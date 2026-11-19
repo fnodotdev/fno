@@ -372,7 +372,9 @@ fn bubble(content: &Content, pending: bool, p: Palette, hl: &[(Range<usize>, boo
         }))
         .children(content.pictures.iter().map(|pic| picture(pic, p)))
         .children(pending.then(|| muted("sending…", p).text_xs()));
-    div().flex().flex_row().justify_end().child(body)
+    // Measure at the list's full width: a shrink-wrapped flex row sizes its
+    // wrapped text on one line and the taller paint overruns the next row.
+    div().w_full().flex().flex_row().justify_end().child(body)
 }
 
 /// One list row, inside the centred column.
