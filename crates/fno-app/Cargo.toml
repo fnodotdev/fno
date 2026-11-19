@@ -51,6 +51,9 @@ pulldown-cmark = { version = "0.13", default-features = false }
 unicode-segmentation = "1"
 # The grid and chat measure glyph widths.
 unicode-width = "0.2"
+# The shot flattens the captured frame onto the theme fill: the window
+# composites at one-percent alpha, and the png must carry it as opaque.
+png = "0.18"
 thiserror = "2"
 tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
 # The shot's window discovery and the window-server metadata reads:
