@@ -397,23 +397,49 @@ fn capture_to_png(out: &std::path::Path, bg: u32) -> i32 {
     0
 }
 
+/// Why a flatten fails: the file layer, the png codec, or a capture
+/// shape the flattener does not parse (R6: typed errors, no
+/// `Result<_, String>`).
+#[derive(Debug)]
+enum FrameError {
+    Io(std::io::Error),
+    Png(String),
+    Shape,
+}
+
+impl std::fmt::Display for FrameError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FrameError::Io(e) => write!(f, "{e}"),
+            FrameError::Png(e) => write!(f, "png: {e}"),
+            FrameError::Shape => write!(f, "the capture is not RGBA8"),
+        }
+    }
+}
+
+impl std::error::Error for FrameError {}
+
 /// Composite the captured frame onto the theme fill. The window server
 /// bakes the window's one-percent alpha into the capture's own alpha
 /// channel, so a viewer composites the frame on white and reads it
 /// nearly blank. Every pixel blends over `bg` and lands fully opaque.
-fn flatten_png(path: &std::path::Path, bg: u32) -> Result<(), String> {
-    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+fn flatten_png(path: &std::path::Path, bg: u32) -> Result<(), FrameError> {
+    let file = std::fs::File::open(path).map_err(FrameError::Io)?;
     let decoder = png::Decoder::new(std::io::BufReader::new(file));
-    let mut reader = decoder.read_info().map_err(|e| e.to_string())?;
+    let mut reader = decoder
+        .read_info()
+        .map_err(|e| FrameError::Png(e.to_string()))?;
     let info = reader.info().clone();
     if info.color_type != png::ColorType::Rgba || info.bit_depth != png::BitDepth::Eight {
-        return Err(format!(
-            "unexpected capture shape {:?}/{:?}",
-            info.color_type, info.bit_depth
-        ));
+        return Err(FrameError::Shape);
     }
-    let mut buf = vec![0u8; info.buffer_size()];
-    reader.next_frame(&mut buf).map_err(|e| e.to_string())?;
+    let Some(size) = reader.output_buffer_size() else {
+        return Err(FrameError::Shape);
+    };
+    let mut buf = vec![0u8; size];
+    reader
+        .next_frame(&mut buf)
+        .map_err(|e| FrameError::Png(e.to_string()))?;
     let (br, bg_, bb) = ((bg >> 16) as u8, (bg >> 8) as u8, bg as u8);
     let channels = 4;
     for px in buf.chunks_exact_mut(channels) {
@@ -427,13 +453,19 @@ fn flatten_png(path: &std::path::Path, bg: u32) -> Result<(), String> {
         }
         px[3] = 255;
     }
-    let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
+    let file = std::fs::File::create(path).map_err(FrameError::Io)?;
     let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), info.width, info.height);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
-    let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
-    writer.write_image_data(&buf).map_err(|e| e.to_string())?;
-    writer.finish().map_err(|e| e.to_string())?;
+    let mut writer = encoder
+        .write_header()
+        .map_err(|e| FrameError::Png(e.to_string()))?;
+    writer
+        .write_image_data(&buf)
+        .map_err(|e| FrameError::Png(e.to_string()))?;
+    writer
+        .finish()
+        .map_err(|e| FrameError::Png(e.to_string()))?;
     Ok(())
 }
 
