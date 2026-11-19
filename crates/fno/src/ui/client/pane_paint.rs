@@ -110,9 +110,7 @@ impl View {
         // Pane frames: after the blit (border wins its own ring), before the
         // underline/grips (affordances paint over the frame).
         for (pid, rect) in &self.layout.panes {
-            self.paint_frame(
-                cells, rows, cols, origin_r, origin_c, clip_r, clip_c, *pid, *rect,
-            );
+            self.paint_frame(cells, cols, origin_r, origin_c, clip_r, clip_c, *pid, *rect);
         }
         // (hover affordance) Underline the accepted link span, client-local:
         // OR UNDERLINE into exactly the pane-local cells the server named,
@@ -387,7 +385,6 @@ impl View {
     fn paint_frame(
         &self,
         cells: &mut [Cell],
-        rows: usize,
         cols: usize,
         origin_r: usize,
         origin_c: usize,
