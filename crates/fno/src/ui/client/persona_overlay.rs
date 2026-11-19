@@ -1474,7 +1474,7 @@ pub(crate) fn close_persona_pane(view: &mut View) {
     };
     let session = view.session.clone();
     if let Ok(sock) = crate::proto::socket_path(&session) {
-        let _ = crate::mux_cli::control_roundtrip(
+        let reply = crate::mux_cli::control_roundtrip(
             &sock,
             &session,
             crate::proto::ControlCommand::PaneKill {
@@ -1482,6 +1482,11 @@ pub(crate) fn close_persona_pane(view: &mut View) {
                 hand_off_to: None,
             },
         );
+        // A refused kill leaves the sleep placeholder running in the
+        // session, so the failure names itself instead of vanishing.
+        if let Err(e) = reply {
+            view.set_notice(format!("the persona pane lingers: {e}"));
+        }
     }
 }
 
