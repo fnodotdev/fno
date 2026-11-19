@@ -49,8 +49,11 @@ pub fn interrupted_path(home: &AgentsHome) -> PathBuf {
 }
 
 fn is_own(skip: &[String], short_id: &str, session_id: Option<&str>) -> bool {
-    skip.iter()
-        .any(|id| id.starts_with(short_id) || session_id == Some(id.as_str()))
+    // An empty prefix would match every id and skip the whole fleet.
+    !short_id.is_empty()
+        && skip
+            .iter()
+            .any(|id| id.starts_with(short_id) || session_id == Some(id.as_str()))
 }
 
 /// The background rows a `--now` stop interrupts: a live session mid-turn
