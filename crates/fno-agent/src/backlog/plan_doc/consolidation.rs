@@ -245,7 +245,7 @@ fn live_lines(answer: &Value, block: &Value, out: &mut Vec<String>) {
         .collect();
     for row in &live {
         let did = row.get("decision_id").and_then(Value::as_str).unwrap_or("");
-        let number = row.get("number").and_then(Value::as_str).unwrap_or("");
+        let number = row["number"].as_str().unwrap_or("");
         let number_hit = number_key(number).is_some_and(|k| acked.contains(&k));
         if !did.is_empty() && !acked.contains(&did.to_lowercase()) && !number_hit {
             let decision = clip(
@@ -378,6 +378,7 @@ mod tests {
 
     #[test]
     fn an_acknowledged_display_number_matches_the_live_ruling() {
+        use serde_json::json;
         let row = |did: &str, number: &str| {
             json!({
                 "decision_id": did, "number": number, "lifecycle": "live",
