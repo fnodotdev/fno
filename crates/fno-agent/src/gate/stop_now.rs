@@ -223,7 +223,12 @@ pub fn resume_interrupted(home: &AgentsHome) -> (Vec<String>, Vec<(String, &'sta
             Err(reason) => missed.push((row.session, reason)),
         }
     }
-    let _ = std::fs::remove_file(&path);
+    // A sidecar left behind would resume the same workers at the next clear.
+    if let Err(error) = std::fs::remove_file(&path) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            eprintln!("fleet-incident: {}: {error}", path.display());
+        }
+    }
     (resumed, missed)
 }
 
@@ -257,7 +262,8 @@ mod tests {
             row("dddd4444", "busy", None),
             row("eeee5555", "busy", Some(5)),
         ]);
-        let skip = vec!["eeee5555-0000-0000-0000-000000000000".to_string()];
+        let own = "eeee5555-0000-0000-0000-000000000000";
+        let skip = vec![own.to_string()];
         let picked: Vec<&str> = running_turns(&snapshot, &skip)
             .iter()
             .map(|r| r.short_id.as_str())
@@ -278,14 +284,16 @@ mod tests {
         let registry = crate::state::Registry {
             entries: vec![
                 entry("ffff6666-1", "pane", Some(7)),
-                entry(&skip[0], "pane", Some(8)),
+                entry(own, "pane", Some(8)),
                 entry("abab0000-1", "thread", None),
             ],
             ..Default::default()
         };
         let panes = pane_workers(&registry, &skip);
-        assert_eq!(panes.len(), 1, "{panes:?}");
-        assert_eq!(panes[0].pane.as_deref(), Some("main:7"));
-        assert_eq!(panes[0].harness.as_deref(), Some("codex"));
+        let [pane] = panes.as_slice() else {
+            panic!("one pane worker, not the stopper or the thread: {panes:?}");
+        };
+        assert_eq!(pane.pane.as_deref(), Some("main:7"));
+        assert_eq!(pane.harness.as_deref(), Some("codex"));
     }
 }
