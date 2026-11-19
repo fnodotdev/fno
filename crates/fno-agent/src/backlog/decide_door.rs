@@ -1049,13 +1049,16 @@ decision index. Run `fno backlog decide-reindex` before retrying."
     // A carried value always says so on the receipt.
     if let Some(qid) = &carried_from {
         if door.audience.is_none() {
-            eprintln!("audience: carried {audience} from {qid}");
+            eprintln!(
+                "audience: carried {audience} from {}",
+                crate::numbers::display(qid)
+            );
         }
         if door.why.is_none() {
-            eprintln!("why: carried from {qid}");
+            eprintln!("why: carried from {}", crate::numbers::display(qid));
         }
         if door.job.is_empty() && !job.is_empty() {
-            eprintln!("job: carried from {qid}");
+            eprintln!("job: carried from {}", crate::numbers::display(qid));
         }
     }
     crate::backlog::decision_subject::stamp(&mut data, &subject);
