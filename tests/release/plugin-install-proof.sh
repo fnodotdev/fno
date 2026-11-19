@@ -41,7 +41,8 @@ grep -q 'binary install adopted' "$LOG" || { echo "proof: postinstall did not ta
 [[ "$(cat "$HOME/.fno/install/channel" 2>/dev/null)" == "binary" ]] || { echo "proof: no binary channel marker"; cat "$LOG"; exit 1; }
 TGT="$(readlink -f "$HOME/.local/bin/fno")"
 [[ "$TGT" == "$HOME/.fno/install/bin/"* ]] || { echo "proof: $TGT is not under the binary install"; exit 1; }
-VER="$("$HOME/.local/bin/fno" --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[^ ]*' | head -1)"
+# No version in the output reads as an empty VER, so the check below names it.
+VER="$("$HOME/.local/bin/fno" --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[^ ]*' | head -1 || true)"
 VER="${VER/-rc./rc}"
 [[ "$VER" == "$CANDIDATE" ]] || { echo "proof: fno --version printed $VER, want $CANDIDATE"; exit 1; }
 "$HOME/.fno/install/bin/fno" backlog list --count >/dev/null
