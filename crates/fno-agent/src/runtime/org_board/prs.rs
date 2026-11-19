@@ -212,6 +212,62 @@ fn read_pr_gate(cwd: &Path, number: i64, timeout: Duration) -> Result<Value, Str
         .map_err(|e| format!("unparseable status payload: {e}"))
 }
 
+/// Bounded fan-out: one gate read per candidate is the price of asking the
+/// gate, but every candidate at once would spend the fleet's shared gh quota
+/// faster than any slice can police.
+const GATE_FANOUT: usize = 4;
+
+/// Run `read` over `numbers` on [`GATE_FANOUT`] workers and collect answers
+/// until `deadline`. A gate read runs in process and cannot be killed, so the
+/// deadline bounds the WAIT: a read still in flight at the deadline finishes
+/// on its detached worker and its answer is dropped. Waiting for it instead
+/// let one slow `gh` read carry the board past the check-in's 60s reader
+/// deadline. A pool, not fixed chunks: a free worker takes the next PR at
+/// once, rather than idling until the slowest read of its chunk returns.
+/// `None` names a PR the deadline left unanswered; answers keep input order.
+fn gather_gate_answers<T, F>(numbers: &[i64], deadline: Instant, read: F) -> Vec<(i64, Option<T>)>
+where
+    T: Send + 'static,
+    F: Fn(i64, Duration) -> T + Send + Sync + 'static,
+{
+    use std::sync::{mpsc, Arc, Mutex};
+    let read = Arc::new(read);
+    let queue = Arc::new(Mutex::new(
+        numbers
+            .iter()
+            .copied()
+            .collect::<std::collections::VecDeque<i64>>(),
+    ));
+    let (tx, rx) = mpsc::channel();
+    for _ in 0..GATE_FANOUT.min(numbers.len()) {
+        let (read, queue, tx) = (Arc::clone(&read), Arc::clone(&queue), tx.clone());
+        std::thread::spawn(move || loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            let Some(n) = queue.lock().ok().and_then(|mut q| q.pop_front()) else {
+                break;
+            };
+            if tx.send((n, read(n, left))).is_err() {
+                break;
+            }
+        });
+    }
+    drop(tx);
+    let mut got: HashMap<i64, T> = HashMap::new();
+    while got.len() < numbers.len() {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match rx.recv_timeout(left) {
+            Ok((n, answer)) => {
+                got.insert(n, answer);
+            }
+            Err(_) => break,
+        }
+    }
+    numbers.iter().map(|n| (*n, got.remove(n))).collect()
+}
+
 /// Ask the merge gate about every candidate the listing called green
 /// (: the queue's only evidence was that the PR is open; a live review
 /// hold or an uncovered head made it unfusable and nothing said so). The
@@ -232,61 +288,33 @@ pub(crate) fn read_pr_gates(
             Vec::new(),
         );
     };
-    // Bounded fan-out: one gate read per candidate is the price of
-    // asking the gate, but every candidate at once would spend the fleet's
-    // shared gh quota faster than any slice can police.
-    const GATE_FANOUT: usize = 4;
+    let cwd = cwd.to_path_buf();
+    let answers = gather_gate_answers(numbers, deadline, move |n, left| {
+        // A panicked reader lands as Err, never unwinds the pool worker.
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read_pr_gate(&cwd, n, left)))
+            .unwrap_or_else(|_| Err("gate reader panicked".to_string()))
+    });
     let mut rows: Vec<Value> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
     let mut skipped: Vec<String> = Vec::new();
-    for chunk in numbers.chunks(GATE_FANOUT) {
-        // Spawn the whole chunk, then join: every member of the chunk runs
-        // concurrently, and a panicked reader lands as Err, never unwinds.
-        let answers: Vec<(i64, Option<Result<Value, String>>)> = std::thread::scope(|s| {
-            let mut pending: Vec<(
-                i64,
-                Option<std::thread::ScopedJoinHandle<Result<Value, String>>>,
-            )> = Vec::new();
-            for n in chunk {
-                let left = deadline.saturating_duration_since(Instant::now());
-                let cwd = cwd.to_path_buf();
-                if left.is_zero() {
-                    pending.push((*n, None));
-                } else {
-                    let h = s.spawn(move || read_pr_gate(&cwd, *n, left));
-                    pending.push((*n, Some(h)));
-                }
-            }
-            pending
-                .into_iter()
-                .map(|(n, h)| {
-                    let answer = h.map(|h| {
-                        h.join()
-                            .unwrap_or_else(|_| Err("gate reader panicked".to_string()))
-                    });
-                    (n, answer)
-                })
-                .collect()
-        });
-        for (n, answer) in answers {
-            match answer {
-                None => skipped.push(n.to_string()),
-                Some(Ok(payload)) => match payload.get("ready").and_then(Value::as_bool) {
-                    Some(ready) => rows.push(json!({
-                        "number": n,
-                        "ready": ready,
-                        "ready_blockers": payload
-                            .get("ready_blockers")
-                            .cloned()
-                            .unwrap_or(Value::Array(Vec::new())),
-                    })),
-                    None => warnings.push(format!(
-                        "merge gate answered no verdict for PR {n}: {}",
-                        s_str(&payload, "reason").unwrap_or("no ready field")
-                    )),
-                },
-                Some(Err(e)) => warnings.push(format!("merge gate unreadable for PR {n}: {e}")),
-            }
+    for (n, answer) in answers {
+        match answer {
+            None => skipped.push(n.to_string()),
+            Some(Ok(payload)) => match payload.get("ready").and_then(Value::as_bool) {
+                Some(ready) => rows.push(json!({
+                    "number": n,
+                    "ready": ready,
+                    "ready_blockers": payload
+                        .get("ready_blockers")
+                        .cloned()
+                        .unwrap_or(Value::Array(Vec::new())),
+                })),
+                None => warnings.push(format!(
+                    "merge gate answered no verdict for PR {n}: {}",
+                    s_str(&payload, "reason").unwrap_or("no ready field")
+                )),
+            },
+            Some(Err(e)) => warnings.push(format!("merge gate unreadable for PR {n}: {e}")),
         }
     }
     if !skipped.is_empty() {
@@ -775,6 +803,31 @@ pub(crate) fn derived_status(entry: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gate_answers_stop_at_the_deadline_when_a_read_hangs() {
+        // One stuck gh read must not carry the board past its deadline: the
+        // other PRs still answer, and the stuck one comes back unanswered.
+        let started = Instant::now();
+        let deadline = started + Duration::from_millis(400);
+        let answers = gather_gate_answers(&[1, 2, 3, 4, 5, 6], deadline, |n, _| {
+            if n == 2 {
+                std::thread::sleep(Duration::from_secs(5));
+            }
+            n
+        });
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
+        let numbers: Vec<i64> = answers.iter().map(|(n, _)| *n).collect();
+        assert_eq!(numbers, vec![1, 2, 3, 4, 5, 6]);
+        for (n, answer) in &answers {
+            let want = if *n == 2 { None } else { Some(*n) };
+            assert_eq!(*answer, want, "PR {n}");
+        }
+    }
 
     #[test]
     fn mergeable_filter_drops_pending_and_failed_but_keeps_a_clean_pr() {
