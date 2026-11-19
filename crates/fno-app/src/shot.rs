@@ -18,16 +18,23 @@ const THEME_LIGHT: &str = "footnote-paper";
 /// The shot window's frame in points.
 const SHOT_SIZE: (f32, f32) = (1280.0, 800.0);
 
-/// How long the capture waits for the window server to hold the first
-/// presented frame and the HQ board reads to resolve before it reads
-/// the buffer.
-const SETTLE: Duration = Duration::from_millis(1500);
+/// How long the shot waits for the board feeds to settle before it
+/// captures.
+const SETTLE_BUDGET: Duration = Duration::from_secs(10);
+
+/// The poll cadence while the feeds settle.
+const SETTLE_POLL: Duration = Duration::from_millis(150);
+
+/// How long the capture waits after the refresh for the frame to
+/// present.
+const PRESENT: Duration = Duration::from_millis(300);
 
 /// How long the pre-warm waits for the demo world's first layout before
 /// it gives up.
 const PREWARM: Duration = Duration::from_secs(5);
 
 pub fn run(opts: ShotOptions) -> i32 {
+    let hold = opts.hold;
     if let Err(e) = theme_pin(&opts.theme) {
         eprintln!("fno-app --shot: {e}");
         return 2;
@@ -73,25 +80,43 @@ pub fn run(opts: ShotOptions) -> i32 {
                 crate::window::root_for_shot(&session, mode, warmed, family, font_size, window, cx)
             },
         );
-        let Ok(_handle) = open else {
+        let Ok(handle) = open else {
             eprintln!("fno-app --shot: the window did not open");
             cx.quit();
             return;
         };
-        // Drop the window below the desktop level in the same run-loop
-        // turn as the open, before the window server composites a
-        // normal-level frame: gpui presents only once the window is
-        // ordered on, and the early level set keeps every composited
-        // frame under the desktop picture.
+        // Fade the window to one-percent alpha in the same run-loop turn
+        // as the open, before the window server composites a full-alpha
+        // frame: gpui presents only once the window is ordered on, and
+        // the early set keeps every composited frame imperceptible.
         // SAFETY: NSApp enumeration over this process's own windows only;
         // the result is dropped.
         let _ = unsafe { shot_window_id() };
         cx.spawn(async move |cx| {
-            cx.background_executor().timer(SETTLE).await;
-            // Hold mode: leave the composited below-desktop window up for
-            // a foreign capturer, skip the in-process capture. Diagnostics
+            // The board feeds land after the first paint. Poll the
+            // board's settled flag, refresh once the feeds land, let the
+            // frame present, then capture. The display link keeps
+            // running (the window stays composited at visible occlusion),
+            // so the refresh presents for real.
+            let deadline = std::time::Instant::now() + SETTLE_BUDGET;
+            let mut settled = false;
+            while std::time::Instant::now() < deadline {
+                let read_yet = handle.update(cx, |root, _, _| root.board.read_yet());
+                if matches!(read_yet, Ok(true)) {
+                    settled = true;
+                    break;
+                }
+                cx.background_executor().timer(SETTLE_POLL).await;
+            }
+            if !settled {
+                eprintln!("fno-app --shot: the board feeds never settled; capturing anyway");
+            }
+            handle.update(cx, |_, window, _| window.refresh()).ok();
+            cx.background_executor().timer(PRESENT).await;
+            // Hold mode: leave the near-invisible composited window up
+            // for a foreign capturer, skip the capture. Diagnostics
             // only; the shot door never sets it.
-            let code = if std::env::var_os("FNO_SHOT_HOLD").is_some() {
+            let code = if hold {
                 eprintln!("fno-app --shot: hold mode: the capture is skipped");
                 std::thread::sleep(std::time::Duration::from_secs(8));
                 0
@@ -269,8 +294,9 @@ fn log_window_live(window_id: u32, when: &str) -> bool {
     };
     // SAFETY: releases the Copy-rule list read above; nothing borrows it.
     unsafe { CFRelease(list) };
-    // The on-screen-only list is the window server's own answer to "is
-    // anything of ours visible": a below-desktop window stays off it.
+    // The on-screen-only list is the liveness read: the window must sit
+    // in the server's list at capture time (it does; the proof line
+    // reads true). Invisibility comes from the alpha, not the list.
     // SAFETY: a Copy-rule result, released after the read below.
     let only = unsafe { CGWindowListCopyWindowInfo(1, 0) };
     if !only.is_null() {
@@ -294,15 +320,16 @@ fn log_window_live(window_id: u32, when: &str) -> bool {
     found
 }
 
-/// Order the app's window below the desktop background and capture its
-/// buffer. The window server composites an ordered window at any level,
-/// so the buffer holds the painted frame, while the user's screen shows
-/// nothing (the desktop paints over it) and no focus moves (the window
-/// never becomes key). The capture runs in Apple's SCK-backed tool: the
-/// in-process ScreenCaptureKit reply decode crashes this binary in
-/// every process shape it tried, while the same window captures
-/// cleanly from any foreign process. The proof lines land on stderr:
-/// the TCC preflight read, the window-server liveness
+/// Capture the app's window buffer at one-percent alpha. The window
+/// server composites the ordered window at the normal level, so the
+/// buffer holds the painted frame and gpui's display link keeps
+/// presenting, while the user's screen shows nothing perceptible (one
+/// percent alpha, mouse events pass through) and no focus moves (the
+/// window never becomes key). The capture runs in Apple's SCK-backed
+/// tool: the in-process ScreenCaptureKit reply decode crashes this
+/// binary in every process shape it tried, while the same window
+/// captures cleanly from any foreign process. The proof lines land on
+/// stderr: the TCC preflight read, the window-server liveness
 /// before and after the capture, and the helper's own lines.
 fn capture_to_png(out: &std::path::Path) -> i32 {
     // SAFETY: NSApp enumeration over this process's own windows only.
@@ -348,9 +375,9 @@ fn capture_to_png(out: &std::path::Path) -> i32 {
 
 /// The app's one window and its backing scale, found through
 /// NSApplication's own list: the process is single-window, so the first
-/// entry with a positive window number is the shot. Ordering it below
-/// the desktop background level keeps it composited but never seen; the
-/// window never becomes key.
+/// entry with a positive window number is the shot. Fading it to
+/// one-percent alpha with mouse events passing through keeps it
+/// composited but never seen; the window never becomes key.
 unsafe fn shot_window_id() -> Option<(u32, f64)> {
     let app: *mut objc::runtime::Object = msg_send![class!(NSApplication), sharedApplication];
     let windows: *mut objc::runtime::Object = msg_send![app, windows];
@@ -383,19 +410,25 @@ unsafe fn shot_window_id() -> Option<(u32, f64)> {
     }) else {
         return None;
     };
-    // Order on first, then drop below the desktop background level: the
-    // desktop paints over it, so nothing is seen. Sharing stays
-    // read-only: the non-deprecated spelling the capture service
+    // Order on first, then fade to one-percent alpha with mouse events
+    // passing through: nothing the user sees or clicks. The window stays
+    // composited at the normal level, so its occlusion state reads
+    // visible and gpui's display link keeps presenting fresh frames for
+    // the capture; below the desktop background the link stops on
+    // occlusion and the buffer never updates past first paint. Sharing
+    // stays read-only: the non-deprecated spelling the capture service
     // accepts. The read-back line shows what the window itself claims,
     // so a reverted setter never hides behind the server-side read.
     let _: () = msg_send![w, orderFront: std::ptr::null_mut::<objc::runtime::Object>()];
-    let _: () = msg_send![w, setLevel: -2147483100i64];
+    let _: () = msg_send![w, setAlphaValue: 0.01f64];
+    let _: () = msg_send![w, setIgnoresMouseEvents: true];
     let _: () = msg_send![w, setSharingType: 1usize];
     let level_after: i64 = msg_send![w, level];
+    let alpha_after: f64 = msg_send![w, alphaValue];
     let visible: bool = msg_send![w, isVisible];
     let occl: usize = msg_send![w, occlusionState];
     eprintln!(
-        "fno-app --shot: window after-set: level={level_after} visible={visible} occlusion={occl}"
+        "fno-app --shot: window after-set: level={level_after} alpha={alpha_after} visible={visible} occlusion={occl}"
     );
     let scale: f64 = msg_send![w, backingScaleFactor];
     Some((num as u32, scale))

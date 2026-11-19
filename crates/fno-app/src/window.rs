@@ -2150,7 +2150,7 @@ pub(super) fn root_for_shot(
         font_size,
         cell: gpui::size(snap(width), snap(font_size * 1.25)),
     };
-    cx.new(|cx| {
+    let root = cx.new(|cx| {
         Root::new_with_link(
             session.to_string(),
             mode,
@@ -2161,5 +2161,12 @@ pub(super) fn root_for_shot(
             window,
             cx,
         )
-    })
+    });
+    // The shot window never activates, and the board poll pauses while
+    // the window is inactive; the shot needs every feed settled before
+    // the capture, so it polls regardless.
+    if let Some(poller) = &root.read(cx).poller {
+        poller.set_active(true);
+    }
+    root
 }
