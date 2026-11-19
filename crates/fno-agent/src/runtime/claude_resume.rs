@@ -393,15 +393,19 @@ mod signed_out_tail_tests {
     }
 
     /// A weekly-limit tail is synthetic but respawn does not fix it (wait or
-    /// switch account), so a live socket keeps the attach arm.
+    /// switch account), so a live row keeps the attach arm. Liveness rides
+    /// the injected truth, not a socket, so the assertion never races a
+    /// probe timeout on a loaded runner.
     #[test]
     fn a_weekly_limit_tail_never_takes_the_reseat_arm() {
         let td = home_with_tail("API Error: Weekly limit reached. Wait or switch account.");
         let ch = ClaudeHome::at(td.path());
-        let _listener = stage_live_socket(td.path(), "7c5dcf5d");
         stage_job_state(td.path(), "7c5dcf5d");
         let (argv, claim) =
-            claude_resume_argv_with_truth(&ch, &thread_row("7c5dcf5d"), "w", |_| None).unwrap();
+            claude_resume_argv_with_truth(&ch, &thread_row("7c5dcf5d"), "w", |_| {
+                Some("working".into())
+            })
+            .unwrap();
         assert_eq!(claim, None, "the live attach arm claims nothing");
         assert_eq!(argv.first(), Some(&"claude".to_string()));
         assert_eq!(argv.get(1), Some(&"attach".to_string()));
