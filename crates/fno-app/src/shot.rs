@@ -347,10 +347,20 @@ fn log_window_live(window_id: u32, when: &str) -> bool {
 /// before and after the capture, and the helper's own lines.
 fn capture_to_png(out: &std::path::Path) -> i32 {
     // SAFETY: NSApp enumeration over this process's own windows only.
-    let Some((window_id, _scale)) = (unsafe { shot_window_id() }) else {
+    let Some((window_id, _scale, occlusion)) = (unsafe { shot_window_id() }) else {
         eprintln!("fno-app --shot: no capturable fno window in this process");
         return 1;
     };
+    // The occlusion visible bit is the settled frame's precondition: a
+    // window covering the shot rect stops gpui's display link, and the
+    // buffer freezes at first paint. Fail loudly instead of handing a
+    // first-paint frame off as a settled one.
+    if occlusion & 2 == 0 {
+        eprintln!(
+            "fno-app --shot: the shot window reads fully occluded (occlusion={occlusion}); a window covers the shot rect, so the frame would hold first paint"
+        );
+        return 1;
+    }
     // SAFETY: a plain read; it returns a bool and touches no pointer.
     let preflight = unsafe { CGPreflightScreenCaptureAccess() };
     eprintln!("fno-app --shot: preflight screen-capture access: {preflight}");
@@ -464,7 +474,7 @@ fn flatten_png(path: &std::path::Path) -> Result<(), FrameError> {
 /// entry with a positive window number is the shot. Fading it to
 /// one-percent alpha with mouse events passing through keeps it
 /// composited but never seen; the window never becomes key.
-unsafe fn shot_window_id() -> Option<(u32, f64)> {
+unsafe fn shot_window_id() -> Option<(u32, f64, usize)> {
     let app: *mut objc::runtime::Object = msg_send![class!(NSApplication), sharedApplication];
     let windows: *mut objc::runtime::Object = msg_send![app, windows];
     let count: usize = msg_send![windows, count];
@@ -517,5 +527,5 @@ unsafe fn shot_window_id() -> Option<(u32, f64)> {
         "fno-app --shot: window after-set: level={level_after} alpha={alpha_after} visible={visible} occlusion={occl}"
     );
     let scale: f64 = msg_send![w, backingScaleFactor];
-    Some((num as u32, scale))
+    Some((num as u32, scale, occl))
 }
