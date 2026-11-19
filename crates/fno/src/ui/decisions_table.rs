@@ -109,22 +109,7 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
     // narrower than the full view's 98-column floor.
     let desc_w = 16.min(w.saturating_sub(81));
     let text_w = w.saturating_sub(81 + desc_w + 1);
-    // The header label fits whole: a narrow dock shortens the word
-    // rather than cutting it mid-token.
-    let desc_label = if desc_w >= 11 { "description" } else { "desc" };
-    let columns = format!(
-        "{} {} {} {} {} {} {} {} {} {}",
-        fit("state", 10),
-        fit("lane", 12),
-        fit("audience", 14),
-        fit("date", 10),
-        fit("who", 10),
-        "Q",
-        fit("node", 9),
-        fit("PR", 6),
-        fit(desc_label, desc_w),
-        fit("decision", text_w),
-    );
+    let columns = table_columns(desc_w, text_w);
     let mut out = vec![head, format!("\x1b[1m{columns}\x1b[0m")];
     let body_rows = h.saturating_sub(5);
     let top = t.pick.saturating_sub(body_rows.saturating_sub(1));
@@ -199,6 +184,25 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
     out
 }
 
+/// The column header row: the fixed labels plus the width-aware
+/// description and decision labels. A narrow dock shortens the
+/// description word rather than cutting it mid-token.
+fn table_columns(desc_w: usize, text_w: usize) -> String {
+    let desc_label = if desc_w >= 11 { "description" } else { "desc" };
+    format!(
+        "{} {} {} {} {} {} {} {} {} {}",
+        fit("state", 10),
+        fit("lane", 12),
+        fit("audience", 14),
+        fit("date", 10),
+        fit("who", 10),
+        "Q",
+        fit("node", 9),
+        fit("PR", 6),
+        fit(desc_label, desc_w),
+        fit("decision", text_w),
+    )
+}
 fn prompt(label: &str) -> Option<String> {
     print!("{label}: ");
     let _ = std::io::stdout().flush();

@@ -86,6 +86,12 @@ pub(crate) struct PersonaOverlay {
     /// split came from, or the chip host a door recorded. `Float` keeps
     /// the full-surface paint.
     pub(crate) home: Home,
+    /// The persona column's own pane: a placeholder split spawned right
+    /// of the session panes when the sideline door opened, so the column
+    /// tiles real space instead of painting over panes that cannot
+    /// reflow under an overlay. The door close kills it; the argv is
+    /// the orphan marker the server side can reap.
+    pub(crate) pane: Option<u64>,
     /// A serving record is drilled open right of the persona column.
     /// Left and Esc pop the record before the column itself.
     pub(crate) drill: bool,
@@ -426,6 +432,7 @@ fn open_page(project: &str, persona: &str) -> PersonaOverlay {
             };
             let draft = is_draft(&doc.status);
             PersonaOverlay {
+                pane: None,
                 title,
                 lines: Vec::new(),
                 cursor: None,
@@ -447,6 +454,7 @@ fn open_page(project: &str, persona: &str) -> PersonaOverlay {
             }
         }
         Err(_) => PersonaOverlay {
+            pane: None,
             title: persona.to_string(),
             lines: notice_lines(&path),
             cursor: None,
@@ -726,6 +734,7 @@ fn picker_lines(personas: &[String], cur: usize) -> Vec<TLine> {
 
 fn open_list(title: &str, project: &str, personas: Vec<String>) -> PersonaOverlay {
     PersonaOverlay {
+        pane: None,
         title: title.to_string(),
         lines: picker_lines(&personas, 0),
         cursor: (!personas.is_empty()).then_some(0),
@@ -786,6 +795,7 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) -> StdinFlow {
         return StdinFlow::Continue;
     }
     if view.persona.as_ref().is_some_and(|o| o.notice) {
+        close_persona_pane(view);
         view.persona = None;
         return StdinFlow::Continue;
     }
@@ -825,6 +835,7 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) -> StdinFlow {
             }
             return StdinFlow::Continue;
         }
+        close_persona_pane(view);
         view.persona = None;
         return StdinFlow::Continue;
     }
@@ -853,6 +864,7 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) -> StdinFlow {
             // column to drill into, so the page hands off the way it did
             // before the drill existed.
             if !matches!(s.kind, ServeKind::Node) || view.backlog_board.is_none() {
+                close_persona_pane(view);
                 view.persona = None;
             } else if let Some(o) = view.persona.as_mut() {
                 o.drill = true;
@@ -893,10 +905,12 @@ fn keys_page(view: &mut View, bytes: &[u8], serving: &[Serving]) -> StdinFlow {
                     }
                     return StdinFlow::Continue;
                 }
+                close_persona_pane(view);
                 view.persona = None;
                 return StdinFlow::Continue;
             }
             b'q' | b'x' => {
+                close_persona_pane(view);
                 view.persona = None;
                 return StdinFlow::Continue;
             }
@@ -1278,6 +1292,7 @@ fn finish_flow(view: &mut View, flow: Flow) -> StdinFlow {
     match flow {
         Flow::Stay => StdinFlow::Continue,
         Flow::Close => {
+            close_persona_pane(view);
             view.persona = None;
             StdinFlow::Continue
         }
@@ -1379,6 +1394,92 @@ pub(crate) fn dock_carry(o: &PersonaOverlay, mut fresh: PersonaOverlay) -> Perso
 pub(crate) fn dock_sideline(mut o: PersonaOverlay) -> PersonaOverlay {
     o.home = Home::SidelineBoard;
     o
+}
+
+/// The persona column's pane: a placeholder split spawned right of the
+/// session panes, so the column tiles real space instead of painting
+/// over panes that cannot reflow under an overlay. The argv is the
+/// orphan marker: a pane whose pty still runs it after its overlay
+/// closed is a reap candidate for the server side. A failed spawn
+/// leaves the dock on the panel fallback, never a half-open door.
+pub(crate) fn spawn_persona_pane(view: &mut View) {
+    let docked = view
+        .persona
+        .as_ref()
+        .is_some_and(|o| o.home == Home::SidelineBoard && o.pane.is_none());
+    if !docked {
+        return;
+    }
+    let cwd = std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| ".".into());
+    let placement = crate::proto::PanePlacement {
+        split: Some(crate::proto::Dir::Right),
+        ..Default::default()
+    };
+    let command = crate::proto::ControlCommand::PaneRun {
+        cwd,
+        argv: vec!["sleep".into(), "100000000000".into()],
+        cols: None,
+        rows: None,
+        claim: false,
+        placement,
+        worker: None,
+        fno_id: None,
+    };
+    let session = view.session.clone();
+    let sock = match crate::proto::socket_path(&session) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let reply = crate::mux_cli::control_roundtrip(&sock, &session, command);
+    let (pane_id, anchor) = match reply {
+        Ok(crate::proto::ServerMsg::PaneSpawned { pane_id, placement }) => {
+            let anchor = placement.as_ref().map(|p| p.anchor);
+            (Some(pane_id), anchor)
+        }
+        _ => (None, None),
+    };
+    if let Some(pane_id) = pane_id {
+        // The seam lands the column its widest share: the split halves
+        // the anchor, and the absolute seam position moves the divider
+        // so the persona pane holds 55 percent of the pair. A refused
+        // resize degrades to the split's even halves.
+        if let Some(anchor) = anchor {
+            if let Some((_, r)) = view.layout.panes.iter().find(|(pid, _)| *pid == anchor) {
+                let cols = r.cols as usize;
+                let x = r.x as usize;
+                let pos = (x + cols * 55 / 100) as u16;
+                view.note_command_sent(&crate::proto::Command::ResizeSeam {
+                    a: anchor,
+                    b: pane_id,
+                    pos,
+                });
+            }
+        }
+        if let Some(o) = view.persona.as_mut() {
+            o.pane = Some(pane_id);
+        }
+    }
+}
+
+/// The door closes: the persona column's pane dies with it, or a
+/// sleep placeholder lingers in the session until the server-side
+/// argv reap finds it. The kill runs on the control socket by id, so
+/// it never steals focus.
+pub(crate) fn close_persona_pane(view: &mut View) {
+    let pane = view.persona.as_ref().and_then(|o| o.pane);
+    let Some(pane) = pane else {
+        return;
+    };
+    let session = view.session.clone();
+    if let Ok(sock) = crate::proto::socket_path(&session) {
+        let _ = crate::mux_cli::control_roundtrip(
+            &sock,
+            &session,
+            crate::proto::ControlCommand::PaneKill { pane },
+        );
+    }
 }
 
 pub(crate) fn dock_pane(view: &View, mut o: PersonaOverlay) -> PersonaOverlay {
@@ -1735,6 +1836,22 @@ pub(crate) fn persona_pane_rect(view: &View) -> Option<(usize, usize, usize, usi
         // would overlap the session panes without reflowing them, and
         // their text leaks around the persona column.
         Some(Home::SidelineBoard) => {
+            // The persona column's own pane, when the split landed: the
+            // rect follows the pane, so seams and resizes keep the
+            // column honest. No pane (spawn refused, stale id) falls
+            // back to the panel dock.
+            if let Some(pane) = view.persona.as_ref().and_then(|o| o.pane) {
+                for (pid, r) in view.layout.panes.iter() {
+                    if *pid != pane {
+                        continue;
+                    }
+                    let top = (TAB_BAR_ROWS as usize + r.y as usize).min(rows as usize);
+                    let left = (view.left_chrome_w() as usize + r.x as usize).min(cols as usize);
+                    let h = (r.rows as usize).min(rows as usize - top);
+                    let w = (r.cols as usize).min(cols as usize - left);
+                    return Some((top, left, h, w));
+                }
+            }
             let w = (view.panel_w() as usize).min(cols as usize);
             let h = (rows as usize)
                 .saturating_sub(view.bottom_row_is_chrome() as usize)
@@ -2183,6 +2300,7 @@ mod tests {
     fn left_pops_the_persona_column() {
         let mut v = View::new((40, 140), "s".into(), LayoutView::default());
         v.persona = Some(PersonaOverlay {
+            pane: None,
             title: "solo".into(),
             lines: Vec::new(),
             cursor: None,

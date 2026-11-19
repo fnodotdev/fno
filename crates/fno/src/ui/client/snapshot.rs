@@ -1771,6 +1771,7 @@ fn persona_sideline_chip_shot(
     let project = super::persona_overlay::session_project(view);
     view.persona = super::persona_overlay::open_from(Some(&aud), Some(&project))
         .map(super::persona_overlay::dock_sideline);
+    super::persona_overlay::spawn_persona_pane(view);
     stage_serving_question(view, &aud);
     super::persona_overlay::keys(view, b"j");
     Ok(())

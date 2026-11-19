@@ -371,6 +371,8 @@ pub(super) async fn mouse_pre_pass(
                         .map(super::persona_overlay::dock_sideline);
                     if view.persona.is_none() {
                         view.set_notice("this audience names no persona file".into());
+                    } else {
+                        super::persona_overlay::spawn_persona_pane(view);
                     }
                     continue;
                 }
