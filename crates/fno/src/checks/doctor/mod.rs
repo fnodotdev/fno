@@ -200,6 +200,23 @@ pub fn classify(args: &[OsString]) -> Option<Claim> {
             }
             Some(Claim::AgentsExec("fno doctor reclaim", argv))
         }
+        // `migrate ids [--check|--dry-run] [--json]`: the q-/d- hex keys to
+        // their numbers, riding `census --ids`.
+        Some("migrate") => {
+            if args.get(2).and_then(|a| a.to_str()) != Some("ids") {
+                return None;
+            }
+            let mut argv = vec![OsString::from("census"), OsString::from("--ids")];
+            for a in args.get(3..).unwrap_or(&[]) {
+                match a.to_str() {
+                    Some("--check") | Some("--dry-run") | Some("--json") | Some("-J") => {
+                        argv.push(a.clone())
+                    }
+                    _ => return None,
+                }
+            }
+            Some(Claim::AgentsExec("fno doctor migrate ids", argv))
+        }
         // `scratch sweep|report ...`: identical flag spellings on the Rust
         // side; the subcommand word routes and everything else passes
         // through byte-verbatim.

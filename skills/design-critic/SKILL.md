@@ -4,6 +4,7 @@ description: Judge a paint PR's mux shots against the mux design system and reco
 argument-hint: "<node-id>"
 metadata:
   internal: false
+allowed-tools: Read
 ---
 
 # Design critic

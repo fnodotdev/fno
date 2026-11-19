@@ -120,6 +120,14 @@ pub fn shortcut(k: &Key) -> Option<Shortcut> {
 /// runs the same action. Ctrl-b is no prefix here: it goes to the pane.
 pub const SHEET_KEY: &str = "cmd-/";
 
+/// The key that opens and closes the go-to palette. Help > Go to… runs the
+/// same action.
+pub const GOTO_KEY: &str = "cmd-k";
+
+/// Keys bound to gpui actions, not to `shortcut()`: the key sheet's own
+/// test skips them, as it skips ⌘/ today.
+pub const ACTION_KEYS: &[&str] = &["/", "k"];
+
 /// The key sheet: every key the app reads, by section, as the sheet shows
 /// them.
 pub const SHEET: &[(&str, &[(&str, &str)])] = &[
@@ -128,6 +136,7 @@ pub const SHEET: &[(&str, &[(&str, &str)])] = &[
         &[
             ("⌘/", "show this sheet"),
             ("⌘n", "start a session or a lead"),
+            ("⌘k", "go to an agent, session, node, question or view"),
             ("⌘1-⌘9", "pick an agent row, or a tab in the terminal"),
             ("hold ⌘", "show the numbers"),
             ("⌘c", "copy"),
@@ -349,11 +358,13 @@ mod tests {
             ..Key::default()
         };
         assert_eq!(encode(&ctrl("b"), Modes::default()), Some(vec![0x02]));
-        // Every cmd-letter the sheet lists is a shortcut the app runs; ⌘/
-        // is the sheet's own action binding.
+        // Every cmd-letter the sheet lists is a shortcut the app runs;
+        // ⌘/ and ⌘k are the sheet's and palette's own action bindings.
         for (_, rows) in SHEET {
             for (keys, _) in *rows {
-                let letter = keys.strip_prefix('⌘').filter(|l| l.len() == 1 && *l != "/");
+                let letter = keys
+                    .strip_prefix('⌘')
+                    .filter(|l| l.len() == 1 && !ACTION_KEYS.contains(l));
                 let Some(letter) = letter else {
                     continue;
                 };

@@ -9,12 +9,13 @@ use super::link::Layout;
 use super::palette::Palette;
 use super::ui;
 use super::window::{Action, MainView, Root};
+use fno::app_api::client::agent_group::{click_command, RowClick};
 use fno::app_api::client::agent_lattice_state;
 use fno::app_api::client::card_line::{binding_suffix, card_facts, CardFacts};
 use fno::app_api::client::header_band::section_rollup;
 use fno::app_api::lattice::{lattice_glyph, status_long, LatticeState};
 use fno::app_api::web_hq::Board;
-use fno::proto::{AgentRow, Command};
+use fno::proto::{AgentRow, Command, SquadMeta};
 
 pub const WIDTH: f32 = 320.0;
 /// The agents shown before a "+N more" row, so the sections below stay above
@@ -72,7 +73,7 @@ fn header(title: &'static str) -> Row {
     }
 }
 
-fn agent_identity(a: &AgentRow) -> Option<String> {
+pub(super) fn agent_identity(a: &AgentRow) -> Option<String> {
     let mut out = match (a.node.as_deref(), a.pr) {
         // The PR leads, so a narrow box cuts the node id and keeps the number.
         (Some(n), Some(pr)) => format!("#{pr} · {n}"),
@@ -84,17 +85,41 @@ fn agent_identity(a: &AgentRow) -> Option<String> {
     Some(out)
 }
 
+/// One agent row's click action: the sideline click command as an app
+/// Action. The go-to palette sends the same thing, so a click and a goto
+/// never diverge.
+pub(super) fn agent_row_action(a: &AgentRow) -> Action {
+    match click_command(a) {
+        RowClick::Send(cmd) => Action::Send(cmd),
+        RowClick::Notice(notice) => Action::Notice(notice),
+    }
+}
+
+/// The left pane's status word for one agent: `harness · status`, where an
+/// ended one-shot's result outranks the lane status.
+pub(super) fn agent_status_word(a: &AgentRow) -> String {
+    let state = agent_lattice_state(a);
+    let harness = a.harness.as_deref().unwrap_or("pane");
+    let status = a.result.as_deref().unwrap_or(status_long(state));
+    format!("{harness} · {status}")
+}
+
+/// One session's detail word: `N tab(s) · M pane(s)`, as the sidebar shows.
+pub(super) fn session_detail(s: &SquadMeta) -> String {
+    let tabs = s.tabs.len();
+    format!(
+        "{tabs} tab{} · {} pane{}",
+        if tabs == 1 { "" } else { "s" },
+        s.panes,
+        if s.panes == 1 { "" } else { "s" }
+    )
+}
+
 /// One session's sidebar row; `active` is the session the window shows.
 fn session_item(s: &fno::proto::SquadMeta, active: u64) -> Row {
-    let tabs = s.tabs.len();
     Row::Item {
         label: s.name.clone(),
-        detail: format!(
-            "{tabs} tab{} · {} pane{}",
-            if tabs == 1 { "" } else { "s" },
-            s.panes,
-            if s.panes == 1 { "" } else { "s" }
-        ),
+        detail: session_detail(s),
         identity: None,
         card: None,
         state: None,
@@ -116,15 +141,8 @@ fn agent_item(
     streamed: Option<&str>,
     launched: Option<(&str, &str)>,
 ) -> Row {
-    use fno::app_api::client::agent_group::{click_command, RowClick};
-    let action = match click_command(a) {
-        RowClick::Send(cmd) => Action::Send(cmd),
-        RowClick::Notice(notice) => Action::Notice(notice),
-    };
+    let action = agent_row_action(a);
     let state = agent_lattice_state(a);
-    let harness = a.harness.as_deref().unwrap_or("pane");
-    // A one-shot's end word outranks the lane status: ended, not stuck.
-    let status = a.result.as_deref().unwrap_or(status_long(state));
     // The launch's own row reads as the task the composer carried: the
     // registry name stays the mail key, the display follows the task.
     let label = match launched {
@@ -133,7 +151,7 @@ fn agent_item(
     };
     Row::Item {
         label,
-        detail: format!("{harness} · {status}"),
+        detail: agent_status_word(a),
         identity: agent_identity(a),
         card: Some(card_facts(a, now_secs)),
         state: Some(state),

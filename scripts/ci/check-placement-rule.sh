@@ -403,6 +403,10 @@ crates/fno-agent/src/eval/evals/runner.rs
 crates/fno-agent/src/backlog/law_match.rs
 crates/fno-agent/src/runtime/mail_cli/send/resolve.rs
 crates/fno-agent/src/client_commands.rs
+#      claude_resume.rs: its signed-out-tail tests stage a claude home under
+#      a tmpdir (projects transcript, sessions socket record, jobs state) -
+#      read-only fixtures, footnote stores nothing there.
+crates/fno-agent/src/runtime/claude_resume.rs
 crates/fno-agent/src/runtime/discovered_sessions.rs
 crates/fno-agent/src/runtime/discovered_sessions/sources.rs
 crates/fno-agent/src/runtime/daemon.rs

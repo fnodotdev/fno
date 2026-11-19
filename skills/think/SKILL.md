@@ -7,6 +7,7 @@ metadata:
     binaries:
       - "fno >= 0.1"
       - "git >= 2.0"
+allowed-tools: Read
 ---
 
 # Think

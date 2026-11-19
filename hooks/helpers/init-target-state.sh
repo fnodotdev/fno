@@ -1391,6 +1391,12 @@ EOF
     _NODE_ID="$_GUARD_NODE"
   elif [[ -n "$INITIAL_PLAN_PATH" ]] && command -v fno >/dev/null 2>&1; then
     _NODE_ID="$(_resolve_plan_node "$INITIAL_PLAN_PATH" "$REPO_ROOT")"
+  elif [[ -n "${INITIAL_INPUT// /}" ]] && [[ -f "$INITIAL_INPUT" ]] && command -v fno >/dev/null 2>&1; then
+    # An input that names an existing file may BE the plan: run the same
+    # plan_path resolution --plan-path gets. Without this, a caller that
+    # passes the plan as --input lands unbound and the stop gate has no
+    # node to read done-state from.
+    _NODE_ID="$(_resolve_plan_node "$INITIAL_INPUT" "$REPO_ROOT")"
   fi
 
   # Never lose a claim silently: when input was supplied but resolved to no

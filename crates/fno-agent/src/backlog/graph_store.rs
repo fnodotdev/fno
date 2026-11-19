@@ -3317,6 +3317,32 @@ pub fn read_pr_rows(path: &Path, pr: Option<i64>) -> Result<Vec<Value>, StoreErr
     Ok(rows)
 }
 
+/// The node ids whose extras tags name `tag`, SQL-side via json_each: the
+/// rare nodes a lane search needs, with their project, without materializing
+/// any row body. Ordered by store order so a caller's "first match" walk
+/// stays deterministic.
+pub fn read_ids_with_tag(
+    path: &Path,
+    tag: &str,
+) -> Result<Vec<(String, Option<String>)>, StoreError> {
+    let connection = crate::backlog::read_connection(path).map_err(StoreError::Db)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT id, project FROM nodes
+             WHERE EXISTS (SELECT 1 FROM json_each(extras, '$.tags') WHERE value = ?1)
+             ORDER BY ordinal, id",
+        )
+        .map_err(|error| StoreError::Db(error.into()))?;
+    let rows = statement
+        .query_map(rusqlite::params![tag], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        })
+        .map_err(|error| StoreError::Db(error.into()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| StoreError::Db(error.into()))?;
+    Ok(rows)
+}
+
 /// A strict rows read for consumers whose boundary contract needs unreadable
 /// stores to remain unknown, never an empty list.
 pub fn read_rows_strict(path: &Path) -> Result<Vec<Value>, StoreError> {
@@ -3516,6 +3542,69 @@ pub fn plan_path_owner_conflict(
         }
     }
     None
+}
+
+/// The node ids whose lifecycle stamps can name an event inside a window
+/// with `since` as its RFC3339 first-19 edge: created or completed at or
+/// after the edge, or carrying a session that started at or after it, plus
+/// the raw-carried rows' body stamps. Second-granularity by design: the
+/// timestamp formats share their first 19 characters, so the substring
+/// compare is exact at second precision and a superset at sub-second, which
+/// the caller's own window filter re-checks. Ordered by store order.
+pub fn read_feed_candidate_ids(path: &Path, since19: &str) -> Result<Vec<String>, StoreError> {
+    let connection = crate::backlog::read_connection(path).map_err(StoreError::Db)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT id FROM (
+               SELECT n.id AS id, n.ordinal AS ord FROM nodes n
+                WHERE substr(n.created_at, 1, 19) >= ?1
+                   OR substr(n.completed_at, 1, 19) >= ?1
+                   OR EXISTS (SELECT 1 FROM sessions s
+                               WHERE s.node_id = n.id
+                                 AND substr(s.started_at, 1, 19) >= ?1)
+               UNION
+               SELECT r.id AS id, r.ordinal AS ord FROM nodes_raw r
+                WHERE CASE WHEN json_valid(r.body)
+                           THEN substr(json_extract(r.body, '$.created_at'), 1, 19) END >= ?1
+                   OR CASE WHEN json_valid(r.body)
+                           THEN substr(json_extract(r.body, '$.completed_at'), 1, 19) END >= ?1
+             ) ORDER BY ord, id",
+        )
+        .map_err(|error| StoreError::Db(error.into()))?;
+    let rows = statement
+        .query_map(rusqlite::params![since19], |row| row.get::<_, String>(0))
+        .map_err(|error| StoreError::Db(error.into()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| StoreError::Db(error.into()))?;
+    Ok(rows)
+}
+
+/// The raw-carried node ids whose body names this PR number: the primary
+/// `pr_number`, an `additional_prs` entry, or a GitHub-style pr_url. Typed
+/// rows keep their PR refs in `pull_requests`, which `read_pr_entries`
+/// reads; `nodes` has no PR columns. The SQL is a superset by contract:
+/// the caller's rank re-checks each row's refs against the number, so a
+/// LIKE over-match only ever costs a dropped candidate.
+pub fn read_pr_bound_candidate_ids(path: &Path, pr: u64) -> Result<Vec<String>, StoreError> {
+    let connection = crate::backlog::read_connection(path).map_err(StoreError::Db)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT id FROM nodes_raw
+              WHERE CASE WHEN json_valid(body) THEN
+                      json_extract(body, '$.pr_number') = ?1
+                      OR EXISTS (SELECT 1 FROM json_each(json_extract(body, '$.additional_prs')) je
+                                 WHERE json_extract(je.value, '$.number') = ?1)
+                      OR json_extract(body, '$.pr_url') LIKE '%/pull/' || ?1
+                    END
+              ORDER BY ordinal",
+        )
+        .map_err(|error| StoreError::Db(error.into()))?;
+    let rows = statement
+        .query_map(rusqlite::params![pr as i64], |row| row.get::<_, String>(0))
+        .map_err(|error| StoreError::Db(error.into()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| StoreError::Db(error.into()))?;
+    Ok(rows)
 }
 
 #[cfg(test)]
@@ -4003,4 +4092,50 @@ mod tests {
             .unwrap()
             .contains("superseded by ab-done2"));
     }
+}
+
+#[test]
+fn feed_candidates_name_only_rows_with_in_window_lifecycle_stamps() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("graph.db");
+    // The seed door carries unrepresentable rows verbatim into nodes_raw
+    // (no slug/title/type/priority, no typed columns), so the fixture rows
+    // carry the four required keys and the session's foreign keys land
+    // after the schema exists (at the database path, not the anchor) but
+    // before the aggregate save unfolds it.
+    crate::backlog::open(&path).unwrap();
+    crate::store_conn::open_write(&crate::backlog::database_path(&path))
+        .unwrap()
+        .execute_batch(
+            "INSERT OR IGNORE INTO harnesses (id) VALUES ('claude');
+             INSERT INTO agent_sessions (id) VALUES ('s-1');",
+        )
+        .unwrap();
+    seed_rows(
+        &path,
+        &[
+            json!({"id": "x-old", "status": "ready", "created_at": "2026-11-01T00:00:00Z",
+                   "slug": "x-old", "title": "old", "type": "feature", "priority": "p2"}),
+            json!({"id": "x-new", "status": "ready", "created_at": "2026-11-18T01:00:00Z",
+                   "slug": "x-new", "title": "new", "type": "feature", "priority": "p2"}),
+            json!({"id": "x-sess", "status": "ready", "created_at": "2026-11-01T00:00:00Z",
+                   "slug": "x-sess", "title": "sess", "type": "feature", "priority": "p2",
+                   "sessions": [{"phase": "execute", "harness": "claude", "session_id": "s-1",
+                                 "started_at": "2026-11-18T02:00:00Z"}]}),
+        ],
+    )
+    .unwrap();
+    let ids = read_feed_candidate_ids(&path, "2026-11-18T00:00:00").unwrap();
+    assert_eq!(ids, vec!["x-new", "x-sess"]);
+    // A malformed raw-carried body skips the raw arm instead of erroring
+    // the whole candidate read (the read_contract_rows guard shape).
+    crate::store_conn::open_write(&crate::backlog::database_path(&path))
+        .unwrap()
+        .execute(
+            "INSERT INTO nodes_raw (id, ordinal, body) VALUES ('x-junk', 99, '{not json')",
+            [],
+        )
+        .unwrap();
+    let ids = read_feed_candidate_ids(&path, "2026-11-18T00:00:00").unwrap();
+    assert_eq!(ids, vec!["x-new", "x-sess"]);
 }

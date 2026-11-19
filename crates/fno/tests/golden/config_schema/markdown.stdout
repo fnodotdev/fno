@@ -50,6 +50,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `backlog.maintain.validity_batch_size` | int | `25` | advanced | Oldest-first validity-sweep batch size (clamped to 100). |
 | `backlog.id_prefix` | str (optional) | _(none)_ | always | Prefix for minted node IDs (<=7 chars; not cv-/fu-/tgt-). |
 | `backlog.id_hex_width` | int | `8` | advanced | Hex width of minted node IDs (4-8). |
+| `backlog.id_mode` | typing.Literal['hex', 'sequential'] | `hex` | never | How a new node id is minted: hex (default) or sequential (<prefix>-1, -2, ...). Sequential refuses a prefix another project uses. |
 | `backlog.staleness_days` | int | `21` | advanced | Age (days) before an unmoved ready node is quarantined from selection. |
 | `backlog.epic_max_open_children` | int (optional) | _(none)_ | advanced | Most open children an epic may hold. A write that would parent one more open child under a full epic is refused and names the new-epic command. Unset means no cap. The graph store reads the global config first, then a config.toml beside the store. |
 | `backlog.max_open_ideas` | int | `25` | advanced | Most unplanned, machine-filed ideas one nearest-epic or project scope may hold (default 25; 0 is off). Operator asks are never capped. The graph store reads the global config first, then a config.toml beside the store. |
