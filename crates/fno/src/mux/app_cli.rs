@@ -320,6 +320,17 @@ fn wait_for_socket(sock: &Path) -> bool {
     false
 }
 
+/// The backlog idea door's JSON stdout, typed so the id read stays a
+/// struct field (R1: parse once, no string-key reads).
+#[derive(serde::Deserialize)]
+struct IdeaSeedOut {
+    id: Option<String>,
+}
+
+/// The demo chat session: the transcript file the seed writes and the
+/// adopt seed registers, one uuid both sides name.
+const DEMO_CHAT_SESSION: &str = "00000000-0000-4000-8000-000000000001";
+
 /// Seed the world's graph through the front door's own backlog, one
 /// deterministic mint per card. Any refusal tears the world down, so a
 /// half-seeded board never shoots.
@@ -342,9 +353,9 @@ fn seed_world(root: &Path, front: &Path) -> Option<String> {
         match cmd.spawn().and_then(|child| child.wait_with_output()) {
             Ok(out) if out.status.success() => {
                 if i == 0 {
-                    first_id = serde_json::from_slice::<serde_json::Value>(&out.stdout)
+                    first_id = serde_json::from_slice::<IdeaSeedOut>(&out.stdout)
                         .ok()
-                        .and_then(|v| v.get("id").and_then(|id| id.as_str()).map(str::to_owned));
+                        .and_then(|seed| seed.id);
                 }
             }
             Ok(out) => {
@@ -364,7 +375,9 @@ fn seed_world(root: &Path, front: &Path) -> Option<String> {
 }
 
 /// Claim the first seeded node as a demo seat, so the board's seats
-/// panel carries a real row with work.
+/// panel carries a real row with work. The transcript is durable
+/// evidence, so the adopt door then writes the registry row the
+/// sideline and seat readers consume.
 fn seed_fleet(root: &Path, front: &Path, node_id: &str) -> bool {
     let mut cmd = world_cmd(root, front);
     cmd.args([
@@ -377,7 +390,7 @@ fn seed_fleet(root: &Path, front: &Path, node_id: &str) -> bool {
     ])
     .stdout(std::process::Stdio::piped())
     .stderr(std::process::Stdio::piped());
-    match cmd.spawn().and_then(|child| child.wait_with_output()) {
+    let claim = match cmd.spawn().and_then(|child| child.wait_with_output()) {
         Ok(out) if out.status.success() => true,
         Ok(out) => {
             eprintln!(
@@ -390,7 +403,37 @@ fn seed_fleet(root: &Path, front: &Path, node_id: &str) -> bool {
             eprintln!("fno mux app shot: the claim seed failed to run: {e}");
             false
         }
-    }
+    };
+    let mut cmd = world_cmd(root, front);
+    cmd.args(["agent", "adopt", DEMO_CHAT_SESSION])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let adopt = match cmd.spawn().and_then(|child| child.wait_with_output()) {
+        Ok(out) if out.status.success() => true,
+        Ok(out) => {
+            eprintln!(
+                "fno mux app shot: the adopt seed refused: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            false
+        }
+        Err(e) => {
+            eprintln!("fno mux app shot: the adopt seed failed to run: {e}");
+            false
+        }
+    };
+    claim && adopt
+}
+
+/// One demo question in the world's journal, so the board's questions
+/// panel carries a real row. The FILE is the contract: the shape the
+/// event store writes.
+fn seed_question(root: &Path) {
+    let ts = chrono::Utc::now().to_rfc3339();
+    let row = format!(
+        r#"{{"ts":"{ts}","type":"operator_question","source":"rust","data":{{"question_id":"q-demo-0001","question":"Which machine should host the demo deploy?","ask":"Pick the demo host; the deploy preview follows the pick.","asker":"demo-worker","node":"none","context":{{"blocked_because":"The demo host choice has not been recorded.","unknowns":"Machine capacity and tailnet reachability have not been compared."}},"subject":"demo-deploy-host","blocks":[]}}}}"#
+    );
+    let _ = std::fs::write(root.join(".fno/questions.jsonl"), format!("{row}\n"));
 }
 
 /// A claude-shaped transcript in the world's projects dir, so the chat
@@ -401,15 +444,15 @@ fn seed_transcript(root: &Path) {
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
-    let session = "00000000-0000-4000-8000-000000000001";
+    let session = DEMO_CHAT_SESSION;
     let rows = concat!(
         r#"{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":"What does the shot door build?"},"sessionId":"00000000-0000-4000-8000-000000000001"}"#,
         "\n",
-        r#"{"parentUuid":null,"isSidechain":false,"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"It builds a throwaway mux world, seeds it, opens the window under the desktop picture, and hands the buffer to the capture tool."}],"sessionId":"00000000-0000-4000-8000-000000000001"}"#,
+        r#"{"parentUuid":null,"isSidechain":false,"type":"assistant","uuid":"a1","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"It builds a throwaway mux world, seeds it, opens a one-percent-alpha window at the normal level, and hands the buffer to the capture tool."}],"sessionId":"00000000-0000-4000-8000-000000000001"}"#,
         "\n",
         r#"{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":"And the offscreen proof?"},"sessionId":"00000000-0000-4000-8000-000000000001"}"#,
         "\n",
-        r#"{"parentUuid":null,"isSidechain":false,"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Frontmost identical across the three reads, zero on-screen windows, no Dock bounce, and the frame lands. The window lives under the desktop the whole time."}],"sessionId":"00000000-0000-4000-8000-000000000001"}"#,
+        r#"{"parentUuid":null,"isSidechain":false,"type":"assistant","uuid":"a2","message":{"id":"m2","role":"assistant","content":[{"type":"text","text":"Frontmost identical across the three reads, no keystrokes, no Dock bounce, and the frame lands. The window composites invisible the whole time."}],"sessionId":"00000000-0000-4000-8000-000000000001"}"#,
         "\n",
     );
     let _ = std::fs::write(dir.join(format!("{session}.jsonl")), rows);
@@ -473,8 +516,10 @@ fn shot(out: &str, theme: &str, mode: Option<AppView>) -> i32 {
     let Some(first_node) = seed_world(&world.root, &front) else {
         return 1;
     };
-    seed_fleet(&world.root, &front, &first_node);
+    // The transcript lands first: the adopt seed reads it as evidence.
     seed_transcript(&world.root);
+    seed_fleet(&world.root, &front, &first_node);
+    seed_question(&world.root);
     let mut cmd = world_cmd(&world.root, &bin);
     cmd.arg("--shot")
         .arg("--shot-out")

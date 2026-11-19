@@ -44,6 +44,7 @@ pub fn run(opts: ShotOptions) -> i32 {
         .clone()
         .unwrap_or_else(|| "default".to_string());
     let mode = opts.mode.unwrap_or(MainView::Orchestration);
+    let pinned = opts.chat.as_deref().and_then(crate::chat::claude_key);
     let out = opts.out.clone();
     let family = opts.font.clone();
     let font_size = opts.font_size;
@@ -77,7 +78,9 @@ pub fn run(opts: ShotOptions) -> i32 {
                 ..Default::default()
             },
             move |window, cx| {
-                crate::window::root_for_shot(&session, mode, warmed, family, font_size, window, cx)
+                crate::window::root_for_shot(
+                    &session, mode, pinned, warmed, family, font_size, window, cx,
+                )
             },
         );
         let Ok(handle) = open else {
@@ -100,11 +103,22 @@ pub fn run(opts: ShotOptions) -> i32 {
             // so the refresh presents for real.
             let deadline = std::time::Instant::now() + SETTLE_BUDGET;
             let mut settled = false;
+            let mut last_events = None;
             while std::time::Instant::now() < deadline {
-                let read_yet = handle.update(cx, |root, _, _| root.board.read_yet());
-                if matches!(read_yet, Ok(true)) {
-                    settled = true;
-                    break;
+                let read = handle.update(cx, |root, _, _| {
+                    (root.board.read_yet(), root.chat.conv.events)
+                });
+                if let Ok((read_yet, events)) = read {
+                    // The board feeds land first; the chat stream keeps
+                    // folding events after that. Settled means the board
+                    // is read AND the chat's event count held still for
+                    // one poll, so the last assistant rows are in the
+                    // model the frame renders.
+                    if read_yet && last_events == Some(events) {
+                        settled = true;
+                        break;
+                    }
+                    last_events = Some(events);
                 }
                 cx.background_executor().timer(SETTLE_POLL).await;
             }

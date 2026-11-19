@@ -1950,8 +1950,13 @@ impl Global for UiState {}
 
 /// Copy the live UI state into the global the exit paths read.
 fn record_ui_state(root: &Root, cx: &mut App) {
-    // The global is set when the window opens; every mutation site runs
-    // after that, so the panicking read is unreachable in practice.
+    // The global is set when the window opens in the attach path, and
+    // every mutation site runs after that. The shot window sets none,
+    // so its chat mutations skip the snapshot: nothing persists a
+    // shot's state.
+    if cx.try_global::<UiState>().is_none() {
+        return;
+    }
     let ui = cx.global_mut::<UiState>();
     ui.view = root.main;
     ui.agents_open = root.agents_open;
@@ -2129,6 +2134,7 @@ pub fn run(
 pub(super) fn root_for_shot(
     session: &str,
     mode: MainView,
+    pinned: Option<SessionKey>,
     warmed: super::link::WarmedLink,
     family: String,
     font_size: f32,
@@ -2154,7 +2160,7 @@ pub(super) fn root_for_shot(
         Root::new_with_link(
             session.to_string(),
             mode,
-            None,
+            pinned,
             false,
             metrics,
             Some(warmed),
