@@ -364,11 +364,21 @@ fn bubble(content: &Content, pending: bool, p: Palette, hl: &[(Range<usize>, boo
         .flex_col()
         .gap_2()
         .children((!content.text.is_empty()).then(|| {
-            if hl.is_empty() {
+            let text: AnyElement = if hl.is_empty() {
                 div().child(content.text.clone()).into_any_element()
             } else {
                 painted(content.text.as_str(), font(UI_FONT), p.fg, hl, p).into_any_element()
-            }
+            };
+            // The text carries its own width cap: with only the bubble box
+            // capped, the flex measure runs the text at max-content, the box
+            // sizes to one line, and the wrapped paint spills onto the row
+            // below.
+            div()
+                .max_w(px(536.0))
+                .min_w_0()
+                .flex_shrink()
+                .child(text)
+                .into_any_element()
         }))
         .children(content.pictures.iter().map(|pic| picture(pic, p)))
         .children(pending.then(|| muted("sending…", p).text_xs()));
