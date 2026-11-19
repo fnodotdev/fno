@@ -171,8 +171,8 @@ pub fn chat_ranges(
 
 /// The one-line bar over the view's top right: query, caret, counter and
 /// the keys. Raised, border, muted and accent only: the app's existing
-/// terminal-native look. The hint paints the bare arrows; the labels
-/// appear while cmd alone is down, the app's badge rule.
+/// terminal-native look. The hint paints the bare arrows; while cmd alone
+/// is down it shows each arrow's chord, the palette's shortcut form.
 pub fn bar(f: &Find, p: Palette, picking: bool) -> Div {
     let counter = f.counter().map(|c| {
         let color = if f.total > 0 { p.accent } else { p.muted };
@@ -208,7 +208,7 @@ pub fn bar(f: &Find, p: Palette, picking: bool) -> Div {
                 .flex_none()
                 .text_color(rgb(p.muted))
                 .child(if picking {
-                    "↑ older  ↓ newer  esc"
+                    "↑ ⇧⌘G   ↓ ⌘G"
                 } else {
                     "↑ ↓"
                 }),

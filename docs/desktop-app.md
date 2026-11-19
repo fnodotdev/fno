@@ -89,7 +89,7 @@ In the terminal view, keys go to the focused pane as a terminal sends them. Ctrl
 | cmd-/ | Open or close the key sheet |
 | cmd-q | Detach and quit |
 
-Cmd-f opens the find bar over the focused view. Typing edits the query. Enter searches in the terminal. The chat scan runs live. Up steps toward the older match. Down steps toward the newer match. Esc closes the bar and clears the highlight. The terminal search reaches the pane's whole server-side scrollback, so a co-viewer sees the jump and the highlight. The counter reads `3/12`, or `no matches`. In the chat the scan runs in the app: matches tint in place and the view follows the current match.
+Cmd-f opens the find bar over the focused view. Typing edits the query. Enter searches in the terminal. The chat scan runs live. Up steps toward the older match. Down steps toward the newer match. The chords ⌘G and ⇧⌘G step to the newer and older match, as in other Mac find bars. Esc closes the bar and clears the highlight. The terminal search reaches the pane's whole server-side scrollback, so a co-viewer sees the jump and the highlight. The counter reads `3/12`, or `no matches`. In the chat the scan runs in the app: matches tint in place and the view follows the current match.
 
 Typed text goes through the macOS input system, so dead keys, option-compose and IME input work. Option on a letter types the composed character, as in Terminal.app. Option on an arrow or backspace still sends the meta form.
 

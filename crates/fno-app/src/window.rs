@@ -728,6 +728,12 @@ impl Root {
     /// step it; the chat steps its own scan. Esc always closes, clearing the
     /// pane's server highlight even when no reply ever arrived.
     fn find_key(&mut self, k: find::FindKey, cx: &mut Context<Self>) {
+        // The arrows and the cmd-g chords share one step path; it runs
+        // outside the bar borrow below.
+        if let find::FindKey::Step { older } = k {
+            self.find_step(older, cx);
+            return;
+        }
         let mut send = None;
         let mut rescan = false;
         let mut escape = false;
@@ -747,33 +753,6 @@ impl Root {
                         rescan = true;
                     }
                 }
-                find::FindKey::Step { older } => match f.target {
-                    find::Target::Pane(p) => {
-                        // An arrow before a search, or on a no-match one, is
-                        // a no-op: the server holds no match list to step
-                        // through (a no-match search_open dropped it).
-                        if f.searched && f.total > 0 {
-                            send = Some(ClientMsg::SearchStep {
-                                pane: p,
-                                dir: find::step_dir(older),
-                            });
-                        }
-                    }
-                    find::Target::Chat => {
-                        if !f.hits.is_empty() {
-                            let cur = f.current.max(1) as usize;
-                            let next = if older {
-                                (cur - 1).max(1)
-                            } else {
-                                (cur + 1).min(f.hits.len())
-                            };
-                            f.current = next as u32;
-                            if let Some(h) = f.hits.get(next - 1) {
-                                reveal = Some(h.item);
-                            }
-                        }
-                    }
-                },
                 find::FindKey::Enter => {
                     if let find::Target::Pane(p) = f.target {
                         // (Re)open on a zero reply too: a no-match search_open
@@ -803,6 +782,47 @@ impl Root {
         } else {
             self.sync_panes(cx);
         }
+        if let Some(item) = reveal {
+            self.chat.list.scroll_to_reveal_item(item);
+        }
+        cx.notify();
+    }
+
+    /// One step for the arrows and the cmd-g chords: the pane sends
+    /// SearchStep only while the server holds a live match list (an arrow
+    /// before a search, or on a no-match one, is a no-op: a no-match
+    /// search_open dropped it), the chat walks its hit index.
+    fn find_step(&mut self, older: bool, cx: &mut Context<Self>) {
+        let mut reveal = None;
+        let mut pane_step = None;
+        {
+            let Some(f) = &mut self.find else { return };
+            match f.target {
+                find::Target::Pane(p) => {
+                    if f.searched && f.total > 0 {
+                        pane_step = Some((p, find::step_dir(older)));
+                    }
+                }
+                find::Target::Chat => {
+                    if !f.hits.is_empty() {
+                        let cur = f.current.max(1) as usize;
+                        let next = if older {
+                            (cur - 1).max(1)
+                        } else {
+                            (cur + 1).min(f.hits.len())
+                        };
+                        f.current = next as u32;
+                        if let Some(h) = f.hits.get(next - 1) {
+                            reveal = Some(h.item);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some((p, dir)) = pane_step {
+            self.send(ClientMsg::SearchStep { pane: p, dir });
+        }
+        self.sync_panes(cx);
         if let Some(item) = reveal {
             self.chat.list.scroll_to_reveal_item(item);
         }
@@ -1127,6 +1147,7 @@ impl Root {
                 }
                 Shortcut::Pick(n) => self.pick(n, cx),
                 Shortcut::Find => self.find_open(cx),
+                Shortcut::FindStep { older } => self.find_step(older, cx),
             }
             return;
         }

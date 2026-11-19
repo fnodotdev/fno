@@ -73,6 +73,11 @@ pub enum Shortcut {
     Pick(u8),
     /// cmd-f: the find bar over the focused pane, or over the chat.
     Find,
+    /// cmd-g steps to the newer match, shift-cmd-g to the older: the
+    /// standard find chords, while the bar is open.
+    FindStep {
+        older: bool,
+    },
 }
 
 pub fn shortcut(k: &Key) -> Option<Shortcut> {
@@ -108,6 +113,8 @@ pub fn shortcut(k: &Key) -> Option<Shortcut> {
         ("x", _) => Shortcut::Cut,
         ("a", _) => Shortcut::SelectAll,
         ("f", false) => Shortcut::Find,
+        ("g", false) => Shortcut::FindStep { older: false },
+        ("g", true) => Shortcut::FindStep { older: true },
         ("q", _) => Shortcut::Quit,
         _ => return None,
     })
@@ -152,6 +159,8 @@ pub const SHEET: &[(&str, &[(&str, &str)])] = &[
             ("⏎", "search"),
             ("↑", "older match"),
             ("↓", "newer match"),
+            ("⌘g", "newer match"),
+            ("⇧⌘g", "older match"),
             ("esc", "close find"),
         ],
     ),
