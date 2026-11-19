@@ -371,10 +371,10 @@ fn run_owned(
         );
     }
 
-    // ── Lead-turn gate: a repeated ask with no live read, an unsent filing ───
+    // ── Lead-turn gate: an unread waiting-on-you ask, an unsent filing ───────
     // A lead's waiting-on-you ask is said once and re-raised only on a state
-    // change, so a repeat must rest on a read this turn. A node it filed this
-    // turn from an operator request leaves dispatched or parked with a reason.
+    // change, so it must rest on a read this turn. A node it filed from an
+    // operator request leaves the turn dispatched or parked with a reason.
     if driver == "lead" {
         let ids = [fire.session_id.as_str(), fire.hook_harness_id.as_str()];
         let message = fire.last_assistant_message.as_deref().unwrap_or_default();

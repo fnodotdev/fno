@@ -1,31 +1,36 @@
 //! The stop hook's lead-turn gate: two checks on the turn a lead ends.
 //!
-//! 1. A waiting-on-you ask that an earlier reply already made goes back to
-//!    the lead when this turn read no live state. The default is to say an
-//!    ask once and re-raise it only on a state change, so a repeat must rest
-//!    on a fresh read (a lead once re-sent "the rc waits for your approval"
-//!    hours after the user approved it and the run published).
-//! 2. A node the lead filed this turn from an operator request goes back
-//!    when it leaves the turn as a bare idea: neither dispatched (a claim on
-//!    it, or a status past the idea rungs) nor parked with a named reason (a
-//!    deferral, which always carries one, or a blocker).
+//! 1. A waiting-on-you line goes back to the lead when this turn read no
+//!    live state behind it. An ask is said once and re-raised only on a
+//!    state change, and only a fresh read tells the two apart (a lead once
+//!    re-sent "the rc waits for your approval" hours after the user approved
+//!    it and the run published).
+//! 2. A node the lead filed from an operator request goes back when it
+//!    leaves the turn as a bare idea: neither dispatched (a claim on it, or a
+//!    status past the idea rungs) nor parked with a named reason (a deferral,
+//!    which always carries one, or a blocker).
 //!
-//! Claude transcripts only: a codex rollout carries no end-of-turn marker
-//! here, so the gate passes it.
+//! A turn is every row after the previous end-of-turn reply, so a beat woken
+//! by a loop, mail or hook row is its own turn whatever shape the wake takes.
+//! Claude transcripts only: a codex rollout carries no end-of-turn marker,
+//! so the gate passes it.
 
 use std::io::{Read as _, Seek as _, SeekFrom};
 use std::path::Path;
 
 use serde_json::Value;
 
-use crate::repeated_asks::{same_ask, waiting_asks_in};
+use crate::repeated_asks::waiting_asks_in;
 
 /// The transcript tail the gate reads. A lead transcript grows for days; the
-/// current turn and the replies before it sit at the end.
+/// current turn sits at the end.
 const TAIL_BYTES: u64 = 8 * 1024 * 1024;
-const PRIOR_REPLIES: usize = 20;
+/// How far back the filing check reaches past the turn start (an SQLite
+/// date modifier), so a node filed before a blocked stop is still read on
+/// the next one.
+const FILING_LOOKBACK: &str = "-2 hours";
 /// Shell commands that read live state an ask can rest on. The check-in is
-/// not one: a lead runs it every beat, so it would clear every repeat.
+/// not one: a lead runs it every beat, so it would clear every stale ask.
 const LIVE_READS: &[&str] = &[
     "gh run ",
     "gh pr ",
@@ -40,23 +45,21 @@ const UNDISPATCHED: &[&str] = &["idea", "intake", "triage", "design"];
 
 #[derive(Debug, Default)]
 pub(super) struct Turn {
-    /// The timestamp of the user prompt that opened this turn.
+    /// The timestamp of the first row after the previous end-of-turn reply.
     started_at: Option<String>,
     /// Every shell command the lead ran in this turn.
     commands: Vec<String>,
-    /// The end-of-turn replies before this turn, oldest first.
-    prior_replies: Vec<String>,
 }
 
 /// Some block reason when the ending lead turn fails either check.
 pub(super) fn gate(transcript: &Path, session_ids: &[&str], message: &str) -> Option<String> {
-    let turn = parse_turn(&read_tail(transcript)?);
-    if let Some(reason) = stale_ask(message, &turn) {
+    let turn = parse_turn(&read_tail(transcript)?, message);
+    if let Some(reason) = unread_ask(message, &turn) {
         return Some(reason);
     }
     let since = turn.started_at.as_deref()?;
     let graph = crate::backlog::database_path(&crate::graph_get::default_graph_path());
-    let nodes = undispatched_operator_nodes(&graph, session_ids, since);
+    let nodes = undispatched_operator_nodes(&graph, session_ids, since, FILING_LOOKBACK);
     (!nodes.is_empty()).then(|| undispatched_reason(&nodes))
 }
 
@@ -78,35 +81,36 @@ fn read_tail(transcript: &Path) -> Option<String> {
     })
 }
 
-fn parse_turn(raw: &str) -> Turn {
+/// The turn that `message` ends. When the harness already wrote `message`
+/// as the newest end-of-turn row, the boundary is the end-of-turn row
+/// before it.
+fn parse_turn(raw: &str, message: &str) -> Turn {
     let rows: Vec<Value> = raw
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .filter(|row| row.get("isSidechain").and_then(Value::as_bool) != Some(true))
         .collect();
-    let start = rows.iter().rposition(is_prompt_row);
+    let ends: Vec<usize> = (0..rows.len())
+        .filter(|&i| is_end_turn_reply(&rows[i]))
+        .collect();
+    let written = ends.last().is_some_and(|&last| {
+        crate::loopcheck::extract_assistant_text(&rows[last]).trim() == message.trim()
+            && !rows[last + 1..].iter().any(is_assistant)
+    });
+    let boundary = if written {
+        ends.len().checked_sub(2).map(|i| ends[i])
+    } else {
+        ends.last().copied()
+    };
+    let current = &rows[boundary.map_or(0, |i| i + 1)..];
     let mut turn = Turn {
-        started_at: start.and_then(|i| {
-            rows[i]
-                .get("timestamp")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        }),
+        started_at: current
+            .iter()
+            .find_map(|row| row.get("timestamp").and_then(Value::as_str))
+            .map(str::to_string),
         ..Turn::default()
     };
-    let (before, current) = rows.split_at(start.map_or(0, |i| i + 1));
-    for row in before.iter().filter(|row| is_end_turn_reply(row)) {
-        let text = crate::loopcheck::extract_assistant_text(row);
-        if !text.trim().is_empty() {
-            turn.prior_replies.push(text);
-        }
-    }
-    let excess = turn.prior_replies.len().saturating_sub(PRIOR_REPLIES);
-    turn.prior_replies.drain(..excess);
-    for row in current {
-        if row.get("type").and_then(Value::as_str) != Some("assistant") {
-            continue;
-        }
+    for row in current.iter().filter(|row| is_assistant(row)) {
         let content = row.pointer("/message/content").and_then(Value::as_array);
         for item in content.into_iter().flatten() {
             if item.get("type").and_then(Value::as_str) == Some("tool_use")
@@ -121,28 +125,16 @@ fn parse_turn(raw: &str) -> Turn {
     turn
 }
 
-/// A typed prompt: a user row that is not hook meta and carries no tool result.
-fn is_prompt_row(row: &Value) -> bool {
-    if row.get("type").and_then(Value::as_str) != Some("user")
-        || crate::provenance::json_truthy(row.get("isMeta"))
-    {
-        return false;
-    }
-    match row.pointer("/message/content") {
-        Some(Value::String(text)) => !text.trim().is_empty(),
-        Some(Value::Array(items)) => !items
-            .iter()
-            .any(|item| item.get("type").and_then(Value::as_str) == Some("tool_result")),
-        _ => false,
-    }
+fn is_assistant(row: &Value) -> bool {
+    row.get("type").and_then(Value::as_str) == Some("assistant")
 }
 
 fn is_end_turn_reply(row: &Value) -> bool {
-    row.get("type").and_then(Value::as_str) == Some("assistant")
+    is_assistant(row)
         && row.pointer("/message/stop_reason").and_then(Value::as_str) == Some("end_turn")
 }
 
-fn stale_ask(message: &str, turn: &Turn) -> Option<String> {
+fn unread_ask(message: &str, turn: &Turn) -> Option<String> {
     if turn
         .commands
         .iter()
@@ -150,29 +142,24 @@ fn stale_ask(message: &str, turn: &Turn) -> Option<String> {
     {
         return None;
     }
-    let earlier: Vec<String> = turn
-        .prior_replies
-        .iter()
-        .flat_map(|reply| waiting_asks_in(reply))
-        .collect();
-    let repeated = waiting_asks_in(message)
-        .into_iter()
-        .find(|ask| earlier.iter().any(|old| same_ask(ask, old)))?;
+    let ask = waiting_asks_in(message).into_iter().next()?;
     Some(format!(
-        "This report repeats a waiting-on-you ask an earlier reply already made (\"{repeated}\"), \
-and this turn read no live state behind it. Re-read that state now (gh run view, gh pr view, \
-fno do pr status, fno inbox outstanding). If it has not changed, drop the line: an ask is \
-said once and re-raised only when its state changes. If it changed, say what changed."
+        "This report says work waits on the user (\"{ask}\"), and this turn read no live state \
+behind it. Re-read that state now (gh run view, gh pr view, fno do pr status, fno inbox \
+outstanding). If it has not changed since you last said it, drop the line: an ask is said once \
+and re-raised only when its state changes. If it changed, say what changed."
     ))
 }
 
-/// The operator-request nodes these sessions filed at or after `since` that
-/// still sit undispatched and unparked. An unreadable graph reads as none:
-/// the gate never holds a stop on its own read failure.
+/// The operator-request nodes these sessions filed since the earlier of
+/// `since` and now shifted by `lookback`, that still sit undispatched and
+/// unparked. An unreadable graph reads as none: the gate never holds a stop
+/// on its own read failure.
 fn undispatched_operator_nodes(
     graph: &Path,
     session_ids: &[&str],
     since: &str,
+    lookback: &str,
 ) -> Vec<(String, String)> {
     let Ok(connection) = crate::store_conn::open_read(graph) else {
         return Vec::new();
@@ -186,7 +173,7 @@ fn undispatched_operator_nodes(
         "SELECT n.id, n.title FROM node_provenance p JOIN nodes n ON n.id = p.node_id \
          WHERE p.source_session_id = ?1 \
            AND (p.source_kind = 'operator_request' OR p.request_origin = 'operator_request') \
-           AND julianday(n.created_at) >= julianday(?2) \
+           AND julianday(n.created_at) >= min(julianday(?2), julianday('now', ?3)) \
            AND n.archived_at IS NULL \
            AND n.status IN ({statuses}) \
            AND NOT EXISTS (SELECT 1 FROM claims c WHERE c.key = 'node:' || n.id) \
@@ -199,7 +186,7 @@ fn undispatched_operator_nodes(
     };
     let mut nodes: Vec<(String, String)> = Vec::new();
     for session in session_ids.iter().filter(|id| !id.is_empty()) {
-        let Ok(rows) = statement.query_map([*session, since], |row| {
+        let Ok(rows) = statement.query_map([*session, since, lookback], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         }) else {
             continue;
@@ -221,7 +208,7 @@ fn undispatched_reason(nodes: &[(String, String)]) -> String {
         .join(", ");
     let first = &nodes[0].0;
     format!(
-        "This turn filed {list} from an operator request and left it a bare idea. A node filed \
+        "This lead filed {list} from an operator request and left it a bare idea. A node filed \
 from an operator request leaves the turn dispatched or parked with a named reason. \
 Dispatch it: fno agent spawn \"/fno:target {first}\". Or park it: fno backlog defer {first} \
 -K later -R \"<why it waits>\", or name its blocker: fno backlog update {first} blocked_by+=<id>."
@@ -233,93 +220,73 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn row(value: Value) -> String {
-        value.to_string()
-    }
-
     fn prompt(ts: &str, text: &str) -> String {
-        row(json!({"type": "user", "timestamp": ts, "message": {"role": "user", "content": text}}))
+        json!({"type": "user", "timestamp": ts, "isMeta": true,
+            "message": {"role": "user", "content": text}})
+        .to_string()
     }
 
     fn reply(text: &str) -> String {
-        row(
-            json!({"type": "assistant", "message": {"role": "assistant", "stop_reason": "end_turn",
-            "content": [{"type": "text", "text": text}]}}),
-        )
+        json!({"type": "assistant", "message": {"role": "assistant", "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": text}]}})
+        .to_string()
     }
 
     fn bash(command: &str) -> String {
-        row(
-            json!({"type": "assistant", "message": {"role": "assistant", "stop_reason": "tool_use",
-            "content": [{"type": "tool_use", "name": "Bash", "input": {"command": command}}]}}),
-        )
-    }
-
-    fn tool_result() -> String {
-        row(json!({"type": "user", "message": {"role": "user",
-            "content": [{"type": "tool_result", "content": "ok"}]}}))
+        json!({"type": "assistant", "message": {"role": "assistant", "stop_reason": "tool_use",
+            "content": [{"type": "tool_use", "name": "Bash", "input": {"command": command}}]}})
+        .to_string()
     }
 
     const ASK: &str = "The v0.0.17 rc still waits for your approval.";
 
     #[test]
-    fn a_repeated_waiting_ask_with_no_live_read_blocks_and_a_read_clears_it() {
-        let earlier = [prompt("2026-11-19T18:00:00Z", "beat"), reply(ASK)].join("\n");
-        let blind = [
-            earlier.clone(),
-            prompt("2026-11-19T19:45:00Z", "beat"),
-            bash("ls"),
+    fn a_waiting_ask_needs_a_live_read_in_its_own_turn() {
+        // Beat 150 read the run; beat 189 (a meta-flagged wake) read nothing.
+        let old_read = [
+            prompt("2026-11-19T18:00:00Z", "beat"),
+            bash("gh run view 123 --json status"),
+            reply("Run green."),
         ]
         .join("\n");
-        let reason = stale_ask(ASK, &parse_turn(&blind)).expect("a blind repeat blocks");
+        let blind = [
+            old_read.clone(),
+            prompt("2026-11-19T19:45:00Z", "beat"),
+            bash("ls"),
+        ];
+        let turn = parse_turn(&blind.join("\n"), ASK);
+        assert_eq!(turn.started_at.as_deref(), Some("2026-11-19T19:45:00Z"));
+        assert_eq!(turn.commands, vec!["ls".to_string()]);
+        let reason = unread_ask(ASK, &turn).expect("an unread ask blocks");
         assert!(reason.contains("waits for your approval"), "{reason}");
         assert!(
             reason.contains("re-raised only when its state changes"),
             "{reason}"
         );
 
-        let read = [
-            earlier.clone(),
+        // The harness already wrote the message: the boundary is the reply before it.
+        let written = [
+            old_read,
             prompt("2026-11-19T19:45:00Z", "beat"),
-            bash("gh run view 123 --json status"),
-            tool_result(),
-        ]
-        .join("\n");
-        let turn = parse_turn(&read);
+            bash("gh pr view 9"),
+            reply(ASK),
+        ];
+        let turn = parse_turn(&written.join("\n"), ASK);
         assert_eq!(turn.started_at.as_deref(), Some("2026-11-19T19:45:00Z"));
         assert!(
-            stale_ask(ASK, &turn).is_none(),
+            unread_ask(ASK, &turn).is_none(),
             "a same-turn live read clears it"
         );
     }
 
     #[test]
-    fn a_first_ask_or_a_plain_report_never_blocks() {
-        let fresh = [prompt("2026-11-19T19:45:00Z", "beat"), bash("ls")].join("\n");
-        assert!(
-            stale_ask(ASK, &parse_turn(&fresh)).is_none(),
-            "said once is fine"
+    fn a_report_with_no_waiting_ask_never_blocks() {
+        let turn = parse_turn(
+            &[prompt("2026-11-19T19:45:00Z", "b"), bash("ls")].join("\n"),
+            "x",
         );
-        let earlier = [prompt("2026-11-19T18:00:00Z", "beat"), reply(ASK)].join("\n");
-        let turn = parse_turn(&[earlier, prompt("2026-11-19T19:45:00Z", "b")].join("\n"));
-        assert!(stale_ask("Merged PR 371; CI green on 372.", &turn).is_none());
-        assert!(stale_ask("You already ruled on the rc: your approval landed.", &turn).is_none());
-    }
-
-    #[test]
-    fn the_turn_starts_at_the_last_typed_prompt_not_a_tool_result() {
-        let raw = [
-            prompt("2026-11-19T19:00:00Z", "first"),
-            reply("done"),
-            prompt("2026-11-19T19:45:00Z", "second"),
-            bash("fno backlog idea x"),
-            tool_result(),
-        ]
-        .join("\n");
-        let turn = parse_turn(&raw);
-        assert_eq!(turn.started_at.as_deref(), Some("2026-11-19T19:45:00Z"));
-        assert_eq!(turn.prior_replies, vec!["done".to_string()]);
-        assert_eq!(turn.commands, vec!["fno backlog idea x".to_string()]);
+        assert!(unread_ask("Merged PR 371; CI green on 372.", &turn).is_none());
+        assert!(unread_ask("You already ruled on the rc: your approval landed.", &turn).is_none());
     }
 
     #[test]
@@ -351,7 +318,9 @@ mod tests {
         )
         .expect("seed");
         drop(db);
-        let nodes = undispatched_operator_nodes(&graph, &["lead-1"], "2026-11-19T19:45:00.000Z");
+        // A zero lookback reads the turn alone; x-older sits before it.
+        let since = "2026-11-19T19:45:00.000Z";
+        let nodes = undispatched_operator_nodes(&graph, &["lead-1"], since, "+0 hours");
         assert_eq!(nodes, vec![("x-bare".to_string(), "bare idea".to_string())]);
         let reason = undispatched_reason(&nodes);
         assert!(
@@ -359,6 +328,6 @@ mod tests {
             "{reason}"
         );
         assert!(reason.contains("fno backlog defer x-bare"), "{reason}");
-        assert!(undispatched_operator_nodes(&graph, &["other"], "2026-11-19T19:45:00Z").is_empty());
+        assert!(undispatched_operator_nodes(&graph, &["other"], since, "+0 hours").is_empty());
     }
 }
