@@ -1434,7 +1434,7 @@ pub(crate) fn spawn_persona_pane(view: &mut View) {
         .iter()
         .max_by_key(|(_, r)| r.x + r.cols)
         .map(|(pid, r)| (*pid, *r));
-    let Some((anchor_id, anchor_rect)) = anchor else {
+    let Some((anchor_id, _)) = anchor else {
         return;
     };
     let cwd = std::env::current_dir()
@@ -1527,7 +1527,7 @@ pub(crate) fn persona_widening_seams(view: &mut View) -> Vec<crate::proto::Comma
         let target = rects
             .iter()
             .filter(|(pid, _)| *pid != pane)
-            .filter(|(_, (x, y, w, h))| *y < py + ph && py < y + h)
+            .filter(|(_, (_, y, _, h))| *y < py + ph && py < y + h)
             .map(|(_, (_, _, w, _))| *w)
             .max()
             .map(|w| w + 1);
