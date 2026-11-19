@@ -136,10 +136,10 @@ pub use gate::{
     pr_status_facts, pr_steward, pr_verify, pr_watch, pr_worktree, publish_review, quarantine,
     receipt_policy, release_notes, release_record, release_watch, review_capability, review_doors,
     review_findings, review_freshness, review_hold, review_invocation, review_level, review_policy,
-    review_summary, stub_manifest, subagent_hold, surface_check, symptom_recheck, target_blast,
-    target_denominator, target_gates, target_init, target_orient, target_start, test_changed,
-    test_command, test_delta, test_env, test_hold, test_run, test_smoke, test_smoke_discovery,
-    test_smoke_registry, verify_advise, verify_evidence,
+    review_summary, stop_now, stub_manifest, subagent_hold, surface_check, symptom_recheck,
+    target_blast, target_denominator, target_gates, target_init, target_orient, target_start,
+    test_changed, test_command, test_delta, test_env, test_hold, test_run, test_smoke,
+    test_smoke_discovery, test_smoke_registry, verify_advise, verify_evidence,
 };
 pub(crate) use gate::{build_marks, pr_idle, stacked_base_stamp};
 use gate::{cancel_sentinel, completion_output, merge_architect, test_run_journal, test_run_pins};

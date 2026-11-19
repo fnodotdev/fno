@@ -107,22 +107,36 @@ pub fn answer_permission_via_control_sock_in(
     if key.is_empty() || key.chars().any(|c| c.is_control()) {
         return Err("unsafe-text");
     }
-    let roster = ClaudeRoster::load(&daemon_dir.join("roster.json")).map_err(|_| NOT_INJECTABLE)?;
-    let worker = roster.find(session).ok_or(NOT_INJECTABLE)?;
-    let sock = worker.resolve_control_sock().ok_or(NOT_INJECTABLE)?;
-    let auth = read_control_key_in(daemon_dir);
-    let mut transport = UnixControlTransport::connect(&sock).map_err(|_| "io-error")?;
-    if perform_attach(
-        &mut transport,
-        &AttachRequest::for_frame_stream(worker.short_id().to_string(), auth.clone()),
-    )
-    .is_err()
-    {
-        return Err("attach-failed");
-    }
+    let mut transport = attach_worker(daemon_dir, session)?;
     transport.send_line(key).map_err(|_| "io-error")?;
     std::thread::sleep(Duration::from_millis(enter_delay_ms));
     transport.send_line("\r").map_err(|_| "io-error")
+}
+
+/// Press Esc in a claude session: the key that interrupts a running turn.
+/// No confirm and no CR. A turn that already ended takes one Esc on an
+/// empty composer, which does nothing; two would open the rewind menu.
+pub fn interrupt_via_control_sock_in(daemon_dir: &Path, session: &str) -> Result<(), &'static str> {
+    attach_worker(daemon_dir, session)?
+        .send_line("\x1b")
+        .map_err(|_| "io-error")
+}
+
+/// Resolve `session` on this account's roster and attach to its control.sock.
+fn attach_worker(daemon_dir: &Path, session: &str) -> Result<UnixControlTransport, &'static str> {
+    let roster = ClaudeRoster::load(&daemon_dir.join("roster.json")).map_err(|_| NOT_INJECTABLE)?;
+    let worker = roster.find(session).ok_or(NOT_INJECTABLE)?;
+    let sock = worker.resolve_control_sock().ok_or(NOT_INJECTABLE)?;
+    let mut transport = UnixControlTransport::connect(&sock).map_err(|_| "io-error")?;
+    perform_attach(
+        &mut transport,
+        &AttachRequest::for_frame_stream(
+            worker.short_id().to_string(),
+            read_control_key_in(daemon_dir),
+        ),
+    )
+    .map_err(|_| "attach-failed")?;
+    Ok(transport)
 }
 
 /// The control.sock lane with the state it reached. `Err` is a refusal

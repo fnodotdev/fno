@@ -82,6 +82,7 @@ fn stale_sweep_suspends_without_consuming_cadence_while_dispatch_paused() {
             origin: None,
             mail: None,
             mail_session_id: None,
+            now: false,
         })
         .unwrap(),
     )
@@ -160,6 +161,7 @@ fn stale_sweep_suspends_without_consuming_cadence_while_dispatch_paused() {
             origin: None,
             mail: None,
             mail_session_id: None,
+            now: false,
         })
         .unwrap(),
     )
