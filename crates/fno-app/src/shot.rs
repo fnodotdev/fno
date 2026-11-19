@@ -71,7 +71,7 @@ pub fn run(opts: ShotOptions) -> i32 {
                 ))),
                 titlebar: None,
                 focus: false,
-                show: false,
+                show: true,
                 is_movable: false,
                 is_resizable: false,
                 ..Default::default()
@@ -85,9 +85,24 @@ pub fn run(opts: ShotOptions) -> i32 {
             cx.quit();
             return;
         };
+        // Drop the window below the desktop level in the same run-loop
+        // turn as the open, before the window server composites a
+        // normal-level frame: gpui presents only once the window is
+        // ordered on, and the early level set keeps every composited
+        // frame under the desktop picture.
+        let _ = unsafe { shot_window_id() };
         cx.spawn(async move |cx| {
             cx.background_executor().timer(SETTLE).await;
-            let code = capture_to_png(&out);
+            // Hold mode: leave the composited below-desktop window up for
+            // a foreign capturer, skip the in-process capture. Diagnostics
+            // only; the shot door never sets it.
+            let code = if std::env::var_os("FNO_SHOT_HOLD").is_some() {
+                eprintln!("fno-app --shot: hold mode: the capture is skipped");
+                std::thread::sleep(std::time::Duration::from_secs(8));
+                0
+            } else {
+                capture_to_png(&out)
+            };
             if code != 0 {
                 eprintln!("fno-app --shot: the capture failed");
             }
@@ -321,6 +336,7 @@ unsafe fn sck_capture(window_id: u32, scale: f64) -> Result<core_graphics::image
     // capture call: the framework keeps the block after this frame ends.
     let capture_block = RcBlock::with_encoding::<_, _, _, CaptureBlockEncoding>(
         move |image: *const c_void, err: *mut c_void| {
+            eprintln!("fno-app --shot: capture completion entered");
             if !image.is_null() && err.is_null() {
                 // SAFETY: the handler's image is valid only for the call,
                 // so it is retained once and the channel carries that +1;
@@ -490,12 +506,20 @@ unsafe fn shot_window_id() -> Option<(u32, f64)> {
     }) else {
         return None;
     };
-    // Below the desktop background level: the desktop paints over it, so
-    // nothing is seen. Sharing stays read-only: the non-deprecated
-    // spelling the capture service accepts.
+    // Order on first, then drop below the desktop background level: the
+    // desktop paints over it, so nothing is seen. Sharing stays
+    // read-only: the non-deprecated spelling the capture service
+    // accepts. The read-back line shows what the window itself claims,
+    // so a reverted setter never hides behind the server-side read.
+    let _: () = msg_send![w, orderFront: std::ptr::null_mut::<objc::runtime::Object>()];
     let _: () = msg_send![w, setLevel: -2147483100i64];
     let _: () = msg_send![w, setSharingType: 1usize];
-    let _: () = msg_send![w, orderFront: std::ptr::null_mut::<objc::runtime::Object>()];
+    let level_after: i64 = msg_send![w, level];
+    let visible: bool = msg_send![w, isVisible];
+    let occl: usize = msg_send![w, occlusionState];
+    eprintln!(
+        "fno-app --shot: window after-set: level={level_after} visible={visible} occlusion={occl}"
+    );
     let scale: f64 = msg_send![w, backingScaleFactor];
     Some((num as u32, scale))
 }
