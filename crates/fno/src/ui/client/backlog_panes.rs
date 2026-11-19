@@ -27,6 +27,38 @@ pub(crate) struct PaneRegions {
 /// Narrowest either pane may get when the seam moves.
 const MIN_PANE_W: usize = 20;
 
+/// An overlay's hint strip wrapped to `w` columns at its own `" · "` key
+/// pairs. The board's own sheet wraps (`hint_lines`), and the strip names
+/// the same kind of keys, so a narrow host column wraps it too: a hard
+/// clip reads as a broken key ("n not" for "n note").
+fn wrap_segments(text: &str, w: usize) -> Vec<TLine> {
+    if w == 0 {
+        return vec![TLine::meta(text)];
+    }
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for seg in text.split(" \u{b7} ") {
+        let candidate = if line.is_empty() {
+            seg.to_string()
+        } else {
+            format!("{line} \u{b7} {seg}")
+        };
+        if candidate.chars().count() > w && !line.is_empty() {
+            lines.push(TLine::meta(std::mem::take(&mut line)));
+            line = seg.to_string();
+        } else {
+            line = candidate;
+        }
+    }
+    if !line.is_empty() {
+        lines.push(TLine::meta(line));
+    }
+    if lines.is_empty() {
+        lines.push(TLine::meta(text));
+    }
+    lines
+}
+
 /// The board width range the seam may take in a host `w` columns wide.
 pub(crate) fn seam_bounds(w: usize) -> (usize, usize) {
     (MIN_PANE_W, w.saturating_sub(MIN_PANE_W + 1).max(MIN_PANE_W))
@@ -134,8 +166,10 @@ pub(crate) fn paint(
     // as ready to act while typing lands somewhere else.
     let hint = match overlay_hint {
         // An overlay owns the keyboard: the strip names its keys, never
-        // the board's.
-        Some(text) => vec![TLine::meta(text)],
+        // the board's. Wrapped at the " · " segment boundaries, the way
+        // the board's own sheet wraps: a narrow host column would
+        // otherwise hard-clip mid-token ("n not" for "n note").
+        Some(text) => wrap_segments(text, w),
         None => hint_lines(b, focus_pane, w),
     };
     let hint: Vec<TLine> = if owner {

@@ -1410,11 +1410,30 @@ pub(crate) fn spawn_persona_pane(view: &mut View) {
     if !docked {
         return;
     }
+    // The split anchors on the row's rightmost pane, so the column opens
+    // as the new rightmost pane and its seam share decides its width. A
+    // focus-relative anchor would land the column mid-row wherever the
+    // keyboard happened to sit. The rect read here is pre-split: the
+    // layout still carries the anchor's full width, which is exactly the
+    // width the seam math needs.
+    let anchor = view
+        .layout
+        .panes
+        .iter()
+        .max_by_key(|(_, r)| r.x + r.cols)
+        .map(|(pid, r)| (*pid, *r));
+    let Some((anchor_id, anchor_rect)) = anchor else {
+        return;
+    };
     let cwd = std::env::current_dir()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| ".".into());
     let placement = crate::proto::PanePlacement {
         split: Some(crate::proto::Dir::Right),
+        at: Some(anchor_id),
+        // Exact placement: a refused split surfaces as a notice below,
+        // never a silent spawn in a fresh tab.
+        fallback: crate::proto::PlacementFallback::Refuse,
         ..Default::default()
     };
     let command = crate::proto::ControlCommand::PaneRun {
@@ -1430,36 +1449,35 @@ pub(crate) fn spawn_persona_pane(view: &mut View) {
     let session = view.session.clone();
     let sock = match crate::proto::socket_path(&session) {
         Ok(s) => s,
-        Err(_) => return,
+        Err(e) => {
+            view.set_notice(format!("the persona pane never opened: {e}"));
+            return;
+        }
     };
     let reply = crate::mux_cli::control_roundtrip(&sock, &session, command);
-    let (pane_id, anchor) = match reply {
-        Ok(crate::proto::ServerMsg::PaneSpawned { pane_id, placement }) => {
-            let anchor = placement.as_ref().map(|p| p.anchor);
-            (Some(pane_id), anchor)
+    let pane_id = match reply {
+        Ok(crate::proto::ServerMsg::PaneSpawned { pane_id, .. }) => pane_id,
+        Ok(other) => {
+            view.set_notice(format!("the persona pane never opened: {other:?}"));
+            return;
         }
-        _ => (None, None),
+        Err(e) => {
+            view.set_notice(format!("the persona pane never opened: {e}"));
+            return;
+        }
     };
-    if let Some(pane_id) = pane_id {
-        // The seam lands the column its widest share: the split halves
-        // the anchor, and the absolute seam position moves the divider
-        // so the persona pane holds 55 percent of the pair. A refused
-        // resize degrades to the split's even halves.
-        if let Some(anchor) = anchor {
-            if let Some((_, r)) = view.layout.panes.iter().find(|(pid, _)| *pid == anchor) {
-                let cols = r.cols as usize;
-                let x = r.x as usize;
-                let pos = (x + cols * 55 / 100) as u16;
-                view.note_command_sent(&crate::proto::Command::ResizeSeam {
-                    a: anchor,
-                    b: pane_id,
-                    pos,
-                });
-            }
-        }
-        if let Some(o) = view.persona.as_mut() {
-            o.pane = Some(pane_id);
-        }
+    // The seam lands the column its widest share: the split halves the
+    // anchor, and the absolute seam position moves the divider so the
+    // persona pane holds 55 percent of the pre-split anchor width. A
+    // refused resize degrades to the split's even halves.
+    let pos = (anchor_rect.x as usize + anchor_rect.cols as usize * 45 / 100) as u16;
+    view.note_command_sent(&crate::proto::Command::ResizeSeam {
+        a: anchor_id,
+        b: pane_id,
+        pos,
+    });
+    if let Some(o) = view.persona.as_mut() {
+        o.pane = Some(pane_id);
     }
 }
 
@@ -1543,6 +1561,21 @@ pub(crate) fn draw_detail(
         paint_unscoped(view, cells, rows, cols, content_origin, content_dims);
         return true;
     };
+    // The chip door's page owns its pane (the split landed): the board
+    // keeps its own panel region, its strip hint naming the open door,
+    // and the pane paints the page full-rect. Docking columns inside the
+    // pane would carve the page for a host that is not there.
+    if view
+        .persona
+        .as_ref()
+        .is_some_and(|o| o.home == Home::SidelineBoard && o.pane.is_some())
+    {
+        if view.backlog_board.is_some() {
+            view.draw_board_rect(cells, rows, cols, persona_panel_rect(view), false);
+        }
+        paint_column(view, cells, rows, cols, home);
+        return true;
+    }
     if sibling_pane(view).is_some() {
         paint_folded(view, cells, rows, cols, home);
         return true;
@@ -1860,10 +1893,7 @@ pub(crate) fn persona_pane_rect(view: &View) -> Option<(usize, usize, usize, usi
                     return Some((top, left, h, w));
                 }
             }
-            let w = (view.panel_w() as usize).min(cols as usize);
-            let h = (rows as usize)
-                .saturating_sub(view.bottom_row_is_chrome() as usize)
-                .max(1);
+            let (h, w) = persona_panel_rect(view);
             Some((0, 0, h, w))
         }
         Some(Home::Question | Home::Decision | Home::Bell) => content_rect(),
@@ -1879,6 +1909,17 @@ pub(crate) fn persona_pane_rect(view: &View) -> Option<(usize, usize, usize, usi
             pane_rect(view.layout.focus)
         }
     }
+}
+
+/// The sideline board's panel dims `(h, w)`: the board and the chip
+/// door's fallback dock live inside the left panel, never past it.
+fn persona_panel_rect(view: &View) -> (usize, usize) {
+    let (rows, cols) = view.term;
+    let w = (view.panel_w() as usize).min(cols as usize);
+    let h = (rows as usize)
+        .saturating_sub(view.bottom_row_is_chrome() as usize)
+        .max(1);
+    (h, w)
 }
 
 /// The docked layout: `(host_w, persona_col_w)` for a home `w` columns

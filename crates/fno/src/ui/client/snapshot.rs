@@ -973,9 +973,18 @@ fn live_frame(
         let fresh = runtime
             .block_on(async {
                 tokio::time::sleep(Duration::from_millis(1500)).await;
-                observe(&socket, cwd.clone(), dims).await
+                observe(&socket, cwd.clone(), staged_dims(dims, &view)).await
             })
             .map_err(|e| format!("persona-editor-pane: {e}"))?;
+        view.layout = fresh.layout;
+        view.frames = fresh.frames;
+    } else if dims.is_some() && dims != Some(view.content_dims()) {
+        // Staging can move the chrome (the chip shot widens the board
+        // panel): the panes must re-tile for the staged viewport, or the
+        // right column crops at the canvas edge with its border clipped.
+        let fresh = runtime
+            .block_on(observe(&socket, cwd.clone(), staged_dims(dims, &view)))
+            .map_err(|e| format!("staged viewport: {e}"))?;
         view.layout = fresh.layout;
         view.frames = fresh.frames;
     }
@@ -985,6 +994,16 @@ fn live_frame(
     }
     crate::lattice::freeze_spin();
     Ok(view.compose())
+}
+
+/// The observe dims after staging: the staged view's own content dims
+/// when a fit-sized shot's chrome moved, else the sizing dims unchanged.
+fn staged_dims(dims: Option<(u16, u16)>, view: &View) -> Option<(u16, u16)> {
+    if dims.is_some() {
+        Some(view.content_dims())
+    } else {
+        None
+    }
 }
 
 /// A shot that cannot be staged; the text is the error `live_frame` returns.

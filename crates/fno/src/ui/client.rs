@@ -6295,6 +6295,12 @@ async fn attach_and_run(
     // raw-fed overlays hold a lone ESC in their carry exactly then, and
     // the quiet-window flush releases it as the Esc action.
     let mut esc_tail_since: Option<Instant> = None;
+    // The content viewport the server last tiled for. A keyboard door that
+    // moves the chrome (panel toggles, density presets) changes
+    // `content_dims` without a winch, and a stale area crops the
+    // rightmost pane with its border clipped; the key arm re-announces on
+    // drift.
+    let mut sent_viewport = (0u16, 0u16);
     // Carries a partial SGR mouse report split across reads (mouse.rs).
     let mut mouse_carry: Vec<u8> = Vec::new();
     // Clipboard delivery runs on a blocking thread and reports its outcome back
@@ -6901,6 +6907,21 @@ async fn attach_and_run(
                                 None
                             };
                             theme_ground::drain_pending_ground(&mut view, &mut compositor, &mut guard);
+                            let dims = view.content_dims();
+                            if dims != sent_viewport {
+                                if let Err(e) = write_msg(
+                                    &mut sock_w,
+                                    &ClientMsg::Resize {
+                                        rows: dims.0,
+                                        cols: dims.1,
+                                    },
+                                )
+                                .await
+                                {
+                                    break Err(format!("resize send failed: {e}"));
+                                }
+                                sent_viewport = dims;
+                            }
                             if let Err(e) = compositor.draw(&view.compose()) {
                                 break Err(format!("draw: {e}"));
                             }
@@ -7225,6 +7246,7 @@ async fn attach_and_run(
                     if let Err(e) = write_msg(&mut sock_w, &ClientMsg::Resize { rows: c_rows, cols: c_cols }).await {
                         break Err(format!("resize send failed: {e}"));
                     }
+                    sent_viewport = (c_rows, c_cols);
                     if let Err(e) = compositor.draw(&view.compose()) {
                         break Err(format!("draw: {e}"));
                     }
