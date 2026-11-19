@@ -51,7 +51,13 @@ pub mod plugins_feed {
 }
 
 pub mod transcript_tail {
-    pub use crate::transcript_tail::{claude_projects_dir, transcript_uuid_shaped};
+    pub use crate::transcript_tail::{
+        claude_projects_dir, harness_of_session, newest_transcript, transcript_uuid_shaped,
+    };
+}
+
+pub mod chat_events {
+    pub use crate::chat_events::opencode::newest_session_id;
 }
 
 pub mod web_hq {

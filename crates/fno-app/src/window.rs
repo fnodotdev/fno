@@ -12,17 +12,18 @@ use std::time::Duration;
 
 use gpui::{
     actions, canvas, div, font, point, prelude::*, px, rgb, rgba, size, AnyView, App, Application,
-    Bounds, ClipboardItem, Context, ElementInputHandler, Entity, EntityInputHandler, FocusHandle,
-    Global, InputHandler, KeyBinding, KeyDownEvent, Menu, MenuItem, ModifiersChangedEvent,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollWheelEvent,
-    Size, Subscription, Task, TitlebarOptions, UTF16Selection, Window, WindowBounds, WindowOptions,
+    Bounds, ClipboardEntry, ClipboardItem, Context, ElementInputHandler, Entity,
+    EntityInputHandler, FocusHandle, Global, InputHandler, KeyBinding, KeyDownEvent, Menu,
+    MenuItem, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    Pixels, Point, ScrollWheelEvent, Size, Subscription, Task, TitlebarOptions, UTF16Selection,
+    Window, WindowBounds, WindowOptions,
 };
 
 use serde::{Deserialize, Serialize};
 
 use super::alerts;
 use super::alerts::Signal;
-use super::chat::{self, Chat};
+use super::chat::{self, composer::Attachment, Chat};
 use super::goto;
 use super::grid::{Metrics, PaneView};
 use super::hq::{Poller, Reply};
@@ -690,7 +691,11 @@ impl Root {
     /// session's own pane, then Enter to that same pane once the harness has
     /// taken it. Focus moving in between changes nothing.
     fn submit_chat(&mut self, cx: &mut Context<Self>) {
-        if self.chat.draft.text().trim().is_empty() || self.chat.closed.is_some() {
+        if self.chat.closed.is_some() {
+            return;
+        }
+        let attach_now = self.chat.draft.attachment().cloned();
+        if self.chat.draft.text().trim().is_empty() && attach_now.is_none() {
             return;
         }
         let target = self
@@ -705,13 +710,21 @@ impl Root {
             );
             return;
         };
+        let attachment = self.chat.draft.take_attachment();
         let mut text = self.chat.draft.take();
         // Unbracketed, each newline would type Enter and submit early.
         if !self.modes.bracketed_paste {
             text = text.replace('\n', " ");
         }
+        let harness = self
+            .chat
+            .key
+            .as_ref()
+            .map(|k| k.harness.clone())
+            .unwrap_or_default();
         let id = self.chat.next_request;
-        self.chat.next_request += 2;
+        let mut next = id + 1;
+        self.chat.next_request += if attachment.is_some() { 3 } else { 2 };
         let input = |request_id, bytes| {
             ClientMsg::PaneInput(proto::pane_input::PaneInputRequest {
                 request_id,
@@ -720,14 +733,103 @@ impl Root {
                 bytes,
             })
         };
-        self.send(input(id, keys::paste(&text, self.modes)));
-        let enter = input(id + 1, b"\r".to_vec());
+        if !text.is_empty() {
+            self.send(input(id, keys::paste(&text, self.modes)));
+        }
+        // The image rides as a keystroke, never as pane bytes: the clipboard
+        // is restored on the main thread first, so the user's next copy never
+        // clobbers it mid-send. The stroke precedes Enter with its own settle,
+        // so the harness reads the clipboard before the submit lands.
+        let stroke = match (attachment.as_ref(), Self::image_paste_key(&harness)) {
+            (Some(att), Some(bytes)) => {
+                let image = gpui::Image::from_bytes(att.format, (*att.bytes).clone());
+                cx.write_to_clipboard(ClipboardItem::new_image(&image));
+                let msg = input(next, bytes.to_vec());
+                next += 1;
+                Some(msg)
+            }
+            (Some(_), None) => {
+                self.say(
+                    format!("no verified image paste for {harness}; the text went alone"),
+                    cx,
+                );
+                None
+            }
+            (None, _) => None,
+        };
+        // Enter only when a turn exists to submit: text typed, or an image
+        // pasted onto the harness. An image-only draft on a harness with no
+        // verified stroke sends nothing, so a bare Enter never submits the
+        // pane's stale input.
+        let enter = (!text.is_empty() || stroke.is_some()).then(|| input(next, b"\r".to_vec()));
         cx.spawn(async move |_, cx| {
             cx.background_executor().timer(chat::SUBMIT_SETTLE).await;
-            let _ = link.send(&enter);
+            if let Some(msg) = stroke {
+                if link.send(&msg).is_err() {
+                    return; // the link died: an Enter would type into a dead pane
+                }
+                cx.background_executor().timer(chat::SUBMIT_SETTLE).await;
+            }
+            if let Some(enter) = enter {
+                link.send(&enter).ok();
+            }
         })
         .detach();
-        self.chat.pending.push(text);
+        if !text.is_empty() {
+            self.chat.pending.push(text);
+        }
+    }
+
+    /// One clipboard paste: text routes by view; a clipboard image with no
+    /// text attaches to the chat draft, and the send re-puts it and types
+    /// the harness's image-paste keystroke (submit_chat).
+    fn paste_clipboard(&mut self, cx: &mut Context<Self>) {
+        let item = cx.read_from_clipboard();
+        let Some(text) = item.as_ref().and_then(|i| i.text()) else {
+            if self.main == MainView::Chat {
+                if let Some(image) = item.as_ref().and_then(|i| {
+                    i.entries().iter().find_map(|e| match e {
+                        ClipboardEntry::Image(img) => Some(img.clone()),
+                        _ => None,
+                    })
+                }) {
+                    self.chat.draft.attach(Attachment {
+                        format: image.format,
+                        bytes: image.bytes.into(),
+                    });
+                    self.chat_moved(cx);
+                }
+            }
+            return;
+        };
+        // The open bar takes the paste into its query, ahead of the draft
+        // and the pane.
+        if self.find.is_some() {
+            self.find_key(find::FindKey::Edit(text.to_owned()), cx);
+            return;
+        }
+        match self.main {
+            MainView::Mods => mods::paste(self, &text, cx),
+            MainView::Chat => {
+                self.chat.draft.replace_selection(&text);
+                self.chat_moved(cx);
+            }
+            _ => {
+                let bytes = keys::paste(&text, self.modes);
+                self.send(ClientMsg::Input(bytes));
+            }
+        }
+    }
+
+    /// The keystroke each harness TUI reads the clipboard image with, where
+    /// verified. All three read Ctrl+V: claude's `chat:imagePaste`, and
+    /// codex (0.166.0) plus opencode measured live on 2026-11-18 in a tmux
+    /// probe: the byte inserts the clipboard image into their composers.
+    fn image_paste_key(harness: &str) -> Option<&'static [u8]> {
+        match harness {
+            "claude" | "codex" | "opencode" => Some(b"\x16"),
+            _ => None,
+        }
     }
 
     pub(super) fn has_focus(&self, window: &Window) -> bool {

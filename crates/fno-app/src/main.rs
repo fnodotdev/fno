@@ -22,8 +22,11 @@ struct Args {
     /// The view the window opens on. Without it, the saved view restores.
     #[arg(long, value_enum)]
     mode: Option<fno_app::MainView>,
-    /// Show this claude session's chat (a session id, or `newest`) instead
-    /// of the focused agent's. With --probe, print
+    /// Show this session's chat instead of the focused agent's:
+    /// `<harness>:<id|newest>` (claude, codex or opencode), a bare session id
+    /// (the transcript carrying it names the harness), or `newest` (claude:
+    /// the newest transcript in the current project, ranked by session
+    /// start; codex: the newest in its sessions tree). With --probe, print
     /// `chat_events=<n> session=<id>` and exit.
     #[arg(long)]
     chat: Option<String>,
