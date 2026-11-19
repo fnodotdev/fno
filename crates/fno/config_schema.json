@@ -7769,6 +7769,7 @@
   },
   {
    "path": "app.alert_sound",
+   "label": "Play the attention sound",
    "type": "bool",
    "default": true,
    "wizard": "advanced",
@@ -7779,6 +7780,7 @@
   },
   {
    "path": "app.alert_notification",
+   "label": "Post the alert notification",
    "type": "bool",
    "default": true,
    "wizard": "advanced",
@@ -7789,6 +7791,7 @@
   },
   {
    "path": "app.alert_badge",
+   "label": "Show the Dock badge",
    "type": "bool",
    "default": true,
    "wizard": "advanced",
