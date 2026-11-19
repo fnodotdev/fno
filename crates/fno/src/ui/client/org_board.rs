@@ -985,7 +985,7 @@ pub(crate) async fn keys(
                 }
             }
             ModalKey::Byte(b'n') => open_composer(view, ""),
-            ModalKey::Byte(b'L') => open_composer(view, "/fno:lead "),
+            ModalKey::Byte(b'L') => open_composer(view, super::agent_launcher::LEAD_SEED),
             ModalKey::Byte(b'V') => super::backlog_board::cycle_sideline_view(view),
             ModalKey::Byte(b'F') => {
                 view.board_full = !view.board_full;
