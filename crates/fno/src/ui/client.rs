@@ -2675,33 +2675,6 @@ impl View {
         }
     }
 
-    /// The CONTENT-AREA viewport reported to the server (terminal minus
-    /// chrome). Never zero, so a degenerate terminal cannot wedge the server.
-    fn content_dims(&self) -> (u16, u16) {
-        (
-            self.term
-                .0
-                .saturating_sub(TAB_BAR_ROWS + self.status_rows())
-                .max(1),
-            self.term
-                .1
-                .saturating_sub(self.panel_w() + self.feed_panel_w() + self.viewer_panel_w())
-                .max(1),
-        )
-    }
-
-    /// Content viewport as `(origin, dims)` in `usize`, for centering a
-    /// [`draw_lines_overlay`] popover against the content rect (right of the
-    /// sideline and any docked board, above any splits) instead of the outer
-    /// terminal. One call site for every corner-anchored popover.
-    fn overlay_viewport(&self) -> ((usize, usize), (usize, usize)) {
-        let (rows, cols) = self.content_dims();
-        (
-            (TAB_BAR_ROWS as usize, self.left_chrome_w() as usize),
-            (rows as usize, cols as usize),
-        )
-    }
-
     /// Map an outer-terminal cell (0-based) to `(pane, pane_row, pane_col)` when
     /// it falls inside a pane's content rect. `None` for a chrome cell (tab bar,
     /// sideline) or a content divider, so the caller swallows it - a mouse event
