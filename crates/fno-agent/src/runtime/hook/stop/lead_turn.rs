@@ -18,7 +18,7 @@
 use std::io::{Read as _, Seek as _, SeekFrom};
 use std::path::Path;
 
-use serde_json::Value;
+use serde::Deserialize;
 
 use crate::repeated_asks::waiting_asks_in;
 
@@ -81,25 +81,97 @@ fn read_tail(transcript: &Path) -> Option<String> {
     })
 }
 
+/// One transcript row, parsed once. Only the fields the gate reads.
+#[derive(Deserialize)]
+struct Row {
+    #[serde(rename = "type", default)]
+    kind: String,
+    #[serde(rename = "isSidechain", default)]
+    is_sidechain: bool,
+    timestamp: Option<String>,
+    message: Option<Message>,
+}
+
+#[derive(Deserialize)]
+struct Message {
+    stop_reason: Option<String>,
+    content: Option<Content>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Content {
+    Text(String),
+    Blocks(Vec<Block>),
+}
+
+#[derive(Deserialize)]
+struct Block {
+    #[serde(rename = "type", default)]
+    kind: String,
+    name: Option<String>,
+    text: Option<String>,
+    input: Option<BlockInput>,
+}
+
+#[derive(Deserialize)]
+struct BlockInput {
+    // Another tool's input can carry a non-string `command`; that must not
+    // drop the row and the Bash calls beside it.
+    command: Option<serde_json::Value>,
+}
+
+impl Row {
+    fn is_assistant(&self) -> bool {
+        self.kind == "assistant"
+    }
+
+    fn is_end_turn_reply(&self) -> bool {
+        self.is_assistant()
+            && self.message.as_ref().and_then(|m| m.stop_reason.as_deref()) == Some("end_turn")
+    }
+
+    fn blocks(&self) -> &[Block] {
+        match self.message.as_ref().and_then(|m| m.content.as_ref()) {
+            Some(Content::Blocks(blocks)) => blocks,
+            _ => &[],
+        }
+    }
+
+    /// The reply text, joined the way the loop-check reader joins it.
+    fn text(&self) -> String {
+        match self.message.as_ref().and_then(|m| m.content.as_ref()) {
+            Some(Content::Text(text)) => text.clone(),
+            Some(Content::Blocks(blocks)) => blocks
+                .iter()
+                .filter(|b| b.kind == "text")
+                .filter_map(|b| b.text.as_deref())
+                .collect::<Vec<_>>()
+                .join(" "),
+            None => String::new(),
+        }
+    }
+}
+
 /// The turn that `message` ends. When the harness already wrote `message`
 /// as the newest end-of-turn row, the boundary is the end-of-turn row
 /// before it. None for a transcript with no claude assistant row, such as a
 /// codex rollout, whose commands this parser cannot see.
 fn parse_turn(raw: &str, message: &str) -> Option<Turn> {
-    let rows: Vec<Value> = raw
+    let rows: Vec<Row> = raw
         .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter(|row| row.get("isSidechain").and_then(Value::as_bool) != Some(true))
+        .filter_map(|line| serde_json::from_str::<Row>(line).ok())
+        .filter(|row| !row.is_sidechain)
         .collect();
-    if !rows.iter().any(is_assistant) {
+    if !rows.iter().any(Row::is_assistant) {
         return None;
     }
     let ends: Vec<usize> = (0..rows.len())
-        .filter(|&i| is_end_turn_reply(&rows[i]))
+        .filter(|&i| rows[i].is_end_turn_reply())
         .collect();
     let written = ends.last().is_some_and(|&last| {
-        crate::loopcheck::extract_assistant_text(&rows[last]).trim() == message.trim()
-            && !rows[last + 1..].iter().any(is_assistant)
+        rows[last].text().trim() == message.trim()
+            && !rows[last + 1..].iter().any(Row::is_assistant)
     });
     let boundary = if written {
         ends.len().checked_sub(2).map(|i| ends[i])
@@ -107,35 +179,21 @@ fn parse_turn(raw: &str, message: &str) -> Option<Turn> {
         ends.last().copied()
     };
     let current = &rows[boundary.map_or(0, |i| i + 1)..];
-    let mut turn = Turn {
-        started_at: current
-            .iter()
-            .find_map(|row| row.get("timestamp").and_then(Value::as_str))
-            .map(str::to_string),
-        ..Turn::default()
-    };
-    for row in current.iter().filter(|row| is_assistant(row)) {
-        let content = row.pointer("/message/content").and_then(Value::as_array);
-        for item in content.into_iter().flatten() {
-            if item.get("type").and_then(Value::as_str) == Some("tool_use")
-                && item.get("name").and_then(Value::as_str) == Some("Bash")
-            {
-                if let Some(command) = item.pointer("/input/command").and_then(Value::as_str) {
-                    turn.commands.push(command.to_string());
-                }
-            }
-        }
-    }
-    Some(turn)
-}
-
-fn is_assistant(row: &Value) -> bool {
-    row.get("type").and_then(Value::as_str) == Some("assistant")
-}
-
-fn is_end_turn_reply(row: &Value) -> bool {
-    is_assistant(row)
-        && row.pointer("/message/stop_reason").and_then(Value::as_str) == Some("end_turn")
+    let commands = current
+        .iter()
+        .filter(|row| row.is_assistant())
+        .flat_map(Row::blocks)
+        .filter(|b| b.kind == "tool_use" && b.name.as_deref() == Some("Bash"))
+        .filter_map(|b| {
+            b.input
+                .as_ref()
+                .and_then(|i| i.command.as_ref()?.as_str().map(str::to_string))
+        })
+        .collect();
+    Some(Turn {
+        started_at: current.iter().find_map(|row| row.timestamp.clone()),
+        commands,
+    })
 }
 
 fn unread_ask(message: &str, turn: &Turn) -> Option<String> {
