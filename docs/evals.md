@@ -428,6 +428,6 @@ with no ledger row; a session terminal on a known unmerged node records
 evidence and never a delivery; a terminal on a node the graph lost counts
 as `inferred`, never as a confirmed merge.
 
-Quality cohorts judge only deliveries that completed the 14-day observation
-window; younger deliveries are reported pending, not in the denominator.
+Quality cohorts judge only deliveries that completed the 14-day observation window. Younger deliveries are reported pending, not in the denominator.
+
 The human_touch emission-failure counter is server-instance telemetry, read from `fno mux diag stats --json` with its own measurement window. An unreachable server renders as Unknown, not as a measured zero.
