@@ -1438,7 +1438,11 @@ pub(crate) fn spawn_persona_pane(view: &mut View) {
     };
     let command = crate::proto::ControlCommand::PaneRun {
         cwd,
-        argv: vec!["sleep".into(), "100000000000".into()],
+        // The orphan marker: a sleep placeholder the server side can
+        // recognise by argv. 2^31-1 seconds is the largest interval the
+        // BSD sleep accepts, so the placeholder actually runs instead of
+        // dying at spawn and reading as a pane the operator closed.
+        argv: vec!["sleep".into(), "2147483647".into()],
         cols: None,
         rows: None,
         claim: false,

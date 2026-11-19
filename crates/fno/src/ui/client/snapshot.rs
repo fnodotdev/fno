@@ -1791,6 +1791,14 @@ fn persona_sideline_chip_shot(
     view.persona = super::persona_overlay::open_from(Some(&aud), Some(&project))
         .map(super::persona_overlay::dock_sideline);
     super::persona_overlay::spawn_persona_pane(view);
+    if let Some(o) = view.persona.as_ref() {
+        if o.pane.is_none() {
+            return Err(format!(
+                "persona-sideline-chip: the persona pane never opened: {:?}",
+                view.notice
+            ));
+        }
+    }
     stage_serving_question(view, &aud);
     super::persona_overlay::keys(view, b"j");
     Ok(())
