@@ -40,6 +40,10 @@ struct Args {
     /// View --shot renders (default: the command center board).
     #[arg(long = "shot-mode", value_enum)]
     shot_mode: Option<ShotView>,
+    /// Hold the composited shot window up for a foreign capturer
+    /// instead of capturing. Diagnostic.
+    #[arg(long = "shot-hold", hide = true)]
+    shot_hold: bool,
 }
 
 /// The --shot-mode values. The kebab spellings mirror MainView.
@@ -81,6 +85,7 @@ fn main() {
             out: std::path::PathBuf::from(out),
             theme: args.shot_theme,
             mode: args.shot_mode.map(ShotView::into_main),
+            hold: args.shot_hold,
         })
     } else {
         None
@@ -90,6 +95,7 @@ fn main() {
         font: args.font,
         font_size: args.font_size,
         probe: args.probe,
+        shot_hold: args.shot_hold,
         mode: args.mode,
         chat: args.chat,
         shot,

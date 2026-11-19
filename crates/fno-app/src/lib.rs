@@ -48,10 +48,16 @@ pub struct Options {
     pub chat: Option<String>,
     /// One offscreen demo shot: render and exit, writing a png.
     pub shot: Option<ShotOptions>,
+    /// Hold the composited shot window up instead of capturing.
+    /// Diagnostic; the shot door never sets it.
+    pub shot_hold: bool,
 }
 
 /// The `--shot` flag set: one offscreen render into a png.
 pub struct ShotOptions {
+    /// Hold the composited window up for a foreign capturer instead of
+    /// capturing. Diagnostic; the shot door never sets it.
+    pub hold: bool,
     /// The mux session to attach (the demo world names its own).
     pub session: Option<String>,
     /// A claude session id, or `newest`: what --shot-mode chat renders.
@@ -100,6 +106,7 @@ pub fn run(opts: Options) -> i32 {
         let theme = shot.theme;
         let mode = shot.mode.or(opts.mode);
         return crate::shot::run(ShotOptions {
+            hold: opts.shot_hold,
             out,
             theme,
             mode,
