@@ -64,30 +64,49 @@ pub(crate) struct SyntheticTail {
     pub excerpt: String,
 }
 
+/// The claude transcript record, parsed once into a typed shape (R1): the
+/// discriminator is `type`, and only an assistant record carries a message
+/// this detector reads.
+#[derive(serde::Deserialize)]
+struct TranscriptRecord {
+    #[serde(rename = "type")]
+    kind: String,
+    message: Option<AssistantMessage>,
+}
+
+/// The assistant payload: the model name and the rendered text blocks.
+#[derive(serde::Deserialize)]
+struct AssistantMessage {
+    model: Option<String>,
+    content: Option<Vec<ContentBlock>>,
+}
+
+/// One content block; only its text part feeds the classifier.
+#[derive(serde::Deserialize)]
+struct ContentBlock {
+    text: Option<String>,
+}
+
 /// Classify a parsed transcript tail (records oldest-first). The LAST
 /// assistant record decides; anything after it (the next user prompt) is
 /// later speech, not a model turn. `None` when no assistant record sits in
 /// the window: the honest answer is "no synthetic evidence", never a claim.
 pub(crate) fn from_records(records: &[Value]) -> Option<SyntheticTail> {
-    let last_assistant = records
-        .iter()
-        .rev()
-        .find(|rec| rec.get("type").and_then(Value::as_str) == Some("assistant"))?;
-    let message = last_assistant.get("message")?;
-    if message.get("model").and_then(Value::as_str) != Some(SYNTHETIC_MODEL) {
+    let last_assistant = records.iter().rev().find_map(|rec| {
+        let parsed: TranscriptRecord = serde_json::from_value(rec.clone()).ok()?;
+        (parsed.kind == "assistant").then_some(parsed)
+    })?;
+    let message = last_assistant.message?;
+    if message.model.as_deref() != Some(SYNTHETIC_MODEL) {
         return None;
     }
     let text = message
-        .get("content")
-        .and_then(Value::as_array)
-        .map(|blocks| {
-            blocks
-                .iter()
-                .filter_map(|b| b.get("text").and_then(Value::as_str))
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
-        .unwrap_or_default();
+        .content
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|block| block.text.clone())
+        .collect::<Vec<_>>()
+        .join(" ");
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return None;
