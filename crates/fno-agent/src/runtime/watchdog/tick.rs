@@ -23,6 +23,11 @@ const WAKE_APPLY_FLOOR_S: f64 = 200.0;
 /// One Codex recovery scan's cost over a root.
 const RECOVERY_ROOT_FLOOR_S: f64 = 3.0;
 const RECOVERY_RECENCY_S: f64 = 24.0 * 3600.0;
+/// How long one signed-out session stays deduped. A respawn does not clear
+/// the synthetic tail - the transcript only moves again when the model
+/// answers a new turn - so without a TTL every tick would re-fire the
+/// respawn until that answer lands.
+const SIGNED_OUT_TTL_S: f64 = 1800.0;
 
 struct Clock {
     deadline: Instant,
@@ -263,6 +268,132 @@ fn wake_mode(clock: &Clock, now: f64, roots: &[PathBuf], outages: &Value) -> (i6
     (acted, results)
 }
 
+/// The dedupe stamp for one signed-out session, under the sweep state root
+/// in a session-keyed subfolder.
+fn signed_out_stamp_path(session_id: &str) -> Option<PathBuf> {
+    let clean: String = session_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect();
+    if clean.is_empty() {
+        return None;
+    }
+    Some(
+        super::sweep::state_root()
+            .join("watchdog-signed-out")
+            .join(format!("{clean}.stamp")),
+    )
+}
+
+/// True when this session already took a respawn inside the TTL: the
+/// transcript still reads synthetic until the model answers a new turn, so
+/// the stamp, not the tail, is what stops the second respawn.
+fn signed_out_recently_acted(session_id: &str) -> bool {
+    let Some(path) = signed_out_stamp_path(session_id) else {
+        return true;
+    };
+    let Ok(meta) = std::fs::metadata(&path) else {
+        return false;
+    };
+    let Ok(modified) = meta.modified() else {
+        return true;
+    };
+    match modified.elapsed() {
+        Ok(age) => age.as_secs_f64() < SIGNED_OUT_TTL_S,
+        Err(_) => true,
+    }
+}
+
+fn mark_signed_out_acted(session_id: &str) {
+    if let Some(path) = signed_out_stamp_path(session_id) {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(&path, now_epoch_s().to_string());
+    }
+}
+
+/// The signed-out backstop lane: sessions whose LAST assistant record is
+/// the harness-authored reply (model `<synthetic>`) answer every process
+/// and socket probe live while the model cannot run - the 2026-11-18
+/// logout that burned a lead's prompts for an hour while every instrument
+/// read the row as fine. The StopFailure hook is the primary detector; this
+/// lane catches what a hook that never fired misses. Per hit: one line to
+/// the operator, the same-id respawn door (`fno agent resume`, which runs
+/// `claude respawn`), then `fno agent reconcile` so the team row re-seats.
+/// Only a logout acts: a weekly limit waits on the account and an API 400
+/// poisons the transcript (a fresh worker is the fix), so neither respawns.
+fn signed_out_mode(
+    clock: &Clock,
+    rows: &[crate::backlog::worked::FleetRow],
+    entries: &std::collections::BTreeMap<String, Option<Vec<Value>>>,
+) -> (i64, Vec<Value>) {
+    let mut acted = 0i64;
+    let mut results = Vec::new();
+    if clock.left() < RECOVERY_ROOT_FLOOR_S {
+        return (0, results);
+    }
+    for row in rows {
+        if clock.left() < RECOVERY_ROOT_FLOOR_S {
+            break;
+        }
+        if row.agent != "claude" {
+            continue;
+        }
+        let Some(records) = entries.get(&row.row_id).and_then(|e| e.as_ref()) else {
+            continue;
+        };
+        let Some(tail) = crate::synthetic_tail::from_records(records) else {
+            continue;
+        };
+        if tail.why != crate::synthetic_tail::SyntheticWhy::SignedOut {
+            continue;
+        }
+        if signed_out_recently_acted(&row.row_id) {
+            continue;
+        }
+        mark_signed_out_acted(&row.row_id);
+        let notified = crate::operator_notice::notify_operator_confirmed(
+            "fno: signed-out session",
+            &format!(
+                "{} is signed out ({}); respawn and reconcile running",
+                row.name, tail.excerpt
+            ),
+            None,
+        );
+        let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
+        cmd.args(["agent", "resume", &row.name])
+            .current_dir(&row.cwd);
+        let respawn = crate::bounded_cmd::output_with_timeout(cmd, 120);
+        let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
+        cmd.args(["agent", "reconcile"]).current_dir(&row.cwd);
+        let reconciled = crate::bounded_cmd::output_with_timeout(cmd, 120);
+        let outcome = if notified && respawn.is_some_and(|o| o.status.success()) {
+            "applied"
+        } else {
+            "notified"
+        };
+        emit_event(
+            "signed_out_respawn",
+            json!({
+                "row_id": row.row_id,
+                "name": row.name,
+                "excerpt": tail.excerpt,
+                "notified": notified,
+                "outcome": outcome,
+            }),
+        );
+        results.push(json!({
+            "session_id": row.row_id,
+            "name": row.name,
+            "outcome": outcome,
+            "reconciled": reconciled.is_some_and(|o| o.status.success()),
+        }));
+        acted += 1;
+    }
+    (acted, results)
+}
+
 /// `{armed, off_detail}` when the lane is off, else the leg's whole answer. A
 /// spent budget is `skip_reason: budget_spent`, not a failure of the sweep.
 fn run_leg(clock: &Clock) -> Value {
@@ -345,6 +476,13 @@ fn run_leg(clock: &Clock) -> Value {
     } else {
         (0, Vec::new())
     };
+    // The signed-out backstop runs on the same wake gate: it restarts
+    // sessions, so an unarmed wake lane must never fire it.
+    let (signed_out_acted, _signed_out_results) = if wake {
+        signed_out_mode(clock, &rows, &entries)
+    } else {
+        (0, Vec::new())
+    };
     let count_outcome = |word: &str| {
         results
             .iter()
@@ -364,6 +502,7 @@ fn run_leg(clock: &Clock) -> Value {
         "armed": true,
         "wake_armed": wake,
         "acted": acted,
+        "signed_out_acted": signed_out_acted,
         "counts": counts.join(" "),
         "recoverable_applied": count_outcome("applied"),
         "recoverable_remaining": count_outcome("deferred"),
