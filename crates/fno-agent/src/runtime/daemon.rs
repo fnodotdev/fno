@@ -1209,8 +1209,7 @@ pub async fn run(home: AgentsHome, opts: DaemonOptions) -> Result<(), DaemonErro
     let (listener, _supervisor_lock) = match bind_supervisor_socket(&home).await {
         Ok(pair) => pair,
         Err(DaemonError::AlreadyRunning(sock)) => {
-            // Race loser: nothing to do; the winner serves. Say so, or a
-            // caller watching this pid reads a clean exit as a dead daemon.
+            // Race loser: the winner serves. Say so, or a clean exit reads as a dead daemon.
             eprintln!(
                 "fno-agent-daemon: another daemon serves {}; exiting",
                 sock.display()
@@ -1243,21 +1242,11 @@ pub async fn run(home: AgentsHome, opts: DaemonOptions) -> Result<(), DaemonErro
     // FIRST `list` is post-sweep. Opt out via FNO_AGENT_NO_STARTUP_RECONCILE
     // for the fastest cold start (discretion #5).
     if opts.reconcile_on_start {
-        // Off the startup path and onto the blocking pool. The sweep
-        // probes reachability PER REGISTRY ROW, each probe bounded but not
-        // free, so on a large roster it costs tens of seconds. Awaiting it here
-        // -- on the async runtime, before the accept loop starts -- meant a
-        // cold daemon answered nothing until every row was probed, and a client
-        // whose connect timed out lazy-started yet another daemon that paid the
-        // same cost. One cold daemon starved itself; the spawns compounded it.
-        //
-        // What that ordering bought was "no client observes a half-applied
-        // sweep", and that guarantee is not what is given up here: the sweep
-        // writes the registry under the same advisory lock every reader takes,
-        // so a client still reads a whole registry, never a torn one. What is
-        // given up is narrower -- the FIRST `list` after a cold start may read
-        // pre-sweep rows, one idle tick before the sweep lands. A stale first
-        // row is worth strictly less than a daemon nobody can reach.
+        // Off the startup path and onto the blocking pool: the sweep probes
+        // every registry row, so awaiting it before the accept loop left a
+        // cold daemon answering nothing for tens of seconds. Readers take the
+        // registry's advisory lock, so none sees a torn sweep; only the first
+        // `list` after a cold start may read pre-sweep rows.
         let home_sweep = home.clone();
         let emitter_sweep = EventEmitter::new(home.events_jsonl(), "daemon");
         tokio::task::spawn_blocking(move || {
