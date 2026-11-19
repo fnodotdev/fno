@@ -483,6 +483,13 @@ pub fn unresolved(text: &str) -> String {
     )
 }
 
+/// Whether the token reads as a q-/d- display number (`D3478`, `d-142`,
+/// `q87@r2d2`): the form a lookup door accepts beside the hash while both
+/// keys exist. Pure shape, no store read.
+pub fn reads_as_number(text: &str) -> bool {
+    is_number_text(text.trim()).is_some()
+}
+
 /// `resolve_in` over this machine's table.
 pub fn resolve(kind: char, text: &str) -> Option<String> {
     read_store(|conn| resolve_in(conn, kind, text, &current_store()))
