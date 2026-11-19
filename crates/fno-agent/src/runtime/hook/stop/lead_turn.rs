@@ -12,7 +12,7 @@
 //!
 //! A turn is every row after the previous end-of-turn reply, so a beat woken
 //! by a loop, mail or hook row is its own turn whatever shape the wake takes.
-//! Claude transcripts only: a codex rollout carries no end-of-turn marker,
+//! Claude transcripts only: a codex rollout carries no claude assistant row,
 //! so the gate passes it.
 
 use std::io::{Read as _, Seek as _, SeekFrom};
@@ -53,7 +53,7 @@ pub(super) struct Turn {
 
 /// Some block reason when the ending lead turn fails either check.
 pub(super) fn gate(transcript: &Path, session_ids: &[&str], message: &str) -> Option<String> {
-    let turn = parse_turn(&read_tail(transcript)?, message);
+    let turn = parse_turn(&read_tail(transcript)?, message)?;
     if let Some(reason) = unread_ask(message, &turn) {
         return Some(reason);
     }
@@ -83,13 +83,17 @@ fn read_tail(transcript: &Path) -> Option<String> {
 
 /// The turn that `message` ends. When the harness already wrote `message`
 /// as the newest end-of-turn row, the boundary is the end-of-turn row
-/// before it.
-fn parse_turn(raw: &str, message: &str) -> Turn {
+/// before it. None for a transcript with no claude assistant row, such as a
+/// codex rollout, whose commands this parser cannot see.
+fn parse_turn(raw: &str, message: &str) -> Option<Turn> {
     let rows: Vec<Value> = raw
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .filter(|row| row.get("isSidechain").and_then(Value::as_bool) != Some(true))
         .collect();
+    if !rows.iter().any(is_assistant) {
+        return None;
+    }
     let ends: Vec<usize> = (0..rows.len())
         .filter(|&i| is_end_turn_reply(&rows[i]))
         .collect();
@@ -122,7 +126,7 @@ fn parse_turn(raw: &str, message: &str) -> Turn {
             }
         }
     }
-    turn
+    Some(turn)
 }
 
 fn is_assistant(row: &Value) -> bool {
@@ -254,7 +258,7 @@ mod tests {
             prompt("2026-11-19T19:45:00Z", "beat"),
             bash("ls"),
         ];
-        let turn = parse_turn(&blind.join("\n"), ASK);
+        let turn = parse_turn(&blind.join("\n"), ASK).expect("claude turn");
         assert_eq!(turn.started_at.as_deref(), Some("2026-11-19T19:45:00Z"));
         assert_eq!(turn.commands, vec!["ls".to_string()]);
         let reason = unread_ask(ASK, &turn).expect("an unread ask blocks");
@@ -271,7 +275,7 @@ mod tests {
             bash("gh pr view 9"),
             reply(ASK),
         ];
-        let turn = parse_turn(&written.join("\n"), ASK);
+        let turn = parse_turn(&written.join("\n"), ASK).expect("claude turn");
         assert_eq!(turn.started_at.as_deref(), Some("2026-11-19T19:45:00Z"));
         assert!(
             unread_ask(ASK, &turn).is_none(),
@@ -280,11 +284,15 @@ mod tests {
     }
 
     #[test]
-    fn a_report_with_no_waiting_ask_never_blocks() {
+    fn a_report_with_no_waiting_ask_or_a_codex_rollout_never_blocks() {
+        let codex = json!({"type": "response_item",
+            "payload": {"type": "message", "role": "assistant", "content": ASK}});
+        assert!(parse_turn(&codex.to_string(), ASK).is_none());
         let turn = parse_turn(
             &[prompt("2026-11-19T19:45:00Z", "b"), bash("ls")].join("\n"),
             "x",
-        );
+        )
+        .expect("claude turn");
         assert!(unread_ask("Merged PR 371; CI green on 372.", &turn).is_none());
         assert!(unread_ask("You already ruled on the rc: your approval landed.", &turn).is_none());
     }
