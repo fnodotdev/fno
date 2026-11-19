@@ -21,6 +21,7 @@ use gpui::{
 use serde::{Deserialize, Serialize};
 
 use super::chat::{self, Chat};
+use super::goto;
 use super::grid::{Metrics, PaneView};
 use super::hq::{Poller, Reply};
 use super::keys::{self, Key, Modes, Shortcut};
@@ -33,7 +34,7 @@ use fno::proto::chat_event::SessionKey;
 use fno::proto::{self, ClientMsg, Command, Frame, MouseEvent, MouseKind};
 use fno::tree::Rect;
 
-actions!(fno_app, [KeyboardShortcuts]);
+actions!(fno_app, [KeyboardShortcuts, GoTo]);
 
 /// What fills the main area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, Serialize, Deserialize)]
@@ -60,6 +61,8 @@ pub enum Action {
     Show(MainView),
     /// Show every agent in the left pane, or only the first few.
     ToggleAgents,
+    /// Open or close the key sheet, as ⌘/ and the palette's command row do.
+    ToggleKeySheet,
     /// Open or close one chat thinking row.
     ToggleChat(usize),
     /// Open the sheet of one chat tool call.
@@ -80,6 +83,7 @@ fn click_id(action: &Action) -> &'static str {
         Action::Answer { .. } => "answer",
         Action::Show(_) => "show_view",
         Action::ToggleAgents => "toggle_agents",
+        Action::ToggleKeySheet => "toggle_key_sheet",
         Action::ToggleChat(_) => "toggle_chat",
         Action::OpenSheet(_) => "open_sheet",
         Action::CloseSheet => "close_sheet",
@@ -147,6 +151,8 @@ pub struct Root {
     pub(super) picking: bool,
     /// The key sheet (cmd-/) covers the window.
     pub(super) sheet: bool,
+    /// The go-to palette (cmd-k) covers the window.
+    pub(super) goto: Option<goto::GoTo>,
     /// The find bar (cmd-f) over the focused pane or the chat.
     pub(super) find: Option<find::Find>,
     /// The mux session this window attached to; panes open on it.
@@ -171,6 +177,25 @@ pub struct Root {
 /// The content size sent to the server. The left pane and the title bar are
 /// always reserved. A notice floats over the grid and never resizes it, and
 /// one row and one column are kept for the half-cell inset around the grid.
+/// The window's live subscriptions: repaint every pane on (de)activation
+/// (the cursor turns hollow; the board poll pauses while the window is
+/// inactive) and follow the system appearance live, because macOS flips it
+/// at dusk with the app open.
+fn wire_window(root: &mut Root, window: &mut Window, cx: &mut Context<Root>) {
+    root._activation = Some(cx.observe_window_activation(window, |root, window, cx| {
+        if let Some(poller) = &root.poller {
+            poller.set_active(window.is_window_active());
+        }
+        for view in root.panes.values() {
+            view.update(cx, |_, cx| cx.notify());
+        }
+    }));
+    root._appearance = Some(cx.observe_window_appearance(window, |root, window, cx| {
+        root.light = super::palette::appearance_is_light(window.appearance());
+        root.restyle(cx);
+    }));
+}
+
 fn grid_size(viewport: Size<Pixels>, cell: Size<Pixels>) -> (u16, u16) {
     let height = viewport.height - px(ui::TITLE_H);
     let width = viewport.width - px(left_pane::WIDTH);
@@ -230,6 +255,7 @@ impl Root {
             pinned,
             picking: false,
             sheet: false,
+            goto: None,
             find: None,
             preedit: None,
             _reader: None,
@@ -241,22 +267,7 @@ impl Root {
             _appearance: None,
             _notice: None,
         };
-        // Repaint every pane on (de)activation: the cursor turns hollow. The
-        // board poll pauses while the window is inactive.
-        root._activation = Some(cx.observe_window_activation(window, |root, window, cx| {
-            if let Some(poller) = &root.poller {
-                poller.set_active(window.is_window_active());
-            }
-            for view in root.panes.values() {
-                view.update(cx, |_, cx| cx.notify());
-            }
-        }));
-        // Follow the system appearance live: macOS flips at dusk with the app
-        // open.
-        root._appearance = Some(cx.observe_window_appearance(window, |root, window, cx| {
-            root.light = super::palette::appearance_is_light(window.appearance());
-            root.restyle(cx);
-        }));
+        wire_window(&mut root, window, cx);
         match Link::connect(&session, sent_size.0, sent_size.1) {
             Ok((link, mut rx)) => {
                 root.link = Some(link);
@@ -383,6 +394,12 @@ impl Root {
             Action::ToggleAgents => {
                 self.agents_open = !self.agents_open;
                 record_ui_state(self, cx);
+            }
+            Action::ToggleKeySheet => {
+                self.sheet = !self.sheet;
+                if self.sheet {
+                    self.goto = None;
+                }
             }
             Action::ToggleChat(i) => {
                 let open = &mut self.chat.conv.expanded;
@@ -1026,6 +1043,27 @@ impl Root {
 
     fn toggle_sheet(&mut self, _: &KeyboardShortcuts, _: &mut Window, cx: &mut Context<Self>) {
         self.sheet = !self.sheet;
+        if self.sheet {
+            self.goto = None;
+        }
+        cx.notify();
+    }
+
+    /// ⌘k: toggle the go-to palette. Opening one closes the key sheet.
+    fn toggle_goto(&mut self, _: &GoTo, _: &mut Window, cx: &mut Context<Self>) {
+        if self.goto.take().is_none() {
+            fno::ui_usage::click("app", "goto_open");
+            self.sheet = false;
+            self.goto = Some(goto::GoTo {
+                query: ui::LineField::new(goto::MAX_QUERY),
+                selected: 0,
+            });
+        }
+        cx.notify();
+    }
+
+    pub(super) fn close_goto(&mut self, cx: &mut Context<Self>) {
+        self.goto = None;
         cx.notify();
     }
 
@@ -1068,6 +1106,12 @@ impl Root {
             cmd: ks.modifiers.platform,
         };
         if self.chord(&key, cx) {
+            cx.stop_propagation();
+            return;
+        }
+        // The palette takes every key while it shows: escape closes, enter
+        // goes, up and down move, other cmd keys close it and run as today.
+        if self.goto.is_some() && goto::key(self, &key, cx) {
             cx.stop_propagation();
             return;
         }
@@ -1536,6 +1580,10 @@ impl EntityInputHandler for Root {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The palette's query owns the keyboard while it shows.
+        if self.goto.is_some() {
+            return;
+        }
         if self.main == MainView::Chat {
             if self.chat.sheet.is_none() && self.chat.closed.is_none() {
                 self.chat.draft.replace_utf16(range, text, false, None);
@@ -1561,6 +1609,10 @@ impl EntityInputHandler for Root {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The palette's query owns the keyboard while it shows.
+        if self.goto.is_some() {
+            return;
+        }
         if self.main == MainView::Chat {
             if self.chat.sheet.is_none() && self.chat.closed.is_none() {
                 self.chat
@@ -1765,6 +1817,7 @@ impl Render for Root {
             .on_key_down(cx.listener(Self::on_key))
             .on_modifiers_changed(cx.listener(Self::on_modifiers))
             .on_action(cx.listener(Self::toggle_sheet))
+            .on_action(cx.listener(Self::toggle_goto))
             // A click on a row, a tab or a view name lands on no focusable
             // element and would leave the window with no key focus.
             .on_any_mouse_down(cx.listener(|root, _, window, _| window.focus(&root.focus)))
@@ -1791,6 +1844,7 @@ impl Render for Root {
                     .children(toast),
             )
             .when(self.sheet, |d| d.child(sheet::render(self, cx)))
+            .when(self.goto.is_some(), |d| d.child(goto::render(self, cx)))
     }
 }
 
@@ -1895,6 +1949,7 @@ pub fn run(
 ) {
     Application::new().run(move |cx: &mut App| {
         cx.bind_keys([KeyBinding::new(keys::SHEET_KEY, KeyboardShortcuts, None)]);
+        cx.bind_keys([KeyBinding::new(keys::GOTO_KEY, GoTo, None)]);
         // The first menu is the app menu; Help lists the keys.
         cx.set_menus(vec![
             Menu {
@@ -1903,7 +1958,10 @@ pub fn run(
             },
             Menu {
                 name: "Help".into(),
-                items: vec![MenuItem::action("Keyboard Shortcuts", KeyboardShortcuts)],
+                items: vec![
+                    MenuItem::action("Go to…", GoTo),
+                    MenuItem::action("Keyboard Shortcuts", KeyboardShortcuts),
+                ],
             },
         ]);
         let window_bounds = initial_window_bounds(restored.as_ref(), cx);
