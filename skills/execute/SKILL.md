@@ -2,6 +2,8 @@
 name: execute
 description: Execute an approved plan in a flat run or coordinated waves.
 argument-hint: "[flat|waves] <plan-path>"
+# bare Read: fresh installs gate reads under the plugin cache, and path-scoped Read rules get no ${CLAUDE_PLUGIN_ROOT} substitution in tool rules.
+allowed-tools: Read
 metadata:
   requires:
     binaries:

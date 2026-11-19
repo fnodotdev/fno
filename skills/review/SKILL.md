@@ -2,6 +2,8 @@
 name: review
 description: Review recent code changes, check if they are ready to ship, or assess a research brief.
 argument-hint: "[level] [--comment] [--fix] [--fresh] [<pr#>|<branch>|<path>] | prove-it [<target>] | cleanup [<target>] | peer [adversarial] [--attest|--post] [PR#|branch] [codex|gemini] | research [brief.md] | declare   e.g. (bare = the fno lane, level sized from the diff), `high --comment`, `high --fresh`, `657`, `prove-it`, `cleanup`, `peer 657 codex --attest`, `research out/topic.md`, `declare`"
+# bare Read: fresh installs gate reads under the plugin cache, and path-scoped Read rules get no ${CLAUDE_PLUGIN_ROOT} substitution in tool rules.
+allowed-tools: Read
 metadata:
   requires:
     binaries:

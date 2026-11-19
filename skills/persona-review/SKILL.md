@@ -4,6 +4,7 @@ description: Review an artifact against the project's customer persona record.
 argument-hint: "<artifact-path> [persona-path]"
 metadata:
   internal: false
+allowed-tools: Read
 ---
 
 # Persona review
