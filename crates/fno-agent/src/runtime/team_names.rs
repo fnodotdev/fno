@@ -2265,7 +2265,8 @@ mod tests {
             assert_eq!(live.get("x-aaaa").map(String::as_str), Some("Gus"));
         }
         // A reboot stamps `status: exited` on a lead the sweep then measures
-        // alive. The fresh word decides both ways; a stale one falls back.
+        // alive. The fresh word decides both ways; a stale one falls back;
+        // a deliberate stop stands over an alive word.
         fn a_rebooted_lead_measured_alive_still_holds_its_team() {
             let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
             let row = |name: &str, scope: &str, status: &str, word: &str, at: &str| {
@@ -2275,10 +2276,13 @@ mod tests {
                 r["liveness_measured_at"] = json!(at);
                 r
             };
+            let mut stopped = row("stopped", "fno-books", "exited", "alive", &now);
+            stopped["stop"] = json!({"by": "user", "at": now});
             let tmp = tempfile::TempDir::new().unwrap();
             write_registry(
                 tmp.path(),
                 json!([
+                    stopped,
                     row("atticus", "fno", "exited", "alive", &now),
                     row("gone", "fnh", "live", "dead", &now),
                     row(
