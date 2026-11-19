@@ -46,16 +46,15 @@ VER="$("$HOME/.local/bin/fno" --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[^ ]*'
 VER="${VER/-rc./rc}"
 [[ "$VER" == "$CANDIDATE" ]] || { echo "proof: fno --version printed $VER, want $CANDIDATE"; exit 1; }
 "$HOME/.fno/install/bin/fno" backlog list --count >/dev/null
-"$HOME/.fno/install/bin/fno-agent-daemon" >/dev/null 2>&1 &
-DPID=$!
+# Postinstall already lazy-started the daemon, so a second start here only
+# loses the supervisor lock and exits 0. Probe the one the install started:
+# `fno-agent status` exits 13 when no daemon serves and never starts one.
 sleep 6
-kill -0 "$DPID" || { echo "proof: the daemon did not survive start"; exit 1; }
-# The daemon can exit between the kill -0 probe and the kill; a failed
-# cleanup kill is not a proof failure under set -e.
-kill "$DPID" 2>/dev/null || true
-# wait returns the SIGTERM status (143) under set -e; the survival contract
-# was already proven by kill -0, so the cleanup wait cannot fail the proof.
-wait "$DPID" 2>/dev/null || true
+"$HOME/.fno/install/bin/fno-agent" status >/dev/null || {
+  echo "proof: the daemon did not survive start"
+  cat "$HOME/.fno/agents/daemon.stderr.log" 2>/dev/null || true
+  exit 1
+}
 echo '{"on_binary": 1}' > /host/proof.result
 PROOF
 

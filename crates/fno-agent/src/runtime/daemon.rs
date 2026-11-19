@@ -1208,8 +1208,13 @@ pub async fn run(home: AgentsHome, opts: DaemonOptions) -> Result<(), DaemonErro
     // lint) matters -- nothing ever reads the `File` again.
     let (listener, _supervisor_lock) = match bind_supervisor_socket(&home).await {
         Ok(pair) => pair,
-        Err(DaemonError::AlreadyRunning(_)) => {
-            // Race loser: nothing to do; the winner serves.
+        Err(DaemonError::AlreadyRunning(sock)) => {
+            // Race loser: nothing to do; the winner serves. Say so, or a
+            // caller watching this pid reads a clean exit as a dead daemon.
+            eprintln!(
+                "fno-agent-daemon: another daemon serves {}; exiting",
+                sock.display()
+            );
             return Ok(());
         }
         Err(e) => return Err(e),
