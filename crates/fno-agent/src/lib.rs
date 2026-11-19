@@ -181,11 +181,12 @@ pub use runtime::{
     session_truth, silence_sweep, slot_cutover, source_pin, stale_spaces, stalls, state,
     state_layout, state_layout_sqlite, state_path, state_root_drift, status_fanout, status_render,
     status_sinks, stream_worker, stuck_work, subscribe, succession_txn, supervisor, sync_canonical,
-    system_sender, task_context, team_alarm, team_identity, team_names, team_read, team_reap,
-    team_rescope, team_settle, team_spend, team_split, team_widen, terminal_stop, territory,
-    tool_activity, tracker, transcript_activity, transcript_resolve, transcript_turns, truth_cli,
-    truth_probe, update_journal, visual_log_reader, visual_screen, wait, wake_name, wake_read,
-    watch, watch_expiry, watchdog, whoami, worker_wake, worktree, worktree_reapable, write_queue,
+    synthetic_tail, system_sender, task_context, team_alarm, team_identity, team_names, team_read,
+    team_reap, team_rescope, team_settle, team_spend, team_split, team_widen, terminal_stop,
+    territory, tool_activity, tracker, transcript_activity, transcript_resolve, transcript_turns,
+    truth_cli, truth_probe, update_journal, visual_log_reader, visual_screen, wait, wake_name,
+    wake_read, watch, watch_expiry, watchdog, whoami, worker_wake, worktree, worktree_reapable,
+    write_queue,
 };
 pub(crate) use runtime::{
     adopt_carry, adopt_identity, agents_event, attended, cargo_builds, cargo_orphans,

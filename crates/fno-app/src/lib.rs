@@ -7,6 +7,7 @@ mod boxdraw;
 mod chat;
 mod control;
 mod find;
+mod goto;
 mod grid;
 mod hq;
 pub mod keys;

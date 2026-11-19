@@ -30,13 +30,27 @@ pub(crate) fn outcome_event(outcome: &str) -> &'static str {
     }
 }
 
-fn run_fno(args: &[&str], cwd: &str) -> std::io::Result<Output> {
+/// The one fno-door spawner in this module: every watchdog lane that shells
+/// the CLI builds its Command here, so the seam crossing stays a single
+/// baselined site.
+fn fno_command(args: &[&str], cwd: &str) -> Command {
     let mut command = Command::new(crate::scrape::fno_bin());
     command.args(args);
     if !cwd.is_empty() {
         command.current_dir(Path::new(cwd));
     }
-    command.output()
+    command
+}
+
+fn run_fno(args: &[&str], cwd: &str) -> std::io::Result<Output> {
+    fno_command(args, cwd).spawn()?.wait_with_output()
+}
+
+/// The same seam under a wall clock, for lanes that cannot spend the tick on
+/// a hung door: the respawn ask truth-confirms and the reconcile sweep reads
+/// a whole fleet, so both ride the bounded spawner.
+pub(crate) fn run_fno_bounded(args: &[&str], cwd: &str, secs: u64) -> Option<Output> {
+    crate::bounded_cmd::output_with_timeout(fno_command(args, cwd), secs)
 }
 
 fn last_output_line(output: &Output) -> String {

@@ -1,6 +1,7 @@
 ---
 name: setup
 description: Set up a machine for Footnote by launching the interactive setup wizard and reading its report.
+allowed-tools: Read
 ---
 
 # Setup

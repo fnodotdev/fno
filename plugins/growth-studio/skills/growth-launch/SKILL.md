@@ -2,6 +2,7 @@
 name: growth-launch
 description: Draft and evaluate a growth campaign bundle, then stop at founder approval.
 pack: growth-studio
+allowed-tools: Read
 metadata:
   requires:
     harness:

@@ -1,6 +1,7 @@
 ---
 name: ship-docs
 description: Write or maintain project documentation, guides, API references, and runbooks.
+allowed-tools: Read
 ---
 
 # Ship Docs

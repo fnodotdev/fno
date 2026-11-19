@@ -11,6 +11,7 @@ hooks:
       hooks:
         - type: command
           command: "SESSION_TYPE=audit ${CLAUDE_PLUGIN_ROOT}/hooks/helpers/init-session-state.sh"
+allowed-tools: Read
 ---
 
 # Audit Skill

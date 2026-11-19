@@ -1,0 +1,21 @@
+# Capability tier: does a reader of the talk skill end a talk the way the
+# skill says? Every talk ends on one Next test line, the brief stays at the
+# design rung, and the close writes the line into the node's session row.
+# Graded on the status word, the close flags and the three test kinds.
+id: capability-talk-ends-on-next-test
+tier: regression
+prompt: |
+  Read skills/talk/SKILL.md. Answer four questions in talk-answers.md at the
+  repo root, one answer per line, in this order:
+  1. Write the frontmatter status word a new talk brief carries.
+  2. Write the --phase value the talk passes to fno backlog session close.
+  3. Write the text the --summary value starts with.
+  4. Write the three kinds of next test, comma-separated, in the order the
+     skill lists them.
+grade:
+  - kind: file-exists
+    path: talk-answers.md
+  - kind: exit
+    command: "python3 -c \"a = open('talk-answers.md').read().lower(); assert 'design' in a, 'answer 1 missing'; assert 'think' in a, 'answer 2 missing'; assert 'next test:' in a, 'answer 3 missing'; assert 'talk to people' in a and 'look it up' in a and 'prototype' in a, 'answer 4 missing'\""
+timeout_minutes: 10
+tags: [capability, talk]
