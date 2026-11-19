@@ -341,7 +341,7 @@ mod tests {
     }
 
     #[test]
-    fn shape_defects_read_in_the_channel_words() {
+    fn shape_defects_and_the_live_number_ack_read_in_channel_words() {
         let none = |_: &str| -> Result<Value, String> { unreachable!() };
         assert_eq!(
             check("no fence", None, &none),
@@ -374,10 +374,10 @@ mod tests {
             lines[0].contains("more than one `outcome:` line"),
             "{lines:?}"
         );
-    }
-
-    #[test]
-    fn an_acknowledged_display_number_matches_the_live_ruling() {
+        // A D-number ack matches the live ruling through the row's number
+        // field; an unacknowledged ruling still reads missing. The same
+        // run drives the schema door's widened decision_id shape end to
+        // end, so one test owns both facets.
         use serde_json::json;
         let row = |did: &str, number: &str| {
             json!({

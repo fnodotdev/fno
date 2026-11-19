@@ -772,15 +772,6 @@ mod tests {
     }
 
     #[test]
-    fn a_decision_id_is_the_hash_or_the_display_number() {
-        assert!(looks_like_decision_id("d-a4b6e1c8"));
-        assert!(looks_like_decision_id("D3478"));
-        assert!(looks_like_decision_id(" d-142 "));
-        assert!(!looks_like_decision_id("D12345678"));
-        assert!(!looks_like_decision_id("bananas"));
-    }
-
-    #[test]
     fn the_difficulty_gate_refuses_only_post_gate_bandless_plans() {
         let mut base = fm(&[
             ("node", json!("x-1234abcd")),
