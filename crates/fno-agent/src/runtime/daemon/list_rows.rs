@@ -199,7 +199,7 @@ where
             // those words already carry a positive verdict the tail cannot
             // improve.
             let rendered_status = match synthetic_tail_row(e, &tail_listing) {
-                Some(tail) => synthetic_status_override(rendered_status, tail.why),
+                Some(tail) => crate::synthetic_tail::status_override(rendered_status, tail.why),
                 None => rendered_status,
             };
             // The whole reachability triple, not just the verdict that
@@ -719,22 +719,6 @@ fn synthetic_tail_row(
     crate::synthetic_tail::from_records(&records)
 }
 
-/// The status word a synthetic tail earns over the activity read. The
-/// activity words (writing/quiet/parked/unknown) all assume a model that can
-/// run; a synthetic last turn is the proof it cannot, so the why decides the
-/// word. `orphaned` and `refused` keep their words: those are positive
-/// verdicts the tail cannot improve.
-fn synthetic_status_override(
-    current: &str,
-    why: crate::synthetic_tail::SyntheticWhy,
-) -> &'static str {
-    match current {
-        "orphaned" => "orphaned",
-        "refused" => "refused",
-        _ => why.as_str(),
-    }
-}
-
 /// True for a Claude model id or tier alias. Mirrors
 /// `fno.agents.model_routing.is_anthropic_model` (cli/src/fno/agents/model_routing.py) --
 /// duplicated rather than shelled out to because the daemon already pays one
@@ -1202,36 +1186,6 @@ mod tests {
                 None
             ),
             ("advancing", "transcript-turn")
-        );
-    }
-
-    /// The synthetic-tail override: the activity words all assume a model
-    /// that can run. A logout answers signed_out, every other synthetic
-    /// answers harness_error, and the two positive verdicts keep their words.
-    #[test]
-    fn the_synthetic_tail_overrides_the_activity_words_only() {
-        use crate::synthetic_tail::SyntheticWhy;
-        for current in ["writing", "quiet", "parked", "unknown"] {
-            assert_eq!(
-                synthetic_status_override(current, SyntheticWhy::SignedOut),
-                "signed_out",
-                "a signed-out tail must reword {current}"
-            );
-            assert_eq!(
-                synthetic_status_override(current, SyntheticWhy::Api400),
-                "harness_error",
-                "a poisoned-request tail must reword {current}"
-            );
-        }
-        assert_eq!(
-            synthetic_status_override("orphaned", SyntheticWhy::SignedOut),
-            "orphaned",
-            "a falsified row keeps its positive verdict"
-        );
-        assert_eq!(
-            synthetic_status_override("refused", SyntheticWhy::Api400),
-            "refused",
-            "a refusal keeps its word over the tail"
         );
     }
 }

@@ -388,7 +388,8 @@ mod signed_out_tail_tests {
             Some(UUID),
             "the dead treatment carries the uuid"
         );
-        assert_eq!(&argv[..2], &["claude".to_string(), "--resume".to_string()]);
+        assert_eq!(argv.first(), Some(&"claude".to_string()));
+        assert_eq!(argv.get(1), Some(&"--resume".to_string()));
     }
 
     /// A weekly-limit tail is synthetic but respawn does not fix it (wait or
@@ -402,7 +403,8 @@ mod signed_out_tail_tests {
         let (argv, claim) =
             claude_resume_argv_with_truth(&ch, &thread_row("7c5dcf5d"), "w", |_| None).unwrap();
         assert_eq!(claim, None, "the live attach arm claims nothing");
-        assert_eq!(&argv[..2], &["claude".to_string(), "attach".to_string()]);
+        assert_eq!(argv.first(), Some(&"claude".to_string()));
+        assert_eq!(argv.get(1), Some(&"attach".to_string()));
     }
 
     /// Signed out with no respawn target (no job state on disk): refuse

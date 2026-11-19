@@ -64,6 +64,19 @@ pub(crate) struct SyntheticTail {
     pub excerpt: String,
 }
 
+/// The status word a synthetic tail earns over the session list's activity
+/// read. The activity words (writing/quiet/parked/unknown) all assume a
+/// model that can run; a synthetic last turn is the proof it cannot, so the
+/// why decides the word. `orphaned` and `refused` keep their words: those
+/// are positive verdicts the tail cannot improve.
+pub(crate) fn status_override(current: &str, why: SyntheticWhy) -> &'static str {
+    match current {
+        "orphaned" => "orphaned",
+        "refused" => "refused",
+        _ => why.as_str(),
+    }
+}
+
 /// The claude transcript record, parsed once into a typed shape (R1): the
 /// discriminator is `type`, and only an assistant record carries a message
 /// this detector reads.
@@ -242,9 +255,39 @@ mod tests {
 
     #[test]
     fn a_silent_synthetic_record_answers_none() {
-        let mut empty = assistant(SYNTHETIC_MODEL, "");
-        empty["message"]["content"] = json!([]);
+        let empty = json!({
+            "type": "assistant",
+            "message": {"model": SYNTHETIC_MODEL, "role": "assistant", "content": []}
+        });
         assert_eq!(from_records(&[empty]), None);
         assert_eq!(from_records(&[user("hello")]), None);
+    }
+
+    /// The override vocabulary: the activity words reword to the why's
+    /// word, the two positive verdicts keep theirs.
+    #[test]
+    fn the_override_rewords_activity_words_only() {
+        for current in ["writing", "quiet", "parked", "unknown"] {
+            assert_eq!(
+                status_override(current, SyntheticWhy::SignedOut),
+                "signed_out",
+                "a signed-out tail must reword {current}"
+            );
+            assert_eq!(
+                status_override(current, SyntheticWhy::Api400),
+                "harness_error",
+                "a poisoned-request tail must reword {current}"
+            );
+        }
+        assert_eq!(
+            status_override("orphaned", SyntheticWhy::SignedOut),
+            "orphaned",
+            "a falsified row keeps its positive verdict"
+        );
+        assert_eq!(
+            status_override("refused", SyntheticWhy::Api400),
+            "refused",
+            "a refusal keeps its word over the tail"
+        );
     }
 }
