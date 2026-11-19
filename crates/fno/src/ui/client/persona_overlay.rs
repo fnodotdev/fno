@@ -2091,7 +2091,9 @@ mod tests {
             panic!("held persona seam still fits three columns");
         };
         assert_eq!(per, 60);
-        assert_eq!(rec, 38);
+        // The board default collapses under the held persona seam and
+        // floors at 24; the record keeps the remainder, 54.
+        assert_eq!(rec, 54);
         v.edge_sizes.set(super::edge_drag::Edge::DrillBoardSeam, 30);
         let (per, board, rec) = drill_widths(&v, 140);
         let Some(board) = board else {
