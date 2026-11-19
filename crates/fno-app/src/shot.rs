@@ -83,6 +83,8 @@ pub fn run(opts: ShotOptions) -> i32 {
         // normal-level frame: gpui presents only once the window is
         // ordered on, and the early level set keeps every composited
         // frame under the desktop picture.
+        // SAFETY: NSApp enumeration over this process's own windows only;
+        // the result is dropped.
         let _ = unsafe { shot_window_id() };
         cx.spawn(async move |cx| {
             cx.background_executor().timer(SETTLE).await;
@@ -265,11 +267,14 @@ fn log_window_live(window_id: u32, when: &str) -> bool {
         }
         hit
     };
+    // SAFETY: releases the Copy-rule list read above; nothing borrows it.
     unsafe { CFRelease(list) };
     // The on-screen-only list is the window server's own answer to "is
     // anything of ours visible": a below-desktop window stays off it.
+    // SAFETY: a Copy-rule result, released after the read below.
     let only = unsafe { CGWindowListCopyWindowInfo(1, 0) };
     if !only.is_null() {
+        // SAFETY: indices stay inside 0..count of the live list.
         let present = unsafe {
             let n = CFArrayGetCount(only);
             let mut hit = false;
@@ -283,6 +288,7 @@ fn log_window_live(window_id: u32, when: &str) -> bool {
             hit
         };
         eprintln!("fno-app --shot: window-live[{when}]: on-screen-only list: {present}");
+        // SAFETY: releases the Copy-rule list read above; nothing borrows it.
         unsafe { CFRelease(only) };
     }
     found
@@ -292,17 +298,19 @@ fn log_window_live(window_id: u32, when: &str) -> bool {
 /// buffer. The window server composites an ordered window at any level,
 /// so the buffer holds the painted frame, while the user's screen shows
 /// nothing (the desktop paints over it) and no focus moves (the window
-/// never becomes key). The capture itself runs in a self-spawned helper
-/// process: the in-process ScreenCaptureKit reply decode crashes the
-/// gpui process, while the same capture succeeds from any other process
-/// (probe-proven against the composited gpui window). The proof lines
-/// land on stderr: the TCC preflight read, the window-server liveness
+/// never becomes key). The capture runs in Apple's SCK-backed tool: the
+/// in-process ScreenCaptureKit reply decode crashes this binary in
+/// every process shape it tried, while the same window captures
+/// cleanly from any foreign process. The proof lines land on stderr:
+/// the TCC preflight read, the window-server liveness
 /// before and after the capture, and the helper's own lines.
 fn capture_to_png(out: &std::path::Path) -> i32 {
+    // SAFETY: NSApp enumeration over this process's own windows only.
     let Some((window_id, _scale)) = (unsafe { shot_window_id() }) else {
         eprintln!("fno-app --shot: no capturable fno window in this process");
         return 1;
     };
+    // SAFETY: a plain read; it returns a bool and touches no pointer.
     let preflight = unsafe { CGPreflightScreenCaptureAccess() };
     eprintln!("fno-app --shot: preflight screen-capture access: {preflight}");
     let before = log_window_live(window_id, "before-capture");
