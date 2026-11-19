@@ -6,11 +6,7 @@
 use super::*;
 
 fn git(repo: &std::path::Path, args: &[&str]) {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .output()
-        .expect("git runs");
+    let out = git_bounded("git", args, repo).expect("git runs to a bounded answer");
     assert!(
         out.status.success(),
         "git {args:?} failed: {}",
