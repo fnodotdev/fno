@@ -1571,7 +1571,8 @@ pub(crate) fn draw_detail(
         .is_some_and(|o| o.home == Home::SidelineBoard && o.pane.is_some())
     {
         if view.backlog_board.is_some() {
-            view.draw_board_rect(cells, rows, cols, persona_panel_rect(view), false);
+            let (h, w) = persona_panel_rect(view);
+            view.draw_board_rect(cells, rows, cols, (0, 0, h, w), false);
         }
         paint_column(view, cells, rows, cols, home);
         return true;
