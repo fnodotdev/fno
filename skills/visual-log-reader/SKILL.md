@@ -5,6 +5,7 @@ metadata:
   requires:
     harness:
       - claude
+allowed-tools: Read
 ---
 
 # Visual Log tap reader

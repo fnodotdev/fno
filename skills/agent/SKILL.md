@@ -10,6 +10,7 @@ metadata:
       - "jq >= 1.6"
     harness:
       - spawn
+allowed-tools: Read
 ---
 
 <!-- style-exception: mechanical command rename preserves pre-existing prose -->

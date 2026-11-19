@@ -1,6 +1,7 @@
 ---
 name: using-fno
 description: Explain when to use Footnote workflow skills versus atomic fno CLI commands.
+allowed-tools: Read
 ---
 
 # You are in a footnote-enabled project
