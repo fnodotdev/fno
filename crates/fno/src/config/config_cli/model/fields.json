@@ -294,6 +294,14 @@
      }
     },
     {
+     "name": "app",
+     "default": {
+      "alert_sound": true,
+      "alert_notification": true,
+      "alert_badge": true
+     }
+    },
+    {
      "name": "agents",
      "default": {
       "single_flight_ttl_seconds": 60,
@@ -1308,6 +1316,23 @@
     {
      "name": "authorized_principals",
      "default": {}
+    }
+   ]
+  },
+  "AppBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "alert_sound",
+     "default": true
+    },
+    {
+     "name": "alert_notification",
+     "default": true
+    },
+    {
+     "name": "alert_badge",
+     "default": true
     }
    ]
   },
@@ -3726,6 +3751,9 @@
   "merge.architect.routes",
   "merge.architect.vision_paths",
   "merge.visual_paint_paths",
-  "merge.visual_shot_workflows"
+  "merge.visual_shot_workflows",
+  "app.alert_sound",
+  "app.alert_notification",
+  "app.alert_badge"
  ]
 }

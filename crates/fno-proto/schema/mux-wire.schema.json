@@ -261,7 +261,7 @@
               "type": "null"
             }
           ],
-          "description": "In-TTL inside-leg badge; `None` = liveness-only (never a scraped guess)."
+          "description": "In-TTL inside-leg badge; `None` = liveness-only. The sanctioned badge\nsources, in seniority order: the hook rung (the agent's own in-TTL\nreport, owning working/done), the question rung (the daemon's\nfirst-party open-question record, `question_rung` on the registry row,\nwhich outranks a WORKING leg - the ask is fresher truth - but never a\nblocked or done one), and the screen backstop (a declared screen\nmanifest). Never a raw terminal scrape."
         },
         "basis": {
           "description": "(v48) Which question the row's reachability evidence answered: the\nbasis half of the reachability triple (`transcript`, `silent`,\n`no-evidence`, or a falsifier name like `process-gone`). The verdict\nhalf of the triple is deliberately NOT carried: it is derivable from\nthe basis, and it is a low-pass filter that reads `reachable` for\nanything dead under two hours - sorting on it would put tonight's\nnine dead workers below every live one. `None` when no probe has\nanswered (a server older than v48 never sends the field; the row then\nranks in the neutral tier, never as urgent). `#[serde(default)]`\nkeeps a v47 reader wire-tolerant.",

@@ -63,6 +63,13 @@ pub enum Event {
     Frame(u64, Frame),
     Modes(Vec<u8>),
     Notice(String),
+    /// A desktop notice from the daemon, a pane's OSC hook or `fno notify`.
+    /// The window renders it as the corner toast; in the background a title
+    /// naming no known agent OS-notifies (alerts.rs carries the rule).
+    Desktop {
+        title: String,
+        body: String,
+    },
     /// Text the server copied (a selection release or Cmd+C) for the
     /// clipboard.
     Copy(String),
@@ -117,6 +124,7 @@ fn to_event(msg: ServerMsg) -> Option<Event> {
         }
         ServerMsg::ModeSync { bytes } => Some(Event::Modes(bytes)),
         ServerMsg::Notice { text } => Some(Event::Notice(text)),
+        ServerMsg::DesktopNotice { title, body } => Some(Event::Desktop { title, body }),
         ServerMsg::PaneInputResult(r) => r
             .result
             .err()
