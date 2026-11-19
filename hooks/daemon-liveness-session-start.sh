@@ -42,7 +42,7 @@ fi
 
 # The heal: fire the gated restart detached, no wait, so the hook budget
 # never sees the ensure loop (a daemon that serves within the budget reads
-# up anyway; a slow boot finishes in the background). The client verb, not
+# up anyway; a slow boot finishes in the background). The client command, not
 # a direct daemon spawn: ensure_daemon scrubs this session's identity env
 # off the new daemon, and the client's own --if-down gate re-measures the
 # down state, so a daemon that came up mid-hook is never bounced.

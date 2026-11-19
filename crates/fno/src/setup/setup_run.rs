@@ -1436,9 +1436,9 @@ fn step_web_bridge_agent(exe: &Path, rep: &mut Report, loaded: &mut Vec<String>)
 /// daemon at login, so fleet wakes, watchdog and daemon beats run without
 /// a person typing first (after a reboot the daemon used to stay down
 /// until someone ran a daemon-routed command). A loaded agent
-/// skips, the pr-watcher's reason. Unlike the verb-backed service steps
+/// skips, the pr-watcher's reason. Unlike the command-backed service steps
 /// this one installs in-process: the installer lives in this crate and
-/// there is no CLI verb (the menu caps hold).
+/// there is no CLI command for it (the menu caps hold).
 fn step_daemon_agent(rep: &mut Report, loaded: &mut Vec<String>) {
     if !crate::setup_services::macos() {
         service_platform(
