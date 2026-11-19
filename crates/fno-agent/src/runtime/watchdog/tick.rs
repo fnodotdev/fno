@@ -491,7 +491,7 @@ fn leg_payload(
     acted: i64,
     signed_out_acted: i64,
     results: &[Value],
-    snapshot: &Value,
+    snapshot: &super::unfinished::Snapshot,
 ) -> Value {
     let count_outcome = |word: &str| {
         results
