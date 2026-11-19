@@ -1631,8 +1631,8 @@ pub(crate) fn persona_widening_seams(view: &mut View) -> Vec<crate::proto::Comma
 /// renders its text inside its pty, where the rect loses two border
 /// columns to the client frame and the transcript pads inside the rest,
 /// so fleet content wraps about four narrower than its rect.
-const PANE_FLOOR: usize = 26;
-const FLEET_FLOOR: usize = 32;
+const PANE_FLOOR: usize = 22;
+const FLEET_FLOOR: usize = 36;
 fn pane_floor(tracked: &[u64], pid: u64) -> usize {
     if tracked.contains(&pid) {
         PANE_FLOOR
@@ -2788,8 +2788,8 @@ mod tests {
         // Fleet row at the chip's shape: archer 59, then the reviewer the
         // persona split turned into 29 | gap | 30. The claim pulls nothing
         // (the donor is already under the fleet floor); the raise pays the
-        // reviewer back to 32 from the persona column, which paints its own
-        // word-wrapped page and floors at 26.
+        // reviewer back to 36 from the persona column, which paints its own
+        // word-wrapped page and floors at 22.
         let mut v = View::new((40, 140), "s".into(), LayoutView::default());
         v.layout.panes = vec![
             (
@@ -2861,8 +2861,8 @@ mod tests {
         };
         assert_eq!(
             (*a, *b, *pos),
-            (3, 6, 92),
-            "the reviewer gains to 32, the persona pays to 27"
+            (3, 6, 96),
+            "the reviewer gains to 36, the persona pays to 23"
         );
         assert!(!v.persona.as_ref().unwrap().widen, "one shot");
     }
