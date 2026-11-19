@@ -14,19 +14,39 @@ use crate::law_match::{
 const RESTORE_USAGE: &str =
     "usage: fno inbox decisions restore <decision-id> [--quote <the user's words>]";
 
+/// A restore names its row by the hash or by the display number (`D3478`);
+/// anything else is a typo'd subject and refuses at the gate.
+fn takes_decision_token(s: &str) -> bool {
+    is_decision_id(s) || crate::numbers::reads_as_number(s)
+}
+
 /// The fields a restore copies from the retracted row, verbatim.
 const COPIED: &str = "decision subject scope paths filters strength when graduation \
                       graduation_ref rationale reads options";
 
 pub fn run_restore(argv: &[String]) -> i32 {
     let (token, quote) = match argv {
-        [one] if is_decision_id(one.trim()) => (one.trim().to_string(), None),
-        [one, flag, quote] if flag == "--quote" && is_decision_id(one.trim()) => {
+        [one] if takes_decision_token(one.trim()) => (one.trim().to_string(), None),
+        [one, flag, quote] if flag == "--quote" && takes_decision_token(one.trim()) => {
             (one.trim().to_string(), Some(quote.as_str()))
         }
         _ => {
             eprintln!(
                 "fno inbox decisions restore: restore takes one decision id\n{RESTORE_USAGE}"
+            );
+            return 2;
+        }
+    };
+    // Dual read: the display number names its hash through the table; a
+    // hash passes through lowercased. A number nothing holds refuses
+    // before any read, naming the hash form to type instead.
+    let resolved = crate::numbers::resolve('d', &token);
+    let token = match resolved {
+        Some(id) => id,
+        None => {
+            eprintln!(
+                "fno inbox decisions restore: {}\n{RESTORE_USAGE}",
+                crate::numbers::unresolved(&token)
             );
             return 2;
         }
@@ -195,6 +215,16 @@ mod tests {
             "_event_type": "decision_retracted", "retraction_id": "r-1",
             "target_decision_id": target, "subject": "portal-test", "ts": ts
         })
+    }
+
+    #[test]
+    fn restore_takes_the_hash_or_the_display_number() {
+        assert!(takes_decision_token("d-abc12345"));
+        assert!(takes_decision_token("D3478"));
+        // A short digit tail reads as a display number, not a hash shape.
+        assert!(takes_decision_token("d-142"));
+        assert!(!takes_decision_token("portal-test"));
+        assert!(!takes_decision_token(""));
     }
 
     #[test]

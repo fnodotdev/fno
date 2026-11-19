@@ -22,7 +22,8 @@ pub fn ddl() -> String {
   {},
   PRIMARY KEY (node_id, seq)
 );
-CREATE INDEX IF NOT EXISTS sessions_by_session ON sessions(session_id, harness);",
+CREATE INDEX IF NOT EXISTS sessions_by_session ON sessions(session_id, harness);
+CREATE INDEX IF NOT EXISTS sessions_by_node ON sessions(node_id, started_at);",
         stamps("sessions"),
         iso("sessions", "started_at"),
         iso("sessions", "ended_at"),

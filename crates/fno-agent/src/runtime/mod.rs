@@ -285,6 +285,7 @@ pub mod subscribe;
 pub mod succession_txn;
 pub mod supervisor;
 pub mod sync_canonical;
+pub mod synthetic_tail;
 pub mod system_sender;
 pub mod task_context;
 pub mod team_alarm;

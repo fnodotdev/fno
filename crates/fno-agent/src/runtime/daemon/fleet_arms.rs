@@ -248,6 +248,7 @@ impl FleetArms {
             ctx.opts.agents_config_cwd.clone(),
             ctx.home.events_jsonl(),
             retire_interval,
+            crate::boot_revival::hold_reason,
             {
                 let prune_cwd = ctx.opts.agents_config_cwd.clone();
                 move || crate::gc::mux_tab_sweep(None, &prune_cwd, false, false)

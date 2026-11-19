@@ -613,6 +613,9 @@ pub(crate) fn mint_node_id(
     existing: &std::collections::BTreeSet<String>,
 ) -> Result<String, String> {
     let prefix = super::settings::node_id_prefix();
+    if super::settings::node_id_sequential() {
+        return mint_sequential_node_id(existing, &prefix).map_err(|e| e.to_string());
+    }
     let width = super::settings::node_id_hex_width();
     let archive_ids = archived_id_pool();
     let tombstones = load_id_tombstones();
@@ -627,6 +630,80 @@ pub(crate) fn mint_node_id(
     )?;
     record_id_tombstone(&minted);
     Ok(minted)
+}
+
+/// Why a sequential node id was not minted.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SequentialMintError {
+    #[error(
+        "backlog.id_mode = \"sequential\" refused: prefix {prefix:?} also names nodes in \
+         project(s) {}. Pick a prefix no other project uses (backlog.id_prefix).",
+        .projects.join(", ")
+    )]
+    SharedPrefix {
+        prefix: String,
+        projects: Vec<String>,
+    },
+    #[error(transparent)]
+    Reserve(#[from] crate::numbers::ReserveError),
+    #[error("sequential id reserve for {0:?} kept naming held ids")]
+    Exhausted(String),
+}
+
+/// `backlog.id_mode = "sequential"`: the next `<prefix>-<n>` from the store's
+/// node counter. Refused while another project files nodes under the prefix,
+/// because the counter is per prefix and the other project's hex ids would
+/// then share a sequence it never opted into.
+fn mint_sequential_node_id(
+    existing: &std::collections::BTreeSet<String>,
+    prefix: &str,
+) -> Result<String, SequentialMintError> {
+    let graph = crate::backlog::database_path(&super::settings::graph_path());
+    // The same derivation that stamps a new node's `project`, so the
+    // caller's own nodes never read as another project's.
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let caller_root = repo_root(&cwd);
+    let checkout = configured_checkout_for(&caller_root).map_or(caller_root, |(_, path)| path);
+    let own = detect_project(Path::new(&checkout)).unwrap_or_default();
+    let others = sequential_prefix_owners(&graph, prefix, &own);
+    if !others.is_empty() {
+        return Err(SequentialMintError::SharedPrefix {
+            prefix: prefix.to_string(),
+            projects: others,
+        });
+    }
+    // A reserved number a node already holds (a stale cache after a sync)
+    // is burned and the next one tried: ids stay unique, never gapless.
+    for _ in 0..8 {
+        let id = crate::numbers::reserve_node_id(&graph, prefix)?;
+        if !existing.contains(&id) {
+            return Ok(id);
+        }
+    }
+    Err(SequentialMintError::Exhausted(prefix.to_string()))
+}
+
+/// The projects other than `own` that hold a node under `prefix`.
+pub(crate) fn sequential_prefix_owners(
+    graph: &std::path::Path,
+    prefix: &str,
+    own: &str,
+) -> Vec<String> {
+    let pattern = format!("{}-%", prefix.trim_end_matches('-'));
+    let Ok(conn) =
+        rusqlite::Connection::open_with_flags(graph, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+    else {
+        return Vec::new();
+    };
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT DISTINCT project FROM nodes WHERE id LIKE ?1 \
+         AND project IS NOT NULL AND project != '' AND project != ?2 ORDER BY project",
+    ) else {
+        return Vec::new();
+    };
+    stmt.query_map(rusqlite::params![pattern, own], |row| row.get(0))
+        .map(|rows| rows.flatten().collect())
+        .unwrap_or_default()
 }
 
 /// The mint with an explicit per-create prefix (`--prefix go` on add): the
@@ -1934,6 +2011,22 @@ mod tests {
         );
         let mint = mint_node_id_prefixed(&Default::default(), "Bad-Prefix").unwrap_err();
         assert!(mint.contains("invalid prefix"), "{mint}");
+    }
+
+    #[test]
+    fn sequential_mode_names_every_other_project_on_its_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("graph.db");
+        rusqlite::Connection::open(&db)
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE nodes (id TEXT, project TEXT);
+                 INSERT INTO nodes VALUES ('t-aaaa','mine'),('t-bbbb','etl'),
+                 ('t-cccc','web'),('tx-dddd','other'),('t-eeee',NULL);",
+            )
+            .unwrap();
+        assert_eq!(sequential_prefix_owners(&db, "t-", "mine"), ["etl", "web"]);
+        assert!(sequential_prefix_owners(&db, "tx", "other").is_empty());
     }
 
     #[test]

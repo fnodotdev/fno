@@ -22,7 +22,7 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 
 use super::keys::Key;
 use super::palette::Palette;
-use super::ui::{self, Button, Role};
+use super::ui::{self, Button, Edit, LineField, Role};
 use super::window::{Action, MainView, Root};
 use fno::app_api::client::node_detail::backlog_md::md_lines;
 use fno::app_api::plugins_feed::{self as feed, Component, Published, ReadFailed};
@@ -145,14 +145,6 @@ enum Gallery {
     Done(Result<Vec<Published>, ReadFailed>),
 }
 
-/// What a typed key did to the URL field.
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum Edit {
-    Typed,
-    Close,
-    Submit,
-}
-
 /// A click in the view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Act {
@@ -208,7 +200,7 @@ pub(super) struct Page {
     recipe: Option<(String, Result<String, ReadFailed>)>,
     view: Option<(String, Result<View, ReadFailed>)>,
     confirm: Option<String>,
-    url: Option<String>,
+    url: Option<LineField>,
     /// Targets whose switch the plugins thread has not answered yet.
     pending: HashSet<String>,
     watch: Watch,
@@ -478,30 +470,20 @@ impl Page {
 
     /// The URL to install: none when the field is empty or starts with `-`.
     fn url_to_install(&self) -> Option<String> {
-        let url = self.url.as_deref().unwrap_or_default().trim();
+        let url = self
+            .url
+            .as_ref()
+            .map(|f| f.text())
+            .unwrap_or_default()
+            .trim();
         (!url.is_empty() && !url.starts_with('-')).then(|| url.to_string())
     }
 
     /// A key while the URL field is open. Text keys never leave this page.
     pub(super) fn edit(&mut self, key: &str, text: Option<&str>) -> Edit {
-        let Some(url) = self.url.as_mut() else {
-            return Edit::Typed;
-        };
-        match key {
-            "escape" => return Edit::Close,
-            "enter" => return Edit::Submit,
-            "backspace" => {
-                url.pop();
-            }
-            _ => {
-                for ch in text.unwrap_or_default().chars().filter(|c| !c.is_control()) {
-                    if url.chars().count() < MAX_URL {
-                        url.push(ch);
-                    }
-                }
-            }
-        }
-        Edit::Typed
+        self.url
+            .as_mut()
+            .map_or(Edit::Typed, |field| field.edit(key, text))
     }
 }
 
@@ -535,7 +517,11 @@ pub(super) fn act(root: &mut Root, act: Act, cx: &mut Context<Root>) {
             root.act(native_open(&t), cx)
         }
         Act::Open(t) => pane(root, vec!["open".into(), t.clone()], t, false),
-        Act::Install => root.ext.url.get_or_insert_with(String::new).clear(),
+        Act::Install => root
+            .ext
+            .url
+            .get_or_insert_with(|| LineField::new(MAX_URL))
+            .clear(),
         Act::Browse => {
             if root.ext.ask(Ask::Gallery) {
                 root.ext.gallery = Gallery::Reading;
@@ -543,7 +529,7 @@ pub(super) fn act(root: &mut Root, act: Act, cx: &mut Context<Root>) {
         }
         Act::Pick(install) => {
             let url = install.rsplit(' ').next().unwrap_or_default();
-            root.ext.url = Some(url.to_string());
+            root.ext.url = Some(LineField::seeded(url, MAX_URL));
         }
         Act::Submit => match root.ext.url_to_install() {
             Some(url) => {
@@ -743,7 +729,7 @@ fn more(root: &Root, cx: &mut Context<Root>) -> Div {
                     )
                 }),
         ),
-        Some(url) => out
+        Some(field) => out
             .child(
                 div()
                     .h(px(26.0))
@@ -752,11 +738,15 @@ fn more(root: &Root, cx: &mut Context<Root>) -> Div {
                     .items_center()
                     .rounded(px(4.0))
                     .bg(rgb(p.raised))
-                    .text_color(rgb(if url.is_empty() { p.faint } else { p.fg }))
-                    .child(if url.is_empty() {
+                    .text_color(rgb(if field.text().is_empty() {
+                        p.faint
+                    } else {
+                        p.fg
+                    }))
+                    .child(if field.text().is_empty() {
                         format!("\u{258f}{URL_HINT}")
                     } else {
-                        format!("{url}\u{258f}")
+                        format!("{}\u{258f}", field.text())
                     }),
             )
             .child(ui::text(
@@ -1413,7 +1403,7 @@ mod tests {
     fn the_url_field_types_edits_and_refuses_an_empty_or_dashed_value() {
         let (mut page, _rx) = page();
         assert!(page.url_to_install().is_none());
-        page.url = Some(String::new());
+        page.url = Some(LineField::new(MAX_URL));
         assert_eq!(page.edit("a", Some("--x")), Edit::Typed);
         assert!(
             page.url_to_install().is_none(),

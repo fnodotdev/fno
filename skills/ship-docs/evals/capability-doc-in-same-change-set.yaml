@@ -1,0 +1,18 @@
+# Capability tier: does a reader of the ship-docs skill know the user doc
+# ships in the SAME change set as the behavior, and that a Docs: line in the
+# code PR names it? The D2707 law is the contract. Graded on the answer
+# naming the paired repo and the Docs line.
+id: capability-doc-in-same-change-set
+tier: capability
+prompt: |
+  Read skills/ship-docs/SKILL.md. Answer two questions in
+  ship-docs-eval-answers.md at the repo root, one per line:
+  1. Where does the user doc for a behavior change land?
+  2. What line in the code PR names the doc?
+grade:
+  - kind: file-exists
+    path: ship-docs-eval-answers.md
+  - kind: exit
+    command: "python3 -c \"a = open('ship-docs-eval-answers.md').read().lower(); assert 'fno-web' in a, 'answer 1 missing the docs repo'; assert 'docs:' in a, 'answer 2 missing the Docs line'\""
+timeout_minutes: 10
+tags: [capability, ship-docs]

@@ -15,7 +15,7 @@
 pub const CLIENT_COMMAND_USAGE: &[&str] = &[
     "spawn <name> [prompt] [-H <harness>] [--route <provider/model|lane>] [--as pane|thread|headless|cloud] [--machine <host>] [-s <squad>] [-x left|right|up|down] [--cwd <dir>|--fresh|--here] [--force] [--no-wait] [--max <n>] [--] [everything after the prompt is harness argv, never parsed; a spawn-owned flag there refuses with the corrected line; unowned flags before the prompt pass in the --flag=value form only] | --argv -- <cmd...>",
     "ask <name> <message> [--cwd <dir>|--fresh|--here] [--answer allow_once|deny]",
-    "list [--all] [--status <live|orphaned|unknown>] [--progress <advancing|awaiting-operator|parked|refused|unknown>]",
+    "list [--all] [--status <writing|quiet|parked|orphaned|refused|unknown|signed_out|harness_error>] [--progress <advancing|awaiting-operator|parked|refused|unknown>]",
     "status",
     // --force is break-glass: it SIGKILLs a wedged lock holder (and would kill
     // a healthy one too). Plain restart is the graceful path; say so here

@@ -545,6 +545,15 @@
       "title": "Id Hex Width",
       "type": "integer"
      },
+     "id_mode": {
+      "default": "hex",
+      "enum": [
+       "hex",
+       "sequential"
+      ],
+      "title": "Id Mode",
+      "type": "string"
+     },
      "staleness_days": {
       "default": 21,
       "title": "Staleness Days",
@@ -4640,6 +4649,27 @@
    "default_source": "",
    "doc": "Hex width of minted node IDs (4-8).",
    "edit": "editor"
+  },
+  {
+   "path": "backlog.id_mode",
+   "label": "Node ID mode",
+   "type": "typing.Literal['hex', 'sequential']",
+   "default": "hex",
+   "wizard": "never",
+   "question": "",
+   "default_source": "",
+   "doc": "How a new node id is minted: hex (default) or sequential (<prefix>-1, -2, ...). Sequential refuses a prefix another project uses.",
+   "edit": "cycle",
+   "choices": [
+    {
+     "value": "hex",
+     "doc": "default"
+    },
+    {
+     "value": "sequential",
+     "doc": "<prefix>-1, -2, ..."
+    }
+   ]
   },
   {
    "path": "backlog.staleness_days",

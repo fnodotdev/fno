@@ -323,6 +323,22 @@ _acknowledged_ids() {
     ' "$1"
 }
 
+# Dual read: an acked entry may carry the display number beside the hash.
+# A number-form entry resolves through the decisions door so the stage
+# compare sees the hash it names; a hash passes through unchanged.
+_resolve_acked_forms() {
+    local bin="$1" id resolved
+    while IFS= read -r id; do
+        [[ -n "$id" ]] || continue
+        printf '%s\n' "$id"
+        if [[ "$id" =~ ^[DdQq]-?[0-9]{1,7}$ ]]; then
+            resolved=$("$bin" backlog decisions "$id" --limit 1 --state all --json 2>/dev/null \
+                | jq -r '.decisions[0].decision_id // empty' 2>/dev/null)
+            [[ -n "$resolved" ]] && printf '%s\n' "$resolved"
+        fi
+    done
+}
+
 # Echo the fno-agent binary the Rust-backed checks shell out to, resolved
 # with the stop hook's order: an explicit executable $FNO_AGENT_BIN, a build
 # under the source root, then PATH. Empty means no binary: callers warn NOT
@@ -1148,7 +1164,7 @@ check_consolidation_file() {
                 local acked_list="" acked_lc="" acked_id
                 while IFS= read -r acked_id; do
                     [[ -n "$acked_id" ]] && acked_list+="${acked_id}"$'\n'
-                done < <(_acknowledged_ids "$file")
+                done < <(_acknowledged_ids "$file" | _resolve_acked_forms "$bin")
                 acked_lc=$(printf '%s' "$acked_list" | tr '[:upper:]' '[:lower:]')
                 local s_created s_did s_did_lc s_subj stage_missing=0
                 s_created=$(_plan_created_date "$file")
@@ -1508,8 +1524,10 @@ check_ask_file() {
                 problems+=("## Consumers row has no verdict: $line - start the cell with 'changes' or 'unaffected because <reason>'")
             fi
         elif [[ "$section" == "## Ask" && "$line" =~ ^-\ leaves\ out: ]]; then
-            if [[ ! "$line" =~ (d-[0-9a-f]{4,}|q-[0-9a-f]{4,}) ]]; then
-                problems+=("an out-of-scope line needs a ruling: $line - cite a d- decision id or a q- question id from 'fno inbox outstanding ask'")
+            # Dual read: the display number beside the hash. A number-form
+            # citation (D3479, d-142) reads as a ruling id; prose refuses.
+            if [[ ! "$line" =~ (d-[0-9a-f]{4,}|q-[0-9a-f]{4,}|[DdQq]-?[0-9]{1,7}(@[A-Za-z0-9._-]+)?) ]]; then
+                problems+=("an out-of-scope line needs a ruling: $line - cite a decision or question id (d-<hex>, D<n>) from 'fno inbox outstanding ask'")
             fi
         fi
     done <"$file"
