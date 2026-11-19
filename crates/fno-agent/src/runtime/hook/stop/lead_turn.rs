@@ -304,7 +304,8 @@ mod tests {
     const ASK: &str = "The v0.0.17 rc still waits for your approval.";
 
     #[test]
-    fn a_waiting_ask_needs_a_live_read_in_its_own_turn() {
+    fn lead_turn_rows() {
+        // A waiting-on-you ask needs a live read in its own turn.
         // Beat 150 read the run; beat 189 (a meta-flagged wake) read nothing.
         let old_read = [
             prompt("2026-11-19T18:00:00Z", "beat"),
@@ -340,10 +341,8 @@ mod tests {
             unread_ask(ASK, &turn).is_none(),
             "a same-turn live read clears it"
         );
-    }
 
-    #[test]
-    fn a_report_with_no_waiting_ask_or_a_codex_rollout_never_blocks() {
+        // A report with no waiting ask, or a codex rollout, never blocks.
         let codex = json!({"type": "response_item",
             "payload": {"type": "message", "role": "assistant", "content": ASK}});
         assert!(parse_turn(&codex.to_string(), ASK).is_none());
@@ -354,10 +353,8 @@ mod tests {
         .expect("claude turn");
         assert!(unread_ask("Merged PR 371; CI green on 372.", &turn).is_none());
         assert!(unread_ask("You already ruled on the rc: your approval landed.", &turn).is_none());
-    }
 
-    #[test]
-    fn an_operator_node_filed_this_turn_must_leave_dispatched_or_parked() {
+        // A user-request node filed this turn leaves dispatched or parked.
         let dir = tempfile::tempdir().expect("tempdir");
         let graph = dir.path().join("graph.db");
         let db = rusqlite::Connection::open(&graph).expect("open");
