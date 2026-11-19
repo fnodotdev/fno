@@ -20,6 +20,7 @@ use fno::search_query::fuzzy_hit;
 
 use gpui::{div, prelude::*, px, rgb, rgba, Context, Div, Stateful};
 
+use super::launch;
 use super::left_pane::{agent_identity, agent_row_action, agent_status_word, session_detail};
 use super::link::Layout;
 use super::tabs::VIEWS;
@@ -71,11 +72,17 @@ pub(super) struct Target {
 }
 
 /// The palette's command table: `(label, key hint, action builder)`. The
-/// launch composer's `New session` and `New lead` composer rows land here
-/// when their `Action::OpenLaunch` variant exists on main; the palette
-/// never builds a launch path of its own.
-pub(super) const COMMANDS: &[(&str, &str, fn() -> Action)] =
-    &[("Keyboard shortcuts", "⌘/", || Action::ToggleKeySheet)];
+/// composer's two rows open the launch panel with their kind picked; the
+/// palette never builds a launch path of its own.
+pub(super) const COMMANDS: &[(&str, &str, fn() -> Action)] = &[
+    ("Keyboard shortcuts", "⌘/", || Action::ToggleKeySheet),
+    ("New session", "⌘N", || {
+        Action::OpenLaunch(Some(launch::Kind::Agent))
+    }),
+    ("New lead", "⌘N", || {
+        Action::OpenLaunch(Some(launch::Kind::Lead))
+    }),
+];
 
 // [[CHUNK-4]]
 

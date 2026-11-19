@@ -9,6 +9,7 @@
 //! permissions, seed acceptance - stay with the door; a refusal renders
 //! verbatim and the draft survives.
 
+use crate::backlog::node_row::Status;
 use crate::harness::{AsHarness, Harness};
 use unicode_width::UnicodeWidthChar;
 
@@ -33,6 +34,11 @@ const MAX_PASTE_CARRY: usize = 16 * 1024;
 const MAX_LAUNCH_FLAGS_CHARS: usize = 1024;
 pub(crate) const LAUNCH_EXTRA_AXES_PROTO: u32 = 91;
 pub(crate) const LAUNCH_WORKTREE_PROTO: u32 = 95;
+
+/// A lead's first prompt rides this seed, as the HQ `L` key types it. The
+/// org board seeds the composer at open; the app's composer prefixes it at
+/// submit. One constant, two surfaces.
+pub const LEAD_SEED: &str = "/fno:lead ";
 
 /// The editor's prompt gutter: the marker glyph and one space, before the
 /// first message row. The message wraps inside what remains.
@@ -106,6 +112,89 @@ pub(crate) struct RecentModelChoice {
 pub(crate) enum CatalogOutcome {
     Ok(Vec<HarnessChoice>, Option<String>, Vec<ProjectFacts>),
     Degraded(String),
+}
+
+/// One harness candidate as the app's composer shows it: the capability
+/// row's name, whether it can start a session, the dim line the row
+/// carries, and the sync floor lists for the model and effort pickers
+/// (the capability table's static rows; the TUI dock keeps the probed
+/// catalog). The TUI dock keeps the full [`HarnessChoice`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HarnessRow {
+    pub name: String,
+    /// False when the row cannot start a session; `reason` says why.
+    pub selectable: bool,
+    /// The name when selectable, else the cause (`not installed`).
+    pub reason: String,
+    /// The capability table's static model slugs, in table order.
+    pub models: Vec<String>,
+    /// The capability table's effort choices; empty when the axis is off.
+    pub efforts: Vec<String>,
+}
+
+/// The capability read's failure, phrased as the dock's degraded line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogUnavailable(pub String);
+
+impl core::fmt::Display for CatalogUnavailable {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// The rows the app's composer offers: the same parse [`load_catalog`]
+/// runs, without its model, routing or project probes. Sync, so the app
+/// calls it straight from its UI thread. `Err` carries the degraded reason
+/// the dock would have shown.
+pub fn harness_rows() -> Result<Vec<HarnessRow>, CatalogUnavailable> {
+    let rows = capability_rows()?;
+    Ok(rows
+        .into_iter()
+        .map(|r| HarnessRow {
+            selectable: r.selectable(),
+            reason: r.reason(),
+            name: r.name,
+            models: r.models.iter().map(|m| m.name.clone()).collect(),
+            efforts: r.efforts.unwrap_or_default(),
+        })
+        .collect())
+}
+
+/// One epic in the lead kind's pick list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EpicChoice {
+    pub id: String,
+    pub slug: String,
+    pub title: String,
+}
+
+/// The lead kind's epic pool: every epic the store carries that is neither
+/// done nor superseded, slug order. Read straight from the graph store on
+/// the app's UI thread; a missing or wedged store reads as an empty pool,
+/// and a lead started against it carries no scope.
+pub fn epic_rows() -> Vec<EpicChoice> {
+    let graph = crate::ui::backlog_view::graph_path();
+    let fields = ["id", "slug", "title", "type", "status"];
+    let Ok(all) = crate::store_client::rows(&graph, None, Some(fields.as_slice())) else {
+        return Vec::new();
+    };
+    let mut out: Vec<EpicChoice> = all
+        .into_iter()
+        .filter(|r| {
+            // The row fields are lenient reads: every one is an Option.
+            // A row with no id cannot seed a lead, so it is not a choice.
+            r.kind.as_deref() == Some("epic")
+                && r.id.is_some()
+                && !matches!(r.status, Some(Status::Done) | Some(Status::Superseded))
+        })
+        .map(|r| EpicChoice {
+            id: r.id.unwrap_or_default(),
+            slug: r.slug.unwrap_or_default(),
+            title: r.title.unwrap_or_default(),
+        })
+        .collect();
+    out.sort_by(|a, b| a.slug.cmp(&b.slug));
+    out
 }
 
 /// One project's launch facts, read during the catalog probe: the checkout's
@@ -2601,12 +2690,19 @@ fn next_free_portal(view: &View) -> u8 {
 /// worktree policy word). Delivered through the probe channel so the dock
 /// has one "not yet read" and "read" shape; async because the subprocess
 /// reads are.
-pub(crate) async fn load_catalog(projects: Vec<String>) -> CatalogOutcome {
+/// The capability parse both catalog readers share: the compiled-in table,
+/// gemini dropped, PATH stats applied, sorted by name. `Err` carries the
+/// degraded reason verbatim.
+fn capability_rows() -> Result<Vec<HarnessChoice>, CatalogUnavailable> {
     let Ok(parsed) = toml::from_str::<toml::Value>(CAPABILITY_TOML) else {
-        return CatalogOutcome::Degraded("harness catalog: capability table unparseable".into());
+        return Err(CatalogUnavailable(
+            "harness catalog: capability table unparseable".into(),
+        ));
     };
     let Some(table) = parsed.get("harness").and_then(|h| h.as_table()) else {
-        return CatalogOutcome::Degraded("harness catalog: no [harness] table".into());
+        return Err(CatalogUnavailable(
+            "harness catalog: no [harness] table".into(),
+        ));
     };
     let mut rows: Vec<HarnessChoice> = table
         .iter()
@@ -2666,8 +2762,18 @@ pub(crate) async fn load_catalog(projects: Vec<String>) -> CatalogOutcome {
         .collect();
     rows.sort_by(|a, b| a.name.cmp(&b.name));
     if rows.is_empty() {
-        return CatalogOutcome::Degraded("harness catalog: empty capability table".into());
+        return Err(CatalogUnavailable(
+            "harness catalog: empty capability table".into(),
+        ));
     }
+    Ok(rows)
+}
+
+pub(crate) async fn load_catalog(projects: Vec<String>) -> CatalogOutcome {
+    let mut rows = match capability_rows() {
+        Ok(rows) => rows,
+        Err(reason) => return CatalogOutcome::Degraded(reason.0),
+    };
     // Non-OpenCode model choices come from configured account records.
     // OpenCode owns its provider/model IDs and supplies them through its model
     // list command. Both reads are bounded and run off the UI loop.

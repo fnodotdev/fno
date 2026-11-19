@@ -71,6 +71,8 @@ pub enum Shortcut {
     Quit,
     /// cmd-1..9 picks that tab in the terminal view, else that agent row.
     Pick(u8),
+    /// cmd-n: the launch composer, over whatever view is showing.
+    NewAgent,
     /// cmd-f: the find bar over the focused pane, or over the chat.
     Find,
 }
@@ -109,6 +111,7 @@ pub fn shortcut(k: &Key) -> Option<Shortcut> {
         ("a", _) => Shortcut::SelectAll,
         ("f", false) => Shortcut::Find,
         ("q", _) => Shortcut::Quit,
+        ("n", false) => Shortcut::NewAgent,
         _ => return None,
     })
 }
@@ -132,6 +135,7 @@ pub const SHEET: &[(&str, &[(&str, &str)])] = &[
         "global",
         &[
             ("⌘/", "show this sheet"),
+            ("⌘n", "start a session or a lead"),
             ("⌘k", "go to an agent, session, node, question or view"),
             ("⌘1-⌘9", "pick an agent row, or a tab in the terminal"),
             ("hold ⌘", "show the numbers"),
