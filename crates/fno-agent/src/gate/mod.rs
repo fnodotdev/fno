@@ -104,6 +104,7 @@ pub mod review_level;
 pub mod review_policy;
 pub mod review_summary;
 pub(crate) mod stacked_base_stamp;
+pub mod stop_now;
 pub mod stub_manifest;
 pub mod subagent_hold;
 pub mod surface_check;

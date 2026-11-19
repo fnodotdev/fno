@@ -288,7 +288,9 @@ pub(crate) fn hold_body(record: &fleet_incident::IncidentRecord) -> String {
     } else {
         format!("Fleet stop by {} ({}).", record.changed_by, record.reason)
     };
-    let work = if record.holds_scope("loops") {
+    let work = if record.holds_scope("loops") && record.now {
+        "Start no new work until the all-clear."
+    } else if record.holds_scope("loops") {
         "Finish your current turn, then stop."
     } else {
         "Keep coding."

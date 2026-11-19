@@ -3593,6 +3593,7 @@ MemAvailable:    8000000 kB\n";
             origin: None,
             mail: None,
             mail_session_id: None,
+            now: false,
         };
         std::fs::write(&path, serde_json::to_string(&record).unwrap()).unwrap();
 

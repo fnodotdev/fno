@@ -56,7 +56,7 @@ pub mod pane;
 pub(crate) use claude_control::resolve_target;
 pub use claude_control::{
     answer_permission_via_control_sock_in, deliver_via_control_sock, deliver_via_control_sock_in,
-    deliver_via_control_sock_state,
+    deliver_via_control_sock_state, interrupt_via_control_sock_in,
 };
 pub use keeper::{deliver_via_keeper_socket, deliver_via_keeper_socket_in};
 #[cfg(test)]
