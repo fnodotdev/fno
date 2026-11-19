@@ -369,7 +369,12 @@ pub fn run(tail: &[String]) -> i32 {
         println!("{total}");
         return 0;
     }
-    // The premise marks attach once, before output: the ids go to the
+    // --limit cuts before the marks: the freshness command pays per id, and
+    // marking every hit to print a few cost seconds on a 5,800-row graph.
+    if let Some(n) = limit {
+        hits.truncate(n);
+    }
+    // The premise marks attach once, before output: the shown ids go to the
     // freshness command's batch arm in one shell-out, and a failure leaves
     // every row unmarked. --count returns above; it shows no rows.
     if !hits.is_empty() {
@@ -382,10 +387,7 @@ pub fn run(tail: &[String]) -> i32 {
             }
         }
     }
-    let shown: Vec<&Hit> = match limit {
-        Some(n) => hits.iter().take(n).collect(),
-        None => hits.iter().collect(),
-    };
+    let shown: Vec<&Hit> = hits.iter().collect();
     if json_out {
         let rows: Vec<Value> = shown.iter().map(|h| h.json_row()).collect();
         println!(
