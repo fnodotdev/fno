@@ -116,6 +116,18 @@ pub fn badge_count(agents: &[AgentRow]) -> u32 {
         .count() as u32
 }
 
+/// The write the Dock needs to move from `current` to `want`: the new
+/// value on any transition, None when they already agree. A switch-off
+/// (want None) stores None but writes the clear, so a turned-off switch
+/// still takes the old count down.
+fn badge_transition(want: Option<u32>, current: &mut Option<u32>) -> Option<u32> {
+    if want == *current {
+        return None;
+    }
+    *current = want;
+    Some(want.unwrap_or(0))
+}
+
 /// What a consumed signal asks the window to do.
 pub enum Signal {
     Toast(String),
@@ -276,19 +288,17 @@ impl Alerts {
         None
     }
 
-    /// The Dock badge for this layout, when it changed. Some(0) clears.
+    /// The Dock value to write for this layout, when it changed. Some(0)
+    /// clears, and a switch-off transition returns Some(0) too: the Dock
+    /// must drop the old count the moment the switch reads off, not wait
+    /// for a close.
     pub fn badge(&mut self, agents: &[AgentRow]) -> Option<u32> {
         let want = if self.prefs.get().badge {
             Some(badge_count(agents))
         } else {
             None
         };
-        if want != self.badge {
-            self.badge = want;
-            want
-        } else {
-            None
-        }
+        badge_transition(want, &mut self.badge)
     }
 
     /// The link closed: the count is unknown, so the badge clears and the
@@ -635,6 +645,22 @@ mod tests {
         let mut d = row("d", 3);
         d.badge = Some(fno::proto::AgentBadge::Done);
         assert_eq!(badge_count(&[w, b, d]), 1);
+    }
+
+    #[test]
+    fn the_switch_off_transition_writes_the_clear() {
+        let mut current = None;
+        // First pass with the switch on and one blocked agent: the count.
+        assert_eq!(badge_transition(Some(1), &mut current), Some(1));
+        // A no-change pass writes nothing.
+        assert_eq!(badge_transition(Some(1), &mut current), None);
+        // Switch off while the Dock reads 1: the clear goes out at once.
+        assert_eq!(badge_transition(None, &mut current), Some(0));
+        assert_eq!(current, None);
+        // Steady state off: no write, the Dock keeps the clear.
+        assert_eq!(badge_transition(None, &mut current), None);
+        // Switch back on: the count returns.
+        assert_eq!(badge_transition(Some(3), &mut current), Some(3));
     }
 
     #[test]
