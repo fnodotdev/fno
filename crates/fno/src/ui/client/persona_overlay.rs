@@ -1501,6 +1501,9 @@ pub(crate) fn persona_widening_seams(view: &mut View) -> Vec<crate::proto::Comma
     if !armed {
         return Vec::new();
     }
+    let Some(o) = view.persona.as_ref() else {
+        return Vec::new();
+    };
     const FLOOR: usize = 10;
     let mut seams = Vec::new();
     if let Some(pane) = o.pane {
@@ -1559,7 +1562,7 @@ pub(crate) fn persona_widening_seams(view: &mut View) -> Vec<crate::proto::Comma
         }
     } else if let Home::Pane(home_id) = o.home {
         if let Some(vi) = sibling_pane(view) {
-            let (_, Some(home)) = view.layout.panes.iter().find(|(pid, _)| *pid == home_id) else {
+            let Some((_, home)) = view.layout.panes.iter().find(|(pid, _)| *pid == home_id) else {
                 return Vec::new();
             };
             let Some((_, vi_r)) = view.layout.panes.iter().find(|(pid, _)| *pid == vi) else {

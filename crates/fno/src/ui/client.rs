@@ -6651,9 +6651,18 @@ async fn attach_and_run(
                     // rects, so the layout that names the new pane is
                     // when the seams can finally be computed and sent.
                     let seams = crate::client::persona_overlay::persona_widening_seams(&mut view);
-                    for cmd in seams {
-                        if let Err(e) = write_msg(&mut sock_w, &ClientMsg::Command(cmd)).await {
-                            break Err(format!("persona seam send failed: {e}"));
+                    if !seams.is_empty() {
+                        let mut failed = None;
+                        for cmd in seams {
+                            if let Err(e) =
+                                write_msg(&mut sock_w, &ClientMsg::Command(cmd)).await
+                            {
+                                failed = Some(format!("persona seam send failed: {e}"));
+                                break;
+                            }
+                        }
+                        if let Some(e) = failed {
+                            break Err(e);
                         }
                     }
                     // a scrape tick may have removed the peeked row.

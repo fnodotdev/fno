@@ -1068,7 +1068,7 @@ fn switch_squad(
         if target.id != seen.layout.active_squad {
             // The server picks the squad from the attach cwd.
             let cwd = target.canonical_cwd.clone();
-            *seen = runtime.block_on(observe(socket, cwd, dims))?;
+            *seen = runtime.block_on(observe(socket, cwd, dims, &[]))?;
         }
     }
     Ok(())
