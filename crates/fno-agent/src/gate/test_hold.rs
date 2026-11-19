@@ -273,6 +273,60 @@ fn write_state(path: &Path, state: &PauseState) -> Result<(), String> {
     std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+const LIFT_TAIL: &str = "The user's tests may run again. Agent sessions still ride CI unless a lead grants a checkout test:priority.";
+
+/// The stop announcement: who stopped the fleet and why, every hold it
+/// carries, and what a worker does now.
+pub(crate) fn hold_body(record: &fleet_incident::IncidentRecord) -> String {
+    // The machine arm's reason is already a plain sentence; a person's stop
+    // names who stopped the fleet and why.
+    let lead = if record.changed_by == fleet_incident::MACHINE_ORIGIN {
+        format!(
+            "{}. Running fleet tests end now (CI covers them) until it cools down. New workers pause too if it stays this busy.",
+            record.reason
+        )
+    } else {
+        format!("Fleet stop by {} ({}).", record.changed_by, record.reason)
+    };
+    let work = if record.holds_scope("loops") {
+        "Finish your current turn, then stop."
+    } else {
+        "Keep coding."
+    };
+    let tail = if record.holds_scope("tests") {
+        " An all-clear lifts this hold for the user's tests; agent sessions still ride CI unless a lead grants a checkout test:priority."
+    } else {
+        ""
+    };
+    format!("{lead} {} {work}{tail}", record.hold_sentence())
+}
+
+/// The bus line for a machine-wide stop the test reconcile does not
+/// announce: a stop without `tests`, or the clear that lifts one. A stop
+/// that holds `tests` announces through [`reconcile`] instead.
+pub(crate) fn announce_untested(
+    prior: Option<&fleet_incident::IncidentRecord>,
+    record: &fleet_incident::IncidentRecord,
+) -> Option<Result<String, String>> {
+    let body = if record.state == "stopped" {
+        if record.holds_scope("tests") {
+            return None;
+        }
+        hold_body(record)
+    } else {
+        let prior = prior.filter(|p| p.state == "stopped" && !p.holds_scope("tests"))?;
+        format!(
+            "All clear: the fleet stop is lifted. It held {}.",
+            prior.held_scopes().join(", ")
+        )
+    };
+    Some(crate::announce::announce_all(
+        "fno/fleet-incident",
+        ANNOUNCE_SUBJECT,
+        &body,
+    ))
+}
+
 fn announce(outcome: &mut Outcome, body: &str) {
     match crate::announce::announce_all("fno/fleet-incident", ANNOUNCE_SUBJECT, body) {
         Ok(id) => outcome.announced = Some(id),
@@ -375,9 +429,10 @@ fn rerun_repo(root: &Path, slug: &str, path: &Path) -> Result<(), String> {
 fn reconcile_locked(home: &AgentsHome, path: &Path) -> Result<Outcome, String> {
     let prior = read_state(path);
     let mut outcome = Outcome::default();
-    let record = match fleet_incident::read_at(&fleet_incident::fleet_stop_path(home)) {
+    let verdict = fleet_incident::read_at(&fleet_incident::fleet_stop_path(home));
+    let record = match &verdict {
         Verdict::Unavailable(_) => return Ok(outcome),
-        Verdict::Stopped(r) if r.holds_scope("tests") => Some(r),
+        Verdict::Stopped(r) if r.holds_scope("tests") => Some(r.clone()),
         Verdict::Stopped(_) | Verdict::Clear(_) => None,
     };
     let Some(record) = record else {
@@ -390,10 +445,14 @@ fn reconcile_locked(home: &AgentsHome, path: &Path) -> Result<Outcome, String> {
             }
         }
         outcome.lifted = true;
-        announce(
-            &mut outcome,
-            "All clear: the test hold is lifted. The user's tests may run again. Agent sessions still ride CI unless a lead grants a checkout test:priority.",
-        );
+        let lifted = match &verdict {
+            Verdict::Stopped(r) => format!(
+                "The test hold is lifted, and the fleet stop still holds the rest. {}",
+                r.hold_sentence()
+            ),
+            _ => "All clear: the fleet stop is lifted.".to_string(),
+        };
+        announce(&mut outcome, &format!("{lifted} {LIFT_TAIL}"));
         std::fs::remove_file(path).map_err(|e| format!("{}: {e}", path.display()))?;
         return Ok(outcome);
     };
@@ -428,23 +487,7 @@ fn reconcile_locked(home: &AgentsHome, path: &Path) -> Result<Outcome, String> {
         }
     }
     if first {
-        // The machine arm's reason is already a plain sentence; a person's
-        // stop names who held the tests and why.
-        let lead = if record.changed_by == fleet_incident::MACHINE_ORIGIN {
-            format!(
-                "{}. Running fleet tests end now (CI covers them) until it cools down. New workers pause too if it stays this busy.",
-                record.reason
-            )
-        } else {
-            format!(
-                "Tests are held by {} ({}).",
-                record.changed_by, record.reason
-            )
-        };
-        announce(
-            &mut outcome,
-            &format!("{lead} Keep coding. Do not rerun tests. An all-clear lifts this hold for the user's tests; agent sessions still ride CI unless a lead grants a checkout test:priority."),
-        );
+        announce(&mut outcome, &hold_body(&record));
         state.announced = outcome.announced.clone();
     }
     write_state(path, &state)?;
@@ -645,13 +688,13 @@ mod tests {
         crate::fleet_incident::write_transition_with_metadata(
             &fleet_incident::fleet_stop_path(&home),
             "stopped",
-            Some("machine overloaded"),
-            Some(fleet_incident::MACHINE_ORIGIN),
-            vec!["tests".to_string()],
-            fleet_incident::RecordMetadata {
-                origin: Some(fleet_incident::MACHINE_ORIGIN.to_string()),
-                ..Default::default()
-            },
+            Some("drill"),
+            Some("the user"),
+            fleet_incident::SCOPES
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+            fleet_incident::RecordMetadata::default(),
         )
         .unwrap();
 
@@ -713,6 +756,20 @@ mod tests {
             bus.contains("test:priority"),
             "the hold announcement must name the standing agent refusal and its lift lever: {bus}"
         );
+        // A hold the text leaves out reads as open: the 2026-11-19 drill's
+        // four-scope stop announced tests alone.
+        for held in [
+            "spawns (",
+            "tests (",
+            "merges (",
+            "loops (",
+            "next turn end",
+        ] {
+            assert!(
+                bus.contains(held),
+                "the hold announcement must name {held:?}: {bus}"
+            );
+        }
 
         let _ = std::fs::remove_dir_all(&root);
     }
