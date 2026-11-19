@@ -68,13 +68,20 @@ where
     if let Some(ref st) = filter_status {
         if !matches!(
             st.as_str(),
-            "writing" | "quiet" | "parked" | "orphaned" | "refused" | "unknown"
+            "writing"
+                | "quiet"
+                | "parked"
+                | "orphaned"
+                | "refused"
+                | "unknown"
+                | "signed_out"
+                | "harness_error"
         ) {
             return Response::err(
                 req.id,
                 ErrorCode::InvalidStatus,
                 format!(
-                    "invalid --status '{st}' (status is served activity: writing | quiet | parked | orphaned | refused | unknown; process liveness is the liveness field on fno agent list --json)"
+                    "invalid --status '{st}' (status is served activity: writing | quiet | parked | orphaned | refused | unknown | signed_out | harness_error; process liveness is the liveness field on fno agent list --json)"
                 ),
             );
         }
@@ -170,6 +177,10 @@ where
         &crate::feed::graph_path(&ctx.home),
         filtered.iter().filter_map(|e| e.node.as_deref()),
     );
+    // One listing walk shared by every claude row's synthetic-tail read: the
+    // same single-walk shape the watchdog sweep uses, so the backstop adds
+    // one store walk per page, not per row.
+    let tail_listing = crate::watchdog::tail::sweep_listing();
     let classified: Vec<_> = filtered
         .into_iter()
         .map(|e| {
@@ -178,6 +189,19 @@ where
             // unanswered row that way.
             let truth = truths.get(&registry_truth_handle(e)).cloned();
             let rendered_status = rendered_status_from_truth(truth.as_ref());
+            // The synthetic-tail backstop: when the LAST assistant record is
+            // the harness-authored placeholder, the model never ran that turn
+            // and the activity word would read writing/quiet while the
+            // session cannot work. The why decides the word: a logout renders
+            // `signed_out` (a respawn fixes it), every other synthetic
+            // renders `harness_error` (weekly limit, poisoned request). A
+            // falsified row keeps `orphaned` and a refusal keeps `refused`:
+            // those words already carry a positive verdict the tail cannot
+            // improve.
+            let rendered_status = match synthetic_tail_row(e, &tail_listing) {
+                Some(tail) => crate::synthetic_tail::status_override(rendered_status, tail.why),
+                None => rendered_status,
+            };
             // The whole reachability triple, not just the verdict that
             // `rendered_status` above was picked from. That rendered word says
             // WHAT the row is; the triple says which question was answered and
@@ -674,6 +698,25 @@ pub(crate) fn rendered_status_from_truth(
         },
         None => "unknown",
     }
+}
+
+/// One row's synthetic-tail read: resolve the claude transcript through the
+/// shared listing and classify its LAST assistant record. `None` when the
+/// row is not claude, records no session id, or its tail carries no
+/// synthetic last turn.
+fn synthetic_tail_row(
+    e: &state::RegistryEntry,
+    listing: &[crate::claude_transcript_paths::Hit],
+) -> Option<crate::synthetic_tail::SyntheticTail> {
+    if e.harness_kind() != Harness::Claude {
+        return None;
+    }
+    let session_id = e.harness_session_id.as_deref()?;
+    if session_id.is_empty() {
+        return None;
+    }
+    let records = crate::watchdog::tail::tail_entries(session_id, &e.cwd, "claude", listing)?;
+    crate::synthetic_tail::from_records(&records)
 }
 
 /// True for a Claude model id or tier alias. Mirrors

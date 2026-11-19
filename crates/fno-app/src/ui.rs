@@ -282,6 +282,68 @@ pub fn advance(window: &gpui::Window, size: f32) -> Pixels {
         .unwrap_or(px(size * 0.6))
 }
 
+/// What a typed key did to a one-line field.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Edit {
+    Typed,
+    Close,
+    Submit,
+}
+
+/// One line of typed text: the palette's query, the Mods install URL.
+/// Escape closes, Enter submits, backspace pops, other text appends.
+/// Control characters drop, and the cap holds no matter what arrives.
+#[derive(Debug)]
+pub(super) struct LineField {
+    text: String,
+    max: usize,
+}
+
+impl LineField {
+    pub(super) fn new(max: usize) -> Self {
+        Self {
+            text: String::new(),
+            max,
+        }
+    }
+
+    /// A field seeded with `text`, cut to the cap the same way typing is.
+    pub(super) fn seeded(text: &str, max: usize) -> Self {
+        let mut out = Self::new(max);
+        out.push(text);
+        out
+    }
+
+    pub(super) fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.text.clear();
+    }
+
+    fn push(&mut self, text: &str) {
+        for ch in text.chars().filter(|c| !c.is_control()) {
+            if self.text.chars().count() < self.max {
+                self.text.push(ch);
+            }
+        }
+    }
+
+    /// A key while the field takes input. Text keys never leave the field.
+    pub(super) fn edit(&mut self, key: &str, text: Option<&str>) -> Edit {
+        match key {
+            "escape" => return Edit::Close,
+            "enter" => return Edit::Submit,
+            "backspace" => {
+                self.text.pop();
+            }
+            _ => self.push(text.unwrap_or_default()),
+        }
+        Edit::Typed
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

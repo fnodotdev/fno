@@ -14,7 +14,7 @@ pub(crate) fn first_step(root: &Path, ci_declared_none: bool) -> String {
     if !root.join(".git").exists() {
         return format!(
             "git init, then gh repo create --source . --private --push, then {TARGET}. \
-             With only an idea and no code yet, start with /fno:think \"<your idea>\"."
+             With only an idea and no code yet, start with /fno:talk \"<your idea>\"."
         );
     }
     let origin = git_capture(root, &["remote", "get-url", "origin"]).unwrap_or_default();
@@ -71,7 +71,7 @@ mod tests {
     fn first_step_reads_the_folder_shape() {
         let empty = tempfile::tempdir().unwrap();
         assert!(first_step(empty.path(), false).starts_with("git init"));
-        assert!(first_step(empty.path(), false).contains("/fno:think"));
+        assert!(first_step(empty.path(), false).contains("/fno:talk"));
 
         let no_remote = tempfile::tempdir().unwrap();
         git(no_remote.path(), &["init", "-q"]);

@@ -7,6 +7,7 @@ metadata:
     harness:
       - loop
       - spawn
+allowed-tools: Read
 ---
 
 <!-- style-exception: monitor cadences and command spellings are load-bearing literals -->
