@@ -2833,16 +2833,13 @@ pub(crate) fn decide_with_payload(
                 // opposite operator responses, and the quota probe below must
                 // not label a killed child as a quota problem either.
                 // The origin remote is a local fact: when it is absent, every
-                // PR read fails with the same owner/repo refusal and no retry
-                // can clear it. Name the remedy instead of the next fire, and
-                // never attach the wait directive to that sentence.
-                let local_output = |args: &[&str]| {
-                    git_bounded(parsed.git_bin.as_ref(), args, &cwd)
-                        .filter(|out| out.status.success())
-                        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
-                };
-                let remoteless_pr =
-                    failed_read.starts_with("pr_") && origin_remote_url(&local_output).is_none();
+                // origin-resolved PR read fails with the same owner/repo
+                // refusal and no retry can clear it. Gate the wording on the
+                // read's own cause, not the remote's absence: a node whose PR
+                // row pins an owner/repo reads fine without an origin, so a
+                // network blip there must keep its ordinary retry wording.
+                let remoteless_pr = failed_read.starts_with("pr_")
+                    && failed_stderr.contains("could not resolve owner/repo");
                 let reason = if remoteless_pr {
                     remoteless_pr_read_reason(&failed_read, &failed_stderr)
                 } else if read_err.kind == ReadErrorKind::TimedOut {
