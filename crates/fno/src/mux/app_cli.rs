@@ -428,21 +428,28 @@ fn seed_fleet(root: &Path, front: &Path, node_id: &str) -> bool {
 /// One demo question in the world's journal, so the board's questions
 /// panel carries a real row. The FILE is the contract: the shape the
 /// event store writes.
-fn seed_question(root: &Path) {
+fn seed_question(root: &Path) -> bool {
     let ts = chrono::Utc::now().to_rfc3339();
     let row = format!(
         r#"{{"ts":"{ts}","type":"operator_question","source":"rust","data":{{"question_id":"q-demo-0001","question":"Which machine should host the demo deploy?","ask":"Pick the demo host; the deploy preview follows the pick.","asker":"demo-worker","node":"none","context":{{"blocked_because":"The demo host choice has not been recorded.","unknowns":"Machine capacity and tailnet reachability have not been compared."}},"subject":"demo-deploy-host","blocks":[]}}}}"#
     );
-    let _ = std::fs::write(root.join(".fno/questions.jsonl"), format!("{row}\n"));
+    match std::fs::write(root.join(".fno/questions.jsonl"), format!("{row}\n")) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("fno mux app shot: the question seed failed to write: {e}");
+            false
+        }
+    }
 }
 
 /// A claude-shaped transcript in the world's projects dir, so the chat
 /// view renders a conversation. The FILE is the contract: rows carry
 /// type + message.content like the real transcripts the server reads.
-fn seed_transcript(root: &Path) {
+fn seed_transcript(root: &Path) -> bool {
     let dir = root.join("transcripts/demo-project");
-    if std::fs::create_dir_all(&dir).is_err() {
-        return;
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        eprintln!("fno mux app shot: the transcript seed failed to create its dir: {e}");
+        return false;
     }
     let session = DEMO_CHAT_SESSION;
     let rows = concat!(
@@ -455,7 +462,13 @@ fn seed_transcript(root: &Path) {
         r#"{"parentUuid":null,"isSidechain":false,"type":"assistant","uuid":"a2","message":{"id":"m2","role":"assistant","content":[{"type":"text","text":"Frontmost identical across the three reads, no keystrokes, no Dock bounce, and the frame lands. The window composites invisible the whole time."}]},"sessionId":"00000000-0000-4000-8000-000000000001"}"#,
         "\n",
     );
-    let _ = std::fs::write(dir.join(format!("{session}.jsonl")), rows);
+    match std::fs::write(dir.join(format!("{session}.jsonl")), rows) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("fno mux app shot: the transcript seed failed to write: {e}");
+            false
+        }
+    }
 }
 
 /// `mux app shot`: one offscreen demo frame as a png, from a world this
@@ -517,9 +530,12 @@ fn shot(out: &str, theme: &str, mode: Option<AppView>) -> i32 {
         return 1;
     };
     // The transcript lands first: the adopt seed reads it as evidence.
-    seed_transcript(&world.root);
-    seed_fleet(&world.root, &front, &first_node);
-    seed_question(&world.root);
+    let transcript = seed_transcript(&world.root);
+    let fleet = seed_fleet(&world.root, &front, &first_node);
+    let question = seed_question(&world.root);
+    if !(transcript && fleet && question) {
+        return 1;
+    }
     let mut cmd = world_cmd(&world.root, &bin);
     cmd.arg("--shot")
         .arg("--shot-out")
