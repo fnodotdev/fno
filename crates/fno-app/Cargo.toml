@@ -45,6 +45,11 @@ serde = { version = "1", features = ["derive"] }
 # The window, text and input layer (Zed's UI framework). `font-kit` is the one
 # feature the macOS text system needs.
 gpui = { version = "0.2.2", default-features = false, features = ["font-kit"] }
+# The attention signals' macOS calls: UNUserNotificationCenter (via raw
+# objc), NSSound and the Dock tile. objc/cocoa ride the lockfile at the
+# versions gpui already pins; block builds the authorization completion.
+cocoa = "0.26"
+block = "0.1"
 # Chat mode's markdown: gpui 0.2.2 ships no markdown element.
 pulldown-cmark = { version = "0.13", default-features = false }
 # The chat composer deletes by grapheme.
