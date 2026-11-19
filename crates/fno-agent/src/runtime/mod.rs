@@ -214,6 +214,7 @@ pub mod process_probe;
 pub mod project;
 pub(crate) mod prompt_wait;
 pub mod provenance;
+pub mod question_stamp;
 pub mod quiet_retire;
 pub mod readiness;
 pub(crate) mod reap_evidence;
