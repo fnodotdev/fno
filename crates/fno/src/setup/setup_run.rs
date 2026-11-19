@@ -307,6 +307,13 @@ pub const STEPS: &[Step] = &[
         effect: "starts the fno-agent supervisor daemon (fleet wake, agent mail, mux) unless one is already serving, so the first agent command finds it up",
     },
     Step {
+        id: "daemon-agent",
+        layer: Layer::Global,
+        kind: Kind::Approve,
+        question: "Install the daemon launchd agent (the daemon starts at login and a crash restarts it)?",
+        effect: "renders ~/Library/LaunchAgents/sh.fno.daemon.plist and loads it; the daemon's designed idle-exit and the client lazy-start stay as they are",
+    },
+    Step {
         id: "gh-auth",
         layer: Layer::Global,
         kind: Kind::Human,
@@ -1425,6 +1432,46 @@ fn step_web_bridge_agent(exe: &Path, rep: &mut Report, loaded: &mut Vec<String>)
     }
 }
 
+/// The daemon boot agent: one launchd install that starts the fno-agent
+/// daemon at login, so fleet wakes, watchdog and daemon beats run without
+/// a person typing first (node: the daemon used to stay down after a
+/// reboot until someone ran a daemon-routed command). A loaded agent
+/// skips, the pr-watcher's reason. Unlike the verb-backed service steps
+/// this one installs in-process: the installer lives in this crate and
+/// there is no CLI verb (the menu caps hold).
+fn step_daemon_agent(rep: &mut Report, loaded: &mut Vec<String>) {
+    if !crate::setup_services::macos() {
+        service_platform(
+            "daemon-agent",
+            "fno config setup run --only daemon-agent",
+            rep,
+        );
+        return;
+    }
+    let label = crate::setup_services::daemon_label();
+    if crate::setup_services::is_loaded(&label) {
+        rep.skipped
+            .push("daemon-agent: agent already loaded, restarting nothing".into());
+        return;
+    }
+    let receipt = crate::setup_daemon_agent::install();
+    match receipt.status.as_str() {
+        "installed" | "unchanged" => {
+            rep.done.push(format!("daemon-agent: {}", receipt.detail));
+            loaded.push(label);
+        }
+        "unsupported" => rep
+            .skipped
+            .push(format!("daemon-agent: {}", receipt.detail)),
+        _ => {
+            let message = format!("daemon-agent: {}", receipt.detail);
+            rep.rows
+                .push(row("needs_human", "service_install", message.clone()));
+            rep.needs_human.push(message);
+        }
+    }
+}
+
 /// A TOML value as JSON for the workspace rows: scalars pass through, a
 /// datetime reads as its string, arrays and tables recurse. Rows carry
 /// only plain shapes, so this is the whole conversion. `pub(crate)`: the
@@ -2480,6 +2527,7 @@ pub(crate) fn apply_wizard_pending(
             "auto-heal" => step_auto_heal(exe, &mut rep),
             "groom-agent" => step_groom_agent(exe, &mut rep, &mut loaded),
             "web-bridge-agent" => step_web_bridge_agent(exe, &mut rep, &mut loaded),
+            "daemon-agent" => step_daemon_agent(&mut rep, &mut loaded),
             "projects" => step_projects(exe, root, &mut rep),
             "messaging" => step_messaging(exe, true, Some(&[p.value.as_str()]), &mut rep),
             "usage-report" => step_usage_report(&mut rep),
@@ -2843,6 +2891,10 @@ pub fn run(tail: &[OsString]) -> i32 {
                 }
             }
             (Layer::Global, "daemon") => step_daemon(&mut rep),
+            (Layer::Global, "daemon-agent") => step_daemon_agent(&mut rep, &mut loaded),
+            (Layer::Global, "web-bridge-agent") => {
+                step_web_bridge_agent(&exe, &mut rep, &mut loaded)
+            }
             (Layer::Global, "gh-auth") => step_gh_auth(&mut rep),
             (Layer::Global, "concurrency-band") => step_concurrency_band(&exe, &mut rep),
             (Layer::Global, "accounts") => rep
