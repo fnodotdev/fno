@@ -1731,7 +1731,7 @@ impl Render for Root {
                 .flex()
                 .flex_col()
                 .child(main)
-                .child(find::bar(f, self.palette))
+                .child(find::bar(f, self.palette, self.picking))
                 .into_any_element(),
             _ => main,
         };
