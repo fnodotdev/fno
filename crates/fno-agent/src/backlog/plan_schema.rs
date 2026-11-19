@@ -6,6 +6,7 @@
 //! block shapes validate-plan.sh validates. Every refusal text is the string
 //! the Python leg printed, carried verbatim.
 
+use super::node_ref::is_wellformed_node_id;
 use serde_json::{json, Map, Value};
 use std::io::Read;
 
@@ -35,13 +36,6 @@ const WAVES_GATED_STATUSES: [&str; 3] = ["ready", "in_progress", "in_review"];
 /// plans (plan/schema.py WAVES_REQUIRED_AFTER). A literal, never computed.
 const WAVES_REQUIRED_AFTER: (i32, u32, u32) = (2026, 9, 2);
 
-/// `[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}` fullmatch: the config-free liberal
-/// node-id shape (graph/_constants.py NODE_ID_BODY).
-fn is_wellformed_node_id(v: &str) -> bool {
-    let re = regex::Regex::new(r"^[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}$").unwrap();
-    re.is_match(v)
-}
-
 /// The consolidation-entry fallback shape: the same body case-insensitively,
 /// excluding an all-hex git-hash literal (the regex's `(?![0-9a-f]+$)` guard).
 fn is_legacy_id_literal(v: &str) -> bool {
@@ -50,10 +44,12 @@ fn is_legacy_id_literal(v: &str) -> bool {
     re.is_match(&low) && !low.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// `^d-[0-9a-f]{4,32}$`, case-insensitive (plan/_decision_shape.py).
+/// `^d-[0-9a-f]{4,32}$`, case-insensitive (plan/_decision_shape.py), or the
+/// display number form (`D3478`, `d-142`): the dual-read wave accepts both
+/// beside each other; writers still write the hash.
 fn looks_like_decision_id(token: &str) -> bool {
     let re = regex::Regex::new(r"(?i)^d-[0-9a-f]{4,32}$").unwrap();
-    re.is_match(token.trim())
+    re.is_match(token.trim()) || crate::numbers::reads_as_number(token.trim())
 }
 
 /// One collected violation in the shape plan/cli.py renders:
@@ -277,7 +273,7 @@ fn validate_consolidation_entry(
         let (key_field, detail) = if decision_rows {
             (
                 "decision_id",
-                "Value error, is not a decision id (expected d-<hex>, e.g. d-a4b6e1c8)",
+                "Value error, is not a decision id (expected d-<hex> or D<n>, e.g. d-a4b6e1c8 or D3478)",
             )
         } else {
             (

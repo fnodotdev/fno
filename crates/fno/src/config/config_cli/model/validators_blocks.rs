@@ -1,6 +1,6 @@
 //! The block-module validators: `fno/config/_attention.py`, `_active_backlog.py`,
 //! `routing_blocks.py`, `_evals.py`, `_lead.py`, `_dispatch_commands.py`,
-//! `_sweeps.py`, `split_block.py`, `build_block.py`, `status_sinks.py` and
+//! `_sweeps.py`, `build_block.py`, `status_sinks.py` and
 //! `spawn_blocks.py`.
 
 use super::{py_repr, Ctx, Fail, Registry};
@@ -93,7 +93,6 @@ pub(super) fn register(reg: &mut Registry) {
     );
 
     reg.before("BuildBlock", &["agent_freeze"], reject_non_bool);
-    reg.before("SplitBlock", &["opens"], coerce_opens);
 
     // SpawnProfileBlock subclasses SpawnDefaultsBlock and inherits its validator.
     reg.before("SpawnDefaultsBlock", &["harness"], keep_dict_values);
@@ -516,7 +515,7 @@ fn coerce_seconds(ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
 }
 
 // ---------------------------------------------------------------------------
-// build_block.py, split_block.py, spawn_blocks.py
+// build_block.py, spawn_blocks.py
 // ---------------------------------------------------------------------------
 
 fn reject_non_bool(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
@@ -526,11 +525,6 @@ fn reject_non_bool(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
     Err(Fail::Value(
         "build.agent_freeze is a TOML bool, not a string".to_string(),
     ))
-}
-
-fn coerce_opens(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
-    let portal = matches!(&v, Value::String(s) if py_strip(s).to_lowercase() == "portal");
-    Ok(Value::from(if portal { "portal" } else { "pane" }))
 }
 
 /// `_coerce_harness_overlays` / `_coerce_by_difficulty`: a non-mapping

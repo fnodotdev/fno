@@ -59,6 +59,20 @@ pub fn run_renew(argv: &[String]) -> i32 {
             return 2;
         }
     };
+    // Dual read: the display number names its hash through the table; a
+    // hash lowercases; a subject passes through as typed. A number nothing
+    // holds refuses before any read.
+    let resolved = crate::numbers::resolve('d', token.trim());
+    let token = match resolved {
+        Some(id) => id,
+        None => {
+            eprintln!(
+                "fno inbox decisions renew: {}\n{RENEW_USAGE}",
+                crate::numbers::unresolved(token.trim())
+            );
+            return 2;
+        }
+    };
     let caller = match resolve_caller() {
         Ok(c) => c,
         Err(message) => return door_refuse(&message),

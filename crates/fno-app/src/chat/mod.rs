@@ -5,6 +5,7 @@
 
 pub mod composer;
 pub mod field;
+pub mod find;
 mod markdown;
 mod model;
 mod view;

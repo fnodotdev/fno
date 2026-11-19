@@ -351,6 +351,11 @@ crates/fno-agent/src/spawn/accounts/staging.rs
 crates/fno-agent/src/spawn/accounts/store.rs
 crates/fno-agent/src/spawn/project_sandbox.rs
 scripts/ops/sandbox-leak-probe.sh
+# mux-demo-snapshot.sh builds its .claude paths under the throwaway demo
+# world root: the rig exports HOME=$ROOT before any of them resolve, so the
+# shim's session records, the seeded daemon roster and the trust store all
+# land inside the world and nothing writes into a real .claude dir.
+scripts/ops/mux-demo-snapshot.sh
 # install-journey.sh builds CLAUDE_CONFIG_DIR under a throwaway run home and
 # reads the plugin cache there to prove the wiring; it writes no fno state
 # into any real .claude dir.

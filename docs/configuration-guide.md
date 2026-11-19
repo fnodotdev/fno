@@ -6,31 +6,32 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 
 | Key | Type | Default | Wizard | Description |
 |-----|------|---------|--------|-------------|
-| `state_dir` | str | `~/.fno/` | advanced | Root dir for global fno do state. |
+| `state_dir` | str | `~/.fno/` | advanced | Where fno keeps its databases, mail and history. Move it to put all fno state on another disk. |
 | `plans_dir` | str | `.fno/plans/` | advanced | Where folder plans are written. |
 | `plans_filename` | str | `%Y%m%d-{slug}-{node}.md` | advanced | Plan/design-doc filename template: strftime codes plus {slug} and {node} placeholders; must render to a bare *.md name. |
 | `repo_aliases` | dict[str, str] | `{}` | advanced | Rename map `old = "new"` between owner/repo slugs. A PR url recorded under a repo's former name binds in the merge gate and heals in the sweep leg; GitHub's own redirect (GET /repos/old answers the new full_name) seeds the same map through the gh-facts cache, so the config row is the offline override, never a requirement. The built-in history map carries this project's own renames (`bllshttng/fno` and `bllshttng/footnote` to `fnodotdev/fno-workshop`, `bllshttng/fnh` to `fno-sh/footnote`); a config row overrides a built-in. Specimen: `bllshttng/fno = "fnodotdev/fno-workshop"`. |
 | `branch.prefix` | str | `fno` | advanced | Prefix for dispatched worktree branches: <prefix>/<slug>-<node>. |
 | `build.agent_freeze` | bool | `false` | never | Agent build freeze: while set, the rustc wrapper's doors refuse an agent session's compile and test run with exit 86 and name CI as the gate; the user's own cargo and the install build still compile. |
-| `paths.ledger_json` | str (optional) | _(none)_ | never | Override path to ledger.json. |
-| `paths.evals_history` | str (optional) | _(none)_ | never | Override path to the evals-history.jsonl bank-run ledger. |
-| `paths.briefs_dir` | str (optional) | _(none)_ | never | Override path to the sidecar briefs dir. |
-| `paths.fleet_dir` | str (optional) | _(none)_ | never | Override path to the megatron fleet dir. |
-| `paths.postmortems_dir` | str (optional) | _(none)_ | never | Override path to the postmortems dir. |
-| `paths.worktrees_base` | str (optional) | _(none)_ | never | Override base dir for worktrees. |
+| `paths.ledger_json` | str (optional) | _(none)_ | never | One JSONL row per finished session across every repo: run history and cost. Move it to keep history on another disk. |
+| `paths.evals_history` | str (optional) | _(none)_ | never | The bank-run eval journal, one JSONL row per run. Move it when the state disk runs short. |
+| `paths.briefs_dir` | str (optional) | _(none)_ | never | Sidecar discovery briefs, one markdown file per backlog node. Move it to keep briefs beside your notes vault. |
+| `paths.postmortems_dir` | str (optional) | _(none)_ | never | Postmortems a stuck terminal writes when it gives up. Move them to keep postmortems beside your docs. |
+| `paths.worktrees_base` | str (optional) | _(none)_ | never | Where target worktrees are created, one dir per node. Move it to a larger volume when the state disk fills. |
 | `paths.cargo_targets_base` | str (optional) | _(none)_ | never | Cargo build base: where cargo intermediates land, as <base>/{workspace-path-hash} via CARGO_BUILD_BUILD_DIR (default ~/.fno/cache/cargo-build). Each checkout hashes to its own dir, so parallel builds never share the cargo artifact lock; the checkout's target/ keeps only final binaries. |
-| `paths.memory_dir` | str (optional) | _(none)_ | never | Override path to the memory dir. |
-| `paths.hook_logs_dir` | str (optional) | _(none)_ | never | Override path to hook logs. |
-| `paths.inbox_path` | str (optional) | _(none)_ | never | Override path to the capture-tier inbox/parking-lot file. |
-| `paths.handoffs_dir` | str (optional) | _(none)_ | never | Override path to the handoffs dir. |
-| `paths.retro_pending_dir` | str (optional) | _(none)_ | never | Override path to the retro-pending dir. |
-| `paths.bus_dir` | str (optional) | _(none)_ | never | Override path to the cross-project mail bus dir. |
-| `paths.chats` | str (optional) | _(none)_ | never | Override root dir for the per-chat message store (default ~/.fno/chats). |
-| `paths.observer_reports_dir` | str (optional) | _(none)_ | never | Override path to the observer harness digest dir. |
-| `paths.operator_lane` | str (optional) | _(none)_ | never | Override path to the operator's priorities lane. |
-| `paths.spaces_dir` | str (optional) | _(none)_ | never | Override path to the per-repo spaces root. |
+| `paths.cache_dir` | str (optional) | _(none)_ | never | Rebuildable caches root: cargo build base, gh-facts, pr-status, pages and hook budgets move here (default macOS ~/Library/Caches/fno, Linux XDG cache; env FNO_CACHE_HOME wins). |
+| `paths.data_dir` | str (optional) | _(none)_ | never | Binaries and installed release payloads land here (default ~/.local/share/fno, XDG_DATA_HOME/fno when set; env FNO_DATA_HOME wins). |
+| `paths.state_dir_local` | str (optional) | _(none)_ | never | Logs and other files that live outside the config home (default ~/.local/state/fno; env FNO_STATE_HOME wins). |
+| `paths.memory_dir` | str (optional) | _(none)_ | never | This project's agent memory. Move it to keep memory when the state root is wiped. |
+| `paths.hook_logs_dir` | str (optional) | _(none)_ | never | One log per hook run, the first stop when a gate refuses or a Stop hook misfires. |
+| `paths.inbox_path` | str (optional) | _(none)_ | never | The capture-tier inbox markdown operator asks land in. Move it to point capture at a file your sweep already reads. |
+| `paths.handoffs_dir` | str (optional) | _(none)_ | never | Session handoff notes, one dir per project. Defaults into the Obsidian vault when one is enabled, else the state dir. |
+| `paths.bus_dir` | str (optional) | _(none)_ | never | The cross-project mail bus: messages.jsonl under this dir. Env FNO_BUS_DIR wins. Move it so several state roots share one bus. |
+| `paths.chats` | str (optional) | _(none)_ | never | The per-chat message store, one append-only jsonl per chat. Move it to keep chat history beside the mail bus. |
+| `paths.observer_reports_dir` | str (optional) | _(none)_ | never | Digests the observer harness writes, one dir per skill owner. Defaults into the vault when enabled, else the state dir. |
+| `paths.operator_lane` | str (optional) | _(none)_ | never | The operator's priorities file, one per person, pinned global like the ledger. |
+| `paths.spaces_dir` | str (optional) | _(none)_ | never | The per-repo spaces root: graph, claims and worktrees live under it. Move it when the default disk runs short. |
 | `obsidian.enabled` | bool | `false` | always | Whether this project uses an Obsidian vault for plans/docs. |
-| `obsidian.vault` | str (optional) | _(none)_ | always | Vault area name (NOT a filesystem path). |
+| `obsidian.vault` | str (optional) | _(none)_ | always | Path to your Obsidian vault folder (~ expands). While Obsidian is on, defaults that name the vault resolve under it. |
 | `project.id` | str (optional) | _(none)_ | advanced | Project identifier. |
 | `project.vision` | str (optional) | _(none)_ | always | One-paragraph statement of what this codebase is and why. |
 | `inbox.unclaimed_ttl` | int | `1800` | advanced | Seconds past which a sent-but-unclaimed bus message is surfaced back to its sender (the turn-boundary nudge). |
@@ -49,6 +50,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `backlog.maintain.validity_batch_size` | int | `25` | advanced | Oldest-first validity-sweep batch size (clamped to 100). |
 | `backlog.id_prefix` | str (optional) | _(none)_ | always | Prefix for minted node IDs (<=7 chars; not cv-/fu-/tgt-). |
 | `backlog.id_hex_width` | int | `8` | advanced | Hex width of minted node IDs (4-8). |
+| `backlog.id_mode` | typing.Literal['hex', 'sequential'] | `hex` | never | How a new node id is minted: hex (default) or sequential (<prefix>-1, -2, ...). Sequential refuses a prefix another project uses. |
 | `backlog.staleness_days` | int | `21` | advanced | Age (days) before an unmoved ready node is quarantined from selection. |
 | `backlog.epic_max_open_children` | int (optional) | _(none)_ | advanced | Most open children an epic may hold. A write that would parent one more open child under a full epic is refused and names the new-epic command. Unset means no cap. The graph store reads the global config first, then a config.toml beside the store. |
 | `backlog.max_open_ideas` | int | `25` | advanced | Most unplanned, machine-filed ideas one nearest-epic or project scope may hold (default 25; 0 is off). Operator asks are never capped. The graph store reads the global config first, then a config.toml beside the store. |
@@ -174,7 +176,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `agents.naming.worker` | str | `t-{slug}` | advanced | Name template for a worker on a node: fno agent spawn, a bare claude --bg with no name, and a row still named by its short id. Tokens: {slug} (first words of the node slug), {node} (node id), {skill} (the seed's command, e.g. target), {random} (four hex digits). A token with no value for the worker falls back to the next name source. |
 | `agents.max_live` | int | `3` | advanced | Backstop cap on concurrent live worker processes (fno registry + claude roster union); spawn queues at cap (default 3). Sized from RAM, because every live row holds RAM whether or not it works: floor((RAM_GB - 4 GB OS reserve - your desktop apps) / 1 GB per worker). The 1 GB planning figure is generous on purpose (a build or a test suite bursts past the measured 430 MB a quiet worker holds); the CPU axis (max_fleet_cpu_share) binds first on any machine with real headroom, so raise this instead of tuning it. |
 | `agents.max_live_per_territory` | int | `4` | advanced | Per-territory team cap: the max live workers whose node is contained in one role scope, enforced in the spawn gate beside agents.max_live (the machine ceiling, which stays independent and authoritative). Rows that work no node (leads, blueprinters, ad-hoc panes) never count. Unknown territory attribution refuses; other-territory headroom is untouched (default 4). |
-| `agents.provider_limits` | dict[str, ProviderBudget] | `{"zai": {"lanes": 5, "subagents": 1}}` | advanced | Per-provider budget record keyed by model provider: `lanes` is the immediate-refusal cap on concurrent live workers. A claude worker with an open operator question and a transcript quiet for 900 s or more is left out of that count until it writes again or its question closes; the lanes probe lists it under `parked`. `subagents` is the in-session fan-out width review route resolution reads (1 means a panel is never dispatched there). A bare integer is still legal and reads as `lanes`. `lanes = 0` closes the lane: the gate refuses every spawn on it except `--force`. Unlisted providers are uncapped in both dimensions; the built-in zai budget is lanes 5, subagents 1, because that account is shared. Renamed from `agents.max_lanes` so no two leaves share that name with `parallel.max_lanes`; the legacy spelling still parses with one deprecation line. |
+| `agents.provider_limits` | dict[str, ProviderBudget] | `{"zai": {"lanes": 8, "subagents": 1}}` | advanced | Per-provider budget record keyed by model provider: `lanes` is the immediate-refusal cap on concurrent live workers. A claude worker with an open operator question and a transcript quiet for 900 s or more is left out of that count until it writes again or its question closes; the lanes probe lists it under `parked`. `subagents` is the in-session fan-out width review route resolution reads (1 means a panel is never dispatched there). A bare integer is still legal and reads as `lanes`. `lanes = 0` closes the lane: the gate refuses every spawn on it except `--force`. Unlisted providers are uncapped in both dimensions; the built-in zai budget is lanes 5, subagents 1, because that account is shared. Renamed from `agents.max_lanes` so no two leaves share that name with `parallel.max_lanes`; the legacy spelling still parses with one deprecation line. |
 | `agents.pane_group_max` | int | `4` | advanced | Maximum panes placed in one named pane_group tab before a spawn creates the next numbered sibling tab (default 4). |
 | `agents.min_free_gb` | float | `4.0` | advanced | Available-RAM floor in GB for spawn preflight; spawn refuses below it (<= 0 disables; default 4). Set it to what the OS needs to stay out of swap: 2 on an 8 GB machine, 3 on 16 GB, 4 above. |
 | `agents.min_free_disk_gb` | float | `20.0` | advanced | Free-disk floor in GB on the data volume for spawn preflight; spawn refuses a build worker below it and the janitor (fno doctor reclaim --apply) runs when free space crosses it (<= 0 disables; default 20). |
@@ -204,7 +206,6 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `sideline.colors.model` | dict[str, str] | `{}` | advanced | Lane colors keyed by the recorded model string, quoted ("glm-5.3-flash[1m]" = "green"). Rendered verbatim; never imply an alias resolved. |
 | `sideline.colors.row` | dict[str, str] | `{}` | advanced | Lane colors keyed by a [[routing.models]] row NAME (row.zai-glm-flash = "orange"). A row's own `color` field outranks this table for the same row. |
 | `sideline.layout` | typing.Literal['card', 'list'] | `card` | advanced | The sideline's row shape: "card" renders each session as a padded two-line card (state glyph, name, PR, then harness, lead, message, age); "list" (default) keeps the one-row table. An unknown value reads as list; a change takes effect on the next attach. |
-| `split.opens` | typing.Literal['pane', 'portal'] | `pane` | advanced | Where the mux row menu's Split Direction toggle starts: pane (default) \| portal. The t key flips it inside the open menu, and the flip lands here. |
 | `autonomy.enabled` | bool | `true` | never | The one master switch over every autonomous session-starting spawner. Defaults true; shipping this changes nothing until explicitly disabled. |
 | `autonomy.mode` | typing.Literal['ask', 'balanced', 'yolo'] | `balanced` | never | One choice over unattended restarts, merges and decision writes: ask, balanced (default) or yolo. Yolo keeps CI, review, holds and run refusals. |
 | `autonomy.allow` | list[typing.Literal['restart', 'merge', 'law']] | `[]` | never | In ask mode, the action classes that run unasked: restart, merge, law. |

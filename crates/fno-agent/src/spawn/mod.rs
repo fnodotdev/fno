@@ -83,6 +83,7 @@ pub mod provider_cap;
 pub mod provider_cap_commands;
 pub mod provider_key;
 pub mod provider_route;
+pub mod reader_route;
 pub(crate) mod resolve_tier;
 pub mod retask;
 pub mod role_cwd;

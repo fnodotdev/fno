@@ -1105,6 +1105,7 @@ async fn daemon_lifecycle_doors(command: &str, args: &[String]) -> Option<i32> {
                 parsed.force,
                 parsed.json.json,
                 parsed.if_drifted,
+                parsed.if_down,
                 parsed.mux,
             )
             .await,

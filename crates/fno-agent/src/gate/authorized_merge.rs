@@ -21,7 +21,6 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::backlog::api::{self as backlog_api, Store as GraphStore};
 use crate::backlog_ready::detect_project;
 use crate::claims::{self, ClaimState};
 use crate::main_ci::main_ci_red_run;
@@ -3100,20 +3099,48 @@ pub(crate) fn node_carries_tag(entry: &Value, tag: &str) -> bool {
 /// than release.
 pub(crate) fn pr_bound_entry(cwd: &Path, pr: u64) -> Option<Value> {
     let graph_path = crate::org_board::scope::graph_json_path(cwd);
-    let store = GraphStore::new(&graph_path);
-    let entries = backlog_api::rows(&store).ok()?;
+    let rows = pr_bound_rows(&graph_path, pr)?;
     let here = crate::pr_list::origin_slug(cwd, None).ok();
     // A node filed under the repo's former name carries old-name refs; seed
     // the alias map (one bounded probe per unknown old slug, cached) before
     // the bind read, or the gate refuses a PR it should bind.
-    let ref_slugs = entries
+    let ref_slugs = rows
         .iter()
         .flat_map(crate::merge_gates::pr_refs_of)
         .filter_map(|r| crate::backlog::pr_link::repo_slug_from_url(r.url.as_deref()));
     let aliases =
         crate::backlog::pr_link::aliases_with_probe(Some(cwd), here.as_deref(), ref_slugs);
-    let at = pr_bound_index(&entries, pr, here.as_deref(), &aliases)?;
-    entries.into_iter().nth(at)
+    let at = pr_bound_index(&rows, pr, here.as_deref(), &aliases)?;
+    rows.into_iter().nth(at)
+}
+
+/// The graph rows the bind rank reads: the typed PR carriers and the
+/// raw-carried candidate ids, materialized through the defaulted read that
+/// owns the id universe. `None` when any leg errors, the same answer the
+/// whole-graph read gave an unreadable graph.
+fn pr_bound_rows(graph_path: &Path, pr: u64) -> Option<Vec<Value>> {
+    let mut ids: Vec<String> = crate::backlog::read_pr_entries(graph_path, Some(pr as i64))
+        .ok()?
+        .iter()
+        .filter_map(|row| RowFacts::id_of(row).map(str::to_string))
+        .collect();
+    ids.extend(crate::graph_store::read_pr_bound_candidate_ids(graph_path, pr).ok()?);
+    ids.sort();
+    ids.dedup();
+    if ids.is_empty() {
+        return Some(Vec::new());
+    }
+    crate::graph_store::read_rows_where(
+        graph_path,
+        &crate::backlog::RowQuery {
+            filter: crate::backlog::api::NodeFilter {
+                id_in: Some(ids),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .ok()
 }
 
 /// The pure half of [`pr_bound_entry`]. PR numbers collide across
@@ -3181,15 +3208,50 @@ pub(crate) fn pr_bound_index(
 /// PR's node carries the [`MAIN_REPAIR_TAG`], else the repair-lane sentence.
 fn main_repair_hold_probe(cwd: &Path, facts: &PrFacts) -> Option<String> {
     let graph_path = crate::org_board::scope::graph_json_path(cwd);
-    let store = GraphStore::new(&graph_path);
-    match backlog_api::rows(&store) {
-        Err(e) => Some(format!(
-            "the graph is unreadable ({}) so no repair lane can be named; tag \
-             the repair node: fno backlog update <node> tags+={MAIN_REPAIR_TAG}",
-            e.0
-        )),
-        Ok(entries) => main_repair_hold_from_entries(&entries, facts),
+    let Some(mut entries) = node_binding_entries(&graph_path, facts) else {
+        return Some(format!(
+            "the graph is unreadable; tag the repair node: \
+             fno backlog update <node> tags+={MAIN_REPAIR_TAG}"
+        ));
+    };
+    // The lane search reads only the tagged nodes: the SQL-side tag read
+    // names them without materializing the graph, and a narrow id read
+    // brings their full rows in. Unreadable tag rows read as no lane, the
+    // sentence names it.
+    let lanes = match crate::graph_store::read_ids_with_tag(&graph_path, MAIN_REPAIR_TAG) {
+        Err(e) => {
+            return Some(format!(
+                "the graph is unreadable ({}); tag the repair node: \
+                 fno backlog update <node> tags+={MAIN_REPAIR_TAG}",
+                e
+            ))
+        }
+        Ok(lanes) => lanes,
+    };
+    let fresh: Vec<String> = lanes
+        .iter()
+        .filter(|(id, _)| {
+            !entries
+                .iter()
+                .any(|e| RowFacts::id_of(e) == Some(id.as_str()))
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+    if !fresh.is_empty() {
+        if let Ok(tagged) = crate::graph_store::read_rows_where(
+            &graph_path,
+            &crate::backlog::RowQuery {
+                filter: crate::backlog::api::NodeFilter {
+                    id_in: Some(fresh),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ) {
+            entries.extend(tagged);
+        }
     }
+    main_repair_hold_from_entries(&entries, facts)
 }
 
 /// The pure half of [`main_repair_hold_probe`], over already-read entries.
@@ -3249,14 +3311,70 @@ fn main_repair_hold_from_entries(entries: &[Value], facts: &PrFacts) -> Option<S
 fn node_binding_probe(cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
     let root = canonical_repo_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
     let graph_path = crate::org_board::scope::graph_json_path(cwd);
-    let store = GraphStore::new(&graph_path);
-    match backlog_api::rows(&store) {
-        Err(e) => ProbeOutcome::Inconclusive(format!(
-            "graph unreadable ({}); refusing to assume bound",
-            e.0
-        )),
-        Ok(entries) => node_binding_from_entries(&root, &entries, facts),
+    match node_binding_entries(&graph_path, facts) {
+        None => {
+            ProbeOutcome::Inconclusive("graph unreadable; refusing to assume bound".to_string())
+        }
+        Some(entries) => node_binding_from_entries(&root, &entries, facts),
     }
+}
+
+/// The graph slice the binding decision reads, without materializing every
+/// node body: the light (id, cwd, project) projection the project detection
+/// walks, the nodes whose pull_requests rows name this PR (the SQL-narrowed
+/// read the grant ops share), and the exact-id rows the head ref and the
+/// closure line name. The union answers every question the full read
+/// answered for this PR; the rest of the store never enters the decision.
+fn node_binding_entries(graph_path: &Path, facts: &PrFacts) -> Option<Vec<Value>> {
+    let mut projection = crate::graph_store::read_rows_where(
+        graph_path,
+        &crate::backlog::RowQuery {
+            fields: Some(
+                ["id", "cwd", "project"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+            ),
+            ..Default::default()
+        },
+    )
+    .ok()?;
+    let mut carriers =
+        crate::backlog::read_pr_entries(graph_path, Some(facts.number as i64)).ok()?;
+    let mut named = crate::backlog::node_branch::node_ids(&facts.head_ref);
+    if let Some(body) = facts.body.as_deref() {
+        named.extend(crate::org_board::pr_closure::parse(body));
+    }
+    named.retain(|id| {
+        !carriers
+            .iter()
+            .any(|row| RowFacts::id_of(row) == Some(id.as_str()))
+    });
+    named.sort();
+    named.dedup();
+    if !named.is_empty() {
+        let mut rows = crate::graph_store::read_rows_where(
+            graph_path,
+            &crate::backlog::RowQuery {
+                filter: crate::backlog::api::NodeFilter {
+                    id_in: Some(named.clone()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .ok()?;
+        // id_in matches slugs too; the keys name ids only, so a slug
+        // collision must not pass the existence check.
+        rows.retain(|row| {
+            named
+                .iter()
+                .any(|id| RowFacts::id_of(row) == Some(id.as_str()))
+        });
+        carriers.append(&mut rows);
+    }
+    projection.append(&mut carriers);
+    Some(projection)
 }
 
 /// The binding decision over already-read graph entries: the pure half of
