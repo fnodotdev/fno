@@ -29,7 +29,7 @@ A conversation, not a research run and not a plan. The user brings an idea, orga
    - **Look it up.** Frame the question in one line and run `fno do research "<question>"`. Cite the rows from its `sources.jsonl` in the test log.
    - **Show a quick prototype.** Name the one slice that tests the guess. The user runs `/fno:blueprint quick <brief path>`, then `/fno:target` on it.
 5. **Write it down.** Update the brief: guesses, test log, and the `Next test` line. The line names the test and the guess it tests. It also names the result that refutes the guess.
-6. **Close the talk.** Run `fno backlog session close <node> --phase think --summary "Next test: <the line>" --launch "/fno:talk <node>" --json`. The node now carries one session row per talk, and the newest row names the next test.
+6. **Close the talk.** Write the line into the node thread with `fno backlog note <node> "Next test: <the line>"`. The newest thread note is the node's live reading. Then run `fno backlog session close <node> --phase think --summary "Next test: <the line>" --launch "/fno:talk <node>" --json`. The close adds one session row per talk.
 
 End the talk with the Next test line and the brief path, then stop. When the user wants to drop the idea, record it with `fno backlog defer <node> -K wont_do -R "<why, in the user's words>"` instead of a Next test.
 
