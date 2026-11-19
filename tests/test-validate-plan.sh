@@ -1397,6 +1397,17 @@ else
     fail "AC14e: step 2c gate: bad=$OUTPUT ok=$ASK_OUT"
 fi
 
+# Step 2c: a leaves-out ruling may cite the display number beside the
+# hash (dual read); the bare refusal case stays AC14e's.
+PLAN_ASK_NUM="$TMPDIR_BASE/ask_num.md"
+design_plan "$PLAN_ASK_NUM" 2026-11-17 "$ROUTED"$'\n## Ask\n\n- Ship the TUI row.\n- leaves out: the web view - ruling: D3479\n\n## Consumers\n\n| Surface | Verdict |\n|---|---|\n| build/release workflows | unaffected because docs only |\n| install channels | unaffected because docs only |\n| sibling repos | unaffected because docs only |\n| laws | unaffected because docs only |\n| existing mechanisms | unaffected because find returned none |\n| CLI | unaffected because docs only |\n| mux | unaffected because the row is TUI only |\n| TUI | changes |\n| web | unaffected because docs only |'
+ASK_NUM_OUT=$(bash "$VALIDATE" "$PLAN_ASK_NUM" 2>&1) || true
+if grep -q "OK:    ask_num.md: ## Ask and ## Consumers present (step 2c gate)" <<< "$ASK_NUM_OUT"; then
+    pass "AC14f: a leaves-out ruling may cite the display number (D3479)"
+else
+    fail "AC14f: number-form ruling: $ASK_NUM_OUT"
+fi
+
 # --- AC15: Probe portability (backslash-b in git grep -E, grep -P, grep -c) ---
 echo ""
 echo "--- AC15: Probe Portability ---"
