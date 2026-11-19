@@ -293,6 +293,7 @@ fn render_plist(daemon_bin: &str, agents_home: &str, label: &str) -> String {
 /// asynchronous and an immediate re-register can lose to the
 /// still-settling label. RunAtLoad fires the daemon, so no kickstart.
 fn bounce(plist_path: &Path, label: &str) -> (String, i32) {
+    // SAFETY: getuid has no preconditions and cannot fail.
     let uid = unsafe { libc::getuid() };
     let domain = format!("gui/{uid}");
     let target = format!("{domain}/{label}");
@@ -367,8 +368,8 @@ fn run_launchctl(args: &[&str]) -> (i32, bool) {
         match child.try_wait() {
             Ok(Some(status)) => return (status.code().unwrap_or(-1), false),
             Ok(None) if std::time::Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
+                child.kill().ok();
+                child.wait().ok();
                 return (-1, true);
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(20)),
