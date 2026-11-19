@@ -2323,17 +2323,18 @@ pub(crate) fn drill_widths(view: &View, w: usize) -> (usize, Option<usize>, usiz
     const MIN_COL: usize = 30;
     const MIN_BOARD: usize = 24;
     // Rightmost widest: the record takes the biggest default share.
-    // The record dominates: the board holds its floor and the persona
-    // column its readable minimum unless the operator dragged a seam.
+    // The record dominates: about 60 percent of the row, the board about
+    // 18 and the persona column about 22, each floored at its readable
+    // minimum unless the operator dragged a seam.
     let per_w = view.edge_sizes.resolve(
         super::edge_drag::Edge::DrillPersonaSeam,
-        MIN_COL,
+        (w * 22 / 100).max(MIN_COL),
         MIN_COL,
         w.saturating_sub(MIN_COL + 1),
     );
     let board_w = view.edge_sizes.resolve(
         super::edge_drag::Edge::DrillBoardSeam,
-        MIN_BOARD,
+        (w * 18 / 100).max(MIN_BOARD),
         MIN_BOARD,
         w.saturating_sub(per_w + MIN_COL + 2),
     );
