@@ -1348,51 +1348,7 @@ impl Root {
         }
         if let Some(action) = keys::shortcut(&key) {
             cx.stop_propagation();
-            match action {
-                Shortcut::Command(Command::CopySelection)
-                    if self.main == MainView::Chat && self.chat.draft.has_selection() =>
-                {
-                    let text = self.chat.draft.selected_text().to_string();
-                    cx.write_to_clipboard(ClipboardItem::new_string(text));
-                }
-                Shortcut::Command(c) => self.send(ClientMsg::Command(c)),
-                Shortcut::Cut => {
-                    if self.main == MainView::Chat && self.chat.draft.has_selection() {
-                        let text = self.chat.draft.selected_text().to_string();
-                        cx.write_to_clipboard(ClipboardItem::new_string(text));
-                        self.chat.draft.replace_selection("");
-                        self.chat_moved(cx);
-                    }
-                }
-                Shortcut::SelectAll => {
-                    if self.main == MainView::Chat {
-                        self.chat.draft.select_all();
-                        self.chat_moved(cx);
-                    }
-                }
-                Shortcut::Paste => self.paste(cx),
-                Shortcut::Quit => {
-                    self.send(ClientMsg::Detach);
-                    record_ui_state(self, cx);
-                    persist_window_state(window, cx);
-                    cx.quit();
-                }
-                // While the composer is open, cmd-1/2/3 switch its kind
-                // (agent, lead, shell) instead of picking a tab or a row.
-                Shortcut::Pick(n) => {
-                    if self.launch.open {
-                        if let Some(kind) = launch::Kind::from_index(n) {
-                            self.launch.state.set_kind(kind);
-                            self.launch.state.row = launch::row_for_kind(kind);
-                            cx.notify();
-                            return;
-                        }
-                    }
-                    self.pick(n, cx);
-                }
-                Shortcut::NewAgent => self.act(Action::OpenLaunch(None), cx),
-                Shortcut::Find => self.find_open(cx),
-            }
+            self.cmd_action(action, window, cx);
             return;
         }
         // The find bar takes the keys it edits before chat and pane routing;
@@ -1419,6 +1375,55 @@ impl Root {
                 cx.notify();
             }
             self.send(ClientMsg::Input(bytes));
+        }
+    }
+
+    /// One cmd shortcut lands.
+    fn cmd_action(&mut self, action: Shortcut, window: &mut Window, cx: &mut Context<Self>) {
+        match action {
+            Shortcut::Command(Command::CopySelection)
+                if self.main == MainView::Chat && self.chat.draft.has_selection() =>
+            {
+                let text = self.chat.draft.selected_text().to_string();
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+            }
+            Shortcut::Command(c) => self.send(ClientMsg::Command(c)),
+            Shortcut::Cut => {
+                if self.main == MainView::Chat && self.chat.draft.has_selection() {
+                    let text = self.chat.draft.selected_text().to_string();
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                    self.chat.draft.replace_selection("");
+                    self.chat_moved(cx);
+                }
+            }
+            Shortcut::SelectAll => {
+                if self.main == MainView::Chat {
+                    self.chat.draft.select_all();
+                    self.chat_moved(cx);
+                }
+            }
+            Shortcut::Paste => self.paste(cx),
+            Shortcut::Quit => {
+                self.send(ClientMsg::Detach);
+                record_ui_state(self, cx);
+                persist_window_state(window, cx);
+                cx.quit();
+            }
+            // While the composer is open, cmd-1/2/3 switch its kind
+            // (agent, lead, shell) instead of picking a tab or a row.
+            Shortcut::Pick(n) => {
+                if self.launch.open {
+                    if let Some(kind) = launch::Kind::from_index(n) {
+                        self.launch.state.set_kind(kind);
+                        self.launch.state.row = launch::row_for_kind(kind);
+                        cx.notify();
+                        return;
+                    }
+                }
+                self.pick(n, cx);
+            }
+            Shortcut::NewAgent => self.act(Action::OpenLaunch(None), cx),
+            Shortcut::Find => self.find_open(cx),
         }
     }
 
