@@ -101,6 +101,35 @@ where
             .jobs_dir_for(short_id)
             .join("state.json")
             .is_file();
+    // The synthetic-tail rung: the LAST assistant record names what the
+    // harness answered for the model. A logout keeps the supervisor socket
+    // answering while the model cannot run, so this rung outranks the
+    // socket: treat the live process as dead and let the re-seat arm take
+    // the respawn (the same-id re-entry plan resolves to `claude respawn`
+    // in runtime/reentry.rs). Only a logout arms it - a weekly limit comes
+    // back on the same account and an API 400 replays the poisoned turn,
+    // so neither may re-seat.
+    let signed_out = if uuid.is_empty() {
+        None
+    } else {
+        crate::claude_drive::find_transcript_in(&claude_home.projects_dir(), uuid)
+            .and_then(|path| crate::synthetic_tail::from_transcript(&path))
+            .filter(|tail| tail.why.respawn_fixes())
+    };
+    if job_state_present && signed_out.is_some() && has_uuid {
+        eprintln!(
+            "fno agent resume: {name} is signed out (its transcript's last turn is the \
+             harness-authored Not-logged-in reply) - re-seating it (claude respawn, \
+             same session id)"
+        );
+        let argv = crate::harness_capabilities::render_session_argv(
+            "claude",
+            "interactive_resume",
+            Some(uuid),
+        )
+        .map_err(|_| 13)?;
+        return Ok((argv, Some(uuid.to_string())));
+    }
     if job_state_present && !socket_live && has_uuid {
         eprintln!(
             "fno agent resume: {name} is a thread worker whose job socket is down - \
@@ -115,7 +144,7 @@ where
         return Ok((argv, Some(uuid.to_string())));
     }
 
-    if live && !short_id.is_empty() {
+    if live && signed_out.is_none() && !short_id.is_empty() {
         // The caller decides whether to print the command, deliver through
         // control.sock, or use a mux pane; downstream output names the action.
         eprintln!("fno agent resume: {name} is live");
@@ -185,6 +214,17 @@ where
         // "liveness is inconclusive" that printed an unrunnable empty-id hint and
         // hid the real bug.
         eprintln!("fno agent resume: {name} has no session id recorded; nothing to resume.");
+        Err(13)
+    } else if signed_out.is_some() {
+        // A signed-out session with no respawn target (a pane worker, or a
+        // row whose job state is gone): the socket probe answered live, so
+        // the plain live/inconclusive words would both misread it. Name the
+        // evidence and the two remedies instead.
+        eprintln!(
+            "fno agent resume: {name} is signed out (its transcript's last turn is the \
+             harness-authored Not-logged-in reply); run /login in the session, or \
+             re-spawn the worker"
+        );
         Err(13)
     } else if live {
         // Probe-live but no short_id to attach through: a pane/mux worker that
@@ -267,4 +307,112 @@ where
         "{name} has exited - fno agent resume {name} (continue it in your terminal)\n\
          or: claude --bg --name {name} --resume {uuid} (detached worker)"
     ))
+}
+
+#[cfg(test)]
+mod signed_out_tail_tests {
+    use super::*;
+    use serde_json::json;
+    use std::fs;
+    use std::os::unix::net::UnixListener;
+
+    const UUID: &str = "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9";
+
+    fn home_with_tail(text: &str) -> tempfile::TempDir {
+        let td = tempfile::tempdir().unwrap();
+        let proj = td.path().join(".claude").join("projects").join("proj");
+        fs::create_dir_all(&proj).unwrap();
+        let reply = json!({
+            "type": "assistant",
+            "message": {
+                "model": "<synthetic>",
+                "role": "assistant",
+                "content": [{"type": "text", "text": text}]
+            }
+        });
+        let prompt = json!({
+            "type": "user",
+            "message": {"role": "user", "content": [{"type": "text", "text": "continue"}]}
+        });
+        fs::write(
+            proj.join(format!("{UUID}.jsonl")),
+            format!("{reply}\n{prompt}\n"),
+        )
+        .unwrap();
+        td
+    }
+
+    fn thread_row(short: &str) -> Value {
+        json!({
+            "name": "w", "provider": "claude", "substrate": "thread",
+            "short_id": short, "claude_session_uuid": UUID,
+        })
+    }
+
+    fn stage_live_socket(td: &std::path::Path, short: &str) -> UnixListener {
+        let sessions = td.join(".claude").join("sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        let sock_path = td.join("live.sock");
+        let listener = UnixListener::bind(&sock_path).unwrap();
+        fs::write(
+            sessions.join(format!("{short}.json")),
+            format!(
+                "{{\"jobId\":\"{short}\",\"kind\":\"bg\",\"messagingSocketPath\":\"{}\",\"sessionId\":\"s\",\"cwd\":\"/tmp\"}}",
+                sock_path.to_str().unwrap()
+            ),
+        )
+        .unwrap();
+        listener
+    }
+
+    fn stage_job_state(td: &std::path::Path, short: &str) {
+        let jobs = td.join(".claude").join("jobs").join(short);
+        fs::create_dir_all(&jobs).unwrap();
+        fs::write(jobs.join("state.json"), "{\"state\":\"idle\"}").unwrap();
+    }
+
+    /// The logout shape: the supervisor socket ANSWERS while the model
+    /// cannot run. The synthetic tail outranks the socket, so the row takes
+    /// the dead treatment (the uuid rides back for the caller to resolve the
+    /// same-id respawn plan in runtime/reentry.rs), never the attach arm.
+    #[test]
+    fn a_signed_out_thread_worker_takes_the_reseat_arm_even_with_a_live_socket() {
+        let td = home_with_tail("Not logged in. Please run /login");
+        let ch = ClaudeHome::at(td.path());
+        let _listener = stage_live_socket(td.path(), "7c5dcf5d");
+        stage_job_state(td.path(), "7c5dcf5d");
+        let (argv, claim) =
+            claude_resume_argv_with_truth(&ch, &thread_row("7c5dcf5d"), "w", |_| None).unwrap();
+        assert_eq!(
+            claim.as_deref(),
+            Some(UUID),
+            "the dead treatment carries the uuid"
+        );
+        assert_eq!(&argv[..2], &["claude".to_string(), "--resume".to_string()]);
+    }
+
+    /// A weekly-limit tail is synthetic but respawn does not fix it (wait or
+    /// switch account), so a live socket keeps the attach arm.
+    #[test]
+    fn a_weekly_limit_tail_never_takes_the_reseat_arm() {
+        let td = home_with_tail("API Error: Weekly limit reached. Wait or switch account.");
+        let ch = ClaudeHome::at(td.path());
+        let _listener = stage_live_socket(td.path(), "7c5dcf5d");
+        stage_job_state(td.path(), "7c5dcf5d");
+        let (argv, claim) =
+            claude_resume_argv_with_truth(&ch, &thread_row("7c5dcf5d"), "w", |_| None).unwrap();
+        assert_eq!(claim, None, "the live attach arm claims nothing");
+        assert_eq!(&argv[..2], &["claude".to_string(), "attach".to_string()]);
+    }
+
+    /// Signed out with no respawn target (no job state on disk): refuse
+    /// naming the logout, never the misleading "is live".
+    #[test]
+    fn a_signed_out_row_without_a_respawn_target_refuses_naming_the_logout() {
+        let td = home_with_tail("Not logged in. Please run /login");
+        let ch = ClaudeHome::at(td.path());
+        let _listener = stage_live_socket(td.path(), "7c5dcf5d");
+        let outcome = claude_resume_argv_with_truth(&ch, &thread_row("7c5dcf5d"), "w", |_| None);
+        assert_eq!(outcome, Err(13));
+    }
 }
