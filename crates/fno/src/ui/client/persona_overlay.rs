@@ -981,6 +981,7 @@ fn note_input_keys(view: &mut View, bytes: &[u8]) -> StdinFlow {
                     }
                 }
                 super::input_field::FieldEvent::Tab => {}
+                super::input_field::FieldEvent::Up | super::input_field::FieldEvent::Down => {}
             }
         }
         if close {
