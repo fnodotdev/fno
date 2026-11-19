@@ -27,6 +27,7 @@ use goal_arbitration::{
 };
 
 mod cannot_claim;
+mod lead_turn;
 
 /// Consecutive checker-unavailable fires tolerated for an active session
 /// before a loud give-up allow (the shim's `MAX_UNAVAIL_RETRIES`).
@@ -368,6 +369,18 @@ fn run_owned(
             driver,
             "no transcript for an active session",
         );
+    }
+
+    // ── Lead-turn gate: a repeated ask with no live read, an unsent filing ───
+    // A lead's waiting-on-you ask is said once and re-raised only on a state
+    // change, so a repeat must rest on a read this turn. A node it filed this
+    // turn from an operator request leaves dispatched or parked with a reason.
+    if driver == "lead" {
+        let ids = [fire.session_id.as_str(), fire.hook_harness_id.as_str()];
+        let message = fire.last_assistant_message.as_deref().unwrap_or_default();
+        if let Some(reason) = lead_turn::gate(&fire.transcript_path, &ids, message) {
+            return emit_block_for_harness(&fire.session_id, &reason);
+        }
     }
 
     let codex_owner = fire.harness.as_deref().map(Harness::parse) == Some(Harness::Codex)
