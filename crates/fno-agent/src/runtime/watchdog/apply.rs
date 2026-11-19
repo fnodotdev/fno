@@ -43,7 +43,7 @@ fn fno_command(args: &[&str], cwd: &str) -> Command {
 }
 
 fn run_fno(args: &[&str], cwd: &str) -> std::io::Result<Output> {
-    fno_command(args, cwd).output()
+    fno_command(args, cwd).spawn()?.wait_with_output()
 }
 
 /// The same seam under a wall clock, for lanes that cannot spend the tick on

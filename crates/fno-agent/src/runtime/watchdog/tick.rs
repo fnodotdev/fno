@@ -307,9 +307,9 @@ fn signed_out_recently_acted(session_id: &str) -> bool {
 fn mark_signed_out_acted(session_id: &str) {
     if let Some(path) = signed_out_stamp_path(session_id) {
         if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
+            drop(std::fs::create_dir_all(dir));
         }
-        let _ = std::fs::write(&path, now_epoch_s().to_string());
+        drop(std::fs::write(&path, now_epoch_s().to_string()));
     }
 }
 
@@ -481,13 +481,25 @@ fn run_leg(clock: &Clock) -> Value {
     } else {
         (0, Vec::new())
     };
+    leg_payload(wake, acted, signed_out_acted, &results, &snapshot)
+}
+
+/// The leg's answer row: the acted counts beside the unfinished-report
+/// counts and the recovery-lane outcome split.
+fn leg_payload(
+    wake: bool,
+    acted: i64,
+    signed_out_acted: i64,
+    results: &[Value],
+    snapshot: &Value,
+) -> Value {
     let count_outcome = |word: &str| {
         results
             .iter()
             .filter(|i| i.get("outcome").and_then(Value::as_str) == Some(word))
             .count()
     };
-    let payload = super::unfinished::snapshot_payload(&snapshot);
+    let payload = super::unfinished::snapshot_payload(snapshot);
     let counts: Vec<String> = payload
         .get("counts")
         .and_then(Value::as_object)
