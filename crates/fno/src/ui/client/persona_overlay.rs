@@ -2073,7 +2073,13 @@ mod tests {
         assert_eq!(host, 63);
         assert_eq!(col, 76);
         assert!(col > host, "the rightmost column is widest by default");
-        assert!(dock_columns(&v, 60).is_none());
+        assert!(dock_columns(&v, 48).is_none(), "the dock refuses under 49");
+        let (host, col) = dock_columns(&v, 49).expect("49 columns dock at the floors");
+        assert_eq!(
+            (host, col),
+            (18, 30),
+            "both floors hold at the refusal edge"
+        );
     }
 
     #[test]
