@@ -154,6 +154,23 @@ impl IncidentRecord {
         self.held_scopes().iter().any(|s| s == scope)
     }
 
+    /// Every held scope with what it asks of a worker, in [`SCOPES`] order.
+    /// A hold the announcement leaves out reads as open to the worker.
+    pub fn hold_sentence(&self) -> String {
+        let held = self.held_scopes();
+        let parts: Vec<&str> = SCOPES
+            .iter()
+            .filter(|s| held.iter().any(|h| h == *s))
+            .map(|s| match *s {
+                "spawns" => "spawns (start no new workers)",
+                "tests" => "tests (do not rerun tests)",
+                "merges" => "merges (merge no PRs)",
+                _ => "loops (each loop stops at its next turn end; a turn in progress runs to its end)",
+            })
+            .collect();
+        format!("Held: {}.", parts.join(", "))
+    }
+
     /// The scopes this record leaves alone, in [`SCOPES`] order. A `clear`
     /// record holds nothing, so everything proceeds.
     pub fn admits_scopes(&self) -> Vec<String> {
@@ -1321,6 +1338,10 @@ pub fn run_fleet_incident(args: &[String]) -> i32 {
                 }
             };
             let machine_wide = target.is_none();
+            let prior = match read_at(&path) {
+                Verdict::Stopped(r) => Some(r),
+                _ => None,
+            };
             match write_transition_with_metadata(
                 &path,
                 if action == "stop" { "stopped" } else { "clear" },
@@ -1349,6 +1370,16 @@ pub fn run_fleet_incident(args: &[String]) -> i32 {
                             }
                             Err(error) => {
                                 eprintln!("fleet-incident: test hold not applied: {error}")
+                            }
+                        }
+                        if let Some(sent) =
+                            crate::test_hold::announce_untested(prior.as_ref(), &record)
+                        {
+                            if let Some(id) = sent.announced {
+                                eprintln!("fleet-incident: announced {id}");
+                            }
+                            if let Some(error) = sent.announce_error {
+                                eprintln!("fleet-incident: announce failed: {error}");
                             }
                         }
                     }

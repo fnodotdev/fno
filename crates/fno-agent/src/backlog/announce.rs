@@ -1168,13 +1168,13 @@ fn walk_session_file(root: &Path, key: &str, depth: u8) -> Option<PathBuf> {
 /// false-positive.
 fn transcript_has_id(path: &Path, id: &str) -> Result<bool, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let normalized = text.replace("\\\"", "\"");
-    if normalized
+    if crate::mail_header::decoded_transcript(&text)
         .lines()
         .any(|line| crate::mail_header::delivered_msg_id(line).as_deref() == Some(id))
     {
         return Ok(true);
     }
+    let normalized = text.replace("\\\"", "\"");
     let needle = regex::Regex::new(&format!(r#"<fno_mail\b[^>]*\bid="{id}""#))
         .map_err(|e| format!("id regex: {e}"))?;
     Ok(needle.is_match(&normalized))
@@ -1605,5 +1605,20 @@ mod tests {
             "a concurrent save dropped an id: {seen:?}"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A hook delivery lands the header inside one JSONL record's string,
+    /// its line breaks escaped. The 2026-11-19 drill read landed 0 of 22
+    /// while seven transcripts held the hold this way.
+    #[test]
+    fn a_hook_delivered_header_counts_as_landed() {
+        let fixture = fixture("hook-landed");
+        let path = fixture.root.join("sess.jsonl");
+        let context = "Rules.\n\n`@fno/fleet-incident · fmail-b6d579fffe93`\nHeld: tests.";
+        let record = json!({"type": "attachment", "attachment": {"content": [context]}});
+        std::fs::write(&path, format!("{record}\n")).unwrap();
+        assert!(transcript_has_id(&path, "fmail-b6d579fffe93").unwrap());
+        assert!(!transcript_has_id(&path, "fmail-000000000000").unwrap());
+        std::fs::remove_dir_all(&fixture.root).ok();
     }
 }
