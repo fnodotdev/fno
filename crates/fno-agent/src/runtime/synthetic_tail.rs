@@ -238,6 +238,10 @@ mod tests {
             from_records(&limit).map(|t| t.why),
             Some(SyntheticWhy::WeeklyLimit)
         );
+        assert!(
+            !SyntheticWhy::WeeklyLimit.respawn_fixes(),
+            "a weekly limit waits on the account; no resume arm may re-seat it"
+        );
         let poisoned = vec![assistant(
             SYNTHETIC_MODEL,
             "API Error: 400 messages.34.content.2: Input tag 'mcp_tool_use' found",
