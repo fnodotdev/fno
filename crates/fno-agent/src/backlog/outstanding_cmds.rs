@@ -196,8 +196,16 @@ fn run_snooze(args: &[String]) -> i32 {
             return 1;
         }
     };
+    // Dual read: a display number names its question through the table (one
+    // primary pull behind a miss); a hash passes through. Writers still
+    // write hashes in this wave.
+    let ids: Vec<String> = parsed
+        .ids
+        .iter()
+        .map(|qid| crate::numbers::resolve_with_pull('q', qid).unwrap_or_else(|| qid.clone()))
+        .collect();
     // Validate every id before the first write, so a bad id leaves no row.
-    for qid in &parsed.ids {
+    for qid in &ids {
         if !open.iter().any(|q| &q.id == qid) {
             eprintln!(
                 "outstanding: {} is not an open question. Nothing was snoozed.",
@@ -217,7 +225,7 @@ fn run_snooze(args: &[String]) -> i32 {
     }
     let by = crate::outstanding::session_id(&cwd);
     let mut code = 0;
-    for qid in &parsed.ids {
+    for qid in &ids {
         let shown = crate::numbers::display(qid);
         let event = snooze_event(qid, &until, parsed.quote.as_deref(), by.as_deref());
         let wrote = crate::event_store::append_envelope(&journal, &event.to_string(), None)
@@ -274,7 +282,7 @@ pub(crate) fn run_clear_cmd(args: &[String]) -> i32 {
     while index < args.len() {
         match args[index].as_str() {
             "-h" | "--help" => {
-                println!("usage: fno inbox outstanding clear <qid>... [--answer <text>] [--authority <source>] [--quote <words>] [--origin <origin>] [--expiry node|pr|date:<when>|never] [--supersedes d-x] [--keep d-x]...");
+                println!("usage: fno inbox outstanding clear <qid>... [--answer <text>] [--authority <source>] [--quote <words>] [--origin <origin>] [--expiry node|pr|date:<when>|never] [--supersedes d-x|D<n>] [--keep d-x|D<n>]...");
                 return 0;
             }
             "--answer" => match args.get(index + 1) {
@@ -311,8 +319,20 @@ pub(crate) fn run_clear_cmd(args: &[String]) -> i32 {
                 Some(value) => {
                     match flag {
                         "--expiry" => expiry = Some(value.clone()),
-                        "--supersedes" => supersedes = Some(value.clone()),
-                        _ => keep.push(value.clone()),
+                        // Dual read: keep the hash the display number
+                        // names; a hash passes through as typed.
+                        "--supersedes" => {
+                            supersedes = Some(
+                                crate::numbers::resolve('d', value)
+                                    .unwrap_or_else(|| value.clone()),
+                            );
+                        }
+                        _ => {
+                            keep.push(
+                                crate::numbers::resolve('d', value)
+                                    .unwrap_or_else(|| value.clone()),
+                            );
+                        }
                     }
                     index += 1;
                 }
@@ -340,7 +360,7 @@ pub(crate) fn run_clear_cmd(args: &[String]) -> i32 {
         index += 1;
     }
     if ids.is_empty() {
-        eprintln!("usage: fno inbox outstanding clear <qid>... [--answer <text>] [--authority <source>] [--quote <words>] [--origin <origin>] [--expiry node|pr|date:<when>|never] [--supersedes d-x] [--keep d-x]...");
+        eprintln!("usage: fno inbox outstanding clear <qid>... [--answer <text>] [--authority <source>] [--quote <words>] [--origin <origin>] [--expiry node|pr|date:<when>|never] [--supersedes d-x|D<n>] [--keep d-x|D<n>]...");
         return 2;
     }
     if let Some(source) = &authority {
