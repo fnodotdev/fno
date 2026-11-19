@@ -1269,10 +1269,12 @@ pub(crate) async fn spawn_edit(
     // folds the page beside a docked editor. Exact placement: a refused
     // split surfaces as a notice below, never a silent spawn in a fresh
     // tab.
+    let min_y = view.layout.panes.iter().map(|(_, r)| r.y).min();
     let anchor = view
         .layout
         .panes
         .iter()
+        .filter(|(_, r)| Some(r.y) == min_y)
         .max_by_key(|(_, r)| r.x + r.cols)
         .map(|(pid, _)| *pid);
     let Some(anchor_id) = anchor else {
@@ -1489,13 +1491,18 @@ pub(crate) fn spawn_persona_pane(view: &mut View) {
     // keyboard happened to sit. The rect read here is pre-split: the
     // layout still carries the anchor's full width, which is exactly the
     // width the seam math needs.
+    // The split anchors on the top band's rightmost pane, so the
+    // column opens top-right beside the widest row instead of a bottom
+    // corner its band cannot widen out of.
+    let min_y = view.layout.panes.iter().map(|(_, r)| r.y).min();
     let anchor = view
         .layout
         .panes
         .iter()
+        .filter(|(_, r)| Some(r.y) == min_y)
         .max_by_key(|(_, r)| r.x + r.cols)
-        .map(|(pid, r)| (*pid, *r));
-    let Some((anchor_id, _)) = anchor else {
+        .map(|(pid, _)| *pid);
+    let Some(anchor_id) = anchor else {
         return;
     };
     let cwd = std::env::current_dir()
@@ -1582,7 +1589,7 @@ pub(crate) fn persona_widening_seams(view: &mut View) -> Vec<crate::proto::Comma
     let Some(o) = view.persona.as_ref() else {
         return Vec::new();
     };
-    const FLOOR: usize = 10;
+    const FLOOR: usize = 22;
     let mut seams = Vec::new();
     let claim = o.claim_pane.or(o.pane);
     if let Some(pane) = claim {
@@ -1657,10 +1664,12 @@ fn spawn_record_pane(view: &mut View, node_id: &str) {
     if !docked {
         return;
     }
+    let min_y = view.layout.panes.iter().map(|(_, r)| r.y).min();
     let anchor = view
         .layout
         .panes
         .iter()
+        .filter(|(_, r)| Some(r.y) == min_y)
         .max_by_key(|(_, r)| r.x + r.cols)
         .map(|(pid, _)| *pid);
     let Some(anchor_id) = anchor else {
@@ -1890,8 +1899,10 @@ pub(crate) fn draw_detail(
         .is_some_and(|o| o.home == Home::SidelineBoard && o.pane.is_some())
     {
         if view.backlog_board.is_some() {
+            // The board paints below the tab bar, never into it.
             let (h, w) = persona_panel_rect(view);
-            view.draw_board_rect(cells, rows, cols, (0, 0, h, w), false);
+            let bar = super::TAB_BAR_ROWS as usize;
+            view.draw_board_rect(cells, rows, cols, (bar, 0, h.saturating_sub(bar), w), false);
         }
         paint_column(view, cells, rows, cols, home);
         paint_record_panes(view, cells, rows, cols);
@@ -2137,11 +2148,19 @@ fn paint_folded(
     if view.backlog_board.is_some() {
         if dock_columns(view, w).is_some() {
             // The board lives in the sideline panel at the far left, the
-            // strip the pane area starts after. Painted inside the home
-            // rect instead, the reserved strip stayed a blank gutter
-            // under the labels.
-            let (ph, pw) = persona_panel_rect(view);
-            view.draw_board_rect(cells, rows, cols, (0, 0, ph, pw), false);
+            // strip the pane area starts after, kanban-only like the
+            // drill view (the narrow panel cannot stack a detail). The
+            // seam column divides it from the page, and nothing paints
+            // into the tab bar.
+            let bar = super::TAB_BAR_ROWS as usize;
+            view.draw_board_rect(
+                cells,
+                rows,
+                cols,
+                (bar, 0, h.saturating_sub(bar), left.saturating_sub(1)),
+                true,
+            );
+            paint_seam(view, cells, rows, cols, top, left - 1, h);
             paint_column(view, cells, rows, cols, (top, left, h, w));
             return;
         }
@@ -2304,15 +2323,17 @@ pub(crate) fn drill_widths(view: &View, w: usize) -> (usize, Option<usize>, usiz
     const MIN_COL: usize = 30;
     const MIN_BOARD: usize = 24;
     // Rightmost widest: the record takes the biggest default share.
+    // The record dominates: the board holds its floor and the persona
+    // column its readable minimum unless the operator dragged a seam.
     let per_w = view.edge_sizes.resolve(
         super::edge_drag::Edge::DrillPersonaSeam,
-        (w * 30 / 100).max(MIN_COL),
+        MIN_COL,
         MIN_COL,
         w.saturating_sub(MIN_COL + 1),
     );
     let board_w = view.edge_sizes.resolve(
         super::edge_drag::Edge::DrillBoardSeam,
-        w.saturating_sub(per_w + (w * 40 / 100).max(MIN_COL) + 2),
+        MIN_BOARD,
         MIN_BOARD,
         w.saturating_sub(per_w + MIN_COL + 2),
     );
