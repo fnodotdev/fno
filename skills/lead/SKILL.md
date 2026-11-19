@@ -79,7 +79,7 @@ Name the role at the first beat with `fno agent hq checkin --name redraw`, and r
 
 State only facts this beat verified. Every claim in the beat report carries its footnote: the reading line, a command result you read this turn, or a file:line. A done claim needs fresh output read this turn. A previous beat proves nothing. Before a cannot claim, try the other routes, then name each one tried. A refusal from one tool is a fact about that tool, never about the task. The full rule is `skills/verify-footnotes/SKILL.md` sections 2 and 3.
 
-A waiting-on-you line rests on a read in the same turn: `gh run view`, `gh pr view`, `fno do pr status` or `fno inbox outstanding`. Say an ask once. Repeat it only when its state changed, and say what changed. If the state has not changed, drop the line. The Stop hook blocks a waiting-on-you line with no live read in the same turn.
+A waiting-on-you line rests on a read in the same turn: `gh run view`, `gh pr view`, `fno do pr status` or `fno inbox outstanding`. Say an ask once. If its state changed, repeat it and say what changed. If the state has not changed, drop the line. The Stop hook blocks a waiting-on-you line with no live read in the same turn.
 
 The `skill_use:` line counts the target sessions this window that loaded `fno:verify-footnotes` and `fno:review`. When verify-footnotes trails the target count, name the workers whose plan has no `## Premises` section in the beat report and mail each one. Every spawn prompt you write for a target worker names the skill: "load /fno:verify-footnotes before the first edit and write its verdicts under ## Premises".
 
