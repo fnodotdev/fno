@@ -920,14 +920,14 @@ mod tests {
         // The plan revision is part of the identity: an amended plan at the
         // same head lands at a new record and re-judges, and the unchanged
         // plan still reuses the published record.
-        let amended = record_path(dir.path(), "o/r", 9, &facts.head_sha, "plan-one");
+        let amended = record_path(dir.path(), "o/r", 9, &record.head, "plan-one");
         publish(
             &amended,
             &Record {
                 repo: "o/r".into(),
                 plan_sha: "plan-one".into(),
                 pr: 9,
-                head: facts.head_sha.clone(),
+                head: record.head.clone(),
                 judgment: Some(parse(&reply("fits", "", "", ""), &bundle()).unwrap()),
                 warning: None,
             },
@@ -956,7 +956,7 @@ mod tests {
             Some(Verdict::MissesPlan)
         );
         assert_eq!(std::fs::read(&amended).unwrap(), amended_bytes);
-        assert!(record_path(dir.path(), "o/r", 9, &facts.head_sha, "plan-two").exists());
+        assert!(record_path(dir.path(), "o/r", 9, &record.head, "plan-two").exists());
         let reused = compute_once(dir.path(), &facts, "o/r", "plan-one", 60, |_| {
             computed += 1;
             Ok(parse(&reply("fits", "", "", ""), &bundle()).unwrap())
@@ -968,7 +968,7 @@ mod tests {
         // The freshness marker tracks the bound plan body: a bound node's
         // plan edit at the same head changes the material, so a cached row
         // that embeds the old verdict stops serving.
-        let unbound = cache_material(dir.path(), "o/r", 9, &facts.head_sha);
+        let unbound = cache_material(dir.path(), "o/r", 9, &record.head);
         crate::graph_store::seed_rows(
             &crate::org_board::scope::graph_json_path(dir.path()),
             &[
@@ -983,14 +983,14 @@ mod tests {
             "## Acceptance Criteria\n**AC1-HP:** Keep the gate honest.\n",
         )
         .unwrap();
-        let first = cache_material(dir.path(), "o/r", 9, &facts.head_sha);
+        let first = cache_material(dir.path(), "o/r", 9, &record.head);
         assert_ne!(first, unbound, "a bound plan must enter the material");
         std::fs::write(
             dir.path().join("plans/one.md"),
             "## Acceptance Criteria\n**AC1-HP:** Keep the gate honest, and rejudge on amendment.\n",
         )
         .unwrap();
-        let second = cache_material(dir.path(), "o/r", 9, &facts.head_sha);
+        let second = cache_material(dir.path(), "o/r", 9, &record.head);
         assert_ne!(
             second, first,
             "a plan edit at the same head must change the material"
