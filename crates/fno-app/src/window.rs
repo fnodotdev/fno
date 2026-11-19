@@ -724,23 +724,19 @@ impl Root {
     }
 
     /// The bar's keys: text and backspace edit the query; the terminal's
-    /// first Enter opens the server search and later Enters and Shift+Enters
-    /// step it; the chat steps its own scan. Esc always closes, clearing the
-    /// pane's server highlight even when no reply ever arrived.
+    /// Enter opens the server search, the arrows and the cmd-g chords step
+    /// its matches, the chat steps its own scan. Esc always closes, clearing
+    /// the pane's server highlight even when no reply ever arrived.
     fn find_key(&mut self, k: find::FindKey, cx: &mut Context<Self>) {
-        // The arrows and the cmd-g chords share one step path; it runs
-        // outside the bar borrow below.
-        if let find::FindKey::Step { older } = k {
-            self.find_step(older, cx);
-            return;
-        }
         let mut send = None;
         let mut rescan = false;
         let mut escape = false;
         let mut reveal = None;
+        let mut step = None;
         {
             let Some(f) = &mut self.find else { return };
             match k {
+                find::FindKey::Step { older } => step = Some(older),
                 find::FindKey::Edit(text) => {
                     f.edit(&text);
                     if matches!(f.target, find::Target::Chat) {
@@ -769,6 +765,12 @@ impl Root {
                 }
                 find::FindKey::Escape => escape = true,
             }
+        }
+        // The step runs outside the bar borrow above: find_step borrows
+        // self again.
+        if let Some(older) = step {
+            self.find_step(older, cx);
+            return;
         }
         if let Some(msg) = send {
             self.send(msg);
