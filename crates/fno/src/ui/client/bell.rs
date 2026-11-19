@@ -199,12 +199,13 @@ pub(crate) fn toggle(view: &mut View) {
     }
 }
 
-/// The bell's glyph: a single-column Nerd Font bell (the operator's
-/// 2026-10-04 ask). A TUI cannot detect font coverage, so a terminal without
-/// the font shows tofu - the fallback (`\u{2407}`, the ASCII bell control
-/// picture) is a one-line const swap, and the live screenshot step is what
-/// catches it.
-const BELL_GLYPH: char = '\u{f0f3}';
+/// The bell's glyph: the ASCII bell control picture. The operator's
+/// 2026-10-04 ask was the single-column Nerd Font bell (`\u{f0f3}`), but the
+/// live screenshot step caught that font: in a terminal without the font it
+/// renders tofu and the button reads as a bare count. The fallback glyph
+/// renders in every font; the swap is one const, exactly as the note
+/// anticipated.
+const BELL_GLYPH: char = '\u{2407}';
 
 fn decision_facts(view: &View) -> Option<&Value> {
     view.bell.projection.as_ref()?.get("decision_facts")

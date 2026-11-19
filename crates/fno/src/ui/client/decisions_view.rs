@@ -190,13 +190,10 @@ pub(crate) fn paint_column(
         return;
     };
     let title = crate::text_style::TLine::meta("decisions");
-    backlog_style::paint_panel(cells, rows, cols, left, w, 1, &[title], None, &view.theme);
+    backlog_style::paint_panel(cells, rows, cols, top, w, 1, &[title], None, &view.theme);
     // The table render carries its own ANSI styling: parse it straight
     // into the column cells the way paint_full does, never as raw text.
-    for (i, line) in render(&b.table, w.saturating_sub(2), h.saturating_sub(1))
-        .iter()
-        .enumerate()
-    {
+    for (i, line) in render(&b.table, w, h.saturating_sub(1)).iter().enumerate() {
         let r = top + 1 + i;
         if r >= rows {
             break;

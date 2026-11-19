@@ -1503,6 +1503,18 @@ fn paint_docked(
     home: (usize, usize, usize, usize),
 ) {
     let (top, left, h, w) = home;
+    // A live toast owns the row below the tab bar: the dock yields the
+    // row and clears it, so the panes never paint a header under the
+    // notice.
+    let (top, h) = if top == super::TAB_BAR_ROWS as usize && view.notice_live() {
+        let base = top * cols + left;
+        if let Some(span) = cells.get_mut(base..base + w) {
+            span.fill(Cell::default());
+        }
+        (top + 1, h.saturating_sub(1))
+    } else {
+        (top, h)
+    };
     let Some((host_w, col)) = dock_columns(view, w) else {
         paint_unscoped(view, cells, rows, cols, (top, left), (h, w));
         return;
@@ -1535,6 +1547,18 @@ fn paint_drilled(
     home: (usize, usize, usize, usize),
 ) {
     let (top, left, h, w) = home;
+    // A live toast owns the row below the tab bar: the drill yields the
+    // row and clears it, so the panes never paint a header under the
+    // notice.
+    let (top, h) = if top == super::TAB_BAR_ROWS as usize && view.notice_live() {
+        let base = top * cols + left;
+        if let Some(span) = cells.get_mut(base..base + w) {
+            span.fill(Cell::default());
+        }
+        (top + 1, h.saturating_sub(1))
+    } else {
+        (top, h)
+    };
     // Rightmost widest: the record takes the biggest default share and
     // the two held seams reshape all three columns.
     let (per_w, board_w, rec_w) = drill_widths(view, w);
@@ -1576,15 +1600,24 @@ fn paint_record(
     cols: usize,
     rect: (usize, usize, usize, usize),
 ) {
+    // The rect clears before every guard: a drill record column that
+    // opens with no node read leaves stale pane text under the paint
+    // that follows it.
+    let (top, left, h, w) = rect;
+    if h == 0 || w == 0 {
+        return;
+    }
     let Some(b) = view.backlog_board.as_ref() else {
         return;
     };
     let Some(d) = b.detail.as_ref() else {
         return;
     };
-    let (top, left, h, w) = rect;
-    if h == 0 || w == 0 {
-        return;
+    for r in top..(top + h).min(rows) {
+        let base = r * cols + left;
+        if let Some(span) = cells.get_mut(base..base + w) {
+            span.fill(Cell::default());
+        }
     }
     backlog_style::paint_title_row(
         cells,
@@ -1627,6 +1660,14 @@ fn paint_folded(
     home: (usize, usize, usize, usize),
 ) {
     let (top, left, h, w) = home;
+    // The home rect clears first: pane cells live under this paint, and
+    // a folded column that skips a region leaves the pane text showing.
+    for r in top..(top + h).min(rows) {
+        let base = r * cols + left;
+        if let Some(span) = cells.get_mut(base..base + w) {
+            span.fill(Cell::default());
+        }
+    }
     // Three surfaces fit beside the editor pane: the board keeps a real
     // column inside the home rect and the page sits right of it. A narrow
     // home folds the board into the strip instead.
@@ -1689,9 +1730,13 @@ pub(crate) fn persona_pane_rect(view: &View) -> Option<(usize, usize, usize, usi
     match view.persona.as_ref().map(|o| o.home) {
         Some(Home::Pane(home)) => pane_rect(home),
         // The sideline board panel: the strip row and the board render
-        // inside the left panel, so the dock lives inside the same panel.
+        // inside the left panel. The dock spans the panel plus part of
+        // the content area, so the persona column keeps its widest-right
+        // share instead of splitting an 80-column panel into the
+        // narrowest pane on screen.
         Some(Home::SidelineBoard) => {
-            let w = (view.panel_w() as usize).min(cols as usize);
+            let panel = (view.panel_w() as usize).min(cols as usize);
+            let w = panel + (cols as usize).saturating_sub(panel) * 40 / 100;
             let h = (rows as usize)
                 .saturating_sub(view.bottom_row_is_chrome() as usize)
                 .max(1);
@@ -1743,6 +1788,21 @@ pub(crate) fn dock_columns(view: &View, w: usize) -> Option<(usize, usize)> {
 pub(crate) fn seam_bounds(w: usize) -> (usize, usize) {
     const MIN_W: usize = 24;
     (MIN_W, w.saturating_sub(MIN_W + 1).max(MIN_W))
+}
+
+/// Whether the open persona overlay docks over the question page
+/// (`Home::Question`): the docked paint repaints the host column itself,
+/// so the host's full-screen chrome must not paint. Its title row would
+/// survive above the dock, spanning the persona column as a second
+/// `question · N … esc` frame.
+pub(crate) fn question_docks(view: &View, cols: usize) -> bool {
+    if view.persona.as_ref().map(|o| o.home) != Some(Home::Question) {
+        return false;
+    }
+    if sibling_pane(view).is_some() {
+        return false;
+    }
+    dock_columns(view, cols).is_some()
 }
 
 /// The drilled layout's column widths from the held seam sizes:

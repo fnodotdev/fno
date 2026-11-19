@@ -154,7 +154,9 @@ pub(crate) fn paint(
         .as_ref()
         .map(|board| filter_bar_lines(b, board, w))
         .unwrap_or_default();
-    backlog_style::paint_panel(cells, rows, cols, top, w, bar_h, &bar_body, None, theme);
+    backlog_style::paint_panel_at(
+        cells, rows, cols, _left, top, w, bar_h, &bar_body, None, theme,
+    );
     paint_esc_chip(cells, rows, cols, top, _left, w, theme);
     let board_rect = laid_out.board;
     let detail_rect = laid_out.detail;
@@ -163,6 +165,15 @@ pub(crate) fn paint(
     // still serves a recompose: it re-blits the cached lines instead of
     // re-rendering every card.
     let board_inner_w = board_rect.3;
+    // The kanban paint falls back to the list shape when the pane cannot
+    // give each column a readable card; the title row names what painted.
+    // Both the key's `columns` and `w` carry the decision, so the cache
+    // splits on it.
+    let list_fallback = b.query.view == crate::backlog_model::View::Kanban
+        && crate::client::backlog_board::kanban_falls_back_to_list(
+            b.layout.columns.len(),
+            board_inner_w,
+        );
     let bkey = crate::client::backlog_board::BodyKey {
         gen: b.body_gen,
         lane: b.lane,
@@ -175,7 +186,7 @@ pub(crate) fn paint(
         columns: b.layout.columns.clone(),
     };
     let follow = b.board_body_cached(bkey, || {
-        if b.query.view == crate::backlog_model::View::List {
+        if b.query.view == crate::backlog_model::View::List || list_fallback {
             list_lines(b, board_inner_w)
         } else {
             render(b, board_inner_w)
@@ -198,6 +209,7 @@ pub(crate) fn paint(
             match b.query.view {
                 crate::backlog_model::View::List => "list",
                 crate::backlog_model::View::Graph => "graph",
+                crate::backlog_model::View::Kanban if list_fallback => "list",
                 crate::backlog_model::View::Kanban => "kanban",
             }
         ),
@@ -208,10 +220,11 @@ pub(crate) fn paint(
         b.strip_board_band();
     }
     let board_lines = b.board_lines_ref();
-    backlog_style::paint_panel(
+    backlog_style::paint_panel_at(
         cells,
         rows,
         cols,
+        board_rect.1,
         board_rect.0 + 1,
         board_rect.3,
         board_rect.2.saturating_sub(1),
@@ -291,7 +304,9 @@ pub(crate) fn paint(
     // The hint: the wrapped sheet, painted once more in the new key-role
     // style the hint_lines builder produced.
     let hint_top = top + h - hint_h;
-    backlog_style::paint_panel(cells, rows, cols, hint_top, w, hint_h, &hint, None, theme);
+    backlog_style::paint_panel_at(
+        cells, rows, cols, _left, hint_top, w, hint_h, &hint, None, theme,
+    );
     let micros = started.elapsed().as_micros();
     b.record_paint(micros);
 }

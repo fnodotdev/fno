@@ -414,6 +414,14 @@ pub(super) fn draw_detail(
         draw_expanded(d, cells, rows, cols, &view.theme);
         return true;
     }
+    // The persona overlay docks over this question: its docked paint
+    // draws the host column itself, so the full-screen frame here would
+    // leave a second `question · N … esc` title row above the dock. Stand
+    // down; the unscoped float case still needs this paint.
+    if super::persona_overlay::question_docks(view, cols) {
+        let _ = super::persona_overlay::draw_detail(view, cells, (rows, cols), _origin, _dims);
+        return true;
+    }
     let strip_h = strip_rows(d, rows);
     let panes_h = rows.saturating_sub(hint_h + strip_h);
     // The frame sizes to the page, so blank the view first: a short

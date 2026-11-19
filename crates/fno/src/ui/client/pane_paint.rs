@@ -110,7 +110,9 @@ impl View {
         // Pane frames: after the blit (border wins its own ring), before the
         // underline/grips (affordances paint over the frame).
         for (pid, rect) in &self.layout.panes {
-            self.paint_frame(cells, rows, cols, origin_r, origin_c, *pid, *rect);
+            self.paint_frame(
+                cells, rows, cols, origin_r, origin_c, clip_r, clip_c, *pid, *rect,
+            );
         }
         // (hover affordance) Underline the accepted link span, client-local:
         // OR UNDERLINE into exactly the pane-local cells the server named,
@@ -389,6 +391,8 @@ impl View {
         cols: usize,
         origin_r: usize,
         origin_c: usize,
+        clip_r: usize,
+        clip_c: usize,
         pid: u64,
         rect: Rect,
     ) {
@@ -468,7 +472,10 @@ impl View {
             let mut c = origin_c + rect.x as usize;
             for (ch, part) in edge {
                 let (fg, flags) = style_of(*part, *ch);
-                if r < rows && c < cols {
+                // The frame clips where the pty blit clips: a pane whose
+                // rect runs past the content edge drops its border cells
+                // instead of painting them past the terminal edge.
+                if r < clip_r && c < clip_c {
                     cells[r * cols + c] = Cell {
                         c: *ch,
                         fg,
@@ -491,7 +498,7 @@ impl View {
                 origin_c + rect.x as usize,
                 origin_c + rect.x as usize + rect.cols as usize - 1,
             ] {
-                if r < rows && c < cols {
+                if r < clip_r && c < clip_c {
                     cells[r * cols + c] = Cell {
                         c: '│',
                         fg: border_fg,

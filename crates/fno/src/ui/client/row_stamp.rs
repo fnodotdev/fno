@@ -160,6 +160,14 @@ impl View {
         }
     }
 
+    /// Whether the transient toast will paint this frame: `notice`
+    /// set. The dock and drill surfaces read this to yield the row the
+    /// toast owns (below the tab bar) instead of painting a pane header
+    /// under it.
+    pub(super) fn notice_live(&self) -> bool {
+        self.notice.is_some()
+    }
+
     /// The transient notice, right-aligned, clipped to the strip.
     ///
     /// The notice is an overlay, not a row: a cut tail keeps the `…`
