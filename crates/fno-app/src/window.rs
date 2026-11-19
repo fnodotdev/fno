@@ -20,6 +20,8 @@ use gpui::{
 
 use serde::{Deserialize, Serialize};
 
+use super::alerts;
+use super::alerts::Signal;
 use super::chat::{self, Chat};
 use super::goto;
 use super::grid::{Metrics, PaneView};
@@ -172,6 +174,12 @@ pub struct Root {
     _activation: Option<Subscription>,
     _appearance: Option<Subscription>,
     _notice: Option<Task<()>>,
+    _alerts: Option<Task<()>>,
+    _alerts_tick: Option<Task<()>>,
+    /// The attention signals: the lattice diff, the switch cache, the badge.
+    alerts: alerts::Alerts,
+    /// Whether the window is frontmost, kept by the activation observer.
+    window_active: bool,
 }
 
 /// The content size sent to the server. The left pane and the title bar are
@@ -183,6 +191,7 @@ pub struct Root {
 /// at dusk with the app open.
 fn wire_window(root: &mut Root, window: &mut Window, cx: &mut Context<Root>) {
     root._activation = Some(cx.observe_window_activation(window, |root, window, cx| {
+        root.window_active = window.is_window_active();
         if let Some(poller) = &root.poller {
             poller.set_active(window.is_window_active());
         }
@@ -266,6 +275,13 @@ impl Root {
             _activation: None,
             _appearance: None,
             _notice: None,
+            _alerts: None,
+            _alerts_tick: None,
+            alerts: alerts::Alerts::new(),
+            // A terminal launch leaves the new window behind the frontmost
+            // app; the activation observer only reports changes, so the
+            // first read happens here.
+            window_active: window.is_window_active(),
         };
         wire_window(&mut root, window, cx);
         match Link::connect(&session, sent_size.0, sent_size.1) {
@@ -289,10 +305,51 @@ impl Root {
             }
             Err(e) => root.closed = Some(e.to_string()),
         }
+        root.wire_alerts(cx);
+        root.start_board_poll(cx);
+        root.start_plugins(cx);
+        // `--mode mods` opens on the view without a switch, so read here.
+        if root.main == MainView::Mods {
+            root.ext.read();
+        }
+        root
+    }
+
+    /// The attention signals: notification taps land here and the task
+    /// routes them through the same click path a sidebar row takes.
+    fn wire_alerts(&mut self, cx: &mut Context<Self>) {
+        let wants_auth = self.alerts.notification_on();
+        if let Some(mut click_rx) = alerts::install_click(wants_auth) {
+            self._alerts = Some(cx.spawn(async move |this, cx| {
+                while let Some(pane) = click_rx.recv().await {
+                    if this
+                        .update(cx, |root, cx| root.on_alert_click(pane, cx))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }));
+        }
+        // The switches live in a settings file no event announces: a one
+        // second tick re-reads them, so turning the badge off clears it at
+        // once even on an idle session that pushes no layouts.
+        self._alerts_tick = Some(cx.spawn(async move |this, cx| loop {
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(1))
+                .await;
+            if this.update(cx, |root, cx| root.on_alerts_tick(cx)).is_err() {
+                break;
+            }
+        }));
+    }
+
+    /// The board poll: fleet, questions and seats arrive here.
+    fn start_board_poll(&mut self, cx: &mut Context<Self>) {
         match Poller::start() {
             Ok((poller, mut rx)) => {
-                root.poller = Some(poller);
-                root._hq = Some(cx.spawn(async move |this, cx| {
+                self.poller = Some(poller);
+                self._hq = Some(cx.spawn(async move |this, cx| {
                     while let Some(reply) = rx.recv().await {
                         if this.update(cx, |root, cx| root.on_hq(reply, cx)).is_err() {
                             break;
@@ -300,14 +357,8 @@ impl Root {
                     }
                 }));
             }
-            Err(e) => root.notice = Some(format!("the board poll did not start: {e}")),
+            Err(e) => self.notice = Some(format!("the board poll did not start: {e}")),
         }
-        root.start_plugins(cx);
-        // `--mode mods` opens on the view without a switch, so read here.
-        if root.main == MainView::Mods {
-            root.ext.read();
-        }
-        root
     }
 
     /// Start the plugins thread and its reply reader. The list reads when
@@ -357,6 +408,9 @@ impl Root {
         self.notice = Some(text);
         self.notice_failed = failed;
         self.notice_gen += 1;
+        // Without this the toast paints only when an unrelated event redraws;
+        // on an idle board it stayed invisible for its whole lifetime.
+        cx.notify();
         let gen = self.notice_gen;
         self._notice = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(NOTICE_FOR).await;
@@ -418,6 +472,67 @@ impl Root {
             Action::SendChat => self.submit_chat(cx),
             Action::Reconnect => self.open_chat(cx),
         }
+        cx.notify();
+    }
+
+    /// The attention signals on one layout push: the enter-only lattice diff
+    /// (module docs in `alerts.rs` carry the route reasoning), plus the Dock
+    /// badge, written only on change. `window_active` picks the toast form.
+    fn on_layout_alerts(&mut self, cx: &mut Context<Self>) {
+        for sig in self
+            .alerts
+            .on_layout(&self.layout.agents, self.window_active)
+        {
+            self.consume_alert(sig, cx);
+        }
+        if let Some(b) = self.alerts.badge(&self.layout.agents) {
+            alerts::set_badge(b);
+        }
+    }
+
+    /// Route one alert signal to the toast, the OS notification or the
+    /// sound.
+    fn consume_alert(&mut self, sig: Signal, cx: &mut Context<Self>) {
+        match sig {
+            Signal::Toast(text) => self.say(text, cx),
+            Signal::Notify {
+                title,
+                body,
+                pane_id,
+            } => alerts::notify(&title, &body, pane_id),
+            Signal::Sound(kind) => alerts::play(kind),
+        }
+    }
+
+    /// The switch tick: re-read the prefs and re-apply the badge, so a
+    /// settings write lands without waiting for a server event.
+    fn on_alerts_tick(&mut self, _cx: &mut Context<Self>) {
+        if let Some(b) = self.alerts.badge(&self.layout.agents) {
+            alerts::set_badge(b);
+        }
+    }
+
+    /// A tapped notification: front the app, open Chat, then send the same
+    /// command a sidebar-row click sends. An exited or gone agent still
+    /// fronts the app but says so in the corner toast (AC5's edge).
+    fn on_alert_click(&mut self, pane: u64, cx: &mut Context<Self>) {
+        cx.activate(true);
+        self.main = MainView::Chat;
+        let row = self
+            .layout
+            .agents
+            .iter()
+            .find(|a| a.pane_id == Some(pane) && !a.exited);
+        match row {
+            Some(a) => match fno::app_api::client::agent_group::click_command(a) {
+                fno::app_api::client::agent_group::RowClick::Send(cmd) => {
+                    self.send(ClientMsg::Command(cmd))
+                }
+                fno::app_api::client::agent_group::RowClick::Notice(text) => self.say(text, cx),
+            },
+            None => self.say(format!("pane {pane}: the agent is gone"), cx),
+        }
+        self.sync_chat(cx);
         cx.notify();
     }
 
@@ -616,6 +731,7 @@ impl Root {
                 }
                 Event::Layout(l) => {
                     self.layout = l;
+                    self.on_layout_alerts(cx);
                     // A Finder launch has cwd `/`: the project's `mux.theme`
                     // pin is read from the active session's own directory.
                     if let Some(dir) = super::palette::project_dir(&self.layout) {
@@ -632,6 +748,15 @@ impl Root {
                 }
                 Event::Modes(bytes) => self.modes.apply(&bytes),
                 Event::Notice(text) => self.say(text, cx),
+                Event::Desktop { title, body } => {
+                    let known = self.layout.agents.iter().any(|a| a.name == title);
+                    if let Some(sig) =
+                        self.alerts
+                            .on_desktop(&title, &body, known, self.window_active)
+                    {
+                        self.consume_alert(sig, cx);
+                    }
+                }
                 // A plain click selects nothing; it never wipes the clipboard.
                 Event::Copy(text) if text.is_empty() => {}
                 Event::Copy(text) => {
@@ -663,6 +788,9 @@ impl Root {
                     self.closed = Some(reason);
                     self.link = None;
                     self.find = None;
+                    if let Some(b) = self.alerts.closed() {
+                        alerts::set_badge(b);
+                    }
                     relayout = true;
                 }
             }
@@ -1801,7 +1929,9 @@ impl Render for Root {
             div()
                 .absolute()
                 .right(px(12.0))
-                .bottom(px(12.0))
+                // Stacked above the chat status row (the empty-state line sits
+                // in the bottom 40px); a corner pin cut that line off.
+                .bottom(px(44.0))
                 .max_w(px(520.0))
                 .px_3()
                 .py_1()

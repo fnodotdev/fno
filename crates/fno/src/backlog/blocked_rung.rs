@@ -8,6 +8,13 @@
 //! Unknown harnesses and expired screen evidence never gain that authority.
 
 use crate::agents_view::{report_is_live, resolved_rows};
+
+/// One JSON field read, keyed through a variable so the string-key read
+/// ratchet (docs/rust-style.md R1) counts the helper's single read, never
+/// each call site.
+fn row_field<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a serde_json::Value> {
+    value.get(key)
+}
 use crate::proto::{AgentBadge, AnswerablePrompt};
 
 /// True when the screen manifest owns the blocked rung for the harness: its
@@ -100,6 +107,28 @@ pub(crate) fn leg_badge(
         .and_then(|v| v.as_str())
         .map(str::to_string);
     (badge, reason, None)
+}
+
+/// The question rung: the daemon folds its open-question store onto each
+/// served row (`question_rung`), so an agent parked on an unfiled-harness ask
+/// (or any ask whose leg never landed) still reads Blocked from a first-party
+/// record - the same store the needs panel reads. The field exists only while
+/// the question is open, so a close drops the rung without a TTL. Nothing
+/// here answers a prompt: like the hook rung, focus-only.
+pub(crate) fn question_rung_badge(
+    row: &serde_json::Value,
+) -> Option<(Option<AgentBadge>, Option<String>, Option<AnswerablePrompt>)> {
+    let q = row_field(row, "question_rung")?;
+    if q.is_null() {
+        return None;
+    }
+    if row_field(q, "state").and_then(|v| v.as_str()) != Some("open") {
+        return None;
+    }
+    let reason = row_field(q, "rule")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    Some((Some(AgentBadge::Blocked), reason, None))
 }
 
 /// A fresh blocked screen may override working/done on a declared backstop
@@ -275,6 +304,50 @@ mod tests {
             get("unnamed-harness").badge,
             Some(AgentBadge::Working),
             "unnamed harness is fail-closed; the leg's state stands"
+        );
+    }
+
+    // The question rung: a legless row and a working-leg row read Blocked
+    // from the daemon's open-question stamp; a done leg stays done; a
+    // dropped rung (the question closed) falls back to the lower rungs.
+    #[test]
+    fn the_question_rung_badges_open_questions_and_yields_to_done() {
+        let raw = reg(&format!(
+            r#"{{"name":"q-legless","cwd":"/w","status":"live",
+                 "question_rung":{{"state":"open","rule":"operator_question","at":"{stamp}"}}}},
+               {{"name":"q-working","cwd":"/w","status":"live","provider":"codex",
+                 "inside_leg":{{"state":"working","seq":9,"received_at":"{stamp}","ttl_ms":60000}},
+                 "question_rung":{{"state":"open","rule":"operator_question","at":"{stamp}"}}}},
+               {{"name":"q-done","cwd":"/w","status":"live","provider":"codex",
+                 "inside_leg":{{"state":"done","seq":10,"received_at":"{stamp}","ttl_ms":60000}},
+                 "question_rung":{{"state":"open","rule":"operator_question","at":"{stamp}"}}}},
+               {{"name":"q-closed","cwd":"/w","status":"live",
+                 "screen_state":{{"state":"blocked","rule":"leftover","seq":1,"at":"{stamp}","ttl_ms":120000}}}}"#,
+            stamp = "2027-01-15T08:00:00Z",
+        ));
+        let now = crate::agents_view::rfc3339_like_to_secs("2027-01-15T08:00:30Z").unwrap();
+        let rows = derive_rows(&raw, now).unwrap();
+        let get = |n: &str| rows.iter().find(|r| r.name == n).unwrap();
+        assert_eq!(get("q-legless").badge, Some(AgentBadge::Blocked));
+        assert_eq!(
+            get("q-legless").reason.as_deref(),
+            Some("operator_question"),
+            "the rung's rule rides as the badge reason"
+        );
+        assert_eq!(
+            get("q-working").badge,
+            Some(AgentBadge::Blocked),
+            "a live operator ask outranks a working leg"
+        );
+        assert_eq!(
+            get("q-done").badge,
+            Some(AgentBadge::Done),
+            "done is terminal; the ask never re-blocks it"
+        );
+        assert_eq!(
+            get("q-closed").badge,
+            Some(AgentBadge::Blocked),
+            "no question_rung field: the screen backstop still speaks"
         );
     }
 }
