@@ -10,7 +10,7 @@ fn git(repo: &std::path::Path, args: &[&str]) {
     assert!(
         out.status.success(),
         "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
+        String::from_utf8_lossy(&out.stderr_tail)
     );
 }
 
