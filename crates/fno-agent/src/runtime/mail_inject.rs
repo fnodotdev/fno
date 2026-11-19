@@ -61,7 +61,7 @@ pub use claude_control::{
 pub use keeper::{deliver_via_keeper_socket, deliver_via_keeper_socket_in};
 #[cfg(test)]
 use pane::unconfirmable_pane_refusal;
-pub(crate) use pane::{deliver_via_pane, deliver_via_pane_state};
+pub(crate) use pane::{deliver_via_pane, deliver_via_pane_state, interrupt_via_pane};
 
 /// Default transcript-growth poll budget: 40 * 250ms = 10s. A live blocked
 /// session echoes the injected turn well within this; a miss demotes to durable.
