@@ -1280,6 +1280,9 @@ mod section_view;
 // of compose_at under the file-budget ratchet .
 mod frame_tick;
 mod pane_paint;
+// The content-viewport announcer, moved out of the winch arm under the
+// file-budget ratchet.
+mod viewport;
 // Region input ownership + the mouse pre-pass, moved out of handle_stdin
 // under the file-budget ratchet.
 mod esc_close;
@@ -6907,18 +6910,11 @@ async fn attach_and_run(
                                 None
                             };
                             theme_ground::drain_pending_ground(&mut view, &mut compositor, &mut guard);
-                            let dims = view.content_dims();
-                            if dims != sent_viewport {
-                                if let Err(e) = write_msg(
-                                    &mut sock_w,
-                                    &ClientMsg::Resize {
-                                        rows: dims.0,
-                                        cols: dims.1,
-                                    },
-                                )
-                                .await
+                            if let Some(dims) = view.drifted(sent_viewport) {
+                                if let Err(e) =
+                                    viewport::announce(&mut sock_w, dims).await
                                 {
-                                    break Err(format!("resize send failed: {e}"));
+                                    break Err(e);
                                 }
                                 sent_viewport = dims;
                             }
@@ -7234,22 +7230,12 @@ async fn attach_and_run(
                 }
             }
             _ = winch.recv() => {
-                if let Ok((cols, rows)) = terminal::size() {
-                    view.term = (rows, cols);
-                    // A shorter terminal shrinks the scroll window; re-clamp so
-                    // the offset never scrolls past the last row.
-                    view.clamp_sideline_scroll();
-                    let (c_rows, c_cols) = view.content_dims();
-                    // The server resizes PTYs + grids off the content area
-                    // and re-emits Layout + frames; the local redraw keeps
-                    // chrome coherent meanwhile.
-                    if let Err(e) = write_msg(&mut sock_w, &ClientMsg::Resize { rows: c_rows, cols: c_cols }).await {
-                        break Err(format!("resize send failed: {e}"));
-                    }
-                    sent_viewport = (c_rows, c_cols);
-                    if let Err(e) = compositor.draw(&view.compose()) {
-                        break Err(format!("draw: {e}"));
-                    }
+                match viewport::winch_resize(&mut view, &mut sock_w, sent_viewport).await {
+                    Ok(dims) => sent_viewport = dims,
+                    Err(e) => break Err(e),
+                }
+                if let Err(e) = compositor.draw(&view.compose()) {
+                    break Err(format!("draw: {e}"));
                 }
             }
             _ = async {
