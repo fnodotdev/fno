@@ -116,6 +116,9 @@ pub struct Root {
     notice_failed: bool,
     /// Bumped by each notice, so only the newest one's timer clears it.
     notice_gen: u64,
+    /// A shot window paints the durable surface only: server notices are a
+    /// transient corner toast that would photobomb a still frame.
+    shot: bool,
     pub(super) closed: Option<String>,
     pub(super) metrics: Metrics,
     pub(super) palette: Palette,
@@ -232,6 +235,7 @@ impl Root {
             notice: theme_warning,
             notice_failed: false,
             notice_gen: 0,
+            shot: false,
             closed: None,
             metrics,
             palette,
@@ -485,6 +489,9 @@ impl Root {
 
     /// [`Self::say`], in the error color when `failed`.
     fn say_as(&mut self, text: String, failed: bool, cx: &mut Context<Self>) {
+        if self.shot {
+            return;
+        }
         self.notice = Some(text);
         self.notice_failed = failed;
         self.notice_gen += 1;
@@ -2168,6 +2175,7 @@ pub(super) fn root_for_shot(
             cx,
         )
     });
+    root.update(cx, |root, _| root.shot = true);
     // The shot window never activates, and the board poll pauses while
     // the window is inactive; the shot needs every feed settled before
     // the capture, so it polls regardless.
