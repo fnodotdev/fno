@@ -88,14 +88,44 @@ pub fn run(opts: ShotOptions) -> i32 {
             cx.quit();
             return;
         };
-        // Fade the window to one-percent alpha in the same run-loop turn
-        // as the open, before the window server composites a full-alpha
-        // frame: gpui presents only once the window is ordered on, and
-        // the early set keeps every composited frame imperceptible.
-        // SAFETY: NSApp enumeration over this process's own windows only;
-        // the result is dropped.
-        let _ = unsafe { shot_window_id() };
+        // The window server keys its composited tile's color precision to
+        // the FIRST frame it composites: a window that fades in the same
+        // run-loop turn as the open locks an eight-color tile, and every
+        // later capture quantizes to two bits per channel (measured: 8
+        // distinct colors fading early, 234 when the first frame composites
+        // at full alpha). So the setup below fades nothing; the spawn
+        // fades right after the first frame presented, one sub-perceptual
+        // blip at window birth in exchange for true-color captures.
+        // SAFETY: NSApp enumeration over this process's own windows only.
+        let opened = unsafe { shot_window_id() };
         cx.spawn(async move |cx| {
+            // The fade waits for the window server's own first composite:
+            // the occlusion visible bit only sets once a frame is on
+            // screen, and tile color precision keys to those first
+            // frames, so the fade may not land before one composites at
+            // full alpha. One extra refresh of margin, then fade. The
+            // timer yields, so the main thread keeps presenting.
+            let Some((_, _, _, w)) = opened else {
+                eprintln!("fno-app --shot: the shot window vanished before the fade");
+                return;
+            };
+            let mut waited = 0u32;
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(10))
+                    .await;
+                // SAFETY: plain read of a window this process owns.
+                let occl: usize = unsafe { msg_send![w, occlusionState] };
+                if occl & 2 != 0 || waited >= 2_000 {
+                    break;
+                }
+                waited += 10;
+            }
+            cx.background_executor()
+                .timer(Duration::from_millis(50))
+                .await;
+            // SAFETY: setters on the window this process owns.
+            let _: () = unsafe { msg_send![w, setAlphaValue: 0.01f64] };
             // The board feeds land after the first paint. Poll the
             // board's settled flag, refresh once the feeds land, let the
             // frame present, then capture. The display link keeps
@@ -125,6 +155,15 @@ pub fn run(opts: ShotOptions) -> i32 {
             if !settled {
                 eprintln!("fno-app --shot: the board feeds never settled; capturing anyway");
             }
+            // The capture phase. The server's composited tile re-composites
+            // only when a frame presents, and the tile's color precision
+            // keys to the alpha at composite time: raising alpha alone
+            // leaves the tiles at one-percent precision (measured 8
+            // distinct colors, same window, same tool), so raise alpha
+            // FIRST, then let this refresh present a full-alpha frame,
+            // then capture. Restored after the tool exits.
+            // SAFETY: setters on the window this process owns.
+            let _: () = unsafe { msg_send![w, setAlphaValue: 1.0f64] };
             handle.update(cx, |_, window, _| window.refresh()).ok();
             cx.background_executor().timer(PRESENT).await;
             // Hold mode: leave the near-invisible composited window up
@@ -137,6 +176,8 @@ pub fn run(opts: ShotOptions) -> i32 {
             } else {
                 capture_to_png(&out)
             };
+            // SAFETY: symmetric restore of the capture phase above.
+            let _: () = unsafe { msg_send![w, setAlphaValue: 0.01f64] };
             if code != 0 {
                 eprintln!("fno-app --shot: the capture failed");
                 // Exit non-zero so the door reads a real failure; the
@@ -347,7 +388,7 @@ fn log_window_live(window_id: u32, when: &str) -> bool {
 /// before and after the capture, and the helper's own lines.
 fn capture_to_png(out: &std::path::Path) -> i32 {
     // SAFETY: NSApp enumeration over this process's own windows only.
-    let Some((window_id, _scale, occlusion, w)) = (unsafe { shot_window_id() }) else {
+    let Some((window_id, _scale, occlusion, _w)) = (unsafe { shot_window_id() }) else {
         eprintln!("fno-app --shot: no capturable fno window in this process");
         return 1;
     };
@@ -366,35 +407,18 @@ fn capture_to_png(out: &std::path::Path) -> i32 {
     eprintln!("fno-app --shot: preflight screen-capture access: {preflight}");
     let before = log_window_live(window_id, "before-capture");
     std::thread::sleep(std::time::Duration::from_millis(200));
-    // The capture phase. The window server quantizes a low-alpha window's
-    // composite to two bits per channel: the probe measured 8 distinct
-    // colors at alpha 0.01 and 234 at alpha 1.0, same window, same tool.
-    // The quantized pixels live in the server's composited tiles, and
-    // tiles only re-composite when the window presents a frame, so full
-    // precision needs at least one presented full-alpha frame. The level
-    // stays floating so the display link keeps running; the window is
-    // fully opaque above the covers for roughly the tool's runtime (two
-    // hundred milliseconds), then fades back. An in-process read of the
-    // Metal surface would remove that flash; until one lands the flash
-    // is the price of a true-color frame.
-    // SAFETY: setters on the window this process owns; plain messages.
-    unsafe {
-        let _: () = msg_send![w, setAlphaValue: 1.0f64];
-    }
-    std::thread::sleep(std::time::Duration::from_millis(250));
-    // The capture runs in Apple's own SCK-backed tool: the in-process
-    // SCScreenshotManager reply decode crashes this binary in every
-    // process shape it tried (gpui and helper alike), while the same
-    // window captures cleanly from any foreign process. -o drops the
-    // shadow margins, -x stays silent.
+    // The caller raised the window to full alpha and presented a fresh
+    // frame before invoking this, so the server's composited tiles hold
+    // full-precision pixels under a full-alpha window (see the spawn's
+    // capture phase). The capture runs in Apple's own SCK-backed tool:
+    // the in-process SCScreenshotManager reply decode crashes this
+    // binary in every process shape it tried (gpui and helper alike),
+    // while the same window captures cleanly from any foreign process.
+    // -o drops the shadow margins, -x stays silent.
     let tool = std::process::Command::new("/usr/sbin/screencapture")
         .args(["-o", "-x", "-l", &window_id.to_string()])
         .arg(out)
         .status();
-    // SAFETY: symmetric restore of the phase above; plain messages.
-    unsafe {
-        let _: () = msg_send![w, setAlphaValue: 0.01f64];
-    }
     match tool {
         Ok(s) if s.success() => {}
         Ok(s) => {
@@ -538,7 +562,9 @@ unsafe fn shot_window_id() -> Option<(u32, f64, usize, *mut objc::runtime::Objec
     // line shows what the window itself claims, so a reverted setter
     // never hides behind the server-side read.
     let _: () = msg_send![w, orderFront: std::ptr::null_mut::<objc::runtime::Object>()];
-    let _: () = msg_send![w, setAlphaValue: 0.01f64];
+    // The fade to one-percent alpha lives in the spawn's delayed task, not
+    // here: the setup must let the first frame composite at full alpha or
+    // the window server locks the tile at two bits per channel.
     // The floating level (3) lifts the window above every normal-level
     // window, so a terminal or editor covering the rect cannot occlude
     // it: the occlusion bit stays visible, the display link keeps
