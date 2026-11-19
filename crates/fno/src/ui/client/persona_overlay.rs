@@ -1681,13 +1681,24 @@ pub(crate) fn persona_widening_seams(view: &mut View) -> Vec<crate::proto::Comma
                 continue;
             }
             let need = FLEET_FLOOR - w;
-            let donor = rects.iter().copied().find(|(nid, (nx, ny, nw, nh))| {
-                *nid != pid
-                    && *ny < py + ph
-                    && py < *ny + *nh
-                    && (*nx + *nw + 1 == x || x + w + 1 == *nx)
-                    && *nw >= need + pane_floor(*nid)
-            });
+            // A donor sharing the pane's own height sits beside it in the
+            // same branch child, so the seam moves one boundary exactly; a
+            // full-height donor reaches only through the parent seam, whose
+            // move leaks through the nested ratio splits. Prefer one.
+            let mut donor = None;
+            for same_rows in [true, false] {
+                donor = rects.iter().copied().find(|(nid, (nx, ny, nw, nh))| {
+                    *nid != pid
+                        && *ny < py + ph
+                        && py < *ny + *nh
+                        && (*nx + *nw + 1 == x || x + w + 1 == *nx)
+                        && *nw >= need + pane_floor(*nid)
+                        && (!same_rows || *nh == h)
+                });
+                if donor.is_some() {
+                    break;
+                }
+            }
             let Some((nid, (dnx, _, dnw, _))) = donor else {
                 continue;
             };
