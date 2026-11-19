@@ -132,7 +132,7 @@ fn plan_sha_at(cwd: &Path, node: &Value) -> String {
     };
     let root = crate::paths::canonical_repo_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
     std::fs::read_to_string(root.join(path))
-        .map(|plan| blake3::hash(plan.as_bytes()).to_hex())
+        .map(|plan| blake3::hash(plan.as_bytes()).to_hex().to_string())
         .unwrap_or_default()
 }
 
