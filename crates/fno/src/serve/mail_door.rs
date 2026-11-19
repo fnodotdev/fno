@@ -33,7 +33,7 @@ fn fno_bin() -> PathBuf {
 fn argv(target: &str, from_name: &str, text: &str) -> Vec<OsString> {
     let mut out = vec![fno_bin().into_os_string()];
     for part in [
-        "agent",
+        "agents",
         "mail",
         "send",
         "--from-name",
@@ -58,15 +58,22 @@ pub enum MailVerdict {
     Refused(String),
 }
 
-/// Run one send through the porcelain, bounded. The CLI's one-line stdout
-/// verdict is the receipt verbatim; a nonzero exit surfaces the first stderr
-/// line, never an empty error.
+/// Run one send through the porcelain, bounded. The text is sanitized like
+/// every other mail surface (control chars out, the 400-char cap holds), the
+/// spawn joins the fleet census, and the CLI's one-line stdout verdict is the
+/// receipt verbatim; a nonzero exit surfaces the first stderr line, never an
+/// empty error.
 pub async fn send(target: &str, from_name: &str, text: &str) -> MailVerdict {
-    let mut parts = argv(target, from_name, text);
+    let text = match crate::mux::server::agent_actions::sanitize_mail_text(text) {
+        Ok(text) => text,
+        Err(why) => return MailVerdict::Refused(why),
+    };
+    let mut parts = argv(target, from_name, &text);
     let bin = parts.remove(0);
     let mut command = Command::new(bin);
     command.args(&parts).stdin(Stdio::null()).kill_on_drop(true);
-    match tokio::time::timeout(MAIL_TIMEOUT, command.output()).await {
+    let run = crate::sessions::process_admission::tokio_output(&mut command);
+    match tokio::time::timeout(MAIL_TIMEOUT, run).await {
         Err(_) => MailVerdict::Refused("mail: timed out".into()),
         Ok(Err(e)) => MailVerdict::Refused(format!("mail: {e}")),
         Ok(Ok(o)) => verdict(
@@ -109,7 +116,7 @@ mod tests {
         assert_eq!(
             tail,
             [
-                "agent",
+                "agents",
                 "mail",
                 "send",
                 "--from-name",

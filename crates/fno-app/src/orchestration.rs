@@ -320,11 +320,14 @@ fn feed(root: &Root, cx: &mut Context<Root>) -> Div {
     out
 }
 
-/// True when a read landed and seats, questions and the next queue are all
-/// empty: the board area then shows the designed empty state and the
-/// per-section quiet lines stand down.
+/// True when a read landed, none of the three reads is failing, and seats,
+/// questions and the next queue are all empty: the board area then shows the
+/// designed empty state and the per-section quiet lines stand down. A fleet
+/// failure counts, or an org read outage would paint "the fleet is quiet"
+/// over an error the seats column never gets to show.
 fn quiet_board(board: &Board) -> bool {
     board.read_yet()
+        && board.fleet_error().is_none()
         && board.questions_error().is_none()
         && board.questions_newest_first().is_empty()
         && board.next_error().is_none()
@@ -471,18 +474,12 @@ pub(super) fn key(root: &mut Root, key: &Key, cx: &mut Context<Root>) {
     let (shift, cmd) = (key.shift, key.cmd);
     match key.key {
         "enter" if !shift && !cmd && !key.ctrl => {
-            let text = root.board_draft.take();
-            if !text.trim().is_empty() {
-                if let Some(poller) = &root.poller {
-                    if poller.mail(text) {
-                        root.mail = Some(MailState::Sending);
-                    } else {
-                        root.mail = Some(MailState::Refused("the board poll stopped".into()));
-                    }
-                    cx.notify();
-                } else {
-                    root.say("no board poll, no send".into(), cx);
-                }
+            // A whitespace draft stays put, as chat's submit does; a real
+            // one goes out through the same action a click would take, so
+            // the send records its usage event.
+            if !root.board_draft.text().trim().is_empty() {
+                let text = root.board_draft.take();
+                root.act(Action::Mail(text), cx);
             }
         }
         "escape" if !root.board_draft.is_empty() => {
@@ -494,10 +491,16 @@ pub(super) fn key(root: &mut Root, key: &Key, cx: &mut Context<Root>) {
         "delete" => root.board_draft.delete(),
         "left" => root.board_draft.left(shift),
         "right" => root.board_draft.right(shift),
-        "home" => root.board_draft.home(false),
-        "end" => root.board_draft.end(false),
+        "home" => root.board_draft.home(shift),
+        "end" => root.board_draft.end(shift),
         _ => {
-            if let Some(ch) = key.key_char.filter(|_| !cmd && !key.ctrl) {
+            // Only real text lands in the one-line draft: named keys kept
+            // their control characters (shift-enter's `\r`, tab's `\t`),
+            // which would ship to the mail door verbatim.
+            if let Some(ch) = key
+                .key_char
+                .filter(|t| !cmd && !key.ctrl && !t.chars().any(char::is_control))
+            {
                 root.board_draft.replace_selection(ch);
                 cx.stop_propagation();
             } else {
@@ -598,6 +601,19 @@ mod tests {
             Ok(json!({ "machines": [] })),
             Ok(fno::needs_overlay::QuestionsFold::default()),
             &inputs,
+            1,
+            &[],
+        );
+        assert!(!quiet_board(&b));
+    }
+
+    #[test]
+    fn a_failed_fleet_read_blocks_the_empty_state() {
+        let mut b = Board::default();
+        b.record(
+            Err("org unreachable".into()),
+            Ok(fno::needs_overlay::QuestionsFold::default()),
+            &Inputs::default(),
             1,
             &[],
         );

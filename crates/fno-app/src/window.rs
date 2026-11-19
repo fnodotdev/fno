@@ -1221,7 +1221,10 @@ impl Root {
                 self.chat.draft.replace_selection(&text);
                 self.chat_moved(cx);
             }
-            MainView::Orchestration => self.board_draft.replace_selection(&text),
+            MainView::Orchestration => {
+                self.board_draft.replace_selection(&text);
+                cx.notify();
+            }
             _ => {
                 let bytes = keys::paste(&text, self.modes);
                 self.send(ClientMsg::Input(bytes));
