@@ -120,16 +120,31 @@ pub(crate) fn install_into(
     }
 }
 
-/// The daemon binary the plist pins: the `fno-agent-daemon` sibling of the
-/// resolved fno-agent, the same rule `fno-agent`'s own
-/// `resolve_daemon_bin` applies to its current exe. Empty when no agents
-/// binary resolves at all.
+/// The daemon binary the plist pins. The plist must outlive this process:
+/// a dev-worktree binary dies with its worktree (the corpse class the
+/// web-bridge resolver names), so the deployed copy on PATH is the first
+/// pick and the `fno-agent-daemon` sibling of the resolved fno-agent is
+/// the fallback. Empty when neither resolves.
 fn resolve_daemon_binary() -> String {
+    if let Some(found) = which("fno-agent-daemon") {
+        return found;
+    }
     crate::digest_overlay::fno_agent_bin_auto()
         .and_then(|bin| bin.parent().map(|d| d.join("fno-agent-daemon")))
         .filter(|bin| bin.is_file())
         .map(|bin| bin.display().to_string())
         .unwrap_or_default()
+}
+
+fn which(program: &str) -> Option<String> {
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let candidate = dir.join(program);
+        if candidate.is_file() {
+            return Some(candidate.to_string_lossy().into_owned());
+        }
+    }
+    None
 }
 
 /// The agents home the plist names: `$FNO_AGENT_HOME`, else
@@ -384,6 +399,7 @@ mod tests {
     /// this lock to run one at a time.
     static SEAM_LOCK: Mutex<()> = Mutex::new(());
 
+    #[cfg(target_os = "macos")]
     fn receipt_status(dir: &Path, loaded: bool, script: &str) -> String {
         let _guard = SEAM_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("FNO_TEST_DAEMON_AGENT_LOADED", loaded.to_string());
@@ -417,13 +433,23 @@ mod tests {
         assert!(rendered.contains("/Users/u/.fno/agents"));
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn install_skips_reregistration_when_loaded_and_unchanged() {
         let dir = tempfile::tempdir().unwrap();
-        let first = receipt_status(dir.path(), true, "[[0,false]]");
+        // The unchanged verdict needs the plist bytes already on disk, or
+        // the write lands as changed and the flow reaches bounce instead.
+        let rendered = render_plist(
+            "/usr/local/bin/fno-agent-daemon",
+            "/Users/u/.fno/agents",
+            &daemon_label(),
+        );
+        std::fs::write(dir.path().join(DAEMON_PLIST_FILENAME), rendered).unwrap();
+        let first = receipt_status(dir.path(), true, "[]");
         assert_eq!(first, "unchanged");
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn install_registers_a_missing_agent() {
         let dir = tempfile::tempdir().unwrap();
@@ -434,6 +460,7 @@ mod tests {
         assert!(dir.path().join(DAEMON_PLIST_FILENAME).exists());
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn a_failed_bootstrap_reads_failed_not_installed() {
         let dir = tempfile::tempdir().unwrap();
