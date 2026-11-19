@@ -906,18 +906,13 @@ pub(crate) fn decide_with_payload(
                     .filter(|out| out.status.success())
                     .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
             };
-            let unshipped_or_dirty = match (
-                local_output(&["rev-parse", "HEAD"]),
-                local_output(&["rev-parse", "@{push}"]),
-                local_output(&["status", "--porcelain"]),
-            ) {
-                (Some(head), Some(upstream), Some(status)) => {
-                    head != upstream || !status.is_empty()
-                }
-                // An unreadable checkout says nothing about what shipped, so
-                // it keeps the REST read.
-                _ => true,
-            };
+            // The origin remote is the terminal local fact behind this whole
+            // fold: gh resolves owner/repo from it, so its absence means the
+            // REST read can never answer and no retry clears it. Reading it
+            // first lets a remote-less repo take the advisory terminal below
+            // instead of burning fires on a read that cannot succeed.
+            let remoteless = origin_remote_url(&local_output).is_none();
+            let unshipped_or_dirty = unshipped_or_dirty(remoteless, &local_output);
             let mut shortcut_holds = !held_by_findings && !unshipped_or_dirty;
             if shortcut_holds {
                 shortcut_holds = !matches!(
@@ -2837,7 +2832,17 @@ pub(crate) fn decide_with_payload(
                 // through the ordinary failed-read wording: the two demand
                 // opposite operator responses, and the quota probe below must
                 // not label a killed child as a quota problem either.
-                let reason = if read_err.kind == ReadErrorKind::TimedOut {
+                // The origin remote is a local fact: when it is absent, every
+                // origin-resolved PR read fails with the same owner/repo
+                // refusal and no retry can clear it. Gate the wording on the
+                // read's own cause, not the remote's absence: a node whose PR
+                // row pins an owner/repo reads fine without an origin, so a
+                // network blip there must keep its ordinary retry wording.
+                let remoteless_pr = failed_read.starts_with("pr_")
+                    && failed_stderr.contains("could not resolve owner/repo");
+                let reason = if remoteless_pr {
+                    remoteless_pr_read_reason(&failed_read, &failed_stderr)
+                } else if read_err.kind == ReadErrorKind::TimedOut {
                     read_err.render()
                 } else if secondary {
                     format!(
@@ -2861,7 +2866,9 @@ pub(crate) fn decide_with_payload(
                 // directive: a permanent one (spawn trouble, an unparseable
                 // payload) must stay free to escalate, and a wait route
                 // never does.
-                let reason = if read_failure_is_transient(read_err.kind, &failed_read) {
+                let reason = if remoteless_pr {
+                    reason
+                } else if read_failure_is_transient(read_err.kind, &failed_read) {
                     format!(
                         "{reason}{}",
                         failed_read_wait_directive(&failed_read, read_err.outcome())
@@ -2895,6 +2902,49 @@ pub(crate) fn decide_with_payload(
     (
         0,
         allow_output("block", None, &continue_msg, this_fire, Some(fingerprint)),
+    )
+}
+
+/// The configured `remote.origin.url`, or None when unset. One bounded
+/// local git read: no network, no gh.
+fn origin_remote_url(local_output: &dyn Fn(&[&str]) -> Option<String>) -> Option<String> {
+    local_output(&["config", "--get", "remote.origin.url"]).filter(|url| !url.is_empty())
+}
+
+/// The local-work conjunct of the done-node shortcut. A remote-less
+/// checkout can never push, so the push-side read is permanently
+/// unreadable there and its absence must not read as unshipped work: a
+/// clean tree on a committed head is the whole delivery fact a remote-less
+/// checkout can carry, and the shortcut's other conjuncts (open findings,
+/// done probes) carry the review half. An unreadable checkout still says
+/// nothing about what shipped and keeps the REST read.
+fn unshipped_or_dirty(remoteless: bool, local_output: &dyn Fn(&[&str]) -> Option<String>) -> bool {
+    let head = local_output(&["rev-parse", "HEAD"]);
+    if remoteless {
+        return match (head, local_output(&["status", "--porcelain"])) {
+            (Some(_), Some(status)) => !status.is_empty(),
+            _ => true,
+        };
+    }
+    match (
+        head,
+        local_output(&["rev-parse", "@{push}"]),
+        local_output(&["status", "--porcelain"]),
+    ) {
+        (Some(head), Some(upstream), Some(status)) => head != upstream || !status.is_empty(),
+        _ => true,
+    }
+}
+
+/// The remote-less PR-read failure wording. The cause cannot clear on a
+/// retry - the remote is a local fact, not a GitHub answer - so the
+/// sentence names the remedy instead of the next fire, and it never
+/// carries the wait directive.
+fn remoteless_pr_read_reason(failed_read: &str, failed_stderr: &str) -> String {
+    format!(
+        "no origin remote in this checkout; gh read '{failed_read}' can never resolve \
+         (owner/repo are read from it). PR terminals are unreachable here until a \
+         remote exists or the run is marked advisory. {failed_stderr}"
     )
 }
 
@@ -3221,6 +3271,7 @@ mod tests {
     mod plan_fidelity_tests;
     mod posture_tests;
     mod pr_read_tests;
+    mod remoteless_tests;
     mod review_findings_tests;
     mod self_review_floor_tests;
     mod settings_tests;
