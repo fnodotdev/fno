@@ -881,15 +881,7 @@ impl Root {
                         self.say(text, cx);
                     }
                 }
-                Event::Desktop { title, body } => {
-                    let known = self.layout.agents.iter().any(|a| a.name == title);
-                    if let Some(sig) =
-                        self.alerts
-                            .on_desktop(&title, &body, known, self.window_active)
-                    {
-                        self.consume_alert(sig, cx);
-                    }
-                }
+                Event::Desktop { title, body } => self.handle_desktop(&title, &body, cx),
                 // A plain click selects nothing; it never wipes the clipboard.
                 Event::Copy(text) if text.is_empty() => {}
                 Event::Copy(text) => {
@@ -926,22 +918,7 @@ impl Root {
                     }
                     relayout = true;
                 }
-                Event::Launch(u) => {
-                    if self.launch.state.apply(&u) && self.launch.open {
-                        if let fno::proto::LaunchState::Launched { name, .. } = &u.state {
-                            let name = name.clone();
-                            let task = self.launch.state.draft.text().trim().to_string();
-                            self.launch.open = false;
-                            self.launch.state = Launch::fresh();
-                            self.launch.state.refresh_projects(&self.layout);
-                            self.launch.focus = Some(name.clone());
-                            self.launch.show = Some(name.clone());
-                            self.launch.show_task = (!task.is_empty()).then_some(task);
-                            self.say(format!("started {name}"), cx);
-                        }
-                        cx.notify();
-                    }
-                }
+                Event::Launch(u) => self.apply_launch_update(u, cx),
             }
         }
         for (id, frame) in newest {
@@ -961,6 +938,38 @@ impl Root {
             self.ext.layout(&live);
             self.sync_panes(cx);
             self.sync_chat(cx);
+            cx.notify();
+        }
+    }
+
+    /// One desktop event: a known agent's tap routes through the alert
+    /// gate, and the gate picks the toast or notification form.
+    fn handle_desktop(&mut self, title: &str, body: &str, cx: &mut Context<Self>) {
+        let known = self.layout.agents.iter().any(|a| a.name == title);
+        if let Some(sig) = self
+            .alerts
+            .on_desktop(title, body, known, self.window_active)
+        {
+            self.consume_alert(sig, cx);
+        }
+    }
+
+    /// One launch update: the panel applies it, and a `Launched` closes the
+    /// panel, freshens its state for the next open, and marks the new row
+    /// to show the task as its label.
+    fn apply_launch_update(&mut self, u: fno::proto::AgentLaunchUpdate, cx: &mut Context<Self>) {
+        if self.launch.state.apply(&u) && self.launch.open {
+            if let fno::proto::LaunchState::Launched { name, .. } = &u.state {
+                let name = name.clone();
+                let task = self.launch.state.draft.text().trim().to_string();
+                self.launch.open = false;
+                self.launch.state = Launch::fresh();
+                self.launch.state.refresh_projects(&self.layout);
+                self.launch.focus = Some(name.clone());
+                self.launch.show = Some(name.clone());
+                self.launch.show_task = (!task.is_empty()).then_some(task);
+                self.say(format!("started {name}"), cx);
+            }
             cx.notify();
         }
     }
