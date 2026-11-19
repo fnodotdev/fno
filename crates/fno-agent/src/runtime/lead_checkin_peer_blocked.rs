@@ -157,7 +157,7 @@ pub(super) fn reading() -> Result<Value, String> {
         {
             continue;
         }
-        if !crate::spawn_gate::status_is_liveish(&row.status) {
+        if !crate::territory::holder_row_is_live(row) {
             continue;
         }
         if own_session
