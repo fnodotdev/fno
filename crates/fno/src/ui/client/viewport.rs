@@ -42,11 +42,12 @@ impl View {
 }
 
 /// Send the viewport the server should tile for. Absolute, so repeats are
-/// idempotent and a missed one self-heals on the next.
+/// idempotent and a missed one self-heals on the next. `Some(message)` on
+/// a failed send.
 pub(super) async fn announce(
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
     dims: (u16, u16),
-) -> Result<(), String> {
+) -> Option<String> {
     write_msg(
         sock_w,
         &ClientMsg::Resize {
@@ -55,25 +56,19 @@ pub(super) async fn announce(
         },
     )
     .await
-    .map_err(|e| format!("resize send failed: {e}"))
+    .err()
+    .map(|e| format!("resize send failed: {e}"))
 }
 
-/// The winch arm: re-read the terminal, re-clamp the scroll window,
-/// announce, and answer the dims to remember as sent. A size read that
-/// fails keeps the previous viewport.
-pub(super) async fn winch_resize(
-    view: &mut View,
-    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
-    sent: (u16, u16),
-) -> Result<(u16, u16), String> {
+/// The winch arm's geometry: re-read the terminal, re-clamp the scroll
+/// window, answer the dims to announce. A failed size read keeps the view
+/// as it was.
+pub(super) fn winch_dims(view: &mut View) -> (u16, u16) {
     if let Ok((cols, rows)) = terminal::size() {
         view.term = (rows, cols);
         // A shorter terminal shrinks the scroll window; re-clamp so the
         // offset never scrolls past the last row.
         view.clamp_sideline_scroll();
-        let dims = view.content_dims();
-        announce(sock_w, dims).await?;
-        return Ok(dims);
     }
-    Ok(sent)
+    view.content_dims()
 }

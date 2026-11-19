@@ -6884,7 +6884,7 @@ async fn attach_and_run(
                             };
                             theme_ground::drain_pending_ground(&mut view, &mut compositor, &mut guard);
                             if let Some(dims) = view.drifted(sent_viewport) {
-                                if let Err(e) =
+                                if let Some(e) =
                                     viewport::announce(&mut sock_w, dims).await
                                 {
                                     break Err(e);
@@ -7203,10 +7203,14 @@ async fn attach_and_run(
                 }
             }
             _ = winch.recv() => {
-                match viewport::winch_resize(&mut view, &mut sock_w, sent_viewport).await {
-                    Ok(dims) => sent_viewport = dims,
-                    Err(e) => break Err(e),
+                let dims = viewport::winch_dims(&mut view);
+                if let Err(e) =
+                    write_msg(&mut sock_w, &ClientMsg::Resize { rows: dims.0, cols: dims.1 })
+                        .await
+                {
+                    break Err(format!("resize send failed: {e}"));
                 }
+                sent_viewport = dims;
                 if let Err(e) = compositor.draw(&view.compose()) {
                     break Err(format!("draw: {e}"));
                 }
