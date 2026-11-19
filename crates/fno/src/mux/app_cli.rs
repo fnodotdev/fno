@@ -455,7 +455,7 @@ fn seed_transcript(root: &Path) -> bool {
     let rows = concat!(
         r#"{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":"What does the shot door build?"},"sessionId":"00000000-0000-4000-8000-000000000001"}"#,
         "\n",
-        r#"{"parentUuid":null,"isSidechain":false,"type":"assistant","uuid":"a1","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"It builds a throwaway mux world, seeds it, opens a one-percent-alpha window at the normal level, and hands the buffer to the capture tool."}]},"sessionId":"00000000-0000-4000-8000-000000000001"}"#,
+        r#"{"parentUuid":null,"isSidechain":false,"type":"assistant","uuid":"a1","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"It builds a throwaway mux world, seeds it, opens a one-percent-alpha window above every normal window, and hands the buffer to the capture tool."}]},"sessionId":"00000000-0000-4000-8000-000000000001"}"#,
         "\n",
         r#"{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":"And the offscreen proof?"},"sessionId":"00000000-0000-4000-8000-000000000001"}"#,
         "\n",
