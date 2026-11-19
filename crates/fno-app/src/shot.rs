@@ -131,27 +131,7 @@ pub fn run(opts: ShotOptions) -> i32 {
             // frame present, then capture. The display link keeps
             // running (the window stays composited at visible occlusion),
             // so the refresh presents for real.
-            let deadline = std::time::Instant::now() + SETTLE_BUDGET;
-            let mut settled = false;
-            let mut last_events = None;
-            while std::time::Instant::now() < deadline {
-                let read = handle.update(cx, |root, _, _| {
-                    (root.board.read_yet(), root.chat.conv.events)
-                });
-                if let Ok((read_yet, events)) = read {
-                    // The board feeds land first; the chat stream keeps
-                    // folding events after that. Settled means the board
-                    // is read AND the chat's event count held still for
-                    // one poll, so the last assistant rows are in the
-                    // model the frame renders.
-                    if read_yet && last_events == Some(events) {
-                        settled = true;
-                        break;
-                    }
-                    last_events = Some(events);
-                }
-                cx.background_executor().timer(SETTLE_POLL).await;
-            }
+            let settled = wait_settled(cx, &handle).await;
             if !settled {
                 eprintln!("fno-app --shot: the board feeds never settled; capturing anyway");
             }
@@ -302,6 +282,37 @@ unsafe fn ns_string(s: &str) -> *const c_void {
     let s: *mut objc::runtime::Object =
         msg_send![class!(NSString), stringWithUTF8String: c.as_ptr()];
     s as *const c_void
+}
+
+/// Poll until the board has read every feed and the chat's event count
+/// held still for one poll, or the budget runs out. The capture wants
+/// the settled feeds in the model the frame renders. Returns whether it
+/// settled.
+async fn wait_settled(
+    cx: &mut gpui::AsyncApp,
+    handle: &gpui::WindowHandle<crate::window::Root>,
+) -> bool {
+    let deadline = std::time::Instant::now() + SETTLE_BUDGET;
+    let mut settled = false;
+    let mut last_events = None;
+    while std::time::Instant::now() < deadline {
+        let read = handle.update(cx, |root, _, _| {
+            (root.board.read_yet(), root.chat.conv.events)
+        });
+        if let Ok((read_yet, events)) = read {
+            // The board feeds land first; the chat stream keeps folding
+            // events after that. Settled means the board is read AND the
+            // chat's event count held still for one poll, so the last
+            // assistant rows are in the model the frame renders.
+            if read_yet && last_events == Some(events) {
+                settled = true;
+                break;
+            }
+            last_events = Some(events);
+        }
+        cx.background_executor().timer(SETTLE_POLL).await;
+    }
+    settled
 }
 
 /// The window-server truth about the shot window at a named moment:
