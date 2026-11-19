@@ -2269,29 +2269,30 @@ mod tests {
         // a deliberate stop stands over an alive word.
         fn a_rebooted_lead_measured_alive_still_holds_its_team() {
             let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-            let row = |name: &str, scope: &str, status: &str, word: &str, at: &str| {
-                let mut r = team_row(name, scope, 0, &format!("sess-{name}"));
-                r["status"] = json!(status);
-                r["liveness"] = json!(word);
-                r["liveness_measured_at"] = json!(at);
-                r
+            let row = |name: &str,
+                       scope: &str,
+                       status: &str,
+                       word: &str,
+                       at: &str,
+                       stop: serde_json::Value| {
+                json!({
+                    "name": name, "status": status, "role_scope": scope,
+                    "role_level": 0, "cwd": "/repo", "harness": "claude",
+                    "harness_session_id": format!("sess-{name}"),
+                    "created_at": "2026-09-23T20:00:00Z",
+                    "liveness": word, "liveness_measured_at": at, "stop": stop,
+                })
             };
-            let mut stopped = row("stopped", "fno-books", "exited", "alive", &now);
-            stopped["stop"] = json!({"by": "user", "at": now});
+            let stop = json!({"by": "user", "at": now});
+            let old = "2026-01-01T00:00:00Z";
             let tmp = tempfile::TempDir::new().unwrap();
             write_registry(
                 tmp.path(),
                 json!([
-                    stopped,
-                    row("atticus", "fno", "exited", "alive", &now),
-                    row("gone", "fnh", "live", "dead", &now),
-                    row(
-                        "stale",
-                        "fno-web",
-                        "exited",
-                        "alive",
-                        "2026-01-01T00:00:00Z"
-                    ),
+                    row("stopped", "fno-books", "exited", "alive", &now, stop),
+                    row("atticus", "fno", "exited", "alive", &now, json!(null)),
+                    row("gone", "fnh", "live", "dead", &now, json!(null)),
+                    row("stale", "fno-web", "exited", "alive", old, json!(null)),
                 ]),
             );
             apply_team_naming(
