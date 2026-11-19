@@ -65,7 +65,17 @@ pub(crate) fn hold_reason(home: &AgentsHome) -> Option<String> {
     let Some(boot) = boot_time() else {
         return None;
     };
-    if boot_age_past_ceiling(boot) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(u64::MAX);
+    hold_reason_at(home, boot, now)
+}
+
+/// The pure hold read, boot and now injected: a test pins both so the
+/// hold legs run no matter how long the runner host has been up.
+pub(crate) fn hold_reason_at(home: &AgentsHome, boot_epoch_s: u64, now_s: u64) -> Option<String> {
+    if boot_age_past_ceiling_at(boot_epoch_s, now_s) {
         return None;
     }
     let receipt = home.root().join(RECEIPT_FILE);
@@ -75,7 +85,7 @@ pub(crate) fn hold_reason(home: &AgentsHome) -> Option<String> {
     match parsed {
         None => Some("no receipt for this boot yet".to_string()),
         Some(v) => {
-            let matches_boot = ran_this_boot(v.get("boot").and_then(Value::as_u64), boot);
+            let matches_boot = ran_this_boot(v.get("boot").and_then(Value::as_u64), boot_epoch_s);
             let done = v.get("done").and_then(Value::as_bool).unwrap_or(false);
             match (matches_boot, done) {
                 (true, true) => None,
@@ -86,17 +96,8 @@ pub(crate) fn hold_reason(home: &AgentsHome) -> Option<String> {
     }
 }
 
-/// Seconds since the boot exceeded the hold ceiling: wall-clock bound.
-fn boot_age_past_ceiling(boot_epoch_s: u64) -> bool {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(u64::MAX);
-    boot_age_past_ceiling_at(boot_epoch_s, now)
-}
-
-/// The pure ceiling read, now injected so the test pins a young and an old
-/// boot without depending on the runner's own uptime.
+/// The pure ceiling read, boot and now injected so the test pins a young
+/// and an old boot without depending on the runner's own uptime.
 fn boot_age_past_ceiling_at(boot_epoch_s: u64, now_s: u64) -> bool {
     now_s.saturating_sub(boot_epoch_s) > REVIVAL_HOLD_CEILING_SECS
 }
@@ -1574,23 +1575,34 @@ mod tests {
         let home = AgentsHome::at(dir.path());
         std::fs::create_dir_all(home.root()).unwrap();
         let receipt = dir.path().join(RECEIPT_FILE);
-        assert!(hold_reason(&home).is_some(), "no receipt must hold");
-        let boot = boot_time().unwrap();
-        write_receipt(&receipt, boot - 86_400, &[], true);
+        // Boot and now are both injected: a runner whose host has been up
+        // past the ceiling must still exercise the hold, not bypass it.
+        let now = BOOT + 60;
         assert!(
-            hold_reason(&home).is_some(),
+            hold_reason_at(&home, BOOT, now).is_some(),
+            "no receipt must hold"
+        );
+        write_receipt(&receipt, BOOT - 86_400, &[], true);
+        assert!(
+            hold_reason_at(&home, BOOT, now).is_some(),
             "an earlier boot's receipt must hold"
         );
-        write_receipt(&receipt, boot, &[], false);
-        assert!(hold_reason(&home).is_some(), "unfinished must hold");
-        write_receipt(&receipt, boot, &[], true);
-        assert!(hold_reason(&home).is_none(), "finished must run");
-        // The ceiling is a pure bound on the boot's age, tested with now
-        // injected: a receipt older than the window reads as an earlier
-        // boot, so the wall-clock ceiling is what ends the hold.
-        let young = boot_age_past_ceiling_at(boot, boot + 60);
+        write_receipt(&receipt, BOOT, &[], false);
+        assert!(
+            hold_reason_at(&home, BOOT, now).is_some(),
+            "unfinished must hold"
+        );
+        write_receipt(&receipt, BOOT, &[], true);
+        assert!(
+            hold_reason_at(&home, BOOT, now).is_none(),
+            "finished must run"
+        );
+        // The ceiling is a pure bound on the boot's age: a receipt older
+        // than the window reads as an earlier boot, so the wall-clock
+        // ceiling is what ends the hold.
+        let young = boot_age_past_ceiling_at(BOOT, BOOT + 60);
         assert!(!young, "a fresh boot is inside the ceiling");
-        let old = boot_age_past_ceiling_at(boot - 1, boot + REVIVAL_HOLD_CEILING_SECS);
+        let old = boot_age_past_ceiling_at(BOOT - 1, BOOT + REVIVAL_HOLD_CEILING_SECS);
         assert!(old, "past the ceiling the hold does not bind");
     }
     /// The re-seat: a revived holder gets its vacated manifest restored and
