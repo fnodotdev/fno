@@ -398,8 +398,7 @@ fn capture_to_png(out: &std::path::Path, bg: u32) -> i32 {
 }
 
 /// Why a flatten fails: the file layer, the png codec, or a capture
-/// shape the flattener does not parse (R6: typed errors, no
-/// `Result<_, String>`).
+/// shape the flattener does not parse. Typed, per R6.
 #[derive(Debug)]
 enum FrameError {
     Io(std::io::Error),
