@@ -983,6 +983,10 @@ pub async fn run_command(args: &[String]) -> i32 {
         let json_flag = args.iter().any(|arg| arg == "--json" || arg == "-J");
         return crate::fleet_lanes::lanes_command(json_flag);
     }
+    // `fno doctor migrate ids` rides the census op too.
+    if args.iter().any(|arg| arg == "--ids") {
+        return crate::numbers::migrate::run(args);
+    }
     // The disk reading rides the census op too: size per class with what
     // is safe to delete (shrink law: no new client action).
     if args.iter().any(|arg| arg == "--disk") {

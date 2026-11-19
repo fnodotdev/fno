@@ -297,6 +297,30 @@ pub fn node_id_hex_width() -> usize {
     8
 }
 
+/// Whether the configured prefix mints sequential ids (`<prefix>-1`,
+/// `<prefix>-2`, ...) instead of hex. Fail-open like the width: an absent or
+/// unknown value reads as hex.
+pub fn node_id_sequential() -> bool {
+    #[derive(serde::Deserialize)]
+    struct Doc {
+        backlog: Option<Block>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Block {
+        id_mode: Option<String>,
+    }
+    for path in candidates() {
+        let mode = serde_json::from_value::<Doc>(read_flat(&path))
+            .ok()
+            .and_then(|doc| doc.backlog)
+            .and_then(|block| block.id_mode);
+        if let Some(mode) = mode {
+            return mode == "sequential";
+        }
+    }
+    false
+}
+
 /// Lexical `normpath`: drop `.` components and resolve `..` against the
 /// buffer, never touching the filesystem. The Python readers compared paths
 /// in this form (os.path.normpath), so a `dir/./x/..` entry still matches.
@@ -518,10 +542,9 @@ pub fn dispatch_commands_from_config() -> (Vec<String>, Vec<String>) {
 
 /// The `paths.*` leaves the Python resolver consumes, bare-keyed in the
 /// receipt. All default to null, like the model.
-const PATH_KEYS: [&str; 15] = [
+const PATH_KEYS: [&str; 13] = [
     "worktrees_base",
     "spaces_dir",
-    "retro_pending_dir",
     "postmortems_dir",
     "operator_lane",
     "observer_reports_dir",
@@ -530,7 +553,6 @@ const PATH_KEYS: [&str; 15] = [
     "inbox_path",
     "hook_logs_dir",
     "handoffs_dir",
-    "fleet_dir",
     "evals_history",
     "bus_dir",
     "briefs_dir",

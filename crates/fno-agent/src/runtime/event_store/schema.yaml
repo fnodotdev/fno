@@ -3009,6 +3009,16 @@ event_types:
         receipt: { type: string }
         error: { type: string }
 
+  - name: quiet_worker_quota_hold
+    description: "Quiet recovery armed or cleared a quota hold: the worker's tail reads a 429 with a future reset, so nudges pause until it lifts."
+    sources: [daemon]
+    data:
+      required: [session_id, node, held]
+      properties:
+        session_id: { type: string }
+        node: { type: string }
+        held: { type: boolean }
+        reset_at_iso: { type: string }
   - name: quiet_worker_recovery
     description: "An unfinished worker recovery attempt was accepted or refused."
     sources: [daemon]

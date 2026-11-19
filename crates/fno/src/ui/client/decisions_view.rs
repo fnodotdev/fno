@@ -240,9 +240,11 @@ pub(crate) fn paint_full(view: &View, cells: &mut [Cell], rows: usize, cols: usi
     }
     if let Some(e) = &b.entry {
         let action = if e.retract { "retract" } else { "overrule" };
+        // The entry chrome names the row by its number; the hash is an
+        // internal key and never reaches the pane.
+        let id_text = e.row.number.clone().unwrap_or_default();
         let line = format!(
-            "\x1b[1m{action} {}\x1b[0m {}: {}_  \x1b[2mEnter runs the decision door, Esc cancels\x1b[0m",
-            e.row.decision_id,
+            "\x1b[1m{action} {id_text}\x1b[0m {}: {}_  \x1b[2mEnter runs the decision door, Esc cancels\x1b[0m",
             e.label(),
             e.text
         );

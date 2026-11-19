@@ -229,6 +229,16 @@ fn parse_cursor(raw: &str) -> Result<[String; 6], String> {
 /// already carry. The journal holds only some decisions (66 of about 3000 on
 /// the machine this was measured on); the index holds every lane, so the
 /// feed reads both and keys on the decision id.
+/// The title's subject with a stored `question:<hash>` key read as its
+/// number: the subject is a stored key (the hash stays the key), the feed
+/// title is reader text.
+fn shown_subject(subject: &str) -> String {
+    match subject.strip_prefix("question:") {
+        Some(tail) => format!("question:{}", crate::numbers::display(tail)),
+        None => subject.to_string(),
+    }
+}
+
 fn decision_rows_from(index: &[Value], have: &std::collections::HashSet<String>) -> Vec<FeedRow> {
     index
         .iter()
@@ -241,7 +251,7 @@ fn decision_rows_from(index: &[Value], have: &std::collections::HashSet<String>)
             let title = if subject.is_empty() {
                 decision
             } else {
-                format!("{subject}: {decision}")
+                format!("{}: {decision}", shown_subject(&subject))
             };
             let (session_id, actor) = split_actor(s_field(r, "decided_by"));
             Some(FeedRow {
@@ -395,7 +405,7 @@ pub fn project(
                 let title = if subject.is_empty() {
                     decision
                 } else {
-                    format!("{subject}: {decision}")
+                    format!("{}: {decision}", shown_subject(&subject))
                 };
                 let qid = s_field(data, "question_id");
                 let node = qid
@@ -1943,51 +1953,89 @@ fn questions_leg(
     }
 }
 
-/// The lifecycle leg reads the store, never the file. An absent store is
-/// still a skipped store for the feed's purposes: the operator should know
-/// the lifecycle leg is absent, so its absence keeps its own note (AC3)
-/// where a present-but-empty store is just empty.
-fn graph_leg(home: &AgentsHome) -> (Vec<Value>, Option<String>) {
+/// The graph leg: every lifecycle row the window can name. With no window
+/// the whole store still materializes (the interactive full feed); with one,
+/// the candidate-id read (created, completed, or session-started since the
+/// edge) answers first and only those ids materialize - 400-id batches,
+/// projection and blockers unchanged.
+fn graph_leg(home: &AgentsHome, since_epoch: Option<u64>) -> (Vec<Value>, Option<String>) {
     let path = graph_path(home);
     if !crate::backlog::database_path(&path).exists() {
         return (Vec::new(), Some("graph store skipped (absent)".to_string()));
     }
-    match crate::graph_store::read_rows_where(
-        &path,
-        &crate::backlog::RowQuery {
-            fields: Some(
-                [
-                    "id",
-                    "title",
-                    "parent",
-                    "cwd",
-                    "sessions",
-                    "created_at",
-                    "completed_at",
-                    "status",
-                    "merge_status",
-                    "pr_number",
-                    "pr_url",
-                    "source_session_id",
-                    "source_harness",
-                    "source_model",
-                    "source_effort",
-                    "source_parent_session",
-                    "source_team",
-                ]
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
-            ),
-            with_blockers: true,
-            ..Default::default()
+    let rows = |ids: Option<Vec<String>>| {
+        crate::graph_store::read_rows_where(
+            &path,
+            &crate::backlog::RowQuery {
+                filter: crate::backlog::api::NodeFilter {
+                    id_in: ids,
+                    ..Default::default()
+                },
+                fields: Some(
+                    [
+                        "id",
+                        "title",
+                        "parent",
+                        "cwd",
+                        "sessions",
+                        "created_at",
+                        "completed_at",
+                        "status",
+                        "merge_status",
+                        "pr_number",
+                        "pr_url",
+                        "source_session_id",
+                        "source_harness",
+                        "source_model",
+                        "source_effort",
+                        "source_parent_session",
+                        "source_team",
+                    ]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+                ),
+                with_blockers: true,
+                ..Default::default()
+            },
+        )
+        .map_err(|error| crate::backlog::api::ApiError(error.to_string()))
+    };
+    match since_epoch {
+        None => match rows(None) {
+            Ok(list) => (list, None),
+            Err(e) => (Vec::new(), Some(format!("graph store skipped ({})", e.0))),
         },
-    )
-    .map_err(|error| crate::backlog::api::ApiError(error.to_string()))
-    {
-        Ok(list) => (list, None),
-        Err(e) => (Vec::new(), Some(format!("graph store skipped ({})", e.0))),
+        Some(since) => {
+            let edge = window_edge_19(since);
+            let skip = |e: String| {
+                (
+                    Vec::new() as Vec<Value>,
+                    Some(format!("graph store skipped ({e})")),
+                )
+            };
+            let Ok(ids) = crate::graph_store::read_feed_candidate_ids(&path, &edge) else {
+                return skip("candidate read failed".to_string());
+            };
+            let mut list: Vec<Value> = Vec::new();
+            for batch in ids.chunks(400) {
+                match rows(Some(batch.to_vec())) {
+                    Ok(part) => list.extend(part),
+                    Err(e) => return skip(e.0),
+                }
+            }
+            (list, None)
+        }
     }
+}
+
+/// The RFC3339 first-19 string (second precision, UTC) the candidate SQL
+/// compares against: shared first 19 characters across the store's stamp
+/// formats, exact at second granularity, a superset at sub-second.
+fn window_edge_19(since_epoch: u64) -> String {
+    chrono::DateTime::from_timestamp(since_epoch as i64, 0)
+        .map(|dt| dt.format("%Y-%m-%dT%H:%M:%S").to_string())
+        .unwrap_or_default()
 }
 
 /// The full window for a non-interactive reader: every leg on, no page, no
@@ -2003,7 +2051,7 @@ pub(crate) fn collect_window(
     let mut notes: Vec<String> = Vec::new();
     let (questions_raw, note) = questions_leg(home, since_epoch, until_epoch);
     notes.extend(note);
-    let (graph_entries, note) = graph_leg(home);
+    let (graph_entries, note) = graph_leg(home, since_epoch);
     notes.extend(note);
     let (removals, removal_notes) =
         crate::removals::read(home, since_epoch.map(|s| s as i64 * 1000));
@@ -2074,7 +2122,7 @@ pub async fn run_feed(rest: &[String], home: &AgentsHome) -> i32 {
     let (graph_entries, graph_note) = if leg_skipped(&args.pre, GRAPH_KINDS) {
         (Vec::new(), None)
     } else {
-        graph_leg(home)
+        graph_leg(home, args.since_epoch)
     };
     if let Some(note) = graph_note {
         eprintln!("fno-agent feed: {note}");

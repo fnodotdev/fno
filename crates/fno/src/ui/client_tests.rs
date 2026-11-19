@@ -3464,9 +3464,8 @@ fn row_menu_rows() {
 }
 
 #[tokio::test]
-async fn row_menu_bg_split_right_attaches_to_current_route() {
-    // AC1-HP: "Split Right" on a bg row sends AttachAgent placing it as a
-    // right split of the current tab - an existing command, zero proto bump.
+async fn row_menu_bg_split_right_opens_a_portal_seat() {
+    // AC1-HP: "Split Right" on a bg row sends AttachAgent placing a fresh portal seat dir-ward.
     let mut v = unified_rows_view();
     let idx = agent_row_at(&v, |a| a.name == "bg-claude");
     assert!(v.open_row_menu(idx, Anchor::Center));
@@ -3482,14 +3481,14 @@ async fn row_menu_bg_split_right_attaches_to_current_route() {
     let mut buf: Vec<u8> = Vec::new();
     row_menu_execute_selected(&mut v, &mut buf).await.unwrap();
     assert!(v.row_menu.is_none(), "executing closes the menu");
-    let mut cur = std::io::Cursor::new(buf);
-    match crate::proto::read_msg_sync::<_, ClientMsg>(&mut cur).unwrap() {
+    match crate::proto::read_msg_sync::<_, ClientMsg>(&mut std::io::Cursor::new(buf)).unwrap() {
         ClientMsg::Command(Command::AttachAgent { id, placement }) => {
             assert_eq!(id, "c19cd2c3");
             assert_eq!(placement.split, Some(Dir::Right));
+            assert!(placement.portal_new);
             assert!(matches!(
                 placement.target,
-                crate::proto::PaneTarget::CurrentRoute
+                crate::proto::PaneTarget::SquadId(_)
             ));
         }
         other => panic!("expected AttachAgent, got {other:?}"),

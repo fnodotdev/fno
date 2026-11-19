@@ -2953,7 +2953,7 @@ mod tests {
             }),
         ];
         let seen = std::cell::Cell::new(0u32);
-        let spawn = |_: &str, _: &str, _: &Path, _: u64, _: &str| {
+        let spawn = |_: &str, _: &str, _: &Path, _: u64, _: &crate::reader_route::ReaderRoute| {
             seen.set(seen.get() + 1);
             Ok((0, "VERDICT: pass".to_string(), String::new()))
         };

@@ -65,6 +65,20 @@ fn every_mux_view_has_a_text_hierarchy() {
 
     for tab in crate::client::settings_modal::ALL {
         v.settings_tab = tab;
+        // The Config tab's rows live in process-global state the settings
+        // tests reset under their gate. Hold the same gate and load a
+        // deterministic list, or the audit races to the one-line
+        // "reading config..." paint and reads one style.
+        // The gate comes first: a reset before it wipes the state a gated
+        // settings test is driving mid-run.
+        let _gate = if tab == crate::client::settings_modal::SettingsTab::Config {
+            let gate = crate::client::config_page::test_gate();
+            crate::client::config_page::reset();
+            crate::client::config_page::snapshot_seam(&mut v, "list");
+            Some(gate)
+        } else {
+            None
+        };
         let popup = v.build_settings_modal().popup;
         views.push((format!("settings {tab:?}"), popup_framed(&popup, v.term)));
     }

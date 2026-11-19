@@ -13,14 +13,15 @@
 /// list against that set, so a new command cannot land without a `--help` entry
 ///.
 pub const CLIENT_COMMAND_USAGE: &[&str] = &[
-    "spawn <name> [prompt] [-H <harness>] [--route <provider/model|lane>] [--as pane|thread|headless|cloud] [--machine <host>] [-s <squad>] [-x left|right|up|down] [--cwd <dir>|--fresh|--here] [--force] [--no-wait] [--] [everything after the prompt is harness argv, never parsed; a spawn-owned flag there refuses with the corrected line; unowned flags before the prompt pass in the --flag=value form only] | --argv -- <cmd...>",
+    "spawn <name> [prompt] [-H <harness>] [--route <provider/model|lane>] [--as pane|thread|headless|cloud] [--machine <host>] [-s <squad>] [-x left|right|up|down] [--cwd <dir>|--fresh|--here] [--force] [--no-wait] [--max <n>] [--] [everything after the prompt is harness argv, never parsed; a spawn-owned flag there refuses with the corrected line; unowned flags before the prompt pass in the --flag=value form only] | --argv -- <cmd...>",
     "ask <name> <message> [--cwd <dir>|--fresh|--here] [--answer allow_once|deny]",
     "list [--all] [--status <live|orphaned|unknown>] [--progress <advancing|awaiting-operator|parked|refused|unknown>]",
     "status",
     // --force is break-glass: it SIGKILLs a wedged lock holder (and would kill
     // a healthy one too). Plain restart is the graceful path; say so here
-    // because this line is what `restart --help` prints.
-    "restart [--force]  # --force: break-glass SIGKILL of the lockfile holder; plain restart is graceful",
+    // because this line is what `restart --help` prints. --if-down is the
+    // idempotent ensure: start only when nothing serves, never bounce a live one.
+    "restart [--force] [--if-down]  # --force: break-glass SIGKILL of the lockfile holder; plain restart is graceful; --if-down swaps only a measured-down daemon and exits 0 when one is serving",
     "reap [--json] [--dry-run] [--release <row>] [--keep <row>] [--unkeep <row>] [--kept]",
     "rename <name> --name <new-label>   -- renames the registry label and, for a teamed session, its team name (generation restarts at 1); old label stays an alias; harness session is untouched",
     "rename --from-journal [--apply]    -- plan registry label rebuilds from the agents journal; --apply renames",

@@ -126,12 +126,16 @@ fn settings_rows() {
 
 #[tokio::test]
 async fn settings_tabs_switch_by_tab_and_by_tap() {
+    // The cycle passes through Config, whose entry resets the tab's
+    // process-global state: hold the gate the Config tests hold.
+    let _gate = config_page::test_gate();
     let mut v = settings_on(SettingsTab::General);
     let mut keys = Keys::new();
     // The tab cycle walks the header order and wraps, never leaving the
-    // modal: general, theme, colors, experimental, remote hosts,
+    // modal: general, config, theme, colors, experimental, remote hosts,
     // mods, general.
     for want in [
+        SettingsTab::Config,
         SettingsTab::Theme,
         SettingsTab::Colors,
         SettingsTab::Experimental,
@@ -160,6 +164,7 @@ async fn settings_tabs_switch_by_tab_and_by_tap() {
         tabs,
         [
             "general",
+            "config",
             "theme",
             "colors",
             "experimental",
@@ -280,4 +285,121 @@ fn mods_tab_lists_switches_and_names_a_failed_read() {
     assert!(!actions
         .iter()
         .any(|a| matches!(a, AuxAction::Mod(Act::Switch(..)))));
+}
+
+/// The Config tab lists one row per schema leaf behind the filter box, and
+/// the query narrows it.
+#[tokio::test]
+async fn config_tab_lists_the_schema_and_filters() {
+    let _gate = config_page::test_gate();
+    let mut v = settings_on(SettingsTab::Config);
+    // The tab's state is process-global; open fresh, not on a prior test's
+    // query.
+    config_page::reset();
+    config_page::ensure_loaded().await;
+    let (rows, actions) = v.settings_rows_for(SettingsTab::Config);
+    assert!(actions.is_empty(), "Config rows run through the list");
+    let entries = rows
+        .iter()
+        .filter(|r| matches!(r, PopupRow::Entry { .. }))
+        .count();
+    // One row per schema leaf, except the eighteen `paths.*` leaves fold
+    // into one Paths group row.
+    assert_eq!(entries, 361);
+    // The fold: one Paths row carries the count and the override state in
+    // its dim column, and the path roots no longer crowd the top level.
+    assert!(
+        rows.iter().any(|r| matches!(
+            r,
+            PopupRow::Entry { label, hint, .. }
+                if label == "Paths" && hint.starts_with("18 · ")
+        )),
+        "the Paths group row paints its count and override summary"
+    );
+    let top: Vec<&str> = rows
+        .iter()
+        .filter_map(|r| match r {
+            PopupRow::Entry { label, .. } => Some(label.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        top.first(),
+        Some(&"State folder"),
+        "the state root leads the list"
+    );
+    assert_eq!(
+        top.last(),
+        Some(&"Paths"),
+        "the folded group closes the list"
+    );
+    assert!(
+        !rows.iter().any(
+            |r| matches!(r, PopupRow::Entry { label, .. } if label == "Run history and cost file")
+        ),
+        "the folded path roots stay inside the group"
+    );
+    let mut keys = Keys::new();
+    keys.send(&mut v, b"notify_on_done").await;
+    let (rows, _) = v.settings_rows_for(SettingsTab::Config);
+    let labels: Vec<&str> = rows
+        .iter()
+        .filter_map(|r| match r {
+            PopupRow::Entry { label, .. } => Some(label.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        labels,
+        ["Notify when an agent is done"],
+        "the label says what the setting is"
+    );
+    assert!(
+        !rows.iter().any(|r| matches!(r, PopupRow::Sub(_))),
+        "no dim key line paints under a row; the key rides the pinned line"
+    );
+}
+
+/// Enter on a choice-page row opens the page without writing; Esc closes it
+/// and the value stays.
+#[tokio::test]
+async fn config_tab_page_opens_and_esc_cancels() {
+    let _gate = config_page::test_gate();
+    let mut v = settings_on(SettingsTab::Config);
+    config_page::reset();
+    config_page::ensure_loaded().await;
+    let mut keys = Keys::new();
+    keys.send(&mut v, b"autonomy.mode").await;
+    // The one filtered row is a page row: Enter opens the page.
+    keys.send(&mut v, b"\r").await;
+    let page_rows = config_page::rows();
+    let glyphs: Vec<&str> = page_rows
+        .iter()
+        .filter_map(|r| match r {
+            PopupRow::Entry { glyph, .. } => Some(glyph.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(glyphs.len(), 3, "one row per option on the page");
+    assert_eq!(
+        glyphs.iter().filter(|g| **g == "✓").count(),
+        1,
+        "the check marks the current value; no number column"
+    );
+    // Esc closes the page; the list is back, value unchanged. A lone ESC on
+    // a real read is held; the live loop's quiet window releases it through
+    // the flush this call drives (handle_stdin short-circuits empty chunks,
+    // so no empty send can reach it).
+    keys.send(&mut v, b"\x1b").await;
+    crate::client::overlay_keys::flush_lone_esc(&mut v, &mut keys.scanner, &mut keys.buf)
+        .await
+        .unwrap();
+    let rows = config_page::rows();
+    assert!(
+        rows.iter().any(|r| matches!(
+            r,
+            PopupRow::Entry { label, .. } if label == "Autonomy mode"
+        )),
+        "back to the list: the filtered row paints again"
+    );
 }

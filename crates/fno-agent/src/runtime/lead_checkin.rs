@@ -649,7 +649,12 @@ fn r_capacity_pair(footprint_payload: &Value, gate_payload: &Value) -> Result<Va
                         .map(|value| value.to_string())
                         .unwrap_or_else(|| "-".into());
                     let quota = lane.quota.as_deref().unwrap_or("unmeasured");
-                    Some(format!("{provider} {live}/{cap} {quota}"))
+                    let blocked = if lane.quota_blocked.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" blocked: {}", lane.quota_blocked.join(", "))
+                    };
+                    Some(format!("{provider} {live}/{cap} {quota}{blocked}"))
                 })
                 .collect::<Vec<_>>();
             rows.sort();
