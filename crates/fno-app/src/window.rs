@@ -27,6 +27,7 @@ use super::goto;
 use super::grid::{Metrics, PaneView};
 use super::hq::{Poller, Reply};
 use super::keys::{self, Key, Modes, Shortcut};
+use super::launch::{self, Launch};
 use super::link::{Event, Layout, Link};
 use super::mouse::{self, Hit};
 use super::palette::Palette;
@@ -74,6 +75,9 @@ pub enum Action {
     SendChat,
     /// Reopen a chat stream that closed.
     Reconnect,
+    /// Open the launch composer, with a kind pre-picked when the opener
+    /// named one; `None` keeps the retained draft's kind.
+    OpenLaunch(Option<launch::Kind>),
 }
 
 /// The stable control id a click's [`Action`] ships to the usage events arm
@@ -92,6 +96,7 @@ fn click_id(action: &Action) -> &'static str {
         Action::Copy(_) => "copy",
         Action::SendChat => "send_chat",
         Action::Reconnect => "reconnect",
+        Action::OpenLaunch(_) => "open_launch",
     }
 }
 
@@ -160,6 +165,9 @@ pub struct Root {
     pub(super) goto: Option<goto::GoTo>,
     /// The find bar (cmd-f) over the focused pane or the chat.
     pub(super) find: Option<find::Find>,
+    /// The launch composer: retained state, open flag, id mint, and the
+    /// row the last launch named. Esc closes and keeps the draft.
+    pub(super) launch: launch::Panel,
     /// The mux session this window attached to; panes open on it.
     pub(super) session: String,
     pub(super) ext: mods::Page,
@@ -296,6 +304,7 @@ impl Root {
             sheet: false,
             goto: None,
             find: None,
+            launch: launch::Panel::default(),
             preedit: None,
             _reader: None,
             _chat: None,
@@ -472,12 +481,24 @@ impl Root {
                 },
                 fno::app_control::AppCommand::Focus { agent } => {
                     let now = fno::app_api::digest_overlay::now_secs();
+                    // The lookup reads the same rows the pane paints, so a
+                    // focus naming the launched row's task label resolves.
+                    let streamed = match self.main {
+                        MainView::Chat => self.chat.key.as_ref().map(|k| k.session_id.as_str()),
+                        _ => None,
+                    };
+                    let launched = self
+                        .launch
+                        .show
+                        .as_deref()
+                        .zip(self.launch.show_task.as_deref());
                     let hit = super::left_pane::rows(
                         &self.layout,
                         &self.board,
                         now,
                         self.agents_open,
-                        None,
+                        streamed,
+                        launched,
                     )
                     .into_iter()
                     .find_map(|r| match r {
@@ -614,7 +635,74 @@ impl Root {
             }
             Action::SendChat => self.submit_chat(cx),
             Action::Reconnect => self.open_chat(cx),
+            Action::OpenLaunch(kind) => self.open_launch(kind, cx),
         }
+        cx.notify();
+    }
+
+    /// Open the composer over whatever view shows. A fresh open re-reads
+    /// the harness catalog; a reopened one keeps its picks and draft.
+    pub(super) fn open_launch(&mut self, kind: Option<launch::Kind>, cx: &mut Context<Self>) {
+        if !self.launch.open {
+            self.launch.state.refresh_harnesses();
+        }
+        self.launch.state.open(kind);
+        self.launch.open = true;
+        cx.notify();
+    }
+
+    /// Close the composer; the draft and picks survive on the root.
+    pub(super) fn close_launch(&mut self, cx: &mut Context<Self>) {
+        self.launch.open = false;
+        cx.notify();
+    }
+
+    /// The composer's shell escape: close the panel, open a terminal pane,
+    /// and send the command into it. The pane primitives already exist
+    /// (NewTab, then Input); the ordered link lands the bytes after the tab
+    /// switch, so the command runs in the new pane.
+    fn run_shell_from_composer(&mut self, cmd: String, cx: &mut Context<Self>) {
+        self.close_launch(cx);
+        self.send(ClientMsg::Command(Command::NewTab));
+        let mut bytes = cmd.into_bytes();
+        bytes.push(b'\n');
+        self.send(ClientMsg::Input(bytes));
+    }
+
+    /// Submit one launch attempt: the shell escape first (a leading `!`, or
+    /// the shell kind, runs the command in a new terminal pane instead of a
+    /// launch), then the panel's in-place refusals, then the door. The
+    /// draft stays until the verdict lands.
+    fn submit_launch(&mut self, cx: &mut Context<Self>) {
+        if let Some(cmd) = launch::shell_command(&self.launch.state.draft) {
+            self.run_shell_from_composer(cmd, cx);
+            return;
+        }
+        if self.launch.state.kind == launch::Kind::Shell {
+            // The shell kind without the bang still runs as a shell command.
+            let text = self.launch.state.draft.text().trim().to_string();
+            if !text.is_empty() {
+                self.run_shell_from_composer(text, cx);
+                return;
+            }
+        }
+        if let Some(link) = &self.link {
+            if let Some(why) = self.launch.state.block() {
+                self.launch.state.phase = launch::Phase::Refused(why);
+                cx.notify();
+                return;
+            }
+            let req = self.launch.state.request(self.launch.next_id);
+            self.launch.next_id += 1;
+            self.launch.state.phase = launch::Phase::Starting;
+            if let Err(e) = link.send(&ClientMsg::AgentLaunch(req)) {
+                self.closed = Some(e.to_string());
+                self.link = None;
+            }
+            cx.notify();
+            return;
+        }
+        self.launch.state.phase = launch::Phase::Refused("not attached to a mux session".into());
         cx.notify();
     }
 
@@ -863,6 +951,51 @@ impl Root {
             .clone()
     }
 
+    /// A launch's new row steers twice, once per roster fact: the named
+    /// row's click action opens a thread through its portal like a click,
+    /// and the named row's session id, once it exists, moves the shown
+    /// conversation onto the launched agent. The pin moves too, or
+    /// sync_chat would hand the view straight back to the startup pin on
+    /// the next layout.
+    fn steer_launch(&mut self, cx: &mut Context<Self>) {
+        if let Some(name) = self.launch.focus.clone() {
+            let row = self.layout.agents.iter().find(|a| a.name == name);
+            if let Some(a) = row {
+                self.launch.focus = None;
+                let action = match fno::app_api::client::agent_group::click_command(a) {
+                    fno::app_api::client::agent_group::RowClick::Send(cmd) => {
+                        Some(Action::Send(cmd))
+                    }
+                    fno::app_api::client::agent_group::RowClick::Notice(text) => {
+                        Some(Action::Notice(text))
+                    }
+                };
+                if let Some(action) = action {
+                    self.act(action, cx);
+                }
+            }
+        }
+        if let Some(name) = self.launch.show.clone() {
+            if let Some(key) = launch::stream_key(&self.layout.agents, &name) {
+                self.launch.show = None;
+                self.pinned = Some(key.clone());
+                self.chat.switch(Some(key));
+                self.open_chat(cx);
+            }
+        }
+    }
+
+    /// True when a server notice is the launch's own portal receipt: the
+    /// list already marks and names that row, so the toast would only sit
+    /// over it.
+    fn own_launch_receipt(&self, text: &str) -> bool {
+        self.launch
+            .show
+            .as_ref()
+            .or(self.launch.focus.as_ref())
+            .is_some_and(|n| text.contains(n) && text.starts_with("thread pane "))
+    }
+
     fn apply(&mut self, batch: Vec<Event>, cx: &mut Context<Self>) {
         // Only the newest frame per pane is drawn.
         let mut newest: HashMap<u64, Frame> = HashMap::new();
@@ -874,6 +1007,8 @@ impl Root {
                 }
                 Event::Layout(l) => {
                     self.layout = l;
+                    self.launch.state.refresh_projects(&self.layout);
+                    self.steer_launch(cx);
                     self.on_layout_alerts(cx);
                     // A Finder launch has cwd `/`: the project's `mux.theme`
                     // pin is read from the active session's own directory.
@@ -890,16 +1025,12 @@ impl Root {
                     relayout = true;
                 }
                 Event::Modes(bytes) => self.modes.apply(&bytes),
-                Event::Notice(text) => self.say(text, cx),
-                Event::Desktop { title, body } => {
-                    let known = self.layout.agents.iter().any(|a| a.name == title);
-                    if let Some(sig) =
-                        self.alerts
-                            .on_desktop(&title, &body, known, self.window_active)
-                    {
-                        self.consume_alert(sig, cx);
+                Event::Notice(text) => {
+                    if !self.own_launch_receipt(&text) {
+                        self.say(text, cx);
                     }
                 }
+                Event::Desktop { title, body } => self.handle_desktop(&title, &body, cx),
                 // A plain click selects nothing; it never wipes the clipboard.
                 Event::Copy(text) if text.is_empty() => {}
                 Event::Copy(text) => {
@@ -936,6 +1067,7 @@ impl Root {
                     }
                     relayout = true;
                 }
+                Event::Launch(u) => self.apply_launch_update(u, cx),
             }
         }
         for (id, frame) in newest {
@@ -955,6 +1087,38 @@ impl Root {
             self.ext.layout(&live);
             self.sync_panes(cx);
             self.sync_chat(cx);
+            cx.notify();
+        }
+    }
+
+    /// One desktop event: a known agent's tap routes through the alert
+    /// gate, and the gate picks the toast or notification form.
+    fn handle_desktop(&mut self, title: &str, body: &str, cx: &mut Context<Self>) {
+        let known = self.layout.agents.iter().any(|a| a.name == title);
+        if let Some(sig) = self
+            .alerts
+            .on_desktop(title, body, known, self.window_active)
+        {
+            self.consume_alert(sig, cx);
+        }
+    }
+
+    /// One launch update: the panel applies it, and a `Launched` closes the
+    /// panel, freshens its state for the next open, and marks the new row
+    /// to show the task as its label.
+    fn apply_launch_update(&mut self, u: fno::proto::AgentLaunchUpdate, cx: &mut Context<Self>) {
+        if self.launch.state.apply(&u) && self.launch.open {
+            if let fno::proto::LaunchState::Launched { name, .. } = &u.state {
+                let name = name.clone();
+                let task = self.launch.state.draft.text().trim().to_string();
+                self.launch.open = false;
+                self.launch.state = Launch::fresh();
+                self.launch.state.refresh_projects(&self.layout);
+                self.launch.focus = Some(name.clone());
+                self.launch.show = Some(name.clone());
+                self.launch.show_task = (!task.is_empty()).then_some(task);
+                self.say(format!("started {name}"), cx);
+            }
             cx.notify();
         }
     }
@@ -1241,6 +1405,49 @@ impl Root {
         self.chat.field.dragging.set(false);
     }
 
+    /// The launch composer's task box: the same caret placement the chat
+    /// composer runs, against the panel's draft.
+    pub(super) fn launch_down(
+        &mut self,
+        ev: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        window.focus(&self.focus);
+        let Some(at) = launch::caret_at(self, ev.position, window) else {
+            return;
+        };
+        match ev.click_count {
+            1 => self.launch.state.draft.move_to(at, ev.modifiers.shift),
+            2 => self.launch.state.draft.select_word_at(at),
+            _ => self.launch.state.draft.select_all(),
+        }
+        self.launch.state.field.dragging.set(true);
+        self.launch.state.field.goal_x.set(None);
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    pub(super) fn launch_drag(
+        &mut self,
+        ev: &MouseMoveEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.launch.state.field.dragging.get() || ev.pressed_button != Some(MouseButton::Left) {
+            return;
+        }
+        if let Some(at) = launch::caret_at(self, ev.position, window) {
+            self.launch.state.draft.move_to(at, true);
+            self.launch.state.field.reveal.set(true);
+            cx.notify();
+        }
+    }
+
+    pub(super) fn launch_up(&mut self, _: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
+        self.launch.state.field.dragging.set(false);
+    }
+
     /// A key in chat mode: an open sheet takes Escape, otherwise it edits the draft.
     fn chat_key(&mut self, key: &Key, window: &Window, cx: &mut Context<Self>) {
         // An open sheet takes only Escape; an IME draft takes the keys.
@@ -1353,6 +1560,25 @@ impl Root {
         }
     }
 
+    /// The open composer takes the key: true when it died in the panel.
+    /// Text keys fall through unstopped, so the input handler still feeds
+    /// the panel's draft.
+    fn launch_key(&mut self, key: &Key, cx: &mut Context<Self>) -> bool {
+        if !self.launch.open {
+            return false;
+        }
+        match self.launch.state.key(key) {
+            launch::KeyOut::Close => self.close_launch(cx),
+            launch::KeyOut::Submit => self.submit_launch(cx),
+            launch::KeyOut::Taken => {
+                cx.notify();
+                cx.stop_propagation();
+            }
+            launch::KeyOut::Ignored => return false,
+        }
+        true
+    }
+
     /// True when the open find bar consumed the key: an edit, a step, close.
     fn find_takes(&mut self, key: &Key, cx: &mut Context<Self>) -> bool {
         if self.find.is_none() {
@@ -1401,40 +1627,14 @@ impl Root {
                 return;
             }
         }
+        // The composer is modal: its keys never reach the pane behind it,
+        // and its text keys still compose through the input handler.
+        if self.launch_key(&key, cx) {
+            return;
+        }
         if let Some(action) = keys::shortcut(&key) {
             cx.stop_propagation();
-            match action {
-                Shortcut::Command(Command::CopySelection)
-                    if self.main == MainView::Chat && self.chat.draft.has_selection() =>
-                {
-                    let text = self.chat.draft.selected_text().to_string();
-                    cx.write_to_clipboard(ClipboardItem::new_string(text));
-                }
-                Shortcut::Command(c) => self.send(ClientMsg::Command(c)),
-                Shortcut::Cut => {
-                    if self.main == MainView::Chat && self.chat.draft.has_selection() {
-                        let text = self.chat.draft.selected_text().to_string();
-                        cx.write_to_clipboard(ClipboardItem::new_string(text));
-                        self.chat.draft.replace_selection("");
-                        self.chat_moved(cx);
-                    }
-                }
-                Shortcut::SelectAll => {
-                    if self.main == MainView::Chat {
-                        self.chat.draft.select_all();
-                        self.chat_moved(cx);
-                    }
-                }
-                Shortcut::Paste => self.paste(cx),
-                Shortcut::Quit => {
-                    self.send(ClientMsg::Detach);
-                    record_ui_state(self, cx);
-                    persist_window_state(window, cx);
-                    cx.quit();
-                }
-                Shortcut::Pick(n) => self.pick(n, cx),
-                Shortcut::Find => self.find_open(cx),
-            }
+            self.cmd_action(action, window, cx);
             return;
         }
         // The find bar takes the keys it edits before chat and pane routing;
@@ -1461,6 +1661,55 @@ impl Root {
                 cx.notify();
             }
             self.send(ClientMsg::Input(bytes));
+        }
+    }
+
+    /// One cmd shortcut lands.
+    fn cmd_action(&mut self, action: Shortcut, window: &mut Window, cx: &mut Context<Self>) {
+        match action {
+            Shortcut::Command(Command::CopySelection)
+                if self.main == MainView::Chat && self.chat.draft.has_selection() =>
+            {
+                let text = self.chat.draft.selected_text().to_string();
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+            }
+            Shortcut::Command(c) => self.send(ClientMsg::Command(c)),
+            Shortcut::Cut => {
+                if self.main == MainView::Chat && self.chat.draft.has_selection() {
+                    let text = self.chat.draft.selected_text().to_string();
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                    self.chat.draft.replace_selection("");
+                    self.chat_moved(cx);
+                }
+            }
+            Shortcut::SelectAll => {
+                if self.main == MainView::Chat {
+                    self.chat.draft.select_all();
+                    self.chat_moved(cx);
+                }
+            }
+            Shortcut::Paste => self.paste(cx),
+            Shortcut::Quit => {
+                self.send(ClientMsg::Detach);
+                record_ui_state(self, cx);
+                persist_window_state(window, cx);
+                cx.quit();
+            }
+            // While the composer is open, cmd-1/2/3 switch its kind
+            // (agent, lead, shell) instead of picking a tab or a row.
+            Shortcut::Pick(n) => {
+                if self.launch.open {
+                    if let Some(kind) = launch::Kind::from_index(n) {
+                        self.launch.state.set_kind(kind);
+                        self.launch.state.row = launch::row_for_kind(kind);
+                        cx.notify();
+                        return;
+                    }
+                }
+                self.pick(n, cx);
+            }
+            Shortcut::NewAgent => self.act(Action::OpenLaunch(None), cx),
+            Shortcut::Find => self.find_open(cx),
         }
     }
 
@@ -1791,6 +2040,12 @@ impl EntityInputHandler for Root {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<String> {
+        if self.launch.open {
+            let d = &self.launch.state.draft;
+            let r = d.range_from_utf16(&range);
+            *adjusted = Some(d.range_to_utf16(&r));
+            return Some(d.text()[r].to_string());
+        }
         if self.main == MainView::Chat {
             let d = &self.chat.draft;
             let r = d.range_from_utf16(&range);
@@ -1808,6 +2063,14 @@ impl EntityInputHandler for Root {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
+        if self.launch.open {
+            let d = &self.launch.state.draft;
+            let range = d.range_to_utf16(&d.selection());
+            return Some(UTF16Selection {
+                range,
+                reversed: d.caret() < d.selection().end,
+            });
+        }
         if self.main == MainView::Chat {
             let d = &self.chat.draft;
             let range = d.range_to_utf16(&d.selection());
@@ -1828,6 +2091,10 @@ impl EntityInputHandler for Root {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Range<usize>> {
+        if self.launch.open {
+            let d = &self.launch.state.draft;
+            return d.marked().map(|m| d.range_to_utf16(&m));
+        }
         if self.main == MainView::Chat {
             let d = &self.chat.draft;
             return d.marked().map(|m| d.range_to_utf16(&m));
@@ -1836,6 +2103,11 @@ impl EntityInputHandler for Root {
     }
 
     fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.launch.open {
+            self.launch.state.draft.unmark();
+            cx.notify();
+            return;
+        }
         if self.main == MainView::Chat {
             self.chat.draft.unmark();
             cx.notify();
@@ -1853,6 +2125,14 @@ impl EntityInputHandler for Root {
     ) {
         // The palette's query owns the keyboard while it shows.
         if self.goto.is_some() {
+            return;
+        }
+        if self.launch.open {
+            self.launch
+                .state
+                .draft
+                .replace_utf16(range, text, false, None);
+            cx.notify();
             return;
         }
         if self.main == MainView::Chat {
@@ -1884,6 +2164,14 @@ impl EntityInputHandler for Root {
         if self.goto.is_some() {
             return;
         }
+        if self.launch.open {
+            self.launch
+                .state
+                .draft
+                .replace_utf16(range, new_text, true, new_selected_range);
+            cx.notify();
+            return;
+        }
         if self.main == MainView::Chat {
             if self.chat.sheet.is_none() && self.chat.closed.is_none() {
                 self.chat
@@ -1903,6 +2191,20 @@ impl EntityInputHandler for Root {
         window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
+        if self.launch.open {
+            let from = self.launch.state.draft.offset_from_utf16(range_utf16.start);
+            let found = launch::with_layout(self, window, |l| {
+                let at = l.position_for_index(from);
+                Bounds::new(l.origin + at, size(px(1.0), l.line_height()))
+            });
+            // Before the first paint, open at the task box's last line.
+            return found.or_else(|| {
+                let at = self.launch.state.composer.get();
+                let line = self.metrics.cell.height;
+                let origin = point(at.origin.x, at.origin.y + at.size.height - line);
+                Some(Bounds::new(origin, size(px(1.0), line)))
+            });
+        }
         if self.main == MainView::Chat {
             let from = self.chat.draft.offset_from_utf16(range_utf16.start);
             let found = self.with_composer_layout(window, |l| {
@@ -1926,6 +2228,10 @@ impl EntityInputHandler for Root {
         window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
+        if self.launch.open {
+            let offset = launch::caret_at(self, at, window)?;
+            return Some(self.launch.state.draft.offset_to_utf16(offset));
+        }
         if self.main == MainView::Chat {
             let offset = self.composer_point(at, window)?;
             return Some(self.chat.draft.offset_to_utf16(offset));
@@ -2116,6 +2422,9 @@ impl Render for Root {
                     .child(main)
                     .children(toast),
             )
+            .when(self.launch.open, |d| {
+                d.child(launch::render(self, window, cx))
+            })
             .when(self.sheet, |d| d.child(sheet::render(self, cx)))
             .when(self.goto.is_some(), |d| d.child(goto::render(self, cx)))
     }

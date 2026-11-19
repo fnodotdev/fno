@@ -12,6 +12,7 @@ mod goto;
 mod grid;
 mod hq;
 pub mod keys;
+pub(crate) mod launch;
 mod left_pane;
 pub mod link;
 mod mods;
