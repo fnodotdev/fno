@@ -1477,7 +1477,10 @@ pub(crate) fn close_persona_pane(view: &mut View) {
         let _ = crate::mux_cli::control_roundtrip(
             &sock,
             &session,
-            crate::proto::ControlCommand::PaneKill { pane },
+            crate::proto::ControlCommand::PaneKill {
+                pane,
+                hand_off_to: None,
+            },
         );
     }
 }
