@@ -1227,10 +1227,13 @@ pub fn run_escalate(args: &[String]) -> i32 {
         .filter(|_| answer.mail_relay)
         .filter(|holder| mail_presiding(holder, &ids, &key, &reason, &summary));
     let note = mailed.map_or(String::new(), |h| format!(", mailed presiding lead {h}"));
-    eprintln!("lead: {outcome}{note} {qid}");
+    // The receipt names the question by its sequential number; the hash
+    // stays an input form.
+    let shown = crate::numbers::display(&qid);
+    eprintln!("lead: {outcome}{note} {shown}");
     match mailed {
         Some(holder) => println!("lead:{holder}"),
-        None => println!("operator:{qid}"),
+        None => println!("operator:{shown}"),
     }
     0
 }

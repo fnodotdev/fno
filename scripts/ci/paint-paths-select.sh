@@ -60,6 +60,7 @@ if [[ -d "$root/crates/fno/src/ui/client" ]]; then
     "crates/fno/src/serve/web_page.html"
     "crates/fno/src/serve/web_trace.html"
     "crates/fno/src/ui/wordmark.rs"
+    "crates/fno-app/src/**"
     "/README.md"
     "docs/images/**"
   )

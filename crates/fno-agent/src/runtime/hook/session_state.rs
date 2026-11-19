@@ -580,7 +580,14 @@ pub(crate) fn report_waiting_on_user(session_id: &str, qids: &[String]) {
     };
     let decision = Decision {
         state: "blocked",
-        reason: format!("{WAITING_ON_USER}: {}", qids.join(", ")),
+        // The board names each question by its sequential number.
+        reason: format!(
+            "{WAITING_ON_USER}: {}",
+            qids.iter()
+                .map(|qid| crate::numbers::display(qid))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
         posture: None,
     };
     let seq = crate::MonotonicTimestamp::now().as_nanos();

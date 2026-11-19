@@ -3,8 +3,8 @@
 
 use serde_json::{json, Value};
 
-use super::command_call;
 use super::state_dir;
+use super::{command_call, resolve_binary};
 use super::{config_candidates, resolve_source, Probes};
 
 const BLOCK_VERSION: i64 = 1;
@@ -90,6 +90,7 @@ pub(crate) fn evals_summary() -> Value {
             "stale_days": evals_stale_days(),
         }),
         30,
+        resolve_binary().as_deref(),
     )
     .unwrap_or(Value::Null)
 }

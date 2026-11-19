@@ -1397,13 +1397,14 @@ final-head code review. {FLOOR_REMEDY}"
     None
 }
 
-/// The mux client's render surface, the paint footnote's own PRs change, plus
-/// the README and `docs/images`, the public front page a reader sees first. The
-/// default applies only where this tree exists, so another project's PRs
-/// keep the gate off and spend no changed-files read.
+/// The mux client's render surface, the desktop app's, the paint footnote's
+/// own PRs change, plus the README and `docs/images`, the public front page a
+/// reader sees first. The default applies only where this tree exists, so
+/// another project's PRs keep the gate off and spend no changed-files read.
 const BUILTIN_VISUAL_PAINT_PATHS: &[&str] = &[
     "crates/fno/src/ui/client/**",
     "crates/fno/src/ui/client.rs",
+    "crates/fno/src/ui/band_remap.rs",
     "crates/fno/src/ui/chrome.rs",
     "crates/fno/src/ui/connections_view.rs",
     "crates/fno/src/ui/feed_overlay.rs",
@@ -1424,6 +1425,7 @@ const BUILTIN_VISUAL_PAINT_PATHS: &[&str] = &[
     "crates/fno/src/serve/web_page.html",
     "crates/fno/src/serve/web_trace.html",
     "crates/fno/src/ui/wordmark.rs",
+    "crates/fno-app/src/**",
     "/README.md",
     "docs/images/**",
 ];
@@ -2921,5 +2923,26 @@ mod tests {
                 "{pattern} names nothing in the tree: a rename left a dead paint entry"
             );
         }
+    }
+
+    #[test]
+    fn the_builtin_paint_list_holds_a_desktop_app_diff() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let paths = super::visual_paint_paths(&repo);
+        for painted in [
+            "crates/fno-app/src/keys.rs",
+            "crates/fno-app/src/mouse.rs",
+            "crates/fno-app/src/window.rs",
+            "crates/fno/src/ui/band_remap.rs",
+        ] {
+            assert!(
+                crate::merge_gates::path_matches_paint(painted, &paths),
+                "{painted} reads outside the paint surface: an app UI PR would merge with no look evidence"
+            );
+        }
+        assert!(!crate::merge_gates::path_matches_paint(
+            "crates/fno-app/Cargo.toml",
+            &paths
+        ));
     }
 }

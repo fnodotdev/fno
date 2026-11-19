@@ -200,6 +200,23 @@ pub fn classify(args: &[OsString]) -> Option<Claim> {
             }
             Some(Claim::AgentsExec("fno doctor reclaim", argv))
         }
+        // `migrate ids [--check|--dry-run] [--json]`: the q-/d- hex keys to
+        // their numbers, riding `census --ids`.
+        Some("migrate") => {
+            if args.get(2).and_then(|a| a.to_str()) != Some("ids") {
+                return None;
+            }
+            let mut argv = vec![OsString::from("census"), OsString::from("--ids")];
+            for a in args.get(3..).unwrap_or(&[]) {
+                match a.to_str() {
+                    Some("--check") | Some("--dry-run") | Some("--json") | Some("-J") => {
+                        argv.push(a.clone())
+                    }
+                    _ => return None,
+                }
+            }
+            Some(Claim::AgentsExec("fno doctor migrate ids", argv))
+        }
         // `scratch sweep|report ...`: identical flag spellings on the Rust
         // side; the subcommand word routes and everything else passes
         // through byte-verbatim.
@@ -1088,6 +1105,25 @@ mod tests {
     /// test_doctor_timeout_kills_gate_descendants fixture): a timed-out
     /// gate's descendant dies with the process group, not orphaned past the
     /// leader.
+    /// command_call must close the child's stdin after the write: every
+    /// fno-agent door reads stdin to EOF, so a held write end deadlocks the
+    /// pair and the round-trip burns its full deadline (the fresh-install
+    /// doctor stall). cat answers the moment EOF arrives. The pure core
+    /// takes the binary, so no env mutation races the binary's other tests.
+    #[test]
+    fn command_call_closes_stdin_so_eof_children_answer() {
+        let started = std::time::Instant::now();
+        let payload = serde_json::json!({"probe": "eof"});
+        let answer = report::command_call(&[], payload.clone(), 10, Some("/bin/cat"))
+            .expect("cat echoes the payload once stdin closes");
+        assert_eq!(answer, payload);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "command_call returned in {:?}; the child starved on stdin EOF",
+            started.elapsed()
+        );
+    }
+
     #[test]
     fn bounded_command_kills_gate_descendants() {
         let tmp = tempfile::TempDir::new().expect("tmp dir");

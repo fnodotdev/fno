@@ -14,7 +14,8 @@ use super::settings;
 /// first-class. The graph, not this shape, is the identity check.
 pub fn is_wellformed_node_id(s: &str) -> bool {
     if let Some((prefix, suffix)) = s.split_once('-') {
-        return valid_prefix(prefix) && valid_hex_suffix(suffix);
+        return valid_prefix(prefix)
+            && (valid_hex_suffix(suffix) || is_sequential_tail(prefix, suffix));
     }
     // No dash: try every prefix/hex split. get() (not split_at) keeps a
     // multibyte input a refusal instead of a panic on a non-char boundary.
@@ -43,6 +44,24 @@ fn valid_prefix(prefix: &str) -> bool {
 /// configured prefix must satisfy.
 pub(crate) fn valid_prefix_word(word: &str) -> bool {
     valid_prefix(word)
+}
+
+/// A `backlog.id_mode = "sequential"` id (`t-12`): the configured prefix and
+/// a number. Gated on the mode, so `wave-1` never reads as an id in a hex
+/// project. Scanners call this per token, so the config is read once per
+/// process.
+fn is_sequential_tail(prefix: &str, tail: &str) -> bool {
+    static SEQUENTIAL_PREFIX: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    (1..=7).contains(&tail.len())
+        && !tail.starts_with('0')
+        && tail.bytes().all(|b| b.is_ascii_digit())
+        && SEQUENTIAL_PREFIX
+            .get_or_init(|| {
+                settings::node_id_sequential()
+                    .then(|| settings::node_id_prefix().trim_end_matches('-').to_string())
+            })
+            .as_deref()
+            == Some(prefix)
 }
 
 fn valid_hex_suffix(suffix: &str) -> bool {
@@ -371,7 +390,8 @@ pub fn names_node_token(s: &str) -> bool {
 /// reaches this line; the number tier resolves it first. Empty for any
 /// other token, so the caller's plain line stands.
 pub(crate) fn display_miss_suffix(token: &str) -> String {
-    if crate::numbers::reads_as_node_number(token) {
+    // A sequential id is its own number: no other form to name.
+    if crate::numbers::reads_as_node_number(token) && !settings::node_id_sequential() {
         format!(
             "; '{token}' reads as a display number (prefix-digits): nothing resolves it here. \
              Writes need the node's id form (prefix-hex)."

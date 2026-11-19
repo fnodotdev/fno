@@ -8,7 +8,6 @@ config:
     cargo_targets_base: null
     chats: null
     evals_history: null
-    fleet_dir: null
     handoffs_dir: null
     hook_logs_dir: null
     inbox_path: null
@@ -17,7 +16,6 @@ config:
     observer_reports_dir: null
     operator_lane: null
     postmortems_dir: null
-    retro_pending_dir: null
     spaces_dir: null
     worktrees_base: null
   plans_dir: .fno/plans/

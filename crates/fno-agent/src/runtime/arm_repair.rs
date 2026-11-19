@@ -69,6 +69,11 @@ fn entry(
             None,
             Some(AUTO),
         ),
+        "sweep_failures" => (
+            "the reconcile sweep ran and its own evidence reads failed; the detail names the first failing row with its kind, and one full `--json` run prints every row with its remedy",
+            Some("fno backlog reconcile --json"),
+            Some(OPERATOR),
+        ),
         "budget_spent" => (
             "the pass ran out of its slice before it covered every unit it enumerated; the detail names how many of N it reached",
             Some(WATCH_STATUS),
@@ -386,6 +391,10 @@ fn classify(row: &mut ArmStatus, facts: &RepairFacts) {
         ("grant_queue_timeout".to_string(), None)
     } else if skip == "overloaded" {
         ("overloaded".to_string(), None)
+    } else if skip == "failures" {
+        // merge_close's only failure token: the sweep ran and its own reads
+        // failed. The detail names the first row; the command reads all of them.
+        ("sweep_failures".to_string(), None)
     } else if detail.contains("TimeoutExpired") {
         ("timeout".to_string(), None)
     } else if detail.contains("printed no path") {
@@ -731,6 +740,24 @@ mod tests {
         );
         assert!(!r.line.contains("heal=auto"), "{}", r.line);
         assert!(r.heal.is_none(), "{}", r.line);
+    }
+
+    #[test]
+    fn merge_close_failures_classify_as_sweep_failures() {
+        let mut r = row("merge_close", SCHED_LAUNCHD);
+        r.failing = true;
+        r.skip_reason = Some("failures".to_string());
+        r.detail = Some(
+            "closed=0 promise_unmet=0 failures=0 evidence_failures=8; evidence: x-2 PR #4548 [not_found]: gh: Not Found (HTTP 404)".to_string(),
+        );
+        classify(&mut r, &facts(false));
+        assert_eq!(r.cause.as_deref(), Some("sweep_failures"));
+        assert!(
+            r.line.contains("repair: fno backlog reconcile --json"),
+            "{}",
+            r.line
+        );
+        assert_eq!(r.heal.as_deref(), Some(OPERATOR));
     }
 
     fn write_claim(root: &Path, key: &str, holder: &str, pid: i32) {

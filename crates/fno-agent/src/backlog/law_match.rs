@@ -2347,21 +2347,27 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
     if let Err(code) = append_decision(&envelope, &decision_id) {
         return code;
     }
+    // The receipt's short number, minted in step with the record so the
+    // caller leaves with it. Advisory and idempotent; the daemon beat mints
+    // the same key anyway.
+    let graph = crate::backlog::database_path(&crate::graph_get::default_graph_path());
+    let _ = crate::numbers::mint_now(&graph, &decision_id);
+    let shown = crate::numbers::display(&decision_id);
     if matches_node_id_shape(&door.subject.to_lowercase()) {
         // The node-view projection (`_project`) is Python-side and not ported;
         // the durable stores hold the row and every decisions read reaches it.
         eprintln!(
-            "decide: recorded {decision_id}, but the node projection is not \
+            "decide: recorded {shown}, but the node projection is not \
              ported to the record door yet; the decision is durable and \
              recoverable with `fno backlog decisions`."
         );
     }
-    println!("{decision_id}");
+    println!("{shown}");
     if let Some(when) = &when {
         crate::law_when::row_active(&json!({"decision_id": decision_id, "when": when}), true);
     }
     if let Some(old) = &auto_superseded {
-        eprintln!("superseded {old}");
+        eprintln!("superseded {}", crate::numbers::display(old));
     }
     crate::law_reach::sweep_after_law(&decision_id, door.subject.trim(), &decision, &door.sweep);
     crate::law_reach::mail_near_leads(&decision_id, door.subject.trim(), &decision);
@@ -2406,9 +2412,10 @@ pub(crate) fn append_decision(envelope: &Value, decision_id: &str) -> Result<(),
     let index_path = decision_index::default_state_path("decisions.jsonl");
     if let Err(e) = crate::event_store::append_envelope(&index_path, &envelope.to_string(), None) {
         eprintln!(
-            "fno inbox decisions: recorded {decision_id} to the project journal, but the \
+            "fno inbox decisions: recorded {} to the project journal, but the \
              recall index write failed ({e}). Run `fno backlog decide-reindex`; \
-             do not re-run the law command."
+             do not re-run the law command.",
+            crate::numbers::display(decision_id)
         );
         return Err(1);
     }
@@ -2418,8 +2425,9 @@ pub(crate) fn append_decision(envelope: &Value, decision_id: &str) -> Result<(),
         envelope.clone(),
     ) {
         eprintln!(
-            "decide: recorded {decision_id}, but the graph store refused the \
+            "decide: recorded {}, but the graph store refused the \
              ruling ({}). The decision is durable in the journal and the index. {}.",
+            crate::numbers::display(decision_id),
             e.0,
             crate::decide_door::GRAPH_RETRY
         );
@@ -2910,13 +2918,14 @@ fn write_retraction(
         relayed_by: caller.relayed_by.clone(),
         quote: Some(quote.to_string()),
     });
+    let shown = crate::numbers::display(&decision_id);
     match outcome {
         RetractOutcome::JournalFailed(e) => {
             door_refuse(&format!("the project journal write failed ({e})"))
         }
         RetractOutcome::IndexFailed(e) => {
             eprintln!(
-                "{label}: retracted {decision_id} to the project journal, \
+                "{label}: retracted {shown} to the project journal, \
                  but the recall index write failed ({e}). Run `fno backlog decide-reindex`; \
                  do not re-run the retract command."
             );
@@ -2924,28 +2933,28 @@ fn write_retraction(
         }
         RetractOutcome::GraphRefused(e) => {
             eprintln!(
-                "{label}: retracted {decision_id}, but the graph store refused \
+                "{label}: retracted {shown}, but the graph store refused \
                  the retraction ({e}). The retraction is durable in the journal and the index. {}.",
                 crate::decide_door::GRAPH_RETRY
             );
-            println!("{decision_id}");
+            println!("{shown}");
             eprintln!(
-                "{label}: retracted {decision_id}. The original decision remains \
+                "{label}: retracted {shown}. The original decision remains \
                  in the append-only history."
             );
             if decision_index::is_law(target) {
-                eprintln!("undo: fno inbox decisions restore {decision_id}");
+                eprintln!("undo: fno inbox decisions restore {shown}");
             }
             0
         }
         RetractOutcome::Done => {
-            println!("{decision_id}");
+            println!("{shown}");
             eprintln!(
-                "{label}: retracted {decision_id}. The original decision remains \
+                "{label}: retracted {shown}. The original decision remains \
                  in the append-only history."
             );
             if decision_index::is_law(target) {
-                eprintln!("undo: fno inbox decisions restore {decision_id}");
+                eprintln!("undo: fno inbox decisions restore {shown}");
             }
             0
         }

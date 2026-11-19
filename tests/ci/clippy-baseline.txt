@@ -8770,7 +8770,7 @@ crates/fno-agent/src/runtime/rename.rs	clippy::indexing_slicing	assert_eq!(recor
 crates/fno-agent/src/runtime/rename.rs	clippy::let_underscore_must_use	let _ = crate::event_store::import_all(&home.events_jsonl());
 crates/fno-agent/src/runtime/restart_run.rs	clippy::indexing_slicing	assert!(err[0].contains("FAILED"));
 crates/fno-agent/src/runtime/restart_run.rs	clippy::indexing_slicing	assert!(err[0].contains("thr-9"));
-crates/fno-agent/src/runtime/restart_run.rs	clippy::too_many_lines	pub async fn run_restart(force: bool, json: bool, if_drifted: bool, mux: bool) -> i32 {
+crates/fno-agent/src/runtime/restart_run.rs	clippy::too_many_lines	pub async fn run_restart(
 crates/fno-agent/src/runtime/resume_args.rs	clippy::too_many_lines	pub fn parse_resume_args(rest: &[String]) -> Result<ResumeArgs, i32> {
 crates/fno-agent/src/runtime/resume_gate.rs	clippy::let_underscore_must_use	let _ = claims::release(&record.key, &node_holder, None, None);
 crates/fno-agent/src/runtime/resume_gate.rs	clippy::let_underscore_must_use	let _ = claims::release(&session_key, &session_holder, None, None);
@@ -12827,7 +12827,7 @@ crates/fno/src/ui/client/remote_hosts.rs	clippy::let_underscore_must_use	let _ =
 crates/fno/src/ui/client/report.rs	clippy::let_underscore_must_use	let _ = tx.send(work.await);
 crates/fno/src/ui/client/row_menu.rs	clippy::let_underscore_must_use	let _ = tx.send(text);
 crates/fno/src/ui/client/row_menu.rs	clippy::too_many_lines	pub(super) async fn execute_row_menu_action(
-crates/fno/src/ui/client/row_menu.rs	clippy::too_many_lines	pub(super) fn build_row_menu_with(
+crates/fno/src/ui/client/row_menu.rs	clippy::too_many_lines	pub(super) fn build_row_menu(agent: &AgentRow, anchor: Anchor) -> RowMenu {
 crates/fno/src/ui/client/row_meter.rs	clippy::indexing_slicing	BREATHE[frame].to_string().repeat(width)
 crates/fno/src/ui/client/row_meter.rs	clippy::indexing_slicing	bar.push(EIGHTHS[level - 1]);
 crates/fno/src/ui/client/row_stamp.rs	clippy::indexing_slicing	cells[idx] = Cell {

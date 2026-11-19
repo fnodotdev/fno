@@ -113,6 +113,21 @@ fn open_read() -> Option<Connection> {
     open_read_at(&db_path())
 }
 
+/// Run `read` over this machine's table on the process's reused read
+/// handle; `None` when the store cannot be read. The decision and attention
+/// passes resolve thousands of tokens a minute, and a fresh open parses the
+/// whole graph schema each time.
+fn read_store<T>(read: impl FnOnce(Option<&Connection>) -> T) -> T {
+    let mut read = Some(read);
+    let shared = crate::store_conn::with_read(&db_path(), |conn| {
+        (read.take().expect("with_read runs the read once"))(Some(conn))
+    });
+    match shared {
+        Ok(value) => value,
+        Err(_) => (read.take().expect("a refused with_read never ran the read"))(None),
+    }
+}
+
 /// The graph store's SQLite file. `default_graph_path` names the `graph.json`
 /// anchor, which is not the database.
 fn db_path() -> std::path::PathBuf {
@@ -470,7 +485,7 @@ pub fn unresolved(text: &str) -> String {
 
 /// `resolve_in` over this machine's table.
 pub fn resolve(kind: char, text: &str) -> Option<String> {
-    resolve_in(open_read().as_ref(), kind, text, &current_store())
+    read_store(|conn| resolve_in(conn, kind, text, &current_store()))
 }
 
 /// [`resolve`] with one primary pull behind a miss: a number the local cache
@@ -510,8 +525,9 @@ fn node_number_text(text: &str) -> Option<(&str, i64, Option<&str>)> {
 pub fn resolve_node_in(conn: Option<&Connection>, text: &str, current: &str) -> Option<String> {
     let (prefix, num, store) = node_number_text(text.trim())?;
     conn?
+        .prepare_cached("SELECT key FROM fno_numbers WHERE kind = ?1 AND num = ?2 AND store = ?3")
+        .ok()?
         .query_row(
-            "SELECT key FROM fno_numbers WHERE kind = ?1 AND num = ?2 AND store = ?3",
             params![
                 format!("{NODE_KIND}{prefix}"),
                 num,
@@ -525,7 +541,7 @@ pub fn resolve_node_in(conn: Option<&Connection>, text: &str, current: &str) -> 
 /// `resolve_node_in` over this machine's table.
 pub fn resolve_node(text: &str) -> Option<String> {
     node_number_text(text.trim())?;
-    resolve_node_in(open_read().as_ref(), text, &current_store())
+    read_store(|conn| resolve_node_in(conn, text, &current_store()))
 }
 
 /// Whether the token reads as a node display number (`x-15`): the shape a
@@ -562,7 +578,7 @@ pub(crate) fn resolve_node_ref_in(
 
 /// `resolve_node_ref_in` over this machine's table.
 pub(crate) fn resolve_node_ref(text: &str) -> Option<String> {
-    resolve_node_ref_in(open_read().as_ref(), text, &current_store())
+    read_store(|conn| resolve_node_ref_in(conn, text, &current_store()))
 }
 
 /// Every number a node holds, as text: `x-15`. A new hash must avoid these,
@@ -583,23 +599,24 @@ pub fn node_number_texts() -> std::collections::BTreeSet<String> {
 
 /// `Q87`, or `None` while the arm has not reached this id.
 pub fn label(id: &str) -> Option<String> {
-    label_in(&open_read()?, id, &current_store())
+    read_store(|conn| label_in(conn?, id, &current_store()))
 }
 
 /// `Q87`, or the id alone while no store holds a number for it. The hash
 /// never reaches a reader beside its number: one short token names one row.
 pub fn display(id: &str) -> String {
-    match open_read() {
-        Some(conn) => display_in(&conn, id, &current_store()),
+    read_store(|conn| match conn {
+        Some(conn) => display_in(conn, id, &current_store()),
         None => id.to_string(),
-    }
+    })
 }
 
 /// Every number this machine holds, for a printer with many rows.
 pub fn labels() -> HashMap<String, String> {
-    open_read()
-        .map(|conn| labels_in(&conn, &current_store()))
-        .unwrap_or_default()
+    read_store(|conn| {
+        conn.map(|conn| labels_in(conn, &current_store()))
+            .unwrap_or_default()
+    })
 }
 
 /// The numbers map for one store's db file: the served store, not the
@@ -849,6 +866,85 @@ pub(crate) fn mint_now_at(
     label_in(&conn, key.strip_prefix(NODE_KIND).unwrap_or(key), &current)
 }
 
+/// The sequential-mode reservation: the next `n:<prefix>` number, stored
+/// with the id it becomes as its key, so a sequential node's number and id
+/// are one value. Skips a number a node already holds as its id, the same
+/// skip as `NODE_INSERT`.
+const SEQ_RESERVE: &str = "INSERT INTO fno_numbers \
+(kind, num, key, store, host, created_at) \
+SELECT ?1, n, substr(?1, 3) || '-' || n, ?2, ?3, strftime('%s','now') FROM (\
+WITH RECURSIVE c(n) AS (\
+SELECT COALESCE(MAX(num), 0) + 1 FROM fno_numbers WHERE kind = ?1 AND store = ?2 \
+UNION ALL SELECT n + 1 FROM c \
+WHERE EXISTS (SELECT 1 FROM nodes WHERE id = substr(?1, 3) || '-' || n)) \
+SELECT n FROM c ORDER BY n DESC LIMIT 1) RETURNING key";
+
+/// Why a sequential id could not be reserved.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ReserveError {
+    #[error("sequential id reserve: the store config is unreadable: {0}")]
+    Config(String),
+    #[error("sequential id reserve failed in the local store: {0}")]
+    Local(String),
+    #[error("sequential id reserve failed at the primary {host}: {detail}")]
+    Primary { host: String, detail: String },
+}
+
+/// Reserve the next sequential node id for `prefix` (`t` or `t-`) at the
+/// store's authority: the primary when one is set, else this graph.db. An
+/// unreachable primary is an error, never a local mint: a number minted
+/// offline would give one node two numbers.
+pub(crate) fn reserve_node_id(graph: &Path, prefix: &str) -> Result<String, ReserveError> {
+    let remote = crate::store_remote::configured().map_err(ReserveError::Config)?;
+    let host = fno_mail::address::normalize_host(&crate::claims::hostname());
+    reserve_node_id_at(graph, prefix, remote.as_ref(), &host)
+}
+
+pub(crate) fn reserve_node_id_at(
+    graph: &Path,
+    prefix: &str,
+    remote: Option<&Remote>,
+    host: &str,
+) -> Result<String, ReserveError> {
+    let kind = format!("{NODE_KIND}{}", prefix.trim_end_matches('-'));
+    let conn = open_write_at(graph).map_err(ReserveError::Local)?;
+    let Some(remote) = remote else {
+        return conn
+            .query_row(SEQ_RESERVE, params![kind, LOCAL_STORE, host], |row| {
+                row.get(0)
+            })
+            .map_err(|e| ReserveError::Local(e.to_string()));
+    };
+    let at_primary = |detail: String| ReserveError::Primary {
+        host: remote.host().to_string(),
+        detail,
+    };
+    remote.script(DDL).map_err(at_primary)?;
+    let reply = remote
+        .execute(
+            SEQ_RESERVE,
+            &[
+                SqlValue::Text(kind),
+                SqlValue::Text(remote.host().to_string()),
+                SqlValue::Text(host.to_string()),
+            ],
+        )
+        .map_err(at_primary)?;
+    let key = reply
+        .rows
+        .first()
+        .and_then(|row| row.first())
+        .and_then(SqlValue::text)
+        .map(str::to_string)
+        .ok_or_else(|| at_primary("it returned no reserved id".to_string()))?;
+    // Cache the row so this machine reads the number before the next beat.
+    // A failed pull costs only that early read: the beat pulls it later.
+    if let Err(error) = pull(remote, &conn) {
+        eprintln!("sequential id {key}: number cache pull failed ({error}); the beat retries");
+    }
+    Ok(key)
+}
+
 /// Every node id, oldest first, so history reads x-1..x-N in filing order.
 fn node_ids_oldest_first(graph: &Path) -> Vec<String> {
     let Some(conn) = open_read_at(graph) else {
@@ -938,6 +1034,13 @@ pub fn maybe_tick(arm: &Arm, cwd: &Path) {
         }
     });
 }
+
+#[path = "numbers_migrate.rs"]
+pub(crate) mod migrate;
+
+#[cfg(test)]
+#[path = "numbers_display_guard_tests.rs"]
+mod display_guard;
 
 #[cfg(test)]
 mod tests {
@@ -1273,5 +1376,24 @@ mod tests {
         let bare = tempfile::tempdir().unwrap();
         let bare_graph = bare.path().join("graph.json");
         assert!(labels_at(&bare_graph).is_empty());
+    }
+
+    #[test]
+    fn a_sequential_reserve_counts_up_skips_a_held_id_and_reads_as_its_own_number() {
+        let (_dir, graph, conn) = conn();
+        // A hex-era node already numbered t-1, and a node whose id is t-3.
+        conn.execute_batch("CREATE TABLE nodes AS SELECT 't-3' AS id")
+            .unwrap();
+        mint_local(&conn, "n:t-aaaa", LOCAL_STORE, "h").unwrap();
+        drop(conn);
+        assert_eq!(reserve_node_id_at(&graph, "t-", None, "h").unwrap(), "t-2");
+        assert_eq!(reserve_node_id_at(&graph, "t", None, "h").unwrap(), "t-4");
+        let conn = open_read_at(&graph).unwrap();
+        // Number and id are one value: the board and every door read t-4.
+        assert_eq!(label_in(&conn, "t-4", LOCAL_STORE).as_deref(), Some("t-4"));
+        assert_eq!(
+            resolve_node_in(Some(&conn), "t-2", LOCAL_STORE).as_deref(),
+            Some("t-2")
+        );
     }
 }

@@ -404,7 +404,29 @@ Set config.project.id to pin it and stop stray internal/<name>/ folders."
 }
 
 /// Last path segment of `remote.origin.url`, one trailing `.git` stripped.
+/// The daemon's plan sync asks every 5 s, so the answer, found or not, is
+/// held for a few minutes per root instead of a git child per ask.
 fn git_remote_slug(root: &Path) -> Option<String> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+    type Memo = HashMap<std::path::PathBuf, (Instant, Option<String>)>;
+    static MEMO: OnceLock<Mutex<Memo>> = OnceLock::new();
+    // Unit tests add remotes to fresh repos mid-test; a memo would hide that.
+    const FRESH: Duration = Duration::from_secs(if cfg!(test) { 0 } else { 300 });
+    let memo = MEMO.get_or_init(Default::default);
+    let held = memo.lock().ok().and_then(|held| held.get(root).cloned());
+    if let Some((_, slug)) = held.filter(|(at, _)| at.elapsed() < FRESH) {
+        return slug;
+    }
+    let slug = read_git_remote_slug(root);
+    if let Ok(mut held) = memo.lock() {
+        held.insert(root.to_path_buf(), (Instant::now(), slug.clone()));
+    }
+    slug
+}
+
+fn read_git_remote_slug(root: &Path) -> Option<String> {
     let out = std::process::Command::new("git")
         .args([
             "-C",

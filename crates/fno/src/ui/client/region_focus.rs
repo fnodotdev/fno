@@ -1088,7 +1088,7 @@ async fn aux_mouse(
             }
         }
         MouseKind::Press(MouseButton::Left) => {
-            if settings_modal::tap_tab(view, rep.row, rep.col) {
+            if settings_modal::tap_tab(view, rep.row, rep.col).await {
                 crate::ui_usage::click("mux", "settings_tab");
                 return Ok(StdinFlow::Continue);
             }

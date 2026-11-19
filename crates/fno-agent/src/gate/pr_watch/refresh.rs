@@ -580,14 +580,22 @@ pub(crate) fn leaf_output(args: &[String]) -> (String, i32) {
         i += 1;
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    // Consent for a HOME-global launchd bootstrap reads the HOME-global
+    // config only. The update tail inherits the caller's cwd, so a project
+    // config at cwd must never authorize the install: any repo with
+    // pr_watch enabled would otherwise turn `fno update --adopt` in a
+    // fresh HOME into a watcher bootstrap there, registered in the user's
+    // real launchd domain and pointing at that HOME's binaries.
     let enabled = crate::pr_watch::status::as_bool(
-        crate::pr_watch::status::cfg_lookup(&cwd, &["pr_watch", "enabled"]),
+        crate::agents_config::config_lookup_global(&["pr_watch", "enabled"]),
         false,
     );
     if !enabled {
         return ("pr-watch: disabled; nothing to refresh.\n".to_string(), 0);
     }
-    let interval = crate::pr_watch::status::cfg_lookup(&cwd, &["pr_watch", "interval_seconds"])
+    // The plist this leaf writes is the global job's, so the job's cadence
+    // reads from the same global config instead of a project override.
+    let interval = crate::agents_config::config_lookup_global(&["pr_watch", "interval_seconds"])
         .and_then(|v| v.as_integer())
         .filter(|n| *n > 0)
         .unwrap_or(600);
@@ -608,7 +616,7 @@ pub(crate) fn leaf_output(args: &[String]) -> (String, i32) {
     // The one `Heal:` readout the Python leaf appended: the arm bit and the
     // journal are the only inputs, read through the same pr-heal renderer.
     let armed = crate::pr_watch::status::as_bool(
-        crate::pr_watch::status::cfg_lookup(&cwd, &["auto_heal", "enabled"]),
+        crate::agents_config::config_lookup_global(&["auto_heal", "enabled"]),
         false,
     );
     let events = crate::paths::AgentsHome::from_env()

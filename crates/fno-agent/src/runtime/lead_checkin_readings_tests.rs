@@ -23,3 +23,4 @@ fn cause_rows() {
     assert_eq!(result.chars().count(), 120);
     assert_eq!(result, "é".repeat(120));
 }
+
