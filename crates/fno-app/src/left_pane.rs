@@ -9,12 +9,13 @@ use super::link::Layout;
 use super::palette::Palette;
 use super::ui;
 use super::window::{Action, MainView, Root};
+use fno::app_api::client::agent_group::{click_command, RowClick};
 use fno::app_api::client::agent_lattice_state;
 use fno::app_api::client::card_line::{binding_suffix, card_facts, CardFacts};
 use fno::app_api::client::header_band::section_rollup;
 use fno::app_api::lattice::{lattice_glyph, status_long, LatticeState};
 use fno::app_api::web_hq::Board;
-use fno::proto::{AgentRow, Command};
+use fno::proto::{AgentRow, Command, SquadMeta};
 
 pub const WIDTH: f32 = 320.0;
 /// The agents shown before a "+N more" row, so the sections below stay above
@@ -38,6 +39,8 @@ pub enum Row {
         /// Per-state counts in severity order; empty for a section with no
         /// states.
         rollup: Vec<(LatticeState, usize)>,
+        /// The Agents header alone: the circled + opens the composer.
+        plus: bool,
     },
     Item {
         label: String,
@@ -66,10 +69,11 @@ fn header(title: &'static str) -> Row {
     Row::Header {
         title,
         rollup: Vec::new(),
+        plus: false,
     }
 }
 
-fn agent_identity(a: &AgentRow) -> Option<String> {
+pub(super) fn agent_identity(a: &AgentRow) -> Option<String> {
     let mut out = match (a.node.as_deref(), a.pr) {
         // The PR leads, so a narrow box cuts the node id and keeps the number.
         (Some(n), Some(pr)) => format!("#{pr} · {n}"),
@@ -81,17 +85,41 @@ fn agent_identity(a: &AgentRow) -> Option<String> {
     Some(out)
 }
 
+/// One agent row's click action: the sideline click command as an app
+/// Action. The go-to palette sends the same thing, so a click and a goto
+/// never diverge.
+pub(super) fn agent_row_action(a: &AgentRow) -> Action {
+    match click_command(a) {
+        RowClick::Send(cmd) => Action::Send(cmd),
+        RowClick::Notice(notice) => Action::Notice(notice),
+    }
+}
+
+/// The left pane's status word for one agent: `harness · status`, where an
+/// ended one-shot's result outranks the lane status.
+pub(super) fn agent_status_word(a: &AgentRow) -> String {
+    let state = agent_lattice_state(a);
+    let harness = a.harness.as_deref().unwrap_or("pane");
+    let status = a.result.as_deref().unwrap_or(status_long(state));
+    format!("{harness} · {status}")
+}
+
+/// One session's detail word: `N tab(s) · M pane(s)`, as the sidebar shows.
+pub(super) fn session_detail(s: &SquadMeta) -> String {
+    let tabs = s.tabs.len();
+    format!(
+        "{tabs} tab{} · {} pane{}",
+        if tabs == 1 { "" } else { "s" },
+        s.panes,
+        if s.panes == 1 { "" } else { "s" }
+    )
+}
+
 /// One session's sidebar row; `active` is the session the window shows.
 fn session_item(s: &fno::proto::SquadMeta, active: u64) -> Row {
-    let tabs = s.tabs.len();
     Row::Item {
         label: s.name.clone(),
-        detail: format!(
-            "{tabs} tab{} · {} pane{}",
-            if tabs == 1 { "" } else { "s" },
-            s.panes,
-            if s.panes == 1 { "" } else { "s" }
-        ),
+        detail: session_detail(s),
         identity: None,
         card: None,
         state: None,
@@ -106,19 +134,24 @@ fn session_item(s: &fno::proto::SquadMeta, active: u64) -> Row {
 }
 
 /// One agent's sidebar row.
-fn agent_item(a: &AgentRow, layout: &Layout, now_secs: u64, streamed: Option<&str>) -> Row {
-    use fno::app_api::client::agent_group::{click_command, RowClick};
-    let action = match click_command(a) {
-        RowClick::Send(cmd) => Action::Send(cmd),
-        RowClick::Notice(notice) => Action::Notice(notice),
-    };
+fn agent_item(
+    a: &AgentRow,
+    layout: &Layout,
+    now_secs: u64,
+    streamed: Option<&str>,
+    launched: Option<(&str, &str)>,
+) -> Row {
+    let action = agent_row_action(a);
     let state = agent_lattice_state(a);
-    let harness = a.harness.as_deref().unwrap_or("pane");
-    // A one-shot's end word outranks the lane status: ended, not stuck.
-    let status = a.result.as_deref().unwrap_or(status_long(state));
+    // The launch's own row reads as the task the composer carried: the
+    // registry name stays the mail key, the display follows the task.
+    let label = match launched {
+        Some((name, task)) if name == a.name && !task.is_empty() => task.to_string(),
+        _ => a.name.clone(),
+    };
     Row::Item {
-        label: a.name.clone(),
-        detail: format!("{harness} · {status}"),
+        label,
+        detail: agent_status_word(a),
         identity: agent_identity(a),
         card: Some(card_facts(a, now_secs)),
         state: Some(state),
@@ -126,7 +159,8 @@ fn agent_item(a: &AgentRow, layout: &Layout, now_secs: u64, streamed: Option<&st
         mark: if match streamed {
             Some(sid) => a.harness_session_id.as_deref() == Some(sid),
             None => a.pane_id == Some(layout.focus),
-        } {
+        } || launched.is_some_and(|(n, _)| n == a.name)
+        {
             Mark::Cursor
         } else {
             Mark::None
@@ -139,7 +173,7 @@ fn agent_item(a: &AgentRow, layout: &Layout, now_secs: u64, streamed: Option<&st
 /// cmd-1 picks the first.
 pub(super) fn agent_actions(root: &Root) -> Vec<Action> {
     let now = fno::app_api::digest_overlay::now_secs();
-    rows(&root.layout, &root.board, now, root.agents_open, None)
+    rows(&root.layout, &root.board, now, root.agents_open, None, None)
         .into_iter()
         .filter_map(|r| match r {
             Row::Item {
@@ -153,18 +187,25 @@ pub(super) fn agent_actions(root: &Root) -> Vec<Action> {
 }
 
 /// `streamed` is the session the main view streams, when it streams one: its
-/// agent carries the cursor, else the focused pane's agent does.
+/// agent carries the cursor, else the focused pane's agent does. `launched`
+/// is the (name, task) the composer launched most recently: that row carries
+/// the cursor and the readable task as its label from its first paint, and a
+/// row click hands both back to the user.
 pub fn rows(
     layout: &Layout,
     board: &Board,
     now_secs: u64,
     agents_open: bool,
     streamed: Option<&str>,
+    launched: Option<(&str, &str)>,
 ) -> Vec<Row> {
     let agents = fno::app_api::client::agent_sort::sideline_order(&layout.agents, now_secs);
     let mut out = vec![Row::Header {
         title: "Agents",
         rollup: section_rollup(agents.iter().map(|a| agent_lattice_state(a))),
+        // The header's circled + opens the composer; the old start row is
+        // gone.
+        plus: true,
     }];
     if agents.is_empty() {
         out.push(Row::Empty("no agents in this session"));
@@ -176,7 +217,7 @@ pub fn rows(
         total.min(AGENTS_SHOWN)
     };
     for a in agents.into_iter().take(shown) {
-        out.push(agent_item(a, layout, now_secs, streamed));
+        out.push(agent_item(a, layout, now_secs, streamed, launched));
     }
     if total > AGENTS_SHOWN {
         out.push(Row::More {
@@ -417,6 +458,8 @@ struct Grid {
     cols: Vec<(usize, usize)>,
     /// Per row, the cmd-digit badge it shows while cmd is held.
     badges: Vec<Option<usize>>,
+    /// Cmd is held right now; the header's shortcut hint reads it.
+    picking: bool,
 }
 
 /// An agent row's cells. While cmd is held, `badge` sits over the age at
@@ -447,15 +490,55 @@ fn agent_row(
         }))
 }
 
+/// The Agents header's right side: the circled + opens the composer and
+/// the ⌘N hint shares the digit badges' cmd flag, so it shows only while
+/// cmd is held.
+fn agents_header_plus(p: &Palette, grid: &Grid, cx: &mut Context<Root>) -> Div {
+    div()
+        .child(
+            ui::clickable(div().id("agents-plus").px_1(), p)
+                .on_click(cx.listener(|root, _, _, cx| root.act(Action::OpenLaunch(None), cx)))
+                .child(div().text_color(rgb(p.faint)).child("⊕".to_string())),
+        )
+        .when(grid.picking, |right| right.child(ui::kbd("⌘N", p)))
+}
+
+/// The folded-agents row: the count, or the fold-back control.
+fn more_row(
+    i: usize,
+    hidden: usize,
+    p: &Palette,
+    adv: Pixels,
+    cx: &mut Context<Root>,
+) -> Stateful<Div> {
+    ui::clickable(ui::row(i, false, p).w(px(WIDTH)), p)
+        .on_click(cx.listener(|root, _, _, cx| root.act(Action::ToggleAgents, cx)))
+        .child(div().w(adv * 2.0).flex_none())
+        .child(ui::text(
+            if hidden > 0 {
+                format!("+{hidden} more")
+            } else {
+                "show fewer".to_string()
+            },
+            ui::Role::Hint,
+            p,
+        ))
+}
+
 /// One sidebar row as an element.
 fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> Stateful<Div> {
     let (p, adv) = (grid.p, grid.adv);
     match row {
-        Row::Header { title, rollup } => div().id(i).px_3().child(
+        Row::Header {
+            title,
+            rollup,
+            plus,
+        } => div().id(i).px_3().child(
             ui::section(title, &p).justify_between().child(
                 div()
                     .flex()
                     .flex_row()
+                    .items_center()
                     .gap(px(8.0))
                     .children(rollup.into_iter().map(|(state, n)| {
                         ui::role(div(), ui::Role::Fact, &p)
@@ -468,7 +551,8 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
                                     .child(lattice_glyph(state).0.to_string()),
                             )
                             .child(n.to_string())
-                    })),
+                    }))
+                    .when(plus, |right| right.child(agents_header_plus(&p, grid, cx))),
             ),
         ),
         Row::Error(e) => div()
@@ -481,18 +565,7 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
             .px_3()
             .py_1()
             .child(ui::text(why, ui::Role::Fact, &p)),
-        Row::More { hidden } => ui::clickable(ui::row(i, false, &p).w(px(WIDTH)), &p)
-            .on_click(cx.listener(|root, _, _, cx| root.act(Action::ToggleAgents, cx)))
-            .child(div().w(adv * 2.0).flex_none())
-            .child(ui::text(
-                if hidden > 0 {
-                    format!("+{hidden} more")
-                } else {
-                    "show fewer".to_string()
-                },
-                ui::Role::Hint,
-                &p,
-            )),
+        Row::More { hidden } => more_row(i, hidden, &p, adv, cx),
         Row::Item {
             label,
             detail,
@@ -535,9 +608,13 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
             };
             if let Some(action) = action {
                 // On click: a press that leaves the row before release
-                // does nothing.
-                item = ui::clickable(item, &p)
-                    .on_click(cx.listener(move |root, _, _, cx| root.act(action.clone(), cx)));
+                // does nothing. A click is the user's own pick, so the
+                // launch's borrowed cursor retires with it.
+                item = ui::clickable(item, &p).on_click(cx.listener(move |root, _, _, cx| {
+                    root.launch.show = None;
+                    root.launch.show_task = None;
+                    root.act(action.clone(), cx)
+                }));
             }
             item
         }
@@ -567,7 +644,19 @@ pub(super) fn render(
         MainView::Chat => root.chat.key.as_ref().map(|k| k.session_id.as_str()),
         _ => None,
     };
-    let rows = rows(&root.layout, &root.board, now_secs, root.agents_open, shown);
+    let launched = root
+        .launch
+        .show
+        .as_deref()
+        .zip(root.launch.show_task.as_deref());
+    let rows = rows(
+        &root.layout,
+        &root.board,
+        now_secs,
+        root.agents_open,
+        shown,
+        launched,
+    );
     let name_w = rows
         .iter()
         .filter_map(|r| match r {
@@ -607,6 +696,7 @@ pub(super) fn render(
         name_w,
         cols,
         badges,
+        picking: root.picking,
     };
     for (i, row) in rows.into_iter().enumerate() {
         pane = pane.child(row_element(i, row, &grid, cx));
@@ -657,10 +747,14 @@ mod tests {
             agents: vec![a],
             ..Layout::default()
         };
-        let rows = rows(&layout, &Board::default(), 100, false, None);
-        assert!(
-            matches!(&rows[1], Row::Item { state: Some(LatticeState::Unmeasured), detail, .. } if detail.ends_with("unknown"))
-        );
+        let rows = rows(&layout, &Board::default(), 100, false, None, None);
+        // The header leads the section and carries the composer's +; the
+        // agent's item follows with no start row between them.
+        assert!(matches!(rows.first(), Some(Row::Header { plus: true, .. })));
+        assert!(matches!(
+            rows.get(1),
+            Some(Row::Item { state: Some(LatticeState::Unmeasured), detail, .. }) if detail.ends_with("unknown")
+        ));
     }
 
     #[test]
@@ -678,7 +772,7 @@ mod tests {
             agents: vec![served, bare],
             ..Layout::default()
         };
-        let rows = rows(&layout, &Board::default(), 100 + 7200, false, None);
+        let rows = rows(&layout, &Board::default(), 100 + 7200, false, None, None);
         let card = |name: &str| {
             rows.iter().find_map(|r| match r {
                 Row::Item { label, card, .. } if label == name => card.clone(),
@@ -746,7 +840,7 @@ mod tests {
             &[],
         );
 
-        let rows = rows(&layout, &board, 100, false, None);
+        let rows = rows(&layout, &board, 100, false, None, None);
         let items = |rows: &[Row]| -> Vec<(String, Option<Action>)> {
             rows.iter()
                 .filter_map(|r| match r {
@@ -798,5 +892,51 @@ mod tests {
             ..tab(10, "build")
         };
         assert_eq!(super::super::tabs::strip(&layout)[0].label, "build");
+    }
+
+    #[test]
+    fn the_row_the_composer_launched_carries_the_cursor_from_its_first_paint() {
+        // The launched row streams before its session id is known, so the
+        // cursor rides the launch's own name until the stream or a click
+        // takes it over.
+        let a: AgentRow = serde_json::from_value(serde_json::json!({
+            "squad": null, "name": "t-land-the-fix", "pane_id": null,
+            "badge": null, "reason": null, "exited": false,
+        }))
+        .unwrap();
+        let other: AgentRow = serde_json::from_value(serde_json::json!({
+            "squad": null, "name": "scout", "pane_id": null,
+            "badge": null, "reason": null, "exited": false,
+        }))
+        .unwrap();
+        let layout = Layout {
+            agents: vec![other, a],
+            ..Layout::default()
+        };
+        let marked = rows(
+            &layout,
+            &Board::default(),
+            100,
+            false,
+            None,
+            Some(("t-land-the-fix", "land the checkout fix")),
+        );
+        let mark = |name: &str, rows: &[Row]| {
+            rows.iter().find_map(|r| match r {
+                Row::Item { label, mark, .. } if label == name => Some(*mark),
+                _ => None,
+            })
+        };
+        // The launched row's label reads as the task, the mail key stays.
+        let label = marked.iter().find_map(|r| match r {
+            Row::Item { label, .. } if label.contains("checkout fix") => Some(label.clone()),
+            _ => None,
+        });
+        assert_eq!(label.as_deref(), Some("land the checkout fix"));
+        assert_eq!(mark("land the checkout fix", &marked), Some(Mark::Cursor));
+        assert_eq!(mark("scout", &marked), Some(Mark::None));
+        // Without a pending launch the same paneless row carries none.
+        let plain = rows(&layout, &Board::default(), 100, false, None, None);
+        assert_eq!(mark("t-land-the-fix", &plain), Some(Mark::None));
     }
 }

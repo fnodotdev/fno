@@ -242,7 +242,6 @@ UNBLOCKS_AFTER: <prerequisite>    # if BLOCKED
 | Agent | Model | Color | Tools | Purpose |
 |-------|-------|-------|-------|---------|
 | `tournament-debugger` | sonnet | red | Read, Grep, Glob, Bash | Parallel hypothesis testing - multiple agents compete to find root cause |
-| `roadmap-generator` | opus | green | Read, Write, Edit, Bash, Grep, Glob | Generates a prioritized task backlog from a vision document for multi-session execution |
 ---
 
 ## Commands

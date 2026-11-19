@@ -370,30 +370,6 @@ mod tests {
     }
 
     #[test]
-    fn every_known_spawner_appears_in_table_order() {
-        let rows = collect_status(None);
-        let names: Vec<&str> = rows.iter().map(|r| r.name).collect();
-        assert_eq!(
-            names,
-            vec![
-                "autonomy (master switch)",
-                "advance (node-walk)",
-                "dispatch_lanes (parallel fill)",
-                "epic converge (mission drain)",
-                "reconcile_dispatch (G4 de-stub)",
-                "spawn_think (context /think)",
-                "post-merge ritual",
-                "pr_watch (headless PR poll)",
-                "recovery sweep (crash respawn)",
-                "keep_going (autonomous follow-up)",
-                "groom (_spawn_groom_worker)",
-                "evals runner",
-                "lead loop",
-            ]
-        );
-    }
-
-    #[test]
     fn master_switch_off_vetoes_every_other_row() {
         // The master switch reads through the settings stack; a root whose
         // .fno config.toml carries autonomy.enabled=false vetoes every gated

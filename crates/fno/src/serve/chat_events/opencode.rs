@@ -15,7 +15,7 @@ use super::{injected_text, ChatReadError, Mapped};
 use crate::proto::chat_event::{
     ChatBody, ContentPart, ImageRef, SessionKey, SourceRef, ToolInput, TurnOutcome, UserOrigin,
 };
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::Deserialize;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -74,6 +74,33 @@ pub fn host_stores() -> Vec<PathBuf> {
         .collect();
     out.sort();
     out
+}
+
+/// The newest session id across the host stores, by the store's own
+/// updated-at clock. `--chat opencode:newest` resolves through this. The
+/// store version decides which table carries the clock, so both layouts
+/// are tried; a store that answers neither (or fails to open read-only)
+/// degrades out of the scan, like every read here.
+pub fn newest_session_id() -> Option<String> {
+    newest_session_id_in(&host_stores())
+}
+
+pub(crate) fn newest_session_id_in(stores: &[PathBuf]) -> Option<String> {
+    const READ_ONLY: OpenFlags = OpenFlags::SQLITE_OPEN_READ_ONLY;
+    for db in stores {
+        let Ok(conn) = Connection::open_with_flags(db, READ_ONLY) else {
+            continue;
+        };
+        for sql in [
+            "SELECT session_id FROM session_message GROUP BY session_id ORDER BY max(time_updated) DESC LIMIT 1",
+            "SELECT session_id FROM part GROUP BY session_id ORDER BY max(time_updated) DESC LIMIT 1",
+        ] {
+            if let Ok(id) = conn.query_row(sql, [], |r| r.get::<_, String>(0)) {
+                return Some(id);
+            }
+        }
+    }
+    None
 }
 
 #[derive(Deserialize)]

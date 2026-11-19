@@ -2,6 +2,8 @@
 name: fix
 description: Fix build failures and red tests, or investigate an error with an evidence-based loop.
 argument-hint: "[fix|investigate]  (fix: [from-debug] [--scope <glob>] [--guard <cmd>] [--category test|type|lint|build] [Iterations: N])"
+# bare Read: fresh installs gate reads under the plugin cache, and path-scoped Read rules get no ${CLAUDE_PLUGIN_ROOT} substitution in tool rules.
+allowed-tools: Read
 metadata:
   requires:
     binaries:

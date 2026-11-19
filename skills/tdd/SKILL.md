@@ -1,6 +1,8 @@
 ---
 name: tdd
 description: Use test-first development to implement a feature or fix against acceptance criteria.
+# bare Read: fresh installs gate reads under the plugin cache, and path-scoped Read rules get no ${CLAUDE_PLUGIN_ROOT} substitution in tool rules.
+allowed-tools: Read
 ---
 
 # Test-Driven Development (TDD)

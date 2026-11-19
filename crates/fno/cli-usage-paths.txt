@@ -418,10 +418,20 @@ mail triage
 mail unread
 mail withdraw
 mux attach
+mux app
+mux app close
+mux app focus
+mux app open
+mux app shot
+mux app show
+mux app state
 mux block
 mux block annotate
 mux block pipe
 mux command
+mux diag
+mux diag rows
+mux diag stats
 mux doctor
 mux kill-server
 mux layout
@@ -444,11 +454,9 @@ mux pane send
 mux pane split
 mux pane wait
 mux retire-session
-mux rows
 mux serve
 mux server
 mux shell-init
-mux stats
 mux tab
 mux tab close
 mux tab create

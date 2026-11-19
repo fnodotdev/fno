@@ -520,6 +520,15 @@
           "title": "Id Hex Width",
           "type": "integer"
         },
+        "id_mode": {
+          "default": "hex",
+          "enum": [
+            "hex",
+            "sequential"
+          ],
+          "title": "Id Mode",
+          "type": "string"
+        },
         "id_prefix": {
           "anyOf": [
             {

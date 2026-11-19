@@ -35,11 +35,11 @@ The app never reads that version to judge compatibility. It reads the wire versi
 | `--font-size <pt>` | `13` | The terminal font size. |
 | `--mode <view>` | `chat` | The view the window opens on: `chat`, `terminal`, `orchestration` or `mods`. |
 | `--probe` | off | Attach with no window, print two lines, and exit. |
-| `--chat <id>` | none | Show one claude session's chat instead of the focused agent's. `newest` picks the most recently written transcript. With `--probe`, count its events instead of attaching. |
+| `--chat <pin>` | none | Show one session's chat instead of the focused agent's. The pin is `<harness>:<id|newest>` (`claude`, `codex` or `opencode`), a bare session id (the transcript that carries it names the harness), or `newest` (claude: the newest transcript in the current project, ranked by session start; codex: the newest in its sessions tree). With `--probe`, count its events instead of attaching. |
 
 `--probe` attaches as an observer, so it never resizes a pane. It waits up to 5 seconds for the layout and one frame per pane. Then it prints `attached session=<s> panes=<n> frames=<m>`. Next it reads the fleet, the open questions and the backlog the way the window does, and prints `agents=<n> questions=<m> seats=<k>`. After a good attach it exits 0. With no server it prints the socket path it tried and exits 1. A failed fleet or question read prints its reason on stderr.
 
-`--probe --chat <id>` asks the server for that claude session's chat stream. It counts the events until 2 seconds pass with no new batch. Then it prints `chat_events=<n> session=<id>`. If n is at least 1, it exits 0. A session the server cannot find prints the server's reason and exits 1.
+`--probe --chat <pin>` asks the server for that session's chat stream. It counts the events until 2 seconds pass with no new batch. Then it prints `chat_events=<n> session=<id>`. If n is at least 1, it exits 0. A session the server cannot find prints the server's reason and exits 1.
 
 ## The window
 
@@ -55,9 +55,11 @@ The agent's text renders as markdown: headings, bold, italic, strikethrough, quo
 
 Thinking takes one line, and a click opens its text. Each tool call takes one muted line with its state: … while it runs, ✓ for a success, ✗ for a failure. A click opens the call's sheet with its input and output in the terminal font, each with a Copy button. Output past 20,000 characters is cut, and the sheet says how many were cut. Escape, Close or a click outside closes the sheet. A kind the app does not know shows as one plain line. New turns append as the agent writes them. The view follows them while it is scrolled to the bottom.
 
-Focus another pane to read its agent. The app keeps each conversation it read, so focusing back resumes where it left off. A pane with no agent session says so. A session with no turns yet says so after 2 seconds. With `--chat <id>`, the view stays on that session whatever has focus.
+Focus another pane to read its agent. The app keeps each conversation it read, so focusing back resumes where it left off. A pane with no agent session says so. A session with no turns yet says so after 2 seconds. With `--chat <pin>`, the view stays on that session whatever has focus.
 
-The composer at the bottom takes your message. Enter sends it, Shift-Enter adds a line, Backspace deletes one character, and cmd-v pastes into it. The hint beside the field names these keys, and a click on it sends. While an input method composes, Enter goes to the input method. The app types the text into the session's own pane as a paste. It waits 800 ms, then presses Enter in that same pane, as the TUI reply path does. Your turn shows at once with "sending…". After the transcript records it, the turn moves into the conversation. If no pane on screen hosts the session, the app says so and sends nothing.
+When the session you are reading has a pending question that waits on you, the chat shows it as a card above the composer. The card names the question and shows one button per option, with the recommended option marked. A tap answers it through the same door the Questions list uses, and the card shows the answer state. A session with no pending question shows no card.
+
+The composer at the bottom takes your message. Enter sends it, Shift-Enter adds a line, Backspace deletes one character, and cmd-v pastes into it. Pasting an image with no text on the clipboard attaches it to the draft as a chip. A send puts the image back on the clipboard and types the harness's paste key, so the session receives it as an image. A harness with no verified paste key takes the text alone and says so. Backspace on an empty draft removes the chip. The hint beside the field names these keys, and a click on it sends. While an input method composes, Enter goes to the input method. The app types the text into the session's own pane as a paste. It waits 800 ms, then presses Enter in that same pane, as the TUI reply path does. Your turn shows at once with "sending…". After the transcript records it, the turn moves into the conversation. If no pane on screen hosts the session, the app says so and sends nothing.
 
 If the chat stream ends, the composer gives way to the reason and a Reconnect button. A normal end with no known cause reads muted. When the connection's own exit reason is known, it folds into that line and reads in the error colour. No corner toast repeats it while no sheet covers the conversation. A failure reads in the error colour. Reconnect resumes from the last event the view holds.
 
@@ -71,7 +73,7 @@ Release the mouse on a button, a row or an option to act on it. Release somewher
 
 ## Keys
 
-Views have no key: click Chat, HQ, Mods or Terminal in the bar. Cmd-/ or Help > Keyboard Shortcuts opens the key sheet. It lists every key the app reads. Esc, `q`, cmd-/ or a click outside closes it. The app has no prefix key.
+Views have no key: click Chat, HQ, Mods or Terminal in the bar. Cmd-K or Help > Go to… opens the go-to palette. It finds an agent, session, node, question or view by name, and Enter goes there. Cmd-/ or Help > Keyboard Shortcuts opens the key sheet. It lists every key the app reads. Esc, `q`, cmd-/ or a click outside closes it. The app has no prefix key.
 
 In the terminal view, keys go to the focused pane as a terminal sends them. Ctrl-b goes to the pane too, so the mux prefix works as in the TUI. The app keeps these cmd shortcuts for itself:
 
@@ -86,6 +88,7 @@ In the terminal view, keys go to the focused pane as a terminal sends them. Ctrl
 | cmd-v | Paste (bracketed when the pane asks for it) |
 | cmd-f | Find in the focused pane (terminal view), or in the chat (chat view) |
 | cmd-1 to cmd-9 | In the terminal view, the session's first nine tabs. In other views, the first nine agent rows. Hold cmd to see the numbers. |
+| cmd-k | Open or close the go-to palette |
 | cmd-/ | Open or close the key sheet |
 | cmd-q | Detach and quit |
 

@@ -113,6 +113,7 @@
       },
       "id_prefix": null,
       "id_hex_width": 8,
+      "id_mode": "hex",
       "staleness_days": 21,
       "epic_max_open_children": null,
       "max_open_ideas": 25,
@@ -290,6 +291,14 @@
       "remote_addrs": null,
       "share_backlog": false,
       "ssh_peers": null
+     }
+    },
+    {
+     "name": "app",
+     "default": {
+      "alert_sound": true,
+      "alert_notification": true,
+      "alert_badge": true
      }
     },
     {
@@ -985,6 +994,10 @@
      "default": 8
     },
     {
+     "name": "id_mode",
+     "default": "hex"
+    },
+    {
      "name": "staleness_days",
      "default": 21
     },
@@ -1303,6 +1316,23 @@
     {
      "name": "authorized_principals",
      "default": {}
+    }
+   ]
+  },
+  "AppBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "alert_sound",
+     "default": true
+    },
+    {
+     "name": "alert_notification",
+     "default": true
+    },
+    {
+     "name": "alert_badge",
+     "default": true
     }
    ]
   },
@@ -3395,6 +3425,7 @@
   "backlog.max_open_ideas",
   "backlog.id_prefix",
   "backlog.id_hex_width",
+  "backlog.id_mode",
   "backlog.render_targets",
   "backlog.render_default",
   "backlog.render_path",
@@ -3720,6 +3751,9 @@
   "merge.architect.routes",
   "merge.architect.vision_paths",
   "merge.visual_paint_paths",
-  "merge.visual_shot_workflows"
+  "merge.visual_shot_workflows",
+  "app.alert_sound",
+  "app.alert_notification",
+  "app.alert_badge"
  ]
 }

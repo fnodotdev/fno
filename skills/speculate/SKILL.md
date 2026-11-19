@@ -6,6 +6,7 @@ metadata:
   requires:
     harness:
       - subagent_dispatch
+allowed-tools: Read
 ---
 
 # Speculate - Parallel Variation Implementations

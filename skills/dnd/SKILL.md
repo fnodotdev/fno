@@ -7,6 +7,7 @@ metadata:
   requires:
     binaries:
       - "fno >= 0.1"
+allowed-tools: Read
 ---
 
 # DND

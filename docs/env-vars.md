@@ -12,6 +12,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `BUDDY_KEY` | rs | The cache key that statusline.sh computes from the input and width. The native statusline writes it beside its output, so the shell can reprint that output with no process start. |
 | `CARGO` | rs | Names the cargo binary the `cargo_build_dirs` lane runs `cargo metadata` through; the PATH scan and `$CARGO_HOME/bin/cargo` are the fallbacks. |
 | `CARGO_BUILD_BUILD_DIR` | rs | The fleet build-dir value the daemon, keeper, stream and stop-hook fills set for fleet-cargo checkouts, and foreign panes scrub; read it with `fno config build-dir`. |
+| `CARGO_CFG_TARGET_OS` | rs | Cargo sets it for build scripts: the target OS the build compiles for. The shot's build script links the ScreenCaptureKit framework on macOS only (crates/fno-app/build.rs). |
 | `CARGO_HOME` | rs | Cargo install root; the default is ~/.cargo. |
 | `CARGO_MANIFEST_DIR` | rs | Cargo sets it on each process that it starts. The live-store fence then refuses to open a store under the operator home `.fno`. Only the admission call of the rustc wrapper removes it. |
 | `CENSUS_DEFERRED_FILE` | rs | Overrides the census deferred set for a targeted run: crates/fno-agent/src/eval/test_census.rs |
@@ -70,6 +71,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_AGENT_TIMER_EXE` | rs | Overrides the binary the mail-hold release timer re-enters (mail_hold.rs spawn_release_timer); empty falls through to the process's own executable. A test suite that arms the standard release leg pins a stub here so no timer escapes the sandbox. |
 | `FNO_AGENT_WORKER` | rs | Marks the process as a footnote worker. |
 | `FNO_AGENT_WORKER_BIN` | rs | Path to the worker binary. The daemon lazy-start passes it on, so a test harness runs its own build. |
+| `FNO_APP_BIN` | rs | Overrides the fno-app binary the `fno mux app` doors launch: a runnable file there wins over the front-door sibling and the PATH scan. |
 | `FNO_ARCHITECT_CALIBRATION_INPUT` | rs | Path to captured PR, plan and diff JSON for the ignored manual architect calibration test. |
 | `FNO_ATTEST_DEBUG` | rs | Prints one stderr line naming the pull's slug, row count and primary url. Unset prints nothing; diagnostics only, never the data channel. Read in crates/fno-agent/src/gate/attest.rs `run_pull`. |
 | `FNO_ATTEST_ENV_ONLY` | rs | `1` makes the retract arm's retractor identity resolve as an environment-only witness (no process ancestry), skipping the CLAUDE_CODE_SESSION_ID conflict read; the identity-conflict unit test pins it. Read in crates/fno-agent/src/gate/attest.rs `resolve_retractor_identity`. |

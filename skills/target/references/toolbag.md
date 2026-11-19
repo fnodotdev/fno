@@ -25,6 +25,7 @@ A pack install drops five skills: agent, mail, dnd, fno-me and lead. Their rows 
 | `fno:tdd` | Any behavior change, before the production edit. | A test seen failing, then passing. |
 | `fno:test-audit` | Before you add or change a test, and when the test delta nears its cap. | Four answers per test, or a prune list. |
 | `fno:think` | A question that one measurement cannot settle, or a refuted premise that needs research. | One cited findings document. |
+| `fno:talk` | A user brings a rough idea and no plan yet. User-invoked: name it, never run it for them. | One living brief bound to the idea node, ending on a Next test line. |
 | `fno:verify-footnotes` | Before the first edit (premises), before a figure reaches a reader (claims), and before a done claim. | A `## Premises` section in the plan, and a verdict with file and line for each claim. `fno do pr create` refuses a post-2026-11-16 plan with no `## Premises`. |
 | `fno:design-critic` | A diff touches `merge.visual_paint_paths`, after the shots and `fno-agent visual critique-prep`, before the look. | Findings in `<node>-critique.json`. |
 | `fno:blueprint` | There is no plan, or a ruling changed the plan (amend). | A plan path and a node. |
@@ -32,6 +33,7 @@ A pack install drops five skills: agent, mail, dnd, fno-me and lead. Their rows 
 | `fno:review` | Before the PR, on the final head. | Findings and the head-pinned attestation. |
 | `fno:persona-review` | A user or lead calls a persona check on one artifact. | The findings file beside the artifact. |
 | `fno:ship` | PR create, check, and merged. | The PR URL and the review state. |
+| `fno:fno-app` | The work touches the fno-app desktop app, or the task needs an app frame or an offscreen shot. | The app's pid or a png at `--out`. |
 | `fno:ship-docs` | User-facing behavior changed. | The doc pages. |
 | `fno:speculate` | Two or more honest routes that only a side-by-side can choose between. | N variant worktrees. |
 | `fno:triage` | Several ready nodes block on order. | A proposed order for approval. |

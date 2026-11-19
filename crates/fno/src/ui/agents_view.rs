@@ -2248,14 +2248,27 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
             .filter(|s| !s.is_empty())
             .map(str::to_string);
         // The hook rung (inside_leg) owns the row wherever a leg exists;
-        // the leg-less row falls to the screen-manifest rung. Both mappings
+        // the leg-less row falls to the question rung (the daemon-folded
+        // open-question store) then the screen-manifest rung. Both mappings
         // and the one merge (a no-blocked-producer harness's fresh screen
         // `blocked` outranks the leg) live in blocked_rung.
         let (badge, reason, answerable) = match inside_leg {
-            Some(leg) if !leg.is_null() => crate::blocked_rung::merged_badge(leg, row, now_secs),
-            _ => {
-                crate::blocked_rung::screen_rung_badge(row, now_secs).unwrap_or((None, None, None))
+            Some(leg) if !leg.is_null() => {
+                let (badge, reason, answerable) =
+                    crate::blocked_rung::merged_badge(leg, row, now_secs);
+                // A live operator question outranks a working leg (the ask
+                // is fresher truth about blockedness) but never a blocked
+                // leg (same meaning) or a done one (done is terminal).
+                if badge == Some(crate::proto::AgentBadge::Working) {
+                    crate::blocked_rung::question_rung_badge(row)
+                        .unwrap_or((badge, reason, answerable))
+                } else {
+                    (badge, reason, answerable)
+                }
             }
+            _ => crate::blocked_rung::question_rung_badge(row)
+                .or_else(|| crate::blocked_rung::screen_rung_badge(row, now_secs))
+                .unwrap_or((None, None, None)),
         };
         // The row's durable identity, provider-agnostic (both are
         // read unscoped: `where` resolves against either spelling).
