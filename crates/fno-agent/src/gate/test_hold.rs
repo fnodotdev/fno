@@ -307,7 +307,7 @@ pub(crate) fn hold_body(record: &fleet_incident::IncidentRecord) -> String {
 pub(crate) fn announce_untested(
     prior: Option<&fleet_incident::IncidentRecord>,
     record: &fleet_incident::IncidentRecord,
-) -> Option<Result<String, String>> {
+) -> Option<Outcome> {
     let body = if record.state == "stopped" {
         if record.holds_scope("tests") {
             return None;
@@ -320,11 +320,9 @@ pub(crate) fn announce_untested(
             prior.held_scopes().join(", ")
         )
     };
-    Some(crate::announce::announce_all(
-        "fno/fleet-incident",
-        ANNOUNCE_SUBJECT,
-        &body,
-    ))
+    let mut outcome = Outcome::default();
+    announce(&mut outcome, &body);
+    Some(outcome)
 }
 
 fn announce(outcome: &mut Outcome, body: &str) {

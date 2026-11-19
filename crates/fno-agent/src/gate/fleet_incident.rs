@@ -1372,12 +1372,15 @@ pub fn run_fleet_incident(args: &[String]) -> i32 {
                                 eprintln!("fleet-incident: test hold not applied: {error}")
                             }
                         }
-                        match crate::test_hold::announce_untested(prior.as_ref(), &record) {
-                            Some(Ok(id)) => eprintln!("fleet-incident: announced {id}"),
-                            Some(Err(error)) => {
-                                eprintln!("fleet-incident: announce failed: {error}")
+                        if let Some(sent) =
+                            crate::test_hold::announce_untested(prior.as_ref(), &record)
+                        {
+                            if let Some(id) = sent.announced {
+                                eprintln!("fleet-incident: announced {id}");
                             }
-                            None => {}
+                            if let Some(error) = sent.announce_error {
+                                eprintln!("fleet-incident: announce failed: {error}");
+                            }
                         }
                     }
                     0
