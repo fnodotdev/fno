@@ -7277,6 +7277,28 @@ event_types:
           type: string
           description: "The apply outcome word this event was built from."
 
+  - name: signed_out_respawn
+    description: "The watchdog's signed-out backstop lane acted on a session whose transcript's LAST assistant record is the harness-authored placeholder: it paged the operator and delivered the same-id respawn ask, then reconciled the registry row. `outcome` records what the LANE did - asked (page fired, ask delivered), page_only (the page fired, the ask could not spawn), quiet (neither) - never a respawn landing, which only the door's own truth confirmation can name."
+    sources: [daemon]
+    data:
+      required: [row_id, outcome]
+      properties:
+        row_id:
+          type: string
+          description: "The signed-out row's recorded session id."
+        name:
+          type: string
+          description: "The row's name."
+        excerpt:
+          type: string
+          description: "The first part of the synthetic reply's text (the why the model never ran)."
+        notified:
+          type: boolean
+          description: "Whether the operator page left the machine."
+        outcome:
+          type: string
+          description: "asked | page_only | quiet."
+
   - name: watchdog_unfinished_work_scan
     description: "The unfinished-work report completed one scan. This is the freshness-bearing positive marker: it fires on every complete scan even when all four dimensions measured zero, because absence of findings is measured evidence, not a skipped read. An incomplete scan fires it with complete=false and names the unknown dimensions."
     sources: [daemon, legacy]
