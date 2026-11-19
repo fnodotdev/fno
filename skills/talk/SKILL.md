@@ -68,3 +68,7 @@ kind: talk-brief
 ## Next test
 <test> - tests G<n> - refuted if <result>
 ```
+
+## Known Limitations and Deferred Work
+
+- The talk keeps one brief per idea and nothing larger. See [LIMITATIONS.md](LIMITATIONS.md).
