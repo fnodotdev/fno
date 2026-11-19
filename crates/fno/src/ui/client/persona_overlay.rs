@@ -1612,7 +1612,7 @@ pub(crate) fn persona_widening_seams(view: &mut View) -> Vec<crate::proto::Comma
     let mut seams = Vec::new();
     let claim = o.claim_pane.or(o.pane);
     if let Some(pane) = claim {
-        let rects: Vec<(u64, (usize, usize, usize, usize))> = view
+        let mut rects: Vec<(u64, (usize, usize, usize, usize))> = view
             .layout
             .panes
             .iter()
@@ -1649,20 +1649,20 @@ pub(crate) fn persona_widening_seams(view: &mut View) -> Vec<crate::proto::Comma
                     y < py + ph && py < y + h && x + w + 1 == persona.0
                 }
             });
-            let Some((nid, (nx, _, nw, _))) = nbr else {
+            let Some(&(nid, (nx, _, nw, _))) = nbr else {
                 break;
             };
             let need = target - persona.1;
-            let donate = need.min(nw.saturating_sub(pane_floor(*nid)));
+            let donate = need.min(nw.saturating_sub(pane_floor(nid)));
             if donate == 0 {
                 break;
             }
             seams.push(crate::proto::Command::ResizeSeam {
-                a: *nid,
+                a: nid,
                 b: pane,
                 pos: (nx + nw - donate) as u16,
             });
-            if let Some(r) = rects.iter_mut().find(|(pid, _)| pid == nid) {
+            if let Some(r) = rects.iter_mut().find(|(pid, _)| *pid == nid) {
                 r.1 .2 -= donate;
             }
             persona.0 -= donate;
