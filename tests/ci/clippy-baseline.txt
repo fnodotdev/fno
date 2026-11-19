@@ -15820,6 +15820,9 @@ crates/fno-agent/src/runtime/disk_report.rs	clippy::indexing_slicing	row["store"
 crates/fno-agent/src/runtime/disk_report.rs	clippy::indexing_slicing	row["verdict"].as_str().unwrap_or(""),
 crates/fno-agent/src/runtime/disk_report.rs	clippy::too_many_lines	fn store_rows(budget: &WalkBudget, mut emit: impl FnMut(serde_json::Value)) {
 crates/fno-agent/src/runtime/cargo_build_dirs.rs	clippy::too_many_lines	pub(crate) fn sweep_roots_bounded(
+crates/fno-agent/src/runtime/disk_report.rs	clippy::indexing_slicing	let store_rows = report["stores"].as_array().unwrap();
+crates/fno-agent/src/runtime/disk_report.rs	clippy::indexing_slicing	let strays = store_rows.iter().find(|r| r["store"] == "strays").unwrap();
+crates/fno-agent/src/runtime/disk_report.rs	clippy::indexing_slicing	strays["verdict"].as_str().unwrap().contains("skipped"),
 crates/fno-agent/src/eval/otel_ingest.rs	clippy::let_underscore_must_use	let _ = conn.execute("DELETE FROM otel_events WHERE ts < ?1", [&cutoff]);
 crates/fno-agent/src/eval/otel_ingest.rs	clippy::let_underscore_must_use	let _ = conn.execute("DELETE FROM api_requests WHERE ts < ?1", [&cutoff]);
 crates/fno-agent/src/eval/otel_ingest.rs	clippy::let_underscore_must_use	let _ = conn.execute(

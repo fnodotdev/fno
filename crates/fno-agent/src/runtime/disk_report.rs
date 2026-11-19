@@ -349,14 +349,24 @@ fn store_rows(budget: &WalkBudget, mut emit: impl FnMut(serde_json::Value)) {
         ),
     ));
     let mut strays = 0u64;
+    let mut strays_partial = false;
+    let mut strays_skipped = budget.expired();
     for name in ["events.db.db", "events.db.db-shm", "events.db.db-wal"] {
-        strays += dir_row_bytes(&root.join(name), budget).0;
+        let (b, p, s) = dir_row_bytes(&root.join(name), budget);
+        strays += b;
+        strays_partial |= p;
+        strays_skipped |= s;
     }
     emit(store_row(
         "strays",
         "data",
         strays,
-        "safe: the stray-db lane removes them after 7 days",
+        &budget_verdict(
+            "safe: the stray-db lane removes them after 7 days",
+            strays_partial,
+            strays_skipped,
+            budget.secs(),
+        ),
     ));
     let (bytes, partial, skipped) = cache_sum("cargo-build", budget);
     emit(store_row(
@@ -507,6 +517,12 @@ mod tests {
             })
             .count();
         assert!(marked >= 1, "no row names the budget: {rows:?}");
+        let store_rows = report["stores"].as_array().unwrap();
+        let strays = store_rows.iter().find(|r| r["store"] == "strays").unwrap();
+        assert!(
+            strays["verdict"].as_str().unwrap().contains("skipped"),
+            "{strays}"
+        );
         std::fs::remove_dir_all(&base).ok();
     }
 }

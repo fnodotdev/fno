@@ -1339,10 +1339,10 @@ fn install_retired_lane(apply: bool) -> Lane {
     lane
 }
 
-/// Bytes, then the apply removals, then the streaming print. Past the
-/// deadline the lane is a skip stub: paths cleared, the skip named on the
-/// line, the callback fired. Never half-removes: the apply arm only runs
-/// inside the budget.
+/// Bounded bytes, then the apply removals, then the streaming print. Past
+/// the deadline the lane is a skip stub: paths cleared, the skip named on
+/// the line, the callback fired. Never half-removes: the apply arm only
+/// runs inside the budget, and the sizing itself stops at the deadline.
 fn finish_lane(
     mut lane: Lane,
     apply: bool,
@@ -1352,7 +1352,21 @@ fn finish_lane(
     if budget.expired() {
         return skip_lane_stub(lane, budget, report);
     }
-    lane.bytes = lane.paths.iter().map(|p| tree_bytes(p)).sum();
+    // Bounded sizing: one huge path cannot stall the stream past the
+    // deadline; the partial is named on the lane, not swallowed.
+    let mut partial = false;
+    for path in &lane.paths {
+        let (bytes, stopped) = crate::disk_report::dir_bytes_bounded(path, budget);
+        lane.bytes += bytes;
+        partial |= stopped;
+    }
+    if partial {
+        if !lane.note.is_empty() {
+            lane.note.push_str("; ");
+        }
+        lane.note
+            .push_str(&format!("partial: walk budget {}s hit", budget.secs()));
+    }
     if apply {
         for path in &lane.paths {
             let _ = std::fs::remove_dir_all(path);
@@ -1420,21 +1434,32 @@ fn build_lanes(
     codex_quarantines = finish_lane(codex_quarantines, apply, budget, report);
     drop(codex_lock);
     lanes.push(codex_quarantines);
-    let mut push = |lane: Lane| {
+    // Every lane past the codex block gates on the budget before its
+    // constructor runs: the constructors size and, on apply, remove, so an
+    // ungated call would work past the deadline.
+    let mut push = |name: &'static str, build: &dyn Fn() -> Lane| {
+        if budget.expired() {
+            let stub = skip_lane_stub(Lane::new(name, Vec::new()), budget, report);
+            lanes.push(stub);
+            return;
+        }
+        let lane = build();
         report(&lane);
         lanes.push(lane);
     };
-    push(cargo_build_dirs_lane(home, apply, include_cwd_root, budget));
-    push(claude_config_tmp_lane(apply));
-    push(stale_spaces_lane(apply));
-    push(backups_retention_lane(home, apply));
-    push(graph_vacuum_lane(home, apply));
-    push(state_layout_lane(home, apply));
-    push(state_root_drift_lane(home));
-    push(stray_event_db_lane(home, apply));
-    push(gh_facts_lane(apply));
-    push(pr_status_lane(apply));
-    push(install_retired_lane(apply));
+    push("cargo_build_dirs", &|| {
+        cargo_build_dirs_lane(home, apply, include_cwd_root, budget)
+    });
+    push("claude_config_tmp", &|| claude_config_tmp_lane(apply));
+    push("stale_spaces", &|| stale_spaces_lane(apply));
+    push("backups_retention", &|| backups_retention_lane(home, apply));
+    push("graph_vacuum", &|| graph_vacuum_lane(home, apply));
+    push("state_layout", &|| state_layout_lane(home, apply));
+    push("state_root_drift", &|| state_root_drift_lane(home));
+    push("stray_event_db", &|| stray_event_db_lane(home, apply));
+    push("gh_facts_retention", &|| gh_facts_lane(apply));
+    push("pr_status_retention", &|| pr_status_lane(apply));
+    push("install_retired", &|| install_retired_lane(apply));
     lanes
 }
 
@@ -1569,6 +1594,40 @@ pub(crate) mod tests {
     /// cargo_build_dirs' tests, which mutate the same vars.
     pub(crate) static ENV_LOCK: std::sync::LazyLock<&'static std::sync::Mutex<()>> =
         std::sync::LazyLock::new(crate::claims::test_env_lock);
+
+    /// An expired budget stubs every lane: the tail constructors never run,
+    /// so nothing sizes or removes past the deadline, and each lane prints
+    /// exactly once.
+    #[test]
+    fn an_expired_budget_stubs_every_tail_lane() {
+        let dead = crate::disk_report::WalkBudget::start(std::time::Duration::ZERO);
+        let home = crate::paths::AgentsHome::from_env();
+        let mut printed: Vec<String> = Vec::new();
+        let lanes = build_lanes(
+            &home,
+            false,
+            false,
+            Vec::new(),
+            String::new(),
+            &dead,
+            &mut |lane| printed.push(lane.name.to_string()),
+        );
+        assert!(lanes.len() >= 15, "lane set shrank: {}", lanes.len());
+        for lane in &lanes {
+            assert!(
+                lane.paths.is_empty(),
+                "{} kept paths past the deadline",
+                lane.name
+            );
+            assert!(
+                lane.note.contains("skipped"),
+                "{} note: {}",
+                lane.name,
+                lane.note
+            );
+        }
+        assert_eq!(printed.len(), lanes.len());
+    }
 
     fn temp_lane_root(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("fno-reclaim-{tag}-{}", std::process::id()));
