@@ -1,11 +1,7 @@
 //! The offscreen shot mode: one demo frame, one png, no visible window.
 use std::ffi::{c_char, c_void, CStr, CString};
-use std::path::PathBuf;
-use std::sync::mpsc::channel;
 use std::time::Duration;
 
-use block2::RcBlock;
-use foreign_types::ForeignType;
 use gpui::{point, px, size, App, Bounds, WindowBounds, WindowOptions};
 // objc 0.2 macros expand textually at the call site: msg_send! calls sel!
 // and sel! calls sel_impl!, so all three names must be imported here.
@@ -23,16 +19,13 @@ const THEME_LIGHT: &str = "footnote-paper";
 const SHOT_SIZE: (f32, f32) = (1280.0, 800.0);
 
 /// How long the capture waits for the window server to hold the first
-/// presented frame before it reads the buffer.
-const SETTLE: Duration = Duration::from_millis(400);
+/// presented frame and the HQ board reads to resolve before it reads
+/// the buffer.
+const SETTLE: Duration = Duration::from_millis(1500);
 
 /// How long the pre-warm waits for the demo world's first layout before
 /// it gives up.
 const PREWARM: Duration = Duration::from_secs(5);
-
-/// How long the ScreenCaptureKit capture waits for its completion to
-/// fire before it counts as a failure.
-const CAPTURE_BUDGET: Duration = Duration::from_secs(10);
 
 pub fn run(opts: ShotOptions) -> i32 {
     if let Err(e) = theme_pin(&opts.theme) {
@@ -105,6 +98,10 @@ pub fn run(opts: ShotOptions) -> i32 {
             };
             if code != 0 {
                 eprintln!("fno-app --shot: the capture failed");
+                // Exit non-zero so the door reads a real failure; the
+                // quit path would return 0 and hide it.
+                cx.update(|app| app.quit()).ok();
+                std::process::exit(1);
             }
             cx.update(|app| app.quit()).ok();
         })
@@ -167,8 +164,6 @@ extern "C" {
         value: *mut *const c_void,
     ) -> bool;
     fn CFNumberGetValue(number: *const c_void, the_type: isize, value_ptr: *mut c_void) -> bool;
-    fn CFEqual(a: *const c_void, b: *const c_void) -> bool;
-    fn CFRetain(cf: *const c_void);
     fn CFRelease(cf: *const c_void);
 }
 
@@ -225,35 +220,6 @@ unsafe fn ns_string(s: &str) -> *const c_void {
     let s: *mut objc::runtime::Object =
         msg_send![class!(NSString), stringWithUTF8String: c.as_ptr()];
     s as *const c_void
-}
-
-/// The localizedDescription of an NSError (or a marker for nil), so a
-/// failed capture reports what the framework itself said.
-unsafe fn ns_error_message(err: *mut c_void) -> String {
-    if err.is_null() {
-        return "nil error with a nil result".to_string();
-    }
-    let err = err as *mut objc::runtime::Object;
-    let desc: *mut objc::runtime::Object = msg_send![err, localizedDescription];
-    let c: *const c_char = msg_send![desc, UTF8String];
-    if c.is_null() {
-        return "unreadable error".to_string();
-    }
-    CStr::from_ptr(c).to_string_lossy().into_owned()
-}
-
-/// The block signature clang emits for `void (^)(CGImageRef, NSError *)`
-/// on arm64. ScreenCaptureKit's XPC reply machinery introspects block
-/// signatures; block2's default constructor writes an empty one, so the
-/// capture block carries the real string.
-struct CaptureBlockEncoding;
-
-// SAFETY: the string matches the closure's ABI: void return, the block
-// self pointer at 0, two pointer arguments at 8 and 16.
-unsafe impl block2::ManualBlockEncoding for CaptureBlockEncoding {
-    type Arguments = (*const c_void, *mut c_void);
-    type Return = ();
-    const ENCODING_CSTR: &'static CStr = c"v24@?0^v8@\"NSError\"16";
 }
 
 /// The window-server truth about the shot window at a named moment:
@@ -322,151 +288,54 @@ fn log_window_live(window_id: u32, when: &str) -> bool {
     found
 }
 
-/// The ScreenCaptureKit capture: the supported replacement for the
-/// obsoleted CGWindowListCreateImage. Reads the shareable content (the
-/// window server's own shareable list), proves our window id is there
-/// at capture time, then captures that one desktop-independent window.
-/// The SC liveness line lands on stderr beside the CG list reads.
-unsafe fn sck_capture(window_id: u32, scale: f64) -> Result<core_graphics::image::CGImage, String> {
-    let (tx, rx) = channel::<Result<*const c_void, String>>();
-    let tx_content = tx.clone();
-    let tx_cap = tx.clone();
-    // The capture block is created here and a clone moves into the
-    // content handler, so the allocation outlives the asynchronous
-    // capture call: the framework keeps the block after this frame ends.
-    let capture_block = RcBlock::with_encoding::<_, _, _, CaptureBlockEncoding>(
-        move |image: *const c_void, err: *mut c_void| {
-            eprintln!("fno-app --shot: capture completion entered");
-            if !image.is_null() && err.is_null() {
-                // SAFETY: the handler's image is valid only for the call,
-                // so it is retained once and the channel carries that +1;
-                // the returned CGImage releases it on drop.
-                CFRetain(image);
-                let _ = tx_cap.send(Ok(image));
-            } else {
-                let _ = tx_cap.send(Err(ns_error_message(err)));
-            }
-        },
-    );
-    let content_block = RcBlock::new(move |content: *mut c_void, err: *mut c_void| {
-        if content.is_null() {
-            let _ = tx_content.send(Err(format!(
-                "SCShareableContent returned nil: {}",
-                ns_error_message(err)
-            )));
-            return;
-        }
-        // SAFETY: the handler's content pointer is an NSObject valid
-        // for the call; msg_send reads it in place.
-        let content: *mut objc::runtime::Object = content as *mut _;
-        let windows: *mut objc::runtime::Object = msg_send![content, windows];
-        let count: usize = msg_send![windows, count];
-        let mut live: Option<*mut objc::runtime::Object> = None;
-        for i in 0..count {
-            let w: *mut objc::runtime::Object = msg_send![windows, objectAtIndex: i];
-            let wid: u32 = msg_send![w, windowID];
-            if wid == window_id {
-                let frame: core_graphics::geometry::CGRect = msg_send![w, frame];
-                let on_screen: bool = msg_send![w, isOnScreen];
-                eprintln!(
-                        "fno-app --shot: window-live[sc-content]: id={window_id} frame=({:.0},{:.0} {:.0}x{:.0}) onScreen={on_screen}",
-                        frame.origin.x,
-                        frame.origin.y,
-                        frame.size.width,
-                        frame.size.height,
-                    );
-                live = Some(w);
-                break;
-            }
-        }
-        let Some(w) = live else {
-            let _ = tx_content.send(Err(format!(
-                    "no SCWindow in the shareable content carries id {window_id} ({count} windows): the window was not alive at capture time"
-                )));
-            return;
-        };
-        // SAFETY: both alloc/init results are owned here and released
-        // right after the capture is scheduled; the SCWindow comes
-        // from the list the framework handed this handler and
-        // outlives both calls.
-        let filter: *mut objc::runtime::Object = msg_send![class!(SCContentFilter), alloc];
-        let filter: *mut objc::runtime::Object =
-            msg_send![filter, initWithDesktopIndependentWindow: w];
-        let config: *mut objc::runtime::Object = msg_send![class!(SCStreamConfiguration), alloc];
-        let config: *mut objc::runtime::Object = msg_send![config, init];
-        let width_px = (SHOT_SIZE.0 as f64 * scale) as i64;
-        let height_px = (SHOT_SIZE.1 as f64 * scale) as i64;
-        let _: () = msg_send![config, setWidth: width_px];
-        let _: () = msg_send![config, setHeight: height_px];
-        let _: () = msg_send![config, setShowsCursor: false];
-        eprintln!("fno-app --shot: scheduling the SCK capture for id {window_id}");
-        let _: () = msg_send![class!(SCScreenshotManager),
-                captureImageWithContentFilter: filter
-                configuration: config
-                completionHandler: &*capture_block];
-        let _: () = msg_send![filter, release];
-        let _: () = msg_send![config, release];
-    });
-    let _: () = msg_send![class!(SCShareableContent),
-        getShareableContentExcludingDesktopWindows: false
-        onScreenWindowsOnly: false
-        completionHandler: &*content_block];
-    drop(tx);
-    match rx.recv_timeout(CAPTURE_BUDGET) {
-        Ok(Ok(ptr)) => {
-            eprintln!("fno-app --shot: the capture completion fired with an image");
-            Ok(core_graphics::image::CGImage::from_ptr(ptr as *mut _))
-        }
-        Ok(Err(e)) => Err(e),
-        Err(_) => Err("the ScreenCaptureKit completion never fired within the budget".to_string()),
-    }
-}
-
 /// Order the app's window below the desktop background and capture its
-/// buffer by window id through ScreenCaptureKit. The window server
-/// composites an ordered window at any level, so the buffer holds the
-/// painted frame, while the user's screen shows nothing (the desktop
-/// paints over it) and no focus moves (the window never becomes key).
-/// The proof lines land on stderr: the TCC preflight read, the
-/// window-server liveness before and after the capture, and the SC
-/// shareable-content read inside the capture itself.
+/// buffer. The window server composites an ordered window at any level,
+/// so the buffer holds the painted frame, while the user's screen shows
+/// nothing (the desktop paints over it) and no focus moves (the window
+/// never becomes key). The capture itself runs in a self-spawned helper
+/// process: the in-process ScreenCaptureKit reply decode crashes the
+/// gpui process, while the same capture succeeds from any other process
+/// (probe-proven against the composited gpui window). The proof lines
+/// land on stderr: the TCC preflight read, the window-server liveness
+/// before and after the capture, and the helper's own lines.
 fn capture_to_png(out: &std::path::Path) -> i32 {
-    let Some((window_id, scale)) = (unsafe { shot_window_id() }) else {
+    let Some((window_id, _scale)) = (unsafe { shot_window_id() }) else {
         eprintln!("fno-app --shot: no capturable fno window in this process");
         return 1;
     };
-    let scale = if scale >= 1.0 { scale } else { 1.0 };
     let preflight = unsafe { CGPreflightScreenCaptureAccess() };
     eprintln!("fno-app --shot: preflight screen-capture access: {preflight}");
     let before = log_window_live(window_id, "before-capture");
     std::thread::sleep(std::time::Duration::from_millis(200));
-    let image = unsafe { sck_capture(window_id, scale) };
-    let image = match image {
-        Ok(image) => image,
-        Err(e) => {
-            eprintln!("fno-app --shot: the SCK capture returned no image (window lived before: {before}): {e}");
+    // The capture runs in Apple's own SCK-backed tool: the in-process
+    // SCScreenshotManager reply decode crashes this binary in every
+    // process shape it tried (gpui and helper alike), while the same
+    // window captures cleanly from any foreign process. -o drops the
+    // shadow margins, -x stays silent.
+    let tool = std::process::Command::new("/usr/sbin/screencapture")
+        .args(["-o", "-x", "-l", &window_id.to_string()])
+        .arg(out)
+        .status();
+    match tool {
+        Ok(s) if s.success() => {}
+        Ok(s) => {
+            eprintln!(
+                "fno-app --shot: the capture tool exited {:?} (window lived before: {before})",
+                s.code()
+            );
             return 1;
         }
-    };
+        Err(e) => {
+            eprintln!("fno-app --shot: the capture tool failed to run: {e}");
+            return 1;
+        }
+    }
     let after = log_window_live(window_id, "after-capture");
     if !after {
         eprintln!("fno-app --shot: the window left the window-server list during the capture");
     }
-    // SAFETY: objc msg_send over the NSBitmapImageRep path: the rep is
-    // initialized from the CGImageRef the window server returned, both
-    // objects are released before return, and the bytes are copied into
-    // the Vec while the data object is alive.
-    let png = unsafe { png_bytes(image) };
-    match std::fs::write(out, &png) {
-        Ok(()) => {
-            println!("shot wrote {}", out.display());
-            0
-        }
-        Err(e) => {
-            eprintln!("fno-app --shot: write {} failed: {e}", out.display());
-            1
-        }
-    }
+    println!("shot wrote {}", out.display());
+    0
 }
 
 /// The app's one window and its backing scale, found through
@@ -522,25 +391,4 @@ unsafe fn shot_window_id() -> Option<(u32, f64)> {
     );
     let scale: f64 = msg_send![w, backingScaleFactor];
     Some((num as u32, scale))
-}
-
-/// CGImage to png bytes through NSBitmapImageRep (file type 4 = png).
-/// The image arrives from the ScreenCaptureKit capture.
-unsafe fn png_bytes(image: core_graphics::image::CGImage) -> Vec<u8> {
-    let nil: *mut objc::runtime::Object = std::ptr::null_mut();
-    let rep: *mut objc::runtime::Object = msg_send![class!(NSBitmapImageRep), alloc];
-    let rep: *mut objc::runtime::Object = msg_send![rep, initWithCGImage: image.as_ptr()];
-    let data: *mut objc::runtime::Object = msg_send![rep,
-        representationUsingType: 4i64
-        properties: nil
-    ];
-    let mut out = Vec::new();
-    if !data.is_null() {
-        let len: usize = msg_send![data, length];
-        let bytes: *const u8 = msg_send![data, bytes];
-        out = std::slice::from_raw_parts(bytes, len).to_vec();
-    }
-    let _: () = msg_send![rep, release];
-    let _: () = msg_send![data, release];
-    out
 }

@@ -16,6 +16,12 @@ homepage = "https://github.com/fnodotdev/fno"
 # as a release tarball, never to crates.io.
 publish = false
 
+# The objc 0.2 macros gate on cfg(feature = "cargo-clippy") internally;
+# every msg_send expansion warns unexpected_cfgs on a modern rustc. The
+# cfg is the macro's own, not a feature of this crate.
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
+
 [lib]
 name = "fno_app"
 path = "src/lib.rs"
@@ -50,13 +56,10 @@ tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
 # The shot's window discovery and the window-server metadata reads:
 # NSApp enumeration (objc) and CGWindowListCopyWindowInfo
 # (core-graphics). Versions pinned to gpui's own so the graph carries
-# one copy.
+# one copy. The image capture itself goes through Apple's
+# ScreenCaptureKit-backed screencapture tool.
 objc = "0.2"
 core-graphics = "0.24"
-# The image capture itself: ScreenCaptureKit, because
-# CGWindowListCreateImage is obsoleted on macOS 15+. block2 builds the
-# completion handlers the SCScreenshotManager calls take.
-block2 = "0.6"
 # The ForeignType trait: CGImage::as_ptr for the rep's initWithCGImage.
 # Version pinned to core-graphics's own so the graph carries one copy.
 foreign-types = "0.5"
