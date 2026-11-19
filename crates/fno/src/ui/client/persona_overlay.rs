@@ -1277,7 +1277,7 @@ pub(crate) async fn spawn_edit(
         .map(|(pid, _)| *pid);
     let Some(anchor_id) = anchor else {
         disarm_edit(view);
-        view.set_notice("the editor pane never opened: no pane to append beside");
+        view.set_notice("the editor pane never opened: no pane to append beside".into());
         return;
     };
     let placement = crate::proto::PanePlacement {
