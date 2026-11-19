@@ -92,10 +92,20 @@ pub(crate) struct PersonaOverlay {
     /// reflow under an overlay. The door close kills it; the argv is
     /// the orphan marker the server side can reap.
     pub(crate) pane: Option<u64>,
-    /// The column still owes its width claim: the spawn (or the editor
-    /// fold beside it) landed, and the seams that shape the row fire once
-    /// a layout naming the new pane arrives. One shot, then cleared.
+    /// The column still owes its width claim: the spawn (the persona
+    /// column, the appended editor pane, or a record pane) landed, and
+    /// the seams that shape the row fire once a layout naming the new
+    /// pane arrives. One shot, then cleared.
     pub(crate) widen: bool,
+    /// The editor pane `e` spawned: appended right of the session panes,
+    /// never folded beside the page. The door close kills it.
+    pub(crate) edit_pane: Option<u64>,
+    /// The pane that still owes its width claim: the persona column, the
+    /// editor pane, or the newest record pane, whichever appended last.
+    pub(crate) claim_pane: Option<u64>,
+    /// Records drilled past the first: each holds its own appended pane
+    /// and the node it renders. The board detail keeps the first record.
+    pub(crate) records: Vec<(u64, String)>,
     /// A serving record is drilled open right of the persona column.
     /// Left and Esc pop the record before the column itself.
     pub(crate) drill: bool,
@@ -438,6 +448,9 @@ fn open_page(project: &str, persona: &str) -> PersonaOverlay {
             PersonaOverlay {
                 pane: None,
                 widen: false,
+                edit_pane: None,
+                claim_pane: None,
+                records: Vec::new(),
                 title,
                 lines: Vec::new(),
                 cursor: None,
@@ -461,6 +474,9 @@ fn open_page(project: &str, persona: &str) -> PersonaOverlay {
         Err(_) => PersonaOverlay {
             pane: None,
             widen: false,
+            edit_pane: None,
+            claim_pane: None,
+            records: Vec::new(),
             title: persona.to_string(),
             lines: notice_lines(&path),
             cursor: None,
@@ -742,6 +758,9 @@ fn open_list(title: &str, project: &str, personas: Vec<String>) -> PersonaOverla
     PersonaOverlay {
         pane: None,
         widen: false,
+        edit_pane: None,
+        claim_pane: None,
+        records: Vec::new(),
         title: title.to_string(),
         lines: picker_lines(&personas, 0),
         cursor: (!personas.is_empty()).then_some(0),
@@ -831,8 +850,11 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) -> StdinFlow {
         .is_some_and(|o| o.input.is_none() && o.cursor.is_none())
         && bytes == [0x1b, 0x5b, 0x44]
     {
-        // Left pops the rightmost pane: a drilled record first, then
-        // the persona column itself.
+        // Left pops the rightmost pane: an appended record pane
+        // first, then the drilled record, then the persona column.
+        if pop_record_pane(view) {
+            return StdinFlow::Continue;
+        }
         if view.persona.as_ref().is_some_and(|o| o.drill) {
             if let Some(o) = view.persona.as_mut() {
                 o.drill = false;
@@ -870,13 +892,27 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) -> StdinFlow {
             // decisions row or a question): the record has no detail
             // column to drill into, so the page hands off the way it did
             // before the drill existed.
+            let mut append: Option<String> = None;
             if !matches!(s.kind, ServeKind::Node) || view.backlog_board.is_none() {
                 close_persona_pane(view);
                 view.persona = None;
-            } else if let Some(o) = view.persona.as_mut() {
-                o.drill = true;
+                open_serving(view, &s);
+            } else {
+                // A drill past the first appends: the record takes its
+                // own pane right of the row and the earlier columns stay.
+                let drilled = view.persona.as_ref().is_some_and(|o| o.drill);
+                if drilled {
+                    append = Some(s.id.clone());
+                } else {
+                    if let Some(o) = view.persona.as_mut() {
+                        o.drill = true;
+                    }
+                    open_serving(view, &s);
+                }
             }
-            open_serving(view, &s);
+            if let Some(node) = append {
+                spawn_record_pane(view, &node);
+            }
             return StdinFlow::Continue;
         }
     }
@@ -901,8 +937,12 @@ fn keys_page(view: &mut View, bytes: &[u8], serving: &[Serving]) -> StdinFlow {
     for &k in bytes {
         match k {
             0x1b => {
-                // Esc pops the rightmost pane: a drilled record first,
-                // then the persona column.
+                // Esc pops the rightmost pane: an appended record pane
+                // first, then the drilled record, then the persona
+                // column.
+                if pop_record_pane(view) {
+                    return StdinFlow::Continue;
+                }
                 if view.persona.as_ref().is_some_and(|o| o.drill) {
                     if let Some(o) = view.persona.as_mut() {
                         o.drill = false;
@@ -1224,8 +1264,26 @@ pub(crate) async fn spawn_edit(
     let cwd = std::env::current_dir()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| ".".into());
+    // The editor appends as the next column right of the row's
+    // rightmost pane, the way the persona column does: a drill never
+    // folds the page beside a docked editor. Exact placement: a refused
+    // split surfaces as a notice below, never a silent spawn in a fresh
+    // tab.
+    let anchor = view
+        .layout
+        .panes
+        .iter()
+        .max_by_key(|(_, r)| r.x + r.cols)
+        .map(|(pid, _)| *pid);
+    let Some(anchor_id) = anchor else {
+        disarm_edit(view);
+        view.set_notice("the editor pane never opened: no pane to append beside");
+        return;
+    };
     let placement = crate::proto::PanePlacement {
         split: Some(crate::proto::Dir::Right),
+        at: Some(anchor_id),
+        fallback: crate::proto::PlacementFallback::Refuse,
         ..Default::default()
     };
     let command = crate::proto::ControlCommand::PaneRun {
@@ -1270,9 +1328,12 @@ pub(crate) async fn spawn_edit(
                 disarm_edit(view);
                 view.set_notice(format!("the editor pane focus failed: {e}"));
             }
-            // The fold claims the persona column's width once the
-            // layout names the editor pane.
+            // The width claim fires on the layout that names the
+            // editor pane: the appended column claims its widest share
+            // then.
             if let Some(o) = view.persona.as_mut() {
+                o.edit_pane = Some(pane_id);
+                o.claim_pane = Some(pane_id);
                 o.widen = true;
             }
         }
@@ -1484,6 +1545,7 @@ pub(crate) fn spawn_persona_pane(view: &mut View) {
     };
     if let Some(o) = view.persona.as_mut() {
         o.pane = Some(pane_id);
+        o.claim_pane = Some(pane_id);
         // The width claim fires on the layout that names the new pane:
         // the seams read post-split rects, which this client only sees
         // after the server's next Layout push.
@@ -1522,7 +1584,8 @@ pub(crate) fn persona_widening_seams(view: &mut View) -> Vec<crate::proto::Comma
     };
     const FLOOR: usize = 10;
     let mut seams = Vec::new();
-    if let Some(pane) = o.pane {
+    let claim = o.claim_pane.or(o.pane);
+    if let Some(pane) = claim {
         let rects: Vec<(u64, (usize, usize, usize, usize))> = view
             .layout
             .panes
@@ -1576,27 +1639,6 @@ pub(crate) fn persona_widening_seams(view: &mut View) -> Vec<crate::proto::Comma
             persona.0 -= donate;
             persona.1 += donate;
         }
-    } else if let Home::Pane(home_id) = o.home {
-        if let Some(vi) = sibling_pane(view) {
-            let Some((_, home)) = view.layout.panes.iter().find(|(pid, _)| *pid == home_id) else {
-                return Vec::new();
-            };
-            let Some((_, vi_r)) = view.layout.panes.iter().find(|(pid, _)| *pid == vi) else {
-                return Vec::new();
-            };
-            // The editor pane shrinks to the dock's persona share, so
-            // the feature column out-reads the scratch pane beside it.
-            let joint = home.cols as usize + vi_r.cols as usize;
-            if let Some((_, col)) = dock_columns(view, joint) {
-                if (vi_r.cols as usize) > col {
-                    seams.push(crate::proto::Command::ResizeSeam {
-                        a: home_id,
-                        b: vi,
-                        pos: (vi_r.x as usize + col) as u16,
-                    });
-                }
-            }
-        }
     }
     // One shot: the claim answers once, from the layout that names it.
     if let Some(o) = view.persona.as_mut() {
@@ -1605,15 +1647,71 @@ pub(crate) fn persona_widening_seams(view: &mut View) -> Vec<crate::proto::Comma
     seams
 }
 
-/// The door closes: the persona column's pane dies with it, or a
-/// sleep placeholder lingers in the session until the server-side
-/// argv reap finds it. The kill runs on the control socket by id, so
-/// it never steals focus.
-pub(crate) fn close_persona_pane(view: &mut View) {
-    let pane = view.persona.as_ref().and_then(|o| o.pane);
-    let Some(pane) = pane else {
+/// A record drilled past the first appends its own pane right of the
+/// row's rightmost pane, the same split the persona column takes. The
+/// pane is a sleep placeholder; the client paints the record lines into
+/// its rect, so the column tiles real space and the seam claim can
+/// reshape the row.
+fn spawn_record_pane(view: &mut View, node_id: &str) {
+    let docked = view.persona.as_ref().is_some_and(|o| o.pane.is_some());
+    if !docked {
+        return;
+    }
+    let anchor = view
+        .layout
+        .panes
+        .iter()
+        .max_by_key(|(_, r)| r.x + r.cols)
+        .map(|(pid, _)| *pid);
+    let Some(anchor_id) = anchor else {
         return;
     };
+    let cwd = std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| ".".into());
+    let placement = crate::proto::PanePlacement {
+        split: Some(crate::proto::Dir::Right),
+        at: Some(anchor_id),
+        fallback: crate::proto::PlacementFallback::Refuse,
+        ..Default::default()
+    };
+    let command = crate::proto::ControlCommand::PaneRun {
+        cwd,
+        argv: vec!["sleep".into(), "2147483647".into()],
+        cols: None,
+        rows: None,
+        claim: false,
+        placement,
+        worker: None,
+        fno_id: None,
+    };
+    let session = view.session.clone();
+    let Ok(sock) = crate::proto::socket_path(&session) else {
+        return;
+    };
+    let reply = crate::mux_cli::control_roundtrip(&sock, &session, command);
+    let Ok(crate::proto::ServerMsg::PaneSpawned { pane_id, .. }) = reply else {
+        return;
+    };
+    if let Some(o) = view.persona.as_mut() {
+        o.records.push((pane_id, node_id.to_string()));
+        o.claim_pane = Some(pane_id);
+        o.widen = true;
+    }
+}
+
+/// Pop the newest appended record pane, if any: kill its placeholder and
+/// drop the record. True when a pane popped, so the key is consumed.
+fn pop_record_pane(view: &mut View) -> bool {
+    let popped = view.persona.as_mut().and_then(|o| o.records.pop());
+    let Some((pane, _)) = popped else {
+        return false;
+    };
+    if let Some(o) = view.persona.as_mut() {
+        if o.claim_pane == Some(pane) {
+            o.claim_pane = None;
+        }
+    }
     let session = view.session.clone();
     if let Ok(sock) = crate::proto::socket_path(&session) {
         let reply = crate::mux_cli::control_roundtrip(
@@ -1624,10 +1722,107 @@ pub(crate) fn close_persona_pane(view: &mut View) {
                 hand_off_to: None,
             },
         );
-        // A refused kill leaves the sleep placeholder running in the
-        // session, so the failure names itself instead of vanishing.
         if let Err(e) = reply {
-            view.set_notice(format!("the persona pane lingers: {e}"));
+            view.set_notice(format!("the record pane lingers: {e}"));
+        }
+    }
+    true
+}
+
+/// The appended record panes: each paints the node's detail lines into
+/// its own rect, the same panel the first drilled record uses.
+fn paint_record_panes(view: &View, cells: &mut [Cell], rows: usize, cols: usize) {
+    let Some(o) = view.persona.as_ref() else {
+        return;
+    };
+    if o.records.is_empty() {
+        return;
+    }
+    let Some(b) = view.backlog_board.as_ref() else {
+        return;
+    };
+    for (pane, node_id) in &o.records {
+        let Some((_, r)) = view.layout.panes.iter().find(|(pid, _)| *pid == *pane) else {
+            continue;
+        };
+        let top = (super::TAB_BAR_ROWS as usize + r.y as usize).min(rows);
+        let left = (view.left_chrome_w() as usize + r.x as usize).min(cols);
+        let h = (r.rows as usize).min(rows.saturating_sub(top));
+        let w = (r.cols as usize).min(cols.saturating_sub(left));
+        if h == 0 || w == 0 {
+            continue;
+        }
+        for rr in top..top + h {
+            let base = rr * cols + left;
+            if let Some(span) = cells.get_mut(base..base + w) {
+                span.fill(Cell::default());
+            }
+        }
+        backlog_style::paint_title_row(
+            cells,
+            rows,
+            cols,
+            top,
+            left,
+            w,
+            &format!("details \u{b7} {node_id}"),
+            false,
+            &view.theme,
+        );
+        if h <= 1 {
+            continue;
+        }
+        let (lines, _) = super::node_detail::pane_lines(b, node_id, None, w);
+        backlog_style::paint_panel_at(
+            cells,
+            rows,
+            cols,
+            left,
+            top + 1,
+            w,
+            h - 1,
+            &lines,
+            None,
+            &view.theme,
+        );
+    }
+}
+
+/// The door closes: the persona column's pane dies with it, or a
+/// sleep placeholder lingers in the session until the server-side
+/// argv reap finds it. The kill runs on the control socket by id, so
+/// it never steals focus.
+pub(crate) fn close_persona_pane(view: &mut View) {
+    let Some(o) = view.persona.as_ref() else {
+        return;
+    };
+    let mut panes = Vec::new();
+    if let Some(p) = o.pane {
+        panes.push(p);
+    }
+    if let Some(p) = o.edit_pane {
+        panes.push(p);
+    }
+    panes.extend(o.records.iter().map(|(p, _)| *p));
+    if panes.is_empty() {
+        return;
+    }
+    let session = view.session.clone();
+    if let Ok(sock) = crate::proto::socket_path(&session) {
+        for pane in panes {
+            let reply = crate::mux_cli::control_roundtrip(
+                &sock,
+                &session,
+                crate::proto::ControlCommand::PaneKill {
+                    pane,
+                    hand_off_to: None,
+                },
+            );
+            // A refused kill leaves the sleep placeholder running in the
+            // session, so the failure names itself instead of vanishing.
+            if let Err(e) = reply {
+                view.set_notice(format!("the persona pane lingers: {e}"));
+            }
         }
     }
 }
@@ -1699,6 +1894,7 @@ pub(crate) fn draw_detail(
             view.draw_board_rect(cells, rows, cols, (0, 0, h, w), false);
         }
         paint_column(view, cells, rows, cols, home);
+        paint_record_panes(view, cells, rows, cols);
         return true;
     }
     if sibling_pane(view).is_some() {
@@ -1939,11 +2135,14 @@ fn paint_folded(
     // column inside the home rect and the page sits right of it. A narrow
     // home folds the board into the strip instead.
     if view.backlog_board.is_some() {
-        if let Some((host_w, col)) = dock_columns(view, w) {
-            view.draw_board_rect(cells, rows, cols, (top, left, h, host_w), false);
-            paint_column(view, cells, rows, cols, (top, left + host_w + 1, h, col));
-            let seam_col = left + host_w;
-            paint_seam(view, cells, rows, cols, top, seam_col, h);
+        if dock_columns(view, w).is_some() {
+            // The board lives in the sideline panel at the far left, the
+            // strip the pane area starts after. Painted inside the home
+            // rect instead, the reserved strip stayed a blank gutter
+            // under the labels.
+            let (ph, pw) = persona_panel_rect(view);
+            view.draw_board_rect(cells, rows, cols, (0, 0, ph, pw), false);
+            paint_column(view, cells, rows, cols, (top, left, h, w));
             return;
         }
     }
@@ -2476,6 +2675,9 @@ mod tests {
         v.persona = Some(PersonaOverlay {
             pane: None,
             widen: false,
+            edit_pane: None,
+            claim_pane: None,
+            records: Vec::new(),
             title: "solo".into(),
             lines: Vec::new(),
             cursor: None,
