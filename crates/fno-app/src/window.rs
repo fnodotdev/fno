@@ -266,27 +266,7 @@ impl Root {
             root.light = super::palette::appearance_is_light(window.appearance());
             root.restyle(cx);
         }));
-        match Link::connect(&session, sent_size.0, sent_size.1) {
-            Ok((link, mut rx)) => {
-                root.link = Some(link);
-                root.send(ClientMsg::PaneInset {
-                    rows: mouse::INSET.0,
-                    cols: mouse::INSET.1,
-                });
-                root._reader = Some(cx.spawn(async move |this, cx| {
-                    while let Some(first) = rx.recv().await {
-                        let mut batch = vec![first];
-                        while let Ok(more) = rx.try_recv() {
-                            batch.push(more);
-                        }
-                        if this.update(cx, |root, cx| root.apply(batch, cx)).is_err() {
-                            break;
-                        }
-                    }
-                }));
-            }
-            Err(e) => root.closed = Some(e.to_string()),
-        }
+        root.connect_link(&session, sent_size, cx);
         match Poller::start() {
             Ok((poller, mut rx)) => {
                 root.poller = Some(poller);
@@ -306,6 +286,32 @@ impl Root {
             root.ext.read();
         }
         root
+    }
+
+    /// Connect the link and spawn its batch reader; a refused connect
+    /// lands the reason in `closed`.
+    fn connect_link(&mut self, session: &str, sent_size: (u16, u16), cx: &mut Context<Self>) {
+        match Link::connect(session, sent_size.0, sent_size.1) {
+            Ok((link, mut rx)) => {
+                self.link = Some(link);
+                self.send(ClientMsg::PaneInset {
+                    rows: mouse::INSET.0,
+                    cols: mouse::INSET.1,
+                });
+                self._reader = Some(cx.spawn(async move |this, cx| {
+                    while let Some(first) = rx.recv().await {
+                        let mut batch = vec![first];
+                        while let Ok(more) = rx.try_recv() {
+                            batch.push(more);
+                        }
+                        if this.update(cx, |root, cx| root.apply(batch, cx)).is_err() {
+                            break;
+                        }
+                    }
+                }));
+            }
+            Err(e) => self.closed = Some(e.to_string()),
+        }
     }
 
     /// Start the plugins thread and its reply reader. The list reads when

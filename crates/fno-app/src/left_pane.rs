@@ -472,6 +472,41 @@ fn agent_row(
         }))
 }
 
+/// The Agents header's right side: the circled + opens the composer and
+/// the ⌘N hint shares the digit badges' cmd flag, so it shows only while
+/// cmd is held.
+fn agents_header_plus(p: &Palette, grid: &Grid, cx: &mut Context<Root>) -> Div {
+    div()
+        .child(
+            ui::clickable(div().id("agents-plus").px_1(), p)
+                .on_click(cx.listener(|root, _, _, cx| root.act(Action::OpenLaunch(None), cx)))
+                .child(div().text_color(rgb(p.faint)).child("⊕".to_string())),
+        )
+        .when(grid.picking, |right| right.child(ui::kbd("⌘N", p)))
+}
+
+/// The folded-agents row: the count, or the fold-back control.
+fn more_row(
+    i: usize,
+    hidden: usize,
+    p: &Palette,
+    adv: Pixels,
+    cx: &mut Context<Root>,
+) -> Stateful<Div> {
+    ui::clickable(ui::row(i, false, p).w(px(WIDTH)), p)
+        .on_click(cx.listener(|root, _, _, cx| root.act(Action::ToggleAgents, cx)))
+        .child(div().w(adv * 2.0).flex_none())
+        .child(ui::text(
+            if hidden > 0 {
+                format!("+{hidden} more")
+            } else {
+                "show fewer".to_string()
+            },
+            ui::Role::Hint,
+            p,
+        ))
+}
+
 /// One sidebar row as an element.
 fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> Stateful<Div> {
     let (p, adv) = (grid.p, grid.adv);
@@ -499,20 +534,7 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
                             )
                             .child(n.to_string())
                     }))
-                    // The circled + sits past the counts and opens the
-                    // composer. The ⌘N hint shares the digit badges' cmd
-                    // flag, so it shows only while cmd is held.
-                    .when(plus, |right| {
-                        right
-                            .child(
-                                ui::clickable(div().id("agents-plus").px_1(), &p)
-                                    .on_click(cx.listener(|root, _, _, cx| {
-                                        root.act(Action::OpenLaunch(None), cx)
-                                    }))
-                                    .child(div().text_color(rgb(p.faint)).child("⊕".to_string())),
-                            )
-                            .when(grid.picking, |right| right.child(ui::kbd("⌘N", &p)))
-                    }),
+                    .when(plus, |right| right.child(agents_header_plus(&p, grid, cx))),
             ),
         ),
         Row::Error(e) => div()
@@ -525,18 +547,7 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
             .px_3()
             .py_1()
             .child(ui::text(why, ui::Role::Fact, &p)),
-        Row::More { hidden } => ui::clickable(ui::row(i, false, &p).w(px(WIDTH)), &p)
-            .on_click(cx.listener(|root, _, _, cx| root.act(Action::ToggleAgents, cx)))
-            .child(div().w(adv * 2.0).flex_none())
-            .child(ui::text(
-                if hidden > 0 {
-                    format!("+{hidden} more")
-                } else {
-                    "show fewer".to_string()
-                },
-                ui::Role::Hint,
-                &p,
-            )),
+        Row::More { hidden } => more_row(i, hidden, &p, adv, cx),
         Row::Item {
             label,
             detail,

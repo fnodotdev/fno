@@ -121,7 +121,7 @@ impl Row {
         } else {
             (at + 1) % chain.len()
         };
-        chain[at]
+        chain.get(at).copied().unwrap_or(self)
     }
 }
 
@@ -461,11 +461,8 @@ impl Launch {
             None => {
                 // The pick ring: forward from the default enters at the
                 // head, backward enters at the tail.
-                if forward {
-                    Some(list[0].clone())
-                } else {
-                    Some(list[list.len() - 1].clone())
-                }
+                let pick = if forward { list.first() } else { list.last() };
+                pick.map(|s| (*s).clone())
             }
             Some(at) => {
                 let next = if forward {
@@ -476,7 +473,7 @@ impl Launch {
                 if next == list.len() {
                     None
                 } else {
-                    Some(list[next % (list.len() + 1)].clone())
+                    list.get(next % (list.len() + 1)).map(|s| (*s).clone())
                 }
             }
         };
@@ -498,11 +495,8 @@ impl Launch {
             None => {
                 // The pick ring: forward from the default enters at the
                 // head, backward enters at the tail.
-                if forward {
-                    Some(list[0].clone())
-                } else {
-                    Some(list[list.len() - 1].clone())
-                }
+                let pick = if forward { list.first() } else { list.last() };
+                pick.map(|s| (*s).clone())
             }
             Some(at) => {
                 let next = if forward {
@@ -513,7 +507,7 @@ impl Launch {
                 if next == list.len() {
                     None
                 } else {
-                    Some(list[next % (list.len() + 1)].clone())
+                    list.get(next % (list.len() + 1)).map(|s| (*s).clone())
                 }
             }
         };
@@ -825,38 +819,7 @@ pub(super) fn render(root: &Root, window: &Window, cx: &mut Context<Root>) -> Di
         .child(harness_row(l, &p, cx))
         .child(project_row(l, &p, cx))
         .when(l.kind == Kind::Agent, |d| {
-            d.child(picker_row(
-                "launch-model",
-                "model",
-                model_label(l),
-                &p,
-                cx,
-                |root, _| {
-                    root.launch.state.step_model(true);
-                },
-            ))
-            .child(picker_row(
-                "launch-effort",
-                "effort",
-                effort_label(l),
-                &p,
-                cx,
-                |root, _| {
-                    root.launch.state.step_effort(true);
-                },
-            ))
-            .child(picker_row(
-                "launch-worktree",
-                "worktree",
-                if l.worktree {
-                    "worktree".to_string()
-                } else {
-                    "main checkout".to_string()
-                },
-                &p,
-                cx,
-                |root, _| root.launch.state.step_worktree(),
-            ))
+            d.child(axis_picker_rows(l, &p, cx))
         })
         .child(task_box(root, window, cx))
         .children(skill_hints(l, &p))
@@ -1037,6 +1000,43 @@ fn picker_row(
             .child(ui::text(label, Role::Label, p)),
     )
     .child(ui::clamp(value, Role::Name, p))
+}
+
+/// The agent kind's three launch-axis pickers: model, effort, worktree.
+fn axis_picker_rows(l: &Launch, p: &Palette, cx: &mut Context<Root>) -> Div {
+    div()
+        .child(picker_row(
+            "launch-model",
+            "model",
+            model_label(l),
+            p,
+            cx,
+            |root, _| {
+                root.launch.state.step_model(true);
+            },
+        ))
+        .child(picker_row(
+            "launch-effort",
+            "effort",
+            effort_label(l),
+            p,
+            cx,
+            |root, _| {
+                root.launch.state.step_effort(true);
+            },
+        ))
+        .child(picker_row(
+            "launch-worktree",
+            "worktree",
+            if l.worktree {
+                "worktree".to_string()
+            } else {
+                "main checkout".to_string()
+            },
+            p,
+            cx,
+            |root, _| root.launch.state.step_worktree(),
+        ))
 }
 
 /// The agent kind's skill matches under the task box; tab fills the top
