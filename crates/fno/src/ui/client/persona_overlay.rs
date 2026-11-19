@@ -2113,8 +2113,8 @@ mod tests {
         let (per, board, rec) = drill_widths(&v, 140);
         assert_eq!(
             (per, board, rec),
-            (110, None, 29),
-            "a wide persona strips the board to persona | record"
+            (109, None, 30),
+            "the persona seam clamps at its ceiling so the strip record keeps 30"
         );
     }
 
