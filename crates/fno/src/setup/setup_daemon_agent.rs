@@ -393,10 +393,14 @@ fn write_if_changed(plist_path: &Path, rendered: &str) -> std::io::Result<bool> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
     use std::sync::Mutex;
 
     /// The seams are process-global env reads, so the receipt tests take
-    /// this lock to run one at a time.
+    /// this lock to run one at a time. macOS-gated with its only user: on
+    /// Linux the receipt tests are compiled out and a bare lock is a
+    /// dead-code error under deny warnings.
+    #[cfg(target_os = "macos")]
     static SEAM_LOCK: Mutex<()> = Mutex::new(());
 
     #[cfg(target_os = "macos")]
