@@ -934,8 +934,13 @@ mod tests {
         )
         .unwrap();
         let amended_bytes = std::fs::read(&amended).unwrap();
+        let amended_facts = PrFacts {
+            number: 9,
+            head_sha: record.head.clone(),
+            ..Default::default()
+        };
         let mut computed = 0u32;
-        let judged = compute_once(dir.path(), &facts, "o/r", "plan-two", 60, |_| {
+        let judged = compute_once(dir.path(), &amended_facts, "o/r", "plan-two", 60, |_| {
             computed += 1;
             Ok(parse(
                 &reply(
@@ -957,7 +962,7 @@ mod tests {
         );
         assert_eq!(std::fs::read(&amended).unwrap(), amended_bytes);
         assert!(record_path(dir.path(), "o/r", 9, &record.head, "plan-two").exists());
-        let reused = compute_once(dir.path(), &facts, "o/r", "plan-one", 60, |_| {
+        let reused = compute_once(dir.path(), &amended_facts, "o/r", "plan-one", 60, |_| {
             computed += 1;
             Ok(parse(&reply("fits", "", "", ""), &bundle()).unwrap())
         })
