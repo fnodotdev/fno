@@ -68,13 +68,20 @@ where
     if let Some(ref st) = filter_status {
         if !matches!(
             st.as_str(),
-            "writing" | "quiet" | "parked" | "orphaned" | "refused" | "unknown"
+            "writing"
+                | "quiet"
+                | "parked"
+                | "orphaned"
+                | "refused"
+                | "unknown"
+                | "signed_out"
+                | "harness_error"
         ) {
             return Response::err(
                 req.id,
                 ErrorCode::InvalidStatus,
                 format!(
-                    "invalid --status '{st}' (status is served activity: writing | quiet | parked | orphaned | refused | unknown; process liveness is the liveness field on fno agent list --json)"
+                    "invalid --status '{st}' (status is served activity: writing | quiet | parked | orphaned | refused | unknown | signed_out | harness_error; process liveness is the liveness field on fno agent list --json)"
                 ),
             );
         }
@@ -170,6 +177,10 @@ where
         &crate::feed::graph_path(&ctx.home),
         filtered.iter().filter_map(|e| e.node.as_deref()),
     );
+    // One listing walk shared by every claude row's synthetic-tail read: the
+    // same single-walk shape the watchdog sweep uses, so the backstop adds
+    // one store walk per page, not per row.
+    let tail_listing = crate::watchdog::tail::sweep_listing();
     let classified: Vec<_> = filtered
         .into_iter()
         .map(|e| {
@@ -178,6 +189,19 @@ where
             // unanswered row that way.
             let truth = truths.get(&registry_truth_handle(e)).cloned();
             let rendered_status = rendered_status_from_truth(truth.as_ref());
+            // The synthetic-tail backstop: when the LAST assistant record is
+            // the harness-authored placeholder, the model never ran that turn
+            // and the activity word would read writing/quiet while the
+            // session cannot work. The why decides the word: a logout renders
+            // `signed_out` (a respawn fixes it), every other synthetic
+            // renders `harness_error` (weekly limit, poisoned request). A
+            // falsified row keeps `orphaned` and a refusal keeps `refused`:
+            // those words already carry a positive verdict the tail cannot
+            // improve.
+            let rendered_status = match synthetic_tail_row(e, &tail_listing) {
+                Some(tail) => synthetic_status_override(rendered_status, tail.why),
+                None => rendered_status,
+            };
             // The whole reachability triple, not just the verdict that
             // `rendered_status` above was picked from. That rendered word says
             // WHAT the row is; the triple says which question was answered and
@@ -676,6 +700,41 @@ pub(crate) fn rendered_status_from_truth(
     }
 }
 
+/// One row's synthetic-tail read: resolve the claude transcript through the
+/// shared listing and classify its LAST assistant record. `None` when the
+/// row is not claude, records no session id, or its tail carries no
+/// synthetic last turn.
+fn synthetic_tail_row(
+    e: &state::RegistryEntry,
+    listing: &[crate::claude_transcript_paths::Hit],
+) -> Option<crate::synthetic_tail::SyntheticTail> {
+    if e.harness_kind() != Harness::Claude {
+        return None;
+    }
+    let session_id = e.harness_session_id.as_deref()?;
+    if session_id.is_empty() {
+        return None;
+    }
+    let records = crate::watchdog::tail::tail_entries(session_id, &e.cwd, "claude", listing)?;
+    crate::synthetic_tail::from_records(&records)
+}
+
+/// The status word a synthetic tail earns over the activity read. The
+/// activity words (writing/quiet/parked/unknown) all assume a model that can
+/// run; a synthetic last turn is the proof it cannot, so the why decides the
+/// word. `orphaned` and `refused` keep their words: those are positive
+/// verdicts the tail cannot improve.
+fn synthetic_status_override(
+    current: &str,
+    why: crate::synthetic_tail::SyntheticWhy,
+) -> &'static str {
+    match current {
+        "orphaned" => "orphaned",
+        "refused" => "refused",
+        _ => why.as_str(),
+    }
+}
+
 /// True for a Claude model id or tier alias. Mirrors
 /// `fno.agents.model_routing.is_anthropic_model` (cli/src/fno/agents/model_routing.py) --
 /// duplicated rather than shelled out to because the daemon already pays one
@@ -1143,6 +1202,36 @@ mod tests {
                 None
             ),
             ("advancing", "transcript-turn")
+        );
+    }
+
+    /// The synthetic-tail override: the activity words all assume a model
+    /// that can run. A logout answers signed_out, every other synthetic
+    /// answers harness_error, and the two positive verdicts keep their words.
+    #[test]
+    fn the_synthetic_tail_overrides_the_activity_words_only() {
+        use crate::synthetic_tail::SyntheticWhy;
+        for current in ["writing", "quiet", "parked", "unknown"] {
+            assert_eq!(
+                synthetic_status_override(current, SyntheticWhy::SignedOut),
+                "signed_out",
+                "a signed-out tail must reword {current}"
+            );
+            assert_eq!(
+                synthetic_status_override(current, SyntheticWhy::Api400),
+                "harness_error",
+                "a poisoned-request tail must reword {current}"
+            );
+        }
+        assert_eq!(
+            synthetic_status_override("orphaned", SyntheticWhy::SignedOut),
+            "orphaned",
+            "a falsified row keeps its positive verdict"
+        );
+        assert_eq!(
+            synthetic_status_override("refused", SyntheticWhy::Api400),
+            "refused",
+            "a refusal keeps its word over the tail"
         );
     }
 }
