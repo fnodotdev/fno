@@ -30,33 +30,25 @@ fn local_output_for(repo: &std::path::Path) -> impl Fn(&[&str]) -> Option<String
 }
 
 #[test]
-fn remoteless_repo_reports_no_origin_url() {
+fn the_terminal_decision_reads_the_repo_shape() {
+    // One contract, two rows (D2147: the happy path, the refusal). Row 1
+    // is the probe shape: no origin remote, one committed file, clean
+    // tree - the unshipped conjunct must not fire, so the NoPr arm's
+    // DoneAdvisory terminal is reachable on local evidence alone. Row 2 is
+    // the refusal: a checkout WITH a remote reads unshipped while @{push}
+    // is unreadable, the unchanged behavior that keeps the REST read, so
+    // the run still waits on PR truth.
+
+    // Row 1: the remote fact itself, absent.
     let (tmp, repo) = temp_repo();
     let read = local_output_for(&repo);
     assert_eq!(origin_remote_url(&read), None);
 
-    git(
-        &repo,
-        &["remote", "add", "origin", "https://example.com/o/r.git"],
-    );
-    let read = local_output_for(&repo);
-    assert_eq!(
-        origin_remote_url(&read).as_deref(),
-        Some("https://example.com/o/r.git")
-    );
-    drop(tmp);
-}
-
-#[test]
-fn remoteless_clean_checkout_reaches_the_no_pr_terminal() {
-    // The probe shape: one committed file, clean tree, no origin remote.
-    // The unshipped conjunct must not fire, so the NoPr arm's DoneAdvisory
-    // terminal is reachable.
-    let (tmp, repo) = temp_repo();
     // A repo with no commit at all stays unshipped even with a clean tree:
     // the HEAD read is load-bearing against an empty checkout.
     let empty = local_output_for(&repo);
     assert!(unshipped_or_dirty(true, &empty));
+
     std::fs::write(repo.join("calc.py"), "def add(a, b):\n    return a + b\n").unwrap();
     git(&repo, &["add", "."]);
     git(
@@ -74,41 +66,28 @@ fn remoteless_clean_checkout_reaches_the_no_pr_terminal() {
     let read = local_output_for(&repo);
     assert!(!unshipped_or_dirty(true, &read));
 
-    // The same checkout with dirt stays unshipped: uncommitted work is not
-    // delivered work even when nothing can ship anywhere.
+    // Dirt stays unshipped: uncommitted work is not delivered work even
+    // when nothing can ship anywhere.
     std::fs::write(repo.join("calc.py"), "def add(a, b):\n    return a\n").unwrap();
     assert!(unshipped_or_dirty(true, &read));
-    drop(tmp);
 
-    // The pushed arm keeps its shape: a checkout WITH a remote reads
-    // unshipped while @{push} is unreadable (no upstream yet), the
-    // unchanged behavior that keeps the REST read.
-    let (tmp2, repo2) = temp_repo();
+    // Row 2: the remote fact flips, and the push-side conjunct governs.
     git(
-        &repo2,
+        &repo,
         &["remote", "add", "origin", "https://example.com/o/r.git"],
     );
-    std::fs::write(repo2.join("f.txt"), "one\n").unwrap();
-    git(&repo2, &["add", "."]);
-    git(
-        &repo2,
-        &[
-            "-c",
-            "user.email=t@t",
-            "-c",
-            "user.name=t",
-            "commit",
-            "-qm",
-            "one",
-        ],
+    let read = local_output_for(&repo);
+    assert_eq!(
+        origin_remote_url(&read).as_deref(),
+        Some("https://example.com/o/r.git")
     );
-    let pushed = local_output_for(&repo2);
-    assert!(unshipped_or_dirty(false, &pushed));
-    drop(tmp2);
-}
+    // @{push} is unreadable until an upstream exists: still unshipped, the
+    // REST read keeps answering.
+    assert!(unshipped_or_dirty(false, &read));
+    drop(tmp);
 
-#[test]
-fn remoteless_pr_failure_names_the_remedy_not_a_retry() {
+    // The failed PR read names the remedy, never a retry: the wording the
+    // gate prints when the owner/repo resolution fails for good.
     let reason = remoteless_pr_read_reason("pr_info_rest", "could not resolve owner/repo");
     assert!(!reason.contains("retrying next fire"));
     assert!(reason.contains("marked advisory"));
