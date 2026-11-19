@@ -347,7 +347,7 @@ fn log_window_live(window_id: u32, when: &str) -> bool {
 /// before and after the capture, and the helper's own lines.
 fn capture_to_png(out: &std::path::Path) -> i32 {
     // SAFETY: NSApp enumeration over this process's own windows only.
-    let Some((window_id, _scale, occlusion)) = (unsafe { shot_window_id() }) else {
+    let Some((window_id, _scale, occlusion, w)) = (unsafe { shot_window_id() }) else {
         eprintln!("fno-app --shot: no capturable fno window in this process");
         return 1;
     };
@@ -366,6 +366,22 @@ fn capture_to_png(out: &std::path::Path) -> i32 {
     eprintln!("fno-app --shot: preflight screen-capture access: {preflight}");
     let before = log_window_live(window_id, "before-capture");
     std::thread::sleep(std::time::Duration::from_millis(200));
+    // The capture phase. The window server quantizes a low-alpha window's
+    // composite to two bits per channel: the probe measured 8 distinct
+    // colors at alpha 0.01 and 234 at alpha 1.0, same window, same tool.
+    // The quantized pixels live in the server's composited tiles, and
+    // tiles only re-composite when the window presents a frame, so full
+    // precision needs at least one presented full-alpha frame. The level
+    // stays floating so the display link keeps running; the window is
+    // fully opaque above the covers for roughly the tool's runtime (two
+    // hundred milliseconds), then fades back. An in-process read of the
+    // Metal surface would remove that flash; until one lands the flash
+    // is the price of a true-color frame.
+    // SAFETY: setters on the window this process owns; plain messages.
+    unsafe {
+        let _: () = msg_send![w, setAlphaValue: 1.0f64];
+    }
+    std::thread::sleep(std::time::Duration::from_millis(250));
     // The capture runs in Apple's own SCK-backed tool: the in-process
     // SCScreenshotManager reply decode crashes this binary in every
     // process shape it tried (gpui and helper alike), while the same
@@ -375,6 +391,10 @@ fn capture_to_png(out: &std::path::Path) -> i32 {
         .args(["-o", "-x", "-l", &window_id.to_string()])
         .arg(out)
         .status();
+    // SAFETY: symmetric restore of the phase above; plain messages.
+    unsafe {
+        let _: () = msg_send![w, setAlphaValue: 0.01f64];
+    }
     match tool {
         Ok(s) if s.success() => {}
         Ok(s) => {
@@ -443,10 +463,11 @@ fn flatten_png(path: &std::path::Path) -> Result<(), FrameError> {
     reader
         .next_frame(&mut buf)
         .map_err(|e| FrameError::Png(e.to_string()))?;
-    // The capture's RGB channels hold the window's full-brightness
-    // render; the one-percent lives only in the alpha channel. Blend or
-    // rescale the RGB and the content crushes toward the background, so
-    // the flatten just pins alpha to opaque and keeps the pixels.
+    // The capture phase reads full alpha, so the RGB holds the render as
+    // painted; this pin stays as the backstop that makes any residual
+    // alpha in the tool's output opaque. Blend or rescale the RGB and
+    // the content crushes toward the background, so the flatten only
+    // ever pins alpha and keeps the pixels.
     for px in buf.chunks_exact_mut(4) {
         let [_, _, _, a] = px else {
             continue;
@@ -474,7 +495,7 @@ fn flatten_png(path: &std::path::Path) -> Result<(), FrameError> {
 /// entry with a positive window number is the shot. Fading it to
 /// one-percent alpha with mouse events passing through keeps it
 /// composited but never seen; the window never becomes key.
-unsafe fn shot_window_id() -> Option<(u32, f64, usize)> {
+unsafe fn shot_window_id() -> Option<(u32, f64, usize, *mut objc::runtime::Object)> {
     let app: *mut objc::runtime::Object = msg_send![class!(NSApplication), sharedApplication];
     let windows: *mut objc::runtime::Object = msg_send![app, windows];
     let count: usize = msg_send![windows, count];
@@ -536,5 +557,5 @@ unsafe fn shot_window_id() -> Option<(u32, f64, usize)> {
         "fno-app --shot: window after-set: level={level_after} alpha={alpha_after} visible={visible} occlusion={occl}"
     );
     let scale: f64 = msg_send![w, backingScaleFactor];
-    Some((num as u32, scale, occl))
+    Some((num as u32, scale, occl, w))
 }
