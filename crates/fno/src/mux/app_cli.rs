@@ -453,11 +453,11 @@ fn seed_transcript(root: &Path) -> bool {
     }
     let session = DEMO_CHAT_SESSION;
     let rows = concat!(
-        r#"{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":"What does the shot door build?"},"sessionId":"00000000-0000-4000-8000-000000000001"}"#,
+        r#"{"parentUuid":null,"isSidechain":false,"type":"user","uuid":"u1","message":{"role":"user","content":"What does the shot door build?"},"sessionId":"00000000-0000-4000-8000-000000000001"}"#,
         "\n",
         r#"{"parentUuid":null,"isSidechain":false,"type":"assistant","uuid":"a1","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"It builds a throwaway mux world, seeds it, opens a one-percent-alpha window above every normal window, and hands the buffer to the capture tool."}]},"sessionId":"00000000-0000-4000-8000-000000000001"}"#,
         "\n",
-        r#"{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":"And the offscreen proof?"},"sessionId":"00000000-0000-4000-8000-000000000001"}"#,
+        r#"{"parentUuid":null,"isSidechain":false,"type":"user","uuid":"u2","message":{"role":"user","content":"And the offscreen proof?"},"sessionId":"00000000-0000-4000-8000-000000000001"}"#,
         "\n",
         r#"{"parentUuid":null,"isSidechain":false,"type":"assistant","uuid":"a2","message":{"id":"m2","role":"assistant","content":[{"type":"text","text":"Frontmost identical across the three reads, no keystrokes, no Dock bounce, and the frame lands. The window composites invisible the whole time."}]},"sessionId":"00000000-0000-4000-8000-000000000001"}"#,
         "\n",
