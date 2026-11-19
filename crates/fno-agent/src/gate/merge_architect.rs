@@ -917,31 +917,23 @@ mod tests {
             ""
         )
         .is_err());
-    }
-
-    #[test]
-    fn amended_plan_rejudges_at_the_same_head() {
-        let dir = tempfile::tempdir().unwrap();
-        let head = "a".repeat(40);
-        let facts = PrFacts {
-            number: 9,
-            head_sha: head.clone(),
-            ..Default::default()
-        };
-        let path = record_path(dir.path(), "o/r", 9, &head, "plan-one");
+        // The plan revision is part of the identity: an amended plan at the
+        // same head lands at a new record and re-judges, and the unchanged
+        // plan still reuses the published record.
+        let amended = record_path(dir.path(), "o/r", 9, &facts.head_sha, "plan-one");
         publish(
-            &path,
+            &amended,
             &Record {
                 repo: "o/r".into(),
-                pr: 9,
-                head: head.clone(),
                 plan_sha: "plan-one".into(),
+                pr: 9,
+                head: facts.head_sha.clone(),
                 judgment: Some(parse(&reply("fits", "", "", ""), &bundle()).unwrap()),
                 warning: None,
             },
         )
         .unwrap();
-        let before = std::fs::read(&path).unwrap();
+        let amended_bytes = std::fs::read(&amended).unwrap();
         let mut computed = 0u32;
         let judged = compute_once(dir.path(), &facts, "o/r", "plan-two", 60, |_| {
             computed += 1;
@@ -963,12 +955,8 @@ mod tests {
             judged.judgment.map(|j| j.verdict),
             Some(Verdict::MissesPlan)
         );
-        assert_eq!(
-            std::fs::read(&path).unwrap(),
-            before,
-            "the plan-one record stays untouched"
-        );
-        assert!(record_path(dir.path(), "o/r", 9, &head, "plan-two").exists());
+        assert_eq!(std::fs::read(&amended).unwrap(), amended_bytes);
+        assert!(record_path(dir.path(), "o/r", 9, &facts.head_sha, "plan-two").exists());
         let reused = compute_once(dir.path(), &facts, "o/r", "plan-one", 60, |_| {
             computed += 1;
             Ok(parse(&reply("fits", "", "", ""), &bundle()).unwrap())
@@ -977,13 +965,10 @@ mod tests {
         assert_eq!(computed, 1, "the unchanged plan must reuse the record");
         assert_eq!(reused.plan_sha, "plan-one");
         assert_eq!(reused.judgment.map(|j| j.verdict), Some(Verdict::Fits));
-    }
-
-    #[test]
-    fn cache_material_tracks_the_bound_plan_body() {
-        let dir = tempfile::tempdir().unwrap();
-        let head = "b".repeat(40);
-        let unbound = cache_material(dir.path(), "o/r", 9, &head);
+        // The freshness marker tracks the bound plan body: a bound node's
+        // plan edit at the same head changes the material, so a cached row
+        // that embeds the old verdict stops serving.
+        let unbound = cache_material(dir.path(), "o/r", 9, &facts.head_sha);
         crate::graph_store::seed_rows(
             &crate::org_board::scope::graph_json_path(dir.path()),
             &[
@@ -998,14 +983,14 @@ mod tests {
             "## Acceptance Criteria\n**AC1-HP:** Keep the gate honest.\n",
         )
         .unwrap();
-        let first = cache_material(dir.path(), "o/r", 9, &head);
+        let first = cache_material(dir.path(), "o/r", 9, &facts.head_sha);
         assert_ne!(first, unbound, "a bound plan must enter the material");
         std::fs::write(
             dir.path().join("plans/one.md"),
             "## Acceptance Criteria\n**AC1-HP:** Keep the gate honest, and rejudge on amendment.\n",
         )
         .unwrap();
-        let second = cache_material(dir.path(), "o/r", 9, &head);
+        let second = cache_material(dir.path(), "o/r", 9, &facts.head_sha);
         assert_ne!(
             second, first,
             "a plan edit at the same head must change the material"
