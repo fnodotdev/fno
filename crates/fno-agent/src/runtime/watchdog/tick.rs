@@ -368,10 +368,13 @@ fn signed_out_mode(
         let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
         cmd.args(["agent", "reconcile"]).current_dir(&row.cwd);
         let reconciled = crate::bounded_cmd::output_with_timeout(cmd, 120);
-        let outcome = if notified && respawn.is_some_and(|o| o.status.success()) {
-            "applied"
-        } else {
-            "notified"
+        // The ask's landing is the door's business - and which door answered
+        // depends on the installed binary's age - so the outcome records what
+        // THIS lane did, never a respawn it cannot see.
+        let outcome = match (notified, respawn.as_ref().map(|o| o.status.success())) {
+            (true, Some(true)) => "asked",
+            (true, _) => "page_only",
+            (false, _) => "quiet",
         };
         emit_event(
             "signed_out_respawn",
