@@ -161,6 +161,9 @@ extern "C" {
 /// and `key` a CFStringRef constant; CFNumberGetValue converts the
 /// stored number to i64 itself.
 unsafe fn cf_i64(dict: *const c_void, key: *const c_void) -> Option<i64> {
+    if dict.is_null() {
+        return None;
+    }
     let mut v: *const c_void = std::ptr::null();
     if CFDictionaryGetValueIfPresent(dict, key, &mut v) && !v.is_null() {
         let mut out: i64 = 0;
@@ -173,6 +176,9 @@ unsafe fn cf_i64(dict: *const c_void, key: *const c_void) -> Option<i64> {
 
 /// SAFETY: same contract as cf_i64, with a float64 conversion.
 unsafe fn cf_f64(dict: *const c_void, key: *const c_void) -> Option<f64> {
+    if dict.is_null() {
+        return None;
+    }
     let mut v: *const c_void = std::ptr::null();
     if CFDictionaryGetValueIfPresent(dict, key, &mut v) && !v.is_null() {
         let mut out: f64 = 0.0;
@@ -199,19 +205,20 @@ unsafe fn cf_string(dict: *const c_void, key: *const c_void) -> Option<String> {
 /// An NSString for the CG bounds-dictionary keys ("X", "Y", ...). The
 /// CString is bound before its pointer enters msg_send, so the bytes
 /// live through the call.
-unsafe fn ns_string(s: &str) -> *mut objc::runtime::Object {
+unsafe fn ns_string(s: &str) -> *const c_void {
     let c = CString::new(s).expect("constant key carries no interior NUL");
     let s: *mut objc::runtime::Object =
         msg_send![class!(NSString), stringWithUTF8String: c.as_ptr()];
-    s
+    s as *const c_void
 }
 
 /// The localizedDescription of an NSError (or a marker for nil), so a
 /// failed capture reports what the framework itself said.
-unsafe fn ns_error_message(err: *mut objc::runtime::Object) -> String {
+unsafe fn ns_error_message(err: *mut c_void) -> String {
     if err.is_null() {
         return "nil error with a nil result".to_string();
     }
+    let err = err as *mut objc::runtime::Object;
     let desc: *mut objc::runtime::Object = msg_send![err, localizedDescription];
     let c: *const c_char = msg_send![desc, UTF8String];
     if c.is_null() {
@@ -240,10 +247,12 @@ fn log_window_live(window_id: u32, when: &str) -> bool {
         for i in 0..n {
             let dict = CFArrayGetValueAtIndex(list, i);
             if cf_i64(dict, kCGWindowNumber) == Some(window_id as i64) {
-                let x = cf_f64(dict, ns_string("X")).unwrap_or(-1.0);
-                let y = cf_f64(dict, ns_string("Y")).unwrap_or(-1.0);
-                let w = cf_f64(dict, ns_string("Width")).unwrap_or(-1.0);
-                let h = cf_f64(dict, ns_string("Height")).unwrap_or(-1.0);
+                let mut b: *const c_void = std::ptr::null();
+                CFDictionaryGetValueIfPresent(dict, kCGWindowBounds, &mut b);
+                let x = cf_f64(b, ns_string("X")).unwrap_or(-1.0);
+                let y = cf_f64(b, ns_string("Y")).unwrap_or(-1.0);
+                let w = cf_f64(b, ns_string("Width")).unwrap_or(-1.0);
+                let h = cf_f64(b, ns_string("Height")).unwrap_or(-1.0);
                 let layer = cf_i64(dict, kCGWindowLayer).unwrap_or(i64::MIN);
                 let alpha = cf_f64(dict, kCGWindowAlpha).unwrap_or(-1.0);
                 let name = cf_string(dict, kCGWindowName);
@@ -277,84 +286,86 @@ unsafe fn sck_capture(window_id: u32, scale: f64) -> Result<core_graphics::image
     // The capture block is created here and a clone moves into the
     // content handler, so the allocation outlives the asynchronous
     // capture call: the framework keeps the block after this frame ends.
-    let capture_block = RcBlock::new(
-        move |image: *const c_void, err: *mut objc::runtime::Object| {
-            if !image.is_null() && err.is_null() {
-                // SAFETY: the handler's image is valid only for the call,
-                // so it is retained once and the channel carries that +1;
-                // the returned CGImage releases it on drop.
-                CFRetain(image);
-                let _ = tx_cap.send(Ok(image));
-            } else {
-                let _ = tx_cap.send(Err(ns_error_message(err)));
-            }
-        },
-    );
-    let content_block = RcBlock::new(
-        move |content: *mut objc::runtime::Object, err: *mut objc::runtime::Object| {
-            if content.is_null() {
-                let _ = tx_content.send(Err(format!(
-                    "SCShareableContent returned nil: {}",
-                    ns_error_message(err)
-                )));
-                return;
-            }
-            let windows: *mut objc::runtime::Object = msg_send![content, windows];
-            let count: usize = msg_send![windows, count];
-            let mut live: Option<*mut objc::runtime::Object> = None;
-            for i in 0..count {
-                let w: *mut objc::runtime::Object = msg_send![windows, objectAtIndex: i];
-                let wid: u32 = msg_send![w, windowID];
-                if wid == window_id {
-                    let frame: core_graphics::geometry::CGRect = msg_send![w, frame];
-                    let on_screen: bool = msg_send![w, isOnScreen];
-                    eprintln!(
+    let capture_block = RcBlock::new(move |image: *const c_void, err: *mut c_void| {
+        if !image.is_null() && err.is_null() {
+            // SAFETY: the handler's image is valid only for the call,
+            // so it is retained once and the channel carries that +1;
+            // the returned CGImage releases it on drop.
+            CFRetain(image);
+            let _ = tx_cap.send(Ok(image));
+        } else {
+            let _ = tx_cap.send(Err(ns_error_message(err)));
+        }
+    });
+    let content_block = RcBlock::new(move |content: *mut c_void, err: *mut c_void| {
+        if content.is_null() {
+            let _ = tx_content.send(Err(format!(
+                "SCShareableContent returned nil: {}",
+                ns_error_message(err)
+            )));
+            return;
+        }
+        // SAFETY: the handler's content pointer is an NSObject valid
+        // for the call; msg_send reads it in place.
+        let content: *mut objc::runtime::Object = content as *mut _;
+        let windows: *mut objc::runtime::Object = msg_send![content, windows];
+        let count: usize = msg_send![windows, count];
+        let mut live: Option<*mut objc::runtime::Object> = None;
+        for i in 0..count {
+            let w: *mut objc::runtime::Object = msg_send![windows, objectAtIndex: i];
+            let wid: u32 = msg_send![w, windowID];
+            if wid == window_id {
+                let frame: core_graphics::geometry::CGRect = msg_send![w, frame];
+                let on_screen: bool = msg_send![w, isOnScreen];
+                eprintln!(
                         "fno-app --shot: window-live[sc-content]: id={window_id} frame=({:.0},{:.0} {:.0}x{:.0}) onScreen={on_screen}",
                         frame.origin.x,
                         frame.origin.y,
                         frame.size.width,
                         frame.size.height,
                     );
-                    live = Some(w);
-                    break;
-                }
+                live = Some(w);
+                break;
             }
-            let Some(w) = live else {
-                let _ = tx_content.send(Err(format!(
+        }
+        let Some(w) = live else {
+            let _ = tx_content.send(Err(format!(
                     "no SCWindow in the shareable content carries id {window_id} ({count} windows): the window was not alive at capture time"
                 )));
-                return;
-            };
-            // SAFETY: both alloc/init results are owned here and released
-            // right after the capture is scheduled; the SCWindow comes
-            // from the list the framework handed this handler and
-            // outlives both calls.
-            let filter: *mut objc::runtime::Object = msg_send![class!(SCContentFilter), alloc];
-            let filter: *mut objc::runtime::Object =
-                msg_send![filter, initWithDesktopIndependentWindow: w];
-            let config: *mut objc::runtime::Object =
-                msg_send![class!(SCStreamConfiguration), alloc];
-            let config: *mut objc::runtime::Object = msg_send![config, init];
-            let width_px = (SHOT_SIZE.0 as f64 * scale) as i64;
-            let height_px = (SHOT_SIZE.1 as f64 * scale) as i64;
-            let _: () = msg_send![config, setWidth: width_px];
-            let _: () = msg_send![config, setHeight: height_px];
-            let _: () = msg_send![config, setShowsCursor: false];
-            let _: () = msg_send![class!(SCScreenshotManager),
+            return;
+        };
+        // SAFETY: both alloc/init results are owned here and released
+        // right after the capture is scheduled; the SCWindow comes
+        // from the list the framework handed this handler and
+        // outlives both calls.
+        let filter: *mut objc::runtime::Object = msg_send![class!(SCContentFilter), alloc];
+        let filter: *mut objc::runtime::Object =
+            msg_send![filter, initWithDesktopIndependentWindow: w];
+        let config: *mut objc::runtime::Object = msg_send![class!(SCStreamConfiguration), alloc];
+        let config: *mut objc::runtime::Object = msg_send![config, init];
+        let width_px = (SHOT_SIZE.0 as f64 * scale) as i64;
+        let height_px = (SHOT_SIZE.1 as f64 * scale) as i64;
+        let _: () = msg_send![config, setWidth: width_px];
+        let _: () = msg_send![config, setHeight: height_px];
+        let _: () = msg_send![config, setShowsCursor: false];
+        eprintln!("fno-app --shot: scheduling the SCK capture for id {window_id}");
+        let _: () = msg_send![class!(SCScreenshotManager),
                 captureImageWithContentFilter: filter
                 configuration: config
                 completionHandler: &*capture_block];
-            let _: () = msg_send![filter, release];
-            let _: () = msg_send![config, release];
-        },
-    );
+        let _: () = msg_send![filter, release];
+        let _: () = msg_send![config, release];
+    });
     let _: () = msg_send![class!(SCShareableContent),
         getShareableContentExcludingDesktopWindows: false
         onScreenWindowsOnly: false
         completionHandler: &*content_block];
     drop(tx);
     match rx.recv_timeout(CAPTURE_BUDGET) {
-        Ok(Ok(ptr)) => Ok(core_graphics::image::CGImage::from_ptr(ptr as *mut _)),
+        Ok(Ok(ptr)) => {
+            eprintln!("fno-app --shot: the capture completion fired with an image");
+            Ok(core_graphics::image::CGImage::from_ptr(ptr as *mut _))
+        }
         Ok(Err(e)) => Err(e),
         Err(_) => Err("the ScreenCaptureKit completion never fired within the budget".to_string()),
     }
@@ -378,11 +389,11 @@ fn capture_to_png(out: &std::path::Path) -> i32 {
     eprintln!("fno-app --shot: preflight screen-capture access: {preflight}");
     let before = log_window_live(window_id, "before-capture");
     std::thread::sleep(std::time::Duration::from_millis(200));
-    let image = sck_capture(window_id, scale);
+    let image = unsafe { sck_capture(window_id, scale) };
     let image = match image {
         Ok(image) => image,
         Err(e) => {
-            eprintln!("fno-app --shot: the SCK capture returned no image: {e}");
+            eprintln!("fno-app --shot: the SCK capture returned no image (window lived before: {before}): {e}");
             return 1;
         }
     };
@@ -420,8 +431,11 @@ unsafe fn shot_window_id() -> Option<(u32, f64)> {
         let w: *mut objc::runtime::Object = msg_send![windows, objectAtIndex: i];
         let num: i64 = msg_send![w, windowNumber];
         if num > 0 {
-            // Below the desktop background level: composited, never seen.
+            // Below the desktop background level: composited, never
+            // seen. Sharing stays read-write or the capture service
+            // refuses the window over XPC.
             let _: () = msg_send![w, setLevel: -2147483100i64];
+            let _: () = msg_send![w, setSharingType: 2usize];
             let _: () = msg_send![w, orderFront: std::ptr::null_mut::<objc::runtime::Object>()];
             let scale: f64 = msg_send![w, backingScaleFactor];
             return Some((num as u32, scale));
