@@ -33,6 +33,7 @@ A pack install drops five skills: agent, mail, dnd, fno-me and lead. Their rows 
 | `fno:review` | Before the PR, on the final head. | Findings and the head-pinned attestation. |
 | `fno:persona-review` | A user or lead calls a persona check on one artifact. | The findings file beside the artifact. |
 | `fno:ship` | PR create, check, and merged. | The PR URL and the review state. |
+| `fno:fno-app` | The work touches the fno-app desktop app, or the task needs an app frame or an offscreen shot. | The app's pid or a png at `--out`. |
 | `fno:ship-docs` | User-facing behavior changed. | The doc pages. |
 | `fno:speculate` | Two or more honest routes that only a side-by-side can choose between. | N variant worktrees. |
 | `fno:triage` | Several ready nodes block on order. | A proposed order for approval. |

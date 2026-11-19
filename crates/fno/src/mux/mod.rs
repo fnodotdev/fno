@@ -1,6 +1,8 @@
 //! The mux server: ptys, the VT grid, the socket, squads and the `fno mux` commands.
 
 #[cfg(feature = "full")]
+pub mod app_cli;
+#[cfg(feature = "full")]
 pub mod mux_cli;
 #[cfg(feature = "full")]
 pub mod mux_log;

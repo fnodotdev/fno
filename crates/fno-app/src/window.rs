@@ -128,6 +128,9 @@ pub struct Root {
     notice_failed: bool,
     /// Bumped by each notice, so only the newest one's timer clears it.
     notice_gen: u64,
+    /// A shot window paints the durable surface only: server notices are a
+    /// transient corner toast that would photobomb a still frame.
+    shot: bool,
     pub(super) closed: Option<String>,
     pub(super) metrics: Metrics,
     pub(super) palette: Palette,
@@ -235,6 +238,32 @@ impl Root {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        Self::new_with_link(
+            session,
+            main,
+            pinned,
+            agents_open,
+            metrics,
+            None,
+            window,
+            cx,
+        )
+    }
+
+    /// The shot path's constructor: `prewarmed` hands a link already
+    /// connected and drained to the world's first layout, so the one
+    /// frame gpui paints synchronously at open carries the world's data.
+    fn new_with_link(
+        session: String,
+        main: MainView,
+        pinned: Option<SessionKey>,
+        agents_open: bool,
+        metrics: Metrics,
+        prewarmed: Option<super::link::WarmedLink>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::write_pid_file(&session);
         let sent_size = grid_size(window.viewport_size(), metrics.cell);
         let light = super::palette::appearance_is_light(window.appearance());
         let theme_cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());
@@ -249,6 +278,7 @@ impl Root {
             notice: theme_warning,
             notice_failed: false,
             notice_gen: 0,
+            shot: false,
             closed: None,
             metrics,
             palette,
@@ -294,15 +324,65 @@ impl Root {
             window_active: window.is_window_active(),
         };
         wire_window(&mut root, window, cx);
-        root.connect_link(&session, sent_size, cx);
+        Self::attach_link(&mut root, &session, sent_size, prewarmed, cx);
         root.wire_alerts(cx);
         root.start_board_poll(cx);
         root.start_plugins(cx);
+        // The control channel: the drain loop applies rows through the
+        // same paths clicks ride (focus, view switch, quit).
+        crate::control::spawn_poll(session.clone(), cx);
         // `--mode mods` opens on the view without a switch, so read here.
         if root.main == MainView::Mods {
             root.ext.read();
         }
         root
+    }
+
+    /// The drive surface finds the live app through this pid file (the
+    /// fleet law: stop builds by pid, never a sweep). The app names its
+    /// own pid at open; a stale file cleans up on the next read.
+    fn write_pid_file(session: &str) {
+        if let Some(dir) = fno::app_control::support_dir() {
+            std::fs::create_dir_all(&dir).ok();
+            std::fs::write(
+                dir.join(format!("fno-app-{session}.pid")),
+                std::process::id().to_string(),
+            )
+            .ok();
+        }
+    }
+
+    /// Connect the root to its session: a prewarmed link adopts the
+    /// stream the shot world already drained; otherwise the root
+    /// connects fresh, and a refusal lands in the notice, not a panic.
+    fn attach_link(
+        root: &mut Root,
+        session: &str,
+        sent_size: (u16, u16),
+        prewarmed: Option<super::link::WarmedLink>,
+        cx: &mut Context<Self>,
+    ) {
+        match prewarmed {
+            Some(warm) => {
+                root.link = Some(warm.link);
+                root.send(ClientMsg::PaneInset {
+                    rows: mouse::INSET.0,
+                    cols: mouse::INSET.1,
+                });
+                root.spawn_reader(warm.early, warm.rest, cx);
+            }
+            None => match Link::connect(session, sent_size.0, sent_size.1) {
+                Ok((link, rx)) => {
+                    root.link = Some(link);
+                    root.send(ClientMsg::PaneInset {
+                        rows: mouse::INSET.0,
+                        cols: mouse::INSET.1,
+                    });
+                    root.spawn_reader(Vec::new(), rx, cx);
+                }
+                Err(e) => root.closed = Some(e.to_string()),
+            },
+        }
     }
 
     /// The attention signals: notification taps land here and the task
@@ -351,29 +431,95 @@ impl Root {
         }
     }
 
-    /// Connect the link and spawn its batch reader; a refused connect
-    /// lands the reason in `closed`.
-    fn connect_link(&mut self, session: &str, sent_size: (u16, u16), cx: &mut Context<Self>) {
-        match Link::connect(session, sent_size.0, sent_size.1) {
-            Ok((link, mut rx)) => {
-                self.link = Some(link);
-                self.send(ClientMsg::PaneInset {
-                    rows: mouse::INSET.0,
-                    cols: mouse::INSET.1,
-                });
-                self._reader = Some(cx.spawn(async move |this, cx| {
-                    while let Some(first) = rx.recv().await {
-                        let mut batch = vec![first];
-                        while let Ok(more) = rx.try_recv() {
-                            batch.push(more);
-                        }
-                        if this.update(cx, |root, cx| root.apply(batch, cx)).is_err() {
-                            break;
+    /// Adopt the link's event stream: apply the pre-drained events first,
+    /// then spawn the reader task over the live receiver. One body for
+    /// the cold path and the shot's warmed path, so the two cannot drift.
+    fn spawn_reader(
+        &mut self,
+        early: Vec<Event>,
+        mut rx: tokio::sync::mpsc::UnboundedReceiver<Event>,
+        cx: &mut Context<Self>,
+    ) {
+        if !early.is_empty() {
+            self.apply(early, cx);
+        }
+        self._reader = Some(cx.spawn(async move |this, cx| {
+            while let Some(first) = rx.recv().await {
+                let mut batch = vec![first];
+                while let Ok(more) = rx.try_recv() {
+                    batch.push(more);
+                }
+                if this.update(cx, |root, cx| root.apply(batch, cx)).is_err() {
+                    break;
+                }
+            }
+        }));
+    }
+
+    /// The control-channel rows the poll loop drained: one path per row,
+    /// riding the same rows a click rides. Quit persists the UI state
+    /// global (the frame saves on the interactive quit paths) and quits.
+    pub(super) fn apply_control(
+        &mut self,
+        cmds: &[fno::app_control::AppCommand],
+        cx: &mut Context<Self>,
+    ) {
+        for cmd in cmds {
+            match cmd {
+                fno::app_control::AppCommand::Quit => {
+                    record_ui_state(self, cx);
+                    cx.quit();
+                }
+                fno::app_control::AppCommand::View { view } => match view.as_str() {
+                    "chat" => self.show(MainView::Chat, cx),
+                    "terminal" => self.show(MainView::Terminal, cx),
+                    "orchestration" => self.show(MainView::Orchestration, cx),
+                    "mods" => self.show(MainView::Mods, cx),
+                    other => {
+                        self.notice = Some(format!("fno mux app: unknown view {other:?}"));
+                        self.notice_failed = true;
+                    }
+                },
+                fno::app_control::AppCommand::Focus { agent } => {
+                    let now = fno::app_api::digest_overlay::now_secs();
+                    // The lookup reads the same rows the pane paints, so a
+                    // focus naming the launched row's task label resolves.
+                    let streamed = match self.main {
+                        MainView::Chat => self.chat.key.as_ref().map(|k| k.session_id.as_str()),
+                        _ => None,
+                    };
+                    let launched = self
+                        .launch
+                        .show
+                        .as_deref()
+                        .zip(self.launch.show_task.as_deref());
+                    let hit = super::left_pane::rows(
+                        &self.layout,
+                        &self.board,
+                        now,
+                        self.agents_open,
+                        streamed,
+                        launched,
+                    )
+                    .into_iter()
+                    .find_map(|r| match r {
+                        super::left_pane::Row::Item {
+                            label,
+                            action: Some(a),
+                            ..
+                        } if label == *agent => Some(a),
+                        _ => None,
+                    });
+                    match hit {
+                        Some(a) => self.act(a, cx),
+                        None => {
+                            self.notice =
+                                Some(format!("fno mux app focus: no agent row names {agent:?}"));
+                            self.notice_failed = true;
                         }
                     }
-                }));
+                }
             }
-            Err(e) => self.closed = Some(e.to_string()),
         }
     }
 
@@ -421,6 +567,9 @@ impl Root {
 
     /// [`Self::say`], in the error color when `failed`.
     fn say_as(&mut self, text: String, failed: bool, cx: &mut Context<Self>) {
+        if self.shot {
+            return;
+        }
         self.notice = Some(text);
         self.notice_failed = failed;
         self.notice_gen += 1;
@@ -2397,8 +2546,13 @@ impl Global for UiState {}
 
 /// Copy the live UI state into the global the exit paths read.
 fn record_ui_state(root: &Root, cx: &mut App) {
-    // The global is set when the window opens; every mutation site runs
-    // after that, so the panicking read is unreachable in practice.
+    // The global is set when the window opens in the attach path, and
+    // every mutation site runs after that. The shot window sets none,
+    // so its chat mutations skip the snapshot: nothing persists a
+    // shot's state.
+    if cx.try_global::<UiState>().is_none() {
+        return;
+    }
     let ui = cx.global_mut::<UiState>();
     ui.view = root.main;
     ui.agents_open = root.agents_open;
@@ -2570,4 +2724,56 @@ pub fn run(
         cx.on_window_closed(|cx| cx.quit()).detach();
         cx.activate(true);
     });
+}
+
+/// The shot path's root builder: the same metrics run() derives, with
+/// the caller's warmed link adopted so the one frame the window paints
+/// synchronously at open carries the world's data. The link was already
+/// connected before gpui started, so this runs fast and the frame is
+/// the shot.
+pub(super) fn root_for_shot(
+    session: &str,
+    mode: MainView,
+    pinned: Option<SessionKey>,
+    warmed: super::link::WarmedLink,
+    family: String,
+    font_size: f32,
+    window: &mut Window,
+    cx: &mut App,
+) -> gpui::Entity<Root> {
+    let font = gpui::font(family);
+    let font_size = px(font_size);
+    let text = window.text_system();
+    let id = text.resolve_font(&font);
+    let width = text
+        .advance(id, font_size, 'm')
+        .map(|s| s.width)
+        .unwrap_or(font_size * 0.6);
+    let scale = window.scale_factor();
+    let snap = |v: Pixels| px((f32::from(v) * scale).round() / scale);
+    let metrics = Metrics {
+        font,
+        font_size,
+        cell: gpui::size(snap(width), snap(font_size * 1.25)),
+    };
+    let root = cx.new(|cx| {
+        Root::new_with_link(
+            session.to_string(),
+            mode,
+            pinned,
+            false,
+            metrics,
+            Some(warmed),
+            window,
+            cx,
+        )
+    });
+    root.update(cx, |root, _| root.shot = true);
+    // The shot window never activates, and the board poll pauses while
+    // the window is inactive; the shot needs every feed settled before
+    // the capture, so it polls regardless.
+    if let Some(poller) = &root.read(cx).poller {
+        poller.set_active(true);
+    }
+    root
 }

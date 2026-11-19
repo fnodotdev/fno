@@ -162,6 +162,10 @@ pub enum LinkError {
     },
     #[error("the socket writer lock was poisoned")]
     Poisoned,
+    #[error("no layout arrived within the warm budget")]
+    NoLayout,
+    #[error("{0}")]
+    Closed(String),
 }
 
 /// Connect and send `Attach`. `rows`/`cols` (0, 0) attach as an observer,
@@ -236,6 +240,49 @@ impl Link {
             what: "write",
             source,
         })
+    }
+}
+
+/// The link already connected and drained to the world's first layout:
+/// what the shot path hands the root, so the one frame gpui paints
+/// synchronously at open carries the world's data.
+pub struct WarmedLink {
+    /// The live link the root adopts.
+    pub link: Link,
+    /// Events drained before the layout (early frames and modes the
+    /// root still applies).
+    pub early: Vec<Event>,
+    /// The stream from the layout onward.
+    pub rest: UnboundedReceiver<Event>,
+}
+
+/// Connect and poll until the first `Layout` arrives or `budget`
+/// elapses. The reader thread fills the channel while the caller
+/// sleeps between polls, so no event is lost.
+pub fn connect_warmed(session: &str, budget: Duration) -> Result<WarmedLink, LinkError> {
+    let (link, mut rx) = Link::connect(session, 80, 24)?;
+    let deadline = std::time::Instant::now() + budget;
+    let mut early = Vec::new();
+    loop {
+        if std::time::Instant::now() >= deadline {
+            return Err(LinkError::NoLayout);
+        }
+        match rx.try_recv() {
+            Ok(Event::Layout(_)) => {
+                return Ok(WarmedLink {
+                    link,
+                    early,
+                    rest: rx,
+                })
+            }
+            Ok(ev) => early.push(ev),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                return Err(LinkError::Closed("the world closed the link".into()));
+            }
+        }
     }
 }
 

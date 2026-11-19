@@ -9,6 +9,7 @@
 #![allow(clippy::doc_lazy_continuation)]
 
 #[cfg(feature = "full")]
+pub mod app_control;
 pub mod chokepoint;
 #[cfg(feature = "full")]
 pub mod cli_args;
