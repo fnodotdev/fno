@@ -79,21 +79,19 @@ fn remoteless_clean_checkout_reaches_the_no_pr_terminal() {
     std::fs::write(repo.join("calc.py"), "def add(a, b):\n    return a\n").unwrap();
     assert!(unshipped_or_dirty(true, &read));
     drop(tmp);
-}
 
-#[test]
-fn remote_read_still_gates_the_pushed_arm() {
-    // A checkout WITH a remote keeps the old semantics: unpushed or dirty
-    // reads unshipped; pushed and clean reads shipped.
-    let (tmp, repo) = temp_repo();
+    // The pushed arm keeps its shape: a checkout WITH a remote reads
+    // unshipped while @{push} is unreadable (no upstream yet), the
+    // unchanged behavior that keeps the REST read.
+    let (tmp2, repo2) = temp_repo();
     git(
-        &repo,
+        &repo2,
         &["remote", "add", "origin", "https://example.com/o/r.git"],
     );
-    std::fs::write(repo.join("f.txt"), "one\n").unwrap();
-    git(&repo, &["add", "."]);
+    std::fs::write(repo2.join("f.txt"), "one\n").unwrap();
+    git(&repo2, &["add", "."]);
     git(
-        &repo,
+        &repo2,
         &[
             "-c",
             "user.email=t@t",
@@ -104,12 +102,9 @@ fn remote_read_still_gates_the_pushed_arm() {
             "one",
         ],
     );
-
-    let read = local_output_for(&repo);
-    // @{push} is unreadable until an upstream exists: unchanged behavior,
-    // keeps the REST read.
-    assert!(unshipped_or_dirty(false, &read));
-    drop(tmp);
+    let pushed = local_output_for(&repo2);
+    assert!(unshipped_or_dirty(false, &pushed));
+    drop(tmp2);
 }
 
 #[test]

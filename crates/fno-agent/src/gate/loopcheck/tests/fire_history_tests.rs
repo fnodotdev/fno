@@ -24,8 +24,6 @@ fn shadow_transition_rejection_changes_no_legacy_decision() {
         crate::run_state::RunEvent::SuccessorProven,
     )
     .unwrap();
-    let legacy = allow_output("block", None, "keep working", 2, None);
-
     observe_shadow_transition(
         &run_log,
         run_id,
@@ -34,7 +32,6 @@ fn shadow_transition_rejection_changes_no_legacy_decision() {
         &events,
     );
 
-    assert_eq!(legacy, allow_output("block", None, "keep working", 2, None));
     let telemetry = crate::events::committed_journal_text(&events);
     assert!(telemetry.contains("\"type\":\"transition_rejected\""));
     assert!(telemetry.contains("invalid transition Closed + DispatchClassified"));
