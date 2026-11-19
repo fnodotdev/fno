@@ -17,7 +17,7 @@ use super::{Closed, EMPTY_AFTER};
 use crate::find;
 use crate::palette::Palette;
 use crate::ui::{self, Role};
-use crate::window::{Action, AnswerState, Root};
+use crate::window::{Action, Root};
 use fno::app_api::client::agent_lattice_state;
 use fno::app_api::client::card_line::card_facts;
 use fno::app_api::lattice::{lattice_glyph, status_long};
@@ -764,80 +764,6 @@ fn status(root: &Root) -> Option<Div> {
     Some(column(muted(text, p)).py_2())
 }
 
-/// The shown session's pending question, as an answer card above the
-/// composer: the diamond-title row, one button per option with the
-/// recommendation carrying the accent, and the answer state the board fold
-/// keeps. Nothing renders when the shown session asked nothing, so a plain
-/// transcript never reserves card space.
-fn question_card(root: &Root, cx: &mut Context<Root>) -> Option<Div> {
-    let key = root.chat.key.as_ref()?;
-    // Newest first, the order the HQ rows and the left pane show: with two
-    // pending questions from one session, the card offers the latest.
-    let q = root.board.questions_newest_first().into_iter().find(|q| {
-        q.item.asker.as_ref().is_some_and(|asker| {
-            asker.session_id.as_deref() == Some(key.session_id.as_str())
-                && asker.harness.as_deref().is_none_or(|h| h == key.harness)
-        })
-    })?;
-    let p = root.palette;
-    let number = q.item.number.as_deref().unwrap_or_default();
-    let head = if number.is_empty() {
-        q.item.title.clone()
-    } else {
-        format!("{number} {}", q.item.title)
-    };
-    let mut card = div()
-        .mx_3()
-        .mb_2()
-        .p_2()
-        .border_1()
-        .border_color(rgb(p.border))
-        .bg(rgb(p.panel))
-        .rounded(px(4.0))
-        .child(
-            div()
-                .flex()
-                .gap_1()
-                .child(div().text_color(rgb(p.warn)).child("◆"))
-                .child(div().flex_1().text_color(rgb(p.fg)).child(head)),
-        );
-    for opt in &q.item.options {
-        let recommended = q
-            .item
-            .recommendation
-            .as_ref()
-            .is_some_and(|r| r.option == opt.n);
-        let label = if recommended {
-            format!("▶ {}. {}", opt.n, opt.text)
-        } else {
-            format!("{}. {}", opt.n, opt.text)
-        };
-        card = card.child(
-            clickable(
-                SharedString::from(format!("q-opt-{}", opt.n)).into(),
-                Action::Answer {
-                    id: q.item.id.clone(),
-                    option: opt.n,
-                },
-                p,
-                cx,
-            )
-            .text_color(rgb(if recommended { p.accent } else { p.fg }))
-            .child(label),
-        );
-    }
-    let state = match root.answers.get(&q.item.id) {
-        Some(AnswerState::Sending(_)) => Some((p.muted, "answering…".into())),
-        Some(AnswerState::Done(_)) => Some((p.ok, "answered".into())),
-        Some(AnswerState::Refused(why)) => Some((p.error, format!("refused: {why}"))),
-        None => None,
-    };
-    if let Some((color, text)) = state {
-        card = card.child(div().text_color(rgb(color)).child(text));
-    }
-    Some(card)
-}
-
 /// The composer, or in its place the closed stream's reason and Reconnect.
 /// The bar that replaces the composer when the chat stream is over: the end
 /// reason and a reconnect button. The link's own exit reason folds in here;
@@ -982,7 +908,6 @@ pub(crate) fn render(root: &Root, window: &Window, cx: &mut Context<Root>) -> Di
         .child(rows)
         .children(pending.collect::<Vec<_>>())
         .children(status(root))
-        .children(question_card(root, cx))
         // A block gap keeps the last turn a full block off the composer.
         .children(composer(root, window, cx).map(|c| c.mt_3()));
     if let Some(s) = sheet(root, cx) {
