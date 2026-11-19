@@ -1589,7 +1589,26 @@ pub(crate) fn persona_widening_seams(view: &mut View) -> Vec<crate::proto::Comma
     let Some(o) = view.persona.as_ref() else {
         return Vec::new();
     };
-    const FLOOR: usize = 28;
+    // Panes this surface paints word-wrap their own lines; a worker renders
+    // its text inside its pty, where the rect loses two border columns to
+    // the client frame and the transcript pads inside the rest, so fleet
+    // content wraps about four narrower than its rect. One floor per kind.
+    const FLOOR: usize = 26;
+    const FLEET_FLOOR: usize = 32;
+    let tracked: Vec<u64> = o
+        .pane
+        .into_iter()
+        .chain(o.edit_pane)
+        .chain(o.claim_pane)
+        .chain(o.records.iter().map(|(id, _)| *id))
+        .collect();
+    let pane_floor = |pid: u64| -> usize {
+        if tracked.contains(&pid) {
+            FLOOR
+        } else {
+            FLEET_FLOOR
+        }
+    };
     let mut seams = Vec::new();
     let claim = o.claim_pane.or(o.pane);
     if let Some(pane) = claim {
@@ -1634,7 +1653,7 @@ pub(crate) fn persona_widening_seams(view: &mut View) -> Vec<crate::proto::Comma
                 break;
             };
             let need = target - persona.1;
-            let donate = need.min(nw.saturating_sub(FLOOR));
+            let donate = need.min(nw.saturating_sub(pane_floor(*nid)));
             if donate == 0 {
                 break;
             }
@@ -1643,8 +1662,43 @@ pub(crate) fn persona_widening_seams(view: &mut View) -> Vec<crate::proto::Comma
                 b: pane,
                 pos: (nx + nw - donate) as u16,
             });
+            if let Some(r) = rects.iter_mut().find(|(pid, _)| pid == nid) {
+                r.1 .2 -= donate;
+            }
             persona.0 -= donate;
             persona.1 += donate;
+        }
+        // The claim only pulls width, and the split that made room for it
+        // can leave a fleet pane under the fleet floor with nothing left to
+        // pull from. Push it back up: the flanking band pane pays down to
+        // its own floor. One seam between band-adjacent panes, so the
+        // server moves the one boundary the pair flanks exactly.
+        for &(pid, (x, y, w, h)) in rects.iter() {
+            if tracked.contains(&pid) || w >= FLEET_FLOOR {
+                continue;
+            }
+            if !(y < py + ph && py < y + h) {
+                continue;
+            }
+            let need = FLEET_FLOOR - w;
+            let donor = rects.iter().copied().find(|(nid, (nx, ny, nw, nh))| {
+                *nid != pid
+                    && *ny < py + ph
+                    && py < *ny + *nh
+                    && (*nx + *nw + 1 == x || x + w + 1 == *nx)
+                    && *nw >= need + pane_floor(*nid)
+            });
+            let Some((nid, (dnx, _, dnw, _))) = donor else {
+                continue;
+            };
+            let left = dnx + dnw + 1 == x;
+            let pos = if left { x - need } else { x + w + need };
+            let (a, b) = if left { (nid, pid) } else { (pid, nid) };
+            seams.push(crate::proto::Command::ResizeSeam {
+                a,
+                b,
+                pos: pos as u16,
+            });
         }
     }
     // One shot: the claim answers once, from the layout that names it.
@@ -2688,6 +2742,93 @@ mod tests {
             (109, None, 30),
             "the persona seam clamps at its ceiling so the strip record keeps 30"
         );
+    }
+
+    #[test]
+    fn the_walk_floors_fleet_panes_and_raises_the_split_deficit() {
+        use crate::proto::layout::Rect;
+        // Fleet row at the chip's shape: archer 59, then the reviewer the
+        // persona split turned into 29 | gap | 30. The claim pulls nothing
+        // (the donor is already under the fleet floor); the raise pays the
+        // reviewer back to 32 from the persona column, which paints its own
+        // word-wrapped page and floors at 26.
+        let mut v = View::new((40, 140), "s".into(), LayoutView::default());
+        v.layout.panes = vec![
+            (
+                1,
+                Rect {
+                    x: 0,
+                    y: 0,
+                    rows: 54,
+                    cols: 59,
+                },
+            ),
+            (
+                3,
+                Rect {
+                    x: 60,
+                    y: 0,
+                    rows: 26,
+                    cols: 29,
+                },
+            ),
+            (
+                6,
+                Rect {
+                    x: 90,
+                    y: 0,
+                    rows: 26,
+                    cols: 30,
+                },
+            ),
+            (
+                2,
+                Rect {
+                    x: 60,
+                    y: 27,
+                    rows: 27,
+                    cols: 60,
+                },
+            ),
+        ];
+        v.persona = Some(PersonaOverlay {
+            pane: Some(6),
+            widen: true,
+            edit_pane: None,
+            claim_pane: Some(6),
+            records: Vec::new(),
+            title: "solo".into(),
+            lines: Vec::new(),
+            cursor: None,
+            personas: Vec::new(),
+            project: "fno".into(),
+            path: "/tmp/no-such-persona.md".into(),
+            draft: false,
+            slug: "solo".into(),
+            doc: None,
+            notes: Vec::new(),
+            scroll: 0,
+            sel: None,
+            notice: false,
+            input: None,
+            edit_since: None,
+            edit_spawn: None,
+            home: Home::Float,
+            drill: false,
+        });
+        let seams = super::persona_widening_seams(&mut v);
+        assert_eq!(seams.len(), 1, "one raise seam, no claim seam");
+        match &seams[0] {
+            crate::proto::Command::ResizeSeam { a, b, pos } => {
+                assert_eq!(
+                    (*a, *b, *pos),
+                    (3, 6, 92),
+                    "the reviewer gains to 32, the persona pays to 27"
+                );
+                assert!(!v.persona.as_ref().unwrap().widen, "one shot");
+            }
+            other => panic!("unexpected command {other:?}"),
+        }
     }
 
     #[test]
