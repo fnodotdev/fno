@@ -47,11 +47,16 @@ unicode-segmentation = "1"
 unicode-width = "0.2"
 thiserror = "2"
 tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
-# The shot's window discovery and capture: NSApp enumeration (objc) and
-# CGWindowListCreateImage (core-graphics). Versions pinned to gpui's own
-# so the graph carries one copy.
+# The shot's window discovery and the window-server metadata reads:
+# NSApp enumeration (objc) and CGWindowListCopyWindowInfo
+# (core-graphics). Versions pinned to gpui's own so the graph carries
+# one copy.
 objc = "0.2"
 core-graphics = "0.24"
+# The image capture itself: ScreenCaptureKit, because
+# CGWindowListCreateImage is obsoleted on macOS 15+. block2 builds the
+# completion handlers the SCScreenshotManager calls take.
+block2 = "0.6"
 # The ForeignType trait: CGImage::as_ptr for the rep's initWithCGImage.
 # Version pinned to core-graphics's own so the graph carries one copy.
 foreign-types = "0.5"
