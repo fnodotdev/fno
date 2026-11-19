@@ -1073,6 +1073,9 @@ pub struct SweepReport {
     pub cap_held: BTreeMap<&'static str, usize>,
     /// `None` = the orphan lane ran; `Some(manifest)` = disabled, named.
     pub orphan_lane: Option<String>,
+    /// A row the walk budget stopped left bytes uncounted: the cap lane
+    /// skips on incomplete bytes, and the summary names the flag.
+    pub bytes_incomplete: bool,
     pub shards_removed: usize,
     /// The per-row lines, in print order, for the reclaim receipt's note.
     pub lines: Vec<String>,
@@ -1182,6 +1185,21 @@ pub fn sweep(root: &Path, apply: bool, now: SystemTime) -> SweepReport {
 /// live-cargo fence must read the union of all their trees: a per-repo sweep
 /// cannot see another repo's live cargo, and its cap would reap that row.
 pub fn sweep_roots(roots: &[PathBuf], apply: bool, now: SystemTime) -> SweepReport {
+    sweep_roots_bounded(roots, apply, now, None)
+}
+
+/// The same sweep under a walk budget: tree resolutions and row byte reads
+/// stop at the deadline. The orphan lane disables itself, named, exactly as
+/// it does on a failing manifest (a blind orphan reap is the one mistake
+/// this sweep cannot undo), rows measured past the deadline carry zero
+/// bytes, and the cap lane skips when bytes are incomplete. `None` runs
+/// unbounded.
+pub(crate) fn sweep_roots_bounded(
+    roots: &[PathBuf],
+    apply: bool,
+    now: SystemTime,
+    budget: Option<&crate::disk_report::WalkBudget>,
+) -> SweepReport {
     let mut rep = SweepReport::default();
     let Some(root) = roots.first() else {
         return rep;
@@ -1216,6 +1234,12 @@ pub fn sweep_roots(roots: &[PathBuf], apply: bool, now: SystemTime) -> SweepRepo
     // rule `owning_tree` applies.
     let mut owner_of: BTreeMap<PathBuf, PathBuf> = BTreeMap::new();
     for tree in &trees {
+        if let Some(b) = budget {
+            if b.expired() {
+                rep.orphan_lane.get_or_insert("walk budget hit".to_string());
+                break;
+            }
+        }
         match answer_tree(tree, &fno_base) {
             Ok(answer) => {
                 rep.trees_resolved += 1;
@@ -1266,7 +1290,14 @@ pub fn sweep_roots(roots: &[PathBuf], apply: bool, now: SystemTime) -> SweepRepo
     for base in &bases {
         let (paths, _) = inventory(base);
         for path in paths {
-            let bytes = crate::reclaim::tree_bytes(&path);
+            let bytes = match budget {
+                Some(b) if b.expired() => {
+                    rep.bytes_incomplete = true;
+                    0
+                }
+                Some(b) => crate::disk_report::dir_bytes_bounded(&path, b).0,
+                None => crate::reclaim::tree_bytes(&path),
+            };
             let quiet = quiet_of(&path, now);
             let membership = has_membership(&path, &names);
             rows.push(Row {
@@ -1375,7 +1406,10 @@ pub fn sweep_roots(roots: &[PathBuf], apply: bool, now: SystemTime) -> SweepRepo
     } else {
         before_bytes.saturating_sub(planned_bytes)
     };
-    if remaining > rep.effective_cap_bytes {
+    if rep.bytes_incomplete && remaining > rep.effective_cap_bytes {
+        rep.cap_held.insert("budget", 0);
+    }
+    if remaining > rep.effective_cap_bytes && !rep.bytes_incomplete {
         let mut candidates: Vec<usize> = rows
             .iter()
             .enumerate()
@@ -1480,7 +1514,7 @@ pub fn sweep_roots(roots: &[PathBuf], apply: bool, now: SystemTime) -> SweepRepo
     };
 
     let orphan_lane = match &rep.orphan_lane {
-        None => "on".to_string(),
+        None => "on (6h quiet window)".to_string(),
         Some(manifest) => format!("disabled:{manifest}"),
     };
     // cap_held answers "why are bytes still over the cap": counted only when
@@ -2421,6 +2455,21 @@ mod tests {
         let summary = rep.lines.last().unwrap();
         assert!(summary.contains("orphans=1"), "{summary}");
         assert!(summary.contains("orphan_lane=on"), "{summary}");
+    }
+
+    /// A budget that dies before the first tree resolution leaves the sweep
+    /// honest: the orphan lane disables itself, named, and no byte reads
+    /// run, so the cap lane skips.
+    #[test]
+    fn an_expired_budget_disables_the_orphan_lane_and_skips_bytes() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let env = setup("budget", "never-broken");
+        plant(&env.fb_base, "00", "cafefe12", seven_h(), true);
+        let dead = crate::disk_report::WalkBudget::start(std::time::Duration::ZERO);
+        let rep = sweep_roots_bounded(&[env.root.clone()], false, SystemTime::now(), Some(&dead));
+        let lane = rep.orphan_lane.as_deref();
+        assert_eq!(lane, Some("walk budget hit"), "{lane:?}");
+        assert!(rep.bytes_incomplete, "bytes must read incomplete");
     }
 
     /// AC2-EDGE: quiet 2h is fresh; no fingerprint under the fallback base is
