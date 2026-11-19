@@ -57,6 +57,10 @@ fn remoteless_clean_checkout_reaches_the_no_pr_terminal() {
     // The unshipped conjunct must not fire, so the NoPr arm's DoneAdvisory
     // terminal is reachable.
     let (tmp, repo) = temp_repo();
+    // A repo with no commit at all stays unshipped even with a clean tree:
+    // the HEAD read is load-bearing against an empty checkout.
+    let empty = local_output_for(&repo);
+    assert!(unshipped_or_dirty(true, &empty));
     std::fs::write(repo.join("calc.py"), "def add(a, b):\n    return a + b\n").unwrap();
     git(&repo, &["add", "."]);
     git(
