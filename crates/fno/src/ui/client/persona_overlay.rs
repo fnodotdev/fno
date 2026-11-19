@@ -1496,6 +1496,22 @@ pub(crate) fn spawn_persona_pane(view: &mut View) {
 /// seam moves whose floors keep every neighbour readable. The editor
 /// fold claims by shrinking the editor pane to the dock's persona
 /// share. Cleared as soon as it answers.
+pub(crate) async fn send_widening_seams<W>(sock_w: &mut W, view: &mut View) -> Option<String>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let seams = persona_widening_seams(view);
+    if seams.is_empty() {
+        return None;
+    }
+    for cmd in seams {
+        if let Err(e) = write_msg(sock_w, &ClientMsg::Command(cmd)).await {
+            return Some(format!("persona seam send failed: {e}"));
+        }
+    }
+    None
+}
+
 pub(crate) fn persona_widening_seams(view: &mut View) -> Vec<crate::proto::Command> {
     let armed = view.persona.as_ref().is_some_and(|o| o.widen);
     if !armed {

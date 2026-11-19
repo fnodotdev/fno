@@ -6650,20 +6650,13 @@ async fn attach_and_run(
                     // The persona column's width claim reads post-split
                     // rects, so the layout that names the new pane is
                     // when the seams can finally be computed and sent.
-                    let seams = crate::client::persona_overlay::persona_widening_seams(&mut view);
-                    if !seams.is_empty() {
-                        let mut failed = None;
-                        for cmd in seams {
-                            if let Err(e) =
-                                write_msg(&mut sock_w, &ClientMsg::Command(cmd)).await
-                            {
-                                failed = Some(format!("persona seam send failed: {e}"));
-                                break;
-                            }
-                        }
-                        if let Some(e) = failed {
-                            break Err(e);
-                        }
+                    if let Some(e) = crate::client::persona_overlay::send_widening_seams(
+                        &mut sock_w,
+                        &mut view,
+                    )
+                    .await
+                    {
+                        break Err(e);
                     }
                     // a scrape tick may have removed the peeked row.
                     // Re-anchor to an adjacent agent row (fetch its transcript)
