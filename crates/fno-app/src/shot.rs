@@ -104,22 +104,16 @@ pub fn run(opts: ShotOptions) -> i32 {
             let deadline = std::time::Instant::now() + SETTLE_BUDGET;
             let mut settled = false;
             let mut last_events = None;
-            let mut bg = 0u32;
             while std::time::Instant::now() < deadline {
                 let read = handle.update(cx, |root, _, _| {
-                    (
-                        root.board.read_yet(),
-                        root.chat.conv.events,
-                        root.palette.bg,
-                    )
+                    (root.board.read_yet(), root.chat.conv.events)
                 });
-                if let Ok((read_yet, events, bg_read)) = read {
+                if let Ok((read_yet, events)) = read {
                     // The board feeds land first; the chat stream keeps
                     // folding events after that. Settled means the board
                     // is read AND the chat's event count held still for
                     // one poll, so the last assistant rows are in the
                     // model the frame renders.
-                    bg = bg_read;
                     if read_yet && last_events == Some(events) {
                         settled = true;
                         break;
@@ -141,7 +135,7 @@ pub fn run(opts: ShotOptions) -> i32 {
                 std::thread::sleep(std::time::Duration::from_secs(8));
                 0
             } else {
-                capture_to_png(&out, bg)
+                capture_to_png(&out)
             };
             if code != 0 {
                 eprintln!("fno-app --shot: the capture failed");
@@ -351,7 +345,7 @@ fn log_window_live(window_id: u32, when: &str) -> bool {
 /// captures cleanly from any foreign process. The proof lines land on
 /// stderr: the TCC preflight read, the window-server liveness
 /// before and after the capture, and the helper's own lines.
-fn capture_to_png(out: &std::path::Path, bg: u32) -> i32 {
+fn capture_to_png(out: &std::path::Path) -> i32 {
     // SAFETY: NSApp enumeration over this process's own windows only.
     let Some((window_id, _scale)) = (unsafe { shot_window_id() }) else {
         eprintln!("fno-app --shot: no capturable fno window in this process");
@@ -389,7 +383,7 @@ fn capture_to_png(out: &std::path::Path, bg: u32) -> i32 {
     if !after {
         eprintln!("fno-app --shot: the window left the window-server list during the capture");
     }
-    if let Err(e) = flatten_png(out, bg) {
+    if let Err(e) = flatten_png(out) {
         eprintln!("fno-app --shot: the frame failed to flatten: {e}");
         return 1;
     }
@@ -422,7 +416,7 @@ impl std::error::Error for FrameError {}
 /// bakes the window's one-percent alpha into the capture's own alpha
 /// channel, so a viewer composites the frame on white and reads it
 /// nearly blank. Every pixel blends over `bg` and lands fully opaque.
-fn flatten_png(path: &std::path::Path, bg: u32) -> Result<(), FrameError> {
+fn flatten_png(path: &std::path::Path) -> Result<(), FrameError> {
     let file = std::fs::File::open(path).map_err(FrameError::Io)?;
     let decoder = png::Decoder::new(std::io::BufReader::new(file));
     let mut reader = decoder
@@ -439,18 +433,15 @@ fn flatten_png(path: &std::path::Path, bg: u32) -> Result<(), FrameError> {
     reader
         .next_frame(&mut buf)
         .map_err(|e| FrameError::Png(e.to_string()))?;
-    let (br, bg_, bb) = ((bg >> 16) as u8, (bg >> 8) as u8, bg as u8);
-    let channels = 4;
-    for px in buf.chunks_exact_mut(channels) {
-        let a = px[3] as u32;
-        if a == 255 {
+    // The capture's RGB channels hold the window's full-brightness
+    // render; the one-percent lives only in the alpha channel. Blend or
+    // rescale the RGB and the content crushes toward the background, so
+    // the flatten just pins alpha to opaque and keeps the pixels.
+    for px in buf.chunks_exact_mut(4) {
+        let [_, _, _, a] = px else {
             continue;
-        }
-        let back = [br, bg_, bb];
-        for (c, &b) in back.iter().enumerate() {
-            px[c] = (((px[c] as u32) * a + b as u32 * (255 - a)) / 255) as u8;
-        }
-        px[3] = 255;
+        };
+        *a = 255;
     }
     let file = std::fs::File::create(path).map_err(FrameError::Io)?;
     let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), info.width, info.height);
