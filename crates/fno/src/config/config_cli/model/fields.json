@@ -113,6 +113,7 @@
       },
       "id_prefix": null,
       "id_hex_width": 8,
+      "id_mode": "hex",
       "staleness_days": 21,
       "epic_max_open_children": null,
       "max_open_ideas": 25,
@@ -983,6 +984,10 @@
     {
      "name": "id_hex_width",
      "default": 8
+    },
+    {
+     "name": "id_mode",
+     "default": "hex"
     },
     {
      "name": "staleness_days",
@@ -3395,6 +3400,7 @@
   "backlog.max_open_ideas",
   "backlog.id_prefix",
   "backlog.id_hex_width",
+  "backlog.id_mode",
   "backlog.render_targets",
   "backlog.render_default",
   "backlog.render_path",

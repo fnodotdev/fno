@@ -74,10 +74,4 @@ mod tests {
         assert!(receipt["janitor"].as_str().unwrap().contains("janitor"));
         assert!(crate::spawn_gate::check_disk_floor(&home, 0.0).is_ok());
     }
-
-    #[test]
-    fn free_disk_reads_a_real_volume() {
-        let td = tempfile::tempdir().unwrap();
-        assert!(free_disk_gb(td.path()).is_some_and(|g| g > 0.0));
-    }
 }

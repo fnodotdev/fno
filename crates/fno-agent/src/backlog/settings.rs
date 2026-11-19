@@ -297,6 +297,30 @@ pub fn node_id_hex_width() -> usize {
     8
 }
 
+/// Whether the configured prefix mints sequential ids (`<prefix>-1`,
+/// `<prefix>-2`, ...) instead of hex. Fail-open like the width: an absent or
+/// unknown value reads as hex.
+pub fn node_id_sequential() -> bool {
+    #[derive(serde::Deserialize)]
+    struct Doc {
+        backlog: Option<Block>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Block {
+        id_mode: Option<String>,
+    }
+    for path in candidates() {
+        let mode = serde_json::from_value::<Doc>(read_flat(&path))
+            .ok()
+            .and_then(|doc| doc.backlog)
+            .and_then(|block| block.id_mode);
+        if let Some(mode) = mode {
+            return mode == "sequential";
+        }
+    }
+    false
+}
+
 /// Lexical `normpath`: drop `.` components and resolve `..` against the
 /// buffer, never touching the filesystem. The Python readers compared paths
 /// in this form (os.path.normpath), so a `dir/./x/..` entry still matches.

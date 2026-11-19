@@ -36,6 +36,9 @@ set -euo pipefail
 
 # Path globs (perl regexes) whose content may keep the word.
 ALLOW_FILES='^(LICENSE[^/]*|.*CHANGELOG[^/]*|scripts/ci/check-no-verb-wording\.sh|skills/harness-verbs/(SKILL|LIMITATIONS)\.md)$'
+# The harness-verbs skill's own evals name the skill; the eval guard demands
+# one beside every changed SKILL.md, so its evals dir rides the same allow.
+ALLOW_FILES+='|^skills/harness-verbs/evals/[^/]+\.yaml$'
 # Cargo-generated copies and the sources the build freeze holds.
 # The mux wire schema is generated from the wire types, which keep the wire
 # name BacklogVerb and the "verb" field; JSON takes no marker comment.

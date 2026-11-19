@@ -1,0 +1,19 @@
+# Capability tier: does a reader of the test-audit skill apply the authoring
+# gate as "four answers per kept test, or the test is a prune candidate"?
+# The toolbag names the two outcomes; the skill defines them. Graded on the
+# answer carrying both the four-answer gate and the prune path.
+id: capability-four-answers-or-prune
+tier: capability
+prompt: |
+  Read skills/test-audit/SKILL.md. Answer two questions in
+  test-audit-eval-answers.md at the repo root, one per line:
+  1. What must every kept test be able to answer? Give the count
+     the skill names.
+  2. What happens to a test that guards no distinct contract?
+grade:
+  - kind: file-exists
+    path: test-audit-eval-answers.md
+  - kind: exit
+    command: "python3 -c \"a = open('test-audit-eval-answers.md').read().lower(); assert '4' in a or 'four' in a, 'answer 1 missing the count'; assert 'prune' in a or 'cut' in a or 'remove' in a, 'answer 2 missing the prune outcome'\""
+timeout_minutes: 10
+tags: [capability, test-audit]

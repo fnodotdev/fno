@@ -1078,6 +1078,7 @@ pub fn maybe_retirement_sweep(
     grace_cwd: PathBuf,
     events: PathBuf,
     interval: Duration,
+    hold_gate: fn(&AgentsHome) -> Option<String>,
     tab_sweep: impl FnOnce() -> crate::reap_render::MuxSweep + Send + 'static,
     roster_sweep: fn(
         &AgentsHome,
@@ -1102,7 +1103,7 @@ pub fn maybe_retirement_sweep(
         // vacate and reap the fleet the revival exists to bring back. The
         // hold is bounded: past the ceiling, or on a host that cannot name
         // its boot, the gate is unevaluable and the sweeps run as before.
-        if let Some(reason) = crate::boot_revival::hold_reason(&home) {
+        if let Some(reason) = hold_gate(&home) {
             let _ = emitter.emit(
                 "retire_held_for_boot_revival",
                 &serde_json::json!({"reason": reason}),
@@ -1400,6 +1401,7 @@ mod tests {
                 grace_cwd.clone(),
                 home.events_jsonl(),
                 Duration::from_secs(300),
+                crate::boot_revival::hold_reason,
                 || crate::reap_render::MuxSweep::Skipped,
                 noop_roster_sweep,
                 noop_team_sweep,
@@ -1414,6 +1416,7 @@ mod tests {
                 grace_cwd,
                 home.events_jsonl(),
                 Duration::from_secs(300),
+                crate::boot_revival::hold_reason,
                 || crate::reap_render::MuxSweep::Skipped,
                 noop_roster_sweep,
                 noop_team_sweep,
@@ -1430,6 +1433,17 @@ mod tests {
             );
         });
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The synthetic boot the injected hold gate pins, 60s old at eval
+    /// time, whatever the runner host's own uptime.
+    const HOLD_GATE_BOOT: u64 = 1_790_338_000;
+
+    /// The gate the revival-gate test passes: the same hold read on a
+    /// pinned boot and now, so the hold legs run even on a runner host up
+    /// past the ceiling.
+    fn injected_hold_gate(home: &AgentsHome) -> Option<String> {
+        crate::boot_revival::hold_reason_at(home, HOLD_GATE_BOOT, HOLD_GATE_BOOT + 60)
     }
 
     /// The gate: while this boot's revival pass has not finished, the retire
@@ -1458,6 +1472,7 @@ mod tests {
                 dir.clone(),
                 home.events_jsonl(),
                 Duration::from_secs(300),
+                injected_hold_gate,
                 || crate::reap_render::MuxSweep::Skipped,
                 noop_roster_sweep,
                 noop_team_sweep,
@@ -1496,7 +1511,7 @@ mod tests {
             // The pass done: the next tick runs the sweeps.
             crate::boot_revival::write_receipt(
                 &home.root().join("boot-revival.json"),
-                crate::boot_revival::boot_time().unwrap(),
+                HOLD_GATE_BOOT,
                 &[],
                 true,
             );
@@ -1509,6 +1524,7 @@ mod tests {
                 dir.clone(),
                 home.events_jsonl(),
                 Duration::from_secs(300),
+                injected_hold_gate,
                 || crate::reap_render::MuxSweep::Skipped,
                 noop_roster_sweep,
                 noop_team_sweep,
@@ -1552,6 +1568,7 @@ mod tests {
                 dir.to_path_buf(),
                 home.events_jsonl(),
                 Duration::from_secs(300),
+                crate::boot_revival::hold_reason,
                 tab_sweep,
                 roster_sweep,
                 noop_team_sweep,
@@ -1762,6 +1779,7 @@ mod tests {
                 dir.path().to_path_buf(),
                 home.events_jsonl(),
                 Duration::from_secs(300),
+                crate::boot_revival::hold_reason,
                 || crate::reap_render::MuxSweep::Skipped,
                 noop_roster_sweep,
                 noop_team_sweep,

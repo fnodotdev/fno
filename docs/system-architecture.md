@@ -59,7 +59,7 @@ graph TB
         EXEC["Executors<br/>archer"]
         REV["Reviewers<br/>code-reviewer,<br/>silent-failure-hunter,<br/>integration-test-analyzer,<br/>type-design-analyzer,<br/>ux-flow-tester,<br/>multi-device-checker"]
         VER["Verifiers<br/>goal-verifier, verifier"]
-        SPEC["Specialists<br/>tournament-debugger,<br/>roadmap-generator"]
+        SPEC["Specialists<br/>tournament-debugger"]
     end
 
     subgraph "Hooks Layer"

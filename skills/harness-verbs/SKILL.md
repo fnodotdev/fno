@@ -1,6 +1,7 @@
 ---
 name: harness-verbs
 description: Renamed to harness-commands. Load that skill instead.
+allowed-tools: Read
 ---
 
 <!-- verb-wording: allow (redirect stub for the old skill name, one release) -->

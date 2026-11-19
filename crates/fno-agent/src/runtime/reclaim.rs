@@ -29,6 +29,10 @@ const SCRATCH_MINUTES: u64 = 24 * 60;
 const UV_PRUNE_TIMEOUT: Duration = Duration::from_secs(120);
 /// Age at which the daemon's daily gate re-runs the sweep.
 const DAILY_SECS: u64 = 24 * 3600;
+
+/// The whole runner's walk budget: lanes compute until it expires, then
+/// name the skip on their line. Measured healthy runs finish inside it.
+const RECLAIM_WALK_BUDGET_SECS: u64 = 60;
 /// Age at which the daemon re-runs the cargo build-base lane alone. A fleet
 /// of builds once grew the base from 4 GB to 144 GB between two daily sweeps,
 /// so the cap must hold on the scale of hours, not days.
@@ -573,14 +577,28 @@ fn roots_by_base(roots: Vec<String>) -> BTreeMap<PathBuf, Vec<PathBuf>> {
 /// and the live-cargo fence must judge all their rows together. The note
 /// carries each base's summary line; bytes are reclaimed (apply) or
 /// projected (dry run).
-fn cargo_build_dirs_lane(home: &AgentsHome, apply: bool, include_cwd_root: bool) -> Lane {
+fn cargo_build_dirs_lane(
+    home: &AgentsHome,
+    apply: bool,
+    include_cwd_root: bool,
+    budget: &crate::disk_report::WalkBudget,
+) -> Lane {
     let mut lane = Lane::new("cargo_build_dirs", Vec::new());
     let mut notes: Vec<String> = Vec::new();
     for roots in roots_by_base(cargo_build_dirs_roots(home, include_cwd_root)).values() {
-        let rep = crate::cargo_build_dirs::sweep_roots(roots, apply, SystemTime::now());
+        let rep = crate::cargo_build_dirs::sweep_roots_bounded(
+            roots,
+            apply,
+            SystemTime::now(),
+            Some(budget),
+        );
         lane.bytes += rep.projected_bytes;
         if let Some(summary) = rep.lines.last() {
             notes.push(summary.clone());
+        }
+        if budget.expired() {
+            notes.push("skipped: walk budget hit mid-sweep".to_string());
+            break;
         }
     }
     lane.note = notes.join("; ");
@@ -979,7 +997,10 @@ pub fn maybe_run_cargo_hourly(home: &AgentsHome) {
     if std::fs::write(&stamp, b"").is_err() {
         return;
     }
-    let lane = cargo_build_dirs_lane(home, true, false);
+    let budget = crate::disk_report::WalkBudget::start(std::time::Duration::from_secs(
+        RECLAIM_WALK_BUDGET_SECS,
+    ));
+    let lane = cargo_build_dirs_lane(home, true, false, &budget);
     let _ = std::fs::write(&stamp, format!("{}\n", lane.note));
 }
 
@@ -1318,20 +1339,76 @@ fn install_retired_lane(apply: bool) -> Lane {
     lane
 }
 
-/// The full lane set (every `run_reclaim` lane but the leading subcommands),
-/// shared by the hand-run CLI path and the daemon's daily tick. Only
-/// `include_cwd_root` differs between the two callers - see
-/// [`cargo_build_dirs_roots`]. Returns the exit code plus the summary the
-/// daemon's sweep event carries.
-/// The lane list: the path-scan lanes first (each sized and, on apply,
-/// removed in place), then the family lanes. One builder keeps
-/// run_reclaim_lanes a runner rather than a catalog.
+/// Bounded bytes, then the apply removals, then the streaming print. Past
+/// the deadline the lane is a skip stub: paths cleared, the skip named on
+/// the line, the callback fired. Never half-removes: the apply arm only
+/// runs inside the budget, and the sizing itself stops at the deadline.
+fn finish_lane(
+    mut lane: Lane,
+    apply: bool,
+    budget: &crate::disk_report::WalkBudget,
+    report: &mut dyn FnMut(&Lane),
+) -> Lane {
+    if budget.expired() {
+        return skip_lane_stub(lane, budget, report);
+    }
+    // Bounded sizing: one huge path cannot stall the stream past the
+    // deadline; the partial is named on the lane, not swallowed.
+    let mut partial = false;
+    for path in &lane.paths {
+        let (bytes, stopped) = crate::disk_report::dir_bytes_bounded(path, budget);
+        lane.bytes += bytes;
+        partial |= stopped;
+    }
+    if partial {
+        if !lane.note.is_empty() {
+            lane.note.push_str("; ");
+        }
+        lane.note
+            .push_str(&format!("partial: walk budget {}s hit", budget.secs()));
+    }
+    if apply {
+        for path in &lane.paths {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+    report(&lane);
+    lane
+}
+
+/// A skipped lane renders as this stub: nothing measured, skip named.
+fn skip_lane_stub(
+    mut lane: Lane,
+    budget: &crate::disk_report::WalkBudget,
+    report: &mut dyn FnMut(&Lane),
+) -> Lane {
+    lane.paths.clear();
+    if !lane.note.is_empty() {
+        lane.note.push_str("; ");
+    }
+    lane.note.push_str(&skip_note(budget));
+    report(&lane);
+    lane
+}
+
+/// The skip line a lane past the deadline names.
+fn skip_note(budget: &crate::disk_report::WalkBudget) -> String {
+    let secs = budget.secs();
+    format!("skipped: walk budget {secs}s hit")
+}
+
+/// The full lane set (every `run_reclaim` lane but the leading
+/// subcommands), each lane finished under the budget and printed as it
+/// lands. One builder keeps run_reclaim_lanes a runner rather than a
+/// catalog; the runner owns the exit code and the summary.
 fn build_lanes(
     home: &AgentsHome,
     apply: bool,
     include_cwd_root: bool,
     done_targets: Vec<PathBuf>,
     done_held: String,
+    budget: &crate::disk_report::WalkBudget,
+    report: &mut dyn FnMut(&Lane),
 ) -> Vec<Lane> {
     let mut lanes = vec![
         Lane::new("plugin_cache_build_copies", plugin_cache_copies()),
@@ -1348,34 +1425,41 @@ fn build_lanes(
             lane.note = done_held;
         }
     }
-    for lane in &mut lanes {
-        lane.bytes = lane.paths.iter().map(|p| tree_bytes(p)).sum();
-        if apply {
-            for path in &lane.paths {
-                let _ = std::fs::remove_dir_all(path);
-            }
-        }
+    let mut finished = Vec::new();
+    for lane in lanes {
+        finished.push(finish_lane(lane, apply, budget, report));
     }
+    let mut lanes = finished;
     let (mut codex_quarantines, codex_lock) = codex_cache_quarantines();
-    codex_quarantines.bytes = codex_quarantines.paths.iter().map(|p| tree_bytes(p)).sum();
-    if apply {
-        for path in &codex_quarantines.paths {
-            let _ = std::fs::remove_dir_all(path);
-        }
-    }
-    lanes.push(codex_quarantines);
+    codex_quarantines = finish_lane(codex_quarantines, apply, budget, report);
     drop(codex_lock);
-    lanes.push(cargo_build_dirs_lane(home, apply, include_cwd_root));
-    lanes.push(claude_config_tmp_lane(apply));
-    lanes.push(stale_spaces_lane(apply));
-    lanes.push(backups_retention_lane(home, apply));
-    lanes.push(graph_vacuum_lane(home, apply));
-    lanes.push(state_layout_lane(home, apply));
-    lanes.push(state_root_drift_lane(home));
-    lanes.push(stray_event_db_lane(home, apply));
-    lanes.push(gh_facts_lane(apply));
-    lanes.push(pr_status_lane(apply));
-    lanes.push(install_retired_lane(apply));
+    lanes.push(codex_quarantines);
+    // Every lane past the codex block gates on the budget before its
+    // constructor runs: the constructors size and, on apply, remove, so an
+    // ungated call would work past the deadline.
+    let mut push = |name: &'static str, build: &dyn Fn() -> Lane| {
+        if budget.expired() {
+            let stub = skip_lane_stub(Lane::new(name, Vec::new()), budget, report);
+            lanes.push(stub);
+            return;
+        }
+        let lane = build();
+        report(&lane);
+        lanes.push(lane);
+    };
+    push("cargo_build_dirs", &|| {
+        cargo_build_dirs_lane(home, apply, include_cwd_root, budget)
+    });
+    push("claude_config_tmp", &|| claude_config_tmp_lane(apply));
+    push("stale_spaces", &|| stale_spaces_lane(apply));
+    push("backups_retention", &|| backups_retention_lane(home, apply));
+    push("graph_vacuum", &|| graph_vacuum_lane(home, apply));
+    push("state_layout", &|| state_layout_lane(home, apply));
+    push("state_root_drift", &|| state_root_drift_lane(home));
+    push("stray_event_db", &|| stray_event_db_lane(home, apply));
+    push("gh_facts_retention", &|| gh_facts_lane(apply));
+    push("pr_status_retention", &|| pr_status_lane(apply));
+    push("install_retired", &|| install_retired_lane(apply));
     lanes
 }
 
@@ -1403,6 +1487,12 @@ fn uv_lane(uv_prune: bool, apply: bool) -> Lane {
     uv
 }
 
+/// The full lane runner (every `run_reclaim` lane but the leading
+/// subcommands), shared by the hand-run CLI path and the daemon's daily
+/// tick. Only `include_cwd_root` differs between the two callers - see
+/// [`cargo_build_dirs_roots`]. Returns the exit code plus the summary the
+/// daemon's sweep event carries. Lanes print as they build, under one walk
+/// budget; a lane the budget stopped is a named skip stub.
 fn run_reclaim_lanes(
     home: &AgentsHome,
     apply: bool,
@@ -1410,17 +1500,11 @@ fn run_reclaim_lanes(
     include_cwd_root: bool,
     uv_prune: bool,
 ) -> (i32, ReclaimSummary) {
-    let (done_targets, done_held) = done_node_worktree_targets();
-    let lanes = build_lanes(home, apply, include_cwd_root, done_targets, done_held);
-    let uv = uv_lane(uv_prune, apply);
-
-    if apply {
-        // The uv lane never removes the cache dir itself, only prunes it.
-        if let Err(e) = write_receipt(home, &lanes) {
-            eprintln!("fno doctor reclaim: receipt write failed: {e}");
-        }
-    }
-
+    let budget = crate::disk_report::WalkBudget::start(std::time::Duration::from_secs(
+        RECLAIM_WALK_BUDGET_SECS,
+    ));
+    // The header leads: output starts before the first lane walks, and the
+    // per-lane callback prints each lane as its build lands.
     println!(
         "fno doctor reclaim: {}",
         if apply {
@@ -1429,10 +1513,10 @@ fn run_reclaim_lanes(
             "dry run (--apply to remove)"
         }
     );
-    for lane in lanes.iter().chain(std::iter::once(&uv)) {
+    let print_lane = |lane: &Lane, verbose: bool| {
         if lane.paths.is_empty() && lane.note.is_empty() {
             println!("       -  {}: nothing", lane.name);
-            continue;
+            return;
         }
         println!(
             "{:6.1} GB  {}: {} path(s){}",
@@ -1450,11 +1534,42 @@ fn run_reclaim_lanes(
                 println!("          {}", path.display());
             }
         }
-    }
+    };
+    let mut report_dyn = |lane: &Lane| print_lane(lane, verbose);
+    let mut all = Vec::new();
+    let (done_targets, done_held) = done_node_worktree_targets();
+    let lanes = build_lanes(
+        home,
+        apply,
+        include_cwd_root,
+        done_targets,
+        done_held,
+        &budget,
+        &mut report_dyn,
+    );
+    // The uv lane constructs its prune, so the expired check gates the
+    // construction: nothing removes past the deadline, not even the prune.
+    let uv = if budget.expired() {
+        skip_lane_stub(
+            Lane::new("uv_cache_prune", Vec::new()),
+            &budget,
+            &mut report_dyn,
+        )
+    } else {
+        let uv = uv_lane(uv_prune, apply);
+        print_lane(&uv, verbose);
+        uv
+    };
+    all.extend(lanes);
+    all.push(uv);
     if apply {
+        // The uv lane never removes the cache dir itself, only prunes it.
+        if let Err(e) = write_receipt(home, &all) {
+            eprintln!("fno doctor reclaim: receipt write failed: {e}");
+        }
         println!("receipt: {}", receipt_path(home).display());
     }
-    let every = lanes.iter().chain(std::iter::once(&uv)).collect::<Vec<_>>();
+    let every = all.iter().collect::<Vec<_>>();
     let top = every
         .iter()
         .max_by_key(|lane| lane.bytes)
@@ -1479,6 +1594,40 @@ pub(crate) mod tests {
     /// cargo_build_dirs' tests, which mutate the same vars.
     pub(crate) static ENV_LOCK: std::sync::LazyLock<&'static std::sync::Mutex<()>> =
         std::sync::LazyLock::new(crate::claims::test_env_lock);
+
+    /// An expired budget stubs every lane: the tail constructors never run,
+    /// so nothing sizes or removes past the deadline, and each lane prints
+    /// exactly once.
+    #[test]
+    fn an_expired_budget_stubs_every_tail_lane() {
+        let dead = crate::disk_report::WalkBudget::start(std::time::Duration::ZERO);
+        let home = crate::paths::AgentsHome::from_env();
+        let mut printed: Vec<String> = Vec::new();
+        let lanes = build_lanes(
+            &home,
+            false,
+            false,
+            Vec::new(),
+            String::new(),
+            &dead,
+            &mut |lane| printed.push(lane.name.to_string()),
+        );
+        assert!(lanes.len() >= 15, "lane set shrank: {}", lanes.len());
+        for lane in &lanes {
+            assert!(
+                lane.paths.is_empty(),
+                "{} kept paths past the deadline",
+                lane.name
+            );
+            assert!(
+                lane.note.contains("skipped"),
+                "{} note: {}",
+                lane.name,
+                lane.note
+            );
+        }
+        assert_eq!(printed.len(), lanes.len());
+    }
 
     fn temp_lane_root(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("fno-reclaim-{tag}-{}", std::process::id()));

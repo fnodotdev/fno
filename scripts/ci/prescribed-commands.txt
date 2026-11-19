@@ -472,6 +472,7 @@ ship
 ship-docs
 speculate
 target
+talk
 tdd
 test-audit
 think

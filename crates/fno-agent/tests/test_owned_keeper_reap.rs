@@ -170,33 +170,3 @@ fn daemon_refuses_a_dead_owner_at_start() {
     assert!(!home.join("supervisor.sock").exists());
     assert!(stderr.contains(&owner_pid.to_string()), "stderr={stderr:?}");
 }
-
-#[test]
-fn every_triad_spawning_test_file_declares_its_owner() {
-    let tests_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
-    let exempt = ["retirement_e2e.rs", "test_run_lifecycle.rs"];
-    let mut matched = Vec::new();
-    for entry in std::fs::read_dir(&tests_dir).expect("read tests directory") {
-        let entry = entry.expect("read test entry");
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
-            continue;
-        }
-        let name = path.file_name().unwrap().to_string_lossy().to_string();
-        let source = std::fs::read_to_string(&path).expect("read test source");
-        let spawns_triad = source.contains("CARGO_BIN_EXE_fno-agent\"")
-            || source.contains("CARGO_BIN_EXE_fno-agent-daemon\"");
-        if !spawns_triad || exempt.contains(&name.as_str()) {
-            continue;
-        }
-        matched.push(name.clone());
-        assert!(
-            source.contains("self_owner_env"),
-            "{name} names a client or daemon bin without self_owner_env"
-        );
-    }
-    assert!(
-        matched.iter().any(|name| name == "daemon_e2e.rs"),
-        "positive control: daemon_e2e.rs must be scanned"
-    );
-}

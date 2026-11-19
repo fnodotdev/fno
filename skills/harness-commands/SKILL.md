@@ -1,6 +1,7 @@
 ---
 name: harness-commands
 description: Show the safe native command roster before using harness-specific commands.
+allowed-tools: Read
 ---
 
 # Know your own harness before you run or mail a native command
