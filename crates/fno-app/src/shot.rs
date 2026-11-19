@@ -508,15 +508,24 @@ unsafe fn shot_window_id() -> Option<(u32, f64, usize)> {
     };
     // Order on first, then fade to one-percent alpha with mouse events
     // passing through: nothing the user sees or clicks. The window stays
-    // composited at the normal level, so its occlusion state reads
-    // visible and gpui's display link keeps presenting fresh frames for
-    // the capture; below the desktop background the link stops on
-    // occlusion and the buffer never updates past first paint. Sharing
-    // stays read-only: the non-deprecated spelling the capture service
-    // accepts. The read-back line shows what the window itself claims,
-    // so a reverted setter never hides behind the server-side read.
+    // composited above every normal-level window (floating level), so
+    // its occlusion state reads visible and gpui's display link keeps
+    // presenting fresh frames for the capture even when a covering
+    // window spans the rect; a window that cannot present freezes the
+    // buffer at first paint. Sharing stays read-only: the
+    // non-deprecated spelling the capture service accepts. The read-back
+    // line shows what the window itself claims, so a reverted setter
+    // never hides behind the server-side read.
     let _: () = msg_send![w, orderFront: std::ptr::null_mut::<objc::runtime::Object>()];
     let _: () = msg_send![w, setAlphaValue: 0.01f64];
+    // The floating level (3) lifts the window above every normal-level
+    // window, so a terminal or editor covering the rect cannot occlude
+    // it: the occlusion bit stays visible, the display link keeps
+    // presenting, and the capture reads settled frames under a cover.
+    // That off-screen capture under a covering window is the shot's
+    // whole point. Nothing of it reaches the user: one-percent alpha,
+    // mouse events pass through, never key.
+    let _: () = msg_send![w, setLevel: 3i64];
     let _: () = msg_send![w, setIgnoresMouseEvents: true];
     let _: () = msg_send![w, setSharingType: 1usize];
     let level_after: i64 = msg_send![w, level];
