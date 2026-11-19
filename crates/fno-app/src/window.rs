@@ -1668,6 +1668,29 @@ impl Root {
 
     /// The paste shortcut: into the open find bar first, then the mods
     /// sheet, the chat draft, or the focused pane.
+    fn paste(&mut self, cx: &mut Context<Self>) {
+        let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) else {
+            return;
+        };
+        // The open bar takes the paste into its query, ahead of the draft
+        // and the pane.
+        if self.find.is_some() {
+            self.find_key(find::FindKey::Edit(text.to_owned()), cx);
+            return;
+        }
+        match self.main {
+            MainView::Mods => mods::paste(self, &text, cx),
+            MainView::Chat => {
+                self.chat.draft.replace_selection(&text);
+                self.chat_moved(cx);
+            }
+            _ => {
+                let bytes = keys::paste(&text, self.modes);
+                self.send(ClientMsg::Input(bytes));
+            }
+        }
+    }
+
     /// A window point relative to the terminal area.
     fn local(&self, at: Point<Pixels>) -> (f32, f32) {
         let o = self.area.get().origin;
