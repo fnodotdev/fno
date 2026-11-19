@@ -12,6 +12,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `BUDDY_KEY` | rs | The cache key that statusline.sh computes from the input and width. The native statusline writes it beside its output, so the shell can reprint that output with no process start. |
 | `CARGO` | rs | Names the cargo binary the `cargo_build_dirs` lane runs `cargo metadata` through; the PATH scan and `$CARGO_HOME/bin/cargo` are the fallbacks. |
 | `CARGO_BUILD_BUILD_DIR` | rs | The fleet build-dir value the daemon, keeper, stream and stop-hook fills set for fleet-cargo checkouts, and foreign panes scrub; read it with `fno config build-dir`. |
+| `CARGO_CFG_TARGET_OS` | rs | Cargo sets it for build scripts: the target OS the build compiles for. The shot's build script links the ScreenCaptureKit framework on macOS only (crates/fno-app/build.rs). |
 | `CARGO_HOME` | rs | Cargo install root; the default is ~/.cargo. |
 | `CARGO_MANIFEST_DIR` | rs | Cargo sets it on each process that it starts. The live-store fence then refuses to open a store under the operator home `.fno`. Only the admission call of the rustc wrapper removes it. |
 | `CENSUS_DEFERRED_FILE` | rs | Overrides the census deferred set for a targeted run: crates/fno-agent/src/eval/test_census.rs |

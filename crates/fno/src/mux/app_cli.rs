@@ -323,7 +323,8 @@ fn wait_for_socket(sock: &Path) -> bool {
 /// Seed the world's graph through the front door's own backlog, one
 /// deterministic mint per card. Any refusal tears the world down, so a
 /// half-seeded board never shoots.
-fn seed_world(root: &Path, front: &Path) -> bool {
+fn seed_world(root: &Path, front: &Path) -> Option<String> {
+    let mut first_id = None;
     for (i, (prio, title)) in SHOT_SEEDS.iter().enumerate() {
         let mut cmd = world_cmd(root, front);
         cmd.args([
@@ -339,21 +340,79 @@ fn seed_world(root: &Path, front: &Path) -> bool {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
         match cmd.spawn().and_then(|child| child.wait_with_output()) {
-            Ok(out) if out.status.success() => {}
+            Ok(out) if out.status.success() => {
+                if i == 0 {
+                    first_id = serde_json::from_slice::<serde_json::Value>(&out.stdout)
+                        .ok()
+                        .and_then(|v| v.get("id").and_then(|id| id.as_str()).map(str::to_owned));
+                }
+            }
             Ok(out) => {
                 eprintln!(
                     "fno mux app shot: the seed refused: {}",
                     String::from_utf8_lossy(&out.stderr)
                 );
-                return false;
+                return None;
             }
             Err(e) => {
                 eprintln!("fno mux app shot: the seed failed to run: {e}");
-                return false;
+                return None;
             }
         }
     }
-    true
+    first_id
+}
+
+/// Claim the first seeded node as a demo seat, so the board's seats
+/// panel carries a real row with work.
+fn seed_fleet(root: &Path, front: &Path, node_id: &str) -> bool {
+    let mut cmd = world_cmd(root, front);
+    cmd.args([
+        "agent",
+        "claim",
+        "acquire",
+        &format!("node:{node_id}"),
+        "--holder",
+        "demo-worker",
+    ])
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::piped());
+    match cmd.spawn().and_then(|child| child.wait_with_output()) {
+        Ok(out) if out.status.success() => true,
+        Ok(out) => {
+            eprintln!(
+                "fno mux app shot: the claim seed refused: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            false
+        }
+        Err(e) => {
+            eprintln!("fno mux app shot: the claim seed failed to run: {e}");
+            false
+        }
+    }
+}
+
+/// A claude-shaped transcript in the world's projects dir, so the chat
+/// view renders a conversation. The FILE is the contract: rows carry
+/// type + message.content like the real transcripts the server reads.
+fn seed_transcript(root: &Path) {
+    let dir = root.join("transcripts/demo-project");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let session = "00000000-0000-4000-8000-000000000001";
+    let rows = concat!(
+        r#"{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":"What does the shot door build?"},"sessionId":"00000000-0000-4000-8000-000000000001"}"#,
+        "\n",
+        r#"{"parentUuid":null,"isSidechain":false,"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"It builds a throwaway mux world, seeds it, opens the window under the desktop picture, and hands the buffer to the capture tool."}],"sessionId":"00000000-0000-4000-8000-000000000001"}"#,
+        "\n",
+        r#"{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":"And the offscreen proof?"},"sessionId":"00000000-0000-4000-8000-000000000001"}"#,
+        "\n",
+        r#"{"parentUuid":null,"isSidechain":false,"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Frontmost identical across the three reads, zero on-screen windows, no Dock bounce, and the frame lands. The window lives under the desktop the whole time."}],"sessionId":"00000000-0000-4000-8000-000000000001"}"#,
+        "\n",
+    );
+    let _ = std::fs::write(dir.join(format!("{session}.jsonl")), rows);
 }
 
 /// `mux app shot`: one offscreen demo frame as a png, from a world this
@@ -411,9 +470,11 @@ fn shot(out: &str, theme: &str, mode: Option<AppView>) -> i32 {
         eprintln!("fno mux app shot: the world server never opened its socket");
         return 1;
     }
-    if !seed_world(&world.root, &front) {
+    let Some(first_node) = seed_world(&world.root, &front) else {
         return 1;
-    }
+    };
+    seed_fleet(&world.root, &front, &first_node);
+    seed_transcript(&world.root);
     let mut cmd = world_cmd(&world.root, &bin);
     cmd.arg("--shot")
         .arg("--shot-out")
@@ -424,6 +485,9 @@ fn shot(out: &str, theme: &str, mode: Option<AppView>) -> i32 {
         .arg("default");
     if let Some(view) = mode {
         cmd.arg("--shot-mode").arg(view.as_spelling());
+        if matches!(view, AppView::Chat) {
+            cmd.arg("--chat").arg("newest");
+        }
     }
     match cmd.status() {
         Ok(s) => s.code().unwrap_or(1),
