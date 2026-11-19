@@ -66,7 +66,7 @@ pub fn run(opts: ShotOptions) -> i32 {
         let open = cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::new(
-                    point(px(-30000.0), px(-30000.0)),
+                    point(px(60.0), px(60.0)),
                     size(px(SHOT_SIZE.0), px(SHOT_SIZE.1)),
                 ))),
                 titlebar: None,
@@ -227,6 +227,20 @@ unsafe fn ns_error_message(err: *mut c_void) -> String {
     CStr::from_ptr(c).to_string_lossy().into_owned()
 }
 
+/// The block signature clang emits for `void (^)(CGImageRef, NSError *)`
+/// on arm64. ScreenCaptureKit's XPC reply machinery introspects block
+/// signatures; block2's default constructor writes an empty one, so the
+/// capture block carries the real string.
+struct CaptureBlockEncoding;
+
+// SAFETY: the string matches the closure's ABI: void return, the block
+// self pointer at 0, two pointer arguments at 8 and 16.
+unsafe impl block2::ManualBlockEncoding for CaptureBlockEncoding {
+    type Arguments = (*const c_void, *mut c_void);
+    type Return = ();
+    const ENCODING_CSTR: &'static CStr = c"v24@?0^v8@\"NSError\"16";
+}
+
 /// The window-server truth about the shot window at a named moment:
 /// layer, alpha and bounds from CGWindowListCopyWindowInfo, read before
 /// and after the capture so the proof shows the window lived across it.
@@ -271,6 +285,25 @@ fn log_window_live(window_id: u32, when: &str) -> bool {
         hit
     };
     unsafe { CFRelease(list) };
+    // The on-screen-only list is the window server's own answer to "is
+    // anything of ours visible": a below-desktop window stays off it.
+    let only = unsafe { CGWindowListCopyWindowInfo(1, 0) };
+    if !only.is_null() {
+        let present = unsafe {
+            let n = CFArrayGetCount(only);
+            let mut hit = false;
+            for i in 0..n {
+                let d = CFArrayGetValueAtIndex(only, i);
+                if cf_i64(d, kCGWindowNumber) == Some(window_id as i64) {
+                    hit = true;
+                    break;
+                }
+            }
+            hit
+        };
+        eprintln!("fno-app --shot: window-live[{when}]: on-screen-only list: {present}");
+        unsafe { CFRelease(only) };
+    }
     found
 }
 
@@ -286,17 +319,19 @@ unsafe fn sck_capture(window_id: u32, scale: f64) -> Result<core_graphics::image
     // The capture block is created here and a clone moves into the
     // content handler, so the allocation outlives the asynchronous
     // capture call: the framework keeps the block after this frame ends.
-    let capture_block = RcBlock::new(move |image: *const c_void, err: *mut c_void| {
-        if !image.is_null() && err.is_null() {
-            // SAFETY: the handler's image is valid only for the call,
-            // so it is retained once and the channel carries that +1;
-            // the returned CGImage releases it on drop.
-            CFRetain(image);
-            let _ = tx_cap.send(Ok(image));
-        } else {
-            let _ = tx_cap.send(Err(ns_error_message(err)));
-        }
-    });
+    let capture_block = RcBlock::with_encoding::<_, _, _, CaptureBlockEncoding>(
+        move |image: *const c_void, err: *mut c_void| {
+            if !image.is_null() && err.is_null() {
+                // SAFETY: the handler's image is valid only for the call,
+                // so it is retained once and the channel carries that +1;
+                // the returned CGImage releases it on drop.
+                CFRetain(image);
+                let _ = tx_cap.send(Ok(image));
+            } else {
+                let _ = tx_cap.send(Err(ns_error_message(err)));
+            }
+        },
+    );
     let content_block = RcBlock::new(move |content: *mut c_void, err: *mut c_void| {
         if content.is_null() {
             let _ = tx_content.send(Err(format!(
@@ -427,21 +462,42 @@ unsafe fn shot_window_id() -> Option<(u32, f64)> {
     let app: *mut objc::runtime::Object = msg_send![class!(NSApplication), sharedApplication];
     let windows: *mut objc::runtime::Object = msg_send![app, windows];
     let count: usize = msg_send![windows, count];
+    let mut chosen: Option<(*mut objc::runtime::Object, i64)> = None;
     for i in 0..count {
         let w: *mut objc::runtime::Object = msg_send![windows, objectAtIndex: i];
         let num: i64 = msg_send![w, windowNumber];
-        if num > 0 {
-            // Below the desktop background level: composited, never
-            // seen. Sharing stays read-write or the capture service
-            // refuses the window over XPC.
-            let _: () = msg_send![w, setLevel: -2147483100i64];
-            let _: () = msg_send![w, setSharingType: 2usize];
-            let _: () = msg_send![w, orderFront: std::ptr::null_mut::<objc::runtime::Object>()];
-            let scale: f64 = msg_send![w, backingScaleFactor];
-            return Some((num as u32, scale));
+        if num <= 0 {
+            continue;
+        }
+        let frame: core_graphics::geometry::CGRect = msg_send![w, frame];
+        eprintln!(
+            "fno-app --shot: window candidate: number={num} frame=({:.0},{:.0} {:.0}x{:.0})",
+            frame.origin.x, frame.origin.y, frame.size.width, frame.size.height
+        );
+        let is_shot =
+            frame.size.width == SHOT_SIZE.0 as f64 && frame.size.height == SHOT_SIZE.1 as f64;
+        if is_shot && chosen.is_none() {
+            chosen = Some((w, num));
         }
     }
-    None
+    let Some((w, num)) = chosen.or_else(|| {
+        // Fallback: the first positive-numbered window.
+        (0..count).find_map(|i| {
+            let w: *mut objc::runtime::Object = msg_send![windows, objectAtIndex: i];
+            let num: i64 = msg_send![w, windowNumber];
+            (num > 0).then_some((w, num))
+        })
+    }) else {
+        return None;
+    };
+    // Below the desktop background level: the desktop paints over it, so
+    // nothing is seen. Sharing stays read-only: the non-deprecated
+    // spelling the capture service accepts.
+    let _: () = msg_send![w, setLevel: -2147483100i64];
+    let _: () = msg_send![w, setSharingType: 1usize];
+    let _: () = msg_send![w, orderFront: std::ptr::null_mut::<objc::runtime::Object>()];
+    let scale: f64 = msg_send![w, backingScaleFactor];
+    Some((num as u32, scale))
 }
 
 /// CGImage to png bytes through NSBitmapImageRep (file type 4 = png).
