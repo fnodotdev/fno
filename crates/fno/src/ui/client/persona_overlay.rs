@@ -1589,7 +1589,7 @@ pub(crate) fn persona_widening_seams(view: &mut View) -> Vec<crate::proto::Comma
     let Some(o) = view.persona.as_ref() else {
         return Vec::new();
     };
-    const FLOOR: usize = 22;
+    const FLOOR: usize = 28;
     let mut seams = Vec::new();
     let claim = o.claim_pane.or(o.pane);
     if let Some(pane) = claim {
@@ -1898,12 +1898,9 @@ pub(crate) fn draw_detail(
         .as_ref()
         .is_some_and(|o| o.home == Home::SidelineBoard && o.pane.is_some())
     {
-        if view.backlog_board.is_some() {
-            // The board paints below the tab bar, never into it.
-            let (h, w) = persona_panel_rect(view);
-            let bar = super::TAB_BAR_ROWS as usize;
-            view.draw_board_rect(cells, rows, cols, (bar, 0, h.saturating_sub(bar), w), false);
-        }
+        // The sideline already painted the board into the panel; a second
+        // board paint here doubled its filter row. The column and the
+        // record panes are the overlay's own surface.
         paint_column(view, cells, rows, cols, home);
         paint_record_panes(view, cells, rows, cols);
         return true;
@@ -2662,7 +2659,9 @@ mod tests {
         let Some(board) = board else {
             panic!("140 columns fit three real columns");
         };
-        assert_eq!((per, board, rec), (42, 40, 56));
+        // The defaults hold about 18 | 22 | 60 board | persona | record:
+        // 25 | 30 | 83 at 140 columns.
+        assert_eq!((per, board, rec), (30, 25, 83));
         assert!(rec > per && per > board, "rightmost widest");
         v.edge_sizes
             .set(super::edge_drag::Edge::DrillPersonaSeam, 60);
@@ -2671,9 +2670,9 @@ mod tests {
             panic!("held persona seam still fits three columns");
         };
         assert_eq!(per, 60);
-        // The board default collapses under the held persona seam and
-        // floors at 24; the record keeps the remainder, 54.
-        assert_eq!(rec, 54);
+        // The board default holds about 18 of the row, 25 here; the
+        // record keeps the remainder, 53.
+        assert_eq!(rec, 53);
         v.edge_sizes.set(super::edge_drag::Edge::DrillBoardSeam, 30);
         let (per, board, rec) = drill_widths(&v, 140);
         let Some(board) = board else {

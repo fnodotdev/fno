@@ -700,8 +700,12 @@ if [ -f "$claims" ]; then
   mkdir -p "$claims"
 fi
 for i in 0 1 2; do
-  "$FNO" agents claim acquire "node:${IDS[$i]}" --holder "target-session:${SIDS[$i]}" --ttl 2h --pid-unavailable >/dev/null
+  # The session row lands first: the acquire resolves the holder's
+  # identity from the registry, and an unseeded row reads "no owned
+  # identity", skips the claim, and the board's sweep surfaces the gap
+  # as a live error in the shot.
   "$FNO" backlog session add "${IDS[$i]}" --phase execute --harness "${HARNESSES[$i]}" --session-id "${SIDS[$i]}" >/dev/null
+  "$FNO" agents claim acquire "node:${IDS[$i]}" --holder "target-session:${SIDS[$i]}" --ttl 2h --pid-unavailable >/dev/null
 done
 # The selected card carries a plan and a rank. --operator: this script is
 # the operator's own tool, writing a graph that dies with the shot.
