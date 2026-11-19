@@ -1796,7 +1796,8 @@ fn persona_sideline_chip_shot(
             return Err(format!(
                 "persona-sideline-chip: the persona pane never opened: {:?}",
                 view.notice
-            ));
+            )
+            .into());
         }
     }
     stage_serving_question(view, &aud);
