@@ -225,13 +225,10 @@ const GATE_FANOUT: usize = 4;
 /// deadline. A pool, not fixed chunks: a free worker takes the next PR at
 /// once, rather than idling until the slowest read of its chunk returns.
 /// `None` names a PR the deadline left unanswered; answers keep input order.
-fn gather_gate_answers<F>(
-    numbers: &[i64],
-    deadline: Instant,
-    read: F,
-) -> Vec<(i64, Option<Result<Value, String>>)>
+fn gather_gate_answers<T, F>(numbers: &[i64], deadline: Instant, read: F) -> Vec<(i64, Option<T>)>
 where
-    F: Fn(i64, Duration) -> Result<Value, String> + Send + Sync + 'static,
+    T: Send + 'static,
+    F: Fn(i64, Duration) -> T + Send + Sync + 'static,
 {
     use std::sync::{mpsc, Arc, Mutex};
     let read = Arc::new(read);
@@ -252,16 +249,13 @@ where
             let Some(n) = queue.lock().ok().and_then(|mut q| q.pop_front()) else {
                 break;
             };
-            // A panicked reader lands as Err, never unwinds the worker.
-            let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read(n, left)))
-                .unwrap_or_else(|_| Err("gate reader panicked".to_string()));
-            if tx.send((n, answer)).is_err() {
+            if tx.send((n, read(n, left))).is_err() {
                 break;
             }
         });
     }
     drop(tx);
-    let mut got: HashMap<i64, Result<Value, String>> = HashMap::new();
+    let mut got: HashMap<i64, T> = HashMap::new();
     while got.len() < numbers.len() {
         let left = deadline.saturating_duration_since(Instant::now());
         match rx.recv_timeout(left) {
@@ -296,7 +290,9 @@ pub(crate) fn read_pr_gates(
     };
     let cwd = cwd.to_path_buf();
     let answers = gather_gate_answers(numbers, deadline, move |n, left| {
-        read_pr_gate(&cwd, n, left)
+        // A panicked reader lands as Err, never unwinds the pool worker.
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read_pr_gate(&cwd, n, left)))
+            .unwrap_or_else(|_| Err("gate reader panicked".to_string()))
     });
     let mut rows: Vec<Value> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
@@ -818,7 +814,7 @@ mod tests {
             if n == 2 {
                 std::thread::sleep(Duration::from_secs(5));
             }
-            Ok(json!({"ready": n % 2 == 1}))
+            n
         });
         assert!(
             started.elapsed() < Duration::from_secs(2),
@@ -828,7 +824,8 @@ mod tests {
         let numbers: Vec<i64> = answers.iter().map(|(n, _)| *n).collect();
         assert_eq!(numbers, vec![1, 2, 3, 4, 5, 6]);
         for (n, answer) in &answers {
-            assert_eq!(answer.is_none(), *n == 2, "PR {n}: {answer:?}");
+            let want = if *n == 2 { None } else { Some(*n) };
+            assert_eq!(*answer, want, "PR {n}");
         }
     }
 

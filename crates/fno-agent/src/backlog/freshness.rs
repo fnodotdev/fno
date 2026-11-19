@@ -522,7 +522,7 @@ pub fn premise_marks(graph: &Path, repo: &Path, ids: &[String]) -> Value {
     let mut by_id: std::collections::HashMap<String, &Value> =
         std::collections::HashMap::with_capacity(entries.len());
     for e in &entries {
-        if let Some(id) = e.get("id").and_then(Value::as_str) {
+        if let Some(id) = RowFacts::id_of(e) {
             by_id.entry(id.to_ascii_lowercase()).or_insert(e);
         }
     }
