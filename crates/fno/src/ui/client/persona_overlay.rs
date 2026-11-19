@@ -92,6 +92,10 @@ pub(crate) struct PersonaOverlay {
     /// reflow under an overlay. The door close kills it; the argv is
     /// the orphan marker the server side can reap.
     pub(crate) pane: Option<u64>,
+    /// The column still owes its width claim: the spawn (or the editor
+    /// fold beside it) landed, and the seams that shape the row fire once
+    /// a layout naming the new pane arrives. One shot, then cleared.
+    pub(crate) widen: bool,
     /// A serving record is drilled open right of the persona column.
     /// Left and Esc pop the record before the column itself.
     pub(crate) drill: bool,
@@ -433,6 +437,7 @@ fn open_page(project: &str, persona: &str) -> PersonaOverlay {
             let draft = is_draft(&doc.status);
             PersonaOverlay {
                 pane: None,
+                widen: false,
                 title,
                 lines: Vec::new(),
                 cursor: None,
@@ -455,6 +460,7 @@ fn open_page(project: &str, persona: &str) -> PersonaOverlay {
         }
         Err(_) => PersonaOverlay {
             pane: None,
+            widen: false,
             title: persona.to_string(),
             lines: notice_lines(&path),
             cursor: None,
@@ -735,6 +741,7 @@ fn picker_lines(personas: &[String], cur: usize) -> Vec<TLine> {
 fn open_list(title: &str, project: &str, personas: Vec<String>) -> PersonaOverlay {
     PersonaOverlay {
         pane: None,
+        widen: false,
         title: title.to_string(),
         lines: picker_lines(&personas, 0),
         cursor: (!personas.is_empty()).then_some(0),
@@ -1263,6 +1270,11 @@ pub(crate) async fn spawn_edit(
                 disarm_edit(view);
                 view.set_notice(format!("the editor pane focus failed: {e}"));
             }
+            // The fold claims the persona column's width once the
+            // layout names the editor pane.
+            if let Some(o) = view.persona.as_mut() {
+                o.widen = true;
+            }
         }
         Ok(Ok(_)) => {
             disarm_edit(view);
@@ -1470,19 +1482,108 @@ pub(crate) fn spawn_persona_pane(view: &mut View) {
             return;
         }
     };
-    // The seam lands the column its widest share: the split halves the
-    // anchor, and the absolute seam position moves the divider so the
-    // persona pane holds 55 percent of the pre-split anchor width. A
-    // refused resize degrades to the split's even halves.
-    let pos = (anchor_rect.x as usize + anchor_rect.cols as usize * 45 / 100) as u16;
-    view.note_command_sent(&crate::proto::Command::ResizeSeam {
-        a: anchor_id,
-        b: pane_id,
-        pos,
-    });
     if let Some(o) = view.persona.as_mut() {
         o.pane = Some(pane_id);
+        // The width claim fires on the layout that names the new pane:
+        // the seams read post-split rects, which this client only sees
+        // after the server's next Layout push.
+        o.widen = true;
     }
+}
+
+/// The seams that shape the row once the persona column exists: the
+/// column claims the widest share of its band, walking leftward with
+/// seam moves whose floors keep every neighbour readable. The editor
+/// fold claims by shrinking the editor pane to the dock's persona
+/// share. Cleared as soon as it answers.
+pub(crate) fn persona_widening_seams(view: &mut View) -> Vec<crate::proto::Command> {
+    let armed = view.persona.as_ref().is_some_and(|o| o.widen);
+    if !armed {
+        return Vec::new();
+    }
+    const FLOOR: usize = 10;
+    let mut seams = Vec::new();
+    if let Some(pane) = o.pane {
+        let rects: Vec<(u64, (usize, usize, usize, usize))> = view
+            .layout
+            .panes
+            .iter()
+            .map(|(pid, r)| {
+                (
+                    *pid,
+                    (r.x as usize, r.y as usize, r.cols as usize, r.rows as usize),
+                )
+            })
+            .collect();
+        let Some(&(px, py, pw, ph)) = rects.iter().find(|(pid, _)| *pid == pane).map(|(_, r)| r)
+        else {
+            return Vec::new();
+        };
+        // The row's own widest pane sets the bar: the feature column
+        // claims at least that share, one neighbour at a time.
+        let target = rects
+            .iter()
+            .filter(|(pid, _)| *pid != pane)
+            .filter(|(_, (x, y, w, h))| *y < py + ph && py < y + h)
+            .map(|(_, (_, _, w, _))| *w)
+            .max()
+            .map(|w| w + 1);
+        let mut persona = (px, pw);
+        for _ in 0..3 {
+            let Some(target) = target else { break };
+            if persona.1 >= target {
+                break;
+            }
+            // The immediate left neighbour in the band, flanking one seam.
+            let nbr = rects.iter().find(|(pid, r)| {
+                *pid != pane && {
+                    let (x, y, w, h) = *r;
+                    y < py + ph && py < y + h && x + w + 1 == persona.0
+                }
+            });
+            let Some((nid, (nx, _, nw, _))) = nbr else {
+                break;
+            };
+            let need = target - persona.1;
+            let donate = need.min(nw.saturating_sub(FLOOR));
+            if donate == 0 {
+                break;
+            }
+            seams.push(crate::proto::Command::ResizeSeam {
+                a: *nid,
+                b: pane,
+                pos: (nx + nw - donate) as u16,
+            });
+            persona.0 -= donate;
+            persona.1 += donate;
+        }
+    } else if let Home::Pane(home_id) = o.home {
+        if let Some(vi) = sibling_pane(view) {
+            let (_, Some(home)) = view.layout.panes.iter().find(|(pid, _)| *pid == home_id) else {
+                return Vec::new();
+            };
+            let Some((_, vi_r)) = view.layout.panes.iter().find(|(pid, _)| *pid == vi) else {
+                return Vec::new();
+            };
+            // The editor pane shrinks to the dock's persona share, so
+            // the feature column out-reads the scratch pane beside it.
+            let joint = home.cols as usize + vi_r.cols as usize;
+            if let Some((_, col)) = dock_columns(view, joint) {
+                if (vi_r.cols as usize) > col {
+                    seams.push(crate::proto::Command::ResizeSeam {
+                        a: home_id,
+                        b: vi,
+                        pos: (vi_r.x as usize + col) as u16,
+                    });
+                }
+            }
+        }
+    }
+    // One shot: the claim answers once, from the layout that names it.
+    if let Some(o) = view.persona.as_mut() {
+        o.widen = false;
+    }
+    seams
 }
 
 /// The door closes: the persona column's pane dies with it, or a
@@ -2355,6 +2456,7 @@ mod tests {
         let mut v = View::new((40, 140), "s".into(), LayoutView::default());
         v.persona = Some(PersonaOverlay {
             pane: None,
+            widen: false,
             title: "solo".into(),
             lines: Vec::new(),
             cursor: None,

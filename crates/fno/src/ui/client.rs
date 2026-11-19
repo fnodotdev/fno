@@ -6647,6 +6647,15 @@ async fn attach_and_run(
                 }
                 Ok(ServerMsg::Layout { squads, active_squad, panes, focus, area, agents, focus_node, backlog, proto, observers, .. }) => {
                     view.apply_layout(LayoutView { squads, active_squad, panes, focus, area, agents, focus_node }, backlog, proto, observers);
+                    // The persona column's width claim reads post-split
+                    // rects, so the layout that names the new pane is
+                    // when the seams can finally be computed and sent.
+                    let seams = crate::client::persona_overlay::persona_widening_seams(&mut view);
+                    for cmd in seams {
+                        if let Err(e) = write_msg(&mut sock_w, &ClientMsg::Command(cmd)).await {
+                            break Err(format!("persona seam send failed: {e}"));
+                        }
+                    }
                     // a scrape tick may have removed the peeked row.
                     // Re-anchor to an adjacent agent row (fetch its transcript)
                     // or close - never a stale render / panic (AC1-EDGE).

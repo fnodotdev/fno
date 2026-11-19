@@ -960,7 +960,7 @@ fn live_frame(
         .map(|t| View::new(t, server.into(), LayoutView::default()).content_dims())
         .map(|d| runtime.block_on(hold_peer(&socket, cwd.clone(), d)))
         .transpose()?;
-    let mut seen = runtime.block_on(observe(&socket, cwd.clone(), dims))?;
+    let mut seen = runtime.block_on(observe(&socket, cwd.clone(), dims, &[]))?;
     switch_squad(&runtime, &socket, server, squad, dims, &mut seen)?;
     let mut view = base_view(server, seen, chrome, &cwd, size, edges);
     runtime.block_on(super::backlog_board::fold_once(&mut view));
@@ -973,7 +973,7 @@ fn live_frame(
         let fresh = runtime
             .block_on(async {
                 tokio::time::sleep(Duration::from_millis(1500)).await;
-                observe(&socket, cwd.clone(), staged_dims(dims, &view)).await
+                observe(&socket, cwd.clone(), staged_dims(dims, &view), &[]).await
             })
             .map_err(|e| format!("persona-editor-pane: {e}"))?;
         view.layout = fresh.layout;
@@ -983,8 +983,24 @@ fn live_frame(
         // panel): the panes must re-tile for the staged viewport, or the
         // right column crops at the canvas edge with its border clipped.
         let fresh = runtime
-            .block_on(observe(&socket, cwd.clone(), staged_dims(dims, &view)))
+            .block_on(observe(&socket, cwd.clone(), staged_dims(dims, &view), &[]))
             .map_err(|e| format!("staged viewport: {e}"))?;
+        view.layout = fresh.layout;
+        view.frames = fresh.frames;
+    }
+    // The persona column's width claim reads post-split rects, so the
+    // fresh layout is when the seams can be computed and sent; the
+    // follow-up observe folds the row they shaped.
+    let seams = crate::client::persona_overlay::persona_widening_seams(&mut view);
+    if !seams.is_empty() {
+        let fresh = runtime
+            .block_on(observe(
+                &socket,
+                cwd.clone(),
+                staged_dims(dims, &view),
+                &seams,
+            ))
+            .map_err(|e| format!("persona seam observe: {e}"))?;
         view.layout = fresh.layout;
         view.frames = fresh.frames;
     }
@@ -2647,7 +2663,12 @@ async fn hold_peer(
 
 /// `dims` set attaches as a sizing client at that content area and reads
 /// for a settle window, so panes can redraw at the new size.
-async fn observe(socket: &Path, cwd: String, dims: Option<(u16, u16)>) -> Result<Observed, String> {
+async fn observe(
+    socket: &Path,
+    cwd: String,
+    dims: Option<(u16, u16)>,
+    cmds: &[proto::Command],
+) -> Result<Observed, String> {
     let stream = tokio::time::timeout(
         Duration::from_secs(3),
         tokio::net::UnixStream::connect(socket),
@@ -2674,6 +2695,14 @@ async fn observe(socket: &Path, cwd: String, dims: Option<(u16, u16)>) -> Result
     )
     .await
     .map_err(|e| format!("attach write failed: {e}"))?;
+    // Commands ride the same attach, before the read loop: the server
+    // applies them in order and the read collects the layout they
+    // produced.
+    for cmd in cmds {
+        proto::write_msg(&mut writer, &ClientMsg::Command(cmd.clone()))
+            .await
+            .map_err(|e| format!("command write failed: {e}"))?;
+    }
     // Read-only from here: release the write half without the half-close
     // that would make the server detach us.
     writer.forget();
