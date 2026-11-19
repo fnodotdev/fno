@@ -127,7 +127,7 @@ fn record_path(cwd: &Path, repo: &str, pr: u64, head: &str, plan_sha: &str) -> P
 /// `gather` reads. Empty on any leg failing: a fingerprint must never
 /// fabricate a mismatch, it must fall back to the head-only identity.
 fn plan_sha_at(cwd: &Path, node: &Value) -> String {
-    let Some(path) = node.get("plan_path").and_then(Value::as_str) else {
+    let Some(path) = RowFacts::of(node).and_then(|row| row.plan_path().as_str()) else {
         return String::new();
     };
     let root = crate::paths::canonical_repo_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
@@ -140,7 +140,6 @@ fn plan_sha_at(cwd: &Path, node: &Value) -> String {
 /// the bundle's plan.
 fn plan_sha(cwd: &Path, facts: &PrFacts) -> String {
     bound_node(cwd, facts)
-        .ok()
         .map(|node| plan_sha_at(cwd, &node))
         .unwrap_or_default()
 }
@@ -336,11 +335,11 @@ fn bind_from(entries: &[Value], cwd: &Path, facts: &PrFacts) -> Option<Value> {
     })
 }
 
-fn bound_node(cwd: &Path, facts: &PrFacts) -> Result<Value, String> {
+fn bound_node(cwd: &Path, facts: &PrFacts) -> Option<Value> {
     let entries =
         crate::graph_store::read_contract_rows(&crate::org_board::scope::graph_json_path(cwd))
-            .map_err(|e| format!("vision graph unreadable: {e}"))?;
-    bind_from(&entries, cwd, facts).ok_or_else(|| "bound node unavailable or ambiguous".to_string())
+            .ok()?;
+    bind_from(&entries, cwd, facts)
 }
 
 fn gather<P: Probes>(
