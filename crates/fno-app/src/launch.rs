@@ -1192,22 +1192,34 @@ mod tests {
 
     #[test]
     fn the_row_chain_skips_the_axes_a_kind_does_not_show() {
+        // next() is pure: the result must be assigned back, or the walk
+        // never moves.
         let mut l = Launch::fresh();
         // Agent: the full chain wraps task -> kind.
         l.row = Row::Task;
-        assert_eq!(l.row.next(false, Kind::Agent), Row::Kind);
+        l.row = l.row.next(false, Kind::Agent);
+        assert_eq!(l.row, Row::Kind);
         // Shell: kind -> project -> task, no harness or axes.
         l.row = Row::Kind;
-        assert_eq!(l.row.next(false, Kind::Shell), Row::Project);
-        assert_eq!(l.row.next(false, Kind::Shell), Row::Task);
-        assert_eq!(l.row.next(false, Kind::Shell), Row::Kind);
-        // Lead: kind -> harness -> project -> task.
-        l.row = Row::Project;
-        assert_eq!(l.row.next(false, Kind::Lead), Row::Task);
-        assert_eq!(l.row.next(false, Kind::Lead), Row::Kind);
-        // Backwards from kind lands on the kind's last row.
+        l.row = l.row.next(false, Kind::Shell);
+        assert_eq!(l.row, Row::Project);
+        l.row = l.row.next(false, Kind::Shell);
+        assert_eq!(l.row, Row::Task);
+        l.row = l.row.next(false, Kind::Shell);
+        assert_eq!(l.row, Row::Kind);
+        // Lead: kind -> harness -> project -> task -> kind.
         l.row = Row::Kind;
-        assert_eq!(l.row.next(true, Kind::Shell), Row::Task);
+        l.row = l.row.next(false, Kind::Lead);
+        assert_eq!(l.row, Row::Harness);
+        l.row = l.row.next(false, Kind::Lead);
+        assert_eq!(l.row, Row::Project);
+        l.row = l.row.next(false, Kind::Lead);
+        assert_eq!(l.row, Row::Task);
+        l.row = l.row.next(false, Kind::Lead);
+        assert_eq!(l.row, Row::Kind);
+        // Backwards from kind lands on the kind's last row.
+        l.row = l.row.next(true, Kind::Shell);
+        assert_eq!(l.row, Row::Task);
     }
 
     #[test]
