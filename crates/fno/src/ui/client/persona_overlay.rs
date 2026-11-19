@@ -1730,13 +1730,12 @@ pub(crate) fn persona_pane_rect(view: &View) -> Option<(usize, usize, usize, usi
     match view.persona.as_ref().map(|o| o.home) {
         Some(Home::Pane(home)) => pane_rect(home),
         // The sideline board panel: the strip row and the board render
-        // inside the left panel. The dock spans the panel plus part of
-        // the content area, so the persona column keeps its widest-right
-        // share instead of splitting an 80-column panel into the
-        // narrowest pane on screen.
+        // inside the left panel, so the dock lives inside the same panel.
+        // The dock paints over panes only inside this rect; a wider home
+        // would overlap the session panes without reflowing them, and
+        // their text leaks around the persona column.
         Some(Home::SidelineBoard) => {
-            let panel = (view.panel_w() as usize).min(cols as usize);
-            let w = panel + (cols as usize).saturating_sub(panel) * 40 / 100;
+            let w = (view.panel_w() as usize).min(cols as usize);
             let h = (rows as usize)
                 .saturating_sub(view.bottom_row_is_chrome() as usize)
                 .max(1);
@@ -2015,18 +2014,20 @@ pub(crate) fn paint_over(
         Vec::new()
     };
     // The chrome's esc chip is the one closer; the footer names the page
-    // keys, so nothing is silent.
+    // keys, so nothing is silent. The footer keeps whole ` \u{b7} ` pairs:
+    // a narrow column drops a pair rather than cutting one mid-token.
     let footer = overlay_footer(o, serving.is_empty());
     let chrome = chrome::Chrome::new(&o.title, Anchor::Center);
+    let cap = content_dims
+        .1
+        .saturating_sub(chrome::Chrome::FRAME_COLS)
+        .max(12);
+    let footer = super::backlog_board::clip_segments(&footer, cap);
     let chrome = if footer.is_empty() {
         chrome
     } else {
         chrome.footer(&footer)
     };
-    let cap = content_dims
-        .1
-        .saturating_sub(chrome::Chrome::FRAME_COLS)
-        .max(12);
     let (lines, follow, paint_cursor) = if page {
         let width = cap.saturating_sub(4).min(106);
         let mut l = o

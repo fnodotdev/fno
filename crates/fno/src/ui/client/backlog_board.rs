@@ -868,13 +868,13 @@ fn push_stats_line(b: &BoardView, lines: &mut Vec<TLine>, board: &Board, w: usiz
     line.push_str(&format!(" · Done {done}"));
     line.push_str(" │ ");
     line.push_str(&flow_line(&board.stats.flow));
-    lines.push(TLine::meta(clip_stat_segments(&line, w)));
+    lines.push(TLine::meta(clip_segments(&line, w)));
 }
 
 /// Clip at a ` · ` segment boundary: whole segments survive, never a
 /// mid-word cut (`this week · c`). Only a first segment wider than the
 /// pane falls back to the hard clip.
-fn clip_stat_segments(line: &str, w: usize) -> String {
+pub(crate) fn clip_segments(line: &str, w: usize) -> String {
     if line.chars().count() <= w {
         return line.to_string();
     }
@@ -1004,9 +1004,18 @@ pub(crate) fn filter_bar_lines(b: &BoardView, board: &Board, w: usize) -> Vec<TL
     let mut lines: Vec<TLine> = Vec::new();
     let mut line = TLine::plain(String::new());
     let mut used = 0usize;
+    // The bar's first row reserves the esc chip's five columns at the
+    // right edge: cells that run under the chip read cut (`Priority: an
+    // esc`), so the row wraps a cell early.
+    let chip_w = 5usize;
     for (label, value) in cells.iter() {
         let cell_w = label.chars().count() + 2 + value.chars().count();
-        if used > 0 && used + 3 + cell_w > w {
+        let budget = if lines.is_empty() {
+            w.saturating_sub(chip_w)
+        } else {
+            w
+        };
+        if used > 0 && used + 3 + cell_w > budget {
             lines.push(line.trunc(w));
             line = TLine::plain(String::new());
             line.push_line(TLine::of(&[

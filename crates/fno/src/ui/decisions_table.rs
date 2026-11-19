@@ -109,6 +109,9 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
     // narrower than the full view's 98-column floor.
     let desc_w = 16.min(w.saturating_sub(81));
     let text_w = w.saturating_sub(81 + desc_w + 1);
+    // The header label fits whole: a narrow dock shortens the word
+    // rather than cutting it mid-token.
+    let desc_label = if desc_w >= 11 { "description" } else { "desc" };
     let columns = format!(
         "{} {} {} {} {} {} {} {} {} {}",
         fit("state", 10),
@@ -119,7 +122,7 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
         "Q",
         fit("node", 9),
         fit("PR", 6),
-        fit("description", desc_w),
+        fit(desc_label, desc_w),
         fit("decision", text_w),
     );
     let mut out = vec![head, format!("\x1b[1m{columns}\x1b[0m")];
