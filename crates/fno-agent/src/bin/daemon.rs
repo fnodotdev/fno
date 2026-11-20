@@ -11,7 +11,7 @@
 //! hook probe hop that fell back to current_exe) fails loud instead
 //! of booting a resident daemon wearing the hop's argv.
 //! The client lazy-starts this detached on first need; running it directly is
-//! for debugging and for the Python wrapper's explicit `daemon` sub-mode.
+//! for debugging.
 
 use fno_agent::daemon::{run, DaemonOptions};
 use fno_agent::paths::AgentsHome;
