@@ -1818,7 +1818,7 @@ impl Root {
     fn mux_key(&mut self, bytes: Vec<u8>, window: &mut Window, cx: &mut Context<Self>) {
         let was_pending = self.scanner.prefix_pending();
         for event in self.scanner.scan(&bytes, Instant::now()) {
-            self.mux_event(event, window, cx);
+            self.mux_event(event, &bytes, window, cx);
         }
         if self.scanner.prefix_pending() && !was_pending {
             self.say(
@@ -1841,6 +1841,7 @@ impl Root {
     fn mux_event(
         &mut self,
         event: fno::ui::keys::Event,
+        key: &[u8],
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1855,6 +1856,11 @@ impl Root {
                 cx.quit();
             }
             keys::MuxAction::Notice(text) => self.say(text, cx),
+            keys::MuxAction::Bell => {
+                alerts::beep();
+                let name = String::from_utf8_lossy(key).escape_debug().to_string();
+                self.say(format!("prefix {name}: no mux action is bound"), cx);
+            }
         }
     }
 

@@ -351,6 +351,8 @@ pub enum MuxAction {
     Tab(usize),
     /// prefix+d detaches, the cmd-q arm.
     Quit,
+    /// An unbound key after the prefix: beep, name the key, forward nothing.
+    Bell,
     /// A key with no app surface yet: name it in the notice, forward nothing.
     Notice(String),
 }
@@ -366,7 +368,7 @@ pub fn translate(event: fno::ui::keys::Event) -> MuxAction {
         Event::Cmd(c) => MuxAction::Command(c),
         Event::SelectTabIdx(n) => MuxAction::Tab(n),
         Event::Detach => MuxAction::Quit,
-        Event::Bell => MuxAction::Notice("unbound prefix key".into()),
+        Event::Bell => MuxAction::Bell,
         other => MuxAction::Notice(format!("{other:?} has no app action yet")),
     }
 }
@@ -556,10 +558,7 @@ mod tests {
             translate(Event::Forward(vec![0x02])),
             MuxAction::Input(vec![0x02])
         );
-        assert_eq!(
-            translate(Event::Bell),
-            MuxAction::Notice("unbound prefix key".into())
-        );
+        assert_eq!(translate(Event::Bell), MuxAction::Bell);
         assert!(matches!(
             translate(Event::OpenSelector),
             MuxAction::Notice(_)
