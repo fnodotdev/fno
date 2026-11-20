@@ -112,13 +112,11 @@ impl DecisionRow {
         }
     }
 
-    /// The description column: the free text, else the whole subject when the
-    /// listing came from a reader that did not split it.
+    /// The description column: the free text, else the subject when the
+    /// listing came from a reader that did not split it or the row only
+    /// carries a node or PR subject.
     pub fn describes(&self) -> &str {
-        if self.subject_text.is_empty()
-            && self.subject_node.is_empty()
-            && self.subject_pr.is_empty()
-        {
+        if self.subject_text.is_empty() {
             &self.subject
         } else {
             &self.subject_text

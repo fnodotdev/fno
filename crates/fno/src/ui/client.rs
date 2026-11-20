@@ -107,7 +107,7 @@ mod row_stamp;
 mod density_width;
 mod edge_drag;
 mod name_fit;
-use self::row_stamp::{no_pane_notice, paint_notice_overlay, paint_row_stamp, RowArm, RowStamp};
+use self::row_stamp::{no_pane_notice, paint_row_stamp, RowArm, RowStamp};
 use density_width::{
     canonical_width, density_glyph, min_admit_width, min_render_width, sideline_max_width,
 };
@@ -1280,6 +1280,9 @@ mod section_view;
 // of compose_at under the file-budget ratchet .
 mod frame_tick;
 mod pane_paint;
+// The content-viewport announcer, moved out of the winch arm under the
+// file-budget ratchet.
+mod viewport;
 // Region input ownership + the mouse pre-pass, moved out of handle_stdin
 // under the file-budget ratchet.
 mod esc_close;
@@ -2670,33 +2673,6 @@ impl View {
         } else {
             0
         }
-    }
-
-    /// The CONTENT-AREA viewport reported to the server (terminal minus
-    /// chrome). Never zero, so a degenerate terminal cannot wedge the server.
-    fn content_dims(&self) -> (u16, u16) {
-        (
-            self.term
-                .0
-                .saturating_sub(TAB_BAR_ROWS + self.status_rows())
-                .max(1),
-            self.term
-                .1
-                .saturating_sub(self.panel_w() + self.feed_panel_w() + self.viewer_panel_w())
-                .max(1),
-        )
-    }
-
-    /// Content viewport as `(origin, dims)` in `usize`, for centering a
-    /// [`draw_lines_overlay`] popover against the content rect (right of the
-    /// sideline and any docked board, above any splits) instead of the outer
-    /// terminal. One call site for every corner-anchored popover.
-    fn overlay_viewport(&self) -> ((usize, usize), (usize, usize)) {
-        let (rows, cols) = self.content_dims();
-        (
-            (TAB_BAR_ROWS as usize, self.left_chrome_w() as usize),
-            (rows as usize, cols as usize),
-        )
     }
 
     /// Map an outer-terminal cell (0-based) to `(pane, pane_row, pane_col)` when
@@ -4481,6 +4457,8 @@ impl View {
         let (cur_r, cur_c, cur_vis) = terminal_cursor::compose_cursor(self, self.card_cursor.get());
         *self.close_chips.borrow_mut() = chrome::close_chips_end();
         backlog_style::node_spans_end();
+        // Last paint: the notice, one row below the tab bar.
+        row_stamp::paint_notice_below_tab_bar(&mut cells, cols, self.notice_overlay(cols));
         Frame {
             rows: rows as u16,
             cols: cols as u16,
@@ -4949,9 +4927,6 @@ impl View {
                 }
             }
         }
-        // Transient notice, right-aligned, INVERSE (paired with the BEL the
-        // event handler already sounded); painted by row_stamp.
-        paint_notice_overlay(cells, cols, self.notice_overlay(cols));
         // The bell keeps the bar's rightmost seat (one column in from the
         // edge); painted after the notice.
         bell::paint_button(self, cells, cols);
@@ -6296,6 +6271,12 @@ async fn attach_and_run(
     // raw-fed overlays hold a lone ESC in their carry exactly then, and
     // the quiet-window flush releases it as the Esc action.
     let mut esc_tail_since: Option<Instant> = None;
+    // The content viewport the server last tiled for. A keyboard door that
+    // moves the chrome (panel toggles, density presets) changes
+    // `content_dims` without a winch, and a stale area crops the
+    // rightmost pane with its border clipped; the key arm re-announces on
+    // drift.
+    let mut sent_viewport = (0u16, 0u16);
     // Carries a partial SGR mouse report split across reads (mouse.rs).
     let mut mouse_carry: Vec<u8> = Vec::new();
     // Clipboard delivery runs on a blocking thread and reports its outcome back
@@ -6666,6 +6647,17 @@ async fn attach_and_run(
                 }
                 Ok(ServerMsg::Layout { squads, active_squad, panes, focus, area, agents, focus_node, backlog, proto, observers, .. }) => {
                     view.apply_layout(LayoutView { squads, active_squad, panes, focus, area, agents, focus_node }, backlog, proto, observers);
+                    // The persona column's width claim reads post-split
+                    // rects, so the layout that names the new pane is
+                    // when the seams can finally be computed and sent.
+                    if let Some(e) = crate::client::persona_overlay::send_widening_seams(
+                        &mut sock_w,
+                        &mut view,
+                    )
+                    .await
+                    {
+                        break Err(e);
+                    }
                     // a scrape tick may have removed the peeked row.
                     // Re-anchor to an adjacent agent row (fetch its transcript)
                     // or close - never a stale render / panic (AC1-EDGE).
@@ -6902,6 +6894,14 @@ async fn attach_and_run(
                                 None
                             };
                             theme_ground::drain_pending_ground(&mut view, &mut compositor, &mut guard);
+                            if let Some(dims) = view.drifted(sent_viewport) {
+                                if let Some(e) =
+                                    viewport::announce(&mut sock_w, dims).await
+                                {
+                                    break Err(e);
+                                }
+                                sent_viewport = dims;
+                            }
                             if let Err(e) = compositor.draw(&view.compose()) {
                                 break Err(format!("draw: {e}"));
                             }
@@ -7214,21 +7214,16 @@ async fn attach_and_run(
                 }
             }
             _ = winch.recv() => {
-                if let Ok((cols, rows)) = terminal::size() {
-                    view.term = (rows, cols);
-                    // A shorter terminal shrinks the scroll window; re-clamp so
-                    // the offset never scrolls past the last row.
-                    view.clamp_sideline_scroll();
-                    let (c_rows, c_cols) = view.content_dims();
-                    // The server resizes PTYs + grids off the content area
-                    // and re-emits Layout + frames; the local redraw keeps
-                    // chrome coherent meanwhile.
-                    if let Err(e) = write_msg(&mut sock_w, &ClientMsg::Resize { rows: c_rows, cols: c_cols }).await {
-                        break Err(format!("resize send failed: {e}"));
-                    }
-                    if let Err(e) = compositor.draw(&view.compose()) {
-                        break Err(format!("draw: {e}"));
-                    }
+                let dims = viewport::winch_dims(&mut view);
+                if let Err(e) =
+                    write_msg(&mut sock_w, &ClientMsg::Resize { rows: dims.0, cols: dims.1 })
+                        .await
+                {
+                    break Err(format!("resize send failed: {e}"));
+                }
+                sent_viewport = dims;
+                if let Err(e) = compositor.draw(&view.compose()) {
+                    break Err(format!("draw: {e}"));
                 }
             }
             _ = async {

@@ -188,15 +188,28 @@ fn persona_name_mismatch(file: &std::path::Path, persona: &str) -> Option<String
 /// already carries.
 fn first_who_sentence(body: &str) -> Option<String> {
     let section = body.split("## Who they are").nth(1)?;
-    let line = section
-        .lines()
-        .find(|l| !l.trim().is_empty() && !l.trim().starts_with('#'))?;
-    let sentence = line.split(". ").next().unwrap_or(line);
-    let mut sentence = sentence.trim().to_string();
+    // The sentence may wrap across source lines; join the paragraph
+    // before cutting, so the description never ends mid-thought.
+    let mut prose = String::new();
+    for l in section.lines() {
+        let t = l.trim();
+        if t.is_empty() || t.starts_with('#') {
+            if !prose.is_empty() {
+                break;
+            }
+            continue;
+        }
+        if !prose.is_empty() {
+            prose.push(' ');
+        }
+        prose.push_str(t);
+    }
+    let first = prose.split(". ").next()?;
+    let mut sentence = first.trim().to_string();
     if !sentence.ends_with('.') {
         sentence.push('.');
     }
-    Some(sentence)
+    (sentence.chars().count() > 1).then_some(sentence)
 }
 fn resolve_persona_file(dir: &std::path::Path, persona: &str) -> PathBuf {
     let laid_out = dir.join(persona).join("PERSONA.md");

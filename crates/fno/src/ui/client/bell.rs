@@ -199,12 +199,13 @@ pub(crate) fn toggle(view: &mut View) {
     }
 }
 
-/// The bell's glyph: a single-column Nerd Font bell (the operator's
-/// 2026-10-04 ask). A TUI cannot detect font coverage, so a terminal without
-/// the font shows tofu - the fallback (`\u{2407}`, the ASCII bell control
-/// picture) is a one-line const swap, and the live screenshot step is what
-/// catches it.
-const BELL_GLYPH: char = '\u{f0f3}';
+/// The bell's glyph: a bullet, the notification dot. The operator's
+/// 2026-10-04 ask was the single-column Nerd Font bell (`\u{f0f3}`), and the
+/// fallback control picture (`\u{2407}`) also failed the live screenshot
+/// step: the font renders it as a raw control glyph. A TUI cannot detect
+/// font coverage, so the button carries the one character every font
+/// renders and every reader takes as a notifier.
+const BELL_GLYPH: char = '\u{2022}';
 
 fn decision_facts(view: &View) -> Option<&Value> {
     view.bell.projection.as_ref()?.get("decision_facts")
@@ -387,11 +388,16 @@ fn rows(view: &View) -> Vec<Row> {
 fn persona_rows(project: &str) -> Vec<Row> {
     let mut out = Vec::new();
     let root = super::persona_overlay::customers_root_pub(project);
+    // The D3440 layout nests one PERSONA.md per persona directory; the
+    // flat <slug>.md stays the fallback the unmigrated records read.
     let mut personas: Vec<String> = std::fs::read_dir(&root)
         .map(|rd| {
             rd.filter_map(|e| e.ok())
                 .filter_map(|e| {
                     let p = e.path();
+                    if p.is_dir() && p.join("PERSONA.md").is_file() {
+                        return p.file_name().map(|s| s.to_string_lossy().into_owned());
+                    }
                     (p.extension().is_some_and(|x| x == "md"))
                         .then(|| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
                         .flatten()
@@ -403,7 +409,7 @@ fn persona_rows(project: &str) -> Vec<Row> {
     if personas.is_empty() {
         out.push(Row::Info(format!(
             "no personas at {}",
-            root.join("<persona>.md").display()
+            super::persona_overlay::display_path(&root.join("<persona>.md"), 32)
         )));
         return out;
     }
@@ -843,10 +849,14 @@ pub(crate) fn apply_hit(view: &mut View, hit: Hit) {
         Hit::Audit => show_decisions(view, true),
         Hit::Question(id) => view.open_detail_on(&id),
         Hit::Persona(p) => {
-            view.persona = Some(super::persona_overlay::open_page_for(
-                &super::persona_overlay::session_project(view),
-                &p,
-            ))
+            view.persona = Some({
+                let mut o = super::persona_overlay::open_page_for(
+                    &super::persona_overlay::session_project(view),
+                    &p,
+                );
+                o.home = super::persona_overlay::Home::Bell;
+                o
+            })
         }
     }
 }
@@ -1044,7 +1054,7 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) {
                 match rows(view).get(selected).cloned() {
                     Some(Row::Question(id)) => view.open_detail_on(&id),
                     Some(Row::Persona(p)) => {
-                        view.persona = Some(super::persona_overlay::open_page_for("fno", &p))
+                        view.persona = Some(super::persona_overlay::open_docked_bell("fno", &p))
                     }
                     Some(Row::Audit(_)) => show_decisions(view, true),
                     Some(Row::Decision(_, Some(q))) => view.open_detail_on(&q),
@@ -1201,6 +1211,104 @@ pub(crate) fn draw(view: &View, cells: &mut [Cell], rows_n: usize, cols: usize) 
     }
 }
 
+/// The (label, color, bold) triple for one bell row: the draw loop's
+/// own mapping, shared with the docked column painter.
+fn row_label(view: &View, row: &Row) -> (String, Color, bool) {
+    match row {
+        Row::Header(s) => (s.clone(), view.theme.brand, true),
+        Row::Question(id) => {
+            let (glyph, color) = if view.bell.marks.contains(id) {
+                ("\u{25cf} ", view.theme.brand)
+            } else {
+                ("? ", Color::Default)
+            };
+            let number = question_item(view, id)
+                .and_then(|q| q.number.as_deref())
+                .map(|n| format!("{n} "))
+                .unwrap_or_default();
+            (
+                format!("{glyph}{number}{}", question_title(view, id)),
+                color,
+                true,
+            )
+        }
+        Row::Clear(n) => (format!("Clear all {n} answered"), view.theme.brand, true),
+        Row::Audit(n) => (
+            format!("{n} decisions have no author"),
+            view.theme.brand,
+            true,
+        ),
+        Row::Decision(s, q) => (s.clone(), Color::Default, q.is_some()),
+        Row::Persona(p) => (p.clone(), view.theme.brand, true),
+        Row::Announcement(s) => (format!("\u{2022} {s}"), Color::Default, false),
+        Row::Info(s) => (s.clone(), crate::theme::dim_fg(&view.theme), false),
+    }
+}
+
+/// The bell rows inside a docked host column: the same rows() source and
+/// row_label mapping as the full panel, scoped to the rect with the
+/// selection band clamped to the column.
+pub(crate) fn paint_column(
+    view: &View,
+    cells: &mut [Cell],
+    rows_n: usize,
+    cols: usize,
+    host: (usize, usize, usize, usize),
+) {
+    let (top, left, h, w) = host;
+    for r in top..(top + h).min(rows_n) {
+        let base = r * cols + left;
+        if let Some(span) = cells.get_mut(base..base + w) {
+            span.fill(Cell::default());
+        }
+    }
+    let x0 = left;
+    let mut lines = rows(view);
+    if lines.is_empty() {
+        lines.push(Row::Info("nothing here".into()));
+    }
+    let title = format!("bell \u{b7} {}", view.bell.tab.label());
+    paint(
+        cells,
+        cols,
+        top,
+        x0 + 2,
+        w.saturating_sub(2),
+        &title,
+        view.theme.brand,
+        true,
+    );
+    let visible = h.saturating_sub(1);
+    let start = view.bell.selected.saturating_sub(visible.saturating_sub(1));
+    for i in 0..visible {
+        let r = top + 1 + i;
+        let base = r * cols;
+        let Some(row) = lines.get(start + i) else {
+            break;
+        };
+        let (label, color, bold) = row_label(view, row);
+        paint(
+            cells,
+            cols,
+            r,
+            x0 + 2,
+            w.saturating_sub(2),
+            &label,
+            color,
+            bold,
+        );
+        if start + i == view.bell.selected {
+            let (fg, bg, flags) = crate::cursor::cursor_style(&view.theme);
+            for c in x0 + 1..x0 + w {
+                if let Some(cell) = cells.get_mut(base + c) {
+                    cell.fg = fg;
+                    cell.bg = bg;
+                    cell.flags = flags;
+                }
+            }
+        }
+    }
+}
 fn paint(
     cells: &mut [Cell],
     cols: usize,

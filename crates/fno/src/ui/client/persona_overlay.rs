@@ -20,6 +20,26 @@
 use super::*;
 use crate::text_style::TSeg;
 
+/// The surface whose rect scopes the docked paint. The dock paints the
+/// host's own column and the persona beside it inside the home rect,
+/// never a modal over the host.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Home {
+    /// No scoped host: the page floats over the whole surface.
+    Float,
+    /// A mux pane hosts the surface the chip sits on; the dock lives
+    /// inside that pane's rect.
+    Pane(u64),
+    /// The sideline backlog board panel.
+    SidelineBoard,
+    /// The question detail.
+    Question,
+    /// The decisions table.
+    Decision,
+    /// The bell's personas tab.
+    Bell,
+}
+
 #[derive(Debug)]
 pub(crate) struct PersonaOverlay {
     /// The chrome title: the persona's display name, or the picker header.
@@ -62,6 +82,36 @@ pub(crate) struct PersonaOverlay {
     /// The edit `e` armed: the file the input loop opens in `$EDITOR`,
     /// in a mux pane beside this one. The loop drains it into one PaneRun.
     pub(crate) edit_spawn: Option<std::path::PathBuf>,
+    /// The surface this page docks beside: the pane the drill or the `e`
+    /// split came from, or the chip host a door recorded. `Float` keeps
+    /// the full-surface paint.
+    pub(crate) home: Home,
+    /// The persona column's own pane: a placeholder split spawned right
+    /// of the session panes when the sideline door opened, so the column
+    /// tiles real space instead of painting over panes that cannot
+    /// reflow under an overlay. The door close kills it; the argv is
+    /// the orphan marker the server side can reap.
+    pub(crate) pane: Option<u64>,
+    /// The column still owes its width claim: the spawn (the persona
+    /// column, the appended editor pane, or a record pane) landed, and
+    /// the seams that shape the row fire once a layout naming the new
+    /// pane arrives. One shot, then cleared.
+    pub(crate) widen: bool,
+    /// The editor pane `e` spawned: appended right of the session panes,
+    /// never folded beside the page. The door close kills it.
+    pub(crate) edit_pane: Option<u64>,
+    /// The pane that still owes its width claim: the persona column, the
+    /// editor pane, or the newest record pane, whichever appended last.
+    pub(crate) claim_pane: Option<u64>,
+    /// Records drilled past the first: each holds its own appended pane
+    /// and the node it renders. The board detail keeps the first record.
+    pub(crate) records: Vec<(u64, String)>,
+    /// Records the three-column cap folded, oldest first. Their panes
+    /// are gone; the breadcrumb strip carries their names.
+    pub(crate) folded: Vec<String>,
+    /// A serving record is drilled open right of the persona column.
+    /// Left and Esc pop the record before the column itself.
+    pub(crate) drill: bool,
 }
 
 /// The personas a stored audience value names: the `customer:<slug>` items
@@ -238,6 +288,53 @@ fn wrap_para(text: &str, width: usize) -> Vec<String> {
     out
 }
 
+/// The path as the user reads it: the home shortens to `~`, and a path
+/// past `width` middle-truncates so both ends stay visible.
+pub(crate) fn display_path(path: &std::path::Path, width: usize) -> String {
+    let mut s = path.display().to_string();
+    if let Ok(home) = std::env::var("HOME") {
+        if !home.is_empty() {
+            if let Some(rest) = s.strip_prefix(&home) {
+                s = format!("~{rest}");
+            }
+        }
+    }
+    let n = s.chars().count();
+    if n > width.max(8) {
+        let keep = (width.max(8).saturating_sub(1)) / 2;
+        let head: String = s.chars().take(keep).collect();
+        let tail: String = s
+            .chars()
+            .rev()
+            .take(keep)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
+        s = format!("{head}\u{2026}{tail}");
+    }
+    s
+}
+
+/// The text cut at `width` chars with a trailing ellipsis. The cut lands
+/// on a word boundary, carries no space before the ellipsis, and never
+/// ends in a bare period, so a cut sentence reads as cut.
+fn clip_ellipsis(text: &str, width: usize) -> String {
+    let n = text.chars().count();
+    if n <= width.max(1) {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(width.max(1).saturating_sub(1)).collect();
+    if let Some(cut) = out.rfind(' ') {
+        out.truncate(cut);
+    }
+    while out.ends_with('.') || out.ends_with(',') {
+        out.pop();
+    }
+    out.push('\u{2026}');
+    out
+}
+
 fn page_lines(doc: &PersonaDoc, path: &std::path::Path, width: usize) -> Vec<TLine> {
     let mut lines = Vec::new();
     lines.push(TLine::of(&[
@@ -246,7 +343,7 @@ fn page_lines(doc: &PersonaDoc, path: &std::path::Path, width: usize) -> Vec<TLi
             role: TextStyle::Meta,
         },
         TSeg {
-            text: path.display().to_string(),
+            text: display_path(path, width.saturating_sub(6)),
             role: TextStyle::Hint,
         },
     ]));
@@ -257,7 +354,7 @@ fn page_lines(doc: &PersonaDoc, path: &std::path::Path, width: usize) -> Vec<TLi
                 role: TextStyle::Meta,
             },
             TSeg {
-                text: d.clone(),
+                text: clip_ellipsis(d, width.saturating_sub(13)),
                 role: TextStyle::Item,
             },
         ]));
@@ -301,10 +398,11 @@ fn page_lines(doc: &PersonaDoc, path: &std::path::Path, width: usize) -> Vec<TLi
     if !doc.who.is_empty() {
         lines.push(TLine::plain(String::new()));
         lines.push(TLine::line(TextStyle::Section, "who they are"));
-        for w in &doc.who {
-            for chunk in wrap_para(w, width.saturating_sub(2).max(8)) {
-                lines.push(TLine::meta(format!("  {chunk}")));
-            }
+        // The paragraph reflows to the pane width: the source's own line
+        // breaks join into one paragraph, so the wrap never goes ragged.
+        let who = doc.who.join(" ");
+        for chunk in wrap_para(&who, width.saturating_sub(2).max(8)) {
+            lines.push(TLine::meta(format!("  {chunk}")));
         }
     }
     if !doc.jobs.is_empty() {
@@ -351,6 +449,11 @@ fn open_page(project: &str, persona: &str) -> PersonaOverlay {
             };
             let draft = is_draft(&doc.status);
             PersonaOverlay {
+                pane: None,
+                widen: false,
+                edit_pane: None,
+                claim_pane: None,
+                records: Vec::new(),
                 title,
                 lines: Vec::new(),
                 cursor: None,
@@ -367,9 +470,17 @@ fn open_page(project: &str, persona: &str) -> PersonaOverlay {
                 input: None,
                 edit_since: None,
                 edit_spawn: None,
+                home: Home::Float,
+                folded: Vec::new(),
+                drill: false,
             }
         }
         Err(_) => PersonaOverlay {
+            pane: None,
+            widen: false,
+            edit_pane: None,
+            claim_pane: None,
+            records: Vec::new(),
             title: persona.to_string(),
             lines: notice_lines(&path),
             cursor: None,
@@ -386,6 +497,9 @@ fn open_page(project: &str, persona: &str) -> PersonaOverlay {
             input: None,
             edit_since: None,
             edit_spawn: None,
+            home: Home::Float,
+            folded: Vec::new(),
+            drill: false,
         },
     }
 }
@@ -647,6 +761,11 @@ fn picker_lines(personas: &[String], cur: usize) -> Vec<TLine> {
 
 fn open_list(title: &str, project: &str, personas: Vec<String>) -> PersonaOverlay {
     PersonaOverlay {
+        pane: None,
+        widen: false,
+        edit_pane: None,
+        claim_pane: None,
+        records: Vec::new(),
         title: title.to_string(),
         lines: picker_lines(&personas, 0),
         cursor: (!personas.is_empty()).then_some(0),
@@ -663,6 +782,9 @@ fn open_list(title: &str, project: &str, personas: Vec<String>) -> PersonaOverla
         input: None,
         edit_since: None,
         edit_spawn: None,
+        home: Home::Float,
+        folded: Vec::new(),
+        drill: false,
     }
 }
 
@@ -705,6 +827,7 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) -> StdinFlow {
         return StdinFlow::Continue;
     }
     if view.persona.as_ref().is_some_and(|o| o.notice) {
+        close_persona_pane(view);
         view.persona = None;
         return StdinFlow::Continue;
     }
@@ -722,6 +845,35 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) -> StdinFlow {
     // A page. The serving read runs before the overlay borrow: it walks
     // the board, the questions fold and the decisions table, which share
     // the view with the persona field.
+    // Left: the drill pops the rightmost column (the persona page) and
+    // its parent takes the keyboard back. The composer and picker own
+    // their own keys, so this sits after the picker branch and only on a
+    // page without an open composer. A lone Esc already pops through
+    // keys_page; the chunk for Left arrives whole.
+    if view
+        .persona
+        .as_ref()
+        .is_some_and(|o| o.input.is_none() && o.cursor.is_none())
+        && bytes == [0x1b, 0x5b, 0x44]
+    {
+        // Left pops the rightmost pane: an appended record pane
+        // first, then the drilled record, then the persona column.
+        if pop_record_pane(view) {
+            return StdinFlow::Continue;
+        }
+        if view.persona.as_ref().is_some_and(|o| o.drill) {
+            if let Some(o) = view.persona.as_mut() {
+                o.drill = false;
+            }
+            if let Some(b) = view.backlog_board.as_mut() {
+                b.detail = None;
+            }
+            return StdinFlow::Continue;
+        }
+        close_persona_pane(view);
+        view.persona = None;
+        return StdinFlow::Continue;
+    }
     let slug = view
         .persona
         .as_ref()
@@ -738,8 +890,40 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) -> StdinFlow {
         .filter(|_| !composing && (bytes.contains(&b'\r') || bytes.contains(&b'\n')))
     {
         if let Some(s) = serving.get(i).cloned() {
-            view.persona = None;
-            open_serving(view, &s);
+            // The node record drills: the persona column stays and the
+            // record opens in the board's detail column beside it. The
+            // question and decision surfaces are their own families; they
+            // keep today's handoff.
+            // No board under the surface (the persona opened from a
+            // decisions row or a question): the record has no detail
+            // column to drill into, so the page hands off the way it did
+            // before the drill existed.
+            let mut append: Option<String> = None;
+            if !matches!(s.kind, ServeKind::Node) || view.backlog_board.is_none() {
+                close_persona_pane(view);
+                view.persona = None;
+                open_serving(view, &s);
+            } else {
+                // A drill past the first appends: the record takes its
+                // own pane right of the row and the earlier columns stay.
+                let drilled = view.persona.as_ref().is_some_and(|o| o.drill);
+                let docked = view.persona.as_ref().is_some_and(|o| o.pane.is_some());
+                if drilled && docked {
+                    append = Some(s.id.clone());
+                } else if drilled {
+                    // No docked pane to append beside: the record in the
+                    // board's detail column follows the selection.
+                    open_serving(view, &s);
+                } else {
+                    if let Some(o) = view.persona.as_mut() {
+                        o.drill = true;
+                    }
+                    open_serving(view, &s);
+                }
+            }
+            if let Some(node) = append {
+                spawn_record_pane(view, &node);
+            }
             return StdinFlow::Continue;
         }
     }
@@ -763,7 +947,28 @@ fn keys_page(view: &mut View, bytes: &[u8], serving: &[Serving]) -> StdinFlow {
     let mut spawn: Option<std::path::PathBuf> = None;
     for &k in bytes {
         match k {
-            0x1b | b'q' | b'x' => {
+            0x1b => {
+                // Esc pops the rightmost pane: an appended record pane
+                // first, then the drilled record, then the persona
+                // column.
+                if pop_record_pane(view) {
+                    return StdinFlow::Continue;
+                }
+                if view.persona.as_ref().is_some_and(|o| o.drill) {
+                    if let Some(o) = view.persona.as_mut() {
+                        o.drill = false;
+                    }
+                    if let Some(b) = view.backlog_board.as_mut() {
+                        b.detail = None;
+                    }
+                    return StdinFlow::Continue;
+                }
+                close_persona_pane(view);
+                view.persona = None;
+                return StdinFlow::Continue;
+            }
+            b'q' | b'x' => {
+                close_persona_pane(view);
                 view.persona = None;
                 return StdinFlow::Continue;
             }
@@ -786,6 +991,14 @@ fn keys_page(view: &mut View, bytes: &[u8], serving: &[Serving]) -> StdinFlow {
                 // The user's editor opens in a mux pane beside this one;
                 // the frame tick polls the file and reloads on save.
                 if o.input.is_none() && o.path.is_file() {
+                    // The focused pane is the surface's home: after the
+                    // split it keeps the page, and the editor composites
+                    // beside it instead of under it. A persona that owns a
+                    // docked pane keeps its dock: its record panes paint
+                    // only on that branch.
+                    if o.pane.is_none() {
+                        o.home = Home::Pane(view.layout.focus);
+                    }
                     o.edit_since = std::fs::metadata(&o.path).and_then(|m| m.modified()).ok();
                     spawn = Some(o.path.clone());
                 }
@@ -869,8 +1082,21 @@ fn note_input_keys(view: &mut View, bytes: &[u8]) -> StdinFlow {
         match save_note(&path, &slug, &text) {
             Some(fail) => view.set_notice(format!("persona note failed: {fail}")),
             None => {
-                let fresh = open_page(&project, &slug);
-                view.set_notice("note saved; the persona is draft for revision".into());
+                let fresh = view
+                    .persona
+                    .as_ref()
+                    .map(|o| dock_carry(o, open_page(&project, &slug)));
+                let Some(fresh) = fresh else {
+                    return StdinFlow::Continue;
+                };
+                // The draft claim follows the file's own status, not the
+                // save: an approved persona stays approved after a note.
+                let msg = if fresh.is_draft() {
+                    "note saved; the persona is draft for revision"
+                } else {
+                    "note saved"
+                };
+                view.set_notice(msg.into());
                 view.persona = Some(fresh);
             }
         }
@@ -990,7 +1216,13 @@ pub(crate) fn edit_poll(view: &mut View) {
         .as_ref()
         .map(|o| (o.project.clone(), o.slug.clone(), o.scroll, o.sel))
         .unwrap_or_default();
-    let mut fresh = open_page(&project, &slug);
+    let fresh = view
+        .persona
+        .as_ref()
+        .map(|o| dock_carry(o, open_page(&project, &slug)));
+    let Some(mut fresh) = fresh else {
+        return;
+    };
     fresh.scroll = scroll;
     fresh.sel = sel;
     view.persona = Some(fresh);
@@ -1047,8 +1279,28 @@ pub(crate) async fn spawn_edit(
     let cwd = std::env::current_dir()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| ".".into());
+    // The editor appends as the next column right of the row's
+    // rightmost pane, the way the persona column does: a drill never
+    // folds the page beside a docked editor. Exact placement: a refused
+    // split surfaces as a notice below, never a silent spawn in a fresh
+    // tab.
+    let min_y = view.layout.panes.iter().map(|(_, r)| r.y).min();
+    let anchor = view
+        .layout
+        .panes
+        .iter()
+        .filter(|(_, r)| Some(r.y) == min_y)
+        .max_by_key(|(_, r)| r.x + r.cols)
+        .map(|(pid, _)| *pid);
+    let Some(anchor_id) = anchor else {
+        disarm_edit(view);
+        view.set_notice("the editor pane never opened: no pane to append beside".into());
+        return;
+    };
     let placement = crate::proto::PanePlacement {
         split: Some(crate::proto::Dir::Right),
+        at: Some(anchor_id),
+        fallback: crate::proto::PlacementFallback::Refuse,
         ..Default::default()
     };
     let command = crate::proto::ControlCommand::PaneRun {
@@ -1093,6 +1345,14 @@ pub(crate) async fn spawn_edit(
                 disarm_edit(view);
                 view.set_notice(format!("the editor pane focus failed: {e}"));
             }
+            // The width claim fires on the layout that names the
+            // editor pane: the appended column claims its widest share
+            // then.
+            if let Some(o) = view.persona.as_mut() {
+                o.edit_pane = Some(pane_id);
+                o.claim_pane = Some(pane_id);
+                o.widen = true;
+            }
         }
         Ok(Ok(_)) => {
             disarm_edit(view);
@@ -1122,6 +1382,7 @@ fn finish_flow(view: &mut View, flow: Flow) -> StdinFlow {
     match flow {
         Flow::Stay => StdinFlow::Continue,
         Flow::Close => {
+            close_persona_pane(view);
             view.persona = None;
             StdinFlow::Continue
         }
@@ -1196,7 +1457,9 @@ fn apply_keys(o: &mut PersonaOverlay, bytes: &[u8]) -> Flow {
             b'k' => cur = cur.saturating_sub(1),
             b'\r' | b'\n' => {
                 return match o.personas.get(cur) {
-                    Some(p) => Flow::Drill(open_page(&o.project, p)),
+                    // The drill keeps the dock: the page opens in the
+                    // picker's own home column.
+                    Some(p) => Flow::Drill(dock_carry(o, open_page(&o.project, p))),
                     None => Flow::Stay,
                 };
             }
@@ -1209,6 +1472,692 @@ fn apply_keys(o: &mut PersonaOverlay, bytes: &[u8]) -> Flow {
 }
 
 /// The overlay a card's chip opens, if any.
+/// Dock maps for the chip doors: each records the surface the chip sat
+/// on, so the page paints beside it instead of over it.
+/// A fresh page from an internal navigation (the picker drill) keeps
+/// the overlay's home, so the dock never floats mid-walk.
+pub(crate) fn dock_carry(o: &PersonaOverlay, mut fresh: PersonaOverlay) -> PersonaOverlay {
+    fresh.home = o.home;
+    fresh
+}
+
+pub(crate) fn dock_sideline(mut o: PersonaOverlay) -> PersonaOverlay {
+    o.home = Home::SidelineBoard;
+    o
+}
+
+/// The persona column's pane: a placeholder split spawned right of the
+/// session panes, so the column tiles real space instead of painting
+/// over panes that cannot reflow under an overlay. The argv is the
+/// orphan marker: a pane whose pty still runs it after its overlay
+/// closed is a reap candidate for the server side. A failed spawn
+/// leaves the dock on the panel fallback, never a half-open door.
+pub(crate) fn spawn_persona_pane(view: &mut View) {
+    let docked = view
+        .persona
+        .as_ref()
+        .is_some_and(|o| o.home == Home::SidelineBoard && o.pane.is_none());
+    if !docked {
+        return;
+    }
+    // The split anchors on the row's rightmost pane, so the column opens
+    // as the new rightmost pane and its seam share decides its width. A
+    // focus-relative anchor would land the column mid-row wherever the
+    // keyboard happened to sit. The rect read here is pre-split: the
+    // layout still carries the anchor's full width, which is exactly the
+    // width the seam math needs.
+    // The split anchors on the top band's rightmost pane, so the
+    // column opens top-right beside the widest row instead of a bottom
+    // corner its band cannot widen out of.
+    let min_y = view.layout.panes.iter().map(|(_, r)| r.y).min();
+    let anchor = view
+        .layout
+        .panes
+        .iter()
+        .filter(|(_, r)| Some(r.y) == min_y)
+        .max_by_key(|(_, r)| r.x + r.cols)
+        .map(|(pid, _)| *pid);
+    let Some(anchor_id) = anchor else {
+        return;
+    };
+    let cwd = std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| ".".into());
+    let placement = crate::proto::PanePlacement {
+        split: Some(crate::proto::Dir::Right),
+        at: Some(anchor_id),
+        // Exact placement: a refused split surfaces as a notice below,
+        // never a silent spawn in a fresh tab.
+        fallback: crate::proto::PlacementFallback::Refuse,
+        ..Default::default()
+    };
+    let command = crate::proto::ControlCommand::PaneRun {
+        cwd,
+        // The orphan marker: a sleep placeholder the server side can
+        // recognise by argv. 2^31-1 seconds is the largest interval the
+        // BSD sleep accepts, so the placeholder actually runs instead of
+        // dying at spawn and reading as a pane the operator closed.
+        argv: vec!["sleep".into(), "2147483647".into()],
+        cols: None,
+        rows: None,
+        claim: false,
+        placement,
+        worker: None,
+        fno_id: None,
+    };
+    let session = view.session.clone();
+    let sock = match crate::proto::socket_path(&session) {
+        Ok(s) => s,
+        Err(e) => {
+            view.set_notice(format!("the persona pane never opened: {e}"));
+            return;
+        }
+    };
+    let reply = crate::mux_cli::control_roundtrip(&sock, &session, command);
+    let pane_id = match reply {
+        Ok(crate::proto::ServerMsg::PaneSpawned { pane_id, .. }) => pane_id,
+        Ok(other) => {
+            view.set_notice(format!("the persona pane never opened: {other:?}"));
+            return;
+        }
+        Err(e) => {
+            view.set_notice(format!("the persona pane never opened: {e}"));
+            return;
+        }
+    };
+    if let Some(o) = view.persona.as_mut() {
+        o.pane = Some(pane_id);
+        o.claim_pane = Some(pane_id);
+        // The width claim fires on the layout that names the new pane:
+        // the seams read post-split rects, which this client only sees
+        // after the server's next Layout push.
+        o.widen = true;
+    }
+}
+
+/// The seams that shape the row once the persona column exists: the
+/// column claims the widest share of its band, walking leftward with
+/// seam moves whose floors keep every neighbour readable. The editor
+/// fold claims by shrinking the editor pane to the dock's persona
+/// share. Cleared as soon as it answers.
+pub(crate) async fn send_widening_seams<W>(sock_w: &mut W, view: &mut View) -> Option<String>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let seams = persona_widening_seams(view);
+    if seams.is_empty() {
+        return None;
+    }
+    for cmd in seams {
+        if let Err(e) = write_msg(sock_w, &ClientMsg::Command(cmd)).await {
+            return Some(format!("persona seam send failed: {e}"));
+        }
+    }
+    None
+}
+
+pub(crate) fn persona_widening_seams(view: &mut View) -> Vec<crate::proto::Command> {
+    let armed = view.persona.as_ref().is_some_and(|o| o.widen);
+    if !armed {
+        return Vec::new();
+    }
+    let Some(o) = view.persona.as_ref() else {
+        return Vec::new();
+    };
+    // Panes this surface paints word-wrap their own lines, so they floor
+    // lower than a fleet pane whose worker renders its own text.
+    let tracked: Vec<u64> = o
+        .pane
+        .into_iter()
+        .chain(o.edit_pane)
+        .chain(o.claim_pane)
+        .chain(o.records.iter().map(|(id, _)| *id))
+        .collect();
+    let mut seams = Vec::new();
+    let claim = o.claim_pane.or(o.pane);
+    if let Some(pane) = claim {
+        let mut rects: Vec<(u64, (usize, usize, usize, usize))> = view
+            .layout
+            .panes
+            .iter()
+            .map(|(pid, r)| {
+                (
+                    *pid,
+                    (r.x as usize, r.y as usize, r.cols as usize, r.rows as usize),
+                )
+            })
+            .collect();
+        let Some(&(px, py, pw, ph)) = rects.iter().find(|(pid, _)| *pid == pane).map(|(_, r)| r)
+        else {
+            return Vec::new();
+        };
+        // A record's claim reaches past a fleet pane with no room to the
+        // wide pane beyond; the persona's own claim stops at its neighbour.
+        let through_fleet = o.pane != Some(pane);
+        claim_widening_seams(
+            &mut rects,
+            pane,
+            (px, py, pw, ph),
+            (&tracked, through_fleet),
+            &mut seams,
+        );
+        raise_fleet_panes(&rects, (py, ph), &tracked, &mut seams);
+        raise_tracked_panes(&mut rects, (py, ph), &tracked, pane, &mut seams);
+    }
+    // One shot: the claim answers once, from the layout that names it.
+    if let Some(o) = view.persona.as_mut() {
+        o.widen = false;
+    }
+    seams
+}
+
+/// One floor per pane kind: panes this surface paints word-wrap their own
+/// lines, so they stay readable narrower than a fleet pane can. A worker
+/// renders its text inside its pty, where the rect loses two border
+/// columns to the client frame and the transcript pads inside the rest,
+/// so fleet content wraps about four narrower than its rect.
+const PANE_FLOOR: usize = 22;
+const FLEET_FLOOR: usize = 34;
+fn pane_floor(tracked: &[u64], pid: u64) -> usize {
+    if tracked.contains(&pid) {
+        PANE_FLOOR
+    } else {
+        FLEET_FLOOR
+    }
+}
+
+/// The claim pulls the feature column up to the row's widest pane, one
+/// flanking neighbour at a time, each donor stopping at its own floor.
+fn claim_widening_seams(
+    rects: &mut [(u64, (usize, usize, usize, usize))],
+    pane: u64,
+    at: (usize, usize, usize, usize),
+    (tracked, through_fleet): (&[u64], bool),
+    seams: &mut Vec<crate::proto::Command>,
+) {
+    let (px, py, pw, ph) = at;
+    // The row's own widest pane sets the bar: the feature column claims at
+    // least that share, one neighbour at a time.
+    let target = rects
+        .iter()
+        .filter(|(pid, _)| *pid != pane)
+        .filter(|(_, (_, y, _, h))| *y < py + ph && py < y + h)
+        .map(|(_, (_, _, w, _))| *w)
+        .max()
+        .map(|w| w + 1);
+    let mut persona = (px, pw);
+    for _ in 0..3 {
+        let Some(target) = target else { break };
+        if persona.1 >= target {
+            break;
+        }
+        // Walk left through the band, one flanking neighbour at a time,
+        // to the first pane with room above its floor. The panes between
+        // the donor and the claim keep their widths: every seam on the way
+        // moves by the same amount.
+        let mut chain: Vec<(u64, usize, usize)> = Vec::new();
+        let mut edge = persona.0;
+        while chain.len() < 4 {
+            let nbr = rects.iter().find(|(pid, r)| {
+                *pid != pane && {
+                    let (x, y, w, h) = *r;
+                    y < py + ph && py < y + h && x + w + 1 == edge
+                }
+            });
+            let Some(&(nid, (nx, _, nw, _))) = nbr else {
+                break;
+            };
+            chain.push((nid, nx, nw));
+            if nw > pane_floor(tracked, nid) || !(through_fleet || tracked.contains(&nid)) {
+                break;
+            }
+            edge = nx;
+        }
+        // The walk ends on the donor, or runs out of neighbours.
+        let Some(&(donor_id, _, dw)) = chain.last() else {
+            break;
+        };
+        let spare = dw.saturating_sub(pane_floor(tracked, donor_id));
+        if spare == 0 {
+            break;
+        }
+        let need = target - persona.1;
+        let donate = need.min(spare);
+        // Seams from the donor outward: each boundary sits one column
+        // left of where it was, per column donated.
+        let rights: Vec<u64> = std::iter::once(pane)
+            .chain(chain.iter().map(|c| c.0))
+            .collect();
+        for (k, &(nid, nx, nw)) in chain.iter().enumerate().rev() {
+            let right = rights.get(k).copied().unwrap_or(pane);
+            seams.push(crate::proto::Command::ResizeSeam {
+                a: nid,
+                b: right,
+                pos: (nx + nw - donate) as u16,
+            });
+        }
+        for (k, &(nid, _, _)) in chain.iter().enumerate() {
+            if let Some(r) = rects.iter_mut().find(|(pid, _)| *pid == nid) {
+                if k + 1 == chain.len() {
+                    r.1 .2 -= donate;
+                } else {
+                    r.1 .0 -= donate;
+                }
+            }
+        }
+        persona.0 -= donate;
+        persona.1 += donate;
+    }
+    if let Some(r) = rects.iter_mut().find(|(pid, _)| *pid == pane) {
+        r.1 .0 = persona.0;
+        r.1 .2 = persona.1;
+    }
+}
+
+/// The claim only pulls width, and the split that made room for it can
+/// leave a fleet pane under the fleet floor with nothing left to pull
+/// from. Push it back up: the flanking band pane pays down to its own
+/// floor. One seam between band-adjacent panes, so the server moves the
+/// one boundary the pair flanks exactly.
+fn raise_fleet_panes(
+    rects: &[(u64, (usize, usize, usize, usize))],
+    band: (usize, usize),
+    tracked: &[u64],
+    seams: &mut Vec<crate::proto::Command>,
+) {
+    let (py, ph) = band;
+    for &(pid, (x, y, w, h)) in rects {
+        if tracked.contains(&pid) || w >= FLEET_FLOOR {
+            continue;
+        }
+        if !(y < py + ph && py < y + h) {
+            continue;
+        }
+        let need = FLEET_FLOOR - w;
+        // A donor sharing the pane's own height sits beside it in the same
+        // branch child, so the seam moves one boundary exactly; a
+        // full-height donor reaches only through the parent seam, whose
+        // move leaks through the nested ratio splits. Prefer one.
+        let mut donor = None;
+        for same_rows in [true, false] {
+            donor = rects.iter().copied().find(|(nid, (nx, ny, nw, nh))| {
+                *nid != pid
+                    && *ny < py + ph
+                    && py < *ny + *nh
+                    && (*nx + *nw + 1 == x || x + w + 1 == *nx)
+                    && *nw >= need + pane_floor(tracked, *nid)
+                    && (!same_rows || *nh == h)
+            });
+            if donor.is_some() {
+                break;
+            }
+        }
+        let Some((nid, (dnx, _, dnw, _))) = donor else {
+            continue;
+        };
+        let left = dnx + dnw + 1 == x;
+        let pos = if left { x - need } else { x + w + need };
+        let (a, b) = if left { (nid, pid) } else { (pid, nid) };
+        seams.push(crate::proto::Command::ResizeSeam {
+            a,
+            b,
+            pos: pos as u16,
+        });
+    }
+}
+
+/// A split halves its anchor, so an older record can end under the floor
+/// the claim left it. Each such pane takes the shortfall from its right
+/// neighbour, which is the claim or a wider record, down to that
+/// neighbour's own floor.
+fn raise_tracked_panes(
+    rects: &mut [(u64, (usize, usize, usize, usize))],
+    band: (usize, usize),
+    tracked: &[u64],
+    claim: u64,
+    seams: &mut Vec<crate::proto::Command>,
+) {
+    let (py, ph) = band;
+    let mut order: Vec<(usize, u64)> = rects
+        .iter()
+        .filter(|(pid, _)| tracked.contains(pid) && *pid != claim)
+        .map(|(pid, (x, _, _, _))| (*x, *pid))
+        .collect();
+    order.sort_unstable();
+    for (_, pid) in order {
+        let Some(&(_, (x, y, w, h))) = rects.iter().find(|(id, _)| *id == pid) else {
+            continue;
+        };
+        if w >= PANE_FLOOR || !(y < py + ph && py < y + h) {
+            continue;
+        }
+        let need = PANE_FLOOR - w;
+        let right = rects.iter().find(|(nid, (nx, ny, _, nh))| {
+            *nid != pid && *nx == x + w + 1 && *ny < py + ph && py < *ny + *nh
+        });
+        let Some(&(nid, (_, _, nw, _))) = right else {
+            continue;
+        };
+        if nw < need + pane_floor(tracked, nid) {
+            continue;
+        }
+        seams.push(crate::proto::Command::ResizeSeam {
+            a: pid,
+            b: nid,
+            pos: (x + w + need) as u16,
+        });
+        for (id, r) in rects.iter_mut() {
+            if *id == pid {
+                r.2 += need;
+            } else if *id == nid {
+                r.0 += need;
+                r.2 -= need;
+            }
+        }
+    }
+}
+
+/// A record drilled past the first appends its own pane right of the
+/// row's rightmost pane, the same split the persona column takes. The
+/// pane is a sleep placeholder; the client paints the record lines into
+/// its rect, so the column tiles real space and the seam claim can
+/// reshape the row.
+fn spawn_record_pane(view: &mut View, node_id: &str) {
+    let docked = view.persona.as_ref().is_some_and(|o| o.pane.is_some());
+    if !docked {
+        return;
+    }
+    // The trail caps at three record columns: the first record lives in
+    // the detail column and at most two panes append past it. A further
+    // drill folds the oldest visible record into the breadcrumb strip.
+    fold_oldest_record(view);
+    let min_y = view.layout.panes.iter().map(|(_, r)| r.y).min();
+    let anchor = view
+        .layout
+        .panes
+        .iter()
+        .filter(|(_, r)| Some(r.y) == min_y)
+        .max_by_key(|(_, r)| r.x + r.cols)
+        .map(|(pid, _)| *pid);
+    let Some(anchor_id) = anchor else {
+        view.set_notice("the record pane never opened: no pane to append beside".into());
+        return;
+    };
+    let cwd = std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| ".".into());
+    let placement = crate::proto::PanePlacement {
+        split: Some(crate::proto::Dir::Right),
+        at: Some(anchor_id),
+        fallback: crate::proto::PlacementFallback::Refuse,
+        ..Default::default()
+    };
+    let command = crate::proto::ControlCommand::PaneRun {
+        cwd,
+        argv: vec!["sleep".into(), "2147483647".into()],
+        cols: None,
+        rows: None,
+        claim: false,
+        placement,
+        worker: None,
+        fno_id: None,
+    };
+    let session = view.session.clone();
+    let sock = match crate::proto::socket_path(&session) {
+        Ok(s) => s,
+        Err(e) => {
+            view.set_notice(format!("the record pane never opened: {e}"));
+            return;
+        }
+    };
+    let reply = crate::mux_cli::control_roundtrip(&sock, &session, command);
+    let pane_id = match reply {
+        Ok(crate::proto::ServerMsg::PaneSpawned { pane_id, .. }) => pane_id,
+        Ok(other) => {
+            view.set_notice(format!("the record pane never opened: {other:?}"));
+            return;
+        }
+        Err(e) => {
+            view.set_notice(format!("the record pane never opened: {e}"));
+            return;
+        }
+    };
+    if let Some(o) = view.persona.as_mut() {
+        o.records.push((pane_id, node_id.to_string()));
+        o.claim_pane = Some(pane_id);
+        o.widen = true;
+    }
+}
+
+/// The trail caps at three record columns: the first record lives in the
+/// detail column and at most two panes append past it. A further drill
+/// folds the oldest visible record: its node joins the breadcrumb strip
+/// and its pane dies, best-effort like a pop. True when a record folded.
+fn fold_oldest_record(view: &mut View) -> bool {
+    let pane = {
+        let Some(o) = view.persona.as_mut() else {
+            return false;
+        };
+        if o.records.len() <= 1 {
+            return false;
+        }
+        let Some((pane, node)) = o.records.first().cloned() else {
+            return false;
+        };
+        o.records.remove(0);
+        o.folded.push(node);
+        if o.claim_pane == Some(pane) {
+            o.claim_pane = None;
+        }
+        pane
+    };
+    let session = view.session.clone();
+    if let Ok(sock) = crate::proto::socket_path(&session) {
+        let reply = crate::mux_cli::control_roundtrip(
+            &sock,
+            &session,
+            crate::proto::ControlCommand::PaneKill {
+                pane,
+                hand_off_to: None,
+            },
+        );
+        if let Err(e) = reply {
+            view.set_notice(format!("the folded record pane lingers: {e}"));
+        }
+    }
+    true
+}
+
+/// The folded trail as one breadcrumb line, oldest first. The name is
+/// the node's title from the board read, falling back to its id.
+fn folded_breadcrumb(inputs: Option<&crate::backlog_model::Inputs>, folded: &[String]) -> String {
+    let names: Vec<String> = folded
+        .iter()
+        .map(|id| {
+            inputs
+                .and_then(|inputs| crate::backlog_model::node(inputs, id))
+                .map(|v| v.card.title.clone())
+                .unwrap_or_else(|| id.clone())
+        })
+        .collect();
+    format!("\u{2039} {}", names.join(" \u{b7} "))
+}
+
+/// Pop the newest appended record pane, if any: kill its placeholder and
+/// drop the record. True when a pane popped, so the key is consumed.
+fn pop_record_pane(view: &mut View) -> bool {
+    let popped = view.persona.as_mut().and_then(|o| o.records.pop());
+    let Some((pane, _)) = popped else {
+        return false;
+    };
+    if let Some(o) = view.persona.as_mut() {
+        if o.claim_pane == Some(pane) {
+            o.claim_pane = None;
+        }
+    }
+    let session = view.session.clone();
+    if let Ok(sock) = crate::proto::socket_path(&session) {
+        let reply = crate::mux_cli::control_roundtrip(
+            &sock,
+            &session,
+            crate::proto::ControlCommand::PaneKill {
+                pane,
+                hand_off_to: None,
+            },
+        );
+        if let Err(e) = reply {
+            view.set_notice(format!("the record pane lingers: {e}"));
+        }
+    }
+    true
+}
+
+/// The appended record panes: each paints the node's detail lines into
+/// its own rect, the same panel the first drilled record uses.
+fn paint_record_panes(view: &View, cells: &mut [Cell], rows: usize, cols: usize) {
+    let Some(o) = view.persona.as_ref() else {
+        return;
+    };
+    if o.records.is_empty() {
+        return;
+    }
+    let Some(b) = view.backlog_board.as_ref() else {
+        return;
+    };
+    let breadcrumb = if o.folded.is_empty() {
+        None
+    } else {
+        Some(folded_breadcrumb(b.inputs.as_ref(), &o.folded))
+    };
+    for (i, (pane, node_id)) in o.records.iter().enumerate() {
+        let Some((_, r)) = view.layout.panes.iter().find(|(pid, _)| *pid == *pane) else {
+            continue;
+        };
+        let top = (super::TAB_BAR_ROWS as usize + r.y as usize).min(rows);
+        let left = (view.left_chrome_w() as usize + r.x as usize).min(cols);
+        let h = (r.rows as usize).min(rows.saturating_sub(top));
+        let w = (r.cols as usize).min(cols.saturating_sub(left));
+        if h == 0 || w == 0 {
+            continue;
+        }
+        for rr in top..top + h {
+            let base = rr * cols + left;
+            if let Some(span) = cells.get_mut(base..base + w) {
+                span.fill(Cell::default());
+            }
+        }
+        backlog_style::paint_title_row(
+            cells,
+            rows,
+            cols,
+            top,
+            left,
+            w,
+            &format!("details \u{b7} {node_id}"),
+            false,
+            &view.theme,
+        );
+        if h <= 1 {
+            continue;
+        }
+        let (lines, _) = super::node_detail::pane_lines(b, node_id, None, w);
+        match breadcrumb.as_deref().filter(|_| i == 0) {
+            Some(text) if h > 2 => {
+                let strip = vec![TLine::meta(text.to_string())];
+                backlog_style::paint_panel_at(
+                    cells,
+                    rows,
+                    cols,
+                    left,
+                    top + 1,
+                    w,
+                    1,
+                    &strip,
+                    None,
+                    &view.theme,
+                );
+                backlog_style::paint_panel_at(
+                    cells,
+                    rows,
+                    cols,
+                    left,
+                    top + 2,
+                    w,
+                    h - 2,
+                    &lines,
+                    None,
+                    &view.theme,
+                );
+            }
+            _ => {
+                backlog_style::paint_panel_at(
+                    cells,
+                    rows,
+                    cols,
+                    left,
+                    top + 1,
+                    w,
+                    h - 1,
+                    &lines,
+                    None,
+                    &view.theme,
+                );
+            }
+        }
+    }
+}
+
+/// The door closes: the persona column's pane dies with it, or a
+/// sleep placeholder lingers in the session until the server-side
+/// argv reap finds it. The kill runs on the control socket by id, so
+/// it never steals focus.
+pub(crate) fn close_persona_pane(view: &mut View) {
+    let Some(o) = view.persona.as_ref() else {
+        return;
+    };
+    let mut panes = Vec::new();
+    if let Some(p) = o.pane {
+        panes.push(p);
+    }
+    if let Some(p) = o.edit_pane {
+        panes.push(p);
+    }
+    panes.extend(o.records.iter().map(|(p, _)| *p));
+    if panes.is_empty() {
+        return;
+    }
+    let session = view.session.clone();
+    if let Ok(sock) = crate::proto::socket_path(&session) {
+        for pane in panes {
+            let reply = crate::mux_cli::control_roundtrip(
+                &sock,
+                &session,
+                crate::proto::ControlCommand::PaneKill {
+                    pane,
+                    hand_off_to: None,
+                },
+            );
+            // A refused kill leaves the sleep placeholder running in the
+            // session, so the failure names itself instead of vanishing.
+            if let Err(e) = reply {
+                view.set_notice(format!("the persona pane lingers: {e}"));
+            }
+        }
+    }
+}
+
+pub(crate) fn dock_pane(view: &View, mut o: PersonaOverlay) -> PersonaOverlay {
+    o.home = Home::Pane(view.layout.focus);
+    o
+}
+
+/// The bell door: the personas tab hosts the dock.
+pub(crate) fn open_docked_bell(project: &str, persona: &str) -> PersonaOverlay {
+    let mut o = open_page_for(project, persona);
+    o.home = Home::Bell;
+    o
+}
+
 pub(crate) fn open_from_card(card: &crate::backlog_model::Card) -> Option<PersonaOverlay> {
     open_from(card.audience.as_ref(), card.project.as_deref())
 }
@@ -1225,19 +2174,641 @@ pub(crate) fn draw_detail(
     if view.persona.is_none() {
         return false;
     }
-    // The overlay floats over the surface that opened it: the node detail
-    // over the full board, the question page, or the decisions table.
-    // Paint that host first, so the chip that opened the overlay shows
-    // behind it; this arm sits ahead of the hosts in the draw chain.
+    // The drill split gives the surface a home pane. With a sibling pane
+    // beside it (the editor), the client-local hosts fold into a one-line
+    // breadcrumb strip and the page takes the rest of the home rect, so
+    // at most three columns show. Without a sibling the page docks as a
+    // column right of its host, never a modal over it. With no home pane
+    // the overlay floats over the whole surface, as before.
+    // The drill docks and folds on the backlog family, whose painter
+    // paints into a rect (draw_board_rect). Other hosts (bell, decisions,
+    // questions) keep the floating page until their painters learn to
+    // paint into a column.
+    // Hosts with their own column painter dock without a board; the
+    // backlog family needs its board state to scope the rect.
+    let board_backed = view.backlog_board.is_some()
+        || matches!(
+            view.persona.as_ref().map(|o| o.home),
+            Some(Home::Bell | Home::Decision | Home::Question)
+        );
+    if !board_backed {
+        paint_unscoped(view, cells, rows, cols, content_origin, content_dims);
+        return true;
+    }
+    let Some(home) = persona_pane_rect(view) else {
+        paint_unscoped(view, cells, rows, cols, content_origin, content_dims);
+        return true;
+    };
+    // The chip door's page owns its pane (the split landed): the board
+    // keeps its own panel region, its strip hint naming the open door,
+    // and the pane paints the page full-rect. Docking columns inside the
+    // pane would carve the page for a host that is not there.
+    if view
+        .persona
+        .as_ref()
+        .is_some_and(|o| o.home == Home::SidelineBoard && o.pane.is_some())
+    {
+        // The sideline already painted the board into the panel; a second
+        // board paint here doubled its filter row. The column and the
+        // record panes are the overlay's own surface.
+        paint_column(view, cells, rows, cols, home);
+        paint_record_panes(view, cells, rows, cols);
+        return true;
+    }
+    if sibling_pane(view).is_some() {
+        paint_folded(view, cells, rows, cols, home);
+        return true;
+    }
+    if view.persona.as_ref().is_some_and(|o| o.drill) {
+        paint_drilled(view, cells, rows, cols, home);
+        return true;
+    }
+    paint_docked(view, cells, rows, cols, home);
+    true
+}
+
+/// The un-scoped paint: the host full surface, the page as the floating
+/// overlay. The path a surface with no home pane takes (no `e` arm yet,
+/// no split).
+fn paint_unscoped(
+    view: &View,
+    cells: &mut [Cell],
+    rows: usize,
+    cols: usize,
+    content_origin: (usize, usize),
+    content_dims: (usize, usize),
+) {
     if view.backlog_board.is_some() {
         view.draw_board(cells, rows, cols);
     } else if view.decisions_board.is_some() {
         super::decisions_view::paint_full(view, cells, rows, cols);
-    } else if view.question_detail.is_some() {
+    } else if view.question_detail.is_some()
+        && view.persona.as_ref().map(|o| o.home) != Some(Home::Question)
+    {
         super::questions::draw_detail(view, cells, (rows, cols), content_origin, content_dims);
     }
     paint_over(view, cells, rows, cols, content_origin, content_dims);
-    true
+}
+
+/// The docked paint: the host keeps its columns and the persona page
+/// docks right of it with a one-column seam, the way the board's own
+/// detail pane docks. Widths read the held seam size, so paint, drag
+/// and the keyboard nudge cannot disagree.
+/// The host half of the dock: the surface the chip sat on keeps a
+/// column inside the home rect, so no pane text is hidden by the page.
+fn paint_host_column(
+    view: &View,
+    cells: &mut [Cell],
+    rows: usize,
+    cols: usize,
+    host: (usize, usize, usize, usize),
+) {
+    match view.persona.as_ref().map(|o| o.home) {
+        Some(Home::Question) => super::questions::paint_column(view, cells, rows, cols, host),
+        Some(Home::Decision) => super::decisions_view::paint_column(view, cells, rows, cols, host),
+        Some(Home::Bell) => super::bell::paint_column(view, cells, rows, cols, host),
+        // The backlog family: the board is the host column.
+        _ => {
+            if view.backlog_board.is_some() {
+                view.draw_board_rect(cells, rows, cols, host, false);
+            }
+        }
+    }
+}
+
+fn paint_docked(
+    view: &View,
+    cells: &mut [Cell],
+    rows: usize,
+    cols: usize,
+    home: (usize, usize, usize, usize),
+) {
+    let (top, left, h, w) = home;
+    // A live toast owns the row below the tab bar: the dock yields the
+    // row and clears it, so the panes never paint a header under the
+    // notice.
+    let (top, h) = if top == super::TAB_BAR_ROWS as usize && view.notice_live() {
+        let base = top * cols + left;
+        if let Some(span) = cells.get_mut(base..base + w) {
+            span.fill(Cell::default());
+        }
+        (top + 1, h.saturating_sub(1))
+    } else {
+        (top, h)
+    };
+    let Some((host_w, col)) = dock_columns(view, w) else {
+        paint_unscoped(view, cells, rows, cols, (top, left), (h, w));
+        return;
+    };
+    // The host surfaces paint full-width beneath this dock (the question
+    // page, the decisions table), so the home rect clears first and the
+    // two columns repaint it; nothing of the wide paint shows through.
+    for r in top..(top + h).min(rows) {
+        let base = r * cols + left;
+        if let Some(span) = cells.get_mut(base..base + w) {
+            span.fill(Cell::default());
+        }
+    }
+    paint_host_column(view, cells, rows, cols, (top, left, h, host_w));
+    paint_column(view, cells, rows, cols, (top, left + host_w + 1, h, col));
+    let seam_col = left + host_w;
+    paint_seam(view, cells, rows, cols, top, seam_col, h);
+}
+
+/// The drilled paint: board | persona | record. The record opens right
+/// of the persona column, the next side pane to the right; the board
+/// paints kanban-only while its detail lives out in the record column.
+/// Past the width cap the board folds into the breadcrumb strip first
+/// and persona | record split the rest, the way the editor frame folds.
+fn paint_drilled(
+    view: &View,
+    cells: &mut [Cell],
+    rows: usize,
+    cols: usize,
+    home: (usize, usize, usize, usize),
+) {
+    let (top, left, h, w) = home;
+    // A live toast owns the row below the tab bar: the drill yields the
+    // row and clears it, so the panes never paint a header under the
+    // notice.
+    let (top, h) = if top == super::TAB_BAR_ROWS as usize && view.notice_live() {
+        let base = top * cols + left;
+        if let Some(span) = cells.get_mut(base..base + w) {
+            span.fill(Cell::default());
+        }
+        (top + 1, h.saturating_sub(1))
+    } else {
+        (top, h)
+    };
+    // Rightmost widest: the record takes the biggest default share and
+    // the two held seams reshape all three columns.
+    let (per_w, board_w, rec_w) = drill_widths(view, w);
+    let Some(board_w) = board_w else {
+        paint_fold_strip(view, cells, rows, cols, top, left, w);
+        let ih = h.saturating_sub(1);
+        paint_column(view, cells, rows, cols, (top + 1, left, ih, per_w));
+        paint_seam(view, cells, rows, cols, top + 1, left + per_w, ih);
+        paint_record(
+            view,
+            cells,
+            rows,
+            cols,
+            (top + 1, left + per_w + 1, ih, rec_w),
+        );
+        return;
+    };
+    view.draw_board_rect(cells, rows, cols, (top, left, h, board_w), true);
+    paint_column(view, cells, rows, cols, (top, left + board_w + 1, h, per_w));
+    paint_seam(view, cells, rows, cols, top, left + board_w, h);
+    paint_seam(view, cells, rows, cols, top, left + board_w + per_w + 1, h);
+    paint_record(
+        view,
+        cells,
+        rows,
+        cols,
+        (top, left + board_w + per_w + 2, h, rec_w),
+    );
+}
+
+/// The drilled record column: the serving row's node, the same detail
+/// lines the board's own detail pane paints, in the column right of the
+/// persona. The board holds no keyboard here, so the title row paints
+/// unfocused.
+fn paint_record(
+    view: &View,
+    cells: &mut [Cell],
+    rows: usize,
+    cols: usize,
+    rect: (usize, usize, usize, usize),
+) {
+    // The rect clears before every guard: a drill record column that
+    // opens with no node read leaves stale pane text under the paint
+    // that follows it.
+    let (top, left, h, w) = rect;
+    if h == 0 || w == 0 {
+        return;
+    }
+    let Some(b) = view.backlog_board.as_ref() else {
+        return;
+    };
+    let Some(d) = b.detail.as_ref() else {
+        return;
+    };
+    for r in top..(top + h).min(rows) {
+        let base = r * cols + left;
+        if let Some(span) = cells.get_mut(base..base + w) {
+            span.fill(Cell::default());
+        }
+    }
+    backlog_style::paint_title_row(
+        cells,
+        rows,
+        cols,
+        top,
+        left,
+        w,
+        &format!("details \u{b7} {}", d.node_id),
+        false,
+        &view.theme,
+    );
+    if h <= 1 {
+        return;
+    }
+    let (lines, _follow) = node_detail::pane_lines(b, &d.node_id, Some(d.sel), w);
+    let dlines = lines.get(d.scroll.min(lines.len())..).unwrap_or(&[]);
+    backlog_style::paint_panel_at(
+        cells,
+        rows,
+        cols,
+        left,
+        top + 1,
+        w,
+        h - 1,
+        dlines,
+        None,
+        &view.theme,
+    );
+}
+
+/// The folded paint: one breadcrumb strip row names the client-local
+/// hosts that folded, and the persona column takes the rest of the home
+/// rect. The editor pane composites beside in its own rect.
+fn paint_folded(
+    view: &View,
+    cells: &mut [Cell],
+    rows: usize,
+    cols: usize,
+    home: (usize, usize, usize, usize),
+) {
+    let (top, left, h, w) = home;
+    // The home rect clears first: pane cells live under this paint, and
+    // a folded column that skips a region leaves the pane text showing.
+    for r in top..(top + h).min(rows) {
+        let base = r * cols + left;
+        if let Some(span) = cells.get_mut(base..base + w) {
+            span.fill(Cell::default());
+        }
+    }
+    // Three surfaces fit beside the editor pane: the board keeps a real
+    // column inside the home rect and the page sits right of it. A narrow
+    // home folds the board into the strip instead.
+    if view.backlog_board.is_some() {
+        if dock_columns(view, w).is_some() {
+            // The board lives in the sideline panel at the far left, the
+            // strip the pane area starts after, kanban-only like the
+            // drill view (the narrow panel cannot stack a detail). The
+            // seam column divides it from the page, and nothing paints
+            // into the tab bar.
+            let bar = super::TAB_BAR_ROWS as usize;
+            view.draw_board_rect(
+                cells,
+                rows,
+                cols,
+                (bar, 0, h.saturating_sub(bar), left.saturating_sub(1)),
+                true,
+            );
+            paint_seam(view, cells, rows, cols, top, left - 1, h);
+            paint_column(view, cells, rows, cols, (top, left, h, w));
+            return;
+        }
+    }
+    paint_fold_strip(view, cells, rows, cols, top, left, w);
+    paint_column(
+        view,
+        cells,
+        rows,
+        cols,
+        (top + 1, left, h.saturating_sub(1), w),
+    );
+}
+
+/// The pane in this tab that is not the surface's home, if any: the
+/// editor pane a drill split spawned.
+pub(crate) fn sibling_pane(view: &View) -> Option<u64> {
+    let home_id = match view.persona.as_ref()?.home {
+        Home::Pane(id) => id,
+        _ => return None,
+    };
+    view.layout
+        .panes
+        .iter()
+        .find(|(pid, _)| *pid != home_id)
+        .map(|(pid, _)| *pid)
+}
+
+/// The persona surface's home as a full-terminal rect (top, left, h, w),
+/// when the surface has one. A recorded home pane wins: the pane the
+/// drill or the `e` split came from, composited beside its siblings. A
+/// door-scoped home resolves its host surface's own rect: the content
+/// area for a full-screen host, the sideline panel for the sideline
+/// board. Pane rects arrive content-area relative, so the content origin
+/// is added back, and the result clamps to the terminal.
+pub(crate) fn persona_pane_rect(view: &View) -> Option<(usize, usize, usize, usize)> {
+    let (rows, cols) = view.term;
+    let pane_rect = |home: u64| -> Option<(usize, usize, usize, usize)> {
+        let (_, rect) = view.layout.panes.iter().find(|(pid, _)| *pid == home)?;
+        let top = (TAB_BAR_ROWS as usize + rect.y as usize).min(rows as usize);
+        let left = (view.left_chrome_w() as usize + rect.x as usize).min(cols as usize);
+        let h = (rect.rows as usize).min(rows as usize - top);
+        let w = (rect.cols as usize).min(cols as usize - left);
+        Some((top, left, h, w))
+    };
+    let content_rect = || {
+        let chrome = view.bottom_row_is_chrome() as usize;
+        let top = TAB_BAR_ROWS as usize;
+        let h = (rows as usize).saturating_sub(top + chrome).max(1);
+        Some((top, 0, h, cols as usize))
+    };
+    match view.persona.as_ref().map(|o| o.home) {
+        Some(Home::Pane(home)) => pane_rect(home),
+        // The sideline board panel: the strip row and the board render
+        // inside the left panel, so the dock lives inside the same panel.
+        // The dock paints over panes only inside this rect; a wider home
+        // would overlap the session panes without reflowing them, and
+        // their text leaks around the persona column.
+        Some(Home::SidelineBoard) => {
+            // The persona column's own pane, when the split landed: the
+            // rect follows the pane, so seams and resizes keep the
+            // column honest. No pane (spawn refused, stale id) falls
+            // back to the panel dock.
+            if let Some(pane) = view.persona.as_ref().and_then(|o| o.pane) {
+                for (pid, r) in view.layout.panes.iter() {
+                    if *pid != pane {
+                        continue;
+                    }
+                    let top = (TAB_BAR_ROWS as usize + r.y as usize).min(rows as usize);
+                    let left = (view.left_chrome_w() as usize + r.x as usize).min(cols as usize);
+                    let h = (r.rows as usize).min(rows as usize - top);
+                    let w = (r.cols as usize).min(cols as usize - left);
+                    return Some((top, left, h, w));
+                }
+            }
+            let (h, w) = persona_panel_rect(view);
+            Some((0, 0, h, w))
+        }
+        Some(Home::Question | Home::Decision | Home::Bell) => content_rect(),
+        // Legacy paths: a full-screen board is its own home; else the
+        // focused pane, else unscoped.
+        _ => {
+            if view.board_full {
+                if view.backlog_board.is_none() {
+                    return None;
+                }
+                return content_rect();
+            }
+            pane_rect(view.layout.focus)
+        }
+    }
+}
+
+/// The sideline board's panel dims `(h, w)`: the board and the chip
+/// door's fallback dock live inside the left panel, never past it.
+fn persona_panel_rect(view: &View) -> (usize, usize) {
+    let (rows, cols) = view.term;
+    let w = (view.panel_w() as usize).min(cols as usize);
+    let h = (rows as usize)
+        .saturating_sub(view.bottom_row_is_chrome() as usize)
+        .max(1);
+    (h, w)
+}
+
+/// The docked layout: `(host_w, persona_col_w)` for a home `w` columns
+/// wide, from the held seam size. `None` when the terminal is too narrow
+/// to dock (the caller keeps the floating overlay there).
+pub(crate) fn dock_columns(view: &View, w: usize) -> Option<(usize, usize)> {
+    // The yazi rule: a narrow home narrows the leftmost column and the
+    // new pane keeps its floor; the dock never falls back to a modal
+    // while two columns physically fit.
+    const MIN_HOST: usize = 18;
+    const MIN_COL: usize = 30;
+    if w < MIN_HOST + MIN_COL + 1 {
+        return None;
+    }
+    let bounds = seam_bounds(w);
+    // Rightmost widest: the persona column, the detail just opened,
+    // takes the biggest share unless the operator dragged the seam.
+    let host_w = view.edge_sizes.resolve(
+        super::edge_drag::Edge::PersonaSeam,
+        w * 45 / 100,
+        bounds.0,
+        bounds.1,
+    );
+    let host_w = host_w.clamp(MIN_HOST, w.saturating_sub(MIN_COL + 1));
+    let col_w = w.saturating_sub(host_w + 1);
+    Some((host_w, col_w))
+}
+
+/// The persona column's width bounds in a home `w` columns wide, the
+/// range the seam may put the host in.
+pub(crate) fn seam_bounds(w: usize) -> (usize, usize) {
+    const MIN_W: usize = 24;
+    (MIN_W, w.saturating_sub(MIN_W + 1).max(MIN_W))
+}
+
+/// Whether the open persona overlay docks over the question page
+/// (`Home::Question`): the docked paint repaints the host column itself,
+/// so the host's full-screen chrome must not paint. Its title row would
+/// survive above the dock, spanning the persona column as a second
+/// `question · N … esc` frame.
+pub(crate) fn question_docks(view: &View, cols: usize) -> bool {
+    if view.persona.as_ref().map(|o| o.home) != Some(Home::Question) {
+        return false;
+    }
+    if sibling_pane(view).is_some() {
+        return false;
+    }
+    dock_columns(view, cols).is_some()
+}
+
+/// The drilled layout's column widths from the held seam sizes:
+/// `(persona, board, record)`. The board holds `DrillBoardSeam`, the
+/// persona column holds `DrillPersonaSeam`, and the record, rightmost
+/// and widest by default, takes the remainder. `None` board: the record
+/// crowded the board out and the paint strips it, keeping persona |
+/// record.
+pub(crate) fn drill_widths(view: &View, w: usize) -> (usize, Option<usize>, usize) {
+    const MIN_COL: usize = 30;
+    const MIN_BOARD: usize = 24;
+    // Rightmost widest: the record takes the biggest default share.
+    // The record dominates: about 60 percent of the row, the board about
+    // 18 and the persona column about 22, each floored at its readable
+    // minimum unless the operator dragged a seam.
+    let per_w = view.edge_sizes.resolve(
+        super::edge_drag::Edge::DrillPersonaSeam,
+        (w * 22 / 100).max(MIN_COL),
+        MIN_COL,
+        w.saturating_sub(MIN_COL + 1),
+    );
+    let board_w = view.edge_sizes.resolve(
+        super::edge_drag::Edge::DrillBoardSeam,
+        (w * 18 / 100).max(MIN_BOARD),
+        MIN_BOARD,
+        w.saturating_sub(per_w + MIN_COL + 2),
+    );
+    let rec_w = w.saturating_sub(board_w + per_w + 2);
+    if rec_w < MIN_COL {
+        (per_w, None, w.saturating_sub(per_w + 1))
+    } else {
+        (per_w, Some(board_w), rec_w)
+    }
+}
+
+/// The persona page as a drill column: a title row naming the persona,
+/// then the wrapped page, notes, serving rows and the composer,
+/// scroll-clamped to the rect. Frameless, like the board's own regions:
+/// drill columns match the board's panes, not the floating chrome.
+fn paint_column(
+    view: &View,
+    cells: &mut [Cell],
+    rows: usize,
+    cols: usize,
+    rect: (usize, usize, usize, usize),
+) {
+    let Some(o) = view.persona.as_ref() else {
+        return;
+    };
+    let (top, left, h, w) = rect;
+    if h == 0 || w == 0 {
+        return;
+    }
+    let page = o.cursor.is_none() && !o.notice;
+    let serving = if page {
+        serving_for(view, &o.slug)
+    } else {
+        Vec::new()
+    };
+    backlog_style::paint_title_row(cells, rows, cols, top, left, w, &o.title, true, &view.theme);
+    super::backlog_board::backlog_panes::paint_esc_chip(
+        cells,
+        rows,
+        cols,
+        top,
+        left,
+        w,
+        &view.theme,
+    );
+    if h <= 1 {
+        return;
+    }
+    let width = w.saturating_sub(2).max(8);
+    let lines: Vec<TLine> = if page {
+        let mut l = o
+            .doc
+            .as_ref()
+            .map(|d| page_lines(d, &o.path, width))
+            .unwrap_or_else(|| o.lines.clone());
+        if !o.notes.is_empty() {
+            l.push(TLine::plain(String::new()));
+            l.push(TLine::line(TextStyle::Section, "notes"));
+            for n in &o.notes {
+                for chunk in wrap_para(n, width.saturating_sub(2).max(8)) {
+                    l.push(TLine::meta(format!("  {chunk}")));
+                }
+            }
+        }
+        l.extend(serving_lines(&serving, o.sel));
+        if let Some(f) = &o.input {
+            l.push(TLine::plain(String::new()));
+            l.push(TLine::of(&[
+                TSeg {
+                    text: "note: ".into(),
+                    role: TextStyle::Meta,
+                },
+                TSeg {
+                    text: f.display(),
+                    role: TextStyle::Item,
+                },
+            ]));
+        }
+        l
+    } else {
+        o.lines.clone()
+    };
+    // The scroll row, else the top, kept on screen: the column's follow
+    // row, clamped so the last page ends at the bottom.
+    let body_h = h - 1;
+    let follow = if page {
+        Some(o.scroll.min(lines.len().saturating_sub(1)))
+    } else {
+        Some(0)
+    };
+    let start = follow
+        .map(|f| f.saturating_sub(body_h.saturating_sub(1)).min(f))
+        .unwrap_or(0);
+    super::backlog_style::paint_panel_at(
+        cells,
+        rows,
+        cols,
+        left,
+        top + 1,
+        w,
+        body_h,
+        lines.get(start..).unwrap_or(&[]),
+        None,
+        &view.theme,
+    );
+}
+
+/// The breadcrumb strip the folded hosts wear: one title row naming the
+/// folded surface, so a drill past the three-column cap never loses the
+/// trail. The strip paints dim (unfocused): the folded surface holds no
+/// keys.
+fn paint_fold_strip(
+    view: &View,
+    cells: &mut [Cell],
+    rows: usize,
+    cols: usize,
+    top: usize,
+    left: usize,
+    w: usize,
+) {
+    let text = fold_names(view).unwrap_or_else(|| "board".into());
+    // No esc chip here: the persona column beside it holds the keys and
+    // wears the chip, so the strip stays a plain name.
+    backlog_style::paint_title_row(cells, rows, cols, top, left, w, &text, false, &view.theme);
+}
+
+/// The names the fold strip carries: the board, plus the drill-down's
+/// node title when a detail is open.
+fn fold_names(view: &View) -> Option<String> {
+    let b = view.backlog_board.as_ref()?;
+    let detail_title = b.detail.as_ref().and_then(|d| node_title(view, &d.node_id));
+    Some(match detail_title {
+        Some(t) => format!("board \u{b7} {t}"),
+        None => "board".into(),
+    })
+}
+
+/// The card title for a node id, read off the board's live inputs.
+fn node_title(view: &View, id: &str) -> Option<String> {
+    let inputs = view.backlog_board.as_ref()?.inputs.as_ref()?;
+    crate::backlog_model::node(inputs, id).map(|nv| nv.card.title)
+}
+
+/// The one-column rule between the host and the persona column, the same
+/// hairline the board's own panes draw.
+fn paint_seam(
+    view: &View,
+    cells: &mut [Cell],
+    rows: usize,
+    cols: usize,
+    top: usize,
+    col: usize,
+    h: usize,
+) {
+    if col >= cols {
+        return;
+    }
+    for r in top..(top + h).min(rows) {
+        if let Some(cell) = cells.get_mut(r * cols + col) {
+            *cell = Cell {
+                c: '\u{2502}',
+                fg: view.theme.border,
+                bg: crate::proto::Color::Default,
+                flags: 0,
+            };
+        }
+    }
 }
 
 /// The overlay alone, over an already-painted host. The question page's
@@ -1262,18 +2833,20 @@ pub(crate) fn paint_over(
         Vec::new()
     };
     // The chrome's esc chip is the one closer; the footer names the page
-    // keys, so nothing is silent.
+    // keys, so nothing is silent. The footer keeps whole ` \u{b7} ` pairs:
+    // a narrow column drops a pair rather than cutting one mid-token.
     let footer = overlay_footer(o, serving.is_empty());
     let chrome = chrome::Chrome::new(&o.title, Anchor::Center);
+    let cap = content_dims
+        .1
+        .saturating_sub(chrome::Chrome::FRAME_COLS)
+        .max(12);
+    let footer = super::backlog_board::clip_segments(&footer, cap);
     let chrome = if footer.is_empty() {
         chrome
     } else {
         chrome.footer(&footer)
     };
-    let cap = content_dims
-        .1
-        .saturating_sub(chrome::Chrome::FRAME_COLS)
-        .max(12);
     let (lines, follow, paint_cursor) = if page {
         let width = cap.saturating_sub(4).min(106);
         let mut l = o
@@ -1371,6 +2944,227 @@ mod tests {
         assert!(personas_in(Some("customers")).is_empty());
         assert!(personas_in(None).is_empty());
         assert!(personas_in(Some("audience?")).is_empty());
+    }
+
+    #[test]
+    fn dock_columns_splits_host_and_column_from_the_held_seam() {
+        let v = View::new((40, 140), "s".into(), LayoutView::default());
+        let (host, col) = dock_columns(&v, 140).expect("140 columns dock");
+        assert_eq!(host, 63);
+        assert_eq!(col, 76);
+        assert!(col > host, "the rightmost column is widest by default");
+        assert!(dock_columns(&v, 48).is_none(), "the dock refuses under 49");
+        let (host, col) = dock_columns(&v, 49).expect("49 columns dock at the floors");
+        assert_eq!(
+            (host, col),
+            (18, 30),
+            "both floors hold at the refusal edge"
+        );
+    }
+
+    #[test]
+    fn drill_widths_hold_rightmost_widest_and_both_seams() {
+        let mut v = View::new((40, 140), "s".into(), LayoutView::default());
+        let (per, board, rec) = drill_widths(&v, 140);
+        let Some(board) = board else {
+            panic!("140 columns fit three real columns");
+        };
+        // The defaults hold about 18 | 22 | 60 board | persona | record:
+        // 25 | 30 | 83 at 140 columns.
+        assert_eq!((per, board, rec), (30, 25, 83));
+        assert!(rec > per && per > board, "rightmost widest");
+        v.edge_sizes
+            .set(super::edge_drag::Edge::DrillPersonaSeam, 60);
+        let (per, board, rec) = drill_widths(&v, 140);
+        let Some(_) = board else {
+            panic!("held persona seam still fits three columns");
+        };
+        assert_eq!(per, 60);
+        // The board default holds about 18 of the row, 25 here; the
+        // record keeps the remainder, 53.
+        assert_eq!(rec, 53);
+        v.edge_sizes.set(super::edge_drag::Edge::DrillBoardSeam, 30);
+        let (per, board, rec) = drill_widths(&v, 140);
+        let Some(board) = board else {
+            panic!("held board seam still fits");
+        };
+        assert_eq!((per, board, rec), (60, 30, 48));
+        // the record crowding below its floor strips the board
+        v.edge_sizes
+            .set(super::edge_drag::Edge::DrillPersonaSeam, 110);
+        let (per, board, rec) = drill_widths(&v, 140);
+        assert_eq!(
+            (per, board, rec),
+            (109, None, 30),
+            "the persona seam clamps at its ceiling so the strip record keeps 30"
+        );
+    }
+
+    #[test]
+    fn the_walk_floors_fleet_panes_and_raises_the_split_deficit() {
+        use crate::proto::layout::Rect;
+        // Fleet row at the chip's shape: archer 59, then the reviewer the
+        // persona split turned into 29 | gap | 30. The claim pulls nothing
+        // (the donor is already under the fleet floor); the raise pays the
+        // reviewer back to 34 from the persona column, which paints its own
+        // word-wrapped page and floors at 22.
+        let mut v = View::new((40, 140), "s".into(), LayoutView::default());
+        v.layout.panes = vec![
+            (
+                1,
+                Rect {
+                    x: 0,
+                    y: 0,
+                    rows: 54,
+                    cols: 59,
+                },
+            ),
+            (
+                3,
+                Rect {
+                    x: 60,
+                    y: 0,
+                    rows: 26,
+                    cols: 29,
+                },
+            ),
+            (
+                6,
+                Rect {
+                    x: 90,
+                    y: 0,
+                    rows: 26,
+                    cols: 30,
+                },
+            ),
+            (
+                2,
+                Rect {
+                    x: 60,
+                    y: 27,
+                    rows: 27,
+                    cols: 60,
+                },
+            ),
+        ];
+        v.persona = Some(PersonaOverlay {
+            pane: Some(6),
+            widen: true,
+            edit_pane: None,
+            claim_pane: Some(6),
+            records: Vec::new(),
+            title: "solo".into(),
+            lines: Vec::new(),
+            cursor: None,
+            personas: Vec::new(),
+            project: "fno".into(),
+            path: "/tmp/no-such-persona.md".into(),
+            draft: false,
+            slug: "solo".into(),
+            doc: None,
+            notes: Vec::new(),
+            scroll: 0,
+            sel: None,
+            notice: false,
+            input: None,
+            edit_since: None,
+            edit_spawn: None,
+            home: Home::Float,
+            folded: Vec::new(),
+            drill: false,
+        });
+        let seams = super::persona_widening_seams(&mut v);
+        assert_eq!(seams.len(), 1, "one raise seam, no claim seam");
+        let Some(crate::proto::Command::ResizeSeam { a, b, pos }) = seams.first() else {
+            panic!("unexpected command {seams:?}");
+        };
+        assert_eq!(
+            (*a, *b, *pos),
+            (3, 6, 94),
+            "the reviewer gains to 34, the persona pays to 25"
+        );
+        assert!(!v.persona.as_ref().unwrap().widen, "one shot");
+    }
+
+    #[test]
+    fn the_record_stack_folds_past_three() {
+        let mut v = View::new((40, 140), "s".into(), LayoutView::default());
+        v.persona = Some(PersonaOverlay {
+            pane: Some(7),
+            widen: false,
+            edit_pane: None,
+            claim_pane: None,
+            records: vec![(9, "ab-2".into()), (8, "ab-3".into())],
+            folded: Vec::new(),
+            title: "solo".into(),
+            lines: Vec::new(),
+            cursor: None,
+            personas: Vec::new(),
+            project: "fno".into(),
+            path: "/tmp/no-such-persona.md".into(),
+            draft: false,
+            slug: "solo".into(),
+            doc: None,
+            notes: Vec::new(),
+            scroll: 0,
+            sel: Some(1),
+            notice: false,
+            input: None,
+            edit_since: None,
+            edit_spawn: None,
+            home: Home::Float,
+            drill: true,
+        });
+        // The trail is detail + two panes: at the cap. A further drill
+        // folds the oldest visible record, its pane dying best-effort.
+        assert!(super::fold_oldest_record(&mut v));
+        {
+            let o = v.persona.as_ref().unwrap();
+            assert_eq!(o.records, vec![(8, "ab-3".to_string())]);
+            assert_eq!(o.folded, vec!["ab-2".to_string()]);
+            assert_eq!(o.claim_pane, None, "the folded pane owed no claim any more");
+        }
+        // One fold per drill: with one pane left the helper declines.
+        assert!(!super::fold_oldest_record(&mut v));
+        // The breadcrumb names the folded record, oldest first.
+        assert_eq!(
+            super::folded_breadcrumb(None, &v.persona.as_ref().unwrap().folded),
+            "\u{2039} ab-2"
+        );
+    }
+
+    #[test]
+    fn left_pops_the_persona_column() {
+        let mut v = View::new((40, 140), "s".into(), LayoutView::default());
+        v.persona = Some(PersonaOverlay {
+            pane: None,
+            widen: false,
+            edit_pane: None,
+            claim_pane: None,
+            records: Vec::new(),
+            title: "solo".into(),
+            lines: Vec::new(),
+            cursor: None,
+            personas: Vec::new(),
+            project: "fno".into(),
+            path: "/tmp/no-such-persona.md".into(),
+            draft: false,
+            slug: "solo".into(),
+            doc: None,
+            notes: Vec::new(),
+            scroll: 0,
+            sel: None,
+            notice: false,
+            input: None,
+            edit_since: None,
+            edit_spawn: None,
+            home: Home::Float,
+            folded: Vec::new(),
+            drill: false,
+        });
+        assert!(v.persona.is_some());
+        keys(&mut v, &[0x1b, 0x5b, 0x44]);
+        assert!(v.persona.is_none());
     }
 
     #[test]
@@ -1801,7 +3595,9 @@ One person.
         crate::client::persona_overlay::keys(&mut v, b"j");
         assert_eq!(v.persona.as_ref().unwrap().sel, Some(0));
         crate::client::persona_overlay::keys(&mut v, b"\r");
-        assert!(v.persona.is_none());
+        // A node record drills: the persona column stays and the node
+        // opens in the board's detail beside it.
+        assert!(v.persona.is_some());
         let detail = v.backlog_board.as_ref().unwrap().detail.as_ref().unwrap();
         assert_eq!(detail.node_id, "demo-1");
         let mut v2 = crate::client::tests::two_pane_view();
@@ -1840,6 +3636,95 @@ One person.
             .unwrap_or(None);
         assert_eq!(picked.as_deref(), Some("d-2"));
         assert!(v3.persona.is_none());
+        unpin_customers_dir();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A persona page over a board that serves `ids` to the solo persona:
+    /// the fixture the drill-key tests share. The caller holds ENV_LOCK
+    /// and cleans up the returned dir.
+    fn drill_view(tag: &str, ids: &[&str]) -> (View, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("persona-{tag}-{}", std::process::id()));
+        let root = dir.join("fno");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("solo.md"), fixture_doc("solo")).unwrap();
+        pin_customers_dir(&dir);
+        let mut v = crate::client::tests::two_pane_view();
+        let mut b = crate::client::backlog_board::BoardView::new(0);
+        b.inputs = Some(crate::backlog_model::Inputs {
+            rows: ids
+                .iter()
+                .map(|id| {
+                    crate::node_row::NodeRow::from_value(serde_json::json!({
+                        "id": id, "title": id, "audience": "customer:solo"
+                    }))
+                })
+                .collect(),
+            ..Default::default()
+        });
+        v.backlog_board = Some(b);
+        v.persona = Some(open_page("fno", "solo"));
+        (v, dir)
+    }
+
+    #[test]
+    fn a_second_enter_without_a_docked_pane_repoints_the_record() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut v, dir) = drill_view("enter2", &["demo-1", "demo-2"]);
+        for key in [&b"j"[..], b"\r", b"j", b"\r"] {
+            keys(&mut v, key);
+        }
+        let shown = v
+            .backlog_board
+            .as_ref()
+            .and_then(|b| b.detail.as_ref())
+            .map(|d| d.node_id.clone());
+        assert_eq!(shown.as_deref(), Some("demo-2"), "the second Enter acts");
+        assert!(v.persona.as_ref().is_some_and(|o| o.records.is_empty()));
+        unpin_customers_dir();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn folds_land_oldest_first_in_the_breadcrumb() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut v, dir) = drill_view("foldorder", &[]);
+        if let Some(o) = v.persona.as_mut() {
+            o.pane = Some(7);
+            o.records = vec![(9, "ab-1".into()), (8, "ab-2".into()), (7, "ab-3".into())];
+        }
+        assert!(fold_oldest_record(&mut v));
+        assert!(fold_oldest_record(&mut v));
+        let folded = v
+            .persona
+            .as_ref()
+            .map(|o| o.folded.clone())
+            .unwrap_or_default();
+        assert_eq!(folded, vec!["ab-1".to_string(), "ab-2".to_string()]);
+        assert_eq!(
+            folded_breadcrumb(None, &folded),
+            "\u{2039} ab-1 \u{b7} ab-2"
+        );
+        unpin_customers_dir();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_edit_key_keeps_a_docked_trail_painting_its_record_panes() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut v, dir) = drill_view("editdock", &["demo-1"]);
+        if let Some(o) = v.persona.as_mut() {
+            o.home = Home::SidelineBoard;
+            o.pane = Some(6);
+            o.records = vec![(9, "demo-1".into())];
+        }
+        keys(&mut v, b"e");
+        assert!(v.persona.as_ref().is_some_and(|o| o.edit_spawn.is_some()));
+        assert!(
+            v.persona.as_ref().map(|o| o.home) == Some(Home::SidelineBoard),
+            "the dock keeps its home, the branch that paints the record panes"
+        );
+        assert!(sibling_pane(&v).is_none());
         unpin_customers_dir();
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -169,6 +169,42 @@ fn paint_ansi(row: &mut [Cell], line: &str) {
     }
 }
 
+/// The decisions table inside a docked host column: the same render the
+/// full paint uses, scoped to the rect and cleared first, so no pane
+/// text bleeds through the docked page.
+pub(crate) fn paint_column(
+    view: &View,
+    cells: &mut [Cell],
+    rows: usize,
+    cols: usize,
+    host: (usize, usize, usize, usize),
+) {
+    let (top, left, h, w) = host;
+    for r in top..(top + h).min(rows) {
+        let base = r * cols + left;
+        if let Some(span) = cells.get_mut(base..base + w) {
+            span.fill(Cell::default());
+        }
+    }
+    let Some(b) = &view.decisions_board else {
+        return;
+    };
+    let title = crate::text_style::TLine::meta("decisions");
+    backlog_style::paint_panel(cells, rows, cols, top, w, 1, &[title], None, &view.theme);
+    // The table render carries its own ANSI styling: parse it straight
+    // into the column cells the way paint_full does, never as raw text.
+    for (i, line) in render(&b.table, w, h.saturating_sub(1)).iter().enumerate() {
+        let r = top + 1 + i;
+        if r >= rows {
+            break;
+        }
+        let base = r * cols + left;
+        if let Some(row) = cells.get_mut(base..base + w) {
+            paint_ansi(row, line);
+        }
+    }
+}
+
 pub(crate) fn paint_full(view: &View, cells: &mut [Cell], rows: usize, cols: usize) {
     cells[..rows * cols].fill(Cell::default());
     view.paint_top_row(cells, cols, cols);
@@ -297,7 +333,11 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) {
             .decisions_board
             .as_ref()
             .and_then(|b| b.table.selected())
-            .and_then(|row| persona_overlay::open_from(row.audience.as_ref(), Some(&project)));
+            .and_then(|row| persona_overlay::open_from(row.audience.as_ref(), Some(&project)))
+            .map(|mut o| {
+                o.home = persona_overlay::Home::Decision;
+                o
+            });
         if let Some(p) = persona {
             view.persona = Some(p);
             return;

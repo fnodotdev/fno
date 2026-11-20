@@ -308,6 +308,9 @@ mkdir -p "$ROOT/mux" "$ROOT/agents" "$ROOT/code/checkout" "$ROOT/text" "$ROOT/.f
 mkdir -p "$ROOT/.fno"
 cp "$ROOT/config.toml" "$ROOT/.fno/config.toml"
 export FNO_CONFIG="$ROOT/config.toml" FNO_MUX_DIR="$ROOT/mux" FNO_AGENT_HOME="$ROOT/.fno/agents"
+# The tab holds three agent panes and the persona column; the drill-past-three
+# shot appends record panes, which the default four-pane tab ceiling refuses.
+export FNO_MUX_PANE_GROUP_MAX="${FNO_MUX_PANE_GROUP_MAX:-12}"
 # The socket pin every daemon client honors: with it set, a client talks to
 # THIS socket and never lazy-starts or finds an incumbent daemon on the real
 # home. The world's own answerer binds it; nothing here may reach a daemon
@@ -700,8 +703,12 @@ if [ -f "$claims" ]; then
   mkdir -p "$claims"
 fi
 for i in 0 1 2; do
-  "$FNO" agents claim acquire "node:${IDS[$i]}" --holder "target-session:${SIDS[$i]}" --ttl 2h --pid-unavailable >/dev/null
+  # The session row lands first: the acquire resolves the holder's
+  # identity from the registry, and an unseeded row reads "no owned
+  # identity", skips the claim, and the board's sweep surfaces the gap
+  # as a live error in the shot.
   "$FNO" backlog session add "${IDS[$i]}" --phase execute --harness "${HARNESSES[$i]}" --session-id "${SIDS[$i]}" >/dev/null
+  "$FNO" agents claim acquire "node:${IDS[$i]}" --holder "target-session:${SIDS[$i]}" --ttl 2h --pid-unavailable >/dev/null
 done
 # The selected card carries a plan and a rank. --operator: this script is
 # the operator's own tool, writing a graph that dies with the shot.

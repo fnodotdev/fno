@@ -367,9 +367,12 @@ pub(super) async fn mouse_pre_pass(
                     super::backlog_style::audience_at(rep.row as usize, rep.col as usize)
                 {
                     let project = super::persona_overlay::session_project(view);
-                    view.persona = super::persona_overlay::open_from(Some(&aud), Some(&project));
+                    view.persona = super::persona_overlay::open_from(Some(&aud), Some(&project))
+                        .map(super::persona_overlay::dock_sideline);
                     if view.persona.is_none() {
                         view.set_notice("this audience names no persona file".into());
+                    } else {
+                        super::persona_overlay::spawn_persona_pane(view);
                     }
                     continue;
                 }
@@ -814,7 +817,8 @@ pub(super) async fn mouse_pre_pass(
                     {
                         let project = super::persona_overlay::session_project(view);
                         view.persona =
-                            super::persona_overlay::open_from(Some(&aud), Some(&project));
+                            super::persona_overlay::open_from(Some(&aud), Some(&project))
+                                .map(|o| super::persona_overlay::dock_pane(view, o));
                         if view.persona.is_none() {
                             view.set_notice("this audience names no persona file".into());
                         }

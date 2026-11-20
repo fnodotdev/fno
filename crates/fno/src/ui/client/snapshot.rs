@@ -24,7 +24,7 @@ const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
 [--keys-footer] [--font <family>] [--message <fmail-id>] [--edge backlog|messages-tree|messages-part|org|dock=<size>] \
-[--view report|report-preview|bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|settings-config|settings-config-filter|settings-config-toggle|settings-config-cycle|settings-config-page|settings-config-detail|settings-config-error|settings-config-paths|mods|mods-gallery|mods-confirm|keys|keys-tags|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-search|backlog-kanban|backlog-graph|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|persona-detail|persona-question|persona-decision|persona-list-before|persona-list|persona-edit-after|persona-note-composer|persona-note-after|persona-editor-pane|bell-personas|connections|connections-use|needs|dock|machines]";
+[--view report|report-preview|bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|settings-config|settings-config-filter|settings-config-toggle|settings-config-cycle|settings-config-page|settings-config-detail|settings-config-error|settings-config-paths|mods|mods-gallery|mods-confirm|keys|keys-tags|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-search|backlog-kanban|backlog-graph|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|persona-detail|persona-question|persona-decision|persona-list-before|persona-list|persona-edit-after|persona-note-composer|persona-note-after|persona-editor-pane|persona-drill|bell-personas|connections|connections-use|needs|dock|machines]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -226,6 +226,15 @@ pub enum ViewKind {
     /// The detail page with the editor pane open beside it: the pane `e`
     /// spawns, showing the persona file in the editor.
     PersonaEditorPane,
+    /// The drill: the persona column docked right of its host with the
+    /// first serving record open in the board's detail column beside it.
+    PersonaDrill,
+    /// The drill past the three-column cap: a fourth drill folds the
+    /// oldest record into the breadcrumb strip riding the oldest visible
+    /// record pane.
+    PersonaDrill4,
+    PersonaBellDock,
+    PersonaSidelineChip,
     BellPersonas,
     /// The connections overlay (prefix+A) on its Accounts tab, with the
     /// reads the live open kicks run inline.
@@ -461,6 +470,10 @@ const VIEW_TABLE: &[(&str, ViewKind)] = &[
     ("persona-note-composer", ViewKind::PersonaNoteComposer),
     ("persona-note-after", ViewKind::PersonaNoteAfter),
     ("persona-editor-pane", ViewKind::PersonaEditorPane),
+    ("persona-drill", ViewKind::PersonaDrill),
+    ("persona-drill4", ViewKind::PersonaDrill4),
+    ("persona-bell-dock", ViewKind::PersonaBellDock),
+    ("persona-sideline-chip", ViewKind::PersonaSidelineChip),
     ("bell-personas", ViewKind::BellPersonas),
     ("sweep", ViewKind::Sweep),
     ("update-wheel", ViewKind::UpdateWheel),
@@ -952,22 +965,51 @@ fn live_frame(
         .map(|t| View::new(t, server.into(), LayoutView::default()).content_dims())
         .map(|d| runtime.block_on(hold_peer(&socket, cwd.clone(), d)))
         .transpose()?;
-    let mut seen = runtime.block_on(observe(&socket, cwd.clone(), dims))?;
+    let mut seen = runtime.block_on(observe(&socket, cwd.clone(), dims, &[]))?;
     switch_squad(&runtime, &socket, server, squad, dims, &mut seen)?;
     let mut view = base_view(server, seen, chrome, &cwd, size, edges);
     runtime.block_on(super::backlog_board::fold_once(&mut view));
     stage_messages(&runtime, &mut view, message, kind)?;
     stage_view(&runtime, &mut view, &socket, kind)?;
-    if matches!(kind, Some(ViewKind::PersonaEditorPane)) {
-        // The editor pane opened server-side during staging, after the
-        // one observe at the top. Settle (vi paints on its own tick),
-        // re-observe, and fold the fresh layout and frames in.
+    if matches!(
+        kind,
+        Some(ViewKind::PersonaEditorPane | ViewKind::PersonaDrill4)
+    ) {
+        // The editor pane or the drill's record panes opened server-side
+        // during staging, after the one observe at the top. Settle (vi
+        // paints on its own tick), re-observe, and fold the fresh layout
+        // and frames in.
         let fresh = runtime
             .block_on(async {
                 tokio::time::sleep(Duration::from_millis(1500)).await;
-                observe(&socket, cwd.clone(), dims).await
+                observe(&socket, cwd.clone(), staged_dims(dims, &view), &[]).await
             })
             .map_err(|e| format!("persona-editor-pane: {e}"))?;
+        view.layout = fresh.layout;
+        view.frames = fresh.frames;
+    } else if dims.is_some() && dims != Some(view.content_dims()) {
+        // Staging can move the chrome (the chip shot widens the board
+        // panel): the panes must re-tile for the staged viewport, or the
+        // right column crops at the canvas edge with its border clipped.
+        let fresh = runtime
+            .block_on(observe(&socket, cwd.clone(), staged_dims(dims, &view), &[]))
+            .map_err(|e| format!("staged viewport: {e}"))?;
+        view.layout = fresh.layout;
+        view.frames = fresh.frames;
+    }
+    // The persona column's width claim reads post-split rects, so the
+    // fresh layout is when the seams can be computed and sent; the
+    // follow-up observe folds the row they shaped.
+    let seams = crate::client::persona_overlay::persona_widening_seams(&mut view);
+    if !seams.is_empty() {
+        let fresh = runtime
+            .block_on(observe(
+                &socket,
+                cwd.clone(),
+                staged_dims(dims, &view),
+                &seams,
+            ))
+            .map_err(|e| format!("persona seam observe: {e}"))?;
         view.layout = fresh.layout;
         view.frames = fresh.frames;
     }
@@ -977,6 +1019,16 @@ fn live_frame(
     }
     crate::lattice::freeze_spin();
     Ok(view.compose())
+}
+
+/// The observe dims after staging: the staged view's own content dims
+/// when a fit-sized shot's chrome moved, else the sizing dims unchanged.
+fn staged_dims(dims: Option<(u16, u16)>, view: &View) -> Option<(u16, u16)> {
+    if dims.is_some() {
+        Some(view.content_dims())
+    } else {
+        None
+    }
 }
 
 /// A shot that cannot be staged; the text is the error `live_frame` returns.
@@ -1025,7 +1077,7 @@ fn switch_squad(
         if target.id != seen.layout.active_squad {
             // The server picks the squad from the attach cwd.
             let cwd = target.canonical_cwd.clone();
-            *seen = runtime.block_on(observe(socket, cwd, dims))?;
+            *seen = runtime.block_on(observe(socket, cwd, dims, &[]))?;
         }
     }
     Ok(())
@@ -1258,6 +1310,7 @@ fn stage_gathered(
         | Some(ViewKind::BellPersonas) => bell_shot(runtime, view, kind)?,
         Some(ViewKind::Feed) | Some(ViewKind::FeedDetail) => feed_shot(runtime, view, kind)?,
         Some(ViewKind::QuestionDetail) => question_detail_shot(runtime, view)?,
+        Some(ViewKind::PersonaBellDock) => persona_bell_dock_shot(runtime, view)?,
         Some(
             kind @ (ViewKind::PersonaDetail
             | ViewKind::PersonaQuestion
@@ -1267,7 +1320,10 @@ fn stage_gathered(
             | ViewKind::PersonaEditAfter
             | ViewKind::PersonaNoteComposer
             | ViewKind::PersonaNoteAfter
-            | ViewKind::PersonaEditorPane),
+            | ViewKind::PersonaEditorPane
+            | ViewKind::PersonaDrill
+            | ViewKind::PersonaDrill4
+            | ViewKind::PersonaSidelineChip),
         ) => persona_chip_shot(runtime, view, socket, kind)?,
         Some(kind @ (ViewKind::NeedsInputPulseOn | ViewKind::NeedsInputPulseOff)) => {
             pulse_shot(runtime, view, kind)?;
@@ -1563,10 +1619,17 @@ fn persona_chip_shot(
             let (id, audience) =
                 picked.ok_or("persona-question: no customer question in the demo fold")?;
             view.open_detail_on(&id);
-            view.persona = super::persona_overlay::open_from(audience.as_ref(), None);
+            view.persona =
+                super::persona_overlay::open_from(audience.as_ref(), None).map(|mut o| {
+                    o.home = super::persona_overlay::Home::Question;
+                    o
+                });
         }
         ViewKind::PersonaDecision => persona_decision_shot(view)?,
         ViewKind::PersonaEditorPane => persona_editor_pane_shot(runtime, view, socket)?,
+        ViewKind::PersonaDrill => persona_drill_shot(runtime, view)?,
+        ViewKind::PersonaDrill4 => persona_drill4_shot(runtime, view, socket)?,
+        ViewKind::PersonaSidelineChip => persona_sideline_chip_shot(runtime, view)?,
         ViewKind::PersonaEditAfter | ViewKind::PersonaNoteComposer | ViewKind::PersonaNoteAfter => {
             persona_edit_note_shot(runtime, view, kind)?
         }
@@ -1694,10 +1757,177 @@ fn persona_decision_shot(view: &mut View) -> Result<(), ShotError> {
         .as_ref()
         .and_then(|b| b.selected_row())
         .and_then(|r| r.audience.clone());
-    view.persona = super::persona_overlay::open_from(audience.as_ref(), None);
+    view.persona = super::persona_overlay::open_from(audience.as_ref(), None).map(|mut o| {
+        o.home = super::persona_overlay::Home::Decision;
+        o
+    });
     Ok(())
 }
 
+/// The drill frame: the page staged, then the first serving row
+/// selected and drilled. The persona column stays; the record opens in
+/// the board's detail column beside it.
+fn persona_drill_shot(runtime: &tokio::runtime::Runtime, view: &mut View) -> Result<(), ShotError> {
+    persona_detail_shot(runtime, view)?;
+    super::persona_overlay::keys(view, b"j");
+    super::persona_overlay::keys(view, b"\r");
+    Ok(())
+}
+
+/// The drill past the three-column cap: four drills over four serving
+/// node rows. The fourth drill folds the second record (the oldest
+/// visible) into the breadcrumb strip riding the oldest visible pane.
+/// The synthetic rows join the board read so the trail has the rows to
+/// drill; the panes spawn through the same control round-trip the live
+/// key sends, and the re-observe in live_frame folds their layout.
+fn persona_drill4_shot(
+    runtime: &tokio::runtime::Runtime,
+    view: &mut View,
+    socket: &std::path::Path,
+) -> Result<(), ShotError> {
+    // The record panes append beside a docked persona pane, so the shot
+    // stages the sideline dock the live chip press opens.
+    let aud = stage_list_customer(runtime, view)?
+        .ok_or("persona-drill4: no customer row in the demo board read")?;
+    view.board_full = false;
+    view.panel_on = true;
+    view.sideline_width = 80;
+    let project = super::persona_overlay::session_project(view);
+    view.persona = super::persona_overlay::open_from(Some(&aud), Some(&project))
+        .map(super::persona_overlay::dock_sideline);
+    super::persona_overlay::spawn_persona_pane(view);
+    if view.persona.as_ref().is_some_and(|o| o.pane.is_none()) {
+        return Err(format!(
+            "persona-drill4: the persona pane never opened: {:?}",
+            view.notice
+        )
+        .into());
+    }
+    settle_persona_layout(runtime, view, socket)?;
+    seed_drill_rows(view);
+    for _ in 0..4 {
+        super::persona_overlay::keys(view, b"j");
+        super::persona_overlay::keys(view, b"\r");
+        settle_persona_layout(runtime, view, socket)?;
+    }
+    Ok(())
+}
+
+/// The server's next Layout push, as the live loop receives it between two
+/// keypresses. A drill's split anchors on the rightmost pane of the layout
+/// this client holds, so a stale layout puts each record left of the last.
+/// The width claim stays armed: it answers once, on the final layout.
+fn settle_persona_layout(
+    runtime: &tokio::runtime::Runtime,
+    view: &mut View,
+    socket: &std::path::Path,
+) -> Result<(), ShotError> {
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let fresh = runtime
+        .block_on(async {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            observe(socket, cwd, None, &[]).await
+        })
+        .map_err(|e| format!("persona-drill4 settle: {e}"))?;
+    view.layout = fresh.layout;
+    view.frames = fresh.frames;
+    Ok(())
+}
+
+/// Three synthetic customer rows past the two the demo board already
+/// serves, so the trail can drill four deep. Cloned from an existing
+/// customer row so every field the board read carries stays valid.
+fn seed_drill_rows(view: &mut View) {
+    let seed = view
+        .backlog_board
+        .as_ref()
+        .and_then(|b| b.inputs.as_ref())
+        .and_then(|i| {
+            i.rows.iter().find(|r| {
+                r.audience
+                    .as_deref()
+                    .map(|a| a.trim().starts_with("customer:"))
+                    .unwrap_or(false)
+            })
+        })
+        .cloned();
+    let Some(mut row) = seed else { return };
+    let Some(inputs) = view.backlog_board.as_mut().and_then(|b| b.inputs.as_mut()) else {
+        return;
+    };
+    for (i, title) in [
+        "Rate the demo flow for a first-run founder",
+        "Ship the receipt polish for a first-run founder",
+        "Turn the checkout keys into one clap",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        row.id = Some(format!("ab-drill{i}"));
+        row.title = Some(title.into());
+        inputs.rows.push(row.clone());
+    }
+}
+
+/// The bell personas tab with one persona docked beside it: the bell
+/// door frame, the page a Row::Persona press opens now.
+fn persona_bell_dock_shot(
+    runtime: &tokio::runtime::Runtime,
+    view: &mut View,
+) -> Result<(), ShotError> {
+    bell_shot(runtime, view, Some(&ViewKind::BellPersonas))?;
+    let questions = runtime.block_on(crate::needs_overlay::questions_now());
+    view.apply_questions_fold(questions);
+    let aud = view.questions_merged().and_then(|fold| {
+        fold.items
+            .iter()
+            .find(|q| {
+                q.audience
+                    .as_deref()
+                    .map(|a| a.trim().starts_with("customer:"))
+                    .unwrap_or(false)
+            })
+            .and_then(|q| q.audience.clone())
+    });
+    let slug = super::persona_overlay::personas_in(aud.as_deref())
+        .into_iter()
+        .next()
+        .ok_or("persona-bell-dock: no customer persona in the demo fold")?;
+    let project = super::persona_overlay::session_project(view);
+    view.persona = Some(super::persona_overlay::open_docked_bell(&project, &slug));
+    Ok(())
+}
+
+/// The sideline board chip door: the board lives in the left panel (not
+/// full-screen), the press opens the page docked inside that panel.
+fn persona_sideline_chip_shot(
+    runtime: &tokio::runtime::Runtime,
+    view: &mut View,
+) -> Result<(), ShotError> {
+    let aud = stage_list_customer(runtime, view)?
+        .ok_or("persona-sideline-chip: no customer row in the demo board read")?;
+    view.board_full = false;
+    view.panel_on = true;
+    view.sideline_width = 80;
+    let project = super::persona_overlay::session_project(view);
+    view.persona = super::persona_overlay::open_from(Some(&aud), Some(&project))
+        .map(super::persona_overlay::dock_sideline);
+    super::persona_overlay::spawn_persona_pane(view);
+    if let Some(o) = view.persona.as_ref() {
+        if o.pane.is_none() {
+            return Err(format!(
+                "persona-sideline-chip: the persona pane never opened: {:?}",
+                view.notice
+            )
+            .into());
+        }
+    }
+    stage_serving_question(view, &aud);
+    super::persona_overlay::keys(view, b"j");
+    Ok(())
+}
 /// The editor-pane frame: the detail page staged, then the pane `e`
 /// spawns, through the same PaneRun round-trip the live key sends.
 fn persona_editor_pane_shot(
@@ -2541,7 +2771,12 @@ async fn hold_peer(
 
 /// `dims` set attaches as a sizing client at that content area and reads
 /// for a settle window, so panes can redraw at the new size.
-async fn observe(socket: &Path, cwd: String, dims: Option<(u16, u16)>) -> Result<Observed, String> {
+async fn observe(
+    socket: &Path,
+    cwd: String,
+    dims: Option<(u16, u16)>,
+    cmds: &[proto::Command],
+) -> Result<Observed, String> {
     let stream = tokio::time::timeout(
         Duration::from_secs(3),
         tokio::net::UnixStream::connect(socket),
@@ -2568,6 +2803,14 @@ async fn observe(socket: &Path, cwd: String, dims: Option<(u16, u16)>) -> Result
     )
     .await
     .map_err(|e| format!("attach write failed: {e}"))?;
+    // Commands ride the same attach, before the read loop: the server
+    // applies them in order and the read collects the layout they
+    // produced.
+    for cmd in cmds {
+        proto::write_msg(&mut writer, &ClientMsg::Command(cmd.clone()))
+            .await
+            .map_err(|e| format!("command write failed: {e}"))?;
+    }
     // Read-only from here: release the write half without the half-close
     // that would make the server detach us.
     writer.forget();
