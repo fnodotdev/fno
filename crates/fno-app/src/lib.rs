@@ -96,7 +96,7 @@ pub struct ShotOptions {
 pub enum SettingsShot {
     /// The open panel.
     Panel,
-    /// The panel with `notify` typed through the real field.
+    /// The panel with `alert` typed through the real field.
     Filter,
     /// The panel with the Theme choice page open through real Enter.
     Page,

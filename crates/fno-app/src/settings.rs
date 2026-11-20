@@ -8,8 +8,8 @@
 //! the `crates/fno` freeze keeps the two from being one shared function
 //! until v0.1.0 ships (the same trade `goto.rs` makes for its ranker).
 //! What IS shared: the schema `edit` fields, the row grammar, and the
-//! write door - one bounded `fno config set` shell-out, never a raw TOML
-//! write. The write lives in `window.rs` where the gpui tasks live.
+//! write door - the in-process `fno config` set and unset calls, never a
+//! raw TOML write. The write lives in `window.rs` where the gpui tasks live.
 
 use gpui::{div, prelude::*, px, rgb, rgba, Context, Div, ElementId, FontWeight, Window};
 use std::path::Path;
@@ -673,47 +673,22 @@ pub(crate) fn mono_fonts(window: &Window) -> Vec<String> {
 #[derive(Debug)]
 pub(crate) struct Refusal(pub String);
 
-/// One bounded `fno config set/unset` shell-out: spawn, poll 3s, kill on
-/// expiry - the mux's `spawn_scoped` bound, mirrored with std handles.
-/// `Err` carries the CLI's first stderr line for the row to paint.
+/// One settings write through the in-process config door: the same
+/// `set_values` / `unset_value` the `fno config` command runs, on the
+/// global file, with a 3 s bound on the file lock. `Err` carries the
+/// refusal's message for the row to paint.
 pub(crate) fn bounded_write(set: bool, id: &str, value: Option<&str>) -> Result<(), Refusal> {
-    let mut cmd = std::process::Command::new("fno");
-    cmd.arg("config");
-    match (set, value) {
-        (true, Some(v)) => {
-            cmd.arg("set").arg(id).arg(v);
-        }
-        _ => {
-            cmd.arg("unset").arg(id);
-        }
-    }
-    cmd.stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped());
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| Refusal(format!("fno config spawn failed: {e}")))?;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-    loop {
-        match child.try_wait() {
-            Ok(Some(st)) if st.success() => return Ok(()),
-            Ok(Some(_)) => {
-                let line = child
-                    .wait_with_output()
-                    .ok()
-                    .and_then(|o| String::from_utf8(o.stderr).ok())
-                    .and_then(|e| e.lines().next().map(str::to_string))
-                    .unwrap_or_else(|| format!("fno config set {id} failed"));
-                return Err(Refusal(line));
-            }
-            Ok(None) if std::time::Instant::now() >= deadline => {
-                let _ = child.kill();
-                return Err(Refusal(format!("fno config {id} timed out")));
-            }
-            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
-            Err(e) => return Err(Refusal(format!("fno config {id}: {e}"))),
-        }
-    }
+    use fno::config_cli::write;
+    let out = match (set, value) {
+        (true, Some(v)) => write::set::set_values(
+            &[(id.to_string(), v.to_string())],
+            "global",
+            Some(std::time::Duration::from_secs(3)),
+        )
+        .map(|_| ()),
+        _ => write::unset::unset_value(id, "global").map(|_| ()),
+    };
+    out.map_err(|r| Refusal(r.message))
 }
 
 #[cfg(test)]
@@ -772,8 +747,8 @@ mod tests {
     #[test]
     fn filter_matches_label_key_and_section() {
         let rows = build_rows(Some(&cfg(&[])), Path::new("/"), &[], &[]);
-        let hits = visible(&rows, "notify").len();
-        assert_eq!(hits, 1, "notify matches the notification row");
+        let hits = visible(&rows, "notification").len();
+        assert_eq!(hits, 1, "notification matches the notification row");
         assert_eq!(visible(&rows, "sound").len(), 1);
         assert_eq!(visible(&rows, "app.alert_sound").len(), 1);
         assert_eq!(
@@ -879,7 +854,7 @@ pub(crate) fn apply_shot(state: &mut SettingsState, shot: crate::SettingsShot) {
     match shot {
         crate::SettingsShot::Panel => {}
         crate::SettingsShot::Filter => {
-            state.query.edit("", Some("notify"));
+            state.query.edit("", Some("alert"));
         }
         crate::SettingsShot::Page => {
             state.selected = 0;

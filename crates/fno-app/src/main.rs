@@ -50,7 +50,7 @@ struct Args {
     #[arg(long = "shot-find", value_enum)]
     shot_find: Option<ShotFind>,
     /// Settings-panel state --shot paints: `panel` opens the panel,
-    /// `filter` types `notify` through the real field, `page` opens the
+    /// `filter` types `alert` through the real field, `page` opens the
     /// Theme choice page through real Enter.
     #[arg(long = "shot-settings", value_enum)]
     shot_settings: Option<ShotSettings>,
@@ -106,7 +106,7 @@ enum ShotFind {
 enum ShotSettings {
     /// The open panel.
     Panel,
-    /// The panel with `notify` typed.
+    /// The panel with `alert` typed.
     Filter,
     /// The Theme choice page open.
     Page,
