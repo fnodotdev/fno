@@ -201,7 +201,7 @@ fn drafts_dir(state: &Path) -> PathBuf {
 pub fn run(args: &[String]) -> i32 {
     let state = crate::evals_candidates::state_root();
     if args.first().is_some_and(|a| a == "changes") {
-        return crate::evals_propose::changes_cli(&args[1..]);
+        return crate::evals_propose::changes_cli(args.get(1..).unwrap_or_default());
     }
     if let Some(sha) = crate::evals::flag_lookup(args, "--from-commit") {
         // Beside the daily drafts, not in them: the drafter reads that folder's yaml.

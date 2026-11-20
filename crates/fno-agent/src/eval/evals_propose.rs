@@ -311,11 +311,9 @@ pub(crate) fn parse_reply(out: &str) -> Result<Reply, ProposeError> {
 /// yields none.
 fn eight_grams(s: &str) -> Vec<String> {
     let words: Vec<&str> = s.split_whitespace().collect();
-    if words.len() < 8 {
-        return Vec::new();
-    }
-    (0..=words.len() - 8)
-        .map(|i| words[i..i + 8].join(" ").to_lowercase())
+    words
+        .windows(8)
+        .map(|w| w.join(" ").to_lowercase())
         .collect()
 }
 
@@ -358,16 +356,10 @@ pub(crate) fn validate_reply(reply: &Reply, tasks: &[TaskSpec]) -> Result<(), Pr
     // The 8-word run: per golden, so a refusal names the id (AC2-HP).
     for (id, keys) in golden_key_grams(tasks) {
         for edit in &reply.edits {
-            let words: Vec<&str> = edit.content.split_whitespace().collect();
-            if words.len() < 8 {
-                continue;
-            }
-            for i in 0..=words.len() - 8 {
-                if keys.contains(&words[i..i + 8].join(" ").to_lowercase()) {
-                    return Err(ProposeError::Reply(format!(
-                        "answer_key_quote: an edit quotes 8 consecutive words of golden {id}"
-                    )));
-                }
+            if eight_grams(&edit.content).iter().any(|g| keys.contains(g)) {
+                return Err(ProposeError::Reply(format!(
+                    "answer_key_quote: an edit quotes 8 consecutive words of golden {id}"
+                )));
             }
         }
     }
@@ -667,6 +659,14 @@ pub(crate) fn decide(
     LegVerdict::Launch
 }
 
+/// Release the cycle claim; a failed release only logs, because the claim's
+/// TTL frees it anyway.
+fn release_claim(holder: &str, root: Option<&std::path::Path>) {
+    if let Err(e) = crate::claims::release(CLAIM_KEY, holder, root, None) {
+        eprintln!("evals propose: release {CLAIM_KEY}: {e}");
+    }
+}
+
 /// The run marker beside the history: a launch that fails before it writes
 /// a row waits a day instead of relaunching every tick.
 fn attempt_path(history: &std::path::Path) -> std::path::PathBuf {
@@ -697,7 +697,7 @@ pub(crate) fn tick(
         (crate::claims::ClaimState::Live, _) => return "in_flight",
         (crate::claims::ClaimState::Corrupted, _) => return "claim_corrupted",
         (crate::claims::ClaimState::Suspect | crate::claims::ClaimState::Stale, Some(rec)) => {
-            let _ = crate::claims::release(CLAIM_KEY, &rec.holder, root.as_deref(), None);
+            release_claim(&rec.holder, root.as_deref());
         }
         _ => {}
     }
@@ -725,7 +725,9 @@ pub(crate) fn tick(
     if tried_within_a_day(leg.history, now) {
         return "retry_wait";
     }
-    let _ = std::fs::write(attempt_path(leg.history), now.to_rfc3339());
+    if let Err(e) = std::fs::write(attempt_path(leg.history), now.to_rfc3339()) {
+        eprintln!("evals propose: attempt marker: {e}");
+    }
     let Some(pid) = spawner(argv) else {
         return "spawn_failed";
     };
@@ -784,7 +786,8 @@ fn candidate_ref(
 ) -> Result<String, ProposeError> {
     let dir = std::env::temp_dir().join(format!("fno-propose-ref-{}", tag.replace('/', "-")));
     let dir_s = dir.to_string_lossy().into_owned();
-    let _ = git_out(repo, &["worktree", "remove", "--force", &dir_s]);
+    // A stale tree from a crashed cycle; none is the usual case.
+    drop(git_out(repo, &["worktree", "remove", "--force", &dir_s]));
     git_out(repo, &["worktree", "add", "--detach", &dir_s, base_sha])?;
     let made = (|| -> Result<String, ProposeError> {
         let mut rels = Vec::new();
@@ -802,7 +805,9 @@ fn candidate_ref(
         git_out(&dir, &["commit", "-q", "-m", "evals: propose candidate"])?;
         git_out(&dir, &["rev-parse", "HEAD"])
     })();
-    let _ = git_out(repo, &["worktree", "remove", "--force", &dir_s]);
+    if let Err(e) = git_out(repo, &["worktree", "remove", "--force", &dir_s]) {
+        eprintln!("evals propose: candidate tree {dir_s}: {e}");
+    }
     let head = made?;
     git_out(
         repo,
@@ -811,20 +816,32 @@ fn candidate_ref(
     Ok(head)
 }
 
-/// One git call in `dir`, stderr on failure (R6: typed error).
-fn git_out(dir: &std::path::Path, args: &[&str]) -> Result<String, ProposeError> {
-    let out = std::process::Command::new("git")
-        .current_dir(dir)
-        .args(args)
-        .output()?;
-    if !out.status.success() {
-        return Err(ProposeError::Io(format!(
-            "git {}: {}",
+/// One bounded command in `dir` through the spawn seam; trimmed stdout on
+/// success, the command and its stderr on failure (R6: typed error).
+fn run_in(
+    dir: &std::path::Path,
+    bin: &str,
+    args: &[&str],
+    timeout: std::time::Duration,
+) -> Result<String, ProposeError> {
+    match crate::pr_push::run_labeled("evals-propose", bin, args, dir, timeout)
+        .map_err(ProposeError::Io)?
+    {
+        (true, out, _) => Ok(out.trim().to_string()),
+        (false, _, err) => Err(ProposeError::Io(format!(
+            "{bin} {}: {}",
             args.join(" "),
-            String::from_utf8_lossy(&out.stderr).trim()
-        )));
+            err.trim()
+        ))),
     }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+/// A golden cohort at 3 repeats and 2 workers runs well under this.
+const COHORT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(4 * 3600);
+
+fn git_out(dir: &std::path::Path, args: &[&str]) -> Result<String, ProposeError> {
+    run_in(dir, "git", args, GIT_TIMEOUT)
 }
 
 /// The ship outcome for the ledger row (change 4).
@@ -916,15 +933,31 @@ struct ProofPaired {
     ci95_points: Option<[f64; 2]>,
 }
 
+/// Set one key on a JSON object row; a non-object row is left as it is.
+fn put(row: &mut Value, key: &str, value: Value) {
+    if let Some(map) = row.as_object_mut() {
+        map.insert(key.to_string(), value);
+    }
+}
+
+/// The fold view's power block, or null.
+fn power_of(view: &Value) -> Value {
+    view.pointer("/power").cloned().unwrap_or_default()
+}
+
 /// The task ids of one fold list (`fixed`, `regressions`, `errors`).
 fn list_tasks(view: &Value, list: &str) -> Vec<String> {
     #[derive(Deserialize)]
     struct Entry {
         task: String,
     }
-    serde_json::from_value::<Vec<Entry>>(view[list].clone())
-        .map(|v| v.into_iter().map(|e| e.task).collect())
-        .unwrap_or_default()
+    serde_json::from_value::<Vec<Entry>>(
+        view.pointer(&format!("/{list}"))
+            .cloned()
+            .unwrap_or_default(),
+    )
+    .map(|v| v.into_iter().map(|e| e.task).collect())
+    .unwrap_or_default()
 }
 
 /// The PR body: cluster, cohorts, the held-out power line, the all-golden
@@ -937,7 +970,7 @@ fn proof_body(
     all: &Value,
     files: usize,
 ) -> String {
-    let p: Option<ProofLine> = serde_json::from_value(held["power"].clone()).ok();
+    let p: Option<ProofLine> = serde_json::from_value(power_of(held)).ok();
     let num = |v: Option<f64>| v.map_or_else(|| "unmeasured".to_string(), |m| format!("{m:.1}"));
     let (verdict, mean, ci, floor, source) = match &p {
         Some(p) => (
@@ -1059,7 +1092,7 @@ fn prove_candidate(
     let all = fold(&rows)?;
     let mut row = serde_json::json!({
         "base": base_cohort, "candidate": cand, "sha": sha,
-        "goldens": cluster.failing_tasks, "power": held["power"],
+        "goldens": cluster.failing_tasks, "power": power_of(&held),
         "files": edits.len(),
     });
     let verdict = match gain(&held, &all)? {
@@ -1067,8 +1100,12 @@ fn prove_candidate(
             let body = proof_body(&cluster.kind, base_cohort, &cand, &held, &all, edits.len());
             match ship_candidate(c.day, &cluster.kind, edits, &body, doors)? {
                 ShipOutcome::Opened(url) => {
-                    row["learning"] = Value::from(record_learning(c.state, &url, &held));
-                    row["pr"] = Value::String(url);
+                    put(
+                        &mut row,
+                        "learning",
+                        Value::from(record_learning(c.state, &url, &held)),
+                    );
+                    put(&mut row, "pr", Value::String(url));
                     "shipped"
                 }
                 ShipOutcome::AlreadyOpen => "already_open",
@@ -1078,7 +1115,7 @@ fn prove_candidate(
         Gain::Underpowered => "underpowered",
         Gain::InsideNoise => "inside_noise",
     };
-    row["verdict"] = Value::from(verdict);
+    put(&mut row, "verdict", Value::from(verdict));
     Ok(row)
 }
 
@@ -1088,7 +1125,7 @@ fn prove_candidate(
 /// Returns the ledger's answer for the cluster row; a refusal never undoes
 /// the PR.
 fn record_learning(state: &std::path::Path, url: &str, held: &Value) -> String {
-    let mean = serde_json::from_value::<ProofLine>(held["power"].clone())
+    let mean = serde_json::from_value::<ProofLine>(power_of(held))
         .ok()
         .and_then(|p| p.paired)
         .and_then(|p| p.mean_delta_points);
@@ -1112,6 +1149,59 @@ fn record_learning(state: &std::path::Path, url: &str, held: &Value) -> String {
     }
 }
 
+/// The `--dry-run` receipt: each cluster with its split and the strip flag
+/// on the input the proposer would read. It spends nothing.
+fn dry_receipt(list: &[Cluster], tasks: &[TaskSpec], split_rule: &str) -> Value {
+    let items: Vec<Value> = list
+        .iter()
+        .map(|cl| {
+            let input = proposer_input(cl, tasks);
+            serde_json::json!({
+                "type": cl.kind,
+                "verdict": "dry_run",
+                "failing": cl.failing_tasks,
+                "train": cl.train,
+                "held_out": cl.held_out,
+                "proposer_input": {
+                    "answer_keys_stripped": answer_keys_stripped(&input, tasks),
+                    "chars": input.len(),
+                },
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "generated_at": chrono::Utc::now().to_rfc3339(),
+        "split": split_rule,
+        "clusters": items,
+    })
+}
+
+/// Ask every cluster the cap admits before any cohort runs: a final row
+/// (`Ok`) for keep_base, a refusal or a cap drop, or the edits (`Err`) of a
+/// candidate still to prove.
+fn ask_proposers(
+    list: &[Cluster],
+    candidates: usize,
+    doors: &Doors,
+    tasks: &[TaskSpec],
+) -> Vec<Result<Value, Edits>> {
+    list.iter()
+        .enumerate()
+        .map(|(i, cluster)| {
+            if i >= candidates {
+                return Ok(serde_json::json!({"verdict": "dropped_by_cap"}));
+            }
+            match propose_cluster(doors, cluster, tasks) {
+                Ok(Proposed::KeepBase(reason)) => {
+                    Ok(serde_json::json!({"verdict": "keep_base", "reason": reason}))
+                }
+                Ok(Proposed::Change(edits)) => Err(edits),
+                Err(e) => Ok(serde_json::json!({"verdict": "refused", "refused": e.to_string()})),
+            }
+        })
+        .collect()
+}
+
 /// One propose cycle (changes 1-4): cluster, budget line, fresh base
 /// cohort, then per cluster propose, prove, gain and ship. Every cluster
 /// lands one ledger row, shipped or not. `dry_run` stops after change 1.
@@ -1123,28 +1213,7 @@ pub(crate) fn run_cycle(c: &Cycle, dry_run: bool, doors: &Doors) -> Result<Value
     let split_rule =
         format!("splitmix64 over the id bytes, seed {SEED}; even is train, odd is held-out");
     if dry_run {
-        let items: Vec<Value> = list
-            .iter()
-            .map(|cl| {
-                let input = proposer_input(cl, &tasks);
-                serde_json::json!({
-                    "type": cl.kind,
-                    "verdict": "dry_run",
-                    "failing": cl.failing_tasks,
-                    "train": cl.train,
-                    "held_out": cl.held_out,
-                    "proposer_input": {
-                        "answer_keys_stripped": answer_keys_stripped(&input, &tasks),
-                        "chars": input.len(),
-                    },
-                })
-            })
-            .collect();
-        return Ok(serde_json::json!({
-            "generated_at": chrono::Utc::now().to_rfc3339(),
-            "split": split_rule,
-            "clusters": items,
-        }));
+        return Ok(dry_receipt(&list, &tasks, &split_rule));
     }
     let mark = serde_json::json!({
         "kind": "cycle", "cycle": c.day, "ts": chrono::Utc::now().to_rfc3339(),
@@ -1186,20 +1255,7 @@ pub(crate) fn run_cycle(c: &Cycle, dry_run: bool, doors: &Doors) -> Result<Value
     ledger_append(c.state, &budget)?;
     // Ask every cluster first: a cycle whose proposers all keep the base
     // or refuse spends no cohort.
-    let mut slots: Vec<Result<Value, Edits>> = Vec::new();
-    for (i, cluster) in list.iter().enumerate() {
-        slots.push(if i >= plan.candidates {
-            Ok(serde_json::json!({"verdict": "dropped_by_cap"}))
-        } else {
-            match propose_cluster(doors, cluster, &tasks) {
-                Ok(Proposed::KeepBase(reason)) => {
-                    Ok(serde_json::json!({"verdict": "keep_base", "reason": reason}))
-                }
-                Ok(Proposed::Change(edits)) => Err(edits),
-                Err(e) => Ok(serde_json::json!({"verdict": "refused", "refused": e.to_string()})),
-            }
-        });
-    }
+    let slots = ask_proposers(&list, plan.candidates, doors, &tasks);
     let base_cohort = format!("{COHORT_PREFIX}{}-base", c.day);
     let any_candidate = slots.iter().any(Result::is_err);
     if any_candidate {
@@ -1224,8 +1280,8 @@ pub(crate) fn run_cycle(c: &Cycle, dry_run: bool, doors: &Doors) -> Result<Value
                 |e| serde_json::json!({"verdict": "refused", "refused": e.to_string()}),
             ),
         };
-        row["cycle"] = Value::String(c.day.to_string());
-        row["type"] = Value::String(cluster.kind.clone());
+        put(&mut row, "cycle", Value::String(c.day.to_string()));
+        put(&mut row, "type", Value::String(cluster.kind.clone()));
         ledger_append(c.state, &row)?;
         results.push(row);
     }
@@ -1285,6 +1341,112 @@ fn ledger_rows(state: &std::path::Path) -> Vec<LedgerRow> {
         .lines()
         .filter_map(|l| serde_json::from_str(l).ok())
         .collect()
+}
+
+/// The proof's base rows and the pooled post-merge rows, restricted to the
+/// goldens graded on both sides: a golden added or removed since the proof
+/// is not a regression of this change.
+fn pool_rows(rows: &[Row], base: &str, post: &[&Row], pooled: &str) -> Vec<Row> {
+    let base_rows: Vec<&Row> = rows
+        .iter()
+        .filter(|x| x.experiment_id.as_deref() == Some(base))
+        .collect();
+    let on_base: BTreeSet<&str> = base_rows.iter().map(|x| x.task_id.as_str()).collect();
+    let on_post: BTreeSet<&str> = post.iter().map(|x| x.task_id.as_str()).collect();
+    let mut fold_rows: Vec<Row> = base_rows
+        .iter()
+        .filter(|x| on_post.contains(x.task_id.as_str()))
+        .map(|x| (*x).clone())
+        .collect();
+    fold_rows.extend(
+        post.iter()
+            .filter(|x| on_base.contains(x.task_id.as_str()))
+            .map(|x| {
+                let mut y = (*x).clone();
+                y.experiment_id = Some(pooled.to_string());
+                y
+            }),
+    );
+    fold_rows
+}
+
+/// Probation's two views (all goldens, held-out goldens) and the goldens
+/// with no live grade. A dead or ungraded golden measures the machine, not
+/// the change, so both views exclude it; on a cluster golden the caller
+/// suspends instead.
+fn probation_views(
+    fold_rows: &[Row],
+    base: &str,
+    pooled: &str,
+    unproved: &BTreeSet<String>,
+) -> Result<(Value, Value, BTreeSet<String>), ProposeError> {
+    let fold = |rows: &[Row], excluded: &BTreeSet<String>| {
+        crate::evals_compare::fold(rows, base, pooled, crate::evals_gate::REPEATS, excluded)
+            .map_err(ProposeError::Fold)
+    };
+    let first = fold(fold_rows, unproved)?;
+    let dead = serde_json::from_value::<BTreeMap<String, usize>>(
+        first.pointer("/b/dead_runs").cloned().unwrap_or_default(),
+    )
+    .unwrap_or_default();
+    let errored: BTreeSet<String> = list_tasks(&first, "errors")
+        .into_iter()
+        .chain(dead.into_keys())
+        .collect();
+    let mut excluded = unproved.clone();
+    excluded.extend(errored.iter().cloned());
+    let all = fold(fold_rows, &excluded)?;
+    let held_rows: Vec<Row> = fold_rows
+        .iter()
+        .filter(|x| split(&x.task_id) == Role::HeldOut)
+        .cloned()
+        .collect();
+    let held = fold(&held_rows, &excluded)?;
+    Ok((all, held, errored))
+}
+
+/// One probation read's verdict: `None` keeps waiting. A suspended change
+/// never reads a gain; a regression or a negative move retires; a positive
+/// move keeps; past `PROBATION_MAX` cohorts inside_noise retires, unless
+/// the window is confounded.
+fn probation_verdict(
+    suspended: bool,
+    held: &Value,
+    all: &Value,
+    cohorts: usize,
+    confounded: bool,
+) -> Result<Option<&'static str>, ProposeError> {
+    if suspended {
+        return Ok(Some("suspended"));
+    }
+    Ok(match gain(held, all)? {
+        Gain::Regression => Some("retired"),
+        Gain::Ship => Some("kept"),
+        Gain::InsideNoise | Gain::Underpowered if cohorts >= PROBATION_MAX => {
+            Some(if confounded { "confounded" } else { "retired" })
+        }
+        Gain::InsideNoise | Gain::Underpowered => None,
+    })
+}
+
+/// The revert PR for a retired change (`git revert -m 1 <merge>`).
+fn open_revert(
+    doors: &ProbationDoors,
+    kind: &str,
+    pr: &str,
+    merge: &str,
+    cohorts: usize,
+) -> Result<String, ProposeError> {
+    let slug = kind.replace('_', "-");
+    let branch = format!(
+        "evals/propose-revert-{slug}-{}",
+        merge.get(..8).unwrap_or(merge)
+    );
+    let title = format!("evals: revert the {kind} fix, probation retired it");
+    let body = format!(
+        "Probation retired {pr} after {cohorts} post-merge `gate-main-` cohorts: the held-out goldens no longer show the gain its proof claimed, or a golden regressed. This reverts merge {merge}."
+    );
+    (doors.revert)(&branch, &title, &body, merge)
 }
 
 /// Probation (change 5): each shipped and merged change is measured on the
@@ -1350,68 +1512,8 @@ pub(crate) fn probation(
             continue;
         }
         let pooled = format!("probation-{}", merge.get(..8).unwrap_or(merge.as_str()));
-        // Only goldens graded on both sides fold: a golden added or removed
-        // since the proof is not a regression of this change.
-        let base_rows: Vec<&Row> = rows
-            .iter()
-            .filter(|x| x.experiment_id.as_deref() == Some(base))
-            .collect();
-        let on_base: BTreeSet<&str> = base_rows.iter().map(|x| x.task_id.as_str()).collect();
-        let on_post: BTreeSet<&str> = post.iter().map(|x| x.task_id.as_str()).collect();
-        let mut fold_rows: Vec<Row> = base_rows
-            .iter()
-            .filter(|x| on_post.contains(x.task_id.as_str()))
-            .map(|x| (*x).clone())
-            .collect();
-        fold_rows.extend(
-            post.iter()
-                .filter(|x| on_base.contains(x.task_id.as_str()))
-                .map(|x| {
-                    let mut y = (*x).clone();
-                    y.experiment_id = Some(pooled.clone());
-                    y
-                }),
-        );
-        let all = crate::evals_compare::fold(
-            &fold_rows,
-            base,
-            &pooled,
-            crate::evals_gate::REPEATS,
-            &unproved,
-        )
-        .map_err(ProposeError::Fold)?;
-        let errored: BTreeSet<String> = list_tasks(&all, "errors")
-            .into_iter()
-            .chain(
-                serde_json::from_value::<BTreeMap<String, usize>>(all["b"]["dead_runs"].clone())
-                    .unwrap_or_default()
-                    .into_keys(),
-            )
-            .collect();
-        // A dead or ungraded golden measures the machine, not the change:
-        // it never reads as a break. On a cluster golden it suspends below.
-        let mut excluded = unproved.clone();
-        excluded.extend(errored.iter().cloned());
-        let all = crate::evals_compare::fold(
-            &fold_rows,
-            base,
-            &pooled,
-            crate::evals_gate::REPEATS,
-            &excluded,
-        )
-        .map_err(ProposeError::Fold)?;
-        let held_rows: Vec<Row> = fold_rows
-            .into_iter()
-            .filter(|x| split(&x.task_id) == Role::HeldOut)
-            .collect();
-        let held = crate::evals_compare::fold(
-            &held_rows,
-            base,
-            &pooled,
-            crate::evals_gate::REPEATS,
-            &excluded,
-        )
-        .map_err(ProposeError::Fold)?;
+        let fold_rows = pool_rows(&rows, base, &post, &pooled);
+        let (all, held, errored) = probation_views(&fold_rows, base, &pooled, &unproved)?;
         let newest = post
             .iter()
             .filter_map(|x| x.bank_rev.as_deref())
@@ -1426,19 +1528,8 @@ pub(crate) fn probation(
             .goldens
             .iter()
             .any(|g| unproved.contains(g) || errored.contains(g));
-        let verdict = if suspended {
-            Some("suspended")
-        } else {
-            match gain(&held, &all)? {
-                Gain::Regression => Some("retired"),
-                Gain::Ship => Some("kept"),
-                Gain::InsideNoise | Gain::Underpowered if cohorts.len() >= PROBATION_MAX => {
-                    Some(if confounded { "confounded" } else { "retired" })
-                }
-                Gain::InsideNoise | Gain::Underpowered => None,
-            }
-        };
-        let Some(verdict) = verdict else {
+        let Some(verdict) = probation_verdict(suspended, &held, &all, cohorts.len(), confounded)?
+        else {
             continue;
         };
         if verdict == "suspended" && last.get(pr) == Some(&"suspended") {
@@ -1447,25 +1538,50 @@ pub(crate) fn probation(
         let mut row = serde_json::json!({
             "probation_of": pr, "type": r.kind, "verdict": verdict,
             "merge": merge, "cohorts": cohorts.len(), "confounded": confounded,
-            "power": held["power"],
+            "power": power_of(&held),
         });
         if verdict == "retired" {
-            let slug = r.kind.replace('_', "-");
-            let branch = format!(
-                "evals/propose-revert-{slug}-{}",
-                merge.get(..8).unwrap_or(merge.as_str())
-            );
-            let title = format!("evals: revert the {} fix, probation retired it", r.kind);
-            let body = format!(
-                "Probation retired {pr} after {n} post-merge `gate-main-` cohorts: the held-out goldens no longer show the gain its proof claimed, or a golden regressed. This reverts merge {merge}.",
-                n = cohorts.len()
-            );
-            row["revert"] = Value::String((doors.revert)(&branch, &title, &body, merge)?);
+            let url = open_revert(doors, &r.kind, pr, merge, cohorts.len())?;
+            put(&mut row, "revert", Value::String(url));
         }
         ledger_append(state, &row)?;
         out.push(row);
     }
     Ok(out)
+}
+
+/// Probation over `repo` with the real doors: gh for the merge commit, git
+/// for ancestry, and bank_pr for the revert PR.
+fn real_probation(
+    repo: &std::path::Path,
+    bank_dir: &std::path::Path,
+    history: &std::path::Path,
+    state: &std::path::Path,
+) -> Result<Vec<Value>, ProposeError> {
+    let merged = |pr: &str| -> Result<Option<String>, ProposeError> {
+        let jq = "select(.state == \"MERGED\") | .mergeCommit.oid";
+        let args = ["pr", "view", pr, "--json", "state,mergeCommit", "--jq", jq];
+        let sha =
+            run_in(repo, "gh", &args, GIT_TIMEOUT).map_err(|e| ProposeError::Pr(e.to_string()))?;
+        Ok((!sha.is_empty()).then_some(sha))
+    };
+    let contains = |rev: &str, merge: &str| {
+        git_out(repo, &["merge-base", "--is-ancestor", merge, rev]).is_ok()
+    };
+    let revert = |branch: &str, title: &str, body: &str, merge: &str| {
+        crate::bank_pr::open_with(repo, branch, title, body, |tree| {
+            git_out(tree, &["revert", "-m", "1", "--no-edit", merge])
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        })
+        .map_err(ProposeError::Pr)
+    };
+    let pdoors = ProbationDoors {
+        merged: &merged,
+        contains: &contains,
+        revert: &revert,
+    };
+    probation(bank_dir, history, state, &pdoors)
 }
 
 /// The real doors over `repo`: the sealed reader call, `fno-agent evals
@@ -1498,7 +1614,9 @@ fn real_cycle<'a>(
         .map_err(ProposeError::Io)?;
         let route = crate::reader_route::resolve(repo, "evals-propose", None, "sonnet");
         let out = spawn_reader(&format!("evals-propose-{kind}"), prompt, &tree, 600, &route);
-        let _ = std::fs::remove_dir_all(&tree);
+        if let Err(e) = std::fs::remove_dir_all(&tree) {
+            eprintln!("evals propose: sealed tree {}: {e}", tree.display());
+        }
         out
     };
     let run = |cohort: &str, variant: &str, sha: &str| {
@@ -1555,52 +1673,17 @@ fn real_cycle<'a>(
     if dry_run {
         return run_cycle(&cycle, true, &doors);
     }
-    let merged = |pr: &str| -> Result<Option<String>, ProposeError> {
-        let out = std::process::Command::new("gh")
-            .current_dir(repo)
-            .args([
-                "pr",
-                "view",
-                pr,
-                "--json",
-                "state,mergeCommit",
-                "--jq",
-                "select(.state == \"MERGED\") | .mergeCommit.oid",
-            ])
-            .output()?;
-        if !out.status.success() {
-            return Err(ProposeError::Pr(
-                String::from_utf8_lossy(&out.stderr).trim().to_string(),
-            ));
-        }
-        let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        Ok((!sha.is_empty()).then_some(sha))
-    };
-    let contains = |rev: &str, merge: &str| {
-        git_out(repo, &["merge-base", "--is-ancestor", merge, rev]).is_ok()
-    };
-    let revert = |branch: &str, title: &str, body: &str, merge: &str| {
-        crate::bank_pr::open_with(repo, branch, title, body, |tree| {
-            git_out(tree, &["revert", "-m", "1", "--no-edit", merge])
-                .map(|_| ())
-                .map_err(|e| e.to_string())
-        })
-        .map_err(ProposeError::Pr)
-    };
-    let pdoors = ProbationDoors {
-        merged: &merged,
-        contains: &contains,
-        revert: &revert,
-    };
-    let probation_rows = probation(&bank_dir, &history, &state, &pdoors)?;
+    let probation_rows = real_probation(repo, &bank_dir, &history, &state)?;
     let mut receipt = run_cycle(&cycle, false, &doors)?;
-    receipt["probation"] = Value::Array(probation_rows);
+    put(&mut receipt, "probation", Value::Array(probation_rows));
     Ok(receipt)
 }
 
 /// origin/main's sha in `repo`, fetched first so the base is today's main.
 fn origin_main(repo: &std::path::Path) -> Result<String, ProposeError> {
-    let _ = git_out(repo, &["fetch", "-q", "origin", "main"]);
+    if let Err(e) = git_out(repo, &["fetch", "-q", "origin", "main"]) {
+        eprintln!("evals propose: fetch failed, using the local origin/main: {e}");
+    }
     git_out(repo, &["rev-parse", "origin/main"])
 }
 
@@ -1610,18 +1693,11 @@ fn evals_cmd<'a>(
     repo: &'a std::path::Path,
 ) -> impl Fn(&[String]) -> Result<(), ProposeError> + 'a {
     move |argv: &[String]| {
-        let out = std::process::Command::new(exe)
-            .current_dir(repo)
-            .arg("evals")
-            .args(argv)
-            .output()?;
-        if !out.status.success() {
-            return Err(ProposeError::Io(format!(
-                "cohort run refused: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            )));
-        }
-        Ok(())
+        let mut args: Vec<&str> = vec!["evals"];
+        args.extend(argv.iter().map(String::as_str));
+        run_in(repo, &exe.to_string_lossy(), &args, COHORT_TIMEOUT)
+            .map(|_| ())
+            .map_err(|e| ProposeError::Io(format!("cohort run refused: {e}")))
     }
 }
 
@@ -1638,12 +1714,7 @@ pub(crate) fn run_leg(r: &Run) -> i32 {
     let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("fno-agent"));
     let cmd = evals_cmd(&exe, repo);
     let outcome = origin_main(repo).and_then(|sha| real_cycle(repo, &cmd, &lane, &sha, false));
-    let _ = crate::claims::release(
-        CLAIM_KEY,
-        &std::process::id().to_string(),
-        r.leg.claims_root,
-        None,
-    );
+    release_claim(&std::process::id().to_string(), r.leg.claims_root);
     match outcome {
         Ok(receipt) => {
             eprintln!("evals propose: {receipt}");
@@ -1708,7 +1779,7 @@ pub fn changes_cli(args: &[String]) -> i32 {
     };
     let outcome = base.and_then(|sha| real_cycle(&repo, &cmd, &lane, &sha, dry_run));
     if !dry_run {
-        let _ = crate::claims::release(CLAIM_KEY, &holder, root.as_deref(), None);
+        release_claim(&holder, root.as_deref());
     }
     match outcome {
         Ok(receipt) => {
