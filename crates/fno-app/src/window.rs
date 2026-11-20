@@ -2791,6 +2791,7 @@ pub(super) fn root_for_shot(
     warmed: super::link::WarmedLink,
     family: String,
     font_size: f32,
+    picking: bool,
     window: &mut Window,
     cx: &mut App,
 ) -> gpui::Entity<Root> {
@@ -2821,7 +2822,12 @@ pub(super) fn root_for_shot(
             cx,
         )
     });
-    root.update(cx, |root, _| root.shot = true);
+    root.update(cx, |root, _| {
+        root.shot = true;
+        // The proof frame for pick-gated paint: the hints reveal as if
+        // cmd alone is down, before any real modifier event arrives.
+        root.picking = picking;
+    });
     // The shot window never activates, and the board poll pauses while
     // the window is inactive; the shot needs every feed settled before
     // the capture, so it polls regardless.

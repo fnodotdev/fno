@@ -43,6 +43,10 @@ struct Args {
     /// View --shot renders (default: the command center board).
     #[arg(long = "shot-mode", value_enum)]
     shot_mode: Option<ShotView>,
+    /// Paint the frame as if cmd alone is held: the pick-gated hints
+    /// reveal. The proof frame for the badge rule.
+    #[arg(long = "shot-picking")]
+    shot_picking: bool,
     /// Hold the composited shot window up for a foreign capturer
     /// instead of capturing. Diagnostic.
     #[arg(long = "shot-hold", hide = true)]
@@ -88,6 +92,7 @@ fn main() {
             out: std::path::PathBuf::from(out),
             theme: args.shot_theme,
             mode: args.shot_mode.map(ShotView::into_main),
+            picking: args.shot_picking,
             hold: args.shot_hold,
         })
     } else {

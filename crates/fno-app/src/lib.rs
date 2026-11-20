@@ -75,6 +75,9 @@ pub struct ShotOptions {
     pub theme: String,
     /// View to render (default: the command center board).
     pub mode: Option<MainView>,
+    /// Paint the frame as if cmd alone is held: the pick-gated hints
+    /// reveal. The proof frame for the badge rule.
+    pub picking: bool,
 }
 
 /// Run the app (or the headless probe) and return the process exit code.
@@ -117,6 +120,7 @@ pub fn run(opts: Options) -> i32 {
             chat: opts.chat,
             font: opts.font,
             font_size: opts.font_size,
+            picking: shot.picking,
         });
     }
     if let Some(home) = std::env::var_os("HOME").and_then(|h| h.into_string().ok()) {

@@ -430,6 +430,9 @@ pub struct AppShotArgs {
     /// View to render (default: the command center board)
     #[arg(long, value_enum)]
     pub mode: Option<AppView>,
+    /// Paint the frame as if cmd alone is held: the pick-gated hints reveal
+    #[arg(long)]
+    pub picking: bool,
 }
 
 /// `mux thread`'s operation set: `reseat` is the one declared operation;
