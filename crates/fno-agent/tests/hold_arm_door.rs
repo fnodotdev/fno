@@ -31,7 +31,7 @@ fn pin_hold_env(home: &std::path::Path) {
     std::env::remove_var("FNO_AGENT_ANSWER_MINUTES");
 }
 
-fn seed_registry_row(home: &std::path::Path, name: &str, session: &str) {
+fn seed_registry_row(name: &str, session: &str) {
     let row = serde_json::json!({
         "name": name, "status": "live", "cwd": "/repo", "harness": "claude",
         "harness_session_id": session,
@@ -57,7 +57,7 @@ fn the_arm_door_writes_a_user_hold_at_the_ceiling() {
     let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let tmp = tempfile::TempDir::new().unwrap();
     pin_hold_env(tmp.path());
-    seed_registry_row(tmp.path(), "worker", SID);
+    seed_registry_row("worker", SID);
     let code = run_mail_hold(&["--session".into(), SID.into(), "--on".into()]);
     assert_eq!(code, 0, "--on exits 0 on a known session");
     let hold = stored_hold(tmp.path(), SID).expect("the arm wrote a hold");
@@ -78,7 +78,7 @@ fn the_arm_door_refuses_an_unknown_session_and_writes_nothing() {
     let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let tmp = tempfile::TempDir::new().unwrap();
     pin_hold_env(tmp.path());
-    seed_registry_row(tmp.path(), "worker", SID);
+    seed_registry_row("worker", SID);
     let code = run_mail_hold(&["--session".into(), OTHER.into(), "--on".into()]);
     assert_eq!(code, 3, "an unknown session refuses like --off");
     assert!(stored_hold(tmp.path(), OTHER).is_none());
