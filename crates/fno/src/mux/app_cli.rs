@@ -461,6 +461,10 @@ fn seed_transcript(root: &Path) -> bool {
         "\n",
         r#"{"parentUuid":null,"isSidechain":false,"type":"assistant","uuid":"a2","message":{"id":"m2","role":"assistant","content":[{"type":"text","text":"Frontmost identical across the three reads, no keystrokes, no Dock bounce, and the frame lands. The window composites invisible the whole time."}]},"sessionId":"00000000-0000-4000-8000-000000000001"}"#,
         "\n",
+        r#"{"parentUuid":null,"isSidechain":false,"type":"assistant","uuid":"a3","message":{"id":"m3","role":"assistant","content":[{"type":"thinking","thinking":"The fold needs a row that carries text, so the chevron has something to open and the body holds this sentence."},{"type":"text","text":"The thinking row above carries text, so its fold opens."}]},"sessionId":"00000000-0000-4000-8000-000000000001"}"#,
+        "\n",
+        r#"{"parentUuid":null,"isSidechain":false,"type":"assistant","uuid":"a4","message":{"id":"m4","role":"assistant","content":[{"type":"redacted_thinking"},{"type":"text","text":"A redacted block carries no text, so no fold paints at all."}]},"sessionId":"00000000-0000-4000-8000-000000000001"}"#,
+        "\n",
     );
     match std::fs::write(dir.join(format!("{session}.jsonl")), rows) {
         Ok(()) => true,
@@ -547,7 +551,10 @@ fn shot(out: &str, theme: &str, mode: Option<AppView>, picking: bool) -> i32 {
     if let Some(view) = mode {
         cmd.arg("--shot-mode").arg(view.as_spelling());
         if matches!(view, AppView::Chat) {
-            cmd.arg("--chat").arg("newest");
+            // The seeded session id, not `newest`: newest resolves inside
+            // the cwd's project dir, and the shot world's transcript lives
+            // in its own demo-project root the pin cwd never matches.
+            cmd.arg("--chat").arg(DEMO_CHAT_SESSION);
         }
     }
     if picking {
