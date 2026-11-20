@@ -333,6 +333,17 @@ pub struct HarnessCapabilities {
     /// Empty means no measured form: the reader runs the plain headless lane.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reader_args: Vec<String>,
+    /// The tool-bearing one-shot reader's fenced flags, after its `--model`:
+    /// the bounded form with the row's read-tools grant. Empty means no
+    /// measured form; a reader whose prompt promises file reads refuses
+    /// instead of running the plain headless lane.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reader_tools_args: Vec<String>,
+    /// The fenced flags that turn the one-shot's stdout into a machine-
+    /// readable envelope a spend reader can parse. Empty = no measured
+    /// envelope form; spend figures then record as `unknown`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reader_spend_args: Vec<String>,
     /// Which delivered-mail header form this harness's composer tolerates:
     /// `true` = the `@name` mention form, `false` = plain `name` (a bare
     /// `@` can open a composer mention picker or read as an address). The
@@ -1972,6 +1983,27 @@ pub fn packaged_reader_args(harness: &str) -> Option<Vec<String>> {
         HarnessContract::packaged().expect("the packaged capability contract parses")
     });
     Some(contract.harness.get(harness)?.reader_args.clone())
+}
+
+/// The packaged contract's tool-bearing reader flags for `harness`. `None`
+/// is an unknown harness; `Some([])` a known row with no measured
+/// tool-bearing form.
+pub fn packaged_reader_tools_args(harness: &str) -> Option<Vec<String>> {
+    static CONTRACT: std::sync::OnceLock<HarnessContract> = std::sync::OnceLock::new();
+    let contract = CONTRACT.get_or_init(|| {
+        HarnessContract::packaged().expect("the packaged capability contract parses")
+    });
+    Some(contract.harness.get(harness)?.reader_tools_args.clone())
+}
+
+/// The packaged contract's spend-envelope flags for `harness`. `None` is an
+/// unknown harness; `Some([])` a known row with no measured envelope form.
+pub fn packaged_reader_spend_args(harness: &str) -> Option<Vec<String>> {
+    static CONTRACT: std::sync::OnceLock<HarnessContract> = std::sync::OnceLock::new();
+    let contract = CONTRACT.get_or_init(|| {
+        HarnessContract::packaged().expect("the packaged capability contract parses")
+    });
+    Some(contract.harness.get(harness)?.reader_spend_args.clone())
 }
 
 pub fn render_session_argv(

@@ -134,6 +134,59 @@ pub(crate) fn reader_argv(
     route: &ReaderRoute,
     extra_owned: &[String],
 ) -> Vec<String> {
+    let mut argv = argv_head(name, cwd, timeout_secs, route, extra_owned);
+    argv.push(prompt.to_string());
+    argv.push("--".to_string());
+    if let Some(model) = &route.model {
+        argv.extend(["--model".to_string(), model.clone()]);
+    }
+    argv.extend(
+        crate::harness_capabilities::packaged_reader_args(&route.harness).unwrap_or_default(),
+    );
+    argv
+}
+
+/// The tool-bearing reader's spawn line: [`reader_argv`]'s shape with the
+/// harness's `reader_tools_args` row in the fence instead of the tool-less
+/// form. A row without a measured tool-bearing form refuses: the reader's
+/// prompt promises file reads, and the plain headless lane cannot honor
+/// that promise.
+pub(crate) fn reader_tools_argv(
+    name: &str,
+    prompt: &str,
+    cwd: &Path,
+    timeout_secs: u64,
+    route: &ReaderRoute,
+    extra_owned: &[String],
+) -> Result<Vec<String>, String> {
+    let tools = crate::harness_capabilities::packaged_reader_tools_args(&route.harness)
+        .filter(|args| !args.is_empty())
+        .ok_or_else(|| {
+            format!(
+                "harness {} has no measured tool-bearing reader form; add reader_tools_args \
+                 to its capability row",
+                route.harness
+            )
+        })?;
+    let mut argv = argv_head(name, cwd, timeout_secs, route, extra_owned);
+    argv.push(prompt.to_string());
+    argv.push("--".to_string());
+    if let Some(model) = &route.model {
+        argv.extend(["--model".to_string(), model.clone()]);
+    }
+    argv.extend(tools);
+    argv
+}
+
+/// The spawn flags before the prompt: identity, machine, harness lane, and
+/// the caller's own pre-prompt flags. Shared by both reader fence forms.
+fn argv_head(
+    name: &str,
+    cwd: &Path,
+    timeout_secs: u64,
+    route: &ReaderRoute,
+    extra_owned: &[String],
+) -> Vec<String> {
     let mut argv: Vec<String> = [
         "agents",
         "spawn",
@@ -158,14 +211,6 @@ pub(crate) fn reader_argv(
         argv.extend(["--route".to_string(), lane.clone()]);
     }
     argv.extend(extra_owned.iter().cloned());
-    argv.push(prompt.to_string());
-    argv.push("--".to_string());
-    if let Some(model) = &route.model {
-        argv.extend(["--model".to_string(), model.clone()]);
-    }
-    argv.extend(
-        crate::harness_capabilities::packaged_reader_args(&route.harness).unwrap_or_default(),
-    );
     argv
 }
 
@@ -291,5 +336,50 @@ mod tests {
         ));
         assert!(tail.starts_with(&["--model".to_string(), "sonnet".to_string()]));
         assert!(tail.iter().any(|t| t == "--strict-mcp-config"));
+    }
+
+    #[test]
+    fn the_tools_form_carries_the_grant_and_an_unmeasured_row_refuses() {
+        let split = |argv: Vec<String>| {
+            let at = argv.iter().position(|t| t == "--").unwrap();
+            let head: Vec<String> = argv.iter().take(at).cloned().collect();
+            let tail: Vec<String> = argv.into_iter().skip(at + 1).collect();
+            (head, tail)
+        };
+        let (head, tail) = split(
+            reader_tools_argv(
+                "golden-drafter",
+                "draft this",
+                Path::new("/tmp"),
+                60,
+                &ReaderRoute::pinned("claude", "sonnet"),
+                &[],
+            )
+            .unwrap(),
+        );
+        assert!(head.windows(2).any(|w| w == ["--harness", "claude"]));
+        assert_eq!(head.last().map(String::as_str), Some("draft this"));
+        assert!(tail.starts_with(&["--model".to_string(), "sonnet".to_string()]));
+        // The row's read-tools grant rides whole: the tools pair and the
+        // allowlist pair, not the tool-less empty `--tools ""` form.
+        let at = tail.iter().position(|t| t == "--tools").unwrap();
+        assert_eq!(tail[at + 1], "Read,Grep,Glob");
+        assert!(tail
+            .windows(2)
+            .any(|w| w == ["--allowedTools", "Read,Grep,Glob"]));
+
+        // A harness with no measured tool-bearing form refuses by name
+        // instead of running a reader that cannot read.
+        let err = reader_tools_argv(
+            "golden-drafter",
+            "draft this",
+            Path::new("/tmp"),
+            60,
+            &ReaderRoute::pinned("codex", ""),
+            &[],
+        )
+        .unwrap_err();
+        assert!(err.contains("codex"), "{err}");
+        assert!(err.contains("reader_tools_args"), "{err}");
     }
 }
