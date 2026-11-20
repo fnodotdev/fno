@@ -1151,7 +1151,7 @@ fn decide_with_warnings<P: Probes>(
     }
     if let Some(blocker) =
         crate::merge_gates::visual_approval_blocker(probes, cwd, facts.number, &head)
-            .filter(|b| b.code == "visual_declined")
+            .filter(|b| crate::merge_gates::visual_holds_merge(&b.code))
     {
         return Err(Outcome::Held {
             reason: blocker.detail,
@@ -1535,11 +1535,14 @@ fn process_warnings<P: Probes>(
     if let Some(warning) = carry_warning {
         warnings.push(warning);
     }
-    // A user decline is authority and holds its named head. A missing look is
-    // a process condition: it warns and never holds; after the merge the
+    // A user decline is authority and holds its named head; an open look ask
+    // holds until the user answers it. A missing look with no ask is a
+    // process condition: it warns and never holds; after the merge the
     // warning routes to the lead as a look request.
     let (visual_warning, visual_hold) = match visual {
-        Some(blocker) if blocker.code == "visual_declined" => (None, Some(blocker)),
+        Some(blocker) if crate::merge_gates::visual_holds_merge(&blocker.code) => {
+            (None, Some(blocker))
+        }
         other => (other, None),
     };
     for evidence in [

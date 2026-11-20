@@ -35,6 +35,8 @@ The two fields answer different questions. A pending or unknown CI verdict remai
 
 The missing look produces warning evidence. It does not cancel CI or automatically file another approval question. Screenshots and design critiques remain useful for the work and for any explicit user request.
 
+An asked look is different. When an open question page names the PR in its title, the user was asked and has not answered. The merge decision then reads the hold `visual_look_pending`, which names the question. It clears when the user answers, or when the page closes as stale. It never cancels CI.
+
 ### A warning appears beside a refusal
 
 Read the refusal separately. A warning never clears a user's hold, grants missing merge authority or authorizes a different head.

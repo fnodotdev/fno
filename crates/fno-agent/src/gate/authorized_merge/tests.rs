@@ -1727,12 +1727,41 @@ fn a_paint_pr_merges_on_a_missing_look_and_holds_on_a_declined_page() {
     );
     drop(requests);
     fake.facts = None;
+    // A look ask names the PR in its title and stays open: the user was
+    // asked and has not answered, so the merge holds instead of warning.
     std::fs::write(
         &page,
-        "---\nquestion_id: q-xc129\nstatus: open\ntitle: May PR 7 merge?\n---\nbody\n",
+        "---\nquestion_id: q-xc129\nstatus: open\ntitle: May PR 7 merge?\n\
+         aliases:\n- May PR 7 merge?\n- D3505\n---\nbody\n",
     )
     .unwrap();
-    assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_some());
+    let pending = crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).unwrap();
+    assert_eq!(pending.code, "visual_look_pending");
+    assert!(pending.detail.contains("D3505"), "{}", pending.detail);
+    fake.facts = Some(PrFacts {
+        head_sha: head.clone(),
+        body: Some("Docs: fno-web#1\n".to_string()),
+        ..open_facts()
+    });
+    fake.look_requests.borrow_mut().clear();
+    let at_head = Request {
+        cwd: tmp.clone(),
+        covered_head: Some(head.clone()),
+        ..request(Effect::Merge)
+    };
+    let waits = run(&fake, &at_head);
+    assert_eq!(waits.word(), "held", "{waits:?}");
+    assert!(waits.detail().contains("is open and unanswered"));
+    assert!(fake.look_requests.borrow().is_empty());
+    // A sibling PR named only in an open page's body prose is no ask.
+    std::fs::write(
+        &page,
+        "---\nquestion_id: q-xc129\nstatus: open\ntitle: May PR 8 merge?\n---\nships before PR 7\n",
+    )
+    .unwrap();
+    let warns = crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).unwrap();
+    assert_eq!(warns.code, "visual_approval");
+    fake.facts = None;
     // An answer that rejects, or picks no option, keeps the hold.
     for answer in [
         "2. Hold for changes",
