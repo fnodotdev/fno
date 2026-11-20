@@ -425,7 +425,9 @@ pub fn settle_reserved(code: i32) {
         return;
     }
     for (key, holder, root) in minted {
-        let _ = claims::release(&key, &holder, root.as_deref(), None);
+        if let Err(e) = claims::release(&key, &holder, root.as_deref(), None) {
+            eprintln!("fno agent resume: warning: freeing {key} failed ({e})");
+        }
     }
 }
 

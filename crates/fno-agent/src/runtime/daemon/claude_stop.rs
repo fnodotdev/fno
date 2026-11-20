@@ -320,7 +320,7 @@ pub(super) async fn stop_claude_pid_confirmed(entry: &RegistryEntry) -> bool {
 /// worker and named by no live argv: a respawned job outlives its recorded
 /// pid. A row with neither carries no evidence, and an unreadable roster or
 /// an unsignalable pid never reads as gone.
-fn no_transport_row_gone(entry: &RegistryEntry) -> bool {
+pub(super) fn no_transport_row_gone(entry: &RegistryEntry) -> bool {
     let sid = entry
         .harness_session_id
         .as_deref()
@@ -541,31 +541,6 @@ mod tests {
 
     fn start_of_every(pid: u32) -> Option<u64> {
         Some(u64::from(pid) + 7)
-    }
-
-    /// A no-short-id row stops as already exited only on proof: a reaped
-    /// pid reads gone; a live pid, or a row with no pid and no session,
-    /// keeps the refusal.
-    #[test]
-    fn a_no_transport_row_reads_gone_only_on_proof() {
-        let mut child = std::process::Command::new("/bin/sleep")
-            .arg("0")
-            .spawn()
-            .expect("spawn sleep child");
-        let dead = child.id();
-        child.wait().expect("reap sleep child");
-        let row = |pid: Option<u32>, start: Option<u64>| RegistryEntry {
-            pid,
-            pid_start_time: start,
-            ..Default::default()
-        };
-        assert!(no_transport_row_gone(&row(Some(dead), None)));
-        let mine = std::process::id();
-        assert!(!no_transport_row_gone(&row(
-            Some(mine),
-            process_start_time(mine)
-        )));
-        assert!(!no_transport_row_gone(&row(None, None)));
     }
 
     /// AC2-ERR: the supervisor pid and this daemon's pid are never targets.
