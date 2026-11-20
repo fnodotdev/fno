@@ -8,7 +8,7 @@ use std::ops::Range;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui::{
     actions, canvas, div, font, point, prelude::*, px, rgb, rgba, size, AnyView, App, Application,
@@ -139,6 +139,9 @@ pub struct Root {
     frames: HashMap<u64, Arc<Frame>>,
     panes: HashMap<u64, Entity<PaneView>>,
     modes: Modes,
+    /// The mux's own key scanner: claims the prefix (Ctrl+B by default)
+    /// before any pane input, the same layer the terminal client claims it.
+    scanner: fno::ui::keys::Scanner,
     notice: Option<String>,
     /// The notice reports a failure: it paints in the error color.
     notice_failed: bool,
@@ -287,6 +290,13 @@ impl Root {
         let light = super::palette::appearance_is_light(window.appearance());
         let theme_cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());
         let (palette, theme_warning) = super::palette::for_appearance(light, &theme_cwd);
+        // The key layer (config.mux.prefix, [mux.keys]), installed before the
+        // scanner reads its first keystroke - the same loader the terminal
+        // client uses. A refused rebind surfaces as the startup notice rather
+        // than silently running the shipped default.
+        let (keymap, key_warnings) = fno::ui::digest_overlay::keymap(&theme_cwd);
+        fno::ui::keys::install(keymap);
+        let key_warning = key_warnings.first().map(|w| w.0.clone());
         let mut root = Root {
             main,
             link: None,
@@ -294,7 +304,8 @@ impl Root {
             frames: HashMap::new(),
             panes: HashMap::new(),
             modes: Modes::default(),
-            notice: theme_warning,
+            scanner: fno::ui::keys::Scanner::default(),
+            notice: key_warning.or(theme_warning),
             notice_failed: false,
             notice_gen: 0,
             shot: false,
@@ -1791,10 +1802,99 @@ impl Root {
         }
         if let Some(bytes) = keys::encode(&key, self.modes) {
             cx.stop_propagation();
-            if self.notice.take().is_some() {
-                cx.notify();
+            self.mux_key(bytes, window, cx);
+        }
+    }
+
+    /// One encoded keystroke through the mux scanner: the prefix claims its
+    /// chords before any pane input, exactly like the terminal client's
+    /// scan loop. A pending prefix announces itself once; a held chord
+    /// candidate or tab number arms the quiet-window flush.
+    fn mux_key(&mut self, bytes: Vec<u8>, window: &mut Window, cx: &mut Context<Self>) {
+        let was_pending = self.scanner.prefix_pending();
+        for event in self.scanner.scan(&bytes, Instant::now()) {
+            self.mux_event(event, window, cx);
+        }
+        if self.scanner.prefix_pending() && !was_pending {
+            self.say(
+                "prefix pending: the next key runs a mux action (cmd-/ shows the sheet)".into(),
+                cx,
+            );
+        }
+        if self.scanner.chord_pending() || self.scanner.digits_pending() {
+            self.arm_quiet_flush(cx);
+        }
+    }
+
+    /// Dispatch one resolved mux event; the same map the terminal client's
+    /// dispatch runs, through [`keys::translate`].
+    fn mux_event(
+        &mut self,
+        event: fno::ui::keys::Event,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match keys::translate(event) {
+            keys::MuxAction::Input(bytes) => self.pane_input(bytes, cx),
+            keys::MuxAction::Command(c) => self.send(ClientMsg::Command(c)),
+            keys::MuxAction::Tab(n) => self.mux_tab(n, cx),
+            keys::MuxAction::Quit => {
+                self.send(ClientMsg::Detach);
+                record_ui_state(self, cx);
+                persist_window_state(window, cx);
+                cx.quit();
             }
-            self.send(ClientMsg::Input(bytes));
+            keys::MuxAction::Notice(text) => self.say(text, cx),
+        }
+    }
+
+    /// Bytes that reached no mux arm: pane input, and the notice a typing
+    /// keystroke always dismissed before, exactly as the pre-prefix path did.
+    fn pane_input(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
+        if self.notice.take().is_some() {
+            cx.notify();
+        }
+        self.send(ClientMsg::Input(bytes));
+    }
+
+    /// A 1-based tab ordinal resolved against the active workspace's strip,
+    /// the same rows the cmd-digit pick walks; a miss answers with a notice,
+    /// never a silent dead key.
+    fn mux_tab(&mut self, n: usize, cx: &mut Context<Self>) {
+        let at = n.saturating_sub(1);
+        match super::tabs::strip(&self.layout).into_iter().nth(at) {
+            Some(tab) => self.act(tab.action, cx),
+            None => self.say(format!("no tab {n} in this workspace"), cx),
+        }
+    }
+
+    /// Arm the 40ms quiet window: a held chord candidate or tab number
+    /// releases to the pane when no keystroke lands (the terminal client's
+    /// CHORD_FLUSH_AFTER). Each pending keystroke re-arms; a flush that
+    /// finds nothing held is a no-op, so stacked arms are harmless.
+    fn arm_quiet_flush(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(40))
+                .await;
+            let _ = this.update(cx, |root, cx| root.flush_quiet(cx));
+        })
+        .detach();
+    }
+
+    /// Release whatever the quiet window ends: only Forward chunks and held
+    /// tab numbers can come out of a flush (the scanner's contract), never
+    /// a detach, so no Window handle is needed here.
+    fn flush_quiet(&mut self, cx: &mut Context<Self>) {
+        let events = [self.scanner.flush_chord(), self.scanner.flush_digits()];
+        for event in events.into_iter().flatten() {
+            match keys::translate(event) {
+                keys::MuxAction::Input(bytes) => self.pane_input(bytes, cx),
+                keys::MuxAction::Command(c) => self.send(ClientMsg::Command(c)),
+                keys::MuxAction::Tab(n) => self.mux_tab(n, cx),
+                keys::MuxAction::Notice(text) => self.say(text, cx),
+                keys::MuxAction::Quit => {}
+            }
         }
     }
 

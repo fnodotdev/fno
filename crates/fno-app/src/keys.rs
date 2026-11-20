@@ -117,7 +117,8 @@ pub fn shortcut(k: &Key) -> Option<Shortcut> {
 }
 
 /// The key that opens and closes the key sheet. Help > Keyboard Shortcuts
-/// runs the same action. Ctrl-b is no prefix here: it goes to the pane.
+/// runs the same action. Ctrl-b is the mux prefix here, as in the terminal
+/// client: the terminal view claims it before pane input.
 pub const SHEET_KEY: &str = "cmd-/";
 
 /// The key that opens and closes the go-to palette. Help > Go to… runs the
@@ -157,6 +158,17 @@ pub const SHEET: &[(&str, &[(&str, &str)])] = &[
             ("⌘⌥→ ⌘⌥↓", "grow the focused pane"),
             ("⌘⌥← ⌘⌥↑", "shrink the focused pane"),
             ("drag a split line", "resize both panes"),
+        ],
+    ),
+    (
+        "mux prefix",
+        &[
+            ("ctrl-b", "the mux prefix; the next key runs a mux action"),
+            ("ctrl-b 1-9", "pick a tab"),
+            ("ctrl-b ctrl-b", "send ctrl-b to the pane"),
+            ("ctrl-b arrows", "focus panes; ctrl resizes, shift moves"),
+            ("ctrl-b x ; c", "close pane, last pane, new tab"),
+            ("ctrl-b d", "detach and quit"),
         ],
     ),
     (
@@ -324,6 +336,41 @@ pub fn paste(text: &str, modes: Modes) -> Vec<u8> {
     out
 }
 
+/// What one scanned mux event does in this app. The scanner is the mux's
+/// own ([`fno::ui::keys::Scanner`]), so both front doors keep one key
+/// semantic; the app claims the prefix at the same layer the terminal
+/// client does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MuxAction {
+    /// Bytes that still reach the pane: pass-through, the prefix-prefix
+    /// literal, a released lone Esc.
+    Input(Vec<u8>),
+    /// A wire command: split, focus, resize, swap, zoom, pane and tab moves.
+    Command(Command),
+    /// A 1-based tab ordinal the window resolves against the active strip.
+    Tab(usize),
+    /// prefix+d detaches, the cmd-q arm.
+    Quit,
+    /// A key with no app surface yet: name it in the notice, forward nothing.
+    Notice(String),
+}
+
+/// Translate one scanner event. Forward, wire commands, tab ordinals and
+/// detach run app-side; every client-local overlay event has no app surface
+/// yet and becomes a notice naming it, so a prefix chord never leaks into
+/// the pane.
+pub fn translate(event: fno::ui::keys::Event) -> MuxAction {
+    use fno::ui::keys::Event;
+    match event {
+        Event::Forward(chunk) => MuxAction::Input(chunk),
+        Event::Cmd(c) => MuxAction::Command(c),
+        Event::SelectTabIdx(n) => MuxAction::Tab(n),
+        Event::Detach => MuxAction::Quit,
+        Event::Bell => MuxAction::Notice("unbound prefix key".into()),
+        other => MuxAction::Notice(format!("{other:?} has no app action yet")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -336,7 +383,7 @@ mod tests {
     }
 
     #[test]
-    fn cmd_digits_pick_a_row_views_have_no_key_and_ctrl_b_reaches_the_pane() {
+    fn cmd_digits_pick_a_row_views_have_no_key_and_encode_maps_ctrl_b() {
         let cmd = |k| Key {
             key: k,
             cmd: true,
@@ -464,5 +511,58 @@ mod tests {
         assert_eq!(paste("a\nb", modes), b"a\rb");
         modes.apply(b"\x1b[?2004h");
         assert_eq!(paste("a\nb", modes), b"\x1b[200~a\rb\x1b[201~");
+    }
+
+    /// The app_prefix contract: the shared scanner claims the prefix before
+    /// any pane input, and translate maps the actionable arms. `z` is
+    /// unbound in the default table, so a post-prefix z is the Bell arm.
+    #[test]
+    fn app_prefix_claims_chords_and_translate_maps_the_arms() {
+        use fno::ui::keys::{Event, Scanner};
+        use std::time::Instant;
+        // Ctrl+B alone is pending: no events, nothing to forward.
+        let mut scanner = Scanner::default();
+        assert!(scanner.scan(&[0x02], Instant::now()).is_empty());
+        // prefix-prefix forwards exactly one literal prefix byte.
+        assert_eq!(
+            scanner.scan(&[0x02], Instant::now()),
+            vec![Event::Forward(vec![0x02])]
+        );
+        // Ctrl+B then 3 selects tab 3 and forwards nothing.
+        let mut scanner = Scanner::default();
+        scanner.scan(&[0x02], Instant::now());
+        assert_eq!(
+            scanner.scan(&[b'3'], Instant::now()),
+            vec![Event::SelectTabIdx(3)]
+        );
+        // Ctrl+B then an unbound key is one Bell and no forward bytes.
+        let mut scanner = Scanner::default();
+        scanner.scan(&[0x02], Instant::now());
+        assert_eq!(scanner.scan(&[b'z'], Instant::now()), vec![Event::Bell]);
+        // A lone Esc held as a chord candidate still reaches the pane once
+        // the quiet window releases it.
+        let mut scanner = Scanner::default();
+        assert!(scanner.scan(&[0x1b], Instant::now()).is_empty());
+        let released = scanner.flush_chord().unwrap();
+        assert_eq!(translate(released), MuxAction::Input(vec![0x1b]));
+        // The translate map: every arm the app runs, and the notice arms.
+        assert_eq!(
+            translate(Event::Cmd(Command::NextPane)),
+            MuxAction::Command(Command::NextPane)
+        );
+        assert_eq!(translate(Event::SelectTabIdx(3)), MuxAction::Tab(3));
+        assert_eq!(translate(Event::Detach), MuxAction::Quit);
+        assert_eq!(
+            translate(Event::Forward(vec![0x02])),
+            MuxAction::Input(vec![0x02])
+        );
+        assert_eq!(
+            translate(Event::Bell),
+            MuxAction::Notice("unbound prefix key".into())
+        );
+        assert!(matches!(
+            translate(Event::OpenSelector),
+            MuxAction::Notice(_)
+        ));
     }
 }
