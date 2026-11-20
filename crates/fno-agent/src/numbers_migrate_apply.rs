@@ -234,7 +234,7 @@ fn whole_row(
     let mut stmt = conn
         .prepare(&format!("SELECT * FROM \"{table}\" WHERE rowid = ?1"))
         .map_err(|e| e.to_string())?;
-    let names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
+    let names: Vec<String> = stmt.column_names().map(str::to_string).collect();
     stmt.query_row(params![rowid], |row| {
         let mut out = BTreeMap::new();
         for (i, name) in names.iter().enumerate() {
