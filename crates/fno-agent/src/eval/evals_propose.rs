@@ -1067,6 +1067,7 @@ fn prove_candidate(
             let body = proof_body(&cluster.kind, base_cohort, &cand, &held, &all, edits.len());
             match ship_candidate(c.day, &cluster.kind, edits, &body, doors)? {
                 ShipOutcome::Opened(url) => {
+                    row["learning"] = Value::from(record_learning(c.state, &url, &held));
                     row["pr"] = Value::String(url);
                     "shipped"
                 }
@@ -1079,6 +1080,36 @@ fn prove_candidate(
     };
     row["verdict"] = Value::from(verdict);
     Ok(row)
+}
+
+/// The shipped change's proof row in the learnings ledger (`kind: pr`):
+/// the held-out paired delta is the score, so `evals report --learnings`
+/// lists the propose loop's gains beside the go-node and persona rows.
+/// Returns the ledger's answer for the cluster row; a refusal never undoes
+/// the PR.
+fn record_learning(state: &std::path::Path, url: &str, held: &Value) -> String {
+    let mean = serde_json::from_value::<ProofLine>(held["power"].clone())
+        .ok()
+        .and_then(|p| p.paired)
+        .and_then(|p| p.mean_delta_points);
+    let row = crate::evals_ledger::Learning {
+        change: url.to_string(),
+        kind: crate::evals_ledger::ChangeKind::Pr,
+        trace_ids: Vec::new(),
+        golden: None,
+        go_node: None,
+        score_before: mean.map(|_| 0.0),
+        pr: Some(url.to_string()),
+        score_after: mean,
+        score: Some("held-out paired delta in points against the fresh base cohort".into()),
+        outcome: crate::evals_ledger::Outcome::Improved,
+        recorded_at: Some(chrono::Utc::now().to_rfc3339()),
+    };
+    match crate::evals_ledger::append(state, row) {
+        Ok(true) => "recorded".into(),
+        Ok(false) => "already_recorded".into(),
+        Err(e) => format!("refused: {e}"),
+    }
 }
 
 /// One propose cycle (changes 1-4): cluster, budget line, fresh base
@@ -2183,6 +2214,8 @@ mod tests {
         let out = cycle_with(change);
         assert_eq!(out.prs, 1, "{}", out.receipt);
         assert_eq!(verdict_of(&out.ledger, "t1"), "shipped");
+        let t1 = out.ledger.iter().find(|r| r["type"] == "t1").unwrap();
+        assert_eq!(t1["learning"], "recorded");
         assert_eq!(verdict_of(&out.ledger, "t3"), "underpowered");
         let cluster_rows = out.ledger.iter().filter(|r| r["type"].is_string()).count();
         assert_eq!(cluster_rows, 2);
