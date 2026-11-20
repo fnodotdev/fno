@@ -110,7 +110,7 @@ fn parse_query(args: &[String]) -> Option<Query<'_>> {
 /// because a WAL-mode store writes there first: the db file's own
 /// mtime and size can hold still across an append, and the authority
 /// recheck a long decide owes must see a decision that lands mid-process.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 struct StoreKey {
     graph: PathBuf,
     db_meta: Option<(SystemTime, u64)>,
@@ -528,7 +528,7 @@ mod tests {
         let full = crate::backlog::decisions_cli::list_core_over(
             &rows,
             0,
-            GraphEntries::default(),
+            super::decisions_cli::GraphEntries::default(),
             Some("pr-hold:o/r#7"),
             Some("law"),
             Some("live"),
