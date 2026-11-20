@@ -320,10 +320,6 @@ pub(crate) fn scope_live_worker_count(rows: &[Value], scope_ids: &BTreeSet<Strin
         .count()
 }
 
-/// The worker's own last word, read in process from its transcript tail:
-/// the same records a peek renders, with no interpreter per worker. A worker
-/// with no transcript yet (a pane row before reconcile backfills its session)
-/// falls back to the pane screen, read in process the way peek reads it.
 /// What one quiet worker's tail holds: its last report, no report, or a
 /// read that failed with its reason.
 enum Tail {
@@ -332,6 +328,10 @@ enum Tail {
     Unreadable(String),
 }
 
+/// The worker's own last word, read in process from its transcript tail:
+/// the same records a peek renders, with no interpreter per worker. A worker
+/// with no transcript yet (a pane row before reconcile backfills its session)
+/// falls back to the pane screen, read in process the way peek reads it.
 fn peek_last_report(handle: &str) -> Tail {
     let texts = match crate::session_truth::tail_texts(handle, PEEK_RECORDS) {
         Ok(texts) => texts,
