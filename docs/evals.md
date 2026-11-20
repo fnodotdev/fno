@@ -51,6 +51,10 @@ tags: [cli, greenfield]
 
 Success criteria must be **mechanical** (develop-tests discipline): a task with no runnable `grade` is invalid at load time, and an all-trivial grade (`command: true`) warns. A **grade-only** task (no `prompt`) skips the worker step and grades the fixture directly - the honest model for a CI-flake regression task where there is no agent work, only a flake to measure.
 
+## The review-score set (scoring the reviewer)
+
+Tagged `review-score`, the set scores the review lane against stored incidents: an incident entry (a merge that turned main red or was reverted) and clean controls (merged PRs that passed the merge gate and were never reverted). The incident grade passes only when a blocking finding names the known bug site - that is recall. A blocking finding on a clean control is a false finding. Run it with `fno doctor evals run --tag review-score`; the fold command reads the per-task rows from the eval-history journal. One entry is a declared reconstruction of a founding incident whose repository is private, marked `reconstructed: true` in its meta; real incidents on this public repository vendor verbatim. The entry contract and the add-an-incident recipe live in `evals/fixtures/review-incidents/README.md`.
+
 ## Commands
 
 | Command | What it does |
