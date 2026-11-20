@@ -7965,7 +7965,7 @@
    "wizard": "never",
    "question": "",
    "default_source": "default",
-   "doc": "Members on one lane with a fresh capped tail needed to open it (default 2). One member suffices when the account's runtime-state quota lock is also set.",
+   "doc": "Members on one lane with a fresh capped tail needed to open it (default 2). One member suffices when its 429 names a reset still ahead, or when the account's runtime-state quota lock is set.",
    "edit": "editor"
   },
   {
