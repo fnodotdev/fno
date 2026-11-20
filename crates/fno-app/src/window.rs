@@ -1026,62 +1026,79 @@ impl Root {
         }
     }
 
-    /// Answer the open question with the picked row. The mux already read
-    /// the harness's own menu off the pane and pinned a keystroke per row,
-    /// so the answer goes through `PaneAnswer`, which the server checks
-    /// against the live grid before it types.
+    /// Answer the open question with the picked row. Where the mux already
+    /// read the harness's own menu off the pane and pinned a keystroke per
+    /// row, the answer goes through `PaneAnswer`, which the server checks
+    /// against the live grid before it types. Claude's question screen has
+    /// no extracted menu, but its rows take their own number as a key, so a
+    /// pick there types that digit into the pane.
     fn answer_choice(&mut self, cx: &mut Context<Self>) {
         let Some((_, ask)) = self.chat.conv.open_question() else {
             return;
         };
         let pick = self.chat.pick.min(ask.choices.len().saturating_sub(1));
-        let target = self
-            .chat
-            .key
-            .as_ref()
-            .and_then(|key| chat::target_pane(self, key));
-        let menu = target.as_ref().and_then(|(pane, identity)| {
-            self.layout
-                .agents
-                .iter()
-                .find(|a| {
-                    a.pane_id == Some(*pane)
-                        && a.harness_session_id.as_deref() == Some(identity.as_str())
-                })
-                .and_then(|a| a.answerable.clone())
-        });
-        let (Some((pane, _)), Some(menu)) = (target, menu) else {
-            self.say(
-                "the pane shows no menu to answer: answer in the pane".into(),
-                cx,
-            );
-            return;
-        };
-        // The pane's menu must be this question's: the row whose label holds
-        // the picked option's text. Any other prompt in the pane (a
-        // permission ask, a stale question) fails closed instead of taking
-        // a keystroke meant for another menu.
         let Some(choice) = ask.choices.get(pick) else {
             return;
         };
         let want = choice.label.trim().to_lowercase();
-        let Some(option) = menu
-            .options
-            .iter()
-            .find(|o| o.label.to_lowercase().contains(&want))
-        else {
-            self.say(
-                "the pane's menu is not this question: answer in the pane".into(),
-                cx,
-            );
+        let Some(key) = self.chat.key.clone() else {
             return;
         };
-        self.send(ClientMsg::PaneAnswer {
-            pane,
-            fingerprint: menu.fingerprint,
-            region_lines: u16::try_from(menu.region_lines).unwrap_or(u16::MAX),
-            keystroke: option.keystroke.clone(),
+        // The row is addressed by pane id and the server re-checks the pane
+        // before it types, so the pane need not be on screen.
+        let row = self.layout.agents.iter().find(|a| {
+            !a.exited
+                && a.pane_id.is_some()
+                && a.harness_session_id.as_deref() == Some(key.session_id.as_str())
         });
+        let Some((pane, menu)) = row.and_then(|a| a.pane_id.map(|p| (p, a.answerable.clone())))
+        else {
+            self.say("no pane hosts this session: answer in the pane".into(), cx);
+            return;
+        };
+        let digit = u8::try_from(pick).ok().filter(|p| *p < 9).map(|p| b'1' + p);
+        match (menu, digit) {
+            (Some(menu), _) => {
+                // The pane's menu must be this question's: the row whose
+                // label holds the picked option's text. Any other prompt in
+                // the pane (a permission ask, a stale question) fails closed
+                // instead of taking a keystroke meant for another menu.
+                let Some(option) = menu
+                    .options
+                    .iter()
+                    .find(|o| o.label.to_lowercase().contains(&want))
+                else {
+                    self.say(
+                        "the pane's menu is not this question: answer in the pane".into(),
+                        cx,
+                    );
+                    return;
+                };
+                self.send(ClientMsg::PaneAnswer {
+                    pane,
+                    fingerprint: menu.fingerprint,
+                    region_lines: u16::try_from(menu.region_lines).unwrap_or(u16::MAX),
+                    keystroke: option.keystroke.clone(),
+                });
+            }
+            (None, Some(digit)) if key.harness == "claude" => {
+                let request_id = self.chat.next_request;
+                self.chat.next_request += 1;
+                // The server types only into a pane the client views, so
+                // bring the question's pane into view first.
+                self.send(ClientMsg::Command(Command::FocusPane(pane)));
+                self.send(ClientMsg::PaneInput(proto::pane_input::PaneInputRequest {
+                    request_id,
+                    pane,
+                    expected_identity: key.session_id.clone(),
+                    bytes: vec![digit],
+                }));
+            }
+            _ => self.say(
+                "the pane shows no menu to answer: answer in the pane".into(),
+                cx,
+            ),
+        }
     }
 
     /// One clipboard paste: text routes by view; a clipboard image with no
