@@ -637,24 +637,29 @@ pub(crate) struct GraphEntries<'a> {
     pub(crate) unread: Option<&'a str>,
 }
 
+/// A store row that renders as a decision: no envelope type, or the
+/// operator_decision type. The derivation and the read-need predicate
+/// share it, so the two stay one definition.
+pub(crate) fn is_decision_row(r: &Value) -> bool {
+    match r.get("_event_type") {
+        None | Some(Value::Null) => true,
+        Some(t) => t.as_str() == Some("operator_decision"),
+    }
+}
+
 /// Do any of the decision rows read the graph for expiry: a stated
 /// non-date expiry_ref, or an unstated expiry that defaults to the
 /// subject (coord lane or a question row). The lane filter bounds it: a
 /// lane that keeps such rows out never pays for the read.
 pub(crate) fn any_row_reads_graph(rows: &[Value], lane: Option<&str>) -> bool {
-    rows.iter()
-        .filter(|r| match r.get("_event_type") {
-            None | Some(Value::Null) => true,
-            Some(t) => t.as_str() == Some("operator_decision"),
-        })
-        .any(|r| {
-            let lane_ok = lane.map_or(true, |l| l == decision_lane(r));
-            let stated = r.get("expiry_ref").filter(|e| e.is_object());
-            let timed = stated.is_some_and(|e| matches!(rows_str(e, "kind"), "date" | "never"));
-            lane_ok
-                && !timed
-                && (stated.is_some() || crate::decision_index::expiry_defaults_to_subject(r))
-        })
+    rows.iter().filter(|r| is_decision_row(r)).any(|r| {
+        let lane_ok = lane.map_or(true, |l| l == decision_lane(r));
+        let stated = r.get("expiry_ref").filter(|e| e.is_object());
+        let timed = stated.is_some_and(|e| matches!(rows_str(e, "kind"), "date" | "never"));
+        lane_ok
+            && !timed
+            && (stated.is_some() || crate::decision_index::expiry_defaults_to_subject(r))
+    })
 }
 
 /// Fill the caller's graph entries when the listing needs them and the
@@ -713,13 +718,7 @@ pub(crate) fn list_core_over(
             }
         }
     }
-    let decisions: Vec<&Value> = all_rows
-        .iter()
-        .filter(|r| match r.get("_event_type") {
-            None | Some(Value::Null) => true,
-            Some(t) => t.as_str() == Some("operator_decision"),
-        })
-        .collect();
+    let decisions: Vec<&Value> = all_rows.iter().filter(|r| is_decision_row(r)).collect();
     let mut superseded_by: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
     let mut superseded_rank: std::collections::HashMap<String, (String, String)> =
