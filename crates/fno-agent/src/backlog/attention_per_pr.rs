@@ -6,7 +6,7 @@
 //! never zeroes that look measured.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Stdio;
 
 use chrono::{DateTime, Duration, Utc};
@@ -332,10 +332,7 @@ fn window_user_turns(
         notes.push(format!("{}: no sessions recorded", node.node));
         return None;
     }
-    let config_dir = std::env::var_os("CLAUDE_CONFIG_DIR")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude")))?;
-    let projects = config_dir.join("projects");
+    let project_dirs = crate::spawn::claude_ask::ClaudeHome::from_env().project_dirs();
     let munged = node.cwd.replace('/', "-");
     let mut total = 0usize;
     let mut resolved = 0usize;
@@ -350,12 +347,24 @@ fn window_user_turns(
         // The line shape is heterogeneous across harnesses, so each row is
         // read through the provenance helpers instead of a typed struct,
         // the same idiom the operator-turn scan uses.
-        let path = projects
-            .join(&munged)
-            .join(format!("{}.jsonl", session.session_id));
+        let path = project_dirs
+            .iter()
+            .map(|root| {
+                root.join(&munged)
+                    .join(format!("{}.jsonl", session.session_id))
+            })
+            .find(|candidate| candidate.is_file());
+        let Some(path) = path else {
+            notes.push(format!(
+                "{}: transcript missing across {} project root(s)",
+                node.node,
+                project_dirs.len()
+            ));
+            continue;
+        };
         let Ok(text) = std::fs::read_to_string(&path) else {
             notes.push(format!(
-                "{}: transcript missing at {}",
+                "{}: transcript unreadable at {}",
                 node.node,
                 path.display()
             ));
