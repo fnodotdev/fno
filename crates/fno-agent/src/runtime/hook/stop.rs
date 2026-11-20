@@ -179,8 +179,8 @@ pub fn run(args: &[String]) -> i32 {
 
     // A turn that ends naming an open user question is waiting on the user
     // IF the turn asked it: the stamp below binds by session id, so a
-    // summary that merely names another session's open question pins nobody
-    // (x-52fa). A promise is a terminal delivery, never a wait: the
+    // summary that merely names another session's open question pins
+    // nobody. A promise is a terminal delivery, never a wait: the
     // classifier's Promise signal leaves the producer's done standing, and a
     // shipped PR's release notes can quote a question label without the row
     // re-blocking over it. Any block below flips the row back to working

@@ -677,15 +677,20 @@ pub(crate) fn open_questions_named(
 
 /// True when a question row names `session_id` as its asker: the row's
 /// canonical `asker` handle or `session_id` resolves to the session's own
-/// short id. A row that names no asker binds to nobody.
+/// short id. A row that names no asker binds to nobody. Both field shapes
+/// read: nested under `data` (the live envelope) or top level, the same
+/// order `question_intake`'s own field reader uses.
 fn row_asked_by(row: &Value, session_id: &str) -> bool {
-    let data = row.get("data");
     let own = crate::identity::canonical_handle(session_id);
-    let fields = [
-        data.and_then(|d| d.get("asker")),
-        data.and_then(|d| d.get("session_id")),
-    ];
-    fields
+    let asker = row
+        .get("data")
+        .and_then(|d| d.get("asker"))
+        .or_else(|| row.get("asker"));
+    let session = row
+        .get("data")
+        .and_then(|d| d.get("session_id"))
+        .or_else(|| row.get("session_id"));
+    [asker, session]
         .into_iter()
         .flatten()
         .filter_map(Value::as_str)

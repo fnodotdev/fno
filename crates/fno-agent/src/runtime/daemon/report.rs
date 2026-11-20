@@ -186,7 +186,7 @@ pub(crate) fn find_uuid_backfill_row(entries: &[RegistryEntry], full_uuid: &str)
 /// land together. Every consumer from the portal attach (peek) to the
 /// agents-list join reads `harness_session_id`, so a claude row that kept
 /// only the legacy `claude_session_uuid` read session-less everywhere until
-/// a later load re-synced it (x-52fa).
+/// a later load re-synced it.
 pub(super) fn backfill_ids(entry: &mut RegistryEntry, session_id: &str) {
     entry.harness_session_id = Some(session_id.to_string());
     if entry.harness_kind() == Harness::Codex {

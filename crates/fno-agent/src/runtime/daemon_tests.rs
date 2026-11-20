@@ -468,7 +468,7 @@ fn find_uuid_backfill_row_refuses_ambiguous_short_collision() {
 
 #[test]
 fn backfill_ids_lands_the_canonical_id_beside_the_harness_alias() {
-    // x-52fa: the claude arm wrote only the legacy uuid field; the
+    // The claude arm wrote only the legacy uuid field; the
     // canonical harness_session_id stayed None and every consumer
     // that reads it (portal attach, agents-list join) saw a
     // session-less row. The write lands both fields.
