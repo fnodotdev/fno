@@ -21,6 +21,49 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
+/// Why a migrate step failed.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum MigrateError {
+    #[error(transparent)]
+    Sql(#[from] rusqlite::Error),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    /// A seam that reports its failure as text: the share flush, the
+    /// numbers primary, the graph opener, the key census.
+    #[error("{0}")]
+    Store(String),
+    /// A failure with the path or step it happened at.
+    #[error("{what}: {source}")]
+    At {
+        what: String,
+        #[source]
+        source: Box<MigrateError>,
+    },
+    #[error("{} would rename onto {}, which exists", from.display(), to.display())]
+    RenameTaken { from: PathBuf, to: PathBuf },
+    #[error("changed since apply; left as it is")]
+    Changed,
+    #[error("fno_numbers row {0} vanished mid-transaction")]
+    Vanished(i64),
+}
+
+impl From<String> for MigrateError {
+    fn from(text: String) -> Self {
+        Self::Store(text)
+    }
+}
+
+/// Name the path or step a failure happened at.
+fn at<E: Into<MigrateError>>(what: impl std::fmt::Display) -> impl FnOnce(E) -> MigrateError {
+    let what = what.to_string();
+    move |e| MigrateError::At {
+        what,
+        source: Box::new(e.into()),
+    }
+}
+
 /// A text that may hold a key: the SQL side of [`rewrite`]'s narrowing.
 const KEY_GLOB: &str = "*[dq]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*";
 
@@ -155,13 +198,13 @@ struct Log {
 }
 
 impl Log {
-    fn open(dir: &Path) -> Result<Self, String> {
-        std::fs::create_dir_all(dir.join("files")).map_err(|e| e.to_string())?;
+    fn open(dir: &Path) -> Result<Self, MigrateError> {
+        std::fs::create_dir_all(dir.join("files"))?;
         let file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(dir.join("undo.jsonl"))
-            .map_err(|e| format!("open {}: {e}", dir.join("undo.jsonl").display()))?;
+            .map_err(at(format!("open {}", dir.join("undo.jsonl").display())))?;
         Ok(Self {
             dir: dir.to_path_buf(),
             file,
@@ -171,16 +214,16 @@ impl Log {
         })
     }
 
-    fn push(&mut self, undo: Undo) -> Result<(), String> {
+    fn push(&mut self, undo: Undo) -> Result<(), MigrateError> {
         self.staged.push(undo);
         Ok(())
     }
 
     /// Write every staged entry: its change is now durable.
-    fn commit(&mut self) -> Result<(), String> {
+    fn commit(&mut self) -> Result<(), MigrateError> {
         for undo in self.staged.drain(..) {
-            let line = serde_json::to_string(&undo).map_err(|e| e.to_string())?;
-            writeln!(self.file, "{line}").map_err(|e| e.to_string())?;
+            let line = serde_json::to_string(&undo)?;
+            writeln!(self.file, "{line}")?;
             self.entries.push(undo);
         }
         Ok(())
@@ -201,7 +244,7 @@ fn cell_json(value: ValueRef<'_>) -> Value {
         ValueRef::Real(f) => json!(f),
         ValueRef::Text(t) => json!(String::from_utf8_lossy(t)),
         ValueRef::Blob(b) => {
-            json!({ "blob": b.iter().map(|x| format!("{x:02x}")).collect::<String>() })
+            json!(b)
         }
     }
 }
@@ -214,13 +257,13 @@ fn cell_sql(value: &Value) -> Sql {
             .map(Sql::Integer)
             .unwrap_or_else(|| Sql::Real(n.as_f64().unwrap_or_default())),
         Value::String(s) => Sql::Text(s.clone()),
-        Value::Object(o) => {
-            let hex = o.get("blob").and_then(Value::as_str).unwrap_or_default();
-            let bytes = (0..hex.len() / 2)
-                .filter_map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok())
-                .collect();
-            Sql::Blob(bytes)
-        }
+        // A blob travels as its byte array.
+        Value::Array(bytes) => Sql::Blob(
+            bytes
+                .iter()
+                .filter_map(|b| b.as_u64().and_then(|b| u8::try_from(b).ok()))
+                .collect(),
+        ),
         other => Sql::Text(other.to_string()),
     }
 }
@@ -230,10 +273,8 @@ fn whole_row(
     conn: &Connection,
     table: &str,
     rowid: i64,
-) -> Result<Option<BTreeMap<String, Value>>, String> {
-    let mut stmt = conn
-        .prepare(&format!("SELECT * FROM \"{table}\" WHERE rowid = ?1"))
-        .map_err(|e| e.to_string())?;
+) -> Result<Option<BTreeMap<String, Value>>, MigrateError> {
+    let mut stmt = conn.prepare(&format!("SELECT * FROM \"{table}\" WHERE rowid = ?1"))?;
     let names: Vec<String> = stmt.column_names().map(str::to_string).collect();
     stmt.query_row(params![rowid], |row| {
         let mut out = BTreeMap::new();
@@ -243,10 +284,14 @@ fn whole_row(
         Ok(out)
     })
     .optional()
-    .map_err(|e| e.to_string())
+    .map_err(MigrateError::from)
 }
 
-fn insert_row(conn: &Connection, table: &str, row: &BTreeMap<String, Value>) -> Result<(), String> {
+fn insert_row(
+    conn: &Connection,
+    table: &str,
+    row: &BTreeMap<String, Value>,
+) -> Result<(), MigrateError> {
     let names: Vec<&String> = row.keys().collect();
     let sql = format!(
         "INSERT OR IGNORE INTO \"{table}\" ({}) VALUES ({})",
@@ -262,7 +307,7 @@ fn insert_row(conn: &Connection, table: &str, row: &BTreeMap<String, Value>) -> 
     );
     conn.execute(&sql, params_from_iter(row.values().map(cell_sql)))
         .map(drop)
-        .map_err(|e| e.to_string())
+        .map_err(MigrateError::from)
 }
 
 fn has_column(conn: &Connection, table: &str, column: &str) -> bool {
@@ -295,24 +340,17 @@ impl Apply<'_> {
     /// The local numbers table: each key takes its number as its key, a row
     /// that names another number for a mapped key goes, and the map lands
     /// beside it so a hex that comes back reads as its number.
-    fn numbers(&mut self, db: &Path, current: &str) -> Result<(), String> {
+    fn numbers(&mut self, db: &Path, current: &str) -> Result<(), MigrateError> {
         let map = self.map;
-        let mut conn = Connection::open(db).map_err(|e| e.to_string())?;
-        conn.execute_batch(&format!("{DDL};{MAP_DDL}"))
-            .map_err(|e| e.to_string())?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|e| e.to_string())?;
+        let mut conn = Connection::open(db)?;
+        conn.execute_batch(&format!("{DDL};{MAP_DDL}"))?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let rows: Vec<(i64, String, String, i64, String)> = {
-            let mut stmt = tx
-                .prepare("SELECT rowid, store, kind, num, key FROM fno_numbers")
-                .map_err(|e| e.to_string())?;
-            let rows = stmt
-                .query_map([], |r| {
-                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
-                })
-                .map_err(|e| e.to_string())?;
-            rows.collect::<Result<_, _>>().map_err(|e| e.to_string())?
+            let mut stmt = tx.prepare("SELECT rowid, store, kind, num, key FROM fno_numbers")?;
+            let rows = stmt.query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })?;
+            rows.collect::<Result<_, _>>()?
         };
         for (rowid, store, kind, num, key) in rows {
             let Some(label) = map.get(&key) else {
@@ -323,8 +361,7 @@ impl Apply<'_> {
                 tx.execute(
                     "UPDATE fno_numbers SET key = ?1 WHERE rowid = ?2",
                     params![label, rowid],
-                )
-                .map_err(|e| e.to_string())?;
+                )?;
                 self.log.push(Undo::Rekey {
                     db: db.to_path_buf(),
                     store,
@@ -334,10 +371,9 @@ impl Apply<'_> {
                     after: label.clone(),
                 })?;
             } else {
-                let row = whole_row(&tx, "fno_numbers", rowid)?
-                    .ok_or_else(|| format!("fno_numbers row {rowid} vanished mid-transaction"))?;
-                tx.execute("DELETE FROM fno_numbers WHERE rowid = ?1", params![rowid])
-                    .map_err(|e| e.to_string())?;
+                let row =
+                    whole_row(&tx, "fno_numbers", rowid)?.ok_or(MigrateError::Vanished(rowid))?;
+                tx.execute("DELETE FROM fno_numbers WHERE rowid = ?1", params![rowid])?;
                 self.log.push(Undo::Gone {
                     db: db.to_path_buf(),
                     table: "fno_numbers".into(),
@@ -347,12 +383,10 @@ impl Apply<'_> {
             self.tally.numbers += 1;
         }
         for (hex, label) in map {
-            let wrote = tx
-                .execute(
-                    "INSERT OR IGNORE INTO fno_id_map (hex, label) VALUES (?1, ?2)",
-                    params![hex, label],
-                )
-                .map_err(|e| e.to_string())?;
+            let wrote = tx.execute(
+                "INSERT OR IGNORE INTO fno_id_map (hex, label) VALUES (?1, ?2)",
+                params![hex, label],
+            )?;
             if wrote > 0 {
                 self.log.push(Undo::Mapped {
                     db: db.to_path_buf(),
@@ -360,7 +394,7 @@ impl Apply<'_> {
                 })?;
             }
         }
-        tx.commit().map_err(|e| e.to_string())?;
+        tx.commit()?;
         self.log.commit()
     }
 
@@ -368,22 +402,18 @@ impl Apply<'_> {
     /// the primary (foreign keys on, deletes sent first) never sees a join
     /// row point at a missing decision: first the copy under the number and
     /// the repointed joins, then the delete of the hex row.
-    fn backlog(&mut self, graph: &Path) -> Result<(), String> {
+    fn backlog(&mut self, graph: &Path) -> Result<(), MigrateError> {
         let map = self.map;
         let db = crate::backlog::database_path(graph);
-        let mut conn = crate::backlog::open_holding_lock(graph).map_err(|e| e.to_string())?;
+        let mut conn = crate::backlog::open_holding_lock(graph)
+            .map_err(|e| MigrateError::Store(e.to_string()))?;
         let rows: Vec<(i64, String, String)> = {
-            let mut stmt = conn
-                .prepare("SELECT rowid, event_id, data FROM decisions ORDER BY seq")
-                .map_err(|e| e.to_string())?;
-            let rows = stmt
-                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-                .map_err(|e| e.to_string())?;
-            rows.collect::<Result<_, _>>().map_err(|e| e.to_string())?
+            let mut stmt =
+                conn.prepare("SELECT rowid, event_id, data FROM decisions ORDER BY seq")?;
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            rows.collect::<Result<_, _>>()?
         };
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|e| e.to_string())?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut moved = Vec::new();
         for (rowid, event_id, data) in rows {
             let after = self.text(&data).into_owned();
@@ -405,8 +435,7 @@ impl Apply<'_> {
                     tx.execute(
                         "UPDATE decisions SET data = ?1 WHERE rowid = ?2",
                         params![after, rowid],
-                    )
-                    .map_err(|e| e.to_string())?;
+                    )?;
                     self.log.push(Undo::Cell {
                         db: db.clone(),
                         table: "decisions".into(),
@@ -426,16 +455,12 @@ impl Apply<'_> {
                     continue;
                 }
                 let cells: Vec<(i64, String)> = {
-                    let mut stmt = tx
-                        .prepare(&format!(
-                            "SELECT rowid, \"{column}\" FROM \"{table}\" \
+                    let mut stmt = tx.prepare(&format!(
+                        "SELECT rowid, \"{column}\" FROM \"{table}\" \
                              WHERE \"{column}\" GLOB '{KEY_GLOB}'"
-                        ))
-                        .map_err(|e| e.to_string())?;
-                    let rows = stmt
-                        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
-                        .map_err(|e| e.to_string())?;
-                    rows.collect::<Result<_, _>>().map_err(|e| e.to_string())?
+                    ))?;
+                    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+                    rows.collect::<Result<_, _>>()?
                 };
                 for (rowid, before) in cells {
                     let after = self.text(&before).into_owned();
@@ -445,8 +470,7 @@ impl Apply<'_> {
                     tx.execute(
                         &format!("UPDATE \"{table}\" SET \"{column}\" = ?1 WHERE rowid = ?2"),
                         params![after, rowid],
-                    )
-                    .map_err(|e| e.to_string())?;
+                    )?;
                     self.log.push(Undo::Cell {
                         db: db.clone(),
                         table: table.to_string(),
@@ -459,17 +483,16 @@ impl Apply<'_> {
                 }
             }
         }
-        tx.commit().map_err(|e| e.to_string())?;
+        tx.commit()?;
         self.log.commit()?;
         crate::backlog_share::flush(graph)?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|e| e.to_string())?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         for from in &moved {
             drop_decision(&tx, from)?;
         }
-        tx.commit().map_err(|e| e.to_string())?;
-        crate::backlog_share::flush(graph).map(drop)
+        tx.commit()?;
+        crate::backlog_share::flush(graph)?;
+        Ok(())
     }
 
     /// One event db: every row whose line names a mapped key gets the new
@@ -480,54 +503,43 @@ impl Apply<'_> {
     /// gigabyte, and a writer held that long loses its row to the dead-letter
     /// file. Each write then matches the line it read, so a row that moved
     /// since the scan is left for the next apply.
-    fn events(&mut self, db: &Path) -> Result<(), String> {
-        let mut conn = Connection::open(db).map_err(|e| e.to_string())?;
-        conn.busy_timeout(std::time::Duration::from_secs(10))
-            .map_err(|e| e.to_string())?;
+    fn events(&mut self, db: &Path) -> Result<(), MigrateError> {
+        let mut conn = Connection::open(db)?;
+        conn.busy_timeout(std::time::Duration::from_secs(10))?;
         let mut changes = Vec::new();
         for table in ["events", "event_observation_pending"] {
             if !has_column(&conn, table, "line") || !has_column(&conn, table, "row_hash") {
                 continue;
             }
-            let mut stmt = conn
-                .prepare(&format!(
-                    "SELECT rowid, line FROM {table} WHERE line GLOB '{KEY_GLOB}'"
-                ))
-                .map_err(|e| e.to_string())?;
-            let rows = stmt
-                .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
-                .map_err(|e| e.to_string())?;
+            let mut stmt = conn.prepare(&format!(
+                "SELECT rowid, line FROM {table} WHERE line GLOB '{KEY_GLOB}'"
+            ))?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
             for row in rows {
-                let (rowid, before) = row.map_err(|e| e.to_string())?;
+                let (rowid, before) = row?;
                 let after = self.text(&before).into_owned();
                 if after != before {
                     changes.push((table, rowid, before, after));
                 }
             }
         }
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|e| e.to_string())?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         for (table, rowid, before, after) in changes {
             let hash = sha(after.as_bytes());
-            let taken: bool = tx
-                .query_row(
-                    &format!("SELECT EXISTS (SELECT 1 FROM {table} WHERE row_hash = ?1)"),
-                    params![hash],
-                    |r| r.get(0),
-                )
-                .map_err(|e| e.to_string())?;
+            let taken: bool = tx.query_row(
+                &format!("SELECT EXISTS (SELECT 1 FROM {table} WHERE row_hash = ?1)"),
+                params![hash],
+                |r| r.get(0),
+            )?;
             if taken {
                 // An ephemeral row can expire between the scan and this write.
                 let Some(row) = whole_row(&tx, table, rowid)? else {
                     continue;
                 };
-                let gone = tx
-                    .execute(
-                        &format!("DELETE FROM {table} WHERE rowid = ?1 AND line = ?2"),
-                        params![rowid, before],
-                    )
-                    .map_err(|e| e.to_string())?;
+                let gone = tx.execute(
+                    &format!("DELETE FROM {table} WHERE rowid = ?1 AND line = ?2"),
+                    params![rowid, before],
+                )?;
                 if gone > 0 {
                     self.log.push(Undo::Gone {
                         db: db.to_path_buf(),
@@ -538,14 +550,12 @@ impl Apply<'_> {
                 }
                 continue;
             }
-            let wrote = tx
-                .execute(
-                    &format!(
-                        "UPDATE {table} SET line = ?1, row_hash = ?2 WHERE rowid = ?3 AND line = ?4"
-                    ),
-                    params![after, hash, rowid, before],
-                )
-                .map_err(|e| e.to_string())?;
+            let wrote = tx.execute(
+                &format!(
+                    "UPDATE {table} SET line = ?1, row_hash = ?2 WHERE rowid = ?3 AND line = ?4"
+                ),
+                params![after, hash, rowid, before],
+            )?;
             if wrote > 0 {
                 self.log.push(Undo::Line {
                     db: db.to_path_buf(),
@@ -557,14 +567,14 @@ impl Apply<'_> {
                 self.tally.event_rows += 1;
             }
         }
-        tx.commit().map_err(|e| e.to_string())?;
+        tx.commit()?;
         self.log.commit()
     }
 
     /// One file: the text rewritten, and the name too when `rename`. The
     /// bytes before land in the backup dir first. A new name another file
     /// already holds refuses.
-    fn file(&mut self, from: &Path, rename: bool) -> Result<(), String> {
+    fn file(&mut self, from: &Path, rename: bool) -> Result<(), MigrateError> {
         let Ok(before) = std::fs::read_to_string(from) else {
             return Ok(());
         };
@@ -583,17 +593,16 @@ impl Apply<'_> {
         }
         let to = from.with_file_name(&new_name);
         if to != from && to.exists() {
-            return Err(format!(
-                "{} would rename onto {}, which exists",
-                from.display(),
-                to.display()
-            ));
+            return Err(MigrateError::RenameTaken {
+                from: from.to_path_buf(),
+                to,
+            });
         }
         let backup = self.log.backup_path(&name);
-        std::fs::copy(from, &backup).map_err(|e| format!("back up {}: {e}", from.display()))?;
+        std::fs::copy(from, &backup).map_err(at(format!("back up {}", from.display())))?;
         write_atomic(&to, &after)?;
         if to != from {
-            std::fs::remove_file(from).map_err(|e| e.to_string())?;
+            std::fs::remove_file(from)?;
         }
         self.log.push(Undo::File {
             from: from.to_path_buf(),
@@ -610,15 +619,18 @@ impl Apply<'_> {
 /// The copy half of a decision's key move: a row under `to` with `data`,
 /// and every join row repointed. A `to` row a stopped move already wrote
 /// keeps its data and still takes the joins. False when no `to` row exists.
-fn copy_decision(conn: &Connection, from: &str, to: &str, data: &str) -> Result<bool, String> {
+fn copy_decision(
+    conn: &Connection,
+    from: &str,
+    to: &str,
+    data: &str,
+) -> Result<bool, MigrateError> {
     let columns: Vec<String> = {
         let mut stmt = conn
             .prepare("SELECT name FROM pragma_table_info('decisions') WHERE name NOT IN ('seq', 'event_id', 'data')")
-            .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map([], |r| r.get::<_, String>(0))
-            .map_err(|e| e.to_string())?;
-        rows.collect::<Result<_, _>>().map_err(|e| e.to_string())?
+            ?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        rows.collect::<Result<_, _>>()?
     };
     let list = columns
         .iter()
@@ -632,46 +644,42 @@ fn copy_decision(conn: &Connection, from: &str, to: &str, data: &str) -> Result<
              AND NOT EXISTS (SELECT 1 FROM decisions WHERE event_id = ?2)"
         ),
         params![from, to, data],
-    )
-    .map_err(|e| e.to_string())?;
-    let held: bool = conn
-        .query_row(
-            "SELECT EXISTS (SELECT 1 FROM decisions WHERE event_id = ?1)",
-            params![to],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
+    )?;
+    let held: bool = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM decisions WHERE event_id = ?1)",
+        params![to],
+        |r| r.get(0),
+    )?;
     if !held {
         return Ok(false);
     }
     conn.execute(
         "UPDATE node_decisions SET event_id = ?2 WHERE event_id = ?1",
         params![from, to],
-    )
-    .map_err(|e| e.to_string())?;
+    )?;
     Ok(true)
 }
 
 /// The delete half: the old row goes once no join row names it.
-fn drop_decision(conn: &Connection, from: &str) -> Result<(), String> {
+fn drop_decision(conn: &Connection, from: &str) -> Result<(), MigrateError> {
     conn.execute(
         "DELETE FROM decisions WHERE event_id = ?1 \
          AND NOT EXISTS (SELECT 1 FROM node_decisions WHERE event_id = ?1)",
         params![from],
     )
     .map(drop)
-    .map_err(|e| e.to_string())
+    .map_err(MigrateError::from)
 }
 
-fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
+fn write_atomic(path: &Path, text: &str) -> Result<(), MigrateError> {
     let tmp = path.with_file_name(format!(
         ".{}.migrate-ids",
         path.file_name()
             .map(|n| n.to_string_lossy())
             .unwrap_or_default()
     ));
-    std::fs::write(&tmp, text).map_err(|e| format!("write {}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, path).map_err(|e| format!("replace {}: {e}", path.display()))
+    std::fs::write(&tmp, text).map_err(at(format!("write {}", tmp.display())))?;
+    std::fs::rename(&tmp, path).map_err(at(format!("replace {}", path.display())))
 }
 
 /// The event dbs under `dir`: every `*.db` with an `events` table.
@@ -732,27 +740,27 @@ fn markdown(root: &Path, out: &mut Vec<PathBuf>) {
 }
 
 /// A consistent copy of each sqlite store, the last resort beside the log.
-fn back_up_dbs(dir: &Path, dbs: &[PathBuf]) -> Result<(), String> {
+fn back_up_dbs(dir: &Path, dbs: &[PathBuf]) -> Result<(), MigrateError> {
     for (n, db) in dbs.iter().enumerate() {
         let name = db
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let conn = Connection::open(db).map_err(|e| format!("open {}: {e}", db.display()))?;
+        let conn = Connection::open(db).map_err(at(format!("open {}", db.display())))?;
         // Two dirs can each hold an `events.db`: the index keeps both copies.
         let into = dir
             .join(format!("{n}-{name}"))
             .to_string_lossy()
             .into_owned();
         conn.execute("VACUUM INTO ?1", params![into])
-            .map_err(|e| format!("back up {}: {e}", db.display()))?;
+            .map_err(at(format!("back up {}", db.display())))?;
     }
     Ok(())
 }
 
 /// The numbers for the later answers of one question: each restates a
 /// ruling the first answer made, and is its own record with its own number.
-fn mint_fresh(graph_db: &Path, keys: &[String]) -> Result<(), String> {
+fn mint_fresh(graph_db: &Path, keys: &[String]) -> Result<(), MigrateError> {
     if keys.is_empty() {
         return Ok(());
     }
@@ -761,11 +769,15 @@ fn mint_fresh(graph_db: &Path, keys: &[String]) -> Result<(), String> {
     match crate::store_remote::configured()? {
         Some(remote) => {
             mint_remote(&remote, keys, &host)?;
-            pull(&remote, &conn).map(drop)
+            pull(&remote, &conn)?;
+            Ok(())
         }
-        None => keys
-            .iter()
-            .try_for_each(|key| mint_local(&conn, key, super::super::LOCAL_STORE, &host)),
+        None => {
+            for key in keys {
+                mint_local(&conn, key, super::super::LOCAL_STORE, &host)?;
+            }
+            Ok(())
+        }
     }
 }
 
@@ -774,10 +786,10 @@ pub(crate) fn apply(json_out: bool) -> i32 {
     let graph = crate::graph_get::default_graph_path();
     let graph_db = db_path();
     let current = current_store();
-    let plan = || -> Result<super::IdMap, String> {
+    let plan = || -> Result<super::IdMap, MigrateError> {
         let conn = super::super::open_read_at(&graph_db)
             .ok_or_else(|| format!("cannot read {}", graph_db.display()))?;
-        let keys = store_keys(Some(&conn)).map_err(|e| e.to_string())?;
+        let keys = store_keys(Some(&conn)).map_err(|e| MigrateError::Store(e.to_string()))?;
         Ok(plan_map(&conn, &keys, &current))
     };
     let mut map = match plan() {
@@ -830,7 +842,7 @@ pub(crate) fn apply(json_out: bool) -> i32 {
             .iter()
             .map(|(hex, label)| format!("{hex}\t{label}\n"))
             .collect();
-        std::fs::write(dir.join("id-map.tsv"), tsv).map_err(|e| e.to_string())?;
+        std::fs::write(dir.join("id-map.tsv"), tsv)?;
         Ok(log)
     });
     let log = match prepared {
@@ -890,17 +902,14 @@ fn steps(
     graph_db: &Path,
     current: &str,
     stores: &[PathBuf],
-) -> Result<(), String> {
+) -> Result<(), MigrateError> {
     run.numbers(graph_db, current)
-        .map_err(|e| format!("numbers table: {e}"))?;
-    run.backlog(graph)
-        .map_err(|e| format!("backlog tables: {e}"))?;
+        .map_err(at("numbers table"))?;
+    run.backlog(graph).map_err(at("backlog tables"))?;
     for db in stores {
-        run.events(db)
-            .map_err(|e| format!("{}: {e}", db.display()))?;
+        run.events(db).map_err(at(db.display()))?;
         for journal in journals(db) {
-            run.file(&journal, false)
-                .map_err(|e| format!("{}: {e}", journal.display()))?;
+            run.file(&journal, false).map_err(at(journal.display()))?;
         }
     }
     let mut files = vec![crate::law_firings::default_path()];
@@ -913,16 +922,14 @@ fn steps(
         );
     }
     for file in files {
-        run.file(&file, false)
-            .map_err(|e| format!("{}: {e}", file.display()))?;
+        run.file(&file, false).map_err(at(file.display()))?;
     }
     let cwd = std::env::current_dir().unwrap_or_default();
     if let Ok(vault) = crate::plans_path::vault_root(&cwd) {
         let mut pages = Vec::new();
         markdown(Path::new(&vault), &mut pages);
         for page in pages {
-            run.file(&page, true)
-                .map_err(|e| format!("{}: {e}", page.display()))?;
+            run.file(&page, true).map_err(at(page.display()))?;
         }
     }
     Ok(())
@@ -941,8 +948,8 @@ pub(crate) fn rollback(dir: &Path) -> i32 {
     let mut entries = Vec::new();
     for (n, line) in std::io::BufReader::new(file).lines().enumerate() {
         let parsed = line
-            .map_err(|e| e.to_string())
-            .and_then(|l| serde_json::from_str::<Undo>(&l).map_err(|e| e.to_string()));
+            .map_err(MigrateError::from)
+            .and_then(|l| serde_json::from_str::<Undo>(&l).map_err(MigrateError::from));
         match parsed {
             Ok(entry) => entries.push(entry),
             Err(error) => {
@@ -980,13 +987,15 @@ fn undo_all(entries: Vec<Undo>) -> Vec<String> {
     // The second half of each move back: the number's row goes once the
     // primary holds the hex row and its joins again.
     for (graph, labels) in moved {
-        let done = (|| -> Result<(), String> {
+        let done = (|| -> Result<(), MigrateError> {
             crate::backlog_share::flush(&graph)?;
-            let conn = crate::backlog::open_holding_lock(&graph).map_err(|e| e.to_string())?;
+            let conn = crate::backlog::open_holding_lock(&graph)
+                .map_err(|e| MigrateError::Store(e.to_string()))?;
             for label in &labels {
                 drop_decision(&conn, label)?;
             }
-            crate::backlog_share::flush(&graph).map(drop)
+            crate::backlog_share::flush(&graph)?;
+            Ok(())
         })();
         if let Err(reason) = done {
             left.push(format!("decisions in {}: {reason}", graph.display()));
@@ -995,16 +1004,16 @@ fn undo_all(entries: Vec<Undo>) -> Vec<String> {
     left
 }
 
-fn changed(n: usize) -> Result<(), String> {
+fn changed(n: usize) -> Result<(), MigrateError> {
     if n == 0 {
-        Err("changed since apply; left as it is".into())
+        Err(MigrateError::Changed)
     } else {
         Ok(())
     }
 }
 
-fn undo_one(entry: &Undo) -> Result<(), String> {
-    let open = |db: &Path| Connection::open(db).map_err(|e| e.to_string());
+fn undo_one(entry: &Undo) -> Result<(), MigrateError> {
+    let open = |db: &Path| Connection::open(db);
     match entry {
         Undo::Cell {
             db,
@@ -1018,8 +1027,7 @@ fn undo_one(entry: &Undo) -> Result<(), String> {
             let shared =
                 table == "decisions" || TEXT_CELLS.iter().any(|(t, _)| *t == table.as_str());
             let conn = if shared {
-                crate::backlog::open_holding_lock(&crate::graph_get::default_graph_path())
-                    .map_err(|e| e.to_string())?
+                crate::backlog::open_holding_lock(&crate::graph_get::default_graph_path())?
             } else {
                 open(db)?
             };
@@ -1030,7 +1038,7 @@ fn undo_one(entry: &Undo) -> Result<(), String> {
                     ),
                     params![before, rowid, after],
                 )
-                .map_err(|e| e.to_string())?,
+                ?,
             )
         }
         Undo::Line {
@@ -1047,8 +1055,7 @@ fn undo_one(entry: &Undo) -> Result<(), String> {
                     params![rowid],
                     |r| r.get(0),
                 )
-                .optional()
-                .map_err(|e| e.to_string())?;
+                .optional()?;
             let held = current.map(|h| h.iter().map(|b| format!("{b:02x}")).collect::<String>());
             if held.as_deref() != Some(after_hash.as_str()) {
                 return changed(0);
@@ -1058,7 +1065,7 @@ fn undo_one(entry: &Undo) -> Result<(), String> {
                 params![before, sha(before.as_bytes()), rowid],
             )
             .map(drop)
-            .map_err(|e| e.to_string())
+            .map_err(MigrateError::from)
         }
         Undo::Gone { db, table, row } => insert_row(&open(db)?, table, row),
         Undo::Rekey {
@@ -1068,19 +1075,15 @@ fn undo_one(entry: &Undo) -> Result<(), String> {
             num,
             before,
             after,
-        } => changed(
-            open(db)?
-                .execute(
-                    "UPDATE fno_numbers SET key = ?1 \
+        } => changed(open(db)?.execute(
+            "UPDATE fno_numbers SET key = ?1 \
                      WHERE store = ?2 AND kind = ?3 AND num = ?4 AND key = ?5",
-                    params![before, store, kind, num, after],
-                )
-                .map_err(|e| e.to_string())?,
-        ),
+            params![before, store, kind, num, after],
+        )?),
         Undo::Mapped { db, hex } => open(db)?
             .execute("DELETE FROM fno_id_map WHERE hex = ?1", params![hex])
             .map(drop)
-            .map_err(|e| e.to_string()),
+            .map_err(MigrateError::from),
         Undo::Moved {
             graph,
             from,
@@ -1088,15 +1091,15 @@ fn undo_one(entry: &Undo) -> Result<(), String> {
             before,
             after,
         } => {
-            let conn = crate::backlog::open_holding_lock(graph).map_err(|e| e.to_string())?;
+            let conn = crate::backlog::open_holding_lock(graph)
+                .map_err(|e| MigrateError::Store(e.to_string()))?;
             let held: Option<String> = conn
                 .query_row(
                     "SELECT data FROM decisions WHERE event_id = ?1",
                     params![to],
                     |r| r.get(0),
                 )
-                .optional()
-                .map_err(|e| e.to_string())?;
+                .optional()?;
             if held.as_deref() != Some(after.as_str()) {
                 return changed(0);
             }
@@ -1108,14 +1111,14 @@ fn undo_one(entry: &Undo) -> Result<(), String> {
             backup,
             after,
         } => {
-            let now = std::fs::read(to).map_err(|e| e.to_string())?;
+            let now = std::fs::read(to)?;
             if sha_hex(&now) != *after {
                 return changed(0);
             }
-            let text = std::fs::read_to_string(backup).map_err(|e| e.to_string())?;
+            let text = std::fs::read_to_string(backup)?;
             write_atomic(from, &text)?;
             if to != from {
-                std::fs::remove_file(to).map_err(|e| e.to_string())?;
+                std::fs::remove_file(to)?;
             }
             Ok(())
         }
