@@ -707,6 +707,71 @@ impl Root {
         }));
     }
 
+    /// The arrival toast: a raised card top-right, the diamond, who
+    /// asked, a preview of the question, and the Answer door. It reads
+    /// the board live, so a dropped question hides it at once.
+    /// The Inbox lists the question itself, so it never toasts there.
+    fn question_toast_card(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        self.question_toast
+            .as_ref()
+            .filter(|_| self.main != MainView::Inbox)
+            .and_then(|(id, _)| self.board.questions().iter().find(|q| q.item.id == *id))
+            .map(|q| {
+                let item = &q.item;
+                let ask = item
+                    .asker
+                    .as_ref()
+                    .map(|a| a.handle.as_str())
+                    .unwrap_or("an agent");
+                let open = Action::OpenAnswer(item.id.clone());
+                div()
+                    .absolute()
+                    .top(px(ui::TITLE_H + 24.0))
+                    .right(px(12.0))
+                    .w(px(420.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .px_3()
+                    .py_2()
+                    .rounded(px(6.0))
+                    .border_1()
+                    .border_color(rgb(self.palette.border))
+                    .bg(rgb(self.palette.raised))
+                    .font_family(ui::MONO)
+                    .text_size(px(ui::BODY))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(6.0))
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_color(rgb(self.palette.warn))
+                                    .child("◆"),
+                            )
+                            .child(
+                                ui::role(div().flex_1().min_w_0(), ui::Role::Name, &self.palette)
+                                    .child(format!("New question from {ask}")),
+                            )
+                            .child(
+                                ui::button(
+                                    "toast-answer",
+                                    "Answer",
+                                    ui::Button::Primary,
+                                    &self.palette,
+                                )
+                                .on_click(
+                                    cx.listener(move |root, _, _, cx| root.act(open.clone(), cx)),
+                                ),
+                            ),
+                    )
+                    .child(ui::cut(&item.title, 52))
+            })
+    }
+
     pub(super) fn act(&mut self, action: Action, cx: &mut Context<Self>) {
         fno::ui_usage::click("app", click_id(&action));
         match action {
@@ -724,8 +789,11 @@ impl Root {
                 // refused one takes a retry.
                 Some(_) if answer::in_flight_or_done(self.answers.get(&id)) => {}
                 Some(poller) => {
-                    poller.answer(id.clone(), option);
-                    self.answers.insert(id, AnswerState::Sending(option));
+                    if poller.answer(id.clone(), fno::needs_overlay::AnswerPick::Option(option)) {
+                        self.answers.insert(id, AnswerState::Sending(option));
+                    } else {
+                        self.say("the board poll stopped: cannot answer".into(), cx);
+                    }
                 }
                 None => self.say("no board poll: cannot answer".into(), cx),
             },
@@ -2875,6 +2943,13 @@ impl InputHandler for TermInput {
     }
 }
 
+/// A board-style view in the mono face at body size.
+fn mono_view(view: impl IntoElement + Styled) -> gpui::AnyElement {
+    view.font_family(ui::MONO)
+        .text_size(px(ui::BODY))
+        .into_any_element()
+}
+
 impl Render for Root {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let size_now = grid_size(window.viewport_size(), self.metrics.cell);
@@ -2890,18 +2965,9 @@ impl Render for Root {
         let main = match self.main {
             MainView::Chat => self.chat_view(window, cx).into_any_element(),
             MainView::Terminal => self.terminal(cx).into_any_element(),
-            MainView::Orchestration => orchestration::render(self, cx)
-                .font_family(ui::MONO)
-                .text_size(px(ui::BODY))
-                .into_any_element(),
-            MainView::Mods => mods::render(self, cx)
-                .font_family(ui::MONO)
-                .text_size(px(ui::BODY))
-                .into_any_element(),
-            MainView::Inbox => crate::inbox::render(self, cx)
-                .font_family(ui::MONO)
-                .text_size(px(ui::BODY))
-                .into_any_element(),
+            MainView::Orchestration => mono_view(orchestration::render(self, cx)),
+            MainView::Mods => mono_view(mods::render(self, cx)),
+            MainView::Inbox => mono_view(crate::inbox::render(self, cx)),
         };
         // The bar floats over the target view's top right; find_gc keeps the
         // target and the view in step, so a live bar always sits over its
@@ -2953,69 +3019,7 @@ impl Render for Root {
                 .text_size(px(ui::BODY))
                 .child(text)
         });
-        // The arrival toast: a raised card top-right, the diamond, who
-        // asked, a preview of the question, and the Answer door. It reads
-        // the board live, so a dropped question hides it at once.
-        // The Inbox lists the question itself, so it never toasts there.
-        let qtoast = self
-            .question_toast
-            .as_ref()
-            .filter(|_| self.main != MainView::Inbox)
-            .and_then(|(id, _)| self.board.questions().iter().find(|q| q.item.id == *id))
-            .map(|q| {
-                let item = &q.item;
-                let ask = item
-                    .asker
-                    .as_ref()
-                    .map(|a| a.handle.as_str())
-                    .unwrap_or("an agent");
-                let open = Action::OpenAnswer(item.id.clone());
-                div()
-                    .absolute()
-                    .top(px(ui::TITLE_H + 24.0))
-                    .right(px(12.0))
-                    .w(px(420.0))
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.0))
-                    .px_3()
-                    .py_2()
-                    .rounded(px(6.0))
-                    .border_1()
-                    .border_color(rgb(self.palette.border))
-                    .bg(rgb(self.palette.raised))
-                    .font_family(ui::MONO)
-                    .text_size(px(ui::BODY))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap(px(6.0))
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .text_color(rgb(self.palette.warn))
-                                    .child("◆"),
-                            )
-                            .child(
-                                ui::role(div().flex_1().min_w_0(), ui::Role::Name, &self.palette)
-                                    .child(format!("New question from {ask}")),
-                            )
-                            .child(
-                                ui::button(
-                                    "toast-answer",
-                                    "Answer",
-                                    ui::Button::Primary,
-                                    &self.palette,
-                                )
-                                .on_click(
-                                    cx.listener(move |root, _, _, cx| root.act(open.clone(), cx)),
-                                ),
-                            ),
-                    )
-                    .child(ui::cut(&item.title, 52))
-            });
+        let qtoast = self.question_toast_card(cx);
         div()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))

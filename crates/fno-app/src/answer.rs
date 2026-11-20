@@ -14,7 +14,7 @@ use super::chat::composer::Draft;
 use super::keys::Key;
 use super::ui::{self, Role};
 use super::window::{Action, AnswerState, Root};
-use fno::needs_overlay::{QuestionItem, QuestionOption};
+use fno::needs_overlay::{AnswerPick, QuestionItem, QuestionOption};
 
 /// The sheet panel's width.
 const SHEET_W: f32 = 560.0;
@@ -381,18 +381,22 @@ pub(super) fn submit(root: &mut Root, cx: &mut Context<Root>) {
     if in_flight_or_done(root.answers.get(&id)) {
         return;
     }
-    if !words.is_empty() {
-        if let Some(poller) = root.poller.as_ref() {
-            poller.answer_words(id.clone(), words);
-        }
-        root.answers.insert(id, AnswerState::SendingWords);
+    let (answer, state) = if !words.is_empty() {
+        (AnswerPick::Words(words), AnswerState::SendingWords)
     } else if let Some(option) = pick {
-        if let Some(poller) = root.poller.as_ref() {
-            poller.answer(id.clone(), option);
-        }
-        root.answers.insert(id, AnswerState::Sending(option));
+        (AnswerPick::Option(option), AnswerState::Sending(option))
     } else {
         root.say("pick a choice or type your answer".into(), cx);
+        return;
+    };
+    let sent = root
+        .poller
+        .as_ref()
+        .is_some_and(|poller| poller.answer(id.clone(), answer));
+    if sent {
+        root.answers.insert(id, state);
+    } else {
+        root.say("the board poll stopped: cannot answer".into(), cx);
     }
     cx.notify();
 }
