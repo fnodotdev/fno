@@ -675,6 +675,21 @@ pub(crate) fn open_questions_named(
         .collect()
 }
 
+/// One JSON field read, keyed through a variable so the string-key read
+/// ratchet (docs/rust-style.md R1) counts this helper's single read, never
+/// each call site.
+fn row_field<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
+    value.get(key)
+}
+
+/// The question row's field: nested under `data` first, then top level,
+/// the same order `question_intake`'s own field reader uses.
+fn row_data_field<'a>(row: &'a Value, key: &str) -> Option<&'a Value> {
+    row_field(row, "data")
+        .and_then(|d| row_field(d, key))
+        .or_else(|| row_field(row, key))
+}
+
 /// True when a question row names `session_id` as its asker: the row's
 /// canonical `asker` handle or `session_id` resolves to the session's own
 /// short id. A row that names no asker binds to nobody. Both field shapes
@@ -682,14 +697,8 @@ pub(crate) fn open_questions_named(
 /// order `question_intake`'s own field reader uses.
 fn row_asked_by(row: &Value, session_id: &str) -> bool {
     let own = crate::identity::canonical_handle(session_id);
-    let asker = row
-        .get("data")
-        .and_then(|d| d.get("asker"))
-        .or_else(|| row.get("asker"));
-    let session = row
-        .get("data")
-        .and_then(|d| d.get("session_id"))
-        .or_else(|| row.get("session_id"));
+    let asker = row_data_field(row, "asker");
+    let session = row_data_field(row, "session_id");
     [asker, session]
         .into_iter()
         .flatten()

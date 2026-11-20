@@ -483,7 +483,7 @@ fn backfill_ids_lands_the_canonical_id_beside_the_harness_alias() {
     // backfill finder, so the else arm stays claude.
     let mut codex = rentry("cx1", AgentStatus::Live, None);
     codex.harness = Some("codex".into());
-    super::report::backfill_ids(&codex, "0f0e1d2c-3b4a-4958-8675-3092f4c1b2a3");
+    super::report::backfill_ids(&mut codex, "0f0e1d2c-3b4a-4958-8675-3092f4c1b2a3");
     assert_eq!(
         codex.harness_session_id.as_deref(),
         Some("0f0e1d2c-3b4a-4958-8675-3092f4c1b2a3"),
