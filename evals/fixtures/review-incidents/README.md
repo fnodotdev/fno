@@ -7,7 +7,7 @@ The bank's reviewer-scoring set, tagged `review-score`: one incident entry and t
 Every entry is four files: `<name>.diff`, `<name>.meta.yaml`, the bank task, and the tree files its catch needs (under `tree/` at their real paths).
 
 - incident: a merge that turned main red or was reverted, replayed as a fixture. The grade passes only when a blocking finding names the known bug site (recall).
-- clean: a merged PR that passed the merge gate and was never reverted. The grade passes only when no blocking finding lands (false findings).
+- clean: a merged PR that passed the merge gate and was never reverted. When no blocking finding lands, the grade passes (that is the false-findings read).
 
 ## The reconstruction rule
 
