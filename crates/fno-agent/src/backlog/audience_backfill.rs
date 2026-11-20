@@ -336,8 +336,19 @@ mod tests {
         let dir = fixture("review");
         let review = dir.join("nested").join("scope-review.md");
         // An unmapped row carries all three facts for the user to rule;
-        // a second apply pass over settled rows writes nothing new.
-        let rows = vec![row("ab-9", &["some-other-tag"], "", "")];
+        // a second apply pass over settled rows writes nothing new. The
+        // row builds inline with empty why and done_means so the
+        // placeholder path renders.
+        let rows = vec![serde_json::json!({
+            "id": "ab-9",
+            "title": "Ship the persona page",
+            "project": "fno",
+            "tags": ["some-other-tag"],
+            "audience": "",
+            "why": "",
+            "done_means": "",
+            "completed_at": "",
+        })];
         let mut updates: Vec<Vec<String>> = Vec::new();
         let (_, mapped, unstamped) =
             backfill_into(&rows, true, Some(&review), &mut |cmd: &[String]| {
