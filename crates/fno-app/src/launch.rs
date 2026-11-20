@@ -55,7 +55,7 @@ impl Kind {
         }
     }
 
-    fn placeholder(self) -> &'static str {
+    pub(crate) fn placeholder(self) -> &'static str {
         match self {
             Kind::Agent => "the task, as one message",
             Kind::Lead => "filter the epics, ⏎ picks the top match",
@@ -453,6 +453,15 @@ impl Launch {
         self.project = cwd;
         self.gone = false;
         self.refresh_skills();
+    }
+
+    /// The picks the start view's header and chips render.
+    pub(crate) fn project(&self) -> &str {
+        &self.project
+    }
+
+    pub(crate) fn harness(&self) -> &str {
+        &self.harness
     }
 
     /// Cycle the model pick: None, then the picked harness's table slugs

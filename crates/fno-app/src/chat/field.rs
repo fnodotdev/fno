@@ -353,7 +353,7 @@ impl Element for Field {
                 underline: None,
                 strikethrough: None,
             };
-            (&*self.placeholder, vec![run])
+            (&self.placeholder[..], vec![run])
         } else {
             (self.draft.text(), self.runs(self.draft.text().len(), &font))
         };

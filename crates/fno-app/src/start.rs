@@ -18,7 +18,7 @@ use crate::window::{Action, MainView, Root};
 use fno::app_api::client::agent_lattice_state;
 use fno::app_api::client::card_line::card_facts;
 use fno::app_api::lattice::{status_long, LatticeState};
-use fno::proto::{AgentRow, SquadMeta};
+use fno::proto::AgentRow;
 
 /// The card column's width, centered in the pane.
 const CARD: f32 = 600.0;
@@ -38,7 +38,7 @@ fn base_name(path: &str) -> String {
 /// title optionally first). The tail is always last when the cwd exists, so
 /// the branch is the segment before it. A segment with a space is a title,
 /// never a branch: git refs hold no spaces.
-fn branch_of(a: &AgentRow, base: &str) -> Option<&str> {
+fn branch_of<'a>(a: &'a AgentRow, base: &str) -> Option<&'a str> {
     let segs: Vec<&str> = a.subline.as_deref()?.split(" · ").collect();
     let tail = segs.len().checked_sub(1)?;
     if segs[tail] != base || tail == 0 {
@@ -109,7 +109,7 @@ struct HeaderFacts {
 
 fn header_facts(root: &Root) -> HeaderFacts {
     let l = &root.launch.state;
-    let project = base_name(&l.project);
+    let project = base_name(l.project());
     let branch = root
         .layout
         .agents
@@ -123,7 +123,7 @@ fn header_facts(root: &Root) -> HeaderFacts {
         .and_then(|f| f.machines.iter().find(|m| m.local))
         .map(|m| m.display_name.clone().unwrap_or_else(|| m.host.clone()));
     HeaderFacts {
-        path: launch::short_project(&l.project),
+        path: launch::short_project(l.project()),
         project,
         branch,
         machine,
@@ -190,11 +190,11 @@ fn header_row(f: &HeaderFacts, p: &Palette) -> Option<gpui::Div> {
 /// monochrome send. A click on the field lands through the launch panel's
 /// own handlers, so the caret, the drag select and the IME window all
 /// behave as they do in the modal.
-fn card(root: &Root, window: &Window, cx: &mut Context<Root>) -> gpui::Div {
+fn card(root: &Root, window: &Window, cx: &mut Context<Root>) -> Stateful<gpui::Div> {
     let p = root.palette;
     let l = &root.launch.state;
     let at = l.composer.clone();
-    let base = base_name(&l.project);
+    let base = base_name(l.project());
     let placeholder: SharedString = match l.kind {
         Kind::Agent if !base.is_empty() => {
             format!("Describe the work. Enter starts an agent in {base}.").into()
@@ -253,7 +253,7 @@ fn card(root: &Root, window: &Window, cx: &mut Context<Root>) -> gpui::Div {
         .border_color(rgb(p.border))
         .bg(rgb(p.raised))
         .child(field)
-        .child(chips(root, p, cx))
+        .child(chips(root, &p, cx))
         .children(launch::phase_line(l, &p))
 }
 
@@ -282,7 +282,7 @@ fn chips(root: &Root, p: &Palette, cx: &mut Context<Root>) -> gpui::Div {
         .child(
             chip(
                 "start-chip-axis",
-                format!("{} · {}", l.harness, launch::model_label(l)),
+                format!("{} · {}", l.harness(), launch::model_label(l)),
                 p,
             )
             .on_click(cx.listener(|root, _, _, cx| {

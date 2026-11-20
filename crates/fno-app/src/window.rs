@@ -304,6 +304,7 @@ impl Root {
             notice_failed: false,
             notice_gen: 0,
             shot: false,
+            shot_empty_chat: false,
             closed: None,
             metrics,
             palette,

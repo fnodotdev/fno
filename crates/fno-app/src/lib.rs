@@ -124,6 +124,8 @@ pub fn run(opts: Options) -> i32 {
             chat: opts.chat,
             font: opts.font,
             font_size: opts.font_size,
+            empty_chat: shot.empty_chat,
+            cmd: shot.cmd,
         });
     }
     if let Some(home) = std::env::var_os("HOME").and_then(|h| h.into_string().ok()) {
