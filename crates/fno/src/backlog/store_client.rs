@@ -551,8 +551,17 @@ struct ApiReply {
     ids: Value,
     underway: Value,
     effective_priority: Value,
-    board: Value,
+    board: BoardWire,
     flow: Option<Value>,
+}
+
+/// The `board` object a rows reply carries when the caller asked for it.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct BoardWire {
+    ids: Value,
+    underway: Value,
+    effective_priority: Value,
 }
 
 impl ApiReply {
@@ -726,9 +735,9 @@ pub fn rows_with_board(
         json!({"op": "rows", "board_claimed": claimed}),
     )?);
     let board = facts_of(
-        &reply.board["ids"],
-        &reply.board["underway"],
-        &reply.board["effective_priority"],
+        &reply.board.ids,
+        &reply.board.underway,
+        &reply.board.effective_priority,
     );
     let rows = match reply.rows {
         Value::Array(rows) => crate::node_row::rows_from_values(rows),

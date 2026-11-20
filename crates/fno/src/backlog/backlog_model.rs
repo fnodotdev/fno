@@ -1497,6 +1497,47 @@ fn parse_snapshot_doc(v: &Value) -> (Vec<NodeRow>, Vec<String>) {
     (rows, errors)
 }
 
+/// The delivery `flow` aggregate: the ledger at <state root>/ledger.json and
+/// the rows go to the classifier. A caller that skips flow never reads the
+/// ledger either. An unreadable ledger is an errors line.
+fn read_flow(
+    graph: &Path,
+    rows: &[NodeRow],
+    external: bool,
+    flow_read: FlowRead,
+    errors: &mut Vec<String>,
+) -> Value {
+    if flow_read == FlowRead::Skip {
+        return json!({"available": false, "reason": "this read skips the flow aggregate"});
+    }
+    /// The ledger document; only its rows ride to the classifier.
+    #[derive(Default, Deserialize)]
+    #[serde(default)]
+    struct Ledger {
+        entries: Value,
+    }
+    let ledger: Vec<Value> = match std::fs::read_to_string(ledger_path()) {
+        Err(_) => Vec::new(),
+        Ok(text) => match serde_json::from_str::<Value>(&text) {
+            Ok(v) => match Ledger::deserialize(&v).unwrap_or_default().entries {
+                Value::Array(entries) => entries,
+                _ => Vec::new(),
+            },
+            Err(e) => {
+                errors.push(format!("ledger unreadable: {e}"));
+                Vec::new()
+            }
+        },
+    };
+    if external {
+        return json!({"available": false, "reason": "no ledger flow on an external backend"});
+    }
+    match store_client::flow(graph, rows, &ledger) {
+        Ok(f) => f,
+        Err(e) => json!({"available": false, "reason": e.to_string()}),
+    }
+}
+
 fn gather_blocking(
     graph: &Path,
     agents: Vec<AgentRow>,
@@ -1572,40 +1613,8 @@ fn gather_blocking(
             (Vec::new(), HashSet::new(), HashMap::new())
         }
     };
-    // (5) The ledger at <state root>/ledger.json. A caller that skips flow
-    // never reads it either.
-    let path = ledger_path();
-    /// The ledger document; only its rows ride to the classifier.
-    #[derive(Default, Deserialize)]
-    #[serde(default)]
-    struct Ledger {
-        entries: Value,
-    }
-    let ledger_text = (flow_read == FlowRead::Read).then(|| std::fs::read_to_string(&path));
-    let ledger: Vec<Value> = match ledger_text {
-        None | Some(Err(_)) => Vec::new(),
-        Some(Ok(text)) => match serde_json::from_str::<Value>(&text) {
-            Ok(v) => match Ledger::deserialize(&v).unwrap_or_default().entries {
-                Value::Array(entries) => entries,
-                _ => Vec::new(),
-            },
-            Err(e) => {
-                errors.push(format!("ledger unreadable: {e}"));
-                Vec::new()
-            }
-        },
-    };
-    // (6) Flow over the rows and the ledger.
-    let flow = if flow_read == FlowRead::Skip {
-        json!({"available": false, "reason": "this read skips the flow aggregate"})
-    } else if external {
-        json!({"available": false, "reason": "no ledger flow on an external backend"})
-    } else {
-        match store_client::flow(graph, &rows, &ledger) {
-            Ok(f) => f,
-            Err(e) => json!({"available": false, "reason": e.to_string()}),
-        }
-    };
+    // (5) and (6): the ledger, then flow over the rows and the ledger.
+    let flow = read_flow(graph, &rows, external, flow_read, &mut errors);
     // (7) The spawn-env scope. Each failure is a named line, never an empty
     // board.
     let (scope, scope_reason) = board_scope_from_spawn_env();
