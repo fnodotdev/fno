@@ -47,6 +47,10 @@ struct Record {
     repo: String,
     pr: u64,
     head: String,
+    /// The bound plan body's hash at judgment time. Pre-hash records
+    /// deserialize with the empty default and orphan at their old key.
+    #[serde(default)]
+    plan_sha: String,
     judgment: Option<Judgment>,
     warning: Option<String>,
 }
@@ -104,15 +108,55 @@ fn strings(cwd: &Path, key: &str, defaults: &[&str]) -> Vec<String> {
         .unwrap_or_else(|| defaults.iter().map(|v| (*v).into()).collect())
 }
 
-fn record_path(cwd: &Path, repo: &str, pr: u64, head: &str) -> PathBuf {
-    let key = format!("{repo}#{pr}@{head}");
+/// The record identity gains the bound plan body's hash: an amended plan at
+/// the same head must re-judge, so it lands at a new path and the old record
+/// survives as evidence. An unresolvable binding degrades to the head-only
+/// key, the shape every pre-hash record was published under.
+fn record_path(cwd: &Path, repo: &str, pr: u64, head: &str, plan_sha: &str) -> PathBuf {
+    let key = if plan_sha.is_empty() {
+        format!("{repo}#{pr}@{head}")
+    } else {
+        format!("{repo}#{pr}@{head}#{plan_sha}")
+    };
     crate::paths::space_dir(cwd)
         .join("state/merge-architect")
         .join(format!("{}.json", blake3::hash(key.as_bytes()).to_hex()))
 }
 
+/// The bound plan body's blake3, read through the same bind and repo root
+/// `gather` reads. Empty on any leg failing: a fingerprint must never
+/// fabricate a mismatch, it must fall back to the head-only identity.
+fn plan_sha_at(cwd: &Path, node: &Value) -> String {
+    let Some(path) = RowFacts::of(node).and_then(|row| row.plan_path().as_str()) else {
+        return String::new();
+    };
+    let root = crate::paths::canonical_repo_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
+    std::fs::read_to_string(root.join(path))
+        .map(|plan| blake3::hash(plan.as_bytes()).to_hex().to_string())
+        .unwrap_or_default()
+}
+
+/// The fingerprint for the gate path, resolved exactly as `gather` resolves
+/// the bundle's plan.
+fn plan_sha(cwd: &Path, facts: &PrFacts) -> String {
+    bound_node(cwd, facts)
+        .map(|node| plan_sha_at(cwd, &node))
+        .unwrap_or_default()
+}
+
+/// The fingerprint for the cache path. The PR-body fallback keys of
+/// `gather` are unavailable here, so a PR bound only through its body
+/// degrades to the head-only material: the row never fresh-serves, which is
+/// the safe direction, and the gate still re-judges through `plan_sha`.
+fn bound_plan_sha(cwd: &Path, pr: u64) -> String {
+    crate::authorized_merge::pr_bound_entry(cwd, pr)
+        .map(|node| plan_sha_at(cwd, &node))
+        .unwrap_or_default()
+}
+
 pub(crate) fn cache_material(cwd: &Path, repo: &str, pr: u64, head: &str) -> String {
-    let record = match std::fs::read(record_path(cwd, repo, pr, head)) {
+    let plan = bound_plan_sha(cwd, pr);
+    let record = match std::fs::read(record_path(cwd, repo, pr, head, &plan)) {
         Ok(bytes) => blake3::hash(&bytes).to_hex().to_string(),
         Err(e) => format!("{:?}", e.kind()),
     };
@@ -124,10 +168,15 @@ pub(crate) fn cache_material(cwd: &Path, repo: &str, pr: u64, head: &str) -> Str
             .filter(|row| row.get("subject").and_then(Value::as_str) == Some(subject.as_str()))
             .collect::<Vec<_>>()
     });
-    format!("{}|{record}|{grants:?}", enabled(cwd))
+    format!("{}|{plan}|{record}|{grants:?}", enabled(cwd))
 }
 
-fn read(path: &Path, repo: &str, facts: &PrFacts) -> Result<Option<Record>, String> {
+fn read(
+    path: &Path,
+    repo: &str,
+    facts: &PrFacts,
+    plan_sha: &str,
+) -> Result<Option<Record>, String> {
     let text = match std::fs::read(path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -137,6 +186,9 @@ fn read(path: &Path, repo: &str, facts: &PrFacts) -> Result<Option<Record>, Stri
         serde_json::from_slice(&text).map_err(|e| format!("invalid architect record: {e}"))?;
     if record.repo != repo || record.pr != facts.number || record.head != facts.head_sha {
         return Err("architect record names a different repository, PR or head".into());
+    }
+    if record.plan_sha != plan_sha {
+        return Err("architect record names a different plan revision".into());
     }
     if record.judgment.is_some() == record.warning.is_some()
         || record
@@ -256,6 +308,40 @@ fn file_names(comparison: &Value, expected: u64) -> Result<Vec<String>, String> 
     Ok(names)
 }
 
+/// The pure half of the gate's binding: the node whose plan a judgment for
+/// this PR must read, from the already-read graph rows. `gather` and the
+/// `plan_sha` fingerprint share it, so both always name the same plan.
+fn bind_from(entries: &[Value], cwd: &Path, facts: &PrFacts) -> Option<Value> {
+    crate::authorized_merge::pr_bound_entry(cwd, facts.number).or_else(|| {
+        let keys = crate::org_board::prs::pr_binding_keys(
+            facts.number as i64,
+            &facts.head_ref,
+            Some(&facts.url),
+            facts.body.as_deref(),
+            entries,
+        );
+        let mut ids: Vec<_> = keys
+            .backrefs
+            .into_iter()
+            .chain(keys.trailer)
+            .chain(keys.branch)
+            .collect();
+        ids.sort();
+        ids.dedup();
+        match ids.as_slice() {
+            [id] => crate::graph_get::find_entry(entries, id).cloned(),
+            _ => None,
+        }
+    })
+}
+
+fn bound_node(cwd: &Path, facts: &PrFacts) -> Option<Value> {
+    let entries =
+        crate::graph_store::read_contract_rows(&crate::org_board::scope::graph_json_path(cwd))
+            .ok()?;
+    bind_from(&entries, cwd, facts)
+}
+
 fn gather<P: Probes>(
     probes: &P,
     cwd: &Path,
@@ -265,29 +351,7 @@ fn gather<P: Probes>(
     let entries =
         crate::graph_store::read_contract_rows(&crate::org_board::scope::graph_json_path(cwd))
             .map_err(|e| format!("vision graph unreadable: {e}"))?;
-    let node = crate::authorized_merge::pr_bound_entry(cwd, facts.number)
-        .or_else(|| {
-            let keys = crate::org_board::prs::pr_binding_keys(
-                facts.number as i64,
-                &facts.head_ref,
-                Some(&facts.url),
-                facts.body.as_deref(),
-                &entries,
-            );
-            let mut ids: Vec<_> = keys
-                .backrefs
-                .into_iter()
-                .chain(keys.trailer)
-                .chain(keys.branch)
-                .collect();
-            ids.sort();
-            ids.dedup();
-            match ids.as_slice() {
-                [id] => crate::graph_get::find_entry(&entries, id).cloned(),
-                _ => None,
-            }
-        })
-        .ok_or("bound node unavailable or ambiguous")?;
+    let node = bind_from(&entries, cwd, facts).ok_or("bound node unavailable or ambiguous")?;
     let root = crate::paths::canonical_repo_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
     let path = node
         .get("plan_path")
@@ -508,9 +572,10 @@ fn record<P: Probes>(
     facts: &PrFacts,
     repo: &str,
     evidence: &[Warning],
+    plan_sha: &str,
 ) -> Result<Record, String> {
     let timeout = timeout_secs(cwd);
-    compute_once(cwd, facts, repo, timeout, |deadline| {
+    compute_once(cwd, facts, repo, plan_sha, timeout, |deadline| {
         gather(probes, cwd, facts, evidence).and_then(|bundle| {
             let remaining = deadline.saturating_duration_since(Instant::now()).as_secs();
             if remaining == 0 {
@@ -526,16 +591,23 @@ fn compute_once(
     cwd: &Path,
     facts: &PrFacts,
     repo: &str,
+    plan_sha: &str,
     timeout: u64,
     compute: impl FnOnce(Instant) -> Result<Judgment, String>,
 ) -> Result<Record, String> {
-    let path = record_path(cwd, repo, facts.number, &facts.head_sha);
+    let path = record_path(cwd, repo, facts.number, &facts.head_sha, plan_sha);
     let deadline = Instant::now() + Duration::from_secs(timeout);
-    let key = format!("architect:{repo}#{}@{}", facts.number, facts.head_sha);
+    // The claim key names the plan revision too: two attempts that resolved
+    // different plan texts are not racing for one artifact, and a waiter
+    // must never adopt a record judged against a plan it does not read.
+    let key = format!(
+        "architect:{repo}#{}@{}#{}",
+        facts.number, facts.head_sha, plan_sha
+    );
     let holder = format!("architect:{}", invocation_id());
     let root = crate::paths::space_dir(cwd);
     loop {
-        if let Some(record) = read(&path, repo, facts)? {
+        if let Some(record) = read(&path, repo, facts, plan_sha)? {
             return Ok(record);
         }
         if Instant::now() >= deadline {
@@ -552,7 +624,7 @@ fn compute_once(
         match crate::claims::acquire(&key, &holder, opts) {
             crate::claims::AcquireOutcome::Acquired(_) => {
                 let result = (|| {
-                    if let Some(record) = read(&path, repo, facts)? {
+                    if let Some(record) = read(&path, repo, facts, plan_sha)? {
                         return Ok(record);
                     }
                     let judgment = compute(deadline);
@@ -562,6 +634,7 @@ fn compute_once(
                     };
                     let record = Record {
                         repo: repo.into(),
+                        plan_sha: plan_sha.to_owned(),
                         pr: facts.number,
                         head: facts.head_sha.clone(),
                         judgment,
@@ -616,13 +689,15 @@ pub(crate) fn evidence<P: Probes>(
     let result = (|| {
         let repo = crate::merge_grant::repo_slug_from_pr_url(&facts.url)
             .ok_or("architect repository identity unavailable")?;
+        let plan_sha = plan_sha(cwd, facts);
         match read(
-            &record_path(cwd, &repo, facts.number, &facts.head_sha),
+            &record_path(cwd, &repo, facts.number, &facts.head_sha, &plan_sha),
             &repo,
             facts,
+            &plan_sha,
         )? {
             Some(record) => Ok(Some(record)),
-            None if run => record(probes, cwd, facts, &repo, warnings).map(Some),
+            None if run => record(probes, cwd, facts, &repo, warnings, &plan_sha).map(Some),
             None => Ok(None),
         }
     })();
@@ -782,14 +857,15 @@ mod tests {
     }
 
     #[test]
-    fn publication_is_immutable_and_reads_bind_repository_pr_and_head() {
+    fn publication_is_immutable_and_reads_bind_repository_pr_head_and_plan() {
         let dir = tempfile::tempdir().unwrap();
-        let path = record_path(dir.path(), "o/r", 9, &"a".repeat(40));
+        let path = record_path(dir.path(), "o/r", 9, &"a".repeat(40), "");
         let before_key = cache_material(dir.path(), "o/r", 9, &"a".repeat(40));
         let record = Record {
             repo: "o/r".into(),
             pr: 9,
             head: "a".repeat(40),
+            plan_sha: String::new(),
             judgment: Some(parse(&reply("fits", "", "", ""), &bundle()).unwrap()),
             warning: None,
         };
@@ -810,23 +886,25 @@ mod tests {
             head_sha: record.head.clone(),
             ..Default::default()
         };
-        assert!(read(&path, "o/r", &facts).unwrap().is_some());
+        assert!(read(&path, "o/r", &facts, "").unwrap().is_some());
         let invalid = Record {
             judgment: None,
             warning: None,
             ..record.clone()
         };
         std::fs::write(&path, serde_json::to_vec(&invalid).unwrap()).unwrap();
-        assert!(read(&path, "o/r", &facts).is_err());
+        assert!(read(&path, "o/r", &facts, "").is_err());
         std::fs::write(&path, before).unwrap();
-        assert!(read(&path, "other/r", &facts).is_err());
+        assert!(read(&path, "other/r", &facts, "").is_err());
+        assert!(read(&path, "o/r", &facts, "other-plan").is_err());
         assert!(read(
             &path,
             "o/r",
             &PrFacts {
                 number: 10,
                 ..facts.clone()
-            }
+            },
+            ""
         )
         .is_err());
         assert!(read(
@@ -835,9 +913,93 @@ mod tests {
             &PrFacts {
                 head_sha: "b".repeat(40),
                 ..facts
-            }
+            },
+            ""
         )
         .is_err());
+        // The plan revision is part of the identity: an amended plan at the
+        // same head lands at a new record and re-judges, and the unchanged
+        // plan still reuses the published record.
+        let amended = record_path(dir.path(), "o/r", 9, &record.head, "plan-one");
+        publish(
+            &amended,
+            &Record {
+                repo: "o/r".into(),
+                plan_sha: "plan-one".into(),
+                pr: 9,
+                head: record.head.clone(),
+                judgment: Some(parse(&reply("fits", "", "", ""), &bundle()).unwrap()),
+                warning: None,
+            },
+        )
+        .unwrap();
+        let amended_bytes = std::fs::read(&amended).unwrap();
+        let amended_facts = PrFacts {
+            number: 9,
+            head_sha: record.head.clone(),
+            ..Default::default()
+        };
+        let mut computed = 0u32;
+        let judged = compute_once(dir.path(), &amended_facts, "o/r", "plan-two", 60, |_| {
+            computed += 1;
+            Ok(parse(
+                &reply(
+                    "misses_plan",
+                    "AC2",
+                    "",
+                    "Restore only owned cancellations.",
+                ),
+                &bundle(),
+            )
+            .unwrap())
+        })
+        .unwrap();
+        assert_eq!(computed, 1, "the amended plan must re-run the judgment");
+        assert_eq!(judged.plan_sha, "plan-two");
+        assert_eq!(
+            judged.judgment.map(|j| j.verdict),
+            Some(Verdict::MissesPlan)
+        );
+        assert_eq!(std::fs::read(&amended).unwrap(), amended_bytes);
+        assert!(record_path(dir.path(), "o/r", 9, &record.head, "plan-two").exists());
+        let reused = compute_once(dir.path(), &amended_facts, "o/r", "plan-one", 60, |_| {
+            computed += 1;
+            Ok(parse(&reply("fits", "", "", ""), &bundle()).unwrap())
+        })
+        .unwrap();
+        assert_eq!(computed, 1, "the unchanged plan must reuse the record");
+        assert_eq!(reused.plan_sha, "plan-one");
+        assert_eq!(reused.judgment.map(|j| j.verdict), Some(Verdict::Fits));
+        // The freshness marker tracks the bound plan body: a bound node's
+        // plan edit at the same head changes the material, so a cached row
+        // that embeds the old verdict stops serving.
+        let unbound = cache_material(dir.path(), "o/r", 9, &record.head);
+        crate::graph_store::seed_rows(
+            &crate::org_board::scope::graph_json_path(dir.path()),
+            &[
+                json!({"id": "x-plan", "status": "in_review", "pr_number": 9,
+                     "plan_path": "plans/one.md"}),
+            ],
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("plans")).unwrap();
+        std::fs::write(
+            dir.path().join("plans/one.md"),
+            "## Acceptance Criteria\n**AC1-HP:** Keep the gate honest.\n",
+        )
+        .unwrap();
+        let first = cache_material(dir.path(), "o/r", 9, &record.head);
+        assert_ne!(first, unbound, "a bound plan must enter the material");
+        std::fs::write(
+            dir.path().join("plans/one.md"),
+            "## Acceptance Criteria\n**AC1-HP:** Keep the gate honest, and rejudge on amendment.\n",
+        )
+        .unwrap();
+        let second = cache_material(dir.path(), "o/r", 9, &record.head);
+        assert_ne!(
+            second, first,
+            "a plan edit at the same head must change the material"
+        );
     }
 
     #[test]
