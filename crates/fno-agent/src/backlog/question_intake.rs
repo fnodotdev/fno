@@ -2287,6 +2287,7 @@ stops
         let mut r = req("is the lane finished?", &root);
         r.subject = Some("lane state".to_string());
         r.node = Some("x-aaaa".to_string());
+        r.ask = Some("finish the lane".to_string());
         r.index_path = Some(index.clone());
         r.journal_path = Some(journal.clone());
         let answer = run_intake(&r, &tmp_home("ask-resolved-node"));
@@ -2321,6 +2322,7 @@ stops
         let mut r = req("should we repaint the header?", &root);
         r.subject = Some("paint re-ask PR 3377".to_string());
         r.node = Some("x-bbbb".to_string());
+        r.ask = Some("finish the paint".to_string());
         r.index_path = Some(index.clone());
         r.journal_path = Some(journal.clone());
         let answer = run_intake(&r, &tmp_home("ask-resolved-pr"));
