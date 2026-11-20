@@ -29,6 +29,10 @@ pub fn run(args: &[String]) -> i32 {
     let rest = &args[1..];
     match sub.as_str() {
         "trend" => crate::evals_trend::run_evals_trend(&trend_argv(rest, "trend")),
+        "report" if rest.iter().any(|a| a == "--decay" || a == "--weekly") => {
+            crate::evals_weekly::command(rest)
+        }
+        "report" if rest.iter().any(|a| a == "--learnings") => crate::evals_ledger::command(rest),
         "report" => crate::evals_trend::run_evals_trend(&trend_argv(rest, "report")),
         "macro" => crate::evals_macro::run_evals_macro(&macro_argv(rest)),
         "grade" => crate::evals::research_grade::run(rest),
