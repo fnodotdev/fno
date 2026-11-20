@@ -187,25 +187,33 @@ fn quiet_scope_workers<'a>(
     rows
 }
 
+/// The two top-row fields a quiet line reads. A lead row carries a role.
+#[derive(serde::Deserialize, Default)]
+struct QuietRow {
+    role: Option<String>,
+    status_age_s: Option<f64>,
+}
+
 /// One quiet row's line. A lead reports in prose and never emits RESULT, so
 /// its line is how long ago its transcript last moved. A worker's line is
-/// its own last report; a tail with none names that and the quiet time, and only a
-/// transcript the reader could not read says READER FAILED.
-fn quiet_line(w: &Value, peek: impl FnOnce() -> Result<Option<String>, String>) -> String {
-    let quiet = w
-        .get("status_age_s")
-        .and_then(Value::as_f64)
+/// its own last report; a tail with none names that and the quiet time, and
+/// only a transcript the reader could not read says READER FAILED.
+fn quiet_line(w: &Value, peek: impl FnOnce() -> Tail) -> String {
+    use serde::Deserialize;
+    let row = QuietRow::deserialize(w).unwrap_or_default();
+    let quiet = row
+        .status_age_s
         .map(|s| format!("{} min", (s / 60.0) as i64))
         .unwrap_or_else(|| "an unknown time".into());
-    if let Some(role) = crate::lead_checkin::s_str(w, "role").filter(|r| !r.is_empty()) {
+    if let Some(role) = row.role.filter(|r| !r.is_empty()) {
         return format!("lead ({role}), last active {quiet} ago");
     }
     match peek() {
-        Ok(Some(report)) => report,
-        Ok(None) => format!(
+        Tail::Report(report) => report,
+        Tail::Silent => format!(
             "no RESULT, help or watching tag in the last {PEEK_RECORDS} records; quiet {quiet}"
         ),
-        Err(e) => format!("READER FAILED {e}"),
+        Tail::Unreadable(e) => format!("READER FAILED {e}"),
     }
 }
 
@@ -316,12 +324,23 @@ pub(crate) fn scope_live_worker_count(rows: &[Value], scope_ids: &BTreeSet<Strin
 /// the same records a peek renders, with no interpreter per worker. A worker
 /// with no transcript yet (a pane row before reconcile backfills its session)
 /// falls back to the pane screen, read in process the way peek reads it.
-fn peek_last_report(handle: &str) -> Result<Option<String>, String> {
+/// What one quiet worker's tail holds: its last report, no report, or a
+/// read that failed with its reason.
+enum Tail {
+    Report(String),
+    Silent,
+    Unreadable(String),
+}
+
+fn peek_last_report(handle: &str) -> Tail {
     let texts = match crate::session_truth::tail_texts(handle, PEEK_RECORDS) {
         Ok(texts) => texts,
-        Err(_) => crate::peek::pane_texts(handle, PEEK_RECORDS)?,
+        Err(_) => match crate::peek::pane_texts(handle, PEEK_RECORDS) {
+            Ok(texts) => texts,
+            Err(e) => return Tail::Unreadable(e),
+        },
     };
-    Ok(last_report(&texts))
+    last_report(&texts).map_or(Tail::Silent, Tail::Report)
 }
 
 /// The last report in a record tail, newest record winning; inside one
@@ -938,18 +957,18 @@ mod tests {
         );
         assert_eq!(last_report(&texts(&["I end on <watching> tags."])), None);
         let lead = json!({"role": "L2 x-da5a", "status_age_s": 1260.0});
-        let never = || -> Result<Option<String>, String> { panic!("a lead is never peeked") };
+        let never = || -> Tail { panic!("a lead is never peeked") };
         assert_eq!(
             quiet_line(&lead, never),
             "lead (L2 x-da5a), last active 21 min ago"
         );
         let worker = json!({"role": null, "status_age_s": 600.0});
-        let none = quiet_line(&worker, || Ok(None));
+        let none = quiet_line(&worker, || Tail::Silent);
         assert!(
             !none.contains("READER FAILED") && none.ends_with("quiet 10 min"),
             "{none}"
         );
-        let failed = quiet_line(&worker, || Err("transcript unreadable".into()));
+        let failed = quiet_line(&worker, || Tail::Unreadable("transcript unreadable".into()));
         assert_eq!(failed, "READER FAILED transcript unreadable");
     }
 }
