@@ -17,12 +17,31 @@
 //! session into another repo: Claude Code refuses any path that is not a
 //! registered worktree of the session's own repo, after this hook allows.
 
-use serde_json::{json, Value};
+use serde::Deserialize;
+use serde_json::json;
 use std::path::{Path, PathBuf};
+
+/// The PermissionRequest fields this hook reads, parsed once. A payload that
+/// does not parse reads as the default, which never allows.
+#[derive(Deserialize, Default)]
+struct Payload {
+    #[serde(default)]
+    tool_name: String,
+    #[serde(default)]
+    cwd: String,
+    #[serde(default)]
+    tool_input: ToolInput,
+}
+
+#[derive(Deserialize, Default)]
+struct ToolInput {
+    #[serde(default)]
+    path: String,
+}
 
 /// Entry: read one PermissionRequest payload, decide, print, always exit 0.
 pub fn run(_args: &[String]) -> i32 {
-    let payload: Value = serde_json::from_str(super::read_stdin().trim()).unwrap_or(Value::Null);
+    let payload: Payload = serde_json::from_str(super::read_stdin().trim()).unwrap_or_default();
     let cwd = payload_cwd(&payload);
     let allowed = bases(&cwd).iter().any(|base| allows(&payload, base));
     if let Some(decision) = row_decision(&payload, allowed) {
@@ -44,20 +63,21 @@ pub fn run(_args: &[String]) -> i32 {
 
 const GUARD: &str = "worktree-relocation-allow";
 
+/// The `path` of an EnterWorktree call, the only shape that relocates. The
+/// create form (`name`) stays inside the repo and never prompts.
+fn path_call(payload: &Payload) -> Option<&str> {
+    (payload.tool_name == "EnterWorktree" && !payload.tool_input.path.is_empty())
+        .then_some(payload.tool_input.path.as_str())
+}
+
 /// The guard row a path call leaves: `allow`, or `ask` when the prompt stays.
 /// Claude Code logs only a hook's decisions, so without the ask row a worker
 /// parked at the prompt looks the same as one whose hook never ran.
-fn row_decision(payload: &Value, allowed: bool) -> Option<&'static str> {
+fn row_decision(payload: &Payload, allowed: bool) -> Option<&'static str> {
     if allowed {
         return Some("allow");
     }
-    let is_path_call = payload.get("tool_name").and_then(Value::as_str) == Some("EnterWorktree")
-        && payload
-            .get("tool_input")
-            .and_then(|ti| ti.get("path"))
-            .and_then(Value::as_str)
-            .is_some_and(|s| !s.is_empty());
-    is_path_call.then_some("ask")
+    path_call(payload).map(|_| "ask")
 }
 
 /// Every base fno has written checkouts to: the configured (or default) base,
@@ -77,10 +97,8 @@ fn bases_for(configured: PathBuf, state: &Path) -> Vec<PathBuf> {
     ]
 }
 
-fn payload_cwd(payload: &Value) -> PathBuf {
-    payload
-        .get("cwd")
-        .and_then(Value::as_str)
+fn payload_cwd(payload: &Payload) -> PathBuf {
+    Some(payload.cwd.as_str())
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
         .or_else(|| std::env::current_dir().ok())
@@ -90,16 +108,8 @@ fn payload_cwd(payload: &Value) -> PathBuf {
 /// True when the payload is an EnterWorktree `path` call whose real target
 /// sits strictly under the real base. Separated from `run` so the tests
 /// exercise the same predicate with no stdin or config in the loop.
-fn allows(payload: &Value, base: &Path) -> bool {
-    if payload.get("tool_name").and_then(Value::as_str) != Some("EnterWorktree") {
-        return false;
-    }
-    let Some(raw) = payload
-        .get("tool_input")
-        .and_then(|ti| ti.get("path"))
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-    else {
+fn allows(payload: &Payload, base: &Path) -> bool {
+    let Some(raw) = path_call(payload) else {
         return false;
     };
     let target = payload_cwd(payload).join(raw);
@@ -113,13 +123,14 @@ fn allows(payload: &Value, base: &Path) -> bool {
 mod tests {
     use super::*;
 
-    fn call(cwd: &Path, path: &str) -> Value {
-        json!({
+    fn call(cwd: &Path, path: &str) -> Payload {
+        serde_json::from_value(json!({
             "hook_event_name": "PermissionRequest",
             "cwd": cwd.to_string_lossy(),
             "tool_name": "EnterWorktree",
             "tool_input": {"path": path}
-        })
+        }))
+        .unwrap()
     }
 
     #[test]
@@ -148,9 +159,12 @@ mod tests {
         assert!(!allows(&call(&repo, &escape), &base));
         // Another tool, or the create form with no path, never allows.
         let mut other = call(&repo, &wt.to_string_lossy());
-        other["tool_name"] = json!("Bash");
+        other.tool_name = "Bash".into();
         assert!(!allows(&other, &base));
-        let create = json!({"tool_name": "EnterWorktree", "tool_input": {"name": "x"}});
+        let create: Payload = serde_json::from_value(
+            json!({"tool_name": "EnterWorktree", "tool_input": {"name": "x"}}),
+        )
+        .unwrap();
         assert!(!allows(&create, &base));
 
         // Every path answer leaves a row, so a stalled worker tells a
