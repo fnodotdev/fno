@@ -20,7 +20,8 @@
 //! suites and the cargo build/run admission doors; the doors wait and
 //! never fail, so a running cargo pauses at its next compile or test
 //! binary and a running suite finishes. `merges` holds the one merge
-//! primitive. `loops` holds live target and lead loops at their next turn end.
+//! primitive. `loops` holds live target and lead loops at their next turn end;
+//! `stop --now` also interrupts every running turn ([`crate::stop_now`]).
 //!
 //! A file that exists but cannot be read or parsed is
 //! [`Verdict::Unavailable`], never clear (AC1-EDGE): an unreadable breaker
@@ -99,10 +100,19 @@ pub struct IncidentRecord {
     /// Full session id whose mail policy the pause-all alias armed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mail_session_id: Option<String>,
+    /// The loops hold's level: false holds each loop at its next turn end,
+    /// true (`stop --now`) also interrupted every running turn.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub now: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Default)]
 pub(crate) struct RecordMetadata {
+    pub(crate) now: bool,
     pub(crate) target: Option<String>,
     pub(crate) expires_at: Option<String>,
     pub(crate) origin: Option<String>,
@@ -152,6 +162,24 @@ impl IncidentRecord {
 
     pub(crate) fn holds_scope(&self, scope: &str) -> bool {
         self.held_scopes().iter().any(|s| s == scope)
+    }
+
+    /// Every held scope with what it asks of a worker, in [`SCOPES`] order.
+    /// A hold the announcement leaves out reads as open to the worker.
+    pub fn hold_sentence(&self) -> String {
+        let held = self.held_scopes();
+        let parts: Vec<&str> = SCOPES
+            .iter()
+            .filter(|s| held.iter().any(|h| h == *s))
+            .map(|s| match *s {
+                "spawns" => "spawns (start no new workers)",
+                "tests" => "tests (do not rerun tests)",
+                "merges" => "merges (merge no PRs)",
+                _ if self.now => "loops (now: every running turn is interrupted; an interrupted worker resumes at the all-clear)",
+                _ => "loops (turn-end: each loop stops at its next turn end; a turn in progress runs to its end)",
+            })
+            .collect();
+        format!("Held: {}.", parts.join(", "))
     }
 
     /// The scopes this record leaves alone, in [`SCOPES`] order. A `clear`
@@ -390,6 +418,9 @@ fn print_machine_status(record: &IncidentRecord, state: &str, targets: &[TargetS
     if state == "stopped" {
         let (holds, admits) = reach(record);
         println!("holds: {}; admits: {}", holds.join(", "), admits.join(", "));
+        if record.now {
+            println!("level: now (running turns interrupted; they resume at clear)");
+        }
     }
     if let Some(expires_at) = &record.expires_at {
         println!("expires {expires_at}");
@@ -531,21 +562,7 @@ pub fn read_at(path: &Path) -> Verdict {
     let raw = match std::fs::read_to_string(path) {
         Ok(raw) => raw,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Verdict::Clear(IncidentRecord {
-                version: STATE_VERSION,
-                state: "clear".to_string(),
-                generation: 0,
-                changed_at: String::new(),
-                changed_by: String::new(),
-                reason: String::new(),
-                holds: Vec::new(),
-                source: Some("default".to_string()),
-                target: None,
-                expires_at: None,
-                origin: None,
-                mail: None,
-                mail_session_id: None,
-            });
+            return Verdict::Clear(default_clear());
         }
         Err(e) => return Verdict::Unavailable(format!("unreadable: {e}")),
     };
@@ -585,21 +602,27 @@ pub fn verdict() -> Verdict {
         // Test-only shape (a cargo test that declared no sandbox root): no
         // state root exists, so there is no incident to observe. Production
         // always resolves a home through `from_env`.
-        None => Verdict::Clear(IncidentRecord {
-            version: STATE_VERSION,
-            state: "clear".to_string(),
-            generation: 0,
-            changed_at: String::new(),
-            changed_by: String::new(),
-            reason: String::new(),
-            holds: Vec::new(),
-            source: Some("default".to_string()),
-            target: None,
-            expires_at: None,
-            origin: None,
-            mail: None,
-            mail_session_id: None,
-        }),
+        None => Verdict::Clear(default_clear()),
+    }
+}
+
+/// The answer for a machine with no record: clear, `source: "default"`.
+fn default_clear() -> IncidentRecord {
+    IncidentRecord {
+        version: STATE_VERSION,
+        state: "clear".to_string(),
+        generation: 0,
+        changed_at: String::new(),
+        changed_by: String::new(),
+        reason: String::new(),
+        holds: Vec::new(),
+        source: Some("default".to_string()),
+        target: None,
+        expires_at: None,
+        origin: None,
+        mail: None,
+        mail_session_id: None,
+        now: false,
     }
 }
 
@@ -923,6 +946,7 @@ fn write_transition_locked(
         origin: metadata.origin,
         mail: metadata.mail,
         mail_session_id: metadata.mail_session_id,
+        now: metadata.now,
     };
     write_record(path, &record)?;
     Ok(record)
@@ -987,6 +1011,67 @@ fn parse_hold_list(value: &str) -> Result<Vec<String>, String> {
         .collect())
 }
 
+/// Why `--now` cannot ride this stop, if it cannot. The interrupt sits on
+/// the machine-wide loops hold, and only an explicit clear resumes the
+/// workers it interrupts, so an expiry would strand them.
+fn now_refusal(
+    now: bool,
+    action: &str,
+    scoped: bool,
+    ttl: bool,
+    holds: Option<&[String]>,
+) -> Option<&'static str> {
+    if !now {
+        return None;
+    }
+    if action == "clear" {
+        return Some("--now applies to stop only; a clear resumes every interrupted turn");
+    }
+    if scoped {
+        return Some(
+            "--now interrupts the whole fleet; it takes no --session, --territory or reserve",
+        );
+    }
+    if ttl {
+        return Some("--now needs an explicit clear to resume the turns it interrupts; drop --ttl");
+    }
+    if holds.is_some_and(|h| !h.iter().any(|s| s == "loops")) {
+        return Some("--now sits on the loops hold; add loops to --hold");
+    }
+    None
+}
+
+/// The running turns follow a machine-wide record: a `--now` stop presses
+/// Esc in each one, and a clear types the resume turn into every session
+/// a `--now` stop interrupted.
+fn follow_turns(home: &crate::paths::AgentsHome, record: &IncidentRecord) {
+    if record.state == "stopped" && record.now {
+        match crate::stop_now::interrupt_running(home) {
+            Ok(sweep) => {
+                eprintln!(
+                    "fleet-incident: interrupted {} running turn(s)",
+                    sweep.interrupted.len()
+                );
+                for (session, reason) in sweep.failed {
+                    eprintln!("fleet-incident: could not interrupt {session}: {reason}");
+                }
+            }
+            Err(error) => eprintln!("fleet-incident: interrupt record not written: {error}"),
+        }
+    } else if record.state == "clear" {
+        let (resumed, missed) = crate::stop_now::resume_interrupted(home);
+        if !resumed.is_empty() {
+            eprintln!(
+                "fleet-incident: resumed {} interrupted session(s)",
+                resumed.len()
+            );
+        }
+        for (session, reason) in missed {
+            eprintln!("fleet-incident: could not resume {session}: {reason}");
+        }
+    }
+}
+
 /// One receipt line, JSON, on stdout: the resulting state, its generation,
 /// and the typed reach it carries.
 fn print_receipt(record: &IncidentRecord) {
@@ -1003,13 +1088,14 @@ fn print_receipt(record: &IncidentRecord) {
             "reason": record.reason,
             "target": record.target,
             "expires_at": record.expires_at,
+            "now": record.now,
         })
     );
 }
 
 fn print_usage() {
     println!(
-        "usage: fno-agent fleet-incident stop --reason <text> [--hold spawns,tests,merges,loops] [--session <id>|--territory <scope>] [--ttl <dur>] | reserve stream|edit [--for <dur>, default 2h] [--reason <text>] | clear --reason <text> [--session <id>|--territory <scope>] | claim <incident> --pr <n> [--by <who>] [--note <text>] | cutover save|restore (see `fleet-incident cutover --help`) | status [--json] | check [--scope spawns|tests|merges|loops] [--json]"
+        "usage: fno-agent fleet-incident stop --reason <text> [--hold spawns,tests,merges,loops] [--now] [--session <id>|--territory <scope>] [--ttl <dur>] | reserve stream|edit [--for <dur>, default 2h] [--reason <text>] | clear --reason <text> [--session <id>|--territory <scope>] | claim <incident> --pr <n> [--by <who>] [--note <text>] | cutover save|restore (see `fleet-incident cutover --help`) | status [--json] | check [--scope spawns|tests|merges|loops] [--json]"
     );
 }
 
@@ -1149,9 +1235,14 @@ pub fn run_fleet_incident(args: &[String]) -> i32 {
             let mut holds: Option<Vec<String>> = None;
             let mut raw_target: Option<(String, String)> = None;
             let mut ttl_ms: Option<u64> = None;
+            let mut now = false;
             let mut i = 0;
             while i < rest.len() {
                 match rest[i].as_str() {
+                    "--now" => {
+                        now = true;
+                        i += 1;
+                    }
                     "--reason" => {
                         match rest.get(i + 1) {
                             Some(v) => reason = Some(v.clone()),
@@ -1240,6 +1331,16 @@ pub fn run_fleet_incident(args: &[String]) -> i32 {
                 eprintln!("fleet-incident: --ttl applies to stop only");
                 return 2;
             }
+            if let Some(refusal) = now_refusal(
+                now,
+                action,
+                raw_target.is_some() || reserve.is_some(),
+                ttl_ms.is_some(),
+                holds.as_deref(),
+            ) {
+                eprintln!("fleet-incident: {refusal}");
+                return 2;
+            }
             if let Some((preset, preset_holds)) = &reserve {
                 if holds.is_some() || raw_target.is_some() {
                     eprintln!(
@@ -1321,6 +1422,10 @@ pub fn run_fleet_incident(args: &[String]) -> i32 {
                 }
             };
             let machine_wide = target.is_none();
+            let prior = match read_at(&path) {
+                Verdict::Stopped(r) => Some(r),
+                _ => None,
+            };
             match write_transition_with_metadata(
                 &path,
                 if action == "stop" { "stopped" } else { "clear" },
@@ -1328,6 +1433,7 @@ pub fn run_fleet_incident(args: &[String]) -> i32 {
                 by.as_deref(),
                 held,
                 RecordMetadata {
+                    now,
                     target,
                     expires_at,
                     origin: reserve
@@ -1351,6 +1457,17 @@ pub fn run_fleet_incident(args: &[String]) -> i32 {
                                 eprintln!("fleet-incident: test hold not applied: {error}")
                             }
                         }
+                        if let Some(sent) =
+                            crate::test_hold::announce_untested(prior.as_ref(), &record)
+                        {
+                            if let Some(id) = sent.announced {
+                                eprintln!("fleet-incident: announced {id}");
+                            }
+                            if let Some(error) = sent.announce_error {
+                                eprintln!("fleet-incident: announce failed: {error}");
+                            }
+                        }
+                        follow_turns(&home, &record);
                     }
                     0
                 }
@@ -1463,6 +1580,29 @@ mod tests {
         if let Some(dir) = path.parent() {
             let _ = std::fs::remove_dir(dir);
         }
+    }
+
+    #[test]
+    fn the_announcement_names_the_loops_level_and_now_refuses_what_strands_a_turn() {
+        let mut record = default_clear();
+        record.state = "stopped".into();
+        record.holds = vec!["loops".into()];
+        assert!(record.hold_sentence().contains("loops (turn-end:"));
+        record.now = true;
+        assert!(record.hold_sentence().contains("loops (now:"));
+        assert!(crate::test_hold::hold_body(&record).contains("until the all-clear"));
+
+        let loops = ["loops".to_string()];
+        let spawns = ["spawns".to_string()];
+        assert_eq!(
+            now_refusal(true, "stop", false, false, Some(&loops[..])),
+            None
+        );
+        assert_eq!(now_refusal(true, "stop", false, false, None), None);
+        assert!(now_refusal(true, "clear", false, false, None).is_some());
+        assert!(now_refusal(true, "stop", true, false, None).is_some());
+        assert!(now_refusal(true, "stop", false, true, None).is_some());
+        assert!(now_refusal(true, "stop", false, false, Some(&spawns[..])).is_some());
     }
 
     #[test]

@@ -697,6 +697,27 @@ impl ActiveBacklogFacts {
     }
 }
 
+/// Whether a registry row counts as live for every team-holder read. The
+/// reconcile sweep's fresh `liveness` word decides when it has one; the
+/// stored `status` is only the fallback. A reboot leaves `status: exited`
+/// on a lead whose resumed session the sweep measures alive, and believing
+/// that snapshot made the team vanish from check-in and the lead beat.
+/// A stop someone ran through fno (`Exited` with its `StopRecord`) stands
+/// over an `alive` word measured before the stop.
+pub(crate) fn holder_row_is_live(row: &RegistryEntry) -> bool {
+    if matches!(row.status, crate::AgentStatus::Exited) && row.stop.is_some() {
+        return false;
+    }
+    match crate::row_truth::served_fresh_liveness(
+        row.liveness.as_deref(),
+        row.liveness_measured_at.as_deref(),
+    ) {
+        "alive" => true,
+        "dead" => false,
+        _ => crate::spawn_gate::status_is_liveish(&row.status),
+    }
+}
+
 /// Live team scopes from the registry cache, one per DISTINCT canonical
 /// scope, in scope order - the read the org and the drain share. A registry
 /// read fault is `TerritoryUnknown`, never an empty team list (the daemon
@@ -714,7 +735,7 @@ pub fn live_teams(registry_path: &Path) -> Result<Vec<Team>, TerritoryUnknown> {
     let mut seen: HashSet<String> = HashSet::new();
     for row in rows {
         let raw = row.role_scope.as_deref().unwrap_or("").trim();
-        if raw.is_empty() || !crate::spawn_gate::status_is_liveish(&row.status) {
+        if raw.is_empty() || !holder_row_is_live(&row) {
             continue;
         }
         let canon = canonical_scope(raw);

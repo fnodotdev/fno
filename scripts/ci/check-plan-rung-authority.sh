@@ -512,6 +512,17 @@ while IFS= read -r reader; do
                 || true
         )"
     fi
+    if [ "$reader" = "crates/fno-agent/src/gate/merge_architect.rs" ]; then
+        # merge_architect's "status" literal is a #[cfg(test)] graph-row
+        # fixture seeding the bind row the cache-material test reads (graph
+        # vocabulary, not plan frontmatter); the reader itself touches plan
+        # prose and acceptance criteria, never a `status:` key.
+        matches="$(
+            printf '%s\n' "$matches" \
+                | grep -vE '"status":[[:space:]]*"in_review"' \
+                || true
+        )"
+    fi
     if [ "$reader" = "crates/fno-agent/src/gate/merge_hold.rs" ]; then
         # merge_hold's #[cfg(test)] fixtures seed graph ROWS whose JSON
         # carries a "status" field (graph vocabulary, not plan frontmatter);

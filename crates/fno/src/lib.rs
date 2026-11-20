@@ -117,8 +117,9 @@ pub use sessions::{
 };
 #[cfg(feature = "full")]
 pub use setup::{
-    cli_hooks, gh_proxy, must_enable, path_migration, setup_autowire, setup_cmds, setup_detect,
-    setup_messaging, setup_profile, setup_run, setup_services, state_layout, wizard, wizard_term,
+    cli_hooks, gh_proxy, must_enable, path_migration, setup_autowire, setup_cmds,
+    setup_daemon_agent, setup_detect, setup_messaging, setup_profile, setup_run, setup_services,
+    state_layout, wizard, wizard_term,
 };
 #[cfg(feature = "full")]
 pub use ui::{

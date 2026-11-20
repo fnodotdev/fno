@@ -704,6 +704,35 @@ fn ascii_lower(text: &str) -> String {
     text.chars().map(|c| c.to_ascii_lowercase()).collect()
 }
 
+/// A JSONL transcript as the text its records carry. A hook delivery puts
+/// the header inside a JSON string, so its line breaks arrive as `\n`
+/// escapes within one record: the header is a line only once each record's
+/// strings are decoded. A line that is not JSON passes through as is.
+pub fn decoded_transcript(text: &str) -> String {
+    fn leaves(value: &Value, out: &mut String) {
+        match value {
+            Value::String(s) => {
+                out.push_str(s);
+                out.push('\n');
+            }
+            Value::Array(items) => items.iter().for_each(|v| leaves(v, out)),
+            Value::Object(map) => map.values().for_each(|v| leaves(v, out)),
+            _ => {}
+        }
+    }
+    let mut out = String::new();
+    for line in text.lines() {
+        match serde_json::from_str::<Value>(line) {
+            Ok(record) => leaves(&record, &mut out),
+            Err(_) => {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    out
+}
+
 /// Every header turn in `text`: `{id, sender}` per line that parses as a
 /// delivered-mail header (the sender without its `@`). The transcript receipt
 /// reader's header-side input, beside `legacy_tags`.

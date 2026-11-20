@@ -1562,6 +1562,7 @@ mod tests {
             origin: None,
             mail: None,
             mail_session_id: None,
+            now: false,
         };
         std::fs::write(&incident_path, serde_json::to_string(&record).unwrap()).unwrap();
 
