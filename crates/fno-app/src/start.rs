@@ -39,12 +39,15 @@ fn base_name(path: &str) -> String {
 /// the branch is the segment before it. A segment with a space is a title,
 /// never a branch: git refs hold no spaces.
 fn branch_of<'a>(a: &'a AgentRow, base: &str) -> Option<&'a str> {
-    let segs: Vec<&str> = a.subline.as_deref()?.split(" · ").collect();
-    let tail = segs.len().checked_sub(1)?;
-    if segs[tail] != base || tail == 0 {
+    // Walked from the right: the tail (the cwd basename) is always last
+    // when the cwd exists, and the branch is the segment before it. A
+    // segment with a space is a title, never a branch: git refs hold no
+    // spaces.
+    let mut segs = a.subline.as_deref()?.rsplit(" · ");
+    if segs.next()? != base {
         return None;
     }
-    let head = segs[tail - 1];
+    let head = segs.next()?;
     (!head.is_empty() && !head.contains(' ')).then_some(head)
 }
 
@@ -471,12 +474,14 @@ mod tests {
         ];
         let rows = workspaces(&layout, 100);
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].name, "quarry");
-        assert_eq!(rows[0].agents, 1);
+        let first = rows.first().expect("two squads with members yield rows");
+        assert_eq!(first.name, "quarry");
+        assert_eq!(first.agents, 1);
         // The dot reads the freshest member's state: recent activity with no
         // live badge is Idle, never Unmeasured.
-        assert_eq!(rows[0].state, Some(LatticeState::Idle));
-        assert_eq!(rows[1].name, "harbor");
+        assert_eq!(first.state, Some(LatticeState::Idle));
+        let second = rows.get(1).expect("a second row");
+        assert_eq!(second.name, "harbor");
     }
 
     #[test]
@@ -492,7 +497,8 @@ mod tests {
             .collect();
         let rows = workspaces(&layout, 100);
         assert_eq!(rows.len(), 4);
-        assert_eq!(rows[0].branch.as_deref(), Some("main"));
+        let first = rows.first().expect("five squads cap at four rows");
+        assert_eq!(first.branch.as_deref(), Some("main"));
     }
 
     #[test]
@@ -523,6 +529,7 @@ mod tests {
         fresh.subline = Some("feat/new · harbor".into());
         layout.agents = vec![stale, fresh];
         let rows = workspaces(&layout, 100);
-        assert_eq!(rows[0].branch.as_deref(), Some("feat/new"));
+        let first = rows.first().expect("one squad with members yields a row");
+        assert_eq!(first.branch.as_deref(), Some("feat/new"));
     }
 }
