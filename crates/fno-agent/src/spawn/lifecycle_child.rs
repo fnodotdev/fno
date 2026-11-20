@@ -52,9 +52,20 @@ pub(crate) async fn bounded_claude_stop_in(
     timeout: Duration,
     config_dir: Option<&Path>,
 ) -> Result<std::io::Result<std::process::Output>, tokio::time::error::Elapsed> {
+    bounded_claude_job_verb_in("stop", short, timeout, config_dir).await
+}
+
+/// `claude <verb> <short>` for a job verb such as `stop` or `rm`, with the
+/// same cwd pin, account root and bound as the stop.
+pub(crate) async fn bounded_claude_job_verb_in(
+    verb: &str,
+    short: &str,
+    timeout: Duration,
+    config_dir: Option<&Path>,
+) -> Result<std::io::Result<std::process::Output>, tokio::time::error::Elapsed> {
     let mut command = tokio::process::Command::new("claude");
     command
-        .arg("stop")
+        .arg(verb)
         .arg(short)
         .current_dir(lifecycle_child_cwd(
             crate::paths::AgentsHome::from_env().root(),
