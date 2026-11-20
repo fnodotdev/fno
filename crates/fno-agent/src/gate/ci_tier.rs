@@ -260,9 +260,9 @@ fn attribute_reruns(posts: Vec<Value>, ours: &HashSet<u64>) -> Vec<Value> {
     posts
         .into_iter()
         .map(|mut post| {
-            if let Some(runs) = post.get_mut("runs").and_then(Value::as_array_mut) {
+            if let Some(runs) = post.pointer_mut("/runs").and_then(Value::as_array_mut) {
                 for run in runs {
-                    let id = run.get("run").and_then(Value::as_u64).unwrap_or(0);
+                    let id = run.pointer("/run").and_then(Value::as_u64).unwrap_or(0);
                     let by = if ours.contains(&id) {
                         "tier"
                     } else {
