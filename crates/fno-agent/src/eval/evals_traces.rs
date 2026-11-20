@@ -642,7 +642,12 @@ pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
         let _gate = crate::daemon::SweepGate(flag);
         if let Some(state) = home.root().parent() {
             match daily(state) {
-                Ok(_) => stamp_daily(&stamp),
+                Ok(_) => {
+                    stamp_daily(&stamp);
+                    if let Err(e) = crate::evals_weekly::leg(state, chrono::Utc::now()) {
+                        eprintln!("eval weekly: {e}");
+                    }
+                }
                 Err(e) => {
                     eprintln!("eval traces: {e}");
                     *next.lock().unwrap_or_else(|e| e.into_inner()) =

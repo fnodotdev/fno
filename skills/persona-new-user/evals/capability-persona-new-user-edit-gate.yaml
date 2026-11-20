@@ -1,0 +1,21 @@
+# Capability tier: does the reader of skills/persona-new-user/SKILL.md carry
+# its verdict path, its skip rule and the accuracy gate on its own edits?
+id: capability-persona-new-user-edit-gate
+tier: capability
+prompt: |
+  Read skills/persona-new-user/SKILL.md. Write three lines to
+  new-user-answer.md at the repo root.
+  Line 1: the verdict the persona gives a change that touches no file on
+  its surface.
+  Line 2: the directory the persona writes its verdict files into, exactly
+  as the skill spells it.
+  Line 3: the command that records a persona edit, and what must be true
+  of score_after for the edit to land.
+  Do not change any other file.
+grade:
+  - kind: file-exists
+    path: new-user-answer.md
+  - kind: exit
+    command: "grep -qiF 'skip' new-user-answer.md && grep -qF '~/.fno/evals/personas/new-user/' new-user-answer.md && grep -qF -- '--learnings --record' new-user-answer.md"
+timeout_minutes: 10
+tags: [capability, persona-new-user]
