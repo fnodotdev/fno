@@ -129,6 +129,16 @@ fn registry_rows(registry_path: &std::path::Path) -> Result<Vec<Value>, String> 
         .unwrap_or_default())
 }
 
+/// The id a claude row's transcript is asked for and looked up by. The bridge
+/// request and the member lookup must read this one answer: a spawned
+/// worker's full id lives in `harness_session_id`, so a request that skipped
+/// it left every live row reading transcript-not-found.
+fn transcript_id(row: &Value) -> Option<&str> {
+    s_field(row, "harness_session_id")
+        .or_else(|| s_field(row, "session_id"))
+        .or_else(|| s_field(row, "short_id"))
+}
+
 fn s_field<'a>(row: &'a Value, key: &str) -> Option<&'a str> {
     row.get(key)
         .and_then(Value::as_str)
@@ -715,9 +725,7 @@ pub fn snapshot_with(
             if s_field(row, "harness").unwrap_or("").as_harness() == Harness::Codex {
                 return None;
             }
-            s_field(row, "session_id")
-                .or_else(|| s_field(row, "short_id"))
-                .map(String::from)
+            transcript_id(row).map(String::from)
         })
         .collect();
     let (claude_paths, bridge_error) = match (scan.claude_paths)(&bridge_ids) {
@@ -764,9 +772,7 @@ pub fn snapshot_with(
         // The compaction stamp keeps the sessions-dir key (a stamp is written
         // by the PreCompact hook with the full uuid); the transcript
         // location comes from the bridge keyed by the row's own id.
-        let bridge_key = session_id
-            .clone()
-            .or_else(|| s_field(row, "short_id").map(String::from));
+        let bridge_key = transcript_id(row).map(String::from);
         // A codex row never resolves in the claude projects dir (its registry
         // row carries session_id = short_id = null), so its rollout resolves
         // from log_path, else from the codex sessions store by thread id.
@@ -2225,6 +2231,56 @@ mod tests {
         assert_eq!(glm[0].members.len(), 3);
         assert_eq!(glm[0].state, "open");
         assert_eq!(glm[0].reset_epoch, Some(9_999_999_999));
+    }
+
+    /// The live registry keeps a spawned worker's full id in
+    /// `harness_session_id`, with `session_id` absent or the short id. The
+    /// bridge must be asked for the same id the member looks itself up by, or
+    /// every row reads transcript-not-found and a 1308 never opens the lane.
+    #[test]
+    fn a_row_keyed_only_by_harness_session_id_reads_its_capped_tail() {
+        let root = std::env::temp_dir().join(format!("pc-hsid-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let home_dir = root.join("home");
+        let projects = root.join("projects").join("-wt");
+        let full_a = "55555555-5555-5555-5555-555555555555";
+        let full_b = "66666666-6666-6666-6666-666666666666";
+        let model = r#"{"kind":"observed","model":"glm-5.3-flash[1m]"}"#;
+        let registry = format!(
+            r#"[{{"name":"w-a","harness_session_id":"{full_a}","harness":"claude","observed_model":{model}}},{{"name":"w-b","session_id":"66666666","short_id":"66666666","harness_session_id":"{full_b}","harness":"claude","observed_model":{model}}}]"#
+        );
+        write(
+            &home_dir.join("registry.json"),
+            format!(r#"{{"schema_version":25,"agents":{registry}}}"#).as_str(),
+        );
+        for sid in [full_a, full_b] {
+            write(
+                &projects.join(format!("{sid}.jsonl")),
+                &format!("{OK_LINE}\n{FOUR29_LINE}\n"),
+            );
+        }
+        let snap = snapshot_with(
+            &scan(
+                home_dir.join("registry.json"),
+                projects.parent().unwrap().to_path_buf(),
+                root.join("runtime-state.json"),
+                home_dir,
+            ),
+            1_000_000_000,
+            &cfg(2),
+        )
+        .unwrap();
+        let glm: Vec<_> = snap.lanes.iter().filter(|l| l.provider == "zai").collect();
+        assert_eq!(glm.len(), 1);
+        for m in &glm[0].members {
+            assert_eq!(
+                m.cap_unknown, None,
+                "{} must resolve its transcript",
+                m.name
+            );
+            assert!(m.capped, "{} must read its 429 tail", m.name);
+        }
+        assert_eq!(glm[0].state, "open");
     }
 
     /// A bridge that fails (the resolver errors) reads a NAMED unknown on
