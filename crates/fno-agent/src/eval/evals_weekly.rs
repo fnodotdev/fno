@@ -25,7 +25,7 @@ const STALE_DAYS: i64 = 28;
 const TREND_WEEKS: i64 = 4;
 
 fn reading(trace: &Value, key: &str) -> Option<f64> {
-    trace[key]["value"].as_f64()
+    trace.get(key)?.pointer("/value")?.as_f64()
 }
 
 fn band(percent: f64) -> &'static str {
@@ -64,9 +64,13 @@ pub(crate) fn decay(traces: &[Value]) -> Value {
         model.n += 1;
         let context = reading(trace, "context_percent").map_or("unmeasured", band);
         *model.context.entry(context).or_default() += 1;
-        let compaction = reading(trace, "compaction_count").map_or("unmeasured", |c| {
-            COMPACTIONS[(c.max(0.0) as usize).min(COMPACTIONS.len() - 1)]
-        });
+        let compaction =
+            reading(trace, "compaction_count").map_or("unmeasured", |c| match c as u64 {
+                0 => "0",
+                1 => "1",
+                2 => "2",
+                _ => "3+",
+            });
         *model.compactions.entry(compaction).or_default() += 1;
     }
     let rows: Vec<Value> = models
@@ -103,7 +107,10 @@ fn render_decay(report: &Value) -> String {
                 .iter()
                 .chain(&["unmeasured"])
                 .map(|key| {
-                    let cell = &model[axis][*key];
+                    let cell = model
+                        .get(axis)
+                        .and_then(|cells| cells.get(*key))
+                        .unwrap_or(&Value::Null);
                     match cell["share"].as_f64() {
                         Some(share) => format!("{key}: {:.0}% n={}", share * 100.0, cell["n"]),
                         None => format!("{key}: n={}", cell["n"]),
@@ -196,9 +203,12 @@ fn trend(traces: &[Value], now: DateTime<Utc>) -> Value {
             continue;
         };
         if let Some(slot) = weeks.iter().position(|w| *w == week_of(at)) {
-            kinds
+            let counts = kinds
                 .entry(kind.to_string())
-                .or_insert_with(|| vec![0; weeks.len()])[slot] += 1;
+                .or_insert_with(|| vec![0; weeks.len()]);
+            if let Some(count) = counts.get_mut(slot) {
+                *count += 1;
+            }
         }
     }
     json!({"weeks": weeks, "kinds": kinds})
@@ -265,14 +275,16 @@ fn render_weekly(report: &Value) -> String {
             golden["grades"]
         ));
     }
-    let weeks: Vec<&str> = report["trend"]["weeks"]
-        .as_array()
+    let weeks: Vec<&str> = report
+        .pointer("/trend/weeks")
+        .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter_map(Value::as_str)
         .collect();
     out.push_str(&format!("\nfailure trend ({}):\n", weeks.join(" ")));
-    for (kind, counts) in report["trend"]["kinds"].as_object().into_iter().flatten() {
+    let kinds = report.pointer("/trend/kinds").and_then(Value::as_object);
+    for (kind, counts) in kinds.into_iter().flatten() {
         let counts: Vec<String> = counts
             .as_array()
             .into_iter()
@@ -341,6 +353,10 @@ pub fn command(args: &[String]) -> i32 {
 mod tests {
     use super::*;
 
+    fn at<'a>(value: &'a Value, pointer: &str) -> &'a Value {
+        value.pointer(pointer).unwrap_or(&Value::Null)
+    }
+
     fn trace(model: Option<&str>, percent: Option<f64>, compactions: Option<u64>) -> Value {
         let fact = |v: Value| json!({"value": v, "basis": "transcript_before_turn"});
         let none = json!({"value": null, "basis": "unmeasured", "reason": "test"});
@@ -368,20 +384,24 @@ mod tests {
         traces.push(trace(Some("glm"), Some(80.0), Some(1)));
         traces.push(trace(None, None, None));
         let report = decay(&traces);
-        let models = report["models"].as_array().unwrap();
-        let opus = models.iter().find(|m| m["model"] == "opus").unwrap();
-        assert_eq!(opus["n"], 31);
-        assert_eq!(opus["context_percent"]["0-25"]["n"], 20);
-        assert_eq!(opus["context_percent"]["0-25"]["share"], json!(0.6667));
-        assert_eq!(opus["context_percent"]["50-75"]["n"], 10);
-        assert_eq!(opus["context_percent"]["unmeasured"]["n"], 1);
-        assert!(opus["context_percent"]["unmeasured"]["share"].is_null());
-        assert_eq!(opus["compaction_count"]["3+"]["n"], 12);
-        let glm = models.iter().find(|m| m["model"] == "glm").unwrap();
-        assert_eq!(glm["context_percent"]["75-100"]["n"], 1);
-        assert!(glm["context_percent"]["75-100"]["share"].is_null());
-        let unmeasured = models.iter().find(|m| m["model"] == "unmeasured").unwrap();
-        assert_eq!(unmeasured["context_percent"]["0-25"]["n"], 0);
+        let model = |name: &str| {
+            at(&report, "/models")
+                .as_array()
+                .and_then(|m| m.iter().find(|m| at(m, "/model") == &json!(name)))
+                .cloned()
+                .unwrap()
+        };
+        let (opus, glm, unmeasured) = (model("opus"), model("glm"), model("unmeasured"));
+        assert_eq!(at(&opus, "/n"), &json!(31));
+        assert_eq!(at(&opus, "/context_percent/0-25/n"), &json!(20));
+        assert_eq!(at(&opus, "/context_percent/0-25/share"), &json!(0.6667));
+        assert_eq!(at(&opus, "/context_percent/50-75/n"), &json!(10));
+        assert_eq!(at(&opus, "/context_percent/unmeasured/n"), &json!(1));
+        assert!(at(&opus, "/context_percent/unmeasured/share").is_null());
+        assert_eq!(at(&opus, "/compaction_count/3+/n"), &json!(12));
+        assert_eq!(at(&glm, "/context_percent/75-100/n"), &json!(1));
+        assert!(at(&glm, "/context_percent/75-100/share").is_null());
+        assert_eq!(at(&unmeasured, "/context_percent/0-25/n"), &json!(0));
         assert!(render_decay(&report).contains("0-25: 67% n=20"));
     }
 
@@ -393,8 +413,12 @@ mod tests {
         std::fs::create_dir_all(&traces).unwrap();
         for (i, kind) in ["no_progress", "no_progress", "revert"].iter().enumerate() {
             let mut t = trace(Some("opus"), Some(30.0), Some(0));
-            t["signal_kind"] = json!(kind);
-            t["session_id"] = json!({"value": format!("s{i}"), "basis": "event"});
+            let fields = t.as_object_mut().unwrap();
+            fields.insert("signal_kind".into(), json!(kind));
+            fields.insert(
+                "session_id".into(),
+                json!({"value": format!("s{i}"), "basis": "event"}),
+            );
             std::fs::write(traces.join(format!("t{i}.json")), t.to_string()).unwrap();
         }
         let labels: Vec<String> = (0..25)
@@ -427,21 +451,26 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let report = weekly(state, &history, now);
-        assert_eq!(report["week"], "2026-W47");
-        assert_eq!(report["slice"].as_array().unwrap().len(), SLICE_N);
-        assert_eq!(report["slice"], weekly(state, &history, now)["slice"]);
-        let layer = report["judges"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|j| j["judge"] == "layer")
-            .unwrap();
-        assert_eq!(layer["proved"], false);
+        assert_eq!(at(&report, "/week"), &json!("2026-W47"));
         assert_eq!(
-            report["stale_goldens"],
-            json!([{"golden": "steady", "grades": 4, "fails": 0}])
+            at(&report, "/slice").as_array().map(Vec::len),
+            Some(SLICE_N)
         );
-        assert_eq!(report["trend"]["kinds"]["no_progress"], json!([0, 0, 0, 2]));
+        let again = weekly(state, &history, now);
+        assert_eq!(at(&report, "/slice"), at(&again, "/slice"));
+        let layer = at(&report, "/judges")
+            .as_array()
+            .and_then(|j| j.iter().find(|j| at(j, "/judge") == &json!("layer")))
+            .unwrap();
+        assert_eq!(at(layer, "/proved"), &json!(false));
+        assert_eq!(
+            at(&report, "/stale_goldens"),
+            &json!([{"golden": "steady", "grades": 4, "fails": 0}])
+        );
+        assert_eq!(
+            at(&report, "/trend/kinds/no_progress"),
+            &json!([0, 0, 0, 2])
+        );
         let text = render_weekly(&report);
         assert!(text.contains("unproved until it holds"), "{text}");
         assert!(text.contains("steady\tgrades=4"), "{text}");

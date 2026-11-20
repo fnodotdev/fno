@@ -196,11 +196,11 @@ pub(crate) fn sweep(state: &Path, now: DateTime<Utc>) -> Result<usize, LedgerErr
     let traces = crate::evals_labels::load_traces(state);
     let mut recorded = 0;
     for node in nodes {
-        let Some(id) = node["id"].as_str().filter(|id| id.starts_with("go-")) else {
+        let text = |field: &str| node.pointer(field).and_then(Value::as_str);
+        let Some(id) = text("/id").filter(|id| id.starts_with("go-")) else {
             continue;
         };
-        let Some(closed) = node["completed_at"]
-            .as_str()
+        let Some(closed) = text("/completed_at")
             .and_then(|at| DateTime::parse_from_rfc3339(at).ok())
             .map(|at| at.with_timezone(&Utc))
         else {
@@ -209,8 +209,8 @@ pub(crate) fn sweep(state: &Path, now: DateTime<Utc>) -> Result<usize, LedgerErr
         if closed + Duration::days(WINDOW_DAYS) > now {
             continue;
         }
-        let details = node["details"].as_str().unwrap_or("");
-        let row = go_row(id, details, node["pr_url"].as_str(), closed, &traces);
+        let details = text("/details").unwrap_or("");
+        let row = go_row(id, details, text("/pr_url"), closed, &traces);
         recorded += usize::from(append(state, row)?);
     }
     Ok(recorded)
@@ -303,10 +303,8 @@ mod tests {
         assert_eq!(row.pr.as_deref(), Some("https://example.test/pr/9"));
         assert_eq!(row.golden, None);
         let line = serde_json::to_value(&row).unwrap();
-        assert!(
-            line["golden"].is_null() && line["go_node"] == "go-1",
-            "{line}"
-        );
+        assert_eq!(line.pointer("/golden"), Some(&Value::Null), "{line}");
+        assert_eq!(line.pointer("/go_node"), Some(&json!("go-1")), "{line}");
     }
 
     #[test]
@@ -330,7 +328,8 @@ mod tests {
         assert!(append(state, persona).unwrap());
         let rows = read(state);
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[1].outcome, Outcome::Improved);
-        assert!(rows[1].recorded_at.is_some());
+        let last = rows.last().unwrap();
+        assert_eq!(last.outcome, Outcome::Improved);
+        assert!(last.recorded_at.is_some());
     }
 }
