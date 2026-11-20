@@ -1170,12 +1170,12 @@ pub fn run_mail_hold(args: &[String]) -> i32 {
         eprintln!("mail-hold: --session <session-id> is required");
         return 2;
     };
+    if on && (off || release || run_parked_mode) {
+        eprintln!("mail-hold: --on is exclusive of --off, --release and --run-parked");
+        return 2;
+    }
     if run_parked_mode {
         return run_parked(session_id);
-    }
-    if on && (off || release) {
-        eprintln!("mail-hold: --on is exclusive of --off and --release");
-        return 2;
     }
     if off || release {
         let Some((matched, _)) = lookup_row(session_id) else {
