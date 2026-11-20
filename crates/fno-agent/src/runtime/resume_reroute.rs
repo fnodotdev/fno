@@ -475,10 +475,14 @@ mod tests {
             updated.get("requested_model").and_then(Value::as_str),
             Some("glm-5.3-flash[1m]")
         );
+        // The reused route-B file belongs to no session; the row records its
+        // own twin, carrying route B's bytes.
+        let twin = file(&format!("session-{sid}.json"));
         assert_eq!(
             updated.get("route_settings_path").and_then(Value::as_str),
-            Some(new.as_str())
+            Some(twin.as_str())
         );
+        assert_eq!(std::fs::read(&twin).unwrap(), std::fs::read(&new).unwrap());
 
         let plan = crate::reentry::resolve_reentry(
             &reg_path,
@@ -497,7 +501,7 @@ mod tests {
             None => std::env::remove_var("FNO_AGENT_HOME"),
         }
         assert_eq!(plan.mechanism, "bg-resume");
-        for token in ["--bg", "--resume", sid, "--settings", new.as_str()] {
+        for token in ["--bg", "--resume", sid, "--settings", twin.as_str()] {
             assert!(
                 plan.argv.iter().any(|a| a == token),
                 "{token} missing from {:?}",
