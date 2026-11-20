@@ -30,11 +30,7 @@ pub(crate) struct RowKey {
     pub name: String,
     pub harness: String,
     pub model_norm: String,
-    /// The row's model id as declared, so a spawn or accept line names the
-    /// model the lane really drives (brackets and all).
-    pub model_raw: String,
     pub vendor: String,
-    pub route: String,
 }
 
 impl RowKey {
@@ -55,14 +51,11 @@ impl RowKey {
         };
         let route = get("route");
         let vendor = route.split('/').next().unwrap_or("").trim().to_string();
-        let model_raw = if model.is_empty() { model_id } else { model };
         RowKey {
             name: get("name"),
             harness: get("harness"),
             model_norm: norm,
-            model_raw,
             vendor,
-            route,
         }
     }
 }
@@ -263,14 +256,11 @@ fn contradicted_laws(stage: &str, band: &str, row: &RowKey, today: NaiveDate) ->
 }
 
 fn spawn_line(row: &RowKey) -> String {
-    let route_flag = if row.route.is_empty() {
-        format!("-m {}", row.model_raw)
-    } else {
-        format!("--route {}", row.route)
-    };
+    // The spawn door has no -m or -c flag; its --route accepts a lane
+    // name, so every row prints the one shape the door parses.
     format!(
-        "fno agent spawn --as thread -H {} {route_flag} -c <repo>",
-        row.harness
+        "fno agent spawn --as thread -H {} --route {} --cwd <repo>",
+        row.harness, row.name
     )
 }
 
@@ -488,13 +478,7 @@ mod tests {
             name: name.to_string(),
             harness: harness.to_string(),
             model_norm: crate::context_window::normalize_model(model),
-            model_raw: model.to_string(),
             vendor: vendor.to_string(),
-            route: if vendor.is_empty() {
-                String::new()
-            } else {
-                format!("{vendor}/{model}")
-            },
         }
     }
 
@@ -648,5 +632,27 @@ mod tests {
             "{props:?}"
         );
         assert_eq!(props.len(), 0, "{props:?}");
+    }
+
+    #[test]
+    fn the_spawn_line_names_only_flags_the_spawn_door_accepts() {
+        // The door parses -H, --route <provider/model|lane> and --cwd; it
+        // has no -m or -c flag, so both row shapes print the legal form.
+        let bare = row("codex-luna", "codex", "gpt-6-luna", "");
+        let line = spawn_line(&bare);
+        assert!(
+            line.contains("-H codex --route codex-luna --cwd <repo>"),
+            "{line}"
+        );
+        assert!(!line.contains(" -m "), "{line}");
+        assert!(!line.contains(" -c "), "{line}");
+
+        let routed = row("zai-flash", "claude", "glm-5.3-flash[1m]", "zai");
+        let line = spawn_line(&routed);
+        assert!(
+            line.contains("-H claude --route zai-flash --cwd <repo>"),
+            "{line}"
+        );
+        assert!(!line.contains(" -c "), "{line}");
     }
 }
