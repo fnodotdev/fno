@@ -229,7 +229,12 @@ fn write_review_file(path: &std::path::Path, proposals: &[String]) {
         text.push_str(block);
     }
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!(
+                "audience-backfill: review dir unwritable at {}: {e}",
+                parent.display()
+            );
+        }
     }
     if let Err(e) = std::fs::write(path, text) {
         eprintln!(
@@ -273,7 +278,7 @@ mod tests {
             "title": "Ship the persona page",
             "project": "fno",
             "tags": tags,
-            "audience": "",
+            "audience": audience,
             "why": "the user asked why nodes carry no customers",
             "done_means": "pr create refuses a body without a Serves section",
             "completed_at": completed_at,
@@ -303,7 +308,9 @@ mod tests {
         // One store write: the ruled row, with the scope stamp, the ruling
         // why and the tag drop in the one update.
         assert_eq!(updates.len(), 1, "the store hears only the ruled row");
-        let cmd = &updates[0];
+        let Some(cmd) = updates.first() else {
+            panic!("the ruled row produces one update: {updates:?}");
+        };
         assert!(cmd.contains(&"audience=internal".to_string()), "{cmd:?}");
         assert!(
             cmd.contains(&"tags-=audience:internal".to_string()),
