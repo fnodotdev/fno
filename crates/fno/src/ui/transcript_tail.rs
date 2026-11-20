@@ -330,7 +330,7 @@ fn newest_claude_in_project(slug: &str) -> Option<String> {
 /// slug function). A cwd whose slug runs past 200 characters gets a hash
 /// suffix there that this walk does not replicate; such a cwd resolves no
 /// project dir and the pin names the miss.
-fn claude_project_slug(cwd: &Path) -> String {
+pub(crate) fn claude_project_slug(cwd: &Path) -> String {
     let mut s = String::new();
     for c in cwd.to_string_lossy().chars() {
         if c.is_ascii_alphanumeric() {

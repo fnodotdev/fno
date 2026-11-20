@@ -82,6 +82,17 @@ pub struct ShotOptions {
     /// Cmd held: the rows and the start view show their cmd hints. The
     /// cmd-held shots set it.
     pub cmd: bool,
+    /// The find bar state the frame paints over the chat view.
+    pub find: Option<FindShot>,
+}
+
+/// The find-bar states `--shot-find` paints.
+#[derive(Clone, Copy, PartialEq)]
+pub enum FindShot {
+    /// The bar open with a query typed; the hint at rest: bare arrows.
+    Bar,
+    /// The bar open, and the cmd-held chord hint forced on.
+    Chords,
 }
 
 /// Run the app (or the headless probe) and return the process exit code.
@@ -120,6 +131,7 @@ pub fn run(opts: Options) -> i32 {
             out,
             theme,
             mode,
+            find: shot.find,
             session: opts.session,
             chat: opts.chat,
             font: opts.font,
