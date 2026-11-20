@@ -347,7 +347,7 @@ fn record_pause(
     state_param: &LadderState,
     now: i64,
     reason: &str,
-) {
+) -> Result<(), String> {
     if &state != state_param {
         save_state(home, &row.session_id, &state);
     }
@@ -361,12 +361,17 @@ fn record_pause(
             "pr": row.pr,
         });
         if !reason.is_empty() {
-            fields["reason"] = serde_json::json!(reason);
+            if let Some(map) = fields.as_object_mut() {
+                map.insert("reason".into(), serde_json::json!(reason));
+            }
         }
-        let _ = emitter.emit("pr_nudge_paused", &fields);
+        emitter
+            .emit("pr_nudge_paused", &fields)
+            .map_err(|e| e.to_string())?;
         state.last_pause_emit_at = Some(now);
         save_state(home, &row.session_id, &state);
     }
+    Ok(())
 }
 
 /// One row through the decision and its effects. Public so tests can stage
@@ -416,7 +421,7 @@ pub fn apply(
         NudgeAction::Pause => {
             // A stamped red head must survive the hold, or the wake after
             // the lift would count as a second one.
-            record_pause(home, emitter, row, state, state_param, now, reason);
+            record_pause(home, emitter, row, state, state_param, now, reason)?;
         }
         NudgeAction::Escalate => {
             let key = task_key(row);
@@ -447,7 +452,7 @@ pub fn apply(
         }
         NudgeAction::Mail | NudgeAction::Resume => {
             if nudge_pause_hold(home, row) {
-                record_pause(home, emitter, row, state, state_param, now, "held");
+                record_pause(home, emitter, row, state, state_param, now, "held")?;
                 return;
             }
             // Mail and resume are only reachable past `due`, which is where
@@ -537,7 +542,7 @@ pub fn apply(
                 (code, stdout, code == 0, false)
             };
             if resumed_exit == Some(crate::resume_gate::RESUME_PAUSED_EXIT) {
-                record_pause(home, emitter, row, state, state_param, now, "held");
+                record_pause(home, emitter, row, state, state_param, now, "held")?;
                 return;
             }
             state.attempts += 1;
