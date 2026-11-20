@@ -26,7 +26,7 @@ const INTERVAL: Duration = Duration::from_secs(60);
 const WINDOW_MS: i64 = 7 * 24 * 3_600_000;
 const TIMEOUT: Duration = Duration::from_secs(120);
 pub(crate) const CHECK_EVENT: &str = "main_revert_check";
-const FINAL: &[&str] = &["opened", "ambiguous", "flaky", "failed"];
+const FINAL: &[&str] = &["opened", "ambiguous", "flaky", "failed", "deduped"];
 
 #[derive(Default)]
 pub struct Arm {
@@ -326,7 +326,9 @@ fn check_repo(
             Decision::Revert(pr) if opened.contains(&pr) => {
                 // The culprit already carries an opened revert; a newer red
                 // head parked over the same culprit is not a new culprit.
-                return None;
+                // The row closes the head, so the walk runs once, not every
+                // tick.
+                ("deduped", json!({"pr": pr}))
             }
             Decision::Revert(pr) => {
                 let Some((_, culprit)) = oldest_red_merge(&stretch) else {
@@ -540,5 +542,13 @@ mod tests {
         assert_eq!(opened, HashSet::from([11, 12]));
         let (_, _, other) = fold(&rows, "x/y", "c4");
         assert_eq!(other, HashSet::from([11]));
+    }
+
+    #[test]
+    fn a_deduped_head_closes_like_any_final_outcome() {
+        let row = json!({"ts": "2026-10-26T10:11:00Z", "data": {"slug": "o/r", "head": "c3", "outcome": "deduped"}});
+        let (_, closed, opened) = fold(&[row], "o/r", "c3");
+        assert!(closed);
+        assert!(opened.is_empty());
     }
 }
