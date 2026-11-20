@@ -341,7 +341,7 @@ fn clear_saved_job(
         }
         // A stop that exits nonzero is judged by what still holds the
         // session below, not by its exit code.
-        run_job_verb("stop", &short, job_root.as_deref())
+        run_job_action("stop", &short, job_root.as_deref())
             .map_err(|e| format!("resume --route: stopping job {short} failed: {e}"))?;
         // The argv census misses a job its supervisor hosts, so a listed
         // job also answers from the roster.
@@ -357,7 +357,7 @@ fn clear_saved_job(
         }
     }
     if remove {
-        let out = run_job_verb("rm", &short, job_root.as_deref())
+        let out = run_job_action("rm", &short, job_root.as_deref())
             .map_err(|e| format!("resume --route: removing job {short} failed: {e}"))?;
         if !out.status.success() {
             return Err(format!(
@@ -383,17 +383,17 @@ fn job_clearing(listing: &JobListing, argv_live: bool) -> (bool, bool) {
     }
 }
 
-/// Run one bounded `claude <verb> <short>` under the job's account root.
-fn run_job_verb(
-    verb: &str,
+/// Run one bounded `claude <action> <short>` under the job's account root.
+fn run_job_action(
+    action: &str,
     short: &str,
     root: Option<&Path>,
 ) -> std::io::Result<std::process::Output> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?
-        .block_on(crate::lifecycle_child::bounded_claude_job_verb_in(
-            verb,
+        .block_on(crate::lifecycle_child::bounded_claude_job_action_in(
+            action,
             short,
             std::time::Duration::from_secs(15),
             root,
