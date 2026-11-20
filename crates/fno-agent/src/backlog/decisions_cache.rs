@@ -528,7 +528,7 @@ mod tests {
         let full = crate::backlog::decisions_cli::list_core_over(
             &rows,
             0,
-            super::decisions_cli::GraphEntries::default(),
+            crate::backlog::decisions_cli::GraphEntries::default(),
             Some("pr-hold:o/r#7"),
             Some("law"),
             Some("live"),
