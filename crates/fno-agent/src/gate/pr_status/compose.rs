@@ -211,14 +211,9 @@ pub(crate) fn compose_payload(inputs: &ComposeInputs) -> (i32, Value, Vec<String
     );
     // The pr-nudge park reads this: a green OPEN draft is a person's gate,
     // not a merge order. Absent on stale cached rows, which read as today.
-    payload.insert(
-        "draft".into(),
-        json!(inputs
-            .pr_json
-            .get("draft")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)),
-    );
+    let park = serde_json::from_value::<super::de::StatusParkTail>(inputs.pr_json.clone())
+        .unwrap_or_default();
+    payload.insert("draft".into(), json!(park.draft.is_some_and(|v| v)));
     payload.insert(
         "mergeable".into(),
         inputs

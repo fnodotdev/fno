@@ -720,13 +720,10 @@ fn actionable_nudge_status(status: &Result<Value, i32>) -> bool {
 /// The status read settled green on an OPEN PR: the one shape whose
 /// remaining gate is a person's verdict rather than this worker's next
 /// push. A red payload never parks; the red-head rung owns that wake.
-fn settled_green_open(status: &Result<Value, i32>) -> bool {
-    let Ok(payload) = status else {
-        return false;
-    };
-    payload.get("settled").and_then(Value::as_bool) == Some(true)
-        && payload.get("verdict").and_then(Value::as_str) == Some("green")
-        && payload.get("pr_state").and_then(Value::as_str) == Some("OPEN")
+/// The draft bit rides the same tail, so one parse feeds both park inputs.
+fn park_tail(status: &Result<Value, i32>) -> Option<crate::pr_status::de::StatusParkTail> {
+    let payload = status.as_ref().ok()?;
+    serde_json::from_value(payload.clone()).ok()
 }
 
 /// The newest ledger run for `node` terminated with a Done* reason. Newest
@@ -738,9 +735,22 @@ fn settled_green_open(status: &Result<Value, i32>) -> bool {
 fn newest_run_terminal_rows(rows: &[Value], node: &str) -> bool {
     rows.iter()
         .rev()
-        .find(|row| row.get("graph_node_id").and_then(Value::as_str) == Some(node))
-        .and_then(|row| row.get("termination_reason").and_then(Value::as_str))
+        .find_map(|row| {
+            let run: LedgerRunTail = serde_json::from_value(row.clone()).ok()?;
+            (run.graph_node_id.as_deref() == Some(node)).then_some(run)
+        })
+        .and_then(|run| run.termination_reason)
         .is_some_and(|reason| reason.starts_with("Done"))
+}
+
+/// One ledger entry's fields the park reads, parsed once at the boundary
+/// (docs/rust-style.md R1).
+#[derive(Deserialize)]
+struct LedgerRunTail {
+    #[serde(default)]
+    graph_node_id: Option<String>,
+    #[serde(default)]
+    termination_reason: Option<String>,
 }
 
 /// The file-reading half of [`newest_run_terminal_rows`]. The same
@@ -1111,8 +1121,6 @@ fn cleanup_state_files(home: &AgentsHome, rows: &[OpenPrRow]) {
 
 /// Everything one pass needs to decide: the input built the same way for
 /// the daemon arm and the dry run, plus the status read a due row took.
-/// Everything one pass needs to decide: the input built the same way for
-/// the daemon arm and the dry run, plus the status read a due row took.
 /// The fourth tuple slot names why a Pause fired (`held` for the
 /// pre-existing hold set, `terminated_run` or `draft_pr` for the user-gate
 /// parks), so the pause event carries it.
@@ -1163,12 +1171,13 @@ fn decide_with_read(
         let s = read_status(row, runner);
         input.red_head = s.as_ref().ok().and_then(settled_red_head);
         input.merge_refused = authority_refusal_hold(&s);
-        input.pr_draft = s
-            .as_ref()
-            .ok()
-            .and_then(|p| p.get("draft").and_then(Value::as_bool))
-            .unwrap_or(false);
-        input.settled_green_open = settled_green_open(&s);
+        let tail = park_tail(&s);
+        input.pr_draft = tail.as_ref().and_then(|t| t.draft).unwrap_or(false);
+        input.settled_green_open = tail.is_some_and(|t| {
+            t.settled == Some(true)
+                && t.verdict.as_deref() == Some("green")
+                && t.pr_state.as_deref() == Some("OPEN")
+        });
         status = Some(s);
     }
     let (action, state) = decide(&input);
