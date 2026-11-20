@@ -370,7 +370,7 @@ mod tests {
     }
 
     #[test]
-    fn evals_weekly_decay_reads_shares_per_model_and_n_only_when_thin() {
+    fn evals_weekly_decay_and_weekly_reports_read_traces_labels_and_history() {
         let mut traces: Vec<Value> = (0..30)
             .map(|i| {
                 trace(
@@ -403,10 +403,8 @@ mod tests {
         assert!(at(&glm, "/context_percent/75-100/share").is_null());
         assert_eq!(at(&unmeasured, "/context_percent/0-25/n"), &json!(0));
         assert!(render_decay(&report).contains("0-25: 67% n=20"));
-    }
 
-    #[test]
-    fn evals_weekly_report_holds_slice_judges_stale_goldens_and_trend() {
+        // The weekly report: slice, judges, stale goldens and trend.
         let tmp = tempfile::tempdir().unwrap();
         let state = tmp.path();
         let traces = state.join("evals/traces");

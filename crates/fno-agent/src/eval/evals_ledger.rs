@@ -279,7 +279,7 @@ mod tests {
     }
 
     #[test]
-    fn evals_ledger_go_row_scores_the_cluster_kind_around_the_close() {
+    fn evals_ledger_scores_a_go_node_and_gates_a_persona_edit_on_a_gain() {
         let closed = DateTime::parse_from_rfc3339("2026-11-10T00:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
@@ -305,10 +305,8 @@ mod tests {
         let line = serde_json::to_value(&row).unwrap();
         assert_eq!(line.pointer("/golden"), Some(&Value::Null), "{line}");
         assert_eq!(line.pointer("/go_node"), Some(&json!("go-1")), "{line}");
-    }
 
-    #[test]
-    fn evals_ledger_appends_once_and_refuses_a_persona_edit_without_a_gain() {
+        // Append lands once, and a persona edit without a gain is refused.
         let tmp = tempfile::tempdir().unwrap();
         let state = tmp.path();
         let base: Learning = serde_json::from_value(json!({"change": "c1", "kind": "pr",
