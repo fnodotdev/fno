@@ -315,6 +315,29 @@ pub(super) async fn stop_claude_pid_confirmed(entry: &RegistryEntry) -> bool {
     pid_gone_within(pid, entry.pid_start_time, Duration::from_secs(2)).await
 }
 
+/// A row with no transport id whose process is provably gone. A recorded pid
+/// must be dead or recycled. A recorded session must be hosted by no roster
+/// worker and named by no live argv: a respawned job outlives its recorded
+/// pid. A row with neither carries no evidence, and an unreadable roster or
+/// an unsignalable pid never reads as gone.
+fn no_transport_row_gone(entry: &RegistryEntry) -> bool {
+    let sid = entry
+        .harness_session_id
+        .as_deref()
+        .filter(|s| !s.is_empty());
+    if entry.pid.is_none() && sid.is_none() {
+        return false;
+    }
+    let pid_gone = entry.pid.is_none_or(|pid| {
+        super::pid_confirmed_dead(pid) || super::pid_recycled(pid, entry.pid_start_time)
+    });
+    pid_gone
+        && sid.is_none_or(|sid| {
+            roster_still_hosts(sid, Some(sid)) == Ok(false)
+                && !crate::census::live_claude_holds_session(sid)
+        })
+}
+
 /// Stop a Claude agent (AC7-EDGE). Claude is shellout-managed (LD8): there is no
 /// worker PTY to signal, so the daemon shells out to the claude supervisor's
 /// `stop` on the agent's short id and marks the registry row exited on success.
@@ -359,6 +382,18 @@ pub(super) async fn stop_claude(
                     req.id,
                     json!({"stopped": true, "backend": "claude", "pid": entry.pid}),
                 );
+            }
+            // A row whose process is provably gone is already stopped. The
+            // refusal left its claims held until `rm --force`.
+            if off_executor(|| no_transport_row_gone(entry)) {
+                if let Err(response) = mark_claude_stopped(ctx, req, name).await {
+                    return response;
+                }
+                let _ = ctx.emitter.emit(
+                    "agent_stopped",
+                    &json!({"name": name, "reason": "already_exited"}),
+                );
+                return Response::ok(req.id, json!({"already_exited": true, "backend": "claude"}));
             }
             return Response::err(
                 req.id,
@@ -506,6 +541,31 @@ mod tests {
 
     fn start_of_every(pid: u32) -> Option<u64> {
         Some(u64::from(pid) + 7)
+    }
+
+    /// A no-short-id row stops as already exited only on proof: a reaped
+    /// pid reads gone; a live pid, or a row with no pid and no session,
+    /// keeps the refusal.
+    #[test]
+    fn a_no_transport_row_reads_gone_only_on_proof() {
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("0")
+            .spawn()
+            .expect("spawn sleep child");
+        let dead = child.id();
+        child.wait().expect("reap sleep child");
+        let row = |pid: Option<u32>, start: Option<u64>| RegistryEntry {
+            pid,
+            pid_start_time: start,
+            ..Default::default()
+        };
+        assert!(no_transport_row_gone(&row(Some(dead), None)));
+        let mine = std::process::id();
+        assert!(!no_transport_row_gone(&row(
+            Some(mine),
+            process_start_time(mine)
+        )));
+        assert!(!no_transport_row_gone(&row(None, None)));
     }
 
     /// AC2-ERR: the supervisor pid and this daemon's pid are never targets.
