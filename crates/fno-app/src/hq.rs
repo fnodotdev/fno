@@ -44,6 +44,7 @@ pub fn owning_lead(fleet: Option<&fno::app_api::client::org_seats::Fleet>) -> Op
 enum Ask {
     Refresh,
     Answer { id: String, option: u32 },
+    AnswerWords { id: String, text: String },
     Mail { text: String },
 }
 
@@ -134,6 +135,19 @@ impl Poller {
                                 }
                                 true
                             }
+                            Ok(Some(Ask::AnswerWords { id, text })) => {
+                                let reply =
+                                    match fno::needs_overlay::answer(&id, AnswerPick::Words(text))
+                                        .await
+                                    {
+                                        Ok(receipt) => Reply::Answered { id, receipt },
+                                        Err(why) => Reply::Refused { id, why },
+                                    };
+                                if out.send(reply).is_err() {
+                                    return;
+                                }
+                                true
+                            }
                             Ok(Some(Ask::Mail { text })) => {
                                 let reply = match owning_lead(board.fleet()) {
                                     None => Reply::Mailed {
@@ -202,6 +216,11 @@ impl Poller {
 
     pub fn answer(&self, id: String, option: u32) {
         let _ = self.asks.send(Ask::Answer { id, option });
+    }
+
+    /// A typed answer through the same door, AnswerPick::Words.
+    pub fn answer_words(&self, id: String, text: String) {
+        let _ = self.asks.send(Ask::AnswerWords { id, text });
     }
 
     /// Route one composer message to the owning lead, off the UI thread.

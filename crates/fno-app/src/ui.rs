@@ -282,6 +282,23 @@ pub fn advance(window: &gpui::Window, size: f32) -> Pixels {
         .unwrap_or(px(size * 0.6))
 }
 
+/// An age label from an RFC 3339 stamp: `12s`, `18m`, `1h`, `2d`, the same
+/// buckets the TUI's sideline uses. An absent or unparseable stamp shows
+/// nothing.
+pub fn age(stamp: &str, now: u64) -> String {
+    let past = chrono::DateTime::parse_from_rfc3339(stamp)
+        .ok()
+        .map(|t| t.timestamp())
+        .unwrap_or(0);
+    let s = (now as i64 - past).max(0);
+    match s {
+        0..=59 => format!("{s}s"),
+        60..=3599 => format!("{}m", s / 60),
+        3600..=172_799 => format!("{}h", s / 3600),
+        _ => format!("{}d", s / 86_400),
+    }
+}
+
 /// What a typed key did to a one-line field.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Edit {
@@ -361,5 +378,21 @@ mod tests {
         // A cut text keeps its cell count, with the ellipsis in the last.
         assert_eq!(cut("Keep the mail store", 8), "Keep th…");
         assert_eq!(cut("short", 8), "short");
+    }
+
+    #[test]
+    fn an_age_label_buckets_whole_units_and_buries_a_bad_stamp() {
+        let t0 = "2026-11-19T18:00:00Z";
+        let epoch = |stamp: &str| {
+            chrono::DateTime::parse_from_rfc3339(stamp)
+                .unwrap()
+                .timestamp() as u64
+        };
+        let now = epoch(t0);
+        assert_eq!(age(t0, now), "0s");
+        assert_eq!(age(t0, now + 60), "1m");
+        assert_eq!(age(t0, now + 3600), "1h");
+        assert_eq!(age(t0, now + 2 * 86_400), "2d");
+        assert_eq!(age("not a stamp", now), "0s");
     }
 }
