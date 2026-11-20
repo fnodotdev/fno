@@ -105,6 +105,8 @@ Under the table, four notes. First, `stranded` and `recovery` have no `KNOWN_ARM
 
 The sweep's per-PR rich read is bounded: one row no more often than every two intervals, default 20 minutes. The cheap listing leg already answered that row's state. The least-recently-read order spreads the pool across the window. A fleet budget hold above 10 s pauses the read pass outright. A refused read ends the pass early and never marks the row stale.
 
+Every arm's report-freshness contract (source, bookmark, re-check, send-confirm, against six rules) is audited in [report-freshness.md](report-freshness.md).
+
 ## Stopping things safely
 
 A launchd agent is stopped by its uninstall command or `launchctl bootout`, never by killing the tick pid mid-phase. The next fire is already scheduled. The daemon is restarted, never killed, because workers survive a graceful restart. A keeper is never killed by hand while its child lives. A pty keeper kill ends the session. A store keeper ends by idle exit or `fno agent session restart`.

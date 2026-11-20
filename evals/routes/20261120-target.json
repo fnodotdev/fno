@@ -1,0 +1,1412 @@
+{
+  "since_days": 28,
+  "coverage": {
+    "nodes": 818,
+    "harness_pct": 100,
+    "provider_pct": 0,
+    "model_pct": 73,
+    "cost_pct": 2,
+    "dropped_unparsed": 0
+  },
+  "cells": [
+    {
+      "kind": "blueprint/high",
+      "harness": "claude",
+      "provider": "unrecorded",
+      "model": "claude-fable-5-1",
+      "nodes": 1,
+      "merged": 1,
+      "merged_pct": 100,
+      "merged_ci95": [
+        0.2065,
+        1.0
+      ],
+      "spend_usd": null,
+      "cost_per_merged_usd": null,
+      "median_work_hours": 0.57,
+      "bounce_pct": 0,
+      "ci_failure_per_node": null,
+      "ci_red_pct": null,
+      "ci_red_coverage_pct": 0,
+      "review_findings_per_node": null,
+      "review_findings_coverage_pct": 0,
+      "fix_of_fix_pct": null,
+      "fix_of_fix_coverage_pct": 0,
+      "shared": 0
+    },
+    {
+      "kind": "blueprint/high",
+      "harness": "claude",
+      "provider": "unrecorded",
+      "model": "claude-opus-5-5",
+      "nodes": 60,
+      "merged": 51,
+      "merged_pct": 85,
+      "merged_ci95": [
+        0.7389,
+        0.919
+      ],
+      "spend_usd": null,
+      "cost_per_merged_usd": null,
+      "median_work_hours": 0.32,
+      "bounce_pct": 0,
+      "ci_failure_per_node": 0.07,
+      "ci_red_pct": 19,
+      "ci_red_coverage_pct": 41,
+      "review_findings_per_node": 0.1,
+      "review_findings_coverage_pct": 41,
+      "fix_of_fix_pct": 67,
+      "fix_of_fix_coverage_pct": 6,
+      "shared": 7
+    },
+    {
+      "kind": "blueprint/high",
+      "harness": "claude",
+      "provider": "unrecorded",
+      "model": "glm-5.3-flash",
+      "nodes": 1,
+      "merged": 1,
+      "merged_pct": 100,
+      "merged_ci95": [
+        0.2065,
+        1.0
+      ],
+      "spend_usd": null,
+      "cost_per_merged_usd": null,
+      "median_work_hours": 1.03,
+      "bounce_pct": 0,
+      "ci_failure_per_node": 0.0,
+      "ci_red_pct": 0,
+      "ci_red_coverage_pct": 100,
+      "review_findings_per_node": 0.0,
+      "review_findings_coverage_pct": 100,
+      "fix_of_fix_pct": null,
+      "fix_of_fix_coverage_pct": 0,
+      "shared": 0
+    },
+    {
+      "kind": "blueprint/high",
+      "harness": "claude",
+      "provider": "unrecorded",
+      "model": "unknown",
+      "nodes": 1,
+      "merged": 1,
+      "merged_pct": 100,
+      "merged_ci95": [
+        0.2065,
+        1.0
+      ],
+      "spend_usd": null,
+      "cost_per_merged_usd": null,
+      "median_work_hours": null,
+      "bounce_pct": 0,
+      "ci_failure_per_node": 0.0,
+      "ci_red_pct": 0,
+      "ci_red_coverage_pct": 100,
+      "review_findings_per_node": 0.0,
+      "review_findings_coverage_pct": 100,
+      "fix_of_fix_pct": null,
+      "fix_of_fix_coverage_pct": 0,
+      "shared": 0
+    },
+    {
+      "kind": "blueprint/high",
+      "harness": "codex",
+      "provider": "unrecorded",
+      "model": "unknown",
+      "nodes": 2,
+      "merged": 2,
+      "merged_pct": 100,
+      "merged_ci95": [
+        0.3424,
+        1.0
+      ],
+      "spend_usd": null,
+      "cost_per_merged_usd": null,
+      "median_work_hours": 0.15,
+      "bounce_pct": 0,
+      "ci_failure_per_node": 0.0,
+      "ci_red_pct": null,
+      "ci_red_coverage_pct": 0,
+      "review_findings_per_node": null,
+      "review_findings_coverage_pct": 0,
+      "fix_of_fix_pct": null,
+      "fix_of_fix_coverage_pct": 0,
+      "shared": 1
+    },
+    {
+      "kind": "blueprint/low",
+      "harness": "claude",
+      "provider": "unrecorded",
+      "model": "claude-opus-5",
+      "nodes": 1,
+      "merged": 1,
+      "merged_pct": 100,
+      "merged_ci95": [
+        0.2065,
+        1.0
+      ],
+      "spend_usd": null,
+      "cost_per_merged_usd": null,
+      "median_work_hours": null,
+      "bounce_pct": 0,
+      "ci_failure_per_node": null,
+      "ci_red_pct": null,
+      "ci_red_coverage_pct": 0,
+      "review_findings_per_node": null,
+      "review_findings_coverage_pct": 0,
+      "fix_of_fix_pct": null,
+      "fix_of_fix_coverage_pct": 0,
+      "shared": 0
+    },
+    {
+      "kind": "blueprint/low",
+      "harness": "claude",
+      "provider": "unrecorded",
+      "model": "claude-opus-5-5",
+      "nodes": 3,
+      "merged": 3,
+      "merged_pct": 100,
+      "merged_ci95": [
+        0.4385,
+        1.0
+      ],
+      "spend_usd": null,
+      "cost_per_merged_usd": null,
+      "median_work_hours": 0.15,
+      "bounce_pct": 0,
+      "ci_failure_per_node": 0.0,
+      "ci_red_pct": 0,
+      "ci_red_coverage_pct": 33,
+      "review_findings_per_node": 0.0,
+      "review_findings_coverage_pct": 33,
+      "fix_of_fix_pct": null,
+      "fix_of_fix_coverage_pct": 0,
+      "shared": 0
+    },
+    {
+      "kind": "blueprint/low",
+      "harness": "claude",
+      "provider": "unrecorded",
+      "model": "glm-5.3-flash",
+      "nodes": 10,
+      "merged": 10,
+      "merged_pct": 100,
+      "merged_ci95": [
+        0.7225,
+        1.0
+      ],
+      "spend_usd": null,
+      "cost_per_merged_usd": null,
+      "median_work_hours": null,
+      "bounce_pct": 0,
+      "ci_failure_per_node": 0.2,
+      "ci_red_pct": 50,
+      "ci_red_coverage_pct": 20,
+      "review_findings_per_node": 0.5,
+      "review_findings_coverage_pct": 20,
+      "fix_of_fix_pct": 100,
+      "fix_of_fix_coverage_pct": 20,
+      "shared": 0
+    },
+    {
+      "kind": "blueprint/medium",
+      "harness": "claude",
+      "provider": "unrecorded",
+      "model": "claude-opus-5-5",
+      "nodes": 59,
+      "merged": 57,
+      "merged_pct": 97,
+      "merged_ci95": [
+        0.8846,
+        0.9907
+      ],
+      "spend_usd": null,
+      "cost_per_merged_usd": null,
+      "median_work_hours": 0.25,
+      "bounce_pct": 0,
+      "ci_failure_per_node": 0.05,
+      "ci_red_pct": 12,
+      "ci_red_coverage_pct": 42,
+      "review_findings_per_node": 0.08,
+      "review_findings_coverage_pct": 42,
+      "fix_of_fix_pct": 80,
+      "fix_of_fix_coverage_pct": 9,
+      "shared": 2
+    },
+    {
+      "kind": "blueprint/medium",
+      "harness": "claude",
+      "provider": "unrecorded",
+      "model": "glm-5.3-flash",
+      "nodes": 48,
+      "merged": 45,
+      "merged_pct": 94,
+      "merged_ci95": [
+        0.8316,
+        0.9785
+      ],
+      "spend_usd": null,
+      "cost_per_merged_usd": null,
+      "median_work_hours": 0.33,
+      "bounce_pct": 0,
+      "ci_failure_per_node": 0.31,
+      "ci_red_pct": 16,
+      "ci_red_coverage_pct": 69,
+      "review_findings_per_node": 0.29,
+      "review_findings_coverage_pct": 69,
+      "fix_of_fix_pct": 17,
+      "fix_of_fix_coverage_pct": 13,
+      "shared": 0
+    },
+    {
+      "kind": "blueprint/medium",
+      "harness": "claude",
+      "provider": "unrecorded",
+      "model": "unknown",
+      "nodes": 1,
+      "merged": 1,
+      "merged_pct": 100,
+      "merged_ci95": [
+        0.2065,
+        1.0
+      ],
+      "spend_usd": null,
+      "cost_per_merged_usd": null,
+      "median_work_hours": 0.32,
+      "bounce_pct": 0,
+      "ci_failure_per_node": 0.0,
+      "ci_red_pct": null,
+      "ci_red_coverage_pct": 0,
+      "review_findings_per_node": null,
+      "review_findings_coverage_pct": 0,
+      "fix_of_fix_pct": null,
+      "fix_of_fix_coverage_pct": 0,
+      "shared": 0
+    },
+    {
+      "kind": "blueprint/medium",
+      "harness": "codex",
+      "provider": "unrecorded",
+      "model": "unknown",
+      "nodes": 3,
+      "merged": 3,
+      "merged_pct": 100,
+      "merged_ci95": [
+        0.4385,
+        1.0
+      ],
+      "spend_usd": null,
+      "cost_per_merged_usd": null,
+      "median_work_hours": null,
+      "bounce_pct": 0,
+      "ci_failure_per_node": 0.0,
+      "ci_red_pct": null,
+      "ci_red_coverage_pct": 0,
+      "review_findings_per_node": null,
+      "review_findings_coverage_pct": 0,
+      "fix_of_fix_pct": null,
+      "fix_of_fix_coverage_pct": 0,
+      "shared": 1
+    },
+    {
+      "kind": "blueprint/unknown",
+      "harness": "claude",
+      "provider": "unrecorded",
+      "model": "claude-opus-5-5",
+      "nodes": 1,
+      "merged": 1,
+      "merged_pct": 100,
+      "merged_ci95": [
+        0.2065,
+        1.0
+      ],
+      "spend_usd": null,
+      "cost_per_merged_usd": null,
+      "median_work_hours": 0.13,
+      "bounce_pct": 0,
+      "ci_failure_per_node": 0.0,
+      "ci_red_pct": null,
+      "ci_red_coverage_pct": 0,
+      "review_findings_per_node": null,
+      "review_findings_coverage_pct": 0,
+      "fix_of_fix_pct": null,
+      "fix_of_fix_coverage_pct": 0,
+      "shared": 0
+    },
+    {
+      "kind": "target/high",
+      "harness": "claude",
+      "provider": "unrecorded",
+      "model": "claude-opus-5-5",
+      "nodes": 46,
+      "merged": 44,
+      "merged_pct": 96,
+      "merged_ci95": [
+        0.8547,
+        0.988
+      ],
+      "spend_usd": 0.0,
+      "cost_per_merged_usd": 0.0,
+      "median_work_hours": 2.85,
+      "bounce_pct": 0,
+      "ci_failure_per_node": 0.11,
+      "ci_red_pct": 19,
+      "ci_red_coverage_pct": 61,
+      "review_findings_per_node": 0.15,
+      "review_findings_coverage_pct": 61,
+      "fix_of_fix_pct": 75,
+      "fix_of_fix_coverage_pct": 9,
+      "shared": 5
+    },
+    {
+      "kind": "target/high",
+      "harness": "claude",
+      "provider": "unrecorded",
+      "model": "claude-sonnet-5-5",
+      "nodes": 3,
+      "merged": 3,
+      "merged_pct": 100,
+      "merged_ci95": [
+        0.4385,
+        1.0
+      ],
+      "spend_usd": null,
+      "cost_per_merged_usd": null,
+      "median_work_hours": 2.13,
+      "bounce_pct": 0,
+      "ci_failure_per_node": 0.0,
+      "ci_red_pct": 0,
+      "ci_red_coverage_pct": 33,
+      "review_findings_per_node": 0.0,
+      "review_findings_coverage_pct": 33,
+      "fix_of_fix_pct": 0,
+      "fix_of_fix_coverage_pct": 33,
+      "shared": 0
+    },
+    {
+      "kind": "target/high",
+      "harness": "claude",
+      "provider": "unrecorded",
+      "model": "glm-5.3-flash",
+      "nodes": 17,
+      "merged": 14,
+      "merged_pct": 82,
+      "merged_ci95": [
+        0.5897,
+        0.9381
+      ],
+      "spend_usd": 4.49,
+      "cost_per_merged_usd": 4.49,
+      "median_work_hours": 4.0,
+      "bounce_pct": 0,
+      "ci_failure_per_node": 0.0,
+      "ci_red_pct": 0,
+      "ci_red_coverage_pct": 43,
+      "review_findings_per_node": 0.0,
+      "review_findings_coverage_pct": 43,
+      "fix_of_fix_pct": 0,
+      "fix_of_fix_coverage_pct": 7,
+      "shared": 1
+    },
+    {
+      "kind": "target/high",
+      "harness": "claude",
+      "provider": "unrecorded",
+      "model": "unknown",
+      "nodes": 31,
+      "merged": 24,
+      "merged_pct": 77,
+      "merged_ci95": [
+        0.6019,
+        0.8861
+      ],
+      "spend_usd": 18.47,
+      "cost_per_merged_usd": 18.47,
+      "median_work_hours": 8.3,
+      "bounce_pct": 0,
+      "ci_failure_per_node": 0.0,
+      "ci_red_pct": 0,
+      "ci_red_coverage_pct": 21,
+      "review_findings_per_node": 0.2,
+      "review_findings_coverage_pct": 21,
+      "fix_of_fix_pct": 100,
+      "fix_of_fix_coverage_pct": 4,
+      "shared": 5
+    },
+    {
+      "kind": "target/high",
+      "harness": "codex",
+      "provider": "unrecorded",
+      "model": "unknown",
+      "nodes": 11,
+      "merged": 11,
+      "merged_pct": 100,
+      "merged_ci95": [
+        0.7412,
+        1.0
+      ],
+      "spend_usd": 0.0,
+      "cost_per_merged_usd": 0.0,
+      "median_work_hours": 8.8,
+      "bounce_pct": 0,
+      "ci_failure_per_node": 0.0,
+      "ci_red_pct": null,
+      "ci_red_coverage_pct": 0,
+      "review_findings_per_node": null,
+      "review_findings_coverage_pct": 0,
+      "fix_of_fix_pct": null,
+      "fix_of_fix_coverage_pct": 0,
+      "shared": 1
+    },
+    {
+      "kind": "target/low",
+      "harness": "claude",
+      "provider": "unrecorded",
+      "model": "claude-haiku-5-5",
+      "nodes": 5,
+      "merged": 5,
+      "merged_pct": 100,
+      "merged_ci95": [
+        0.5655,
+        1.0
+      ],
+      "spend_usd": null,
+      "cost_per_merged_usd": null,
+      "median_work_hours": 1.3,
+      "bounce_pct": 0,
+      "ci_failure_per_node": 0.2,
+      "ci_red_pct": 50,
+      "ci_red_coverage_pct": 40,
+      "review_findings_per_node": 0.5,
+      "review_findings_coverage_pct": 40,
+      "fix_of_fix_pct": 0,
+      "fix_of_fix_coverage_pct": 20,
+      "shared": 0
+    },
+    {
+      "kind": "target/low",
+      "harness": "claude",
+      "provider": "unrecorded",
+      "model": "claude-opus-5-5",
+      "nodes": 18,
+      "merged": 18,
+      "merged_pct": 100,
+      "merged_ci95": [
+        0.8241,
+        1.0
+      ],
+      "spend_usd": null,
+      "cost_per_merged_usd": null,
+      "median_work_hours": 0.63,
+      "bounce_pct": 0,
+      "ci_failure_per_node": 0.0,
+      "ci_red_pct": 0,
+      "ci_red_coverage_pct": 11,
+      "review_findings_per_node": 0.0,
+      "review_findings_coverage_pct": 11,
+      "fix_of_fix_pct": 100,
+      "fix_of_fix_coverage_pct": 11,
+      "shared": 0
+    },
+    {
+      "kind": "target/low",
+      "harness": "claude",
+      "provider": "unrecorded",
+      "model": "claude-sonnet-5-5",
+      "nodes": 6,
+      "merged": 6,
+      "merged_pct": 100,
+      "merged_ci95": [
+        0.6097,
+        1.0
+      ],
+      "spend_usd": null,
+      "cost_per_merged_usd": null,
+      "median_work_hours": 0.85,
+      "bounce_pct": 0,
+      "ci_failure_per_node": 0.0,
+      "ci_red_pct": null,
+      "ci_red_coverage_pct": 0,
+      "review_findings_per_node": null,
+      "review_findings_coverage_pct": 0,
+      "fix_of_fix_pct": null,
+      "fix_of_fix_coverage_pct": 0,
+      "shared": 0
+    },
+    {
+      "kind": "target/low",
+      "harness": "claude",
+      "provider": "unrecorded",
+      "model": "glm-5.3-flash",
+      "nodes": 118,
+      "merged": 117,
+      "merged_pct": 99,
+      "merged_ci95": [
+        0.9536,
+        0.9985
+      ],
+      "spend_usd": null,
+      "cost_per_merged_usd": null,
+      "median_work_hours": 2.15,
+      "bounce_pct": 0,
+      "ci_failure_per_node": 0.03,
+      "ci_red_pct": 11,
+      "ci_red_coverage_pct": 23,
+      "review_findings_per_node": 0.15,
+      "review_findings_coverage_pct": 23,
+      "fix_of_fix_pct": 38,
+      "fix_of_fix_coverage_pct": 21,
+      "shared": 4
+    },
+    {
+      "kind": "target/low",
+      "harness": "claude",
+      "provider": "unrecorded",
+      "model": "unknown",
+      "nodes": 47,
+      "merged": 32,
+      "merged_pct": 68,
+      "merged_ci95": [
+        0.5383,
+        0.796
+      ],
+      "spend_usd": null,
+      "cost_per_merged_usd": null,
+      "median_work_hours": 2.08,
+      "bounce_pct": 0,
+      "ci_failure_per_node": 0.0,
+      "ci_red_pct": 0,
+      "ci_red_coverage_pct": 16,
+      "review_findings_per_node": 0.0,
+      "review_findings_coverage_pct": 16,
+      "fix_of_fix_pct": 50,
+      "fix_of_fix_coverage_pct": 6,
+      "shared": 2
+    },
+    {
+      "kind": "target/low",
+      "harness": "codex",
+      "provider": "unrecorded",
+      "model": "unknown",
+      "nodes": 1,
+      "merged": 1,
+      "merged_pct": 100,
+      "merged_ci95": [
+        0.2065,
+        1.0
+      ],
+      "spend_usd": null,
+      "cost_per_merged_usd": null,
+      "median_work_hours": 4.17,
+      "bounce_pct": 0,
+      "ci_failure_per_node": 0.0,
+      "ci_red_pct": null,
+      "ci_red_coverage_pct": 0,
+      "review_findings_per_node": null,
+      "review_findings_coverage_pct": 0,
+      "fix_of_fix_pct": null,
+      "fix_of_fix_coverage_pct": 0,
+      "shared": 0
+    },
+    {
+      "kind": "target/medium",
+      "harness": "claude",
+      "provider": "unrecorded",
+      "model": "claude-haiku-5-5",
+      "nodes": 1,
+      "merged": 1,
+      "merged_pct": 100,
+      "merged_ci95": [
+        0.2065,
+        1.0
+      ],
+      "spend_usd": null,
+      "cost_per_merged_usd": null,
+      "median_work_hours": 0.58,
+      "bounce_pct": 0,
+      "ci_failure_per_node": 0.0,
+      "ci_red_pct": 0,
+      "ci_red_coverage_pct": 100,
+      "review_findings_per_node": 0.0,
+      "review_findings_coverage_pct": 100,
+      "fix_of_fix_pct": 100,
+      "fix_of_fix_coverage_pct": 100,
+      "shared": 0
+    },
+    {
+      "kind": "target/medium",
+      "harness": "claude",
+      "provider": "unrecorded",
+      "model": "claude-opus-5-5",
+      "nodes": 47,
+      "merged": 46,
+      "merged_pct": 98,
+      "merged_ci95": [
+        0.8889,
+        0.9962
+      ],
+      "spend_usd": 10.94,
+      "cost_per_merged_usd": 10.94,
+      "median_work_hours": 1.28,
+      "bounce_pct": 0,
+      "ci_failure_per_node": 0.02,
+      "ci_red_pct": 3,
+      "ci_red_coverage_pct": 74,
+      "review_findings_per_node": 0.09,
+      "review_findings_coverage_pct": 74,
+      "fix_of_fix_pct": 58,
+      "fix_of_fix_coverage_pct": 41,
+      "shared": 4
+    },
+    {
+      "kind": "target/medium",
+      "harness": "claude",
+      "provider": "unrecorded",
+      "model": "claude-sonnet-5-5",
+      "nodes": 109,
+      "merged": 108,
+      "merged_pct": 99,
+      "merged_ci95": [
+        0.9499,
+        0.9984
+      ],
+      "spend_usd": 0.0,
+      "cost_per_merged_usd": 0.0,
+      "median_work_hours": 0.9,
+      "bounce_pct": 0,
+      "ci_failure_per_node": 0.11,
+      "ci_red_pct": 11,
+      "ci_red_coverage_pct": 69,
+      "review_findings_per_node": 0.11,
+      "review_findings_coverage_pct": 69,
+      "fix_of_fix_pct": 48,
+      "fix_of_fix_coverage_pct": 39,
+      "shared": 3
+    },
+    {
+      "kind": "target/medium",
+      "harness": "claude",
+      "provider": "unrecorded",
+      "model": "glm-5.3-flash",
+      "nodes": 229,
+      "merged": 225,
+      "merged_pct": 98,
+      "merged_ci95": [
+        0.956,
+        0.9932
+      ],
+      "spend_usd": 70.51,
+      "cost_per_merged_usd": 17.63,
+      "median_work_hours": 3.53,
+      "bounce_pct": 0,
+      "ci_failure_per_node": 0.1,
+      "ci_red_pct": 8,
+      "ci_red_coverage_pct": 58,
+      "review_findings_per_node": 0.37,
+      "review_findings_coverage_pct": 58,
+      "fix_of_fix_pct": 37,
+      "fix_of_fix_coverage_pct": 29,
+      "shared": 10
+    },
+    {
+      "kind": "target/medium",
+      "harness": "claude",
+      "provider": "unrecorded",
+      "model": "unknown",
+      "nodes": 112,
+      "merged": 74,
+      "merged_pct": 66,
+      "merged_ci95": [
+        0.569,
+        0.7418
+      ],
+      "spend_usd": 17.39,
+      "cost_per_merged_usd": 4.35,
+      "median_work_hours": 2.47,
+      "bounce_pct": 0,
+      "ci_failure_per_node": 0.01,
+      "ci_red_pct": 0,
+      "ci_red_coverage_pct": 31,
+      "review_findings_per_node": 0.26,
+      "review_findings_coverage_pct": 31,
+      "fix_of_fix_pct": 40,
+      "fix_of_fix_coverage_pct": 14,
+      "shared": 6
+    },
+    {
+      "kind": "target/medium",
+      "harness": "codex",
+      "provider": "unrecorded",
+      "model": "unknown",
+      "nodes": 16,
+      "merged": 15,
+      "merged_pct": 94,
+      "merged_ci95": [
+        0.7167,
+        0.9889
+      ],
+      "spend_usd": null,
+      "cost_per_merged_usd": null,
+      "median_work_hours": 5.75,
+      "bounce_pct": 0,
+      "ci_failure_per_node": 0.0,
+      "ci_red_pct": 0,
+      "ci_red_coverage_pct": 33,
+      "review_findings_per_node": 0.0,
+      "review_findings_coverage_pct": 33,
+      "fix_of_fix_pct": 0,
+      "fix_of_fix_coverage_pct": 13,
+      "shared": 2
+    },
+    {
+      "kind": "target/unknown",
+      "harness": "claude",
+      "provider": "unrecorded",
+      "model": "glm-5.3-flash",
+      "nodes": 1,
+      "merged": 1,
+      "merged_pct": 100,
+      "merged_ci95": [
+        0.2065,
+        1.0
+      ],
+      "spend_usd": null,
+      "cost_per_merged_usd": null,
+      "median_work_hours": 6.03,
+      "bounce_pct": 0,
+      "ci_failure_per_node": 0.0,
+      "ci_red_pct": null,
+      "ci_red_coverage_pct": 0,
+      "review_findings_per_node": null,
+      "review_findings_coverage_pct": 0,
+      "fix_of_fix_pct": null,
+      "fix_of_fix_coverage_pct": 0,
+      "shared": 0
+    }
+  ],
+  "proposals": {
+    "stage": "target",
+    "proposals": [
+      {
+        "kind": "target/high",
+        "lane": "claude-fable-5-1",
+        "harness": "claude",
+        "verdict": "explore",
+        "nodes": 0,
+        "laws": [
+          {
+            "gist": "from 2026-10-23 target work returns to glm-5.3-flash[1m]",
+            "contradicted": true
+          },
+          {
+            "gist": "prefer glm-5.3-flash for all dispatch lanes until the operator says otherwise",
+            "contradicted": true
+          },
+          {
+            "gist": "execution and target spawns ride glm-5.3-flash[1m]",
+            "contradicted": true
+          }
+        ],
+        "spawn_line": "fno agent spawn --as thread -H claude -m claude-fable-5-1 -c <repo>",
+        "note": "fewer than 5 nodes on this kind"
+      },
+      {
+        "kind": "target/high",
+        "lane": "codex-sol",
+        "harness": "codex",
+        "verdict": "explore",
+        "nodes": 0,
+        "laws": [
+          {
+            "gist": "from 2026-10-23 target work returns to glm-5.3-flash[1m]",
+            "contradicted": true
+          },
+          {
+            "gist": "prefer glm-5.3-flash for all dispatch lanes until the operator says otherwise",
+            "contradicted": true
+          },
+          {
+            "gist": "execution and target spawns ride glm-5.3-flash[1m]",
+            "contradicted": true
+          }
+        ],
+        "spawn_line": "fno agent spawn --as thread -H codex -m sol -c <repo>",
+        "note": "fewer than 5 nodes on this kind"
+      },
+      {
+        "kind": "target/high",
+        "lane": "codex-astra",
+        "harness": "codex",
+        "verdict": "explore",
+        "nodes": 0,
+        "laws": [
+          {
+            "gist": "from 2026-10-23 target work returns to glm-5.3-flash[1m]",
+            "contradicted": true
+          },
+          {
+            "gist": "prefer glm-5.3-flash for all dispatch lanes until the operator says otherwise",
+            "contradicted": true
+          },
+          {
+            "gist": "execution and target spawns ride glm-5.3-flash[1m]",
+            "contradicted": true
+          }
+        ],
+        "spawn_line": "fno agent spawn --as thread -H codex -m gpt-6-astra -c <repo>",
+        "note": "fewer than 5 nodes on this kind"
+      },
+      {
+        "kind": "target/high",
+        "lane": "zai-flash",
+        "harness": "claude",
+        "verdict": "explore",
+        "nodes": 0,
+        "laws": [],
+        "spawn_line": "fno agent spawn --as thread -H claude --route zai/glm-5.3-flash[1m] -c <repo>",
+        "note": "fewer than 5 nodes on this kind"
+      },
+      {
+        "kind": "target/high",
+        "lane": "codex-luna",
+        "harness": "codex",
+        "verdict": "explore",
+        "nodes": 0,
+        "laws": [
+          {
+            "gist": "from 2026-10-23 target work returns to glm-5.3-flash[1m]",
+            "contradicted": true
+          },
+          {
+            "gist": "prefer glm-5.3-flash for all dispatch lanes until the operator says otherwise",
+            "contradicted": true
+          },
+          {
+            "gist": "execution and target spawns ride glm-5.3-flash[1m]",
+            "contradicted": true
+          }
+        ],
+        "spawn_line": "fno agent spawn --as thread -H codex -m gpt-6-luna -c <repo>",
+        "note": "fewer than 5 nodes on this kind"
+      },
+      {
+        "kind": "target/high",
+        "lane": "claude-sonnet-5-5",
+        "harness": "claude",
+        "verdict": "explore",
+        "nodes": 3,
+        "laws": [
+          {
+            "gist": "from 2026-10-23 target work returns to glm-5.3-flash[1m]",
+            "contradicted": true
+          },
+          {
+            "gist": "prefer glm-5.3-flash for all dispatch lanes until the operator says otherwise",
+            "contradicted": true
+          },
+          {
+            "gist": "execution and target spawns ride glm-5.3-flash[1m]",
+            "contradicted": true
+          }
+        ],
+        "merged": 3,
+        "merged_ci95": [
+          0.4385,
+          1.0
+        ],
+        "cost_per_merged_usd": null,
+        "spawn_line": "fno agent spawn --as thread -H claude -m claude-sonnet-5-5 -c <repo>",
+        "note": "fewer than 5 nodes on this kind"
+      },
+      {
+        "kind": "target/high",
+        "lane": "claude-haiku-5-5",
+        "harness": "claude",
+        "verdict": "explore",
+        "nodes": 0,
+        "laws": [
+          {
+            "gist": "from 2026-10-23 target work returns to glm-5.3-flash[1m]",
+            "contradicted": true
+          },
+          {
+            "gist": "prefer glm-5.3-flash for all dispatch lanes until the operator says otherwise",
+            "contradicted": true
+          },
+          {
+            "gist": "execution and target spawns ride glm-5.3-flash[1m]",
+            "contradicted": true
+          }
+        ],
+        "spawn_line": "fno agent spawn --as thread -H claude -m claude-haiku-5-5 -c <repo>",
+        "note": "fewer than 5 nodes on this kind"
+      },
+      {
+        "kind": "target/low",
+        "lane": "claude-opus-5-5",
+        "harness": "claude",
+        "verdict": "hold",
+        "nodes": 18,
+        "laws": [
+          {
+            "gist": "from 2026-10-23 target work returns to glm-5.3-flash[1m]",
+            "contradicted": true
+          },
+          {
+            "gist": "prefer glm-5.3-flash for all dispatch lanes until the operator says otherwise",
+            "contradicted": true
+          },
+          {
+            "gist": "execution and target spawns ride glm-5.3-flash[1m]",
+            "contradicted": true
+          }
+        ],
+        "merged": 18,
+        "merged_ci95": [
+          0.8241,
+          1.0
+        ],
+        "cost_per_merged_usd": null,
+        "note": "cost or interval unmeasured"
+      },
+      {
+        "kind": "target/low",
+        "lane": "claude-fable-5-1",
+        "harness": "claude",
+        "verdict": "explore",
+        "nodes": 0,
+        "laws": [
+          {
+            "gist": "from 2026-10-23 target work returns to glm-5.3-flash[1m]",
+            "contradicted": true
+          },
+          {
+            "gist": "prefer glm-5.3-flash for all dispatch lanes until the operator says otherwise",
+            "contradicted": true
+          },
+          {
+            "gist": "execution and target spawns ride glm-5.3-flash[1m]",
+            "contradicted": true
+          }
+        ],
+        "spawn_line": "fno agent spawn --as thread -H claude -m claude-fable-5-1 -c <repo>",
+        "note": "fewer than 5 nodes on this kind"
+      },
+      {
+        "kind": "target/low",
+        "lane": "codex-sol",
+        "harness": "codex",
+        "verdict": "explore",
+        "nodes": 0,
+        "laws": [
+          {
+            "gist": "from 2026-10-23 target work returns to glm-5.3-flash[1m]",
+            "contradicted": true
+          },
+          {
+            "gist": "prefer glm-5.3-flash for all dispatch lanes until the operator says otherwise",
+            "contradicted": true
+          },
+          {
+            "gist": "execution and target spawns ride glm-5.3-flash[1m]",
+            "contradicted": true
+          }
+        ],
+        "spawn_line": "fno agent spawn --as thread -H codex -m sol -c <repo>",
+        "note": "fewer than 5 nodes on this kind"
+      },
+      {
+        "kind": "target/low",
+        "lane": "codex-astra",
+        "harness": "codex",
+        "verdict": "explore",
+        "nodes": 0,
+        "laws": [
+          {
+            "gist": "from 2026-10-23 target work returns to glm-5.3-flash[1m]",
+            "contradicted": true
+          },
+          {
+            "gist": "prefer glm-5.3-flash for all dispatch lanes until the operator says otherwise",
+            "contradicted": true
+          },
+          {
+            "gist": "execution and target spawns ride glm-5.3-flash[1m]",
+            "contradicted": true
+          }
+        ],
+        "spawn_line": "fno agent spawn --as thread -H codex -m gpt-6-astra -c <repo>",
+        "note": "fewer than 5 nodes on this kind"
+      },
+      {
+        "kind": "target/low",
+        "lane": "zai-flash",
+        "harness": "claude",
+        "verdict": "explore",
+        "nodes": 0,
+        "laws": [],
+        "spawn_line": "fno agent spawn --as thread -H claude --route zai/glm-5.3-flash[1m] -c <repo>",
+        "note": "fewer than 5 nodes on this kind"
+      },
+      {
+        "kind": "target/low",
+        "lane": "codex-luna",
+        "harness": "codex",
+        "verdict": "explore",
+        "nodes": 0,
+        "laws": [
+          {
+            "gist": "from 2026-10-23 target work returns to glm-5.3-flash[1m]",
+            "contradicted": true
+          },
+          {
+            "gist": "prefer glm-5.3-flash for all dispatch lanes until the operator says otherwise",
+            "contradicted": true
+          },
+          {
+            "gist": "execution and target spawns ride glm-5.3-flash[1m]",
+            "contradicted": true
+          }
+        ],
+        "spawn_line": "fno agent spawn --as thread -H codex -m gpt-6-luna -c <repo>",
+        "note": "fewer than 5 nodes on this kind"
+      },
+      {
+        "kind": "target/low",
+        "lane": "claude-sonnet-5-5",
+        "harness": "claude",
+        "verdict": "hold",
+        "nodes": 6,
+        "laws": [
+          {
+            "gist": "from 2026-10-23 target work returns to glm-5.3-flash[1m]",
+            "contradicted": true
+          },
+          {
+            "gist": "prefer glm-5.3-flash for all dispatch lanes until the operator says otherwise",
+            "contradicted": true
+          },
+          {
+            "gist": "execution and target spawns ride glm-5.3-flash[1m]",
+            "contradicted": true
+          }
+        ],
+        "merged": 6,
+        "merged_ci95": [
+          0.6097,
+          1.0
+        ],
+        "cost_per_merged_usd": null,
+        "note": "cost or interval unmeasured"
+      },
+      {
+        "kind": "target/medium",
+        "lane": "claude-opus-5-5",
+        "harness": "claude",
+        "verdict": "hold",
+        "nodes": 47,
+        "laws": [
+          {
+            "gist": "from 2026-10-23 target work returns to glm-5.3-flash[1m]",
+            "contradicted": true
+          },
+          {
+            "gist": "prefer glm-5.3-flash for all dispatch lanes until the operator says otherwise",
+            "contradicted": true
+          },
+          {
+            "gist": "execution and target spawns ride glm-5.3-flash[1m]",
+            "contradicted": true
+          }
+        ],
+        "merged": 46,
+        "merged_ci95": [
+          0.8889,
+          0.9962
+        ],
+        "cost_per_merged_usd": 10.94,
+        "note": "no arm fired"
+      },
+      {
+        "kind": "target/medium",
+        "lane": "claude-fable-5-1",
+        "harness": "claude",
+        "verdict": "explore",
+        "nodes": 0,
+        "laws": [
+          {
+            "gist": "from 2026-10-23 target work returns to glm-5.3-flash[1m]",
+            "contradicted": true
+          },
+          {
+            "gist": "prefer glm-5.3-flash for all dispatch lanes until the operator says otherwise",
+            "contradicted": true
+          },
+          {
+            "gist": "execution and target spawns ride glm-5.3-flash[1m]",
+            "contradicted": true
+          }
+        ],
+        "spawn_line": "fno agent spawn --as thread -H claude -m claude-fable-5-1 -c <repo>",
+        "note": "fewer than 5 nodes on this kind"
+      },
+      {
+        "kind": "target/medium",
+        "lane": "codex-sol",
+        "harness": "codex",
+        "verdict": "explore",
+        "nodes": 0,
+        "laws": [
+          {
+            "gist": "from 2026-10-23 target work returns to glm-5.3-flash[1m]",
+            "contradicted": true
+          },
+          {
+            "gist": "prefer glm-5.3-flash for all dispatch lanes until the operator says otherwise",
+            "contradicted": true
+          },
+          {
+            "gist": "execution and target spawns ride glm-5.3-flash[1m]",
+            "contradicted": true
+          }
+        ],
+        "spawn_line": "fno agent spawn --as thread -H codex -m sol -c <repo>",
+        "note": "fewer than 5 nodes on this kind"
+      },
+      {
+        "kind": "target/medium",
+        "lane": "codex-astra",
+        "harness": "codex",
+        "verdict": "explore",
+        "nodes": 0,
+        "laws": [
+          {
+            "gist": "from 2026-10-23 target work returns to glm-5.3-flash[1m]",
+            "contradicted": true
+          },
+          {
+            "gist": "prefer glm-5.3-flash for all dispatch lanes until the operator says otherwise",
+            "contradicted": true
+          },
+          {
+            "gist": "execution and target spawns ride glm-5.3-flash[1m]",
+            "contradicted": true
+          }
+        ],
+        "spawn_line": "fno agent spawn --as thread -H codex -m gpt-6-astra -c <repo>",
+        "note": "fewer than 5 nodes on this kind"
+      },
+      {
+        "kind": "target/medium",
+        "lane": "zai-flash",
+        "harness": "claude",
+        "verdict": "explore",
+        "nodes": 0,
+        "laws": [],
+        "spawn_line": "fno agent spawn --as thread -H claude --route zai/glm-5.3-flash[1m] -c <repo>",
+        "note": "fewer than 5 nodes on this kind"
+      },
+      {
+        "kind": "target/medium",
+        "lane": "codex-luna",
+        "harness": "codex",
+        "verdict": "explore",
+        "nodes": 0,
+        "laws": [
+          {
+            "gist": "from 2026-10-23 target work returns to glm-5.3-flash[1m]",
+            "contradicted": true
+          },
+          {
+            "gist": "prefer glm-5.3-flash for all dispatch lanes until the operator says otherwise",
+            "contradicted": true
+          },
+          {
+            "gist": "execution and target spawns ride glm-5.3-flash[1m]",
+            "contradicted": true
+          }
+        ],
+        "spawn_line": "fno agent spawn --as thread -H codex -m gpt-6-luna -c <repo>",
+        "note": "fewer than 5 nodes on this kind"
+      },
+      {
+        "kind": "target/medium",
+        "lane": "claude-haiku-5-5",
+        "harness": "claude",
+        "verdict": "explore",
+        "nodes": 1,
+        "laws": [
+          {
+            "gist": "from 2026-10-23 target work returns to glm-5.3-flash[1m]",
+            "contradicted": true
+          },
+          {
+            "gist": "prefer glm-5.3-flash for all dispatch lanes until the operator says otherwise",
+            "contradicted": true
+          },
+          {
+            "gist": "execution and target spawns ride glm-5.3-flash[1m]",
+            "contradicted": true
+          }
+        ],
+        "merged": 1,
+        "merged_ci95": [
+          0.2065,
+          1.0
+        ],
+        "cost_per_merged_usd": null,
+        "spawn_line": "fno agent spawn --as thread -H claude -m claude-haiku-5-5 -c <repo>",
+        "note": "fewer than 5 nodes on this kind"
+      },
+      {
+        "kind": "target/unknown",
+        "lane": "claude-fable-5-1",
+        "harness": "claude",
+        "verdict": "explore",
+        "nodes": 0,
+        "laws": [
+          {
+            "gist": "from 2026-10-23 target work returns to glm-5.3-flash[1m]",
+            "contradicted": true
+          },
+          {
+            "gist": "prefer glm-5.3-flash for all dispatch lanes until the operator says otherwise",
+            "contradicted": true
+          },
+          {
+            "gist": "execution and target spawns ride glm-5.3-flash[1m]",
+            "contradicted": true
+          }
+        ],
+        "spawn_line": "fno agent spawn --as thread -H claude -m claude-fable-5-1 -c <repo>",
+        "note": "fewer than 5 nodes on this kind"
+      },
+      {
+        "kind": "target/unknown",
+        "lane": "codex-sol",
+        "harness": "codex",
+        "verdict": "explore",
+        "nodes": 0,
+        "laws": [
+          {
+            "gist": "from 2026-10-23 target work returns to glm-5.3-flash[1m]",
+            "contradicted": true
+          },
+          {
+            "gist": "prefer glm-5.3-flash for all dispatch lanes until the operator says otherwise",
+            "contradicted": true
+          },
+          {
+            "gist": "execution and target spawns ride glm-5.3-flash[1m]",
+            "contradicted": true
+          }
+        ],
+        "spawn_line": "fno agent spawn --as thread -H codex -m sol -c <repo>",
+        "note": "fewer than 5 nodes on this kind"
+      },
+      {
+        "kind": "target/unknown",
+        "lane": "codex-astra",
+        "harness": "codex",
+        "verdict": "explore",
+        "nodes": 0,
+        "laws": [
+          {
+            "gist": "from 2026-10-23 target work returns to glm-5.3-flash[1m]",
+            "contradicted": true
+          },
+          {
+            "gist": "prefer glm-5.3-flash for all dispatch lanes until the operator says otherwise",
+            "contradicted": true
+          },
+          {
+            "gist": "execution and target spawns ride glm-5.3-flash[1m]",
+            "contradicted": true
+          }
+        ],
+        "spawn_line": "fno agent spawn --as thread -H codex -m gpt-6-astra -c <repo>",
+        "note": "fewer than 5 nodes on this kind"
+      },
+      {
+        "kind": "target/unknown",
+        "lane": "zai-flash",
+        "harness": "claude",
+        "verdict": "explore",
+        "nodes": 0,
+        "laws": [],
+        "spawn_line": "fno agent spawn --as thread -H claude --route zai/glm-5.3-flash[1m] -c <repo>",
+        "note": "fewer than 5 nodes on this kind"
+      },
+      {
+        "kind": "target/unknown",
+        "lane": "codex-luna",
+        "harness": "codex",
+        "verdict": "explore",
+        "nodes": 0,
+        "laws": [
+          {
+            "gist": "from 2026-10-23 target work returns to glm-5.3-flash[1m]",
+            "contradicted": true
+          },
+          {
+            "gist": "prefer glm-5.3-flash for all dispatch lanes until the operator says otherwise",
+            "contradicted": true
+          },
+          {
+            "gist": "execution and target spawns ride glm-5.3-flash[1m]",
+            "contradicted": true
+          }
+        ],
+        "spawn_line": "fno agent spawn --as thread -H codex -m gpt-6-luna -c <repo>",
+        "note": "fewer than 5 nodes on this kind"
+      },
+      {
+        "kind": "target/unknown",
+        "lane": "claude-sonnet-5-5",
+        "harness": "claude",
+        "verdict": "explore",
+        "nodes": 0,
+        "laws": [
+          {
+            "gist": "from 2026-10-23 target work returns to glm-5.3-flash[1m]",
+            "contradicted": true
+          },
+          {
+            "gist": "prefer glm-5.3-flash for all dispatch lanes until the operator says otherwise",
+            "contradicted": true
+          },
+          {
+            "gist": "execution and target spawns ride glm-5.3-flash[1m]",
+            "contradicted": true
+          }
+        ],
+        "spawn_line": "fno agent spawn --as thread -H claude -m claude-sonnet-5-5 -c <repo>",
+        "note": "fewer than 5 nodes on this kind"
+      },
+      {
+        "kind": "target/unknown",
+        "lane": "claude-haiku-5-5",
+        "harness": "claude",
+        "verdict": "explore",
+        "nodes": 0,
+        "laws": [
+          {
+            "gist": "from 2026-10-23 target work returns to glm-5.3-flash[1m]",
+            "contradicted": true
+          },
+          {
+            "gist": "prefer glm-5.3-flash for all dispatch lanes until the operator says otherwise",
+            "contradicted": true
+          },
+          {
+            "gist": "execution and target spawns ride glm-5.3-flash[1m]",
+            "contradicted": true
+          }
+        ],
+        "spawn_line": "fno agent spawn --as thread -H claude -m claude-haiku-5-5 -c <repo>",
+        "note": "fewer than 5 nodes on this kind"
+      }
+    ]
+  }
+}

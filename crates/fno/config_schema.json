@@ -1076,6 +1076,12 @@
        "lane_usd": {}
       }
      },
+     "propose": {
+      "$ref": "#/$defs/ProposeBlock",
+      "default": {
+       "cycle_usd": 10.0
+      }
+     },
      "enabled": {
       "default": true,
       "title": "Enabled",
@@ -1116,6 +1122,18 @@
      }
     },
     "title": "FailoverBlock",
+    "type": "object"
+   },
+   "ProposeBlock": {
+    "description": "The propose-and-prove loop (``evals.propose.*``): the per-cycle dollar cap on the base and candidate cohorts.\nFull key docs live in the generated reference and docs/evals.md.",
+    "properties": {
+     "cycle_usd": {
+      "default": 10.0,
+      "title": "Cycle Usd",
+      "type": "number"
+     }
+    },
+    "title": "ProposeBlock",
     "type": "object"
    },
    "GateBlock": {
@@ -6990,6 +7008,17 @@
    "question": "",
    "default_source": "",
    "doc": "Lane the gate's golden runs use. Defaults zai-flash.",
+   "edit": "editor"
+  },
+  {
+   "path": "evals.propose.cycle_usd",
+   "label": "Eval propose cycle budget (USD)",
+   "type": "float",
+   "default": 10.0,
+   "wizard": "never",
+   "question": "",
+   "default_source": "",
+   "doc": "Per-cycle USD cap on the propose-and-prove loop's base and candidate cohorts, priced at the run lane's evals.gate.lane_usd entry. Over cap the cycle drops candidates from the last; a cap that fits no candidate refuses the cycle.",
    "edit": "editor"
   },
   {

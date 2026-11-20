@@ -240,7 +240,7 @@ pub(crate) fn fill(
 
 /// The bank checkout the PR is cut from, or None when no registered project
 /// carries one.
-fn bank_repo() -> Option<PathBuf> {
+pub(crate) fn bank_repo() -> Option<PathBuf> {
     let has_bank = |p: &PathBuf| p.join("evals").join("bank").is_dir();
     crate::provider::plugin_root()
         .filter(|r| r.join(".git").exists())

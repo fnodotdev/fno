@@ -1668,6 +1668,37 @@ fn question_prs(data: &Value) -> Vec<u64> {
     prs
 }
 
+/// The resolution an ask's own subject already carries, read at the ask
+/// door before filing: every node the ask names sits on a terminal rung,
+/// or a PR the ask names merged on one of them. The same predicates the
+/// sweep closes on, so intake never runs a second reader. A user-owed ask
+/// refuses nothing here for the same reason the sweep keeps one open, and
+/// an unread PR files normally (the sweep still closes it later on its
+/// own read).
+pub(crate) fn ask_subject_resolved(
+    data: &Value,
+    facts: &crate::question_sweep::RungFacts,
+) -> Option<String> {
+    if user_owed(data) {
+        return None;
+    }
+    let nodes = question_nodes(data);
+    if let Some(rungs) = closed_node(&nodes, facts) {
+        let named = rungs
+            .iter()
+            .map(|(n, s)| format!("{n} reads {s}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Some(format!("node-closed: {named}"));
+    }
+    for pr in question_prs(data) {
+        if pr_settled(pr, data, &nodes, facts) {
+            return Some(format!("pr-merged: PR {pr} merged"));
+        }
+    }
+    None
+}
+
 /// A named PR no longer needs an answer only on a positive read: merged on
 /// one of the question's nodes, or read closed. An unread PR holds the row.
 fn pr_settled(
