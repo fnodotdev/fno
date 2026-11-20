@@ -520,6 +520,27 @@ impl Root {
                     record_ui_state(self, cx);
                     cx.quit();
                 }
+                fno::app_control::AppCommand::Answer { option } => {
+                    let open = self
+                        .chat
+                        .conv
+                        .open_question()
+                        .map(|(_, ask)| ask.choices.len());
+                    match open {
+                        Some(n) if (1..=n).contains(option) => {
+                            self.chat.pick = option - 1;
+                            self.answer_choice(cx);
+                        }
+                        Some(n) => self.say(
+                            format!("fno mux app answer: the question has {n} options"),
+                            cx,
+                        ),
+                        None => self.say(
+                            "fno mux app answer: no question waits in this chat".into(),
+                            cx,
+                        ),
+                    }
+                }
                 fno::app_control::AppCommand::View { view } => match view.as_str() {
                     "chat" => self.show(MainView::Chat, cx),
                     "terminal" => self.show(MainView::Terminal, cx),

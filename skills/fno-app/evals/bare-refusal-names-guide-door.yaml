@@ -10,7 +10,7 @@ prompt: |
   not read the source; judge only what the command prints.
 grade:
   - kind: exit
-    command: "fno mux app 2>&1 | grep -q 'open, show, focus, shot, state or close'"
+    command: "fno mux app 2>&1 | grep -q 'open, show, focus, answer, shot, state or close'"
   - kind: exit
     command: "fno mux app 2>&1 | grep -q 'fno whoami guide app'"
 timeout_minutes: 5

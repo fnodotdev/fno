@@ -14,7 +14,7 @@ use crate::cli_args::{AppOp, AppView};
 /// and this group's guide lives behind the `fno whoami guide app` topic,
 /// so the refusal is the one self-teaching surface.
 pub fn bare_usage() -> String {
-    "fno mux app: an operation word is required: open, show, focus, shot, state or close. \
+    "fno mux app: an operation word is required: open, show, focus, answer, shot, state or close. \
      The full guide prints at `fno whoami guide app`."
         .to_string()
 }
@@ -82,6 +82,7 @@ pub fn run(op: AppOp) -> i32 {
         AppOp::Open(args) => open(&args.mode, args.focus.as_deref(), &args.common),
         AppOp::Show(args) => show(args.view, &args.common),
         AppOp::Focus(args) => focus(&args.agent, &args.common),
+        AppOp::Answer(args) => answer(args.option, &args.common),
         AppOp::Shot(args) => shot(
             &args.out,
             &args.theme,
@@ -182,6 +183,32 @@ fn focus(agent: &str, common: &crate::cli_args::MuxCommon) -> i32 {
         Ok(()) => 0,
         Err(e) => {
             eprintln!("fno mux app focus: {e}");
+            1
+        }
+    }
+}
+
+/// `mux app answer <option>`: pick option N on the pending question in the
+/// running app, through the path a click on that row rides. Refuses naming
+/// the session when no live app answers the pid file.
+fn answer(option: u32, common: &crate::cli_args::MuxCommon) -> i32 {
+    if !require_macos("answer") {
+        return 2;
+    }
+    let session = session_or_default(common.server.as_ref());
+    if running_app_pid(&session).is_none() {
+        eprintln!(
+            "fno mux app answer: no fno-app runs for session {session}; open one with fno mux app open --server {session}"
+        );
+        return 3;
+    }
+    let cmd = crate::app_control::AppCommand::Answer {
+        option: option as usize,
+    };
+    match crate::app_control::append(&session, &cmd) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("fno mux app answer: {e}");
             1
         }
     }
@@ -708,10 +735,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bare_usage_names_the_six_commands() {
+    fn bare_usage_names_the_seven_commands() {
         let line = bare_usage();
         assert!(
-            line.contains("open, show, focus, shot, state or close"),
+            line.contains("open, show, focus, answer, shot, state or close"),
             "{line}"
         );
         assert!(line.contains("fno whoami guide app"), "{line}");
