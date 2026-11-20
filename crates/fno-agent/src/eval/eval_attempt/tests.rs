@@ -1,4 +1,4 @@
-use super::{classify, validate_cohorts};
+use super::validate_cohorts;
 use serde_json::json;
 
 fn decl() -> serde_json::Value {
