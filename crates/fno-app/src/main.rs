@@ -52,6 +52,10 @@ struct Args {
     /// forces the cmd-held hint.
     #[arg(long = "shot-find", value_enum)]
     shot_find: Option<ShotFind>,
+    /// Window-relative X,Y in logical points the shot clicks through a
+    /// posted mouse event before the capture.
+    #[arg(long = "shot-tap", value_name = "X,Y")]
+    shot_tap: Option<String>,
     /// Hold the composited shot window up for a foreign capturer
     /// instead of capturing. Diagnostic.
     #[arg(long = "shot-hold", hide = true)]
@@ -91,6 +95,12 @@ enum ShotFind {
     Chords,
 }
 
+/// Parse the --shot-tap X,Y pair.
+fn parse_point(s: &str) -> Option<(f64, f64)> {
+    let (x, y) = s.split_once(',')?;
+    Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+}
+
 fn main() {
     let args = Args::parse();
     let shot = if args.shot {
@@ -111,6 +121,7 @@ fn main() {
                 ShotFind::Bar => fno_app::FindShot::Bar,
                 ShotFind::Chords => fno_app::FindShot::Chords,
             }),
+            tap: args.shot_tap.as_deref().and_then(parse_point),
             hold: args.shot_hold,
         })
     } else {

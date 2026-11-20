@@ -88,6 +88,7 @@ pub fn run(op: AppOp) -> i32 {
             args.find.as_deref(),
             args.mode,
             args.picking,
+            args.tap.as_deref(),
         ),
         AppOp::State { json } => state(json.json),
         AppOp::Close { common } => close(&common),
@@ -497,7 +498,14 @@ fn seed_transcript(root: &Path) -> bool {
 /// the caller's own state: its own HOME, mux dir, agents home and graph
 /// store, all under /tmp (a socket path must stay under 104 bytes on
 /// macOS), and every child strips the caller's identity keys.
-fn shot(out: &str, theme: &str, find: Option<&str>, mode: Option<AppView>, picking: bool) -> i32 {
+fn shot(
+    out: &str,
+    theme: &str,
+    find: Option<&str>,
+    mode: Option<AppView>,
+    picking: bool,
+    tap: Option<&str>,
+) -> i32 {
     if !require_macos("shot") {
         return 2;
     }
@@ -583,6 +591,9 @@ fn shot(out: &str, theme: &str, find: Option<&str>, mode: Option<AppView>, picki
     }
     if let Some(find) = find {
         cmd.arg("--shot-find").arg(find);
+    }
+    if let Some(tap) = tap {
+        cmd.arg("--shot-tap").arg(tap);
     }
     match cmd.status() {
         Ok(s) => s.code().unwrap_or(1),

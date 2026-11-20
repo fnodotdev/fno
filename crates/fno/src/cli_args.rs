@@ -437,6 +437,10 @@ pub struct AppShotArgs {
     /// the bar with a query typed; `chords` also holds the cmd hint
     #[arg(long, value_parser = ["bar", "chords"])]
     pub find: Option<String>,
+    /// Window-relative X,Y in logical points the frame clicks through a
+    /// posted mouse event before the capture
+    #[arg(long, value_name = "X,Y")]
+    pub tap: Option<String>,
 }
 
 /// `mux thread`'s operation set: `reseat` is the one declared operation;

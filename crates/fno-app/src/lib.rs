@@ -80,6 +80,10 @@ pub struct ShotOptions {
     pub picking: bool,
     /// The find bar state the frame paints over the chat view.
     pub find: Option<FindShot>,
+    /// Window-relative logical x,y the frame clicks through a posted
+    /// mouse event before the capture: the proof frame for real
+    /// interaction on the running demo window.
+    pub tap: Option<(f64, f64)>,
 }
 
 /// The find-bar states `--shot-find` paints.
@@ -133,6 +137,7 @@ pub fn run(opts: Options) -> i32 {
             font: opts.font,
             font_size: opts.font_size,
             picking: shot.picking,
+            tap: shot.tap,
         });
     }
     if let Some(home) = std::env::var_os("HOME").and_then(|h| h.into_string().ok()) {
