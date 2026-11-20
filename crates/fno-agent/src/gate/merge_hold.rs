@@ -798,6 +798,14 @@ fn release_hold(
         )
         .to_string();
     }
+    // A readable plan with no dispatch_hold key keeps its hold on the node
+    // row: release there, the way hold_read falls through to the node field.
+    // The node arm checks evidence against the node's own hold fields. An
+    // unreadable plan skips this: its INVALID hold read parks the node
+    // either way, so the plan arm's error below stands.
+    if read_frontmatter(&probe).is_some_and(|fm| !fm.contains_key("dispatch_hold")) {
+        return release_node_hold(entry, node_id, graph, evidence, decisions_jsonl);
+    }
     let (hold_reason, hold_when, hold_set_by) = existing_hold_fields(&probe);
     if let Some(refusal) = release_evidence_refusal(
         node_id,
@@ -814,13 +822,6 @@ fn release_hold(
         Err(e) => return receipt("error", 2, format!("plan read failed: {e}")).to_string(),
     };
     let Some(new_text) = remove_hold_block(&original) else {
-        // A readable plan with no dispatch_hold key keeps its hold on the
-        // node row: release there, the way hold_read falls through to the
-        // node field. An unreadable plan keeps this error - its INVALID
-        // hold read parks the node either way.
-        if read_frontmatter(&probe).is_some_and(|fm| !fm.contains_key("dispatch_hold")) {
-            return release_node_hold(entry, node_id, graph, evidence, decisions_jsonl);
-        }
         return receipt(
             "error",
             3,
