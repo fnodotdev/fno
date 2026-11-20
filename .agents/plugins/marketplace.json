@@ -9,8 +9,8 @@
       "source": {
         "source": "url",
         "url": "https://github.com/fnodotdev/fno.git",
-        "ref": "v0.0.16",
-        "sha": "b45f439411c2ea26088d521be736e642a5ac4027"
+        "ref": "v0.0.17",
+        "sha": "a916a41908c09969aedc68bbfaeac81db35fcf8d"
       },
       "policy": {
         "installation": "AVAILABLE",
