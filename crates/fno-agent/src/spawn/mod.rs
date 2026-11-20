@@ -77,7 +77,6 @@ pub mod pi;
 pub mod pi_ask;
 pub mod plugin_install;
 pub mod plugins;
-pub mod pr_watch_warning;
 pub mod project_sandbox;
 pub mod provider;
 pub mod provider_cap;
@@ -145,6 +144,7 @@ pub(crate) mod test_spare;
 pub mod thread_host;
 pub mod usage;
 pub mod usage_refresh;
+pub mod watcher_probe;
 pub mod zcode;
 pub mod zcode_ask;
 

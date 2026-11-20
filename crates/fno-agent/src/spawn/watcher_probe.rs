@@ -11,6 +11,7 @@
 use crate::gate::pr_watch::status::{
     gather, launch_agents_dir, leg_facts, tick_watermarks, verdict,
 };
+use serde_json::Value;
 
 /// The verdict words that mean down: absent, loaded but broken, or up and
 /// delivering nothing. `disabled` is a deliberate config off and stays
@@ -29,11 +30,22 @@ fn warning_line(word: &str, detail: &str) -> String {
     )
 }
 
-/// One probe per dispatch. A code payload reads the watcher and warns when
-/// it is down; the payload test is the repo's own definition, the same gate
-/// the codex git-grant refusal uses, so a node-bearing spawn probes too.
-/// Any other payload skips the read and pays no launchctl subprocess.
-pub fn warn_if_watcher_down(message: &str, node_present: bool) {
+/// The probe the client spawn intercept runs: the payload is the repo's own
+/// code-payload definition, the same gate the codex git-grant refusal uses,
+/// so a dispatch-command-prefix message or a node-bearing spawn reads the
+/// watcher and warns when it is down. Any other payload skips the read and
+/// pays no launchctl subprocess.
+pub fn probe_client_spawn(params: &Value) {
+    let message = params
+        .pointer("/message")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let node_present = params.pointer("/node").and_then(Value::as_str).is_some();
+    warn_if_watcher_down(message, node_present);
+}
+
+/// One probe per dispatch: classify, read the verdict, warn once.
+fn warn_if_watcher_down(message: &str, node_present: bool) {
     if !crate::pane_spawn::codex::is_code_payload(message) && !node_present {
         return;
     }

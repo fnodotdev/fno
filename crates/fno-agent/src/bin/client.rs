@@ -499,6 +499,16 @@ impl SpawnLease {
     }
 }
 
+/// The agent name the parsed params carry; commands that never set
+/// params.name resolve to the empty string.
+fn spawn_agent_name(params: &Value) -> String {
+    params
+        .pointer("/name")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_default()
+}
+
 /// The daemon-bound path: build the request, run the client-side ask and
 /// spawn lanes, then forward what is left to the daemon and render it.
 async fn run_daemon_command(
@@ -530,11 +540,7 @@ async fn run_daemon_command(
     // would capture "--force" and print the wrong success line (gemini-code-assist
     // high on PR #361). Falls back to the raw first positional for commands that don't
     // set params.name (none of the formatted commands hit that path today).
-    let mut agent_name = params
-        .get("name")
-        .and_then(|v| v.as_str())
-        .map(str::to_string)
-        .unwrap_or_default();
+    let mut agent_name = spawn_agent_name(&params);
 
     let home = AgentsHome::from_env();
 
@@ -550,13 +556,7 @@ async fn run_daemon_command(
     // and fall through to the daemon RPC unchanged.
     let mut lease = SpawnLease::default();
     if method == "agent.spawn" && command == "spawn" {
-        fno_agent::spawn::pr_watch_warning::warn_if_watcher_down(
-            params
-                .pointer("/message")
-                .and_then(Value::as_str)
-                .unwrap_or(""),
-            params.pointer("/node").and_then(Value::as_str).is_some(),
-        );
+        fno_agent::spawn::watcher_probe::probe_client_spawn(&params);
         if let Some(code) = run_client_spawn(
             &home,
             args,
