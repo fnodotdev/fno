@@ -1864,8 +1864,11 @@ pub fn notify_on_done_enabled(cwd: &Path) -> bool {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderCapConfig {
     pub enabled: bool,
-    /// `ask` (default: nothing moves until an operator answer is recorded) or
-    /// `auto` (members migrate without a question; sleep hours also auto).
+    /// `triage` (default: a stranded member whose node is p0 or p1, or which
+    /// has an open PR, moves to the destination; the rest park until the
+    /// reset and the return ladder resumes them on their own lane), `ask`
+    /// (nothing moves until an operator answer is recorded) or `auto` (every
+    /// member migrates without a question; sleep hours also auto).
     pub mode: String,
     /// A reset closer than this is waited out, never migrated (wave 3).
     pub min_wait_minutes: u64,
@@ -1885,8 +1888,8 @@ pub struct ProviderCapConfig {
 impl Default for ProviderCapConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
-            mode: "ask".to_string(),
+            enabled: true,
+            mode: "triage".to_string(),
             min_wait_minutes: 30,
             sleep_hours: String::new(),
             sleep_timezone: String::new(),
@@ -1919,7 +1922,7 @@ pub fn provider_cap_config(cwd: &Path) -> ProviderCapConfig {
         enabled: as_bool(value("enabled"), defaults.enabled),
         mode: value("mode")
             .and_then(|v| v.as_str().map(|s| s.trim().to_string()))
-            .filter(|m| matches!(m.as_str(), "ask" | "auto"))
+            .filter(|m| matches!(m.as_str(), "ask" | "auto" | "triage"))
             .unwrap_or_else(|| defaults.mode.clone()),
         min_wait_minutes: as_u64(value("min_wait_minutes"), defaults.min_wait_minutes),
         sleep_hours: value("sleep_hours")

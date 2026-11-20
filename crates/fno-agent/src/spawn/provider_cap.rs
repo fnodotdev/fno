@@ -1241,7 +1241,7 @@ pub fn leave_decision(
     if reset - now_epoch < (cfg.min_wait_minutes as i64) * 60 {
         return LeaveDecision::Wait("short-reset".to_string());
     }
-    if cfg.mode == "auto" || in_sleep_window(cfg, now_epoch) {
+    if matches!(cfg.mode.as_str(), "auto" | "triage") || in_sleep_window(cfg, now_epoch) {
         return LeaveDecision::Act(acting_members);
     }
     LeaveDecision::Ask
@@ -1371,6 +1371,17 @@ fn write_return_state(home: &AgentsHome, lane: &str, state: &Value) {
 /// them in any journal for this lane. Matched by name, because a respawn can
 /// change the row's session id.
 fn moved_members(home: &AgentsHome, lane: &str) -> Vec<String> {
+    members_with_steps(home, lane, &["spawn-confirmed"])
+}
+
+/// Members whose migration began on this lane: the leave ladder never starts
+/// a second one, so a successor that spawned but did not confirm is never
+/// joined by a twin on the next tick.
+fn migration_started(home: &AgentsHome, lane: &str) -> Vec<String> {
+    members_with_steps(home, lane, &["handoff-doc", "spawn", "spawn-confirmed"])
+}
+
+fn members_with_steps(home: &AgentsHome, lane: &str, steps: &[&str]) -> Vec<String> {
     let token = lane_file_token(lane);
     let prefix = format!("{token}-");
     let mut out = Vec::new();
@@ -1393,7 +1404,10 @@ fn moved_members(home: &AgentsHome, lane: &str) -> Vec<String> {
             let Ok(v) = serde_json::from_str::<Value>(&r.line) else {
                 continue;
             };
-            if v.get("step").and_then(Value::as_str) == Some("spawn-confirmed") {
+            if v.get("step")
+                .and_then(Value::as_str)
+                .is_some_and(|s| steps.contains(&s))
+            {
                 if let Some(m) = v.get("member").and_then(Value::as_str) {
                     out.push(m.to_string());
                 }
@@ -1520,6 +1534,7 @@ pub fn run_return_lane(
         // Step 2: fresh epoch. Retire the leave question and decision: they
         // answered the reset that passed.
         close_leave_question(home, lane, now_epoch);
+        let _ = std::fs::remove_file(alert_marker(home, &lane.lane));
         let mut candidates = return_candidates(home, lane);
         if candidates.is_empty() {
             journal(
@@ -1692,7 +1707,9 @@ fn return_tick_survived(
         .filter(|c| !resumed.contains(&c.name))
         .collect();
     // Step 6: announce once in ask mode outside sleep hours.
-    if state.get("announced_at").is_none() && cfg.mode != "auto" && !in_sleep_window(cfg, now_epoch)
+    if state.get("announced_at").is_none()
+        && !matches!(cfg.mode.as_str(), "auto" | "triage")
+        && !in_sleep_window(cfg, now_epoch)
     {
         let n = remaining.len();
         let veto_at = now_epoch + RETURN_VETO_S;
@@ -1805,6 +1822,67 @@ pub struct LeaveDeps {
     pub resume: Box<dyn Fn(&CapMember) -> Result<(), String>>,
     /// Announce the return, with the veto instruction in the body.
     pub announce: Box<dyn Fn(&str) -> Result<(), String>>,
+    /// Under triage, whether a stranded member moves: its node is p0 or p1,
+    /// or it has an open PR. The rest park for the reset.
+    pub moves_on_cap: Box<dyn Fn(&CapMember) -> bool>,
+    /// Tell the lane members' leads that the lane opened. True when it left.
+    pub alert: Box<dyn Fn(&CapLane, &str) -> bool>,
+}
+
+/// The move destination when no fallback grid is configured: Opus, unless
+/// the stranded lane is itself the Anthropic one.
+fn built_in_destination(lane: &CapLane) -> Option<(String, Vec<String>)> {
+    if lane.provider == "anthropic" {
+        return None;
+    }
+    let (id, flags) =
+        crate::spawn_overlay::mint_link(&json!({"provider": "claude", "route": "anthropic/opus"}));
+    let flags = flags
+        .iter()
+        .filter_map(|f| f.as_str().map(String::from))
+        .collect();
+    Some((id, flags))
+}
+
+fn alert_marker(home: &AgentsHome, lane: &str) -> PathBuf {
+    lanes_dir(home).join(format!("{}.alerted", lane_file_token(lane)))
+}
+
+/// One alert per strand: the marker names the reset it announced, and the
+/// return ladder drops it when the lane comes back.
+fn alert_once(home: &AgentsHome, lane: &CapLane, now_epoch: i64, deps: &LeaveDeps) {
+    let key = lane
+        .reset_epoch
+        .map_or_else(|| "unknown".to_string(), |r| r.to_string());
+    let path = alert_marker(home, &lane.lane);
+    if std::fs::read_to_string(&path).is_ok_and(|k| k.trim() == key) {
+        return;
+    }
+    let when = lane
+        .reset_epoch
+        .map_or_else(|| "an unknown time".to_string(), epoch_to_rfc3339);
+    let capped: Vec<&str> = lane
+        .members
+        .iter()
+        .filter(|m| m.capped)
+        .map(|m| m.name.as_str())
+        .collect();
+    let body = format!(
+        "control: provider lane {} hit its usage limit; it resets at {when}. Workers on p0/p1 nodes or with an open PR move to Opus; the rest park and resume on {} after the reset. Capped: {}.",
+        lane.lane,
+        lane.provider,
+        capped.join(", ")
+    );
+    if (deps.alert)(lane, &body) {
+        let _ = std::fs::create_dir_all(lanes_dir(home));
+        let _ = std::fs::write(&path, &key);
+        journal(
+            home,
+            &lane.lane,
+            now_epoch,
+            &json!({"step": "alerted", "reset": lane.reset_epoch}),
+        );
+    }
 }
 
 /// Run the leave ladder for one open lane and journal every step.
@@ -1817,6 +1895,7 @@ pub fn run_leave_lane(
     now_epoch: i64,
     deps: &LeaveDeps,
 ) -> String {
+    alert_once(home, lane, now_epoch, deps);
     let decision = leave_decision(lane, now_epoch, answer, cfg);
     match decision {
         LeaveDecision::Wait(reason) => {
@@ -1849,9 +1928,21 @@ pub fn run_leave_lane(
             "ask".to_string()
         }
         LeaveDecision::Act(names) => {
+            let started = migration_started(home, &lane.lane);
+            let triage = cfg.mode == "triage" && answer.is_none();
+            let acting: Vec<&CapMember> = lane
+                .members
+                .iter()
+                .filter(|m| names.contains(&m.name) && !started.contains(&m.name))
+                .filter(|m| !triage || (deps.moves_on_cap)(m))
+                .collect();
+            if acting.is_empty() {
+                return "parked".to_string();
+            }
             // Trap 3: refresh before reading destination headroom.
             (deps.refresh_usage)();
             let dests = match destinations(scan, "default", &[lane.lane.clone()]) {
+                Ok(d) if d.is_empty() => built_in_destination(lane).into_iter().collect(),
                 Ok(d) => d,
                 Err(reason) => {
                     journal(
@@ -1874,11 +1965,6 @@ pub fn run_leave_lane(
                 );
                 return "wait: no-healthy-destination".to_string();
             }
-            let acting: Vec<&CapMember> = lane
-                .members
-                .iter()
-                .filter(|m| names.contains(&m.name))
-                .collect();
             for member in acting {
                 migrate_one(home, lane, member, &dests, now_epoch, deps);
             }
@@ -2538,7 +2624,7 @@ mod tests {
     /// while compacting: the bridge-resolved transcript's stem names the full
     /// uuid, so the compaction stamp is probed by the right key.
     #[test]
-    fn ac2_arm_config_defaults_off_and_reads_overrides() {
+    fn ac2_arm_config_defaults_to_triage_and_reads_overrides() {
         // FNO_CONFIG, when set, is the ONLY config candidate; hold the env
         // lock so a sibling fixture (probe tests set it) cannot own the
         // window while this test reads config discovery.
@@ -2549,16 +2635,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join(".fno")).unwrap();
         let defaults = provider_cap_config(&root);
-        assert!(!defaults.enabled);
-        assert_eq!(defaults.mode, "ask");
+        assert!(defaults.enabled);
+        assert_eq!(defaults.mode, "triage");
         assert_eq!(defaults.quorum, 2);
         std::fs::write(
             root.join(".fno/config.toml"),
-            "[provider_cap]\nenabled = true\nmode = \"auto\"\nmin_wait_minutes = 45\nquorum = 1\n",
+            "[provider_cap]\nenabled = false\nmode = \"auto\"\nmin_wait_minutes = 45\nquorum = 1\n",
         )
         .unwrap();
         let armed = provider_cap_config(&provider_cap_config_test_cwd(&root));
-        assert!(armed.enabled);
+        assert!(!armed.enabled);
         assert_eq!(armed.mode, "auto");
         assert_eq!(armed.min_wait_minutes, 45);
         assert_eq!(armed.quorum, 1);
@@ -2622,6 +2708,14 @@ mod tests {
                 move |body: &str| {
                     calls.borrow_mut().push(format!("announce:{}", body));
                     Ok(())
+                }
+            }),
+            moves_on_cap: Box::new(|m: &CapMember| m.node.as_deref() != Some("park")),
+            alert: Box::new({
+                let calls = calls.clone();
+                move |lane: &CapLane, _body: &str| {
+                    calls.borrow_mut().push(format!("alert:{}", lane.lane));
+                    true
                 }
             }),
         }
@@ -2726,6 +2820,7 @@ mod tests {
         let lane = lane_fixture(Some(now_epoch_secs() + 3 * 3600), None);
         let cfg = ProviderCapConfig {
             sleep_hours: String::new(),
+            mode: "ask".into(),
             ..Default::default()
         };
         let calls = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
@@ -2774,6 +2869,46 @@ mod tests {
             confirmed_pos < stopped_pos,
             "spawn-confirmed before stopped"
         );
+    }
+
+    /// The default triage on a measured strand: important work moves to the
+    /// built-in Opus destination, the rest parks, the leads hear once, and a
+    /// later tick never starts a second migration for the same member.
+    #[test]
+    fn triage_moves_important_work_parks_the_rest_and_alerts_once() {
+        let home =
+            AgentsHome::at(std::env::temp_dir().join(format!("pc3t-{}", std::process::id())));
+        let _ = std::fs::remove_dir_all(home.root());
+        let mut lane = lane_fixture(Some(now_epoch_secs() + 3 * 3600), None);
+        let mut parked = lane.members.first().cloned().expect("fixture member");
+        parked.name = "w-2".into();
+        parked.node = Some("park".into());
+        lane.members.push(parked);
+        let cfg = ProviderCapConfig::default();
+        assert_eq!(cfg.mode, "triage");
+        let calls = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let deps = rec_deps(calls.clone(), true);
+        let (_fixture, grid_scan) = scan_fixture();
+        let scan = CapScan {
+            settings_candidates: vec![],
+            ..grid_scan
+        };
+        let now = now_epoch_secs();
+        assert_eq!(
+            run_leave_lane(&home, &scan, &lane, None, &cfg, now, &deps),
+            "acted"
+        );
+        assert_eq!(
+            run_leave_lane(&home, &scan, &lane, None, &cfg, now, &deps),
+            "parked"
+        );
+        let calls = calls.borrow();
+        let count = |p: &str| calls.iter().filter(|c| c.as_str() == p).count();
+        assert_eq!(count("spawn:w-1"), 1, "{calls:?}");
+        assert_eq!(count("spawn:w-2"), 0, "{calls:?}");
+        assert_eq!(count("alert:zai:zai-main"), 1, "{calls:?}");
+        let (_, flags) = built_in_destination(&lane).expect("zai lane escapes to opus");
+        assert!(flags.windows(2).any(|w| w == ["--route", "anthropic/opus"]));
     }
 
     fn read_journal(home: &AgentsHome) -> Vec<String> {
