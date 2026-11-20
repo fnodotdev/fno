@@ -1012,7 +1012,10 @@ agents = [
     row("scout", "claude", "opus", ids[1 + off], "done", sids[0]) | {"context_used_pct": 41},
     row("reviewer", "opencode", "zen", ids[2 + off], "working", sids[2]) | {"context_used_pct": 23},
     # Blocked, so the strip's need-input count and the Input word render.
-    row("pager", "pi", "glm-5", ids[3 + off], "blocked") | {"context_used_pct": 88},
+    # The literal sid gives the first row a session, so its row menu shows
+    # the pin and the do-not-disturb arm every session-carrying row offers.
+    row("pager", "pi", "glm-5", ids[3 + off], "blocked",
+        "6b65e7e1-0000-4000-8000-00000000d5b3") | {"context_used_pct": 88},
     row("scribe", "claude", "sonnet", ids[4 + off], "done") | {"context_used_pct": 15},
     # Paneless threads, so the sideline shows the other states too.
     # Leads dispatch and never host a pane: attachable thread rows.
@@ -1061,23 +1064,34 @@ if os.environ.get("FNO_DEMO_FLATPINS"):
         worker("vega-w1", "demo-sid-vega", "demo-sid-vega-w1"),
     ]
 # --holds adds the hold fixture: keeper carries a live conversation hold
-# (the fno-mail hold record), sentry takes mail only (the register door's
-# bus-only capability), and eval-once is a headless one-shot that paints no
-# row.
+# (the fno-mail hold record), sentinel carries the user-set do-not-disturb
+# hold the row menu's arm writes, sentry takes mail only (the register
+# door's bus-only capability), and eval-once is a headless one-shot that
+# paints no row.
 if os.environ.get("FNO_DEMO_HOLDS"):
     live = {"inside_leg": {"state": "working", "seq": 1, "received_at": now}}
     hold_dir = os.path.join(os.path.dirname(db), "mail", "mail-hold")
     os.makedirs(hold_dir, exist_ok=True)
+    # The badge overlay reads the real wall clock, not the frozen demo
+    # epoch, so the records run a month out or every shoot renders them
+    # expired and the marks vanish.
     until = datetime.datetime.fromtimestamp(
-        int(os.environ["FNO_DEMO_EPOCH"]) + 600, datetime.timezone.utc
+        int(os.environ["FNO_DEMO_EPOCH"]) + 30 * 86400, datetime.timezone.utc
     ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ceiling = until
     keeper_sid = "6b65e7e1-0000-4000-8000-00000000d3e0"
     with open(os.path.join(hold_dir, keeper_sid + ".json"), "w") as f:
         json.dump({"session": keeper_sid, "until": until, "set_by": "conversation",
                    "reason": "conversation", "clock": {"kind": "wall"}}, f)
+    sentinel_sid = "6b65e7e1-0000-4000-8000-00000000d4a7"
+    with open(os.path.join(hold_dir, sentinel_sid + ".json"), "w") as f:
+        json.dump({"session": sentinel_sid, "until": ceiling, "set_by": "user",
+                   "reason": "sideline_menu", "clock": {"kind": "wall"}}, f)
     agents += [
         thread("keeper", "claude", "idle", attach="demo-keeper") | live | {
             "harness_session_id": keeper_sid},
+        thread("sentinel", "claude", "idle", attach="demo-sentinel") | live | {
+            "harness_session_id": sentinel_sid},
         thread("sentry", "codex", "idle", attach="demo-sentry") | live | {
             "delivery_policy": "bus-only", "harness_session_id": "demo-sid-sentry"},
         thread("eval-once", "claude", "idle") | live | {"substrate": "headless"},
