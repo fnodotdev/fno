@@ -482,9 +482,9 @@ unset CLAUDE_CODE_SESSION_ID CLAUDE_SESSION_ID CLAUDECODE CLAUDECODE_SESSION_ID 
   CODEX_COMPANION_TRANSCRIPT_PATH GEMINI_SESSION_ID OPENCODE_SESSION_ID \
   PI_SESSION_ID PI_SESSION_FILE HERMES_SESSION_ID TARGET_SESSION_ID \
   FNO_HARNESS_NAME FNO_HARNESS_SESSION_ID REX_SERVER REX_SESSION REX_BLOCK
-# Under an owner session the server lives as long as its owner. Left alone,
-# the owner is the first short-lived `pane run`, and the server shuts down
-# before the shot. This script owns it instead, so it also dies with us.
+# Under an owner session the server lives as long as its owner. A one-shot
+# `pane run` never names itself the owner, so this script declares itself,
+# and the server dies with us.
 export FNO_OWNER_PID=$$
 
 # The usage cache the connections view reads first: invented readings, probed
