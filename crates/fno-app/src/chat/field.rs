@@ -219,7 +219,9 @@ impl Default for FieldState {
 
 pub struct Field {
     pub draft: Draft,
-    pub placeholder: &'static str,
+    /// The quiet text an empty field shows. SharedString, so a caller can
+    /// name a project in it.
+    pub placeholder: SharedString,
     pub fg: Hsla,
     pub muted: Hsla,
     pub selection: u32,
@@ -351,7 +353,7 @@ impl Element for Field {
                 underline: None,
                 strikethrough: None,
             };
-            (self.placeholder, vec![run])
+            (&*self.placeholder, vec![run])
         } else {
             (self.draft.text(), self.runs(self.draft.text().len(), &font))
         };
