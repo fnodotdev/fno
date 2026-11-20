@@ -66,11 +66,8 @@ pub(crate) struct Row {
 /// What Enter resolved to: the caller writes it through `fno config set`.
 #[derive(Debug, PartialEq)]
 pub(crate) enum Outcome {
-    /// Flip a bool key (a toggle row).
-    Set {
-        id: &'static str,
-        value: &'static str,
-    },
+    /// Flip a bool key (a toggle row) or step a cycle row.
+    Set { id: &'static str, value: String },
     /// Confirm one option of an open page.
     Page { index: usize, options: Vec<Choice> },
     /// `fno config unset`, the Follow macOS theme pseudo-choice.
@@ -345,7 +342,11 @@ pub(crate) fn resolve_enter(rows: &[SectionRows], q: &str, sel: usize) -> Outcom
     match &row.mode {
         Mode::Toggle { on } => Outcome::Set {
             id: row.id,
-            value: if *on { "false" } else { "true" },
+            value: if *on {
+                "false".to_string()
+            } else {
+                "true".to_string()
+            },
         },
         Mode::Cycle { options, current } => {
             if options.len() < 2 {
@@ -786,7 +787,7 @@ mod tests {
             out,
             Outcome::Set {
                 id: "app.alert_sound",
-                value: "false"
+                value: "false".to_string()
             }
         );
         let out = resolve_enter(&rows, "theme", 0);
