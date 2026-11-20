@@ -1810,42 +1810,17 @@ fn seed_drill_rows(view: &mut View) {
         })
         .cloned();
     let Some(mut row) = seed else { return };
-    let inputs_ref = view.backlog_board.as_ref().and_then(|b| b.inputs.as_mut());
-    let Some(inputs) = inputs_ref else { return };
+    let Some(inputs) = view.backlog_board.as_mut().and_then(|b| b.inputs.as_mut()) else {
+        return;
+    };
     for (i, title) in [
         "Rate the demo flow for a first-run founder",
         "Ship the receipt polish for a first-run founder",
         "Turn the checkout keys into one clap",
-    ] {
-        row.id = Some(format!("ab-drill{i}"));
-        row.title = Some(title.into());
-        inputs.rows.push(row.clone());
-    }
-}
-
-/// Two synthetic customer rows past the two the demo board already
-/// serves, so the trail can drill four deep. Cloned from an existing
-/// customer row so every field the board read carries stays valid.
-fn seed_drill_rows(view: &mut View) {
-    let seed = view
-        .backlog_board
-        .as_ref()
-        .and_then(|b| b.inputs.as_ref())
-        .and_then(|i| {
-            i.rows.iter().find(|r| {
-                r.audience
-                    .as_deref()
-                    .map(|a| a.trim().starts_with("customer:"))
-                    .unwrap_or(false)
-            })
-        })
-        .cloned();
-    let Some(mut row) = seed else { return };
-    for (i, title) in [
-        "Rate the demo flow for a first-run founder",
-        "Ship the receipt polish for a first-run founder",
-        "Turn the checkout keys into one clap",
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         row.id = Some(format!("ab-drill{i}"));
         row.title = Some(title.into());
         inputs.rows.push(row.clone());
