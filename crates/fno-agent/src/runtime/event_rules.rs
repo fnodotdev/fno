@@ -1153,8 +1153,9 @@ mod tests {
     }
 
     fn stop_stamp_binds_the_question_to_the_asking_session_leg() {
-        let lock = crate::claims::test_env_lock();
-        let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+        // The caller holds test_env_lock: the lock is a plain std Mutex, so
+        // a second acquire here deadlocks the test process (the 30m CI cap
+        // hung on exactly this). It runs only from r1_blocks, which locks.
         let rig = Rig::new(false);
         // One question this session asked; one another session asked; one
         // stamped by nobody. The turn's summary names all three.
