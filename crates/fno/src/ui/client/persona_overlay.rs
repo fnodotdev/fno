@@ -1622,7 +1622,16 @@ pub(crate) fn persona_widening_seams(view: &mut View) -> Vec<crate::proto::Comma
         else {
             return Vec::new();
         };
-        claim_widening_seams(&mut rects, pane, (px, py, pw, ph), &tracked, &mut seams);
+        // A record's claim reaches past a fleet pane with no room to the
+        // wide pane beyond; the persona's own claim stops at its neighbour.
+        let through_fleet = o.pane != Some(pane);
+        claim_widening_seams(
+            &mut rects,
+            pane,
+            (px, py, pw, ph),
+            (&tracked, through_fleet),
+            &mut seams,
+        );
         raise_fleet_panes(&rects, (py, ph), &tracked, &mut seams);
         raise_tracked_panes(&mut rects, (py, ph), &tracked, pane, &mut seams);
     }
@@ -1654,7 +1663,7 @@ fn claim_widening_seams(
     rects: &mut [(u64, (usize, usize, usize, usize))],
     pane: u64,
     at: (usize, usize, usize, usize),
-    tracked: &[u64],
+    (tracked, through_fleet): (&[u64], bool),
     seams: &mut Vec<crate::proto::Command>,
 ) {
     let (px, py, pw, ph) = at;
@@ -1690,7 +1699,7 @@ fn claim_widening_seams(
                 break;
             };
             chain.push((nid, nx, nw));
-            if nw > pane_floor(tracked, nid) {
+            if nw > pane_floor(tracked, nid) || !(through_fleet || tracked.contains(&nid)) {
                 break;
             }
             edge = nx;
