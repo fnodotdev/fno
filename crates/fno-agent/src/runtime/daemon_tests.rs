@@ -1221,6 +1221,34 @@ fn list_row_key_set_matches_shared_contract() {
     assert_eq!(row["role_scope"], "epic-x");
     assert_eq!(row["role_grantor"], "lead");
 
+    // The uuid-backfill leg (x-52fa's third clause): a report from a claude
+    // bg row that holds only its short-id prefix lands the canonical
+    // harness_session_id beside the legacy claude_session_uuid, so every
+    // consumer that reads the canonical field sees the id at once.
+    state::update_registry(&home.registry_json(), |r| {
+        r.entries.push(bg_claude_row("worker-B", "3228ccad"));
+    })
+    .unwrap();
+    let full = "3228ccad-c078-4b53-a8c9-7199b831eae4";
+    let backfill = Request::new(
+        3,
+        "agent.report",
+        json!({"session_id": full, "seq": 5, "state": "working"}),
+    );
+    assert_eq!(
+        handle_report(&ctx, &backfill).result().unwrap()["stored"],
+        true,
+        "the short-id prefix backfills the report onto the null-uuid row"
+    );
+    let reg = state::load_registry(&home.registry_json()).unwrap();
+    let bg = reg
+        .entries
+        .iter()
+        .find(|e| e.name == "worker-B")
+        .expect("the backfilled row");
+    assert_eq!(bg.harness_session_id.as_deref(), Some(full));
+    assert_eq!(bg.claude_session_uuid.as_deref(), Some(full));
+
     std::fs::remove_dir_all(home.root()).ok();
 }
 
