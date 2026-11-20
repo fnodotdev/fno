@@ -84,7 +84,8 @@ pub(crate) fn workspaces(layout: &Layout, now: u64) -> Vec<WorkspaceRow> {
                 cwd: squad.canonical_cwd.clone(),
                 branch: members
                     .iter()
-                    .find_map(|a| branch_of(a, &base))
+                    .min_by_key(|a| a.last_activity_age_s.unwrap_or(u64::MAX))
+                    .and_then(|a| branch_of(*a, &base))
                     .map(str::to_string),
                 agents: members.len(),
                 age: facts.activity.or(facts.created),
@@ -115,7 +116,8 @@ fn header_facts(root: &Root) -> HeaderFacts {
         .agents
         .iter()
         .filter(|a| a.cwd_base.as_deref() == Some(project.as_str()))
-        .find_map(|a| branch_of(a, &project))
+        .min_by_key(|a| a.last_activity_age_s.unwrap_or(u64::MAX))
+        .and_then(|a| branch_of(a, &project))
         .map(str::to_string);
     let machine = root
         .board
@@ -509,5 +511,18 @@ mod tests {
 
         let bare = agent("d", Some("harbor"), Some(5));
         assert_eq!(branch_of(&bare, "harbor"), None);
+    }
+
+    #[test]
+    fn the_freshest_member_names_the_branch() {
+        let mut layout = Layout::default();
+        layout.squads = vec![squad(1, "/code/harbor")];
+        let mut stale = agent("stale", Some("harbor"), Some(600));
+        stale.subline = Some("feat/old · harbor".into());
+        let mut fresh = agent("fresh", Some("harbor"), Some(5));
+        fresh.subline = Some("feat/new · harbor".into());
+        layout.agents = vec![stale, fresh];
+        let rows = workspaces(&layout, 100);
+        assert_eq!(rows[0].branch.as_deref(), Some("feat/new"));
     }
 }
