@@ -8,6 +8,8 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::reader_route::ReaderRoute;
+
 const READER_PROMPT: &str = include_str!("reader.md");
 const GRADER_PROMPT: &str = include_str!("grader.md");
 const DEFAULT_MODEL: &str = "opus";
@@ -22,76 +24,43 @@ const SECTIONS: [&str; 4] = [
     "PENDING-NODES.md",
 ];
 
-/// One model call: prompt, working dir, timeout seconds, model.
+/// One model call: prompt, working dir, timeout seconds, resolved route.
 pub(crate) type Spawn<'a> =
-    &'a (dyn Fn(&str, &Path, u64, &str) -> Result<(i32, String, String), String> + Sync);
+    &'a (dyn Fn(&str, &Path, u64, &ReaderRoute) -> Result<(i32, String, String), String> + Sync);
 
 /// Grade the eval in `dir`. A failure leaves parts 3 and 4 pending and stamps
 /// the index `graded_by: failed: <reason>`.
 pub(crate) fn grade(dir: &Path, value: &Value, cwd: &Path) -> Result<(), String> {
-    let model = crate::agents_config::config_lookup(cwd, &["lead_eval", "reader_model"])
-        .and_then(|v| v.as_str().map(str::to_string))
-        .filter(|m| !m.trim().is_empty())
-        .unwrap_or_else(|| DEFAULT_MODEL.to_string());
-    grade_with(dir, value, &model, &spawn)
+    let route = crate::reader_route::resolve(
+        cwd,
+        "lead-eval-grader",
+        Some(crate::reader_route::Legacy {
+            keys: &["lead_eval", "reader_model"],
+        }),
+        DEFAULT_MODEL,
+    );
+    grade_with(dir, value, &route, &spawn)
 }
 
 fn spawn(
     prompt: &str,
     cwd: &Path,
     timeout_secs: u64,
-    model: &str,
+    route: &ReaderRoute,
 ) -> Result<(i32, String, String), String> {
-    crate::blueprint_judge::headless_spawn(
-        &spawn_argv(prompt, cwd, timeout_secs, model),
+    let argv = crate::reader_route::reader_tools_argv(
+        "lead-eval-grader",
+        prompt,
+        cwd,
         timeout_secs,
-    )
+        route,
+        &[],
+    )?;
+    crate::blueprint_judge::headless_spawn(&argv, timeout_secs)
 }
 
-/// The judge's `--once` shape with one change: the reader keeps the Read
-/// tool, because a digest is far too large for argv. The working directory
-/// is the eval dir, so Read needs no extra directory grant. No `--name`: the
-/// spawn names the one-shot from the prompt.
-fn spawn_argv(prompt: &str, cwd: &Path, timeout_secs: u64, model: &str) -> Vec<String> {
-    let mut argv: Vec<String> = [
-        "agents",
-        "spawn",
-        "--harness",
-        "claude",
-        "--once",
-        "--cwd",
-        &cwd.display().to_string(),
-        "--timeout",
-        &timeout_secs.to_string(),
-    ]
-    .into_iter()
-    .map(String::from)
-    .collect();
-    // The prompt rides before the fence: the positional boundary refuses a
-    // spawn-owned flag after the prompt (law d-3244).
-    argv.push(prompt.to_string());
-    argv.extend(
-        [
-            "--",
-            "--model",
-            model,
-            "--setting-sources",
-            "",
-            "--strict-mcp-config",
-            "--tools",
-            "Read",
-            "--disable-slash-commands",
-            "--no-chrome",
-            "--no-session-persistence",
-        ]
-        .into_iter()
-        .map(String::from),
-    );
-    argv
-}
-
-fn grade_with(dir: &Path, value: &Value, model: &str, spawn: Spawn) -> Result<(), String> {
-    match run_grade(dir, value, model, spawn) {
+fn grade_with(dir: &Path, value: &Value, route: &ReaderRoute, spawn: Spawn) -> Result<(), String> {
+    match run_grade(dir, value, route, spawn) {
         Ok(()) => Ok(()),
         Err(reason) => {
             set_graded_by(dir, &format!("failed: {}", reason.replace('\n', " ")));
@@ -100,7 +69,7 @@ fn grade_with(dir: &Path, value: &Value, model: &str, spawn: Spawn) -> Result<()
     }
 }
 
-fn run_grade(dir: &Path, value: &Value, model: &str, spawn: Spawn) -> Result<(), String> {
+fn run_grade(dir: &Path, value: &Value, route: &ReaderRoute, spawn: Spawn) -> Result<(), String> {
     let digests = digest_files(dir)?;
     let groups = split_windows(&digests);
     let reports = std::thread::scope(|scope| {
@@ -110,7 +79,7 @@ fn run_grade(dir: &Path, value: &Value, model: &str, spawn: Spawn) -> Result<(),
             .map(|(i, group)| {
                 let label = char::from(b'A' + i as u8);
                 let total = groups.len();
-                scope.spawn(move || read_group(dir, label, total, group, model, spawn))
+                scope.spawn(move || read_group(dir, label, total, group, route, spawn))
             })
             .collect();
         handles
@@ -121,7 +90,7 @@ fn run_grade(dir: &Path, value: &Value, model: &str, spawn: Spawn) -> Result<(),
             })
             .collect::<Result<Vec<_>, String>>()
     })?;
-    let reply = grader_reply(dir, value, model, spawn)?;
+    let reply = grader_reply(dir, value, route, spawn)?;
     let sections = parse_sections(&reply)?;
     let sources = std::iter::once("data/fold.json".to_string())
         .chain(
@@ -131,7 +100,7 @@ fn run_grade(dir: &Path, value: &Value, model: &str, spawn: Spawn) -> Result<(),
         )
         .collect::<Vec<_>>()
         .join(", ");
-    write_graded(dir, value, model, &sources, &sections)
+    write_graded(dir, value, &route.label(), &sources, &sections)
 }
 
 /// Each `data/out/window-NN.md` with its size, in window order.
@@ -184,7 +153,7 @@ fn read_group(
     label: char,
     total: usize,
     group: &[PathBuf],
-    model: &str,
+    route: &ReaderRoute,
     spawn: Spawn,
 ) -> Result<char, String> {
     let names: Vec<String> = group
@@ -198,13 +167,18 @@ fn read_group(
         "Retro reader {label} of {total}.\n\n{READER_PROMPT}\n\nYour window files: {}.\n",
         names.join(", ")
     );
-    let report = one_call(&prompt, dir, model, spawn, &format!("reader {label}"))?;
+    let report = one_call(&prompt, dir, route, spawn, &format!("reader {label}"))?;
     let path = dir.join(format!("data/out/reader-{label}.md"));
     std::fs::write(&path, format!("{report}\n")).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(label)
 }
 
-fn grader_reply(dir: &Path, value: &Value, model: &str, spawn: Spawn) -> Result<String, String> {
+fn grader_reply(
+    dir: &Path,
+    value: &Value,
+    route: &ReaderRoute,
+    spawn: Spawn,
+) -> Result<String, String> {
     let keys = serde_json::json!({
         "harness": value["harness"],
         "windows": value["windows"].as_array().map_or(0, Vec::len),
@@ -216,7 +190,7 @@ fn grader_reply(dir: &Path, value: &Value, model: &str, spawn: Spawn) -> Result<
         "user_corrections": value["user_corrections"],
     });
     let prompt = format!("{GRADER_PROMPT}\n\nThe fold's key numbers:\n\n{keys}\n");
-    one_call(&prompt, dir, model, spawn, "grader")
+    one_call(&prompt, dir, route, spawn, "grader")
 }
 
 /// One call, its stdout as the answer. A non-zero exit, a timeout or an
@@ -224,12 +198,12 @@ fn grader_reply(dir: &Path, value: &Value, model: &str, spawn: Spawn) -> Result<
 fn one_call(
     prompt: &str,
     dir: &Path,
-    model: &str,
+    route: &ReaderRoute,
     spawn: Spawn,
     who: &str,
 ) -> Result<String, String> {
     let (code, out, err) =
-        spawn(prompt, dir, CALL_TIMEOUT_S, model).map_err(|e| format!("{who}: {e}"))?;
+        spawn(prompt, dir, CALL_TIMEOUT_S, route).map_err(|e| format!("{who}: {e}"))?;
     if code != 0 {
         let tail: String = err
             .lines()
@@ -446,9 +420,10 @@ mod tests {
 
     fn spawn_with(
         reply: &'static str,
-    ) -> impl Fn(&str, &Path, u64, &str) -> Result<(i32, String, String), String> + Sync {
+    ) -> impl Fn(&str, &Path, u64, &ReaderRoute) -> Result<(i32, String, String), String> + Sync
+    {
         let calls = Mutex::new(0usize);
-        move |prompt: &str, _cwd: &Path, _t: u64, _m: &str| {
+        move |prompt: &str, _cwd: &Path, _t: u64, _route: &ReaderRoute| {
             *calls.lock().unwrap() += 1;
             let out = if prompt.starts_with("Retro grader") {
                 reply.to_string()
@@ -465,7 +440,7 @@ mod tests {
         let dir = eval_dir(root.path());
         let value = json!({"session": "abcdef1234567890", "totals": {}});
         let fake = spawn_with(REPLY);
-        grade_with(&dir, &value, "opus", &fake).unwrap();
+        grade_with(&dir, &value, &ReaderRoute::pinned("claude", "opus"), &fake).unwrap();
         for part in [
             "part3-failures.md",
             "part4-reforms.md",
@@ -498,7 +473,7 @@ mod tests {
         // A part 3 the user graded by hand stays byte-identical.
         let hand = "---\nstatus: graded\n---\n\nby hand\n";
         std::fs::write(dir.join("part3-failures.md"), hand).unwrap();
-        grade_with(&dir, &value, "opus", &fake).unwrap();
+        grade_with(&dir, &value, &ReaderRoute::pinned("claude", "opus"), &fake).unwrap();
         assert_eq!(
             std::fs::read_to_string(dir.join("part3-failures.md")).unwrap(),
             hand
@@ -511,7 +486,7 @@ mod tests {
         let dir = eval_dir(root.path());
         let value = json!({"session": "abcdef1234567890"});
         let fake = spawn_with("=== part3-failures.md ===\nonly this\n");
-        let err = grade_with(&dir, &value, "opus", &fake).unwrap_err();
+        let err = grade_with(&dir, &value, &ReaderRoute::pinned("claude", "opus"), &fake).unwrap_err();
         assert!(err.contains("part4-reforms.md"), "{err}");
         assert!(std::fs::read_to_string(dir.join("part3-failures.md"))
             .unwrap()

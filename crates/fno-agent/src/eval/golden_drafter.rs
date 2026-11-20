@@ -16,12 +16,14 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::evals::bank;
+use crate::reader_route::ReaderRoute;
 
 const DEFAULT_MAX_PER_DAY: usize = 5;
 const SPAWN_TIMEOUT_S: u64 = 300;
 const MODEL: &str = "sonnet";
 
-type Spawn<'a> = &'a dyn Fn(&str, &str, &Path, u64, &str) -> Result<(i32, String, String), String>;
+type Spawn<'a> =
+    &'a dyn Fn(&str, &str, &Path, u64, &ReaderRoute) -> Result<(i32, String, String), String>;
 type Open<'a> = &'a dyn Fn(&str, &str, &str, &[(PathBuf, Vec<u8>)]) -> Result<String, String>;
 
 #[derive(Deserialize)]
@@ -161,6 +163,7 @@ pub(crate) fn fill(
     spawn: Spawn,
     open: Open,
 ) -> Result<Value, String> {
+    let route = crate::reader_route::resolve(repo, "golden-drafter", None, MODEL);
     let (mut kept, mut dropped) = (Vec::new(), 0u64);
     let mut edits: Vec<(PathBuf, Vec<u8>)> = Vec::new();
     for (hash, path) in open_drafts(dir).into_iter().take(max) {
@@ -170,7 +173,7 @@ pub(crate) fn fill(
             &prompt(&draft),
             repo,
             SPAWN_TIMEOUT_S,
-            MODEL,
+            &route,
         )
         .and_then(|(code, out, err)| {
             if code == 0 {
@@ -246,46 +249,16 @@ fn bank_repo() -> Option<PathBuf> {
         .find(has_bank)
 }
 
-/// One claude one-shot with read tools, rooted at the checkout.
+/// The golden drafter's one-shot: routed through the reader route (profile
+/// `golden-drafter`) with the harness's tool-bearing form in the fence.
 fn spawn_reader(
     name: &str,
     prompt: &str,
     cwd: &Path,
     timeout: u64,
-    model: &str,
+    route: &ReaderRoute,
 ) -> Result<(i32, String, String), String> {
-    let argv: Vec<String> = [
-        "agents",
-        "spawn",
-        "--name",
-        name,
-        "--harness",
-        "claude",
-        "--once",
-        "--cwd",
-        &cwd.display().to_string(),
-        "--timeout",
-        &timeout.to_string(),
-        // The prompt rides last before the fence: the spawn door refuses a
-        // spawn-owned flag after the prompt.
-        prompt,
-        "--",
-        "--model",
-        model,
-        "--setting-sources",
-        "",
-        "--strict-mcp-config",
-        "--tools",
-        "Read,Grep,Glob",
-        "--allowedTools",
-        "Read,Grep,Glob",
-        "--disable-slash-commands",
-        "--no-chrome",
-        "--no-session-persistence",
-    ]
-    .into_iter()
-    .map(String::from)
-    .collect();
+    let argv = crate::reader_route::reader_tools_argv(name, prompt, cwd, timeout, route, &[])?;
     crate::blueprint_judge::headless_spawn(&argv, timeout)
 }
 
@@ -341,7 +314,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(15));
         }
         let calls = RefCell::new(0);
-        let spawn = |name: &str, _: &str, _: &Path, _: u64, _: &str| {
+        let spawn = |name: &str, _: &str, _: &Path, _: u64, _: &ReaderRoute| {
             *calls.borrow_mut() += 1;
             let reply = match name {
                 "golden-drafter-aaa" => {
