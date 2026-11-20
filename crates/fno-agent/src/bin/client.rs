@@ -551,8 +551,11 @@ async fn run_daemon_command(
     let mut lease = SpawnLease::default();
     if method == "agent.spawn" && command == "spawn" {
         fno_agent::spawn::pr_watch_warning::warn_if_watcher_down(
-            params["message"].as_str().unwrap_or(""),
-            params["node"].as_str().is_some(),
+            params
+                .pointer("/message")
+                .and_then(Value::as_str)
+                .unwrap_or(""),
+            params.pointer("/node").and_then(Value::as_str).is_some(),
         );
         if let Some(code) = run_client_spawn(
             &home,
