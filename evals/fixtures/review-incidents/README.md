@@ -15,7 +15,7 @@ Real incidents on this public repository vendor verbatim. Incidents from private
 
 ## Adding the next incident
 
-1. Write the diff to `<name>.diff`, verbatim when the incident lives on this repository.
+1. When the incident lives on this repository, write the diff to `<name>.diff` verbatim.
 2. Write `<name>.meta.yaml`: coordinates, the bug site, and the defect sentence.
 3. Vendor under `tree/` only the files the catch needs, at their real paths.
 4. Add the bank task and prove both arms of its grade with the grade fixtures.
