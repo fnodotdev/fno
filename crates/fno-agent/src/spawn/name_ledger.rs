@@ -238,8 +238,8 @@ pub(crate) fn read_merged_or_mirror(
 /// The offline notice prints once per process: one naming ceremony makes
 /// several ledger reads, and the beat's contract is one line.
 fn notice_once(notice: &str) {
-    static SAID: std::sync::AtomicBool = std::sync::AtomicBool::new(false);
-    if !SAID.swap(true, std::sync::AtomicOrdering::Relaxed) {
+    static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
         eprintln!("name ledger: {notice}");
     }
 }
