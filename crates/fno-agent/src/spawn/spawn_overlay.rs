@@ -527,6 +527,7 @@ fn resolve_print(payload: &Value) -> Result<Value, String> {
         &account_env,
         payload.get("sandbox").filter(|v| v.is_object()).cloned(),
         alias,
+        None,
         &cwd,
     )?;
     let template = crate::spawn_compose::resolve_template(

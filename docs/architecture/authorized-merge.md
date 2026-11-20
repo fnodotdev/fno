@@ -60,7 +60,7 @@ After a main merge, every open PR with older CI is stale. A stale PR can prove i
 
 `fno do pr status` uses the same preview decision. Its CI verdict remains separate from `ready`: pending or unknown CI never becomes a false green. The warning list is present beside both allowed and blocked outcomes. These process demotions need no setting.
 
-The raw merge hook and operator hold-check use the native dispatch-hold reader. Missing looks, review coverage and registered reviews warn without disarming GitHub's queue. An explicit user decline still vetoes and disarms only its named head. The raw hook retains its separate merge-consent and lineage checks. It no longer requires a completed external-review artifact as a permission factor.
+The raw merge hook and operator hold-check use the native dispatch-hold reader. Missing looks, review coverage and registered reviews warn without disarming GitHub's queue. An explicit user decline still vetoes and disarms only its named head. An open look question with screens that names the PR in its title holds the merge until the user answers it. The raw hook retains its separate merge-consent and lineage checks. It no longer requires a completed external-review artifact as a permission factor.
 
 ## The head-scoped user merge grant
 

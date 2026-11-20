@@ -647,6 +647,7 @@ fn lane_rows(cwd: &Path, registry: &Path, warnings: &mut Vec<String>) -> Vec<Val
     let Some(lanes) = lanes.as_object() else {
         return vec![json!({"provider": null, "unreadable": "gate probe unreadable"})];
     };
+    let parked = parked_until(registry);
     let mut providers: Vec<&String> = lanes.keys().collect();
     providers.sort();
     providers
@@ -672,9 +673,29 @@ fn lane_rows(cwd: &Path, registry: &Path, warnings: &mut Vec<String>) -> Vec<Val
             Some(json!({
                 "provider": provider, "cap": cap, "holders": holders,
                 "count": live, "full": full,
+                "parked_until": parked.get(provider.as_str()),
             }))
         })
         .collect()
+}
+
+/// Providers whose lane the quota snapshot holds open until a reset still
+/// ahead: the spawn gate refuses them until then, so the table says so.
+fn parked_until(registry: &Path) -> std::collections::BTreeMap<String, String> {
+    let now = crate::provider_cap::now_epoch_secs();
+    registry
+        .parent()
+        .map(|root| crate::paths::AgentsHome::at(root.to_path_buf()))
+        .and_then(|home| crate::provider_cap::read_persisted_snapshot(&home))
+        .map(|snap| {
+            snap.lanes
+                .iter()
+                .filter(|l| l.state == "open")
+                .filter_map(|l| Some((l.provider.clone(), l.reset_epoch.filter(|r| *r > now)?)))
+                .map(|(p, r)| (p, crate::provider_cap::epoch_to_rfc3339(r)))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn long_holds(cwd: &Path) -> Result<Value, String> {
@@ -1093,6 +1114,11 @@ pub fn render(p: &Value) -> String {
             (
                 format!("?/{cap}"),
                 format!("unreadable: {}", cell(&r["unreadable"])),
+            )
+        } else if let Some(until) = r["parked_until"].as_str() {
+            (
+                format!("{}/{cap}", r["count"]),
+                format!("PARKED until {until}"),
             )
         } else if r["full"] == json!(true) {
             (format!("{}/{cap}", r["count"]), "FULL".into())

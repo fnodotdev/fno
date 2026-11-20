@@ -776,7 +776,7 @@ pub fn pre_gate(
         })
         .unwrap_or_default();
     let written =
-        crate::route_settings::write_composed(&env, &Map::new(), Some(sandbox), None, cwd)
+        crate::route_settings::write_composed(&env, &Map::new(), Some(sandbox), None, None, cwd)
             .map_err(|e| {
                 eprintln!("fno agent spawn: {e}");
                 2

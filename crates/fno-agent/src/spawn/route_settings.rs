@@ -3,6 +3,10 @@
 //! payload shape (the env map, an optional sandbox block, the foreign-endpoint
 //! tool denies), the sha256[:16] content address, the 0600 atomic publish and
 //! the stable `lane-<row>.json` alias a routing row's native line prints. The
+//! digest name is the dedup store; when a write (or the spawn mint, after the
+//! session uuid resolves) knows the session id, it also publishes the twin
+//! `session-<id>.json` beside it, so `ls route-settings` joins a file to its
+//! session by eye. The
 //! door command reads the composed env on STDIN - it carries
 //! `ANTHROPIC_AUTH_TOKEN`, which must never ride argv - and answers
 //! `{"path", "alias_path"}` on stdout.
@@ -52,12 +56,14 @@ fn foreign_endpoint_tool_denies(env: &Map<String, Value>) -> Vec<&'static str> {
     FOREIGN_ENDPOINT_DENY_TOOLS.to_vec()
 }
 
-/// One write ask: the composed env, the optional sandbox block, and the
-/// optional stable lane alias (`lane-<alias>.json`).
+/// One write ask: the composed env, the optional sandbox block, the
+/// optional stable lane alias (`lane-<alias>.json`), and the optional
+/// session id the file belongs to (`session-<id>.json`).
 pub struct WriteAsk {
     pub env: Map<String, Value>,
     pub sandbox: Option<Value>,
     pub alias: Option<String>,
+    pub session: Option<String>,
 }
 
 pub struct WriteReceipt {
@@ -212,20 +218,29 @@ fn valid_alias(alias: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
-fn write_atomic_0600(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    if path.exists() {
-        return Ok(());
-    }
-    let base = path
-        .parent()
-        .ok_or_else(|| format!("{}: no parent", path.display()))?;
-    let tmp = base.join(format!(
+/// A session-named entry is keyed by the harness session id (a uuid: hex and
+/// hyphens), so the name can never escape route-settings and can never
+/// collide with the digest or `lane-` namespaces.
+fn valid_session(id: &str) -> bool {
+    (8..=64).contains(&id.len()) && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+}
+
+/// The per-process temp name beside `path` that a rename publishes.
+fn tmp_beside(path: &Path) -> PathBuf {
+    path.with_file_name(format!(
         ".{}.{}.tmp",
         path.file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default(),
         std::process::id()
-    ));
+    ))
+}
+
+fn write_atomic_0600(path: &Path, bytes: &[u8], overwrite: bool) -> Result<(), String> {
+    if !overwrite && path.exists() {
+        return Ok(());
+    }
+    let tmp = tmp_beside(path);
     std::fs::write(&tmp, bytes).map_err(|e| format!("{}: {e}", tmp.display()))?;
     #[cfg(unix)]
     {
@@ -238,7 +253,11 @@ fn write_atomic_0600(path: &Path, bytes: &[u8]) -> Result<(), String> {
 /// Write the content-addressed settings file (and the lane alias when asked)
 /// under `<state>/route-settings`. Identical payloads collapse to one file;
 /// racing writers publish identical bytes, so a last-writer-wins rename stays
-/// correct (model_routing.py:_write_settings_env_file).
+/// correct (model_routing.py:_write_settings_env_file). When the ask names a
+/// session id, the returned path is the session-named twin
+/// `session-<id>.json` instead of the digest name: the twin replaces on a
+/// re-route of the same session, the digest twin stays the skip-if-exists
+/// dedup store, and the resume reader takes whatever path the row records.
 pub fn write(ask: &WriteAsk, cwd: &Path) -> Result<WriteReceipt, String> {
     let state = crate::agents_config::state_dir(cwd)
         .ok_or_else(|| "no resolvable state root (set FNO_STATE_DIR or HOME)".to_string())?;
@@ -250,15 +269,26 @@ pub fn write(ask: &WriteAsk, cwd: &Path) -> Result<WriteReceipt, String> {
     std::fs::create_dir_all(&base).map_err(|e| format!("{}: {e}", base.display()))?;
     let payload = payload_bytes(&ask.env, ask.sandbox.as_ref());
     let digest = digest_of(&payload);
-    let path = base.join(format!("{digest}.json"));
-    write_atomic_0600(&path, &payload)?;
+    let digest_path = base.join(format!("{digest}.json"));
+    write_atomic_0600(&digest_path, &payload, false)?;
+    let path = match ask.session.as_deref() {
+        Some(id) if !id.is_empty() => {
+            if !valid_session(id) {
+                return Err(format!("session id {id:?} is not a session handle"));
+            }
+            let session_path = base.join(format!("session-{id}.json"));
+            write_atomic_0600(&session_path, &payload, true)?;
+            session_path
+        }
+        _ => digest_path,
+    };
     let alias_path = match &ask.alias {
         Some(name) => {
             if !valid_alias(name) {
                 return Err(format!("lane alias {name:?} is not a CLI handle"));
             }
             let alias_path = base.join(format!("lane-{name}.json"));
-            write_atomic_0600(&alias_path, &payload)?;
+            write_atomic_0600(&alias_path, &payload, false)?;
             Some(alias_path)
         }
         None => None,
@@ -266,15 +296,69 @@ pub fn write(ask: &WriteAsk, cwd: &Path) -> Result<WriteReceipt, String> {
     Ok(WriteReceipt { path, alias_path })
 }
 
+/// The spawn-mint's join. The settings file is written before the session
+/// uuid exists (the claude daemon mints the id at first launch and the mint
+/// resolves it by polling afterward), so the mint publishes the session-named
+/// twin once the id lands: a hardlink beside the recorded file, a copy where
+/// the filesystem refuses the link. A stale twin from an earlier publish of
+/// the same id is replaced, never trusted. io::Result keeps this helper off
+/// the crate's string-error ratchet; the caller maps the error.
+pub fn publish_session_entry(recorded: &Path, session_id: &str) -> std::io::Result<PathBuf> {
+    if !valid_session(session_id) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("session id {session_id:?} is not a session handle"),
+        ));
+    }
+    let dest = recorded.with_file_name(format!("session-{session_id}.json"));
+    if dest == recorded {
+        return Ok(dest);
+    }
+    let tmp = tmp_beside(&dest);
+    std::fs::remove_file(&tmp).ok();
+    if std::fs::hard_link(recorded, &tmp).is_ok() {
+        std::fs::rename(&tmp, &dest)?;
+    } else {
+        let bytes = std::fs::read(recorded)?;
+        write_atomic_0600(&dest, &bytes, true).map_err(std::io::Error::other)?;
+    }
+    Ok(dest)
+}
+
+/// The late-uuid join for a row the mint recorded before its session id
+/// resolved: publish the twin when `recorded` is a route-writer file, and
+/// return the path the row should now record. A caller's own `--settings`
+/// file (outside route-settings) is never twinned.
+pub fn publish_for_row(recorded: &str, session_id: &str) -> Option<String> {
+    let recorded = Path::new(recorded);
+    let owned = recorded
+        .parent()
+        .and_then(Path::file_name)
+        .is_some_and(|d| d == "route-settings");
+    if !owned {
+        return None;
+    }
+    match publish_session_entry(recorded, session_id) {
+        Ok(path) => Some(path.to_string_lossy().into_owned()),
+        Err(e) => {
+            eprintln!("fno agent: warning: route-settings session twin for {session_id}: {e}");
+            None
+        }
+    }
+}
+
 /// Compose from the RAW overlays and write, the one helper behind both
 /// doors (the native exec and the print kind). `Ok(None)` when the ask
 /// names neither overlay nor sandbox: a plain lane launch carries no
-/// settings file, but a write policy alone still owes the scrub floor.
+/// settings file, but a write policy alone still owes the scrub floor. A
+/// non-empty `session` names the returned file `session-<id>.json` (the
+/// resume reader replays the recorded path verbatim).
 pub fn write_composed(
     route_env: &Map<String, Value>,
     account_env: &Map<String, Value>,
     sandbox: Option<Value>,
     alias: Option<&str>,
+    session: Option<&str>,
     cwd: &Path,
 ) -> Result<Option<String>, String> {
     if route_env.is_empty() && account_env.is_empty() && sandbox.is_none() {
@@ -289,6 +373,7 @@ pub fn write_composed(
             env,
             sandbox,
             alias: alias.map(str::to_string),
+            session: session.map(str::to_string),
         },
         cwd,
     )
@@ -345,6 +430,9 @@ pub fn write_settings_kind(payload: &Value) -> Result<Value, String> {
             .get("alias")
             .and_then(Value::as_str)
             .map(str::to_string),
+        // The transport contract carries no session id today; a fresh
+        // compose that knows one goes through write_composed.
+        session: None,
     };
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let receipt = write(&ask, &cwd)?;
@@ -421,6 +509,7 @@ mod tests {
             env: env_of(&[("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic")]),
             sandbox: None,
             alias: Some("zai-flash".to_string()),
+            session: None,
         };
         let receipt = write(&ask, root.path()).unwrap();
         let alias = receipt.alias_path.unwrap();
@@ -479,5 +568,110 @@ mod tests {
         assert_eq!(as_str("CLAUDE_CODE_OAUTH_TOKEN"), "");
         assert_eq!(as_str("FNO_ROUTE_PROVIDER"), "");
         assert_eq!(as_str("ANTHROPIC_DEFAULT_FABLE_MODEL"), "");
+    }
+
+    const SESSION_ID: &str = "3e7f0a47-3777-459d-9e8a-6304803bd2d1";
+
+    /// The session join: a write that names a session returns the
+    /// session-named path, lands the digest twin beside it with identical
+    /// bytes, and stamps 0600 on the twin.
+    #[test]
+    fn the_session_entry_lands_beside_its_digest_twin() {
+        let root = tempfile::tempdir().unwrap();
+        let (guard, saved) = state_pin(root.path());
+        let route_env = env_of(&[("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic")]);
+        let path = write_composed(
+            &route_env,
+            &Map::new(),
+            None,
+            None,
+            Some(SESSION_ID),
+            root.path(),
+        )
+        .unwrap()
+        .unwrap();
+        let path = PathBuf::from(&path);
+        assert_eq!(
+            path.file_name().unwrap().to_string_lossy(),
+            format!("session-{SESSION_ID}.json")
+        );
+        let digest_twin = path
+            .parent()
+            .unwrap()
+            .read_dir()
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .find(|n| n.ends_with(".json") && !n.starts_with("session-"))
+            .expect("digest twin present");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            std::fs::read(path.parent().unwrap().join(digest_twin)).unwrap()
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        state_restore(saved);
+        drop(guard);
+    }
+
+    /// A re-route of the same session replaces the twin with the new route;
+    /// the digest store keeps one file per payload.
+    #[test]
+    fn a_session_reroute_replaces_the_entry() {
+        let root = tempfile::tempdir().unwrap();
+        let (guard, saved) = state_pin(root.path());
+        let first = env_of(&[("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic")]);
+        let second = env_of(&[("ANTHROPIC_BASE_URL", "https://api.anthropic.com")]);
+        let first_path = write_composed(
+            &first,
+            &Map::new(),
+            None,
+            None,
+            Some(SESSION_ID),
+            root.path(),
+        )
+        .unwrap()
+        .unwrap();
+        let path = write_composed(
+            &second,
+            &Map::new(),
+            None,
+            None,
+            Some(SESSION_ID),
+            root.path(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(first_path, path);
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert!(body.contains("api.anthropic.com"));
+        assert!(!body.contains("api.z.ai"));
+        state_restore(saved);
+        drop(guard);
+    }
+
+    /// The mint-side publish: a stranger id refuses, and a stale twin from an
+    /// earlier publish of the same id is replaced, never trusted. Writes land
+    /// beside `recorded`, so no state-root pin applies.
+    #[test]
+    fn publish_session_entry_refuses_a_stranger_and_replaces_a_stale_twin() {
+        let dir = tempfile::tempdir().unwrap();
+        let recorded = dir.path().join("deadbeef01234567.json");
+        std::fs::write(&recorded, b"first").unwrap();
+        assert!(publish_session_entry(&recorded, "../escape").is_err());
+        assert!(publish_session_entry(&recorded, "short").is_err());
+        assert!(!dir
+            .path()
+            .join(format!("session-{SESSION_ID}.json"))
+            .exists());
+        let dest = publish_session_entry(&recorded, SESSION_ID).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"first");
+        std::fs::write(&recorded, b"second").unwrap();
+        let dest = publish_session_entry(&recorded, SESSION_ID).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"second");
     }
 }
