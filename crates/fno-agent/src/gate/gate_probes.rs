@@ -1248,8 +1248,9 @@ mod tests {
             },
         })];
         let worktree = "/home/.fno/worktrees/books/x-h7";
+        let entry_refs: Vec<&Value> = entries.iter().collect();
         assert_eq!(
-            crate::backlog_ready::detect_project(&entries, worktree),
+            crate::backlog_ready::detect_project(&entry_refs, worktree),
             None
         );
         match dispatch_hold_rows(Path::new(worktree), &facts(9), &entries) {
