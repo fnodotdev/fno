@@ -1816,7 +1816,7 @@ fn spawn_record_pane(view: &mut View, node_id: &str) {
 /// folds the oldest visible record: its node joins the breadcrumb strip
 /// and its pane dies, best-effort like a pop. True when a record folded.
 fn fold_oldest_record(view: &mut View) -> bool {
-    let (pane, node) = {
+    let pane = {
         let Some(o) = view.persona.as_mut() else {
             return false;
         };
@@ -1831,7 +1831,7 @@ fn fold_oldest_record(view: &mut View) -> bool {
         if o.claim_pane == Some(pane) {
             o.claim_pane = None;
         }
-        (pane, node)
+        pane
     };
     let session = view.session.clone();
     if let Ok(sock) = crate::proto::socket_path(&session) {
