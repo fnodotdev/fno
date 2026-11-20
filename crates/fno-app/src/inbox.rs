@@ -43,7 +43,7 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
     let questions = root.board.questions_newest_first();
     out = out.child(open_section(&questions, &p, now, root, cx));
     let answered = root.board.answered();
-    out = out.child(answered_section(answered, &p, now, root, cx));
+    out = out.child(answered_section(answered, &p, now, root));
     out.child(ui::quiet(
         "Click a question to answer it in place. The asking agent keeps working.",
         &p,
@@ -100,7 +100,7 @@ fn question_row(
     let small = root.adv * (ui::SMALL / ui::BODY);
     let action = Action::OpenAnswer(q.id.clone());
     let id = format!("inbox-q-{i}");
-    let answered = matches!(
+    let sending = matches!(
         root.answers.get(&q.id),
         Some(super::window::AnswerState::Sending(_))
             | Some(super::window::AnswerState::SendingWords)
@@ -112,7 +112,7 @@ fn question_row(
         .items_center()
         .gap(px(8.0))
         // The comp's hover swap: the facts yield to the Answer button.
-        .group_hover("inbox-row", |s| s.opacity(0.0))
+        .when(!sending, |d| d.group_hover("inbox-row", |s| s.opacity(0.0)))
         .child(fact_cell(
             q.asker.as_ref().map(|a| a.handle.as_str()),
             COLS[0],
@@ -126,20 +126,29 @@ fn question_row(
             p,
             small,
         ));
-    let answer_btn = ui::button("inbox-answer", "Answer", ui::Button::Primary, p)
+    // The button sits over the fact columns, not beside them: the row's
+    // click opens the sheet, so the button carries no handler of its own.
+    let answer_btn = div()
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .right_3()
+        .flex()
+        .items_center()
         .opacity(0.0)
-        .group_hover("inbox-row", |s| s.opacity(1.0))
-        .when(!answered, |d| {
-            d.on_click(
-                cx.listener(move |root, _, _, cx| root.act(Action::OpenAnswer(q.id.clone()), cx)),
-            )
-        });
-    let open_click = Action::OpenAnswer(q.id.clone());
+        .when(!sending, |d| d.group_hover("inbox-row", |s| s.opacity(1.0)))
+        .child(ui::button(
+            ElementId::Name(format!("inbox-answer-{i}").into()),
+            "Answer",
+            ui::Button::Primary,
+            p,
+        ));
     ui::row(ElementId::Name(id.into()), false, p)
         .group("inbox-row")
+        .relative()
         .cursor_pointer()
         .hover(move |s| s.bg(rgb(p.row_fill)))
-        .on_click(cx.listener(move |root, _, _, cx| root.act(open_click.clone(), cx)))
+        .on_click(cx.listener(move |root, _, _, cx| root.act(action.clone(), cx)))
         .child(
             div()
                 .w(root.adv * 2.0)

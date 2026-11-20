@@ -6,7 +6,7 @@
 //! Answer submits the typed words, AnswerPick::Words, or the picked choice,
 //! the option path the board rows already ride.
 
-use gpui::{div, prelude::*, px, rgb, rgba, Context, Div, FontWeight, MouseButton};
+use gpui::{div, prelude::*, px, rgb, rgba, Context, Div, ElementId, FontWeight, MouseButton};
 
 use super::chat::composer::Draft;
 use super::keys::Key;
@@ -15,7 +15,7 @@ use super::window::{Action, AnswerState, Root};
 use fno::needs_overlay::{QuestionItem, QuestionOption};
 
 /// The sheet panel's width.
-const SHEET_W: f32 = 408.0;
+const SHEET_W: f32 = 560.0;
 
 /// The sheet's held state: which question, which choice the user picked,
 /// and what they typed. `pick` feeds Action::AnswerChoice; the draft feeds
@@ -85,7 +85,7 @@ fn gone(root: &Root, cx: &mut Context<Root>) -> Div {
         .child(
             ui::button("answer-later-gone", "Later", ui::Button::Quiet, &p)
                 .on_click(cx.listener(|root, _, _, cx| root.act(Action::CloseAnswer, cx))),
-        );
+        )
 }
 
 /// The sheet body for one open question.
@@ -128,6 +128,9 @@ fn sheet(q: &QuestionItem, root: &Root, cx: &mut Context<Root>) -> Div {
                 )
                 .child(ui::kbd("esc close", &p)),
         );
+    if let Some(line) = subtitle(q, root, now) {
+        out = out.child(ui::text(line, Role::Meta, &p));
+    }
     if let Some(body) = q.body.as_deref().map(str::trim).filter(|b| !b.is_empty()) {
         out = out.child(
             div()
@@ -137,21 +140,20 @@ fn sheet(q: &QuestionItem, root: &Root, cx: &mut Context<Root>) -> Div {
                 .child(body.to_string()),
         );
     }
-    out.child(
-        ui::role(div(), Role::Label, &p)
-            .pt(px(10.0))
-            .text_color(rgb(p.accent))
-            .child("Choices"),
-    );
+    if !q.options.is_empty() {
+        out = out.child(
+            ui::role(div(), Role::Label, &p)
+                .pt(px(10.0))
+                .text_color(rgb(p.accent))
+                .child("Choices"),
+        );
+    }
     for o in &q.options {
         out = out.child(choice_row(o, q, root, cx));
     }
-    match state {
-        Some(AnswerState::Refused(why)) => {
-            let line = ui::text(format!("answer refused: {why}"), Role::Fact, &p);
-            out = out.child(line.text_color(rgb(p.error)));
-        }
-        _ => {}
+    if let Some(AnswerState::Refused(why)) = state {
+        let line = ui::text(format!("answer refused: {why}"), Role::Fact, &p);
+        out = out.child(line.text_color(rgb(p.error)));
     }
     if !sending {
         out = out.child(field(root)).child(buttons(root, cx));
@@ -180,7 +182,7 @@ fn choice_row(o: &QuestionOption, q: &QuestionItem, root: &Root, cx: &mut Contex
         .id(ElementId::Name(id.into()))
         .flex()
         .flex_row()
-        .items_center()
+        .items_start()
         .gap_2()
         .px_2()
         .py(px(5.0))
@@ -201,9 +203,17 @@ fn choice_row(o: &QuestionOption, q: &QuestionItem, root: &Root, cx: &mut Contex
             div()
                 .flex_1()
                 .min_w_0()
-                .font_family(ui::PROSE)
-                .text_size(px(13.0))
-                .child(o.text.clone()),
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .font_family(ui::PROSE)
+                        .text_size(px(13.0))
+                        .child(o.text.clone()),
+                )
+                .when_some(o.next.clone().filter(|n| !n.is_empty()), |d, next| {
+                    d.child(ui::text(next, Role::Meta, &p))
+                }),
         )
         .when(is_rec && !picked, |d| {
             d.child(ui::tag("Recommended", p.accent, &p))
@@ -284,7 +294,7 @@ fn subtitle(q: &QuestionItem, root: &Root, now: u64) -> Option<String> {
         parts.push(m);
     }
     if !q.created_at.is_empty() {
-        parts.push(ui::age(&q.created_at, now));
+        parts.push(format!("{} ago", ui::age(&q.created_at, now)));
     }
     (!parts.is_empty()).then(|| parts.join(" · "))
 }

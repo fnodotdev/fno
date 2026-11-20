@@ -2688,9 +2688,11 @@ impl Render for Root {
         // The arrival toast: a raised card top-right, the diamond, who
         // asked, a preview of the question, and the Answer door. It reads
         // the board live, so a dropped question hides it at once.
+        // The Inbox lists the question itself, so it never toasts there.
         let qtoast = self
             .question_toast
             .as_ref()
+            .filter(|_| self.main != MainView::Inbox)
             .and_then(|(id, _)| self.board.questions().iter().find(|q| q.item.id == *id))
             .map(|q| {
                 let item = &q.item;
