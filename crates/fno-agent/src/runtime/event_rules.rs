@@ -1152,8 +1152,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn stop_stamp_binds_the_question_to_the_asking_session() {
+    fn stop_stamp_binds_the_question_to_the_asking_session_leg() {
         let lock = crate::claims::test_env_lock();
         let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
         let rig = Rig::new(false);
@@ -1258,6 +1257,7 @@ mod tests {
         assert!(fires.is_empty(), "no ask, no fire");
         r1_unpromoted_and_cap_legs();
         r2_and_r3_legs();
+        stop_stamp_binds_the_question_to_the_asking_session_leg();
     }
 
     #[test]
