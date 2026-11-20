@@ -7,6 +7,8 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
+use crate::harness_capabilities::ContractError;
+
 /// The resolved coordinate for one reader spawn. A `route` owns the model,
 /// the same way an explicit `--route` does on the spawn door, so the two are
 /// never both set.
@@ -158,14 +160,14 @@ pub(crate) fn reader_tools_argv(
     timeout_secs: u64,
     route: &ReaderRoute,
     extra_owned: &[String],
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, ContractError> {
     let tools = crate::harness_capabilities::packaged_reader_tools_args(&route.harness)
         .filter(|args| !args.is_empty())
         .ok_or_else(|| {
-            format!(
-                "harness {} has no measured tool-bearing reader form; add reader_tools_args \
-                 to its capability row",
-                route.harness
+            crate::harness_capabilities::field_error(
+                &route.harness,
+                "reader_tools_args",
+                "no measured tool-bearing reader form; add reader_tools_args to the row",
             )
         })?;
     let mut argv = argv_head(name, cwd, timeout_secs, route, extra_owned);
@@ -363,7 +365,7 @@ mod tests {
         // The row's read-tools grant rides whole: the tools pair and the
         // allowlist pair, not the tool-less empty `--tools ""` form.
         let at = tail.iter().position(|t| t == "--tools").unwrap();
-        assert_eq!(tail[at + 1], "Read,Grep,Glob");
+        assert_eq!(tail.get(at + 1), Some(&"Read,Grep,Glob".to_string()));
         assert!(tail
             .windows(2)
             .any(|w| w == ["--allowedTools", "Read,Grep,Glob"]));

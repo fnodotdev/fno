@@ -258,7 +258,8 @@ fn spawn_reader(
     timeout: u64,
     route: &ReaderRoute,
 ) -> Result<(i32, String, String), String> {
-    let argv = crate::reader_route::reader_tools_argv(name, prompt, cwd, timeout, route, &[])?;
+    let argv = crate::reader_route::reader_tools_argv(name, prompt, cwd, timeout, route, &[])
+        .map_err(|e| e.to_string())?;
     crate::blueprint_judge::headless_spawn(&argv, timeout)
 }
 

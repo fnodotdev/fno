@@ -58,8 +58,8 @@ fn spawn(
             .map(|d| d.subsec_nanos())
             .unwrap_or(0)
     );
-    let argv =
-        crate::reader_route::reader_tools_argv(&name, prompt, cwd, timeout_secs, route, &[])?;
+    let argv = crate::reader_route::reader_tools_argv(&name, prompt, cwd, timeout_secs, route, &[])
+        .map_err(|e| e.to_string())?;
     crate::blueprint_judge::headless_spawn(&argv, timeout_secs)
 }
 

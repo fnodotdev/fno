@@ -127,7 +127,8 @@ pub(crate) fn spawn_verifier(
     };
     let route = crate::reader_route::resolve(cwd, "verify-advise", None, "haiku");
     let argv =
-        crate::reader_route::reader_tools_argv(&name, prompt, cwd, SPAWN_TIMEOUT_S, &route, &[])?;
+        crate::reader_route::reader_tools_argv(&name, prompt, cwd, SPAWN_TIMEOUT_S, &route, &[])
+            .map_err(|e| e.to_string())?;
     let (rc, stdout, stderr) = crate::blueprint_judge::headless_spawn(&argv, SPAWN_TIMEOUT_S + 30)?;
     if rc != 0 {
         let detail = crate::backlog::advance::gate_refusal_detail(&stderr);

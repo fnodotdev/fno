@@ -1931,7 +1931,7 @@ fn validate_row(harness: &str, caps: &HarnessCapabilities) -> Result<(), Contrac
     Ok(())
 }
 
-fn field_error(harness: &str, field: &str, detail: &str) -> ContractError {
+pub(crate) fn field_error(harness: &str, field: &str, detail: &str) -> ContractError {
     ContractError(format!("harness {harness:?} field {field:?}: {detail}"))
 }
 

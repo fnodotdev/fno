@@ -8,6 +8,7 @@
 
 use crate::event_store::{EventQuery, EventRow};
 use crate::harness::Harness;
+use crate::harness_capabilities::ContractError;
 use crate::paths::AgentsHome;
 use crate::reader_route::ReaderRoute;
 use crate::transcript_resolve::{resolve_transcript, ResolvedTranscript, Roots};
@@ -346,7 +347,7 @@ fn consult_spawn_argv(
     prompt: &str,
     cwd: &Path,
     route: &ReaderRoute,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, ContractError> {
     let mut argv = crate::reader_route::reader_tools_argv(
         "consult",
         prompt,
@@ -365,7 +366,7 @@ fn consult_spawn_argv(
 /// row's tool grant, then its spend-envelope flags. A harness with no
 /// measured tool-bearing row refuses here too, so the dry run shows what
 /// the real ask does, never an argv that would never spawn.
-fn fence_tail(route: &ReaderRoute) -> Result<Vec<String>, String> {
+fn fence_tail(route: &ReaderRoute) -> Result<Vec<String>, ContractError> {
     let tools = crate::harness_capabilities::packaged_reader_tools_args(&route.harness)
         .filter(|args| !args.is_empty())
         .ok_or_else(|| {

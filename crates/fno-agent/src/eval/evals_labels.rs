@@ -10,6 +10,8 @@
 //! so a trace that lands later rescores the session under a new digest and
 //! every reader sees only the newest digest per key.
 
+use crate::harness_capabilities::ContractError;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -375,7 +377,7 @@ fn parse_label_reply(out: &str) -> Result<(String, String), String> {
 /// sits directly before the fence: the positional boundary refuses a
 /// spawn-owned flag after the prompt (law d-3244), the exit-2 the old
 /// mid-argv prompt answered.
-fn labels_spawn_argv(name: &str, prompt: &str, cwd: &Path) -> Result<Vec<String>, String> {
+fn labels_spawn_argv(name: &str, prompt: &str, cwd: &Path) -> Result<Vec<String>, ContractError> {
     let route = crate::reader_route::resolve(cwd, "labels-judge", None, MODEL);
     // The pin names the account the model pick lives on; a profile that
     // overrides the model inherits no account it never asked for.
@@ -390,7 +392,7 @@ fn labels_spawn_argv(name: &str, prompt: &str, cwd: &Path) -> Result<Vec<String>
 
 fn spawn_judge(name: &str, prompt: &str) -> Result<(String, String), String> {
     let cwd = crate::evals::canonical_repo_root();
-    let argv = labels_spawn_argv(name, prompt, &cwd)?;
+    let argv = labels_spawn_argv(name, prompt, &cwd).map_err(|e| e.to_string())?;
     let (code, out, err) = crate::blueprint_judge::headless_spawn(&argv, JUDGE_TIMEOUT_S + 30)?;
     if code != 0 {
         return Err(format!("spawn exit {code}: {}", err.trim()));
