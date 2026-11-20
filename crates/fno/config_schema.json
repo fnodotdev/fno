@@ -40,6 +40,65 @@
     "title": "AppBlock",
     "type": "object"
    },
+   "ProviderCapBlock": {
+    "description": "Provider usage-cap actor settings (nested under 'config.provider_cap').\n\nA provider's usage cap arms this actor, independent of recovery.watchdog. It alone decides whether a cap may move sessions. A malformed value reads as its default.\n\nKnobs:\n  enabled                - arm the actor (default on).\n  mode                   - park (default), triage, ask or auto.\n  destinations           - route lanes a moving member tries, in order.\n  min_wait_minutes       - a reset closer than this is waited out.\n  sleep_hours            - HH:MM-HH:MM window in which ask mode moves without a question.\n  sleep_timezone         - IANA zone for sleep_hours (empty = local).\n  canary_survive_minutes - minutes a canary lives before parked members resume.\n  quorum                 - members on one lane needed to open a cap.",
+    "properties": {
+     "enabled": {
+      "default": true,
+      "title": "Enabled",
+      "type": "boolean"
+     },
+     "mode": {
+      "default": "park",
+      "enum": [
+       "park",
+       "triage",
+       "ask",
+       "auto"
+      ],
+      "title": "Mode",
+      "type": "string"
+     },
+     "destinations": {
+      "default": [],
+      "items": {
+       "type": "string"
+      },
+      "title": "Destinations",
+      "type": "array"
+     },
+     "min_wait_minutes": {
+      "default": 30,
+      "minimum": 0,
+      "title": "Min Wait Minutes",
+      "type": "integer"
+     },
+     "sleep_hours": {
+      "default": "",
+      "title": "Sleep Hours",
+      "type": "string"
+     },
+     "sleep_timezone": {
+      "default": "",
+      "title": "Sleep Timezone",
+      "type": "string"
+     },
+     "canary_survive_minutes": {
+      "default": 15,
+      "minimum": 0,
+      "title": "Canary Survive Minutes",
+      "type": "integer"
+     },
+     "quorum": {
+      "default": 2,
+      "minimum": 1,
+      "title": "Quorum",
+      "type": "integer"
+     }
+    },
+    "title": "ProviderCapBlock",
+    "type": "object"
+   },
    "AccountsBlock": {
     "description": "Account rotation and provider configuration (nested under 'config.accounts').",
     "properties": {
@@ -4030,6 +4089,9 @@
    "app": {
     "$ref": "#/$defs/AppBlock"
    },
+   "provider_cap": {
+    "$ref": "#/$defs/ProviderCapBlock"
+   },
    "process_admission": {
     "$ref": "#/$defs/ProcessAdmissionBlock"
    },
@@ -7799,6 +7861,112 @@
    "default_source": "default",
    "doc": "The Dock badge showing the count of blocked agents in fno-app (default on).",
    "edit": "toggle"
+  },
+  {
+   "path": "provider_cap.enabled",
+   "label": "Arm the provider cap actor",
+   "type": "bool",
+   "default": true,
+   "wizard": "never",
+   "question": "",
+   "default_source": "default",
+   "doc": "Arm the provider cap actor: a lane that hits its usage cap alerts its leads, and its members park until the reset (default on). Off still measures and saves the snapshot, and moves nothing.",
+   "edit": "toggle"
+  },
+  {
+   "path": "provider_cap.mode",
+   "label": "Cap response",
+   "type": "typing.Literal['park', 'triage', 'ask', 'auto']",
+   "default": "park",
+   "wizard": "never",
+   "question": "",
+   "default_source": "default",
+   "doc": "What a capped lane does with its members: park (default; alert the leads, move nothing, resume after the reset) | triage (a member on a p0 or p1 node, or with an open PR, moves to destinations; the rest park) | ask (nothing moves until an operator answers; inside sleep_hours it moves without a question) | auto (every member moves without a question).",
+   "edit": "cycle",
+   "choices": [
+    {
+     "value": "park",
+     "doc": "default; alert the leads, move nothing"
+    },
+    {
+     "value": "triage",
+     "doc": "p0, p1 and open-PR members move; the rest park"
+    },
+    {
+     "value": "ask",
+     "doc": "nothing moves until an operator answers"
+    },
+    {
+     "value": "auto",
+     "doc": "every member moves without a question"
+    }
+   ]
+  },
+  {
+   "path": "provider_cap.destinations",
+   "label": "Cap destination lanes",
+   "type": "list[str]",
+   "default": [],
+   "wizard": "never",
+   "question": "",
+   "default_source": "default",
+   "doc": "Route lanes a moving member tries in order when no fallback grid is set. Empty by default: moving work spends another paid lane, so only an operator names one.",
+   "edit": "editor"
+  },
+  {
+   "path": "provider_cap.min_wait_minutes",
+   "label": "Shortest reset to move for",
+   "type": "int",
+   "default": 30,
+   "wizard": "never",
+   "question": "",
+   "default_source": "default",
+   "doc": "A reset closer than this many minutes is waited out and never moved (default 30).",
+   "edit": "editor"
+  },
+  {
+   "path": "provider_cap.sleep_hours",
+   "label": "Sleep hours",
+   "type": "str",
+   "default": "",
+   "wizard": "never",
+   "question": "",
+   "default_source": "default",
+   "doc": "Window as HH:MM-HH:MM, read in sleep_timezone. In ask mode a cap inside the window moves members without a question. Empty (default) means never asleep.",
+   "edit": "editor"
+  },
+  {
+   "path": "provider_cap.sleep_timezone",
+   "label": "Sleep hours timezone",
+   "type": "str",
+   "default": "",
+   "wizard": "never",
+   "question": "",
+   "default_source": "default",
+   "doc": "IANA zone for sleep_hours, for example America/Los_Angeles. Empty (default) reads the machine's local zone.",
+   "edit": "editor"
+  },
+  {
+   "path": "provider_cap.canary_survive_minutes",
+   "label": "Canary survival minutes",
+   "type": "int",
+   "default": 15,
+   "wizard": "never",
+   "question": "",
+   "default_source": "default",
+   "doc": "Minutes a canary session must live after the reset before the return ladder resumes the parked members (default 15).",
+   "edit": "editor"
+  },
+  {
+   "path": "provider_cap.quorum",
+   "label": "Members needed to open a cap",
+   "type": "int",
+   "default": 2,
+   "wizard": "never",
+   "question": "",
+   "default_source": "default",
+   "doc": "Members on one lane with a fresh capped tail needed to open it (default 2). One member suffices when its 429 names a reset still ahead, or when the account's runtime-state quota lock is set.",
+   "edit": "editor"
   },
   {
    "path": "mux.attach_digest",
