@@ -82,7 +82,7 @@ pub fn run(op: AppOp) -> i32 {
         AppOp::Open(args) => open(&args.mode, args.focus.as_deref(), &args.common),
         AppOp::Show(args) => show(args.view, &args.common),
         AppOp::Focus(args) => focus(&args.agent, &args.common),
-        AppOp::Shot(args) => shot(&args.out, &args.theme, args.mode),
+        AppOp::Shot(args) => shot(&args),
         AppOp::State { json } => state(json.json),
         AppOp::Close { common } => close(&common),
     }
@@ -499,7 +499,8 @@ fn seed_transcript(root: &Path) -> bool {
 /// the caller's own state: its own HOME, mux dir, agents home and graph
 /// store, all under /tmp (a socket path must stay under 104 bytes on
 /// macOS), and every child strips the caller's identity keys.
-fn shot(out: &str, theme: &str, mode: Option<AppView>) -> i32 {
+fn shot(args: &crate::cli_args::AppShotArgs) -> i32 {
+    let (out, theme, mode) = (args.out.as_str(), args.theme.as_str(), args.mode);
     if !require_macos("shot") {
         return 2;
     }
@@ -567,6 +568,12 @@ fn shot(out: &str, theme: &str, mode: Option<AppView>) -> i32 {
         .arg(theme)
         .arg("--session")
         .arg("default");
+    if args.sheet {
+        cmd.arg("--shot-sheet");
+    }
+    if args.picking {
+        cmd.arg("--shot-picking");
+    }
     if let Some(view) = mode {
         cmd.arg("--shot-mode").arg(view.as_spelling());
         if matches!(view, AppView::Chat) {
