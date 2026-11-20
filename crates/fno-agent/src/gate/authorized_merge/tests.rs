@@ -735,13 +735,12 @@ fn a_head_grant_clears_the_per_run_no_merge_and_the_receipt_names_it() {
     };
     let outcome = run(&fake, &req);
     assert_eq!(outcome.word(), "merged", "{}", outcome.detail());
-    let receipt = outcome.to_json();
-    assert_eq!(
-        receipt["merge_grant"],
-        json!("user head grant abc123"),
-        "{}",
-        receipt
-    );
+    match &outcome {
+        Outcome::Merged { merge_grant, .. } => {
+            assert_eq!(merge_grant.as_deref(), Some("user head grant abc123"))
+        }
+        other => panic!("expected a merged receipt, got {other:?}"),
+    }
     assert!(fake
         .fno_calls
         .borrow()
@@ -761,10 +760,6 @@ fn a_head_grant_clears_the_per_run_no_merge_and_the_receipt_names_it() {
         .detail()
         .contains("repository identity is unreadable"));
     assert!(missing_repo.fno_calls.borrow().is_empty());
-}
-
-#[test]
-fn a_visual_log_approval_clears_the_per_run_no_merge_at_its_head() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(tmp.path().join(".fno")).unwrap();
     let spaces = tempfile::tempdir().unwrap();
@@ -835,15 +830,23 @@ fn a_visual_log_approval_clears_the_per_run_no_merge_at_its_head() {
         ..request(Effect::Merge)
     };
 
-    let outcome = run(&fake, &req);
-    assert_eq!(outcome.word(), "merged", "{}", outcome.detail());
+    let visual_outcome = run(&fake, &req);
     assert_eq!(
-        outcome.to_json()["merge_grant"],
-        json!(format!(
-            "user head grant {}",
-            head.chars().take(8).collect::<String>()
-        ))
+        visual_outcome.word(),
+        "merged",
+        "{}",
+        visual_outcome.detail()
     );
+    let expected_grant = format!(
+        "user head grant {}",
+        head.chars().take(8).collect::<String>()
+    );
+    match visual_outcome {
+        Outcome::Merged { merge_grant, .. } => {
+            assert_eq!(merge_grant.as_deref(), Some(expected_grant.as_str()))
+        }
+        other => panic!("expected a merged receipt, got {other:?}"),
+    }
 }
 
 #[test]
