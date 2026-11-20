@@ -77,6 +77,10 @@ pub struct ShotOptions {
     pub theme: String,
     /// View to render (default: the command center board).
     pub mode: Option<MainView>,
+    /// Paint with cmd held: rows and tabs show their digit badges.
+    pub picking: bool,
+    /// Open the answer sheet on the newest question once the board lands.
+    pub sheet: bool,
 }
 
 /// Run the app (or the headless probe) and return the process exit code.
@@ -107,18 +111,15 @@ fn widened_path(path: &str, home: &str) -> String {
 /// Run the app (or the headless probe) and return the process exit code.
 pub fn run(opts: Options) -> i32 {
     if let Some(shot) = opts.shot {
-        let out = shot.out;
-        let theme = shot.theme;
         let mode = shot.mode.or(opts.mode);
         return crate::shot::run(ShotOptions {
             hold: opts.shot_hold,
-            out,
-            theme,
             mode,
             session: opts.session,
             chat: opts.chat,
             font: opts.font,
             font_size: opts.font_size,
+            ..shot
         });
     }
     if let Some(home) = std::env::var_os("HOME").and_then(|h| h.into_string().ok()) {

@@ -79,7 +79,16 @@ pub fn run(opts: ShotOptions) -> i32 {
             },
             move |window, cx| {
                 crate::window::root_for_shot(
-                    &session, mode, pinned, warmed, family, font_size, window, cx,
+                    &session,
+                    mode,
+                    pinned,
+                    warmed,
+                    family,
+                    font_size,
+                    opts.picking,
+                    opts.sheet,
+                    window,
+                    cx,
                 )
             },
         );

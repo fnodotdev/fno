@@ -47,6 +47,13 @@ struct Args {
     /// instead of capturing. Diagnostic.
     #[arg(long = "shot-hold", hide = true)]
     shot_hold: bool,
+    /// Paint the shot with cmd held: the sidebar rows and tabs show their
+    /// digit badges. The paint proofs use it; never a user flag.
+    #[arg(long = "shot-picking", hide = true)]
+    shot_picking: bool,
+    /// Open the answer sheet on the newest question: the sheet proof.
+    #[arg(long = "shot-sheet", hide = true)]
+    shot_sheet: bool,
 }
 
 /// The --shot-mode values. The kebab spellings mirror MainView.
@@ -60,6 +67,8 @@ enum ShotView {
     Orchestration,
     /// The mods and layouts feed
     Mods,
+    /// The inbox
+    Inbox,
 }
 
 impl ShotView {
@@ -69,6 +78,7 @@ impl ShotView {
             ShotView::Terminal => fno_app::MainView::Terminal,
             ShotView::Orchestration => fno_app::MainView::Orchestration,
             ShotView::Mods => fno_app::MainView::Mods,
+            ShotView::Inbox => fno_app::MainView::Inbox,
         }
     }
 }
@@ -89,6 +99,8 @@ fn main() {
             theme: args.shot_theme,
             mode: args.shot_mode.map(ShotView::into_main),
             hold: args.shot_hold,
+            picking: args.shot_picking,
+            sheet: args.shot_sheet,
         })
     } else {
         None

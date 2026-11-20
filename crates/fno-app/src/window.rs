@@ -218,6 +218,9 @@ pub struct Root {
     /// The shot window toasts on its first read: the capture wants the
     /// arrival toast in frame.
     toast_on_first_read: bool,
+    /// The shot window opens the answer sheet on the newest question when
+    /// the first board read lands: the sheet proof.
+    sheet_on_first_read: bool,
     /// The go-to palette (cmd-k) covers the window.
     pub(super) goto: Option<goto::GoTo>,
     /// The find bar (cmd-f) over the focused pane or the chat.
@@ -367,6 +370,7 @@ impl Root {
             question_toast_gen: 0,
             seen_questions: HashSet::new(),
             toast_on_first_read: false,
+            sheet_on_first_read: false,
             goto: None,
             find: None,
             launch: launch::Panel::default(),
@@ -656,12 +660,16 @@ impl Root {
 
     /// Raise the arrival toast for one question. The element reads the
     /// board live at paint, so a question the board drops hides the toast
-    /// even before the timer does.
+    /// even before the timer does. The shot holds it: the capture wants
+    /// the surface in frame, not a timed one.
     fn say_question(&mut self, id: String, cx: &mut Context<Self>) {
         self.question_toast_gen += 1;
         let gen = self.question_toast_gen;
         self.question_toast = Some((id, gen));
         cx.notify();
+        if self.shot {
+            return;
+        }
         self._question_toast = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(QUESTION_TOAST_FOR).await;
             let _ = this.update(cx, |root, cx| {
@@ -1117,6 +1125,11 @@ impl Root {
                         .find_map(|q| arrivals.contains(&q.item.id).then(|| q.item.id.clone()));
                     if let Some(id) = newest {
                         self.say_question(id, cx);
+                    }
+                }
+                if first_read && self.sheet_on_first_read {
+                    if let Some(q) = board.questions_newest_first().first() {
+                        self.answer = Some(answer::Sheet::new(q.item.id.clone()));
                     }
                 }
                 self.board = *board;
@@ -2716,12 +2729,12 @@ impl Render for Root {
                                     .child("◆"),
                             )
                             .child(
-                                ui::role(div().flex_1().min_w_0(), Role::Name, &self.palette)
+                                ui::role(div().flex_1().min_w_0(), ui::Role::Name, &self.palette)
                                     .child(format!("New question from {ask}")),
                             )
                             .child(
                                 ui::button(
-                                    ElementId::Name("toast-answer".into()),
+                                    "toast-answer",
                                     "Answer",
                                     ui::Button::Primary,
                                     &self.palette,
@@ -2980,6 +2993,8 @@ pub(super) fn root_for_shot(
     warmed: super::link::WarmedLink,
     family: String,
     font_size: f32,
+    picking: bool,
+    sheet: bool,
     window: &mut Window,
     cx: &mut App,
 ) -> gpui::Entity<Root> {
@@ -3013,6 +3028,9 @@ pub(super) fn root_for_shot(
     root.update(cx, |root, _| {
         root.shot = true;
         root.toast_on_first_read = true;
+        // The cmd-held proof: rows and tabs paint their digit badges.
+        root.picking = picking;
+        root.sheet_on_first_read = sheet;
     });
     // The shot window never activates, and the board poll pauses while
     // the window is inactive; the shot needs every feed settled before
