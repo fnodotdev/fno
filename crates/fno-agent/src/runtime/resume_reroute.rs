@@ -96,7 +96,7 @@ pub(crate) fn apply(
             let target =
                 crate::spawn_route::resolve_target(route, cwd, &|k: &str| std::env::var(k).ok())
                     .map_err(|line| format!("resume --route: {line}"))?;
-            compose_route_file(&target, entry, cwd)?
+            compose_route_file(&target, entry, &session_id, cwd)?
         }
     };
 
@@ -183,10 +183,13 @@ fn pane_backed(entry: &Value) -> bool {
 }
 
 /// Write a fresh settings file for `target` under the row's own account
-/// overlay, the same composition spawn's thread seam runs.
+/// overlay, the same composition spawn's thread seam runs. `session` is the
+/// row's harness session id, so the fresh file lands as
+/// `session-<id>.json` and the restamped row records the join by eye.
 fn compose_route_file(
     target: &crate::spawn_route::Target,
     entry: &Value,
+    session: &str,
     cwd: &Path,
 ) -> Result<String, String> {
     let route_env: serde_json::Map<String, Value> = target
@@ -199,7 +202,14 @@ fn compose_route_file(
         .into_iter()
         .map(|(k, v)| (k, Value::String(v)))
         .collect();
-    match crate::route_settings::write_composed(&route_env, &account_map, None, None, cwd) {
+    match crate::route_settings::write_composed(
+        &route_env,
+        &account_map,
+        None,
+        None,
+        (!session.is_empty()).then_some(session),
+        cwd,
+    ) {
         Ok(Some(path)) => Ok(path),
         Ok(None) => Err("resume --route: the route wrote no settings file".to_string()),
         Err(e) => Err(format!("resume --route: {e}")),
