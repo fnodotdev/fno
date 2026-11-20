@@ -31,9 +31,12 @@ name = "fno-app"
 path = "src/main.rs"
 
 # The app links fno through `fno::app_api` and the modules fno already
-# exports. fno never depends on this crate.
+# exports. fno never depends on this crate. It takes the `app` feature only:
+# the web bridge, the session-bundle transfer and the PDF viewer stay behind
+# fno's `web`, `transfer` and `pdf` features, because the app reaches a mux
+# server through the client and runs none of them.
 [dependencies]
-fno = { path = "../fno" }
+fno = { path = "../fno", default-features = false, features = ["app"] }
 # The pack UI contract: the app parses view files with the same type the
 # manifest parses, so the app and the CLI read one spelling.
 fno-proto = { path = "../fno-proto" }
