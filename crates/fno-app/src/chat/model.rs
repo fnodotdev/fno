@@ -88,9 +88,79 @@ impl Content {
     }
 }
 
+/// One option of a question the agent asked.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Choice {
+    pub label: String,
+    pub detail: String,
+    pub recommended: bool,
+}
+
+/// A single-choice question, parsed from the prompt every harness carries as
+/// `questions[0]` with `question`, `header` and `options` of `label` and
+/// `description`. A harness may mark its pick with a "(Recommended)" label.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Ask {
+    pub header: String,
+    pub prompt: String,
+    pub choices: Vec<Choice>,
+}
+
+impl Ask {
+    /// `None` for a shape the strip cannot answer by one pick: no options,
+    /// or a multi-select.
+    pub fn parse(prompt: &serde_json::Value) -> Option<Ask> {
+        let root = prompt.get("input").unwrap_or(prompt);
+        let q = root.get("questions")?.as_array()?.first()?;
+        if q.get("multiSelect").and_then(|v| v.as_bool()) == Some(true) {
+            return None;
+        }
+        let text = |v: &serde_json::Value, k: &str| {
+            v.get(k)
+                .and_then(|x| x.as_str())
+                .unwrap_or_default()
+                .trim()
+                .to_string()
+        };
+        let choices: Vec<Choice> = q
+            .get("options")?
+            .as_array()?
+            .iter()
+            .map(|o| {
+                let raw = o
+                    .as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| text(o, "label"));
+                let (label, recommended) = match raw.strip_suffix("(Recommended)") {
+                    Some(rest) => (rest.trim_end().to_string(), true),
+                    None => (raw, false),
+                };
+                Choice {
+                    label,
+                    detail: text(o, "description"),
+                    recommended,
+                }
+            })
+            .filter(|c| !c.label.is_empty())
+            .collect();
+        let prompt = text(q, "question");
+        (!choices.is_empty() && !prompt.is_empty()).then(|| Ask {
+            header: text(q, "header"),
+            prompt,
+            choices,
+        })
+    }
+}
+
 /// One row of the conversation.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Item {
+    /// A question the agent asked. It stands open until its answer event.
+    Question {
+        call_id: String,
+        ask: Ask,
+        answer: Option<String>,
+    },
     User {
         content: Content,
         meta: bool,
@@ -170,6 +240,20 @@ pub struct Conversation {
 }
 
 impl Conversation {
+    /// The newest question still waiting on its answer, with its row.
+    pub fn open_question(&self) -> Option<(usize, &Ask)> {
+        self.items
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(i, it)| match it {
+                Item::Question {
+                    ask, answer: None, ..
+                } => Some((i, ask)),
+                _ => None,
+            })
+    }
+
     /// Fold one event. Returns the index of the row it added or changed.
     pub fn push(&mut self, event: ChatEvent) -> Option<usize> {
         let at = event.at_ms;
@@ -233,8 +317,38 @@ impl Conversation {
                 }
                 Item::Line(format!("result of an unseen call {call_id}"))
             }
-            ChatBody::QuestionAsked { prompt, .. } => Item::Line(format!("asked: {prompt}")),
-            ChatBody::QuestionAnswered { answer, .. } => Item::Line(format!("answered: {answer}")),
+            ChatBody::QuestionAsked { call_id, prompt } => match Ask::parse(&prompt) {
+                Some(ask) => Item::Question {
+                    call_id,
+                    ask,
+                    answer: None,
+                },
+                None => Item::Line(format!("asked: {prompt}")),
+            },
+            ChatBody::QuestionAnswered { call_id, answer } => {
+                let said = match &answer {
+                    serde_json::Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                };
+                let open = self
+                    .items
+                    .iter_mut()
+                    .enumerate()
+                    .rev()
+                    .find_map(|(i, it)| match it {
+                        Item::Question {
+                            call_id: id,
+                            answer,
+                            ..
+                        } if *id == call_id => Some((i, answer)),
+                        _ => None,
+                    });
+                if let Some((i, slot)) = open {
+                    *slot = Some(said);
+                    return Some(i);
+                }
+                Item::Line(format!("answered: {said}"))
+            }
             ChatBody::SubagentStarted { task, .. } => Item::Line(format!(
                 "subagent started: {}",
                 task.unwrap_or_else(|| "no task given".into())
@@ -285,6 +399,33 @@ mod tests {
     #![allow(clippy::indexing_slicing)]
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_question_opens_then_closes_in_place() {
+        let asked = json!({"kind": "question_asked", "call_id": "q", "prompt": {"questions": [{"question": "Where?", "header": "Land", "options": [{"label": "Hook (Recommended)", "description": "d1"}, {"label": "Feed"}]}]}});
+        let answered = json!({"kind": "question_answered", "call_id": "q", "answer": "Hook"});
+        let mut conv = Conversation::default();
+        for (seq, body) in [asked, answered].into_iter().enumerate() {
+            let line = json!({"seq": seq, "source": {"type": "line", "offset": seq}, "body": body});
+            let row = conv.push(serde_json::from_value(line).unwrap());
+            assert_eq!(row, Some(0));
+            if seq == 0 {
+                let (ix, ask) = conv.open_question().unwrap();
+                assert_eq!(ix, 0);
+                assert!(ask.choices[0].recommended);
+                assert_eq!(ask.choices[0].label, "Hook");
+                assert_eq!(ask.choices[0].detail, "d1");
+            }
+        }
+        assert!(conv.open_question().is_none());
+        assert!(matches!(&conv.items[0], Item::Question { answer: Some(a), .. } if a == "Hook"));
+    }
+
+    #[test]
+    fn a_multi_select_stays_a_plain_line() {
+        let p = json!({"questions": [{"question": "Q", "multiSelect": true, "options": [{"label": "a"}]}]});
+        assert!(Ask::parse(&p).is_none());
+    }
 
     #[test]
     fn chat_folds_turns_tools_and_unknown_kinds_in_order() {

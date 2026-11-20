@@ -78,6 +78,10 @@ pub enum Action {
     CloseSheet,
     Copy(String),
     SendChat,
+    /// Move the open question's pick to one row.
+    PickChoice(usize),
+    /// Answer the open question with the picked row.
+    AnswerChoice,
     /// The start view's send: the launch panel's own submit door.
     SubmitLaunch,
     /// Reopen a chat stream that closed.
@@ -104,6 +108,8 @@ fn click_id(action: &Action) -> &'static str {
         Action::CloseSheet => "close_sheet",
         Action::Copy(_) => "copy",
         Action::SendChat => "send_chat",
+        Action::PickChoice(_) => "pick_choice",
+        Action::AnswerChoice => "answer_choice",
         Action::SubmitLaunch => "submit_launch",
         Action::Reconnect => "reconnect",
         Action::Mail(_) => "mail_lead",
@@ -679,6 +685,15 @@ impl Root {
                 self.say(format!("copied {n} characters"), cx);
             }
             Action::SendChat => self.submit_chat(cx),
+            Action::PickChoice(i) => {
+                // A second click on the picked row answers with it.
+                if self.chat.pick == i {
+                    self.answer_choice(cx);
+                } else {
+                    self.chat.pick = i;
+                }
+            }
+            Action::AnswerChoice => self.answer_choice(cx),
             Action::SubmitLaunch => self.submit_launch(cx),
             Action::Reconnect => self.open_chat(cx),
             Action::Mail(text) => match &self.poller {
@@ -988,6 +1003,52 @@ impl Root {
         if !text.is_empty() {
             self.chat.pending.push(text);
         }
+    }
+
+    /// Answer the open question with the picked row. The mux already read
+    /// the harness's own menu off the pane and pinned a keystroke per row,
+    /// so the answer goes through `PaneAnswer`, which the server checks
+    /// against the live grid before it types.
+    fn answer_choice(&mut self, cx: &mut Context<Self>) {
+        let Some((_, ask)) = self.chat.conv.open_question() else {
+            return;
+        };
+        let pick = self.chat.pick.min(ask.choices.len().saturating_sub(1));
+        let target = self
+            .chat
+            .key
+            .as_ref()
+            .and_then(|key| chat::target_pane(self, key));
+        let menu = target.as_ref().and_then(|(pane, identity)| {
+            self.layout
+                .agents
+                .iter()
+                .find(|a| {
+                    a.pane_id == Some(*pane)
+                        && a.harness_session_id.as_deref() == Some(identity.as_str())
+                })
+                .and_then(|a| a.answerable.clone())
+        });
+        let (Some((pane, _)), Some(menu)) = (target, menu) else {
+            self.say(
+                "the pane shows no menu to answer: answer in the pane".into(),
+                cx,
+            );
+            return;
+        };
+        let Some(option) = menu.options.get(pick) else {
+            self.say(
+                "the pane's menu has fewer rows than the question".into(),
+                cx,
+            );
+            return;
+        };
+        self.send(ClientMsg::PaneAnswer {
+            pane,
+            fingerprint: menu.fingerprint,
+            region_lines: u16::try_from(menu.region_lines).unwrap_or(u16::MAX),
+            keystroke: option.keystroke.clone(),
+        });
     }
 
     /// One clipboard paste: text routes by view; a clipboard image with no
@@ -1731,6 +1792,20 @@ impl Root {
             return;
         }
         if self.chat.draft.marked().is_some() {
+            return;
+        }
+        // An open question takes the movement keys and Enter in the
+        // composer's place.
+        if let Some((_, ask)) = self.chat.conv.open_question() {
+            let last = ask.choices.len().saturating_sub(1);
+            match key.key {
+                "up" => self.chat.pick = self.chat.pick.saturating_sub(1),
+                "down" => self.chat.pick = (self.chat.pick + 1).min(last),
+                "enter" => self.answer_choice(cx),
+                _ => return,
+            }
+            cx.stop_propagation();
+            cx.notify();
             return;
         }
         let (shift, alt, cmd) = (key.shift, key.alt, key.cmd);

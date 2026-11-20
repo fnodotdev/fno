@@ -12,7 +12,7 @@ use gpui::{
 
 use super::field::Field;
 use super::markdown::{Block, Inline, Runs};
-use super::model::{Content, Item, Picture};
+use super::model::{Ask, Content, Item, Picture};
 use super::{Closed, EMPTY_AFTER};
 use crate::find;
 use crate::palette::Palette;
@@ -447,6 +447,16 @@ fn row(root: &mut Root, ix: usize, _window: &mut Window, cx: &mut Context<Root>)
             };
             tool_row(id("tool"), name, summary, mark, color, root, ix, cx).into_any_element()
         }
+        Item::Question { ask, answer, .. } => {
+            let said = answer
+                .as_deref()
+                .map(|a| format!(" · answered: {a}"))
+                .unwrap_or_default();
+            muted(format!("asked: {}{said}", ask.prompt), p)
+                .line_clamp(2)
+                .text_ellipsis()
+                .into_any_element()
+        }
         Item::Line(text) => {
             let hl = find::chat_ranges(root.find.as_ref(), ix, 0, text.len());
             let d = if hl.is_empty() {
@@ -797,11 +807,120 @@ fn closed_bar(root: &Root, p: Palette, cx: &mut Context<Root>) -> Option<Div> {
     Some(column(bar).pb_3())
 }
 
+/// The strip that holds the composer's slot while the agent waits on an
+/// answer: a Needs-you stamp and the question, one row per option with the
+/// recommended one chipped, and under them the picked option's description.
+/// A click picks, a click on the picked row answers; so do the arrows and
+/// Enter. The accent is the theme ink, never a hue of its own.
+fn question_strip(root: &Root, ask: &Ask, p: Palette, cx: &mut Context<Root>) -> Div {
+    let pick = root.chat.pick.min(ask.choices.len().saturating_sub(1));
+    let mut strip = div()
+        .flex()
+        .flex_col()
+        .px_3()
+        .py_2()
+        .gap_1()
+        .rounded(px(8.0))
+        .bg(rgb(p.raised))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .gap_2()
+                .child(
+                    div()
+                        .flex_none()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(p.warn))
+                        .child("Needs you"),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_color(rgb(p.fg))
+                        .child(ask.prompt.clone()),
+                ),
+        );
+    for (i, choice) in ask.choices.iter().enumerate() {
+        let picked = i == pick;
+        let mut row = div()
+            .id(ElementId::NamedInteger("choice".into(), i as u64))
+            .flex()
+            .flex_row()
+            .items_start()
+            .gap_2()
+            .px_2()
+            .py_1()
+            .rounded(px(4.0))
+            .cursor_pointer()
+            .hover(move |s| s.bg(rgb(p.hover)))
+            .on_click(cx.listener(move |root, _, _, cx| root.act(Action::PickChoice(i), cx)))
+            .child(
+                div()
+                    .flex_none()
+                    .text_color(rgb(if picked { p.fg } else { p.muted }))
+                    .child(if picked { "●" } else { "○" }),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_color(rgb(p.fg))
+                    .child(choice.label.clone()),
+            );
+        if picked {
+            row = row.bg(rgb(p.row_fill));
+        }
+        if choice.recommended {
+            row = row.child(
+                div()
+                    .flex_none()
+                    .px_1()
+                    .rounded(px(3.0))
+                    .bg(rgb(p.accent))
+                    .text_color(rgb(p.bg))
+                    .child("recommended"),
+            );
+        }
+        strip = strip.child(row);
+    }
+    let picked = ask.choices.get(pick);
+    strip.child(
+        div()
+            .flex()
+            .flex_row()
+            .gap_2()
+            .mt_1()
+            .pt_2()
+            .border_t_1()
+            .border_color(rgb(p.border))
+            .px_2()
+            .child(
+                div()
+                    .flex_none()
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(rgb(p.fg))
+                    .child(picked.map(|c| c.label.clone()).unwrap_or_default()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_color(rgb(p.muted))
+                    .child(picked.map(|c| c.detail.clone()).unwrap_or_default()),
+            ),
+    )
+}
+
 fn composer(root: &Root, window: &Window, cx: &mut Context<Root>) -> Option<Div> {
     let p = root.palette;
     root.chat.key.as_ref()?;
     if root.chat.closed.is_some() {
         return closed_bar(root, p, cx);
+    }
+    if let Some((_, ask)) = root.chat.conv.open_question() {
+        return Some(column(question_strip(root, ask, p, cx)).pb_3());
     }
     let at = root.chat.composer.clone();
     let state = root.chat.field.clone();
