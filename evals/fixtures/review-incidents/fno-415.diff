@@ -1,0 +1,356 @@
+diff --git a/crates/fno-agent/src/backlog/graph_keeper.rs b/crates/fno-agent/src/backlog/graph_keeper.rs
+index 479682aeb8..d17c19cfa1 100644
+--- a/crates/fno-agent/src/backlog/graph_keeper.rs
++++ b/crates/fno-agent/src/backlog/graph_keeper.rs
+@@ -1396,6 +1396,17 @@ fn handle_write_status(state: &StoreState, params: &Value) -> Result<Value, Stor
+     })
+ }
+ 
++/// The board mode's reply over `entries`: shared by the `ready` op and the
++/// `rows` op's `board_claimed` option, so one load serves both answers.
++fn board_reply(
++    entries: &[Value],
++    claimed: &std::collections::BTreeSet<String>,
++    now_ms: i64,
++) -> Value {
++    let f = crate::backlog_ready::board_facts(entries, claimed, now_ms);
++    json!({"ids": f.ids, "underway": f.underway, "effective_priority": f.effective_priority})
++}
++
+ /// The dispatch admission decision over client-shipped rows or the graph
+ /// this keeper owns: `backlog_ready::select` in, survivors + drops out.
+ /// Params: `project`, `all`, `roadmap_id`, `parent`, `mission`,
+@@ -1487,9 +1498,7 @@ fn handle_ready(state: &StoreState, params: &Value) -> Result<Value, StoreError>
+     // date filter below narrows the selection reply, not the whole-graph
+     // facts: the board's contract is every entry, no admission.
+     if matches!(params.get("board").and_then(Value::as_bool), Some(true)) {
+-        let f = crate::backlog_ready::board_facts(entries, &opts.claimed, opts.now_ms);
+-        let reply = json!({"ids": f.ids, "underway": f.underway, "effective_priority": f.effective_priority});
+-        return Ok(reply);
++        return Ok(board_reply(entries, &opts.claimed, opts.now_ms));
+     }
+     let window = date_filter_from_params(params, opts.now_ms).map_err(StoreError::Invalid)?;
+     match select(entries, &opts) {
+@@ -3262,10 +3271,20 @@ fn api_read_op(
+         "rows" => {
+             let mut served = rows.to_vec();
+             crate::node_reading::attach_reading(&mut served);
+-            Ok(json!({
++            let mut reply = json!({
+                 "rows": project(served),
+                 "version": api::version(store)?,
+-            }))
++            });
++            // `board_claimed` opts in to the board facts over these same
++            // rows, so a reader that wants both loads the graph once.
++            if let Value::Array(ids) = &params["board_claimed"] {
++                let claimed = ids.iter().filter_map(Value::as_str).map(str::to_string);
++                let board = board_reply(rows, &claimed.collect(), crate::claims::now_ms());
++                if let Some(obj) = reply.as_object_mut() {
++                    obj.insert("board".into(), board);
++                }
++            }
++            Ok(reply)
+         }
+         _ => unreachable!("handle_api routes node/nodes/rows here"),
+     }
+diff --git a/crates/fno/src/backlog/backlog_list.rs b/crates/fno/src/backlog/backlog_list.rs
+index d9a667803e..d90b2c9ba6 100644
+--- a/crates/fno/src/backlog/backlog_list.rs
++++ b/crates/fno/src/backlog/backlog_list.rs
+@@ -450,7 +450,12 @@ fn gather_inputs(graph: &Path) -> Result<crate::backlog_model::Inputs, String> {
+         .enable_all()
+         .build()
+         .map_err(|e| format!("cannot start the async runtime: {e}"))?;
+-    Ok(runtime.block_on(crate::backlog_model::gather(&graph, agents)))
++    // The list prints cards, never the scoreboard, so it skips the flow read.
++    Ok(runtime.block_on(crate::backlog_model::gather_with(
++        &graph,
++        agents,
++        crate::backlog_model::FlowRead::Skip,
++    )))
+ }
+ 
+ #[cfg(test)]
+diff --git a/crates/fno/src/backlog/backlog_model.rs b/crates/fno/src/backlog/backlog_model.rs
+index 4315cbb405..7e45184f5e 100644
+--- a/crates/fno/src/backlog/backlog_model.rs
++++ b/crates/fno/src/backlog/backlog_model.rs
+@@ -1428,6 +1428,21 @@ pub fn node(inp: &Inputs, id: &str) -> Option<NodeView> {
+ /// sweep runs first so one snapshot binds the order, the underway epics and
+ /// the card flags.
+ pub async fn gather(graph: &Path, agents: Vec<AgentRow>) -> Inputs {
++    gather_with(graph, agents, FlowRead::Read).await
++}
++
++/// Whether a gather reads the delivery `flow` aggregate. The read ships
++/// every row and the whole ledger to a classifier child, about a third of a
++/// list's wall time on a 7,900-row graph, so a consumer that never shows the
++/// scoreboard skips it.
++#[derive(Clone, Copy, PartialEq, Eq)]
++pub enum FlowRead {
++    Read,
++    Skip,
++}
++
++/// [`gather`] with the flow read named by the caller.
++pub async fn gather_with(graph: &Path, agents: Vec<AgentRow>, flow: FlowRead) -> Inputs {
+     // One claim snapshot binds the order, the underway epics and the card
+     // flags. A failed sweep is an errors line, never an empty board: the
+     // keeper then reads the claim store itself and refuses when it cannot.
+@@ -1441,7 +1456,7 @@ pub async fn gather(graph: &Path, agents: Vec<AgentRow>) -> Inputs {
+     }
+     let graph = graph.to_path_buf();
+     tokio::task::spawn_blocking(move || {
+-        gather_blocking(&graph, agents, live_claims, errors, sweep_failed)
++        gather_blocking(&graph, agents, live_claims, errors, sweep_failed, flow)
+     })
+     .await
+     .unwrap_or_else(|e| Inputs {
+@@ -1482,15 +1497,64 @@ fn parse_snapshot_doc(v: &Value) -> (Vec<NodeRow>, Vec<String>) {
+     (rows, errors)
+ }
+ 
++/// The delivery `flow` aggregate: the ledger at <state root>/ledger.json and
++/// the rows go to the classifier. A caller that skips flow never reads the
++/// ledger either. An unreadable ledger is an errors line.
++fn read_flow(
++    graph: &Path,
++    rows: &[NodeRow],
++    external: bool,
++    flow_read: FlowRead,
++    errors: &mut Vec<String>,
++) -> Value {
++    if flow_read == FlowRead::Skip {
++        return json!({"available": false, "reason": "this read skips the flow aggregate"});
++    }
++    /// The ledger document; only its rows ride to the classifier.
++    #[derive(Default, Deserialize)]
++    #[serde(default)]
++    struct Ledger {
++        entries: Value,
++    }
++    let ledger: Vec<Value> = match std::fs::read_to_string(ledger_path()) {
++        Err(_) => Vec::new(),
++        Ok(text) => match serde_json::from_str::<Value>(&text) {
++            Ok(v) => match Ledger::deserialize(&v).unwrap_or_default().entries {
++                Value::Array(entries) => entries,
++                _ => Vec::new(),
++            },
++            Err(e) => {
++                errors.push(format!("ledger unreadable: {e}"));
++                Vec::new()
++            }
++        },
++    };
++    if external {
++        return json!({"available": false, "reason": "no ledger flow on an external backend"});
++    }
++    match store_client::flow(graph, rows, &ledger) {
++        Ok(f) => f,
++        Err(e) => json!({"available": false, "reason": e.to_string()}),
++    }
++}
++
+ fn gather_blocking(
+     graph: &Path,
+     agents: Vec<AgentRow>,
+     live_claims: HashMap<String, String>,
+     mut errors: Vec<String>,
+     sweep_failed: bool,
++    flow_read: FlowRead,
+ ) -> Inputs {
+     let backend_name = external_backend_name();
+     let external = external_backend_selected();
++    // The live claims the keeper orders by. When the sweep failed, send none.
++    let claimed: Vec<String> = if sweep_failed {
++        Vec::new()
++    } else {
++        live_claims.keys().cloned().collect()
++    };
++    let mut board_facts: Option<store_client::BoardFacts> = None;
+     // (2) The source: the external snapshot, or the store's rows.
+     let (rows, rows_error, snapshot_errors): (Vec<NodeRow>, Option<String>, Vec<String>) =
+         if external {
+@@ -1508,8 +1572,13 @@ fn gather_blocking(
+         } else {
+             // Shared rows also feed detail drawers and flow; keep closed rows, prose,
+             // decisions, progress notes, costs, PRs, and complete session records.
+-            match store_client::rows(graph, None, None) {
+-                Ok(r) => (r, None, Vec::new()),
++            // The same call carries the board facts, so the keeper loads the
++            // graph once for both.
++            match store_client::rows_with_board(graph, &claimed) {
++                Ok((r, board)) => {
++                    board_facts = board;
++                    (r, None, Vec::new())
++                }
+                 Err(e) => (Vec::new(), Some(e.to_string()), Vec::new()),
+             }
+         };
+@@ -1531,52 +1600,21 @@ fn gather_blocking(
+     } else {
+         store_client::version(graph).ok()
+     };
+-    // (4) The keeper's board facts. When the sweep failed, send no claimed:
+-    // the keeper reads the claim store itself and refuses when it cannot.
+-    let claimed: Vec<String> = if sweep_failed {
+-        Vec::new()
+-    } else {
+-        live_claims.keys().cloned().collect()
+-    };
++    // (4) The keeper's board facts: already in hand from the rows call, else
++    // (an external backend, or a keeper that predates the option) asked for.
+     let shipped_entries = external.then_some(rows.as_slice());
+-    let (order, underway, effective_priority) =
+-        match store_client::board_facts(graph, shipped_entries, &claimed) {
+-            Ok(facts) => (facts.ids, facts.underway, facts.effective_priority),
+-            Err(e) => {
+-                errors.push(format!("board order unavailable: {e}"));
+-                (Vec::new(), HashSet::new(), HashMap::new())
+-            }
+-        };
+-    // (5) The ledger at <state root>/ledger.json.
+-    let path = ledger_path();
+-    /// The ledger document; only its rows ride to the classifier.
+-    #[derive(Default, Deserialize)]
+-    #[serde(default)]
+-    struct Ledger {
+-        entries: Value,
+-    }
+-    let ledger: Vec<Value> = match std::fs::read_to_string(&path) {
+-        Err(_) => Vec::new(),
+-        Ok(text) => match serde_json::from_str::<Value>(&text) {
+-            Ok(v) => match Ledger::deserialize(&v).unwrap_or_default().entries {
+-                Value::Array(entries) => entries,
+-                _ => Vec::new(),
+-            },
+-            Err(e) => {
+-                errors.push(format!("ledger unreadable: {e}"));
+-                Vec::new()
+-            }
+-        },
+-    };
+-    // (6) Flow over the rows and the ledger.
+-    let flow = if external {
+-        json!({"available": false, "reason": "no ledger flow on an external backend"})
+-    } else {
+-        match store_client::flow(graph, &rows, &ledger) {
+-            Ok(f) => f,
+-            Err(e) => json!({"available": false, "reason": e.to_string()}),
++    let (order, underway, effective_priority) = match board_facts
++        .map(Ok)
++        .unwrap_or_else(|| store_client::board_facts(graph, shipped_entries, &claimed))
++    {
++        Ok(facts) => (facts.ids, facts.underway, facts.effective_priority),
++        Err(e) => {
++            errors.push(format!("board order unavailable: {e}"));
++            (Vec::new(), HashSet::new(), HashMap::new())
+         }
+     };
++    // (5) and (6): the ledger, then flow over the rows and the ledger.
++    let flow = read_flow(graph, &rows, external, flow_read, &mut errors);
+     // (7) The spawn-env scope. Each failure is a named line, never an empty
+     // board.
+     let (scope, scope_reason) = board_scope_from_spawn_env();
+diff --git a/crates/fno/src/backlog/store_client.rs b/crates/fno/src/backlog/store_client.rs
+index babc2d1545..50fc950760 100644
+--- a/crates/fno/src/backlog/store_client.rs
++++ b/crates/fno/src/backlog/store_client.rs
+@@ -551,9 +551,19 @@ struct ApiReply {
+     ids: Value,
+     underway: Value,
+     effective_priority: Value,
++    board: BoardWire,
+     flow: Option<Value>,
+ }
+ 
++/// The `board` object a rows reply carries when the caller asked for it.
++#[derive(Default, Deserialize)]
++#[serde(default)]
++struct BoardWire {
++    ids: Value,
++    underway: Value,
++    effective_priority: Value,
++}
++
+ impl ApiReply {
+     fn of(reply: Value) -> ApiReply {
+         ApiReply::deserialize(reply).unwrap_or_default()
+@@ -672,6 +682,24 @@ pub struct BoardFacts {
+     pub effective_priority: HashMap<String, String>,
+ }
+ 
++/// The board facts from the three reply fields that carry them, `None` when
++/// `ids` is no array (a keeper that predates the board mode).
++fn facts_of(ids: &Value, underway: &Value, effective_priority: &Value) -> Option<BoardFacts> {
++    if !ids.is_array() {
++        return None;
++    }
++    let effective_priority = effective_priority.as_object().map(|o| {
++        o.iter()
++            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
++            .collect()
++    });
++    Some(BoardFacts {
++        ids: strings(ids).collect(),
++        underway: strings(underway).collect(),
++        effective_priority: effective_priority.unwrap_or_default(),
++    })
++}
++
+ /// The keeper's whole-graph order and column facts: the `ready` op in
+ /// board mode. A reply with no `ids` array names the deploy skew, so a
+ /// keeper that predates the board mode is an error line, never a silently
+@@ -686,23 +714,38 @@ pub fn board_facts(
+         params["entries"] = json!(e);
+     }
+     let reply = ApiReply::of(call(graph, "ready", params)?);
+-    if !reply.ids.is_array() {
+-        return Err(StoreClientError::Protocol(
++    facts_of(&reply.ids, &reply.underway, &reply.effective_priority).ok_or_else(|| {
++        StoreClientError::Protocol(
+             "the store keeper predates the board mode; run fno doctor update".into(),
+-        ));
+-    }
+-    let effective_priority = reply.effective_priority.as_object().map(|o| {
+-        o.iter()
+-            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+-            .collect()
+-    });
+-    Ok(BoardFacts {
+-        ids: strings(&reply.ids).collect(),
+-        underway: strings(&reply.underway).collect(),
+-        effective_priority: effective_priority.unwrap_or_default(),
++        )
+     })
+ }
+ 
++/// Every row plus the board facts over those same rows, in one store call:
++/// the keeper loads the graph once instead of once per answer. The facts are
++/// `None` when the keeper predates the `board_claimed` option, and the caller
++/// then asks [`board_facts`] the old way.
++pub fn rows_with_board(
++    graph: &Path,
++    claimed: &[String],
++) -> Result<(Vec<NodeRow>, Option<BoardFacts>), StoreClientError> {
++    let reply = ApiReply::of(call(
++        graph,
++        "api",
++        json!({"op": "rows", "board_claimed": claimed}),
++    )?);
++    let board = facts_of(
++        &reply.board.ids,
++        &reply.board.underway,
++        &reply.board.effective_priority,
++    );
++    let rows = match reply.rows {
++        Value::Array(rows) => crate::node_row::rows_from_values(rows),
++        _ => Vec::new(),
++    };
++    Ok((rows, board))
++}
++
+ /// The one delivery classifier's `flow` aggregate over the graph rows and
+ /// the ledger. A reply whose `flow` is absent or null is a protocol error:
+ /// a null flow names no aggregate, so it never reads as an empty one.
