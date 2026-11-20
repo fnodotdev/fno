@@ -876,6 +876,12 @@ canary_survive_minutes = 15
 # Members on one lane with a fresh capped tail needed to open it (default 2). One member suffices when its 429 names a reset still ahead, or when the account's runtime-state quota lock is set.
 quorum = 2
 
+[main_repair]
+# Arm the main-repair auto-revert pass: when main's CI stays red past revert_after_minutes and the red head is a PR merge, the arm reverts the culprit merge (default off).
+auto_revert = false
+# How many minutes a red main head waits before the auto-revert pass reverts it (default 10).
+revert_after_minutes = 10
+
 [dev]
 # Maintainer pin: a checkout root the Rust bootstrap re-provisions from (uv tool install <path>/cli) when its tool venv is wiped. Unset = the frozen 0.4.8 wheel self-provision (legacy end-user default).
 source = ""

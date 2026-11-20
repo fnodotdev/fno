@@ -803,6 +803,13 @@
       "visual_paint_paths": null,
       "visual_shot_workflows": null
      }
+    },
+    {
+     "name": "main_repair",
+     "default": {
+      "auto_revert": false,
+      "revert_after_minutes": 10
+     }
     }
    ]
   },
@@ -3422,6 +3429,19 @@
      "default": []
     }
    ]
+  },
+  "MainRepairBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "auto_revert",
+     "default": false
+    },
+    {
+     "name": "revert_after_minutes",
+     "default": 10
+    }
+   ]
   }
  },
  "field_meta": [
@@ -3812,6 +3832,8 @@
   "provider_cap.sleep_hours",
   "provider_cap.sleep_timezone",
   "provider_cap.canary_survive_minutes",
-  "provider_cap.quorum"
+  "provider_cap.quorum",
+  "main_repair.auto_revert",
+  "main_repair.revert_after_minutes"
  ]
 }

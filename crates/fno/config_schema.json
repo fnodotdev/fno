@@ -99,6 +99,24 @@
     "title": "ProviderCapBlock",
     "type": "object"
    },
+   "MainRepairBlock": {
+    "description": "Main-red repair settings (nested under 'config.main_repair').\n\nWhen main's CI stays red, the daemon's main-repair arm can revert the merge that broke it. Opt-in per repo: the arm runs only where auto_revert is true, and a red head that outlives revert_after_minutes and is a PR merge is a revert candidate. A malformed value reads as its default.\n\nKnobs:\n  auto_revert           - arm the auto-revert pass (default off).\n  revert_after_minutes  - minutes a red head waits before the arm reverts it (default 10).",
+    "properties": {
+     "auto_revert": {
+      "default": false,
+      "title": "Auto Revert",
+      "type": "boolean"
+     },
+     "revert_after_minutes": {
+      "default": 10,
+      "minimum": 1,
+      "title": "Revert After Minutes",
+      "type": "integer"
+     }
+    },
+    "title": "MainRepairBlock",
+    "type": "object"
+   },
    "AccountsBlock": {
     "description": "Account rotation and provider configuration (nested under 'config.accounts').",
     "properties": {
@@ -4092,6 +4110,9 @@
    "provider_cap": {
     "$ref": "#/$defs/ProviderCapBlock"
    },
+   "main_repair": {
+    "$ref": "#/$defs/MainRepairBlock"
+   },
    "process_admission": {
     "$ref": "#/$defs/ProcessAdmissionBlock"
    },
@@ -7966,6 +7987,28 @@
    "question": "",
    "default_source": "default",
    "doc": "Members on one lane with a fresh capped tail needed to open it (default 2). One member suffices when its 429 names a reset still ahead, or when the account's runtime-state quota lock is set.",
+   "edit": "editor"
+  },
+  {
+   "path": "main_repair.auto_revert",
+   "label": "Auto-revert a red main",
+   "type": "bool",
+   "default": false,
+   "wizard": "never",
+   "question": "",
+   "default_source": "default",
+   "doc": "Arm the main-repair auto-revert pass: when main's CI stays red past revert_after_minutes and the red head is a PR merge, the arm reverts the culprit merge (default off).",
+   "edit": "toggle"
+  },
+  {
+   "path": "main_repair.revert_after_minutes",
+   "label": "Minutes before a red head is reverted",
+   "type": "int",
+   "default": 10,
+   "wizard": "never",
+   "question": "",
+   "default_source": "default",
+   "doc": "How many minutes a red main head waits before the auto-revert pass reverts it (default 10).",
    "edit": "editor"
   },
   {

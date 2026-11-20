@@ -335,6 +335,8 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `provider_cap.sleep_timezone` | str | `` | never | IANA zone for sleep_hours, for example America/Los_Angeles. Empty (default) reads the machine's local zone. |
 | `provider_cap.canary_survive_minutes` | int | `15` | never | Minutes a canary session must live after the reset before the return ladder resumes the parked members (default 15). |
 | `provider_cap.quorum` | int | `2` | never | Members on one lane with a fresh capped tail needed to open it (default 2). One member suffices when its 429 names a reset still ahead, or when the account's runtime-state quota lock is set. |
+| `main_repair.auto_revert` | bool | `false` | never | Arm the main-repair auto-revert pass: when main's CI stays red past revert_after_minutes and the red head is a PR merge, the arm reverts the culprit merge (default off). |
+| `main_repair.revert_after_minutes` | int | `10` | never | How many minutes a red main head waits before the auto-revert pass reverts it (default 10). |
 | `mux.attach_digest` | bool | `true` | advanced | Show a 'while you were gone' catch-up digest overlay on attach after an absence (default on). |
 | `mux.attach_digest_threshold_min` | int | `10` | advanced | Minutes since last detach before the catch-up digest overlay shows (default 10). |
 | `mux.scrollback_lines` | int | `10000` | advanced | History lines each mux pane keeps (default 10000). Each line costs every column of the pane, about 2 MB per 1k lines at 80 columns, so 48 panes at 100k lines hold several GB. Latched at mux server birth; `fno mux kill-server` re-reads. |
