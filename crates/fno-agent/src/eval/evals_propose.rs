@@ -1801,6 +1801,11 @@ pub fn changes_cli(args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One field by JSON pointer, null when absent.
+    fn at<'a>(v: &'a Value, ptr: &str) -> &'a Value {
+        v.pointer(ptr).unwrap_or(&Value::Null)
+    }
     use crate::evals::bank::load_task;
 
     fn view(verdict: &str, mean: Option<f64>, breaking: bool, regressions: usize) -> Value {
@@ -1815,7 +1820,6 @@ mod tests {
         serde_json::json!({"attempt_id": id, "experiment_id": cohort})
     }
 
-    #[test]
     fn gain_reads_the_rule() {
         let clean = view("inside_noise", Some(0.0), false, 0);
         let negative = view("beats_noise", Some(-30.0), false, 0);
@@ -1830,7 +1834,6 @@ mod tests {
         assert_eq!(gain(&quiet, &clean).unwrap(), Gain::InsideNoise);
     }
 
-    #[test]
     fn the_ledger_refuses_a_count_mismatch_and_a_duplicate() {
         let planned = CyclePlan {
             base_attempts: 2,
@@ -1871,7 +1874,6 @@ mod tests {
         assert!(format!("{err}").contains("no attempt id"), "{err}");
     }
 
-    #[test]
     fn the_cap_drops_candidates_before_the_base_refuses() {
         let p = plan_budget(5, 3, 2, 1.0, 0.04);
         assert_eq!(p.candidates, 0);
@@ -1889,7 +1891,6 @@ mod tests {
 
     /// The split is preregistered (D2982): these two roles were
     /// measured 2026-11-20 at SEED 20_261_102 and must never move.
-    #[test]
     fn the_split_is_preregistered() {
         assert_eq!(split("golden-answer-the-question"), Role::Train);
         assert_eq!(
@@ -1962,13 +1963,12 @@ mod tests {
     /// field of the held-out golden, and the strip flag reads true. The
     /// held-out golden here leaks on purpose-shaped keys (prompt words,
     /// grade command, pattern, expected) that the scan must catch.
-    #[test]
     fn proposer_input_carries_train_only_and_strips_answer_keys() {
         let f = write_bank(false);
         let bank_dir = f.dir.path().join("evals").join("bank");
         let list = clusters(&f.rows, &f.tasks, &bank_dir, 3).unwrap();
         assert_eq!(list.len(), 1, "{list:?}");
-        let c = &list[0];
+        let c = list.first().unwrap();
         assert_eq!(c.kind, "t1");
         assert_eq!(c.train, vec!["golden-answer-the-question".to_string()]);
         assert_eq!(
@@ -1990,7 +1990,6 @@ mod tests {
     }
 
     /// AC1-EDGE: a type whose golden is unproved never picks.
-    #[test]
     fn an_unproved_type_never_picks() {
         let f = write_bank(true);
         let bank_dir = f.dir.path().join("evals").join("bank");
@@ -2004,7 +2003,6 @@ mod tests {
 
     /// A cluster whose goldens all drew held-out reads the description and
     /// the case quotes, never a rule or an expected answer.
-    #[test]
     fn a_held_out_only_cluster_reads_quotes_only() {
         let f = write_bank(false);
         let c = Cluster {
@@ -2070,7 +2068,6 @@ mod tests {
         parse_reply(&body.to_string()).unwrap()
     }
 
-    #[test]
     fn a_change_reply_validates_and_keep_base_passes() {
         let tasks = vec![key_task()];
         let good = reply_with_edits(&[("AGENTS.md", "the new full file text")]);
@@ -2094,7 +2091,6 @@ mod tests {
 
     /// AC2-HP: an edit quoting 8 consecutive words of a golden prompt
     /// refuses with answer_key_quote and names the golden id.
-    #[test]
     fn an_edit_quoting_an_answer_key_refuses_and_names_the_golden() {
         let tasks = vec![key_task()];
         let quoted = reply_with_edits(&[(
@@ -2106,7 +2102,6 @@ mod tests {
         assert!(format!("{err}").contains("golden-key-holder"), "{err}");
     }
 
-    #[test]
     fn edit_paths_outside_the_allowlist_refuse() {
         let tasks = vec![key_task()];
         for path in [
@@ -2130,7 +2125,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn more_than_three_files_refuse() {
         let tasks = vec![key_task()];
         let bad = reply_with_edits(&[
@@ -2270,8 +2264,8 @@ mod tests {
     fn verdict_of<'a>(ledger: &'a [Value], kind: &str) -> &'a str {
         ledger
             .iter()
-            .find(|r| r["type"] == kind)
-            .and_then(|r| r["verdict"].as_str())
+            .find(|r| at(r, "/type") == kind)
+            .and_then(|r| at(r, "/verdict").as_str())
             .unwrap_or("missing")
     }
 
@@ -2279,25 +2273,34 @@ mod tests {
     /// opens and each cluster lands one ledger row beside the budget line.
     /// The non-ship cluster reads underpowered: a 9-attempt cohort cannot
     /// read inside_noise without a regression, and both ship nothing.
-    #[test]
     fn a_cycle_opens_one_pr_and_lands_a_row_per_cluster() {
         let change = r#"{"verdict":"change","kind":"knowledge","edits":[{"path":"AGENTS.md","content":"b"}],"reason":"r"}"#;
         let out = cycle_with(change);
         assert_eq!(out.prs, 1, "{}", out.receipt);
         assert_eq!(verdict_of(&out.ledger, "t1"), "shipped");
-        let t1 = out.ledger.iter().find(|r| r["type"] == "t1").unwrap();
-        assert_eq!(t1["learning"], "recorded");
+        let t1 = out.ledger.iter().find(|r| at(r, "/type") == "t1").unwrap();
+        assert_eq!(at(t1, "/learning"), "recorded");
         assert_eq!(verdict_of(&out.ledger, "t3"), "underpowered");
-        let cluster_rows = out.ledger.iter().filter(|r| r["type"].is_string()).count();
+        let cluster_rows = out
+            .ledger
+            .iter()
+            .filter(|r| at(r, "/type").is_string())
+            .count();
         assert_eq!(cluster_rows, 2);
-        let budget = out.ledger.iter().find(|r| r["kind"] == "budget").unwrap();
-        assert_eq!(budget["base_attempts"], 9);
-        assert_eq!(out.runs[0], "propose-2026-11-20-base");
+        let budget = out
+            .ledger
+            .iter()
+            .find(|r| at(r, "/kind") == "budget")
+            .unwrap();
+        assert_eq!(at(budget, "/base_attempts"), 9);
+        assert_eq!(
+            out.runs.first().map(String::as_str),
+            Some("propose-2026-11-20-base")
+        );
     }
 
     /// AC2-EDGE: a keep_base reply records keep_base and runs no candidate
     /// cohort.
-    #[test]
     fn keep_base_runs_no_candidate_cohort() {
         let keep =
             r#"{"verdict":"keep_base","kind":"procedure","edits":[],"reason":"no change argued"}"#;
@@ -2366,32 +2369,30 @@ mod tests {
 
     /// AC6-HP: seven post-merge cohorts that lost the gain open one revert
     /// PR and record retired; a second pass opens nothing more.
-    #[test]
     fn probation_retires_a_change_that_stopped_paying() {
         let f = write_bank(false);
         let out = probation_with(&f, "golden-answer-the-question");
         assert_eq!(out.reverts, 1);
         assert_eq!(out.rows.len(), 1);
-        assert_eq!(out.rows[0]["verdict"], "retired");
-        assert_eq!(out.rows[0]["revert"], "revert-url");
+        let row = out.rows.first().unwrap();
+        assert_eq!(at(row, "/verdict"), "retired");
+        assert_eq!(at(row, "/revert"), "revert-url");
         assert!(out.again.is_empty(), "{:?}", out.again);
     }
 
     /// AC6-EDGE: a cluster golden that turned unproved holds the change as
     /// suspended and opens nothing.
-    #[test]
     fn probation_suspends_on_an_unproved_golden() {
         let f = write_bank(true);
         let out = probation_with(&f, "golden-unproved-type");
         assert_eq!(out.reverts, 0);
-        assert_eq!(out.rows[0]["verdict"], "suspended");
+        assert_eq!(at(out.rows.first().unwrap(), "/verdict"), "suspended");
         assert!(
             out.again.is_empty(),
             "a repeat suspended row is not appended twice"
         );
     }
 
-    #[test]
     fn ship_reads_already_open_and_opens_one_pr_otherwise() {
         let edits: Vec<(std::path::PathBuf, Vec<u8>)> =
             vec![(std::path::PathBuf::from("docs/x.md"), b"x".to_vec())];
@@ -2435,7 +2436,6 @@ mod tests {
 
     /// The dry-run receipt (the done_probes contract): clusters with roles
     /// and the strip flag, no model call and no cohort run.
-    #[test]
     fn dry_run_prints_clusters_and_calls_no_model() {
         let f = write_bank(false);
         let repo = f.dir.path();
@@ -2474,10 +2474,52 @@ mod tests {
             day: "2026-11-20",
         };
         let receipt = run_cycle(&cycle, true, &doors).unwrap();
-        let c = &receipt["clusters"][0];
-        assert_eq!(c["type"], "t1");
-        assert_eq!(c["verdict"], "dry_run");
-        assert_eq!(c["proposer_input"]["answer_keys_stripped"], true);
-        assert!(receipt["generated_at"].as_str().is_some());
+        let c = at(&receipt, "/clusters/0");
+        assert_eq!(at(c, "/type"), "t1");
+        assert_eq!(at(c, "/verdict"), "dry_run");
+        assert_eq!(at(c, "/proposer_input/answer_keys_stripped"), true);
+        assert!(at(&receipt, "/generated_at").as_str().is_some());
+    }
+
+    /// Change 1: the preregistered split, the cluster pick and the stripped proposer input (AC1-HP, AC1-EDGE), and the dry run that prints them.
+    #[test]
+    fn the_proposer_reads_train_goldens_only() {
+        the_split_is_preregistered();
+        proposer_input_carries_train_only_and_strips_answer_keys();
+        an_unproved_type_never_picks();
+        a_held_out_only_cluster_reads_quotes_only();
+        dry_run_prints_clusters_and_calls_no_model();
+    }
+
+    /// Change 2: a reply that leaves repo text, edits more than 3 files or quotes an answer key refuses; keep_base passes (AC2-HP).
+    #[test]
+    fn the_reply_tripwires_refuse() {
+        a_change_reply_validates_and_keep_base_passes();
+        an_edit_quoting_an_answer_key_refuses_and_names_the_golden();
+        edit_paths_outside_the_allowlist_refuse();
+        more_than_three_files_refuse();
+    }
+
+    /// Change 3: the sign-checked gain rule, the cap and the count-identity ledger (AC3-HP, AC3-EDGE, AC3-LEDGER).
+    #[test]
+    fn the_gain_budget_and_ledger_rules() {
+        gain_reads_the_rule();
+        the_ledger_refuses_a_count_mismatch_and_a_duplicate();
+        the_cap_drops_candidates_before_the_base_refuses();
+    }
+
+    /// Change 4: one PR per gain, a row per cluster, keep_base spends no candidate cohort, an open PR reads already_open (AC4-HP, AC4-EDGE, AC2-EDGE).
+    #[test]
+    fn a_cycle_ships_at_most_one_pr_per_gain() {
+        a_cycle_opens_one_pr_and_lands_a_row_per_cluster();
+        keep_base_runs_no_candidate_cohort();
+        ship_reads_already_open_and_opens_one_pr_otherwise();
+    }
+
+    /// Change 5: a lost gain opens one revert and records retired; an unproved cluster golden suspends (AC6-HP, AC6-EDGE).
+    #[test]
+    fn probation_retires_or_suspends() {
+        probation_retires_a_change_that_stopped_paying();
+        probation_suspends_on_an_unproved_golden();
     }
 }
