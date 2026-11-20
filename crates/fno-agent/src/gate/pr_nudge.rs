@@ -1262,9 +1262,13 @@ mod tests {
 
     /// A lead's `hold-set` writes `dispatch_hold`, on the node row when the
     /// node has no plan. The nudge must read it: a held node got "drive it to
-    /// merge" retries the merge gate would refuse.
+    /// merge" retries the merge gate would refuse. The same predicate family
+    /// holds the user-gate park (the ledger's newest Done* run, the draft
+    /// bit, the settled-green shape, and the red head that never parks), so
+    /// the pause arm's rows all pin here rather than as separate
+    /// declarations: the G3 net cap is 0.
     #[test]
-    fn dispatch_hold_on_the_node_or_an_ancestor_pauses_the_nudge() {
+    fn the_pause_predicates_hold_the_nudge() {
         let hold = serde_json::json!({
             "reason": "main cli-ci red", "release_when": "main green",
             "review_on": "2099-01-01", "set_by": "lead"
@@ -1282,6 +1286,89 @@ mod tests {
             node_dispatch_hold_rows("x-free", None),
             "an unreadable graph never reads as unheld"
         );
+
+        // The terminal-run lookup: newest entry per node wins.
+        let done = serde_json::json!({
+            "graph_node_id": "x-node",
+            "termination_reason": "DonePRGreen",
+        });
+        let inflight = serde_json::json!({
+            "graph_node_id": "x-node",
+            "termination_reason": serde_json::Value::Null,
+        });
+        let nowork = serde_json::json!({
+            "graph_node_id": "x-node",
+            "termination_reason": "NoWork",
+        });
+        let other = serde_json::json!({
+            "graph_node_id": "x-other",
+            "termination_reason": "DonePRGreen",
+        });
+        assert!(newest_run_terminal_rows(&[done.clone()], "x-node"));
+        assert!(
+            !newest_run_terminal_rows(&[done.clone(), inflight.clone()], "x-node"),
+            "a newer in-flight run unparks the row"
+        );
+        assert!(
+            newest_run_terminal_rows(&[inflight.clone(), done.clone()], "x-node"),
+            "a newer Done* run parks it again"
+        );
+        assert!(!newest_run_terminal_rows(&[nowork], "x-node"));
+        assert!(
+            !newest_run_terminal_rows(&[done.clone(), other], "x-node"),
+            "another node's terminal run is not this row's"
+        );
+
+        // The park: terminated or draft + settled green open pauses,
+        // whatever the budget spent; a red head still wakes with one
+        // re-armed attempt; a plain green with neither truth still wakes.
+        let park_input =
+            |run_terminated: bool, pr_draft: bool, green: bool| crate::pr_nudge::NudgeInput {
+                state: LadderState::default(),
+                transcript_age_s: Some(1_000),
+                last_activity_at: None,
+                merge_order_hold: false,
+                grace_secs: 900,
+                now: 1_900,
+                live: true,
+                busy: false,
+                red_head: None,
+                merge_refused: false,
+                run_terminated,
+                pr_draft,
+                settled_green_open: green,
+            };
+        assert_eq!(decide(&park_input(true, false, true)).0, NudgeAction::Pause);
+        assert_eq!(decide(&park_input(false, true, true)).0, NudgeAction::Pause);
+        let spent = crate::pr_nudge::NudgeInput {
+            state: LadderState {
+                attempts: MAX_ATTEMPTS,
+                ..LadderState::default()
+            },
+            ..park_input(true, false, true)
+        };
+        assert_eq!(
+            decide(&spent).0,
+            NudgeAction::Pause,
+            "the park outranks the operator escalation"
+        );
+        let red = crate::pr_nudge::NudgeInput {
+            red_head: Some("0123456789abcdef".to_string()),
+            settled_green_open: false,
+            ..park_input(true, false, false)
+        };
+        let (action, state) = decide(&red);
+        assert!(
+            matches!(action, NudgeAction::Mail | NudgeAction::Resume),
+            "the red-head wake survives a terminal run"
+        );
+        assert_eq!(state.attempts, MAX_ATTEMPTS - 1, "one red wake re-arms");
+        assert_eq!(decide(&park_input(false, false, true)).0, NudgeAction::Mail);
+        let stopped = crate::pr_nudge::NudgeInput {
+            live: false,
+            ..park_input(false, false, true)
+        };
+        assert_eq!(decide(&stopped).0, NudgeAction::Resume);
     }
 
     /// The status payload the real command writes to stdout whatever the exit
@@ -2012,144 +2099,5 @@ mod tests {
         let text2 = nudge_text(&r, &read_status(&r, &mut runner2));
         assert!(text2.contains("red unsettled @ abcdef123456"), "{text2}");
         assert!(text2.contains(". Failing: `ci`"), "{text2}");
-    }
-
-    /// The user-gate park: the ledger's newest run for the node ended
-    /// Done* or the PR reads draft, and the PR sits settled green and
-    /// open. The ladder pauses instead of ordering a drive the worker
-    /// cannot act on. AC1-HP's shape.
-    #[test]
-    fn newest_run_terminal_rows_reads_newest_entry_per_node() {
-        let done = serde_json::json!({
-            "graph_node_id": "x-node",
-            "termination_reason": "DonePRGreen",
-        });
-        let inflight = serde_json::json!({
-            "graph_node_id": "x-node",
-            "termination_reason": serde_json::Value::Null,
-        });
-        let nowork = serde_json::json!({
-            "graph_node_id": "x-node",
-            "termination_reason": "NoWork",
-        });
-        let other = serde_json::json!({
-            "graph_node_id": "x-other",
-            "termination_reason": "DonePRGreen",
-        });
-        assert!(newest_run_terminal_rows(&[done.clone()], "x-node"));
-        assert!(
-            !newest_run_terminal_rows(&[done.clone(), inflight.clone()], "x-node"),
-            "a newer in-flight run unparks the row"
-        );
-        assert!(
-            newest_run_terminal_rows(&[inflight.clone(), done.clone()], "x-node"),
-            "a newer Done* run parks it again"
-        );
-        assert!(!newest_run_terminal_rows(&[nowork.clone()], "x-node"));
-        assert!(
-            !newest_run_terminal_rows(&[done.clone(), other.clone()], "x-node"),
-            "another node's terminal run is not this row's"
-        );
-    }
-
-    #[test]
-    fn terminated_run_parks_a_settled_green_row() {
-        let input = crate::pr_nudge::NudgeInput {
-            state: LadderState::default(),
-            transcript_age_s: Some(1_000),
-            last_activity_at: None,
-            merge_order_hold: false,
-            grace_secs: 900,
-            now: 1_900,
-            live: true,
-            busy: false,
-            red_head: None,
-            merge_refused: false,
-            run_terminated: true,
-            pr_draft: false,
-            settled_green_open: true,
-        };
-        assert_eq!(decide(&input).0, NudgeAction::Pause);
-        // The park outranks the operator escalation: a spent budget on a
-        // parked row files no second ask.
-        let spent = crate::pr_nudge::NudgeInput {
-            state: LadderState {
-                attempts: MAX_ATTEMPTS,
-                ..LadderState::default()
-            },
-            ..input.clone()
-        };
-        assert_eq!(decide(&spent).0, NudgeAction::Pause);
-    }
-
-    #[test]
-    fn terminated_run_still_wakes_a_settled_red_row() {
-        let input = crate::pr_nudge::NudgeInput {
-            state: LadderState::default(),
-            transcript_age_s: Some(1_000),
-            last_activity_at: None,
-            merge_order_hold: false,
-            grace_secs: 900,
-            now: 1_900,
-            live: true,
-            busy: false,
-            red_head: Some("0123456789abcdef".to_string()),
-            merge_refused: false,
-            run_terminated: true,
-            pr_draft: false,
-            // A red payload never sets this, so the park never fires on red.
-            settled_green_open: false,
-        };
-        let (action, state) = decide(&input);
-        assert!(
-            matches!(action, NudgeAction::Mail | NudgeAction::Resume),
-            "the red-head wake survives a terminal run"
-        );
-        assert_eq!(state.attempts, MAX_ATTEMPTS - 1, "one red wake re-arms");
-    }
-
-    #[test]
-    fn draft_pr_parks_a_settled_green_row() {
-        let input = crate::pr_nudge::NudgeInput {
-            state: LadderState::default(),
-            transcript_age_s: Some(1_000),
-            last_activity_at: None,
-            merge_order_hold: false,
-            grace_secs: 900,
-            now: 1_900,
-            live: true,
-            busy: false,
-            red_head: None,
-            merge_refused: false,
-            run_terminated: false,
-            pr_draft: true,
-            settled_green_open: true,
-        };
-        assert_eq!(decide(&input).0, NudgeAction::Pause);
-    }
-
-    #[test]
-    fn green_without_a_user_gate_still_wakes() {
-        let base = crate::pr_nudge::NudgeInput {
-            state: LadderState::default(),
-            transcript_age_s: Some(1_000),
-            last_activity_at: None,
-            merge_order_hold: false,
-            grace_secs: 900,
-            now: 1_900,
-            live: true,
-            busy: false,
-            red_head: None,
-            merge_refused: false,
-            run_terminated: false,
-            pr_draft: false,
-            settled_green_open: true,
-        };
-        assert_eq!(decide(&base).0, NudgeAction::Mail);
-        let stopped = crate::pr_nudge::NudgeInput {
-            live: false,
-            ..base.clone()
-        };
-        assert_eq!(decide(&stopped).0, NudgeAction::Resume);
     }
 }
