@@ -1349,7 +1349,11 @@ mod tests {
 
         assert_eq!(degraded.exit, None, "{:?}", degraded.stderr);
         let at = degraded.argv.iter().position(|t| t == "--name").unwrap();
-        let name = &degraded.argv[at + 1];
+        let name = degraded
+            .argv
+            .get(at + 1)
+            .map(String::as_str)
+            .unwrap_or_default();
         assert!(crate::team_names::valid_person_name(name), "{name}");
         assert!(
             degraded
