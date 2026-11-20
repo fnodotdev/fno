@@ -405,7 +405,7 @@ fn next_column(root: &Root) -> Div {
         let id = row["id"].as_str().unwrap_or_default();
         let title = row["title"].as_str().unwrap_or_default();
         let priority = row["priority"].as_str().unwrap_or_default();
-        let mut line = div()
+        let line = div()
             .flex()
             .flex_row()
             .items_center()
