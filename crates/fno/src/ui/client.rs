@@ -463,7 +463,7 @@ pub(crate) fn connect_or_spawn(
     if path.exists() {
         eprintln!("fno: previous session ended; starting a fresh one");
     }
-    spawn_server(path)?;
+    spawn_server(path, patient)?;
     let deadline = Instant::now() + SPAWN_CONNECT_TIMEOUT;
     loop {
         match proto::connect_unix_timeout(path, ATTACH_CONNECT_TIMEOUT) {
