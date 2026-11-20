@@ -91,8 +91,6 @@ pub struct ShotOptions {
     pub settings: Option<SettingsShot>,
 }
 
-/// The find-bar states `--shot-find` paints.
-#[derive(Clone, Copy, PartialEq)]
 /// The --shot-settings values.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SettingsShot {
@@ -104,14 +102,14 @@ pub enum SettingsShot {
     Page,
 }
 
+/// The find-bar states `--shot-find` paints.
+#[derive(Clone, Copy, PartialEq)]
 pub enum FindShot {
     /// The bar open with a query typed; the hint at rest: bare arrows.
     Bar,
     /// The bar open, and the cmd-held chord hint forced on.
     Chords,
 }
-
-/// Run the app (or the headless probe) and return the process exit code.
 
 /// The raw global settings dict: the file the WRITE door targets
 /// (`~/.fno/config.toml`, preferred over the legacy yaml a migrated
@@ -222,6 +220,7 @@ fn widened_path(path: &str, home: &str) -> String {
     dirs.join(":")
 }
 
+/// Run the app (or the headless probe) and return the process exit code.
 /// Run the app (or the headless probe) and return the process exit code.
 pub fn run(opts: Options) -> i32 {
     if let Some(shot) = opts.shot {

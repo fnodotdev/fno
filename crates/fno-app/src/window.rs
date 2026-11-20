@@ -2019,12 +2019,18 @@ impl Root {
                     .as_mut()
                     .and_then(|st| settings::key(st, &key));
                 cx.stop_propagation();
-                if let Some((set, id, value)) = ev.map(|e| match e {
-                    settings::Event::Close => None,
-                    settings::Event::Set { id, value } => Some((true, id, value)),
-                    settings::Event::Unset { id } => Some((false, id, String::new())),
-                }) {
-                    self.spawn_settings_write(set, id, value, cx);
+                match ev {
+                    Some(settings::Event::Close) => {
+                        self.settings = None;
+                        cx.notify();
+                    }
+                    Some(settings::Event::Set { id, value }) => {
+                        self.spawn_settings_write(true, id, value, cx)
+                    }
+                    Some(settings::Event::Unset { id }) => {
+                        self.spawn_settings_write(false, id, String::new(), cx)
+                    }
+                    None => {}
                 }
                 return;
             }
