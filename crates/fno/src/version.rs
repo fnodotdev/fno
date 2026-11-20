@@ -31,7 +31,7 @@ pub fn version_json() -> serde_json::Value {
 /// form is a one-liner. Side-effect-free: never spawns a server or attaches.
 /// Binary surface: the `fno` bin requires the `full` feature, and the human
 /// form reads the `full`-only bootstrap resolver.
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 pub fn print_version(json_out: bool) {
     let pkg = env!("CARGO_PKG_VERSION");
     let rev = env!("FNO_MUX_GIT_REV"); // full sha, or the literal "unknown"

@@ -16,6 +16,7 @@ use tokio::sync::mpsc;
 
 use crate::proto::{self, Frame, ObserverHello, ObserverVia, ServerMsg};
 use crate::server::observers::clean_label;
+use crate::screen::Screen;
 use crate::{frame_ansi, share, web};
 
 /// Parsed `fno mux serve --observe` arguments.
@@ -41,29 +42,6 @@ pub(crate) fn default_name() -> String {
 /// Whether a chunk of typed bytes asks to leave: `q`, Ctrl-C or Ctrl-D.
 fn quits(bytes: &[u8]) -> bool {
     bytes.iter().any(|b| matches!(b, b'q' | b'Q' | 0x03 | 0x04))
-}
-
-/// Raw mode and the alternate screen for the life of the watch, undone on
-/// every exit path.
-pub(crate) struct Screen;
-
-impl Screen {
-    pub(crate) fn enter() -> Result<Screen, String> {
-        crossterm::terminal::enable_raw_mode().map_err(|e| format!("terminal raw mode: {e}"))?;
-        let mut out = std::io::stdout();
-        let _ = out.write_all(b"\x1b[?1049h\x1b[?25l\x1b[2J");
-        let _ = out.flush();
-        Ok(Screen)
-    }
-}
-
-impl Drop for Screen {
-    fn drop(&mut self) {
-        let mut out = std::io::stdout();
-        let _ = out.write_all(b"\x1b[0m\x1b[?25h\x1b[?1049l");
-        let _ = out.flush();
-        let _ = crossterm::terminal::disable_raw_mode();
-    }
 }
 
 /// Typed bytes, read on a thread because a tty read cannot be cancelled.

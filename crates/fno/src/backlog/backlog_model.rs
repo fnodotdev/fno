@@ -2138,7 +2138,7 @@ pub fn read_search_sources(inp: &mut Inputs, want_questions: bool) {
 /// The node ids with an `operator_question` whose `question_id` has no
 /// later `operator_question_closed` (file order decides "later").
 fn read_open_questions(inp: &Inputs) -> HashSet<String> {
-    let text = match std::fs::read_to_string(crate::attention_api::journal_path()) {
+    let text = match std::fs::read_to_string(crate::web_core::journal_path()) {
         Ok(text) => text,
         Err(_) => return HashSet::new(),
     };
@@ -2166,7 +2166,7 @@ fn read_open_questions(inp: &Inputs) -> HashSet<String> {
         }
     }
     let mut by_qid: HashMap<String, Vec<String>> = HashMap::new();
-    for v in crate::attention_api::journal_rows(&text) {
+    for v in crate::web_core::journal_rows(&text) {
         let Ok(event) = Event::deserialize(&v) else {
             continue;
         };

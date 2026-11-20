@@ -1,16 +1,16 @@
 //! The `fno doctor event` commands and the rows the front door writes.
 
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 pub mod attest;
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 pub mod chokepoint_events;
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 pub mod cli_usage;
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 pub mod event_cli;
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 pub(crate) mod event_corrections;
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 pub(crate) mod event_signals;
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 pub(crate) mod first_check;

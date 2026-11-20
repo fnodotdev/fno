@@ -1004,7 +1004,7 @@ pub(crate) async fn keys(
                 }
             }
             ModalKey::Byte(b'W') => {
-                let bridge = crate::web::live_bridge(&view.session);
+                let bridge = crate::web_core::live_bridge(&view.session);
                 let host = crate::agents_view::hostname();
                 let notice = match hq_url(bridge, crate::link::is_remote_session(), &host) {
                     Err(e) => e,
@@ -1133,7 +1133,7 @@ fn prompt_key(b: &mut OrgBoard, token: ModalKey) -> Option<String> {
 /// loopback bridge is unreachable from the user's browser, and a wide one is
 /// reached by this machine's name.
 pub(crate) fn hq_url(
-    bridge: Result<crate::web::LiveBridge, String>,
+    bridge: Result<crate::web_core::LiveBridge, String>,
     remote: bool,
     host: &str,
 ) -> Result<String, String> {
