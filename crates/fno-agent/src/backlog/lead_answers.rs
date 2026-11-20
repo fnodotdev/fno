@@ -6,8 +6,8 @@
 //! team scope, so a ruling recorded on another lead's page still shows.
 //! The quiet reading reads each quiet scope worker with the peek reader,
 //! in process, printing its last RESULT line, help block or watching tag; a
-//! lead reads by how long ago it last spoke. Only a failed read says READER
-//! FAILED; a row never blanks.
+//! lead reads by how long ago its transcript last moved. Only a failed
+//! read says READER FAILED; a row never blanks.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -188,8 +188,8 @@ fn quiet_scope_workers<'a>(
 }
 
 /// One quiet row's line. A lead reports in prose and never emits RESULT, so
-/// its line is how long ago it last spoke. A worker's line is its own last
-/// report; a tail with none names that and the quiet time, and only a
+/// its line is how long ago its transcript last moved. A worker's line is
+/// its own last report; a tail with none names that and the quiet time, and only a
 /// transcript the reader could not read says READER FAILED.
 fn quiet_line(w: &Value, peek: impl FnOnce() -> Result<Option<String>, String>) -> String {
     let quiet = w
@@ -198,7 +198,7 @@ fn quiet_line(w: &Value, peek: impl FnOnce() -> Result<Option<String>, String>) 
         .map(|s| format!("{} min", (s / 60.0) as i64))
         .unwrap_or_else(|| "an unknown time".into());
     if let Some(role) = crate::lead_checkin::s_str(w, "role").filter(|r| !r.is_empty()) {
-        return format!("lead ({role}), last spoke {quiet} ago");
+        return format!("lead ({role}), last active {quiet} ago");
     }
     match peek() {
         Ok(Some(report)) => report,
@@ -915,7 +915,7 @@ mod tests {
     /// re-arm note in inline code, the recovery nudge's own bare `<help>`,
     /// and a skill injection quoting the protocol whole. The worker's own
     /// RESULT after an injected record still reads. A parked worker's
-    /// watching tag is its report, and a lead reads by its last word's age:
+    /// watching tag is its report, and a lead reads by its transcript's age:
     /// neither healthy session renders READER FAILED.
     #[test]
     fn the_quiet_line_names_the_real_state_and_never_a_quoted_help() {
@@ -941,7 +941,7 @@ mod tests {
         let never = || -> Result<Option<String>, String> { panic!("a lead is never peeked") };
         assert_eq!(
             quiet_line(&lead, never),
-            "lead (L2 x-da5a), last spoke 21 min ago"
+            "lead (L2 x-da5a), last active 21 min ago"
         );
         let worker = json!({"role": null, "status_age_s": 600.0});
         let none = quiet_line(&worker, || Ok(None));
