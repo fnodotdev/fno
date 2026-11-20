@@ -10205,7 +10205,7 @@ crates/fno-agent/src/spawn/provider.rs	clippy::let_underscore_must_use	let _ = c
 crates/fno-agent/src/spawn/provider_cap.rs	clippy::indexing_slicing	assert!(!lane.members[0].capped);
 crates/fno-agent/src/spawn/provider_cap.rs	clippy::indexing_slicing	assert_eq!(glm[0].members.len(), 3);
 crates/fno-agent/src/spawn/provider_cap.rs	clippy::indexing_slicing	assert_eq!(glm[0].reset_epoch, Some(9_999_999_999));
-crates/fno-agent/src/spawn/provider_cap.rs	clippy::indexing_slicing	assert_eq!(glm[0].state, "open");
+crates/fno-agent/src/spawn/provider_cap.rs	clippy::indexing_slicing	assert_eq!(glm[0].state, "capped");
 crates/fno-agent/src/spawn/provider_cap.rs	clippy::indexing_slicing	assert_eq!(resumes[0], "resume:w-1");
 crates/fno-agent/src/spawn/provider_cap.rs	clippy::indexing_slicing	assert_eq!(resumes[1], "resume:w-2");
 crates/fno-agent/src/spawn/provider_cap.rs	clippy::indexing_slicing	assert_eq!(state["resumed"].as_array().unwrap().len(), 5);

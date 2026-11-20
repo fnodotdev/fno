@@ -652,6 +652,10 @@ daily_usd = 15.0
 # Lane the gate's golden runs use. Defaults zai-flash.
 lane = "zai-flash"
 
+[evals.propose]
+# Per-cycle USD cap on the propose-and-prove loop's base and candidate cohorts, priced at the run lane's evals.gate.lane_usd entry. Over cap the cycle drops candidates from the last; a cap that fits no candidate refuses the cycle.
+cycle_usd = 10.0
+
 [recovery]
 # Enable the bg-session recovery sweep: provider failover on swap-class deaths plus close-surfacing for finished-but-lingering sessions (rides the pr_watch tick). Assumes bypass workers (the config.agents.defaults.permission_mode built-in for autonomous dispatch, answered per harness: claude rides auto, every other harness rides bypassPermissions); a non-bypass worker cannot run autonomously and is not resumed.
 enabled = true
@@ -875,6 +879,12 @@ sleep_timezone = ""
 canary_survive_minutes = 15
 # Members on one lane with a fresh capped tail needed to open it (default 2). One member suffices when its 429 names a reset still ahead, or when the account's runtime-state quota lock is set.
 quorum = 2
+
+[main_repair]
+# Arm the main-repair auto-revert pass: when main's CI stays red past revert_after_minutes and the red head is a PR merge, the arm reverts the culprit merge (default off).
+auto_revert = false
+# How many minutes a red main head waits before the auto-revert pass reverts it (default 10).
+revert_after_minutes = 10
 
 [dev]
 # Maintainer pin: a checkout root the Rust bootstrap re-provisions from (uv tool install <path>/cli) when its tool venv is wiped. Unset = the frozen 0.4.8 wheel self-provision (legacy end-user default).

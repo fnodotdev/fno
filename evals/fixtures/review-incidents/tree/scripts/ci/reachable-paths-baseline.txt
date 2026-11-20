@@ -1,0 +1,7 @@
+# Reconstructed from the founding incident's bug class; this is not the real
+# file. The point is the second row: the module that incident.diff deletes is
+# still listed here as a py leg, so the reachable-paths check reads red after
+# a green merge. Real coordinates live in the filing node's record only.
+A	^*worker_rows:*(.*?)*$	py=cli/src/fno/worker/rollup.py;rs=crates/fno-agent/src/worker_rollup.rs	# CLASSIFY protocol|msg-twin|data
+A	^*graph_node_id:*(.*?)*$	py=cli/src/fno/doctor.py|cli/src/fno/worker/ship.py;rs=crates/fno-agent/src/ledger_register.rs	# CLASSIFY protocol|msg-twin|data the target-state body graph_node_id scan all three legs spell
+A	worktree lifecycle and worker registration.	py=cli/src/fno/workspace/cli.py;rs=crates/fno/src/agents_menu.rs	# shared-vocabulary: the nested agents menu repeats the Python group help until the Python group is deleted

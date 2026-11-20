@@ -1009,6 +1009,12 @@
             "lane_usd": {}
           }
         },
+        "propose": {
+          "$ref": "#/$defs/ProposeBlock",
+          "default": {
+            "cycle_usd": 10.0
+          }
+        },
         "schedule_days": {
           "default": 7,
           "title": "Schedule Days",
@@ -1462,6 +1468,24 @@
         }
       },
       "title": "LoopEntry",
+      "type": "object"
+    },
+    "MainRepairBlock": {
+      "description": "Main-red repair settings (nested under 'config.main_repair').\n\nWhen main's CI stays red, the daemon's main-repair arm can revert the merge that broke it. Opt-in per repo: the arm runs only where auto_revert is true, and a red head that outlives revert_after_minutes and is a PR merge is a revert candidate. A malformed value reads as its default.\n\nKnobs:\n  auto_revert           - arm the auto-revert pass (default off).\n  revert_after_minutes  - minutes a red head waits before the arm reverts it (default 10).",
+      "properties": {
+        "auto_revert": {
+          "default": false,
+          "title": "Auto Revert",
+          "type": "boolean"
+        },
+        "revert_after_minutes": {
+          "default": 10,
+          "minimum": 1,
+          "title": "Revert After Minutes",
+          "type": "integer"
+        }
+      },
+      "title": "MainRepairBlock",
       "type": "object"
     },
     "MaintainBlock": {
@@ -2412,6 +2436,18 @@
         }
       },
       "title": "ProjectBlock",
+      "type": "object"
+    },
+    "ProposeBlock": {
+      "description": "The propose-and-prove loop (``evals.propose.*``): the per-cycle dollar cap on the base and candidate cohorts.\nFull key docs live in the generated reference and docs/evals.md.",
+      "properties": {
+        "cycle_usd": {
+          "default": 10.0,
+          "title": "Cycle Usd",
+          "type": "number"
+        }
+      },
+      "title": "ProposeBlock",
       "type": "object"
     },
     "ProviderBudget": {
@@ -4078,6 +4114,9 @@
       },
       "title": "Loops",
       "type": "object"
+    },
+    "main_repair": {
+      "$ref": "#/$defs/MainRepairBlock"
     },
     "merge": {
       "$ref": "#/$defs/MergeBlock"

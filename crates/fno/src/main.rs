@@ -210,6 +210,9 @@ enum Role {
     /// emit surface and the other event names until their cutover.
     DoctorEvent(Vec<OsString>),
     DoctorCost(Vec<OsString>),
+    /// `fno doctor attention [--days N] [--json]`: the per-PR attention
+    /// rows and guardrail, exec'd through the agent's attention-ledger door.
+    DoctorAttention(Vec<OsString>),
     /// `fno doctor skill-diff tick|reconcile` and the deprecated root `fno
     /// skill-diff`: the whole command execs the native `fno-agent loops`
     /// skill-diff ops. The op word maps to the loops door's name (`tick` ->
@@ -1422,6 +1425,11 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::doctor_cost::classify(args) {
         return Role::DoctorCost(rest);
     }
+    if let [group, leaf, rest @ ..] = args {
+        if group == "doctor" && leaf == "attention" {
+            return Role::DoctorAttention(rest.to_vec());
+        }
+    }
     if let Some(rest) = fno::event_cli::classify_doctor_event(args) {
         return Role::DoctorEvent(rest);
     }
@@ -2145,6 +2153,11 @@ fn run_doctor_role(role: Role) -> ControlFlow<(), Role> {
     match role {
         Role::DoctorEvent(rest) => fno::cli_usage::exit(fno::event_cli::run(&rest)),
         Role::DoctorCost(rest) => fno::cli_usage::exit(fno::doctor_cost::run(&rest)),
+        Role::DoctorAttention(rest) => fno::cli_usage::exit(fno_agent_exec(
+            "fno doctor attention",
+            &["compaction", "attention-ledger", "--per-pr"],
+            &rest,
+        )),
         Role::DoctorLintMenuCaps(rest) => fno::cli_usage::exit(fno::menu_caps::run(&rest)),
         Role::DoctorLintRepo(rest) => {
             let flat: Vec<String> = rest

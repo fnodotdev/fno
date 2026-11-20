@@ -1,0 +1,11 @@
+# Clean control A: a merged PR of this repository that passed the merge gate
+# (green and reviewed) and was never reverted. Any blocking finding on it is
+# a false finding for the reviewer under test.
+id: review-clean-backlog-perf
+diff: fno-415.diff
+repo: fnodotdev/fno
+pr: 415
+title: "perf(backlog): list skips the flow read and loads the graph once"
+merged_at: 2026-11-20T10:31:33Z
+merge_commit: b18156ef
+clean_basis: merged through the merge gate and never reverted; the last 100 commits on main hold no Revert (measured 2026-11-20)
