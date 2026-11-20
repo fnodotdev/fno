@@ -880,6 +880,7 @@ fn composer(root: &Root, window: &Window, cx: &mut Context<Root>) -> Option<Div>
             root.adv,
             root.chat.composer.get().size.width,
             px(700.0),
+            true,
             &p,
         )
     }) {

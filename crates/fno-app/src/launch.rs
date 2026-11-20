@@ -1057,13 +1057,14 @@ fn axis_picker_rows(l: &Launch, p: &Palette, cx: &mut Context<Root>) -> Div {
 /// The agent kind's skill popover above the task box; tab fills the
 /// selected row. None shows unless the draft leads with the harness's
 /// sigil and the harness lists skills.
-pub(crate) fn skill_hints(root: &Root) -> Option<Div> {
+pub(crate) fn skill_hints(root: &Root) -> Option<gpui::AnyElement> {
     let l = &root.launch.state;
     skill_popover(
         l.skill_view()?,
         root.adv,
         l.composer.get().size.width,
         px(560.0),
+        false,
         &root.palette,
     )
 }
@@ -1077,8 +1078,9 @@ pub(crate) fn skill_popover(
     adv: Pixels,
     seen: Pixels,
     fallback: Pixels,
+    above: bool,
     p: &Palette,
-) -> Option<Div> {
+) -> Option<gpui::AnyElement> {
     let skills::View {
         rows,
         more,
@@ -1156,24 +1158,33 @@ pub(crate) fn skill_popover(
             p,
         ))
         .child(ui::text("tab inserts · esc closes", Role::Hint, p));
-    Some(
-        div()
-            .absolute()
-            .left_0()
-            .right_0()
-            .bottom(gpui::relative(1.0))
+    let card = div()
+        .absolute()
+        .left_0()
+        .right_0()
+        .flex()
+        .flex_col()
+        .gap(px(2.0))
+        .p_1()
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(rgb(p.border))
+        .bg(rgb(p.raised))
+        .child(col)
+        .child(foot);
+    // Above the composer in the chat, where the bar sits at the bottom of
+    // the pane. Below it in the start view, where the card sits near the
+    // top and a full list would cover the toolbar. The deferred layer
+    // paints over the rows that follow the card.
+    Some(if above {
+        card.bottom(gpui::relative(1.0))
             .mb(px(6.0))
-            .flex()
-            .flex_col()
-            .gap(px(2.0))
-            .p_1()
-            .rounded(px(8.0))
-            .border_1()
-            .border_color(rgb(p.border))
-            .bg(rgb(p.raised))
-            .child(col)
-            .child(foot),
-    )
+            .into_any_element()
+    } else {
+        gpui::deferred(card.top(gpui::relative(1.0)).mt(px(6.0)))
+            .with_priority(1)
+            .into_any_element()
+    })
 }
 
 /// The lead kind's epic picker under the filter box: up to six matches,
