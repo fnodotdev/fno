@@ -1929,7 +1929,7 @@ impl Root {
                     self.restyle(cx);
                 }
                 if id == "app.font" {
-                    self.font_want.0 = value;
+                    self.font_want.0 = value.clone();
                 }
                 if id == "app.font_size" {
                     if let Ok(f) = value.parse::<f32>() {
@@ -3293,7 +3293,7 @@ pub(super) fn root_for_shot(
     if let Some(shot) = settings {
         let fonts = settings::mono_fonts(window);
         root.update(cx, |root, cx| root.open_settings_with(fonts, cx));
-        root.update(cx, |root, cx| {
+        root.update(cx, |root, _| {
             if let Some(st) = root.settings.as_mut() {
                 settings::apply_shot(st, shot);
             }
