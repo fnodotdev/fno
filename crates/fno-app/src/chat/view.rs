@@ -410,6 +410,8 @@ fn row(root: &mut Root, ix: usize, _window: &mut Window, cx: &mut Context<Root>)
         Item::Text { .. } => {
             markdown(ix, item.blocks().unwrap_or_default(), p.fg, root).into_any_element()
         }
+        // A redacted block carries no text: nothing to open, so no fold.
+        Item::Thinking { text, .. } if text.is_empty() => div().into_any_element(),
         Item::Thinking { .. } => {
             let open = root.chat.conv.expanded.contains(&ix);
             let caret = if open { "▾" } else { "▸" };
@@ -844,17 +846,20 @@ fn composer(root: &Root, window: &Window, cx: &mut Context<Root>) -> Option<Div>
         )
         .child(text);
     // A filled field, no outline. The send hint answers the key question
-    // the placeholder no longer carries, and it sends on click too.
+    // the placeholder no longer carries, and it sends on click too. Per the
+    // badge rule, the hint shows only while cmd is held.
     let send = clickable("chat-send".into(), Action::SendChat, p, cx)
         .flex()
         .flex_row()
         .items_center()
         .gap_1()
         .flex_none()
-        .child(ui::kbd("⏎", &p))
-        .child(ui::text("send", Role::Hint, &p))
-        .child(ui::kbd("⇧⏎", &p))
-        .child(ui::text("new line", Role::Hint, &p));
+        .when(root.picking, |s| {
+            s.child(ui::kbd("⏎", &p))
+                .child(ui::text("send", Role::Hint, &p))
+                .child(ui::kbd("⇧⏎", &p))
+                .child(ui::text("new line", Role::Hint, &p))
+        });
     let mut bar = div()
         .flex()
         .flex_col()
