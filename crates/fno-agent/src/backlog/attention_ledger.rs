@@ -655,8 +655,8 @@ pub fn run_cli(args: &[String]) -> i32 {
     let mut per_pr = false;
     let mut days: u32 = 1;
     let mut index = 0usize;
-    while index < args.len() {
-        match args[index].as_str() {
+    while let Some(arg) = args.get(index) {
+        match arg.as_str() {
             "--json" | "-J" => as_json = true,
             "--report" => want_report = true,
             "--per-pr" => per_pr = true,

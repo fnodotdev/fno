@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -288,6 +289,8 @@ fn run_limit(days: u32) -> usize {
 /// Completed main-branch workflow runs via the gh CLI, typed at the
 /// boundary. A failure carries the trimmed stderr in a typed error.
 fn main_runs(limit: usize) -> Result<Vec<MainRun>, RunsError> {
+    // Both streams pipe: wait_with_output only collects what is piped, so
+    // gh's own progress lines never leak into this read's output.
     let out = std::process::Command::new("gh")
         .args([
             "run",
@@ -299,7 +302,10 @@ fn main_runs(limit: usize) -> Result<Vec<MainRun>, RunsError> {
             "--json",
             "conclusion,createdAt,updatedAt",
         ])
-        .output();
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .and_then(|child| child.wait_with_output());
     let out = match out {
         Ok(out) => out,
         Err(e) => return Err(RunsError::Gh(format!("spawn failed: {e}"))),
@@ -518,8 +524,8 @@ mod tests {
         ];
         let red = red_span_hours(&runs);
         assert_eq!(red.len(), 2);
-        assert_eq!(red[0], ("2026-11-10".to_string(), 14.0));
-        assert_eq!(red[1], ("2026-11-11".to_string(), 1.5));
+        assert_eq!(red.first(), Some(&("2026-11-10".to_string(), 14.0)));
+        assert_eq!(red.get(1), Some(&("2026-11-11".to_string(), 1.5)));
     }
 
     /// AC1-EDGE: a failed gh read degrades to a note with the guardrail
