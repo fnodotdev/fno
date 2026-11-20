@@ -1902,6 +1902,8 @@ impl Root {
             note: None,
             rows,
             fonts,
+            scroll: gpui::ScrollHandle::new(),
+            follow: std::cell::Cell::new(false),
         });
         cx.notify();
     }

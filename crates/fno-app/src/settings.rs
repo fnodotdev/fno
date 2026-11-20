@@ -11,7 +11,11 @@
 //! write door - the in-process `fno config` set and unset calls, never a
 //! raw TOML write. The write lives in `window.rs` where the gpui tasks live.
 
-use gpui::{div, prelude::*, px, rgb, rgba, Context, Div, ElementId, FontWeight, Window};
+use gpui::{
+    div, prelude::*, px, rgb, rgba, AnyElement, Context, Div, ElementId, FontWeight, ScrollHandle,
+    Window,
+};
+use std::cell::Cell;
 use std::path::Path;
 
 use serde_json::Value;
@@ -87,6 +91,21 @@ pub(crate) struct SettingsState {
     /// The open-time monospaced family list, so the Font page never
     /// re-probes the text system per frame.
     pub fonts: Vec<String>,
+    /// The row list's scroll position; a jump or a cursor move asks it to
+    /// bring its row (and the section head above it) into view.
+    pub scroll: ScrollHandle,
+    pub follow: Cell<bool>,
+}
+
+impl SettingsState {
+    /// Move the cursor to the first visible row of section `si`, if any.
+    pub(crate) fn jump_to_section(&mut self, si: usize) {
+        let vis = visible(&self.rows, self.query.text());
+        if let Some(i) = vis.iter().position(|(s, _)| *s == si) {
+            self.selected = i;
+            self.follow.set(true);
+        }
+    }
 }
 
 /// One section's rows, keyed by its SECTIONS name.
@@ -451,12 +470,27 @@ pub(crate) fn key(state: &mut SettingsState, k: &Key) -> Option<Event> {
     match k.key {
         "up" => {
             state.selected = state.selected.saturating_sub(1);
+            state.follow.set(true);
             None
         }
         "down" => {
             let n = visible(&state.rows, state.query.text()).len();
             if state.selected + 1 < n {
                 state.selected += 1;
+            }
+            state.follow.set(true);
+            None
+        }
+        "tab" => {
+            let vis = visible(&state.rows, state.query.text());
+            let here = vis.get(state.selected).map(|(si, _)| *si).unwrap_or(0);
+            let next = vis
+                .iter()
+                .map(|(si, _)| *si)
+                .find(|si| *si > here)
+                .or_else(|| vis.first().map(|(si, _)| *si));
+            if let Some(si) = next {
+                state.jump_to_section(si);
             }
             None
         }
@@ -472,6 +506,7 @@ pub(crate) fn key(state: &mut SettingsState, k: &Key) -> Option<Event> {
         _ => match state.query.edit(k.key, k.key_char) {
             Edit::Typed => {
                 state.selected = 0;
+                state.follow.set(true);
                 None
             }
             Edit::Close => Some(Event::Close),
@@ -561,8 +596,8 @@ fn body(root: &Root, cx: &mut Context<Root>) -> Div {
     panel
 }
 
-/// The section rail and the filtered rows, or the flat filtered list when
-/// a query is live.
+/// The section rail and the filtered rows: each group under its heading,
+/// the rail jumping to a group when clicked.
 fn rows_body(root: &Root, cx: &mut Context<Root>) -> Div {
     let p = root.palette;
     let Some(state) = root.settings.as_ref() else {
@@ -570,14 +605,66 @@ fn rows_body(root: &Root, cx: &mut Context<Root>) -> Div {
     };
     let vis = visible(&state.rows, state.query.text());
     let filtering = !state.query.text().is_empty();
+    let here = vis.get(state.selected).map(|(si, _)| *si);
     let mut wrap = div().flex().flex_row().min_h_0();
     if !filtering {
         let rail = div().flex_none().w(px(96.0)).flex().flex_col().children(
-            SECTIONS
-                .iter()
-                .map(|name| ui::role(div(), Role::Label, &p).child(*name)),
+            SECTIONS.iter().enumerate().map(|(si, name)| {
+                let on = here == Some(si);
+                ui::clickable(
+                    ui::row(
+                        ElementId::NamedInteger("settings-rail".into(), si as u64),
+                        on,
+                        &p,
+                    )
+                    .px_0()
+                    .child(ui::role(div(), Role::Label, &p).child(*name)),
+                    &p,
+                )
+                .on_click(cx.listener(move |root, _, _, cx| {
+                    if let Some(st) = root.settings.as_mut() {
+                        st.jump_to_section(si);
+                    }
+                    cx.notify();
+                }))
+            }),
         );
         wrap = wrap.child(rail);
+    }
+    let mut children: Vec<AnyElement> = Vec::new();
+    let mut scroll_to: Vec<usize> = Vec::new();
+    let mut last = None;
+    for (i, (si, row)) in vis.iter().enumerate() {
+        if last != Some(*si) {
+            last = Some(*si);
+            let name = SECTIONS.get(*si).copied().unwrap_or("");
+            let mut head = div()
+                .flex_none()
+                .pt(px(8.0))
+                .child(ui::role(div(), Role::Heading, &p).child(name));
+            if let Some(reason) = state
+                .rows
+                .get(*si)
+                .and_then(|(_, rows)| section_reason(rows))
+            {
+                head = head.child(ui::role(div(), Role::Hint, &p).child(reason));
+            }
+            children.push(head.into_any_element());
+        }
+        // The cursor row scrolls into view with its group head above it
+        // when it is the group's first row.
+        let first_of_group = i == 0 || vis.get(i - 1).map(|(s, _)| *s) != Some(*si);
+        scroll_to.push(if first_of_group {
+            children.len() - 1
+        } else {
+            children.len()
+        });
+        children.push(row_line(row, i == state.selected, &p, cx).into_any_element());
+    }
+    if state.follow.replace(false) {
+        if let Some(ix) = scroll_to.get(state.selected) {
+            state.scroll.scroll_to_item(*ix);
+        }
     }
     let list = div()
         .id("settings-rows")
@@ -586,30 +673,36 @@ fn rows_body(root: &Root, cx: &mut Context<Root>) -> Div {
         .min_h_0()
         .overflow_x_hidden()
         .overflow_y_scroll()
-        .children(
-            vis.iter()
-                .enumerate()
-                .map(|(i, (_, row))| row_line(row, i == state.selected, &p, cx)),
-        );
+        .track_scroll(&state.scroll)
+        .children(children);
     wrap.child(list)
+}
+
+/// The one reason a whole section shares, when every row is locked for
+/// it: the heading says why once, so the rows stay quiet.
+fn section_reason(rows: &[Row]) -> Option<&str> {
+    let mut reasons = rows.iter().map(|r| match &r.mode {
+        Mode::Locked { reason } => Some(reason.as_str()),
+        _ => None,
+    });
+    let first = reasons.next()??;
+    reasons.all(|r| r == Some(first)).then_some(first)
 }
 
 /// One row: label left, value right, the mode glyph leading, a locked
 /// row's reason dimmed under it while the row is selected.
 fn row_line(row: &Row, selected: bool, p: &Palette, cx: &mut Context<Root>) -> Div {
     let _ = cx;
+    let locked = matches!(row.mode, Mode::Locked { .. });
     let (glyph, value) = match &row.mode {
-        Mode::Toggle { on } => (
-            (if *on { "on" } else { "off" }).to_string(),
-            row.value.clone(),
-        ),
+        Mode::Toggle { .. } | Mode::Locked { .. } => (" ".to_string(), row.value.clone()),
         Mode::Cycle { .. } => (" ".to_string(), format!("< {} >", row.value)),
         Mode::Page { .. } => ("›".to_string(), row.value.clone()),
-        Mode::Locked { .. } => ("×".to_string(), row.value.clone()),
     };
+    let label_role = if locked { Role::Hint } else { Role::Name };
     let line = ui::row(ElementId::Name(row.label.clone().into()), selected, p)
-        .child(ui::text(glyph.clone(), Role::Meta, p))
-        .child(ui::role(div(), Role::Name, p).child(row.label.clone()))
+        .child(ui::text(glyph, Role::Meta, p))
+        .child(ui::role(div(), label_role, p).child(row.label.clone()))
         .child(div().flex_1())
         .child(ui::role(div(), Role::Meta, p).child(value));
     match &row.mode {
@@ -641,10 +734,12 @@ fn page_body(id: &str, options: &[Choice], sel: usize, rows: &[SectionRows], p: 
     for (i, c) in options.iter().enumerate() {
         let mark = if i == sel { "✓" } else { " " };
         let n = format!("{}", i + 1);
-        let doc = if c.doc.is_empty() {
-            String::new()
+        let (name, doc) = if c.value.is_empty() {
+            (c.doc.to_string(), String::new())
+        } else if c.doc.is_empty() {
+            (c.value.clone(), String::new())
         } else {
-            format!("  {}", c.doc)
+            (c.value.clone(), format!("  {}", c.doc))
         };
         page = page.child(
             ui::row(
@@ -654,7 +749,7 @@ fn page_body(id: &str, options: &[Choice], sel: usize, rows: &[SectionRows], p: 
             )
             .child(ui::text(mark, Role::Meta, p))
             .child(ui::text(n, Role::Fact, p))
-            .child(ui::text(c.value.clone(), Role::Body, p))
+            .child(ui::text(name, Role::Body, p))
             .child(ui::text(doc, Role::Hint, p)),
         );
     }
@@ -805,6 +900,8 @@ mod tests {
             note: None,
             rows,
             fonts: vec!["SF Mono".into(), "Menlo".into()],
+            scroll: ScrollHandle::new(),
+            follow: Cell::new(false),
         };
         st.query.edit("t", Some("t"));
         assert_eq!(
