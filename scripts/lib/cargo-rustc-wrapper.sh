@@ -115,25 +115,26 @@ if [[ "${1:-}" == "--run" ]]; then
     exec "$@"
 fi
 
-# sccache is opt-in; the default is bare rustc. The fleet measured 60 percent
-# hits on cacheable calls while the costly workspace crates never cached
-# (worktree paths bake into their keys), the cache sat full, and one wedged
-# server parked every build for up to an hour. A build uses sccache only when
-# the project `.fno/config.toml` sets `build.sccache = true` (the global
-# `~/.fno/config.toml` is the fallback) or FNO_SCCACHE=1, sccache is
-# installed, and SCCACHE_DISABLE is not 1. The 2026-08-20 note stands: Cargo
-# decides incremental before this script runs, so `.cargo/config.toml`'s
-# [build] incremental = false is what enables caching, not this wrapper. An
-# uncached compile still passes build and run admission below.
-build_sccache_opted_in() {
+# sccache runs after the slot admit whenever it is on PATH, so a fresh
+# worktree reuses the dependency compiles of every other worktree. Opt out
+# with `build.sccache = false` in the project `.fno/config.toml` (the global
+# `~/.fno/config.toml` is the fallback), FNO_SCCACHE=0, or SCCACHE_DISABLE=1.
+# Workspace crates bake the worktree path into their key and still miss; the
+# registry dependencies are the cold-start cost this removes. One wedged
+# server once parked every build for up to an hour, so the client watcher
+# below stays. Cargo decides incremental before this script runs, so
+# `.cargo/config.toml`'s [build] incremental = false is what enables caching,
+# not this wrapper. Admission runs first either way.
+build_sccache_enabled() {
     [[ "${FNO_SCCACHE:-}" == "1" ]] && return 0
+    [[ "${FNO_SCCACHE:-}" == "0" ]] && return 1
     local file value
     for file in "$REPO_ROOT/.fno/config.toml" "${CONFIG_FILE:-$STATE_DIR/config.toml}"; do
         [[ -f "$file" ]] || continue
         # Minimal TOML read for one boolean: the `sccache` key under [build],
         # or the dotted `build.sccache` before any section. The project
         # file's answer settles it; the global file is only the fallback
-        # for an unset key.
+        # for an unset key. Both unset: on.
         value="$(awk '
             { line = $0; sub(/#.*/, "", line); gsub(/[[:space:]]/, "", line) }
             line ~ /^\[/ { section = line; gsub(/[\[\]]/, "", section); next }
@@ -147,10 +148,10 @@ build_sccache_opted_in() {
             return 1
         fi
     done
-    return 1
+    return 0
 }
 
-if [[ "${SCCACHE_DISABLE:-0}" != "1" ]] && build_sccache_opted_in && command -v sccache >/dev/null 2>&1; then
+if [[ "${SCCACHE_DISABLE:-0}" != "1" ]] && build_sccache_enabled &&command -v sccache >/dev/null 2>&1; then
     HAS_SCCACHE=1
 else
     HAS_SCCACHE=0
@@ -165,7 +166,7 @@ case " $* " in
         elif ! command -v sccache >/dev/null 2>&1; then
             echo "cargo-rustc-wrapper: bare rustc (sccache not installed)" >&2
         else
-            echo "cargo-rustc-wrapper: bare rustc (sccache is opt-in: build.sccache = true or FNO_SCCACHE=1)" >&2
+            echo "cargo-rustc-wrapper: bare rustc (sccache is off: build.sccache = false or FNO_SCCACHE=0)" >&2
         fi
         ;;
 esac
@@ -226,7 +227,7 @@ case " $* " in
 esac
 
 if [[ "$HAS_SCCACHE" -eq 1 ]]; then
-    export SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-30G}"
+    export SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-20G}"
     # 0 stops the server exiting on idle mid-build, which fell compiles back
     # to local rustc under fleet load. The daemon sets the same default; this
     # keeps an operator's shorter override working.
