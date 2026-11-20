@@ -305,8 +305,9 @@ fn subtitle(q: &QuestionItem, root: &Root, now: u64) -> Option<String> {
     if let Some(m) = model {
         parts.push(m);
     }
-    if !q.created_at.is_empty() {
-        parts.push(format!("{} ago", ui::age(&q.created_at, now)));
+    let age = ui::age(&q.created_at, now);
+    if !age.is_empty() {
+        parts.push(format!("{age} ago"));
     }
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
@@ -351,6 +352,19 @@ pub(super) fn key(root: &mut Root, key: &Key, cx: &mut Context<Root>) -> bool {
     true
 }
 
+/// An answer sent or landed takes no second send; a refusal takes a retry.
+pub(super) fn in_flight_or_done(state: Option<&AnswerState>) -> bool {
+    matches!(
+        state,
+        Some(
+            AnswerState::Sending(_)
+                | AnswerState::SendingWords
+                | AnswerState::Done(_)
+                | AnswerState::DoneWords
+        )
+    )
+}
+
 /// The Answer button and Enter: the typed words win over the picked
 /// choice. The in-flight and answered states land in the same map the
 /// board rows read, so every surface stops double-answering together.
@@ -364,7 +378,7 @@ pub(super) fn submit(root: &mut Root, cx: &mut Context<Root>) {
         root.say("no board poll: cannot answer".into(), cx);
         return;
     }
-    if root.answers.contains_key(&id) {
+    if in_flight_or_done(root.answers.get(&id)) {
         return;
     }
     if !words.is_empty() {

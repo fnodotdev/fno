@@ -229,6 +229,8 @@ pub struct Root {
     /// has not met; the first read seeds it silently, unless the shot flag
     /// below is set, so an app open never toasts a backlog.
     seen_questions: HashSet<String>,
+    /// A good question read has seeded `seen_questions`.
+    questions_seeded: bool,
     /// The shot window toasts on its first read: the capture wants the
     /// arrival toast in frame.
     toast_on_first_read: bool,
@@ -392,6 +394,7 @@ impl Root {
             question_toast: None,
             question_toast_gen: 0,
             seen_questions: HashSet::new(),
+            questions_seeded: false,
             toast_on_first_read: false,
             sheet_on_first_read: false,
             goto: None,
@@ -717,8 +720,9 @@ impl Root {
             }
             Action::Notice(text) => self.say(text, cx),
             Action::Answer { id, option } => match &self.poller {
-                // A row already sent or answered takes no second click.
-                Some(_) if self.answers.contains_key(&id) => {}
+                // A row already sent or answered takes no second click; a
+                // refused one takes a retry.
+                Some(_) if answer::in_flight_or_done(self.answers.get(&id)) => {}
                 Some(poller) => {
                     poller.answer(id.clone(), option);
                     self.answers.insert(id, AnswerState::Sending(option));
@@ -1145,7 +1149,7 @@ impl Root {
                 // Arrival: an id the seen set has not met. The first read
                 // seeds the set silently - an app open never toasts a
                 // backlog - unless the shot wants the toast in frame.
-                let first_read = self.seen_questions.is_empty();
+                let first_read = !self.questions_seeded;
                 let ids: Vec<String> = board
                     .questions()
                     .iter()
@@ -1157,6 +1161,11 @@ impl Root {
                     .cloned()
                     .collect();
                 self.seen_questions.extend(ids);
+                // A good read seeds the set, even an empty one, so the first
+                // question after an empty open still toasts.
+                if board.read_yet() && board.questions_error().is_none() {
+                    self.questions_seeded = true;
+                }
                 if board.questions_error().is_none() && (!first_read || self.toast_on_first_read) {
                     // Newest first, so the first hit is the newest arrival.
                     let newest = board
