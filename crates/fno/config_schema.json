@@ -6926,17 +6926,6 @@
    "edit": "editor"
   },
   {
-   "path": "evals.propose.cycle_usd",
-   "label": "Eval propose cycle budget (USD)",
-   "type": "float",
-   "default": 10.0,
-   "wizard": "never",
-   "question": "",
-   "default_source": "",
-   "doc": "Per-cycle USD cap on the propose-and-prove loop's base and candidate cohorts, priced at the run lane's evals.gate.lane_usd entry. Over cap the cycle drops its last candidate; base-only over cap refuses the cycle.",
-   "edit": "editor"
-  },
-  {
    "path": "evals.gate.lane",
    "label": "Eval gate lane",
    "type": "str",
@@ -6945,6 +6934,17 @@
    "question": "",
    "default_source": "",
    "doc": "Lane the gate's golden runs use. Defaults zai-flash.",
+   "edit": "editor"
+  },
+  {
+   "path": "evals.propose.cycle_usd",
+   "label": "Eval propose cycle budget (USD)",
+   "type": "float",
+   "default": 10.0,
+   "wizard": "never",
+   "question": "",
+   "default_source": "",
+   "doc": "Per-cycle USD cap on the propose-and-prove loop's base and candidate cohorts, priced at the run lane's evals.gate.lane_usd entry. Over cap the cycle drops candidates from the last; a cap that fits no candidate refuses the cycle.",
    "edit": "editor"
   },
   {
