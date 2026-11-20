@@ -376,7 +376,10 @@ mod tests {
                 (Source::Plugin, "fno:target"),
             ]
         );
-        assert_eq!(got[2].description, "run a node");
+        assert_eq!(
+            got.get(2).map(|s| s.description.as_str()),
+            Some("run a node")
+        );
     }
 
     #[test]
@@ -386,7 +389,7 @@ mod tests {
         skill(&t.path().join(".claude/skills"), "beta", "b");
         let got = list_in("codex", "", Some(t.path()));
         assert_eq!(got.len(), 1);
-        assert_eq!(got[0].name, "alpha");
+        assert_eq!(got.first().map(|s| s.name.as_str()), Some("alpha"));
         assert!(list_in("agy", "", Some(t.path())).is_empty());
         assert_eq!(sigil("codex"), Some('$'));
     }
