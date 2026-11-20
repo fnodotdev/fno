@@ -1833,7 +1833,7 @@ fn authority_refusal<P: Probes>(
         match crate::merge_grant::head_grant_status(stdout.as_deref()) {
             crate::merge_grant::HeadGrant::Granted => {}
             other => {
-                let visual_tap_grant = crate::merge_gates::pr_bound_entry(cwd, facts.number)
+                let visual_tap_grant = pr_bound_entry(cwd, facts.number)
                     .and_then(|entry| RowFacts::id_of(&entry).map(str::to_owned))
                     .is_some_and(|node| {
                         crate::merge_gates::visual_tap_clears_pr(
