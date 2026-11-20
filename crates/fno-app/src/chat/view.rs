@@ -553,7 +553,9 @@ fn author(root: &Root, ix: usize) -> Option<Div> {
 fn speaker(items: &[Item], ix: usize) -> Option<bool> {
     let side = |it: &Item| match it {
         Item::User { meta: false, .. } => Some(true),
-        Item::Text { .. } | Item::Thinking { .. } | Item::Tool { .. } => Some(false),
+        Item::Text { .. } | Item::Thinking { .. } | Item::Tool { .. } | Item::Question { .. } => {
+            Some(false)
+        }
         Item::User { meta: true, .. } | Item::Line(_) => None,
     };
     let me = side(items.get(ix)?)?;
@@ -811,7 +813,7 @@ fn closed_bar(root: &Root, p: Palette, cx: &mut Context<Root>) -> Option<Div> {
 /// answer: a Needs-you stamp and the question, one row per option with the
 /// recommended one chipped, and under them the picked option's description.
 /// A click picks, a click on the picked row answers; so do the arrows and
-/// Enter. The accent is the theme ink, never a hue of its own.
+/// Enter. The chip is filled with the theme ink, never a hue of its own.
 fn question_strip(root: &Root, ask: &Ask, p: Palette, cx: &mut Context<Root>) -> Div {
     let pick = root.chat.pick.min(ask.choices.len().saturating_sub(1));
     let mut strip = div()
@@ -878,7 +880,7 @@ fn question_strip(root: &Root, ask: &Ask, p: Palette, cx: &mut Context<Root>) ->
                     .flex_none()
                     .px_1()
                     .rounded(px(3.0))
-                    .bg(rgb(p.accent))
+                    .bg(rgb(p.fg))
                     .text_color(rgb(p.bg))
                     .child("recommended"),
             );
@@ -899,9 +901,14 @@ fn question_strip(root: &Root, ask: &Ask, p: Palette, cx: &mut Context<Root>) ->
             .child(
                 div()
                     .flex_none()
+                    .max_w(relative(0.4))
                     .font_weight(FontWeight::BOLD)
                     .text_color(rgb(p.fg))
-                    .child(picked.map(|c| c.label.clone()).unwrap_or_default()),
+                    .child(
+                        picked
+                            .map(|c| c.label.split(':').next().unwrap_or(&c.label).to_string())
+                            .unwrap_or_default(),
+                    ),
             )
             .child(
                 div()
