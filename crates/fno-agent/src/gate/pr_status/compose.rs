@@ -209,6 +209,16 @@ pub(crate) fn compose_payload(inputs: &ComposeInputs) -> (i32, Value, Vec<String
         "pr_state".into(),
         inputs.pr_json.get("state").cloned().unwrap_or(Value::Null),
     );
+    // The pr-nudge park reads this: a green OPEN draft is a person's gate,
+    // not a merge order. Absent on stale cached rows, which read as today.
+    payload.insert(
+        "draft".into(),
+        json!(inputs
+            .pr_json
+            .get("draft")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)),
+    );
     payload.insert(
         "mergeable".into(),
         inputs
