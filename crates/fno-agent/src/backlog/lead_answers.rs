@@ -956,11 +956,11 @@ mod tests {
             Some("watching ci on PR 4081 (timeout 15m)")
         );
         assert_eq!(last_report(&texts(&["I end on <watching> tags."])), None);
-        let lead = json!({"role": "L2 x-da5a", "status_age_s": 1260.0});
+        let lead = json!({"role": "L2 x-team", "status_age_s": 1260.0});
         let never = || -> Tail { panic!("a lead is never peeked") };
         assert_eq!(
             quiet_line(&lead, never),
-            "lead (L2 x-da5a), last active 21 min ago"
+            "lead (L2 x-team), last active 21 min ago"
         );
         let worker = json!({"role": null, "status_age_s": 600.0});
         let none = quiet_line(&worker, || Tail::Silent);
