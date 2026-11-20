@@ -167,24 +167,24 @@ fn read_head(
         }
         let ancestor = page.as_ref().and_then(|c| {
             c.iter()
-                .find(|c| c["sha"].as_str() == Some(expected.as_str()))
+                .find(|c| c.pointer("/sha").and_then(Value::as_str) == Some(expected.as_str()))
         });
         let Some(ancestor) = ancestor else {
             // Deeper than one page: the first red is unproven, refused.
             return Ok((Vec::new(), "deeper".into()));
         };
-        let ancestor_subject = ancestor["commit"]["message"]
-            .as_str()
+        let ancestor_subject = ancestor
+            .pointer("/commit/message")
+            .and_then(Value::as_str)
             .unwrap_or("")
             .lines()
             .next()
             .unwrap_or("")
             .to_string();
         stretch.push((expected.clone(), ancestor_subject));
-        expected = ancestor["parents"]
-            .as_array()
-            .and_then(|p| p.first())
-            .and_then(|p| p["sha"].as_str())
+        expected = ancestor
+            .pointer("/parents/0/sha")
+            .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
         if expected.is_empty() {
