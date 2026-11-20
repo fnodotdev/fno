@@ -28,9 +28,15 @@ pub const RESUME_REASSIGNED_EXIT: i32 = 17;
 /// refusals reuse it and no consumer changes.
 pub const RESUME_PAUSED_EXIT: i32 = 19;
 
-/// The revival window a node reservation holds: long enough to relaunch, and
-/// freed early by pid death (the claim is pid-liveness anchored).
+/// The revival window a node reservation holds: long enough to relaunch.
+/// The recorded pid is this short-lived CLI, so liveness inside the window
+/// comes from the session witness, which reads the resumed session the
+/// record names.
 const RESERVE_TTL_MS: i64 = 900_000;
+
+/// resume_wake's exit when a relaunch ran but never read live: the job may
+/// be up, so its reservation stays for the witness to decide.
+pub(crate) const LAUNCH_UNCONFIRMED_EXIT: i32 = 16;
 
 /// The other holder the gate found.
 pub(crate) struct OtherHolder {
@@ -382,8 +388,15 @@ pub(crate) fn revive_admission_refusal(
 /// resuming session's own holder, and same-holder acquire is idempotent, so
 /// the revived session's own claim refreshes the reservation instead of
 /// fighting it. `session_id` is always the full session id, including on the
-/// claude resume arms whose row handle is only a short id.
-pub fn gate_and_reserve(home: &AgentsHome, row_name: &str, session_id: &str) -> Option<i32> {
+/// claude resume arms whose row handle is only a short id. `harness` is the
+/// resumed row's, stamped on the reserve beside its session id.
+pub fn gate_and_reserve(
+    home: &AgentsHome,
+    row_name: &str,
+    session_id: &str,
+    harness: &str,
+    reserved: &mut Reservation,
+) -> Option<i32> {
     let Some(entries) = gc_sweep::read_graph_rows(home) else {
         eprintln!("fno agent resume: warning: graph unreadable, holder check skipped");
         return None;
@@ -391,34 +404,80 @@ pub fn gate_and_reserve(home: &AgentsHome, row_name: &str, session_id: &str) -> 
     if let Some(code) = refused_line(home, &entries, session_id, row_name) {
         return Some(code);
     }
-    let holder = format!("target-session:{session_id}");
-    reserve_nodes(&entries, session_id, row_name, &holder, None)
+    reserve_nodes(&entries, session_id, harness, row_name, reserved)
 }
 
-/// The reserve half: acquire every session node under the resuming session's
+/// The node seats one resume minted, so a failed resume can free them.
+#[derive(Debug, Default)]
+pub struct Reservation {
+    holder: String,
+    keys: Vec<String>,
+    root: Option<std::path::PathBuf>,
+}
+
+impl Reservation {
+    /// An empty reservation on the claims `root` (`None` = the machine's).
+    #[cfg(test)]
+    pub(crate) fn at(root: Option<&std::path::Path>) -> Self {
+        Self {
+            root: root.map(std::path::Path::to_path_buf),
+            ..Default::default()
+        }
+    }
+
+    /// Free the minted seats unless the resume launched or may have
+    /// launched. A refused or failed resume left nothing running, and a
+    /// leftover seat refused every fresh spawn on the node until it expired.
+    pub fn settle(&self, code: i32) {
+        if code == 0 || code == LAUNCH_UNCONFIRMED_EXIT {
+            return;
+        }
+        for key in &self.keys {
+            let _ = claims::release(key, &self.holder, self.root.as_deref(), None);
+        }
+    }
+}
+
+/// The reserve half: hold every session node under the resuming session's
 /// holder. A dispatch that wins the race holds the claim file; the resume
-/// refuses naming it. Root is injectable for tests; production passes the
-/// machine claims root.
+/// refuses naming it. A seat the session already holds live keeps its own
+/// claim: a same-holder acquire would overwrite that claim's pid and reason
+/// with this short-lived CLI's.
 fn reserve_nodes(
     entries: &[Value],
     session_id: &str,
+    harness: &str,
     row_name: &str,
-    holder: &str,
-    root: Option<&std::path::Path>,
+    reserved: &mut Reservation,
 ) -> Option<i32> {
+    let holder = format!("target-session:{session_id}");
+    reserved.holder = holder.clone();
+    let root = reserved.root.clone();
     for node in session_nodes(entries, session_id) {
         let Some(id) = RowFacts::id_of(node) else {
             continue;
         };
+        let key = format!("node:{id}");
+        if let Ok(Some(own)) = crate::claim_store::read(&key, root.as_deref()) {
+            if own.holder == holder
+                && crate::claim_commands::status_verdict(&own).0 != claims::ClaimState::Stale
+            {
+                continue;
+            }
+        }
+        // The identity is the resumed session's. Left ambient, it named the
+        // operator who typed the resume, and that live session kept a
+        // stopped worker's seat live.
         let opts = claims::AcquireOpts {
             pid: Some(std::process::id()),
             ttl_ms: Some(RESERVE_TTL_MS),
             reason: Some("resume reserve".into()),
-            root: root.map(|p| p.to_path_buf()),
+            root: root.clone(),
+            identity: (!harness.is_empty()).then(|| (session_id.to_string(), harness.to_string())),
             ..Default::default()
         };
-        match claims::acquire(&format!("node:{id}"), holder, opts) {
-            AcquireOutcome::Acquired(_) => {}
+        match claims::acquire(&key, &holder, opts) {
+            AcquireOutcome::Acquired(_) => reserved.keys.push(key),
             AcquireOutcome::HeldByOther { holder: other, .. } => {
                 let who = holder_handle(&other);
                 eprintln!(
@@ -792,14 +851,63 @@ mod tests {
             crate::claims::AcquireOutcome::Acquired(_) => {}
             other => panic!("fixture claim failed: {other:?}"),
         }
+        let mut reserved = Reservation::at(Some(&claims_root));
         let refused = reserve_nodes(
             &entries,
             "8c58eaf1-old",
+            "claude",
             "t-old-row",
-            "target-session:8c58eaf1-old",
-            Some(&claims_root),
+            &mut reserved,
         );
         assert_eq!(refused, Some(RESUME_REASSIGNED_EXIT));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // The reserve names the resumed session, never the operator who typed
+    // the resume: the witness then asks about the right session, so a
+    // stopped job's reserve reads dead. A live claim the session already
+    // holds keeps its own evidence, and a failed resume frees only the
+    // seats it minted.
+    #[test]
+    fn reserve_names_the_resumed_session_and_a_failed_resume_frees_it() {
+        let (_, dir) = registry_home("reserve-own");
+        let sid = "8c58eaf1-old";
+        let entries = vec![do_entry("x-aaaa", sid), do_entry("x-bbbb", sid)];
+        let root = dir.join("claims-root");
+        std::fs::create_dir_all(&root).unwrap();
+        let holder = format!("target-session:{sid}");
+        let own_opts = crate::claims::AcquireOpts {
+            reason: Some("target init".into()),
+            root: Some(root.clone()),
+            ..Default::default()
+        };
+        let own = match crate::claims::acquire("node:x-bbbb", &holder, own_opts) {
+            crate::claims::AcquireOutcome::Acquired(rec) => rec,
+            other => panic!("fixture claim failed: {other:?}"),
+        };
+        let mut reserved = Reservation::at(Some(&root));
+        assert_eq!(
+            reserve_nodes(&entries, sid, "claude", "t-old-row", &mut reserved),
+            None
+        );
+        assert_eq!(reserved.keys, vec!["node:x-aaaa".to_string()]);
+        let read = |key: &str| crate::claim_store::read(key, Some(&root)).unwrap();
+        let minted = read("node:x-aaaa").expect("reserve minted");
+        assert_eq!(minted.session_id.as_deref(), Some(sid));
+        assert_eq!(minted.harness.as_deref(), Some("claude"));
+        let kept = read("node:x-bbbb").expect("own claim kept");
+        assert_eq!(kept.reason.as_deref(), Some("target init"));
+        assert_eq!(kept.acquired_at, own.acquired_at);
+
+        reserved.settle(crate::reentry::REENTRY_REFUSED_EXIT);
+        assert!(
+            read("node:x-aaaa").is_none(),
+            "failed resume frees its seat"
+        );
+        assert!(
+            read("node:x-bbbb").is_some(),
+            "the session's own claim stays"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
