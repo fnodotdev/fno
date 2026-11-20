@@ -144,6 +144,7 @@ pub(crate) mod test_spare;
 pub mod thread_host;
 pub mod usage;
 pub mod usage_refresh;
+pub mod watcher_probe;
 pub mod zcode;
 pub mod zcode_ask;
 
