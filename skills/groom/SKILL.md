@@ -1,6 +1,7 @@
 ---
 name: groom
 description: Apply the daily allowlisted grooming levers to the backlog and report changes.
+allowed-tools: Read
 ---
 
 # Groom

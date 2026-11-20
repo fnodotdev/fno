@@ -1009,7 +1009,7 @@ pub(crate) fn select_targets(rows: &[crate::state::RegistryEntry]) -> TargetSele
     let mut by_scope: Vec<(String, Vec<&crate::state::RegistryEntry>)> = Vec::new();
     for row in rows {
         let raw = row.role_scope.as_deref().unwrap_or("").trim();
-        if raw.is_empty() || !crate::spawn_gate::status_is_liveish(&row.status) {
+        if raw.is_empty() || !crate::territory::holder_row_is_live(row) {
             continue;
         }
         let canon = crate::territory::canonical_scope(raw);

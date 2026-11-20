@@ -12,7 +12,7 @@ pub(crate) mod refresh;
 mod render;
 mod sessions;
 mod state;
-mod status;
+pub(crate) mod status;
 mod tick;
 
 use std::path::Path;

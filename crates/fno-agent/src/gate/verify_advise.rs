@@ -108,9 +108,12 @@ pub fn parse_verdict(text: &str) -> Option<String> {
         .map(|c| c[1].to_ascii_lowercase())
 }
 
-/// One-shot headless verifier through the sanctioned spawn surface. Ok
-/// carries (exit, reply, stderr); Err names the failure with the gate
-/// refusal detail.
+/// One-shot headless verifier through the sanctioned spawn surface: the
+/// reader route (profile `verify-advise`) with the harness's tool-bearing
+/// form in the fence - the bounded form the old inline line lacked, so the
+/// verifier now drops the user's settings, MCP and chrome too. Ok carries
+/// (exit, reply, stderr); Err names the failure with the gate refusal
+/// detail.
 pub(crate) fn spawn_verifier(
     prompt: &str,
     cwd: &Path,
@@ -122,26 +125,10 @@ pub(crate) fn spawn_verifier(
     } else {
         format!("verifier-advise-{short}")
     };
-    let mut argv = vec![
-        "agents".to_string(),
-        "spawn".to_string(),
-        "--name".to_string(),
-        name,
-        "--harness".to_string(),
-        "claude".to_string(),
-        "--once".to_string(),
-        "--cwd".to_string(),
-        cwd.display().to_string(),
-        "--timeout".to_string(),
-        SPAWN_TIMEOUT_S.to_string(),
-    ];
-    // argv-fence: exempt - `agents spawn` reserves `--` for its passthrough
-    // lane, so no fence exists; the seed is a template-rendered verifier
-    // prompt, never user input, and cannot lead with a flag token.
-    argv.push(prompt.to_string());
-    // The model rides the passthrough lane in claude's own spelling: the
-    // spawn's --model axis is retired.
-    argv.extend(["--".to_string(), "--model".to_string(), "haiku".to_string()]);
+    let route = crate::reader_route::resolve(cwd, "verify-advise", None, "haiku");
+    let argv =
+        crate::reader_route::reader_tools_argv(&name, prompt, cwd, SPAWN_TIMEOUT_S, &route, &[])
+            .map_err(|e| e.to_string())?;
     let (rc, stdout, stderr) = crate::blueprint_judge::headless_spawn(&argv, SPAWN_TIMEOUT_S + 30)?;
     if rc != 0 {
         let detail = crate::backlog::advance::gate_refusal_detail(&stderr);

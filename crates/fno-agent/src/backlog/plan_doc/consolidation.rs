@@ -85,7 +85,7 @@ fn render(err: &Value, block: &Value) -> String {
             "id" if message == "Field required" => return format!("consolidation section `{section}` has an entry with no id"),
             "id" => return format!("consolidation entry id `{}` ({section}) is not a node id (expected <prefix>-<hex>, e.g. x-aaaa)", text(key("id"))),
             "decision_id" if message == "Field required" => return format!("consolidation section `{section}` has an entry with no decision_id"),
-            "decision_id" => return format!("consolidation entry decision_id `{}` ({section}) is not a decision id (expected d-<hex>)", text(key("decision_id"))),
+            "decision_id" => return format!("consolidation entry decision_id `{}` ({section}) is not a decision id (expected d-<hex> or D<n>)", text(key("decision_id"))),
             "reason" => {
                 let named = entry
                     .and_then(|e| if e.is_object() { e.get("id").or_else(|| e.get("decision_id")) } else { Some(e) });
@@ -161,6 +161,26 @@ fn decisions(node: &str) -> Result<Value, String> {
     serde_json::from_slice(&out.stdout).map_err(|e| format!("W\tthe graph could not be read ({}), so coord lifecycles and slug subjects are unknown", clip(&e.to_string(), 160)))
 }
 
+/// The compare key for a typed display number: `D3478`, `d-3478` and
+/// `d3478@r2d2` all read `d3478`. A hash is not a number, so it reads None
+/// and the caller compares it lowercased as before. The `@store` tail
+/// stays in the key, so a foreign store's number never matches this
+/// store's bare one.
+fn number_key(token: &str) -> Option<String> {
+    let token = token.trim();
+    if !crate::numbers::reads_as_number(token) {
+        return None;
+    }
+    let mut out = String::with_capacity(token.len());
+    for (i, c) in token.chars().enumerate() {
+        if i > 0 && c == '-' {
+            continue;
+        }
+        out.push(c.to_ascii_lowercase());
+    }
+    Some(out)
+}
+
 fn live_lines(answer: &Value, block: &Value, out: &mut Vec<String>) {
     let empty = Vec::new();
     let rows = answer
@@ -217,16 +237,22 @@ fn live_lines(answer: &Value, block: &Value, out: &mut Vec<String>) {
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .map(|e| {
-            e.get("decision_id")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_lowercase()
+        .flat_map(|e| {
+            let typed = e.get("decision_id").and_then(Value::as_str).unwrap_or("");
+            let mut keys = vec![typed.to_lowercase()];
+            // Dual read: the display number beside the hash. One entry
+            // contributes both compare keys; a hash contributes itself.
+            if let Some(number) = number_key(typed) {
+                keys.push(number);
+            }
+            keys
         })
         .collect();
     for row in &live {
         let did = row.get("decision_id").and_then(Value::as_str).unwrap_or("");
-        if !did.is_empty() && !acked.contains(&did.to_lowercase()) {
+        let number = row["number"].as_str().unwrap_or("");
+        let number_hit = number_key(number).is_some_and(|k| acked.contains(&k));
+        if !did.is_empty() && !acked.contains(&did.to_lowercase()) && !number_hit {
             let decision = clip(
                 row.get("decision").and_then(Value::as_str).unwrap_or(""),
                 80,
@@ -320,7 +346,7 @@ mod tests {
     }
 
     #[test]
-    fn shape_defects_read_in_the_channel_words() {
+    fn shape_defects_and_the_live_number_ack_read_in_channel_words() {
         let none = |_: &str| -> Result<Value, String> { unreachable!() };
         assert_eq!(
             check("no fence", None, &none),
@@ -352,6 +378,34 @@ mod tests {
         assert!(
             lines[0].contains("more than one `outcome:` line"),
             "{lines:?}"
+        );
+        // A D-number ack matches the live ruling through the row's number
+        // field; an unacknowledged ruling still reads missing. The same
+        // run drives the schema door's widened decision_id shape end to
+        // end, so one test owns both facets.
+        use serde_json::json;
+        let row = |did: &str, number: &str| {
+            json!({
+                "decision_id": did, "number": number, "lifecycle": "live",
+                "decision": "one ruling", "ts": "2026-11-18T00:00:00Z"
+            })
+        };
+        let block = "consolidation:\n  outcome: proceed_alone\n  decisions_acknowledged:\n    - decision_id: D3478\n      reason: shapes the work; does not close it";
+        let answer = json!({"decisions": [row("d-abc12345", "D3478")], "damaged": 0});
+        let lines = check(
+            &fm(block),
+            Some("x-1234abcd"),
+            &|_: &str| Ok(answer.clone()),
+        );
+        assert!(
+            lines.iter().all(|l| !l.starts_with("M\t")),
+            "the number ack matched nothing: {lines:?}"
+        );
+        let other = json!({"decisions": [row("d-fff98765", "D3500")], "damaged": 0});
+        let lines = check(&fm(block), Some("x-1234abcd"), &|_: &str| Ok(other.clone()));
+        assert!(
+            lines.iter().any(|l| l.starts_with("M\t")),
+            "an unacknowledged ruling read acknowledged: {lines:?}"
         );
     }
 }

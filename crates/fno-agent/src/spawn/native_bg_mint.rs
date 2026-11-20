@@ -214,6 +214,34 @@ pub(crate) fn mint_missing_native_bg(
         }
     }
 
+    // A native row minted before the mint read its record's lane carries the
+    // load backfill's first-party default, and the gate counts it on the
+    // wrong lane. The claimed record names the lane it launched on. A row
+    // with a recorded route was re-routed on purpose and keeps its stamp.
+    let default_lane = crate::claude_adopt::first_party_provider("claude");
+    let mut relanes: Vec<(String, String)> = Vec::new();
+    for e in entries.iter().filter(|e| {
+        e.harness_kind() == Harness::Claude
+            && e.provider.as_deref() == default_lane
+            && e.route_settings_path.as_deref().is_none_or(str::is_empty)
+            && crate::spawn_gate::status_is_liveish(&e.status)
+    }) {
+        if relanes.len() >= BUDGET_PER_BEAT {
+            deferred = true;
+            break;
+        }
+        let Some(session) = e.harness_session_id.as_deref() else {
+            continue;
+        };
+        let lane = crate::launch_record::claimed_edge(home.root(), session)
+            .as_ref()
+            .and_then(crate::native_adopt::record_lane)
+            .filter(|lane| Some(lane.as_str()) != default_lane);
+        if let Some(lane) = lane {
+            relanes.push((session.to_string(), lane));
+        }
+    }
+
     let mut born: Vec<Value> = Vec::new();
     let mut filled: Vec<Value> = Vec::new();
     let mut parent_filled: Vec<Value> = Vec::new();
@@ -268,6 +296,18 @@ pub(crate) fn mint_missing_native_bg(
             if e.node.is_none() {
                 e.node = Some(node.clone());
                 filled.push(json!({"name": e.name.clone(), "node": node}));
+            }
+        }
+        for (session, lane) in relanes {
+            let Some(e) = r
+                .entries
+                .iter_mut()
+                .find(|e| e.harness_session_id.as_deref() == Some(session.as_str()))
+            else {
+                continue;
+            };
+            if e.provider.as_deref() == default_lane {
+                e.provider = Some(lane);
             }
         }
         for (session, record) in parented {
@@ -531,6 +571,7 @@ fn prepare_row(
         cwd: cwd.clone(),
         project_root: cwd,
         claude_session_uuid: row.session_id.clone().filter(|s| !s.is_empty()),
+        provider: record.and_then(crate::native_adopt::record_lane),
         model,
         model_basis,
         ..RegistryEntry::new(Some(session.to_string()), lineage)
@@ -623,14 +664,14 @@ mod tests {
         let record = json!({
             "harness": "claude", "name": "t-xaaaa-glm", "node": "x-aaaa", "cwd": "/tmp/proj",
             "launcher_session": "d7031e2c", "launcher_harness": "claude",
-            "launched_at_ms": 0, "child_session": sid,
+            "launched_at_ms": 0, "child_session": sid, "provider": "zai",
         });
         std::fs::write(dir.join(format!("{sid}.json")), record.to_string()).unwrap();
     }
 
-    /// A claimed launch record names the spawner at birth, even for a session
-    /// that never joined, and a row born before its record was read takes the
-    /// parent on the next beat.
+    /// A claimed launch record names the spawner and the lane at birth, even
+    /// for a session that never joined, and a row born before its record was
+    /// read takes the parent and leaves the default lane on the next beat.
     #[test]
     fn a_claimed_launch_record_parents_the_row() {
         sandbox(|home| {
@@ -655,6 +696,7 @@ mod tests {
                     e.name
                 );
                 assert_eq!(e.node.as_deref(), Some("x-aaaa"), "{}", e.name);
+                assert_eq!(e.provider.as_deref(), Some("zai"), "{}", e.name);
             }
             assert!(registry.entries.iter().any(|e| e.name == "t-xaaaa-glm"));
 

@@ -1,0 +1,19 @@
+# Capability tier: does a reader of the harness-verbs skill know it owns no
+# verb surface of its own and redirects to the command matrix? The toolbag
+# pins the skill as redirect-only. Graded on the answer naming the redirect
+# target and refusing to list verbs itself.
+id: capability-redirect-to-commands
+tier: capability
+prompt: |
+  Read skills/harness-verbs/SKILL.md. Answer two questions in
+  harness-verbs-eval-answers.md at the repo root, one per line:
+  1. Which skill does this one send the reader to?
+  2. Does this skill define any harness commands itself? Answer
+     yes or no.
+grade:
+  - kind: file-exists
+    path: harness-verbs-eval-answers.md
+  - kind: exit
+    command: "python3 -c \"a = open('harness-verbs-eval-answers.md').read().lower(); assert 'harness-commands' in a, 'answer 1 missing the redirect target'; l = [x for x in a.splitlines() if x.strip()]; assert l[-1].lstrip('2. ').startswith('no'), 'answer 2 must refuse its own verb surface'\""
+timeout_minutes: 10
+tags: [capability, harness-verbs]

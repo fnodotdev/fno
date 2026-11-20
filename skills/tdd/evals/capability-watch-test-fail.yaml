@@ -1,0 +1,18 @@
+# Capability tier: does a reader of the tdd skill take "watch the test fail"
+# as the entry gate, not as optional ceremony? The skill's core principle is
+# that an unwatched passing test proves nothing. Graded on the answer naming
+# the failing run as the precondition for trusting a pass.
+id: capability-watch-test-fail
+tier: capability
+prompt: |
+  Read skills/tdd/SKILL.md. Answer one question in
+  tdd-eval-answers.md at the repo root: before you trust that a
+  passing test proves the behavior, what must you have watched the
+  test do first, and what does the skill say an unwatched pass means?
+grade:
+  - kind: file-exists
+    path: tdd-eval-answers.md
+  - kind: exit
+    command: "python3 -c \"a = open('tdd-eval-answers.md').read().lower(); assert 'fail' in a, 'answer must name watching the test fail'\""
+timeout_minutes: 10
+tags: [capability, tdd]

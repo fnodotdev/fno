@@ -2,6 +2,8 @@
 name: blueprint
 description: Create or update one implementation plan from an idea, node, or cited research.
 argument-hint: "[quick] [group N | no-group] [no-adopt] [no-collision-check] <design-doc-path | feature-description> [--no-linear]"
+# bare Read: fresh installs gate reads under the plugin cache, and path-scoped Read rules get no ${CLAUDE_PLUGIN_ROOT} substitution in tool rules.
+allowed-tools: Read
 ---
 
 <!-- style-exception: mechanical command rename preserves pre-existing prose -->

@@ -33,10 +33,20 @@ mod config_route_cli;
 /// the docs to discover a rename they could have been told about in one line,
 /// and a hook that hits it fails with no idea why. A tombstone is cheaper than
 /// a broken caller, so removal means moving the name here, not deleting it.
-const MUX_TOMBSTONES: &[(&str, &str)] = &[(
-    "squad",
-    "`fno mux workspace <command>` - `squad` was an unadvertised alias and is gone",
-)];
+const MUX_TOMBSTONES: &[(&str, &str)] = &[
+    (
+        "squad",
+        "`fno mux workspace <command>` - `squad` was an unadvertised alias and is gone",
+    ),
+    (
+        "stats",
+        "`fno mux diag stats` - `stats` folded under the hidden diag group",
+    ),
+    (
+        "rows",
+        "`fno mux diag rows` - `rows` folded under the hidden diag group",
+    ),
+];
 
 fn mux_tombstone(command: &str) -> Option<&'static str> {
     MUX_TOMBSTONES
@@ -102,7 +112,7 @@ enum Role {
     /// `mux doctor [--json]`: read-only environment diagnostics (US6). The bool
     /// is `--json`.
     MuxDoctor(bool),
-    /// (v78) `mux stats [--json]`: server-instance telemetry (the human_touch
+    /// (v78) `mux diag stats [--json]`: server-instance telemetry (the human_touch
     /// emission-failure counter with its measurement window). Hidden, read-only.
     MuxStats(bool),
     /// (v110) `mux notify <title> <message> [--json]`: one desktop
@@ -120,6 +130,9 @@ enum Role {
     MuxTab(fno::cli_args::TabOp),
     /// `mux layout <get|apply|graft> ...`: nested layout trees and specs.
     MuxLayout(fno::cli_args::LayoutOp),
+    /// `mux app <op>`: the fno-app drive surface (open, show, focus, shot,
+    /// state, close).
+    MuxApp(fno::cli_args::AppOp),
     ///  `mux rows [--json]`: the one row-set receipt - the last
     /// derived `layout.agents` with the paint verdict per row.
     MuxRows(Vec<OsString>),
@@ -197,6 +210,9 @@ enum Role {
     /// emit surface and the other event names until their cutover.
     DoctorEvent(Vec<OsString>),
     DoctorCost(Vec<OsString>),
+    /// `fno doctor attention [--days N] [--json]`: the per-PR attention
+    /// rows and guardrail, exec'd through the agent's attention-ledger door.
+    DoctorAttention(Vec<OsString>),
     /// `fno doctor skill-diff tick|reconcile` and the deprecated root `fno
     /// skill-diff`: the whole command execs the native `fno-agent loops`
     /// skill-diff ops. The op word maps to the loops door's name (`tick` ->
@@ -1409,6 +1425,11 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::doctor_cost::classify(args) {
         return Role::DoctorCost(rest);
     }
+    if let [group, leaf, rest @ ..] = args {
+        if group == "doctor" && leaf == "attention" {
+            return Role::DoctorAttention(rest.to_vec());
+        }
+    }
     if let Some(rest) = fno::event_cli::classify_doctor_event(args) {
         return Role::DoctorEvent(rest);
     }
@@ -1781,7 +1802,10 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
             }
             cli_args::MuxCmd::Ls { json } => Role::MuxLs(json.json),
             cli_args::MuxCmd::Doctor { json } => Role::MuxDoctor(json.json),
-            cli_args::MuxCmd::Stats { json } => Role::MuxStats(json.json),
+            cli_args::MuxCmd::Diag { op } => match op {
+                cli_args::DiagOp::Stats { json } => Role::MuxStats(json.json),
+                cli_args::DiagOp::Rows(t) => Role::MuxRows(t.tail),
+            },
             cli_args::MuxCmd::Notify {
                 title,
                 message,
@@ -1819,6 +1843,7 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
             cli_args::MuxCmd::Layout { common: _, op } => Role::MuxLayout(op),
             cli_args::MuxCmd::Web { op } => Role::MuxWebCtl(op),
             cli_args::MuxCmd::Workspace { op } => Role::MuxWorkspace(op),
+            cli_args::MuxCmd::App { op } => Role::MuxApp(op),
             cli_args::MuxCmd::Serve(t) if fno::client::snapshot::wants_snapshot(&t.tail) => {
                 Role::MuxSnapshot(t.tail)
             }
@@ -1855,7 +1880,6 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
                     "fno mux serve: needs --web, --stop, --status, or --snapshot".into(),
                 ),
             },
-            cli_args::MuxCmd::Rows(t) => Role::MuxRows(t.tail),
             cli_args::MuxCmd::Where(t) => Role::MuxWhere(t.tail),
             cli_args::MuxCmd::RetireSession(t) => Role::MuxRetireSession(t.tail),
             // An explicit -h/--help prints the view help (the command family's
@@ -2129,6 +2153,11 @@ fn run_doctor_role(role: Role) -> ControlFlow<(), Role> {
     match role {
         Role::DoctorEvent(rest) => fno::cli_usage::exit(fno::event_cli::run(&rest)),
         Role::DoctorCost(rest) => fno::cli_usage::exit(fno::doctor_cost::run(&rest)),
+        Role::DoctorAttention(rest) => fno::cli_usage::exit(fno_agent_exec(
+            "fno doctor attention",
+            &["compaction", "attention-ledger", "--per-pr"],
+            &rest,
+        )),
         Role::DoctorLintMenuCaps(rest) => fno::cli_usage::exit(fno::menu_caps::run(&rest)),
         Role::DoctorLintRepo(rest) => {
             let flat: Vec<String> = rest
@@ -2668,6 +2697,7 @@ fn run_mux_tree_role(role: Role, env_session: Option<&str>) -> ControlFlow<(), R
             let tail = op.tail();
             exit_mux(mux_cli::layout(op, &tail, env_session))
         }
+        Role::MuxApp(op) => fno::cli_usage::exit(fno::mux::app_cli::run(op)),
         Role::MuxRows(args) => exit_mux(mux_cli::mux_rows::rows(&args, env_session)),
         Role::MuxWhere(rest) => exit_mux(mux_cli::where_(&rest, env_session)),
         Role::MuxThread(rest) => exit_mux(mux_cli::thread(&rest, env_session)),
@@ -3340,7 +3370,7 @@ mod tests {
             Role::MuxRetireSession(os(&["a", "--harness", "h", "--session-id", "i"]))
         );
         assert_eq!(
-            decide_role(&os(&["mux", "rows", "--json"]), false),
+            decide_role(&os(&["mux", "diag", "rows", "--json"]), false),
             Role::MuxRows(os(&["--json"]))
         );
         assert_eq!(

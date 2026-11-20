@@ -5,7 +5,7 @@ use std::process::Command;
 /// server never receives the terminal's SIGHUP, stderr to a per-session log.
 /// Two clients racing here both spawn; the bind is the lock, the losing
 /// server exits 0, and both clients attach to the winner (AC4-EDGE).
-pub(super) fn spawn_server(path: &Path) -> Result<(), String> {
+pub(super) fn spawn_server(path: &Path, attaching: bool) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| format!("cannot find own binary: {e}"))?;
     let log = std::fs::OpenOptions::new()
         .create(true)
@@ -18,7 +18,7 @@ pub(super) fn spawn_server(path: &Path) -> Result<(), String> {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(log);
-    stamp_sandbox_owner(&mut cmd);
+    stamp_sandbox_owner(&mut cmd, attaching);
     // The pure-Rust server does not read config.toml. Resolve this once on the
     // client, which already pays for the bounded config lookup.
     if std::env::var_os("FNO_MUX_SHELL_INTEGRATION").is_none() && shell_integration_off() {
@@ -66,9 +66,9 @@ pub(super) fn spawn_server(path: &Path) -> Result<(), String> {
 }
 
 /// A Codex companion session is the explicit sandbox marker for an owner-bound
-/// mux server. A caller may pass an outer script's pid; otherwise this client
-/// process owns the detached server for the duration of its attach.
-pub(super) fn stamp_sandbox_owner(cmd: &mut Command) {
+/// mux server. A caller may pass an outer script's pid; otherwise an attaching
+/// client owns the detached server for the duration of its attach.
+pub(super) fn stamp_sandbox_owner(cmd: &mut Command, attaching: bool) {
     const OWNER_KEYS: [&str; 3] = ["FNO_OWNER_PID", "FNO_OWNER_BIRTH", "FNO_OWNER_SESSION"];
     for key in OWNER_KEYS {
         cmd.env_remove(key);
@@ -81,30 +81,40 @@ pub(super) fn stamp_sandbox_owner(cmd: &mut Command) {
                 .ok()
                 .filter(|v| valid_owner_session(v))
         });
-    let Some(session) = session else { return };
-    let owner_pid = match std::env::var("FNO_OWNER_PID") {
-        Ok(raw) => match raw.parse::<u32>() {
-            Ok(pid) if pid > 1 => pid,
-            _ => return,
-        },
-        Err(_) => std::process::id(),
-    };
-    let birth = match std::env::var("FNO_OWNER_BIRTH") {
-        Ok(raw) => match raw.parse::<u64>() {
-            Ok(birth) if birth > 0 => birth,
-            _ => return,
-        },
-        Err(_) => match crate::proto::pid_start_time(owner_pid) {
-            Some(birth) => birth,
-            None => return,
-        },
-    };
-    if crate::proto::pid_start_time(owner_pid) != Some(birth) {
-        return;
+    let lease = owner_lease(
+        session,
+        std::env::var("FNO_OWNER_PID").ok(),
+        std::env::var("FNO_OWNER_BIRTH").ok(),
+        attaching,
+    );
+    if let Some((owner_pid, birth, session)) = lease {
+        cmd.env("FNO_OWNER_PID", owner_pid.to_string())
+            .env("FNO_OWNER_BIRTH", birth.to_string())
+            .env("FNO_OWNER_SESSION", session);
     }
-    cmd.env("FNO_OWNER_PID", owner_pid.to_string())
-        .env("FNO_OWNER_BIRTH", birth.to_string())
-        .env("FNO_OWNER_SESSION", session);
+}
+
+/// The owner a spawned server binds to, or `None` for a shared ownerless one.
+/// A one-shot client such as `pane run` exits right after the spawn, so with
+/// no declared `FNO_OWNER_PID` it must not name itself: the server would shut
+/// down owner-gone one tick later and take every pane with it.
+fn owner_lease(
+    session: Option<String>,
+    pid_raw: Option<String>,
+    birth_raw: Option<String>,
+    attaching: bool,
+) -> Option<(u32, u64, String)> {
+    let session = session?;
+    let owner_pid = match pid_raw {
+        Some(raw) => raw.parse::<u32>().ok().filter(|pid| *pid > 1)?,
+        None if attaching => std::process::id(),
+        None => return None,
+    };
+    let birth = match birth_raw {
+        Some(raw) => raw.parse::<u64>().ok().filter(|birth| *birth > 0)?,
+        None => crate::proto::pid_start_time(owner_pid)?,
+    };
+    (crate::proto::pid_start_time(owner_pid) == Some(birth)).then_some((owner_pid, birth, session))
 }
 
 fn valid_owner_session(session: &str) -> bool {
@@ -149,7 +159,7 @@ pub(crate) fn config_says_off(stdout: &str) -> bool {
 
 #[cfg(test)]
 mod spawn_config_tests {
-    use super::{config_says_off, scrollback_lines_value, window_size_word};
+    use super::{config_says_off, owner_lease, scrollback_lines_value, window_size_word};
 
     /// The env bridge from config.toml to the interactive server's
     /// latched env: must mirror `pty::integration_disabled` - exactly
@@ -171,5 +181,19 @@ mod spawn_config_tests {
         assert_eq!(scrollback_lines_value(" 20000\n"), Some(20_000));
         assert_eq!(scrollback_lines_value("0"), None);
         assert_eq!(scrollback_lines_value("20k"), None);
+    }
+
+    /// A one-shot client never owns the server it leaves behind; an
+    /// attaching client and a declared owner pid still bind it.
+    #[test]
+    fn only_an_attaching_client_or_a_declared_pid_owns_the_server() {
+        let session = || Some("agent-session".to_string());
+        let me = std::process::id();
+        assert_eq!(owner_lease(session(), None, None, false), None);
+        let attached = owner_lease(session(), None, None, true).expect("attach binds");
+        assert_eq!(attached.0, me);
+        let declared = owner_lease(session(), Some(me.to_string()), None, false);
+        assert_eq!(declared.map(|lease| lease.0), Some(me));
+        assert_eq!(owner_lease(None, None, None, true), None);
     }
 }

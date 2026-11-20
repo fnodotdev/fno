@@ -464,6 +464,7 @@ harness-verbs # verb-wording: allow (the shipped slash skill name)
 intel
 lead
 mail
+persona-new-user
 persona-review
 pr
 review
@@ -472,6 +473,7 @@ ship
 ship-docs
 speculate
 target
+talk
 tdd
 test-audit
 think

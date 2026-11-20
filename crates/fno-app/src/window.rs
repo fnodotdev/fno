@@ -8,32 +8,41 @@ use std::ops::Range;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui::{
     actions, canvas, div, font, point, prelude::*, px, rgb, rgba, size, AnyView, App, Application,
-    Bounds, ClipboardItem, Context, ElementInputHandler, Entity, EntityInputHandler, FocusHandle,
-    Global, InputHandler, KeyBinding, KeyDownEvent, Menu, MenuItem, ModifiersChangedEvent,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollWheelEvent,
-    Size, Subscription, Task, TitlebarOptions, UTF16Selection, Window, WindowBounds, WindowOptions,
+    Bounds, ClipboardEntry, ClipboardItem, Context, ElementInputHandler, Entity,
+    EntityInputHandler, FocusHandle, Global, InputHandler, KeyBinding, KeyDownEvent, Menu,
+    MenuItem, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    Pixels, Point, ScrollWheelEvent, Size, Subscription, Task, TitlebarOptions, UTF16Selection,
+    Window, WindowBounds, WindowOptions,
 };
 
 use serde::{Deserialize, Serialize};
 
-use super::chat::{self, Chat};
+use super::alerts;
+use super::alerts::Signal;
+use super::chat::{
+    self,
+    composer::{Attachment, Draft},
+    Chat,
+};
+use super::goto;
 use super::grid::{Metrics, PaneView};
 use super::hq::{Poller, Reply};
 use super::keys::{self, Key, Modes, Shortcut};
+use super::launch::{self, Launch};
 use super::link::{Event, Layout, Link};
 use super::mouse::{self, Hit};
 use super::palette::Palette;
-use super::{find, left_pane, mods, orchestration, sheet, tabs, ui};
+use super::{find, left_pane, mods, orchestration, settings, sheet, tabs, ui};
 use fno::app_api::web_hq::Board;
 use fno::proto::chat_event::SessionKey;
 use fno::proto::{self, ClientMsg, Command, Frame, MouseEvent, MouseKind};
 use fno::tree::Rect;
 
-actions!(fno_app, [KeyboardShortcuts]);
+actions!(fno_app, [KeyboardShortcuts, GoTo, OpenSettings]);
 
 /// What fills the main area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, Serialize, Deserialize)]
@@ -60,6 +69,8 @@ pub enum Action {
     Show(MainView),
     /// Show every agent in the left pane, or only the first few.
     ToggleAgents,
+    /// Open or close the key sheet, as ⌘/ and the palette's command row do.
+    ToggleKeySheet,
     /// Open or close one chat thinking row.
     ToggleChat(usize),
     /// Open the sheet of one chat tool call.
@@ -67,8 +78,15 @@ pub enum Action {
     CloseSheet,
     Copy(String),
     SendChat,
+    /// The start view's send: the launch panel's own submit door.
+    SubmitLaunch,
     /// Reopen a chat stream that closed.
     Reconnect,
+    /// Route one HQ composer message to the owning lead.
+    Mail(String),
+    /// Open the launch composer, with a kind pre-picked when the opener
+    /// named one; `None` keeps the retained draft's kind.
+    OpenLaunch(Option<launch::Kind>),
 }
 
 /// The stable control id a click's [`Action`] ships to the usage events arm
@@ -80,12 +98,16 @@ fn click_id(action: &Action) -> &'static str {
         Action::Answer { .. } => "answer",
         Action::Show(_) => "show_view",
         Action::ToggleAgents => "toggle_agents",
+        Action::ToggleKeySheet => "toggle_key_sheet",
         Action::ToggleChat(_) => "toggle_chat",
         Action::OpenSheet(_) => "open_sheet",
         Action::CloseSheet => "close_sheet",
         Action::Copy(_) => "copy",
         Action::SendChat => "send_chat",
+        Action::SubmitLaunch => "submit_launch",
         Action::Reconnect => "reconnect",
+        Action::Mail(_) => "mail_lead",
+        Action::OpenLaunch(_) => "open_launch",
     }
 }
 
@@ -98,8 +120,22 @@ pub enum AnswerState {
     Refused(String),
 }
 
+/// Where the HQ composer's send stands.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MailState {
+    Sending,
+    /// The porcelain's own verdict line.
+    Sent(String),
+    Refused(String),
+}
+
 /// How long a notice stays in the corner.
 const NOTICE_FOR: Duration = Duration::from_secs(4);
+/// The terminal client's quiet windows, mirrored: 40ms releases a held Esc
+/// candidate, 400ms keeps a typed tab number together before it resolves
+/// on its own.
+const CHORD_FLUSH_MS: u64 = 40;
+const DIGIT_FLUSH_MS: u64 = 400;
 
 /// The most wheel lines one event sends, so a fling cannot flood the socket.
 const WHEEL_CAP: i32 = 10;
@@ -111,11 +147,20 @@ pub struct Root {
     frames: HashMap<u64, Arc<Frame>>,
     panes: HashMap<u64, Entity<PaneView>>,
     modes: Modes,
+    /// The mux's own key scanner: claims the prefix (Ctrl+B by default)
+    /// before any pane input, the same layer the terminal client claims it.
+    scanner: fno::ui::keys::Scanner,
     notice: Option<String>,
     /// The notice reports a failure: it paints in the error color.
     notice_failed: bool,
     /// Bumped by each notice, so only the newest one's timer clears it.
     notice_gen: u64,
+    /// A shot window paints the durable surface only: server notices are a
+    /// transient corner toast that would photobomb a still frame.
+    shot: bool,
+    /// The empty-pane shot: sync_chat never hands the pane a session, so
+    /// the start view holds for the frame.
+    shot_empty_chat: bool,
     pub(super) closed: Option<String>,
     pub(super) metrics: Metrics,
     pub(super) palette: Palette,
@@ -127,7 +172,7 @@ pub struct Root {
     /// The content size (rows, cols) last sent to the server.
     sent_size: (u16, u16),
     pub(super) board: Board,
-    poller: Option<Poller>,
+    pub(super) poller: Option<Poller>,
     /// The terminal area's bounds at the last paint, for mouse hit tests.
     area: Rc<Cell<Bounds<Pixels>>>,
     /// The pane a left-button drag started in.
@@ -139,6 +184,9 @@ pub struct Root {
     /// The pane the wheel remainder belongs to.
     wheel_pane: Option<u64>,
     pub(super) answers: HashMap<String, AnswerState>,
+    /// The composer's draft and its send state.
+    pub(super) board_draft: Draft,
+    pub(super) mail: Option<MailState>,
     pub(super) agents_open: bool,
     pub(super) chat: Chat,
     /// `--chat <id>`: the session chat mode shows, whatever has focus.
@@ -147,8 +195,19 @@ pub struct Root {
     pub(super) picking: bool,
     /// The key sheet (cmd-/) covers the window.
     pub(super) sheet: bool,
+    /// The go-to palette (cmd-k) covers the window.
+    pub(super) goto: Option<goto::GoTo>,
     /// The find bar (cmd-f) over the focused pane or the chat.
     pub(super) find: Option<find::Find>,
+    /// The launch composer: retained state, open flag, id mint, and the
+    /// row the last launch named. Esc closes and keeps the draft.
+    pub(super) launch: launch::Panel,
+    /// The Settings panel (cmd-,): rows, query, page; None while closed.
+    pub(super) settings: Option<settings::SettingsState>,
+    /// The font face and size the terminal metrics should carry: the
+    /// launch values, then a Settings write. Render moves the real
+    /// `metrics` onto it, where the text system can measure.
+    pub(super) font_want: (String, f32),
     /// The mux session this window attached to; panes open on it.
     pub(super) session: String,
     pub(super) ext: mods::Page,
@@ -166,11 +225,37 @@ pub struct Root {
     _activation: Option<Subscription>,
     _appearance: Option<Subscription>,
     _notice: Option<Task<()>>,
+    _alerts: Option<Task<()>>,
+    _alerts_tick: Option<Task<()>>,
+    /// The attention signals: the lattice diff, the switch cache, the badge.
+    alerts: alerts::Alerts,
+    /// Whether the window is frontmost, kept by the activation observer.
+    window_active: bool,
 }
 
 /// The content size sent to the server. The left pane and the title bar are
 /// always reserved. A notice floats over the grid and never resizes it, and
 /// one row and one column are kept for the half-cell inset around the grid.
+/// The window's live subscriptions: repaint every pane on (de)activation
+/// (the cursor turns hollow; the board poll pauses while the window is
+/// inactive) and follow the system appearance live, because macOS flips it
+/// at dusk with the app open.
+fn wire_window(root: &mut Root, window: &mut Window, cx: &mut Context<Root>) {
+    root._activation = Some(cx.observe_window_activation(window, |root, window, cx| {
+        root.window_active = window.is_window_active();
+        if let Some(poller) = &root.poller {
+            poller.set_active(window.is_window_active());
+        }
+        for view in root.panes.values() {
+            view.update(cx, |_, cx| cx.notify());
+        }
+    }));
+    root._appearance = Some(cx.observe_window_appearance(window, |root, window, cx| {
+        root.light = super::palette::appearance_is_light(window.appearance());
+        root.restyle(cx);
+    }));
+}
+
 fn grid_size(viewport: Size<Pixels>, cell: Size<Pixels>) -> (u16, u16) {
     let height = viewport.height - px(ui::TITLE_H);
     let width = viewport.width - px(left_pane::WIDTH);
@@ -192,10 +277,47 @@ impl Root {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        Self::new_with_link(
+            session,
+            main,
+            pinned,
+            agents_open,
+            metrics,
+            None,
+            window,
+            cx,
+        )
+    }
+
+    /// The shot path's constructor: `prewarmed` hands a link already
+    /// connected and drained to the world's first layout, so the one
+    /// frame gpui paints synchronously at open carries the world's data.
+    fn new_with_link(
+        session: String,
+        main: MainView,
+        pinned: Option<SessionKey>,
+        agents_open: bool,
+        metrics: Metrics,
+        prewarmed: Option<super::link::WarmedLink>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::write_pid_file(&session);
         let sent_size = grid_size(window.viewport_size(), metrics.cell);
         let light = super::palette::appearance_is_light(window.appearance());
+        let font_want = (
+            metrics.font.family.to_string(),
+            f32::from(metrics.font_size),
+        );
         let theme_cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());
         let (palette, theme_warning) = super::palette::for_appearance(light, &theme_cwd);
+        // The key layer (config.mux.prefix, [mux.keys]), installed before the
+        // scanner reads its first keystroke - the same loader the terminal
+        // client uses. A refused rebind surfaces as the startup notice rather
+        // than silently running the shipped default.
+        let (keymap, key_warnings) = fno::ui::digest_overlay::keymap(&theme_cwd);
+        fno::ui::keys::install(keymap);
+        let key_warning = key_warnings.first().map(|w| w.0.clone());
         let mut root = Root {
             main,
             link: None,
@@ -203,9 +325,12 @@ impl Root {
             frames: HashMap::new(),
             panes: HashMap::new(),
             modes: Modes::default(),
-            notice: theme_warning,
+            scanner: fno::ui::keys::Scanner::default(),
+            notice: key_warning.or(theme_warning),
             notice_failed: false,
             notice_gen: 0,
+            shot: false,
+            shot_empty_chat: false,
             closed: None,
             metrics,
             palette,
@@ -219,6 +344,8 @@ impl Root {
             wheel: 0.0,
             wheel_pane: None,
             answers: HashMap::new(),
+            board_draft: Default::default(),
+            mail: None,
             agents_open,
             light,
             theme_cwd: theme_cwd.clone(),
@@ -230,7 +357,11 @@ impl Root {
             pinned,
             picking: false,
             sheet: false,
+            goto: None,
             find: None,
+            launch: launch::Panel::default(),
+            settings: None,
+            font_want,
             preedit: None,
             _reader: None,
             _chat: None,
@@ -240,48 +371,111 @@ impl Root {
             _activation: None,
             _appearance: None,
             _notice: None,
+            _alerts: None,
+            _alerts_tick: None,
+            alerts: alerts::Alerts::new(),
+            // A terminal launch leaves the new window behind the frontmost
+            // app; the activation observer only reports changes, so the
+            // first read happens here.
+            window_active: window.is_window_active(),
         };
-        // Repaint every pane on (de)activation: the cursor turns hollow. The
-        // board poll pauses while the window is inactive.
-        root._activation = Some(cx.observe_window_activation(window, |root, window, cx| {
-            if let Some(poller) = &root.poller {
-                poller.set_active(window.is_window_active());
-            }
-            for view in root.panes.values() {
-                view.update(cx, |_, cx| cx.notify());
-            }
-        }));
-        // Follow the system appearance live: macOS flips at dusk with the app
-        // open.
-        root._appearance = Some(cx.observe_window_appearance(window, |root, window, cx| {
-            root.light = super::palette::appearance_is_light(window.appearance());
-            root.restyle(cx);
-        }));
-        match Link::connect(&session, sent_size.0, sent_size.1) {
-            Ok((link, mut rx)) => {
-                root.link = Some(link);
+        wire_window(&mut root, window, cx);
+        Self::attach_link(&mut root, &session, sent_size, prewarmed, cx);
+        root.wire_alerts(cx);
+        root.start_board_poll(cx);
+        root.start_plugins(cx);
+        // The control channel: the drain loop applies rows through the
+        // same paths clicks ride (focus, view switch, quit).
+        crate::control::spawn_poll(session.clone(), cx);
+        // `--mode mods` opens on the view without a switch, so read here.
+        if root.main == MainView::Mods {
+            root.ext.read();
+        }
+        root
+    }
+
+    /// The drive surface finds the live app through this pid file (the
+    /// fleet law: stop builds by pid, never a sweep). The app names its
+    /// own pid at open; a stale file cleans up on the next read.
+    fn write_pid_file(session: &str) {
+        if let Some(dir) = fno::app_control::support_dir() {
+            std::fs::create_dir_all(&dir).ok();
+            std::fs::write(
+                dir.join(format!("fno-app-{session}.pid")),
+                std::process::id().to_string(),
+            )
+            .ok();
+        }
+    }
+
+    /// Connect the root to its session: a prewarmed link adopts the
+    /// stream the shot world already drained; otherwise the root
+    /// connects fresh, and a refusal lands in the notice, not a panic.
+    fn attach_link(
+        root: &mut Root,
+        session: &str,
+        sent_size: (u16, u16),
+        prewarmed: Option<super::link::WarmedLink>,
+        cx: &mut Context<Self>,
+    ) {
+        match prewarmed {
+            Some(warm) => {
+                root.link = Some(warm.link);
                 root.send(ClientMsg::PaneInset {
                     rows: mouse::INSET.0,
                     cols: mouse::INSET.1,
                 });
-                root._reader = Some(cx.spawn(async move |this, cx| {
-                    while let Some(first) = rx.recv().await {
-                        let mut batch = vec![first];
-                        while let Ok(more) = rx.try_recv() {
-                            batch.push(more);
-                        }
-                        if this.update(cx, |root, cx| root.apply(batch, cx)).is_err() {
-                            break;
-                        }
-                    }
-                }));
+                root.spawn_reader(warm.early, warm.rest, cx);
             }
-            Err(e) => root.closed = Some(e.to_string()),
+            None => match Link::connect(session, sent_size.0, sent_size.1) {
+                Ok((link, rx)) => {
+                    root.link = Some(link);
+                    root.send(ClientMsg::PaneInset {
+                        rows: mouse::INSET.0,
+                        cols: mouse::INSET.1,
+                    });
+                    root.spawn_reader(Vec::new(), rx, cx);
+                }
+                Err(e) => root.closed = Some(e.to_string()),
+            },
         }
+    }
+
+    /// The attention signals: notification taps land here and the task
+    /// routes them through the same click path a sidebar row takes.
+    fn wire_alerts(&mut self, cx: &mut Context<Self>) {
+        let wants_auth = self.alerts.notification_on();
+        if let Some(mut click_rx) = alerts::install_click(wants_auth) {
+            self._alerts = Some(cx.spawn(async move |this, cx| {
+                while let Some(pane) = click_rx.recv().await {
+                    if this
+                        .update(cx, |root, cx| root.on_alert_click(pane, cx))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }));
+        }
+        // The switches live in a settings file no event announces: a one
+        // second tick re-reads them, so turning the badge off clears it at
+        // once even on an idle session that pushes no layouts.
+        self._alerts_tick = Some(cx.spawn(async move |this, cx| loop {
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(1))
+                .await;
+            if this.update(cx, |root, cx| root.on_alerts_tick(cx)).is_err() {
+                break;
+            }
+        }));
+    }
+
+    /// The board poll: fleet, questions and seats arrive here.
+    fn start_board_poll(&mut self, cx: &mut Context<Self>) {
         match Poller::start() {
             Ok((poller, mut rx)) => {
-                root.poller = Some(poller);
-                root._hq = Some(cx.spawn(async move |this, cx| {
+                self.poller = Some(poller);
+                self._hq = Some(cx.spawn(async move |this, cx| {
                     while let Some(reply) = rx.recv().await {
                         if this.update(cx, |root, cx| root.on_hq(reply, cx)).is_err() {
                             break;
@@ -289,14 +483,100 @@ impl Root {
                     }
                 }));
             }
-            Err(e) => root.notice = Some(format!("the board poll did not start: {e}")),
+            Err(e) => self.notice = Some(format!("the board poll did not start: {e}")),
         }
-        root.start_plugins(cx);
-        // `--mode mods` opens on the view without a switch, so read here.
-        if root.main == MainView::Mods {
-            root.ext.read();
+    }
+
+    /// Adopt the link's event stream: apply the pre-drained events first,
+    /// then spawn the reader task over the live receiver. One body for
+    /// the cold path and the shot's warmed path, so the two cannot drift.
+    fn spawn_reader(
+        &mut self,
+        early: Vec<Event>,
+        mut rx: tokio::sync::mpsc::UnboundedReceiver<Event>,
+        cx: &mut Context<Self>,
+    ) {
+        if !early.is_empty() {
+            self.apply(early, cx);
         }
-        root
+        self._reader = Some(cx.spawn(async move |this, cx| {
+            while let Some(first) = rx.recv().await {
+                let mut batch = vec![first];
+                while let Ok(more) = rx.try_recv() {
+                    batch.push(more);
+                }
+                if this.update(cx, |root, cx| root.apply(batch, cx)).is_err() {
+                    break;
+                }
+            }
+        }));
+    }
+
+    /// The control-channel rows the poll loop drained: one path per row,
+    /// riding the same rows a click rides. Quit persists the UI state
+    /// global (the frame saves on the interactive quit paths) and quits.
+    pub(super) fn apply_control(
+        &mut self,
+        cmds: &[fno::app_control::AppCommand],
+        cx: &mut Context<Self>,
+    ) {
+        for cmd in cmds {
+            match cmd {
+                fno::app_control::AppCommand::Quit => {
+                    record_ui_state(self, cx);
+                    cx.quit();
+                }
+                fno::app_control::AppCommand::View { view } => match view.as_str() {
+                    "chat" => self.show(MainView::Chat, cx),
+                    "terminal" => self.show(MainView::Terminal, cx),
+                    "orchestration" => self.show(MainView::Orchestration, cx),
+                    "mods" => self.show(MainView::Mods, cx),
+                    other => {
+                        self.notice = Some(format!("fno mux app: unknown view {other:?}"));
+                        self.notice_failed = true;
+                    }
+                },
+                fno::app_control::AppCommand::Focus { agent } => {
+                    let now = fno::app_api::digest_overlay::now_secs();
+                    // The lookup reads the same rows the pane paints, so a
+                    // focus naming the launched row's task label resolves.
+                    let streamed = match self.main {
+                        MainView::Chat => self.chat.key.as_ref().map(|k| k.session_id.as_str()),
+                        _ => None,
+                    };
+                    let launched = self
+                        .launch
+                        .show
+                        .as_deref()
+                        .zip(self.launch.show_task.as_deref());
+                    let hit = super::left_pane::rows(
+                        &self.layout,
+                        &self.board,
+                        now,
+                        self.agents_open,
+                        streamed,
+                        launched,
+                    )
+                    .into_iter()
+                    .find_map(|r| match r {
+                        super::left_pane::Row::Item {
+                            label,
+                            action: Some(a),
+                            ..
+                        } if label == *agent => Some(a),
+                        _ => None,
+                    });
+                    match hit {
+                        Some(a) => self.act(a, cx),
+                        None => {
+                            self.notice =
+                                Some(format!("fno mux app focus: no agent row names {agent:?}"));
+                            self.notice_failed = true;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Start the plugins thread and its reply reader. The list reads when
@@ -343,9 +623,15 @@ impl Root {
 
     /// [`Self::say`], in the error color when `failed`.
     fn say_as(&mut self, text: String, failed: bool, cx: &mut Context<Self>) {
+        if self.shot {
+            return;
+        }
         self.notice = Some(text);
         self.notice_failed = failed;
         self.notice_gen += 1;
+        // Without this the toast paints only when an unrelated event redraws;
+        // on an idle board it stayed invisible for its whole lifetime.
+        cx.notify();
         let gen = self.notice_gen;
         self._notice = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(NOTICE_FOR).await;
@@ -384,6 +670,12 @@ impl Root {
                 self.agents_open = !self.agents_open;
                 record_ui_state(self, cx);
             }
+            Action::ToggleKeySheet => {
+                self.sheet = !self.sheet;
+                if self.sheet {
+                    self.goto = None;
+                }
+            }
             Action::ToggleChat(i) => {
                 let open = &mut self.chat.conv.expanded;
                 if !open.remove(&i) {
@@ -399,8 +691,148 @@ impl Root {
                 self.say(format!("copied {n} characters"), cx);
             }
             Action::SendChat => self.submit_chat(cx),
+            Action::SubmitLaunch => self.submit_launch(cx),
             Action::Reconnect => self.open_chat(cx),
+            Action::Mail(text) => match &self.poller {
+                Some(poller) => {
+                    if poller.mail(text) {
+                        self.mail = Some(MailState::Sending);
+                    } else {
+                        self.mail = Some(MailState::Refused("the board poll stopped".into()));
+                    }
+                    cx.notify();
+                }
+                None => self.say("no board poll: cannot mail".into(), cx),
+            },
+            Action::OpenLaunch(kind) => self.open_launch(kind, cx),
         }
+        cx.notify();
+    }
+
+    /// Open the composer over whatever view shows. A fresh open re-reads
+    /// the harness catalog; a reopened one keeps its picks and draft.
+    pub(super) fn open_launch(&mut self, kind: Option<launch::Kind>, cx: &mut Context<Self>) {
+        if !self.launch.open {
+            self.launch.state.refresh_harnesses();
+        }
+        self.launch.state.open(kind);
+        self.launch.open = true;
+        cx.notify();
+    }
+
+    /// Close the composer; the draft and picks survive on the root.
+    pub(super) fn close_launch(&mut self, cx: &mut Context<Self>) {
+        self.launch.open = false;
+        cx.notify();
+    }
+
+    /// The composer's shell escape: close the panel, open a terminal pane,
+    /// and send the command into it. The pane primitives already exist
+    /// (NewTab, then Input); the ordered link lands the bytes after the tab
+    /// switch, so the command runs in the new pane.
+    fn run_shell_from_composer(&mut self, cmd: String, cx: &mut Context<Self>) {
+        self.close_launch(cx);
+        self.send(ClientMsg::Command(Command::NewTab));
+        let mut bytes = cmd.into_bytes();
+        bytes.push(b'\n');
+        self.send(ClientMsg::Input(bytes));
+    }
+
+    /// Submit one launch attempt: the shell escape first (a leading `!`, or
+    /// the shell kind, runs the command in a new terminal pane instead of a
+    /// launch), then the panel's in-place refusals, then the door. The
+    /// draft stays until the verdict lands.
+    fn submit_launch(&mut self, cx: &mut Context<Self>) {
+        if let Some(cmd) = launch::shell_command(&self.launch.state.draft) {
+            self.run_shell_from_composer(cmd, cx);
+            return;
+        }
+        if self.launch.state.kind == launch::Kind::Shell {
+            // The shell kind without the bang still runs as a shell command.
+            let text = self.launch.state.draft.text().trim().to_string();
+            if !text.is_empty() {
+                self.run_shell_from_composer(text, cx);
+                return;
+            }
+        }
+        if let Some(link) = &self.link {
+            if let Some(why) = self.launch.state.block() {
+                self.launch.state.phase = launch::Phase::Refused(why);
+                cx.notify();
+                return;
+            }
+            let req = self.launch.state.request(self.launch.next_id);
+            self.launch.next_id += 1;
+            self.launch.state.phase = launch::Phase::Starting;
+            if let Err(e) = link.send(&ClientMsg::AgentLaunch(req)) {
+                self.closed = Some(e.to_string());
+                self.link = None;
+            }
+            cx.notify();
+            return;
+        }
+        self.launch.state.phase = launch::Phase::Refused("not attached to a mux session".into());
+        cx.notify();
+    }
+
+    /// The attention signals on one layout push: the enter-only lattice diff
+    /// (module docs in `alerts.rs` carry the route reasoning), plus the Dock
+    /// badge, written only on change. `window_active` picks the toast form.
+    fn on_layout_alerts(&mut self, cx: &mut Context<Self>) {
+        for sig in self
+            .alerts
+            .on_layout(&self.layout.agents, self.window_active)
+        {
+            self.consume_alert(sig, cx);
+        }
+        if let Some(b) = self.alerts.badge(&self.layout.agents) {
+            alerts::set_badge(b);
+        }
+    }
+
+    /// Route one alert signal to the toast, the OS notification or the
+    /// sound.
+    fn consume_alert(&mut self, sig: Signal, cx: &mut Context<Self>) {
+        match sig {
+            Signal::Toast(text) => self.say(text, cx),
+            Signal::Notify {
+                title,
+                body,
+                pane_id,
+            } => alerts::notify(&title, &body, pane_id),
+            Signal::Sound(kind) => alerts::play(kind),
+        }
+    }
+
+    /// The switch tick: re-read the prefs and re-apply the badge, so a
+    /// settings write lands without waiting for a server event.
+    fn on_alerts_tick(&mut self, _cx: &mut Context<Self>) {
+        if let Some(b) = self.alerts.badge(&self.layout.agents) {
+            alerts::set_badge(b);
+        }
+    }
+
+    /// A tapped notification: front the app, open Chat, then send the same
+    /// command a sidebar-row click sends. An exited or gone agent still
+    /// fronts the app but says so in the corner toast (AC5's edge).
+    fn on_alert_click(&mut self, pane: u64, cx: &mut Context<Self>) {
+        cx.activate(true);
+        self.main = MainView::Chat;
+        let row = self
+            .layout
+            .agents
+            .iter()
+            .find(|a| a.pane_id == Some(pane) && !a.exited);
+        match row {
+            Some(a) => match fno::app_api::client::agent_group::click_command(a) {
+                fno::app_api::client::agent_group::RowClick::Send(cmd) => {
+                    self.send(ClientMsg::Command(cmd))
+                }
+                fno::app_api::client::agent_group::RowClick::Notice(text) => self.say(text, cx),
+            },
+            None => self.say(format!("pane {pane}: the agent is gone"), cx),
+        }
+        self.sync_chat(cx);
         cx.notify();
     }
 
@@ -420,6 +852,11 @@ impl Root {
     /// In chat mode, stream the focused pane's agent session. A new focus
     /// parks the shown conversation and resumes the new one where it left.
     fn sync_chat(&mut self, cx: &mut Context<Self>) {
+        // The empty-pane shot pins the start view: no layout event may
+        // hand the pane a session.
+        if self.shot_empty_chat {
+            return;
+        }
         let key = chat::focused_key(self);
         if self.main != MainView::Chat || key == self.chat.key {
             return;
@@ -476,7 +913,11 @@ impl Root {
     /// session's own pane, then Enter to that same pane once the harness has
     /// taken it. Focus moving in between changes nothing.
     fn submit_chat(&mut self, cx: &mut Context<Self>) {
-        if self.chat.draft.text().trim().is_empty() || self.chat.closed.is_some() {
+        if self.chat.closed.is_some() {
+            return;
+        }
+        let attach_now = self.chat.draft.attachment().cloned();
+        if self.chat.draft.text().trim().is_empty() && attach_now.is_none() {
             return;
         }
         let target = self
@@ -491,13 +932,21 @@ impl Root {
             );
             return;
         };
+        let attachment = self.chat.draft.take_attachment();
         let mut text = self.chat.draft.take();
         // Unbracketed, each newline would type Enter and submit early.
         if !self.modes.bracketed_paste {
             text = text.replace('\n', " ");
         }
+        let harness = self
+            .chat
+            .key
+            .as_ref()
+            .map(|k| k.harness.clone())
+            .unwrap_or_default();
         let id = self.chat.next_request;
-        self.chat.next_request += 2;
+        let mut next = id + 1;
+        self.chat.next_request += if attachment.is_some() { 3 } else { 2 };
         let input = |request_id, bytes| {
             ClientMsg::PaneInput(proto::pane_input::PaneInputRequest {
                 request_id,
@@ -506,14 +955,110 @@ impl Root {
                 bytes,
             })
         };
-        self.send(input(id, keys::paste(&text, self.modes)));
-        let enter = input(id + 1, b"\r".to_vec());
+        if !text.is_empty() {
+            self.send(input(id, keys::paste(&text, self.modes)));
+        }
+        // The image rides as a keystroke, never as pane bytes: the clipboard
+        // is restored on the main thread first, so the user's next copy never
+        // clobbers it mid-send. The stroke precedes Enter with its own settle,
+        // so the harness reads the clipboard before the submit lands.
+        let stroke = match (attachment.as_ref(), Self::image_paste_key(&harness)) {
+            (Some(att), Some(bytes)) => {
+                let image = gpui::Image::from_bytes(att.format, (*att.bytes).clone());
+                cx.write_to_clipboard(ClipboardItem::new_image(&image));
+                let msg = input(next, bytes.to_vec());
+                next += 1;
+                Some(msg)
+            }
+            (Some(_), None) => {
+                self.say(
+                    format!("no verified image paste for {harness}; the text went alone"),
+                    cx,
+                );
+                None
+            }
+            (None, _) => None,
+        };
+        // Enter only when a turn exists to submit: text typed, or an image
+        // pasted onto the harness. An image-only draft on a harness with no
+        // verified stroke sends nothing, so a bare Enter never submits the
+        // pane's stale input.
+        let enter = (!text.is_empty() || stroke.is_some()).then(|| input(next, b"\r".to_vec()));
         cx.spawn(async move |_, cx| {
             cx.background_executor().timer(chat::SUBMIT_SETTLE).await;
-            let _ = link.send(&enter);
+            if let Some(msg) = stroke {
+                if link.send(&msg).is_err() {
+                    return; // the link died: an Enter would type into a dead pane
+                }
+                cx.background_executor().timer(chat::SUBMIT_SETTLE).await;
+            }
+            if let Some(enter) = enter {
+                link.send(&enter).ok();
+            }
         })
         .detach();
-        self.chat.pending.push(text);
+        if !text.is_empty() {
+            self.chat.pending.push(text);
+        }
+    }
+
+    /// One clipboard paste: text routes by view; a clipboard image with no
+    /// text attaches to the chat draft, and the send re-puts it and types
+    /// the harness's image-paste keystroke (submit_chat).
+    fn paste_clipboard(&mut self, cx: &mut Context<Self>) {
+        let item = cx.read_from_clipboard();
+        let Some(text) = item.as_ref().and_then(|i| i.text()) else {
+            if self.main == MainView::Chat {
+                if let Some(image) = item.as_ref().and_then(|i| {
+                    i.entries().iter().find_map(|e| match e {
+                        ClipboardEntry::Image(img) => Some(img.clone()),
+                        _ => None,
+                    })
+                }) {
+                    self.chat.draft.attach(Attachment {
+                        format: image.format,
+                        bytes: image.bytes.into(),
+                    });
+                    self.chat_moved(cx);
+                }
+            }
+            return;
+        };
+        // The open bar takes the paste into its query, ahead of the draft
+        // and the pane.
+        if self.find.is_some() {
+            self.find_key(find::FindKey::Edit(text.to_owned()), cx);
+            return;
+        }
+        match self.main {
+            MainView::Mods => mods::paste(self, &text, cx),
+            MainView::Chat => {
+                // The start view's field: the paste lands in the launch draft.
+                if crate::start::visible(self) {
+                    self.launch.state.draft.replace_selection(&text);
+                    self.launch.state.field.reveal.set(true);
+                    cx.notify();
+                    return;
+                }
+                self.chat.draft.replace_selection(&text);
+                self.chat_moved(cx);
+            }
+            _ => {
+                let bytes = keys::paste(&text, self.modes);
+                self.send(ClientMsg::Input(bytes));
+            }
+        }
+    }
+
+    /// The keystroke each harness TUI reads the clipboard image with, where
+    /// verified. All three read Ctrl+V: claude's `chat:imagePaste`, and
+    /// codex (0.166.0) plus opencode measured live on 2026-11-18 in a tmux
+    /// probe: the byte inserts the clipboard image into their composers.
+    fn image_paste_key(harness: &str) -> Option<&'static [u8]> {
+        match harness {
+            "claude" | "codex" | "opencode" => Some(b"\x16"),
+            _ => None,
+        }
     }
 
     pub(super) fn has_focus(&self, window: &Window) -> bool {
@@ -542,6 +1087,13 @@ impl Root {
             }
             Reply::Refused { id, why } => {
                 self.answers.insert(id, AnswerState::Refused(why));
+            }
+            Reply::Mailed { ok, text } => {
+                self.mail = Some(match ok {
+                    true => MailState::Sent(text.clone()),
+                    false => MailState::Refused(text.clone()),
+                });
+                self.say(text, cx);
             }
         }
         cx.notify();
@@ -588,6 +1140,51 @@ impl Root {
             .clone()
     }
 
+    /// A launch's new row steers twice, once per roster fact: the named
+    /// row's click action opens a thread through its portal like a click,
+    /// and the named row's session id, once it exists, moves the shown
+    /// conversation onto the launched agent. The pin moves too, or
+    /// sync_chat would hand the view straight back to the startup pin on
+    /// the next layout.
+    fn steer_launch(&mut self, cx: &mut Context<Self>) {
+        if let Some(name) = self.launch.focus.clone() {
+            let row = self.layout.agents.iter().find(|a| a.name == name);
+            if let Some(a) = row {
+                self.launch.focus = None;
+                let action = match fno::app_api::client::agent_group::click_command(a) {
+                    fno::app_api::client::agent_group::RowClick::Send(cmd) => {
+                        Some(Action::Send(cmd))
+                    }
+                    fno::app_api::client::agent_group::RowClick::Notice(text) => {
+                        Some(Action::Notice(text))
+                    }
+                };
+                if let Some(action) = action {
+                    self.act(action, cx);
+                }
+            }
+        }
+        if let Some(name) = self.launch.show.clone() {
+            if let Some(key) = launch::stream_key(&self.layout.agents, &name) {
+                self.launch.show = None;
+                self.pinned = Some(key.clone());
+                self.chat.switch(Some(key));
+                self.open_chat(cx);
+            }
+        }
+    }
+
+    /// True when a server notice is the launch's own portal receipt: the
+    /// list already marks and names that row, so the toast would only sit
+    /// over it.
+    fn own_launch_receipt(&self, text: &str) -> bool {
+        self.launch
+            .show
+            .as_ref()
+            .or(self.launch.focus.as_ref())
+            .is_some_and(|n| text.contains(n) && text.starts_with("thread pane "))
+    }
+
     fn apply(&mut self, batch: Vec<Event>, cx: &mut Context<Self>) {
         // Only the newest frame per pane is drawn.
         let mut newest: HashMap<u64, Frame> = HashMap::new();
@@ -599,6 +1196,9 @@ impl Root {
                 }
                 Event::Layout(l) => {
                     self.layout = l;
+                    self.launch.state.refresh_projects(&self.layout);
+                    self.steer_launch(cx);
+                    self.on_layout_alerts(cx);
                     // A Finder launch has cwd `/`: the project's `mux.theme`
                     // pin is read from the active session's own directory.
                     if let Some(dir) = super::palette::project_dir(&self.layout) {
@@ -614,7 +1214,12 @@ impl Root {
                     relayout = true;
                 }
                 Event::Modes(bytes) => self.modes.apply(&bytes),
-                Event::Notice(text) => self.say(text, cx),
+                Event::Notice(text) => {
+                    if !self.own_launch_receipt(&text) {
+                        self.say(text, cx);
+                    }
+                }
+                Event::Desktop { title, body } => self.handle_desktop(&title, &body, cx),
                 // A plain click selects nothing; it never wipes the clipboard.
                 Event::Copy(text) if text.is_empty() => {}
                 Event::Copy(text) => {
@@ -646,8 +1251,12 @@ impl Root {
                     self.closed = Some(reason);
                     self.link = None;
                     self.find = None;
+                    if let Some(b) = self.alerts.closed() {
+                        alerts::set_badge(b);
+                    }
                     relayout = true;
                 }
+                Event::Launch(u) => self.apply_launch_update(u, cx),
             }
         }
         for (id, frame) in newest {
@@ -667,6 +1276,38 @@ impl Root {
             self.ext.layout(&live);
             self.sync_panes(cx);
             self.sync_chat(cx);
+            cx.notify();
+        }
+    }
+
+    /// One desktop event: a known agent's tap routes through the alert
+    /// gate, and the gate picks the toast or notification form.
+    fn handle_desktop(&mut self, title: &str, body: &str, cx: &mut Context<Self>) {
+        let known = self.layout.agents.iter().any(|a| a.name == title);
+        if let Some(sig) = self
+            .alerts
+            .on_desktop(title, body, known, self.window_active)
+        {
+            self.consume_alert(sig, cx);
+        }
+    }
+
+    /// One launch update: the panel applies it, and a `Launched` closes the
+    /// panel, freshens its state for the next open, and marks the new row
+    /// to show the task as its label.
+    fn apply_launch_update(&mut self, u: fno::proto::AgentLaunchUpdate, cx: &mut Context<Self>) {
+        if self.launch.state.apply(&u) && self.launch.open {
+            if let fno::proto::LaunchState::Launched { name, .. } = &u.state {
+                let name = name.clone();
+                let task = self.launch.state.draft.text().trim().to_string();
+                self.launch.open = false;
+                self.launch.state = Launch::fresh();
+                self.launch.state.refresh_projects(&self.layout);
+                self.launch.focus = Some(name.clone());
+                self.launch.show = Some(name.clone());
+                self.launch.show_task = (!task.is_empty()).then_some(task);
+                self.say(format!("started {name}"), cx);
+            }
             cx.notify();
         }
     }
@@ -724,17 +1365,19 @@ impl Root {
     }
 
     /// The bar's keys: text and backspace edit the query; the terminal's
-    /// first Enter opens the server search and later Enters and Shift+Enters
-    /// step it; the chat steps its own scan. Esc always closes, clearing the
-    /// pane's server highlight even when no reply ever arrived.
+    /// Enter opens the server search, the arrows and the cmd-g chords step
+    /// its matches, the chat steps its own scan. Esc always closes, clearing
+    /// the pane's server highlight even when no reply ever arrived.
     fn find_key(&mut self, k: find::FindKey, cx: &mut Context<Self>) {
         let mut send = None;
         let mut rescan = false;
         let mut escape = false;
         let mut reveal = None;
+        let mut step = None;
         {
             let Some(f) = &mut self.find else { return };
             match k {
+                find::FindKey::Step { older } => step = Some(older),
                 find::FindKey::Edit(text) => {
                     f.edit(&text);
                     if matches!(f.target, find::Target::Chat) {
@@ -747,8 +1390,8 @@ impl Root {
                         rescan = true;
                     }
                 }
-                find::FindKey::Enter { shift } => match f.target {
-                    find::Target::Pane(p) => {
+                find::FindKey::Enter => {
+                    if let find::Target::Pane(p) = f.target {
                         // (Re)open on a zero reply too: a no-match search_open
                         // already dropped the server's search state, so a step
                         // would only draw its "no active search" Notice.
@@ -758,30 +1401,17 @@ impl Root {
                                 query: f.query.clone(),
                             });
                             f.searched = true;
-                        } else if f.searched {
-                            send = Some(ClientMsg::SearchStep {
-                                pane: p,
-                                dir: find::step_dir(shift),
-                            });
                         }
                     }
-                    find::Target::Chat => {
-                        if !f.hits.is_empty() {
-                            let cur = f.current.max(1) as usize;
-                            let next = if shift {
-                                (cur + 1).min(f.hits.len())
-                            } else {
-                                (cur - 1).max(1)
-                            };
-                            f.current = next as u32;
-                            if let Some(h) = f.hits.get(next - 1) {
-                                reveal = Some(h.item);
-                            }
-                        }
-                    }
-                },
+                }
                 find::FindKey::Escape => escape = true,
             }
+        }
+        // The step runs outside the bar borrow above: find_step borrows
+        // self again.
+        if let Some(older) = step {
+            self.find_step(older, cx);
+            return;
         }
         if let Some(msg) = send {
             self.send(msg);
@@ -795,6 +1425,47 @@ impl Root {
         } else {
             self.sync_panes(cx);
         }
+        if let Some(item) = reveal {
+            self.chat.list.scroll_to_reveal_item(item);
+        }
+        cx.notify();
+    }
+
+    /// One step for the arrows and the cmd-g chords: the pane sends
+    /// SearchStep only while the server holds a live match list (an arrow
+    /// before a search, or on a no-match one, is a no-op: a no-match
+    /// search_open dropped it), the chat walks its hit index.
+    fn find_step(&mut self, older: bool, cx: &mut Context<Self>) {
+        let mut reveal = None;
+        let mut pane_step = None;
+        {
+            let Some(f) = &mut self.find else { return };
+            match f.target {
+                find::Target::Pane(p) => {
+                    if f.searched && f.total > 0 {
+                        pane_step = Some((p, find::step_dir(older)));
+                    }
+                }
+                find::Target::Chat => {
+                    if !f.hits.is_empty() {
+                        let cur = f.current.max(1) as usize;
+                        let next = if older {
+                            (cur - 1).max(1)
+                        } else {
+                            (cur + 1).min(f.hits.len())
+                        };
+                        f.current = next as u32;
+                        if let Some(h) = f.hits.get(next - 1) {
+                            reveal = Some(h.item);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some((p, dir)) = pane_step {
+            self.send(ClientMsg::SearchStep { pane: p, dir });
+        }
+        self.sync_panes(cx);
         if let Some(item) = reveal {
             self.chat.list.scroll_to_reveal_item(item);
         }
@@ -908,6 +1579,64 @@ impl Root {
         }
     }
 
+    /// The start view's field keys: the chat draft's movement set on the
+    /// launch draft, Enter through the launch panel's submit door. An empty
+    /// agent draft starts nothing: the placeholder is the contract.
+    fn start_key(&mut self, key: &Key, window: &Window, cx: &mut Context<Self>) {
+        if self.launch.state.draft.marked().is_some() {
+            return;
+        }
+        let (shift, cmd) = (key.shift, key.cmd);
+        let vertical = matches!(key.key, "up" | "down");
+        if !vertical {
+            self.launch.state.field.goal_x.set(None);
+        }
+        match key.key {
+            "enter" if !shift => {
+                cx.stop_propagation();
+                let empty = self.launch.state.draft.text().trim().is_empty();
+                let agent = self.launch.state.kind == crate::launch::Kind::Agent;
+                if !(agent && empty) {
+                    self.submit_launch(cx);
+                }
+            }
+            "enter" => self.launch.state.draft.replace_selection("\n"),
+            "backspace" => self.launch.state.draft.backspace(),
+            "delete" => self.launch.state.draft.delete(),
+            "left" if cmd => self.launch.state.draft.home(shift),
+            "left" if key.alt => self.launch.state.draft.word_left(shift),
+            "left" => self.launch.state.draft.left(shift),
+            "right" if cmd => self.launch.state.draft.end(shift),
+            "right" if key.alt => self.launch.state.draft.word_right(shift),
+            "right" => self.launch.state.draft.right(shift),
+            "home" => self.launch.state.draft.home(shift),
+            "end" => self.launch.state.draft.end(shift),
+            "up" if cmd => self.launch.state.draft.doc_start(shift),
+            "down" if cmd => self.launch.state.draft.doc_end(shift),
+            "up" | "down" => self.start_vertical(key.key == "up", shift, window),
+            _ => return,
+        }
+        self.launch.state.field.reveal.set(true);
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    /// Vertical caret movement on the start field, the chat composer's own
+    /// goal-column walk against the launch field's layout.
+    fn start_vertical(&mut self, up: bool, extend: bool, window: &Window) {
+        let from = self.launch.state.draft.caret();
+        let len = self.launch.state.draft.text().len();
+        let goal = self.launch.state.field.goal_x.get();
+        let moved = launch::with_layout(self, window, |l| {
+            let goal = goal.unwrap_or_else(|| l.position_for_index(from).x);
+            (l.vertical(from, up, goal, len), goal)
+        });
+        if let Some((to, new_goal)) = moved {
+            self.launch.state.field.goal_x.set(Some(new_goal));
+            self.launch.state.draft.move_to(to, extend);
+        }
+    }
+
     fn composer_point(&self, at: Point<Pixels>, window: &Window) -> Option<usize> {
         let len = self.chat.draft.text().len();
         self.with_composer_layout(window, |l| l.index_for_point(at - l.origin, len))
@@ -953,8 +1682,57 @@ impl Root {
         self.chat.field.dragging.set(false);
     }
 
+    /// The launch composer's task box: the same caret placement the chat
+    /// composer runs, against the panel's draft.
+    pub(super) fn launch_down(
+        &mut self,
+        ev: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        window.focus(&self.focus);
+        let Some(at) = launch::caret_at(self, ev.position, window) else {
+            return;
+        };
+        match ev.click_count {
+            1 => self.launch.state.draft.move_to(at, ev.modifiers.shift),
+            2 => self.launch.state.draft.select_word_at(at),
+            _ => self.launch.state.draft.select_all(),
+        }
+        self.launch.state.field.dragging.set(true);
+        self.launch.state.field.goal_x.set(None);
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    pub(super) fn launch_drag(
+        &mut self,
+        ev: &MouseMoveEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.launch.state.field.dragging.get() || ev.pressed_button != Some(MouseButton::Left) {
+            return;
+        }
+        if let Some(at) = launch::caret_at(self, ev.position, window) {
+            self.launch.state.draft.move_to(at, true);
+            self.launch.state.field.reveal.set(true);
+            cx.notify();
+        }
+    }
+
+    pub(super) fn launch_up(&mut self, _: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
+        self.launch.state.field.dragging.set(false);
+    }
+
     /// A key in chat mode: an open sheet takes Escape, otherwise it edits the draft.
     fn chat_key(&mut self, key: &Key, window: &Window, cx: &mut Context<Self>) {
+        // The start view's field takes the keys first: its own movement set,
+        // and Enter through the launch panel's submit door.
+        if crate::start::visible(self) {
+            self.start_key(key, window, cx);
+            return;
+        }
         // An open sheet takes only Escape; an IME draft takes the keys.
         if self.chat.sheet.is_some() {
             if key.key == "escape" {
@@ -1026,11 +1804,179 @@ impl Root {
 
     fn toggle_sheet(&mut self, _: &KeyboardShortcuts, _: &mut Window, cx: &mut Context<Self>) {
         self.sheet = !self.sheet;
+        if self.sheet {
+            self.goto = None;
+        }
+        cx.notify();
+    }
+
+    /// ⌘k: toggle the go-to palette. Opening one closes the key sheet.
+    fn toggle_goto(&mut self, _: &GoTo, _: &mut Window, cx: &mut Context<Self>) {
+        if self.goto.take().is_none() {
+            fno::ui_usage::click("app", "goto_open");
+            self.sheet = false;
+            self.goto = Some(goto::GoTo {
+                query: ui::LineField::new(goto::MAX_QUERY),
+                selected: 0,
+            });
+        }
+        cx.notify();
+    }
+
+    pub(super) fn close_goto(&mut self, cx: &mut Context<Self>) {
+        self.goto = None;
         cx.notify();
     }
 
     pub(super) fn close_sheet(&mut self, cx: &mut Context<Self>) {
         self.sheet = false;
+        cx.notify();
+    }
+
+    /// A Settings font write moved `font_want`: re-measure the cell here,
+    /// where the text system can measure, and hand every pane the new
+    /// metrics - the grid resize follows on the next paint.
+    fn apply_font_want(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.font_want
+            == (
+                self.metrics.font.family.to_string(),
+                f32::from(self.metrics.font_size),
+            )
+        {
+            return;
+        }
+        let (family, want) = self.font_want.clone();
+        let font = font(family);
+        let size_px = px(want);
+        let text = window.text_system();
+        let id = text.resolve_font(&font);
+        let width = text
+            .advance(id, size_px, 'm')
+            .map(|s| s.width)
+            .unwrap_or(size_px * 0.6);
+        let scale = window.scale_factor();
+        let snap = |v: Pixels| px((f32::from(v) * scale).round() / scale);
+        let metrics = Metrics {
+            font,
+            font_size: size_px,
+            cell: size(snap(width), snap(size_px * 1.25)),
+        };
+        self.metrics = metrics.clone();
+        for view in self.panes.values() {
+            view.update(cx, |v, _| v.metrics = metrics.clone());
+        }
+        cx.notify();
+    }
+
+    /// ⌘,: toggle the Settings panel. Opening it closes the key sheet and
+    /// the palette.
+    fn toggle_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings.take().is_some() {
+            cx.notify();
+            return;
+        }
+        let fonts = settings::mono_fonts(window);
+        self.open_settings_with(fonts, cx);
+    }
+
+    /// The open half: rows from the live config, fleet and the given
+    /// faces. The shot path calls it with pre-measured faces.
+    pub(super) fn open_settings_with(&mut self, fonts: Vec<String>, cx: &mut Context<Self>) {
+        fno::ui_usage::click("app", "settings_open");
+        self.sheet = false;
+        self.goto = None;
+        let config = crate::global_config_raw();
+        let machines = self
+            .board
+            .fleet()
+            .map(|f| f.machines.clone())
+            .unwrap_or_default();
+        let rows = settings::build_rows(config.as_ref(), &self.theme_cwd, &machines, &fonts);
+        self.settings = Some(settings::SettingsState {
+            query: ui::LineField::new(64),
+            selected: 0,
+            page: None,
+            note: None,
+            rows,
+            fonts,
+            scroll: gpui::ScrollHandle::new(),
+            follow: std::cell::Cell::new(false),
+        });
+        cx.notify();
+    }
+    /// The panel's click-outside close (settings.rs's backdrop listener).
+    pub(super) fn close_settings(&mut self, cx: &mut Context<Self>) {
+        self.settings = None;
+        cx.notify();
+    }
+
+    /// One resolved settings write: spawn the bounded CLI door on a
+    /// background task. The apply half runs on the result.
+    fn spawn_settings_write(
+        &mut self,
+        set: bool,
+        id: String,
+        value: String,
+        cx: &mut Context<Self>,
+    ) {
+        // Detached: a second Enter must not drop the write still in flight.
+        cx.spawn(async move |this, cx| {
+            let id2 = id.clone();
+            let v2 = value.clone();
+            let out = cx
+                .background_executor()
+                .spawn(async move {
+                    settings::bounded_write(set, &id, if set { Some(&value) } else { None })
+                })
+                .await;
+            this.update(cx, |root, cx| root.on_settings_write(out, id2, v2, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    /// Rebuild the panel's rows from the live file and fleet, and set the
+    /// refusal line under them (None clears it).
+    fn rebuild_settings_rows(&mut self, note: Option<String>) {
+        let machines = self
+            .board
+            .fleet()
+            .map(|f| f.machines.clone())
+            .unwrap_or_default();
+        if let Some(st) = self.settings.as_mut() {
+            let config = crate::global_config_raw();
+            st.note = note;
+            st.rows = settings::build_rows(config.as_ref(), &self.theme_cwd, &machines, &st.fonts);
+        }
+    }
+
+    /// A settings write landed: repaint the rows from the fresh global
+    /// file and run the apply half - the theme restyles, the font keys
+    /// move `font_want`, and render re-measures the panes there.
+    fn on_settings_write(
+        &mut self,
+        out: Result<(), settings::Refusal>,
+        id: String,
+        value: String,
+        cx: &mut Context<Self>,
+    ) {
+        match out {
+            Ok(()) => {
+                self.rebuild_settings_rows(None);
+                if id == "mux.theme" {
+                    self.restyle(cx);
+                }
+                if id == "app.font" {
+                    self.font_want.0 = value.clone();
+                }
+                if id == "app.font_size" {
+                    if let Ok(f) = value.parse::<f32>() {
+                        self.font_want.1 = f;
+                    }
+                }
+            }
+            Err(settings::Refusal(line)) => self.rebuild_settings_rows(Some(line)),
+        }
         cx.notify();
     }
 
@@ -1042,6 +1988,25 @@ impl Root {
             self.picking = picking;
             cx.notify();
         }
+    }
+
+    /// The open composer takes the key: true when it died in the panel.
+    /// Text keys fall through unstopped, so the input handler still feeds
+    /// the panel's draft.
+    fn launch_key(&mut self, key: &Key, cx: &mut Context<Self>) -> bool {
+        if !self.launch.open {
+            return false;
+        }
+        match self.launch.state.key(key) {
+            launch::KeyOut::Close => self.close_launch(cx),
+            launch::KeyOut::Submit => self.submit_launch(cx),
+            launch::KeyOut::Taken => {
+                cx.notify();
+                cx.stop_propagation();
+            }
+            launch::KeyOut::Ignored => return false,
+        }
+        true
     }
 
     /// True when the open find bar consumed the key: an edit, a step, close.
@@ -1071,55 +2036,55 @@ impl Root {
             cx.stop_propagation();
             return;
         }
-        // Esc under a seam drag puts the split back where it was grabbed.
-        // After chord: with the key sheet open, esc closes the sheet first.
-        if key.key == "escape" {
-            if let Some(drag) = self.seam_drag.take() {
+        // The palette takes every key while it shows: escape closes, enter
+        // goes, up and down move, other cmd keys close it and run as today.
+        if self.goto.is_some() && goto::key(self, &key, cx) {
+            cx.stop_propagation();
+            return;
+        }
+        // The Settings panel takes every key while it shows; a cmd key
+        // closes it and runs as today (the key sheet's grammar).
+        if self.settings.is_some() {
+            if key.cmd {
+                self.settings = None;
+                cx.notify();
+            } else {
+                let ev = self
+                    .settings
+                    .as_mut()
+                    .and_then(|st| settings::key(st, &key));
                 cx.stop_propagation();
-                if drag.last_pos != drag.start_pos {
-                    self.send(ClientMsg::Command(Command::ResizeSeam {
-                        a: drag.seam.a,
-                        b: drag.seam.b,
-                        pos: drag.start_pos,
-                    }));
+                match ev {
+                    Some(settings::Event::Close) => {
+                        self.settings = None;
+                        cx.notify();
+                    }
+                    Some(settings::Event::Set { id, value }) => {
+                        if let Some(st) = self.settings.as_mut() {
+                            settings::apply_local(&mut st.rows, &id, &value);
+                        }
+                        self.spawn_settings_write(true, id, value, cx)
+                    }
+                    Some(settings::Event::Unset { id }) => {
+                        self.spawn_settings_write(false, id, String::new(), cx)
+                    }
+                    None => {}
                 }
                 return;
             }
         }
+        // After chord: with the key sheet open, esc closes the sheet first.
+        if key.key == "escape" && self.seam_escape(cx) {
+            return;
+        }
+        // The composer is modal: its keys never reach the pane behind it,
+        // and its text keys still compose through the input handler.
+        if self.launch_key(&key, cx) {
+            return;
+        }
         if let Some(action) = keys::shortcut(&key) {
             cx.stop_propagation();
-            match action {
-                Shortcut::Command(Command::CopySelection)
-                    if self.main == MainView::Chat && self.chat.draft.has_selection() =>
-                {
-                    let text = self.chat.draft.selected_text().to_string();
-                    cx.write_to_clipboard(ClipboardItem::new_string(text));
-                }
-                Shortcut::Command(c) => self.send(ClientMsg::Command(c)),
-                Shortcut::Cut => {
-                    if self.main == MainView::Chat && self.chat.draft.has_selection() {
-                        let text = self.chat.draft.selected_text().to_string();
-                        cx.write_to_clipboard(ClipboardItem::new_string(text));
-                        self.chat.draft.replace_selection("");
-                        self.chat_moved(cx);
-                    }
-                }
-                Shortcut::SelectAll => {
-                    if self.main == MainView::Chat {
-                        self.chat.draft.select_all();
-                        self.chat_moved(cx);
-                    }
-                }
-                Shortcut::Paste => self.paste(cx),
-                Shortcut::Quit => {
-                    self.send(ClientMsg::Detach);
-                    record_ui_state(self, cx);
-                    persist_window_state(window, cx);
-                    cx.quit();
-                }
-                Shortcut::Pick(n) => self.pick(n, cx),
-                Shortcut::Find => self.find_open(cx),
-            }
+            self.cmd_action(action, window, cx);
             return;
         }
         // The find bar takes the keys it edits before chat and pane routing;
@@ -1129,6 +2094,10 @@ impl Root {
         }
         if self.main == MainView::Chat {
             self.chat_key(&key, window, cx);
+            return;
+        }
+        if self.main == MainView::Orchestration {
+            orchestration::key(self, &key, cx);
             return;
         }
         if self.main == MainView::Mods && mods::key(self, &key, cx) {
@@ -1142,15 +2111,198 @@ impl Root {
         }
         if let Some(bytes) = keys::encode(&key, self.modes) {
             cx.stop_propagation();
-            if self.notice.take().is_some() {
-                cx.notify();
+            self.mux_key(bytes, window, cx);
+        }
+    }
+
+    /// One encoded keystroke through the mux scanner: the prefix claims its
+    /// chords before any pane input, exactly like the terminal client's
+    /// scan loop. A pending prefix announces itself once; a held chord
+    /// candidate or tab number arms the quiet-window flush.
+    fn mux_key(&mut self, bytes: Vec<u8>, window: &mut Window, cx: &mut Context<Self>) {
+        let was_pending = self.scanner.prefix_pending();
+        for event in self.scanner.scan(&bytes, Instant::now()) {
+            self.mux_event(event, &bytes, window, cx);
+        }
+        if self.scanner.prefix_pending() && !was_pending {
+            self.say(
+                "prefix pending: the next key runs a mux action (cmd-/ shows the sheet)".into(),
+                cx,
+            );
+        }
+        if self.scanner.chord_pending() || self.scanner.digits_pending() {
+            let ms = if self.scanner.chord_pending() {
+                CHORD_FLUSH_MS
+            } else {
+                DIGIT_FLUSH_MS
+            };
+            self.arm_quiet_flush(ms, cx);
+        }
+    }
+
+    /// Dispatch one resolved mux event; the same map the terminal client's
+    /// dispatch runs, through [`keys::translate`].
+    fn mux_event(
+        &mut self,
+        event: fno::ui::keys::Event,
+        key: &[u8],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match keys::translate(event) {
+            keys::MuxAction::Input(bytes) => self.pane_input(bytes, cx),
+            keys::MuxAction::Command(c) => self.send(ClientMsg::Command(c)),
+            keys::MuxAction::Tab(n) => self.mux_tab(n, cx),
+            keys::MuxAction::Quit => {
+                self.send(ClientMsg::Detach);
+                record_ui_state(self, cx);
+                persist_window_state(window, cx);
+                cx.quit();
             }
-            self.send(ClientMsg::Input(bytes));
+            keys::MuxAction::Notice(text) => self.say(text, cx),
+            keys::MuxAction::Bell => {
+                alerts::beep();
+                let name = String::from_utf8_lossy(key).escape_debug().to_string();
+                self.say(format!("prefix {name}: no mux action is bound"), cx);
+            }
+        }
+    }
+
+    /// Bytes that reached no mux arm: pane input, and the notice a typing
+    /// keystroke always dismissed before, exactly as the pre-prefix path did.
+    fn pane_input(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
+        if self.notice.take().is_some() {
+            cx.notify();
+        }
+        self.send(ClientMsg::Input(bytes));
+    }
+
+    /// A 1-based tab ordinal resolved against the active workspace's strip,
+    /// the same rows the cmd-digit pick walks; a miss answers with a notice,
+    /// never a silent dead key.
+    fn mux_tab(&mut self, n: usize, cx: &mut Context<Self>) {
+        let at = n.saturating_sub(1);
+        match super::tabs::strip(&self.layout).into_iter().nth(at) {
+            Some(tab) => self.act(tab.action, cx),
+            None => self.say(format!("no tab {n} in this workspace"), cx),
+        }
+    }
+
+    /// Arm the quiet window: a held chord candidate or tab number releases
+    /// to the pane when no keystroke lands. Each pending keystroke re-arms;
+    /// a flush that finds nothing held is a no-op, so stacked arms are
+    /// harmless.
+    fn arm_quiet_flush(&mut self, ms: u64, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(ms))
+                .await;
+            // A window closed mid-timer has nothing left to flush.
+            this.update(cx, |root, cx| root.flush_quiet(cx)).ok();
+        })
+        .detach();
+    }
+
+    /// Release whatever the quiet window ends. A flush releases only
+    /// Forward chunks (a lone Esc) and held tab numbers, per the scanner's
+    /// flush contract, so the other arms cannot fire here and no Window
+    /// handle is needed.
+    fn flush_quiet(&mut self, cx: &mut Context<Self>) {
+        let events = [self.scanner.flush_chord(), self.scanner.flush_digits()];
+        for event in events.into_iter().flatten() {
+            match keys::translate(event) {
+                keys::MuxAction::Input(bytes) => self.pane_input(bytes, cx),
+                keys::MuxAction::Tab(n) => self.mux_tab(n, cx),
+                _ => {}
+            }
+        }
+    }
+
+    /// Esc under a seam drag puts the split back where it was grabbed.
+    /// True when a live drag consumed the escape.
+    fn seam_escape(&mut self, cx: &mut Context<Self>) -> bool {
+        if let Some(drag) = self.seam_drag.take() {
+            cx.stop_propagation();
+            if drag.last_pos != drag.start_pos {
+                self.send(ClientMsg::Command(Command::ResizeSeam {
+                    a: drag.seam.a,
+                    b: drag.seam.b,
+                    pos: drag.start_pos,
+                }));
+            }
+            return true;
+        }
+        false
+    }
+
+    /// One cmd shortcut lands.
+    fn cmd_action(&mut self, action: Shortcut, window: &mut Window, cx: &mut Context<Self>) {
+        match action {
+            Shortcut::Command(Command::CopySelection)
+                if crate::start::visible(self) && self.launch.state.draft.has_selection() =>
+            {
+                let text = self.launch.state.draft.selected_text().to_string();
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+            }
+            Shortcut::Command(Command::CopySelection)
+                if self.main == MainView::Chat && self.chat.draft.has_selection() =>
+            {
+                let text = self.chat.draft.selected_text().to_string();
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+            }
+            Shortcut::Command(c) => self.send(ClientMsg::Command(c)),
+            Shortcut::Cut => {
+                if crate::start::visible(self) && self.launch.state.draft.has_selection() {
+                    let text = self.launch.state.draft.selected_text().to_string();
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                    self.launch.state.draft.replace_selection("");
+                    self.launch.state.field.reveal.set(true);
+                    cx.notify();
+                } else if self.main == MainView::Chat && self.chat.draft.has_selection() {
+                    let text = self.chat.draft.selected_text().to_string();
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                    self.chat.draft.replace_selection("");
+                    self.chat_moved(cx);
+                }
+            }
+            Shortcut::SelectAll => {
+                if crate::start::visible(self) {
+                    self.launch.state.draft.select_all();
+                    self.launch.state.field.reveal.set(true);
+                    cx.notify();
+                } else if self.main == MainView::Chat {
+                    self.chat.draft.select_all();
+                    self.chat_moved(cx);
+                }
+            }
+            Shortcut::Paste => self.paste(cx),
+            Shortcut::Quit => {
+                self.send(ClientMsg::Detach);
+                record_ui_state(self, cx);
+                persist_window_state(window, cx);
+                cx.quit();
+            }
+            // While the composer is open, cmd-1/2/3 switch its kind
+            // (agent, lead, shell) instead of picking a tab or a row.
+            Shortcut::Pick(n) => {
+                if self.launch.open {
+                    if let Some(kind) = launch::Kind::from_index(n) {
+                        self.launch.state.set_kind(kind);
+                        self.launch.state.row = launch::row_for_kind(kind);
+                        cx.notify();
+                        return;
+                    }
+                }
+                self.pick(n, cx);
+            }
+            Shortcut::NewAgent => self.act(Action::OpenLaunch(None), cx),
+            Shortcut::Find => self.find_open(cx),
+            Shortcut::FindStep { older } => self.find_step(older, cx),
         }
     }
 
     /// The paste shortcut: into the open find bar first, then the mods
-    /// sheet, the chat draft, or the focused pane.
+    /// sheet, the chat draft, the board composer, or the focused pane.
     fn paste(&mut self, cx: &mut Context<Self>) {
         let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) else {
             return;
@@ -1164,8 +2316,19 @@ impl Root {
         match self.main {
             MainView::Mods => mods::paste(self, &text, cx),
             MainView::Chat => {
+                // The start view's field: the paste lands in the launch draft.
+                if crate::start::visible(self) {
+                    self.launch.state.draft.replace_selection(&text);
+                    self.launch.state.field.reveal.set(true);
+                    cx.notify();
+                    return;
+                }
                 self.chat.draft.replace_selection(&text);
                 self.chat_moved(cx);
+            }
+            MainView::Orchestration => {
+                self.board_draft.replace_selection(&text);
+                cx.notify();
             }
             _ => {
                 let bytes = keys::paste(&text, self.modes);
@@ -1476,6 +2639,12 @@ impl EntityInputHandler for Root {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<String> {
+        if self.launch.open {
+            let d = &self.launch.state.draft;
+            let r = d.range_from_utf16(&range);
+            *adjusted = Some(d.range_to_utf16(&r));
+            return Some(d.text()[r].to_string());
+        }
         if self.main == MainView::Chat {
             let d = &self.chat.draft;
             let r = d.range_from_utf16(&range);
@@ -1493,6 +2662,14 @@ impl EntityInputHandler for Root {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
+        if self.launch.open || crate::start::visible(self) {
+            let d = &self.launch.state.draft;
+            let range = d.range_to_utf16(&d.selection());
+            return Some(UTF16Selection {
+                range,
+                reversed: d.caret() < d.selection().end,
+            });
+        }
         if self.main == MainView::Chat {
             let d = &self.chat.draft;
             let range = d.range_to_utf16(&d.selection());
@@ -1513,6 +2690,10 @@ impl EntityInputHandler for Root {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Range<usize>> {
+        if self.launch.open || crate::start::visible(self) {
+            let d = &self.launch.state.draft;
+            return d.marked().map(|m| d.range_to_utf16(&m));
+        }
         if self.main == MainView::Chat {
             let d = &self.chat.draft;
             return d.marked().map(|m| d.range_to_utf16(&m));
@@ -1521,6 +2702,11 @@ impl EntityInputHandler for Root {
     }
 
     fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.launch.open || crate::start::visible(self) {
+            self.launch.state.draft.unmark();
+            cx.notify();
+            return;
+        }
         if self.main == MainView::Chat {
             self.chat.draft.unmark();
             cx.notify();
@@ -1536,6 +2722,18 @@ impl EntityInputHandler for Root {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The palette's query owns the keyboard while it shows.
+        if self.goto.is_some() {
+            return;
+        }
+        if self.launch.open || crate::start::visible(self) {
+            self.launch
+                .state
+                .draft
+                .replace_utf16(range, text, false, None);
+            cx.notify();
+            return;
+        }
         if self.main == MainView::Chat {
             if self.chat.sheet.is_none() && self.chat.closed.is_none() {
                 self.chat.draft.replace_utf16(range, text, false, None);
@@ -1561,6 +2759,18 @@ impl EntityInputHandler for Root {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The palette's query owns the keyboard while it shows.
+        if self.goto.is_some() {
+            return;
+        }
+        if self.launch.open {
+            self.launch
+                .state
+                .draft
+                .replace_utf16(range, new_text, true, new_selected_range);
+            cx.notify();
+            return;
+        }
         if self.main == MainView::Chat {
             if self.chat.sheet.is_none() && self.chat.closed.is_none() {
                 self.chat
@@ -1580,6 +2790,20 @@ impl EntityInputHandler for Root {
         window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
+        if self.launch.open || crate::start::visible(self) {
+            let from = self.launch.state.draft.offset_from_utf16(range_utf16.start);
+            let found = launch::with_layout(self, window, |l| {
+                let at = l.position_for_index(from);
+                Bounds::new(l.origin + at, size(px(1.0), l.line_height()))
+            });
+            // Before the first paint, open at the task box's last line.
+            return found.or_else(|| {
+                let at = self.launch.state.composer.get();
+                let line = self.metrics.cell.height;
+                let origin = point(at.origin.x, at.origin.y + at.size.height - line);
+                Some(Bounds::new(origin, size(px(1.0), line)))
+            });
+        }
         if self.main == MainView::Chat {
             let from = self.chat.draft.offset_from_utf16(range_utf16.start);
             let found = self.with_composer_layout(window, |l| {
@@ -1603,6 +2827,10 @@ impl EntityInputHandler for Root {
         window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
+        if self.launch.open || crate::start::visible(self) {
+            let offset = launch::caret_at(self, at, window)?;
+            return Some(self.launch.state.draft.offset_to_utf16(offset));
+        }
         if self.main == MainView::Chat {
             let offset = self.composer_point(at, window)?;
             return Some(self.chat.draft.offset_to_utf16(offset));
@@ -1699,7 +2927,9 @@ impl Render for Root {
             });
         }
         self.adv = ui::advance(window, ui::BODY);
+        self.apply_font_want(window, cx);
         self.width = window.viewport_size().width;
+
         let main = match self.main {
             MainView::Chat => self.chat_view(window, cx).into_any_element(),
             MainView::Terminal => self.terminal(cx).into_any_element(),
@@ -1723,7 +2953,7 @@ impl Render for Root {
                 .flex()
                 .flex_col()
                 .child(main)
-                .child(find::bar(f, self.palette))
+                .child(find::bar(f, self.palette, self.picking))
                 .into_any_element(),
             _ => main,
         };
@@ -1749,7 +2979,9 @@ impl Render for Root {
             div()
                 .absolute()
                 .right(px(12.0))
-                .bottom(px(12.0))
+                // Stacked above the chat status row (the empty-state line sits
+                // in the bottom 40px); a corner pin cut that line off.
+                .bottom(px(44.0))
                 .max_w(px(520.0))
                 .px_3()
                 .py_1()
@@ -1760,11 +2992,13 @@ impl Render for Root {
                 .text_size(px(ui::BODY))
                 .child(text)
         });
-        div()
+        let page = div()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
             .on_modifiers_changed(cx.listener(Self::on_modifiers))
             .on_action(cx.listener(Self::toggle_sheet))
+            .on_action(cx.listener(Self::toggle_goto))
+            .on_action(cx.listener(Self::toggle_settings))
             // A click on a row, a tab or a view name lands on no focusable
             // element and would leave the window with no key focus.
             .on_any_mouse_down(cx.listener(|root, _, window, _| window.focus(&root.focus)))
@@ -1789,8 +3023,28 @@ impl Render for Root {
                     .child(strip)
                     .child(main)
                     .children(toast),
-            )
-            .when(self.sheet, |d| d.child(sheet::render(self, cx)))
+            );
+        self.overlays(page, window, cx)
+    }
+}
+
+impl Root {
+    /// The overlays over the window, in draw order: the launch composer,
+    /// the key sheet, the go-to palette, the Settings panel.
+    fn overlays(
+        &mut self,
+        page: gpui::Div,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        page.when(self.launch.open, |d| {
+            d.child(launch::render(self, window, cx))
+        })
+        .when(self.sheet, |d| d.child(sheet::render(self, cx)))
+        .when(self.goto.is_some(), |d| d.child(goto::render(self, cx)))
+        .when(self.settings.is_some(), |d| {
+            d.child(settings::render(self, cx))
+        })
     }
 }
 
@@ -1808,8 +3062,13 @@ impl Global for UiState {}
 
 /// Copy the live UI state into the global the exit paths read.
 fn record_ui_state(root: &Root, cx: &mut App) {
-    // The global is set when the window opens; every mutation site runs
-    // after that, so the panicking read is unreachable in practice.
+    // The global is set when the window opens in the attach path, and
+    // every mutation site runs after that. The shot window sets none,
+    // so its chat mutations skip the snapshot: nothing persists a
+    // shot's state.
+    if cx.try_global::<UiState>().is_none() {
+        return;
+    }
     let ui = cx.global_mut::<UiState>();
     ui.view = root.main;
     ui.agents_open = root.agents_open;
@@ -1895,15 +3154,20 @@ pub fn run(
 ) {
     Application::new().run(move |cx: &mut App| {
         cx.bind_keys([KeyBinding::new(keys::SHEET_KEY, KeyboardShortcuts, None)]);
+        cx.bind_keys([KeyBinding::new(keys::GOTO_KEY, GoTo, None)]);
+        cx.bind_keys([KeyBinding::new(keys::SETTINGS_KEY, OpenSettings, None)]);
         // The first menu is the app menu; Help lists the keys.
         cx.set_menus(vec![
             Menu {
                 name: "fno".into(),
-                items: Vec::new(),
+                items: vec![MenuItem::action("Settings…", OpenSettings)],
             },
             Menu {
                 name: "Help".into(),
-                items: vec![MenuItem::action("Keyboard Shortcuts", KeyboardShortcuts)],
+                items: vec![
+                    MenuItem::action("Go to…", GoTo),
+                    MenuItem::action("Keyboard Shortcuts", KeyboardShortcuts),
+                ],
             },
         ]);
         let window_bounds = initial_window_bounds(restored.as_ref(), cx);
@@ -1977,4 +3241,94 @@ pub fn run(
         cx.on_window_closed(|cx| cx.quit()).detach();
         cx.activate(true);
     });
+}
+
+/// The shot path's root builder: the same metrics run() derives, with
+/// the caller's warmed link adopted so the one frame the window paints
+/// synchronously at open carries the world's data. The link was already
+/// connected before gpui started, so this runs fast and the frame is
+/// the shot.
+pub(super) fn root_for_shot(
+    session: &str,
+    mode: MainView,
+    pinned: Option<SessionKey>,
+    warmed: super::link::WarmedLink,
+    family: String,
+    font_size: f32,
+    find: Option<crate::FindShot>,
+    settings: Option<crate::SettingsShot>,
+    empty_chat: bool,
+    cmd: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> gpui::Entity<Root> {
+    let font = gpui::font(family);
+    let font_size = px(font_size);
+    let text = window.text_system();
+    let id = text.resolve_font(&font);
+    let width = text
+        .advance(id, font_size, 'm')
+        .map(|s| s.width)
+        .unwrap_or(font_size * 0.6);
+    let scale = window.scale_factor();
+    let snap = |v: Pixels| px((f32::from(v) * scale).round() / scale);
+    let metrics = Metrics {
+        font,
+        font_size,
+        cell: gpui::size(snap(width), snap(font_size * 1.25)),
+    };
+    let root = cx.new(|cx| {
+        Root::new_with_link(
+            session.to_string(),
+            mode,
+            pinned,
+            false,
+            metrics,
+            Some(warmed),
+            window,
+            cx,
+        )
+    });
+    root.update(cx, |root, _| {
+        root.shot = true;
+        if empty_chat {
+            root.shot_empty_chat = true;
+            root.chat.switch(None);
+        }
+        if cmd {
+            root.picking = true;
+        }
+    });
+    if let Some(find) = find {
+        root.update(cx, |root, cx| {
+            // The real paths: the bar opens and the query types exactly
+            // as the user's keystrokes would land.
+            root.find_open(cx);
+            root.find_key(find::FindKey::Edit("the".to_owned()), cx);
+            if find == crate::FindShot::Chords {
+                root.picking = true;
+            }
+        });
+    }
+    if let Some(shot) = settings {
+        let fonts = settings::mono_fonts(window);
+        // The demo world pins its theme in a project file; the panel's
+        // rows read the global file alone, so the Theme row stays editable.
+        root.update(cx, |root, cx| {
+            root.theme_cwd = PathBuf::from("/");
+            root.open_settings_with(fonts, cx)
+        });
+        root.update(cx, |root, _| {
+            if let Some(st) = root.settings.as_mut() {
+                settings::apply_shot(st, shot);
+            }
+        });
+    }
+    // The shot window never activates, and the board poll pauses while
+    // the window is inactive; the shot needs every feed settled before
+    // the capture, so it polls regardless.
+    if let Some(poller) = &root.read(cx).poller {
+        poller.set_active(true);
+    }
+    root
 }

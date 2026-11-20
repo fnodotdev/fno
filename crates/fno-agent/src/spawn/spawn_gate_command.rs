@@ -1340,7 +1340,7 @@ mod tests {
             reset_epoch: Some(now + 3600),
             reset_passed_epoch: None,
             missing_reset_timezone: vec![],
-            state: "closed".into(),
+            state: "capped".into(),
             members: vec![capped],
         };
         crate::provider_cap::persist_snapshot(
@@ -1393,7 +1393,7 @@ mod tests {
             zai.quota.as_deref(),
             Some(
                 format!(
-                    "closed (resets {})",
+                    "capped (resets {})",
                     crate::provider_cap::epoch_to_rfc3339(now + 3600)
                 )
                 .as_str()
@@ -1562,6 +1562,7 @@ mod tests {
             origin: None,
             mail: None,
             mail_session_id: None,
+            now: false,
         };
         std::fs::write(&incident_path, serde_json::to_string(&record).unwrap()).unwrap();
 

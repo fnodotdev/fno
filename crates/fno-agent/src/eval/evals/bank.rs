@@ -77,6 +77,9 @@ impl TaskSpec {
 pub struct Golden {
     pub source_kind: String,
     pub source_ref: String,
+    /// The source case's words. The propose loop carries it to the proposer
+    /// as failure evidence; it is not an answer key.
+    pub quote: String,
     pub expected: String,
     pub rule: String,
     pub failure_type: String,
@@ -358,6 +361,7 @@ fn parse_golden(
     Ok(Golden {
         source_kind: source_field("kind")?,
         source_ref: source_field("ref")?,
+        quote: text(map, "quote").unwrap_or_default(),
         expected: need("expected")?,
         rule: need("rule")?,
         failure_type: need("failure_type")?,

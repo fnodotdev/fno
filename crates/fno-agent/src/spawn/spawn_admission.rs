@@ -1315,10 +1315,12 @@ mod tests {
     }
 
     /// A nameless `--promote` draws the lead's person name. When the shared
-    /// name ledger cannot be read, the spawn refuses; it never falls back to
-    /// a slug the name check never saw.
+    /// name ledger cannot be read, the naming read degrades to this
+    /// machine's mirror (one offline primary cannot blind the beat) and the
+    /// draw still lands a real person name: it never falls back to a slug
+    /// the name check never saw, and the offline notice prints once.
     #[test]
-    fn a_nameless_promote_refuses_when_the_ledger_cannot_be_read() {
+    fn a_nameless_promote_draws_from_the_mirror_when_the_ledger_cannot_be_read() {
         let _lock = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -1338,18 +1340,20 @@ mod tests {
             .collect();
 
         crate::name_ledger::route_to_primary(Some(crate::store_remote::test_primary::dead()));
-        let refused = normalize(&argv, None, tmp.path());
+        let degraded = normalize(&argv, None, tmp.path());
         crate::name_ledger::route_to_primary(None);
-        let drawn = normalize(&argv, None, tmp.path());
         match prior {
             Some(v) => std::env::set_var(crate::paths::HOME_ENV, v),
             None => std::env::remove_var(crate::paths::HOME_ENV),
         }
 
-        assert_eq!(refused.exit, Some(2), "{:?}", refused.stderr);
-        assert!(refused.stderr.iter().any(|l| l.contains("draw failed")));
-        let at = drawn.argv.iter().position(|t| t == "--name").unwrap();
-        let name = &drawn.argv[at + 1];
+        assert_eq!(degraded.exit, None, "{:?}", degraded.stderr);
+        let at = degraded.argv.iter().position(|t| t == "--name").unwrap();
+        let name = degraded
+            .argv
+            .get(at + 1)
+            .map(String::as_str)
+            .unwrap_or_default();
         assert!(crate::team_names::valid_person_name(name), "{name}");
     }
 

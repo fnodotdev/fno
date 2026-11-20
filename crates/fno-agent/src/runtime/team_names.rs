@@ -424,10 +424,16 @@ pub(crate) fn history_append_locked(
 }
 
 /// This machine's rows plus every peer's from the shared ledger. A
-/// configured ledger that cannot be read is an error, never "no names".
+/// configured ledger that cannot be read degrades to this machine's mirror
+/// with one stderr line (the naming ceremony runs on this read, and one
+/// offline machine must not blind the lead beat); a hard error from the
+/// local reads below still propagates, because a corrupt file is not an
+/// outage.
 pub(crate) fn history_all(store_path: &Path) -> Result<Vec<NameHistoryEntry>, String> {
     let mut rows = local_rows(store_path)?;
-    let shared = crate::name_ledger::read_merged(store_path, &rows)?;
+    let remote = crate::name_ledger::primary(store_path)?;
+    let (shared, _notice) =
+        crate::name_ledger::read_merged_or_mirror(remote.as_ref(), store_path, &rows);
     rows.extend(shared);
     Ok(rows)
 }
@@ -446,10 +452,9 @@ pub fn remote_fleet_label(
     let (host, handle) = crate::mail_header::remote_parts(from)?;
     let identity = from_session.filter(|s| !s.is_empty()).unwrap_or(handle);
     let wanted = crate::identity::canonical_handle(identity);
-    // A naming decision refuses on an unreadable ledger; a sender lookup
-    // degrades instead. The mirror rows stand on their own (the sweep pulls
-    // the fleet's rows in), so an outage at read time cannot erase what the
-    // mirror already holds - the sender keeps the short id, no worse.
+    // The mirror rows stand on their own (the sweep pulls the fleet's rows
+    // in), so an outage at read time cannot erase what the mirror already
+    // holds - the sender keeps the short id, no worse.
     let mut rows = local_rows(store_path).ok()?;
     if let Ok(shared) = crate::name_ledger::read_merged(store_path, &rows) {
         rows.extend(shared);
@@ -624,9 +629,10 @@ pub fn unconsumed_draw(store_path: &Path, scope: &str) -> Result<Option<String>,
 /// store's records (live or stale), every registry row's name and aliases
 /// (any status), the bus's names and @mentions, the handoffs dir's file
 /// tokens, and the `name:` claims the peer hosts wrote. Best-effort sources
-/// (bus, handoffs, claims) answer what they can read; a hard error
-/// (history, store, registry) propagates, because a naming decision made on
-/// a half-read set is the bug this module exists to close.
+/// (bus, handoffs, claims) answer what they can read; the history ledger
+/// degrades to this machine's mirror when the fleet primary is offline; a
+/// hard error (store, registry) still propagates, because a corrupt local
+/// file is not an outage.
 pub fn used_names(store_path: &Path, registry_path: &Path) -> Result<BTreeSet<String>, String> {
     used_names_over(history_names(store_path)?, store_path, registry_path)
 }
@@ -1327,7 +1333,7 @@ fn holds_live_team(entries: &[crate::state::RegistryEntry], sid: &str) -> bool {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for row in entries {
         let raw = row.role_scope.as_deref().unwrap_or("").trim();
-        if raw.is_empty() || !crate::spawn_gate::status_is_liveish(&row.status) {
+        if raw.is_empty() || !crate::territory::holder_row_is_live(row) {
             continue;
         }
         let canon = crate::territory::canonical_scope(raw);
@@ -2264,6 +2270,50 @@ mod tests {
             let live = live_names(&registry_path(tmp.path())).unwrap();
             assert_eq!(live.get("x-aaaa").map(String::as_str), Some("Gus"));
         }
+        // A reboot stamps `status: exited` on a lead the sweep then measures
+        // alive. The fresh word decides both ways; a stale one falls back;
+        // a deliberate stop stands over an alive word.
+        fn a_rebooted_lead_measured_alive_still_holds_its_team() {
+            let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+            let row = |name: &str,
+                       scope: &str,
+                       status: &str,
+                       word: &str,
+                       at: &str,
+                       stop: serde_json::Value| {
+                json!({
+                    "name": name, "status": status, "role_scope": scope,
+                    "role_level": 0, "cwd": "/repo", "harness": "claude",
+                    "harness_session_id": format!("sess-{name}"),
+                    "created_at": "2026-09-23T20:00:00Z",
+                    "liveness": word, "liveness_measured_at": at, "stop": stop,
+                })
+            };
+            let stop = json!({"by": "user", "at": now});
+            let old = "2026-01-01T00:00:00Z";
+            let tmp = tempfile::TempDir::new().unwrap();
+            write_registry(
+                tmp.path(),
+                json!([
+                    row("stopped", "fno-books", "exited", "alive", &now, stop),
+                    row("atticus", "fno", "exited", "alive", &now, json!(null)),
+                    row("gone", "fnh", "live", "dead", &now, json!(null)),
+                    row("stale", "fno-web", "exited", "alive", old, json!(null)),
+                ]),
+            );
+            apply_team_naming(
+                &store_path(tmp.path()),
+                &registry_path(tmp.path()),
+                None,
+                None,
+                Some("fleet ops"),
+                Some(0),
+                "fno",
+            )
+            .unwrap();
+            let live = live_names(&registry_path(tmp.path())).unwrap();
+            assert_eq!(live.keys().collect::<Vec<_>>(), vec!["fno"], "{live:?}");
+        }
         fn an_unnamed_live_team_cannot_complete_checkin() {
             let tmp = tempfile::TempDir::new().unwrap();
             write_registry(tmp.path(), json!([team_row("lead-a", "fno", 1, "sess-a")]));
@@ -2807,6 +2857,27 @@ mod tests {
             let err = name_team(&store, &registry, "x-bbbb", "hazel").unwrap_err();
             assert!(err.contains("retired"), "{err}");
         }
+        fn a_dead_ledger_degrades_the_naming_judge_to_the_mirror() {
+            let tmp = tempfile::TempDir::new().unwrap();
+            let store = store_path(tmp.path());
+            write_registry(tmp.path(), json!([team_row("gus", "x-aaaa", 2, "sess-g")]));
+            crate::name_ledger::route_to_primary(None);
+            crate::team_names::history_append(
+                &store,
+                NameHistoryEntry::here("odile", "x-aaaa", Some("sess-old".into()), "bound"),
+            )
+            .unwrap();
+            crate::name_ledger::route_to_primary(Some(crate::store_remote::test_primary::dead()));
+            // A name the mirror holds is still retired on the mirror's word
+            // alone; a fresh name binds without the primary.
+            let err = carry_holder_name(&store, "sess-g", 2, "x-aaaa", "odile").unwrap_err();
+            assert!(err.contains("retired"), "{err}");
+            assert_eq!(
+                carry_holder_name(&store, "sess-g", 2, "x-aaaa", "briar").unwrap(),
+                Some("Briar".to_string())
+            );
+            crate::name_ledger::route_to_primary(None);
+        }
 
         an_org_promote_rescope_carries_the_record_and_the_carry_names_an_unnamed_team();
         a_resumed_lead_rebinds_the_name_its_own_session_held();
@@ -2815,6 +2886,7 @@ mod tests {
         binder_rebinds_own_name_on_checkin();
         an_unnamed_live_team_cannot_complete_checkin();
         a_person_named_holder_checks_in_with_no_rename();
+        a_rebooted_lead_measured_alive_still_holds_its_team();
         a_successor_checkin_keeps_the_label_and_the_record_mirrors_it();
         a_duplicate_live_name_refuses_naming_and_names_the_holder();
         naming_an_already_named_team_refuses();
@@ -2827,6 +2899,7 @@ mod tests {
         a_theme_with_a_quote_or_bad_length_refuses();
         the_theme_is_set_once_per_scope_and_the_same_theme_is_a_noop();
         a_rescope_carries_the_theme_and_title_and_the_next_beat_needs_no_new_one();
+        a_dead_ledger_degrades_the_naming_judge_to_the_mirror();
     }
     use super::*;
     use serde_json::json;

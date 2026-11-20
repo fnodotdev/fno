@@ -1,6 +1,7 @@
 ---
 name: test-audit
 description: Audit or prune existing tests and verify coverage against distinct contracts.
+allowed-tools: Read
 ---
 
 # Test Audit

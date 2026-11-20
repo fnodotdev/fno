@@ -178,6 +178,14 @@ pub(crate) enum CoreError {
     ValueError(String),
 }
 
+impl std::fmt::Display for CoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CoreError::Read(s) | CoreError::ValueError(s) => f.write_str(s),
+        }
+    }
+}
+
 pub(crate) struct ListOut {
     pub(crate) label: String,
     pub(crate) rows: Vec<Value>,
@@ -583,8 +591,18 @@ fn list_core(
             crate::decision_index::PROOF_CUTOVER
         );
     }
+    let unread = fill_graph_entries(entries, &rows, lane);
     Ok(list_core_over(
-        rows, damaged, entries, subject, lane, state, scope_all,
+        &rows,
+        damaged,
+        GraphEntries {
+            graph: entries.as_deref(),
+            unread: unread.as_deref(),
+        },
+        subject,
+        lane,
+        state,
+        scope_all,
     ))
 }
 
@@ -601,15 +619,84 @@ pub(crate) fn live_rows_over(
     entries: &mut Option<Vec<Value>>,
     subject: &str,
 ) -> Vec<Value> {
-    list_core_over(rows, 0, entries, Some(subject), None, Some("live"), false).rows
+    let unread = fill_graph_entries(entries, &rows, None);
+    list_core_over(
+        &rows,
+        0,
+        GraphEntries {
+            graph: entries.as_deref(),
+            unread: unread.as_deref(),
+        },
+        Some(subject),
+        None,
+        Some("live"),
+        false,
+    )
+    .rows
+}
+
+/// The graph side of one listing call: the entries the derivation renders
+/// against and the reason the graph was needed but could not be read (the
+/// input that marks a coord row unknown). Borrowed, so a cached caller
+/// hands over Arc'd rows with no clone.
+#[derive(Default, Clone, Copy)]
+pub(crate) struct GraphEntries<'a> {
+    pub(crate) graph: Option<&'a [Value]>,
+    pub(crate) unread: Option<&'a str>,
+}
+
+/// A store row that renders as a decision: no envelope type, or the
+/// operator_decision type. The derivation and the read-need predicate
+/// share it, so the two stay one definition.
+pub(crate) fn is_decision_row(r: &Value) -> bool {
+    match r.get("_event_type") {
+        None | Some(Value::Null) => true,
+        Some(t) => t.as_str() == Some("operator_decision"),
+    }
+}
+
+/// Do any of the decision rows read the graph for expiry: a stated
+/// non-date expiry_ref, or an unstated expiry that defaults to the
+/// subject (coord lane or a question row). The lane filter bounds it: a
+/// lane that keeps such rows out never pays for the read.
+pub(crate) fn any_row_reads_graph(rows: &[Value], lane: Option<&str>) -> bool {
+    rows.iter().filter(|r| is_decision_row(r)).any(|r| {
+        let lane_ok = lane.map_or(true, |l| l == decision_lane(r));
+        let stated = r.get("expiry_ref").filter(|e| e.is_object());
+        let timed = stated.is_some_and(|e| matches!(rows_str(e, "kind"), "date" | "never"));
+        lane_ok
+            && !timed
+            && (stated.is_some() || crate::decision_index::expiry_defaults_to_subject(r))
+    })
+}
+
+/// Fill the caller's graph entries when the listing needs them and the
+/// caller has none: one read, stored for the caller's reuse. The returned
+/// Some carries the unread reason (the coord-row degrade's input).
+pub(crate) fn fill_graph_entries(
+    entries: &mut Option<Vec<Value>>,
+    rows: &[Value],
+    lane: Option<&str>,
+) -> Option<String> {
+    if entries.is_some() || !any_row_reads_graph(rows, lane) {
+        return None;
+    }
+    match read_graph_entries() {
+        Ok(rows) => {
+            *entries = Some(rows);
+            None
+        }
+        Err(e) => Some(format!("the graph could not be read ({e})")),
+    }
 }
 
 /// The pure listing over injected store rows: flatten, derive, filter,
-/// sort, scope.
+/// sort, scope. The graph rows come in borrowed (the caller's cache or
+/// read); the body reads and never owns them.
 pub(crate) fn list_core_over(
-    rows: Vec<Value>,
+    rows: &[Value],
     damaged: usize,
-    entries: &mut Option<Vec<Value>>,
+    entries: GraphEntries<'_>,
     subject: Option<&str>,
     lane: Option<&str>,
     state: Option<&str>,
@@ -639,13 +726,7 @@ pub(crate) fn list_core_over(
             }
         }
     }
-    let decisions: Vec<&Value> = all_rows
-        .iter()
-        .filter(|r| match r.get("_event_type") {
-            None | Some(Value::Null) => true,
-            Some(t) => t.as_str() == Some("operator_decision"),
-        })
-        .collect();
+    let decisions: Vec<&Value> = all_rows.iter().filter(|r| is_decision_row(r)).collect();
     let mut superseded_by: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
     let mut superseded_rank: std::collections::HashMap<String, (String, String)> =
@@ -668,26 +749,9 @@ pub(crate) fn list_core_over(
         }
     }
 
-    let mut graph_unread: Option<String> = None;
-    // The graph serves expiry alone: only a row whose expiry names a node or
-    // a PR reads it, and only when the lane filter lets that row into the
-    // answer. A lane that filters such rows out never pays for the read.
-    let reads_graph = |r: &&Value| {
-        let lane_ok = lane.map_or(true, |l| l == decision_lane(r));
-        let stated = r.get("expiry_ref").filter(|e| e.is_object());
-        let timed = stated.is_some_and(|e| matches!(rows_str(e, "kind"), "date" | "never"));
-        lane_ok
-            && !timed
-            && (stated.is_some() || crate::decision_index::expiry_defaults_to_subject(r))
-    };
-    if entries.is_none() && decisions.iter().any(reads_graph) {
-        match read_graph_entries() {
-            Ok(rows) => *entries = Some(rows),
-            Err(e) => graph_unread = Some(format!("the graph could not be read ({e})")),
-        }
-    }
     let scratch: Vec<Value> = Vec::new();
-    let ent: &[Value] = entries.as_deref().unwrap_or(&scratch);
+    let ent: &[Value] = entries.graph.unwrap_or(&scratch);
+    let graph_unread = entries.unread;
 
     let index = ResolutionIndex::new(ent);
     let expiry_index = ExpiryIndex::new(ent);
@@ -2238,8 +2302,19 @@ mod tests {
     fn derivation_covers_every_lane_and_retirement() {
         let rows = seed_fixture();
         // Some(empty): the derivation never reads the ambient machine graph.
-        let mut entries: Option<Vec<Value>> = Some(Vec::new());
-        let out = list_core_over(rows, 0, &mut entries, None, None, None, true);
+        let entries: Option<Vec<Value>> = Some(Vec::new());
+        let out = list_core_over(
+            &rows,
+            0,
+            GraphEntries {
+                graph: entries.as_deref(),
+                unread: None,
+            },
+            None,
+            None,
+            None,
+            true,
+        );
         // newest first, duplicate id folded
         assert_eq!(
             rows_ids(&out),
@@ -2304,7 +2379,19 @@ mod tests {
         std::env::set_var("FNO_STATE_DIR", dir.path());
         let rows = seed_fixture();
         let mut entries: Option<Vec<Value>> = None;
-        let out = list_core_over(rows, 0, &mut entries, None, None, None, true);
+        let unread = fill_graph_entries(&mut entries, &rows, None);
+        let out = list_core_over(
+            &rows,
+            0,
+            GraphEntries {
+                graph: entries.as_deref(),
+                unread: unread.as_deref(),
+            },
+            None,
+            None,
+            None,
+            true,
+        );
         match saved_home {
             Some(v) => std::env::set_var("FNO_HOME", v),
             None => std::env::remove_var("FNO_HOME"),
@@ -2319,7 +2406,7 @@ mod tests {
 
     #[test]
     fn current_law_reads_conflict_and_none() {
-        let mut entries: Option<Vec<Value>> = None;
+        let entries: Option<Vec<Value>> = None;
         let text = [
             envelope(
                 "d-aaaa0001",
@@ -2340,9 +2427,12 @@ mod tests {
         let (rows, damaged) = rows_from_jsonl(&text);
         assert_eq!(damaged, 0);
         let out = list_core_over(
-            rows,
+            &rows,
             0,
-            &mut entries,
+            GraphEntries {
+                graph: entries.as_deref(),
+                unread: None,
+            },
             Some("topic-a"),
             Some("user"),
             Some("live"),
@@ -2365,9 +2455,12 @@ mod tests {
             "",
         ));
         let out = list_core_over(
-            rows,
+            &rows,
             0,
-            &mut entries,
+            GraphEntries {
+                graph: entries.as_deref(),
+                unread: None,
+            },
             Some("topic-a"),
             Some("user"),
             Some("live"),

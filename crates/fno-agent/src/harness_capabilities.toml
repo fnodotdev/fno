@@ -27,6 +27,15 @@ permission_bypass = ["--dangerously-skip-permissions"]
 # THE TOOL-LESS READER FORM, fenced after a one-shot reader's `--model`. A row
 # without it runs the plain headless form; the merge architect refuses that row.
 reader_args = ["--setting-sources", "", "--strict-mcp-config", "--tools", "", "--disable-slash-commands", "--no-chrome", "--no-session-persistence"]
+# THE TOOL-BEARING READER FORM, fenced after a one-shot reader's `--model`: the
+# bounded form with the row's read-tools grant, for a reader whose prompt
+# promises file reads. A row without it refuses a tool-bearing reader - the
+# plain headless lane cannot honor that promise.
+reader_tools_args = ["--setting-sources", "", "--strict-mcp-config", "--tools", "Read,Grep,Glob", "--allowedTools", "Read,Grep,Glob", "--disable-slash-commands", "--no-chrome", "--no-session-persistence"]
+# THE SPEND READER FORM, appended after the tool-bearing form when a reader
+# must read its own spend off the one-shot's stdout. A row without it leaves
+# every spend figure reading `unknown`.
+reader_spend_args = ["--output-format", "json"]
 # LAUNCHER CHOICE LISTS. The mux composer's picker chips read these. Three
 # states: key ABSENT = no surface at all (the chip reads "not offered");
 # EMPTY list = the axis exists but the values are provider passthrough (the

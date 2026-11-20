@@ -10,6 +10,11 @@ pub mod client {
     pub mod agent_group {
         pub use crate::client::agent_group::{click_command, RowClick};
     }
+    pub mod agent_launcher {
+        pub use crate::client::agent_launcher::{
+            epic_rows, harness_rows, EpicChoice, HarnessRow, LEAD_SEED,
+        };
+    }
     pub mod agent_sort {
         pub use crate::client::agent_sort::sideline_order;
     }
@@ -20,7 +25,7 @@ pub mod client {
         pub use crate::client::header_band::section_rollup;
     }
     pub mod org_seats {
-        pub use crate::client::org_seats::{read_fleet, Machine};
+        pub use crate::client::org_seats::{read_fleet, Fleet, Lead, Machine};
     }
     pub mod node_detail {
         pub mod backlog_md {
@@ -31,6 +36,10 @@ pub mod client {
 
 pub mod proto {
     pub use crate::mux_rows::server_wire;
+}
+
+pub mod mail_door {
+    pub use crate::serve::mail_door::{send, MailVerdict, FROM};
 }
 
 pub mod digest_overlay {
@@ -46,7 +55,13 @@ pub mod plugins_feed {
 }
 
 pub mod transcript_tail {
-    pub use crate::transcript_tail::{claude_projects_dir, transcript_uuid_shaped};
+    pub use crate::transcript_tail::{
+        claude_projects_dir, harness_of_session, newest_transcript, transcript_uuid_shaped,
+    };
+}
+
+pub mod chat_events {
+    pub use crate::chat_events::opencode::newest_session_id;
 }
 
 pub mod web_hq {

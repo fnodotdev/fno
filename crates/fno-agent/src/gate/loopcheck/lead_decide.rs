@@ -363,7 +363,7 @@ pub(super) fn lead_decide(
             .iter()
             .any(|owner| owner == &session_id)
             || last_assistant_text(&parsed.transcript_path).is_some_and(|text| {
-                !crate::event_rules::stop_open_questions(&parsed.cwd, &text).is_empty()
+                !crate::event_rules::stop_open_questions(&parsed.cwd, &text, None).is_empty()
             });
         if open_question {
             return terminate(

@@ -1,6 +1,7 @@
 ---
 name: intel
 description: Report session provenance, work completed, and where agent sessions needed correction.
+allowed-tools: Read
 ---
 
 # intel

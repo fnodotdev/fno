@@ -793,11 +793,19 @@ fn comment_only_on<P: GateReads>(probes: &P, cwd: &Path, pr: u64, touched: &[&st
     })
 }
 
+/// The visual verdicts that hold a merge: a user decline at this head, or a
+/// look ask the user has not answered yet. A missing look with no ask is a
+/// process condition and only warns.
+pub(crate) fn visual_holds_merge(code: &str) -> bool {
+    matches!(code, "visual_declined" | "visual_look_pending")
+}
+
 /// Visual evidence for this head. Missing looks warn; an explicit user
-/// decline holds only its named head. Paint paths select optional evidence,
-/// never erase an already recorded user decline. A missing look routes to
-/// the lead as a look request after the merge; an unprovable carry or an
-/// unreadable read warns and never holds.
+/// decline holds only its named head, and an open look ask holds until the
+/// user answers it. Paint paths select optional evidence, never erase an
+/// already recorded user decline. A missing look routes to the lead as a
+/// look request after the merge; an unprovable carry or an unreadable read
+/// warns and never holds.
 pub(crate) fn visual_approval_blocker<P: GateReads>(
     probes: &P,
     cwd: &Path,
@@ -908,6 +916,23 @@ pub(crate) fn visual_approval_verdict<P: GateReads>(
             Carry::Absent => {}
             Carry::Ask(ask) => carry_ask = Some(ask),
         }
+    }
+    // The user was asked for this look and has not answered: the merge
+    // waits for the answer. Only an ask with no page at all is the process
+    // condition that warns.
+    if let Some(ask) = open_look_ask(&root, pr) {
+        return (
+            Some(Blocker::held(
+                "visual_look_pending",
+                format!(
+                    "PR {pr} touches the paint surface ({}); look question {ask} is open and \
+                     unanswered, so the merge holds until the user answers it; a stale ask \
+                     clears when its page closes",
+                    touched.join(", ")
+                ),
+            )),
+            None,
+        );
     }
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let shots = node_id
@@ -1567,6 +1592,41 @@ fn open_look_names_head(root: &Path, pr: u64, head: &str) -> bool {
     })
 }
 
+/// The open question page whose title or ask cell names the PR and whose
+/// body carries the shots: a look the user was asked for and has not
+/// answered. A question with no screens is no look ask. Body prose never
+/// names the PR, since a look page names sibling PRs in its downside line.
+/// The page's sequential alias (D3505) names it when present, else its
+/// question id.
+fn open_look_ask(root: &Path, pr: u64) -> Option<String> {
+    question_read_dirs(root, false)
+        .iter()
+        .find_map(|(dir, stamp)| {
+            crate::lead_answers::read_question_pages(dir)
+                .unwrap_or_default()
+                .into_iter()
+                .find_map(|(_stem, text)| {
+                    let (front, body) = crate::attention_file::parse_page(&text)?;
+                    let asks = front.status == "open"
+                        && stamp_allows(&front.project, stamp)
+                        && (page_names_pr(&front.title, pr) || page_names_pr(&front.ask, pr))
+                        && body.lines().any(|l| l.trim() == "## Screens");
+                    asks.then(|| {
+                        front
+                            .aliases
+                            .iter()
+                            .find(|a| {
+                                a.len() > 1
+                                    && a.starts_with(['D', 'Q'])
+                                    && a[1..].bytes().all(|b| b.is_ascii_digit())
+                            })
+                            .cloned()
+                            .unwrap_or(front.question_id)
+                    })
+                })
+        })
+}
+
 fn open_page_names_head<'a>(pages: impl Iterator<Item = &'a str>, pr: u64, head: &str) -> bool {
     let mut pages = pages;
     !head.is_empty()
@@ -1742,6 +1802,23 @@ pub(crate) fn role_chat_clears_pr<P: GateReads>(
             .any(|text| text_names_head(text, head))
 }
 
+/// A Visual Log reader row is a user approval for the bound node, not a lead
+/// grant. It may clear only this run's no-merge posture when its decision text
+/// names this PR and head; the bound node supplies repository scoping.
+pub(crate) fn visual_tap_clears_pr<P: GateReads>(
+    probes: &P,
+    cwd: &Path,
+    pr: u64,
+    head: &str,
+    node: &str,
+) -> bool {
+    !head.is_empty()
+        && role_approval_texts(probes, cwd, pr, node)
+            .iter()
+            .filter(|text| text.to_ascii_lowercase().contains(VISUAL_LOG_TAP))
+            .any(|text| text_names_head(text, head))
+}
+
 /// One `fno backlog decisions ... --json` read; None when the read fails.
 fn decisions_payload<P: GateReads>(probes: &P, cwd: &Path, args: &[&str]) -> Option<Value> {
     let args: Vec<String> = args.iter().map(|s| (*s).to_string()).collect();
@@ -1749,6 +1826,25 @@ fn decisions_payload<P: GateReads>(probes: &P, cwd: &Path, args: &[&str]) -> Opt
         return None;
     };
     serde_json::from_slice::<Value>(&out).ok()
+}
+
+fn role_decisions_payload<P: GateReads>(probes: &P, cwd: &Path, node: &str) -> Option<Value> {
+    decisions_payload(
+        probes,
+        cwd,
+        &[
+            "backlog",
+            "decisions",
+            node,
+            "--lane",
+            "unattributed",
+            "--state",
+            "all",
+            "--limit",
+            "0",
+            "--json",
+        ],
+    )
 }
 
 /// Does `token` name `head`: the full sha, or a hex prefix of at least seven
@@ -1843,22 +1939,7 @@ fn law_decline_texts<P: GateReads>(probes: &P, cwd: &Path, pr: u64) -> Vec<Strin
 fn role_approval_texts<P: GateReads>(probes: &P, cwd: &Path, pr: u64, node: &str) -> Vec<String> {
     // Subject-scoped and uncapped: a capped newest-first read of the whole
     // lane loses an approval once enough other rows land after it.
-    let Some(payload) = decisions_payload(
-        probes,
-        cwd,
-        &[
-            "backlog",
-            "decisions",
-            node,
-            "--lane",
-            "unattributed",
-            "--state",
-            "all",
-            "--limit",
-            "0",
-            "--json",
-        ],
-    ) else {
+    let Some(payload) = role_decisions_payload(probes, cwd, node) else {
         return Vec::new();
     };
     let approved: Vec<String> = approving_pages(&vault_root(cwd), pr)

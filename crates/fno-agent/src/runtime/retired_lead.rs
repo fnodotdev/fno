@@ -171,7 +171,7 @@ fn refuses_wake_in(home: &AgentsHome, session: &str) -> bool {
     };
     !registry.entries.iter().any(|row| {
         row.harness_session_id.as_deref() == Some(session)
-            && crate::spawn_gate::status_is_liveish(&row.status)
+            && crate::territory::holder_row_is_live(row)
     })
 }
 

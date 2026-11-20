@@ -69,6 +69,13 @@ pub(crate) fn inherited_node(entry: &RegistryEntry, entries: &[RegistryEntry]) -
     crate::launch_record::parent_node(entries, parent, entry.spawned_by_harness.as_deref())
 }
 
+/// The lane a launch record bills: the provider the dispatcher resolved and
+/// the gate counted the pending seat on. The row's provider comes from here
+/// first, because the session reports before its transcript names a model.
+pub(crate) fn record_lane(r: &crate::launch_record::Record) -> Option<String> {
+    r.launch.provider.clone().filter(|p| !p.is_empty())
+}
+
 pub(crate) fn prepare_mint(
     home: &crate::paths::AgentsHome,
     harness: &str,
@@ -175,13 +182,19 @@ pub(crate) fn prepare_mint(
         entry.node = Some(node);
         entry.node_basis = Some("parent".to_string());
     }
-    // The record child is a lane-attributed fleet row: the claude transcript
-    // states the model, and the provider comes only from the route-settings
-    // match, exactly the roster adopt's closure. The operator mint carries no
-    // lane claim at all (the unattributed warning skips operator rows).
+    // The record child is a lane-attributed fleet row. The record's lane wins:
+    // the dispatcher resolved it, and the report fires before the transcript
+    // states any model, so a transcript-only read left a routed worker
+    // provider-less and the load backfill billed it to anthropic. The
+    // route-settings match on the transcript model covers a record that
+    // names no lane. The operator mint carries no lane claim at all (the
+    // unattributed warning skips operator rows).
+    entry.provider = record.and_then(record_lane);
     if record.is_some() && harness.as_harness() == Harness::Claude {
         if let Some(model) = crate::claude_adopt::transcript_model(session_id) {
-            entry.provider = crate::claude_adopt::provider_from_route_settings(Some(&model));
+            if entry.provider.is_none() {
+                entry.provider = crate::claude_adopt::provider_from_route_settings(Some(&model));
+            }
             entry.model = Some(model);
             entry.model_basis = Some("verified".to_string());
         }

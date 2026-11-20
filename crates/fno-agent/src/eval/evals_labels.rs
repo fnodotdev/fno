@@ -10,6 +10,8 @@
 //! so a trace that lands later rescores the session under a new digest and
 //! every reader sees only the newest digest per key.
 
+use crate::harness_capabilities::ContractError;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -115,6 +117,11 @@ fn append_rows(path: &Path, rows: &[Value]) -> Result<(), String> {
         .map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// Every session's newest label rows, read from the one label table.
+pub(crate) fn label_rows(state: &Path) -> Vec<Value> {
+    newest_rows(&read_rows(&labels_path(state)))
+}
+
 /// The newest-digest row per (session, judge, judge_version). Rows land in
 /// append order, so the last row for a key carries the newest digest, and
 /// this function is the only projection a reader needs.
@@ -143,7 +150,7 @@ pub(crate) fn newest_rows(rows: &[Value]) -> Vec<Value> {
     out.into_values().collect()
 }
 
-fn fact_str(field: &Value) -> Option<&str> {
+pub(crate) fn fact_str(field: &Value) -> Option<&str> {
     field
         .get("value")
         .and_then(Value::as_str)
@@ -187,7 +194,7 @@ fn mtime_ms(path: &Path) -> Option<i64> {
         .map(|d| d.as_millis() as i64)
 }
 
-fn load_traces(state: &Path) -> Vec<Value> {
+pub(crate) fn load_traces(state: &Path) -> Vec<Value> {
     let dir = state.join("evals").join("traces");
     let mut out = Vec::new();
     for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
@@ -367,58 +374,30 @@ fn parse_label_reply(out: &str) -> Result<(String, String), String> {
     Ok((label, reason))
 }
 
-/// One zai flash one-shot with read tools: the golden drafter's bounded
-/// spawn shape plus the account flag. A hang dies at the kill bound, not
-/// at the child's own timeout.
-/// The label judge's spawn line. Every spawn-owned flag rides before the
-/// prompt and the prompt sits directly before the fence: the positional
-/// boundary refuses a spawn-owned flag after the prompt (law d-3244), the
-/// exit-2 the old mid-argv prompt answered.
-fn labels_spawn_argv(name: &str, prompt: &str, cwd_display: &str) -> Vec<String> {
-    let mut argv: Vec<String> = [
-        "agents",
-        "spawn",
-        "--name",
-        name,
-        "--harness",
-        "claude",
-        "--account",
-        ACCOUNT,
-        "--once",
-        "--cwd",
-        cwd_display,
-        "--timeout",
-        &JUDGE_TIMEOUT_S.to_string(),
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect();
-    argv.push(prompt.to_string());
-    argv.extend(
-        [
-            "--",
-            "--model",
-            MODEL,
-            "--setting-sources",
-            "",
-            "--strict-mcp-config",
-            "--tools",
-            "Read,Grep,Glob",
-            "--allowedTools",
-            "Read,Grep,Glob",
-            "--disable-slash-commands",
-            "--no-chrome",
-            "--no-session-persistence",
-        ]
-        .into_iter()
-        .map(String::from),
-    );
-    argv
+/// The label judge's spawn line: routed through the reader route (profile
+/// `labels-judge`) with the harness's tool-bearing form in the fence. The
+/// zai account pin rides only on claude, the harness the pick names; a
+/// profile that routes the judge elsewhere runs that harness's own
+/// account. Every spawn-owned flag rides before the prompt and the prompt
+/// sits directly before the fence: the positional boundary refuses a
+/// spawn-owned flag after the prompt (law d-3244), the exit-2 the old
+/// mid-argv prompt answered.
+fn labels_spawn_argv(name: &str, prompt: &str, cwd: &Path) -> Result<Vec<String>, ContractError> {
+    let route = crate::reader_route::resolve(cwd, "labels-judge", None, MODEL);
+    // The pin names the account the model pick lives on; a profile that
+    // overrides the model inherits no account it never asked for.
+    let extra_owned: Vec<String> =
+        if route.harness == "claude" && route.model.as_deref() == Some(MODEL) {
+            vec!["--account".to_string(), ACCOUNT.to_string()]
+        } else {
+            Vec::new()
+        };
+    crate::reader_route::reader_tools_argv(name, prompt, cwd, JUDGE_TIMEOUT_S, &route, &extra_owned)
 }
 
 fn spawn_judge(name: &str, prompt: &str) -> Result<(String, String), String> {
     let cwd = crate::evals::canonical_repo_root();
-    let argv = labels_spawn_argv(name, prompt, &cwd.display().to_string());
+    let argv = labels_spawn_argv(name, prompt, &cwd).map_err(|e| e.to_string())?;
     let (code, out, err) = crate::blueprint_judge::headless_spawn(&argv, JUDGE_TIMEOUT_S + 30)?;
     if code != 0 {
         return Err(format!("spawn exit {code}: {}", err.trim()));
@@ -1200,7 +1179,8 @@ mod tests {
     // argv[2..] is in bounds by construction.
     #[allow(clippy::indexing_slicing)]
     fn the_label_judge_spawn_line_respects_the_positional_boundary() {
-        let argv = labels_spawn_argv("labels-arm", "grade it", "/tmp");
+        let argv = labels_spawn_argv("labels-arm", "grade it", Path::new("/tmp"))
+            .expect("the packaged claude row measures a tool-bearing form");
         let prompt_at = argv
             .iter()
             .position(|a| a == "grade it")

@@ -6,6 +6,7 @@ metadata:
   requires:
     binaries:
       - "fno >= 0.3.1"
+allowed-tools: Read
 ---
 
 # fno-me

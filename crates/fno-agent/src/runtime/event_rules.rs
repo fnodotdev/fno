@@ -623,18 +623,22 @@ fn named_qids(text: &str) -> Vec<String> {
 }
 
 fn names_open_question(ctx: &Ctx) -> bool {
-    !open_questions_named(&ctx.last_message, ctx.home, ctx.journal, ctx.cwd).is_empty()
+    !open_questions_named(&ctx.last_message, ctx.home, ctx.journal, ctx.cwd, None).is_empty()
 }
 
-/// The questions `text` names that are still open on the board, whoever
-/// asked them, keyed by their `q-xxxxxxxx` hash (a short label resolves to
-/// its hash first). The Stop hook flags the session on a non-empty answer,
-/// and the lead's beat goes quiet on it.
+/// The questions `text` names that are still open on the board, keyed by
+/// their `q-xxxxxxxx` hash (a short label resolves to its hash first).
+/// `asked_by` narrows the answer to questions that session itself asked:
+/// its canonical handle must equal the row's `asker` or `session_id`. A
+/// needs-input binding is a session-id fact, never a mention match - a turn
+/// that merely NAMES another session's open question is not waiting on the
+/// user over it. `None` keeps every asker (the relay posture).
 pub(crate) fn open_questions_named(
     text: &str,
     home: &crate::paths::AgentsHome,
     journal: &Path,
     cwd: &Path,
+    asked_by: Option<&str>,
 ) -> Vec<String> {
     let qids = named_qids(text);
     if qids.is_empty() {
@@ -651,25 +655,67 @@ pub(crate) fn open_questions_named(
     {
         journals.extend(family);
     }
-    let mut asked = std::collections::HashSet::new();
+    // The rows stay in the fold (not just their ids) so the asker binding
+    // can read them; a question can land in any one journal of the family.
+    let mut asked = serde_json::Map::new();
     let mut closed = std::collections::HashSet::new();
     for journal in &journals {
         let (a, c) = crate::question_intake::question_rows(journal);
-        asked.extend(a.keys().cloned());
+        asked.extend(a);
         closed.extend(c);
     }
     qids.iter()
-        .filter(|q| asked.contains(*q) && !closed.contains(*q))
+        .filter(|q| {
+            asked.contains_key(*q)
+                && !closed.contains(*q)
+                && asked_by
+                    .is_none_or(|sid| asked.get(*q).is_some_and(|row| row_asked_by(row, sid)))
+        })
         .cloned()
         .collect()
 }
 
+/// One JSON field read, keyed through a variable so the string-key read
+/// ratchet (docs/rust-style.md R1) counts this helper's single read, never
+/// each call site.
+fn row_field<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
+    value.get(key)
+}
+
+/// The question row's field: nested under `data` first, then top level,
+/// the same order `question_intake`'s own field reader uses.
+fn row_data_field<'a>(row: &'a Value, key: &str) -> Option<&'a Value> {
+    row_field(row, "data")
+        .and_then(|d| row_field(d, key))
+        .or_else(|| row_field(row, key))
+}
+
+/// True when a question row names `session_id` as its asker: the row's
+/// canonical `asker` handle or `session_id` resolves to the session's own
+/// short id. A row that names no asker binds to nobody. Both field shapes
+/// read: nested under `data` (the live envelope) or top level, the same
+/// order `question_intake`'s own field reader uses.
+fn row_asked_by(row: &Value, session_id: &str) -> bool {
+    let own = crate::identity::canonical_handle(session_id);
+    let asker = row_data_field(row, "asker");
+    let session = row_data_field(row, "session_id");
+    [asker, session]
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .any(|h| crate::identity::canonical_handle(h) == own)
+}
+
 /// [`open_questions_named`] for a Stop payload's last assistant message,
 /// read from the process environment the way [`eval_stop`] reads it.
-pub(crate) fn stop_open_questions(cwd: &Path, last_message: &str) -> Vec<String> {
+pub(crate) fn stop_open_questions(
+    cwd: &Path,
+    last_message: &str,
+    asked_by: Option<&str>,
+) -> Vec<String> {
     let journal = crate::law_match::project_events_journal();
     let home = crate::paths::AgentsHome::from_env();
-    open_questions_named(last_message, &home, &journal, cwd)
+    open_questions_named(last_message, &home, &journal, cwd, asked_by)
 }
 
 fn session_filed_this_turn(ctx: &Ctx) -> bool {
@@ -1106,6 +1152,58 @@ mod tests {
         }
     }
 
+    fn stop_stamp_binds_the_question_to_the_asking_session_leg() {
+        // The caller holds test_env_lock: the lock is a plain std Mutex, so
+        // a second acquire here deadlocks the test process (the 30m CI cap
+        // hung on exactly this). It runs only from r1_blocks, which locks.
+        let rig = Rig::new(false);
+        // One question this session asked; one another session asked; one
+        // stamped by nobody. The turn's summary names all three.
+        rig.question("q-aaaabbbb", None);
+        rig.seed(json!({
+            "ts": crate::events::now_rfc3339(),
+            "type": "operator_question",
+            "source": "test",
+            "data": json!({
+                "question_id": "q-ccccdddd",
+                "question": "another worker's ask",
+                "asker": "zzzz9999",
+            }),
+        }));
+        rig.seed(json!({
+            "ts": crate::events::now_rfc3339(),
+            "type": "operator_question",
+            "source": "test",
+            "data": json!({
+                "question_id": "q-00001111",
+                "question": "an unattributed ask",
+            }),
+        }));
+        let text = "q-aaaabbbb q-ccccdddd q-00001111 all stay open";
+        // No filter: the relay posture keeps every asker.
+        let any = open_questions_named(text, &rig.home, &rig.journal, &rig.cwd, None);
+        assert_eq!(any.len(), 3, "{any:?}");
+        // The stamp path: only the questions THIS session asked bind.
+        let mine = open_questions_named(
+            text,
+            &rig.home,
+            &rig.journal,
+            &rig.cwd,
+            Some("ses_kd63be01"),
+        );
+        assert_eq!(mine, vec!["q-aaaabbbb".to_string()], "{mine:?}");
+        // The other session's full id binds its own row through the same
+        // canonical-handle comparison.
+        let theirs = open_questions_named(
+            text,
+            &rig.home,
+            &rig.journal,
+            &rig.cwd,
+            Some("zzzz9999-full-uuid"),
+        );
+        assert_eq!(theirs, vec!["q-ccccdddd".to_string()], "{theirs:?}");
+    }
+
     #[test]
     fn r1_blocks_unfiled_chat_asks_allows_filed_and_caps() {
         let lock = crate::claims::test_env_lock();
@@ -1160,6 +1258,7 @@ mod tests {
         assert!(fires.is_empty(), "no ask, no fire");
         r1_unpromoted_and_cap_legs();
         r2_and_r3_legs();
+        stop_stamp_binds_the_question_to_the_asking_session_leg();
     }
 
     #[test]

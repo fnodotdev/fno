@@ -45,7 +45,6 @@ agent_freeze = false
 # evals_history = <unset>   # optional; no default
 # Sidecar discovery briefs, one markdown file per backlog node. Move it to keep briefs beside your notes vault.
 # briefs_dir = <unset>   # optional; no default
-# The retired megatron fleet dir. No reader consumes it; leave it unset.
 # Postmortems a stuck terminal writes when it gives up. Move them to keep postmortems beside your docs.
 # postmortems_dir = <unset>   # optional; no default
 # Where target worktrees are created, one dir per node. Move it to a larger volume when the state disk fills.
@@ -66,7 +65,6 @@ agent_freeze = false
 # inbox_path = <unset>   # optional; no default
 # Session handoff notes, one dir per project. Defaults into the Obsidian vault when one is enabled, else the state dir.
 # handoffs_dir = <unset>   # optional; no default
-# Retro items waiting for the next post-merge ritual. Move it only when the state root itself moves.
 # The cross-project mail bus: messages.jsonl under this dir. Env FNO_BUS_DIR wins. Move it so several state roots share one bus.
 # bus_dir = <unset>   # optional; no default
 # The per-chat message store, one append-only jsonl per chat. Move it to keep chat history beside the mail bus.
@@ -654,6 +652,10 @@ daily_usd = 15.0
 # Lane the gate's golden runs use. Defaults zai-flash.
 lane = "zai-flash"
 
+[evals.propose]
+# Per-cycle USD cap on the propose-and-prove loop's base and candidate cohorts, priced at the run lane's evals.gate.lane_usd entry. Over cap the cycle drops candidates from the last; a cap that fits no candidate refuses the cycle.
+cycle_usd = 10.0
+
 [recovery]
 # Enable the bg-session recovery sweep: provider failover on swap-class deaths plus close-surfacing for finished-but-lingering sessions (rides the pr_watch tick). Assumes bypass workers (the config.agents.defaults.permission_mode built-in for autonomous dispatch, answered per harness: claude rides auto, every other harness rides bypassPermissions); a non-bypass worker cannot run autonomously and is not resumed.
 enabled = true
@@ -852,6 +854,38 @@ hold_workers = true
 # Startup restore policy for worker members: hold (rebuild named held panes, resume on focus, skip tabs whose every slot binds a done worker, default), idle (members stay idle rows), or resume (relaunch every member that is not tombstoned, gone, or reap-retired, finished work included). The policy never decides the tab count by itself: tabs rebuild from the stored tab trees under every value, so no value restores zero tabs. Overrides hold_workers when set.
 # policy = <unset>   # optional; no default
 
+[app]
+# The attention sound fno-app plays when an agent turns blocked or done (default on).
+alert_sound = true
+# The macOS notification fno-app posts when an agent turns blocked or done outside the window (default on).
+alert_notification = true
+# The Dock badge showing the count of blocked agents in fno-app (default on).
+alert_badge = true
+
+[provider_cap]
+# Arm the provider cap actor: a lane that hits its usage cap alerts its leads, and its members park until the reset (default on). Off still measures and saves the snapshot, and moves nothing.
+enabled = true
+# What a capped lane does with its members: park (default; alert the leads, move nothing, resume after the reset) | triage (a member on a p0 or p1 node, or with an open PR, moves to destinations; the rest park) | ask (nothing moves until an operator answers; inside sleep_hours it moves without a question) | auto (every member moves without a question).
+mode = "park"
+# Route lanes a moving member tries in order when no fallback grid is set. Empty by default: moving work spends another paid lane, so only an operator names one.
+destinations = []
+# A reset closer than this many minutes is waited out and never moved (default 30).
+min_wait_minutes = 30
+# Window as HH:MM-HH:MM, read in sleep_timezone. In ask mode a cap inside the window moves members without a question. Empty (default) means never asleep.
+sleep_hours = ""
+# IANA zone for sleep_hours, for example America/Los_Angeles. Empty (default) reads the machine's local zone.
+sleep_timezone = ""
+# Minutes a canary session must live after the reset before the return ladder resumes the parked members (default 15).
+canary_survive_minutes = 15
+# Members on one lane with a fresh capped tail needed to open it (default 2). One member suffices when its 429 names a reset still ahead, or when the account's runtime-state quota lock is set.
+quorum = 2
+
+[main_repair]
+# Arm the main-repair auto-revert pass: when main's CI stays red past revert_after_minutes and the red head is a PR merge, the arm reverts the culprit merge (default off).
+auto_revert = false
+# How many minutes a red main head waits before the auto-revert pass reverts it (default 10).
+revert_after_minutes = 10
+
 [dev]
 # Maintainer pin: a checkout root the Rust bootstrap re-provisions from (uv tool install <path>/cli) when its tool venv is wiped. Unset = the frozen 0.4.8 wheel self-provision (legacy end-user default).
 source = ""
@@ -933,7 +967,7 @@ repo = ""
 batch = 10
 # Arm the question judge: when true, judge runs read the question board and decide open questions against the law record.
 enabled = false
-# Model the judge dispatches verdicts with.
+# DEPRECATED: the stage table (agents.profiles.question-judge.model) is the home for the judge model; this key reads as the fallback rung beneath it for one release. Migrate with `fno config set agents.profiles.question-judge.model <model>`.
 model = "sonnet"
 
 [merge]

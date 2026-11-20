@@ -200,6 +200,21 @@ pub(crate) fn deliver_via_pane_state(
     ))
 }
 
+/// Press Esc in the pane at `server:pane_id`, the key that interrupts a
+/// running turn. `--fno-id` pins the write to `session`'s pane, so a pane
+/// reused by another worker refuses instead of taking the key.
+pub(crate) fn interrupt_via_pane(session: &str, address: &str) -> Result<(), &'static str> {
+    let (server, pane_id) = address.split_once(':').ok_or(NOT_INJECTABLE)?;
+    let mut transport = PaneTransport {
+        server: server.to_string(),
+        address: pane_id.to_string(),
+        fno_id: Some(session.to_string()),
+        hold_pass: false,
+    };
+    use crate::claude_attach::ControlTransport as _;
+    transport.send_line("\x1b").map_err(|_| "io-error")
+}
+
 /// The pane lane's pre-state answer, for callers that only ask whether it landed.
 pub(crate) fn deliver_via_pane(
     session: &str,

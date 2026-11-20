@@ -1882,6 +1882,33 @@
       "doc": "Also notify on a terminal 'done' hook transition (default off)."
     },
     {
+      "path": "app.alert_sound",
+      "type": "bool",
+      "default": true,
+      "tier": "advanced",
+      "question": "",
+      "default_source": "default",
+      "doc": "The attention sound fno-app plays when an agent turns blocked or done (default on)."
+    },
+    {
+      "path": "app.alert_notification",
+      "type": "bool",
+      "default": true,
+      "tier": "advanced",
+      "question": "",
+      "default_source": "default",
+      "doc": "The macOS notification fno-app posts when an agent turns blocked or done outside the window (default on)."
+    },
+    {
+      "path": "app.alert_badge",
+      "type": "bool",
+      "default": true,
+      "tier": "advanced",
+      "question": "",
+      "default_source": "default",
+      "doc": "The Dock badge showing the count of blocked agents in fno-app (default on)."
+    },
+    {
       "path": "mux.attach_digest",
       "type": "bool",
       "default": true,

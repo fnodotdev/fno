@@ -222,6 +222,7 @@ fn pr_json_from(name: &str) -> Value {
 fn composer_replays_the_goldens() {
     for name in [
         "green_settled",
+        "draft_green_settled",
         "red_detailed_capped",
         "pending_mixed",
         "all_status_contexts",

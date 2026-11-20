@@ -27,6 +27,7 @@ use goal_arbitration::{
 };
 
 mod cannot_claim;
+mod lead_turn;
 
 /// Consecutive checker-unavailable fires tolerated for an active session
 /// before a loud give-up allow (the shim's `MAX_UNAVAIL_RETRIES`).
@@ -176,12 +177,19 @@ pub fn run(args: &[String]) -> i32 {
         return emit_block_for_harness(&session_id, &reason);
     }
 
-    // A turn that ends naming an open user question is waiting on the user,
-    // whoever filed the question. Any block below flips the row back to
-    // working with a later seq, so only a terminal allow leaves the flag up.
+    // A turn that ends naming an open user question is waiting on the user
+    // IF the turn asked it: the stamp below binds by session id, so a
+    // summary that merely names another session's open question pins
+    // nobody. A promise is a terminal delivery, never a wait: the
+    // classifier's Promise signal leaves the producer's done standing, and a
+    // shipped PR's release notes can quote a question label without the row
+    // re-blocking over it. Any block below flips the row back to working
+    // with a later seq, so only a terminal allow leaves the flag up.
     if let Some(msg) = fire.last_assistant_message.as_deref() {
-        let qids = crate::event_rules::stop_open_questions(&cwd, msg);
-        super::session_state::report_waiting_on_user(&session_id, &qids);
+        let qids = crate::event_rules::stop_open_questions(&cwd, msg, Some(&session_id));
+        if stamps_waiting_on_user(msg, &qids) {
+            super::session_state::report_waiting_on_user(&session_id, &qids);
+        }
     }
 
     // ── Correction gate (law d-2d9ee096) ─────────────────────────────────────
@@ -211,6 +219,19 @@ pub fn run(args: &[String]) -> i32 {
             owner_cwd,
         } => run_owned(&cwd, &fire, &payload, state, driver, owner_cwd),
     }
+}
+
+/// The needs-input stamp decision for one Stop fire, pure so the promise
+/// gate is unit-testable without a harness fire. The fold (`qids`) is
+/// already asker-bound (`stop_open_questions(_, _, Some(session))`): a
+/// summary that merely NAMES another session's open question returned empty
+/// and stamps nothing. A promise-ending turn is a terminal delivery, so it
+/// stamps nothing either - the producer's done stands, and a shipped PR's
+/// release notes quoting a question label never re-blocks the row.
+fn stamps_waiting_on_user(msg: &str, qids: &[String]) -> bool {
+    !qids.is_empty()
+        && crate::runtime::session_truth::Signal::of(msg)
+            != crate::runtime::session_truth::Signal::Promise
 }
 
 /// A grok Stop fire, normalized onto the snake_case vocabulary the handler
@@ -368,6 +389,18 @@ fn run_owned(
             driver,
             "no transcript for an active session",
         );
+    }
+
+    // ── Lead-turn gate: an unread waiting-on-you ask, an unsent filing ───────
+    // A lead's waiting-on-you ask is said once and re-raised only on a state
+    // change, so it must rest on a read this turn. A node it filed from an
+    // operator request leaves the turn dispatched or parked with a reason.
+    if driver == "lead" {
+        let ids = [fire.session_id.as_str(), fire.hook_harness_id.as_str()];
+        let message = fire.last_assistant_message.as_deref().unwrap_or_default();
+        if let Some(reason) = lead_turn::gate(&fire.transcript_path, &ids, message) {
+            return emit_block_for_harness(&fire.session_id, &reason);
+        }
     }
 
     let codex_owner = fire.harness.as_deref().map(Harness::parse) == Some(Harness::Codex)
@@ -1502,6 +1535,30 @@ fn git_delivery_prefix(repo_root: &Path) -> PathBuf {
 mod tests {
     use super::goal_arbitration::StopDecisionEvent;
     use super::*;
+
+    #[test]
+    fn promise_ending_turn_stamps_no_waiting_on_user() {
+        // A delivery summary may quote a question label; the promise wins.
+        assert!(!stamps_waiting_on_user(
+            "shipped. open boards: q-529ff5d0 #369. <promise>MISSION COMPLETE: PR 369 green</promise>",
+            &["q-529ff5d0".to_string()],
+        ));
+    }
+
+    #[test]
+    fn plain_turn_naming_own_open_question_stamps() {
+        assert!(stamps_waiting_on_user(
+            "the board shows q-529ff5d0 still open; pick one? [y/n]",
+            &["q-529ff5d0".to_string()],
+        ));
+    }
+
+    #[test]
+    fn no_asker_bound_question_stamps_nothing() {
+        // The asker-bound fold returned empty: another session's ask pins
+        // nobody, whatever the text says.
+        assert!(!stamps_waiting_on_user("q-529ff5d0 #369 stays open", &[]));
+    }
 
     struct EventsPathRestore(Option<std::ffi::OsString>);
 

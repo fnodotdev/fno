@@ -777,6 +777,7 @@ fn decide_loops(args: &[String]) -> Result<(String, Value), i32> {
                     origin: Some("pause-all".into()),
                     mail: Some(mail_state.clone()),
                     mail_session_id: mail_session_id.clone(),
+                    now: false,
                 },
             ) {
                 Ok(record) => json!({
@@ -1223,6 +1224,7 @@ mod tests {
             origin: None,
             mail: None,
             mail_session_id: None,
+            now: false,
         }
     }
 
@@ -1248,6 +1250,7 @@ mod tests {
             origin: None,
             mail: None,
             mail_session_id: None,
+            now: false,
         };
         let combined = combine(&paused, crate::fleet_incident::Verdict::Clear(clear_record));
         assert_eq!(

@@ -279,13 +279,26 @@ fn print_row(kind: &str, num: i64, store: &str, current: &str) -> String {
 /// decision answers, then the newest row from another store, printed
 /// qualified.
 pub fn label_in(conn: &Connection, id: &str, current: &str) -> Option<String> {
-    label_row(conn, id, current).or_else(|| {
-        // One record, one number: an answer decision carries no number of
-        // its own. It reads as the number its question already holds, so
-        // answering never splits one record into two labels.
-        let question = answer_question_of(conn, id)?;
-        label_row(conn, &question, current)
-    })
+    label_row(conn, id, current)
+        .or_else(|| retired(conn, canonical(id)))
+        .or_else(|| {
+            // One record, one number: an answer decision carries no number of
+            // its own. It reads as the number its question already holds, so
+            // answering never splits one record into two labels.
+            let question = answer_question_of(conn, id)?;
+            label_row(conn, &question, current)
+        })
+}
+
+/// The number `migrate ids --apply` gave a hex key it retired. `None` on a
+/// store the migration never ran on, or for a key its map never held.
+fn retired(conn: &Connection, hex: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT label FROM fno_id_map WHERE hex = ?1",
+        params![hex],
+        |row| row.get(0),
+    )
+    .ok()
 }
 
 /// The label read over the own row: this store first, then the newest row
@@ -450,7 +463,10 @@ pub fn resolve_in(
             .get(2..)
             .is_some_and(|hex| !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit()))
             && (lowered.starts_with("d-") || lowered.starts_with("q-"));
-        return Some(if is_hash { lowered } else { text.to_string() });
+        if !is_hash {
+            return Some(text.to_string());
+        }
+        return Some(conn.and_then(|c| retired(c, &lowered)).unwrap_or(lowered));
     };
     let num: i64 = digits.parse().ok()?;
     let store = store.unwrap_or(current);
@@ -481,6 +497,13 @@ pub fn unresolved(text: &str) -> String {
         },
         text.trim().to_ascii_uppercase()
     )
+}
+
+/// Whether the token reads as a q-/d- display number (`D3478`, `d-142`,
+/// `q87@r2d2`): the form a lookup door accepts beside the hash while both
+/// keys exist. Pure shape, no store read.
+pub fn reads_as_number(text: &str) -> bool {
+    is_number_text(text.trim()).is_some()
 }
 
 /// `resolve_in` over this machine's table.
@@ -748,8 +771,11 @@ fn wanted(
 
 fn unnumbered(conn: &Connection, keys: Vec<String>, store: &str) -> Vec<String> {
     let bare = |key: &str| key.strip_prefix(NODE_KIND).unwrap_or(key).to_string();
+    // A hex key the migration retired is held too: a copy or a peer's row
+    // that brings it back must not mint the record a second number.
     let held: std::collections::HashSet<String> = conn
-        .prepare("SELECT key FROM fno_numbers WHERE store = ?1")
+        .prepare("SELECT key FROM fno_numbers WHERE store = ?1 UNION SELECT hex FROM fno_id_map")
+        .or_else(|_| conn.prepare("SELECT key FROM fno_numbers WHERE store = ?1"))
         .and_then(|mut stmt| {
             let rows = stmt.query_map(params![store], |row| row.get::<_, String>(0))?;
             Ok(rows.flatten().collect())

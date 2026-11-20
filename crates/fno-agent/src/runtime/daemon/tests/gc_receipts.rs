@@ -2,7 +2,7 @@
 //! families. Shared helpers (`tmp_home`, `ask_row`, `rentry`, `civil`, ...)
 //! stay in the parent tests module and resolve through the glob.
 use super::*;
-use crate::daemon::claude_stop::stop_claude_pid_confirmed;
+use crate::daemon::claude_stop::{no_transport_row_gone, stop_claude_pid_confirmed};
 
 use crate::gc_sweep::{self, GcSummary, GraphRead};
 use crate::quiet_retire::no_live_worker;
@@ -847,6 +847,12 @@ async fn stop_claude_pid_kills_a_real_child_and_spares_a_recycled_pid() {
         !stop_claude_pid_confirmed(&entry).await,
         "no pid -> nothing to stop"
     );
+    // The already-exited arm reads only pid evidence here.
+    entry.harness_session_id = None;
+    assert!(
+        !no_transport_row_gone(&entry),
+        "no pid and no session -> no proof of death"
+    );
     let child = std::process::Command::new("sleep")
         .arg("60")
         .stdin(std::process::Stdio::null())
@@ -899,6 +905,10 @@ async fn stop_claude_pid_kills_a_real_child_and_spares_a_recycled_pid() {
     assert!(is_alive(), "an unrelated incarnation must not be signalled");
     entry.pid_start_time = Some(start);
     assert!(
+        !no_transport_row_gone(&entry),
+        "an owned live pid is not gone"
+    );
+    assert!(
         stop_claude_pid_confirmed(&entry).await,
         "owned live pid -> stopped"
     );
@@ -909,6 +919,10 @@ async fn stop_claude_pid_kills_a_real_child_and_spares_a_recycled_pid() {
     assert!(
         !stop_claude_pid_confirmed(&entry).await,
         "a dead pid is not newly stopped"
+    );
+    assert!(
+        no_transport_row_gone(&entry),
+        "a reaped pid reads gone, so stop answers already exited"
     );
 }
 

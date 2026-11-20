@@ -10205,7 +10205,7 @@ crates/fno-agent/src/spawn/provider.rs	clippy::let_underscore_must_use	let _ = c
 crates/fno-agent/src/spawn/provider_cap.rs	clippy::indexing_slicing	assert!(!lane.members[0].capped);
 crates/fno-agent/src/spawn/provider_cap.rs	clippy::indexing_slicing	assert_eq!(glm[0].members.len(), 3);
 crates/fno-agent/src/spawn/provider_cap.rs	clippy::indexing_slicing	assert_eq!(glm[0].reset_epoch, Some(9_999_999_999));
-crates/fno-agent/src/spawn/provider_cap.rs	clippy::indexing_slicing	assert_eq!(glm[0].state, "open");
+crates/fno-agent/src/spawn/provider_cap.rs	clippy::indexing_slicing	assert_eq!(glm[0].state, "capped");
 crates/fno-agent/src/spawn/provider_cap.rs	clippy::indexing_slicing	assert_eq!(resumes[0], "resume:w-1");
 crates/fno-agent/src/spawn/provider_cap.rs	clippy::indexing_slicing	assert_eq!(resumes[1], "resume:w-2");
 crates/fno-agent/src/spawn/provider_cap.rs	clippy::indexing_slicing	assert_eq!(state["resumed"].as_array().unwrap().len(), 5);
@@ -15812,6 +15812,17 @@ crates/fno-agent/src/runtime/lead_reads.rs	clippy::indexing_slicing	eprintln!("f
 crates/fno-agent/src/runtime/disk_report.rs	clippy::indexing_slicing	let rows = report["stores"].as_array().unwrap();
 crates/fno-agent/src/runtime/disk_report.rs	clippy::indexing_slicing	format!("{size:.1} {}", units[unit])
 crates/fno-agent/src/runtime/disk_report.rs	clippy::indexing_slicing	assert_eq!(report["classes"].as_array().map(Vec::len), Some(4));
+crates/fno-agent/src/runtime/disk_report.rs	clippy::indexing_slicing	human_bytes(row["bytes"].as_u64().unwrap_or(0)),
+crates/fno-agent/src/runtime/disk_report.rs	clippy::indexing_slicing	let rows = report["classes"].as_array().unwrap();
+crates/fno-agent/src/runtime/disk_report.rs	clippy::indexing_slicing	row["class"].as_str().unwrap_or("?"),
+crates/fno-agent/src/runtime/disk_report.rs	clippy::indexing_slicing	row["home"].as_str().unwrap_or("?"),
+crates/fno-agent/src/runtime/disk_report.rs	clippy::indexing_slicing	row["store"].as_str().unwrap_or("?"),
+crates/fno-agent/src/runtime/disk_report.rs	clippy::indexing_slicing	row["verdict"].as_str().unwrap_or(""),
+crates/fno-agent/src/runtime/disk_report.rs	clippy::too_many_lines	fn store_rows(budget: &WalkBudget, mut emit: impl FnMut(serde_json::Value)) {
+crates/fno-agent/src/runtime/cargo_build_dirs.rs	clippy::too_many_lines	pub(crate) fn sweep_roots_bounded(
+crates/fno-agent/src/runtime/disk_report.rs	clippy::indexing_slicing	let store_rows = report["stores"].as_array().unwrap();
+crates/fno-agent/src/runtime/disk_report.rs	clippy::indexing_slicing	let strays = store_rows.iter().find(|r| r["store"] == "strays").unwrap();
+crates/fno-agent/src/runtime/disk_report.rs	clippy::indexing_slicing	strays["verdict"].as_str().unwrap().contains("skipped"),
 crates/fno-agent/src/eval/otel_ingest.rs	clippy::let_underscore_must_use	let _ = conn.execute("DELETE FROM otel_events WHERE ts < ?1", [&cutoff]);
 crates/fno-agent/src/eval/otel_ingest.rs	clippy::let_underscore_must_use	let _ = conn.execute("DELETE FROM api_requests WHERE ts < ?1", [&cutoff]);
 crates/fno-agent/src/eval/otel_ingest.rs	clippy::let_underscore_must_use	let _ = conn.execute(

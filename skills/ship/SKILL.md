@@ -2,6 +2,8 @@
 name: ship
 description: Open or create a pull request, check reviews, or ship a research brief through delivery gates.
 argument-hint: "<pr|doc>  (pr: create|check|merged - the PR lifecycle; doc: <topic> [--golden <discovery-*.md>])  - a type is required, there is no default"
+# bare Read: fresh installs gate reads under the plugin cache, and path-scoped Read rules get no ${CLAUDE_PLUGIN_ROOT} substitution in tool rules.
+allowed-tools: Read
 metadata:
   requires:
     binaries:

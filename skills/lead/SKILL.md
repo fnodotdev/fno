@@ -7,6 +7,7 @@ metadata:
     harness:
       - loop
       - spawn
+allowed-tools: Read
 ---
 
 <!-- style-exception: monitor cadences and command spellings are load-bearing literals -->
@@ -78,6 +79,14 @@ Name the role at the first beat with `fno agent hq checkin --name redraw`, and r
 
 State only facts this beat verified. Every claim in the beat report carries its footnote: the reading line, a command result you read this turn, or a file:line. A done claim needs fresh output read this turn. A previous beat proves nothing. Before a cannot claim, try the other routes, then name each one tried. A refusal from one tool is a fact about that tool, never about the task. The full rule is `skills/verify-footnotes/SKILL.md` sections 2 and 3.
 
+A waiting-on-you line rests on a read in the same turn: `gh run view`, `gh pr view`, `fno do pr status` or `fno inbox outstanding`. Say an ask once. If its state changed, repeat it and say what changed. If the state has not changed, drop the line. The Stop hook blocks a waiting-on-you line with no live read in the same turn.
+
+A report that names a PR, run or node state re-reads that state in the same turn and prints the read time. `green at 14:32Z` is a claim this beat verified. A state claim with no read this turn is a stale claim. Correct it or drop it.
+
+Before you forward visual work, set the worker's shot beside the user's reference and list the differences you see. Forward the comparison and the shot, never the bare shot. The user's recorded words are the reference: `fno backlog find --notes "Visual Log: Change"` reads them newest first.
+
+A report of a fix names the process that must restart before the user sees it. Name the holder (the daemon, the installed plugin, the shell, a pane) and the step that restarts it. Without that line, a merged fix reads as still happening, and the user re-reports it.
+
 The `skill_use:` line counts the target sessions this window that loaded `fno:verify-footnotes` and `fno:review`. When verify-footnotes trails the target count, name the workers whose plan has no `## Premises` section in the beat report and mail each one. Every spawn prompt you write for a target worker names the skill: "load /fno:verify-footnotes before the first edit and write its verdicts under ## Premises".
 
 Then run `fno agent hq checkin` (bare from the titled session, or `--scope <scope>` elsewhere). The `held:` line lists this role's due questions. A node-named question carries its `fno backlog decide <node> "<ruling>" --question-id <id>` closer. A question this role asked clears with `fno inbox outstanding clear <qid> --answer "<answer>" --authority role`.
@@ -93,6 +102,8 @@ Apply the first matching lever to each row, in this order:
 5. Keep a worker on the top unplanned node. Run the `start`, `target-ready` or `plan-ready` command, without `--name`.
 
 Your job between beats is to start work. Run the `pick:` line and every startable line, in check-in order, and nothing the check-in omits. Fold a `batch:` group with `fno backlog contain` first. Decide reversible in-scope questions yourself. Detail: [between beats](references/check-in.md#between-beats).
+
+A node you file from a user request (source kind `operator_request`) leaves the turn dispatched or parked, never a bare idea. Spawn its worker with `fno agent spawn "/fno:target <id>"`. Or park it with a named reason: `fno backlog defer <id> -K later -R "<why it waits>"`, or a blocker with `fno backlog update <id> blocked_by+=<id>`. The Stop hook blocks a turn that leaves it undispatched.
 
 Read `fno agent hq verdict` and print its first line and its `hygiene:` line. The `hygiene:` line is evidence, never a stop. It names `converging`, `stalled`, `degraded`, or `unknown`. An absent bound is absent, never satisfied. If the verdict changes, say so in the next beat's `--change` sentence. When it says `stalled`, `degraded`, or `unknown`, run `fno agent hq escalate <scope> --reason Verdict`. This records one deduplicated user question with the bounds and the handoff offer (`fno agent spawn --promote <scope> --hand-off`). The lead never spawns its own successor on its own judgment. The one pre-authorized succession is the declared term's expiry hand-off in [On titling](#on-titling). Every verdict-driven handoff stays an escalation with the handoff offer, and the user decides it.
 
@@ -117,6 +128,8 @@ The tenured lead does not dispatch. A `--once` pass dispatches only through its 
 `fno doctor event emit -t lead_dispatch_exception -s loop -d '{"scope":"<scope>","arm":"<arm>","node":"<id>"}'`
 
 The `-s loop` source keeps the row out of the `test` default. The exception uses the canonical implementation worker line in `references/org-operations.md#control-surfaces`. A blueprint launch writes its [brief](references/org-operations.md#blueprint-brief) into the node first.
+
+Every worker spawn records its why on the node it serves: `fno backlog note <node> "spawned <name>: <why>"`. A `fno do pr create` you run states its why in the PR body. A seat or a PR with no recorded why is a defect: the next reader cannot separate the seat's work from its cost.
 
 ## Stop and park
 

@@ -698,9 +698,9 @@ fn resolve_live_sender(msg_id: &str) -> Option<String> {
             continue;
         };
         // The envelope lives inside JSONL transcript records, so its quotes
-        // arrive escaped; normalize before matching so a raw or a JSON-
-        // escaped transcript both resolve.
-        let normalized = text.replace("\\\"", "\"");
+        // and line breaks arrive escaped; decode the records so a raw or a
+        // JSON-escaped transcript both resolve.
+        let normalized = crate::mail_header::decoded_transcript(&text);
         if let Some(sender) = sender_from_transcript_text(&normalized, msg_id, Some(&session_id)) {
             return Some(sender);
         }

@@ -120,6 +120,8 @@ crossing	crates/fno/src/mux/server/agent_actions.rs	let bin = fno_bin();
 crossing	crates/fno/src/mux/server/agent_launch.rs	let fno = super::fno_bin().display().to_string();
 crossing	crates/fno/src/mux/server/agent_launch.rs	let fno = super::fno_bin().display().to_string();
 crossing	crates/fno/src/serve/attention_api.rs	crate::server::fno_bin(),
+crossing	crates/fno/src/serve/mail_door.rs	fn fno_bin() -> PathBuf {
+crossing	crates/fno/src/serve/mail_door.rs	let mut out = vec![fno_bin().into_os_string()];
 crossing	crates/fno/src/ui/client/agent_launcher.rs	let bin = crate::server::fno_bin().to_string_lossy().into_owned();
 crossing	crates/fno/src/ui/client/config_set.rs	let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
 crossing	crates/fno/src/ui/client/decisions_view.rs	let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
@@ -165,4 +167,5 @@ resolver	crates/fno/src/install/doctor_update.rs	fn resolve_source_pin(override_
 resolver	crates/fno/src/install/doctor_update.rs	fn component_verdict(
 resolver	crates/fno/src/mux/mux_cli/pane_prepare.rs	pub(super) fn prepare_pane_bytes(
 resolver	crates/fno/src/mux/server.rs	pub(crate) fn fno_bin() -> PathBuf {
+resolver	crates/fno/src/serve/mail_door.rs	fn fno_bin() -> PathBuf {
 resolver	crates/fno/src/ui/client_tests/theme_import_tests.rs	async fn settings_modal_body_paints_no_inverse_under_a_named_theme() {
