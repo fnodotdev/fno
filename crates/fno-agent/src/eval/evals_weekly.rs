@@ -161,7 +161,11 @@ fn stale_goldens(history: &[crate::evals_trend::Row], now: DateTime<Utc>) -> Vec
     let since = now - Duration::days(STALE_DAYS);
     let mut tally: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
     for row in history {
-        if !crate::evals_trend::is_scored(row) || !row.ts().is_some_and(|ts| ts >= since) {
+        // A capability task that always passes graduates; it is never stale.
+        if !crate::evals_trend::is_scored(row)
+            || row.raw_str("tier") == Some("capability")
+            || !row.ts().is_some_and(|ts| ts >= since)
+        {
             continue;
         }
         let cell = tally.entry(row.task_id.as_str()).or_default();
@@ -289,17 +293,21 @@ fn report_path(state: &Path, week: &str) -> PathBuf {
 }
 
 /// The weekly leg: the first daily tick of an ISO week writes that week's
-/// report once, and settles the learnings ledger.
+/// report once, then settles the learnings ledger. The report goes first, so
+/// a graph read failure in the sweep never costs the week its report.
 pub(crate) fn leg(
     state: &Path,
     now: DateTime<Utc>,
 ) -> Result<Value, crate::evals_ledger::LedgerError> {
-    let recorded = crate::evals_ledger::sweep(state, now)?;
     let path = report_path(state, &week_of(now));
-    std::fs::create_dir_all(state.join("evals/weekly")).map_err(|e| e.to_string())?;
-    let report = weekly(state, &crate::evals::history_path(), now);
-    let bytes = serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?;
-    let wrote = crate::evals_traces::create_once(&path, &bytes)?;
+    let mut wrote = false;
+    if !path.exists() {
+        std::fs::create_dir_all(state.join("evals/weekly")).map_err(|e| e.to_string())?;
+        let report = weekly(state, &crate::evals::history_path(), now);
+        let bytes = serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?;
+        wrote = crate::evals_traces::create_once(&path, &bytes)?;
+    }
+    let recorded = crate::evals_ledger::sweep(state, now)?;
     Ok(json!({"weekly": wrote.then(|| path.display().to_string()), "learnings": recorded}))
 }
 
@@ -400,10 +408,15 @@ mod tests {
         std::fs::write(state.join("evals/labels.jsonl"), labels.join("\n")).unwrap();
         let history = state.join("history.jsonl");
         let mut lines = Vec::new();
-        for (task, pass) in [("steady", true), ("caught", true), ("caught", false)] {
+        for (task, tier, pass) in [
+            ("steady", "regression", true),
+            ("caught", "regression", true),
+            ("caught", "regression", false),
+            ("graduating", "capability", true),
+        ] {
             for _ in 0..4 {
                 lines.push(
-                    json!({"task_id": task, "tier": "regression", "pass": pass,
+                    json!({"task_id": task, "tier": tier, "pass": pass,
                     "status": "graded", "ts": "2026-11-10T00:00:00Z"})
                     .to_string(),
                 );
