@@ -139,26 +139,7 @@ pub fn run(opts: ShotOptions) -> i32 {
             // frame present, then capture. The display link keeps
             // running (the window stays composited at visible occlusion),
             // so the refresh presents for real.
-            let settled = wait_settled(cx, &handle).await;
-            if !settled {
-                eprintln!("fno-app --shot: the board feeds never settled; capturing anyway");
-            }
-            // The tap: one real click inside the shot window before the
-            // capture. The events queue in the app and run its own mouse
-            // path, so the fold opens the way a user's click opens it,
-            // not through a seeded state.
-            if let Some((tx, ty)) = tap {
-                // SAFETY: reads on the window this process owns.
-                unsafe { tap_window_point(w, tx, ty) };
-                // The yield lets the run loop dispatch the queued click.
-                cx.background_executor()
-                    .timer(Duration::from_millis(300))
-                    .await;
-                handle.update(cx, |_, window, _| window.refresh()).ok();
-                cx.background_executor()
-                    .timer(Duration::from_millis(150))
-                    .await;
-            }
+            settle_then_tap(cx, &handle, w, tap).await;
             // The capture phase. The server's composited tile re-composites
             // only when a frame presents, and the tile's color precision
             // keys to the alpha at composite time: raising alpha alone
@@ -306,6 +287,36 @@ unsafe fn ns_string(s: &str) -> *const c_void {
     let s: *mut objc::runtime::Object =
         msg_send![class!(NSString), stringWithUTF8String: c.as_ptr()];
     s as *const c_void
+}
+
+/// Wait for the board feeds to settle, then post the optional tap and
+/// let the frame it opened present before the capture.
+async fn settle_then_tap(
+    cx: &mut gpui::AsyncApp,
+    handle: &gpui::WindowHandle<crate::window::Root>,
+    w: *mut objc::runtime::Object,
+    tap: Option<(f64, f64)>,
+) {
+    let settled = wait_settled(cx, handle).await;
+    if !settled {
+        eprintln!("fno-app --shot: the board feeds never settled; capturing anyway");
+    }
+    // The tap: one real click inside the shot window before the
+    // capture. The events queue in the app and run its own mouse
+    // path, so the fold opens the way a user's click opens it,
+    // not through a seeded state.
+    if let Some((tx, ty)) = tap {
+        // SAFETY: reads on the window this process owns.
+        unsafe { tap_window_point(w, tx, ty) };
+        // The yield lets the run loop dispatch the queued click.
+        cx.background_executor()
+            .timer(Duration::from_millis(300))
+            .await;
+        handle.update(cx, |_, window, _| window.refresh()).ok();
+        cx.background_executor()
+            .timer(Duration::from_millis(150))
+            .await;
+    }
 }
 
 /// Poll until the board has read every feed and the chat's event count
