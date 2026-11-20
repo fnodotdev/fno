@@ -27,6 +27,7 @@ use fno::ui::theme::THEME_NAMES;
 pub(super) const SECTIONS: [&str; 5] = ["Look", "Alerts", "Machines", "Keys", "Updates"];
 
 /// One selectable value on a choice page.
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Choice {
     pub value: String,
     pub doc: &'static str,
@@ -34,6 +35,7 @@ pub(crate) struct Choice {
 
 /// How a row answers Enter. The app-side twin of the mux model's
 /// vocabulary; the caller resolves the outcome against the real config.
+#[derive(Debug, PartialEq)]
 pub(crate) enum Mode {
     Toggle {
         on: bool,
@@ -53,6 +55,7 @@ pub(crate) enum Mode {
 
 /// One row of the panel: the dotted key, the painted label, the current
 /// value text, and how Enter treats it.
+#[derive(Debug, PartialEq)]
 pub(crate) struct Row {
     pub id: &'static str,
     pub label: String,
@@ -61,6 +64,7 @@ pub(crate) struct Row {
 }
 
 /// What Enter resolved to: the caller writes it through `fno config set`.
+#[derive(Debug, PartialEq)]
 pub(crate) enum Outcome {
     /// Flip a bool key (a toggle row).
     Set {
@@ -367,6 +371,7 @@ pub(crate) fn resolve_enter(rows: &[SectionRows], q: &str, sel: usize) -> Outcom
 
 /// What a key on the open panel handed back to the window: a write to
 /// resolve through the CLI door, or a close.
+#[derive(Debug, PartialEq)]
 pub(crate) enum Event {
     Close,
     Set { id: String, value: String },
@@ -695,5 +700,162 @@ pub(crate) fn bounded_write(set: bool, id: &str, value: Option<&str>) -> Result<
             Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
             Err(e) => return Err(format!("fno config {id}: {e}")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg(pairs: &[(&str, serde_json::Value)]) -> Value {
+        let mut mux = serde_json::Map::new();
+        let mut app = serde_json::Map::new();
+        for (k, v) in pairs {
+            match k.strip_prefix("mux.").or_else(|| k.strip_prefix("app.")) {
+                Some(rest) => {
+                    let target = if k.starts_with("mux.") {
+                        &mut mux
+                    } else {
+                        &mut app
+                    };
+                    target.insert(rest.into(), v.clone());
+                }
+                None => {}
+            }
+        }
+        serde_json::json!({"mux": mux, "app": app})
+    }
+
+    /// The five sections build in order, and a locked Machines row names
+    /// its reason.
+    #[test]
+    fn five_sections_and_a_locked_reason() {
+        let rows = build_rows(Some(&cfg(&[])), Path::new("/"), &[], &[]);
+        let names: Vec<&str> = rows.iter().map(|(name, _)| *name).collect();
+        assert_eq!(names, ["Look", "Alerts", "Machines", "Keys", "Updates"]);
+        let machines = &rows[2].1;
+        assert_eq!(machines.len(), 0, "no fleet, no rows");
+        let m = Machine {
+            host: "m2".into(),
+            local: false,
+            fresh: false,
+            age_s: 42,
+            leads: Vec::new(),
+            ..Machine::default()
+        };
+        let rows = build_rows(Some(&cfg(&[])), Path::new("/"), &[m], &[]);
+        let machines = &rows[2].1;
+        assert_eq!(machines.len(), 1);
+        assert_eq!(
+            machines[0].mode,
+            Mode::Locked {
+                reason: "add or connect a host from the mux".into()
+            }
+        );
+        assert_eq!(machines[0].value, "0 seats seen 42s ago");
+    }
+
+    /// The filter matches a label, the dotted key, and the section name.
+    #[test]
+    fn filter_matches_label_key_and_section() {
+        let rows = build_rows(Some(&cfg(&[])), Path::new("/"), &[], &[]);
+        let hits = visible(&rows, "notify").len();
+        assert_eq!(hits, 1, "notify matches the notification row");
+        assert_eq!(visible(&rows, "sound").len(), 1);
+        assert_eq!(visible(&rows, "app.alert_sound").len(), 1);
+        assert_eq!(
+            visible(&rows, "alerts").len(),
+            3,
+            "the section name matches"
+        );
+        assert_eq!(visible(&rows, "theme").len(), 1);
+    }
+
+    /// Enter on a toggle writes the other state; a cycle steps; a page
+    /// opens on the current choice; a locked row stays inert.
+    #[test]
+    fn enter_resolves_per_mode() {
+        let rows = build_rows(
+            Some(&cfg(&[("app.alert_sound", true.into())])),
+            Path::new("/"),
+            &[],
+            &[],
+        );
+        let out = resolve_enter(&rows, "", 4);
+        assert_eq!(
+            out,
+            Outcome::Set {
+                id: "app.alert_sound",
+                value: "false"
+            }
+        );
+        let out = resolve_enter(&rows, "theme", 0);
+        assert!(matches!(out, Outcome::Page { .. }), "theme opens its page");
+        assert_eq!(resolve_enter(&rows, "machine", 0), Outcome::None);
+    }
+
+    /// Esc clears a query first, then closes; a typed query narrows and
+    /// Enter resolves within it; a page opens and confirms through its
+    /// numbered options.
+    #[test]
+    fn the_panel_key_flow() {
+        let rows = build_rows(Some(&cfg(&[])), Path::new("/"), &[], &[]);
+        let mut st = SettingsState {
+            query: ui::LineField::new(64),
+            selected: 0,
+            page: None,
+            note: None,
+            rows,
+            fonts: vec!["SF Mono".into(), "Menlo".into()],
+        };
+        st.query.edit("t", Some("t"));
+        assert_eq!(
+            key(
+                &mut st,
+                &Key {
+                    key: "escape",
+                    ..Key::default()
+                }
+            ),
+            None
+        );
+        assert_eq!(st.query.text(), "", "esc clears the query first");
+        assert_eq!(
+            key(
+                &mut st,
+                &Key {
+                    key: "escape",
+                    ..Key::default()
+                }
+            ),
+            Some(Event::Close)
+        );
+        // The theme row opens its page on the Follow-macOS choice.
+        st.query.edit("theme", Some("theme"));
+        assert_eq!(
+            key(
+                &mut st,
+                &Key {
+                    key: "enter",
+                    ..Key::default()
+                }
+            ),
+            None
+        );
+        assert!(st.page.is_some(), "the page opened");
+        // Confirm the current choice: Follow macOS = unset.
+        assert_eq!(
+            key(
+                &mut st,
+                &Key {
+                    key: "enter",
+                    ..Key::default()
+                }
+            ),
+            Some(Event::Unset {
+                id: "mux.theme".into()
+            })
+        );
+        assert!(st.page.is_none());
     }
 }
