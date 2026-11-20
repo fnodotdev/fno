@@ -29,6 +29,7 @@ pub mod evals_macro;
 pub mod evals_power;
 pub mod evals_predict;
 pub mod evals_profile;
+pub mod evals_propose;
 pub mod evals_qualification;
 pub mod evals_traces;
 pub mod evals_trend;
