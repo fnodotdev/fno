@@ -305,6 +305,10 @@ fn world_cmd(root: &Path, exe: &Path) -> Command {
         .env("FNO_DEMO_HOST", "demo-host")
         .env("FNO_CLAUDE_PROJECTS_DIR", root.join("transcripts"))
         .env("FNO_OWNER_PID", std::process::id().to_string());
+    // The transcript pin resolves through the cwd's project slug, so every
+    // world child runs in the fake checkout the seed writes transcripts
+    // for; without it the caller's own cwd slugs the lookup one dir off.
+    cmd.current_dir(root.join("code/checkout"));
     cmd
 }
 
@@ -446,7 +450,14 @@ fn seed_question(root: &Path) -> bool {
 /// view renders a conversation. The FILE is the contract: rows carry
 /// type + message.content like the real transcripts the server reads.
 fn seed_transcript(root: &Path) -> bool {
-    let dir = root.join("transcripts/demo-project");
+    // The dir name is the project slug of the world children's cwd
+    // (world_cmd pins them to code/checkout); that is the only name the
+    // newest-lookup can find.
+    let dir = root
+        .join("transcripts")
+        .join(crate::ui::transcript_tail::claude_project_slug(
+            &root.join("code/checkout"),
+        ));
     if let Err(e) = std::fs::create_dir_all(&dir) {
         eprintln!("fno mux app shot: the transcript seed failed to create its dir: {e}");
         return false;
