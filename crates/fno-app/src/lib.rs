@@ -21,6 +21,7 @@ mod orchestration;
 pub mod palette;
 mod sheet;
 mod shot;
+mod skills;
 mod start;
 mod tabs;
 mod ui;

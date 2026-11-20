@@ -6,7 +6,6 @@
 //! close and reopen on the root.
 
 use std::cell::Cell;
-use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui::{
@@ -19,6 +18,7 @@ use super::chat::field::{Field, FieldState};
 use super::keys::Key;
 use super::link::Layout;
 use super::palette::Palette;
+use super::skills::{self, Skill};
 use super::ui::{self, Role};
 use super::window::Root;
 use fno::app_api::client::agent_launcher::{
@@ -202,10 +202,10 @@ pub struct Launch {
     effort: Option<String>,
     /// True when the launch lands in a worktree instead of the main checkout.
     worktree: bool,
-    /// The picked project's slash skills, read at open and on a harness
-    /// step. Claude only: the other harnesses have no listing surface, so
-    /// their prompts autocomplete nothing.
-    skills: Vec<String>,
+    /// The picked harness's skills, read from its dirs at open and on a
+    /// harness or project step. A harness with no known on-disk layout
+    /// lists none, so its prompt autocompletes nothing.
+    skills: Vec<Skill>,
     harnesses: Vec<HarnessRow>,
     projects: Vec<String>,
     pub draft: Draft,
@@ -326,11 +326,11 @@ impl Launch {
         self.refresh_epics();
     }
 
-    /// Read the picked project's skill names for the completion list. A
-    /// claude pick lists both roots; anything else carries none.
+    /// Read the picked harness's skills for the completion list: claude
+    /// lists project, user and plugin skills, codex its own root.
     pub(crate) fn refresh_skills(&mut self) {
-        self.skills = if self.kind == Kind::Agent && self.harness == "claude" {
-            skill_names(&self.project)
+        self.skills = if self.kind == Kind::Agent {
+            skills::list(&self.harness, &self.project)
         } else {
             Vec::new()
         };
@@ -537,42 +537,43 @@ impl Launch {
         self.worktree = !self.worktree;
     }
 
-    /// The `/query` the draft leads with, if it does.
+    /// The query after the picked harness's sigil, if the draft leads
+    /// with one and holds no space yet.
     fn skill_query(&self) -> Option<&str> {
+        let sigil = skills::sigil(&self.harness)?;
         self.draft
             .text()
-            .strip_prefix('/')
+            .strip_prefix(sigil)
             .filter(|q| !q.contains(char::is_whitespace))
     }
 
-    /// The skills matching the draft's leading `/query`, name order. Only
-    /// the agent kind on claude lists any: the door verifies one name at a
-    /// time and nothing lists them, so every other pick autocompletes
-    /// nothing.
-    pub(crate) fn skill_completions(&self) -> Vec<String> {
-        if self.kind != Kind::Agent || self.harness != "claude" {
+    /// The skills matching the draft's leading query, grouped by source.
+    /// Only the agent kind lists any.
+    pub(crate) fn skill_completions(&self) -> Vec<Skill> {
+        if self.kind != Kind::Agent {
             return Vec::new();
         }
         let Some(q) = self.skill_query() else {
             return Vec::new();
         };
-        let needle = q.to_lowercase();
-        self.skills
-            .iter()
-            .filter(|s| s.to_lowercase().contains(&needle))
-            .take(4)
+        skills::matching(&self.skills, q, 6)
+            .into_iter()
             .cloned()
             .collect()
     }
 
-    /// Tab fills the top match as `/name ` and keeps the row on the task.
-    /// False when nothing shows, so tab keeps moving rows.
+    /// Tab fills the top match as `<sigil>name ` and keeps the row on the
+    /// task. False when nothing shows, so tab keeps moving rows.
     pub(crate) fn complete_skill(&mut self) -> bool {
-        let Some(first) = self.skill_completions().into_iter().next() else {
+        let (Some(first), Some(sigil)) = (
+            self.skill_completions().into_iter().next(),
+            skills::sigil(&self.harness),
+        ) else {
             return false;
         };
         self.draft.select_all();
-        self.draft.replace_selection(&format!("/{first} "));
+        self.draft
+            .replace_selection(&format!("{sigil}{} ", first.name));
         true
     }
 
@@ -903,36 +904,6 @@ pub(crate) fn shell_command(draft: &Draft) -> Option<String> {
     (!rest.is_empty()).then(|| rest.to_string())
 }
 
-/// The skill dir names under the two roots Claude Code reads: the user's
-/// `~/.claude/skills` and the picked project's `.claude/skills`. A dir
-/// without a SKILL.md is not a skill. Missing roots read as none; the
-/// read is best-effort and never a submit blocker.
-fn skill_names(project: &str) -> Vec<String> {
-    let mut roots = Vec::new();
-    if let Some(home) = std::env::var_os("HOME") {
-        roots.push(PathBuf::from(home).join(".claude/skills"));
-    }
-    if !project.is_empty() {
-        roots.push(PathBuf::from(project).join(".claude/skills"));
-    }
-    let mut out = Vec::new();
-    for root in roots {
-        let Ok(entries) = std::fs::read_dir(&root) else {
-            continue;
-        };
-        for e in entries.flatten() {
-            if e.path().join("SKILL.md").is_file() {
-                if let Some(name) = e.file_name().to_str() {
-                    out.push(name.to_string());
-                }
-            }
-        }
-    }
-    out.sort();
-    out.dedup();
-    out
-}
-
 /// The project row's display path: home becomes `~`, and a long path
 /// middle-truncates so the row keeps its shape. The request itself always
 /// carries the full path.
@@ -1059,20 +1030,36 @@ fn axis_picker_rows(l: &Launch, p: &Palette, cx: &mut Context<Root>) -> Div {
         ))
 }
 
-/// The agent kind's skill matches under the task box; tab fills the top
-/// one. None show unless the draft leads with a `/` and the picked
-/// harness lists skills.
+/// The agent kind's skill matches under the task box, grouped by source
+/// with a label per group; tab fills the top one. None show unless the
+/// draft leads with the harness's sigil and the harness lists skills.
 fn skill_hints(l: &Launch, p: &Palette) -> Option<Div> {
     let rows = l.skill_completions();
     if rows.is_empty() {
         return None;
     }
-    Some(
-        div().flex().flex_col().px_2().gap(px(2.0)).children(
-            rows.into_iter()
-                .map(|s| ui::text(format!("/{s}"), Role::Hint, p)),
-        ),
-    )
+    let sigil = skills::sigil(&l.harness)?;
+    let mut col = div().flex().flex_col().px_2().gap(px(2.0));
+    let mut group = None;
+    for s in rows {
+        if group != Some(s.source) {
+            group = Some(s.source);
+            col = col.child(ui::text(s.source.label(), Role::Label, p));
+        }
+        col = col.child(
+            div()
+                .flex()
+                .flex_row()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .text_color(rgb(p.accent))
+                        .child(format!("{sigil}{}", s.name)),
+                )
+                .child(ui::text(s.description, Role::Hint, p)),
+        );
+    }
+    Some(col)
 }
 
 /// The lead kind's epic picker under the filter box: up to six matches,
@@ -1297,9 +1284,9 @@ mod tests {
         let mut l = Launch::fresh();
         l.kind = Kind::Agent;
         l.harness = "claude".into();
-        l.skills = vec!["target".into(), "think".into()];
+        l.skills = vec![sk("target"), sk("think")];
         l.draft.replace_selection("/ta");
-        assert_eq!(l.skill_completions(), vec!["target".to_string()]);
+        assert_eq!(l.skill_completions(), vec![sk("target")]);
         assert!(l.complete_skill());
         assert_eq!(l.draft.text(), "/target ");
     }
@@ -1353,12 +1340,34 @@ mod tests {
         );
     }
 
+    fn sk(name: &str) -> Skill {
+        Skill {
+            source: skills::Source::User,
+            name: name.into(),
+            description: String::new(),
+        }
+    }
+
     #[test]
-    fn the_completions_leave_the_other_harnesses_and_kinds_alone() {
+    fn codex_completes_with_the_dollar_sigil_and_ignores_the_slash() {
         let mut l = Launch::fresh();
         l.harness = "codex".into();
-        l.skills = vec!["target".into()];
+        l.skills = vec![sk("target")];
         l.draft.replace_selection("/ta");
+        assert!(l.skill_completions().is_empty());
+        l.draft.select_all();
+        l.draft.replace_selection("$ta");
+        assert!(l.complete_skill());
+        assert_eq!(l.draft.text(), "$target ");
+    }
+
+    #[test]
+    fn the_completions_leave_the_other_kinds_alone() {
+        let mut l = Launch::fresh();
+        l.harness = "claude".into();
+        l.skills = vec![sk("target")];
+        l.draft.replace_selection("/ta");
+        l.kind = Kind::Shell;
         assert!(l.skill_completions().is_empty());
         assert!(!l.complete_skill());
         // A lead on claude stays silent: no listing surface, no matches.
