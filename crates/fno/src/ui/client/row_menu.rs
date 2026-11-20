@@ -47,7 +47,7 @@ pub(super) enum MenuTarget {
 /// The disambiguating identity of an agent row, captured when a row menu opens.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct AgentIdent {
-    name: String,
+    pub(super) name: String,
     pane_id: Option<u64>,
     attach_id: Option<String>,
 }
@@ -186,7 +186,7 @@ impl MenuAction {
     /// advertises and the key it answers cannot drift. The tab commands and the
     /// settled rename/close/remove pair carry one; everything else is
     /// Enter/click only and renders no key.
-    fn accelerator_id(&self) -> Option<&'static str> {
+    pub(super) fn accelerator_id(&self) -> Option<&'static str> {
         match self {
             MenuAction::TabNew => Some("new-tab"),
             MenuAction::TabRename => Some("rename-tab"),
