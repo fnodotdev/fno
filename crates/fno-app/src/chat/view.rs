@@ -874,11 +874,15 @@ fn composer(root: &Root, window: &Window, cx: &mut Context<Root>) -> Option<Div>
                 .child(format!("[img {} KB]", att.bytes.len() / 1024)),
         );
     }
-    if let Some(pop) = root
-        .chat
-        .skill_view()
-        .and_then(|v| crate::launch::skill_popover(v, root.adv, &p))
-    {
+    if let Some(pop) = root.chat.skill_view().and_then(|v| {
+        crate::launch::skill_popover(
+            v,
+            root.adv,
+            root.chat.composer.get().size.width,
+            px(700.0),
+            &p,
+        )
+    }) {
         bar = bar.child(pop);
     }
     bar = bar.child(

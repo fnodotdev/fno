@@ -867,7 +867,7 @@ pub(super) fn render(root: &Root, window: &Window, cx: &mut Context<Root>) -> Di
             d.child(axis_picker_rows(l, &p, cx))
         })
         .child(task_box(root, window, cx))
-        .children(skill_hints(l, &p))
+        .children(skill_hints(root))
         .children(epic_list(l, &p))
         .children(phase_line(l, &p))
         .child(
@@ -1059,14 +1059,26 @@ fn axis_picker_rows(l: &Launch, p: &Palette, cx: &mut Context<Root>) -> Div {
 /// sigil and the harness lists skills.
 pub(crate) fn skill_hints(root: &Root) -> Option<Div> {
     let l = &root.launch.state;
-    skill_popover(l.skill_view()?, root.adv, &root.palette)
+    skill_popover(
+        l.skill_view()?,
+        root.adv,
+        l.composer.get().size.width,
+        px(560.0),
+        &root.palette,
+    )
 }
 
 /// The popover card, shared by the start and chat composers. It floats
 /// above its parent, which must be `relative`. Rows group by source, the
 /// typed prefix is bold, the descriptions share one column and end in an
 /// ellipsis, and the footer counts the matches left out.
-pub(crate) fn skill_popover(v: skills::View, adv: Pixels, p: &Palette) -> Option<Div> {
+pub(crate) fn skill_popover(
+    v: skills::View,
+    adv: Pixels,
+    seen: Pixels,
+    fallback: Pixels,
+    p: &Palette,
+) -> Option<Div> {
     let skills::View {
         rows,
         more,
@@ -1074,6 +1086,14 @@ pub(crate) fn skill_popover(v: skills::View, adv: Pixels, p: &Palette) -> Option
         query,
     } = v;
     let width = rows.iter().map(|s| s.name.chars().count()).max()? + 2;
+    // The card's width is known once it has painted once; the first frame
+    // takes the caller's guess. The chrome is monospace, so a count of
+    // cells is an exact width and the cut lands on an ellipsis.
+    let card = if seen > px(0.0) { seen } else { fallback };
+    let hint_adv = adv * (ui::SMALL / ui::BODY);
+    let room = ((card - px(40.0) - adv * width as f32) / hint_adv)
+        .floor()
+        .max(8.0) as usize;
     let mut col = div().flex().flex_col().gap(px(1.0));
     let mut group = None;
     for (i, s) in rows.into_iter().enumerate() {
@@ -1108,7 +1128,14 @@ pub(crate) fn skill_popover(v: skills::View, adv: Pixels, p: &Palette) -> Option
                     .child(div().font_weight(FontWeight::BOLD).child(mid))
                     .child(post),
             )
-            .child(ui::clamp(s.description, Role::Hint, p));
+            .child(
+                ui::role(div(), Role::Hint, p)
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .child(ui::cut(&s.description, room)),
+            );
         col = col.child(row);
     }
     let foot = div()
