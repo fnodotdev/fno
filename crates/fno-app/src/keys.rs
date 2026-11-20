@@ -514,8 +514,8 @@ mod tests {
     }
 
     /// The app_prefix contract: the shared scanner claims the prefix before
-    /// any pane input, and translate maps the actionable arms. `z` is
-    /// unbound in the default table, so a post-prefix z is the Bell arm.
+    /// any pane input, and translate maps the actionable arms. `u` is
+    /// unbound in the default table, so a post-prefix u is the Bell arm.
     #[test]
     fn app_prefix_claims_chords_and_translate_maps_the_arms() {
         use fno::ui::keys::{Event, Scanner};
@@ -538,7 +538,7 @@ mod tests {
         // Ctrl+B then an unbound key is one Bell and no forward bytes.
         let mut scanner = Scanner::default();
         scanner.scan(&[0x02], Instant::now());
-        assert_eq!(scanner.scan(&[b'z'], Instant::now()), vec![Event::Bell]);
+        assert_eq!(scanner.scan(&[b'u'], Instant::now()), vec![Event::Bell]);
         // A lone Esc held as a chord candidate still reaches the pane once
         // the quiet window releases it.
         let mut scanner = Scanner::default();
