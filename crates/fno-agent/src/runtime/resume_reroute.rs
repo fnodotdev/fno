@@ -11,6 +11,7 @@
 //! callers. Reentry then reads the restamped row and takes bg-resume with the
 //! new `--settings` (reentry.rs:635-690) under the same session id.
 
+use crate::claude_ask::JobListing;
 use crate::harness::{AsHarness, Harness};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -138,7 +139,7 @@ pub(crate) fn apply(
         ));
     }
 
-    stop_live_session(home, entry, &session_id)?;
+    clear_saved_job(home, entry, &session_id, cwd)?;
 
     crate::route_recovery::persist_overwrite(
         &home.registry_json(),
@@ -284,31 +285,25 @@ fn config_dir_conflict(session_id: &str, overlay_dir: &Path) -> Option<String> {
     ))
 }
 
-/// Stop the live process the way the daemon's stop does, then confirm the
-/// hold witness cleared. A stopped session skips straight through.
-fn stop_live_session(
+/// Clear the row's claude job before the relaunch. A listed job keeps its
+/// saved launch options, so `claude --bg --resume <id> --settings <new>`
+/// answers with a COPY under a new id whether the job runs, sits blocked or
+/// is stopped (measured on claude 2.1.325: "keeps its own saved options, so
+/// the flags you passed started a copy"). A running job stops first, then
+/// `claude rm` takes it off the list. rm keeps the conversation, so the
+/// bg-resume continues the same session id on the new route.
+fn clear_saved_job(
     home: &crate::paths::AgentsHome,
     entry: &Value,
     session_id: &str,
+    cwd: &Path,
 ) -> Result<(), String> {
-    if !crate::census::live_claude_holds_session(session_id) {
-        return Ok(());
-    }
     let registry = crate::state::load_registry(&home.registry_json())
         .map_err(|e| format!("resume --route: registry read failed: {e}"))?;
     let typed = registry
         .entries
         .iter()
         .find(|e| crate::route_recovery::row_matches_session(e, session_id));
-    if let Some(row) = typed {
-        if let Some(why) = crate::attended::stop_refusal(home, row) {
-            return Err(format!(
-                "resume --route: row {} is attended ({why}); a session the user typed \
-                 into is not stopped",
-                row.name
-            ));
-        }
-    }
     let short = typed
         .and_then(|row| row.transport_short())
         .map(str::to_string)
@@ -319,31 +314,91 @@ fn stop_live_session(
                 .filter(|s| !s.is_empty())
                 .map(str::to_string)
         })
-        .unwrap_or_else(|| session_id.to_string());
-    let stopped = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| format!("resume --route: runtime build failed: {e}"))?
-        .block_on(crate::lifecycle_child::bounded_claude_stop(
-            &short,
-            std::time::Duration::from_secs(15),
-        ));
-    match stopped {
-        Ok(Ok(_)) => {}
-        Ok(Err(e)) => return Err(format!("resume --route: stopping {short:?} failed: {e}")),
-        Err(_) => {
+        .unwrap_or_else(|| crate::client_commands::derived_short_id(session_id));
+    let account = recorded_account(entry);
+    let job_root =
+        (!account.is_empty() && account != "default").then(|| row_config_dir(entry, cwd));
+    let listing = crate::claude_ask::ClaudeHome::from_env().listed_job(&short, job_root.as_deref());
+    if listing == JobListing::Unread {
+        eprintln!(
+            "fno agent resume: warning: `claude agents` could not be read, so job {short} \
+             is not cleared; a listed job comes back as a refused copy"
+        );
+    }
+    let (stop, remove) = job_clearing(
+        &listing,
+        crate::census::live_claude_holds_session(session_id),
+    );
+    if stop {
+        if let Some(row) = typed {
+            if let Some(why) = crate::attended::stop_refusal(home, row) {
+                return Err(format!(
+                    "resume --route: row {} is attended ({why}); a session the user typed \
+                     into is not stopped",
+                    row.name
+                ));
+            }
+        }
+        // A stop that exits nonzero is judged by what still holds the
+        // session below, not by its exit code.
+        run_job_action("stop", &short, job_root.as_deref())
+            .map_err(|e| format!("resume --route: stopping job {short} failed: {e}"))?;
+        // The argv census misses a job its supervisor hosts, so a listed
+        // job also answers from the roster.
+        let still_listed_running = remove
+            && crate::claude_ask::ClaudeHome::from_env()
+                .listed_job(&short, job_root.as_deref())
+                .is_running();
+        if still_listed_running || crate::census::live_claude_holds_session(session_id) {
             return Err(format!(
-                "resume --route: stopping {short:?} timed out after 15s"
-            ))
+                "resume --route: a live process still holds session {session_id} after the \
+                 stop; stop it and re-run resume --route"
+            ));
         }
     }
-    if crate::census::live_claude_holds_session(session_id) {
-        return Err(format!(
-            "resume --route: a live process still holds session {session_id} after the \
-             stop; stop it and re-run resume --route"
-        ));
+    if remove {
+        let out = run_job_action("rm", &short, job_root.as_deref())
+            .map_err(|e| format!("resume --route: removing job {short} failed: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "resume --route: removing job {short} exited {}: {}; the saved job would \
+                 turn the relaunch into a copy",
+                out.status
+                    .code()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "signal".to_string()),
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
     }
     Ok(())
+}
+
+/// What the re-route does to the row's saved job: (stop, remove). `argv_live`
+/// is a live process argv naming the session.
+fn job_clearing(listing: &JobListing, argv_live: bool) -> (bool, bool) {
+    match listing {
+        JobListing::Listed(_) => (argv_live || listing.is_running(), true),
+        JobListing::Unlisted | JobListing::Unread => (argv_live, false),
+    }
+}
+
+/// Run one bounded `claude <action> <short>` under the job's account root.
+fn run_job_action(
+    action: &str,
+    short: &str,
+    root: Option<&Path>,
+) -> std::io::Result<std::process::Output> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(crate::lifecycle_child::bounded_claude_job_action_in(
+            action,
+            short,
+            std::time::Duration::from_secs(15),
+            root,
+        ))
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "timed out after 15s"))?
 }
 
 #[cfg(test)]
@@ -484,6 +539,21 @@ mod tests {
         }
         std::fs::remove_dir_all(&base).ok();
         std::fs::remove_dir_all(&home_dir).ok();
+    }
+
+    #[test]
+    fn a_listed_job_is_cleared_so_the_new_route_continues_the_same_session() {
+        // A listed claude job answers a flagged bg-resume with a COPY in any
+        // state, so the re-route removes it; a job still running (a 429
+        // stall reads blocked) stops first. An unlisted session stops only
+        // when a live argv holds it, and an unread listing clears nothing.
+        let listed = |state: &str| JobListing::Listed(Some(state.to_string()));
+        assert_eq!(job_clearing(&listed("blocked"), false), (true, true));
+        assert_eq!(job_clearing(&listed("working"), false), (true, true));
+        assert_eq!(job_clearing(&listed("stopped"), false), (false, true));
+        assert_eq!(job_clearing(&JobListing::Unlisted, true), (true, false));
+        assert_eq!(job_clearing(&JobListing::Unlisted, false), (false, false));
+        assert_eq!(job_clearing(&JobListing::Unread, false), (false, false));
     }
 
     #[test]

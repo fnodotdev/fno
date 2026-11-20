@@ -954,8 +954,13 @@ async fn registry_doors(command: &str, args: &[String]) -> Option<i32> {
         // the same shape).
         let home = AgentsHome::from_env();
         return Some(
-            match std::thread::spawn(move || fno_agent::client_commands::run_resume(&rest, &home))
-                .join()
+            // The resume's node seats live on this thread; settle them at its exit.
+            match std::thread::spawn(move || {
+                let code = fno_agent::client_commands::run_resume(&rest, &home);
+                fno_agent::resume_gate::settle_reserved(code);
+                code
+            })
+            .join()
             {
                 Ok(code) => code,
                 Err(payload) => std::panic::resume_unwind(payload),
