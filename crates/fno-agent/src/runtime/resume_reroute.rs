@@ -342,7 +342,7 @@ fn clear_saved_job(
         // A stop that exits nonzero is judged by what still holds the
         // session below, not by its exit code.
         run_job_verb("stop", &short, job_root.as_deref())
-            .map_err(|e| format!("resume --route: `claude stop {short}` failed: {e}"))?;
+            .map_err(|e| format!("resume --route: stopping job {short} failed: {e}"))?;
         // The argv census misses a job its supervisor hosts, so a listed
         // job also answers from the roster.
         let still_listed_running = remove
@@ -358,10 +358,10 @@ fn clear_saved_job(
     }
     if remove {
         let out = run_job_verb("rm", &short, job_root.as_deref())
-            .map_err(|e| format!("resume --route: `claude rm {short}` failed: {e}"))?;
+            .map_err(|e| format!("resume --route: removing job {short} failed: {e}"))?;
         if !out.status.success() {
             return Err(format!(
-                "resume --route: `claude rm {short}` exited {}: {}; the saved job would \
+                "resume --route: removing job {short} exited {}: {}; the saved job would \
                  turn the relaunch into a copy",
                 out.status
                     .code()
