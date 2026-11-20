@@ -1,0 +1,83 @@
+diff --git a/cli/src/fno/agents/folded_subcommands.yaml b/cli/src/fno/agents/folded_subcommands.yaml
+index 86dbef2f96c..1c2b3a4d5e6f 100644
+--- a/cli/src/fno/agents/folded_subcommands.yaml
++++ b/cli/src/fno/agents/folded_subcommands.yaml
+@@ -30,12 +30,6 @@ worker:
+   - Worker lifecycle and check-in.
+   - hidden: true
+   members:
+-  - module: fno.worker.ship
+-    help: Ship-side worker helpers.
+-  - module: fno.worker.rollup
+-    help: Rollup reports for the worker family.
+   - module: fno.worker.summary
+     help: Worker summary tables.
+   - hidden: true
+diff --git a/cli/src/fno/worker/rollup.py b/cli/src/fno/worker/rollup.py
+deleted file mode 100644
+index 9a7b8c6d5e4f..000000000000
+--- a/cli/src/fno/worker/rollup.py
++++ /dev/null
+@@ -1,31 +0,0 @@
+-"""Rollup reports for the worker family."""
+-
+-
+-def fold_rows(rows, section):
+-    """Fold flat worker rows into one table per section."""
+-    out = {}
+-    for row in rows:
+-        key = row.get("section", section)
+-        out.setdefault(key, []).append(row)
+-    return out
+-
+-
+-def weekly(rows):
+-    """Return the weekly rollup table for the worker family."""
+-    return fold_rows(rows, section="week")
+-
+-
+-def read_rows():
+-    """Read worker rows from the shared store."""
+-    from fno.graph.store import read_worker_rows
+-    return read_worker_rows()
+-
+-
+-def main(argv=None):
+-    """Entry point for the folded rollup subcommand."""
+-    print(fold_rows(read_rows(), section="week"))
+-    return 0
+-
+-
+-if __name__ == "__main__":
+-    raise SystemExit(main())
+diff --git a/cli/src/fno/worker/ship.py b/cli/src/fno/worker/ship.py
+deleted file mode 100644
+index abc123def456..000000000000
+--- a/cli/src/fno/worker/ship.py
++++ /dev/null
+@@ -1,24 +0,0 @@
+-"""Ship-side worker helpers: fold worker rows into the ship report."""
+-
+-from fno.worker.rollup import fold_rows
+-
+-
+-def ship_table(rows):
+-    """Return the worker section rows for the ship report."""
+-    return fold_rows(rows, section="worker")
+-
+-
+-def main(argv=None):
+-    """Entry point for the folded ship subcommand."""
+-    rows = read_rows()
+-    print(ship_table(rows))
+-    return 0
+-
+-
+-def read_rows():
+-    """Read worker rows from the shared store."""
+-    from fno.graph.store import read_worker_rows
+-    return read_worker_rows()
+-
+-
+-if __name__ == "__main__":
+-    raise SystemExit(main())

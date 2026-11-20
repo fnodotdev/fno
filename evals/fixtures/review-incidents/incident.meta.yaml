@@ -1,0 +1,14 @@
+# Review-incident entry 1. RECONSTRUCTED, not the real diff: the founding
+# incident's repository is private and this one is public, so the fixture
+# rebuilds the bug class. The real coordinates (repository, PR number, head
+# sha, merge times, bug site and defect sentence) live in the filing node's
+# record, never in public files.
+id: review-incident-reachable-paths-carrier
+reconstructed: true
+class: a port deletes Python modules while a reachable-paths baseline row still lists one of them as a py leg, so the check reads red after a green merge
+diff: incident.diff
+tree:
+  - tree/scripts/ci/reachable-paths-baseline.txt
+bug_site: scripts/ci/reachable-paths-baseline.txt
+bug_defect: the baseline row still names the deleted module as a py leg
+reported: 2026-10-26
