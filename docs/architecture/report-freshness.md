@@ -60,4 +60,4 @@ One row per arm in the arms table. Column semantics: the bookmark cell names the
 
 ## The ask door
 
-The question ask door reads the same facts the sweep closes on, at filing time (crates/fno-agent/src/backlog/needs.rs `ask_subject_resolved`, wired at crates/fno-agent/src/backlog/question_intake.rs in `run_intake`). A terminal rung on every node the ask names refuses the ask. A merged PR on one of them refuses the ask with the merge in the refusal. An amend of an open row rides through. A user-owed ask never refuses. An unread PR files normally.
+The question ask door reads the same facts the sweep closes on, at filing time (crates/fno-agent/src/backlog/needs.rs `ask_subject_resolved`, wired at crates/fno-agent/src/backlog/question_intake.rs in `run_intake`). A terminal rung on every node the ask names refuses the ask. A merged PR on one of them refuses the ask with the merge in the refusal. An amend of an open row rides through. A user-owed ask never refuses. An ask with no node pointer skips the facts read. An unread PR files normally.

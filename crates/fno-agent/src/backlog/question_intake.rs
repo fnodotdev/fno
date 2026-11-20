@@ -158,7 +158,7 @@ pub struct IntakeAnswer {
     /// that predates the template arm.
     #[serde(default)]
     pub template: bool,
-    /// `law` | `node_pointer` | `context` | `config` | `decide_yourself` | `dedup` | `write` | `index`.
+    /// `law` | `node_pointer` | `context` | `config` | `decide_yourself` | `dedup` | `resolved` | `write` | `index`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refusal: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1039,8 +1039,9 @@ already waits ({}). Answer it or clear it; the asker amends it with a \
     // subject hourly; the door reads the same facts here, so the ask never
     // pings anyone for a subject that already resolved. An amend of an
     // open row rides through: the row already waits, and the sweep owns
-    // its close.
-    if amend.is_none() {
+    // its close. Both refusal rules need a named node, so an ask with no
+    // node pointer skips the facts read entirely.
+    if amend.is_none() && (node.is_some() || !req.blocks.is_empty()) {
         let ask_data = json!({
             "node": node,
             "subject": subject,
@@ -2271,7 +2272,7 @@ stops
     fn an_ask_whose_node_reads_done_refuses_at_intake() {
         // The sweep closes an ask when its subject's node reaches a
         // terminal rung, hourly; the ask door reads the same facts before
-        // filing, so the resolved subject files nothing (x-5841).
+        // filing, so the resolved subject files nothing.
         let _env = crate::law_match::scope_tests::DoorEnv::new();
         let root = tmp_root("ask-resolved-node");
         seed_graph(json!({
