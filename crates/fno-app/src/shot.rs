@@ -72,26 +72,24 @@ pub fn run(opts: ShotOptions) -> i32 {
     gpui::Application::new().run(move |cx: &mut App| {
         let out = out.clone();
         let family = family.clone();
-        let open = cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
-                    point(px(60.0), px(60.0)),
-                    size(px(SHOT_SIZE.0), px(SHOT_SIZE.1)),
-                ))),
-                titlebar: None,
-                focus: false,
-                show: true,
-                is_movable: false,
-                is_resizable: false,
-                ..Default::default()
-            },
-            move |window, cx| {
-                crate::window::root_for_shot(
-                    &session, mode, pinned, warmed, family, font_size, find, empty_chat, cmd,
-                    draft, harness, window, cx,
-                )
-            },
-        );
+        let open = cx.open_window(shot_window_options(), move |window, cx| {
+            crate::window::root_for_shot(
+                &session,
+                mode,
+                pinned,
+                warmed,
+                family,
+                font_size,
+                find,
+                opts.settings,
+                empty_chat,
+                cmd,
+                draft,
+                harness,
+                window,
+                cx,
+            )
+        });
         let Ok(handle) = open else {
             eprintln!("fno-app --shot: the window did not open");
             cx.quit();
@@ -179,6 +177,22 @@ pub fn run(opts: ShotOptions) -> i32 {
         .detach();
     });
     0
+}
+
+/// The shot window: a fixed, undecorated 1280x800 tile at (60, 60).
+fn shot_window_options() -> WindowOptions {
+    WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+            point(px(60.0), px(60.0)),
+            size(px(SHOT_SIZE.0), px(SHOT_SIZE.1)),
+        ))),
+        titlebar: None,
+        focus: false,
+        show: true,
+        is_movable: false,
+        is_resizable: false,
+        ..Default::default()
+    }
 }
 
 /// Write the `[mux] theme` pin the ladder reads, in a temp dir the

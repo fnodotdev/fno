@@ -298,7 +298,9 @@
      "default": {
       "alert_sound": true,
       "alert_notification": true,
-      "alert_badge": true
+      "alert_badge": true,
+      "font": "SF Mono",
+      "font_size": 13.0
      }
     },
     {
@@ -1353,6 +1355,14 @@
     {
      "name": "alert_badge",
      "default": true
+    },
+    {
+     "name": "font",
+     "default": "SF Mono"
+    },
+    {
+     "name": "font_size",
+     "default": 13.0
     }
    ]
   },
@@ -3841,6 +3851,8 @@
   "app.alert_sound",
   "app.alert_notification",
   "app.alert_badge",
+  "app.font",
+  "app.font_size",
   "provider_cap.enabled",
   "provider_cap.mode",
   "provider_cap.destinations",
