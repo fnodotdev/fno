@@ -225,20 +225,22 @@ fn valid_session(id: &str) -> bool {
     (8..=64).contains(&id.len()) && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
 }
 
-fn write_atomic_0600(path: &Path, bytes: &[u8], overwrite: bool) -> Result<(), String> {
-    if !overwrite && path.exists() {
-        return Ok(());
-    }
-    let base = path
-        .parent()
-        .ok_or_else(|| format!("{}: no parent", path.display()))?;
-    let tmp = base.join(format!(
+/// The per-process temp name beside `path` that a rename publishes.
+fn tmp_beside(path: &Path) -> PathBuf {
+    path.with_file_name(format!(
         ".{}.{}.tmp",
         path.file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default(),
         std::process::id()
-    ));
+    ))
+}
+
+fn write_atomic_0600(path: &Path, bytes: &[u8], overwrite: bool) -> Result<(), String> {
+    if !overwrite && path.exists() {
+        return Ok(());
+    }
+    let tmp = tmp_beside(path);
     std::fs::write(&tmp, bytes).map_err(|e| format!("{}: {e}", tmp.display()))?;
     #[cfg(unix)]
     {
@@ -309,20 +311,40 @@ pub fn publish_session_entry(recorded: &Path, session_id: &str) -> std::io::Resu
         ));
     }
     let dest = recorded.with_file_name(format!("session-{session_id}.json"));
-    let tmp = dest.with_file_name(format!(
-        ".{}.{}.tmp",
-        dest.file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default(),
-        std::process::id()
-    ));
-    let _ = std::fs::remove_file(&tmp);
-    if std::fs::hard_link(recorded, &tmp).is_err() {
-        let bytes = std::fs::read(recorded)?;
-        write_atomic_0600(&tmp, &bytes, true).map_err(std::io::Error::other)?;
+    if dest == recorded {
+        return Ok(dest);
     }
-    std::fs::rename(&tmp, &dest)?;
+    let tmp = tmp_beside(&dest);
+    let _ = std::fs::remove_file(&tmp);
+    if std::fs::hard_link(recorded, &tmp).is_ok() {
+        std::fs::rename(&tmp, &dest)?;
+    } else {
+        let bytes = std::fs::read(recorded)?;
+        write_atomic_0600(&dest, &bytes, true).map_err(std::io::Error::other)?;
+    }
     Ok(dest)
+}
+
+/// The late-uuid join for a row the mint recorded before its session id
+/// resolved: publish the twin when `recorded` is a route-writer file, and
+/// return the path the row should now record. A caller's own `--settings`
+/// file (outside route-settings) is never twinned.
+pub fn publish_for_row(recorded: &str, session_id: &str) -> Option<String> {
+    let recorded = Path::new(recorded);
+    let owned = recorded
+        .parent()
+        .and_then(Path::file_name)
+        .is_some_and(|d| d == "route-settings");
+    if !owned {
+        return None;
+    }
+    match publish_session_entry(recorded, session_id) {
+        Ok(path) => Some(path.to_string_lossy().into_owned()),
+        Err(e) => {
+            eprintln!("fno agent: warning: route-settings session twin for {session_id}: {e}");
+            None
+        }
+    }
 }
 
 /// Compose from the RAW overlays and write, the one helper behind both
@@ -604,7 +626,7 @@ mod tests {
         let (guard, saved) = state_pin(root.path());
         let first = env_of(&[("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic")]);
         let second = env_of(&[("ANTHROPIC_BASE_URL", "https://api.anthropic.com")]);
-        let path = write_composed(
+        let first_path = write_composed(
             &first,
             &Map::new(),
             None,
@@ -624,6 +646,7 @@ mod tests {
         )
         .unwrap()
         .unwrap();
+        assert_eq!(first_path, path);
         let body = std::fs::read_to_string(&path).unwrap();
         assert!(body.contains("api.anthropic.com"));
         assert!(!body.contains("api.z.ai"));
