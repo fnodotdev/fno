@@ -1234,7 +1234,7 @@ mod tests {
         assert_eq!(r["outcome"], "released", "{r}");
         assert_eq!(r["exit_code"], 0, "{r}");
         assert_eq!(r["plan"], Value::Null, "{r}");
-        assert!(hold_entry(&fx).get("dispatch_hold").is_none());
+        assert!(hold_entry(&fx)["dispatch_hold"].is_null());
         assert_eq!(std::fs::read_to_string(&fx.plan).unwrap(), PLAN_BODY);
 
         // An unreadable plan keeps the error: its INVALID hold read parks
