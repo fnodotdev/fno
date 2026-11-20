@@ -1295,15 +1295,25 @@ pub(super) async fn execute_row_menu_action(
                         .args(["mail-hold", "--session", &sid, "--release"])
                         .stdin(std::process::Stdio::null())
                         .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status(),
+                        .stderr(std::process::Stdio::piped())
+                        .output(),
                 )
                 .await;
                 let text = match outcome {
-                    Ok(Ok(s)) if s.success() => {
+                    Ok(Ok(out)) if out.status.success() => {
                         format!("hold released for {name}; held mail is delivering")
                     }
-                    Ok(Ok(s)) => format!("release failed ({s}); is fno-agent current?"),
+                    // A refusal's reason rides stderr (no registry row,
+                    // stale binary): the notice shows it, never a bare
+                    // exit code that names nothing.
+                    Ok(Ok(out)) => {
+                        let why = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                        if why.is_empty() {
+                            format!("release failed ({}); is fno-agent current?", out.status)
+                        } else {
+                            format!("release failed: {why}")
+                        }
+                    }
                     Ok(Err(exc)) => format!("release did not start: {exc}"),
                     Err(_) => "release is still running; the hold lifts when it lands".into(),
                 };
@@ -1332,15 +1342,25 @@ pub(super) async fn execute_row_menu_action(
                         .args(["mail-hold", "--session", &sid, "--on"])
                         .stdin(std::process::Stdio::null())
                         .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status(),
+                        .stderr(std::process::Stdio::piped())
+                        .output(),
                 )
                 .await;
                 let text = match outcome {
-                    Ok(Ok(s)) if s.success() => {
+                    Ok(Ok(out)) if out.status.success() => {
                         format!("do-not-disturb armed for {name}; mail holds until it lifts")
                     }
-                    Ok(Ok(s)) => format!("dnd arm failed ({s}); is fno-agent current?"),
+                    // A refusal's reason rides stderr (bus-only row, no
+                    // registry row, stale binary): the notice shows it,
+                    // never a bare exit code that names nothing.
+                    Ok(Ok(out)) => {
+                        let why = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                        if why.is_empty() {
+                            format!("dnd arm failed ({}); is fno-agent current?", out.status)
+                        } else {
+                            format!("dnd arm failed: {why}")
+                        }
+                    }
                     Ok(Err(exc)) => format!("dnd arm did not start: {exc}"),
                     Err(_) => "arm is still running; the hold lands when it does".into(),
                 };
