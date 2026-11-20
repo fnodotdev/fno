@@ -395,7 +395,6 @@ pub fn gate_and_reserve(
     row_name: &str,
     session_id: &str,
     harness: &str,
-    reserved: &mut Reservation,
 ) -> Option<i32> {
     let Some(entries) = gc_sweep::read_graph_rows(home) else {
         eprintln!("fno agent resume: warning: graph unreadable, holder check skipped");
@@ -404,37 +403,29 @@ pub fn gate_and_reserve(
     if let Some(code) = refused_line(home, &entries, session_id, row_name) {
         return Some(code);
     }
-    reserve_nodes(&entries, session_id, harness, row_name, reserved)
+    reserve_nodes(&entries, session_id, harness, row_name, None)
 }
 
-/// The node seats one resume minted, so a failed resume can free them.
-#[derive(Debug, Default)]
-pub struct Reservation {
-    holder: String,
-    keys: Vec<String>,
-    root: Option<std::path::PathBuf>,
+thread_local! {
+    /// The node seats this thread's resume minted: (key, holder, root). A
+    /// resume runs on one thread from the gate to its exit code, through
+    /// every route that reserves, so the exit settles them without each
+    /// route carrying the list.
+    static MINTED: std::cell::RefCell<Vec<(String, String, Option<std::path::PathBuf>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
-impl Reservation {
-    /// An empty reservation on the claims `root` (`None` = the machine's).
-    #[cfg(test)]
-    pub(crate) fn at(root: Option<&std::path::Path>) -> Self {
-        Self {
-            root: root.map(std::path::Path::to_path_buf),
-            ..Default::default()
-        }
+/// Settle this thread's minted seats at a resume's exit `code`. A resume
+/// that launched, or may have launched, keeps them; a refused or failed one
+/// frees them. A leftover seat refused every fresh spawn on the node until
+/// it expired.
+pub fn settle_reserved(code: i32) {
+    let minted = MINTED.with(|m| std::mem::take(&mut *m.borrow_mut()));
+    if code == 0 || code == LAUNCH_UNCONFIRMED_EXIT {
+        return;
     }
-
-    /// Free the minted seats unless the resume launched or may have
-    /// launched. A refused or failed resume left nothing running, and a
-    /// leftover seat refused every fresh spawn on the node until it expired.
-    pub fn settle(&self, code: i32) {
-        if code == 0 || code == LAUNCH_UNCONFIRMED_EXIT {
-            return;
-        }
-        for key in &self.keys {
-            let _ = claims::release(key, &self.holder, self.root.as_deref(), None);
-        }
+    for (key, holder, root) in minted {
+        let _ = claims::release(&key, &holder, root.as_deref(), None);
     }
 }
 
@@ -448,11 +439,10 @@ fn reserve_nodes(
     session_id: &str,
     harness: &str,
     row_name: &str,
-    reserved: &mut Reservation,
+    root: Option<&std::path::Path>,
 ) -> Option<i32> {
     let holder = format!("target-session:{session_id}");
-    reserved.holder = holder.clone();
-    let root = reserved.root.clone();
+    let root = root.map(std::path::Path::to_path_buf);
     for node in session_nodes(entries, session_id) {
         let Some(id) = RowFacts::id_of(node) else {
             continue;
@@ -477,7 +467,9 @@ fn reserve_nodes(
             ..Default::default()
         };
         match claims::acquire(&key, &holder, opts) {
-            AcquireOutcome::Acquired(_) => reserved.keys.push(key),
+            AcquireOutcome::Acquired(_) => {
+                MINTED.with(|m| m.borrow_mut().push((key, holder.clone(), root.clone())))
+            }
             AcquireOutcome::HeldByOther { holder: other, .. } => {
                 let who = holder_handle(&other);
                 eprintln!(
@@ -851,13 +843,12 @@ mod tests {
             crate::claims::AcquireOutcome::Acquired(_) => {}
             other => panic!("fixture claim failed: {other:?}"),
         }
-        let mut reserved = Reservation::at(Some(&claims_root));
         let refused = reserve_nodes(
             &entries,
             "8c58eaf1-old",
             "claude",
             "t-old-row",
-            &mut reserved,
+            Some(&claims_root),
         );
         assert_eq!(refused, Some(RESUME_REASSIGNED_EXIT));
         let _ = std::fs::remove_dir_all(&dir);
@@ -885,12 +876,12 @@ mod tests {
             crate::claims::AcquireOutcome::Acquired(rec) => rec,
             other => panic!("fixture claim failed: {other:?}"),
         };
-        let mut reserved = Reservation::at(Some(&root));
         assert_eq!(
-            reserve_nodes(&entries, sid, "claude", "t-old-row", &mut reserved),
+            reserve_nodes(&entries, sid, "claude", "t-old-row", Some(&root)),
             None
         );
-        assert_eq!(reserved.keys, vec!["node:x-aaaa".to_string()]);
+        let minted: Vec<String> = MINTED.with(|m| m.borrow().iter().map(|e| e.0.clone()).collect());
+        assert_eq!(minted, vec!["node:x-aaaa".to_string()]);
         let read = |key: &str| crate::claim_store::read(key, Some(&root)).unwrap();
         let minted = read("node:x-aaaa").expect("reserve minted");
         assert_eq!(minted.session_id.as_deref(), Some(sid));
@@ -899,7 +890,7 @@ mod tests {
         assert_eq!(kept.reason.as_deref(), Some("target init"));
         assert_eq!(kept.acquired_at, own.acquired_at);
 
-        reserved.settle(crate::reentry::REENTRY_REFUSED_EXIT);
+        settle_reserved(crate::reentry::REENTRY_REFUSED_EXIT);
         assert!(
             read("node:x-aaaa").is_none(),
             "failed resume frees its seat"

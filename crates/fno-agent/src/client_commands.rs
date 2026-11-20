@@ -1715,17 +1715,12 @@ use crate::resume_wake::MUX_RESUME_CLAIM_TTL_MS;
 use crate::resume_wake::{acquire_resume_session_claim, is_uuid_shaped, run_and_confirm_respawn};
 
 pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
-    let mut reserved = crate::resume_gate::Reservation::default();
-    let code = resume_reserving(rest, home, &mut reserved);
-    reserved.settle(code);
+    let code = resume_reserving(rest, home);
+    crate::resume_gate::settle_reserved(code);
     code
 }
 
-fn resume_reserving(
-    rest: &[String],
-    home: &AgentsHome,
-    reserved: &mut crate::resume_gate::Reservation,
-) -> i32 {
+fn resume_reserving(rest: &[String], home: &AgentsHome) -> i32 {
     let crate::resume_args::ResumeArgs {
         name,
         print_command,
@@ -2134,9 +2129,7 @@ fn resume_reserving(
     // print-command and live-attach paths remain inspection/attach only.
     if !matches!(&route, ResumeRoute::ClientResume) || claim_uuid.is_some() {
         let gate_id = claim_uuid.as_deref().unwrap_or(session_id);
-        if let Some(code) =
-            crate::resume_gate::gate_and_reserve(home, &name, gate_id, harness, reserved)
-        {
+        if let Some(code) = crate::resume_gate::gate_and_reserve(home, &name, gate_id, harness) {
             return code;
         }
     }
