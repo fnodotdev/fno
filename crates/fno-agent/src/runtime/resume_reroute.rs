@@ -92,12 +92,24 @@ pub(crate) fn apply(
         None => (route.to_string(), String::new()),
     };
     let route_path: String = match crate::route_recovery::route_file_for(&provider, &model) {
-        Some(path) => path.to_string_lossy().into_owned(),
+        Some(path) => {
+            // The reuse path hands back a file another session may own (a
+            // digest or a twin named by its writer's session), so the
+            // rerouting row publishes its own twin beside it and records a
+            // path that names THIS session; the mint's join, reused.
+            match crate::route_settings::publish_session_entry(&path, &session_id) {
+                Ok(twin) => twin.to_string_lossy().into_owned(),
+                Err(e) => {
+                    eprintln!("resume --route: session twin: {e}");
+                    path.to_string_lossy().into_owned()
+                }
+            }
+        }
         None => {
             let target =
                 crate::spawn_route::resolve_target(route, cwd, &|k: &str| std::env::var(k).ok())
                     .map_err(|line| format!("resume --route: {line}"))?;
-            compose_route_file(&target, entry, cwd)?
+            compose_route_file(&target, entry, &session_id, cwd)?
         }
     };
 
@@ -184,10 +196,13 @@ fn pane_backed(entry: &Value) -> bool {
 }
 
 /// Write a fresh settings file for `target` under the row's own account
-/// overlay, the same composition spawn's thread seam runs.
+/// overlay, the same composition spawn's thread seam runs. `session` is the
+/// row's harness session id, so the fresh file lands as
+/// `session-<id>.json` and the restamped row records the join by eye.
 fn compose_route_file(
     target: &crate::spawn_route::Target,
     entry: &Value,
+    session: &str,
     cwd: &Path,
 ) -> Result<String, String> {
     let route_env: serde_json::Map<String, Value> = target
@@ -200,7 +215,14 @@ fn compose_route_file(
         .into_iter()
         .map(|(k, v)| (k, Value::String(v)))
         .collect();
-    match crate::route_settings::write_composed(&route_env, &account_map, None, None, cwd) {
+    match crate::route_settings::write_composed(
+        &route_env,
+        &account_map,
+        None,
+        None,
+        (!session.is_empty()).then_some(session),
+        cwd,
+    ) {
         Ok(Some(path)) => Ok(path),
         Ok(None) => Err("resume --route: the route wrote no settings file".to_string()),
         Err(e) => Err(format!("resume --route: {e}")),
@@ -508,10 +530,14 @@ mod tests {
             updated.get("requested_model").and_then(Value::as_str),
             Some("glm-5.3-flash[1m]")
         );
+        // The reused route-B file belongs to no session; the row records its
+        // own twin, carrying route B's bytes.
+        let twin = file(&format!("session-{sid}.json"));
         assert_eq!(
             updated.get("route_settings_path").and_then(Value::as_str),
-            Some(new.as_str())
+            Some(twin.as_str())
         );
+        assert_eq!(std::fs::read(&twin).unwrap(), std::fs::read(&new).unwrap());
 
         let plan = crate::reentry::resolve_reentry(
             &reg_path,
@@ -530,7 +556,7 @@ mod tests {
             None => std::env::remove_var("FNO_AGENT_HOME"),
         }
         assert_eq!(plan.mechanism, "bg-resume");
-        for token in ["--bg", "--resume", sid, "--settings", new.as_str()] {
+        for token in ["--bg", "--resume", sid, "--settings", twin.as_str()] {
             assert!(
                 plan.argv.iter().any(|a| a == token),
                 "{token} missing from {:?}",
