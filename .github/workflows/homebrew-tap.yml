@@ -1,0 +1,61 @@
+name: homebrew-tap
+
+# Re-run only the Homebrew tap leg of a stable release. The stable publish
+# job in release.yml bumps the tap after crates.io and the GitHub Release.
+# When that one step fails (most often HOMEBREW_TAP_TOKEN), re-running the
+# whole publish job repeats every earlier leg. This workflow runs the same
+# script alone, behind the same release-environment approval that guards
+# the token.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Stable version to put on the tap, for example 0.0.17; empty takes the Latest GitHub Release"
+        type: string
+        default: ""
+
+concurrency:
+  group: homebrew-tap
+
+permissions:
+  contents: read
+
+jobs:
+  tap:
+    name: bump the Homebrew tap
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve the release version
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WANTED: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          version="${WANTED#v}"
+          if [ -z "$version" ]; then
+            tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)"
+            version="${tag#v}"
+          fi
+          # The tap serves stable releases only: refuse a missing release,
+          # a draft or a prerelease before the token is touched.
+          state="$(gh release view "v${version}" --repo "$GITHUB_REPOSITORY" \
+            --json isDraft,isPrerelease --jq '"\(.isDraft) \(.isPrerelease)"')" \
+            || { echo "::error::no GitHub Release v${version}"; exit 1; }
+          [ "$state" = "false false" ] \
+            || { echo "::error::v${version} is a draft or a prerelease (draft prerelease = ${state}); the tap takes stable releases only"; exit 1; }
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tap target: ${version}"
+
+      - name: Homebrew tap
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ steps.pick.outputs.version }}
+        run: bash scripts/release/bump-homebrew-tap.sh "$VERSION"
