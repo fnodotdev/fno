@@ -8,8 +8,8 @@
 //! answer-key strip on the proposer's input, the reply tripwires, the gain
 //! rule, the count-identity ledger and probation. It calls
 //! `evals_compare::failure_fold` and `evals_compare::fold` rather than
-//! copying them (x-6e14 route 1). Candidate surfaces are repo text only
-//! (law d-78f7daea): hooks, routing and fnh wait on their own nodes.
+//! copying them. Candidate surfaces are repo text only (D2977): hooks,
+//! routing and fnh changes wait on their own nodes.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -73,7 +73,7 @@ impl From<std::io::Error> for ProposeError {
 }
 
 /// Which half of the golden tier a task id lands in. The split is a
-/// preregistered rule (law d-d2bc0f62): the proposer reads only train
+/// preregistered rule (D2982): the proposer reads only train
 /// goldens, and a change ships only on held-out proof with the whole tier
 /// unregressed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -350,7 +350,7 @@ pub(crate) fn validate_reply(reply: &Reply, tasks: &[TaskSpec]) -> Result<(), Pr
     for edit in &reply.edits {
         if !allowed_path(&edit.path) {
             return Err(ProposeError::Reply(format!(
-                "edit path {:?} is outside AGENTS.md, docs/, skills/*/SKILL.md and skills/*/references/ (q-38521bc5)",
+                "edit path {:?} is outside AGENTS.md, docs/, skills/*/SKILL.md and skills/*/references/",
                 edit.path
             )));
         }
@@ -399,7 +399,7 @@ fn golden_key_grams(tasks: &[TaskSpec]) -> Vec<(String, BTreeSet<String>)> {
         .collect()
 }
 
-/// Candidate surfaces (change 2, q-38521bc5): repo text only.
+/// Candidate surfaces (change 2): repo text only.
 fn allowed_path(p: &str) -> bool {
     p == "AGENTS.md"
         || p.starts_with("docs/")
@@ -558,6 +558,14 @@ struct HistoryRow {
     attempt_id: Option<String>,
     #[serde(default)]
     experiment_id: Option<String>,
+}
+
+/// A ledger row's cycle mark: every cycle that gets past the cluster pick
+/// writes one, cohort or not, so the leg's week reads from the ledger.
+#[derive(Deserialize)]
+struct CycleMark {
+    #[serde(default)]
+    kind: String,
     #[serde(default)]
     ts: Option<String>,
 }
@@ -629,28 +637,22 @@ pub(crate) enum LegVerdict {
 }
 
 /// The leg's due+budget decision, the capability leg's shape: due when the
-/// newest `propose-` cohort row is older than the window; budget when the
-/// full plan prices over the cycle cap with no candidate to drop.
+/// ledger's newest cycle mark is older than the window; budget when the
+/// cap fits no candidate beside the base.
 pub(crate) fn decide(
-    rows: &[Value],
+    ledger: &[Value],
     now: chrono::DateTime<chrono::Utc>,
     window_days: i64,
     goldens: usize,
     cap_usd: f64,
     attempt_usd: f64,
 ) -> LegVerdict {
-    let newest = rows
+    let newest = ledger
         .iter()
-        .filter_map(|r| {
-            let r = serde_json::from_value::<HistoryRow>(r.clone()).ok()?;
-            r.ts.as_deref().map(|ts| (ts.to_string(), r.experiment_id))
-        })
-        .filter(|(_, c)| c.as_deref().is_some_and(|c| c.starts_with(COHORT_PREFIX)))
-        .filter_map(|(ts, _)| {
-            chrono::DateTime::parse_from_rfc3339(&ts)
-                .ok()
-                .map(|t| t.with_timezone(&chrono::Utc))
-        })
+        .filter_map(|r| serde_json::from_value::<CycleMark>(r.clone()).ok())
+        .filter(|m| m.kind == "cycle")
+        .filter_map(|m| chrono::DateTime::parse_from_rfc3339(m.ts.as_deref()?).ok())
+        .map(|t| t.with_timezone(&chrono::Utc))
         .max();
     if let Some(ts) = newest {
         if (now - ts).num_days() < window_days {
@@ -659,7 +661,7 @@ pub(crate) fn decide(
     }
     // The plan prices the whole cycle: base plus MAX_CLUSTERS candidates.
     let plan = plan_budget(goldens, 3, MAX_CLUSTERS, cap_usd, attempt_usd);
-    if plan.candidates == 0 && plan.estimate_usd > cap_usd {
+    if plan.candidates == 0 {
         return LegVerdict::Budget;
     }
     LegVerdict::Launch
@@ -699,7 +701,8 @@ pub(crate) fn tick(
         }
         _ => {}
     }
-    let rows = crate::evals_gate::history_rows(leg.history);
+    let ledger =
+        crate::evals_gate::history_rows(&ledger_path(&crate::evals_candidates::state_root()));
     let daily = cycle_usd(leg.repo);
     let lane = crate::evals_gate::config_lane(leg.repo);
     let lane_price = crate::evals_gate::lane_attempt_usd(leg.repo, &lane);
@@ -711,7 +714,7 @@ pub(crate) fn tick(
                 .count()
         })
         .unwrap_or(0);
-    match decide(&rows, now, leg.window_days, goldens, daily, lane_price) {
+    match decide(&ledger, now, leg.window_days, goldens, daily, lane_price) {
         LegVerdict::Fresh => return "fresh",
         LegVerdict::Budget => return "budget",
         LegVerdict::Launch => {}
@@ -970,20 +973,22 @@ fn proof_body(
     )
 }
 
-/// One cluster's proof: propose, tripwire, commit, run, assert the counts,
-/// fold, gain, ship. Every outcome is one ledger row; an error becomes a
-/// `refused` row in the caller.
-#[allow(clippy::too_many_arguments)]
-fn prove_cluster(
-    c: &Cycle,
+/// One full-file edit set: (repo-relative path, bytes).
+type Edits = Vec<(std::path::PathBuf, Vec<u8>)>;
+
+/// The proposer's answer for one cluster, after the tripwires.
+enum Proposed {
+    KeepBase(String),
+    Change(Edits),
+}
+
+/// One cluster's proposal: strip check, one sealed call, parse, tripwires.
+/// It spends no bank run, so the cycle asks every cluster before the base.
+fn propose_cluster(
     doors: &Doors,
     cluster: &Cluster,
     tasks: &[TaskSpec],
-    base_cohort: &str,
-    variant: &str,
-    unproved: &BTreeSet<String>,
-    plan: &CyclePlan,
-) -> Result<Value, ProposeError> {
+) -> Result<Proposed, ProposeError> {
     let input = proposer_input(cluster, tasks);
     if !answer_keys_stripped(&input, tasks) {
         return Err(ProposeError::Reply(
@@ -1000,19 +1005,32 @@ fn prove_cluster(
     let reply = parse_reply(&out)?;
     validate_reply(&reply, tasks)?;
     if reply.verdict == "keep_base" {
-        return Ok(serde_json::json!({"verdict": "keep_base", "reason": reply.reason}));
+        return Ok(Proposed::KeepBase(reply.reason));
     }
-    let edits: Vec<(std::path::PathBuf, Vec<u8>)> = reply
-        .edits
-        .iter()
-        .map(|e| {
-            (
-                std::path::PathBuf::from(&e.path),
-                e.content.clone().into_bytes(),
-            )
-        })
-        .collect();
-    let sha = (doors.commit)(&format!("{}/{}", c.day, cluster.kind), &edits)?;
+    Ok(Proposed::Change(
+        reply
+            .edits
+            .into_iter()
+            .map(|e| (std::path::PathBuf::from(e.path), e.content.into_bytes()))
+            .collect(),
+    ))
+}
+
+/// One candidate's proof: commit, run, assert the counts, fold, gain,
+/// ship. Every outcome is one ledger row; an error becomes a `refused` row
+/// in the caller.
+#[allow(clippy::too_many_arguments)]
+fn prove_candidate(
+    c: &Cycle,
+    doors: &Doors,
+    cluster: &Cluster,
+    edits: &Edits,
+    base_cohort: &str,
+    variant: &str,
+    unproved: &BTreeSet<String>,
+    plan: &CyclePlan,
+) -> Result<Value, ProposeError> {
+    let sha = (doors.commit)(&format!("{}/{}", c.day, cluster.kind), edits)?;
     let cand = format!(
         "{COHORT_PREFIX}{}-{}",
         c.day,
@@ -1047,7 +1065,7 @@ fn prove_cluster(
     let verdict = match gain(&held, &all)? {
         Gain::Ship => {
             let body = proof_body(&cluster.kind, base_cohort, &cand, &held, &all, edits.len());
-            match ship_candidate(c.day, &cluster.kind, &edits, &body, doors)? {
+            match ship_candidate(c.day, &cluster.kind, edits, &body, doors)? {
                 ShipOutcome::Opened(url) => {
                     row["pr"] = Value::String(url);
                     "shipped"
@@ -1097,6 +1115,11 @@ pub(crate) fn run_cycle(c: &Cycle, dry_run: bool, doors: &Doors) -> Result<Value
             "clusters": items,
         }));
     }
+    let mark = serde_json::json!({
+        "kind": "cycle", "cycle": c.day, "ts": chrono::Utc::now().to_rfc3339(),
+        "clusters": list.len(),
+    });
+    ledger_append(c.state, &mark)?;
     if list.is_empty() {
         return Ok(serde_json::json!({
             "generated_at": chrono::Utc::now().to_rfc3339(),
@@ -1130,26 +1153,45 @@ pub(crate) fn run_cycle(c: &Cycle, dry_run: bool, doors: &Doors) -> Result<Value
         "estimate_usd": plan.estimate_usd, "cap_usd": c.cap_usd,
     });
     ledger_append(c.state, &budget)?;
+    // Ask every cluster first: a cycle whose proposers all keep the base
+    // or refuse spends no cohort.
+    let mut slots: Vec<Result<Value, Edits>> = Vec::new();
+    for (i, cluster) in list.iter().enumerate() {
+        slots.push(if i >= plan.candidates {
+            Ok(serde_json::json!({"verdict": "dropped_by_cap"}))
+        } else {
+            match propose_cluster(doors, cluster, &tasks) {
+                Ok(Proposed::KeepBase(reason)) => {
+                    Ok(serde_json::json!({"verdict": "keep_base", "reason": reason}))
+                }
+                Ok(Proposed::Change(edits)) => Err(edits),
+                Err(e) => Ok(serde_json::json!({"verdict": "refused", "refused": e.to_string()})),
+            }
+        });
+    }
     let base_cohort = format!("{COHORT_PREFIX}{}-base", c.day);
-    (doors.run)(&base_cohort, "v1", c.base_sha)?;
+    let any_candidate = slots.iter().any(Result::is_err);
+    if any_candidate {
+        (doors.run)(&base_cohort, "v1", c.base_sha)?;
+    }
     let unproved = unproved_set(&tasks, c.bank_dir)?;
     let mut results: Vec<Value> = Vec::new();
-    for (i, cluster) in list.iter().enumerate() {
-        let mut row = if i >= plan.candidates {
-            serde_json::json!({"verdict": "dropped_by_cap"})
-        } else {
-            let variant = format!("v{}", i + 2);
-            prove_cluster(
+    for (i, (cluster, slot)) in list.iter().zip(slots).enumerate() {
+        let mut row = match slot {
+            Ok(row) => row,
+            Err(edits) => prove_candidate(
                 c,
                 doors,
                 cluster,
-                &tasks,
+                &edits,
                 &base_cohort,
-                &variant,
+                &format!("v{}", i + 2),
                 &unproved,
                 &plan,
             )
-            .unwrap_or_else(|e| serde_json::json!({"verdict": "refused", "refused": e.to_string()}))
+            .unwrap_or_else(
+                |e| serde_json::json!({"verdict": "refused", "refused": e.to_string()}),
+            ),
         };
         row["cycle"] = Value::String(c.day.to_string());
         row["type"] = Value::String(cluster.kind.clone());
@@ -1160,6 +1202,7 @@ pub(crate) fn run_cycle(c: &Cycle, dry_run: bool, doors: &Doors) -> Result<Value
         "generated_at": chrono::Utc::now().to_rfc3339(),
         "split": split_rule,
         "base_cohort": base_cohort,
+        "base_ran": any_candidate,
         "budget": budget,
         "clusters": results.len(),
         "results": results,
@@ -1171,6 +1214,12 @@ pub(crate) const PROBATION_COHORTS: usize = 7;
 /// Cohorts after which inside_noise retires an unconfounded change.
 pub(crate) const PROBATION_MAX: usize = 21;
 const GATE_MAIN: &str = "gate-main-";
+
+/// A worker-seat main cohort: `gate-main-<date>-<hash>`. The lead seat runs
+/// other tasks, and a fallback cohort runs another lane, so neither pools.
+fn worker_main_cohort(cohort: &str) -> bool {
+    cohort.starts_with(GATE_MAIN) && !cohort.ends_with("-lead") && !cohort.ends_with("-fallback")
+}
 
 /// What probation reads from GitHub and git, injected for tests.
 pub(crate) struct ProbationDoors<'a> {
@@ -1255,11 +1304,7 @@ pub(crate) fn probation(
         }
         let post: Vec<&Row> = rows
             .iter()
-            .filter(|x| {
-                x.experiment_id
-                    .as_deref()
-                    .is_some_and(|e| e.starts_with(GATE_MAIN))
-            })
+            .filter(|x| x.experiment_id.as_deref().is_some_and(worker_main_cohort))
             .filter(|x| {
                 x.bank_rev
                     .as_deref()
@@ -1274,16 +1319,28 @@ pub(crate) fn probation(
             continue;
         }
         let pooled = format!("probation-{}", merge.get(..8).unwrap_or(merge.as_str()));
-        let mut fold_rows: Vec<Row> = rows
+        // Only goldens graded on both sides fold: a golden added or removed
+        // since the proof is not a regression of this change.
+        let base_rows: Vec<&Row> = rows
             .iter()
             .filter(|x| x.experiment_id.as_deref() == Some(base))
-            .cloned()
             .collect();
-        fold_rows.extend(post.iter().map(|x| {
-            let mut y = (*x).clone();
-            y.experiment_id = Some(pooled.clone());
-            y
-        }));
+        let on_base: BTreeSet<&str> = base_rows.iter().map(|x| x.task_id.as_str()).collect();
+        let on_post: BTreeSet<&str> = post.iter().map(|x| x.task_id.as_str()).collect();
+        let mut fold_rows: Vec<Row> = base_rows
+            .iter()
+            .filter(|x| on_post.contains(x.task_id.as_str()))
+            .map(|x| (*x).clone())
+            .collect();
+        fold_rows.extend(
+            post.iter()
+                .filter(|x| on_base.contains(x.task_id.as_str()))
+                .map(|x| {
+                    let mut y = (*x).clone();
+                    y.experiment_id = Some(pooled.clone());
+                    y
+                }),
+        );
         let all = crate::evals_compare::fold(
             &fold_rows,
             base,
@@ -1300,6 +1357,18 @@ pub(crate) fn probation(
                     .into_keys(),
             )
             .collect();
+        // A dead or ungraded golden measures the machine, not the change:
+        // it never reads as a break. On a cluster golden it suspends below.
+        let mut excluded = unproved.clone();
+        excluded.extend(errored.iter().cloned());
+        let all = crate::evals_compare::fold(
+            &fold_rows,
+            base,
+            &pooled,
+            crate::evals_gate::REPEATS,
+            &excluded,
+        )
+        .map_err(ProposeError::Fold)?;
         let held_rows: Vec<Row> = fold_rows
             .into_iter()
             .filter(|x| split(&x.task_id) == Role::HeldOut)
@@ -1309,7 +1378,7 @@ pub(crate) fn probation(
             base,
             &pooled,
             crate::evals_gate::REPEATS,
-            &unproved,
+            &excluded,
         )
         .map_err(ProposeError::Fold)?;
         let newest = post
@@ -1578,12 +1647,39 @@ pub fn changes_cli(args: &[String]) -> i32 {
     let lane = crate::evals_gate::config_lane(&repo);
     let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("fno-agent"));
     let cmd = evals_cmd(&exe, &repo);
+    let root = crate::claims::global_claims_root();
+    let holder = format!("drafts-changes:{}", std::process::id());
+    if !dry_run {
+        if let (crate::claims::ClaimState::Live, _) =
+            crate::claims::status(CLAIM_KEY, root.as_deref())
+        {
+            eprintln!("evals drafts changes: a propose cycle is in flight (claim {CLAIM_KEY}); wait for it to settle");
+            return 3;
+        }
+        let opts = crate::claims::AcquireOpts {
+            host: None,
+            pid: Some(std::process::id()),
+            pid_unavailable: false,
+            ttl_ms: Some(6 * 3600 * 1000),
+            reason: Some("evals propose cycle (manual)".into()),
+            metadata: None,
+            pid_provenance: None,
+            identity: None,
+            root: root.clone(),
+            events_dir: None,
+        };
+        let _ = crate::claims::acquire(CLAIM_KEY, &holder, opts);
+    }
     let base = if dry_run {
         Ok(String::new())
     } else {
         origin_main(&repo)
     };
-    match base.and_then(|sha| real_cycle(&repo, &cmd, &lane, &sha, dry_run)) {
+    let outcome = base.and_then(|sha| real_cycle(&repo, &cmd, &lane, &sha, dry_run));
+    if !dry_run {
+        let _ = crate::claims::release(CLAIM_KEY, &holder, root.as_deref(), None);
+    }
+    match outcome {
         Ok(receipt) => {
             let text = if json_out {
                 serde_json::to_string(&receipt)
@@ -1689,7 +1785,7 @@ mod tests {
     const CATALOG: &str =
         "cost_order: [trust]\ntypes:\n  - {id: t1, cost: trust, description: type one}\n";
 
-    /// The split is preregistered (law d-d2bc0f62): these two roles were
+    /// The split is preregistered (D2982): these two roles were
     /// measured 2026-11-20 at SEED 20_261_102 and must never move.
     #[test]
     fn the_split_is_preregistered() {
@@ -2090,8 +2186,8 @@ mod tests {
         assert_eq!(verdict_of(&out.ledger, "t3"), "underpowered");
         let cluster_rows = out.ledger.iter().filter(|r| r["type"].is_string()).count();
         assert_eq!(cluster_rows, 2);
-        assert_eq!(out.ledger[0]["kind"], "budget");
-        assert_eq!(out.ledger[0]["base_attempts"], 9);
+        let budget = out.ledger.iter().find(|r| r["kind"] == "budget").unwrap();
+        assert_eq!(budget["base_attempts"], 9);
         assert_eq!(out.runs[0], "propose-2026-11-20-base");
     }
 
