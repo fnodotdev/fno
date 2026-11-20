@@ -36,13 +36,13 @@ use super::launch::{self, Launch};
 use super::link::{Event, Layout, Link};
 use super::mouse::{self, Hit};
 use super::palette::Palette;
-use super::{find, left_pane, mods, orchestration, sheet, tabs, ui};
+use super::{find, left_pane, mods, orchestration, settings, sheet, tabs, ui};
 use fno::app_api::web_hq::Board;
 use fno::proto::chat_event::SessionKey;
 use fno::proto::{self, ClientMsg, Command, Frame, MouseEvent, MouseKind};
 use fno::tree::Rect;
 
-actions!(fno_app, [KeyboardShortcuts, GoTo]);
+actions!(fno_app, [KeyboardShortcuts, GoTo, OpenSettings]);
 
 /// What fills the main area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, Serialize, Deserialize)]
@@ -188,6 +188,14 @@ pub struct Root {
     /// The launch composer: retained state, open flag, id mint, and the
     /// row the last launch named. Esc closes and keeps the draft.
     pub(super) launch: launch::Panel,
+    /// The Settings panel (cmd-,): rows, query, page; None while closed.
+    pub(super) settings: Option<settings::SettingsState>,
+    /// The font face and size the terminal metrics should carry: the
+    /// launch values, then a Settings write. Render moves the real
+    /// `metrics` onto it, where the text system can measure.
+    pub(super) font_want: (String, f32),
+    /// The bounded settings write in flight.
+    _settings_write: Option<Task<()>>,
     /// The mux session this window attached to; panes open on it.
     pub(super) session: String,
     pub(super) ext: mods::Page,
@@ -327,6 +335,12 @@ impl Root {
             goto: None,
             find: None,
             launch: launch::Panel::default(),
+            settings: None,
+            font_want: (
+                metrics.font.family.to_string(),
+                f32::from(metrics.font_size),
+            ),
+            _settings_write: None,
             preedit: None,
             _reader: None,
             _chat: None,
@@ -1721,6 +1735,112 @@ impl Root {
         cx.notify();
     }
 
+    /// ⌘,: toggle the Settings panel. Opening it closes the key sheet and
+    /// the palette, and builds the rows from the live config, fleet and
+    /// installed monospaced faces.
+    fn toggle_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings.take().is_some() {
+            cx.notify();
+            return;
+        }
+        fno::ui_usage::click("app", "settings_open");
+        self.sheet = false;
+        self.goto = None;
+        let fonts = settings::mono_fonts(window);
+        let config = crate::global_config_raw();
+        let machines = self
+            .board
+            .fleet()
+            .map(|f| f.machines.clone())
+            .unwrap_or_default();
+        let rows = settings::build_rows(config.as_ref(), &self.theme_cwd, &machines, &fonts);
+        self.settings = Some(settings::SettingsState {
+            query: ui::LineField::new(64),
+            selected: 0,
+            page: None,
+            note: None,
+            rows,
+            fonts,
+        });
+        cx.notify();
+    }
+
+    /// The panel's click-outside close (settings.rs's backdrop listener).
+    pub(super) fn close_settings(&mut self, cx: &mut Context<Self>) {
+        self.settings = None;
+        cx.notify();
+    }
+
+    /// One resolved settings write: spawn the bounded CLI door on a
+    /// background task. The apply half runs on the result.
+    fn spawn_settings_write(
+        &mut self,
+        set: bool,
+        id: String,
+        value: String,
+        cx: &mut Context<Self>,
+    ) {
+        self._settings_write = Some(cx.spawn(async move |this, cx| {
+            let id2 = id.clone();
+            let v2 = value.clone();
+            let out = cx
+                .background_executor()
+                .spawn(async move {
+                    settings::bounded_write(set, &id, if set { Some(&value) } else { None })
+                })
+                .await;
+            let _ = this.update(cx, |root, cx| root.on_settings_write(out, id2, v2, cx));
+        }));
+    }
+
+    /// A settings write landed: repaint the rows from the fresh global
+    /// file and run the apply half - the theme restyles, the font keys
+    /// move `font_want`, and render re-measures the panes there.
+    fn on_settings_write(
+        &mut self,
+        out: Result<(), String>,
+        id: String,
+        value: String,
+        cx: &mut Context<Self>,
+    ) {
+        match out {
+            Ok(()) => {
+                if let Some(st) = self.settings.as_mut() {
+                    st.note = None;
+                    let machines = self
+                        .board
+                        .fleet()
+                        .map(|f| f.machines.clone())
+                        .unwrap_or_default();
+                    let config = crate::global_config_raw();
+                    st.rows = settings::build_rows(
+                        config.as_ref(),
+                        &self.theme_cwd,
+                        &machines,
+                        &st.fonts,
+                    );
+                }
+                if id == "mux.theme" {
+                    self.restyle(cx);
+                }
+                if id == "app.font" {
+                    self.font_want.0 = value;
+                }
+                if id == "app.font_size" {
+                    if let Ok(f) = value.parse::<f32>() {
+                        self.font_want.1 = f;
+                    }
+                }
+            }
+            Err(line) => {
+                if let Some(st) = self.settings.as_mut() {
+                    st.note = Some(line);
+                }
+            }
+        }
+        cx.notify();
+    }
+
     /// Badges show while cmd alone is down, as in the Claude desktop app.
     fn on_modifiers(&mut self, ev: &ModifiersChangedEvent, _: &mut Window, cx: &mut Context<Self>) {
         let m = &ev.modifiers;
@@ -1782,6 +1902,28 @@ impl Root {
         if self.goto.is_some() && goto::key(self, &key, cx) {
             cx.stop_propagation();
             return;
+        }
+        // The Settings panel takes every key while it shows; a cmd key
+        // closes it and runs as today (the key sheet's grammar).
+        if self.settings.is_some() {
+            if key.cmd {
+                self.settings = None;
+                cx.notify();
+            } else {
+                let ev = self
+                    .settings
+                    .as_mut()
+                    .and_then(|st| settings::key(st, &key));
+                cx.stop_propagation();
+                if let Some((set, id, value)) = ev.map(|e| match e {
+                    settings::Event::Close => None,
+                    settings::Event::Set { id, value } => Some((true, id, value)),
+                    settings::Event::Unset { id } => Some((false, id, String::new())),
+                }) {
+                    self.spawn_settings_write(set, id, value, cx);
+                }
+                return;
+            }
         }
         // After chord: with the key sheet open, esc closes the sheet first.
         if key.key == "escape" && self.seam_escape(cx) {
@@ -2514,7 +2656,39 @@ impl Render for Root {
             });
         }
         self.adv = ui::advance(window, ui::BODY);
+        // A Settings font write moved `font_want`: re-measure the cell
+        // here, where the text system can measure, and hand every pane
+        // the new metrics - the grid resize follows on the next paint.
+        if self.font_want
+            != (
+                self.metrics.font.family.to_string(),
+                f32::from(self.metrics.font_size),
+            )
+        {
+            let (family, size) = self.font_want.clone();
+            let font = font(family);
+            let size_px = px(size);
+            let text = window.text_system();
+            let id = text.resolve_font(&font);
+            let width = text
+                .advance(id, size_px, 'm')
+                .map(|s| s.width)
+                .unwrap_or(size_px * 0.6);
+            let scale = window.scale_factor();
+            let snap = |v: Pixels| px((f32::from(v) * scale).round() / scale);
+            let metrics = Metrics {
+                font,
+                font_size: size_px,
+                cell: size(snap(width), snap(size_px * 1.25)),
+            };
+            self.metrics = metrics.clone();
+            for view in self.panes.values() {
+                view.update(cx, |v, _| v.metrics = metrics.clone());
+            }
+            cx.notify();
+        }
         self.width = window.viewport_size().width;
+
         let main = match self.main {
             MainView::Chat => self.chat_view(window, cx).into_any_element(),
             MainView::Terminal => self.terminal(cx).into_any_element(),
@@ -2583,6 +2757,7 @@ impl Render for Root {
             .on_modifiers_changed(cx.listener(Self::on_modifiers))
             .on_action(cx.listener(Self::toggle_sheet))
             .on_action(cx.listener(Self::toggle_goto))
+            .on_action(cx.listener(Self::toggle_settings))
             // A click on a row, a tab or a view name lands on no focusable
             // element and would leave the window with no key focus.
             .on_any_mouse_down(cx.listener(|root, _, window, _| window.focus(&root.focus)))
@@ -2613,6 +2788,9 @@ impl Render for Root {
             })
             .when(self.sheet, |d| d.child(sheet::render(self, cx)))
             .when(self.goto.is_some(), |d| d.child(goto::render(self, cx)))
+            .when(self.settings.is_some(), |d| {
+                d.child(settings::render(self, cx))
+            })
     }
 }
 
@@ -2723,11 +2901,12 @@ pub fn run(
     Application::new().run(move |cx: &mut App| {
         cx.bind_keys([KeyBinding::new(keys::SHEET_KEY, KeyboardShortcuts, None)]);
         cx.bind_keys([KeyBinding::new(keys::GOTO_KEY, GoTo, None)]);
+        cx.bind_keys([KeyBinding::new(keys::SETTINGS_KEY, OpenSettings, None)]);
         // The first menu is the app menu; Help lists the keys.
         cx.set_menus(vec![
             Menu {
                 name: "fno".into(),
-                items: Vec::new(),
+                items: vec![MenuItem::action("Settings…", OpenSettings)],
             },
             Menu {
                 name: "Help".into(),

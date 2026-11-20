@@ -19,6 +19,7 @@ mod mods;
 mod mouse;
 mod orchestration;
 pub mod palette;
+mod settings;
 mod sheet;
 mod shot;
 mod tabs;
