@@ -20,19 +20,35 @@ pub struct Window {
     pub start: DateTime<Utc>,
 }
 
-/// One filed question the window covers, from a vault question page.
+/// One filed question the window covers, from a vault question page: the
+/// asked stamp the weekly fold reads, plus the answered stamp the per-PR
+/// wait reads.
 #[derive(Debug, Clone)]
 pub struct QuestionRow {
     pub node: String,
     pub title: String,
     pub asked: DateTime<Utc>,
+    pub answered: Option<DateTime<Utc>>,
 }
 
-/// One merged node the window covers, from the graph store.
+/// One session row of a merged node, projected from the graph.
+#[derive(Debug, Clone)]
+pub struct NodeSession {
+    pub harness: String,
+    pub session_id: String,
+}
+
+/// One merged node the window covers, from the graph store: the merge
+/// stamps the weekly fold reads, plus the per-PR join fields (node id, PR
+/// number, sessions, project cwd) the doctor's per-PR view reads.
 #[derive(Debug, Clone)]
 pub struct MergedNode {
     pub created: DateTime<Utc>,
     pub completed: DateTime<Utc>,
+    pub node: String,
+    pub pr: Option<i64>,
+    pub sessions: Vec<NodeSession>,
+    pub cwd: String,
 }
 
 /// The ledger itself. Hours carry one decimal; `None` means no merged PRs in
@@ -129,7 +145,6 @@ pub fn fold(
         .map(|m| (m.completed - m.created).num_seconds() as f64 / 3600.0)
         .collect();
     cycle.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let round1 = |v: f64| (v * 10.0).round() / 10.0;
     let median = match cycle.len() {
         0 => None,
         n if n % 2 == 1 => cycle.get(n / 2).map(|v| round1(*v)),
@@ -216,6 +231,22 @@ struct NodeRow {
     completed_at: String,
     #[serde(default)]
     merge_status: String,
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    pr_number: Option<i64>,
+    #[serde(default)]
+    sessions: Vec<NodeSessionJson>,
+    #[serde(default)]
+    cwd: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct NodeSessionJson {
+    #[serde(default)]
+    harness: String,
+    #[serde(default)]
+    session_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -234,17 +265,24 @@ struct QuestionPage {
     node: String,
     #[serde(default)]
     title: String,
+    #[serde(default)]
+    answered_at: Option<String>,
 }
 
-fn parse_ts(raw: &str) -> Option<DateTime<Utc>> {
+pub(crate) fn parse_ts(raw: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(raw)
         .ok()
         .map(|t| t.with_timezone(&Utc))
 }
 
+/// One-decimal rounding the weekly line and the per-PR rows share.
+pub(crate) fn round1(v: f64) -> f64 {
+    (v * 10.0).round() / 10.0
+}
+
 /// Question pages under `dir` (flat) and `dir/done`, parsed through the
 /// attention-file reader the vault pages already use.
-fn question_rows(dir: &Path, notes: &mut Vec<String>) -> Vec<QuestionRow> {
+pub(crate) fn question_rows(dir: &Path, notes: &mut Vec<String>) -> Vec<QuestionRow> {
     let mut rows = Vec::new();
     if !dir.is_dir() {
         notes.push(format!("question files missing at {}", dir.display()));
@@ -276,6 +314,7 @@ fn question_rows(dir: &Path, notes: &mut Vec<String>) -> Vec<QuestionRow> {
                 asked_at: front.asked_at,
                 node: front.node,
                 title: front.title,
+                answered_at: front.answered_at,
             };
             let Some(asked) = parse_ts(&page.asked_at) else {
                 continue;
@@ -284,6 +323,7 @@ fn question_rows(dir: &Path, notes: &mut Vec<String>) -> Vec<QuestionRow> {
                 node: page.node,
                 title: page.title,
                 asked,
+                answered: page.answered_at.as_deref().and_then(parse_ts),
             });
         }
     }
@@ -292,7 +332,7 @@ fn question_rows(dir: &Path, notes: &mut Vec<String>) -> Vec<QuestionRow> {
 
 /// Nodes with merge evidence, parsed at the boundary. The projection reads
 /// only the four fields the ledger needs.
-fn merged_nodes(notes: &mut Vec<String>) -> Vec<MergedNode> {
+pub(crate) fn merged_nodes(notes: &mut Vec<String>) -> Vec<MergedNode> {
     let home = crate::paths::AgentsHome::from_env();
     let root = home
         .root()
@@ -302,10 +342,18 @@ fn merged_nodes(notes: &mut Vec<String>) -> Vec<MergedNode> {
     let graph = crate::state_layout::graph_anchor(&root);
     let query = crate::backlog::RowQuery {
         fields: Some(
-            ["created_at", "completed_at", "merge_status"]
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
+            [
+                "created_at",
+                "completed_at",
+                "merge_status",
+                "id",
+                "pr_number",
+                "sessions",
+                "cwd",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
         ),
         ..Default::default()
     };
@@ -322,7 +370,21 @@ fn merged_nodes(notes: &mut Vec<String>) -> Vec<MergedNode> {
         .filter(|r| r.merge_status == "merged")
         .filter_map(
             |r| match (parse_ts(&r.created_at), parse_ts(&r.completed_at)) {
-                (Some(created), Some(completed)) => Some(MergedNode { created, completed }),
+                (Some(created), Some(completed)) => Some(MergedNode {
+                    created,
+                    completed,
+                    node: r.id,
+                    pr: r.pr_number,
+                    sessions: r
+                        .sessions
+                        .into_iter()
+                        .map(|s| NodeSession {
+                            harness: s.harness,
+                            session_id: s.session_id,
+                        })
+                        .collect(),
+                    cwd: r.cwd,
+                }),
                 _ => None,
             },
         )
@@ -358,11 +420,15 @@ fn refusal_count(window: &Window, journals: &[PathBuf], notes: &mut Vec<String>)
     count
 }
 
-/// Reverts on the project repo's main: commits whose subject carries the
-/// git revert marker, in the window. Lower bound by construction (the
-/// research method's own caveat): squash reverts and unresolvable targets
-/// are missed.
-fn revert_count(window: &Window, cwd: &Path, notes: &mut Vec<String>) -> usize {
+/// Reverts on the project repo's main, as (sha, committed-at) rows: commits
+/// whose subject carries the git revert marker, in the window. Lower bound
+/// by construction (the research method's own caveat): squash reverts and
+/// unresolvable targets are missed.
+pub(crate) fn revert_rows(
+    window: &Window,
+    cwd: &Path,
+    notes: &mut Vec<String>,
+) -> Vec<(String, DateTime<Utc>)> {
     let since = window.start.to_rfc3339();
     for git_ref in ["origin/main", "main", "HEAD"] {
         let out = Command::new("git")
@@ -376,11 +442,11 @@ fn revert_count(window: &Window, cwd: &Path, notes: &mut Vec<String>) -> usize {
                 "--grep",
                 "This reverts commit",
                 "--format",
-                "%H",
+                "%H %cI",
             ])
             // Both streams pipe: wait_with_output only collects what is
             // piped, an inherited stderr would leak git's fatal lines into
-            // the beat's own stderr, and the count and the failure note
+            // the beat's own stderr, and the rows and the failure note
             // both read what the child prints.
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -391,7 +457,11 @@ fn revert_count(window: &Window, cwd: &Path, notes: &mut Vec<String>) -> usize {
                 return String::from_utf8_lossy(&out.stdout)
                     .lines()
                     .filter(|l| !l.trim().is_empty())
-                    .count();
+                    .filter_map(|l| {
+                        let (sha, stamp) = l.trim().split_once(' ')?;
+                        Some((sha.to_string(), parse_ts(stamp)?))
+                    })
+                    .collect();
             }
             Ok(out) => notes.push(format!(
                 "git log {git_ref} failed: {}",
@@ -400,7 +470,12 @@ fn revert_count(window: &Window, cwd: &Path, notes: &mut Vec<String>) -> usize {
             Err(e) => notes.push(format!("git log {git_ref} failed: {e}")),
         }
     }
-    0
+    Vec::new()
+}
+
+/// The weekly ledger's revert count: the same rows, counted.
+fn revert_count(window: &Window, cwd: &Path, notes: &mut Vec<String>) -> usize {
+    revert_rows(window, cwd, notes).len()
 }
 
 /// Current operator turn-queue depth, as context on the line. `None` when
@@ -554,21 +629,46 @@ pub(crate) fn beat_write(readings: &[crate::lead_checkin::Reading], cwd: &Path) 
     }
 }
 
-/// `fno-agent attention-ledger [--json|-J] [--report]`
+/// `fno inbox attention-ledger [--json|-J] [--report] [--per-pr [--days N]]`
 pub fn run_cli(args: &[String]) -> i32 {
     let mut as_json = false;
     let mut want_report = false;
-    for arg in args {
-        match arg.as_str() {
+    let mut per_pr = false;
+    let mut days: u32 = 1;
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
             "--json" | "-J" => as_json = true,
             "--report" => want_report = true,
+            "--per-pr" => per_pr = true,
+            "--days" => {
+                let Some(raw) = args.get(index + 1) else {
+                    eprintln!(
+                        "Usage: fno inbox attention-ledger [--json|-J] [--report] [--per-pr [--days N]] (--days needs a number 1-30)"
+                    );
+                    return 2;
+                };
+                match raw.parse::<u32>() {
+                    Ok(d) if (1..=30).contains(&d) => days = d,
+                    _ => {
+                        eprintln!("attention-ledger: --days needs a number 1-30 (got {raw})");
+                        return 2;
+                    }
+                }
+                index += 1;
+            }
             other => {
                 eprintln!(
-                    "Usage: fno inbox attention-ledger [--json|-J] [--report] (unknown argument: {other})"
+                    "Usage: fno inbox attention-ledger [--json|-J] [--report] [--per-pr [--days N]] (unknown argument: {other})"
                 );
                 return 2;
             }
         }
+        index += 1;
+    }
+    if per_pr {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        return super::attention_per_pr::run_per_pr(cwd.as_path(), days, as_json);
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     match compute(&cwd) {
