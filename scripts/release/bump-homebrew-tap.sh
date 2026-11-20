@@ -35,7 +35,8 @@ fi
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" "$work/tap"
+git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" "$work/tap" \
+  || { echo "::error::clone of ${TAP_REPO} failed; the release already shipped, so run the homebrew-tap workflow to retry."; exit 1; }
 # The seed is the structure source: copy it over the tap formula before the
 # patch, so the tap's url shape and install block move with this repo's seed.
 cp "$root/scripts/install/homebrew/fno.rb" "$work/tap/Formula/fno.rb"
