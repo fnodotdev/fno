@@ -39,6 +39,8 @@ pub enum Row {
         /// Per-state counts in severity order; empty for a section with no
         /// states.
         rollup: Vec<(LatticeState, usize)>,
+        /// The For-you header's open-question count: ◆ N in the warn color.
+        warn: Option<usize>,
         /// The Agents header alone: the circled + opens the composer.
         plus: bool,
     },
@@ -69,6 +71,7 @@ fn header(title: &'static str) -> Row {
     Row::Header {
         title,
         rollup: Vec::new(),
+        warn: None,
         plus: false,
     }
 }
@@ -113,6 +116,23 @@ pub(super) fn session_detail(s: &SquadMeta) -> String {
         s.panes,
         if s.panes == 1 { "" } else { "s" }
     )
+}
+
+/// One question's rail detail: what it is about, then how long it has
+/// waited. The node id leads when the question has one; otherwise the
+/// asker's handle; otherwise the kind.
+fn question_detail(q: &fno::needs_overlay::QuestionItem, now_secs: u64) -> String {
+    let about = q
+        .node
+        .clone()
+        .or_else(|| q.asker.as_ref().map(|a| a.handle.clone()))
+        .unwrap_or_else(|| q.kind.clone());
+    let age = ui::age(&q.created_at, now_secs);
+    if age.is_empty() {
+        about
+    } else {
+        format!("{about} {age}")
+    }
 }
 
 /// One session's sidebar row; `active` is the session the window shows.
@@ -203,6 +223,7 @@ pub fn rows(
     let mut out = vec![Row::Header {
         title: "Agents",
         rollup: section_rollup(agents.iter().map(|a| agent_lattice_state(a))),
+        warn: None,
         // The header's circled + opens the composer; the old start row is
         // gone.
         plus: true,
@@ -241,9 +262,15 @@ pub fn rows(
             (true, None) => None,
         }
     };
-    out.push(header("Questions"));
-    out.extend(failed(board.questions_error()));
     let questions = board.questions_newest_first();
+    let counted = board.read_yet() && board.questions_error().is_none();
+    out.push(Row::Header {
+        title: "For you",
+        rollup: Vec::new(),
+        warn: counted.then_some(questions.len()),
+        plus: false,
+    });
+    out.extend(failed(board.questions_error()));
     if questions.is_empty() && board.questions_error().is_none() {
         out.push(Row::Empty("nothing waits on you"));
     }
@@ -251,13 +278,13 @@ pub fn rows(
         let q = &q.item;
         out.push(Row::Item {
             label: q.title.clone(),
-            detail: q.node.clone().unwrap_or_else(|| q.kind.clone()),
+            detail: question_detail(q, now_secs),
             identity: None,
             card: None,
             state: None,
             question: true,
             mark: Mark::None,
-            action: Some(Action::Show(MainView::Orchestration)),
+            action: Some(Action::OpenAnswer(q.id.clone())),
         });
     }
 
@@ -532,6 +559,7 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
         Row::Header {
             title,
             rollup,
+            warn,
             plus,
         } => div().id(i).px_3().child(
             ui::section(title, &p).justify_between().child(
@@ -550,6 +578,14 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
                                     .text_color(rgb(state_color(&p, state)))
                                     .child(lattice_glyph(state).0.to_string()),
                             )
+                            .child(n.to_string())
+                    }))
+                    .children(warn.map(|n| {
+                        ui::role(div(), ui::Role::Fact, &p)
+                            .flex()
+                            .flex_row()
+                            .gap(px(3.0))
+                            .child(div().text_color(rgb(p.warn)).child("◆"))
                             .child(n.to_string())
                     }))
                     .when(plus, |right| right.child(agents_header_plus(&p, grid, cx))),
@@ -583,7 +619,7 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
             // unmeasured agent wears, so none leans on color.
             let (glyph, glyph_color) = match (state, question) {
                 (Some(s), _) => (lattice_glyph(s).0.to_string(), state_color(&p, s)),
-                (None, true) => ("◇".to_string(), p.warn),
+                (None, true) => ("◆".to_string(), p.warn),
                 (None, false) => (String::new(), p.faint),
             };
             let mut item = ui::row(i, cursor, &p).w(px(WIDTH)).child(
