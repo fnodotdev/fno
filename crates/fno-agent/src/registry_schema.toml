@@ -1,8 +1,9 @@
 # Single owner of the per-agent registry schema version and writer floor.
 # Additive fields move `version` only. Raise `min_writer` to the new version
 # when an older writer would make a wrong decision, not merely miss a field.
-# build.rs renders both Rust constants and projects this file byte-for-byte to
-# cli/src/fno/agents/registry_schema.toml, which registry.py reads as package data.
+# build.rs renders both Rust constants (state.rs include!s them); the old
+# byte-for-byte projection to cli/src/fno/agents/ and its registry.py reader
+# are gone with the Python runtime.
 #
 # v27: additive `launch_account_source` - WHO chose the row's
 # `launch_account`: "caller" (a flag on this spawn's argv) or "config"

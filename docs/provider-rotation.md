@@ -501,12 +501,9 @@ For `oauth_dir` auth, the symlink target is `credentials_source`. You create the
 
 ## Route survival across a relaunch
 
-A routed claude spawn writes its endpoint, auth token, and tier maps to a
-content-addressed `0600` file under `~/.fno/route-settings/<sha16>.json`, and the
-worker's registry row records that file's PATH in `route_settings_path` (schema
-v12).
-The row stores the path only: the file carries a live `ANTHROPIC_AUTH_TOKEN` and
-the registry has no `0600` guarantee.
+A routed claude spawn writes its endpoint, auth token, and tier maps to a content-addressed `0600` file under `~/.fno/route-settings/<sha16>.json`, and the worker's registry row records that file's PATH in `route_settings_path` (schema v12).
+The row stores the path only: the file carries a live `ANTHROPIC_AUTH_TOKEN` and the registry has no `0600` guarantee.
+When the session id is in hand, the writer also publishes a `session-<id>.json` twin beside the digest store and the row records the twin's path, so `ls ~/.fno/route-settings` joins a file to its session by eye; the digest name stays the dedup store and prunes once no row names it.
 
 Relaunching a worker means starting a new harness process for it, and the route
 comes only from the flags on that new invocation, so without the recorded path a
