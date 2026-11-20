@@ -1423,7 +1423,7 @@ pub fn doctor(json: bool) -> i32 {
     render_doctor(&gather_checks(), &deps, json)
 }
 
-/// `fno mux stats` body lives in server_stats, beside its answer.
+/// `fno mux diag stats` body lives in server_stats, beside its answer.
 pub fn stats(json: bool) -> i32 {
     crate::server_stats::cli(json)
 }

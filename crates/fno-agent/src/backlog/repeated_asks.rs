@@ -44,6 +44,23 @@ const ASK: &[&str] = &[
     "please confirm",
     "can you ",
 ];
+const WAITING: &[&str] = &[
+    "waiting on you",
+    "waiting on your",
+    "waits on you",
+    "waits on your",
+    "waits for your",
+    "waiting for your",
+    "your call",
+    "your pick",
+    "your decision",
+    "your approval",
+    "your go",
+    "needs you",
+    "need you",
+    "needs your",
+    "need your",
+];
 const START: &[&str] = &[
     "answer ", "approve ", "confirm ", "pick ", "choose ", "reply ",
 ];
@@ -160,6 +177,23 @@ fn codex_assistant_text(row: &Value) -> Option<String> {
     None
 }
 
+/// The asks in `reply` that put the user on the hook: an approval, a call
+/// or a go the work waits on. A narrower class than `asks_in`, so the stop
+/// gate never reads a rhetorical question as a held ask.
+pub(crate) fn waiting_asks_in(reply: &str) -> Vec<String> {
+    sentences(reply)
+        .into_iter()
+        .filter(|sentence| !sentence.contains('|'))
+        .map(normalize)
+        .filter(|ask| {
+            !NOT_ASK.iter().any(|marker| ask.contains(marker))
+                && WAITING
+                    .iter()
+                    .any(|marker| format!("{ask} ").contains(marker))
+        })
+        .collect()
+}
+
 pub(crate) fn asks_in(reply: &str) -> Vec<String> {
     let mut asks = Vec::new();
     for sentence in sentences(reply) {
@@ -264,7 +298,7 @@ fn tokens(text: &str) -> HashSet<String> {
         .collect()
 }
 
-fn same_ask(a: &str, b: &str) -> bool {
+pub(crate) fn same_ask(a: &str, b: &str) -> bool {
     let a = tokens(a);
     let b = tokens(b);
     let union = a.union(&b).count();

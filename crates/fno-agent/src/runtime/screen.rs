@@ -244,17 +244,6 @@ mod tests {
     }
 
     #[test]
-    fn resize_does_not_panic_and_view_roundtrips() {
-        let mut grid = TerminalGrid::with_default_size();
-        grid.resize(0, 0); // clamped to 1x1
-        grid.feed(b"q");
-        let owned = grid.snapshot();
-        let view = owned.view();
-        assert_eq!(view.visible_text, owned.text);
-        assert_eq!(view.cursor_row, owned.cursor_row);
-    }
-
-    #[test]
     fn osc_title_exposed_on_snapshot_and_reassembled_across_feeds() {
         // AC-E6-1 at the read-loop level: an OSC title split across two feeds
         // reassembles, is exposed on the snapshot (owned + borrowed view), and

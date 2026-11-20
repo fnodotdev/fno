@@ -136,10 +136,10 @@ pub use gate::{
     pr_status_facts, pr_steward, pr_verify, pr_watch, pr_worktree, publish_review, quarantine,
     receipt_policy, release_notes, release_record, release_watch, review_capability, review_doors,
     review_findings, review_freshness, review_hold, review_invocation, review_level, review_policy,
-    review_summary, stub_manifest, subagent_hold, surface_check, symptom_recheck, target_blast,
-    target_denominator, target_gates, target_init, target_orient, target_start, test_changed,
-    test_command, test_delta, test_env, test_hold, test_run, test_smoke, test_smoke_discovery,
-    test_smoke_registry, verify_advise, verify_evidence,
+    review_summary, stop_now, stub_manifest, subagent_hold, surface_check, symptom_recheck,
+    target_blast, target_denominator, target_gates, target_init, target_orient, target_start,
+    test_changed, test_command, test_delta, test_env, test_hold, test_run, test_smoke,
+    test_smoke_discovery, test_smoke_registry, verify_advise, verify_evidence,
 };
 pub(crate) use gate::{build_marks, pr_idle, stacked_base_stamp};
 use gate::{cancel_sentinel, completion_output, merge_architect, test_run_journal, test_run_pins};
@@ -171,8 +171,8 @@ pub use runtime::{
     opencode_turn, operator_notice, operator_turns, operator_witness, org_board, org_fold,
     org_remote, org_rivals, orphan_reap, orphans, osc, page_relief, pane_claim, pane_identity,
     pane_keeper, pane_loop, pane_rebind, pane_relaunch, pane_stop, peek, pending_session_row,
-    pi_transcript, process_owner, process_probe, project, provenance, quiet_retire, readiness,
-    reap_release, reap_render, receipt, reclaim, recovery_sweep, reentry, register,
+    pi_transcript, process_owner, process_probe, project, provenance, question_stamp, quiet_retire,
+    readiness, reap_release, reap_render, receipt, reclaim, recovery_sweep, reentry, register,
     registry_commands, registry_commit, registry_guard, registry_json, registry_read,
     registry_store, removals, rename, reserve, restart_run, resume_args, resume_gate, resume_pin,
     resume_receipt, resume_wake, rev_front, revival_check, revive_proof, rm_receipt, rm_tombstone,

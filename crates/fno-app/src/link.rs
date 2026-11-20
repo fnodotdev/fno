@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 use fno::proto::{
-    self, AgentRow, ClientMsg, Frame, ProtoError, ServerMsg, SquadMeta, BUILD_VERSION,
-    PROTO_VERSION,
+    self, AgentLaunchUpdate, AgentRow, ClientMsg, Frame, ProtoError, ServerMsg, SquadMeta,
+    BUILD_VERSION, PROTO_VERSION,
 };
 use fno::tree::Rect;
 
@@ -63,6 +63,13 @@ pub enum Event {
     Frame(u64, Frame),
     Modes(Vec<u8>),
     Notice(String),
+    /// A desktop notice from the daemon, a pane's OSC hook or `fno notify`.
+    /// The window renders it as the corner toast; in the background a title
+    /// naming no known agent OS-notifies (alerts.rs carries the rule).
+    Desktop {
+        title: String,
+        body: String,
+    },
     /// Text the server copied (a selection release or Cmd+C) for the
     /// clipboard.
     Copy(String),
@@ -78,6 +85,8 @@ pub enum Event {
     /// The server ended the connection (`Bye`) or the socket failed. The
     /// reader has stopped.
     Closed(String),
+    /// One launch attempt's progress, correlated by `request_id`.
+    Launch(AgentLaunchUpdate),
 }
 
 /// Map one server message to an app event. `None` for messages the app
@@ -117,11 +126,13 @@ fn to_event(msg: ServerMsg) -> Option<Event> {
         }
         ServerMsg::ModeSync { bytes } => Some(Event::Modes(bytes)),
         ServerMsg::Notice { text } => Some(Event::Notice(text)),
+        ServerMsg::DesktopNotice { title, body } => Some(Event::Desktop { title, body }),
         ServerMsg::PaneInputResult(r) => r
             .result
             .err()
             .map(|why| Event::Notice(format!("send to pane {} failed: {why}", r.pane_id))),
         ServerMsg::Bye { reason } => Some(Event::Closed(reason)),
+        ServerMsg::AgentLaunch(u) => Some(Event::Launch(u)),
         _ => None,
     }
 }
@@ -151,6 +162,10 @@ pub enum LinkError {
     },
     #[error("the socket writer lock was poisoned")]
     Poisoned,
+    #[error("no layout arrived within the warm budget")]
+    NoLayout,
+    #[error("{0}")]
+    Closed(String),
 }
 
 /// Connect and send `Attach`. `rows`/`cols` (0, 0) attach as an observer,
@@ -225,6 +240,49 @@ impl Link {
             what: "write",
             source,
         })
+    }
+}
+
+/// The link already connected and drained to the world's first layout:
+/// what the shot path hands the root, so the one frame gpui paints
+/// synchronously at open carries the world's data.
+pub struct WarmedLink {
+    /// The live link the root adopts.
+    pub link: Link,
+    /// Events drained before the layout (early frames and modes the
+    /// root still applies).
+    pub early: Vec<Event>,
+    /// The stream from the layout onward.
+    pub rest: UnboundedReceiver<Event>,
+}
+
+/// Connect and poll until the first `Layout` arrives or `budget`
+/// elapses. The reader thread fills the channel while the caller
+/// sleeps between polls, so no event is lost.
+pub fn connect_warmed(session: &str, budget: Duration) -> Result<WarmedLink, LinkError> {
+    let (link, mut rx) = Link::connect(session, 80, 24)?;
+    let deadline = std::time::Instant::now() + budget;
+    let mut early = Vec::new();
+    loop {
+        if std::time::Instant::now() >= deadline {
+            return Err(LinkError::NoLayout);
+        }
+        match rx.try_recv() {
+            Ok(Event::Layout(_)) => {
+                return Ok(WarmedLink {
+                    link,
+                    early,
+                    rest: rx,
+                })
+            }
+            Ok(ev) => early.push(ev),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                return Err(LinkError::Closed("the world closed the link".into()));
+            }
+        }
     }
 }
 
@@ -315,6 +373,33 @@ pub fn probe(session: &str, budget: Duration) -> (i32, Option<Layout>) {
         None => 0,
     };
     (code, Some(layout))
+}
+
+#[cfg(test)]
+mod launch_arm_tests {
+    use super::*;
+    use fno::proto::{AgentLaunchUpdate, LaunchState};
+
+    #[test]
+    fn launch_maps_with_its_reason_and_other_messages_map_as_before() {
+        // AC3: a refusal rides Event::Launch with its reason intact.
+        let update = AgentLaunchUpdate {
+            request_id: 9,
+            state: LaunchState::Refused {
+                reason: "project path /gone does not exist".into(),
+            },
+        };
+        // AC3: the refusal's reason rides intact.
+        match to_event(ServerMsg::AgentLaunch(update.clone())) {
+            Some(Event::Launch(u)) => assert_eq!(u, update),
+            other => panic!("expected a launch event, got {other:?}"),
+        }
+        // AC4: a message the app mapped before still maps.
+        match to_event(ServerMsg::Notice { text: "hi".into() }) {
+            Some(Event::Notice(text)) => assert_eq!(text, "hi"),
+            other => panic!("expected a notice event, got {other:?}"),
+        }
+    }
 }
 
 #[cfg(test)]

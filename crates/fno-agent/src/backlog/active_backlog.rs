@@ -2611,6 +2611,7 @@ mod tests {
             origin: None,
             mail: None,
             mail_session_id: None,
+            now: false,
         };
         std::fs::write(
             crate::fleet_incident::fleet_stop_path(&crate::paths::AgentsHome::at(&home)),

@@ -24,6 +24,8 @@ mod setup_autowire_tests;
 #[cfg(feature = "full")]
 pub mod setup_cmds;
 #[cfg(feature = "full")]
+pub mod setup_daemon_agent;
+#[cfg(feature = "full")]
 pub mod setup_detect;
 #[cfg(feature = "full")]
 pub mod setup_messaging;

@@ -28,6 +28,17 @@ pub(crate) fn web_bridge_label() -> String {
     format!("sh.fno.web-bridge.{}", launchd_suffix())
 }
 
+/// This HOME's daemon boot-agent launchd label: starts the fno-agent
+/// supervisor daemon at login.
+pub(crate) fn daemon_label() -> String {
+    format!("sh.fno.daemon.{}", launchd_suffix())
+}
+
+/// The daemon boot-agent plist's fixed filename: the per-HOME LaunchAgents
+/// directory separates files; only the Label inside carries the suffix
+/// (the groom convention).
+pub(crate) const DAEMON_PLIST_FILENAME: &str = "sh.fno.daemon.plist";
+
 /// The web-bridge plist's fixed filename: the per-HOME LaunchAgents
 /// directory separates files; only the Label inside carries the suffix
 /// (the groom convention).
@@ -122,5 +133,8 @@ mod tests {
         assert!(gr.starts_with("sh.fno.groom."));
         assert_eq!(pw.rsplit('.').next().unwrap().len(), 8);
         assert_eq!(gr.rsplit('.').next().unwrap().len(), 8);
+        let da = daemon_label();
+        assert!(da.starts_with("sh.fno.daemon."));
+        assert_eq!(da.rsplit('.').next().unwrap().len(), 8);
     }
 }

@@ -1327,7 +1327,7 @@ fn holds_live_team(entries: &[crate::state::RegistryEntry], sid: &str) -> bool {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for row in entries {
         let raw = row.role_scope.as_deref().unwrap_or("").trim();
-        if raw.is_empty() || !crate::spawn_gate::status_is_liveish(&row.status) {
+        if raw.is_empty() || !crate::territory::holder_row_is_live(row) {
             continue;
         }
         let canon = crate::territory::canonical_scope(raw);
@@ -2264,6 +2264,50 @@ mod tests {
             let live = live_names(&registry_path(tmp.path())).unwrap();
             assert_eq!(live.get("x-aaaa").map(String::as_str), Some("Gus"));
         }
+        // A reboot stamps `status: exited` on a lead the sweep then measures
+        // alive. The fresh word decides both ways; a stale one falls back;
+        // a deliberate stop stands over an alive word.
+        fn a_rebooted_lead_measured_alive_still_holds_its_team() {
+            let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+            let row = |name: &str,
+                       scope: &str,
+                       status: &str,
+                       word: &str,
+                       at: &str,
+                       stop: serde_json::Value| {
+                json!({
+                    "name": name, "status": status, "role_scope": scope,
+                    "role_level": 0, "cwd": "/repo", "harness": "claude",
+                    "harness_session_id": format!("sess-{name}"),
+                    "created_at": "2026-09-23T20:00:00Z",
+                    "liveness": word, "liveness_measured_at": at, "stop": stop,
+                })
+            };
+            let stop = json!({"by": "user", "at": now});
+            let old = "2026-01-01T00:00:00Z";
+            let tmp = tempfile::TempDir::new().unwrap();
+            write_registry(
+                tmp.path(),
+                json!([
+                    row("stopped", "fno-books", "exited", "alive", &now, stop),
+                    row("atticus", "fno", "exited", "alive", &now, json!(null)),
+                    row("gone", "fnh", "live", "dead", &now, json!(null)),
+                    row("stale", "fno-web", "exited", "alive", old, json!(null)),
+                ]),
+            );
+            apply_team_naming(
+                &store_path(tmp.path()),
+                &registry_path(tmp.path()),
+                None,
+                None,
+                Some("fleet ops"),
+                Some(0),
+                "fno",
+            )
+            .unwrap();
+            let live = live_names(&registry_path(tmp.path())).unwrap();
+            assert_eq!(live.keys().collect::<Vec<_>>(), vec!["fno"], "{live:?}");
+        }
         fn an_unnamed_live_team_cannot_complete_checkin() {
             let tmp = tempfile::TempDir::new().unwrap();
             write_registry(tmp.path(), json!([team_row("lead-a", "fno", 1, "sess-a")]));
@@ -2815,6 +2859,7 @@ mod tests {
         binder_rebinds_own_name_on_checkin();
         an_unnamed_live_team_cannot_complete_checkin();
         a_person_named_holder_checks_in_with_no_rename();
+        a_rebooted_lead_measured_alive_still_holds_its_team();
         a_successor_checkin_keeps_the_label_and_the_record_mirrors_it();
         a_duplicate_live_name_refuses_naming_and_names_the_holder();
         naming_an_already_named_team_refuses();

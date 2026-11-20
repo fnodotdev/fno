@@ -506,6 +506,7 @@ jobs:
         if: env.CHANNEL == 'stable'
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CRATES_UA: fno-release (https://github.com/fnodotdev/fno)
         run: |
           set -euo pipefail
           # Main's manifests can lag a shipped stable, so publish the version
@@ -520,11 +521,13 @@ jobs:
             name="${pair%%:*}"
             dir="${pair#*:}"
             ver="$(perl -ne 'if(/^version = "(.*)"/){print $1; exit}' "${dir}/Cargo.toml")"
-            code="$(curl -s -o /dev/null -w '%{http_code}' "https://crates.io/api/v1/crates/${name}/${ver}")"
+            # crates.io answers 403 to a request with no User-Agent.
+            code="$(curl -s -o /dev/null -w '%{http_code}' -A "$CRATES_UA" "https://crates.io/api/v1/crates/${name}/${ver}")"
             if [ "$code" = "200" ]; then
               echo "${name} ${ver} is already on crates.io - skipping"
               continue
             fi
+            [ "$code" = "404" ] || echo "::warning::crates.io probe for ${name} ${ver} answered ${code}; publishing anyway"
             if [ "$DRY_RUN" = "true" ]; then
               extra=()
               # A new fno-mail or fno-proto version is not on crates.io until
@@ -541,7 +544,13 @@ jobs:
               cargo publish --dry-run --allow-dirty --manifest-path "${dir}/Cargo.toml" "${extra[@]}"
             else
               test -n "$CARGO_REGISTRY_TOKEN" || { echo "CARGO_REGISTRY_TOKEN not set; refusing to publish"; exit 1; }
-              cargo publish --allow-dirty --manifest-path "${dir}/Cargo.toml"
+              log="${RUNNER_TEMP}/publish-${name}.log"
+              if ! cargo publish --allow-dirty --manifest-path "${dir}/Cargo.toml" 2>&1 | tee "$log"; then
+                # The probe can miss a version (a 5xx, a policy change). The
+                # registry's own refusal of a duplicate is the same skip.
+                grep -q "already exists on crates.io index" "$log" || exit 1
+                echo "${name} ${ver} is already on crates.io - skipping"
+              fi
             fi
           done
 
@@ -633,39 +642,9 @@ jobs:
         if: ${{ !cancelled() && inputs.dry_run != true && env.CHANNEL == 'stable' && steps.release.outcome == 'success' }}
         env:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-        run: |
-          set -euo pipefail
-          # A fine-grained PAT with write to the SEPARATE tap repo - the default
-          # GITHUB_TOKEN cannot push cross-repo. Without it the tap stays on the
-          # old release and brew users never see the new one, so the job fails
-          # here instead of passing quietly (crates + the release already
-          # shipped; set the secret and rerun this job).
-          if [ -z "${TAP_TOKEN:-}" ]; then
-            echo "::error::HOMEBREW_TAP_TOKEN is not set - the tap (fnodotdev/homebrew-fno) was NOT bumped to ${VERSION}. Add the secret to the release environment and rerun this job."
-            exit 1
-          fi
-          echo "fno version: ${VERSION}"
-          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/fnodotdev/homebrew-fno.git" tap \
-            || { echo "::error::tap clone failed - grant HOMEBREW_TAP_TOKEN write access to fnodotdev/homebrew-fno (the tap moved off bllshttng/homebrew-fno; crates + the release already shipped; rerun this job after widening the token scope)"; exit 1; }
-          # The seed is the structure source: copy it over the tap formula
-          # before the patch, so the tap's url shape and install block move
-          # with this repo's seed on every release instead of diverging.
-          cp scripts/install/homebrew/fno.rb tap/Formula/fno.rb
-          python3 scripts/release/update-homebrew-formula.py "${VERSION}" tap/Formula/fno.rb
-          cd tap
-          # The rewrite must land the version; a formula that still names
-          # another release fails the job.
-          grep -q "version \"${VERSION}\"" Formula/fno.rb \
-            || { echo "::error::tap formula does not read version ${VERSION} after the rewrite"; exit 1; }
-          if git diff --quiet; then
-            echo "tap already at ${VERSION} - nothing to push."
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -am "fno ${VERSION}: bump url + sha256 (auto)"
-          git push
-          echo "tap bumped to ${VERSION}"
+        # The tap-only retry is the homebrew-tap workflow: it runs the same
+        # script without re-running crates.io or the release upload.
+        run: bash scripts/release/bump-homebrew-tap.sh "$VERSION"
 
       - name: Sync main's version surfaces to the promoted release (stable only)
         # A failed tap leg must not skip the sync: both need only the release.

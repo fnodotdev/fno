@@ -364,15 +364,27 @@ fn bubble(content: &Content, pending: bool, p: Palette, hl: &[(Range<usize>, boo
         .flex_col()
         .gap_2()
         .children((!content.text.is_empty()).then(|| {
-            if hl.is_empty() {
+            let text: AnyElement = if hl.is_empty() {
                 div().child(content.text.clone()).into_any_element()
             } else {
                 painted(content.text.as_str(), font(UI_FONT), p.fg, hl, p).into_any_element()
-            }
+            };
+            // The text carries its own width cap: with only the bubble box
+            // capped, the flex measure runs the text at max-content, the box
+            // sizes to one line, and the wrapped paint spills onto the row
+            // below.
+            div()
+                .max_w(px(536.0))
+                .min_w_0()
+                .flex_shrink()
+                .child(text)
+                .into_any_element()
         }))
         .children(content.pictures.iter().map(|pic| picture(pic, p)))
         .children(pending.then(|| muted("sending…", p).text_xs()));
-    div().flex().flex_row().justify_end().child(body)
+    // Measure at the list's full width: a shrink-wrapped flex row sizes its
+    // wrapped text on one line and the taller paint overruns the next row.
+    div().w_full().flex().flex_row().justify_end().child(body)
 }
 
 /// One list row, inside the centred column.
@@ -753,36 +765,43 @@ fn status(root: &Root) -> Option<Div> {
 }
 
 /// The composer, or in its place the closed stream's reason and Reconnect.
+/// The bar that replaces the composer when the chat stream is over: the end
+/// reason and a reconnect button. The link's own exit reason folds in here;
+/// the corner toast for it is suppressed while this bar stands (window
+/// render).
+fn closed_bar(root: &Root, p: Palette, cx: &mut Context<Root>) -> Option<Div> {
+    let closed = root.chat.closed.as_ref()?;
+    let (text, color) = match closed {
+        Closed::Ended => match &root.closed {
+            Some(reason) => (format!("The chat stream ended: {reason}."), p.error),
+            None => ("The session's chat stream ended.".to_string(), p.muted),
+        },
+        Closed::Failed(why) => (why.clone(), p.error),
+    };
+    let bar = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_3()
+        .p_2()
+        .rounded(px(6.0))
+        .bg(rgb(p.raised))
+        .child(div().flex_1().min_w_0().text_color(rgb(color)).child(text))
+        .child(button(
+            "chat-reconnect",
+            "Reconnect",
+            Action::Reconnect,
+            p,
+            cx,
+        ));
+    Some(column(bar).pb_3())
+}
+
 fn composer(root: &Root, window: &Window, cx: &mut Context<Root>) -> Option<Div> {
     let p = root.palette;
     root.chat.key.as_ref()?;
-    if let Some(closed) = &root.chat.closed {
-        let (text, color) = match closed {
-            // The link's own exit reason folds in here; the corner toast
-            // for it is suppressed while this bar stands (window render).
-            Closed::Ended => match &root.closed {
-                Some(reason) => (format!("The chat stream ended: {reason}."), p.error),
-                None => ("The session's chat stream ended.".to_string(), p.muted),
-            },
-            Closed::Failed(why) => (why.clone(), p.error),
-        };
-        let bar = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap_3()
-            .p_2()
-            .rounded(px(6.0))
-            .bg(rgb(p.raised))
-            .child(div().flex_1().min_w_0().text_color(rgb(color)).child(text))
-            .child(button(
-                "chat-reconnect",
-                "Reconnect",
-                Action::Reconnect,
-                p,
-                cx,
-            ));
-        return Some(column(bar).pb_3());
+    if root.chat.closed.is_some() {
+        return closed_bar(root, p, cx);
     }
     let at = root.chat.composer.clone();
     let state = root.chat.field.clone();
@@ -836,17 +855,33 @@ fn composer(root: &Root, window: &Window, cx: &mut Context<Root>) -> Option<Div>
         .child(ui::text("send", Role::Hint, &p))
         .child(ui::kbd("⇧⏎", &p))
         .child(ui::text("new line", Role::Hint, &p));
-    let bar = div()
+    let mut bar = div()
         .flex()
-        .flex_row()
-        .items_end()
-        .gap_2()
+        .flex_col()
         .px_3()
         .py_2()
         .rounded(px(8.0))
-        .bg(rgb(p.raised))
-        .child(field)
-        .child(send);
+        .bg(rgb(p.raised));
+    if let Some(att) = root.chat.draft.attachment() {
+        bar = bar.child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .text_color(rgb(p.muted))
+                .child(format!("[img {} KB]", att.bytes.len() / 1024)),
+        );
+    }
+    bar = bar.child(
+        div()
+            .flex()
+            .flex_row()
+            .items_end()
+            .gap_2()
+            .child(field)
+            .child(send),
+    );
     Some(column(bar).pb_3())
 }
 
@@ -873,7 +908,7 @@ pub(crate) fn render(root: &Root, window: &Window, cx: &mut Context<Root>) -> Di
         .child(rows)
         .children(pending.collect::<Vec<_>>())
         .children(status(root))
-        // A block gap keeps the last turn off the composer.
+        // A block gap keeps the last turn a full block off the composer.
         .children(composer(root, window, cx).map(|c| c.mt_3()));
     if let Some(s) = sheet(root, cx) {
         out = out.child(s);

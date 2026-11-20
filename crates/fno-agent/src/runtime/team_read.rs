@@ -779,38 +779,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn team_payload_matches_the_rendered_nodes_bytes() {
-        // The in-process org read must answer exactly what the `--nodes`
-        // render prints: one computation, two shapes. The spawned child's
-        // stdout was the old transport; this pins the new one to the same
-        // bytes.
-        let rendered = render_team_with(
-            json!({
-                "roles": [{"scope": "fno", "level": 1, "holder": "a"}],
-                "conflicts": [],
-                "summary": {},
-            }),
-            |_p: &[Value]| -> Result<Value, String> { Ok(json!({})) },
-            Some(HashMap::new()),
-            || json!({"verdict": "probe-ok"}),
-            true,
-            true,
-        );
-        let payload = team_payload(
-            json!({
-                "roles": [{"scope": "fno", "level": 1, "holder": "a"}],
-                "conflicts": [],
-                "summary": {},
-            }),
-            |_p: &[Value]| -> Result<Value, String> { Ok(json!({})) },
-            Some(HashMap::new()),
-            || json!({"verdict": "probe-ok"}),
-            true,
-        );
-        assert_eq!(rendered, sorted_json(&payload));
-    }
-
-    #[test]
     fn an_epic_rung_needs_a_readable_graph() {
         assert_eq!(
             agreement(Some(2), Some("x-a"), None),

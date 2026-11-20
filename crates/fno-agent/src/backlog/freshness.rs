@@ -515,9 +515,23 @@ pub fn premise_marks(graph: &Path, repo: &Path, ids: &[String]) -> Value {
     )
     .unwrap_or_default();
     let ctx = premise_ctx(repo);
+    // One id index for the batch: a find_entry scan per token is quadratic,
+    // and on a 5,853-row list it was two thirds of this read. A token that
+    // misses the index (a slug) still resolves through find_entry, so the
+    // match rules stay the shared matcher's: id first, then slug, any case.
+    let mut by_id: std::collections::HashMap<String, &Value> =
+        std::collections::HashMap::with_capacity(entries.len());
+    for e in &entries {
+        if let Some(id) = RowFacts::id_of(e) {
+            by_id.entry(id.to_ascii_lowercase()).or_insert(e);
+        }
+    }
     let mut marks = BTreeMap::new();
     for token in ids {
-        let row = crate::graph_get::find_entry(&entries, token);
+        let row = by_id
+            .get(&token.to_ascii_lowercase())
+            .copied()
+            .or_else(|| crate::graph_get::find_entry(&entries, token));
         let node_id = row.and_then(|r| RowFacts::id_of(r)).unwrap_or(token);
         let verdict = match row {
             Some(r) => premise_verdict_in(&ctx, node_id, r),

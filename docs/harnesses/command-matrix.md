@@ -23,6 +23,7 @@ A cell is a projection, never a fresh measurement. The rule, in order:
 | dnd | - | native | native | `absent` | native | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 | execute | - | native | native | `absent` | native | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 | fix | - | native | native | `absent` | native | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
+| fno-app | - | native | native | `absent` | native | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 | fno-me | - | native | native | `absent` | native | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 | groom | - | native | native | `absent` | native | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 | growth-launch | subagent_dispatch | native | native | `absent` | native | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |

@@ -2475,7 +2475,7 @@ fn now_iso() -> String {
 }
 
 /// Public twin for cross-module callers that need the same UTC stamp shape
-/// (the mux stats answer carries the counter's measurement window).
+/// (the mux diag stats answer carries the counter's measurement window).
 pub fn epoch_to_iso_public(secs: u64) -> String {
     epoch_to_iso(secs)
 }

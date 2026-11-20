@@ -1,5 +1,5 @@
 //! x-f209: the mux server axis is spelled `server`. The commands with no pure
-//! parser (tab, layout, workspace restore, rows, where, `mux server`,
+//! parser (tab, layout, workspace restore, `diag rows`, where, `mux server`,
 //! `serve --web`) accept `--server`, keep `--session` working with exactly
 //! one deprecation line, and the env precedence is flag > FNO_SERVER >
 //! FNO_SESSION > main. Runs the real binary against a scratch FNO_MUX_DIR,
@@ -40,8 +40,12 @@ fn server_axis_commands_accept_server_and_warn_only_on_session() {
     // carries exactly one deprecation line while --server carries none.
     let scratch = Scratch::new("axis-commands");
 
-    // rows (take_common_flags -> run_on_existing_server refuses naming it).
-    let out = fno_env(&scratch, &[], &["mux", "rows", "--server", "s-rows"]);
+    // diag rows (take_common_flags -> run_on_existing_server refuses naming it).
+    let out = fno_env(
+        &scratch,
+        &[],
+        &["mux", "diag", "rows", "--server", "s-rows"],
+    );
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(
         !err.contains("unknown argument"),
@@ -54,7 +58,11 @@ fn server_axis_commands_accept_server_and_warn_only_on_session() {
         "no deprecation for --server: {err}"
     );
 
-    let out = fno_env(&scratch, &[], &["mux", "rows", "--session", "s-rows"]);
+    let out = fno_env(
+        &scratch,
+        &[],
+        &["mux", "diag", "rows", "--session", "s-rows"],
+    );
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(
         !err.contains("unknown argument"),
@@ -215,7 +223,7 @@ fn server_axis_env_precedence_matrix() {
     let out = fno_env(
         &scratch,
         &[("FNO_SERVER", "env-a"), ("FNO_SESSION", "env-b")],
-        &["mux", "rows"],
+        &["mux", "diag", "rows"],
     );
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("\"env-a\""), "FNO_SERVER decided: {err}");
@@ -226,7 +234,11 @@ fn server_axis_env_precedence_matrix() {
     );
 
     // AC6: only FNO_SESSION -> one line, and it decided.
-    let out = fno_env(&scratch, &[("FNO_SESSION", "env-b")], &["mux", "rows"]);
+    let out = fno_env(
+        &scratch,
+        &[("FNO_SESSION", "env-b")],
+        &["mux", "diag", "rows"],
+    );
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("\"env-b\""), "FNO_SESSION decided: {err}");
     assert_eq!(count(&err, SESSION_LINE), 1, "one line: {err}");
@@ -235,7 +247,7 @@ fn server_axis_env_precedence_matrix() {
     let out = fno_env(
         &scratch,
         &[("FNO_SESSION", "env-b")],
-        &["mux", "rows", "--server", "env-a"],
+        &["mux", "diag", "rows", "--server", "env-a"],
     );
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("\"env-a\""), "flag decided: {err}");
