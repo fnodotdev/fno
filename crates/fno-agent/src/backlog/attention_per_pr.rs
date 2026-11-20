@@ -290,22 +290,22 @@ fn run_limit(days: u32) -> usize {
 /// boundary. A failure carries the trimmed stderr in a typed error.
 fn main_runs(limit: usize) -> Result<Vec<MainRun>, RunsError> {
     // Both streams pipe: wait_with_output only collects what is piped, so
-    // gh's own progress lines never leak into this read's output.
-    let out = std::process::Command::new("gh")
-        .args([
-            "run",
-            "list",
-            "--branch",
-            "main",
-            "--limit",
-            &limit.to_string(),
-            "--json",
-            "conclusion,createdAt,updatedAt",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .and_then(|child| child.wait_with_output());
+    // gh's own progress lines never leak into this read's output. The spawn
+    // rides the fleet gh budget seam like every other gh read.
+    let mut cmd = std::process::Command::new("gh");
+    cmd.args([
+        "run",
+        "list",
+        "--branch",
+        "main",
+        "--limit",
+        &limit.to_string(),
+        "--json",
+        "conclusion,createdAt,updatedAt",
+    ])
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
+    let out = crate::gh_budget::output(cmd);
     let out = match out {
         Ok(out) => out,
         Err(e) => return Err(RunsError::Gh(format!("spawn failed: {e}"))),
