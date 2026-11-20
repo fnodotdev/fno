@@ -473,7 +473,9 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].name, "quarry");
         assert_eq!(rows[0].agents, 1);
-        assert_eq!(rows[0].state, Some(LatticeState::Unmeasured));
+        // The dot reads the freshest member's state: recent activity with no
+        // live badge is Idle, never Unmeasured.
+        assert_eq!(rows[0].state, Some(LatticeState::Idle));
         assert_eq!(rows[1].name, "harbor");
     }
 
