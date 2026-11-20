@@ -106,6 +106,9 @@ pub(crate) struct PersonaOverlay {
     /// Records drilled past the first: each holds its own appended pane
     /// and the node it renders. The board detail keeps the first record.
     pub(crate) records: Vec<(u64, String)>,
+    /// Records the three-column cap folded, oldest first. Their panes
+    /// are gone; the breadcrumb strip carries their names.
+    pub(crate) folded: Vec<String>,
     /// A serving record is drilled open right of the persona column.
     /// Left and Esc pop the record before the column itself.
     pub(crate) drill: bool,
@@ -468,6 +471,7 @@ fn open_page(project: &str, persona: &str) -> PersonaOverlay {
                 edit_since: None,
                 edit_spawn: None,
                 home: Home::Float,
+                folded: Vec::new(),
                 drill: false,
             }
         }
@@ -494,6 +498,7 @@ fn open_page(project: &str, persona: &str) -> PersonaOverlay {
             edit_since: None,
             edit_spawn: None,
             home: Home::Float,
+            folded: Vec::new(),
             drill: false,
         },
     }
@@ -778,6 +783,7 @@ fn open_list(title: &str, project: &str, personas: Vec<String>) -> PersonaOverla
         edit_since: None,
         edit_spawn: None,
         home: Home::Float,
+        folded: Vec::new(),
         drill: false,
     }
 }
@@ -1756,6 +1762,10 @@ fn spawn_record_pane(view: &mut View, node_id: &str) {
     if !docked {
         return;
     }
+    // The trail caps at three record columns: the first record lives in
+    // the detail column and at most two panes append past it. A further
+    // drill folds the oldest visible record into the breadcrumb strip.
+    fold_oldest_record(view);
     let min_y = view.layout.panes.iter().map(|(_, r)| r.y).min();
     let anchor = view
         .layout
@@ -1801,6 +1811,60 @@ fn spawn_record_pane(view: &mut View, node_id: &str) {
     }
 }
 
+/// The trail caps at three record columns: the first record lives in the
+/// detail column and at most two panes append past it. A further drill
+/// folds the oldest visible record: its node joins the breadcrumb strip
+/// and its pane dies, best-effort like a pop. True when a record folded.
+fn fold_oldest_record(view: &mut View) -> bool {
+    let (pane, node) = {
+        let Some(o) = view.persona.as_mut() else {
+            return false;
+        };
+        if o.records.len() <= 1 {
+            return false;
+        }
+        let Some((pane, node)) = o.records.first().cloned() else {
+            return false;
+        };
+        o.records.remove(0);
+        o.folded.insert(0, node);
+        if o.claim_pane == Some(pane) {
+            o.claim_pane = None;
+        }
+        (pane, node)
+    };
+    let session = view.session.clone();
+    if let Ok(sock) = crate::proto::socket_path(&session) {
+        let reply = crate::mux_cli::control_roundtrip(
+            &sock,
+            &session,
+            crate::proto::ControlCommand::PaneKill {
+                pane,
+                hand_off_to: None,
+            },
+        );
+        if let Err(e) = reply {
+            view.set_notice(format!("the folded record pane lingers: {e}"));
+        }
+    }
+    true
+}
+
+/// The folded trail as one breadcrumb line, oldest first. The name is
+/// the node's title from the board read, falling back to its id.
+fn folded_breadcrumb(inputs: Option<&crate::backlog_model::Inputs>, folded: &[String]) -> String {
+    let names: Vec<String> = folded
+        .iter()
+        .map(|id| {
+            inputs
+                .and_then(|inputs| crate::backlog_model::node(inputs, id))
+                .map(|v| v.card.title.clone())
+                .unwrap_or_else(|| id.clone())
+        })
+        .collect();
+    format!("\u{2039} {}", names.join(" \u{b7} "))
+}
+
 /// Pop the newest appended record pane, if any: kill its placeholder and
 /// drop the record. True when a pane popped, so the key is consumed.
 fn pop_record_pane(view: &mut View) -> bool {
@@ -1842,7 +1906,12 @@ fn paint_record_panes(view: &View, cells: &mut [Cell], rows: usize, cols: usize)
     let Some(b) = view.backlog_board.as_ref() else {
         return;
     };
-    for (pane, node_id) in &o.records {
+    let breadcrumb = if o.folded.is_empty() {
+        None
+    } else {
+        Some(folded_breadcrumb(b.inputs.as_ref(), &o.folded))
+    };
+    for (i, (pane, node_id)) in o.records.iter().enumerate() {
         let Some((_, r)) = view.layout.panes.iter().find(|(pid, _)| *pid == *pane) else {
             continue;
         };
@@ -1874,18 +1943,49 @@ fn paint_record_panes(view: &View, cells: &mut [Cell], rows: usize, cols: usize)
             continue;
         }
         let (lines, _) = super::node_detail::pane_lines(b, node_id, None, w);
-        backlog_style::paint_panel_at(
-            cells,
-            rows,
-            cols,
-            left,
-            top + 1,
-            w,
-            h - 1,
-            &lines,
-            None,
-            &view.theme,
-        );
+        match breadcrumb.as_deref().filter(|_| i == 0) {
+            Some(text) if h > 2 => {
+                let strip = vec![TLine::meta(text.to_string())];
+                backlog_style::paint_panel_at(
+                    cells,
+                    rows,
+                    cols,
+                    left,
+                    top + 1,
+                    w,
+                    1,
+                    &strip,
+                    None,
+                    &view.theme,
+                );
+                backlog_style::paint_panel_at(
+                    cells,
+                    rows,
+                    cols,
+                    left,
+                    top + 2,
+                    w,
+                    h - 2,
+                    &lines,
+                    None,
+                    &view.theme,
+                );
+            }
+            _ => {
+                backlog_style::paint_panel_at(
+                    cells,
+                    rows,
+                    cols,
+                    left,
+                    top + 1,
+                    w,
+                    h - 1,
+                    &lines,
+                    None,
+                    &view.theme,
+                );
+            }
+        }
     }
 }
 
@@ -2852,6 +2952,7 @@ mod tests {
             edit_since: None,
             edit_spawn: None,
             home: Home::Float,
+            folded: Vec::new(),
             drill: false,
         });
         let seams = super::persona_widening_seams(&mut v);
@@ -2865,6 +2966,53 @@ mod tests {
             "the reviewer gains to 34, the persona pays to 25"
         );
         assert!(!v.persona.as_ref().unwrap().widen, "one shot");
+    }
+
+    #[test]
+    fn the_record_stack_folds_past_three() {
+        let mut v = View::new((40, 140), "s".into(), LayoutView::default());
+        v.persona = Some(PersonaOverlay {
+            pane: Some(7),
+            widen: false,
+            edit_pane: None,
+            claim_pane: None,
+            records: vec![(9, "ab-2".into()), (8, "ab-3".into())],
+            folded: Vec::new(),
+            title: "solo".into(),
+            lines: Vec::new(),
+            cursor: None,
+            personas: Vec::new(),
+            project: "fno".into(),
+            path: "/tmp/no-such-persona.md".into(),
+            draft: false,
+            slug: "solo".into(),
+            doc: None,
+            notes: Vec::new(),
+            scroll: 0,
+            sel: Some(1),
+            notice: false,
+            input: None,
+            edit_since: None,
+            edit_spawn: None,
+            home: Home::Float,
+            drill: true,
+        });
+        // The trail is detail + two panes: at the cap. A further drill
+        // folds the oldest visible record, its pane dying best-effort.
+        assert!(super::fold_oldest_record(&mut v));
+        {
+            let o = v.persona.as_ref().unwrap();
+            assert_eq!(o.records, vec![(8, "ab-3".to_string())]);
+            assert_eq!(o.folded, vec!["ab-2".to_string()]);
+            assert_eq!(o.claim_pane, None, "the folded pane owed no claim any more");
+        }
+        // One fold per drill: with one pane left the helper declines.
+        assert!(!super::fold_oldest_record(&mut v));
+        // The breadcrumb names the folded record, oldest first.
+        assert_eq!(
+            super::folded_breadcrumb(None, &v.persona.as_ref().unwrap().folded),
+            "\u{2039} ab-2"
+        );
     }
 
     #[test]
@@ -2893,6 +3041,7 @@ mod tests {
             edit_since: None,
             edit_spawn: None,
             home: Home::Float,
+            folded: Vec::new(),
             drill: false,
         });
         assert!(v.persona.is_some());

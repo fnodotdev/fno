@@ -229,6 +229,10 @@ pub enum ViewKind {
     /// The drill: the persona column docked right of its host with the
     /// first serving record open in the board's detail column beside it.
     PersonaDrill,
+    /// The drill past the three-column cap: a fourth drill folds the
+    /// oldest record into the breadcrumb strip riding the oldest visible
+    /// record pane.
+    PersonaDrill4,
     PersonaBellDock,
     PersonaSidelineChip,
     BellPersonas,
@@ -467,6 +471,7 @@ const VIEW_TABLE: &[(&str, ViewKind)] = &[
     ("persona-note-after", ViewKind::PersonaNoteAfter),
     ("persona-editor-pane", ViewKind::PersonaEditorPane),
     ("persona-drill", ViewKind::PersonaDrill),
+    ("persona-drill4", ViewKind::PersonaDrill4),
     ("persona-bell-dock", ViewKind::PersonaBellDock),
     ("persona-sideline-chip", ViewKind::PersonaSidelineChip),
     ("bell-personas", ViewKind::BellPersonas),
@@ -966,10 +971,14 @@ fn live_frame(
     runtime.block_on(super::backlog_board::fold_once(&mut view));
     stage_messages(&runtime, &mut view, message, kind)?;
     stage_view(&runtime, &mut view, &socket, kind)?;
-    if matches!(kind, Some(ViewKind::PersonaEditorPane)) {
-        // The editor pane opened server-side during staging, after the
-        // one observe at the top. Settle (vi paints on its own tick),
-        // re-observe, and fold the fresh layout and frames in.
+    if matches!(
+        kind,
+        Some(ViewKind::PersonaEditorPane | ViewKind::PersonaDrill4)
+    ) {
+        // The editor pane or the drill's record panes opened server-side
+        // during staging, after the one observe at the top. Settle (vi
+        // paints on its own tick), re-observe, and fold the fresh layout
+        // and frames in.
         let fresh = runtime
             .block_on(async {
                 tokio::time::sleep(Duration::from_millis(1500)).await;
@@ -1618,6 +1627,7 @@ fn persona_chip_shot(
         ViewKind::PersonaDecision => persona_decision_shot(view)?,
         ViewKind::PersonaEditorPane => persona_editor_pane_shot(runtime, view, socket)?,
         ViewKind::PersonaDrill => persona_drill_shot(runtime, view)?,
+        ViewKind::PersonaDrill4 => persona_drill4_shot(runtime, view)?,
         ViewKind::PersonaSidelineChip => persona_sideline_chip_shot(runtime, view)?,
         ViewKind::PersonaEditAfter | ViewKind::PersonaNoteComposer | ViewKind::PersonaNoteAfter => {
             persona_edit_note_shot(runtime, view, kind)?
@@ -1761,6 +1771,85 @@ fn persona_drill_shot(runtime: &tokio::runtime::Runtime, view: &mut View) -> Res
     super::persona_overlay::keys(view, b"j");
     super::persona_overlay::keys(view, b"\r");
     Ok(())
+}
+
+/// The drill past the three-column cap: four drills over four serving
+/// node rows. The fourth drill folds the second record (the oldest
+/// visible) into the breadcrumb strip riding the oldest visible pane.
+/// The synthetic rows join the board read so the trail has the rows to
+/// drill; the panes spawn through the same control round-trip the live
+/// key sends, and the re-observe in live_frame folds their layout.
+fn persona_drill4_shot(
+    runtime: &tokio::runtime::Runtime,
+    view: &mut View,
+) -> Result<(), ShotError> {
+    persona_detail_shot(runtime, view)?;
+    seed_drill_rows(view);
+    for _ in 0..4 {
+        super::persona_overlay::keys(view, b"j");
+        super::persona_overlay::keys(view, b"\r");
+    }
+    Ok(())
+}
+
+/// Three synthetic customer rows past the two the demo board already
+/// serves, so the trail can drill four deep. Cloned from an existing
+/// customer row so every field the board read carries stays valid.
+fn seed_drill_rows(view: &mut View) {
+    let seed = view
+        .backlog_board
+        .as_ref()
+        .and_then(|b| b.inputs.as_ref())
+        .and_then(|i| {
+            i.rows.iter().find(|r| {
+                r.audience
+                    .as_deref()
+                    .map(|a| a.trim().starts_with("customer:"))
+                    .unwrap_or(false)
+            })
+        })
+        .cloned();
+    let Some(mut row) = seed else { return };
+    let inputs_ref = view.backlog_board.as_ref().and_then(|b| b.inputs.as_mut());
+    let Some(inputs) = inputs_ref else { return };
+    for (i, title) in [
+        "Rate the demo flow for a first-run founder",
+        "Ship the receipt polish for a first-run founder",
+        "Turn the checkout keys into one clap",
+    ] {
+        row.id = Some(format!("ab-drill{i}"));
+        row.title = Some(title.into());
+        inputs.rows.push(row.clone());
+    }
+}
+
+/// Two synthetic customer rows past the two the demo board already
+/// serves, so the trail can drill four deep. Cloned from an existing
+/// customer row so every field the board read carries stays valid.
+fn seed_drill_rows(view: &mut View) {
+    let seed = view
+        .backlog_board
+        .as_ref()
+        .and_then(|b| b.inputs.as_ref())
+        .and_then(|i| {
+            i.rows.iter().find(|r| {
+                r.audience
+                    .as_deref()
+                    .map(|a| a.trim().starts_with("customer:"))
+                    .unwrap_or(false)
+            })
+        })
+        .cloned();
+    let Some(mut row) = seed else { return };
+    for (i, title) in [
+        "Rate the demo flow for a first-run founder",
+        "Ship the receipt polish for a first-run founder",
+        "Turn the checkout keys into one clap",
+    ] {
+        row.id = Some(format!("ab-drill{i}"));
+        row.title = Some(title.into());
+        inputs.rows.push(row.clone());
+    }
 }
 
 /// The bell personas tab with one persona docked beside it: the bell
