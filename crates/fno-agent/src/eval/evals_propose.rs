@@ -11,7 +11,7 @@
 //! copying them (x-6e14 route 1). Candidate surfaces are repo text only
 //! (law d-78f7daea): hooks, routing and fnh wait on their own nodes.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::Deserialize;
@@ -32,6 +32,9 @@ pub(crate) const MAX_CLUSTERS: usize = 2;
 /// Files per reply cap (change 2). A reply that rewrites the whole repo is
 /// not a candidate.
 pub(crate) const MAX_EDITS: usize = 3;
+
+/// The default cycle cap when config is silent (change 3).
+pub(crate) const DEFAULT_CYCLE_USD: f64 = 10.0;
 
 /// Typed failures of one propose cycle (R6: no new `Result<_, String>` in
 /// this crate). `Display` carries the one-line cause the ledger row reads.
@@ -446,10 +449,256 @@ pub(crate) fn spawn_reader(
         .map_err(|e| ProposeError::Reply(format!("spawn: {e}")))
 }
 
+/// The cycle's gain verdict (change 3): ship only on a positive held-out
+/// power block over an unregressed tier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Gain {
+    Ship,
+    Regression,
+    Underpowered,
+    InsideNoise,
+}
+
+/// The typed read of `evals_compare::fold`'s view (R1: parse at the
+/// boundary).
+#[derive(Deserialize)]
+struct FoldView {
+    #[serde(default)]
+    breaking: bool,
+    #[serde(default)]
+    regressions: Vec<Value>,
+    #[serde(default)]
+    power: Option<PowerBlock>,
+}
+
+#[derive(Deserialize)]
+struct PowerBlock {
+    #[serde(default)]
+    verdict: String,
+    paired: Option<PairedBlock>,
+}
+
+#[derive(Deserialize)]
+struct PairedBlock {
+    #[serde(default)]
+    mean_delta_points: Option<f64>,
+}
+
+/// The gain rule (AC3-HP, AC3-EDGE): a tier break or a regression entry
+/// reads regression whatever the held-out block says; a negative
+/// beats_noise never ships (the power verdict ignores the sign, so the
+/// mean's sign decides); underpowered and inside_noise ship nothing.
+pub(crate) fn gain(held: &Value, all: &Value) -> Result<Gain, ProposeError> {
+    let h: FoldView = serde_json::from_value(held.clone())
+        .map_err(|e| ProposeError::Fold(format!("held-out view unreadable: {e}")))?;
+    let a: FoldView = serde_json::from_value(all.clone())
+        .map_err(|e| ProposeError::Fold(format!("all-golden view unreadable: {e}")))?;
+    if a.breaking || !a.regressions.is_empty() {
+        return Ok(Gain::Regression);
+    }
+    let Some(power) = h.power else {
+        return Err(ProposeError::Fold("view carries no power block".into()));
+    };
+    if power.verdict == "underpowered" {
+        return Ok(Gain::Underpowered);
+    }
+    if power.verdict == "beats_noise" {
+        return Ok(match power.paired.and_then(|p| p.mean_delta_points) {
+            Some(m) if m > 0.0 => Gain::Ship,
+            Some(_) => Gain::Regression,
+            None => Gain::Underpowered,
+        });
+    }
+    Ok(Gain::InsideNoise)
+}
+
+/// The cycle's planned attempt counts, priced before launch (change 3's
+/// budget line).
+pub(crate) struct CyclePlan {
+    pub(crate) base_attempts: usize,
+    pub(crate) per_candidate_attempts: usize,
+    pub(crate) candidates: usize,
+    pub(crate) proposer_calls: usize,
+    pub(crate) estimate_usd: f64,
+}
+
+/// The budget line (change 3): base attempts = goldens x repeats, each
+/// candidate cohort = goldens x repeats. Over `cycle_usd` the plan drops
+/// candidates one at a time; base-only over cap leaves candidates at zero
+/// and the estimate over cap, which the caller refuses on.
+pub(crate) fn plan_budget(
+    goldens: usize,
+    repeats: usize,
+    candidates: usize,
+    cap_usd: f64,
+    attempt_usd: f64,
+) -> CyclePlan {
+    let base_attempts = goldens * repeats;
+    let per_candidate_attempts = goldens * repeats;
+    let est = |cands: usize| (base_attempts + cands * per_candidate_attempts) as f64 * attempt_usd;
+    let mut candidates = candidates;
+    while candidates > 0 && est(candidates) > cap_usd {
+        candidates -= 1;
+    }
+    CyclePlan {
+        base_attempts,
+        per_candidate_attempts,
+        candidates,
+        proposer_calls: 0,
+        estimate_usd: est(candidates),
+    }
+}
+
+/// The per-cycle cap (change 3): `evals.propose.cycle_usd`, default 10.0,
+/// read like the gate's daily_usd (float, integer, or numeric string).
+pub(crate) fn cycle_usd(repo: &std::path::Path) -> f64 {
+    match crate::agents_config::config_value_deep(repo, &["evals", "propose", "cycle_usd"]) {
+        Some(toml::Value::Float(f)) => f,
+        Some(toml::Value::Integer(i)) => i as f64,
+        Some(toml::Value::String(v)) => v.trim().parse().unwrap_or(DEFAULT_CYCLE_USD),
+        _ => DEFAULT_CYCLE_USD,
+    }
+}
+
+/// One history row, typed (R1): the fields the count assert reads.
+#[derive(Deserialize)]
+struct HistoryRow {
+    #[serde(default)]
+    attempt_id: Option<String>,
+    #[serde(default)]
+    experiment_id: Option<String>,
+}
+
+/// The count-identity ledger assert (change 3, AC3-LEDGER): for each cycle
+/// cohort the history holds exactly the planned attempt count, and no
+/// attempt id repeats. A mismatch ships nothing.
+pub(crate) fn assert_ledger(
+    rows: &[Value],
+    base_cohort: &str,
+    candidate_cohorts: &[String],
+    planned: &CyclePlan,
+) -> Result<(), ProposeError> {
+    let mut wanted: Vec<(String, usize)> = vec![(base_cohort.to_string(), planned.base_attempts)];
+    for c in candidate_cohorts {
+        wanted.push((c.clone(), planned.per_candidate_attempts));
+    }
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for row in rows {
+        let r: HistoryRow = serde_json::from_value(row.clone())
+            .map_err(|e| ProposeError::Ledger(format!("history row unreadable: {e}")))?;
+        let Some(cohort) = r.experiment_id.as_deref() else {
+            continue;
+        };
+        if !wanted.iter().any(|(name, _)| name == cohort) {
+            continue;
+        }
+        let id = r.attempt_id.clone().unwrap_or_default();
+        if id.is_empty() {
+            return Err(ProposeError::Ledger(format!(
+                "count_mismatch: a row in {cohort} carries no attempt id"
+            )));
+        }
+        if !seen.insert(id) {
+            return Err(ProposeError::Ledger(format!(
+                "count_mismatch: duplicate attempt id {id:?}"
+            )));
+        }
+        *counts.entry(cohort.to_string()).or_default() += 1;
+    }
+    for (name, want) in &wanted {
+        let got = counts.get(name).copied().unwrap_or(0);
+        if got != *want {
+            return Err(ProposeError::Ledger(format!(
+                "count_mismatch: cohort {name} holds {got} rows, planned {want}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::evals::bank::load_task;
+
+    fn view(verdict: &str, mean: Option<f64>, breaking: bool, regressions: usize) -> Value {
+        serde_json::json!({
+            "breaking": breaking,
+            "regressions": vec![serde_json::json!({}); regressions],
+            "power": {"verdict": verdict, "paired": {"mean_delta_points": mean}},
+        })
+    }
+
+    fn row(id: &str, cohort: &str) -> Value {
+        serde_json::json!({"attempt_id": id, "experiment_id": cohort})
+    }
+
+    #[test]
+    fn gain_reads_the_rule() {
+        let clean = view("inside_noise", Some(0.0), false, 0);
+        let negative = view("beats_noise", Some(-30.0), false, 0);
+        assert_eq!(gain(&negative, &clean).unwrap(), Gain::Regression);
+        let positive = view("beats_noise", Some(25.0), false, 0);
+        assert_eq!(gain(&positive, &clean).unwrap(), Gain::Ship);
+        let broken = view("beats_noise", Some(0.0), true, 1);
+        assert_eq!(gain(&positive, &broken).unwrap(), Gain::Regression);
+        let thin = view("underpowered", None, false, 0);
+        assert_eq!(gain(&thin, &clean).unwrap(), Gain::Underpowered);
+        let quiet = view("inside_noise", Some(2.0), false, 0);
+        assert_eq!(gain(&quiet, &clean).unwrap(), Gain::InsideNoise);
+    }
+
+    #[test]
+    fn the_ledger_refuses_a_count_mismatch_and_a_duplicate() {
+        let planned = CyclePlan {
+            base_attempts: 2,
+            per_candidate_attempts: 2,
+            candidates: 1,
+            proposer_calls: 0,
+            estimate_usd: 0.0,
+        };
+        let cands = vec!["cand".to_string()];
+        let ok_rows = vec![
+            row("a1", "base"),
+            row("a2", "base"),
+            row("c1", "cand"),
+            row("c2", "cand"),
+        ];
+        assert_ledger(&ok_rows, "base", &cands, &planned).unwrap();
+        let extra = vec![
+            row("a1", "base"),
+            row("a2", "base"),
+            row("a3", "base"),
+            row("c1", "cand"),
+            row("c2", "cand"),
+        ];
+        let err = assert_ledger(&extra, "base", &cands, &planned).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("count_mismatch"), "{msg}");
+        assert!(msg.contains("holds 3 rows, planned 2"), "{msg}");
+        let dup_rows = vec![
+            row("a1", "base"),
+            row("a1", "base"),
+            row("c1", "cand"),
+            row("c2", "cand"),
+        ];
+        let err = assert_ledger(&dup_rows, "base", &cands, &planned).unwrap_err();
+        assert!(format!("{err}").contains("duplicate"), "{err}");
+        let none = vec![row("a1", "base"), row("c1", "cand")];
+        let err = assert_ledger(&none, "base", &cands, &planned).unwrap_err();
+        assert!(format!("{err}").contains("no attempt id"), "{err}");
+    }
+
+    #[test]
+    fn the_cap_drops_candidates_before_the_base_refuses() {
+        let p = plan_budget(5, 3, 2, 1.0, 0.04);
+        assert_eq!(p.candidates, 0);
+        assert!((p.estimate_usd - 0.6).abs() < 1e-9);
+        let keep = plan_budget(5, 3, 2, 2.0, 0.04);
+        assert_eq!(keep.candidates, 2);
+        assert!((keep.estimate_usd - 1.8).abs() < 1e-9);
+    }
 
     const BANK_A: &str = "id: golden-answer-the-question\ntier: capability\nprompt: p-a\ngrade:\n  - kind: file-exists\n    path: reply.md\ntimeout_minutes: 5\ntags: [golden]\ngolden:\n  source: {kind: correction, ref: \"c:1\"}\n  quote: quote-a\n  expected: expected-a\n  rule: rule-a\n  failure_type: t1\n  cost: trust\n  outcome: failed\n";
     const BANK_B: &str = "id: golden-agent-decide-no-operator-authority\ntier: capability\nprompt: prompt-b words here\ngrade:\n  - kind: exit\n    command: \"grep -q zb reply.md\"\n  - kind: grep\n    path: reply.md\n    pattern: zb-marker\ntimeout_minutes: 5\ntags: [golden]\ngolden:\n  source: {kind: correction, ref: \"c:2\"}\n  quote: quote-b\n  expected: expected-b\n  rule: rule-b\n  failure_type: t1\n  cost: trust\n  outcome: failed\n";
