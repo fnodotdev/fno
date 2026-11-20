@@ -313,7 +313,6 @@ mod tests {
                     "FNO_NODE_CLAIM_HOLDER",
                     std::env::var_os("FNO_NODE_CLAIM_HOLDER"),
                 ),
-                ("FNO_TEST_CAPTURE", std::env::var_os("FNO_TEST_CAPTURE")),
             ];
             std::env::remove_var("FNO_CONFIG");
             std::env::remove_var("FNO_GLOBAL_SETTINGS_PATH");
@@ -423,12 +422,11 @@ mod tests {
         let _env = EnvPin::take(dir.path());
         let capture = dir.path().join("child-env");
         std::env::set_var("FNO_AGENT_HOME", dir.path().join("agents-home"));
-        std::env::set_var("FNO_TEST_CAPTURE", &capture);
         std::env::set_var("FNO_NODE_CLAIM_HOLDER", "handover-w1");
         std::env::remove_var("FNO_AGENT_SELF");
         std::env::remove_var("FNO_AGENT_HARNESS");
         std::env::remove_var("FNO_HARNESS_NAME");
-        stage_row_with(dir.path(), "env > $FNO_TEST_CAPTURE");
+        stage_row_with(dir.path(), &format!("env > {}", capture.display()));
 
         exec_lane(&serde_json::json!({
             "harness": "claude", "name": "w1",
