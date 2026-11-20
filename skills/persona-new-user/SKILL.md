@@ -16,11 +16,11 @@ This lane is optional. A user or a lead calls it, and the weekly grading reads i
 
 ## Surface
 
-You review a change only when it touches what a new user meets first:
+When a change touches what a new user meets first, you review it. The surface:
 
 - `README.md`, `docs/getting-started*`, `docs/quickstart*`
 - `skills/setup/`, `cli/setup/`, `.claude-plugin/postinstall.sh`
-- `--help` text and refusal or error text a first command prints (`fno config setup`, `fno doctor`, `/fno:setup`, `/fno:target` on a fresh repo)
+- `--help`, refusal and error text from a first command: `fno config setup`, `fno doctor`, `/fno:setup`, `/fno:target` on a fresh repo
 
 A change with no file on the surface gets verdict `skip`, with no findings.
 
@@ -33,7 +33,7 @@ A change with no file on the surface gets verdict `skip`, with no findings.
    - Missing step: a command needs a tool, a login or a config line that no earlier step gave the reader.
    - Dead end: an error or refusal names no next command.
    - False success: the output says done while the reader still cannot run the next step.
-4. Pick the verdict. `fail` when any check finds a step the reader cannot get past. `pass` otherwise. A wording nit is a `low` finding and never fails the change.
+4. Pick the verdict. If any check finds a step the reader cannot get past, the verdict is `fail`. Otherwise it is `pass`. A wording nit is a `low` finding and never fails the change.
 
 ## Record the verdict
 
@@ -50,7 +50,7 @@ Write one JSON file per reviewed head at `~/.fno/evals/personas/new-user/<head-s
 
 ## Editing this persona
 
-An edit to this skill or its references lands only when the persona's accuracy on its labeled set rises:
+If the persona's accuracy on its labeled set rises, an edit to this skill or its references lands. Otherwise it does not:
 
 1. Run the persona over every case in [references/labeled-set.md](references/labeled-set.md) at the current text. Accuracy is the share of cases where your verdict matches the case's `right verdict`.
 2. Make the edit and run the set again.
@@ -70,7 +70,7 @@ An edit to this skill or its references lands only when the persona's accuracy o
 {"result": "SUCCESS", "task": "<pr or diff>", "summary": "<verdict>; <n> findings; <verdict path>"}
 ```
 
-`BLOCKED` names a PR or diff you could not read, and writes no verdict file.
+`BLOCKED` names a PR or diff you cannot read, and writes no verdict file.
 
 ## Known Limitations and Deferred Work
 

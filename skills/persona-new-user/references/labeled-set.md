@@ -22,13 +22,13 @@ Each case is one change and the verdict a careful new-user review gives it. The 
 
 ## case-4
 
-- change: the getting-started page says "the lead seat dispatches your node to a lane" with no earlier definition of lead, seat or lane.
+- change: the getting-started page says "the lead seat dispatches your node to a lane". No earlier line defines lead, seat or lane.
 - right verdict: fail
 - why: undefined words on the first page a new user reads, with no link to a definition.
 
 ## case-5
 
-- change: postinstall.sh prints `installer exit 0` and stops, while `~/.local/bin` is not on PATH, so the next `fno` command is not found.
+- change: postinstall.sh prints `installer exit 0` and stops. `~/.local/bin` is not on PATH, so the next `fno` command is not found.
 - right verdict: fail
 - why: false success. The output says done, and the reader cannot run the next step.
 
