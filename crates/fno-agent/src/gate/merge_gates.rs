@@ -1802,6 +1802,22 @@ pub(crate) fn role_chat_clears_pr<P: GateReads>(
             .any(|text| text_names_head(text, head))
 }
 
+/// A Visual Log reader row is a user approval for the bound node, not a lead
+/// grant. It may clear only this run's no-merge posture when its decision text
+/// names this PR and head; the bound node supplies repository scoping.
+pub(crate) fn visual_tap_clears_pr<P: GateReads>(
+    probes: &P,
+    cwd: &Path,
+    pr: u64,
+    head: &str,
+    node: &str,
+) -> bool {
+    !head.is_empty()
+        && visual_tap_approval_texts(probes, cwd, pr, node)
+            .iter()
+            .any(|text| text_names_head(text, head))
+}
+
 /// One `fno backlog decisions ... --json` read; None when the read fails.
 fn decisions_payload<P: GateReads>(probes: &P, cwd: &Path, args: &[&str]) -> Option<Value> {
     let args: Vec<String> = args.iter().map(|s| (*s).to_string()).collect();
@@ -1809,6 +1825,52 @@ fn decisions_payload<P: GateReads>(probes: &P, cwd: &Path, args: &[&str]) -> Opt
         return None;
     };
     serde_json::from_slice::<Value>(&out).ok()
+}
+
+fn visual_tap_approval_texts<P: GateReads>(
+    probes: &P,
+    cwd: &Path,
+    pr: u64,
+    node: &str,
+) -> Vec<String> {
+    let Some(payload) = role_decisions_payload(probes, cwd, node) else {
+        return Vec::new();
+    };
+    payload
+        .get("decisions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|row| row.get("subject").and_then(Value::as_str) == Some(node))
+        .filter(|row| {
+            matches!(
+                row.get("lifecycle").and_then(Value::as_str),
+                Some("live") | Some("unscoped")
+            ) && row.get("authority_source").and_then(Value::as_str) == Some("role")
+                && row_is_tap_attested(row)
+        })
+        .map(row_text)
+        .filter(|text| page_names_pr(text, pr))
+        .collect()
+}
+
+fn role_decisions_payload<P: GateReads>(probes: &P, cwd: &Path, node: &str) -> Option<Value> {
+    decisions_payload(
+        probes,
+        cwd,
+        &[
+            "backlog",
+            "decisions",
+            node,
+            "--lane",
+            "unattributed",
+            "--state",
+            "all",
+            "--limit",
+            "0",
+            "--json",
+        ],
+    )
 }
 
 /// Does `token` name `head`: the full sha, or a hex prefix of at least seven
@@ -1903,22 +1965,7 @@ fn law_decline_texts<P: GateReads>(probes: &P, cwd: &Path, pr: u64) -> Vec<Strin
 fn role_approval_texts<P: GateReads>(probes: &P, cwd: &Path, pr: u64, node: &str) -> Vec<String> {
     // Subject-scoped and uncapped: a capped newest-first read of the whole
     // lane loses an approval once enough other rows land after it.
-    let Some(payload) = decisions_payload(
-        probes,
-        cwd,
-        &[
-            "backlog",
-            "decisions",
-            node,
-            "--lane",
-            "unattributed",
-            "--state",
-            "all",
-            "--limit",
-            "0",
-            "--json",
-        ],
-    ) else {
+    let Some(payload) = role_decisions_payload(probes, cwd, node) else {
         return Vec::new();
     };
     let approved: Vec<String> = approving_pages(&vault_root(cwd), pr)
