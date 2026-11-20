@@ -1335,6 +1335,30 @@ pub(crate) fn quota_penalty_until_raw(raw: &Value, account: &str, now: f64) -> O
     (penalty_end > now).then_some(penalty_end)
 }
 
+/// The route axis of the penalty. A route-keyed spawn names no account, so
+/// the reset the lane snapshot recorded (still ahead or just passed) stands
+/// in for the account's health record. A missing snapshot reads no penalty.
+pub(crate) fn lane_penalty_until(home_root: &Path, provider: &str, now: f64) -> Option<f64> {
+    let home = crate::paths::AgentsHome::at(home_root.to_path_buf());
+    let snapshot = crate::provider_cap::read_persisted_snapshot(&home)?;
+    lane_penalty_until_from(&snapshot.lanes, provider, now)
+}
+
+/// The pure half of [`lane_penalty_until`], over the snapshot's lanes.
+pub(crate) fn lane_penalty_until_from(
+    lanes: &[crate::provider_cap::CapLane],
+    provider: &str,
+    now: f64,
+) -> Option<f64> {
+    lanes
+        .iter()
+        .filter(|lane| lane.provider == provider)
+        .filter_map(|lane| lane.reset_epoch.or(lane.reset_passed_epoch))
+        .map(|reset| reset as f64 + QUOTA_PENALTY_WINDOW_S)
+        .filter(|end| *end > now)
+        .reduce(f64::max)
+}
+
 /// Epoch seconds as a UTC ISO-8601 string for the refusal prose; the receipt
 /// keeps the epoch number the Python receipt kept.
 fn chrono_like_iso(epoch_s: f64) -> String {
@@ -1446,6 +1470,35 @@ mod tests {
         assert_eq!(
             quota_penalty_until_raw(&health(900_000.0), "default", now),
             None
+        );
+        // A route-keyed spawn reads the lane's recorded reset instead, ahead
+        // or passed, and only on its own provider.
+        let lane = |provider: &str, ahead: Option<i64>, passed: Option<i64>| {
+            crate::provider_cap::CapLane {
+                lane: format!("{provider}:default"),
+                provider: provider.to_string(),
+                account: "default".to_string(),
+                reset_epoch: ahead,
+                reset_passed_epoch: passed,
+                missing_reset_timezone: vec![],
+                state: "returning".to_string(),
+                members: vec![],
+            }
+        };
+        let passed = [lane("zai", None, Some(880_000))];
+        assert_eq!(
+            lane_penalty_until_from(&passed, "zai", now),
+            Some(880_000.0 + QUOTA_PENALTY_WINDOW_S)
+        );
+        assert_eq!(lane_penalty_until_from(&passed, "anthropic", now), None);
+        assert_eq!(
+            lane_penalty_until_from(&passed, "zai", 880_000.0 + QUOTA_PENALTY_WINDOW_S + 1.0),
+            None
+        );
+        let ahead = [lane("zai", Some(900_000), None)];
+        assert_eq!(
+            lane_penalty_until_from(&ahead, "zai", now),
+            Some(900_000.0 + QUOTA_PENALTY_WINDOW_S)
         );
     }
 

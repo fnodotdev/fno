@@ -1854,7 +1854,8 @@ fn decide_gate(
             if let Some(configured_cap) = provider_cap {
                 // The two cap modifiers, in order: --max replaces the
                 // configured number for this one call; a recorded usage-limit
-                // window on the account drops the cap by 2 for the window
+                // window on the account, or on the route's lane when the
+                // spawn names no account, drops the cap by 2 for the window
                 // after the 429's own. The refusal names the effective cap
                 // and which modifier set it.
                 let cap_account = input.account.as_deref().unwrap_or("default");
@@ -1863,7 +1864,17 @@ fn decide_gate(
                     .map(|d| d.as_secs_f64())
                     .unwrap_or(0.0);
                 let penalty_until =
-                    spawn_gate_lanes::quota_penalty_until(config_cwd, cap_account, now);
+                    spawn_gate_lanes::quota_penalty_until(config_cwd, cap_account, now).or_else(
+                        || {
+                            spawn_gate_lanes::lane_penalty_until(
+                                registry_path
+                                    .parent()
+                                    .unwrap_or_else(|| std::path::Path::new(".")),
+                                route_provider.unwrap_or_default(),
+                                now,
+                            )
+                        },
+                    );
                 let (cap_value, cap_source) = match flags.max_provider {
                     Some(max) => (max, "max-override"),
                     None if penalty_until.is_some() => {
