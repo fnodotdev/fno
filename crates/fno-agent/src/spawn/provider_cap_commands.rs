@@ -539,7 +539,87 @@ fn real_deps() -> crate::provider_cap::LeaveDeps {
                 Err("team mail refused".into())
             }
         }),
+        moves_on_cap: Box::new(|member| {
+            let Some(node) = member.node.as_deref().filter(|n| !n.is_empty()) else {
+                return false;
+            };
+            let Some(raw) = run_fno_output(
+                &["backlog", "get", node],
+                None,
+                std::time::Duration::from_secs(30),
+            ) else {
+                return false;
+            };
+            serde_json::from_str::<NodeTriage>(&raw).is_ok_and(|n| moves_on_cap(&n))
+        }),
+        alert: Box::new(alert_leads),
     }
+}
+
+/// The triage rule over a node's own record: p0 and p1 work moves, and so
+/// does a node whose PR is open (in review). An unreadable record parks.
+fn moves_on_cap(node: &NodeTriage) -> bool {
+    let open_pr = node.pr_number.is_some() && node.status == "in_review";
+    matches!(node.priority.as_str(), "p0" | "p1") || open_pr
+}
+
+/// The node fields the triage rule reads from `fno backlog get`.
+#[derive(serde::Deserialize)]
+struct NodeTriage {
+    #[serde(default)]
+    priority: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    pr_number: Option<u64>,
+}
+
+/// One mail per owning lead of the lane's capped members; the operator
+/// notice when no lead resolves, so the alert always reaches someone.
+fn alert_leads(lane: &crate::provider_cap::CapLane, body: &str) -> bool {
+    let home = crate::paths::AgentsHome::from_env();
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let rows = crate::graph_store::read_rows_where(
+        &crate::gc_sweep::graph_path(&home),
+        &crate::backlog::RowQuery::default(),
+    )
+    .unwrap_or_default();
+    let mut cache = None;
+    let mut scopes: Vec<String> = lane
+        .members
+        .iter()
+        .filter(|m| m.capped)
+        .filter_map(|m| m.node.as_deref())
+        .filter_map(|node| {
+            crate::burn_watch::node_owner(&cwd, &home.registry_json(), &rows, &mut cache, node)
+        })
+        .collect();
+    scopes.sort();
+    scopes.dedup();
+    let mut sent = false;
+    for scope in &scopes {
+        sent |= run_fno(
+            &[
+                "agents",
+                "mail",
+                "send",
+                "--from-name",
+                "fno/provider-cap",
+                "--origin",
+                "scheduler",
+                "--to-lead",
+                scope,
+                body,
+            ],
+            None,
+            std::time::Duration::from_secs(60),
+        );
+    }
+    sent || crate::operator_notice::notify_operator(
+        "provider cap: lane at its usage limit",
+        body,
+        Some("fno agent admit provider-cap status"),
+    )
 }
 
 /// Extend the armed branch: run the leave ladder per open lane. Returns the
