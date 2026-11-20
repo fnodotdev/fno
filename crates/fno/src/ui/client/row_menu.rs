@@ -53,7 +53,7 @@ pub(super) struct AgentIdent {
 }
 
 impl AgentIdent {
-    fn of(a: &AgentRow) -> Self {
+    pub(super) fn of(a: &AgentRow) -> Self {
         AgentIdent {
             name: a.name.clone(),
             pane_id: a.pane_id,
