@@ -1644,9 +1644,8 @@ fn importance_score(
         .map(crate::backlog::audience::audience_score_term)
         .unwrap_or(0) as f64;
     let fanout_pts = (open_dependents.max(0) as f64 * 10.0).min(50.0);
-    let age_pts = entry
-        .get("created_at")
-        .and_then(parse_iso_ms)
+    let age_pts = get_str(entry, "created_at")
+        .and_then(parse_iso_str)
         .map(|stamp| days_between(now_ms, stamp).max(0) as f64)
         .unwrap_or(0.0)
         .min(60.0);
@@ -2323,7 +2322,7 @@ mod tests {
                 {"voter_key": "outside-1", "voter_kind": "external"}
             ],
         });
-        let now = parse_iso_ms("2027-01-15T00:00:00Z").expect("the fixed now parses");
+        let now = parse_iso_str("2026-01-15T00:00:00Z").expect("the fixed now parses");
         let score = importance_score(&entry, "p2", 2, now);
         assert_eq!(score, 430.0, "the worked example: {score}");
         // The fresh p1 internal node (no voters, no dependents, created
@@ -2332,7 +2331,7 @@ mod tests {
             "id": "ab-2",
             "priority": "p1",
             "audience": "internal",
-            "created_at": "2027-01-15T00:00:00Z",
+            "created_at": "2026-01-15T00:00:00Z",
         });
         let fresh_score = importance_score(&fresh, "p1", 0, now);
         assert_eq!(fresh_score, 300.0);
