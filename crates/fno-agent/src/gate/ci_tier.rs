@@ -821,6 +821,29 @@ mod tests {
         assert_eq!(plan.rerun, vec![(3, vec![70])]);
         // 5 has 80 percent passed; 7 waits with nothing to cancel.
         assert_eq!(plan.cancel, vec![(6, vec![60])]);
+        // The rerun ledger: a cancel no hold row names reruns wherever it
+        // was made; a hold-named run stays owned by its hold.
+        let named: HashSet<u64> = [70u64].into();
+        assert!(rerunnable(80, &named));
+        assert!(!rerunnable(70, &named));
+        assert!(rerunnable(70, &HashSet::new()));
+        // Each rerun post names who cancelled the run: the journal's own
+        // cancel reads tier, any other reads unattributed.
+        let posts = vec![json!({"pr": 3, "runs": [
+            json!({"run": 70, "ok": true}),
+            json!({"run": 80, "ok": true}),
+        ]})];
+        let ours: HashSet<u64> = [70u64].into();
+        let stamped = attribute_reruns(posts, &ours);
+        let post = stamped.first().expect("one post");
+        let marks: Vec<&str> = post
+            .pointer("/runs")
+            .and_then(Value::as_array)
+            .expect("runs array")
+            .iter()
+            .filter_map(|run| run.pointer("/cancelled_by").and_then(Value::as_str))
+            .collect();
+        assert_eq!(marks, ["tier", "unattributed"]);
     }
 
     #[test]
@@ -871,32 +894,5 @@ mod tests {
         assert_eq!(fact["cancelled_runs"], json!([71]));
         let note = fact["note"].as_str().unwrap();
         assert!(note.contains("gh run rerun"), "{note}");
-    }
-
-    #[test]
-    fn a_cancel_no_hold_row_names_reruns_wherever_it_was_made() {
-        let named: HashSet<u64> = [70u64].into();
-        // A run this journal never cancelled (a keeper on another machine or
-        // a hand cancel) reruns at the head's tier turn; a hold-named run
-        // stays owned by its hold.
-        assert!(rerunnable(80, &named));
-        assert!(!rerunnable(70, &named));
-        // An empty hold ledger reruns everything.
-        assert!(rerunnable(70, &HashSet::new()));
-    }
-
-    #[test]
-    fn rerun_posts_carry_who_cancelled_the_run() {
-        let posts = vec![json!({"pr": 3, "runs": [
-            json!({"run": 70, "ok": true}),
-            json!({"run": 80, "ok": true}),
-        ]})];
-        let ours: HashSet<u64> = [70u64].into();
-        let stamped = attribute_reruns(posts, &ours);
-        let runs = stamped[0]["runs"].as_array().unwrap();
-        // The journal's own cancel names the tier; any other cancel is a
-        // keeper on another machine or a hand cancel.
-        assert_eq!(runs[0]["cancelled_by"], json!("tier"));
-        assert_eq!(runs[1]["cancelled_by"], json!("unattributed"));
     }
 }
