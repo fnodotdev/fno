@@ -25,7 +25,7 @@ mod tabs;
 mod ui;
 mod window;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use fno::app_api::web_hq::Board;
@@ -81,14 +81,48 @@ pub struct ShotOptions {
 
 /// Run the app (or the headless probe) and return the process exit code.
 
-/// The raw global settings dict, the same read the alert prefs walk
-/// (`alerts.rs`): the app reads the GLOBAL file only, because a
-/// Finder-launched app has no project cwd.
-pub fn global_config_raw() -> Option<serde_json::Value> {
-    let path = fno::config_cli::global_settings_path();
+/// The raw global settings dict: the file the WRITE door targets
+/// (`~/.fno/config.toml`, preferred over the legacy yaml a migrated
+/// install no longer has - `global_settings_path()` still names the yaml).
+/// The same FNO_CONFIG / FNO_GLOBAL_SETTINGS_PATH pin rules the loader
+/// walks, mirrored here because the reader twin (`digest_overlay.rs`
+/// `global_config_toml`) is pub(crate).
+pub fn global_config_raw() -> Option<serde::json::Value> {
+    let dir = fno::config_cli::global_settings_path()
+        .parent()?
+        .to_path_buf();
+    let pin = std::env::var("FNO_CONFIG").ok().filter(|p| !p.is_empty());
+    let pin = pin.or_else(|| {
+        std::env::var("FNO_GLOBAL_SETTINGS_PATH")
+            .ok()
+            .filter(|p| !p.is_empty())
+    });
+    let path = match pin.as_deref() {
+        // A yaml-shaped pin names the legacy file the write door converts;
+        // read the toml sibling it leaves behind.
+        Some(p) if Path::new(p).file_name() == Some(std::ffi::OsStr::new("settings.yaml")) => {
+            Some(PathBuf::from(p).with_file_name("config.toml"))
+        }
+        Some(p) if Path::new(p).extension().is_some_and(|e| e == "toml") => Some(PathBuf::from(p)),
+        Some(_) => None,
+        // No pin: the write door targets config.toml and migrates the
+        // legacy yaml beside it, so an existing config.toml wins.
+        None => pick_global_file(&dir),
+    }?;
     fno::config_cli::parse_config_file(&path)
-        .ok()
         .map(|parsed| fno::config_cli::unwrap_config_dict(&parsed))
+}
+
+/// The global config file inside `dir`: the write door targets
+/// `config.toml` and converts the legacy yaml beside it, so an existing
+/// config.toml wins; an unmigrated install reads the yaml.
+fn pick_global_file(dir: &Path) -> Option<PathBuf> {
+    let toml = dir.join("config.toml");
+    if toml.is_file() {
+        return Some(toml);
+    }
+    let yaml = dir.join("settings.yaml");
+    yaml.is_file().then_some(yaml)
 }
 
 /// One dotted key's raw value out of the settings dict.
