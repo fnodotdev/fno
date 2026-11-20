@@ -3277,7 +3277,7 @@ fn api_read_op(
             });
             // `board_claimed` opts in to the board facts over these same
             // rows, so a reader that wants both loads the graph once.
-            if let Some(Value::Array(ids)) = params.get("board_claimed") {
+            if let Value::Array(ids) = &params["board_claimed"] {
                 let claimed = ids.iter().filter_map(Value::as_str).map(str::to_string);
                 reply["board"] = board_reply(rows, &claimed.collect(), crate::claims::now_ms());
             }
