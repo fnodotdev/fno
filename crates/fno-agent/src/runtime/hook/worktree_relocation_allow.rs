@@ -24,7 +24,11 @@ use std::path::{Path, PathBuf};
 pub fn run(_args: &[String]) -> i32 {
     let payload: Value = serde_json::from_str(super::read_stdin().trim()).unwrap_or(Value::Null);
     let cwd = payload_cwd(&payload);
-    if bases(&cwd).iter().any(|base| allows(&payload, base)) {
+    let allowed = bases(&cwd).iter().any(|base| allows(&payload, base));
+    if let Some(decision) = row_decision(&payload, allowed) {
+        super::emit_guard_row(&cwd, GUARD, "EnterWorktree", decision);
+    }
+    if allowed {
         let out = json!({
             "hookSpecificOutput": {
                 "hookEventName": "PermissionRequest",
@@ -36,6 +40,24 @@ pub fn run(_args: &[String]) -> i32 {
     } else {
         super::emit_allow()
     }
+}
+
+const GUARD: &str = "worktree-relocation-allow";
+
+/// The guard row a path call leaves: `allow`, or `ask` when the prompt stays.
+/// Claude Code logs only a hook's decisions, so without the ask row a worker
+/// parked at the prompt looks the same as one whose hook never ran.
+fn row_decision(payload: &Value, allowed: bool) -> Option<&'static str> {
+    if allowed {
+        return Some("allow");
+    }
+    let is_path_call = payload.get("tool_name").and_then(Value::as_str) == Some("EnterWorktree")
+        && payload
+            .get("tool_input")
+            .and_then(|ti| ti.get("path"))
+            .and_then(Value::as_str)
+            .is_some_and(|s| !s.is_empty());
+    is_path_call.then_some("ask")
 }
 
 /// Every base fno has written checkouts to: the configured (or default) base,
@@ -130,6 +152,15 @@ mod tests {
         assert!(!allows(&other, &base));
         let create = json!({"tool_name": "EnterWorktree", "tool_input": {"name": "x"}});
         assert!(!allows(&create, &base));
+
+        // Every path answer leaves a row, so a stalled worker tells a
+        // declined path (ask) from a hook that never answered (no row).
+        let inside = call(&repo, &wt.to_string_lossy());
+        let declined = call(&repo, &outside.to_string_lossy());
+        assert_eq!(row_decision(&inside, true), Some("allow"));
+        assert_eq!(row_decision(&declined, false), Some("ask"));
+        assert_eq!(row_decision(&other, false), None);
+        assert_eq!(row_decision(&create, false), None);
     }
 
     #[test]
