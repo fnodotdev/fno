@@ -1628,7 +1628,7 @@ fn persona_chip_shot(
         ViewKind::PersonaDecision => persona_decision_shot(view)?,
         ViewKind::PersonaEditorPane => persona_editor_pane_shot(runtime, view, socket)?,
         ViewKind::PersonaDrill => persona_drill_shot(runtime, view)?,
-        ViewKind::PersonaDrill4 => persona_drill4_shot(runtime, view)?,
+        ViewKind::PersonaDrill4 => persona_drill4_shot(runtime, view, socket)?,
         ViewKind::PersonaSidelineChip => persona_sideline_chip_shot(runtime, view)?,
         ViewKind::PersonaEditAfter | ViewKind::PersonaNoteComposer | ViewKind::PersonaNoteAfter => {
             persona_edit_note_shot(runtime, view, kind)?
@@ -1783,6 +1783,7 @@ fn persona_drill_shot(runtime: &tokio::runtime::Runtime, view: &mut View) -> Res
 fn persona_drill4_shot(
     runtime: &tokio::runtime::Runtime,
     view: &mut View,
+    socket: &std::path::Path,
 ) -> Result<(), ShotError> {
     // The record panes append beside a docked persona pane, so the shot
     // stages the sideline dock the live chip press opens.
@@ -1802,11 +1803,36 @@ fn persona_drill4_shot(
         )
         .into());
     }
+    settle_persona_layout(runtime, view, socket)?;
     seed_drill_rows(view);
     for _ in 0..4 {
         super::persona_overlay::keys(view, b"j");
         super::persona_overlay::keys(view, b"\r");
+        settle_persona_layout(runtime, view, socket)?;
     }
+    Ok(())
+}
+
+/// The server's next Layout push, as the live loop receives it between two
+/// keypresses. A drill's split anchors on the rightmost pane of the layout
+/// this client holds, so a stale layout puts each record left of the last.
+/// The width claim stays armed: it answers once, on the final layout.
+fn settle_persona_layout(
+    runtime: &tokio::runtime::Runtime,
+    view: &mut View,
+    socket: &std::path::Path,
+) -> Result<(), ShotError> {
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let fresh = runtime
+        .block_on(async {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            observe(socket, cwd, None, &[]).await
+        })
+        .map_err(|e| format!("persona-drill4 settle: {e}"))?;
+    view.layout = fresh.layout;
+    view.frames = fresh.frames;
     Ok(())
 }
 

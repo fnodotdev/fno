@@ -1624,6 +1624,7 @@ pub(crate) fn persona_widening_seams(view: &mut View) -> Vec<crate::proto::Comma
         };
         claim_widening_seams(&mut rects, pane, (px, py, pw, ph), &tracked, &mut seams);
         raise_fleet_panes(&rects, (py, ph), &tracked, &mut seams);
+        raise_tracked_panes(&mut rects, (py, ph), &tracked, pane, &mut seams);
     }
     // One shot: the claim answers once, from the layout that names it.
     if let Some(o) = view.persona.as_mut() {
@@ -1672,31 +1673,60 @@ fn claim_widening_seams(
         if persona.1 >= target {
             break;
         }
-        // The immediate left neighbour in the band, flanking one seam.
-        let nbr = rects.iter().find(|(pid, r)| {
-            *pid != pane && {
-                let (x, y, w, h) = *r;
-                y < py + ph && py < y + h && x + w + 1 == persona.0
+        // Walk left through the band, one flanking neighbour at a time,
+        // to the first pane with room above its floor. The panes between
+        // the donor and the claim keep their widths: every seam on the way
+        // moves by the same amount.
+        let mut chain: Vec<(u64, usize, usize)> = Vec::new();
+        let mut edge = persona.0;
+        let mut donor = None;
+        while chain.len() < 4 {
+            let nbr = rects.iter().find(|(pid, r)| {
+                *pid != pane && {
+                    let (x, y, w, h) = *r;
+                    y < py + ph && py < y + h && x + w + 1 == edge
+                }
+            });
+            let Some(&(nid, (nx, _, nw, _))) = nbr else {
+                break;
+            };
+            chain.push((nid, nx, nw));
+            if nw > pane_floor(tracked, nid) {
+                donor = Some(chain.len() - 1);
+                break;
             }
-        });
-        let Some(&(nid, (nx, _, nw, _))) = nbr else {
-            break;
-        };
-        let need = target - persona.1;
-        let donate = need.min(nw.saturating_sub(pane_floor(tracked, nid)));
-        if donate == 0 {
-            break;
+            edge = nx;
         }
-        seams.push(crate::proto::Command::ResizeSeam {
-            a: nid,
-            b: pane,
-            pos: (nx + nw - donate) as u16,
-        });
-        if let Some(r) = rects.iter_mut().find(|(pid, _)| *pid == nid) {
-            r.1 .2 -= donate;
+        let Some(di) = donor else { break };
+        let need = target - persona.1;
+        let (_, _, dw) = chain[di];
+        let donate = need.min(dw - pane_floor(tracked, chain[di].0));
+        // Seams from the donor outward: each boundary sits one column
+        // left of where it was, per column donated.
+        for k in (0..=di).rev() {
+            let (nid, nx, nw) = chain[k];
+            let right = if k == 0 { pane } else { chain[k - 1].0 };
+            seams.push(crate::proto::Command::ResizeSeam {
+                a: nid,
+                b: right,
+                pos: (nx + nw - donate) as u16,
+            });
+        }
+        for (k, &(nid, _, _)) in chain.iter().enumerate().take(di + 1) {
+            if let Some(r) = rects.iter_mut().find(|(pid, _)| *pid == nid) {
+                if k == di {
+                    r.1 .2 -= donate;
+                } else {
+                    r.1 .0 -= donate;
+                }
+            }
         }
         persona.0 -= donate;
         persona.1 += donate;
+    }
+    if let Some(r) = rects.iter_mut().find(|(pid, _)| *pid == pane) {
+        r.1 .0 = persona.0;
+        r.1 .2 = persona.1;
     }
 }
 
@@ -1749,6 +1779,57 @@ fn raise_fleet_panes(
             b,
             pos: pos as u16,
         });
+    }
+}
+
+/// A split halves its anchor, so an older record can end under the floor
+/// the claim left it. Each such pane takes the shortfall from its right
+/// neighbour, which is the claim or a wider record, down to that
+/// neighbour's own floor.
+fn raise_tracked_panes(
+    rects: &mut [(u64, (usize, usize, usize, usize))],
+    band: (usize, usize),
+    tracked: &[u64],
+    claim: u64,
+    seams: &mut Vec<crate::proto::Command>,
+) {
+    let (py, ph) = band;
+    let mut order: Vec<(usize, u64)> = rects
+        .iter()
+        .filter(|(pid, _)| tracked.contains(pid) && *pid != claim)
+        .map(|(pid, (x, _, _, _))| (*x, *pid))
+        .collect();
+    order.sort_unstable();
+    for (_, pid) in order {
+        let Some(&(_, (x, y, w, h))) = rects.iter().find(|(id, _)| *id == pid) else {
+            continue;
+        };
+        if w >= PANE_FLOOR || !(y < py + ph && py < y + h) {
+            continue;
+        }
+        let need = PANE_FLOOR - w;
+        let right = rects.iter().find(|(nid, (nx, ny, _, nh))| {
+            *nid != pid && *nx == x + w + 1 && *ny < py + ph && py < *ny + *nh
+        });
+        let Some(&(nid, (_, _, nw, _))) = right else {
+            continue;
+        };
+        if nw < need + pane_floor(tracked, nid) {
+            continue;
+        }
+        seams.push(crate::proto::Command::ResizeSeam {
+            a: pid,
+            b: nid,
+            pos: (x + w + need) as u16,
+        });
+        for (id, r) in rects.iter_mut() {
+            if *id == pid {
+                r.2 += need;
+            } else if *id == nid {
+                r.0 += need;
+                r.2 -= need;
+            }
+        }
     }
 }
 
