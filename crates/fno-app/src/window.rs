@@ -128,6 +128,11 @@ pub enum MailState {
 
 /// How long a notice stays in the corner.
 const NOTICE_FOR: Duration = Duration::from_secs(4);
+/// The terminal client's quiet windows, mirrored: 40ms releases a held Esc
+/// candidate, 400ms keeps a typed tab number together before it resolves
+/// on its own.
+const CHORD_FLUSH_MS: u64 = 40;
+const DIGIT_FLUSH_MS: u64 = 400;
 
 /// The most wheel lines one event sends, so a fling cannot flood the socket.
 const WHEEL_CAP: i32 = 10;
@@ -1822,7 +1827,12 @@ impl Root {
             );
         }
         if self.scanner.chord_pending() || self.scanner.digits_pending() {
-            self.arm_quiet_flush(cx);
+            let ms = if self.scanner.chord_pending() {
+                CHORD_FLUSH_MS
+            } else {
+                DIGIT_FLUSH_MS
+            };
+            self.arm_quiet_flush(ms, cx);
         }
     }
 
@@ -1868,32 +1878,31 @@ impl Root {
         }
     }
 
-    /// Arm the 40ms quiet window: a held chord candidate or tab number
-    /// releases to the pane when no keystroke lands (the terminal client's
-    /// CHORD_FLUSH_AFTER). Each pending keystroke re-arms; a flush that
-    /// finds nothing held is a no-op, so stacked arms are harmless.
-    fn arm_quiet_flush(&mut self, cx: &mut Context<Self>) {
+    /// Arm the quiet window: a held chord candidate or tab number releases
+    /// to the pane when no keystroke lands. Each pending keystroke re-arms;
+    /// a flush that finds nothing held is a no-op, so stacked arms are
+    /// harmless.
+    fn arm_quiet_flush(&mut self, ms: u64, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             cx.background_executor()
-                .timer(Duration::from_millis(40))
+                .timer(Duration::from_millis(ms))
                 .await;
             let _ = this.update(cx, |root, cx| root.flush_quiet(cx));
         })
         .detach();
     }
 
-    /// Release whatever the quiet window ends: only Forward chunks and held
-    /// tab numbers can come out of a flush (the scanner's contract), never
-    /// a detach, so no Window handle is needed here.
+    /// Release whatever the quiet window ends. A flush releases only
+    /// Forward chunks (a lone Esc) and held tab numbers, per the scanner's
+    /// flush contract, so the other arms cannot fire here and no Window
+    /// handle is needed.
     fn flush_quiet(&mut self, cx: &mut Context<Self>) {
         let events = [self.scanner.flush_chord(), self.scanner.flush_digits()];
         for event in events.into_iter().flatten() {
             match keys::translate(event) {
                 keys::MuxAction::Input(bytes) => self.pane_input(bytes, cx),
-                keys::MuxAction::Command(c) => self.send(ClientMsg::Command(c)),
                 keys::MuxAction::Tab(n) => self.mux_tab(n, cx),
-                keys::MuxAction::Notice(text) => self.say(text, cx),
-                keys::MuxAction::Quit => {}
+                _ => {}
             }
         }
     }
