@@ -87,7 +87,7 @@ pub(crate) fn kanban_column(
     let priority = match id_of(e).and_then(|id| effective.get(id)) {
         Some(p) => p.clone(),
         None => match live_epic_for(e, by_id, child_progress) {
-            Some(epic) => priority_name(&epic).min(priority_name(e)),
+            Some(epic) => priority_name(epic).min(priority_name(e)),
             None => priority_name(e),
         },
     };

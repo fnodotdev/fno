@@ -543,7 +543,8 @@ pub fn run(args: &[String]) -> i32 {
             eprintln!("Error: graph unreadable: the prelude is empty; selection refused");
             return 1;
         };
-        project_filter = detect_project(entries, &repo_root);
+        let entry_refs: Vec<&Value> = entries.iter().collect();
+        project_filter = detect_project(&entry_refs, &repo_root);
     }
     let mut parent_target_id: Option<String> = None;
     if let Some(parent) = &o.parent {

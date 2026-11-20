@@ -1412,7 +1412,7 @@ fn normalize_cwd(raw: &str) -> String {
 /// Detect the active project from candidate `cwd`s
 /// (`_intake.detect_project`): an exact-root node names the project
 /// outright; else the first node under the root does; else None.
-pub(crate) fn detect_project(entries: &[Value], repo_root: &str) -> Option<String> {
+pub(crate) fn detect_project(entries: &[&Value], repo_root: &str) -> Option<String> {
     let norm_root = normalize_cwd(repo_root);
     let root_prefix = format!("{}/", norm_root.trim_end_matches('/'));
     let mut fallback: Option<String> = None;
@@ -1690,11 +1690,11 @@ pub(crate) fn epics_with_child_progress(by_id: &BTreeMap<String, Value>) -> BTre
 /// The node's live epic parent, or None (`_intake._live_epic_for`): an
 /// epic-typed parent with a valid priority and status, not explicitly
 /// terminal and not status-terminal without child progress.
-pub(crate) fn live_epic_for(
+pub(crate) fn live_epic_for<'a>(
     node: &Value,
-    by_id: &BTreeMap<String, Value>,
+    by_id: &'a BTreeMap<String, Value>,
     child_progress: &BTreeSet<String>,
-) -> Option<Value> {
+) -> Option<&'a Value> {
     let parent_id = get_str(node, "parent")?;
     let epic = by_id.get(parent_id)?;
     if get_str(epic, "type") != Some("epic") {
@@ -1727,7 +1727,7 @@ pub(crate) fn live_epic_for(
     if explicitly_terminal || status_terminal {
         return None;
     }
-    Some(epic.clone())
+    Some(epic)
 }
 
 pub(crate) fn in_progress_epic_ids(
@@ -1753,7 +1753,7 @@ pub(crate) fn in_progress_epic_ids(
             continue;
         }
         if let Some(epic) = live_epic_for(child, by_id, child_progress) {
-            if let Some(id) = entry_id(&epic) {
+            if let Some(id) = entry_id(epic) {
                 result.insert(id.to_string());
             }
         }
@@ -1770,7 +1770,7 @@ pub(crate) fn make_effective_priority(
         let child_priority = priority_name(e);
         let effective = match live_epic_for(e, by_id, child_progress) {
             Some(epic) => {
-                let epic_priority = priority_name(&epic);
+                let epic_priority = priority_name(epic);
                 if priority_rank(&epic_priority) < priority_rank(&child_priority) {
                     epic_priority
                 } else {
@@ -1779,7 +1779,7 @@ pub(crate) fn make_effective_priority(
             }
             None => child_priority,
         };
-        out.insert(id.clone(), effective);
+        out.insert((*id).to_string(), effective);
     }
     out
 }
@@ -1828,9 +1828,9 @@ pub(crate) fn selection_sort_key(
             } else {
                 1
             };
-            let epic_band = rank_band(&epic);
-            let epic_prio = priority_rank(&priority_name(&epic));
-            let epic_created = get_str(&epic, "created_at").unwrap_or("").to_string();
+            let epic_band = rank_band(epic);
+            let epic_prio = priority_rank(&priority_name(epic));
+            let epic_created = get_str(epic, "created_at").unwrap_or("").to_string();
             vec![
                 Term::Band(epic_band.0, OrdF64(epic_band.1)),
                 Term::I(0),
@@ -2045,13 +2045,13 @@ fn drops_for_filter(
     }
 }
 
-struct SelectCtx {
+struct SelectCtx<'a> {
     opts: ReadyOpts,
     repo_root: String,
     staleness_days: i64,
     parent_scope: Option<BTreeSet<String>>,
     container_ids: BTreeSet<String>,
-    by_id: BTreeMap<String, Value>,
+    by_id: &'a BTreeMap<String, Value>,
 }
 
 /// The decision, in one call: admit, narrow through the cascade, rank.
@@ -2088,7 +2088,7 @@ pub fn select(entries: &[Value], opts: &ReadyOpts) -> Result<ReadyReply, NoSuchP
         staleness_days,
         parent_scope,
         container_ids: container_ids(entries),
-        by_id: by_id.clone(),
+        by_id: &by_id,
     };
 
     // Admission: persisted status in the allowed set (ready, plus idea /
@@ -2101,7 +2101,7 @@ pub fn select(entries: &[Value], opts: &ReadyOpts) -> Result<ReadyReply, NoSuchP
     if opts.include_deferred {
         allowed.insert("deferred");
     }
-    let candidates: Vec<Value> = entries
+    let candidates: Vec<&Value> = entries
         .iter()
         .filter(|e| is_dict(e))
         .filter(|e| {
@@ -2111,7 +2111,6 @@ pub fn select(entries: &[Value], opts: &ReadyOpts) -> Result<ReadyReply, NoSuchP
                 || is_cold_dispatchable(e))
                 && !truthy(e.get("completed_at"))
         })
-        .cloned()
         .collect();
 
     // The cascade, in its shipped order, with first-filter attribution.
@@ -2126,7 +2125,7 @@ pub fn select(entries: &[Value], opts: &ReadyOpts) -> Result<ReadyReply, NoSuchP
         FILTER_BATCHED,
         FILTER_SELECTION_GUARD,
     ];
-    let mut survivors: Vec<Value> = candidates;
+    let mut survivors: Vec<&Value> = candidates;
     let mut drops: Vec<Drop> = Vec::new();
     for filter in filter_order {
         // The live-claim filter only exists when claims are held, matching
@@ -2148,9 +2147,9 @@ pub fn select(entries: &[Value], opts: &ReadyOpts) -> Result<ReadyReply, NoSuchP
         };
         let mut kept = Vec::new();
         for e in survivors {
-            match drops_for_filter(filter, &e, &ctx, effective_project.as_deref()) {
+            match drops_for_filter(filter, e, &ctx, effective_project.as_deref()) {
                 Some(reason) => {
-                    if let Some(id) = entry_id(&e) {
+                    if let Some(id) = entry_id(e) {
                         drops.push(Drop {
                             id: id.to_string(),
                             filter: filter.to_string(),
@@ -2163,11 +2162,10 @@ pub fn select(entries: &[Value], opts: &ReadyOpts) -> Result<ReadyReply, NoSuchP
         }
         survivors = kept;
     }
-
     // Epics-first, then flat priority: the key is built from the FULL graph
     // so epic parents resolve even when filtered out of the candidate set.
     let (ordered, _tables) =
-        order_by_selection_key(survivors, entries, &by_id, &opts.claimed, opts.now_ms);
+        order_refs_by_selection_key(&survivors, entries, &ctx.by_id, &opts.claimed, opts.now_ms);
 
     Ok(ReadyReply {
         rows: ordered.iter().map(|e| dispatch_node_summary(e)).collect(),
@@ -2185,24 +2183,25 @@ pub(crate) struct KeyTables {
 
 /// The one selection order: `rows` sorted by [`selection_sort_key`], with the
 /// tables it was built from handed back so the board mode answers from the
-/// same facts instead of rebuilding them.
-pub(crate) fn order_by_selection_key(
-    rows: Vec<Value>,
+/// same facts instead of rebuilding them. The rows come in and go out as
+/// references: the sort keys off the borrowed graph and never clones a row.
+pub(crate) fn order_refs_by_selection_key<'a>(
+    rows: &[&'a Value],
     entries: &[Value],
     by_id: &BTreeMap<String, Value>,
     claimed: &BTreeSet<String>,
     now_ms: i64,
-) -> (Vec<Value>, KeyTables) {
+) -> (Vec<&'a Value>, KeyTables) {
     let child_progress = epics_with_child_progress(by_id);
     let dependents = dependents_fanout(entries);
     let effective_priority = make_effective_priority(by_id, &child_progress);
     let orphans = orphan_ids(entries, by_id);
     let epic_in_progress = in_progress_epic_ids(entries, by_id, &child_progress, claimed);
-    let mut keyed: Vec<(Vec<Term>, Value)> = rows
-        .into_iter()
+    let mut keyed: Vec<(Vec<Term>, &'a Value)> = rows
+        .iter()
         .map(|e| {
             let key = selection_sort_key(
-                &e,
+                e,
                 by_id,
                 &child_progress,
                 &dependents,
@@ -2211,7 +2210,7 @@ pub(crate) fn order_by_selection_key(
                 &epic_in_progress,
                 now_ms,
             );
-            (key, e)
+            (key, *e)
         })
         .collect();
     keyed.sort_by(|a, b| a.0.cmp(&b.0));
@@ -2244,8 +2243,9 @@ pub fn board_facts(entries: &[Value], claimed: &BTreeSet<String>, now_ms: i64) -
         .filter(|e| is_dict(e))
         .filter_map(|e| entry_id(e).map(|id| (id.to_string(), e.clone())))
         .collect();
-    let sortables: Vec<Value> = by_id.values().cloned().collect();
-    let (ordered, tables) = order_by_selection_key(sortables, entries, &by_id, claimed, now_ms);
+    let sortables: Vec<&Value> = by_id.values().collect();
+    let (ordered, tables) =
+        order_refs_by_selection_key(&sortables, entries, &by_id, claimed, now_ms);
     let ids = ordered
         .iter()
         .filter_map(|e| entry_id(e).map(str::to_string))
@@ -2255,7 +2255,7 @@ pub fn board_facts(entries: &[Value], claimed: &BTreeSet<String>, now_ms: i64) -
         .into_iter()
         .filter(|(id, effective)| {
             by_id
-                .get(id)
+                .get(id.as_str())
                 .is_some_and(|e| &priority_name(e) != effective)
         })
         .collect();
