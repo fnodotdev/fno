@@ -79,6 +79,8 @@ APP_THEME=""
 APP_MODE="chat"
 FNO_DEMO_FLATPINS=""
 FNO_DEMO_HOLDS=""
+FNO_DEMO_DND=""
+THEME_ARG=""
 FNO_DEMO_SORT=""
 FNO_DEMO_LAYOUT=""
 FNO_DEMO_LEAD_NESTING=""
@@ -113,6 +115,13 @@ for a in "$@"; do
     case "$a" in chat|terminal) APP_MODE="$a" ;; *) echo "mux-demo-snapshot: --app-mode takes chat or terminal, got '$a'" >&2; exit 2 ;; esac
   elif [ "$PREV" = "--mod-pane" ]; then
     MOD_PANE="$a"
+  elif [ "$PREV" = "--theme" ]; then
+    # Captured AND forwarded: the serve lens takes dark|light|macchiato,
+    # while the demo config the client renders through needs the theme's
+    # config twin - `light` is no config theme, so the cells would stay
+    # dark and only the selection bar would invert.
+    THEME_ARG="$a"
+    ARGS+=("$a")
   elif [ "$a" = "--window-size" ] || [ "$a" = "--group" ] || [ "$a" = "--web-port" ] || [ "$a" = "--sort" ] || [ "$a" = "--layout" ] || [ "$a" = "--install-card" ] || [ "$a" = "--app-theme" ] || [ "$a" = "--app-mode" ] || [ "$a" = "--mod-pane" ]; then
     :
   elif [ "$a" = "--second-workspace" ]; then
@@ -123,6 +132,8 @@ for a in "$@"; do
     FNO_DEMO_FLATPINS=1
   elif [ "$a" = "--holds" ]; then
     FNO_DEMO_HOLDS=1
+  elif [ "$a" = "--dnd" ]; then
+    FNO_DEMO_DND=1
   elif [ "$a" = "--hold" ]; then
     HOLD=1
   elif [ "$a" = "--remote-pane" ]; then
@@ -143,7 +154,7 @@ case "$MOD_PANE" in
   ""|review-ledger) ;;
   *) echo "mux-demo-snapshot: --mod-pane supports: review-ledger" >&2; exit 2 ;;
 esac
-export FNO_DEMO_FLATPINS FNO_DEMO_SORT FNO_DEMO_LAYOUT FNO_DEMO_LEAD_NESTING FNO_DEMO_HOLDS
+export FNO_DEMO_FLATPINS FNO_DEMO_SORT FNO_DEMO_LAYOUT FNO_DEMO_LEAD_NESTING FNO_DEMO_HOLDS FNO_DEMO_DND
 # bash 3.2 (stock macOS) reads an empty array under set -u as unbound.
 set -- ${ARGS[@]+"${ARGS[@]}"}
 
@@ -298,6 +309,12 @@ mkdir -p "$ROOT/mux" "$ROOT/agents" "$ROOT/code/checkout" "$ROOT/text" "$ROOT/.f
       *) theme="" ;;
     esac
     [ -z "$theme" ] || printf 'theme = "%s"\n' "$theme"
+    # The lens name maps to its config twin, or the client renders dark
+    # cells under a light lens and the frame mixes two palettes.
+    case "$THEME_ARG" in
+      light) printf 'theme = "footnote-paper"\n' ;;
+      dark) printf 'theme = "footnote-superscript"\n' ;;
+    esac
   fi
   # FNO_DEMO_LAYOUT=list shoots the one-line row instead of the card.
   if [ -n "${FNO_DEMO_LAYOUT:-}" ]; then
@@ -1096,6 +1113,18 @@ if os.environ.get("FNO_DEMO_HOLDS"):
             "delivery_policy": "bus-only", "harness_session_id": "demo-sid-sentry"},
         thread("eval-once", "claude", "idle") | live | {"substrate": "headless"},
     ]
+# --dnd seeds only the pager user hold: the off/armed pair shoots the
+# SAME sidebar with one row toggled, never two different fleets.
+if os.environ.get("FNO_DEMO_DND"):
+    pager_sid = "6b65e7e1-0000-4000-8000-00000000d5b3"
+    hold_dir = os.path.join(os.path.dirname(db), "mail", "mail-hold")
+    os.makedirs(hold_dir, exist_ok=True)
+    ceiling = datetime.datetime.fromtimestamp(
+        int(os.environ["FNO_DEMO_EPOCH"]) + 30 * 86400, datetime.timezone.utc
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with open(os.path.join(hold_dir, pager_sid + ".json"), "w") as f:
+        json.dump({"session": pager_sid, "until": ceiling, "set_by": "user",
+                   "reason": "sideline_menu", "clock": {"kind": "wall"}}, f)
 if os.environ.get("FNO_DEMO_SECOND_WS"):
     ledger = cwd.rsplit("/", 1)[0] + "/ledger"
     agents += [
