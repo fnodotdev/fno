@@ -1871,6 +1871,7 @@ fn decide_gate(
                                     .parent()
                                     .unwrap_or_else(|| std::path::Path::new(".")),
                                 route_provider.unwrap_or_default(),
+                                cap_account,
                                 now,
                             )
                         },

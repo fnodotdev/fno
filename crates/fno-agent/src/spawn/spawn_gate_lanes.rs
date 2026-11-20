@@ -1336,23 +1336,30 @@ pub(crate) fn quota_penalty_until_raw(raw: &Value, account: &str, now: f64) -> O
 }
 
 /// The route axis of the penalty. A route-keyed spawn names no account, so
-/// the reset the lane snapshot recorded (still ahead or just passed) stands
-/// in for the account's health record. A missing snapshot reads no penalty.
-pub(crate) fn lane_penalty_until(home_root: &Path, provider: &str, now: f64) -> Option<f64> {
+/// the reset the lane snapshot recorded for the spawn's own provider and
+/// account (still ahead or just passed) stands in for the health record. A
+/// missing snapshot reads no penalty.
+pub(crate) fn lane_penalty_until(
+    home_root: &Path,
+    provider: &str,
+    account: &str,
+    now: f64,
+) -> Option<f64> {
     let home = crate::paths::AgentsHome::at(home_root.to_path_buf());
     let snapshot = crate::provider_cap::read_persisted_snapshot(&home)?;
-    lane_penalty_until_from(&snapshot.lanes, provider, now)
+    lane_penalty_until_from(&snapshot.lanes, provider, account, now)
 }
 
 /// The pure half of [`lane_penalty_until`], over the snapshot's lanes.
 pub(crate) fn lane_penalty_until_from(
     lanes: &[crate::provider_cap::CapLane],
     provider: &str,
+    account: &str,
     now: f64,
 ) -> Option<f64> {
     lanes
         .iter()
-        .filter(|lane| lane.provider == provider)
+        .filter(|lane| lane.provider == provider && lane.account == account)
         .filter_map(|lane| lane.reset_epoch.or(lane.reset_passed_epoch))
         .map(|reset| reset as f64 + QUOTA_PENALTY_WINDOW_S)
         .filter(|end| *end > now)
@@ -1487,17 +1494,26 @@ mod tests {
         };
         let passed = [lane("zai", None, Some(880_000))];
         assert_eq!(
-            lane_penalty_until_from(&passed, "zai", now),
+            lane_penalty_until_from(&passed, "zai", "default", now),
             Some(880_000.0 + QUOTA_PENALTY_WINDOW_S)
         );
-        assert_eq!(lane_penalty_until_from(&passed, "anthropic", now), None);
         assert_eq!(
-            lane_penalty_until_from(&passed, "zai", 880_000.0 + QUOTA_PENALTY_WINDOW_S + 1.0),
+            lane_penalty_until_from(&passed, "anthropic", "default", now),
+            None
+        );
+        assert_eq!(lane_penalty_until_from(&passed, "zai", "zai-b", now), None);
+        assert_eq!(
+            lane_penalty_until_from(
+                &passed,
+                "zai",
+                "default",
+                880_000.0 + QUOTA_PENALTY_WINDOW_S + 1.0
+            ),
             None
         );
         let ahead = [lane("zai", Some(900_000), None)];
         assert_eq!(
-            lane_penalty_until_from(&ahead, "zai", now),
+            lane_penalty_until_from(&ahead, "zai", "default", now),
             Some(900_000.0 + QUOTA_PENALTY_WINDOW_S)
         );
     }
