@@ -191,14 +191,9 @@ impl PrefsCache {
     }
 
     fn get(&mut self) -> Prefs {
-        // The read door targets config.toml, the write door's file, when it
-        // exists; the legacy yaml a migrated install converted reads only
-        // when the toml is absent. global_settings_path() names the yaml,
-        // so a migrated install's switches would read as defaults here.
-        let path = fno::config_cli::global_settings_path()
-            .parent()
-            .and_then(|dir| crate::pick_global_file(dir))
-            .unwrap_or_else(|| fno::config_cli::global_settings_path());
+        // The mtime watch follows the file the read follows, pins included.
+        let path =
+            crate::global_config_path().unwrap_or_else(fno::config_cli::global_settings_path);
         let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
         if mtime != self.mtime {
             self.mtime = mtime;

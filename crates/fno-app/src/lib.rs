@@ -118,6 +118,14 @@ pub enum FindShot {
 /// walks, mirrored here because the reader twin (`digest_overlay.rs`
 /// `global_config_toml`) is pub(crate).
 pub fn global_config_raw() -> Option<serde_json::Value> {
+    let path = global_config_path()?;
+    fno::config_cli::parse_config_file(&path)
+        .map(|parsed| fno::config_cli::unwrap_config_dict(&parsed))
+}
+
+/// The file `global_config_raw` reads: the pin rules above, one owner, so
+/// the alert switches' mtime watch follows the file the read follows.
+pub fn global_config_path() -> Option<PathBuf> {
     let dir = fno::config_cli::global_settings_path()
         .parent()?
         .to_path_buf();
@@ -127,7 +135,7 @@ pub fn global_config_raw() -> Option<serde_json::Value> {
             .ok()
             .filter(|p| !p.is_empty())
     });
-    let path = match pin.as_deref() {
+    match pin.as_deref() {
         // A yaml-shaped pin names the legacy file the write door converts;
         // read the toml sibling it leaves behind.
         Some(p) if Path::new(p).file_name() == Some(std::ffi::OsStr::new("settings.yaml")) => {
@@ -138,9 +146,7 @@ pub fn global_config_raw() -> Option<serde_json::Value> {
         // No pin: the write door targets config.toml and migrates the
         // legacy yaml beside it, so an existing config.toml wins.
         None => pick_global_file(&dir),
-    }?;
-    fno::config_cli::parse_config_file(&path)
-        .map(|parsed| fno::config_cli::unwrap_config_dict(&parsed))
+    }
 }
 
 /// The global config file inside `dir`: the write door targets

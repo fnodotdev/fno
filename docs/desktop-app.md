@@ -113,7 +113,7 @@ When an agent turns blocked or done outside the window, the app fires three sign
 
 Machines lists the fleet's hosts read-only: add or connect a host from the mux. Keys restates the key sheet read-only: keys are fixed. Updates shows the app's version. Updates arrive with the release.
 
-Rows write through `fno config set`, into the per-user global file, because a Finder-launched app has no project to pin to. A key a project-local file decides already dims with its path. The global write cannot beat it. A refused write shows the CLI's first line under the row and keeps the old value.
+Rows write through the same door `fno config set` runs, into the per-user global file, because a Finder-launched app has no project to pin to. A key a project-local file decides already dims with its path. The global write cannot beat it. A refused write shows the CLI's first line under the row and keeps the old value.
 
 The flags still win: `--font`, `--font-size` and `--mode` override the config rows for that launch. Without a flag, the launch ladder is the config value, then the saved view, then the default.
 
