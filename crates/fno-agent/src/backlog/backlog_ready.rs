@@ -39,9 +39,6 @@ const ROLLUP_TYPES: &[&str] = &["feature", "task"];
 const CLOSED_STATUSES: &[&str] = &["done", "superseded", "deferred"];
 /// The rungs the autonomous drain must NOT pick up (ladder.UNSELECTABLE_RUNGS).
 const UNSELECTABLE_RUNGS: &[&str] = &["idea", "design"];
-const PRIORITY_WEIGHT: &[(&str, i64)] = &[("p0", 1), ("p1", 2), ("p2", 3), ("p3", 4)];
-const AGE_CAP_DAYS: f64 = 90.0;
-const AGE_DIVISOR: f64 = 100.0;
 /// Default staleness window when config is missing or unparseable
 /// (`_guard_staleness_days`'s fail-open contract).
 const DEFAULT_STALENESS_DAYS: i64 = 21;
@@ -132,6 +129,8 @@ pub struct ReadyOpts {
     /// The selection instant, epoch milliseconds UTC. now()-stamps never
     /// reach the projection; this only drives staleness and encounter age.
     pub now_ms: i64,
+    /// Print each score term beside the pick instead of only the verdict.
+    pub explain: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -388,7 +387,7 @@ pub fn date_filter_from_params(params: &Value, now_ms: i64) -> Result<DateFilter
     parse_date_filter(&args, now_ms)
 }
 
-fn touched_ms(entry: &Value) -> Option<i64> {
+pub(crate) fn touched_ms(entry: &Value) -> Option<i64> {
     entry
         .get("touched_at")
         .and_then(parse_iso_ms)
@@ -1308,6 +1307,12 @@ pub(crate) fn selection_guards(
     if let Some(hold) = dispatch_hold_verdict(entry, by_id) {
         return Some(hold.guard_reason);
     }
+    // An --audience ask filed audience? on purpose: the who is undecided,
+    // so the node holds from dispatch until an audience is set. Unset is
+    // the migration state, not a hold; the explicit ask is.
+    if get_str(entry, "audience").as_deref() == Some("audience?") {
+        return Some("scope-ask".to_string());
+    }
     // A question the operator has not answered outranks every selector
     // signal: the node leaves ready the moment it is named in blocks, so a
     // dispatcher never spends a lane on the same ruling twice.
@@ -1612,28 +1617,39 @@ pub(crate) fn encounter_voters(entry: &Value) -> BTreeSet<String> {
         .unwrap_or_default()
 }
 
-fn importance_score(entry: &Value, effective_priority: &str, now_ms: i64) -> f64 {
-    let voters = encounter_voters(entry);
-    if voters.is_empty() {
-        return 0.0;
-    }
-    let weight = PRIORITY_WEIGHT
-        .iter()
-        .find(|(k, _)| *k == effective_priority)
-        .map(|(_, v)| *v as f64)
-        .unwrap_or(3.0);
-    let weight = if !truthy(entry.get("sessions")) && !truthy(entry.get("pr_number")) {
-        weight * 2.0
-    } else {
-        weight
+fn importance_score(
+    entry: &Value,
+    effective_priority: &str,
+    open_dependents: i64,
+    now_ms: i64,
+) -> f64 {
+    // The approved board score: priority band (p0 400, p1 300, p2 200, p3 100)
+    // plus encounters (25 per distinct voter, cap 100) plus scope impact (the
+    // strongest named audience: customer:<persona> 60, customers 50, internal
+    // 0) plus fan-out (10 per open dependent, cap 50) plus age without a
+    // worker (1/day since created_at, cap 60; the plan's session-end reset
+    // needs a node-level stamp the graph does not carry yet, so the clock
+    // reads created). The design's worked example (p2 customers, four
+    // voters, two dependents, 60 idle days) reads 430.
+    let prio_pts = match effective_priority {
+        "p0" => 400.0,
+        "p1" => 300.0,
+        "p2" => 200.0,
+        "p3" => 100.0,
+        _ => 200.0,
     };
-    let divergence = voters.len() as f64 * weight;
-    let stamp = touched_ms(entry);
-    let Some(stamp) = stamp else {
-        return divergence;
-    };
-    let days = days_between(now_ms, stamp).max(0) as f64;
-    divergence + days.min(AGE_CAP_DAYS) / AGE_DIVISOR
+    let voters = encounter_voters(entry).len() as f64;
+    let encounter_pts = (voters * 25.0).min(100.0);
+    let scope_pts = crate::backlog::question_intake::str_field(entry, "audience")
+        .map(crate::backlog::audience::audience_score_term)
+        .unwrap_or(0) as f64;
+    let fanout_pts = (open_dependents.max(0) as f64 * 10.0).min(50.0);
+    let age_pts = get_str(entry, "created_at")
+        .and_then(parse_iso_str)
+        .map(|stamp| days_between(now_ms, stamp).max(0) as f64)
+        .unwrap_or(0.0)
+        .min(60.0);
+    prio_pts + encounter_pts + scope_pts + fanout_pts + age_pts
 }
 
 // ---------------------------------------------------------------------------
@@ -1790,7 +1806,7 @@ pub(crate) fn selection_sort_key(
     let child_orphan = !node_id.is_empty() && orphans.contains(node_id);
     let child_created = get_str(node, "created_at").unwrap_or("").to_string();
     let child_created_clone = child_created.clone();
-    let fanout = -dependents.get(node_id).copied().unwrap_or(0);
+    let open_dependents = dependents.get(node_id).copied().unwrap_or(0);
     let score = {
         let prio = effective_priority
             .get(node_id)
@@ -1798,7 +1814,7 @@ pub(crate) fn selection_sort_key(
             .unwrap_or_else(|| priority_name(node));
         // Degrade like every ordering signal: a malformed encounter never
         // breaks selection.
-        -importance_score(node, &prio, now_ms)
+        -importance_score(node, &prio, open_dependents, now_ms)
     };
     let epic = live_epic_for(node, by_id, child_progress);
     match epic {
@@ -1823,7 +1839,6 @@ pub(crate) fn selection_sort_key(
                 Term::S(epic_created),
                 Term::Band(band.0, OrdF64(band.1)),
                 Term::I(child_prio),
-                Term::I(fanout),
                 Term::B(child_orphan),
                 Term::F(OrdF64(score)),
                 Term::S(child_created),
@@ -1834,12 +1849,10 @@ pub(crate) fn selection_sort_key(
             Term::I(1),
             Term::I(0),
             Term::I(child_prio),
-            Term::I(fanout),
             Term::B(child_orphan),
             Term::F(OrdF64(score)),
             Term::S(child_created),
             Term::I(child_prio),
-            Term::I(fanout),
             Term::S(child_created_clone),
         ],
     }
@@ -2290,6 +2303,44 @@ pub(crate) fn dependents_fanout(entries: &[Value]) -> BTreeMap<String, i64> {
 
 #[cfg(test)]
 mod tests {
+    // --- the approved board score (the design's worked example) ---
+
+    #[test]
+    fn the_worked_example_reads_430_and_outranks_a_fresh_p1() {
+        // A p2 customers node, four distinct voters, two open dependents,
+        // 60 idle days: 200 + 100 + 50 + 20 + 60 = 430.
+        let entry = serde_json::json!({
+            "id": "ab-1",
+            "priority": "p2",
+            "audience": "customers",
+            "created_at": "2025-11-16T00:00:00Z",
+            "encounters": [
+                {"voter_key": "s-1"},
+                {"voter_key": "s-2"},
+                {"voter_key": "s-3"},
+                {"voter_key": "s-4"},
+                {"voter_key": "outside-1", "voter_kind": "external"}
+            ],
+        });
+        let now = parse_iso_str("2026-01-15T00:00:00Z").expect("the fixed now parses");
+        let score = importance_score(&entry, "p2", 2, now);
+        assert_eq!(score, 430.0, "the worked example: {score}");
+        // The fresh p1 internal node (no voters, no dependents, created
+        // today) reads 300 and loses.
+        let fresh = serde_json::json!({
+            "id": "ab-2",
+            "priority": "p1",
+            "audience": "internal",
+            "created_at": "2026-01-15T00:00:00Z",
+        });
+        let fresh_score = importance_score(&fresh, "p1", 0, now);
+        assert_eq!(fresh_score, 300.0);
+        assert!(score > fresh_score, "430 outranks 300");
+        // Fan-out caps at 50 and the external vote stays out.
+        let capped = importance_score(&entry, "p2", 7, now);
+        assert_eq!(capped, 460.0, "fan-out capped at 50: {capped}");
+    }
+
     // --- the dispatch router (the user-only offer the retro caught) ---
 
     /// A user-only node refuses every dispatch rung, a declared command

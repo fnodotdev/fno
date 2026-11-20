@@ -209,7 +209,12 @@ fn live_lines(answer: &Value, block: &Value, out: &mut Vec<String>) {
         return;
     }
     for row in rows.iter().filter(|r| {
-        r.get("lane").and_then(Value::as_str) == Some("coord") && r.get("expiry_ref").is_some()
+        // Stored rows predate the user/agent rename; both spellings read as
+        // the same lane.
+        matches!(
+            r.get("lane").and_then(Value::as_str),
+            Some("coord") | Some("agent")
+        ) && r.get("expiry_ref").is_some()
     }) {
         let did = row
             .get("decision_id")

@@ -78,6 +78,10 @@ struct UpdateArgs {
     /// carry the int gate as a raw token the PR block validates.
     pr_number: Option<String>,
     pr_url: Option<String>,
+    audience: Option<String>,
+    why: Option<String>,
+    done_means: Option<String>,
+    job: Option<String>,
     repo: Option<String>,
     add_pr: Option<String>,
     add_pr_url: Option<String>,
@@ -109,6 +113,10 @@ struct UpdateArgs {
 impl UpdateArgs {
     fn parse(tail: &[String]) -> ParsedUpdate {
         let mut a = UpdateArgs {
+            audience: None,
+            why: None,
+            done_means: None,
+            job: None,
             task_id: String::new(),
             help: false,
             title: None,
@@ -428,6 +436,10 @@ fn lower_op(
             }
         },
         ("has_brief", update_ops::Op::Set) => a.has_brief = Some(value),
+        ("scope", update_ops::Op::Set) => a.audience = Some(value),
+        ("why", update_ops::Op::Set) => a.why = Some(value),
+        ("done_means", update_ops::Op::Set) => a.done_means = Some(value),
+        ("job", update_ops::Op::Set) => a.job = Some(value),
         _ => {} // check() refused every field outside OP_FIELDS at parse
     }
     Ok(())
@@ -1611,6 +1623,124 @@ fn apply_mutators(
     if let Some(v) = &args.has_brief {
         let obj = rows[idx].as_object_mut().expect("row is an object");
         obj.insert("has_brief".into(), Value::Bool(v.to_lowercase() == "true"));
+    }
+    // -- Who, why and done-means. scope= validates through the audience
+    // parser (no default, persona file must exist); `null` clears why or
+    // done_means but never scope (a node always names who it serves).
+    if let Some(v) = &args.audience {
+        if v.to_lowercase() == "null" {
+            return Err(refused(
+                "Error: scope= null refuses: a node always names who it serves. Pass a scope.",
+                1,
+            ));
+        }
+        // A change carries its reason: audience= with no why= on the same
+        // call refuses, and the move appends one history entry.
+        if args.why.as_deref().map(str::trim).unwrap_or("").is_empty() {
+            return Err(refused(
+                "Error: audience= refuses a change with no why=: pass why=<the reason the customer changed> on the same update.",
+                1,
+            ));
+        }
+        let project = args
+            .project
+            .clone()
+            .or_else(|| {
+                rows.get(idx)
+                    .and_then(|row| crate::backlog::question_intake::str_field(row, "project"))
+                    .map(String::from)
+            })
+            .unwrap_or_else(|| "fno".into());
+        if let Err(e) = crate::backlog::audience::parse_audience(Some(v), &project) {
+            return Err(refused(format!("Error: {}", e.0), 1));
+        }
+        {
+            // The change keeps its history: one {from, to, at, by, why} entry
+            // per move, so a customer change is never silent. The old value
+            // reads before the mutable borrow below.
+            let old = rows
+                .get(idx)
+                .and_then(|row| crate::backlog::question_intake::str_field(row, "audience"))
+                .unwrap_or("")
+                .to_string();
+            let obj = rows
+                .get_mut(idx)
+                .and_then(Value::as_object_mut)
+                .expect("row is an object");
+            let now = crate::claims::now_ms();
+            let at = chrono::DateTime::from_timestamp(now / 1000, 0)
+                .map(|dt| dt.to_rfc3339())
+                .unwrap_or_default();
+            let entry = json!({
+                "from": old,
+                "to": v,
+                "at": at,
+                "by": crate::outstanding::session_id(&std::env::current_dir().unwrap_or_default())
+                    .unwrap_or_else(|| "unknown".into()),
+                "why": args.why.clone().unwrap_or_default(),
+            });
+            let history = obj
+                .entry("audience_history".to_string())
+                .or_insert_with(|| Value::Array(Vec::new()));
+            if let Some(arr) = history.as_array_mut() {
+                arr.push(entry);
+            }
+            obj.insert("audience".into(), json!(v));
+        }
+    }
+    for (field, slot) in [("why", &args.why), ("done_means", &args.done_means)] {
+        // A scope change consumes the why= value as the history entry's
+        // reason; it never also rewrites the node's goal, which the change
+        // did not touch.
+        if field == "why" && args.audience.is_some() {
+            continue;
+        }
+        if let Some(v) = slot {
+            rows.get_mut(idx)
+                .and_then(Value::as_object_mut)
+                .expect("row is an object")
+                .insert(
+                    field.into(),
+                    if v.to_lowercase() == "null" {
+                        Value::Null
+                    } else {
+                        json!(v)
+                    },
+                );
+        }
+    }
+    // The job= op replaces the whole job list; every named persona must
+    // carry the job heading, validated against the row's audience.
+    if let Some(raw) = &args.job {
+        let jobs: Vec<String> = raw
+            .split(',')
+            .map(|j| j.trim().to_string())
+            .filter(|j| !j.is_empty())
+            .collect();
+        let audience_now = rows
+            .get(idx)
+            .and_then(|row| crate::backlog::question_intake::str_field(row, "audience"))
+            .unwrap_or_default();
+        let job_project = args
+            .project
+            .clone()
+            .or_else(|| {
+                rows.get(idx)
+                    .and_then(|row| crate::backlog::question_intake::str_field(row, "project"))
+                    .map(String::from)
+            })
+            .unwrap_or_else(|| "fno".into());
+        if audience_now != "audience?" {
+            if let Err(e) =
+                crate::backlog::audience::validate_job(&audience_now, &jobs, &job_project)
+            {
+                return Err(refused(format!("Error: {}", e.0), 1));
+            }
+        }
+        rows.get_mut(idx)
+            .and_then(Value::as_object_mut)
+            .expect("row is an object")
+            .insert("job".into(), json!(jobs));
     }
     // -- U7: the plan binding, directly after has_brief in cmd_update's
     // order. 'null' clears; the one-plan-one-node conflict refuses naming

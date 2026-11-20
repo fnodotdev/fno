@@ -260,6 +260,13 @@ pub(crate) fn keys_modal_byte(view: &mut View, b: u8) -> bool {
 /// is folded like every other overlay (carried across reads) so a split arrow
 /// sequence can never leak its tail into a pane (codex P2). No key ever reaches
 /// a pane.
+/// The centered which-key modal (US3) replaces the old top-left key-table
+/// poster (opaque, sectioned, scrollable); the compose chain draws it.
+/// Enter/`click` run the selected row; a bound printable key runs immediately
+/// through the shared chord dispatch (which-key), an unbound one dismisses. Esc
+/// is folded like every other overlay (carried across reads) so a split arrow
+/// sequence can never leak its tail into a pane (codex P2). No key ever reaches
+/// a pane.
 pub(crate) async fn keys_modal_keys(
     view: &mut View,
     scanner: &mut Scanner,

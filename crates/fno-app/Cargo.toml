@@ -11,7 +11,6 @@ rust-version = "1.92"
 description = "The fno desktop app: a native GPUI window over a running fno mux server."
 license = "Apache-2.0"
 repository = "https://github.com/fnodotdev/fno"
-homepage = "https://github.com/fnodotdev/fno"
 # gpui is a pinned release and fno is a path dependency, so this crate ships
 # as a release tarball, never to crates.io.
 publish = false

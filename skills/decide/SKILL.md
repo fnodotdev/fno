@@ -28,7 +28,7 @@ Type `/fno:decide Merges belong to the user` in chat. A `d-` id comes back.
 4. Record it:
 
 ```bash
-fno inbox decisions set "<subject>" "<decision>" --scope internal|customers|customer:<persona> --rationale "<why>" --quote "<the user's words>" [--supersedes d-xxxxxxxx] [--keep d-xxxxxxxx]... [--sweep <word>]...
+fno inbox decisions set "<subject>" "<decision>" --audience internal|customers|customer:<persona> --rationale "<why>" --quote "<the user's words>" [--supersedes d-xxxxxxxx] [--keep d-xxxxxxxx]... [--sweep <word>]...
 ```
 
 The door compares the new decision with every live ruling in the same scope, subject and text together. A ruling that shares six or more topic words, and half of the shorter text, is near. The door refuses until you name each near ruling. `--supersedes <id>` retires it. `--keep <id>` keeps it beside the new decision. Read each near ruling before you choose. Never pass `--keep` to get past the refusal.

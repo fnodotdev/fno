@@ -234,6 +234,7 @@ fn ready_frontier(
         repo_root: Some(repo_root.to_string_lossy().to_string()),
         claimed: occupied.clone(),
         held: held.clone(),
+        explain: false,
         staleness_days: Some(staleness_days),
         now_ms,
     };

@@ -104,35 +104,42 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
         },
         if f.audit_only { "  [audit queue]" } else { "" }
     );
-    let columns = format!(
-        "{} {} {} {} {} {} {} {} {}",
-        fit("state", 10),
-        fit("lane", 12),
-        fit("date", 10),
-        fit("who", 10),
-        "Q",
-        fit("node", 9),
-        fit("PR", 6),
-        fit("description", 16),
-        "decision",
-    );
+    // The description column shrinks before the ruling vanishes: 80
+    // fixed columns plus one gap precede it, and a docked host pane is
+    // narrower than the full view's 98-column floor.
+    let desc_w = 16.min(w.saturating_sub(81));
+    let text_w = w.saturating_sub(81 + desc_w + 1);
+    let columns = table_columns(desc_w, text_w);
     let mut out = vec![head, format!("\x1b[1m{columns}\x1b[0m")];
     let body_rows = h.saturating_sub(5);
     let top = t.pick.saturating_sub(body_rows.saturating_sub(1));
-    // 82 columns of fixed fields precede the text; one more keeps the last
-    // column clear of the wrap edge.
-    let text_w = w.saturating_sub(83);
     for (i, r) in shown.iter().enumerate().skip(top).take(body_rows) {
         let line = format!(
-            "{} {} {} {} {} {} {} {} {}",
+            "{} {} {} {} {} {} {} {} {} {}",
             fit(&r.lifecycle, 10),
             fit(&r.lane, 12),
+            fit(
+                &{
+                    let audience_word = r
+                        .audience
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or("audience?");
+                    if r.job.is_empty() {
+                        audience_word.to_string()
+                    } else {
+                        format!("{audience_word} {}", r.job.join(","))
+                    }
+                },
+                14
+            ),
             fit(r.ts.get(..10).unwrap_or(&r.ts), 10),
             fit(&r.decider(), 10),
             if r.has_quote() { "Q" } else { " " },
             fit(&r.subject_node, 9),
             fit(&r.subject_pr, 6),
-            fit(r.describes(), 16),
+            fit(r.describes(), desc_w),
             fit(&r.decision, text_w),
         );
         out.push(if i == t.pick {
@@ -151,10 +158,51 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
             None => String::new(),
         },
     );
-    out.push("\x1b[2mj/k move  l lane  s state  a author  u audit queue  r retract  o overrule  v reviewed  g question  q quit\x1b[0m".to_string());
+    // The key hints keep whole pairs: the docked pane is narrower than
+    // the full string, and a mid-token cut reads as a broken key.
+    let hints = [
+        ("j/k", "move"),
+        ("l", "lane"),
+        ("s", "state"),
+        ("a", "author"),
+        ("u", "audit queue"),
+        ("r", "retract"),
+        ("o", "overrule"),
+        ("v", "reviewed"),
+        ("g", "question"),
+        ("q", "quit"),
+    ];
+    let mut hint = String::new();
+    for (k, v) in hints {
+        let seg = format!("{k} {v}  ");
+        if hint.chars().count() + seg.chars().count() > w.saturating_sub(2) {
+            break;
+        }
+        hint.push_str(&seg);
+    }
+    out.push(format!("\x1b[2m{}\x1b[0m", hint.trim_end()));
     out
 }
 
+/// The column header row: the fixed labels plus the width-aware
+/// description and decision labels. A narrow dock shortens the
+/// description word rather than cutting it mid-token.
+fn table_columns(desc_w: usize, text_w: usize) -> String {
+    let desc_label = if desc_w >= 11 { "description" } else { "desc" };
+    format!(
+        "{} {} {} {} {} {} {} {} {} {}",
+        fit("state", 10),
+        fit("lane", 12),
+        fit("audience", 14),
+        fit("date", 10),
+        fit("who", 10),
+        "Q",
+        fit("node", 9),
+        fit("PR", 6),
+        fit(desc_label, desc_w),
+        fit("decision", text_w),
+    )
+}
 fn prompt(label: &str) -> Option<String> {
     print!("{label}: ");
     let _ = std::io::stdout().flush();

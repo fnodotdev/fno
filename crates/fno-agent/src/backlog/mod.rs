@@ -128,6 +128,7 @@ pub mod workflows;
 pub mod active_backlog;
 pub mod additional_prs;
 pub mod announce;
+pub mod audience_backfill;
 pub mod backlog_ready;
 pub mod backlog_share;
 pub mod check_supersession;

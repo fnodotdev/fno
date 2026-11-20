@@ -85,6 +85,8 @@ no index is present, the first line says so.]
 
 ## Context
 
+[Serves: <scope> / <the node's why, quoted from the user's words when the ask came from him> / done-means: <acceptance a merge check can read>. Copy this line from the bound node when one is bound, so the plan opens with who it serves and the goal it came from.]
+
 [Problem statement in 2-5 sentences. Include:
 - What's broken or what needs to be built
 - Root cause if this is a bug

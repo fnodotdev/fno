@@ -210,6 +210,10 @@ pub fn outside_question(groups: &[StoredGroup]) -> IntakeRequest {
         options,
         blocks: Vec::new(),
         node: None,
+        // Machine-asked rows serve this project's own operation.
+        audience: Some("internal".to_string()),
+        why: None,
+        job: Vec::new(),
         subject: Some("machine-load".to_string()),
         session_id: Some("machine_watch".to_string()),
         harness: None,
@@ -546,6 +550,10 @@ pub fn file_budget_question(
         ],
         blocks: Vec::new(),
         node: None,
+        // Machine-asked rows serve this project's own operation.
+        audience: Some("internal".to_string()),
+        why: None,
+        job: Vec::new(),
         subject: Some("concurrency-budget".to_string()),
         session_id: Some("machine_watch".to_string()),
         harness: None,

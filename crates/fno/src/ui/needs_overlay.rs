@@ -168,6 +168,12 @@ pub struct QuestionItem {
     pub created_at: String,
     #[serde(default)]
     pub priority: String,
+    /// Who the question serves; absent rows render the audience? chip.
+    #[serde(default)]
+    pub audience: Option<String>,
+    /// The persona jobs the question names, shown beside the audience chip.
+    #[serde(default)]
+    pub job: Vec<String>,
     #[serde(default)]
     pub ready: bool,
     #[serde(default)]

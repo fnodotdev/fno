@@ -659,6 +659,8 @@ impl View {
                         self.input_owner() == super::region_focus::RegionOwner::Board,
                         self.edge_sizes.get(super::edge_drag::Edge::BacklogSeam),
                         &self.theme,
+                        super::persona_overlay::strip_hint(self).as_deref(),
+                        false,
                     );
                 }
             } else {
@@ -682,13 +684,18 @@ impl View {
             } else {
                 (Color::Default, cell_flags::DIM)
             };
-            for r in 0..rows {
-                cells[r * cols + (panel_w - 1)] = Cell {
-                    c: '\u{2502}',
-                    fg: border_fg,
-                    bg: Color::Default,
-                    flags: border_flags,
-                };
+            // The divider bounds a body the panel painted. With the board
+            // folded full-width the column beside it stays empty, and a
+            // full-height rule there reads as an orphan.
+            if !self.board_full {
+                for r in 0..rows {
+                    cells[r * cols + (panel_w - 1)] = Cell {
+                        c: '\u{2502}',
+                        fg: border_fg,
+                        bg: Color::Default,
+                        flags: border_flags,
+                    };
+                }
             }
             return;
         }
