@@ -528,13 +528,13 @@ mod tests {
             scanner.scan(&[0x02], Instant::now()),
             vec![Event::Forward(vec![0x02])]
         );
-        // Ctrl+B then 3 selects tab 3 and forwards nothing.
+        // Ctrl+B then 3 holds the tab number (tab 34 stays reachable) and
+        // forwards nothing; the quiet-window flush selects tab 3.
         let mut scanner = Scanner::default();
         scanner.scan(&[0x02], Instant::now());
-        assert_eq!(
-            scanner.scan(&[b'3'], Instant::now()),
-            vec![Event::SelectTabIdx(3)]
-        );
+        assert!(scanner.scan(&[b'3'], Instant::now()).is_empty());
+        assert!(scanner.digits_pending());
+        assert_eq!(scanner.flush_digits(), Some(Event::SelectTabIdx(3)));
         // Ctrl+B then an unbound key is one Bell and no forward bytes.
         let mut scanner = Scanner::default();
         scanner.scan(&[0x02], Instant::now());
