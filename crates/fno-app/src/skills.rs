@@ -98,48 +98,53 @@ pub(crate) fn list_in(harness: &str, project: &str, home: Option<&Path>) -> Vec<
 /// The plugins settings.json turns off: `enabledPlugins` maps
 /// `plugin@market` to a bool, and only an explicit `false` disables one.
 fn disabled_plugins(settings: &Path) -> Vec<String> {
-    let Some(json) = std::fs::read_to_string(settings)
+    #[derive(serde::Deserialize, Default)]
+    struct Settings {
+        #[serde(rename = "enabledPlugins", default)]
+        enabled: std::collections::BTreeMap<String, serde_json::Value>,
+    }
+    let parsed: Settings = std::fs::read_to_string(settings)
         .ok()
-        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-    else {
-        return Vec::new();
-    };
-    json.get("enabledPlugins")
-        .and_then(|e| e.as_object())
-        .map(|e| {
-            e.iter()
-                .filter(|(_, v)| v.as_bool() == Some(false))
-                .map(|(k, _)| k.clone())
-                .collect()
-        })
-        .unwrap_or_default()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default();
+    parsed
+        .enabled
+        .into_iter()
+        .filter(|(_, v)| v.as_bool() == Some(false))
+        .map(|(k, _)| k)
+        .collect()
 }
 
 fn read_plugins(manifest: &Path, settings: &Path, out: &mut Vec<Skill>) {
+    #[derive(serde::Deserialize)]
+    struct Install {
+        #[serde(rename = "installPath")]
+        path: String,
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct Manifest {
+        #[serde(default)]
+        plugins: std::collections::BTreeMap<String, Vec<Install>>,
+    }
     let off = disabled_plugins(settings);
-    let Ok(text) = std::fs::read_to_string(manifest) else {
-        return;
-    };
-    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return;
-    };
-    let Some(plugins) = json.get("plugins").and_then(|p| p.as_object()) else {
-        return;
-    };
-    for (key, installs) in plugins {
-        if off.contains(key) {
+    let parsed: Manifest = std::fs::read_to_string(manifest)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default();
+    for (key, installs) in parsed.plugins {
+        if off.contains(&key) {
             continue;
         }
-        let plugin = key.split('@').next().unwrap_or(key);
-        let Some(path) = installs
-            .as_array()
-            .and_then(|a| a.last())
-            .and_then(|i| i.get("installPath"))
-            .and_then(|p| p.as_str())
-        else {
+        let plugin = key.split('@').next().unwrap_or(&key);
+        let Some(last) = installs.last() else {
             continue;
         };
-        read_root(&Path::new(path).join("skills"), Source::Plugin, plugin, out);
+        read_root(
+            &Path::new(&last.path).join("skills"),
+            Source::Plugin,
+            plugin,
+            out,
+        );
     }
 }
 
@@ -394,7 +399,7 @@ mod tests {
             description: String::new(),
         };
         let all = vec![mk("my-fno"), mk("fno-doc")];
-        let got: Vec<_> = matching(&all, "fno", 4)
+        let got: Vec<_> = matching(&all, "fno")
             .iter()
             .map(|s| s.name.clone())
             .collect();
