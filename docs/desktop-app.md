@@ -73,9 +73,13 @@ Release the mouse on a button, a row or an option to act on it. Release somewher
 
 ## Keys
 
-Views have no key: click Chat, HQ, Mods or Terminal in the bar. Cmd-K or Help > Go to… opens the go-to palette. It finds an agent, session, node, question or view by name, and Enter goes there. Cmd-/ or Help > Keyboard Shortcuts opens the key sheet. It lists every key the app reads. Esc, `q`, cmd-/ or a click outside closes it. The app has no prefix key.
+Views have no key: click Chat, HQ, Mods or Terminal in the bar. Cmd-K or Help > Go to… opens the go-to palette. It finds an agent, session, node, question or view by name, and Enter goes there. Cmd-/ or Help > Keyboard Shortcuts opens the key sheet. It lists every key the app reads. Esc, `q`, cmd-/ or a click outside closes it.
 
-In the terminal view, keys go to the focused pane as a terminal sends them. Ctrl-b goes to the pane too, so the mux prefix works as in the TUI. The app keeps these cmd shortcuts for itself:
+In the terminal view the mux prefix works as in the TUI. Ctrl-b, or whatever `mux.prefix` in your fno config names, starts a mux action. The next key resolves it. Ctrl-b 1-9 picks a tab. Ctrl-b ctrl-b sends one ctrl-b to the pane. Ctrl-b arrows focus panes, ctrl resizes, and shift moves a pane. Ctrl-b x closes a pane, the semicolon chord returns to the last pane, and ctrl-b c opens a tab. Ctrl-b d detaches and quits the app. An unbound key after the prefix shows a notice and sends nothing. The key sheet lists the prefix under its own section.
+
+The prefix belongs to the mux. A Claude Code ctrl-b pressed in a focused pane therefore never reaches the pane's program, the same as inside the terminal TUI. To hand ctrl-b back to the pane, set `mux.prefix` in your fno config (for example `alt+space`) and restart the app.
+
+In the terminal view, other keys go to the focused pane as a terminal sends them. The app keeps these cmd shortcuts for itself:
 
 | Shortcut | Action |
 |---|---|
