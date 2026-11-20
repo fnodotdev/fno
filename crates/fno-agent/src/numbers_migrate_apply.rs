@@ -143,11 +143,14 @@ enum Undo {
     },
 }
 
-/// The undo log, written one line per change as it happens.
+/// The undo log. A change is staged while its transaction runs and lands
+/// in `undo.jsonl` only once that transaction commits, so a rolled-back
+/// transaction leaves no entry to undo.
 struct Log {
     dir: PathBuf,
     file: std::fs::File,
     entries: Vec<Undo>,
+    staged: Vec<Undo>,
     copies: usize,
 }
 
@@ -163,14 +166,23 @@ impl Log {
             dir: dir.to_path_buf(),
             file,
             entries: Vec::new(),
+            staged: Vec::new(),
             copies: 0,
         })
     }
 
     fn push(&mut self, undo: Undo) -> Result<(), String> {
-        let line = serde_json::to_string(&undo).map_err(|e| e.to_string())?;
-        writeln!(self.file, "{line}").map_err(|e| e.to_string())?;
-        self.entries.push(undo);
+        self.staged.push(undo);
+        Ok(())
+    }
+
+    /// Write every staged entry: its change is now durable.
+    fn commit(&mut self) -> Result<(), String> {
+        for undo in self.staged.drain(..) {
+            let line = serde_json::to_string(&undo).map_err(|e| e.to_string())?;
+            writeln!(self.file, "{line}").map_err(|e| e.to_string())?;
+            self.entries.push(undo);
+        }
         Ok(())
     }
 
@@ -346,7 +358,8 @@ impl Apply<'_> {
                 })?;
             }
         }
-        tx.commit().map_err(|e| e.to_string())
+        tx.commit().map_err(|e| e.to_string())?;
+        self.log.commit()
     }
 
     /// The shared backlog tables. A decision's key moves in two flushes, so
@@ -445,6 +458,7 @@ impl Apply<'_> {
             }
         }
         tx.commit().map_err(|e| e.to_string())?;
+        self.log.commit()?;
         crate::backlog_share::flush(graph)?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -459,61 +473,75 @@ impl Apply<'_> {
     /// One event db: every row whose line names a mapped key gets the new
     /// line and its hash. A row whose new line another row already holds is
     /// that row again under the store's own dedupe rule, so it goes.
+    ///
+    /// The scan reads outside any write lock: an events.db can run to a
+    /// gigabyte, and a writer held that long loses its row to the dead-letter
+    /// file. Each write then matches the line it read, so a row that moved
+    /// since the scan is left for the next apply.
     fn events(&mut self, db: &Path) -> Result<(), String> {
         let mut conn = Connection::open(db).map_err(|e| e.to_string())?;
         conn.busy_timeout(std::time::Duration::from_secs(10))
             .map_err(|e| e.to_string())?;
+        let mut changes = Vec::new();
+        for table in ["events", "event_observation_pending"] {
+            if !has_column(&conn, table, "line") || !has_column(&conn, table, "row_hash") {
+                continue;
+            }
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT rowid, line FROM {table} WHERE line GLOB '{KEY_GLOB}'"
+                ))
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+                .map_err(|e| e.to_string())?;
+            for row in rows {
+                let (rowid, before) = row.map_err(|e| e.to_string())?;
+                let after = self.text(&before).into_owned();
+                if after != before {
+                    changes.push((table, rowid, before, after));
+                }
+            }
+        }
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
-        for table in ["events", "event_observation_pending"] {
-            if !has_column(&tx, table, "line") || !has_column(&tx, table, "row_hash") {
-                continue;
-            }
-            let rows: Vec<(i64, String)> = {
-                let mut stmt = tx
-                    .prepare(&format!(
-                        "SELECT rowid, line FROM {table} WHERE line GLOB '{KEY_GLOB}'"
-                    ))
-                    .map_err(|e| e.to_string())?;
-                let rows = stmt
-                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
-                    .map_err(|e| e.to_string())?;
-                rows.collect::<Result<_, _>>().map_err(|e| e.to_string())?
-            };
-            for (rowid, before) in rows {
-                let after = self.text(&before).into_owned();
-                if after == before {
-                    continue;
-                }
-                let hash = sha(after.as_bytes());
-                let taken: bool = tx
-                    .query_row(
-                        &format!("SELECT EXISTS (SELECT 1 FROM {table} WHERE row_hash = ?1)"),
-                        params![hash],
-                        |r| r.get(0),
+        for (table, rowid, before, after) in changes {
+            let hash = sha(after.as_bytes());
+            let taken: bool = tx
+                .query_row(
+                    &format!("SELECT EXISTS (SELECT 1 FROM {table} WHERE row_hash = ?1)"),
+                    params![hash],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            if taken {
+                let row = whole_row(&tx, table, rowid)?;
+                let gone = tx
+                    .execute(
+                        &format!("DELETE FROM {table} WHERE rowid = ?1 AND line = ?2"),
+                        params![rowid, before],
                     )
                     .map_err(|e| e.to_string())?;
-                if taken {
-                    let row = whole_row(&tx, table, rowid)?;
-                    tx.execute(
-                        &format!("DELETE FROM {table} WHERE rowid = ?1"),
-                        params![rowid],
-                    )
-                    .map_err(|e| e.to_string())?;
+                if gone > 0 {
                     self.log.push(Undo::Gone {
                         db: db.to_path_buf(),
                         table: table.into(),
                         row,
                     })?;
                     self.tally.duplicates += 1;
-                    continue;
                 }
-                tx.execute(
-                    &format!("UPDATE {table} SET line = ?1, row_hash = ?2 WHERE rowid = ?3"),
-                    params![after, hash, rowid],
+                continue;
+            }
+            let wrote = tx
+                .execute(
+                    &format!(
+                        "UPDATE {table} SET line = ?1, row_hash = ?2 WHERE rowid = ?3 AND line = ?4"
+                    ),
+                    params![after, hash, rowid, before],
                 )
                 .map_err(|e| e.to_string())?;
+            if wrote > 0 {
                 self.log.push(Undo::Line {
                     db: db.to_path_buf(),
                     table: table.into(),
@@ -524,7 +552,8 @@ impl Apply<'_> {
                 self.tally.event_rows += 1;
             }
         }
-        tx.commit().map_err(|e| e.to_string())
+        tx.commit().map_err(|e| e.to_string())?;
+        self.log.commit()
     }
 
     /// One file: the text rewritten, and the name too when `rename`. The
@@ -567,6 +596,7 @@ impl Apply<'_> {
             backup,
             after: sha_hex(after.as_bytes()),
         })?;
+        self.log.commit()?;
         self.tally.files += 1;
         Ok(())
     }
@@ -698,13 +728,17 @@ fn markdown(root: &Path, out: &mut Vec<PathBuf>) {
 
 /// A consistent copy of each sqlite store, the last resort beside the log.
 fn back_up_dbs(dir: &Path, dbs: &[PathBuf]) -> Result<(), String> {
-    for db in dbs {
+    for (n, db) in dbs.iter().enumerate() {
         let name = db
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         let conn = Connection::open(db).map_err(|e| format!("open {}: {e}", db.display()))?;
-        let into = dir.join(&name).to_string_lossy().into_owned();
+        // Two dirs can each hold an `events.db`: the index keeps both copies.
+        let into = dir
+            .join(format!("{n}-{name}"))
+            .to_string_lossy()
+            .into_owned();
         conn.execute("VACUUM INTO ?1", params![into])
             .map_err(|e| format!("back up {}: {e}", db.display()))?;
     }
