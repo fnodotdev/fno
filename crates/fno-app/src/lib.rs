@@ -21,6 +21,7 @@ mod orchestration;
 pub mod palette;
 mod sheet;
 mod shot;
+mod start;
 mod tabs;
 mod ui;
 mod window;
@@ -75,6 +76,12 @@ pub struct ShotOptions {
     pub theme: String,
     /// View to render (default: the command center board).
     pub mode: Option<MainView>,
+    /// The empty-pane state: the chat pane shows its start view no matter
+    /// what the world's focus carries. The start-view shots set it.
+    pub empty_chat: bool,
+    /// Cmd held: the rows and the start view show their cmd hints. The
+    /// cmd-held shots set it.
+    pub cmd: bool,
     /// The find bar state the frame paints over the chat view.
     pub find: Option<FindShot>,
 }
@@ -129,6 +136,8 @@ pub fn run(opts: Options) -> i32 {
             chat: opts.chat,
             font: opts.font,
             font_size: opts.font_size,
+            empty_chat: shot.empty_chat,
+            cmd: shot.cmd,
         });
     }
     if let Some(home) = std::env::var_os("HOME").and_then(|h| h.into_string().ok()) {
