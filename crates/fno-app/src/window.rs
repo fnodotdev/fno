@@ -208,8 +208,6 @@ pub struct Root {
     /// launch values, then a Settings write. Render moves the real
     /// `metrics` onto it, where the text system can measure.
     pub(super) font_want: (String, f32),
-    /// The bounded settings write in flight.
-    _settings_write: Option<Task<()>>,
     /// The mux session this window attached to; panes open on it.
     pub(super) session: String,
     pub(super) ext: mods::Page,
@@ -364,7 +362,6 @@ impl Root {
             launch: launch::Panel::default(),
             settings: None,
             font_want,
-            _settings_write: None,
             preedit: None,
             _reader: None,
             _chat: None,
@@ -1922,7 +1919,8 @@ impl Root {
         value: String,
         cx: &mut Context<Self>,
     ) {
-        self._settings_write = Some(cx.spawn(async move |this, cx| {
+        // Detached: a second Enter must not drop the write still in flight.
+        cx.spawn(async move |this, cx| {
             let id2 = id.clone();
             let v2 = value.clone();
             let out = cx
@@ -1933,7 +1931,8 @@ impl Root {
                 .await;
             this.update(cx, |root, cx| root.on_settings_write(out, id2, v2, cx))
                 .ok();
-        }));
+        })
+        .detach();
     }
 
     /// A settings write landed: repaint the rows from the fresh global
