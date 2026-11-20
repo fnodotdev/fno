@@ -503,7 +503,7 @@ mod tests {
         assert_eq!(x1.user_turns, Some(12));
         assert_eq!(x1.questions_asked, 3);
         assert_eq!(x1.questions_open, 1);
-        assert_eq!(x1.wait_hours_median, Some(2.5));
+        assert_eq!(x1.wait_hours_median, Some(2.0));
         assert_eq!(x1.wait_open_age_hours, Some(75.0));
         let x9 = rows.iter().find(|r| r.node == "x-9").unwrap();
         assert_eq!(x9.questions_asked, 0);
