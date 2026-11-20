@@ -173,13 +173,20 @@ fn ask(deps: &Deps, harness: &str, session: &str, ask: &Ask) -> i32 {
     );
     if ask.dry_run {
         let context_bytes = config_i64(&deps.cwd, "context_bytes", DEFAULT_CONTEXT_BYTES);
+        let tail = match fence_tail(&route) {
+            Ok(tail) => tail,
+            Err(e) => {
+                eprintln!("consult: {e}");
+                return EXIT_SPAWN_FAILED;
+            }
+        };
         let answer = json!({
             "max_calls": max_calls,
             "count": count,
             "model": route.label(),
             "context_bytes": context_bytes,
             "transcript": deps.transcript.as_ref().map(|p| p.display().to_string()),
-            "argv_tail": fence_tail(&route),
+            "argv_tail": tail,
         });
         println!("{}", serde_json::to_string(&answer).unwrap_or_default());
         return 0;
@@ -355,19 +362,28 @@ fn consult_spawn_argv(
 }
 
 /// The dry-run's tail: the fence the real ask would carry - the model, the
-/// row's tool grant, then its spend-envelope flags.
-fn fence_tail(route: &ReaderRoute) -> Vec<String> {
+/// row's tool grant, then its spend-envelope flags. A harness with no
+/// measured tool-bearing row refuses here too, so the dry run shows what
+/// the real ask does, never an argv that would never spawn.
+fn fence_tail(route: &ReaderRoute) -> Result<Vec<String>, String> {
+    let tools = crate::harness_capabilities::packaged_reader_tools_args(&route.harness)
+        .filter(|args| !args.is_empty())
+        .ok_or_else(|| {
+            format!(
+                "harness {} has no measured tool-bearing reader form; add reader_tools_args \
+                 to its capability row",
+                route.harness
+            )
+        })?;
     let mut tail: Vec<String> = Vec::new();
     if let Some(model) = &route.model {
         tail.extend(["--model".to_string(), model.clone()]);
     }
-    tail.extend(
-        crate::harness_capabilities::packaged_reader_tools_args(&route.harness).unwrap_or_default(),
-    );
+    tail.extend(tools);
     tail.extend(
         crate::harness_capabilities::packaged_reader_spend_args(&route.harness).unwrap_or_default(),
     );
-    tail
+    Ok(tail)
 }
 
 /// The per-harness spend reader: a harness whose row carries spend-envelope
