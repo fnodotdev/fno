@@ -77,7 +77,7 @@ Views have no key: click Chat, HQ, Mods or Terminal in the bar. Cmd-K or Help > 
 
 In the terminal view the mux prefix works as in the TUI. Ctrl-b, or whatever `mux.prefix` in your fno config names, starts a mux action. The next key resolves it. Ctrl-b 1-9 picks a tab. Ctrl-b ctrl-b sends one ctrl-b to the pane. Ctrl-b arrows focus panes, ctrl resizes, and shift moves a pane. Ctrl-b x closes a pane, the semicolon chord returns to the last pane, and ctrl-b c opens a tab. Ctrl-b d detaches and quits the app. An unbound key after the prefix shows a notice and sends nothing. The key sheet lists the prefix under its own section.
 
-The prefix belongs to the mux. A Claude Code ctrl-b pressed in a focused pane therefore never reaches the pane's program, the same as inside the terminal TUI. To hand ctrl-b back to the pane, set `mux.prefix` in your fno config (for example `alt+space`) and restart the app.
+The prefix belongs to the mux. A Claude Code ctrl-b pressed in a focused pane therefore never reaches the pane's program, the same as inside the terminal TUI. To hand ctrl-b back to the pane, set `mux.prefix` in your fno config, for example `ctrl+a`, and restart the app. Ctrl-a is the shell's line-start key, so a shell pane loses that chord to the prefix. An alt prefix does not fire in the app: option composes a text character first.
 
 In the terminal view, other keys go to the focused pane as a terminal sends them. The app keeps these cmd shortcuts for itself:
 
