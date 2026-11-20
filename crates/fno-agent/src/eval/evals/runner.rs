@@ -192,7 +192,7 @@ fn remove_skill_task_files(tree: &std::path::Path) {
 /// Where sealed trees live: the temp dir, so no `$HOME` file sits on the
 /// worker's ancestor path. None of it may sit inside `$HOME`, which the fence
 /// denies as a whole.
-fn sealed_base(
+pub(crate) fn sealed_base(
     temp: &std::path::Path,
     home: &std::path::Path,
 ) -> Result<std::path::PathBuf, String> {
@@ -292,7 +292,7 @@ fn apply_rules(
 /// names the real repo in its `.git` file, and any parent commit holds the
 /// rules and the answer keys one `git show` away, so this tree has neither.
 /// Returns the path and its head, the base a grader diffs against.
-fn make_sealed_tree(
+pub(crate) fn make_sealed_tree(
     repo_root: &std::path::Path,
     ref_name: &str,
     overlay_ref: Option<&str>,
