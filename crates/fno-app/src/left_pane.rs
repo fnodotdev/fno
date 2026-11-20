@@ -492,15 +492,20 @@ fn agent_row(
 
 /// The Agents header's right side: the circled + opens the composer and
 /// the ⌘N hint shares the digit badges' cmd flag, so it shows only while
-/// cmd is held.
+/// cmd is held. The hint mounts in both states at opacity 0, right of the
+/// + on the same line, so the header's height never changes when it
+/// reveals.
 fn agents_header_plus(p: &Palette, grid: &Grid, cx: &mut Context<Root>) -> Div {
     div()
+        .flex()
+        .flex_row()
+        .items_center()
         .child(
             ui::clickable(div().id("agents-plus").px_1(), p)
                 .on_click(cx.listener(|root, _, _, cx| root.act(Action::OpenLaunch(None), cx)))
                 .child(div().text_color(rgb(p.faint)).child("⊕".to_string())),
         )
-        .when(grid.picking, |right| right.child(ui::kbd("⌘N", p)))
+        .child(ui::kbd("⌘N", p).opacity(if grid.picking { 1.0 } else { 0.0 }))
 }
 
 /// The folded-agents row: the count, or the fold-back control.
