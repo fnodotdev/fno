@@ -252,6 +252,30 @@ pub(crate) fn act(root: &Path, list: &[(u64, Vec<u64>)], action: &str, actor: &s
         .collect()
 }
 
+/// Stamp who cancelled each rerun the pass row carries. GitHub's runs API
+/// names no cancel actor, so the ledger attributes what its rows can prove:
+/// `tier` is this journal's own cancel, `unattributed` is a keeper on
+/// another machine or a hand cancel.
+fn attribute_reruns(posts: Vec<Value>, ours: &HashSet<u64>) -> Vec<Value> {
+    posts
+        .into_iter()
+        .map(|mut post| {
+            if let Some(runs) = post.get_mut("runs").and_then(Value::as_array_mut) {
+                for run in runs {
+                    let id = run.get("run").and_then(Value::as_u64).unwrap_or(0);
+                    let by = if ours.contains(&id) {
+                        "tier"
+                    } else {
+                        "unattributed"
+                    };
+                    run["cancelled_by"] = json!(by);
+                }
+            }
+            post
+        })
+        .collect()
+}
+
 /// This repo's rows of one kind since `since_ms`, oldest first.
 fn rows_of(path: &Path, kind: &str, slug: &str, since_ms: i64) -> Result<Vec<Value>, String> {
     let query = crate::event_store::EventQuery {
@@ -267,7 +291,8 @@ fn rows_of(path: &Path, kind: &str, slug: &str, since_ms: i64) -> Result<Vec<Val
         .collect())
 }
 
-/// The runs this tier cancelled, from its own rows.
+/// The runs this tier cancelled, from its own rows. No longer the rerun
+/// gate: it attributes each rerun the pass row carries.
 fn ours(passes: &[Value]) -> HashSet<u64> {
     let cancels = passes.iter().flat_map(|r| r.pointer("/data/cancelled"));
     let runs = cancels.flat_map(|c| c.as_array().cloned().unwrap_or_default());
@@ -303,13 +328,14 @@ pub(crate) fn named_cancels(
     Ok(named)
 }
 
-/// Whether a cancelled run stays on the rerun ledger: only a run the tier
-/// cancelled itself, and never one another row names. A hand cancel stays
-/// cancelled. A wait cancel answered a red the head already carries, so a
-/// rerun would burn a slot on a known red. A look hold reruns its own when
-/// the look clears.
-fn rerunnable(run: u64, ours: &HashSet<u64>, named: &HashSet<u64>) -> bool {
-    ours.contains(&run) && !named.contains(&run)
+/// Whether a cancelled run stays on the rerun ledger: any run no hold row
+/// names, wherever the cancel was made. The runs API names no cancel actor,
+/// so a cancel outside this journal's own rows is a keeper on another
+/// machine or a hand cancel, and it reruns at the head's tier turn. A wait
+/// cancel answered a red the head already carries, so a rerun would burn a
+/// slot on a known red. A look hold reruns its own when the look clears.
+fn rerunnable(run: u64, named: &HashSet<u64>) -> bool {
+    !named.contains(&run)
 }
 
 /// The PR a push of `branch` must wait for, and the refusal sentence. A
@@ -655,7 +681,7 @@ fn pass_repo(root: &Path, slug: &str, path: &Path) -> Result<(), String> {
     let ours = ours(&passes);
     let named = named_cancels(path, slug, now - DAY_MS)?;
     for (_, head) in &mut ranked {
-        head.cancelled.retain(|run| rerunnable(*run, &ours, &named));
+        head.cancelled.retain(|run| rerunnable(*run, &named));
     }
     // Each merge-queue-gate run in flight holds one slot.
     let slots = SIZE.saturating_sub(gates);
@@ -663,7 +689,7 @@ fn pass_repo(root: &Path, slug: &str, path: &Path) -> Result<(), String> {
     let plan = plan(&ranked, slots, &approved);
     let cancelled = act(root, &plan.cancel, "cancel", "ci_tier");
     // A full rerun: a cancelled run has no failed job for rerun-failed-jobs.
-    let rerun = act(root, &plan.rerun, "rerun", "ci_tier");
+    let rerun = attribute_reruns(act(root, &plan.rerun, "rerun", "ci_tier"), &ours);
     let data = json!({"slug": slug, "slots": slots, "gates": gates, "active": plan.active,
         "ranked": order, "cancelled": cancelled, "rerun": rerun});
     let pass_row = json!({"ts": chrono::Utc::now().to_rfc3339(), "data": data});
@@ -845,5 +871,32 @@ mod tests {
         assert_eq!(fact["cancelled_runs"], json!([71]));
         let note = fact["note"].as_str().unwrap();
         assert!(note.contains("gh run rerun"), "{note}");
+    }
+
+    #[test]
+    fn a_cancel_no_hold_row_names_reruns_wherever_it_was_made() {
+        let named: HashSet<u64> = [70u64].into();
+        // A run this journal never cancelled (a keeper on another machine or
+        // a hand cancel) reruns at the head's tier turn; a hold-named run
+        // stays owned by its hold.
+        assert!(rerunnable(80, &named));
+        assert!(!rerunnable(70, &named));
+        // An empty hold ledger reruns everything.
+        assert!(rerunnable(70, &HashSet::new()));
+    }
+
+    #[test]
+    fn rerun_posts_carry_who_cancelled_the_run() {
+        let posts = vec![json!({"pr": 3, "runs": [
+            json!({"run": 70, "ok": true}),
+            json!({"run": 80, "ok": true}),
+        ]})];
+        let ours: HashSet<u64> = [70u64].into();
+        let stamped = attribute_reruns(posts, &ours);
+        let runs = stamped[0]["runs"].as_array().unwrap();
+        // The journal's own cancel names the tier; any other cancel is a
+        // keeper on another machine or a hand cancel.
+        assert_eq!(runs[0]["cancelled_by"], json!("tier"));
+        assert_eq!(runs[1]["cancelled_by"], json!("unattributed"));
     }
 }
