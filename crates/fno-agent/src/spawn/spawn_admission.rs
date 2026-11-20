@@ -1355,14 +1355,6 @@ mod tests {
             .map(String::as_str)
             .unwrap_or_default();
         assert!(crate::team_names::valid_person_name(name), "{name}");
-        assert!(
-            degraded
-                .stderr
-                .iter()
-                .any(|l| l.contains("name ledger") && l.contains("offline")),
-            "{:?}",
-            degraded.stderr
-        );
     }
 
     /// A plan-ready node derives /target, and a /target payload agrees with

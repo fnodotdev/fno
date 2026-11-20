@@ -386,9 +386,18 @@ mod tests {
 
         route_to_primary(Some(crate::store_remote::test_primary::dead()));
         // The sync-side read refuses on an outage; the naming read degrades
-        // to the mirror and still answers with this machine's rows.
+        // to the mirror and still answers with this machine's rows, one
+        // notice in hand.
         let err = read_merged(&mac_store, &[]).unwrap_err();
         assert!(err.contains("cannot be read"), "{err}");
+        let dead = crate::store_remote::test_primary::dead();
+        let (rows, notice) = read_merged_or_mirror(Some(&dead), &mac_store, &[]);
+        assert!(rows.is_empty());
+        let notice = notice.expect("the dead primary answers the one-line notice");
+        assert!(
+            notice.contains("offline") && notice.contains("cached names"),
+            "{notice}"
+        );
         let names = team_names::history_names(&mac_store).unwrap();
         assert!(
             names.contains("rowan") && names.contains("odile"),
