@@ -5,8 +5,9 @@
 //! directory (state path `questions`), matching on NODE membership in the
 //! team scope, so a ruling recorded on another lead's page still shows.
 //! The quiet reading reads each quiet scope worker with the peek reader,
-//! in process, printing its last RESULT line or help block; a
-//! failed read keeps its row and says READER FAILED, never blanks.
+//! in process, printing its last RESULT line, help block or watching tag; a
+//! lead reads by how long ago its transcript last moved. Only a failed
+//! read says READER FAILED; a row never blanks.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -152,19 +153,21 @@ pub(crate) fn quiet_reading(
     let rows: Vec<Value> = quiet
         .into_iter()
         .take(crate::lead_checkin::MAX_ORG_ROWS)
-        .map(|(name, node)| {
-            let line = peek_last_report(&name).unwrap_or_else(|e| format!("READER FAILED {e}"));
+        .map(|(name, node, w)| {
+            let line = quiet_line(w, || peek_last_report(&name));
             json!({"worker": name, "node": node, "line": line})
         })
         .collect();
     Ok(json!({"quiet": total, "read": rows.len(), "rows": rows}))
 }
 
-/// The quiet rows in scope, `(worker name, node id)`, payload order. A
+/// The quiet rows in scope, `(worker name, node id, row)`, payload order. A
 /// worker's node comes off the row when the join resolved, else off its
-/// name; a row that names no scope node - leads, foreign workers - stays
-/// out.
-fn quiet_scope_workers(workers: &[Value], scope_ids: &BTreeSet<String>) -> Vec<(String, String)> {
+/// name; a row that names no scope node - foreign workers - stays out.
+fn quiet_scope_workers<'a>(
+    workers: &'a [Value],
+    scope_ids: &BTreeSet<String>,
+) -> Vec<(String, String, &'a Value)> {
     let mut rows = Vec::new();
     for w in workers {
         if crate::lead_checkin::s_str(w, "status") != Some("quiet") {
@@ -179,9 +182,39 @@ fn quiet_scope_workers(workers: &[Value], scope_ids: &BTreeSet<String>) -> Vec<(
         if !scope_ids.contains(&node) {
             continue;
         }
-        rows.push((name.to_string(), node));
+        rows.push((name.to_string(), node, w));
     }
     rows
+}
+
+/// The two top-row fields a quiet line reads. A lead row carries a role.
+#[derive(serde::Deserialize, Default)]
+struct QuietRow {
+    role: Option<String>,
+    status_age_s: Option<f64>,
+}
+
+/// One quiet row's line. A lead reports in prose and never emits RESULT, so
+/// its line is how long ago its transcript last moved. A worker's line is
+/// its own last report; a tail with none names that and the quiet time, and
+/// only a transcript the reader could not read says READER FAILED.
+fn quiet_line(w: &Value, peek: impl FnOnce() -> Tail) -> String {
+    use serde::Deserialize;
+    let row = QuietRow::deserialize(w).unwrap_or_default();
+    let quiet = row
+        .status_age_s
+        .map(|s| format!("{} min", (s / 60.0) as i64))
+        .unwrap_or_else(|| "an unknown time".into());
+    if let Some(role) = row.role.filter(|r| !r.is_empty()) {
+        return format!("lead ({role}), last active {quiet} ago");
+    }
+    match peek() {
+        Tail::Report(report) => report,
+        Tail::Silent => format!(
+            "no RESULT, help or watching tag in the last {PEEK_RECORDS} records; quiet {quiet}"
+        ),
+        Tail::Unreadable(e) => format!("READER FAILED {e}"),
+    }
 }
 
 /// The node id a payload worker row answers for: the joined node when the
@@ -287,21 +320,32 @@ pub(crate) fn scope_live_worker_count(rows: &[Value], scope_ids: &BTreeSet<Strin
         .count()
 }
 
+/// What one quiet worker's tail holds: its last report, no report, or a
+/// read that failed with its reason.
+enum Tail {
+    Report(String),
+    Silent,
+    Unreadable(String),
+}
+
 /// The worker's own last word, read in process from its transcript tail:
 /// the same records a peek renders, with no interpreter per worker. A worker
 /// with no transcript yet (a pane row before reconcile backfills its session)
 /// falls back to the pane screen, read in process the way peek reads it.
-fn peek_last_report(handle: &str) -> Result<String, String> {
+fn peek_last_report(handle: &str) -> Tail {
     let texts = match crate::session_truth::tail_texts(handle, PEEK_RECORDS) {
         Ok(texts) => texts,
-        Err(_) => crate::peek::pane_texts(handle, PEEK_RECORDS)?,
+        Err(_) => match crate::peek::pane_texts(handle, PEEK_RECORDS) {
+            Ok(texts) => texts,
+            Err(e) => return Tail::Unreadable(e),
+        },
     };
-    last_report(&texts)
-        .ok_or_else(|| format!("no RESULT or help block in the last {PEEK_RECORDS} records"))
+    last_report(&texts).map_or(Tail::Silent, Tail::Report)
 }
 
 /// The last report in a record tail, newest record winning; inside one
-/// record a RESULT line outranks a help block. Records the harness or
+/// record a RESULT line outranks a help block, and a help block outranks a
+/// watching tag (a parked worker's live report). Records the harness or
 /// control plane injected drop first: a skill body quotes every protocol
 /// tag, and neither it nor a tool result is ever the worker's report.
 fn last_report(texts: &[String]) -> Option<String> {
@@ -314,9 +358,41 @@ fn last_report(texts: &[String]) -> Option<String> {
             report = Some(l);
         } else if let Some(h) = help_line(text) {
             report = Some(h);
+        } else if let Some(w) = watching_line(text) {
+            report = Some(w);
         }
     }
     report
+}
+
+/// The last attributed `<watching ...>` tag in one record, named as the wait
+/// it declares. A bare `<watching>` is prose naming the protocol. A
+/// backticked tag still counts: workers emit it that way, and the stop gate
+/// reads it the same way.
+fn watching_line(text: &str) -> Option<String> {
+    let mut found = None;
+    let mut from = 0usize;
+    while let Some(rel) = text[from..].find("<watching") {
+        let start = from + rel;
+        let Some(gt) = text[start..].find('>') else {
+            break;
+        };
+        let tag = &text[start..start + gt + 1];
+        if crate::distress::carries_an_attribute(&tag["<watching".len()..tag.len() - 1]) {
+            found = Some(tag);
+        }
+        from = start + "<watching".len();
+    }
+    let tag = found?;
+    let attr = |k: &str| crate::loopcheck::parse_xml_attr(tag, k).filter(|v| !v.is_empty());
+    let mut line = format!("watching {}", attr("reason").unwrap_or_else(|| "-".into()));
+    if let Some(pr) = attr("pr") {
+        line.push_str(&format!(" on PR {pr}"));
+    }
+    if let Some(timeout) = attr("timeout") {
+        line.push_str(&format!(" (timeout {timeout})"));
+    }
+    Some(one_line(&line, REPORT_CAP_CHARS))
 }
 
 /// The last `RESULT:` line in one record's text.
@@ -857,9 +933,11 @@ mod tests {
     /// A tag the record merely quotes never reads as the worker's help: a
     /// re-arm note in inline code, the recovery nudge's own bare `<help>`,
     /// and a skill injection quoting the protocol whole. The worker's own
-    /// RESULT after an injected record still reads.
+    /// RESULT after an injected record still reads. A parked worker's
+    /// watching tag is its report, and a lead reads by its transcript's age:
+    /// neither healthy session renders READER FAILED.
     #[test]
-    fn a_quoted_nudged_or_injected_help_never_reads_as_the_report() {
+    fn the_quiet_line_names_the_real_state_and_never_a_quoted_help() {
         let rearm = "Re-arming; `<help class=\"held\">` only if this wedges";
         assert_eq!(last_report(&texts(&[rearm])), None);
         let nudge = "control: quiet 15 min on x-9, what blocks you? continue or emit <help>. [quiet-recovery:sid:work:nudge]";
@@ -872,5 +950,25 @@ mod tests {
             Some("RESULT: SUCCESS shipped"),
             "the injected record drops; the worker's own RESULT reads"
         );
+        let parked = "Held on a user look.\n`<watching reason=\"ci\" pr=\"4081\" timeout=\"15m\">`";
+        assert_eq!(
+            last_report(&texts(&[parked])).as_deref(),
+            Some("watching ci on PR 4081 (timeout 15m)")
+        );
+        assert_eq!(last_report(&texts(&["I end on <watching> tags."])), None);
+        let lead = json!({"role": "L2 x-team", "status_age_s": 1260.0});
+        let never = || -> Tail { panic!("a lead is never peeked") };
+        assert_eq!(
+            quiet_line(&lead, never),
+            "lead (L2 x-team), last active 21 min ago"
+        );
+        let worker = json!({"role": null, "status_age_s": 600.0});
+        let none = quiet_line(&worker, || Tail::Silent);
+        assert!(
+            !none.contains("READER FAILED") && none.ends_with("quiet 10 min"),
+            "{none}"
+        );
+        let failed = quiet_line(&worker, || Tail::Unreadable("transcript unreadable".into()));
+        assert_eq!(failed, "READER FAILED transcript unreadable");
     }
 }
