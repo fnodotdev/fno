@@ -225,12 +225,12 @@ fn cell_sql(value: &Value) -> Sql {
     }
 }
 
-/// Every column of one row, by rowid.
+/// Every column of one row, by rowid. `None` once the row is gone.
 fn whole_row(
     conn: &Connection,
     table: &str,
     rowid: i64,
-) -> Result<BTreeMap<String, Value>, String> {
+) -> Result<Option<BTreeMap<String, Value>>, String> {
     let mut stmt = conn
         .prepare(&format!("SELECT * FROM \"{table}\" WHERE rowid = ?1"))
         .map_err(|e| e.to_string())?;
@@ -242,6 +242,7 @@ fn whole_row(
         }
         Ok(out)
     })
+    .optional()
     .map_err(|e| e.to_string())
 }
 
@@ -333,7 +334,8 @@ impl Apply<'_> {
                     after: label.clone(),
                 })?;
             } else {
-                let row = whole_row(&tx, "fno_numbers", rowid)?;
+                let row = whole_row(&tx, "fno_numbers", rowid)?
+                    .ok_or_else(|| format!("fno_numbers row {rowid} vanished mid-transaction"))?;
                 tx.execute("DELETE FROM fno_numbers WHERE rowid = ?1", params![rowid])
                     .map_err(|e| e.to_string())?;
                 self.log.push(Undo::Gone {
@@ -516,7 +518,10 @@ impl Apply<'_> {
                 )
                 .map_err(|e| e.to_string())?;
             if taken {
-                let row = whole_row(&tx, table, rowid)?;
+                // An ephemeral row can expire between the scan and this write.
+                let Some(row) = whole_row(&tx, table, rowid)? else {
+                    continue;
+                };
                 let gone = tx
                     .execute(
                         &format!("DELETE FROM {table} WHERE rowid = ?1 AND line = ?2"),
