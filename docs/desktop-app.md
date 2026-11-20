@@ -101,15 +101,15 @@ Typed text goes through the macOS input system, so dead keys, option-compose and
 
 Cmd-comma or fno > Settings… opens Settings: one panel over the window, in the key sheet's look. It has five sections: Look, Alerts, Machines, Keys and Updates. Esc or a click outside closes it, and a cmd key closes it and runs.
 
-Type to filter: a query matches a row's label, its dotted config key and its section name, and the search runs across every section at once. Enter on a boolean flips it. Enter on a short choice steps it to the next value. A row ending in `›` opens a choice page: one numbered line per option, the check on the current value, Enter confirms, Esc cancels. A row you cannot change here dims with the reason under it, and Enter on it writes nothing.
+Type to filter: a query matches a row's label, its dotted config key and its section name. The search runs across every section at once. Enter on a boolean flips it. Enter on a short choice steps it to the next value. A row ending in `›` opens a choice page: one numbered line per option, the check on the current value, Enter confirms, Esc cancels. A row you cannot change here dims with the reason under it, and Enter on it writes nothing.
 
-Look holds the theme pin, the terminal font, the font size and the first view. The theme row's page offers Follow macOS plus the built-in themes; confirming repaints the window at once, the way the appearance observer does. The font page lists the installed monospaced families your Mac has. Font and size apply to the panes live; the chrome (the title bar, lists and labels) stays SF Mono at 12pt. The first-view row writes `mux.launch_screen`, the same key the mux reads, with three values: last view (the default; the window reopens where you left it), agents and hq.
+Look holds the theme pin, the terminal font, the font size and the first view. The theme row's page offers Follow macOS plus the built-in themes. Confirming repaints the window at once, the way the appearance observer does. The font page lists the installed monospaced families your Mac has. Font and size apply to the panes live. The chrome (the title bar, lists and labels) stays SF Mono at 12pt. The first-view row writes `mux.launch_screen`, the key the mux reads too. Its three values: last view (the default, the window reopens where you left it), agents and hq.
 
-Alerts holds the three switches the app itself reads when an agent turns blocked or done outside the window: the sound, the macOS notification and the Dock badge. They are the `app.alert_*` keys, separate from the daemon's `mux.notify_*` knobs, which govern the TUI.
+When an agent turns blocked or done outside the window, the app fires three signals. Alerts holds their switches: the sound, the macOS notification and the Dock badge. They are the `app.alert_*` keys, separate from the daemon's `mux.notify_*` knobs, which govern the TUI.
 
-Machines lists the fleet's hosts read-only: add or connect a host from the mux. Keys restates the key sheet read-only: keys are fixed. Updates shows the app's version; updates arrive with the release.
+Machines lists the fleet's hosts read-only: add or connect a host from the mux. Keys restates the key sheet read-only: keys are fixed. Updates shows the app's version. Updates arrive with the release.
 
-Rows write through `fno config set`, into the per-user global file, because a Finder-launched app has no project to pin to. A key a project-local file decides already dims with its path, and the global write would lose to it. A refused write shows the CLI's first line under the row and keeps the old value.
+Rows write through `fno config set`, into the per-user global file, because a Finder-launched app has no project to pin to. A key a project-local file decides already dims with its path. The global write cannot beat it. A refused write shows the CLI's first line under the row and keeps the old value.
 
 The flags still win: `--font`, `--font-size` and `--mode` override the config rows for that launch. Without a flag, the launch ladder is the config value, then the saved view, then the default.
 
