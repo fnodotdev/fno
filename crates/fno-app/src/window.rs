@@ -150,6 +150,9 @@ pub struct Root {
     /// A shot window paints the durable surface only: server notices are a
     /// transient corner toast that would photobomb a still frame.
     shot: bool,
+    /// The empty-pane shot: sync_chat never hands the pane a session, so
+    /// the start view holds for the frame.
+    shot_empty_chat: bool,
     pub(super) closed: Option<String>,
     pub(super) metrics: Metrics,
     pub(super) palette: Palette,
@@ -820,6 +823,11 @@ impl Root {
     /// In chat mode, stream the focused pane's agent session. A new focus
     /// parks the shown conversation and resumes the new one where it left.
     fn sync_chat(&mut self, cx: &mut Context<Self>) {
+        // The empty-pane shot pins the start view: no layout event may
+        // hand the pane a session.
+        if self.shot_empty_chat {
+            return;
+        }
         let key = chat::focused_key(self);
         if self.main != MainView::Chat || key == self.chat.key {
             return;
@@ -2889,6 +2897,8 @@ pub(super) fn root_for_shot(
     warmed: super::link::WarmedLink,
     family: String,
     font_size: f32,
+    empty_chat: bool,
+    cmd: bool,
     window: &mut Window,
     cx: &mut App,
 ) -> gpui::Entity<Root> {
@@ -2919,7 +2929,16 @@ pub(super) fn root_for_shot(
             cx,
         )
     });
-    root.update(cx, |root, _| root.shot = true);
+    root.update(cx, |root, _| {
+        root.shot = true;
+        if empty_chat {
+            root.shot_empty_chat = true;
+            root.chat.switch(None);
+        }
+        if cmd {
+            root.picking = true;
+        }
+    });
     // The shot window never activates, and the board poll pauses while
     // the window is inactive; the shot needs every feed settled before
     // the capture, so it polls regardless.

@@ -48,6 +48,8 @@ pub fn run(opts: ShotOptions) -> i32 {
     let out = opts.out.clone();
     let family = opts.font.clone();
     let font_size = opts.font_size;
+    let empty_chat = opts.empty_chat;
+    let cmd = opts.cmd;
     // Pre-warm before gpui starts: connect and drain to the world's
     // first layout on plain sockets, so the one frame the window paints
     // synchronously at open carries the world's data. gpui draws once at
@@ -79,7 +81,7 @@ pub fn run(opts: ShotOptions) -> i32 {
             },
             move |window, cx| {
                 crate::window::root_for_shot(
-                    &session, mode, pinned, warmed, family, font_size, window, cx,
+                    &session, mode, pinned, warmed, family, font_size, window, cx, empty_chat, cmd,
                 )
             },
         );

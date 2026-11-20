@@ -76,6 +76,12 @@ pub struct ShotOptions {
     pub theme: String,
     /// View to render (default: the command center board).
     pub mode: Option<MainView>,
+    /// The empty-pane state: the chat pane shows its start view no matter
+    /// what the world's focus carries. The start-view shots set it.
+    pub empty_chat: bool,
+    /// Cmd held: the rows and the start view show their cmd hints. The
+    /// cmd-held shots set it.
+    pub cmd: bool,
 }
 
 /// Run the app (or the headless probe) and return the process exit code.
