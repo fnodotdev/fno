@@ -953,13 +953,13 @@ fn phase_merge(t: &mut Tick, slice: f64) -> Result<(), DoorError> {
         int(out.get("elapsed_ms"), -1),
     );
     let skip = starved.then_some("budget_spent");
-    t.live.emitter.row(
-        "pr_watch_merge",
-        interval,
-        counts.executed,
-        skip,
-        Some(&detail),
-    );
+    // Dispositions are the merge arm's delivery: held, skipped and budget
+    // rows are work done, not silence, and the starvation mark reads this
+    // acted field.
+    let acted = counts.executed + counts.held + counts.failed + counts.skipped + counts.budget;
+    t.live
+        .emitter
+        .row("pr_watch_merge", interval, acted, skip, Some(&detail));
     Ok(())
 }
 
@@ -1174,6 +1174,14 @@ fn phase_heal(t: &mut Tick, _slice: f64) -> Result<(), DoorError> {
     Ok(())
 }
 
+/// A cut after a completed root is the designed progressive slice (the
+/// rotate starts the next run one root later), so the row explains itself
+/// instead of reading starved. Zero completed roots is a wedge and keeps
+/// the starved cut row.
+fn stranded_cut_token(completed_roots: usize) -> Option<&'static str> {
+    (completed_roots > 0).then_some("progressing")
+}
+
 /// Report, never reap: only STRANDED rows get pushed and filed; only UNKNOWN
 /// rows get recorded. The sweep always feeds the board's provenance cache;
 /// the lane's arming decides only whether it acts.
@@ -1198,6 +1206,7 @@ fn phase_stranded(t: &mut Tick, _slice: f64) -> Result<(), DoorError> {
         roots.rotate_left(start);
     }
     let (mut changed, mut stranded, mut unknown, mut acted, mut failed) = (false, 0, 0, 0, 0);
+    let mut completed = 0usize;
     for root in &roots {
         // Per root: a multi-repo tick could blow past the shared deadline
         // after the first root's own check passed.
@@ -1217,8 +1226,27 @@ fn phase_stranded(t: &mut Tick, _slice: f64) -> Result<(), DoorError> {
             args.push("--no-wake");
         }
         let payload = match clock::door(&args, None, 120.0) {
-            Ok(payload) => payload,
-            Err(DoorError::Cut) => return Err(DoorError::Cut),
+            Ok(payload) => {
+                completed += 1;
+                payload
+            }
+            Err(DoorError::Cut) => {
+                if let Some(token) = stranded_cut_token(completed) {
+                    // Name what landed and that the rotate resumes, so the
+                    // status verdict stays healthy on routine slicing.
+                    t.live.emitter.row(
+                        "stranded",
+                        t.arm_interval("stranded"),
+                        acted as i64,
+                        Some(token),
+                        Some(&format!(
+                            "slice spent after {completed} root(s); rotate resumes next run"
+                        )),
+                    );
+                    return Ok(());
+                }
+                return Err(DoorError::Cut);
+            }
             Err(DoorError::Failed(why)) => {
                 eprintln!("pr-watch: stranded sweep failed for {root_text}: {why}");
                 continue;
@@ -1600,6 +1628,13 @@ pub fn run(args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stranded_cut_token_names_progress_only_after_a_completed_root() {
+        assert_eq!(stranded_cut_token(0), None);
+        assert_eq!(stranded_cut_token(1), Some("progressing"));
+        assert_eq!(stranded_cut_token(7), Some("progressing"));
+    }
 
     #[test]
     fn the_deadline_stays_under_the_interval_and_the_env_seam_is_unclamped() {

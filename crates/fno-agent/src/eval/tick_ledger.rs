@@ -2622,6 +2622,82 @@ mod tests {
         assert_eq!(render_row(heal).split_whitespace().nth(1), Some("FAIL"));
     }
 
+    #[test]
+    fn a_merge_arm_dispositioning_its_queue_is_not_starved() {
+        // The live 2026-11-20 shape: the queue fully dispositions every tick
+        // (held on a recorded dispatch hold, skipped as merged or parked),
+        // the budget never fires, and the row's skip stays None. Dispositions
+        // are the merge arm's delivery, so the window is not starvation.
+        let dir = temp_dir();
+        let path = dir.join("events.jsonl");
+        write_rows(
+            &path,
+            &[
+                tick_envelope(
+                    "2026-09-20T12:00:00Z",
+                    "pr_watch_merge",
+                    SCHED_LAUNCHD,
+                    4,
+                    json!(null),
+                    600,
+                ),
+                tick_envelope(
+                    "2026-09-21T11:59:00Z",
+                    "pr_watch_merge",
+                    SCHED_LAUNCHD,
+                    4,
+                    json!(null),
+                    600,
+                ),
+            ],
+        );
+        let now = parse_rfc3339_unix("2026-09-21T12:00:00Z").unwrap();
+        let journals = vec![path.clone()];
+        let mut rows = read_arms(&journals, now);
+        mark_starved(&journals, &mut rows, now, 604_800);
+        let merge = rows
+            .iter()
+            .find(|r| r.arm == "pr_watch_merge")
+            .expect("merge row");
+        assert!(!merge.starved, "{merge:?}");
+
+        // The guard holds in both directions: a window of silent zeroes
+        // (acted=0, no skip token) still reads starved, so this is not an
+        // unconditional merge exemption.
+        let dir = temp_dir();
+        let path = dir.join("events.jsonl");
+        write_rows(
+            &path,
+            &[
+                tick_envelope(
+                    "2026-09-20T12:00:00Z",
+                    "pr_watch_merge",
+                    SCHED_LAUNCHD,
+                    0,
+                    json!(null),
+                    600,
+                ),
+                tick_envelope(
+                    "2026-09-21T11:59:00Z",
+                    "pr_watch_merge",
+                    SCHED_LAUNCHD,
+                    0,
+                    json!(null),
+                    600,
+                ),
+            ],
+        );
+        let now = parse_rfc3339_unix("2026-09-21T12:00:00Z").unwrap();
+        let journals = vec![path.clone()];
+        let mut rows = read_arms(&journals, now);
+        mark_starved(&journals, &mut rows, now, 604_800);
+        let merge = rows
+            .iter()
+            .find(|r| r.arm == "pr_watch_merge")
+            .expect("merge row");
+        assert!(merge.starved, "{merge:?}");
+    }
+
     // A pass the tick's budget cut every time emits skip="starved",
     // acted=0. That run of starved rows is starvation - the arm's input was
     // never empty - so it must reach the starved verdict, not sit as an
