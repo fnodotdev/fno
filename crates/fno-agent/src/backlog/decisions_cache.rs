@@ -542,7 +542,7 @@ mod tests {
     fn graph_slot_serves_repeated_reads_and_rebuilds_on_a_key_change() {
         // The graph slot answers every ask under one key from one read, and
         // a key change rebuilds: the merge gate's per-PR law listing costs
-        // one graph read per store version, not one per PR (node x-37cb).
+        // one graph read per store version, not one per PR.
         let lock = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -552,16 +552,16 @@ mod tests {
             Ok(vec![json!({"subject": "fixture"})])
         };
         let key = store_key(
-            Path::new("/x-37cb-fixture/graph.db"),
-            Path::new("/x-37cb-fixture/decisions.jsonl"),
+            Path::new("/graph-cache-fixture/graph.db"),
+            Path::new("/graph-cache-fixture/decisions.jsonl"),
         );
         let _first = graph_from_cache(key.clone(), read).unwrap();
         assert_eq!(count.get(), 1, "the first ask reads");
         let _second = graph_from_cache(key.clone(), read).unwrap();
         assert_eq!(count.get(), 1, "a same-key ask answers from the slot");
         let other = store_key(
-            Path::new("/x-37cb-fixture/other/graph.db"),
-            Path::new("/x-37cb-fixture/other/decisions.jsonl"),
+            Path::new("/graph-cache-fixture/other/graph.db"),
+            Path::new("/graph-cache-fixture/other/decisions.jsonl"),
         );
         let _third = graph_from_cache(other, read).unwrap();
         assert_eq!(count.get(), 2, "a key change rebuilds");
