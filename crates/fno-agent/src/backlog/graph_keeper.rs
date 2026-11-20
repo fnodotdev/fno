@@ -1396,6 +1396,17 @@ fn handle_write_status(state: &StoreState, params: &Value) -> Result<Value, Stor
     })
 }
 
+/// The board mode's reply over `entries`: shared by the `ready` op and the
+/// `rows` op's `board_claimed` option, so one load serves both answers.
+fn board_reply(
+    entries: &[Value],
+    claimed: &std::collections::BTreeSet<String>,
+    now_ms: i64,
+) -> Value {
+    let f = crate::backlog_ready::board_facts(entries, claimed, now_ms);
+    json!({"ids": f.ids, "underway": f.underway, "effective_priority": f.effective_priority})
+}
+
 /// The dispatch admission decision over client-shipped rows or the graph
 /// this keeper owns: `backlog_ready::select` in, survivors + drops out.
 /// Params: `project`, `all`, `roadmap_id`, `parent`, `mission`,
@@ -1487,9 +1498,7 @@ fn handle_ready(state: &StoreState, params: &Value) -> Result<Value, StoreError>
     // date filter below narrows the selection reply, not the whole-graph
     // facts: the board's contract is every entry, no admission.
     if matches!(params.get("board").and_then(Value::as_bool), Some(true)) {
-        let f = crate::backlog_ready::board_facts(entries, &opts.claimed, opts.now_ms);
-        let reply = json!({"ids": f.ids, "underway": f.underway, "effective_priority": f.effective_priority});
-        return Ok(reply);
+        return Ok(board_reply(entries, &opts.claimed, opts.now_ms));
     }
     let window = date_filter_from_params(params, opts.now_ms).map_err(StoreError::Invalid)?;
     match select(entries, &opts) {
@@ -3262,10 +3271,17 @@ fn api_read_op(
         "rows" => {
             let mut served = rows.to_vec();
             crate::node_reading::attach_reading(&mut served);
-            Ok(json!({
+            let mut reply = json!({
                 "rows": project(served),
                 "version": api::version(store)?,
-            }))
+            });
+            // `board_claimed` opts in to the board facts over these same
+            // rows, so a reader that wants both loads the graph once.
+            if let Some(Value::Array(ids)) = params.get("board_claimed") {
+                let claimed = ids.iter().filter_map(Value::as_str).map(str::to_string);
+                reply["board"] = board_reply(rows, &claimed.collect(), crate::claims::now_ms());
+            }
+            Ok(reply)
         }
         _ => unreachable!("handle_api routes node/nodes/rows here"),
     }

@@ -1507,6 +1507,13 @@ fn gather_blocking(
 ) -> Inputs {
     let backend_name = external_backend_name();
     let external = external_backend_selected();
+    // The live claims the keeper orders by. When the sweep failed, send none.
+    let claimed: Vec<String> = if sweep_failed {
+        Vec::new()
+    } else {
+        live_claims.keys().cloned().collect()
+    };
+    let mut board_facts: Option<store_client::BoardFacts> = None;
     // (2) The source: the external snapshot, or the store's rows.
     let (rows, rows_error, snapshot_errors): (Vec<NodeRow>, Option<String>, Vec<String>) =
         if external {
@@ -1524,8 +1531,13 @@ fn gather_blocking(
         } else {
             // Shared rows also feed detail drawers and flow; keep closed rows, prose,
             // decisions, progress notes, costs, PRs, and complete session records.
-            match store_client::rows(graph, None, None) {
-                Ok(r) => (r, None, Vec::new()),
+            // The same call carries the board facts, so the keeper loads the
+            // graph once for both.
+            match store_client::rows_with_board(graph, &claimed) {
+                Ok((r, board)) => {
+                    board_facts = board;
+                    (r, None, Vec::new())
+                }
                 Err(e) => (Vec::new(), Some(e.to_string()), Vec::new()),
             }
         };
@@ -1547,22 +1559,19 @@ fn gather_blocking(
     } else {
         store_client::version(graph).ok()
     };
-    // (4) The keeper's board facts. When the sweep failed, send no claimed:
-    // the keeper reads the claim store itself and refuses when it cannot.
-    let claimed: Vec<String> = if sweep_failed {
-        Vec::new()
-    } else {
-        live_claims.keys().cloned().collect()
-    };
+    // (4) The keeper's board facts: already in hand from the rows call, else
+    // (an external backend, or a keeper that predates the option) asked for.
     let shipped_entries = external.then_some(rows.as_slice());
-    let (order, underway, effective_priority) =
-        match store_client::board_facts(graph, shipped_entries, &claimed) {
-            Ok(facts) => (facts.ids, facts.underway, facts.effective_priority),
-            Err(e) => {
-                errors.push(format!("board order unavailable: {e}"));
-                (Vec::new(), HashSet::new(), HashMap::new())
-            }
-        };
+    let (order, underway, effective_priority) = match board_facts
+        .map(Ok)
+        .unwrap_or_else(|| store_client::board_facts(graph, shipped_entries, &claimed))
+    {
+        Ok(facts) => (facts.ids, facts.underway, facts.effective_priority),
+        Err(e) => {
+            errors.push(format!("board order unavailable: {e}"));
+            (Vec::new(), HashSet::new(), HashMap::new())
+        }
+    };
     // (5) The ledger at <state root>/ledger.json. A caller that skips flow
     // never reads it either.
     let path = ledger_path();
