@@ -237,10 +237,15 @@ fn widened_path(path: &str, home: &str) -> String {
 /// Run the app (or the headless probe) and return the process exit code.
 pub fn run(opts: Options) -> i32 {
     if let Some(shot) = opts.shot {
+        let out = shot.out;
+        let theme = shot.theme;
         let mode = shot.mode.or(opts.mode);
         return crate::shot::run(ShotOptions {
             hold: opts.shot_hold,
+            out,
+            theme,
             mode,
+            find: shot.find,
             session: opts.session,
             chat: opts.chat,
             // A shot pins its own face: the shot path reads no config,
