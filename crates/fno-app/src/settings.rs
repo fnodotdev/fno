@@ -152,8 +152,8 @@ fn look_rows(config: Option<&Value>, cwd: &Path, fonts: &[String]) -> Vec<Row> {
             reason: format!("set in {path}, which outranks the global file"),
         },
         None => Mode::Page {
-            options: theme_choices(),
-            current: theme_current(&theme),
+            options: theme_choices(theme.as_deref()),
+            current: theme_current(&theme, theme_choices(theme.as_deref())),
         },
     };
     let theme_value = theme.clone().unwrap_or_else(|| "Follow macOS".to_string());
@@ -225,7 +225,9 @@ fn look_rows(config: Option<&Value>, cwd: &Path, fonts: &[String]) -> Vec<Row> {
     ]
 }
 
-fn theme_choices() -> Vec<Choice> {
+/// The Theme page's choices: Follow macOS, the built-ins, and the pinned
+/// theme when it is a user theme the built-in list does not name.
+fn theme_choices(pinned: Option<&str>) -> Vec<Choice> {
     let mut out = vec![Choice {
         value: String::new(),
         doc: "follow the system appearance",
@@ -236,15 +238,52 @@ fn theme_choices() -> Vec<Choice> {
             doc: "",
         });
     }
+    if let Some(name) = pinned.filter(|n| !THEME_NAMES.contains(n)) {
+        out.push(Choice {
+            value: name.to_string(),
+            doc: "your theme",
+        });
+    }
     out
 }
 
 /// The page's selection lands on the current theme; Follow macOS (empty)
 /// is index 0, so the unset key opens with its own choice picked.
-fn theme_current(theme: &Option<String>) -> usize {
+fn theme_current(theme: &Option<String>, choices: Vec<Choice>) -> usize {
     match theme.as_deref() {
         None => 0,
-        Some(name) => 1 + THEME_NAMES.iter().position(|n| *n == name).unwrap_or(0),
+        Some(name) => choices.iter().position(|c| c.value == name).unwrap_or(0),
+    }
+}
+
+/// Show a write at once: the row takes the new value before the write
+/// lands, so a second Enter reads what the first one chose. A refusal
+/// rebuilds the rows from the file and puts the old value back.
+pub(crate) fn apply_local(rows: &mut [SectionRows], id: &str, value: &str) {
+    let Some(row) = rows
+        .iter_mut()
+        .flat_map(|(_, r)| r.iter_mut())
+        .find(|r| r.id == id)
+    else {
+        return;
+    };
+    row.value = value.to_string();
+    match &mut row.mode {
+        Mode::Toggle { on } => {
+            *on = value == "true";
+            row.value = if *on { "on" } else { "off" }.to_string();
+        }
+        Mode::Cycle { options, current } => {
+            if let Some(i) = options.iter().position(|o| o == value) {
+                *current = i;
+            }
+        }
+        Mode::Page { options, current } => {
+            if let Some(i) = options.iter().position(|o| o.value == value) {
+                *current = i;
+            }
+        }
+        Mode::Locked { .. } => {}
     }
 }
 
@@ -847,6 +886,16 @@ mod tests {
             machines.first().expect("one machine").value,
             "0 seats seen 42s ago"
         );
+    }
+
+    /// A write shows at once: the toggle flips in place, so a second Enter
+    /// reads the new value.
+    #[test]
+    fn a_write_shows_before_it_lands() {
+        let mut rows = build_rows(Some(&cfg(&[])), Path::new("/"), &[], &[]);
+        apply_local(&mut rows, "app.alert_sound", "false");
+        let out = resolve_enter(&rows, "play", 0);
+        assert!(matches!(out, Outcome::Set { ref value, .. } if value == "true"));
     }
 
     /// The filter matches a label, the dotted key, and the section name.

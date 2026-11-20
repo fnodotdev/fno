@@ -1935,6 +1935,21 @@ impl Root {
         .detach();
     }
 
+    /// Rebuild the panel's rows from the live file and fleet, and set the
+    /// refusal line under them (None clears it).
+    fn rebuild_settings_rows(&mut self, note: Option<String>) {
+        let machines = self
+            .board
+            .fleet()
+            .map(|f| f.machines.clone())
+            .unwrap_or_default();
+        if let Some(st) = self.settings.as_mut() {
+            let config = crate::global_config_raw();
+            st.note = note;
+            st.rows = settings::build_rows(config.as_ref(), &self.theme_cwd, &machines, &st.fonts);
+        }
+    }
+
     /// A settings write landed: repaint the rows from the fresh global
     /// file and run the apply half - the theme restyles, the font keys
     /// move `font_want`, and render re-measures the panes there.
@@ -1947,21 +1962,7 @@ impl Root {
     ) {
         match out {
             Ok(()) => {
-                if let Some(st) = self.settings.as_mut() {
-                    st.note = None;
-                    let machines = self
-                        .board
-                        .fleet()
-                        .map(|f| f.machines.clone())
-                        .unwrap_or_default();
-                    let config = crate::global_config_raw();
-                    st.rows = settings::build_rows(
-                        config.as_ref(),
-                        &self.theme_cwd,
-                        &machines,
-                        &st.fonts,
-                    );
-                }
+                self.rebuild_settings_rows(None);
                 if id == "mux.theme" {
                     self.restyle(cx);
                 }
@@ -1974,11 +1975,7 @@ impl Root {
                     }
                 }
             }
-            Err(settings::Refusal(line)) => {
-                if let Some(st) = self.settings.as_mut() {
-                    st.note = Some(line);
-                }
-            }
+            Err(settings::Refusal(line)) => self.rebuild_settings_rows(Some(line)),
         }
         cx.notify();
     }
@@ -2063,6 +2060,9 @@ impl Root {
                         cx.notify();
                     }
                     Some(settings::Event::Set { id, value }) => {
+                        if let Some(st) = self.settings.as_mut() {
+                            settings::apply_local(&mut st.rows, &id, &value);
+                        }
                         self.spawn_settings_write(true, id, value, cx)
                     }
                     Some(settings::Event::Unset { id }) => {
