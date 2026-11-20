@@ -4,7 +4,7 @@
     "stderr_lines": [
       "42 UNKNOWN error unsettled mergeable-unavailable(no-answer) NOT-ready @ unknown - 1 blockers: error: gh api pull request read: secondary rate limit"
     ],
-    "stdout": "{\"pr\": \"42\", \"verdict\": \"error\", \"settled\": false, \"green\": false, \"reason\": \"gh api pull request read: secondary rate limit\", \"rate_limit_class\": \"secondary\"}\n"
+    "stdout": "{\n  \"pr\": \"42\",\n  \"verdict\": \"error\",\n  \"settled\": false,\n  \"green\": false,\n  \"reason\": \"gh api pull request read: secondary rate limit\",\n  \"rate_limit_class\": \"secondary\",\n  \"draft\": false\n}"
   },
   "inputs": {
     "branch_history": null,
