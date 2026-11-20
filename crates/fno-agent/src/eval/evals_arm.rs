@@ -1127,7 +1127,9 @@ pub fn run_evals_arm(args: &[String]) -> i32 {
             let mut pargv = run_argv_for(&o, &repo, &now.to_rfc3339(), false);
             pargv.push("--propose".into());
             let pcan = can_launch && seen != "launched";
-            let pseen = crate::evals_propose::tick(&leg, now, pcan, &pargv, &spawn_detached);
+            let pseen = crate::evals_propose::tick(&leg, now, pcan, &pargv, &|a: &[String]| {
+                spawn_detached(a).ok()
+            });
             if !matches!(pseen, "fresh" | "in_flight") {
                 eprintln!("evals-arm: propose leg: {pseen}");
             }

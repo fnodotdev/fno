@@ -36,7 +36,7 @@ pub(crate) const MAX_EDITS: usize = 3;
 /// The default cycle cap when config is silent (change 3).
 pub(crate) const DEFAULT_CYCLE_USD: f64 = 10.0;
 
-/// Typed failures of one propose cycle (R6: no new `Result<_, String>` in
+/// Typed failures of one propose cycle (R6: no new string error type in
 /// this crate). `Display` carries the one-line cause the ledger row reads.
 #[derive(Debug)]
 pub(crate) enum ProposeError {
@@ -687,7 +687,7 @@ pub(crate) fn tick(
     now: chrono::DateTime<chrono::Utc>,
     can_launch: bool,
     argv: &[String],
-    spawner: &dyn Fn(&[String]) -> Result<u32, String>,
+    spawner: &dyn Fn(&[String]) -> Option<u32>,
 ) -> &'static str {
     let root = leg
         .claims_root
@@ -726,7 +726,7 @@ pub(crate) fn tick(
         return "retry_wait";
     }
     let _ = std::fs::write(attempt_path(leg.history), now.to_rfc3339());
-    let Ok(pid) = spawner(argv) else {
+    let Some(pid) = spawner(argv) else {
         return "spawn_failed";
     };
     let opts = crate::claims::AcquireOpts {
@@ -747,7 +747,7 @@ pub(crate) fn tick(
 
 /// bank_pr::open's shape.
 pub(crate) type Opener<'a> =
-    &'a dyn Fn(&str, &str, &str, &[(std::path::PathBuf, Vec<u8>)]) -> Result<String, String>;
+    &'a dyn Fn(&str, &str, &str, &[(std::path::PathBuf, Vec<u8>)]) -> Result<String, ProposeError>;
 
 /// The state-side ledger path: `<state>/evals/propose/ledger.jsonl`.
 pub(crate) fn ledger_path(state: &std::path::Path) -> std::path::PathBuf {
@@ -849,7 +849,7 @@ fn ship_candidate(
         return Ok(ShipOutcome::AlreadyOpen);
     }
     let title = format!("evals: a proved {kind} fix on the golden tier");
-    let url = (doors.open)(&branch, &title, body, edits).map_err(ProposeError::Pr)?;
+    let url = (doors.open)(&branch, &title, body, edits)?;
     Ok(ShipOutcome::Opened(url))
 }
 
@@ -1498,7 +1498,7 @@ fn real_cycle<'a>(
         candidate_ref(repo, base_sha, tag, edits)
     };
     let open = |branch: &str, title: &str, body: &str, edits: &[(std::path::PathBuf, Vec<u8>)]| {
-        crate::bank_pr::open(repo, branch, title, body, edits)
+        crate::bank_pr::open(repo, branch, title, body, edits).map_err(ProposeError::Pr)
     };
     let is_open = |branch: &str| {
         crate::bank_pr::existing_pr(repo, branch)
@@ -2129,7 +2129,7 @@ mod tests {
                     _: &str,
                     _: &str,
                     _: &[(std::path::PathBuf, Vec<u8>)]|
-         -> Result<String, String> {
+         -> Result<String, ProposeError> {
             prs.set(prs.get() + 1);
             Ok("url-1".into())
         };
@@ -2301,7 +2301,7 @@ mod tests {
                       _: &str,
                       _: &str,
                       _: &[(std::path::PathBuf, Vec<u8>)]|
-         -> Result<String, String> { Ok("url-1".into()) };
+         -> Result<String, ProposeError> { Ok("url-1".into()) };
         let closed = |_: &str| -> Result<bool, ProposeError> { Ok(false) };
         let doors = Doors {
             propose: &fail_propose,
@@ -2316,7 +2316,7 @@ mod tests {
                      _: &str,
                      _: &str,
                      _: &[(std::path::PathBuf, Vec<u8>)]|
-         -> Result<String, String> { panic!("opener must not fire") };
+         -> Result<String, ProposeError> { panic!("opener must not fire") };
         let open = |_: &str| -> Result<bool, ProposeError> { Ok(true) };
         let doors = Doors {
             propose: &fail_propose,
@@ -2350,7 +2350,7 @@ mod tests {
                     _: &str,
                     _: &str,
                     _: &[(std::path::PathBuf, Vec<u8>)]|
-         -> Result<String, String> { panic!("no PR in a dry run") };
+         -> Result<String, ProposeError> { panic!("no PR in a dry run") };
         let is_open = |_: &str| -> Result<bool, ProposeError> { panic!("no PR read in a dry run") };
         let doors = Doors {
             propose: &propose,
