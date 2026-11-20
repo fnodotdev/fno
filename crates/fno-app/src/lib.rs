@@ -40,8 +40,10 @@ const CHAT_PROBE_IDLE: Duration = Duration::from_secs(2);
 
 pub struct Options {
     pub session: Option<String>,
-    pub font: String,
-    pub font_size: f32,
+    /// None reads `app.font` from the global config, then the default.
+    pub font: Option<String>,
+    /// None reads `app.font_size`, then the default.
+    pub font_size: Option<f32>,
     pub probe: bool,
     /// The view the window opens on. None restores the saved view (the
     /// default for a plain launch); an explicit `--mode` wins over the save.
@@ -79,6 +81,58 @@ pub struct ShotOptions {
 
 /// Run the app (or the headless probe) and return the process exit code.
 
+/// The raw global settings dict, the same read the alert prefs walk
+/// (`alerts.rs`): the app reads the GLOBAL file only, because a
+/// Finder-launched app has no project cwd.
+pub fn global_config_raw() -> Option<serde_json::Value> {
+    let path = fno::config_cli::global_settings_path();
+    fno::config_cli::parse_config_file(&path)
+        .ok()
+        .map(|parsed| fno::config_cli::unwrap_config_dict(&parsed))
+}
+
+/// One dotted key's raw value out of the settings dict.
+fn raw_get(config: Option<&serde_json::Value>, key: &str) -> Option<serde_json::Value> {
+    config.and_then(|raw| fno::config_cli::raw_get(raw, key))
+}
+
+/// The launch ladder in one pure function: a flag wins, then `app.font` /
+/// `app.font_size` / `mux.launch_screen` in the global config, then the
+/// built-in defaults (`mux.launch_screen` lands before the saved view, so
+/// the D3320 pin moves the first screen; `--mode` beats it). The config
+/// read is the RAW value: the schema default `agents` must not pin Chat
+/// over the saved view a quit left behind, so only a key the user wrote
+/// decides.
+pub fn launch_prefs(
+    font_flag: Option<String>,
+    size_flag: Option<f32>,
+    mode_flag: Option<MainView>,
+    saved_view: Option<MainView>,
+    config: Option<&serde_json::Value>,
+) -> (String, f32, MainView) {
+    let font = font_flag
+        .or_else(|| raw_get(config, "app.font").and_then(|v| v.as_str().map(str::to_string)))
+        .unwrap_or_else(|| "SF Mono".to_string());
+    let font_size = size_flag
+        .or_else(|| raw_get(config, "app.font_size").and_then(|v| v.as_f64()))
+        .map(|f| f as f32)
+        .unwrap_or(13.0);
+    let view = mode_flag
+        .or_else(|| {
+            match raw_get(config, "mux.launch_screen")
+                .and_then(|v| v.as_str().map(str::to_string))
+                .as_deref()
+            {
+                Some("hq") => Some(MainView::Orchestration),
+                Some("agents") => Some(MainView::Chat),
+                _ => None,
+            }
+        })
+        .or(saved_view)
+        .unwrap_or(MainView::Chat);
+    (font, font_size, view)
+}
+
 /// `path` with the directories fno installs into appended when missing. A
 /// Finder launch hands the app `/usr/bin:/bin:/usr/sbin:/sbin`, which holds
 /// neither `fno` nor `fno-agent`, so the fleet and question reads fail.
@@ -115,8 +169,10 @@ pub fn run(opts: Options) -> i32 {
             mode,
             session: opts.session,
             chat: opts.chat,
-            font: opts.font,
-            font_size: opts.font_size,
+            // A shot pins its own face: the shot path reads no config,
+            // so the flag (or the default) decides and a run is repeatable.
+            font: opts.font.unwrap_or_else(|| "SF Mono".to_string()),
+            font_size: opts.font_size.unwrap_or(13.0),
         });
     }
     if let Some(home) = std::env::var_os("HOME").and_then(|h| h.into_string().ok()) {
@@ -137,15 +193,19 @@ pub fn run(opts: Options) -> i32 {
         Some(key) => key,
         None => restored.as_ref().and_then(|s| s.pinned.clone()),
     };
-    // An explicit --mode beats the saved view; Chat stays the no-state default.
-    let view = opts
-        .mode
-        .or(restored.as_ref().map(|s| s.view))
-        .unwrap_or(MainView::Chat);
+    // The launch ladder: flag, then config, then the saved view, then Chat.
+    let config = global_config_raw();
+    let (font, font_size, view) = launch_prefs(
+        opts.font,
+        opts.font_size,
+        opts.mode,
+        restored.as_ref().map(|s| s.view),
+        config.as_ref(),
+    );
     match (opts.probe, pinned) {
         (true, Some(key)) => return chat::probe(&session, key, CHAT_PROBE_IDLE),
         (true, None) => return probe(&session),
-        (false, pinned) => window::run(session, view, pinned, opts.font, opts.font_size, restored),
+        (false, pinned) => window::run(session, view, pinned, font, font_size, restored),
     }
     0
 }
@@ -194,5 +254,87 @@ mod path_tests {
             "/usr/bin:/bin:/Users/u/.local/bin:/Users/u/.fno/install/bin:/opt/homebrew/bin:/usr/local/bin"
         );
         assert_eq!(widened_path(&path, "/Users/u"), path);
+    }
+}
+
+#[cfg(test)]
+mod launch_prefs_tests {
+    use super::launch_prefs;
+    use crate::window::MainView;
+
+    fn cfg(
+        launch_screen: Option<&str>,
+        font: Option<&str>,
+        size: Option<f64>,
+    ) -> serde_json::Value {
+        let mut mux = serde_json::Map::new();
+        if let Some(ls) = launch_screen {
+            mux.insert("launch_screen".into(), serde_json::json!(ls));
+        }
+        let mut app = serde_json::Map::new();
+        if let Some(f) = font {
+            app.insert("font".into(), serde_json::json!(f));
+        }
+        if let Some(s) = size {
+            app.insert("font_size".into(), serde_json::json!(s));
+        }
+        serde_json::json!({"mux": mux, "app": app})
+    }
+
+    #[test]
+    fn config_fills_the_ladder_between_flags_and_saved_state() {
+        // Config picks the face and the first view with no flags.
+        let raw = cfg(Some("hq"), Some("JetBrains Mono"), Some(14.0));
+        let (font, size, view) = launch_prefs(None, None, None, None, Some(&raw));
+        assert_eq!(font, "JetBrains Mono");
+        assert_eq!(size, 14.0);
+        assert_eq!(view, MainView::Orchestration);
+        // A flag beats the config pin.
+        let (font, size, view) = launch_prefs(
+            Some("Menlo".into()),
+            Some(12.0),
+            Some(MainView::Terminal),
+            None,
+            Some(&raw),
+        );
+        assert_eq!(font, "Menlo");
+        assert_eq!(size, 12.0);
+        assert_eq!(view, MainView::Terminal);
+        // The saved view survives an unset key, and Chat stays the floor.
+        let empty = cfg(None, None, None);
+        let (font, size, view) = launch_prefs(None, None, None, Some(MainView::Mods), Some(&empty));
+        assert_eq!(font, "SF Mono");
+        assert_eq!(size, 13.0);
+        assert_eq!(view, MainView::Mods);
+    }
+
+    #[test]
+    fn the_schema_default_does_not_pin_chat_over_the_saved_view() {
+        // The RAW read: an explicit "agents" pins Chat, but an absent key
+        // falls through to the saved view - the resolved default would
+        // strand the restore.
+        let empty = cfg(None, None, None);
+        let (_, _, view) = launch_prefs(
+            None,
+            None,
+            None,
+            Some(MainView::Orchestration),
+            Some(&empty),
+        );
+        assert_eq!(view, MainView::Orchestration);
+        let pinned = cfg(Some("agents"), None, None);
+        let (_, _, view) = launch_prefs(
+            None,
+            None,
+            None,
+            Some(MainView::Orchestration),
+            Some(&pinned),
+        );
+        assert_eq!(view, MainView::Chat);
+        // An unknown word falls through too, never wedges the launch.
+        let odd = cfg(Some("chaos"), None, None);
+        let (_, _, view) =
+            launch_prefs(None, None, None, Some(MainView::Orchestration), Some(&odd));
+        assert_eq!(view, MainView::Orchestration);
     }
 }
