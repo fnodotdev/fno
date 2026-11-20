@@ -2993,7 +2993,7 @@ impl Render for Root {
                 .text_size(px(ui::BODY))
                 .child(text)
         });
-        div()
+        let page = div()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
             .on_modifiers_changed(cx.listener(Self::on_modifiers))
@@ -3024,15 +3024,28 @@ impl Render for Root {
                     .child(strip)
                     .child(main)
                     .children(toast),
-            )
-            .when(self.launch.open, |d| {
-                d.child(launch::render(self, window, cx))
-            })
-            .when(self.sheet, |d| d.child(sheet::render(self, cx)))
-            .when(self.goto.is_some(), |d| d.child(goto::render(self, cx)))
-            .when(self.settings.is_some(), |d| {
-                d.child(settings::render(self, cx))
-            })
+            );
+        self.overlays(page, window, cx)
+    }
+}
+
+impl Root {
+    /// The overlays over the window, in draw order: the launch composer,
+    /// the key sheet, the go-to palette, the Settings panel.
+    fn overlays(
+        &mut self,
+        page: gpui::Div,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        page.when(self.launch.open, |d| {
+            d.child(launch::render(self, window, cx))
+        })
+        .when(self.sheet, |d| d.child(sheet::render(self, cx)))
+        .when(self.goto.is_some(), |d| d.child(goto::render(self, cx)))
+        .when(self.settings.is_some(), |d| {
+            d.child(settings::render(self, cx))
+        })
     }
 }
 
