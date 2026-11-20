@@ -1741,6 +1741,7 @@ impl Root {
         match key.key {
             "enter" if !shift => self.submit_chat(cx),
             "enter" => self.chat.draft.replace_selection("\n"),
+            "tab" if self.chat.complete_skill() => {}
             "backspace" => self.chat.draft.backspace(),
             "delete" => self.chat.draft.delete(),
             "left" if cmd => self.chat.draft.home(shift),

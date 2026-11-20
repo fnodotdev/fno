@@ -161,6 +161,9 @@ pub struct Chat {
     pub next_request: u64,
     /// The composer's bounds at the last paint, where the IME window opens.
     pub composer: Rc<Cell<Bounds<Pixels>>>,
+    /// The shown session's harness skills, read on a switch. User and
+    /// plugin roots only: the chat holds no project path.
+    pub skills: Vec<crate::skills::Skill>,
 }
 
 impl Default for Chat {
@@ -179,6 +182,7 @@ impl Default for Chat {
             pending: Vec::new(),
             next_request: 1,
             composer: Rc::new(Cell::new(Bounds::default())),
+            skills: Vec::new(),
         }
     }
 }
@@ -194,6 +198,10 @@ impl Chat {
         if let Some(old_key) = self.key.take() {
             self.parked.insert(old_key, old);
         }
+        self.skills = key
+            .as_ref()
+            .map(|k| crate::skills::list(&k.harness, ""))
+            .unwrap_or_default();
         self.key = key;
         self.stream = None;
         self.closed = None;
@@ -201,6 +209,47 @@ impl Chat {
         self.pending.clear();
         self.opened_at = Instant::now();
         self.list.reset(self.conv.items.len());
+    }
+
+    /// The skills the draft's leading `<sigil>query` matches, grouped by
+    /// source. Empty once the draft holds a space or the harness has no
+    /// sigil.
+    pub fn skill_hits(&self) -> Vec<crate::skills::Skill> {
+        let Some(sigil) = self
+            .key
+            .as_ref()
+            .and_then(|k| crate::skills::sigil(&k.harness))
+        else {
+            return Vec::new();
+        };
+        let Some(q) = self
+            .draft
+            .text()
+            .strip_prefix(sigil)
+            .filter(|q| !q.contains(char::is_whitespace))
+        else {
+            return Vec::new();
+        };
+        crate::skills::matching(&self.skills, q, 6)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Tab fills the top match as `<sigil>name `. False when none show.
+    pub fn complete_skill(&mut self) -> bool {
+        let (Some(first), Some(sigil)) = (
+            self.skill_hits().into_iter().next(),
+            self.key
+                .as_ref()
+                .and_then(|k| crate::skills::sigil(&k.harness)),
+        ) else {
+            return false;
+        };
+        self.draft.select_all();
+        self.draft
+            .replace_selection(&format!("{sigil}{} ", first.name));
+        true
     }
 
     /// Fold a batch. Rows that changed in place are measured again; rows

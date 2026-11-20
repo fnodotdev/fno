@@ -1034,11 +1034,14 @@ fn axis_picker_rows(l: &Launch, p: &Palette, cx: &mut Context<Root>) -> Div {
 /// with a label per group; tab fills the top one. None show unless the
 /// draft leads with the harness's sigil and the harness lists skills.
 fn skill_hints(l: &Launch, p: &Palette) -> Option<Div> {
-    let rows = l.skill_completions();
+    skill_rows(l.skill_completions(), skills::sigil(&l.harness)?, p)
+}
+
+/// The grouped popover rows, shared by the start and chat composers.
+pub(crate) fn skill_rows(rows: Vec<Skill>, sigil: char, p: &Palette) -> Option<Div> {
     if rows.is_empty() {
         return None;
     }
-    let sigil = skills::sigil(&l.harness)?;
     let mut col = div().flex().flex_col().px_2().gap(px(2.0));
     let mut group = None;
     for s in rows {

@@ -873,6 +873,15 @@ fn composer(root: &Root, window: &Window, cx: &mut Context<Root>) -> Option<Div>
                 .child(format!("[img {} KB]", att.bytes.len() / 1024)),
         );
     }
+    let sigil = root
+        .chat
+        .key
+        .as_ref()
+        .and_then(|k| crate::skills::sigil(&k.harness));
+    if let Some(rows) = sigil.and_then(|c| crate::launch::skill_rows(root.chat.skill_hits(), c, &p))
+    {
+        bar = bar.child(rows.pb_2());
+    }
     bar = bar.child(
         div()
             .flex()
