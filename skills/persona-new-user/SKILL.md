@@ -74,4 +74,5 @@ An edit to this skill or its references lands only when the persona's accuracy o
 
 ## Known Limitations and Deferred Work
 
-See [LIMITATIONS.md](LIMITATIONS.md).
+- The labeled set holds six seed cases, so one case moves accuracy by about 17 points.
+- See [LIMITATIONS.md](LIMITATIONS.md).
