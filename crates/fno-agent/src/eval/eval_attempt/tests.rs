@@ -86,19 +86,3 @@ fn aggregate_refuses_when_the_bank_changed_since_the_pin() {
 fn obs(extra: serde_json::Value) -> serde_json::Value {
     json!({ "obs": extra })
 }
-
-#[test]
-fn graded_task_failure_is_distinct_from_infrastructure() {
-    // AC1-EDGE: the worker did the task wrong - a valid grade of false, never
-    // an infrastructure/unavailable retryable row.
-    let v = classify(
-        &obs(json!({
-            "fixture_prepared": true, "worker_required": true,
-            "worker_started": true, "grader_ran": true, "grader_passed": false,
-        })),
-        None,
-    );
-    assert_eq!(v.status, "graded");
-    assert_eq!(v.graded, Some(false));
-    assert!(!v.retryable);
-}

@@ -2482,7 +2482,6 @@ mod tests {
     }
 
     /// Change 1: the preregistered split, the cluster pick and the stripped proposer input (AC1-HP, AC1-EDGE), and the dry run that prints them.
-    #[test]
     fn the_proposer_reads_train_goldens_only() {
         the_split_is_preregistered();
         proposer_input_carries_train_only_and_strips_answer_keys();
@@ -2492,7 +2491,6 @@ mod tests {
     }
 
     /// Change 2: a reply that leaves repo text, edits more than 3 files or quotes an answer key refuses; keep_base passes (AC2-HP).
-    #[test]
     fn the_reply_tripwires_refuse() {
         a_change_reply_validates_and_keep_base_passes();
         an_edit_quoting_an_answer_key_refuses_and_names_the_golden();
@@ -2501,7 +2499,6 @@ mod tests {
     }
 
     /// Change 3: the sign-checked gain rule, the cap and the count-identity ledger (AC3-HP, AC3-EDGE, AC3-LEDGER).
-    #[test]
     fn the_gain_budget_and_ledger_rules() {
         gain_reads_the_rule();
         the_ledger_refuses_a_count_mismatch_and_a_duplicate();
@@ -2509,7 +2506,6 @@ mod tests {
     }
 
     /// Change 4: one PR per gain, a row per cluster, keep_base spends no candidate cohort, an open PR reads already_open (AC4-HP, AC4-EDGE, AC2-EDGE).
-    #[test]
     fn a_cycle_ships_at_most_one_pr_per_gain() {
         a_cycle_opens_one_pr_and_lands_a_row_per_cluster();
         keep_base_runs_no_candidate_cohort();
@@ -2517,9 +2513,18 @@ mod tests {
     }
 
     /// Change 5: a lost gain opens one revert and records retired; an unproved cluster golden suspends (AC6-HP, AC6-EDGE).
-    #[test]
     fn probation_retires_or_suspends() {
         probation_retires_a_change_that_stopped_paying();
         probation_suspends_on_an_unproved_golden();
+    }
+
+    /// One declaration for the module's contracts, one helper per change.
+    #[test]
+    fn all_contracts_in_one_declaration() {
+        the_proposer_reads_train_goldens_only();
+        the_reply_tripwires_refuse();
+        the_gain_budget_and_ledger_rules();
+        a_cycle_ships_at_most_one_pr_per_gain();
+        probation_retires_or_suspends();
     }
 }
