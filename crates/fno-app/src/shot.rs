@@ -144,21 +144,16 @@ pub fn run(opts: ShotOptions) -> i32 {
                 eprintln!("fno-app --shot: the board feeds never settled; capturing anyway");
             }
             // The tap: one real click inside the shot window before the
-            // capture. The event posts to this process's own pid and the
-            // app routes it through its own mouse path, so the fold
-            // opens the way a user's click opens it, not through a
-            // seeded state.
+            // capture. The events queue in the app and run its own mouse
+            // path, so the fold opens the way a user's click opens it,
+            // not through a seeded state.
             if let Some((tx, ty)) = tap {
-                // SAFETY: frame and flag setters on the window this
-                // process owns.
+                // SAFETY: reads on the window this process owns.
                 unsafe { tap_window_point(w, tx, ty) };
-                // The yield lets the run loop deliver the posted click;
-                // only then does the click-through shield go back up.
+                // The yield lets the run loop dispatch the queued click.
                 cx.background_executor()
                     .timer(Duration::from_millis(300))
                     .await;
-                // SAFETY: setter on the window this process owns.
-                let _: () = unsafe { msg_send![w, setIgnoresMouseEvents: true] };
                 handle.update(cx, |_, window, _| window.refresh()).ok();
                 cx.background_executor()
                     .timer(Duration::from_millis(150))
@@ -243,16 +238,6 @@ extern "C" {
     static kCGWindowBounds: *const c_void;
     static kCGWindowLayer: *const c_void;
     static kCGWindowAlpha: *const c_void;
-    fn CGEventCreateMouseEvent(
-        source: *const c_void,
-        mouse_type: u32,
-        cursor: core_graphics::geometry::CGPoint,
-        mouse_button: u32,
-    ) -> *const c_void;
-    fn CGEventSetIntegerValueField(event: *const c_void, field: i64, value: i64);
-    fn CGEventPostToPid(pid: i32, event: *const c_void);
-    fn CGMainDisplayID() -> u32;
-    fn CGDisplayBounds(display: u32) -> core_graphics::geometry::CGRect;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -564,41 +549,45 @@ fn flatten_png(path: &std::path::Path) -> Result<(), FrameError> {
     Ok(())
 }
 
-/// One real left click at the window-relative logical point: the frame
-/// flips the point into CG's top-left global space, the event posts to
-/// this process's own pid (no cursor move, nothing else on the desktop
-/// changes), and the click-through flag lifts so the otherwise
-/// mouse-transparent window can take the delivery. The flag STAYS
-/// lifted: the posted events only reach the app when the caller yields
-/// to the run loop, so the caller restores the flag after a settle
-/// wait. SAFETY: frame and flag setters on the window this process
-/// owns; the CGEvent objects are released right after posting.
+/// One real left click at the window-relative logical point. The down
+/// and up go into NSApp's own event queue, addressed to the shot window
+/// by number, so AppKit dispatches them to the view's mouseDown and
+/// mouseUp exactly as it would a user's click. The window server never
+/// hit-tests them. A CGEvent posted to the pid at the same point left
+/// the fold shut in both themes (measured). The click-through flag stays up the whole
+/// time, so no user click can reach the shot window. The events only
+/// dispatch once the caller yields to the run loop. SAFETY: reads and
+/// class-method calls on the window this process owns.
 unsafe fn tap_window_point(w: *mut objc::runtime::Object, tx: f64, ty: f64) {
     let frame: core_graphics::geometry::CGRect = msg_send![w, frame];
-    // SAFETY: plain display reads.
-    let bounds = unsafe { CGDisplayBounds(CGMainDisplayID()) };
-    let cg_x = frame.origin.x + tx;
-    let cg_y = bounds.size.height - frame.origin.y - frame.size.height + ty;
-    eprintln!("fno-app --shot: tap window ({tx},{ty}) -> global ({cg_x:.0},{cg_y:.0})");
-    let _: () = msg_send![w, setIgnoresMouseEvents: false];
-    // mouseDown=1, mouseUp=2; the click state is set on the down because
-    // some event consumers drop a synthesized click whose state reads 0.
-    for (kind, click_state) in [(1u32, 1i64), (2u32, 0i64)] {
-        let ev = CGEventCreateMouseEvent(
-            std::ptr::null(),
-            kind,
-            core_graphics::geometry::CGPoint { x: cg_x, y: cg_y },
-            0,
-        );
+    let num: i64 = msg_send![w, windowNumber];
+    // AppKit window coordinates put the origin at the bottom left.
+    let at = core_graphics::geometry::CGPoint {
+        x: tx,
+        y: frame.size.height - ty,
+    };
+    eprintln!(
+        "fno-app --shot: tap window ({tx},{ty}) -> window-local ({:.0},{:.0})",
+        at.x, at.y
+    );
+    let app: *mut objc::runtime::Object = msg_send![class!(NSApplication), sharedApplication];
+    // NSEventTypeLeftMouseDown=1, NSEventTypeLeftMouseUp=2.
+    for kind in [1u64, 2u64] {
+        let ev: *mut objc::runtime::Object = msg_send![class!(NSEvent),
+            mouseEventWithType: kind
+            location: at
+            modifierFlags: 0u64
+            timestamp: 0f64
+            windowNumber: num
+            context: std::ptr::null::<c_void>()
+            eventNumber: 0i64
+            clickCount: 1i64
+            pressure: 1f32];
         if ev.is_null() {
             eprintln!("fno-app --shot: the tap event did not create");
-            break;
+            return;
         }
-        CGEventSetIntegerValueField(ev, 1, click_state);
-        CGEventPostToPid(std::process::id() as i32, ev);
-        CFRelease(ev);
-        // The up must land after the down reached the app's queue.
-        std::thread::sleep(Duration::from_millis(40));
+        let _: () = msg_send![app, postEvent: ev atStart: false];
     }
 }
 
