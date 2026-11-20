@@ -153,8 +153,14 @@ pub fn decide(input: &NudgeInput) -> (NudgeAction, LadderState) {
     }
     // 3. Pause: a merge order, the owner's pr-hold, a fleet loop halt, an
     // open operator question, or the merge authority's own refusal holds
-    // the row. The pause names itself at most once per hour.
-    if input.merge_order_hold || input.merge_refused {
+    // the row. So does a user gate: the run already ended (Done* in the
+    // ledger) or the PR reads draft, and the PR sits settled green and
+    // open, which leaves a person's verdict as the only gate left. Driving
+    // either shape repeats an order the worker cannot act on. The pause
+    // names itself at most once per hour. A settled red never parks: the
+    // red-head rung above re-armed the budget, and the worker owns a fix.
+    let parked = (input.run_terminated || input.pr_draft) && input.settled_green_open;
+    if input.merge_order_hold || input.merge_refused || parked {
         return (NudgeAction::Pause, state);
     }
     // 4. Escalate: the budget is spent and the operator has not heard yet.
@@ -205,6 +211,15 @@ pub struct NudgeInput {
     /// A CI verdict word is also a refused blocker but the worker owns the
     /// next push, so only the authority codes hold.
     pub merge_refused: bool,
+    /// The node's newest ledger run terminated with a Done* reason: the
+    /// loop itself concluded, so a green PR owes the worker no drive order.
+    pub run_terminated: bool,
+    /// The status payload read the PR as a draft: the lead's hold lives in
+    /// GitHub, not the graph, and driving to merge repeats that hold.
+    pub pr_draft: bool,
+    /// The status read settled green on an OPEN PR, the one shape whose
+    /// remaining gate is a person rather than this worker.
+    pub settled_green_open: bool,
 }
 
 /// The production effect: one bounded subprocess, returning the exit code,
@@ -331,6 +346,7 @@ fn record_pause(
     mut state: LadderState,
     state_param: &LadderState,
     now: i64,
+    reason: &str,
 ) {
     if &state != state_param {
         save_state(home, &row.session_id, &state);
@@ -339,14 +355,15 @@ fn record_pause(
         .last_pause_emit_at
         .is_none_or(|then| now.saturating_sub(then) >= PAUSE_EMIT_FLOOR_S);
     if pause_due {
-        let _ = emitter.emit(
-            "pr_nudge_paused",
-            &serde_json::json!({
-                "session_id": row.session_id,
-                "node": row.node,
-                "pr": row.pr,
-            }),
-        );
+        let mut fields = serde_json::json!({
+            "session_id": row.session_id,
+            "node": row.node,
+            "pr": row.pr,
+        });
+        if !reason.is_empty() {
+            fields["reason"] = serde_json::json!(reason);
+        }
+        let _ = emitter.emit("pr_nudge_paused", &fields);
         state.last_pause_emit_at = Some(now);
         save_state(home, &row.session_id, &state);
     }
@@ -366,7 +383,7 @@ pub fn apply(
     runner: Runner,
 ) {
     let loop_pause = loop_pause_hold(home, row);
-    let (action, mut state, status) = decide_with_read(
+    let (action, mut state, status, reason) = decide_with_read(
         row,
         state_param,
         merge_order_hold,
@@ -399,7 +416,7 @@ pub fn apply(
         NudgeAction::Pause => {
             // A stamped red head must survive the hold, or the wake after
             // the lift would count as a second one.
-            record_pause(home, emitter, row, state, state_param, now);
+            record_pause(home, emitter, row, state, state_param, now, reason);
         }
         NudgeAction::Escalate => {
             let key = task_key(row);
@@ -430,7 +447,7 @@ pub fn apply(
         }
         NudgeAction::Mail | NudgeAction::Resume => {
             if nudge_pause_hold(home, row) {
-                record_pause(home, emitter, row, state, state_param, now);
+                record_pause(home, emitter, row, state, state_param, now, "held");
                 return;
             }
             // Mail and resume are only reachable past `due`, which is where
@@ -520,7 +537,7 @@ pub fn apply(
                 (code, stdout, code == 0, false)
             };
             if resumed_exit == Some(crate::resume_gate::RESUME_PAUSED_EXIT) {
-                record_pause(home, emitter, row, state, state_param, now);
+                record_pause(home, emitter, row, state, state_param, now, "held");
                 return;
             }
             state.attempts += 1;
@@ -698,6 +715,44 @@ fn actionable_nudge_status(status: &Result<Value, i32>) -> bool {
     );
     let open = payload.get("pr_state").and_then(Value::as_str) == Some("OPEN");
     settled && actionable_verdict && open
+}
+
+/// The status read settled green on an OPEN PR: the one shape whose
+/// remaining gate is a person's verdict rather than this worker's next
+/// push. A red payload never parks; the red-head rung owns that wake.
+fn settled_green_open(status: &Result<Value, i32>) -> bool {
+    let Ok(payload) = status else {
+        return false;
+    };
+    payload.get("settled").and_then(Value::as_bool) == Some(true)
+        && payload.get("verdict").and_then(Value::as_str) == Some("green")
+        && payload.get("pr_state").and_then(Value::as_str) == Some("OPEN")
+}
+
+/// The newest ledger run for `node` terminated with a Done* reason. Newest
+/// wins because the ledger is append-ordered history: an entry without a
+/// termination_reason is an in-flight run, and it unparks the row. A
+/// Done* termination is the loop's own conclusion, so after it a green PR
+/// owes this worker no drive order. No file read settles the park alone;
+/// the caller joins it with the status shape.
+fn newest_run_terminal_rows(rows: &[Value], node: &str) -> bool {
+    rows.iter()
+        .rev()
+        .find(|row| row.get("graph_node_id").and_then(Value::as_str) == Some(node))
+        .and_then(|row| row.get("termination_reason").and_then(Value::as_str))
+        .is_some_and(|reason| reason.starts_with("Done"))
+}
+
+/// The file-reading half of [`newest_run_terminal_rows`]. The same
+/// test-root guard the merge gate's `ledger_plan_path` carries: the ledger
+/// is global history, so an undeclared test process answers false instead
+/// of reading the operator's runs.
+fn newest_run_terminal(cwd: &std::path::Path, node: &str) -> bool {
+    if cfg!(test) && !crate::paths::test_root_declared() {
+        return false;
+    }
+    let rows = crate::loopcheck::ledger_file_rows(&crate::paths_cli::ledger_json(cwd));
+    newest_run_terminal_rows(&rows, node)
 }
 
 /// The merge-authority hold, read from the receipt the status read already
@@ -1056,6 +1111,11 @@ fn cleanup_state_files(home: &AgentsHome, rows: &[OpenPrRow]) {
 
 /// Everything one pass needs to decide: the input built the same way for
 /// the daemon arm and the dry run, plus the status read a due row took.
+/// Everything one pass needs to decide: the input built the same way for
+/// the daemon arm and the dry run, plus the status read a due row took.
+/// The fourth tuple slot names why a Pause fired (`held` for the
+/// pre-existing hold set, `terminated_run` or `draft_pr` for the user-gate
+/// parks), so the pause event carries it.
 fn decide_with_read(
     row: &OpenPrRow,
     state_param: &LadderState,
@@ -1064,7 +1124,13 @@ fn decide_with_read(
     grace_secs: i64,
     now: i64,
     runner: Runner,
-) -> (NudgeAction, LadderState, Option<Result<Value, i32>>) {
+) -> (
+    NudgeAction,
+    LadderState,
+    Option<Result<Value, i32>>,
+    &'static str,
+) {
+    let run_terminated = newest_run_terminal(std::path::Path::new(&row.cwd), &row.node);
     let mut input = NudgeInput {
         state: state_param.clone(),
         transcript_age_s: row.transcript_age_s,
@@ -1076,6 +1142,9 @@ fn decide_with_read(
         busy: row.busy,
         red_head: None,
         merge_refused: false,
+        run_terminated,
+        pr_draft: false,
+        settled_green_open: false,
     };
     let mut status = None;
     // ponytail: one status read per due row per retire pass (300 s), and an
@@ -1085,16 +1154,31 @@ fn decide_with_read(
     // row (merge order, authorized-merge pr-hold, loop pause, or question
     // hold) also skips the read: the decision is Pause either way, and the
     // read is a wasted `gh`-touching call for a row the ladder already knows
-    // not to nudge. A refusal leg from the receipt needs the read, so it
-    // lands only on a due row the earlier holds did not catch.
+    // not to nudge. A user-gate row is unheld by definition, so it takes
+    // the read: the draft bit and the settled-green shape live in the
+    // payload, and without them the park cannot fire. A refusal leg from
+    // the receipt needs the read, so it lands only on a due row the
+    // earlier holds did not catch.
     if !input.merge_order_hold && due(&input) && row.pr.is_some() {
         let s = read_status(row, runner);
         input.red_head = s.as_ref().ok().and_then(settled_red_head);
         input.merge_refused = authority_refusal_hold(&s);
+        input.pr_draft = s
+            .as_ref()
+            .ok()
+            .and_then(|p| p.get("draft").and_then(Value::as_bool))
+            .unwrap_or(false);
+        input.settled_green_open = settled_green_open(&s);
         status = Some(s);
     }
     let (action, state) = decide(&input);
-    (action, state, status)
+    let reason = match action {
+        NudgeAction::Pause if input.merge_order_hold || input.merge_refused => "held",
+        NudgeAction::Pause if input.run_terminated => "terminated_run",
+        NudgeAction::Pause => "draft_pr",
+        _ => "",
+    };
+    (action, state, status, reason)
 }
 
 /// The DRY-RUN plan: decisions only, no effect, no state write. Staged
@@ -1481,6 +1565,9 @@ mod tests {
                 busy: false,
                 red_head: None,
                 merge_refused: false,
+                run_terminated: false,
+                pr_draft: false,
+                settled_green_open: false,
             })
             .0,
             NudgeAction::Wait
@@ -1909,5 +1996,144 @@ mod tests {
         let text2 = nudge_text(&r, &read_status(&r, &mut runner2));
         assert!(text2.contains("red unsettled @ abcdef123456"), "{text2}");
         assert!(text2.contains(". Failing: `ci`"), "{text2}");
+    }
+
+    /// The user-gate park: the ledger's newest run for the node ended
+    /// Done* or the PR reads draft, and the PR sits settled green and
+    /// open. The ladder pauses instead of ordering a drive the worker
+    /// cannot act on. AC1-HP's shape.
+    #[test]
+    fn newest_run_terminal_rows_reads_newest_entry_per_node() {
+        let done = serde_json::json!({
+            "graph_node_id": "x-node",
+            "termination_reason": "DonePRGreen",
+        });
+        let inflight = serde_json::json!({
+            "graph_node_id": "x-node",
+            "termination_reason": serde_json::Value::Null,
+        });
+        let nowork = serde_json::json!({
+            "graph_node_id": "x-node",
+            "termination_reason": "NoWork",
+        });
+        let other = serde_json::json!({
+            "graph_node_id": "x-other",
+            "termination_reason": "DonePRGreen",
+        });
+        assert!(newest_run_terminal_rows(&[done.clone()], "x-node"));
+        assert!(
+            !newest_run_terminal_rows(&[done.clone(), inflight.clone()], "x-node"),
+            "a newer in-flight run unparks the row"
+        );
+        assert!(
+            newest_run_terminal_rows(&[inflight.clone(), done.clone()], "x-node"),
+            "a newer Done* run parks it again"
+        );
+        assert!(!newest_run_terminal_rows(&[nowork.clone()], "x-node"));
+        assert!(
+            !newest_run_terminal_rows(&[done.clone(), other.clone()], "x-node"),
+            "another node's terminal run is not this row's"
+        );
+    }
+
+    #[test]
+    fn terminated_run_parks_a_settled_green_row() {
+        let input = crate::pr_nudge::NudgeInput {
+            state: LadderState::default(),
+            transcript_age_s: Some(1_000),
+            last_activity_at: None,
+            merge_order_hold: false,
+            grace_secs: 900,
+            now: 1_900,
+            live: true,
+            busy: false,
+            red_head: None,
+            merge_refused: false,
+            run_terminated: true,
+            pr_draft: false,
+            settled_green_open: true,
+        };
+        assert_eq!(decide(&input).0, NudgeAction::Pause);
+        // The park outranks the operator escalation: a spent budget on a
+        // parked row files no second ask.
+        let spent = crate::pr_nudge::NudgeInput {
+            state: LadderState {
+                attempts: MAX_ATTEMPTS,
+                ..LadderState::default()
+            },
+            ..input.clone()
+        };
+        assert_eq!(decide(&spent).0, NudgeAction::Pause);
+    }
+
+    #[test]
+    fn terminated_run_still_wakes_a_settled_red_row() {
+        let input = crate::pr_nudge::NudgeInput {
+            state: LadderState::default(),
+            transcript_age_s: Some(1_000),
+            last_activity_at: None,
+            merge_order_hold: false,
+            grace_secs: 900,
+            now: 1_900,
+            live: true,
+            busy: false,
+            red_head: Some("0123456789abcdef".to_string()),
+            merge_refused: false,
+            run_terminated: true,
+            pr_draft: false,
+            // A red payload never sets this, so the park never fires on red.
+            settled_green_open: false,
+        };
+        let (action, state) = decide(&input);
+        assert!(
+            matches!(action, NudgeAction::Mail | NudgeAction::Resume),
+            "the red-head wake survives a terminal run"
+        );
+        assert_eq!(state.attempts, MAX_ATTEMPTS - 1, "one red wake re-arms");
+    }
+
+    #[test]
+    fn draft_pr_parks_a_settled_green_row() {
+        let input = crate::pr_nudge::NudgeInput {
+            state: LadderState::default(),
+            transcript_age_s: Some(1_000),
+            last_activity_at: None,
+            merge_order_hold: false,
+            grace_secs: 900,
+            now: 1_900,
+            live: true,
+            busy: false,
+            red_head: None,
+            merge_refused: false,
+            run_terminated: false,
+            pr_draft: true,
+            settled_green_open: true,
+        };
+        assert_eq!(decide(&input).0, NudgeAction::Pause);
+    }
+
+    #[test]
+    fn green_without_a_user_gate_still_wakes() {
+        let base = crate::pr_nudge::NudgeInput {
+            state: LadderState::default(),
+            transcript_age_s: Some(1_000),
+            last_activity_at: None,
+            merge_order_hold: false,
+            grace_secs: 900,
+            now: 1_900,
+            live: true,
+            busy: false,
+            red_head: None,
+            merge_refused: false,
+            run_terminated: false,
+            pr_draft: false,
+            settled_green_open: true,
+        };
+        assert_eq!(decide(&base).0, NudgeAction::Mail);
+        let stopped = crate::pr_nudge::NudgeInput {
+            live: false,
+            ..base.clone()
+        };
+        assert_eq!(decide(&stopped).0, NudgeAction::Resume);
     }
 }
