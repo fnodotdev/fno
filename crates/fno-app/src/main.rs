@@ -58,6 +58,14 @@ struct Args {
     /// instead of capturing. Diagnostic.
     #[arg(long = "shot-hold", hide = true)]
     shot_hold: bool,
+    /// The chat pane keeps its empty start view for the frame, whatever
+    /// the world's focus carries. Shot-only.
+    #[arg(long = "shot-empty-chat", hide = true)]
+    shot_empty_chat: bool,
+    /// Cmd held: the rows and the start view show their cmd hints.
+    /// Shot-only.
+    #[arg(long = "shot-cmd", hide = true)]
+    shot_cmd: bool,
 }
 
 /// The --shot-mode values. The kebab spellings mirror MainView.
@@ -131,6 +139,8 @@ fn main() {
                 ShotSettings::Page => fno_app::SettingsShot::Page,
             }),
             hold: args.shot_hold,
+            empty_chat: args.shot_empty_chat,
+            cmd: args.shot_cmd,
         })
     } else {
         None

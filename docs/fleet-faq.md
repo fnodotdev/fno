@@ -86,6 +86,10 @@ When the old worker holds context you must otherwise pay to rebuild, prefer resu
 
 The provider-cap actor brings them back, not the watchdog and not a clock. Watch the lane with `fno agent admit provider-cap status`. When the quota lock's `rate_limited_until` passes and no member's 429 is newer, the lane reads `returning`. The actor resumes one canary and holds a survive window of `canary_survive_minutes` (default 15). Then it trickles the rest one per tick. In `ask` mode outside sleep hours it announces first and holds a 10-minute veto. `fno agent admit provider-cap decide <lane> --answer wait` holds them for as long as the answer stands. A canary that hits a new 429 reopens the lane for the leave ladder instead.
 
+What happens while the lane is open depends on `[provider_cap] mode`. The default is `park`. When the lane opens, each owning lead gets one mail. The spawn gate refuses new work on the lane until the named reset, and `fno agent fleet top` shows the lane as `PARKED until <reset>`. Nothing moves to another paid lane. After the reset, the parked workers resume on their own lane.
+
+To move important work instead, set `mode = "triage"` and name the lanes in `destinations`, for example `["codex-luna", "claude-sonnet-5-5"]`. A worker on a p0 or p1 node, or with an open PR, then moves with a handoff doc. It goes to the first lane that accepts the spawn. The rest still park. Set `mode = "ask"` to move nothing until you answer, or `enabled = false` to turn the actor off.
+
 ## My worker did real work and never reported it
 
 Read its transcript. A finished worker can print its report into its own transcript and stop without mailing anyone. Its roster row then reads `quiet` with `last_message_at` null, which looks identical to a worker that did nothing.

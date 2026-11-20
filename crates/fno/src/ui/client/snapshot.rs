@@ -1674,6 +1674,10 @@ fn stage_menu(view: &mut View, kind: Option<&ViewKind>) -> Result<bool, ShotErro
                 .position(|r| matches!(r, super::DisplayRow::Agent(_)))
                 .ok_or("no agent rows to open a row menu on")?;
             view.open_row_menu(i, Anchor::Center);
+            // The shot must pair the menu with the row it acts on: the
+            // selector moves to the menu's row, so the highlight names the
+            // target the header names.
+            view.selector = Some(i);
         }
         Some(kind @ (ViewKind::Hover | ViewKind::Cursor)) => {
             let agents = view.display_rows().into_iter().enumerate();

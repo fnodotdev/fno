@@ -3459,6 +3459,33 @@ fn followup(
     }
 }
 
+/// The row's route-settings join: when the route's file and the session uuid
+/// are both in hand, publish the session-named twin and record THAT path, so
+/// `ls route-settings` matches a file to its session by eye. Best-effort: a
+/// failed publish records the digest path and warns, never fails the spawn.
+/// A caller's own `--settings` passthrough is recorded untouched; it names a
+/// file the route writer does not own.
+fn session_named_settings(
+    route: Option<RouteStamp<'_>>,
+    session_uuid: Option<&str>,
+    passthrough_settings: Option<&str>,
+) -> Option<String> {
+    let settings = route.map(|r| r.settings);
+    match (settings, session_uuid) {
+        (Some(settings), Some(uuid)) => {
+            match crate::route_settings::publish_session_entry(Path::new(settings), uuid) {
+                Ok(path) => Some(path.to_string_lossy().into_owned()),
+                Err(e) => {
+                    eprintln!("fno agent: warning: route-settings session twin for {uuid}: {e}");
+                    Some(settings.to_string())
+                }
+            }
+        }
+        (Some(settings), None) => Some(settings.to_string()),
+        (None, _) => passthrough_settings.map(str::to_string),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn create(
     home: &AgentsHome,
@@ -3710,10 +3737,7 @@ fn create(
         role_level: None,
         role_scope: None,
         role_grantor: None,
-        route_settings_path: route
-            .map(|r| r.settings)
-            .or(flags.settings)
-            .map(str::to_string),
+        route_settings_path: session_named_settings(route, session_uuid.as_deref(), flags.settings),
         delivery_policy: None,
         sandbox_posture: None,
         git_grant: None,

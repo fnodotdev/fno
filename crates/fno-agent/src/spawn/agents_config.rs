@@ -1858,15 +1858,24 @@ pub fn notify_on_done_enabled(cwd: &Path) -> bool {
 // --- [provider_cap]. The cap actor's own arm, independent of
 // recovery.watchdog: the watchdog stays in report mode; this table alone
 // decides whether a provider usage cap may move sessions. Same precedence and
-// fail-open degrade as every reader above: an absent table means OFF, a
-// malformed value degrades to its default.
+// fail-open degrade as every reader above: an absent table means armed in
+// park mode (alert and park, move nothing), a malformed value degrades to its
+// default.
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderCapConfig {
     pub enabled: bool,
-    /// `ask` (default: nothing moves until an operator answer is recorded) or
-    /// `auto` (members migrate without a question; sleep hours also auto).
+    /// `park` (default: the leads hear once, nothing moves to another paid
+    /// lane, and the return ladder resumes the parked members after the
+    /// reset), `triage` (a member whose node is p0 or p1, or which has an
+    /// open PR, moves to `destinations`; the rest park), `ask` (nothing moves
+    /// until an operator answer is recorded) or `auto` (every member migrates
+    /// without a question; sleep hours also auto).
     pub mode: String,
+    /// Route lanes a moving member tries in order when no fallback grid is
+    /// configured. Empty by default: moving work spends another paid lane,
+    /// so only an operator names one.
+    pub destinations: Vec<String>,
     /// A reset closer than this is waited out, never migrated (wave 3).
     pub min_wait_minutes: u64,
     /// "HH:MM-HH:MM" in `sleep_timezone` (empty = local); empty = never asleep.
@@ -1885,8 +1894,9 @@ pub struct ProviderCapConfig {
 impl Default for ProviderCapConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
-            mode: "ask".to_string(),
+            enabled: true,
+            mode: "park".to_string(),
+            destinations: Vec::new(),
             min_wait_minutes: 30,
             sleep_hours: String::new(),
             sleep_timezone: String::new(),
@@ -1919,8 +1929,18 @@ pub fn provider_cap_config(cwd: &Path) -> ProviderCapConfig {
         enabled: as_bool(value("enabled"), defaults.enabled),
         mode: value("mode")
             .and_then(|v| v.as_str().map(|s| s.trim().to_string()))
-            .filter(|m| matches!(m.as_str(), "ask" | "auto"))
+            .filter(|m| matches!(m.as_str(), "park" | "ask" | "auto" | "triage"))
             .unwrap_or_else(|| defaults.mode.clone()),
+        destinations: value("destinations")
+            .and_then(|v| {
+                v.as_array().map(|a| {
+                    a.iter()
+                        .filter_map(|d| d.as_str().map(|s| s.trim().to_string()))
+                        .filter(|d| !d.is_empty())
+                        .collect()
+                })
+            })
+            .unwrap_or_default(),
         min_wait_minutes: as_u64(value("min_wait_minutes"), defaults.min_wait_minutes),
         sleep_hours: value("sleep_hours")
             .and_then(|v| v.as_str().map(|s| s.trim().to_string()))

@@ -194,6 +194,15 @@ pub(super) fn backfill_ids(entry: &mut RegistryEntry, session_id: &str) {
     } else {
         entry.claude_session_uuid = Some(session_id.to_string());
     }
+    // A poll-miss spawn minted the row with the digest-named settings file;
+    // the uuid landing here is the first moment its session twin can exist.
+    if let Some(twin) = entry
+        .route_settings_path
+        .as_deref()
+        .and_then(|recorded| crate::route_settings::publish_for_row(recorded, session_id))
+    {
+        entry.route_settings_path = Some(twin);
+    }
 }
 
 /// The codex thread id a rollout path names: the trailing 36-char uuid of the

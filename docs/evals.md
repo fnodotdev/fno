@@ -62,6 +62,9 @@ Success criteria must be **mechanical** (develop-tests discipline): a task with 
 | `fno doctor evals report --check-metrics [--json]` | Run each golden's grader on its labelled cases. Exit 1 when a type is not proved. No model spend. See Failure types. |
 | `fno-agent evals candidates [--limit N] [--source KIND] [--json]` | Rank real failures to label as goldens. See Goldens. Read-only. |
 | `fno-agent evals candidates --traces` | Run the local failure-trace intake now. The daemon runs the same pass daily. |
+| `fno doctor evals report --decay [--json]` | Failure traces per model by context-percent band and compaction count, with n per cell. See Weekly and decay reports. |
+| `fno doctor evals report --weekly [--json]` | This week's label slice to check, judge agreement against the rubric bar, stale goldens and the failure trend. See Weekly and decay reports. |
+| `fno doctor evals report --learnings [--record ROW.json] [--json]` | Read the learnings ledger, or append one row. See Learnings ledger. |
 | `fno-agent evals export --profile` | Refresh and print the local anonymous user profile. No network export. |
 | `fno-agent evals export --profile-set FIELD=VALUE` | Set one local profile field. User values win over derived readings. |
 | `fno-agent evals drafts` | Run the correction-to-draft pass now and print new, open and expired counts. The daemon runs it daily. See Goldens. |
@@ -155,6 +158,20 @@ Run `fno-agent evals candidates --traces` to collect local failure evidence. The
 Each trace holds the trigger, up to ten prior tool calls and assistant statements, truth evidence, an anonymous profile id, session facts and context readings. Transcript evidence stops before the identified failure turn. Missing transcripts, turns and unsupported harness readings produce `{value: null, basis: "unmeasured", reason}`. A recorded assistant statement is a claim to inspect. It has not been verified by the intake. `right_action` and `layer_verdict` stay unmeasured until labeled. Existing files are never overwritten, so a repeat pass preserves labels.
 
 The first pass freezes the available S2 rows from the legacy correction log into `seed-s2.log` and creates a seed trace for each row. Later passes reuse the frozen file after removal of the legacy log. A new installation with no legacy log starts with an empty seed. The seed stays local and is not committed to the repository. When exactly one retained Claude transcript matches a seed session prefix, the pass resolves the prefix. The log batch timestamp does not locate a failure turn: the trace needs a unique matching correction turn, or its transcript facts stay unmeasured.
+
+### Weekly and decay reports
+
+`fno doctor evals report --decay` groups the failure traces by model. The context bands are 0-25, 25-50, 50-75 and 75-100 percent. The compaction counts are 0, 1, 2 and 3+. Each model prints its count per band and per compaction count, plus the traces with no reading. Traces hold failures only, so a cell's share is its part of that model's measured failures, not a per-turn failure rate. A model with fewer than 20 measured failures prints n and no share. On 2026-11-19 one machine held 1,520 traces. The 0-25 band held 379, 25-50 held 350, 50-75 held 77 and 75-100 held 3. The other 711 had no context reading.
+
+`fno doctor evals report --weekly` prints four parts. The slice holds up to 20 of this week's judge label rows. A hash of the week picks them, so the pick is stable within the week. Check a row by setting the trace's `layer_verdict` or `right_action` with basis `user_set`. The judge lines read the agreement with those hand labels. A judge stays unproved until it clears the rubric bar: 100 labels, 0.90 agreement and 0.80 kappa. A stale golden has no failure among 4 or more scored grades in the last 28 days. It catches nothing, so retire it or make it harder. The trend counts failure traces per signal kind for each of the last 4 ISO weeks. Seed traces carry their import day, so the trend leaves them out.
+
+The daily trace tick runs the weekly leg. The first tick of an ISO week writes `~/.fno/evals/weekly/<year>-W<week>.json` once, and settles the learnings ledger.
+
+### Learnings ledger
+
+`~/.fno/evals/learnings.jsonl` holds one append-only row per eval-caused change. The `kind` field is `go_node`, `pr` or `persona`. The other fields are `change`, `trace_ids`, `golden`, `go_node`, `score_before`, `pr` and `score_after`. Then come `score` (what the scores measure), `outcome` and `recorded_at`. An unknown field reads null. A change id lands once, so a rerun writes nothing.
+
+The weekly leg writes a go node's row 7 days after the node closes. Its scores are the failure traces of the cluster's signal kind in the 7 days before the close and the 7 days after. Fewer after reads `improved`. Other writers record their own proof with `--record ROW.json`. A `persona` row is accuracy on the persona's labeled set, and the ledger refuses one whose `score_after` does not exceed `score_before`. That refusal is the gate on a persona edit: see the `persona-new-user` skill.
 
 ### Local user profiles
 

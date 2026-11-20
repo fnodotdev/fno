@@ -1269,15 +1269,23 @@ pub(crate) fn check_lane_quota_lock(
         return Ok(());
     };
     let reset_unknown = lane.reset_epoch.is_none();
-    if reset_unknown {
-        let target = lane
-            .missing_reset_timezone
-            .first()
-            .map(String::as_str)
-            .unwrap_or(&lane.account);
+    if let Some(target) = lane
+        .missing_reset_timezone
+        .first()
+        .filter(|_| reset_unknown)
+    {
         warnings.push(format!(
             "spawn-gate: provider lane {} has an unknown reset; refusing; set reset_timezone on the [[accounts.records]] entry for {target}; no worker launched",
             lane.lane
+        ));
+    } else if reset_unknown {
+        // The zone is known, so the 429s named no reset at all: a rate
+        // refusal (1302), not the usage window. The hold runs from the
+        // newest capped 429.
+        warnings.push(format!(
+            "spawn-gate: provider lane {} is returning 429s that name no reset; refusing for up to {}h after the newest; no worker launched",
+            lane.lane,
+            UNKNOWN_RESET_HOLD_S / 3600
         ));
     } else {
         let when = chrono_like_iso(lane.reset_epoch.unwrap() as f64);
@@ -1333,6 +1341,37 @@ pub(crate) fn quota_penalty_until_raw(raw: &Value, account: &str, now: f64) -> O
         .rate_limited_until?;
     let penalty_end = rlu + QUOTA_PENALTY_WINDOW_S;
     (penalty_end > now).then_some(penalty_end)
+}
+
+/// The route axis of the penalty. A route-keyed spawn names no account, so
+/// the reset the lane snapshot recorded for the spawn's own provider and
+/// account (still ahead or just passed) stands in for the health record. A
+/// missing snapshot reads no penalty.
+pub(crate) fn lane_penalty_until(
+    home_root: &Path,
+    provider: &str,
+    account: &str,
+    now: f64,
+) -> Option<f64> {
+    let home = crate::paths::AgentsHome::at(home_root.to_path_buf());
+    let snapshot = crate::provider_cap::read_persisted_snapshot(&home)?;
+    lane_penalty_until_from(&snapshot.lanes, provider, account, now)
+}
+
+/// The pure half of [`lane_penalty_until`], over the snapshot's lanes.
+pub(crate) fn lane_penalty_until_from(
+    lanes: &[crate::provider_cap::CapLane],
+    provider: &str,
+    account: &str,
+    now: f64,
+) -> Option<f64> {
+    lanes
+        .iter()
+        .filter(|lane| lane.provider == provider && lane.account == account)
+        .filter_map(|lane| lane.reset_epoch.or(lane.reset_passed_epoch))
+        .map(|reset| reset as f64 + QUOTA_PENALTY_WINDOW_S)
+        .filter(|end| *end > now)
+        .reduce(f64::max)
 }
 
 /// Epoch seconds as a UTC ISO-8601 string for the refusal prose; the receipt
@@ -1446,6 +1485,44 @@ mod tests {
         assert_eq!(
             quota_penalty_until_raw(&health(900_000.0), "default", now),
             None
+        );
+        // A route-keyed spawn reads the lane's recorded reset instead, ahead
+        // or passed, and only on its own provider.
+        let lane = |provider: &str, ahead: Option<i64>, passed: Option<i64>| {
+            crate::provider_cap::CapLane {
+                lane: format!("{provider}:default"),
+                provider: provider.to_string(),
+                account: "default".to_string(),
+                reset_epoch: ahead,
+                reset_passed_epoch: passed,
+                missing_reset_timezone: vec![],
+                state: "returning".to_string(),
+                members: vec![],
+            }
+        };
+        let passed = [lane("zai", None, Some(880_000))];
+        assert_eq!(
+            lane_penalty_until_from(&passed, "zai", "default", now),
+            Some(880_000.0 + QUOTA_PENALTY_WINDOW_S)
+        );
+        assert_eq!(
+            lane_penalty_until_from(&passed, "anthropic", "default", now),
+            None
+        );
+        assert_eq!(lane_penalty_until_from(&passed, "zai", "zai-b", now), None);
+        assert_eq!(
+            lane_penalty_until_from(
+                &passed,
+                "zai",
+                "default",
+                880_000.0 + QUOTA_PENALTY_WINDOW_S + 1.0
+            ),
+            None
+        );
+        let ahead = [lane("zai", Some(900_000), None)];
+        assert_eq!(
+            lane_penalty_until_from(&ahead, "zai", "default", now),
+            Some(900_000.0 + QUOTA_PENALTY_WINDOW_S)
         );
     }
 

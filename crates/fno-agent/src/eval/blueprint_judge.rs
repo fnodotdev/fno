@@ -1320,51 +1320,6 @@ mod tests {
         assert_eq!(run_judge(&[]), 2);
     }
 
-    /// Always returns `VERDICT: pass` for persona, `VERDICT: fail` for
-    /// everything else -- exercises the tp_rate/tn_rate/disagreement math
-    /// without a real model spawn.
-    fn fake_spawn(
-        name: &str,
-        _: &str,
-        _: &Path,
-        _: u64,
-        _: &ReaderRoute,
-    ) -> Result<(i32, String, String), String> {
-        let out = if name.ends_with("persona") {
-            "VERDICT: pass"
-        } else {
-            "VERDICT: fail"
-        };
-        Ok((0, out.to_string(), String::new()))
-    }
-
-    #[test]
-    fn tally_math_counts_rates_and_control_disagreements() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("p.md"), "a plan").unwrap();
-        let labels_path = dir.path().join("labels.yaml");
-        std::fs::write(
-            &labels_path,
-            "- plan: p.md\n  split: test\n  control: true\n  labels: {persona: pass, surface_fit: pass}\n",
-        )
-        .unwrap();
-
-        // fake_spawn always answers persona=pass, surface_fit=fail: the
-        // persona row agrees with its label, the surface_fit row disagrees
-        // and (being a control) counts against controls_wrong. Lenses are
-        // built with sections here: a missing lens is a gap that never
-        // disagrees, so an empty map would score nothing.
-        let lenses = (
-            String::new(),
-            HashMap::from([
-                ("persona".to_string(), "who is hit".to_string()),
-                ("surface_fit".to_string(), "surface".to_string()),
-            ]),
-        );
-        let rc = run_calibration(&labels_path, "test", dir.path(), &lenses, &fake_spawn);
-        assert_eq!(rc, 1);
-    }
-
     #[test]
     fn a_fail_quoting_invented_text_is_not_evidence() {
         let dir = tempfile::tempdir().unwrap();

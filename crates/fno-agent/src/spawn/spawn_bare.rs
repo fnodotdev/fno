@@ -70,6 +70,55 @@ pub fn spawn_owned(token: &str) -> bool {
     crate::spawn_admission::is_value_flag(flag) || SCALAR_OWNED_FLAGS.contains(&flag)
 }
 
+/// The flags `fno do target init` owns. No harness takes them, so as harness
+/// argv the worker dies at boot before SessionStart and the row stalls at
+/// Spawning. A spawn line that carries one refuses and names its home.
+const TARGET_INIT_FLAGS: &[&str] = &[
+    "--deliverables",
+    "--plan-path",
+    "--no-merge",
+    "--advisory",
+    "--steps",
+    "--beastmode",
+    "--beast",
+    "--input",
+    "--size",
+];
+
+/// The refusal for a target init flag anywhere in the spawn line: before the
+/// prompt, after it, or behind the spawn's own `--` fence. The scan stops at
+/// `--argv` (a whole provider command line) and at a second `--` (positional
+/// to the harness), and skips the value of a spawn value flag.
+fn target_init_flag_refusal(rest: &[String]) -> Option<String> {
+    let mut fenced = false;
+    let mut i = 0;
+    while let Some(tok) = rest.get(i) {
+        if tok == "--argv" || (fenced && tok == "--") {
+            return None;
+        }
+        if tok == "--" {
+            fenced = true;
+            i += 1;
+            continue;
+        }
+        let flag = tok.split_once('=').map_or(tok.as_str(), |(f, _)| f);
+        if TARGET_INIT_FLAGS.contains(&flag) {
+            let home = if flag == "--deliverables" {
+                "init derives the count from the node details, so drop the flag".to_string()
+            } else {
+                format!("put it inside the quoted prompt: '/fno:target <node> {flag}'")
+            };
+            return Some(format!(
+                "{flag} is a fno do target init flag, not harness argv; \
+                 the harness refuses it at boot and the worker never starts. {home}"
+            ));
+        }
+        let consumes = !fenced && !tok.contains('=') && crate::spawn_admission::is_value_flag(tok);
+        i += if consumes { 2 } else { 1 };
+    }
+    None
+}
+
 /// Whether a token ends the prompt region: any `-`-prefixed token longer than
 /// one char. The lone `-` stays a prompt word.
 fn looks_like_flag(token: &str) -> bool {
@@ -122,6 +171,9 @@ pub enum Boundary {
 // computed, so the slicing lint reads arithmetic, not risk.
 #[allow(clippy::indexing_slicing)]
 pub fn boundary_rewrite(rest: &[String]) -> Boundary {
+    if let Some(line) = target_init_flag_refusal(rest) {
+        return Boundary::Refuse(line);
+    }
     let fence = rest.iter().position(|t| t == "--" || t == "--argv");
     let head_end = fence.unwrap_or(rest.len());
     let head = &rest[..head_end];
@@ -724,7 +776,7 @@ pub fn pre_gate(
         })
         .unwrap_or_default();
     let written =
-        crate::route_settings::write_composed(&env, &Map::new(), Some(sandbox), None, cwd)
+        crate::route_settings::write_composed(&env, &Map::new(), Some(sandbox), None, None, cwd)
             .map_err(|e| {
                 eprintln!("fno agent spawn: {e}");
                 2
@@ -1133,6 +1185,52 @@ mod tests {
             panic!("the owned scalar refuses too");
         };
         assert!(err.contains("--print"), "{err}");
+    }
+
+    #[test]
+    fn boundary_refuses_a_target_init_flag_with_its_home() {
+        // The stalled lead line: --deliverables behind the fence reached
+        // claude's argv and the worker never booted.
+        let stalled = toks(&[
+            "--model",
+            "sonnet",
+            "/fno:target x-1",
+            "--",
+            "--deliverables",
+            "t",
+        ]);
+        let crate::spawn_bare::Boundary::Refuse(err) = boundary_rewrite(&stalled) else {
+            panic!("a fenced target init flag refuses");
+        };
+        assert!(
+            err.contains("--deliverables") && err.contains("drop the flag"),
+            "{err}"
+        );
+        // Before the prompt in = form, and after it unfenced, refuse the same.
+        for line in [
+            toks(&["--no-merge=1", "w", "/fno:target x-1"]),
+            toks(&["w", "/fno:target x-1", "--no-merge"]),
+        ] {
+            let crate::spawn_bare::Boundary::Refuse(err) = boundary_rewrite(&line) else {
+                panic!("a target init flag refuses: {line:?}");
+            };
+            assert!(err.contains("'/fno:target <node> --no-merge'"), "{err}");
+        }
+        // Inside the quoted prompt, inside --argv, and positional to the
+        // harness behind a second fence, the flag is legal.
+        for line in [
+            toks(&["w", "/fno:target x-1 --no-merge"]),
+            toks(&["w", "--argv", "--", "opencode", "run", "--", "--no-merge"]),
+            toks(&["w", "msg", "--", "--", "--no-merge"]),
+        ] {
+            assert!(
+                !matches!(
+                    boundary_rewrite(&line),
+                    crate::spawn_bare::Boundary::Refuse(_)
+                ),
+                "{line:?}"
+            );
+        }
     }
 
     #[test]

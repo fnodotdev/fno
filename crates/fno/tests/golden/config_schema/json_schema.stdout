@@ -2445,6 +2445,65 @@
       "title": "ProviderBudget",
       "type": "object"
     },
+    "ProviderCapBlock": {
+      "description": "Provider usage-cap actor settings (nested under 'config.provider_cap').\n\nA provider's usage cap arms this actor, independent of recovery.watchdog. It alone decides whether a cap may move sessions. A malformed value reads as its default.\n\nKnobs:\n  enabled                - arm the actor (default on).\n  mode                   - park (default), triage, ask or auto.\n  destinations           - route lanes a moving member tries, in order.\n  min_wait_minutes       - a reset closer than this is waited out.\n  sleep_hours            - HH:MM-HH:MM window in which ask mode moves without a question.\n  sleep_timezone         - IANA zone for sleep_hours (empty = local).\n  canary_survive_minutes - minutes a canary lives before parked members resume.\n  quorum                 - members on one lane needed to open a cap.",
+      "properties": {
+        "canary_survive_minutes": {
+          "default": 15,
+          "minimum": 0,
+          "title": "Canary Survive Minutes",
+          "type": "integer"
+        },
+        "destinations": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Destinations",
+          "type": "array"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "min_wait_minutes": {
+          "default": 30,
+          "minimum": 0,
+          "title": "Min Wait Minutes",
+          "type": "integer"
+        },
+        "mode": {
+          "default": "park",
+          "enum": [
+            "park",
+            "triage",
+            "ask",
+            "auto"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "quorum": {
+          "default": 2,
+          "minimum": 1,
+          "title": "Quorum",
+          "type": "integer"
+        },
+        "sleep_hours": {
+          "default": "",
+          "title": "Sleep Hours",
+          "type": "string"
+        },
+        "sleep_timezone": {
+          "default": "",
+          "title": "Sleep Timezone",
+          "type": "string"
+        }
+      },
+      "title": "ProviderCapBlock",
+      "type": "object"
+    },
     "QuestionsBlock": {
       "description": "Question judge settings (nested under ``config.questions``).",
       "properties": {
@@ -4068,6 +4127,9 @@
     },
     "project": {
       "$ref": "#/$defs/ProjectBlock"
+    },
+    "provider_cap": {
+      "$ref": "#/$defs/ProviderCapBlock"
     },
     "questions": {
       "$ref": "#/$defs/QuestionsBlock"

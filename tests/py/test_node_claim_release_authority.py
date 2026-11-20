@@ -135,6 +135,12 @@ ALLOWLIST = {
     # held by anyone else survives. The steward never releases a session's
     # claim.
     "crates/fno-agent/src/gate/pr_steward.rs",
+    # crates/fno-agent/src/runtime/resume_gate.rs settle_reserved: a refused or
+    # failed resume frees the node seats the same resume minted on the same
+    # thread moments before, under the holder it wrote. A seat the session
+    # already held live is never minted, so it is never released here. Not
+    # releasing refused every fresh spawn on the node for the reserve's TTL.
+    "crates/fno-agent/src/runtime/resume_gate.rs",
 }
 
 _EXTS = {".py", ".sh", ".bash", ".rs"}

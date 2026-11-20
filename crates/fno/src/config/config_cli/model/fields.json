@@ -304,6 +304,19 @@
      }
     },
     {
+     "name": "provider_cap",
+     "default": {
+      "enabled": true,
+      "mode": "park",
+      "destinations": [],
+      "min_wait_minutes": 30,
+      "sleep_hours": "",
+      "sleep_timezone": "",
+      "canary_survive_minutes": 15,
+      "quorum": 2
+     }
+    },
+    {
      "name": "agents",
      "default": {
       "single_flight_ttl_seconds": 60,
@@ -1343,6 +1356,43 @@
     {
      "name": "font_size",
      "default": 13.0
+    }
+   ]
+  },
+  "ProviderCapBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "enabled",
+     "default": true
+    },
+    {
+     "name": "mode",
+     "default": "park"
+    },
+    {
+     "name": "destinations",
+     "default": []
+    },
+    {
+     "name": "min_wait_minutes",
+     "default": 30
+    },
+    {
+     "name": "sleep_hours",
+     "default": ""
+    },
+    {
+     "name": "sleep_timezone",
+     "default": ""
+    },
+    {
+     "name": "canary_survive_minutes",
+     "default": 15
+    },
+    {
+     "name": "quorum",
+     "default": 2
     }
    ]
   },
@@ -3766,6 +3816,14 @@
   "app.alert_notification",
   "app.alert_badge",
   "app.font",
-  "app.font_size"
+  "app.font_size",
+  "provider_cap.enabled",
+  "provider_cap.mode",
+  "provider_cap.destinations",
+  "provider_cap.min_wait_minutes",
+  "provider_cap.sleep_hours",
+  "provider_cap.sleep_timezone",
+  "provider_cap.canary_survive_minutes",
+  "provider_cap.quorum"
  ]
 }
