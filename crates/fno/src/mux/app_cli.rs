@@ -516,6 +516,10 @@ fn shot(out: &str, theme: &str, find: Option<&str>, mode: Option<AppView>) -> i3
             return 1;
         }
     }
+    // macOS hands getcwd the physical path (/private/tmp), and the chat
+    // pin slugs that cwd to find the seed, so every pin below uses the
+    // canonical root or the lookup lands one symlink off the seed.
+    world.root = std::fs::canonicalize(&world.root).unwrap_or_else(|_| world.root.clone());
     if let Err(e) = std::fs::write(world.root.join(".fno/config.toml"), "") {
         eprintln!("fno mux app shot: the world config failed: {e}");
         return 1;

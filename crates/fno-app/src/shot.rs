@@ -35,6 +35,10 @@ const PREWARM: Duration = Duration::from_secs(5);
 
 pub fn run(opts: ShotOptions) -> i32 {
     let hold = opts.hold;
+    // The pin resolves before the theme pin chdirs: the newest lookup
+    // reads the cwd's project slug, and the pin dir would slug one dir
+    // off the world's seed.
+    let pinned = opts.chat.as_deref().and_then(crate::chat::resolve_key);
     if let Err(e) = theme_pin(&opts.theme) {
         eprintln!("fno-app --shot: {e}");
         return 2;
@@ -44,7 +48,6 @@ pub fn run(opts: ShotOptions) -> i32 {
         .clone()
         .unwrap_or_else(|| "default".to_string());
     let mode = opts.mode.unwrap_or(MainView::Orchestration);
-    let pinned = opts.chat.as_deref().and_then(crate::chat::resolve_key);
     let find = opts.find;
     let out = opts.out.clone();
     let family = opts.font.clone();
