@@ -298,23 +298,21 @@ mkdir -p "$ROOT/mux" "$ROOT/agents" "$ROOT/code/checkout" "$ROOT/text" "$ROOT/.f
   # FNO_DEMO_PREFIX=alt+shift+a shoots the keys list and footer with that prefix.
   # --app-theme pins the palette the desktop app paints, light or dark. Both
   # keys live in one [mux] table: TOML refuses a second header.
-  if [ -n "${FNO_DEMO_PREFIX:-}" ] || [ -n "$APP_THEME" ]; then
+  if [ -n "${FNO_DEMO_PREFIX:-}" ] || [ -n "$APP_THEME" ] || [ -n "$THEME_ARG" ]; then
     printf '[mux]\n'
     [ -z "${FNO_DEMO_PREFIX:-}" ] || printf 'prefix = "%s"\n' "$FNO_DEMO_PREFIX"
     # The app knows palette names, not light/dark: footnote-paper paints
-    # light, footnote-superscript dark. Anything else falls back dark.
-    case "$APP_THEME" in
+    # light, footnote-superscript dark. Anything else falls back dark. The
+    # serve lens (--theme dark|light|macchiato) maps to the same twin: the
+    # cells are painted through the [mux] theme config key (theme_resolved
+    # reads mux.theme), so a lens without its twin leaves dark cells under
+    # a light frame and the shot mixes two palettes.
+    case "${APP_THEME:-$THEME_ARG}" in
       light) theme=footnote-paper ;;
       dark) theme=footnote-superscript ;;
       *) theme="" ;;
     esac
     [ -z "$theme" ] || printf 'theme = "%s"\n' "$theme"
-    # The lens name maps to its config twin, or the client renders dark
-    # cells under a light lens and the frame mixes two palettes.
-    case "$THEME_ARG" in
-      light) printf 'theme = "footnote-paper"\n' ;;
-      dark) printf 'theme = "footnote-superscript"\n' ;;
-    esac
   fi
   # FNO_DEMO_LAYOUT=list shoots the one-line row instead of the card.
   if [ -n "${FNO_DEMO_LAYOUT:-}" ]; then
