@@ -81,6 +81,9 @@ pub fn fold_per_pr_inputs(
 ) -> Vec<PerPrAttention> {
     merged
         .iter()
+        // A PR merged before the window is history, not this window's cost:
+        // the row list stays inside --days.
+        .filter(|m| m.completed >= window_start)
         .map(|m| {
             let mut notes = Vec::new();
             let attributed: Vec<&QuestionRow> = questions
@@ -469,10 +472,10 @@ mod tests {
         }
     }
 
-    fn m(node: &str, pr: Option<i64>) -> MergedNode {
+    fn m(node: &str, pr: Option<i64>, completed: DateTime<Utc>) -> MergedNode {
         MergedNode {
             created: ts(2026, 11, 10, 8),
-            completed: ts(2026, 11, 10, 15),
+            completed,
             node: node.to_string(),
             pr,
             sessions: Vec::new(),
@@ -493,11 +496,18 @@ mod tests {
             q("x-2", ts(2026, 11, 15, 9), None),
             q("", ts(2026, 11, 15, 9), None),
         ];
-        let merged = vec![m("x-1", Some(157)), m("x-9", Some(158))];
+        let merged = vec![
+            m("x-1", Some(157), ts(2026, 11, 19, 15)),
+            m("x-9", Some(158), ts(2026, 11, 14, 9)),
+            m("x-old", None, ts(2026, 11, 10, 15)),
+        ];
         let mut turns = BTreeMap::new();
         turns.insert("x-1".to_string(), Some(12usize));
         let rows = fold_per_pr_inputs(now, ts(2026, 11, 13, 0), &merged, &questions, &turns);
         assert_eq!(rows.len(), 2);
+        // A node merged before the window prints no row: the row list is
+        // this window's merges, not all history.
+        assert!(rows.iter().all(|r| r.node != "x-old"));
         let x1 = rows.iter().find(|r| r.node == "x-1").unwrap();
         assert_eq!(x1.pr, Some(157));
         assert_eq!(x1.user_turns, Some(12));
@@ -542,7 +552,7 @@ mod tests {
     #[test]
     fn compose_degrades_gh_failure_to_a_note() {
         let now = ts(2026, 11, 20, 12);
-        let merged = vec![m("x-1", Some(157))];
+        let merged = vec![m("x-1", Some(157), ts(2026, 11, 19, 15))];
         let report = compose_per_pr(
             now,
             2,
