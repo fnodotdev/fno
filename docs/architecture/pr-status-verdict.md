@@ -48,7 +48,7 @@ On a red, live PR the optional `history:` slot reports a cancelled or timed-out 
 
 `ready` and `ready_blockers` come from the authorized-merge preview receipt. The status command displays that receipt as `merge_decision`. The effect path stops at its first retained blocker. Preview collects each blocker it can evaluate.
 
-Authority and code blockers include `dispatch_hold`, `pr_hold`, `merge_freeze`, `visual_declined`, `ci_red`, `github_blocked`, `head_not_covered`, `head_moved`, `stacked_base`, `red_merge_result` and `stub_manifest_unreconciled`. A missing review, a running review, a review-posture mismatch, or pending or unreadable CI contributes warnings instead. The CI verdict and exit code continue to report the CI read itself.
+Authority and code blockers include `dispatch_hold`, `pr_hold`, `merge_freeze`, `visual_declined`, `visual_look_pending`, `ci_red`, `github_blocked`, `head_not_covered`, `head_moved`, `stacked_base`, `red_merge_result` and `stub_manifest_unreconciled`. A missing review, a running review, a review-posture mismatch, or pending or unreadable CI contributes warnings instead. The CI verdict and exit code continue to report the CI read itself.
 
 The receipt's `warnings` list also carries eval status, docs, plan fidelity, overlap, recovered flakes and optional findings. Allowed and blocked receipts retain evaluated warning evidence. No setting is required to enable the demotions.
 
