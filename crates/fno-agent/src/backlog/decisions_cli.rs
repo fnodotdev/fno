@@ -639,7 +639,7 @@ pub(crate) fn live_rows_over(
 /// against and the reason the graph was needed but could not be read (the
 /// input that marks a coord row unknown). Borrowed, so a cached caller
 /// hands over Arc'd rows with no clone.
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub(crate) struct GraphEntries<'a> {
     pub(crate) graph: Option<&'a [Value]>,
     pub(crate) unread: Option<&'a str>,
