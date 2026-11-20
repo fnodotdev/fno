@@ -377,11 +377,14 @@ fn parse_label_reply(out: &str) -> Result<(String, String), String> {
 /// mid-argv prompt answered.
 fn labels_spawn_argv(name: &str, prompt: &str, cwd: &Path) -> Result<Vec<String>, String> {
     let route = crate::reader_route::resolve(cwd, "labels-judge", None, MODEL);
-    let extra_owned: Vec<String> = if route.harness == "claude" {
-        vec!["--account".to_string(), ACCOUNT.to_string()]
-    } else {
-        Vec::new()
-    };
+    // The pin names the account the model pick lives on; a profile that
+    // overrides the model inherits no account it never asked for.
+    let extra_owned: Vec<String> =
+        if route.harness == "claude" && route.model.as_deref() == Some(MODEL) {
+            vec!["--account".to_string(), ACCOUNT.to_string()]
+        } else {
+            Vec::new()
+        };
     crate::reader_route::reader_tools_argv(name, prompt, cwd, JUDGE_TIMEOUT_S, &route, &extra_owned)
 }
 

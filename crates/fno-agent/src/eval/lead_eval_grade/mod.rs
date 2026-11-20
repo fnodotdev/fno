@@ -48,14 +48,18 @@ fn spawn(
     timeout_secs: u64,
     route: &ReaderRoute,
 ) -> Result<(i32, String, String), String> {
-    let argv = crate::reader_route::reader_tools_argv(
-        "lead-eval-grader",
-        prompt,
-        cwd,
-        timeout_secs,
-        route,
-        &[],
-    )?;
+    // The reader threads run concurrently, so the one-shot name carries a
+    // per-call suffix: a fixed name would put every concurrent reader on
+    // one registry row.
+    let name = format!(
+        "lead-eval-grader-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0)
+    );
+    let argv =
+        crate::reader_route::reader_tools_argv(&name, prompt, cwd, timeout_secs, route, &[])?;
     crate::blueprint_judge::headless_spawn(&argv, timeout_secs)
 }
 
