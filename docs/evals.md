@@ -53,7 +53,7 @@ Success criteria must be **mechanical** (develop-tests discipline): a task with 
 
 ## The review-score set (scoring the reviewer)
 
-Tagged `review-score`, the set scores the review lane against stored incidents: an incident entry (a merge that turned main red or was reverted) and clean controls (merged PRs that passed the merge gate and were never reverted). When a blocking finding names the known bug site, the incident grade passes; that is recall. A blocking finding on a clean control is a false finding. Run it with `fno doctor evals run --tag review-score`; the fold command reads the per-task rows from the eval-history journal. One entry is a declared reconstruction of a founding incident whose repository is private, marked `reconstructed: true` in its meta. Real incidents on this public repository vendor verbatim. The entry contract and the add-an-incident recipe live in `evals/fixtures/review-incidents/README.md`.
+Tagged `review-score`, the set scores the review lane against stored incidents. Each incident entry replays a merge that turned main red or was reverted. Each clean control is a merged PR that passed the merge gate and was never reverted. When a blocking finding names the known bug site, the incident grade passes. That is recall. A blocking finding on a clean control is a false finding. Run the set with `fno doctor evals run --tag review-score`. The fold command reads per-task rows from the eval-history journal. One entry is a declared reconstruction of a founding incident whose repository is private. Its meta reads `reconstructed: true`. Real incidents on this public repository vendor verbatim. The entry contract and the add-an-incident recipe live in `evals/fixtures/review-incidents/README.md`.
 
 ## Commands
 

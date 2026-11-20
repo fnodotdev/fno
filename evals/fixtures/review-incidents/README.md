@@ -1,17 +1,17 @@
 # Review incident set
 
-The bank's reviewer-scoring set, tagged `review-score`: one incident entry and two clean controls. Each entry pairs a diff with a metadata file, the tree files its catch needs, and one capability-tier bank task whose grade reads a findings file.
+The bank's reviewer-scoring set, tagged `review-score`: one incident entry and two clean controls. An entry pairs a diff and a metadata file with a bank task and any tree files the catch needs.
 
 ## Entry contract
 
 Every entry is four files: `<name>.diff`, `<name>.meta.yaml`, the bank task, and the tree files its catch needs (under `tree/` at their real paths).
 
-- incident: a merge that turned main red or was reverted, replayed as a fixture. The grade passes only when a blocking finding names the known bug site (recall).
+- incident: a merge that turned main red or was reverted, replayed as a fixture. When a blocking finding names the known bug site, the grade passes. That is recall.
 - clean: a merged PR that passed the merge gate and was never reverted. When no blocking finding lands, the grade passes (that is the false-findings read).
 
 ## The reconstruction rule
 
-Real incidents on this public repository vendor verbatim. Incidents from private repositories are reconstructed from the bug class and marked `reconstructed: true` in the meta; the real coordinates live in the filing node's record only, never in public files.
+Real incidents on this public repository vendor verbatim. Incidents from private repositories are reconstructed from the bug class and marked `reconstructed: true` in the meta. The real coordinates live in the filing node's record only, never in public files.
 
 ## Adding the next incident
 
