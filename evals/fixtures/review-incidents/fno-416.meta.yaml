@@ -2,6 +2,7 @@
 # (green and reviewed) and was never reverted. Any blocking finding on it is
 # a false finding for the reviewer under test.
 id: review-clean-config-provider-cap
+diff: fno-416.diff
 repo: fnodotdev/fno
 pr: 416
 title: "feat(config): model the [provider_cap] table so config get and set reach it"

@@ -1,5 +1,5 @@
 diff --git a/cli/src/fno/agents/folded_subcommands.yaml b/cli/src/fno/agents/folded_subcommands.yaml
-index 86dbef2f96c..1c2b3a4d5e6f 100644
+index 5f1a2b3c4d5e..6a7b8c9d0e1f 100644
 --- a/cli/src/fno/agents/folded_subcommands.yaml
 +++ b/cli/src/fno/agents/folded_subcommands.yaml
 @@ -30,12 +30,6 @@ worker:

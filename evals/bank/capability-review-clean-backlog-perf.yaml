@@ -5,8 +5,7 @@ id: capability-review-clean-backlog-perf
 tier: capability
 prompt: |
   Review a merged pull request the way you would review a real PR on this
-  repo. It is a clean control: it merged green through the merge gate and
-  was never reverted.
+  repo.
 
   The material is evals/fixtures/review-incidents/fno-415.diff. The diff was
   produced against this repository. Review it against this repo's review
