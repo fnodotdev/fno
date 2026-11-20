@@ -3049,37 +3049,39 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
         }
     }
 
-    // The two long reads (graph, board) ride detached threads from here: on
-    // a 7,693-row board each ran tens of seconds, and serially they
-    // front-loaded the beat past the caller's foreground window. The fold,
-    // the scope compile and the idea-children pass all reuse the graph rows
-    // this read produces, so the beat pays for exactly one store scan.
+    // The two long reads (graph, board) share ONE graph materialization: the
+    // beat reads the rows once, then hands the same Arc to the board fetch,
+    // so the board never runs its own full scan. On a 7,693-row board each
+    // used to run tens of seconds; the clone churn and the double scan were
+    // what pushed the beat past the 60s reader deadline under fleet load.
+    // The fold, the scope compile and the idea-children pass all
+    // reuse the graph rows this read produces.
     let graph_rx = spawn_preflight("graph read", {
         let graph = ctx.graph.clone();
         move || crate::graph_store::read_rows(&graph).map_err(|e| e.to_string())
     });
-    let board_rx = spawn_preflight("board fetch", {
-        let state = ctx.board_state.clone();
-        let cwd = ctx.cwd.clone();
-        move || {
-            Ok::<Value, String>(read_board(&BoardOpts {
-                state_path: state,
-                cwd: Some(cwd),
-                budget_ms: BOARD_BUDGET_MS,
-                ..Default::default()
-            }))
-        }
-    });
     // The graph read rides the beat once, before anything else needs it: the
-    // --queue resolver and the lineup both read it. The fold spawns only
-    // once these rows are in hand, over the same Arc: a second store scan
-    // never rides the serial path.
+    // --queue resolver, the lineup and now the board fetch all read it.
     let (graph_rows, graph_error): (Vec<Value>, Option<String>) =
         match await_reading(graph_rx, "graph read", READER_DEADLINE) {
             Ok(rows) => (rows, None),
             Err(e) => (Vec::new(), Some(e)),
         };
     let graph_rows = std::sync::Arc::new(graph_rows);
+    let board_rx = spawn_preflight("board fetch", {
+        let state = ctx.board_state.clone();
+        let cwd = ctx.cwd.clone();
+        let rows = std::sync::Arc::clone(&graph_rows);
+        move || {
+            Ok::<Value, String>(read_board(&BoardOpts {
+                state_path: state,
+                cwd: Some(cwd),
+                budget_ms: BOARD_BUDGET_MS,
+                graph_rows: Some(rows),
+                ..Default::default()
+            }))
+        }
+    });
     // The queue rides the manifest, so the same beat that records the seat
     // order prints it. Ids resolve against the graph and the CANONICAL id is
     // what gets stored, so a dashless or bare-hex spelling lands as the same
