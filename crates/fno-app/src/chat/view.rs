@@ -756,7 +756,7 @@ fn status(root: &Root) -> Option<Div> {
     let p = root.palette;
     let empty = root.chat.conv.items.is_empty() && root.chat.closed.is_none();
     let text = match &root.chat.key {
-        None => "The focused pane hosts no agent session. Pick an agent on the left.",
+        None => return None,
         Some(_) if empty && root.chat.opened_at.elapsed() < EMPTY_AFTER => {
             "Reading the conversation…"
         }
@@ -809,7 +809,7 @@ fn composer(root: &Root, window: &Window, cx: &mut Context<Root>) -> Option<Div>
     let state = root.chat.field.clone();
     let text = Field {
         draft: root.chat.draft.clone(),
-        placeholder: "Message the agent",
+        placeholder: "Message the agent".into(),
         fg: rgb(p.fg).into(),
         muted: rgb(p.muted).into(),
         selection: (p.accent << 8) | 0x55,
@@ -891,6 +891,15 @@ fn composer(root: &Root, window: &Window, cx: &mut Context<Root>) -> Option<Div>
 }
 
 pub(crate) fn render(root: &Root, window: &Window, cx: &mut Context<Root>) -> Div {
+    // The start view: an empty pane holds the launch composer, the recent
+    // workspaces and the hint row, not a bare "no session" line.
+    if crate::start::visible(root) {
+        let mut out = crate::start::render(root, window, cx);
+        if let Some(s) = sheet(root, cx) {
+            out = out.child(s);
+        }
+        return out;
+    }
     let p = root.palette;
     let rows = list(root.chat.list.clone(), cx.processor(row))
         .flex_1()

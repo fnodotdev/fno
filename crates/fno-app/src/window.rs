@@ -78,6 +78,8 @@ pub enum Action {
     CloseSheet,
     Copy(String),
     SendChat,
+    /// The start view's send: the launch panel's own submit door.
+    SubmitLaunch,
     /// Reopen a chat stream that closed.
     Reconnect,
     /// Route one HQ composer message to the owning lead.
@@ -102,6 +104,7 @@ fn click_id(action: &Action) -> &'static str {
         Action::CloseSheet => "close_sheet",
         Action::Copy(_) => "copy",
         Action::SendChat => "send_chat",
+        Action::SubmitLaunch => "submit_launch",
         Action::Reconnect => "reconnect",
         Action::Mail(_) => "mail_lead",
         Action::OpenLaunch(_) => "open_launch",
@@ -147,6 +150,9 @@ pub struct Root {
     /// A shot window paints the durable surface only: server notices are a
     /// transient corner toast that would photobomb a still frame.
     shot: bool,
+    /// The empty-pane shot: sync_chat never hands the pane a session, so
+    /// the start view holds for the frame.
+    shot_empty_chat: bool,
     pub(super) closed: Option<String>,
     pub(super) metrics: Metrics,
     pub(super) palette: Palette,
@@ -298,6 +304,7 @@ impl Root {
             notice_failed: false,
             notice_gen: 0,
             shot: false,
+            shot_empty_chat: false,
             closed: None,
             metrics,
             palette,
@@ -656,6 +663,7 @@ impl Root {
                 self.say(format!("copied {n} characters"), cx);
             }
             Action::SendChat => self.submit_chat(cx),
+            Action::SubmitLaunch => self.submit_launch(cx),
             Action::Reconnect => self.open_chat(cx),
             Action::Mail(text) => match &self.poller {
                 Some(poller) => {
@@ -816,6 +824,11 @@ impl Root {
     /// In chat mode, stream the focused pane's agent session. A new focus
     /// parks the shown conversation and resumes the new one where it left.
     fn sync_chat(&mut self, cx: &mut Context<Self>) {
+        // The empty-pane shot pins the start view: no layout event may
+        // hand the pane a session.
+        if self.shot_empty_chat {
+            return;
+        }
         let key = chat::focused_key(self);
         if self.main != MainView::Chat || key == self.chat.key {
             return;
@@ -992,6 +1005,13 @@ impl Root {
         match self.main {
             MainView::Mods => mods::paste(self, &text, cx),
             MainView::Chat => {
+                // The start view's field: the paste lands in the launch draft.
+                if crate::start::visible(self) {
+                    self.launch.state.draft.replace_selection(&text);
+                    self.launch.state.field.reveal.set(true);
+                    cx.notify();
+                    return;
+                }
                 self.chat.draft.replace_selection(&text);
                 self.chat_moved(cx);
             }
@@ -1531,6 +1551,64 @@ impl Root {
         }
     }
 
+    /// The start view's field keys: the chat draft's movement set on the
+    /// launch draft, Enter through the launch panel's submit door. An empty
+    /// agent draft starts nothing: the placeholder is the contract.
+    fn start_key(&mut self, key: &Key, window: &Window, cx: &mut Context<Self>) {
+        if self.launch.state.draft.marked().is_some() {
+            return;
+        }
+        let (shift, cmd) = (key.shift, key.cmd);
+        let vertical = matches!(key.key, "up" | "down");
+        if !vertical {
+            self.launch.state.field.goal_x.set(None);
+        }
+        match key.key {
+            "enter" if !shift => {
+                cx.stop_propagation();
+                let empty = self.launch.state.draft.text().trim().is_empty();
+                let agent = self.launch.state.kind == crate::launch::Kind::Agent;
+                if !(agent && empty) {
+                    self.submit_launch(cx);
+                }
+            }
+            "enter" => self.launch.state.draft.replace_selection("\n"),
+            "backspace" => self.launch.state.draft.backspace(),
+            "delete" => self.launch.state.draft.delete(),
+            "left" if cmd => self.launch.state.draft.home(shift),
+            "left" if key.alt => self.launch.state.draft.word_left(shift),
+            "left" => self.launch.state.draft.left(shift),
+            "right" if cmd => self.launch.state.draft.end(shift),
+            "right" if key.alt => self.launch.state.draft.word_right(shift),
+            "right" => self.launch.state.draft.right(shift),
+            "home" => self.launch.state.draft.home(shift),
+            "end" => self.launch.state.draft.end(shift),
+            "up" if cmd => self.launch.state.draft.doc_start(shift),
+            "down" if cmd => self.launch.state.draft.doc_end(shift),
+            "up" | "down" => self.start_vertical(key.key == "up", shift, window),
+            _ => return,
+        }
+        self.launch.state.field.reveal.set(true);
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    /// Vertical caret movement on the start field, the chat composer's own
+    /// goal-column walk against the launch field's layout.
+    fn start_vertical(&mut self, up: bool, extend: bool, window: &Window) {
+        let from = self.launch.state.draft.caret();
+        let len = self.launch.state.draft.text().len();
+        let goal = self.launch.state.field.goal_x.get();
+        let moved = launch::with_layout(self, window, |l| {
+            let goal = goal.unwrap_or_else(|| l.position_for_index(from).x);
+            (l.vertical(from, up, goal, len), goal)
+        });
+        if let Some((to, new_goal)) = moved {
+            self.launch.state.field.goal_x.set(Some(new_goal));
+            self.launch.state.draft.move_to(to, extend);
+        }
+    }
+
     fn composer_point(&self, at: Point<Pixels>, window: &Window) -> Option<usize> {
         let len = self.chat.draft.text().len();
         self.with_composer_layout(window, |l| l.index_for_point(at - l.origin, len))
@@ -1621,6 +1699,12 @@ impl Root {
 
     /// A key in chat mode: an open sheet takes Escape, otherwise it edits the draft.
     fn chat_key(&mut self, key: &Key, window: &Window, cx: &mut Context<Self>) {
+        // The start view's field takes the keys first: its own movement set,
+        // and Enter through the launch panel's submit door.
+        if crate::start::visible(self) {
+            self.start_key(key, window, cx);
+            return;
+        }
         // An open sheet takes only Escape; an IME draft takes the keys.
         if self.chat.sheet.is_some() {
             if key.key == "escape" {
@@ -1849,6 +1933,12 @@ impl Root {
     fn cmd_action(&mut self, action: Shortcut, window: &mut Window, cx: &mut Context<Self>) {
         match action {
             Shortcut::Command(Command::CopySelection)
+                if crate::start::visible(self) && self.launch.state.draft.has_selection() =>
+            {
+                let text = self.launch.state.draft.selected_text().to_string();
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+            }
+            Shortcut::Command(Command::CopySelection)
                 if self.main == MainView::Chat && self.chat.draft.has_selection() =>
             {
                 let text = self.chat.draft.selected_text().to_string();
@@ -1856,7 +1946,13 @@ impl Root {
             }
             Shortcut::Command(c) => self.send(ClientMsg::Command(c)),
             Shortcut::Cut => {
-                if self.main == MainView::Chat && self.chat.draft.has_selection() {
+                if crate::start::visible(self) && self.launch.state.draft.has_selection() {
+                    let text = self.launch.state.draft.selected_text().to_string();
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                    self.launch.state.draft.replace_selection("");
+                    self.launch.state.field.reveal.set(true);
+                    cx.notify();
+                } else if self.main == MainView::Chat && self.chat.draft.has_selection() {
                     let text = self.chat.draft.selected_text().to_string();
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
                     self.chat.draft.replace_selection("");
@@ -1864,7 +1960,11 @@ impl Root {
                 }
             }
             Shortcut::SelectAll => {
-                if self.main == MainView::Chat {
+                if crate::start::visible(self) {
+                    self.launch.state.draft.select_all();
+                    self.launch.state.field.reveal.set(true);
+                    cx.notify();
+                } else if self.main == MainView::Chat {
                     self.chat.draft.select_all();
                     self.chat_moved(cx);
                 }
@@ -1910,6 +2010,13 @@ impl Root {
         match self.main {
             MainView::Mods => mods::paste(self, &text, cx),
             MainView::Chat => {
+                // The start view's field: the paste lands in the launch draft.
+                if crate::start::visible(self) {
+                    self.launch.state.draft.replace_selection(&text);
+                    self.launch.state.field.reveal.set(true);
+                    cx.notify();
+                    return;
+                }
                 self.chat.draft.replace_selection(&text);
                 self.chat_moved(cx);
             }
@@ -2249,7 +2356,7 @@ impl EntityInputHandler for Root {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
-        if self.launch.open {
+        if self.launch.open || crate::start::visible(self) {
             let d = &self.launch.state.draft;
             let range = d.range_to_utf16(&d.selection());
             return Some(UTF16Selection {
@@ -2277,7 +2384,7 @@ impl EntityInputHandler for Root {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Range<usize>> {
-        if self.launch.open {
+        if self.launch.open || crate::start::visible(self) {
             let d = &self.launch.state.draft;
             return d.marked().map(|m| d.range_to_utf16(&m));
         }
@@ -2289,7 +2396,7 @@ impl EntityInputHandler for Root {
     }
 
     fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.launch.open {
+        if self.launch.open || crate::start::visible(self) {
             self.launch.state.draft.unmark();
             cx.notify();
             return;
@@ -2313,7 +2420,7 @@ impl EntityInputHandler for Root {
         if self.goto.is_some() {
             return;
         }
-        if self.launch.open {
+        if self.launch.open || crate::start::visible(self) {
             self.launch
                 .state
                 .draft
@@ -2377,7 +2484,7 @@ impl EntityInputHandler for Root {
         window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
-        if self.launch.open {
+        if self.launch.open || crate::start::visible(self) {
             let from = self.launch.state.draft.offset_from_utf16(range_utf16.start);
             let found = launch::with_layout(self, window, |l| {
                 let at = l.position_for_index(from);
@@ -2414,7 +2521,7 @@ impl EntityInputHandler for Root {
         window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
-        if self.launch.open {
+        if self.launch.open || crate::start::visible(self) {
             let offset = launch::caret_at(self, at, window)?;
             return Some(self.launch.state.draft.offset_to_utf16(offset));
         }
@@ -2822,8 +2929,9 @@ pub(super) fn root_for_shot(
     warmed: super::link::WarmedLink,
     family: String,
     font_size: f32,
-    picking: bool,
     find: Option<crate::FindShot>,
+    empty_chat: bool,
+    cmd: bool,
     window: &mut Window,
     cx: &mut App,
 ) -> gpui::Entity<Root> {
@@ -2856,9 +2964,13 @@ pub(super) fn root_for_shot(
     });
     root.update(cx, |root, _| {
         root.shot = true;
-        // The proof frame for pick-gated paint: the hints reveal as if
-        // cmd alone is down, before any real modifier event arrives.
-        root.picking = picking;
+        if empty_chat {
+            root.shot_empty_chat = true;
+            root.chat.switch(None);
+        }
+        if cmd {
+            root.picking = true;
+        }
     });
     if let Some(find) = find {
         root.update(cx, |root, cx| {

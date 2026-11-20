@@ -587,7 +587,9 @@ fn shot(
         }
     }
     if picking {
-        cmd.arg("--shot-picking");
+        // The app-side flag renamed to --shot-cmd; the door's own
+        // spelling stays --picking (the tree row is the published form).
+        cmd.arg("--shot-cmd");
     }
     if let Some(find) = find {
         cmd.arg("--shot-find").arg(find);

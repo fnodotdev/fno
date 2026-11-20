@@ -81,6 +81,12 @@ State only facts this beat verified. Every claim in the beat report carries its 
 
 A waiting-on-you line rests on a read in the same turn: `gh run view`, `gh pr view`, `fno do pr status` or `fno inbox outstanding`. Say an ask once. If its state changed, repeat it and say what changed. If the state has not changed, drop the line. The Stop hook blocks a waiting-on-you line with no live read in the same turn.
 
+A report that names a PR, run or node state re-reads that state in the same turn and prints the read time. `green at 14:32Z` is a claim this beat verified. A state claim with no read this turn is a stale claim. Correct it or drop it.
+
+Before you forward visual work, set the worker's shot beside the user's reference and list the differences you see. Forward the comparison and the shot, never the bare shot. The user's recorded words are the reference: `fno backlog find --notes "Visual Log: Change"` reads them newest first.
+
+A report of a fix names the process that must restart before the user sees it. Name the holder (the daemon, the installed plugin, the shell, a pane) and the step that restarts it. Without that line, a merged fix reads as still happening, and the user re-reports it.
+
 The `skill_use:` line counts the target sessions this window that loaded `fno:verify-footnotes` and `fno:review`. When verify-footnotes trails the target count, name the workers whose plan has no `## Premises` section in the beat report and mail each one. Every spawn prompt you write for a target worker names the skill: "load /fno:verify-footnotes before the first edit and write its verdicts under ## Premises".
 
 Then run `fno agent hq checkin` (bare from the titled session, or `--scope <scope>` elsewhere). The `held:` line lists this role's due questions. A node-named question carries its `fno backlog decide <node> "<ruling>" --question-id <id>` closer. A question this role asked clears with `fno inbox outstanding clear <qid> --answer "<answer>" --authority role`.
@@ -122,6 +128,8 @@ The tenured lead does not dispatch. A `--once` pass dispatches only through its 
 `fno doctor event emit -t lead_dispatch_exception -s loop -d '{"scope":"<scope>","arm":"<arm>","node":"<id>"}'`
 
 The `-s loop` source keeps the row out of the `test` default. The exception uses the canonical implementation worker line in `references/org-operations.md#control-surfaces`. A blueprint launch writes its [brief](references/org-operations.md#blueprint-brief) into the node first.
+
+Every worker spawn records its why on the node it serves: `fno backlog note <node> "spawned <name>: <why>"`. A `fno do pr create` you run states its why in the PR body. A seat or a PR with no recorded why is a defect: the next reader cannot separate the seat's work from its cost.
 
 ## Stop and park
 

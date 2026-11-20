@@ -1803,12 +1803,28 @@ mod tests {
     /// the launcher's row - the launcher triple as the parent edge, the
     /// record's node on the row, the record's name winning the name
     /// precedence, and one `agent_spawned` birth carrying `launch: "native"`.
+    /// The record's lane is the row's provider: a fresh session has stated no
+    /// model yet, so a routed worker would otherwise read as anthropic.
     #[test]
     fn a_launch_record_child_adopts_with_parent_node_and_birth() {
-        for (explicit, parent_harness, expected, basis) in [
-            (Some("x-aaaa"), "claude", Some("x-aaaa"), None),
-            (None, "claude", Some("x-bbbb"), Some("parent")),
-            (None, "codex", None, None),
+        for (explicit, parent_harness, expected, basis, lane, provider) in [
+            (
+                Some("x-aaaa"),
+                "claude",
+                Some("x-aaaa"),
+                None,
+                Some("zai"),
+                "zai",
+            ),
+            (
+                None,
+                "claude",
+                Some("x-bbbb"),
+                Some("parent"),
+                None,
+                "anthropic",
+            ),
+            (None, "codex", None, None, None, "anthropic"),
         ] {
             let (_d, home) = temp_home("native");
             seed_registry(
@@ -1823,7 +1839,7 @@ mod tests {
                     name: Some("w1".into()),
                     node: explicit.map(str::to_string),
                     slot: None,
-                    provider: None,
+                    provider: lane.map(str::to_string),
                     cwd: "/repo".into(),
                 },
                 node_basis: None,
@@ -1856,6 +1872,7 @@ mod tests {
             assert_eq!(row.node_basis.as_deref(), basis);
             assert_eq!(row.spawned_by_session.as_deref(), Some("lead-7"));
             assert_eq!(row.substrate.as_deref(), Some("thread"));
+            assert_eq!(row.provider.as_deref(), Some(provider));
             assert_eq!(row.status, AgentStatus::Live);
             let births = crate::event_store::query_events(
                 &home.events_jsonl(),

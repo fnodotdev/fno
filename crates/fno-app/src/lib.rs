@@ -21,6 +21,7 @@ mod orchestration;
 pub mod palette;
 mod sheet;
 mod shot;
+mod start;
 mod tabs;
 mod ui;
 mod window;
@@ -75,9 +76,12 @@ pub struct ShotOptions {
     pub theme: String,
     /// View to render (default: the command center board).
     pub mode: Option<MainView>,
-    /// Paint the frame as if cmd alone is held: the pick-gated hints
-    /// reveal. The proof frame for the badge rule.
-    pub picking: bool,
+    /// The empty-pane state: the chat pane shows its start view no matter
+    /// what the world's focus carries. The start-view shots set it.
+    pub empty_chat: bool,
+    /// Cmd held: the rows and the start view show their cmd hints. The
+    /// cmd-held shots set it.
+    pub cmd: bool,
     /// The find bar state the frame paints over the chat view.
     pub find: Option<FindShot>,
     /// Window-relative logical x,y the frame clicks through a posted
@@ -136,7 +140,8 @@ pub fn run(opts: Options) -> i32 {
             chat: opts.chat,
             font: opts.font,
             font_size: opts.font_size,
-            picking: shot.picking,
+            empty_chat: shot.empty_chat,
+            cmd: shot.cmd,
             tap: shot.tap,
         });
     }

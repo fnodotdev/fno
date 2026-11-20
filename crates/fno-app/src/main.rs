@@ -43,10 +43,6 @@ struct Args {
     /// View --shot renders (default: the command center board).
     #[arg(long = "shot-mode", value_enum)]
     shot_mode: Option<ShotView>,
-    /// Paint the frame as if cmd alone is held: the pick-gated hints
-    /// reveal. The proof frame for the badge rule.
-    #[arg(long = "shot-picking")]
-    shot_picking: bool,
     /// Find-bar state --shot paints over the chat view: `bar` opens the
     /// bar with a query typed through the real key path; `chords` also
     /// forces the cmd-held hint.
@@ -60,6 +56,14 @@ struct Args {
     /// instead of capturing. Diagnostic.
     #[arg(long = "shot-hold", hide = true)]
     shot_hold: bool,
+    /// The chat pane keeps its empty start view for the frame, whatever
+    /// the world's focus carries. Shot-only.
+    #[arg(long = "shot-empty-chat", hide = true)]
+    shot_empty_chat: bool,
+    /// Cmd held: the rows and the start view show their cmd hints.
+    /// Shot-only.
+    #[arg(long = "shot-cmd", hide = true)]
+    shot_cmd: bool,
 }
 
 /// The --shot-mode values. The kebab spellings mirror MainView.
@@ -116,13 +120,14 @@ fn main() {
             out: std::path::PathBuf::from(out),
             theme: args.shot_theme,
             mode: args.shot_mode.map(ShotView::into_main),
-            picking: args.shot_picking,
             find: args.shot_find.map(|f| match f {
                 ShotFind::Bar => fno_app::FindShot::Bar,
                 ShotFind::Chords => fno_app::FindShot::Chords,
             }),
             tap: args.shot_tap.as_deref().and_then(parse_point),
             hold: args.shot_hold,
+            empty_chat: args.shot_empty_chat,
+            cmd: args.shot_cmd,
         })
     } else {
         None
