@@ -2280,7 +2280,8 @@ mod tests {
         .unwrap();
         let glm: Vec<_> = snap.lanes.iter().filter(|l| l.provider == "zai").collect();
         assert_eq!(glm.len(), 1);
-        for m in &glm[0].members {
+        let lane = glm.first().expect("one zai lane");
+        for m in &lane.members {
             assert_eq!(
                 m.cap_unknown, None,
                 "{} must resolve its transcript",
@@ -2288,7 +2289,7 @@ mod tests {
             );
             assert!(m.capped, "{} must read its 429 tail", m.name);
         }
-        assert_eq!(glm[0].state, "open");
+        assert_eq!(lane.state, "open");
     }
 
     /// A 1308 names its reset in z.ai's own clock. The lane parks until that
