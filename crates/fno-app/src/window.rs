@@ -2769,6 +2769,7 @@ pub(super) fn root_for_shot(
     warmed: super::link::WarmedLink,
     family: String,
     font_size: f32,
+    find: Option<crate::FindShot>,
     window: &mut Window,
     cx: &mut App,
 ) -> gpui::Entity<Root> {
@@ -2800,6 +2801,17 @@ pub(super) fn root_for_shot(
         )
     });
     root.update(cx, |root, _| root.shot = true);
+    if let Some(find) = find {
+        root.update(cx, |root, cx| {
+            // The real paths: the bar opens and the query types exactly
+            // as the user's keystrokes would land.
+            root.find_open(cx);
+            root.find_key(find::FindKey::Edit("the".to_owned()), cx);
+            if find == crate::FindShot::Chords {
+                root.picking = true;
+            }
+        });
+    }
     // The shot window never activates, and the board poll pauses while
     // the window is inactive; the shot needs every feed settled before
     // the capture, so it polls regardless.

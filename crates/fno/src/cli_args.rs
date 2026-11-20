@@ -326,9 +326,9 @@ pub enum AppOp {
     /// the running app; refuses naming the session when none runs
     #[command(disable_help_flag = true)]
     Focus(AppFocusArgs),
-    /// `mux app shot --out <path> [--theme dark|light] [--mode <view>]`:
-    /// render one offscreen demo frame and write a png; never opens a
-    /// window on any display
+    /// `mux app shot --out <path> [--theme dark|light] [--mode <view>]
+    /// [--find bar|chords]`: render one offscreen demo frame and write a
+    /// png; never opens a window on any display
     #[command(disable_help_flag = true)]
     Shot(AppShotArgs),
     /// `mux app state [--json]`: read the app's saved window state
@@ -430,6 +430,10 @@ pub struct AppShotArgs {
     /// View to render (default: the command center board)
     #[arg(long, value_enum)]
     pub mode: Option<AppView>,
+    /// Find-bar state the frame paints over the chat view: `bar` opens
+    /// the bar with a query typed; `chords` also holds the cmd hint
+    #[arg(long, value_parser = ["bar", "chords"])]
+    pub find: Option<String>,
 }
 
 /// `mux thread`'s operation set: `reseat` is the one declared operation;

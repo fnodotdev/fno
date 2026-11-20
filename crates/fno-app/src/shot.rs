@@ -45,6 +45,7 @@ pub fn run(opts: ShotOptions) -> i32 {
         .unwrap_or_else(|| "default".to_string());
     let mode = opts.mode.unwrap_or(MainView::Orchestration);
     let pinned = opts.chat.as_deref().and_then(crate::chat::claude_key);
+    let find = opts.find;
     let out = opts.out.clone();
     let family = opts.font.clone();
     let font_size = opts.font_size;
@@ -79,7 +80,7 @@ pub fn run(opts: ShotOptions) -> i32 {
             },
             move |window, cx| {
                 crate::window::root_for_shot(
-                    &session, mode, pinned, warmed, family, font_size, window, cx,
+                    &session, mode, pinned, warmed, family, font_size, find, window, cx,
                 )
             },
         );

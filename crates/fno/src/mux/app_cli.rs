@@ -82,7 +82,7 @@ pub fn run(op: AppOp) -> i32 {
         AppOp::Open(args) => open(&args.mode, args.focus.as_deref(), &args.common),
         AppOp::Show(args) => show(args.view, &args.common),
         AppOp::Focus(args) => focus(&args.agent, &args.common),
-        AppOp::Shot(args) => shot(&args.out, &args.theme, args.mode),
+        AppOp::Shot(args) => shot(&args.out, &args.theme, args.find.as_deref(), args.mode),
         AppOp::State { json } => state(json.json),
         AppOp::Close { common } => close(&common),
     }
@@ -476,7 +476,7 @@ fn seed_transcript(root: &Path) -> bool {
 /// the caller's own state: its own HOME, mux dir, agents home and graph
 /// store, all under /tmp (a socket path must stay under 104 bytes on
 /// macOS), and every child strips the caller's identity keys.
-fn shot(out: &str, theme: &str, mode: Option<AppView>) -> i32 {
+fn shot(out: &str, theme: &str, find: Option<&str>, mode: Option<AppView>) -> i32 {
     if !require_macos("shot") {
         return 2;
     }
@@ -549,6 +549,9 @@ fn shot(out: &str, theme: &str, mode: Option<AppView>) -> i32 {
         if matches!(view, AppView::Chat) {
             cmd.arg("--chat").arg("newest");
         }
+    }
+    if let Some(find) = find {
+        cmd.arg("--shot-find").arg(find);
     }
     match cmd.status() {
         Ok(s) => s.code().unwrap_or(1),
