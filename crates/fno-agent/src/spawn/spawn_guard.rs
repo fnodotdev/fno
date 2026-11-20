@@ -88,7 +88,22 @@ fn decide_with_occupancy(
         // did not answer is an outage, and repair advice would mislead.
         Err(error) if !error.starts_with("remote store ") => (ClaimState::Corrupted, None),
         Err(error) => {
-            let detail = format!("{node_key} claim is unreadable: {error}; not dispatching");
+            // store_remote's own outage text never sends a reader to the
+            // local store (a local write splits the claim store); this
+            // surface is the operator's explicit ask, so the machine's name
+            // and the switch are stated beside the split caveat.
+            let named = crate::store_remote::configured()
+                .ok()
+                .flatten()
+                .map(|remote| remote.host().to_string())
+                .unwrap_or_else(|| "the claims primary".to_string());
+            let detail = format!(
+                "{node_key} claim is unreadable: {error}; not dispatching. {named} is down, so \
+                 no claim can be read or reserved. Until it returns, `fno config unset \
+                 store.remote_url` runs claims on this machine's local store; machines switched \
+                 apart dispatch independently, so coordinate with the fleet, and set the URL \
+                 back when the primary answers."
+            );
             return (
                 json!({"verdict": "error", "reason": "claims-unavailable", "detail": detail}),
                 3,
@@ -1536,6 +1551,7 @@ mod tests {
             detail.contains(dead.url()) && detail.contains("store.remote_url"),
             "{detail}"
         );
+        assert!(detail.contains("config unset store.remote_url"), "{detail}");
         assert!(refusal_line("x-1", &out).contains(" reason=claims-unavailable; "));
     }
 }
