@@ -370,10 +370,10 @@ fn fence_tail(route: &ReaderRoute) -> Result<Vec<String>, ContractError> {
     let tools = crate::harness_capabilities::packaged_reader_tools_args(&route.harness)
         .filter(|args| !args.is_empty())
         .ok_or_else(|| {
-            format!(
-                "harness {} has no measured tool-bearing reader form; add reader_tools_args \
-                 to its capability row",
-                route.harness
+            crate::harness_capabilities::field_error(
+                &route.harness,
+                "reader_tools_args",
+                "no measured tool-bearing reader form; add reader_tools_args to the row",
             )
         })?;
     let mut tail: Vec<String> = Vec::new();
