@@ -960,8 +960,8 @@ fn review_list_core() -> Result<Value, CoreError> {
     // The review read always consults the graph for live subjects, the soft
     // way: an unreadable graph degrades to text grouping and says so.
     if entries.is_none() {
-        match super::decisions_cache::cached_graph_entries() {
-            Ok(rows) if !rows.is_empty() => entries = Some((*rows).clone()),
+        match read_graph_entries() {
+            Ok(rows) if !rows.is_empty() => entries = Some(rows),
             Ok(_) => {}
             Err(e) => eprintln!(
                 "decide: the graph could not be read ({e}), so a subject only \
