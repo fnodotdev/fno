@@ -907,8 +907,13 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) -> StdinFlow {
                 // A drill past the first appends: the record takes its
                 // own pane right of the row and the earlier columns stay.
                 let drilled = view.persona.as_ref().is_some_and(|o| o.drill);
-                if drilled {
+                let docked = view.persona.as_ref().is_some_and(|o| o.pane.is_some());
+                if drilled && docked {
                     append = Some(s.id.clone());
+                } else if drilled {
+                    // No docked pane to append beside: the record in the
+                    // board's detail column follows the selection.
+                    open_serving(view, &s);
                 } else {
                     if let Some(o) = view.persona.as_mut() {
                         o.drill = true;
@@ -988,8 +993,12 @@ fn keys_page(view: &mut View, bytes: &[u8], serving: &[Serving]) -> StdinFlow {
                 if o.input.is_none() && o.path.is_file() {
                     // The focused pane is the surface's home: after the
                     // split it keeps the page, and the editor composites
-                    // beside it instead of under it.
-                    o.home = Home::Pane(view.layout.focus);
+                    // beside it instead of under it. A persona that owns a
+                    // docked pane keeps its dock: its record panes paint
+                    // only on that branch.
+                    if o.pane.is_none() {
+                        o.home = Home::Pane(view.layout.focus);
+                    }
                     o.edit_since = std::fs::metadata(&o.path).and_then(|m| m.modified()).ok();
                     spawn = Some(o.path.clone());
                 }
@@ -1871,6 +1880,7 @@ fn spawn_record_pane(view: &mut View, node_id: &str) {
         .max_by_key(|(_, r)| r.x + r.cols)
         .map(|(pid, _)| *pid);
     let Some(anchor_id) = anchor else {
+        view.set_notice("the record pane never opened: no pane to append beside".into());
         return;
     };
     let cwd = std::env::current_dir()
@@ -1893,8 +1903,12 @@ fn spawn_record_pane(view: &mut View, node_id: &str) {
         fno_id: None,
     };
     let session = view.session.clone();
-    let Ok(sock) = crate::proto::socket_path(&session) else {
-        return;
+    let sock = match crate::proto::socket_path(&session) {
+        Ok(s) => s,
+        Err(e) => {
+            view.set_notice(format!("the record pane never opened: {e}"));
+            return;
+        }
     };
     let reply = crate::mux_cli::control_roundtrip(&sock, &session, command);
     let pane_id = match reply {
@@ -1931,7 +1945,7 @@ fn fold_oldest_record(view: &mut View) -> bool {
             return false;
         };
         o.records.remove(0);
-        o.folded.insert(0, node);
+        o.folded.push(node);
         if o.claim_pane == Some(pane) {
             o.claim_pane = None;
         }
@@ -3622,6 +3636,95 @@ One person.
             .unwrap_or(None);
         assert_eq!(picked.as_deref(), Some("d-2"));
         assert!(v3.persona.is_none());
+        unpin_customers_dir();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A persona page over a board that serves `ids` to the solo persona:
+    /// the fixture the drill-key tests share. The caller holds ENV_LOCK
+    /// and cleans up the returned dir.
+    fn drill_view(tag: &str, ids: &[&str]) -> (View, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("persona-{tag}-{}", std::process::id()));
+        let root = dir.join("fno");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("solo.md"), fixture_doc("solo")).unwrap();
+        pin_customers_dir(&dir);
+        let mut v = crate::client::tests::two_pane_view();
+        let mut b = crate::client::backlog_board::BoardView::new(0);
+        b.inputs = Some(crate::backlog_model::Inputs {
+            rows: ids
+                .iter()
+                .map(|id| {
+                    crate::node_row::NodeRow::from_value(serde_json::json!({
+                        "id": id, "title": id, "audience": "customer:solo"
+                    }))
+                })
+                .collect(),
+            ..Default::default()
+        });
+        v.backlog_board = Some(b);
+        v.persona = Some(open_page("fno", "solo"));
+        (v, dir)
+    }
+
+    #[test]
+    fn a_second_enter_without_a_docked_pane_repoints_the_record() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut v, dir) = drill_view("enter2", &["demo-1", "demo-2"]);
+        for key in [&b"j"[..], b"\r", b"j", b"\r"] {
+            keys(&mut v, key);
+        }
+        let shown = v
+            .backlog_board
+            .as_ref()
+            .and_then(|b| b.detail.as_ref())
+            .map(|d| d.node_id.clone());
+        assert_eq!(shown.as_deref(), Some("demo-2"), "the second Enter acts");
+        assert!(v.persona.as_ref().is_some_and(|o| o.records.is_empty()));
+        unpin_customers_dir();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn folds_land_oldest_first_in_the_breadcrumb() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut v, dir) = drill_view("foldorder", &[]);
+        if let Some(o) = v.persona.as_mut() {
+            o.pane = Some(7);
+            o.records = vec![(9, "ab-1".into()), (8, "ab-2".into()), (7, "ab-3".into())];
+        }
+        assert!(fold_oldest_record(&mut v));
+        assert!(fold_oldest_record(&mut v));
+        let folded = v
+            .persona
+            .as_ref()
+            .map(|o| o.folded.clone())
+            .unwrap_or_default();
+        assert_eq!(folded, vec!["ab-1".to_string(), "ab-2".to_string()]);
+        assert_eq!(
+            folded_breadcrumb(None, &folded),
+            "\u{2039} ab-1 \u{b7} ab-2"
+        );
+        unpin_customers_dir();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_edit_key_keeps_a_docked_trail_painting_its_record_panes() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut v, dir) = drill_view("editdock", &["demo-1"]);
+        if let Some(o) = v.persona.as_mut() {
+            o.home = Home::SidelineBoard;
+            o.pane = Some(6);
+            o.records = vec![(9, "demo-1".into())];
+        }
+        keys(&mut v, b"e");
+        assert!(v.persona.as_ref().is_some_and(|o| o.edit_spawn.is_some()));
+        assert!(
+            v.persona.as_ref().map(|o| o.home) == Some(Home::SidelineBoard),
+            "the dock keeps its home, the branch that paints the record panes"
+        );
+        assert!(sibling_pane(&v).is_none());
         unpin_customers_dir();
         std::fs::remove_dir_all(&dir).ok();
     }
