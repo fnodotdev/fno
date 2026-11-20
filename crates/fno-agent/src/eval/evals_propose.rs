@@ -1717,15 +1717,15 @@ pub(crate) fn run_leg(r: &Run) -> i32 {
 pub fn changes_cli(args: &[String]) -> i32 {
     if let Some(bad) = args
         .iter()
-        .find(|a| !matches!(a.as_str(), "--dry-run" | "--json"))
+        .find(|a| a.as_str() != "--dry-run" && !crate::json_output::is_flag(a))
     {
         eprintln!(
-            "evals drafts changes: unknown argument {bad:?}; usage: changes [--dry-run] [--json]"
+            "evals drafts changes: unknown argument {bad:?}; usage: changes [--dry-run] [--json|-J]"
         );
         return 2;
     }
     let dry_run = args.iter().any(|a| a == "--dry-run");
-    let json_out = args.iter().any(|a| a == "--json");
+    let json_out = crate::json_output::requested(args);
     let Some(repo) = crate::golden_drafter::bank_repo() else {
         eprintln!("evals drafts changes: no bank checkout found");
         return 2;
