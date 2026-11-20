@@ -175,7 +175,7 @@ pub(crate) fn reader_tools_argv(
         argv.extend(["--model".to_string(), model.clone()]);
     }
     argv.extend(tools);
-    argv
+    Ok(argv)
 }
 
 /// The spawn flags before the prompt: identity, machine, harness lane, and
