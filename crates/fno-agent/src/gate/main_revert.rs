@@ -519,10 +519,10 @@ mod tests {
         ];
         let ts = |i: usize| crate::ci_cadence::ts_ms(&rows[i]);
         let (first, closed, opened) = fold(&rows, "o/r", "c2");
-        assert_eq!((first, closed), (Some(ts(0)), true));
+        assert_eq!((first, closed), (ts(0), true));
         assert!(opened.is_empty());
         let (first, closed, opened) = fold(&rows, "o/r", "c3");
-        assert_eq!((first, closed), (Some(ts(2)), false));
+        assert_eq!((first, closed), (ts(2), false));
         assert!(opened.is_empty());
         assert_eq!(fold(&rows, "o/r", "c4"), (None, false, HashSet::new()));
     }
