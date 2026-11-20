@@ -20,7 +20,7 @@ use serde_json::Value;
 use crate::reader_route::ReaderRoute;
 
 use crate::evals::bank::TaskSpec;
-use crate::evals::failure_types::{prove, Catalog};
+use crate::evals::failure_types::{prove, unproved_tasks, Catalog};
 use crate::evals_power::SEED;
 use crate::evals_trend::Row;
 
@@ -870,21 +870,6 @@ fn ship_candidate(
     Ok(ShipOutcome::Opened(url))
 }
 
-/// The bank's unproved set, the fold's exclusion list: a golden whose
-/// grader is unproved lists as Unproved and cannot fail a compare.
-fn unproved_set(
-    tasks: &[TaskSpec],
-    bank_dir: &std::path::Path,
-) -> Result<BTreeSet<String>, ProposeError> {
-    let catalog = Catalog::load(bank_dir).map_err(ProposeError::Bank)?;
-    let proofs = prove(&catalog, tasks, bank_dir);
-    Ok(tasks
-        .iter()
-        .filter(|t| !proofs.get(&t.id).is_some_and(|p| p.proved))
-        .map(|t| t.id.clone())
-        .collect())
-}
-
 /// The cycle's side effects, injected so a whole cycle runs under test
 /// with no model, no bank run, no git and no GitHub.
 pub(crate) struct Doors<'a> {
@@ -1261,7 +1246,7 @@ pub(crate) fn run_cycle(c: &Cycle, dry_run: bool, doors: &Doors) -> Result<Value
     if any_candidate {
         (doors.run)(&base_cohort, "v1", c.base_sha)?;
     }
-    let unproved = unproved_set(&tasks, c.bank_dir)?;
+    let unproved = unproved_tasks(c.bank_dir).map_err(ProposeError::Bank)?;
     let mut results: Vec<Value> = Vec::new();
     for (i, (cluster, slot)) in list.iter().zip(slots).enumerate() {
         let mut row = match slot {
@@ -1481,8 +1466,7 @@ pub(crate) fn probation(
             merges.insert(pr, sha);
         }
     }
-    let tasks = crate::evals::bank::discover_bank(bank_dir).map_err(|e| ProposeError::Bank(e.0))?;
-    let unproved = unproved_set(&tasks, bank_dir)?;
+    let unproved = unproved_tasks(bank_dir).map_err(ProposeError::Bank)?;
     let rows = crate::evals_trend::read_rows(&history.to_string_lossy(), None, None);
     let mut out = Vec::new();
     for r in &shipped {
@@ -1869,7 +1853,12 @@ mod tests {
         ];
         let err = assert_ledger(&dup_rows, "base", &cands, &planned).unwrap_err();
         assert!(format!("{err}").contains("duplicate"), "{err}");
-        let none = vec![row("a1", "base"), row("c1", "cand")];
+        let none = vec![
+            row("a1", "base"),
+            serde_json::json!({"experiment_id": "base"}),
+            row("c1", "cand"),
+            row("c2", "cand"),
+        ];
         let err = assert_ledger(&none, "base", &cands, &planned).unwrap_err();
         assert!(format!("{err}").contains("no attempt id"), "{err}");
     }
