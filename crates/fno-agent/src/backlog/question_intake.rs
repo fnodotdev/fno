@@ -2343,9 +2343,10 @@ stops
         let root = tmp_root("ask-live-subject");
         let index = root.join("questions.jsonl");
         let journal = root.join("journal").join("events.jsonl");
-        let mut r = req("which lane first?", &root);
+        let mut r = req("Approve the lane order?", &root);
         r.subject = Some("lane order".to_string());
         r.node = Some("x-cccc".to_string());
+        r.ask = Some("finish the lane".to_string());
         r.index_path = Some(index.clone());
         r.journal_path = Some(journal.clone());
         let answer = run_intake(&r, &tmp_home("ask-live-subject"));
