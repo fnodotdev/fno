@@ -1613,7 +1613,7 @@ fn route_outside_merge_look(record: &MergeDriftRecord, repo: &str) {
                 &blocker.detail,
             );
         }
-        Some(blocker) if blocker.code == "visual_declined" => {}
+        Some(blocker) if crate::merge_gates::visual_holds_merge(&blocker.code) => {}
         Some(blocker) => eprintln!(
             "look request not routed: PR {pr} gate read {}: {}",
             blocker.code, blocker.detail

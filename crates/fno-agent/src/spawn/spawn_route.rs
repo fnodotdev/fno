@@ -209,7 +209,8 @@ fn settled(refuse: &dyn Fn(&str) -> String, target: Target, cwd: &Path) -> Route
         .map(|(k, v)| (k.clone(), Value::String(v.clone())))
         .collect();
     let settings =
-        match crate::route_settings::write_composed(&route_env, &Map::new(), None, None, cwd) {
+        match crate::route_settings::write_composed(&route_env, &Map::new(), None, None, None, cwd)
+        {
             Ok(Some(path)) => path,
             Ok(None) => return RouteSeam::Refuse(refuse("the route wrote no settings file")),
             Err(e) => return RouteSeam::Refuse(refuse(&e)),

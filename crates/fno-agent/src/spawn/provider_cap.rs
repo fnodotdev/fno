@@ -1396,15 +1396,14 @@ fn members_with_steps(home: &AgentsHome, lane: &str, steps: &[&str]) -> Vec<Stri
         if !(name.starts_with(&prefix) && name.ends_with(".jsonl")) {
             continue;
         }
-        // Committed rows, not journal bytes: the ladder's own steps are
-        // store-committed, so the moved-set reads them back from the store.
-        let Ok(rows) =
-            crate::event_store::query_events(&e.path(), &crate::event_store::EventQuery::default())
-        else {
+        // `journal` appends plain JSON lines, so they are read back as lines:
+        // the event-store query answered none of them, and every migrated
+        // member read as never moved.
+        let Ok(body) = std::fs::read_to_string(e.path()) else {
             continue;
         };
-        for r in rows {
-            let Ok(v) = serde_json::from_str::<Value>(&r.line) else {
+        for line in body.lines() {
+            let Ok(v) = serde_json::from_str::<Value>(line) else {
                 continue;
             };
             if v.get("step")
@@ -1537,7 +1536,8 @@ pub fn run_return_lane(
         // Step 2: fresh epoch. Retire the leave question and decision: they
         // answered the reset that passed.
         close_leave_question(home, lane, now_epoch);
-        let _ = std::fs::remove_file(alert_marker(home, &lane.lane));
+        // An absent marker is the common case: the lane never alerted.
+        std::fs::remove_file(alert_marker(home, &lane.lane)).ok();
         let mut candidates = return_candidates(home, lane);
         if candidates.is_empty() {
             journal(
@@ -1872,13 +1872,13 @@ fn alert_once(home: &AgentsHome, lane: &CapLane, plan: &str, now_epoch: i64, dep
     );
     if (deps.alert)(lane, &body) {
         let _ = std::fs::create_dir_all(lanes_dir(home));
-        let _ = std::fs::write(&path, &key);
-        journal(
-            home,
-            &lane.lane,
-            now_epoch,
-            &json!({"step": "alerted", "reset": lane.reset_epoch}),
-        );
+        // An unwritten marker re-alerts next tick; the journal says why.
+        let step = match std::fs::write(&path, &key) {
+            Ok(()) => json!({"step": "alerted", "reset": lane.reset_epoch}),
+            Err(e) => json!({"step": "alerted", "reset": lane.reset_epoch,
+                             "marker": format!("unwritten: {e}")}),
+        };
+        journal(home, &lane.lane, now_epoch, &step);
     }
 }
 

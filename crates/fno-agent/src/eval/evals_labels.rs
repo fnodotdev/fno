@@ -117,6 +117,11 @@ fn append_rows(path: &Path, rows: &[Value]) -> Result<(), String> {
         .map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// Every session's newest label rows, read from the one label table.
+pub(crate) fn label_rows(state: &Path) -> Vec<Value> {
+    newest_rows(&read_rows(&labels_path(state)))
+}
+
 /// The newest-digest row per (session, judge, judge_version). Rows land in
 /// append order, so the last row for a key carries the newest digest, and
 /// this function is the only projection a reader needs.
@@ -145,7 +150,7 @@ pub(crate) fn newest_rows(rows: &[Value]) -> Vec<Value> {
     out.into_values().collect()
 }
 
-fn fact_str(field: &Value) -> Option<&str> {
+pub(crate) fn fact_str(field: &Value) -> Option<&str> {
     field
         .get("value")
         .and_then(Value::as_str)
@@ -189,7 +194,7 @@ fn mtime_ms(path: &Path) -> Option<i64> {
         .map(|d| d.as_millis() as i64)
 }
 
-fn load_traces(state: &Path) -> Vec<Value> {
+pub(crate) fn load_traces(state: &Path) -> Vec<Value> {
     let dir = state.join("evals").join("traces");
     let mut out = Vec::new();
     for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {

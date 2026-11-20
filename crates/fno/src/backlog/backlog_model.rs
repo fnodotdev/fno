@@ -1428,6 +1428,21 @@ pub fn node(inp: &Inputs, id: &str) -> Option<NodeView> {
 /// sweep runs first so one snapshot binds the order, the underway epics and
 /// the card flags.
 pub async fn gather(graph: &Path, agents: Vec<AgentRow>) -> Inputs {
+    gather_with(graph, agents, FlowRead::Read).await
+}
+
+/// Whether a gather reads the delivery `flow` aggregate. The read ships
+/// every row and the whole ledger to a classifier child, about a third of a
+/// list's wall time on a 7,900-row graph, so a consumer that never shows the
+/// scoreboard skips it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum FlowRead {
+    Read,
+    Skip,
+}
+
+/// [`gather`] with the flow read named by the caller.
+pub async fn gather_with(graph: &Path, agents: Vec<AgentRow>, flow: FlowRead) -> Inputs {
     // One claim snapshot binds the order, the underway epics and the card
     // flags. A failed sweep is an errors line, never an empty board: the
     // keeper then reads the claim store itself and refuses when it cannot.
@@ -1441,7 +1456,7 @@ pub async fn gather(graph: &Path, agents: Vec<AgentRow>) -> Inputs {
     }
     let graph = graph.to_path_buf();
     tokio::task::spawn_blocking(move || {
-        gather_blocking(&graph, agents, live_claims, errors, sweep_failed)
+        gather_blocking(&graph, agents, live_claims, errors, sweep_failed, flow)
     })
     .await
     .unwrap_or_else(|e| Inputs {
@@ -1482,15 +1497,64 @@ fn parse_snapshot_doc(v: &Value) -> (Vec<NodeRow>, Vec<String>) {
     (rows, errors)
 }
 
+/// The delivery `flow` aggregate: the ledger at <state root>/ledger.json and
+/// the rows go to the classifier. A caller that skips flow never reads the
+/// ledger either. An unreadable ledger is an errors line.
+fn read_flow(
+    graph: &Path,
+    rows: &[NodeRow],
+    external: bool,
+    flow_read: FlowRead,
+    errors: &mut Vec<String>,
+) -> Value {
+    if flow_read == FlowRead::Skip {
+        return json!({"available": false, "reason": "this read skips the flow aggregate"});
+    }
+    /// The ledger document; only its rows ride to the classifier.
+    #[derive(Default, Deserialize)]
+    #[serde(default)]
+    struct Ledger {
+        entries: Value,
+    }
+    let ledger: Vec<Value> = match std::fs::read_to_string(ledger_path()) {
+        Err(_) => Vec::new(),
+        Ok(text) => match serde_json::from_str::<Value>(&text) {
+            Ok(v) => match Ledger::deserialize(&v).unwrap_or_default().entries {
+                Value::Array(entries) => entries,
+                _ => Vec::new(),
+            },
+            Err(e) => {
+                errors.push(format!("ledger unreadable: {e}"));
+                Vec::new()
+            }
+        },
+    };
+    if external {
+        return json!({"available": false, "reason": "no ledger flow on an external backend"});
+    }
+    match store_client::flow(graph, rows, &ledger) {
+        Ok(f) => f,
+        Err(e) => json!({"available": false, "reason": e.to_string()}),
+    }
+}
+
 fn gather_blocking(
     graph: &Path,
     agents: Vec<AgentRow>,
     live_claims: HashMap<String, String>,
     mut errors: Vec<String>,
     sweep_failed: bool,
+    flow_read: FlowRead,
 ) -> Inputs {
     let backend_name = external_backend_name();
     let external = external_backend_selected();
+    // The live claims the keeper orders by. When the sweep failed, send none.
+    let claimed: Vec<String> = if sweep_failed {
+        Vec::new()
+    } else {
+        live_claims.keys().cloned().collect()
+    };
+    let mut board_facts: Option<store_client::BoardFacts> = None;
     // (2) The source: the external snapshot, or the store's rows.
     let (rows, rows_error, snapshot_errors): (Vec<NodeRow>, Option<String>, Vec<String>) =
         if external {
@@ -1508,8 +1572,13 @@ fn gather_blocking(
         } else {
             // Shared rows also feed detail drawers and flow; keep closed rows, prose,
             // decisions, progress notes, costs, PRs, and complete session records.
-            match store_client::rows(graph, None, None) {
-                Ok(r) => (r, None, Vec::new()),
+            // The same call carries the board facts, so the keeper loads the
+            // graph once for both.
+            match store_client::rows_with_board(graph, &claimed) {
+                Ok((r, board)) => {
+                    board_facts = board;
+                    (r, None, Vec::new())
+                }
                 Err(e) => (Vec::new(), Some(e.to_string()), Vec::new()),
             }
         };
@@ -1531,52 +1600,21 @@ fn gather_blocking(
     } else {
         store_client::version(graph).ok()
     };
-    // (4) The keeper's board facts. When the sweep failed, send no claimed:
-    // the keeper reads the claim store itself and refuses when it cannot.
-    let claimed: Vec<String> = if sweep_failed {
-        Vec::new()
-    } else {
-        live_claims.keys().cloned().collect()
-    };
+    // (4) The keeper's board facts: already in hand from the rows call, else
+    // (an external backend, or a keeper that predates the option) asked for.
     let shipped_entries = external.then_some(rows.as_slice());
-    let (order, underway, effective_priority) =
-        match store_client::board_facts(graph, shipped_entries, &claimed) {
-            Ok(facts) => (facts.ids, facts.underway, facts.effective_priority),
-            Err(e) => {
-                errors.push(format!("board order unavailable: {e}"));
-                (Vec::new(), HashSet::new(), HashMap::new())
-            }
-        };
-    // (5) The ledger at <state root>/ledger.json.
-    let path = ledger_path();
-    /// The ledger document; only its rows ride to the classifier.
-    #[derive(Default, Deserialize)]
-    #[serde(default)]
-    struct Ledger {
-        entries: Value,
-    }
-    let ledger: Vec<Value> = match std::fs::read_to_string(&path) {
-        Err(_) => Vec::new(),
-        Ok(text) => match serde_json::from_str::<Value>(&text) {
-            Ok(v) => match Ledger::deserialize(&v).unwrap_or_default().entries {
-                Value::Array(entries) => entries,
-                _ => Vec::new(),
-            },
-            Err(e) => {
-                errors.push(format!("ledger unreadable: {e}"));
-                Vec::new()
-            }
-        },
-    };
-    // (6) Flow over the rows and the ledger.
-    let flow = if external {
-        json!({"available": false, "reason": "no ledger flow on an external backend"})
-    } else {
-        match store_client::flow(graph, &rows, &ledger) {
-            Ok(f) => f,
-            Err(e) => json!({"available": false, "reason": e.to_string()}),
+    let (order, underway, effective_priority) = match board_facts
+        .map(Ok)
+        .unwrap_or_else(|| store_client::board_facts(graph, shipped_entries, &claimed))
+    {
+        Ok(facts) => (facts.ids, facts.underway, facts.effective_priority),
+        Err(e) => {
+            errors.push(format!("board order unavailable: {e}"));
+            (Vec::new(), HashSet::new(), HashMap::new())
         }
     };
+    // (5) and (6): the ledger, then flow over the rows and the ledger.
+    let flow = read_flow(graph, &rows, external, flow_read, &mut errors);
     // (7) The spawn-env scope. Each failure is a named line, never an empty
     // board.
     let (scope, scope_reason) = board_scope_from_spawn_env();

@@ -1225,8 +1225,16 @@ fn list_row_key_set_matches_shared_contract() {
     // bg row that holds only its short-id prefix lands the canonical
     // harness_session_id beside the legacy claude_session_uuid, so every
     // consumer that reads the canonical field sees the id at once.
+    // A poll-miss mint recorded the digest-named settings file; the
+    // backfill publishes the session twin and re-points the row at it.
+    let settings_dir = home.root().join("route-settings");
+    std::fs::create_dir_all(&settings_dir).unwrap();
+    let digest = settings_dir.join("0123456789abcdef.json");
+    std::fs::write(&digest, "{}").unwrap();
     state::update_registry(&home.registry_json(), |r| {
-        r.entries.push(bg_claude_row("worker-B", "3228ccad"));
+        let mut row = bg_claude_row("worker-B", "3228ccad");
+        row.route_settings_path = Some(digest.to_string_lossy().into_owned());
+        r.entries.push(row);
     })
     .unwrap();
     let full = "3228ccad-c078-4b53-a8c9-7199b831eae4";
@@ -1248,6 +1256,12 @@ fn list_row_key_set_matches_shared_contract() {
         .expect("the backfilled row");
     assert_eq!(bg.harness_session_id.as_deref(), Some(full));
     assert_eq!(bg.claude_session_uuid.as_deref(), Some(full));
+    let twin = settings_dir.join(format!("session-{full}.json"));
+    assert_eq!(
+        bg.route_settings_path.as_deref(),
+        Some(twin.to_string_lossy().as_ref())
+    );
+    assert_eq!(std::fs::read_to_string(&twin).unwrap(), "{}");
 
     std::fs::remove_dir_all(home.root()).ok();
 }

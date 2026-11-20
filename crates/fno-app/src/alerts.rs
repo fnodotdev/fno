@@ -321,7 +321,7 @@ impl Alerts {
 }
 
 #[cfg(target_os = "macos")]
-pub use mac::{install_click, notify, play, set_badge};
+pub use mac::{beep, install_click, notify, play, set_badge};
 
 #[cfg(not(target_os = "macos"))]
 pub fn install_click(_wants_auth: bool) -> Option<tokio::sync::mpsc::UnboundedReceiver<u64>> {
@@ -331,6 +331,8 @@ pub fn install_click(_wants_auth: bool) -> Option<tokio::sync::mpsc::UnboundedRe
 pub fn notify(_title: &str, _body: &str, _pane_id: Option<u64>) {}
 #[cfg(not(target_os = "macos"))]
 pub fn play(_kind: Kind) {}
+#[cfg(not(target_os = "macos"))]
+pub fn beep() {}
 #[cfg(not(target_os = "macos"))]
 pub fn set_badge(_count: u32) {}
 
@@ -538,6 +540,16 @@ mod mac {
                 let _: () = msg_send![sound, play];
             }
         }
+    }
+
+    /// The system alert sound, the user's chosen beep.
+    pub fn beep() {
+        #[link(name = "AppKit", kind = "framework")]
+        extern "C" {
+            fn NSBeep();
+        }
+        // SAFETY: NSBeep takes no arguments and is callable from any thread.
+        unsafe { NSBeep() }
     }
 
     pub fn set_badge(count: u32) {
