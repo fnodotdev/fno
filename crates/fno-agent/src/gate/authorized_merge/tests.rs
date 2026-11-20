@@ -735,13 +735,12 @@ fn a_head_grant_clears_the_per_run_no_merge_and_the_receipt_names_it() {
     };
     let outcome = run(&fake, &req);
     assert_eq!(outcome.word(), "merged", "{}", outcome.detail());
-    let receipt = outcome.to_json();
-    assert_eq!(
-        receipt["merge_grant"],
-        json!("user head grant abc123"),
-        "{}",
-        receipt
-    );
+    match &outcome {
+        Outcome::Merged { merge_grant, .. } => {
+            assert_eq!(merge_grant.as_deref(), Some("user head grant abc123"))
+        }
+        other => panic!("expected a merged receipt, got {other:?}"),
+    }
     assert!(fake
         .fno_calls
         .borrow()
@@ -761,6 +760,93 @@ fn a_head_grant_clears_the_per_run_no_merge_and_the_receipt_names_it() {
         .detail()
         .contains("repository identity is unreadable"));
     assert!(missing_repo.fno_calls.borrow().is_empty());
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join(".fno")).unwrap();
+    let spaces = tempfile::tempdir().unwrap();
+    let _env_lock = crate::pr_status::cache_env_lock();
+    crate::paths::pin_test_claims_root(spaces.path());
+    struct RestoreEnv(Option<std::ffi::OsString>, Option<std::ffi::OsString>);
+    impl Drop for RestoreEnv {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(value) => std::env::set_var("FNO_SPACES_DIR", value),
+                None => std::env::remove_var("FNO_SPACES_DIR"),
+            }
+            match self.1.take() {
+                Some(value) => std::env::set_var("FNO_HOME", value),
+                None => std::env::remove_var("FNO_HOME"),
+            }
+        }
+    }
+    let _env = RestoreEnv(
+        std::env::var_os("FNO_SPACES_DIR"),
+        std::env::var_os("FNO_HOME"),
+    );
+    std::env::set_var("FNO_SPACES_DIR", spaces.path());
+    std::env::set_var("FNO_HOME", tmp.path());
+    crate::graph_store::seed_rows(
+        &crate::org_board::scope::graph_json_path(tmp.path()),
+        &[json!({
+            "id": "x-visual",
+            "status": "in_review",
+            "pr_number": 7,
+            "pr_url": "https://github.com/o/r/pull/7"
+        })],
+    )
+    .unwrap();
+
+    let head = "a".repeat(40);
+    let mut fake = clean();
+    fake.facts = Some(PrFacts {
+        head_sha: head.clone(),
+        body: Some("Docs: fno-web#1\n".to_string()),
+        ..open_facts()
+    });
+    fake.covered_head = Some(head.clone());
+    fake.decisions_stdout = Some(
+        json!({
+            "decisions": [{
+                "subject": "x-visual",
+                "authority_source": "role",
+                "lifecycle": "unscoped",
+                "decision": format!("visual approval PR 7 at {head}: approved"),
+                "rationale": "User tapped Approve on the Visual Log (viewer u_test)"
+            }]
+        })
+        .to_string()
+        .into_bytes(),
+    );
+    assert!(!crate::merge_gates::visual_tap_clears_pr(
+        &fake,
+        tmp.path(),
+        7,
+        &"b".repeat(40),
+        "x-visual"
+    ));
+    let req = Request {
+        cwd: tmp.path().to_path_buf(),
+        approved: Some(false),
+        covered_head: Some(head.clone()),
+        ..request(Effect::Merge)
+    };
+
+    let visual_outcome = run(&fake, &req);
+    assert_eq!(
+        visual_outcome.word(),
+        "merged",
+        "{}",
+        visual_outcome.detail()
+    );
+    let expected_grant = format!(
+        "user head grant {}",
+        head.chars().take(8).collect::<String>()
+    );
+    match visual_outcome {
+        Outcome::Merged { merge_grant, .. } => {
+            assert_eq!(merge_grant.as_deref(), Some(expected_grant.as_str()))
+        }
+        other => panic!("expected a merged receipt, got {other:?}"),
+    }
 }
 
 #[test]
