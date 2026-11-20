@@ -38,7 +38,7 @@ pub enum Kind {
 }
 
 impl Kind {
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Kind::Agent => "agent",
             Kind::Lead => "lead",
@@ -55,7 +55,7 @@ impl Kind {
         }
     }
 
-    fn placeholder(self) -> &'static str {
+    pub(crate) fn placeholder(self) -> &'static str {
         match self {
             Kind::Agent => "the task, as one message",
             Kind::Lead => "filter the epics, ⏎ picks the top match",
@@ -401,7 +401,7 @@ impl Launch {
         }
     }
 
-    fn step_harness(&mut self, forward: bool) {
+    pub(crate) fn step_harness(&mut self, forward: bool) {
         let n = self.harnesses.len();
         if n == 0 {
             return;
@@ -444,9 +444,29 @@ impl Launch {
         }
     }
 
+    /// The start view's workspace click: jump the pick straight to one
+    /// workspace, with the skills reread for it.
+    pub(crate) fn pick_project(&mut self, cwd: String) {
+        if cwd.is_empty() {
+            return;
+        }
+        self.project = cwd;
+        self.gone = false;
+        self.refresh_skills();
+    }
+
+    /// The picks the start view's header and chips render.
+    pub(crate) fn project(&self) -> &str {
+        &self.project
+    }
+
+    pub(crate) fn harness(&self) -> &str {
+        &self.harness
+    }
+
     /// Cycle the model pick: None, then the picked harness's table slugs
     /// in order, then back to None. An empty list never leaves None.
-    fn step_model(&mut self, forward: bool) {
+    pub(crate) fn step_model(&mut self, forward: bool) {
         let row = self.harnesses.iter().find(|r| r.name == self.harness);
         let list: Vec<&String> = row.map(|r| r.models.iter().collect()).unwrap_or_default();
         if list.is_empty() {
@@ -480,7 +500,7 @@ impl Launch {
     }
 
     /// Cycle the effort pick over the harness's capability list; None wraps.
-    fn step_effort(&mut self, forward: bool) {
+    pub(crate) fn step_effort(&mut self, forward: bool) {
         let row = self.harnesses.iter().find(|r| r.name == self.harness);
         let list: Vec<&String> = row.map(|r| r.efforts.iter().collect()).unwrap_or_default();
         if list.is_empty() {
@@ -916,7 +936,7 @@ fn skill_names(project: &str) -> Vec<String> {
 /// The project row's display path: home becomes `~`, and a long path
 /// middle-truncates so the row keeps its shape. The request itself always
 /// carries the full path.
-fn short_project(path: &str) -> String {
+pub(crate) fn short_project(path: &str) -> String {
     let home = std::env::var("HOME").unwrap_or_default();
     short_project_with(path, &home)
 }
@@ -964,12 +984,12 @@ fn project_row(l: &Launch, p: &Palette, cx: &mut Context<Root>) -> Stateful<Div>
 }
 
 /// The label the model row shows: the pick, or the door default.
-fn model_label(l: &Launch) -> String {
+pub(crate) fn model_label(l: &Launch) -> String {
     l.model.clone().unwrap_or_else(|| "default".to_string())
 }
 
 /// The label the effort row shows: the pick, or the door default.
-fn effort_label(l: &Launch) -> String {
+pub(crate) fn effort_label(l: &Launch) -> String {
     l.effort.clone().unwrap_or_else(|| "default".to_string())
 }
 
@@ -1098,7 +1118,7 @@ fn task_box(root: &Root, window: &Window, cx: &mut Context<Root>) -> Stateful<Di
     let at = l.composer.clone();
     let text = Field {
         draft: l.draft.clone(),
-        placeholder: l.kind.placeholder(),
+        placeholder: l.kind.placeholder().into(),
         fg: rgb(p.fg).into(),
         muted: rgb(p.muted).into(),
         selection: (p.accent << 8) | 0x55,
@@ -1138,7 +1158,7 @@ fn task_box(root: &Root, window: &Window, cx: &mut Context<Root>) -> Stateful<Di
         .child(text)
 }
 
-fn phase_line(l: &Launch, p: &Palette) -> Option<Div> {
+pub(crate) fn phase_line(l: &Launch, p: &Palette) -> Option<Div> {
     match &l.phase {
         Phase::Editing => None,
         Phase::Starting => Some(ui::text("starting…", Role::Hint, p).py_1()),

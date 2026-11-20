@@ -79,6 +79,8 @@ APP_THEME=""
 APP_MODE="chat"
 FNO_DEMO_FLATPINS=""
 FNO_DEMO_HOLDS=""
+FNO_DEMO_DND=""
+THEME_ARG=""
 FNO_DEMO_SORT=""
 FNO_DEMO_LAYOUT=""
 FNO_DEMO_LEAD_NESTING=""
@@ -113,6 +115,13 @@ for a in "$@"; do
     case "$a" in chat|terminal) APP_MODE="$a" ;; *) echo "mux-demo-snapshot: --app-mode takes chat or terminal, got '$a'" >&2; exit 2 ;; esac
   elif [ "$PREV" = "--mod-pane" ]; then
     MOD_PANE="$a"
+  elif [ "$PREV" = "--theme" ]; then
+    # Captured AND forwarded: the serve lens takes dark|light|macchiato,
+    # while the demo config the client renders through needs the theme's
+    # config twin - `light` is no config theme, so the cells would stay
+    # dark and only the selection bar would invert.
+    THEME_ARG="$a"
+    ARGS+=("$a")
   elif [ "$a" = "--window-size" ] || [ "$a" = "--group" ] || [ "$a" = "--web-port" ] || [ "$a" = "--sort" ] || [ "$a" = "--layout" ] || [ "$a" = "--install-card" ] || [ "$a" = "--app-theme" ] || [ "$a" = "--app-mode" ] || [ "$a" = "--mod-pane" ]; then
     :
   elif [ "$a" = "--second-workspace" ]; then
@@ -123,6 +132,8 @@ for a in "$@"; do
     FNO_DEMO_FLATPINS=1
   elif [ "$a" = "--holds" ]; then
     FNO_DEMO_HOLDS=1
+  elif [ "$a" = "--dnd" ]; then
+    FNO_DEMO_DND=1
   elif [ "$a" = "--hold" ]; then
     HOLD=1
   elif [ "$a" = "--remote-pane" ]; then
@@ -143,7 +154,7 @@ case "$MOD_PANE" in
   ""|review-ledger) ;;
   *) echo "mux-demo-snapshot: --mod-pane supports: review-ledger" >&2; exit 2 ;;
 esac
-export FNO_DEMO_FLATPINS FNO_DEMO_SORT FNO_DEMO_LAYOUT FNO_DEMO_LEAD_NESTING FNO_DEMO_HOLDS
+export FNO_DEMO_FLATPINS FNO_DEMO_SORT FNO_DEMO_LAYOUT FNO_DEMO_LEAD_NESTING FNO_DEMO_HOLDS FNO_DEMO_DND
 # bash 3.2 (stock macOS) reads an empty array under set -u as unbound.
 set -- ${ARGS[@]+"${ARGS[@]}"}
 
@@ -287,12 +298,16 @@ mkdir -p "$ROOT/mux" "$ROOT/agents" "$ROOT/code/checkout" "$ROOT/text" "$ROOT/.f
   # FNO_DEMO_PREFIX=alt+shift+a shoots the keys list and footer with that prefix.
   # --app-theme pins the palette the desktop app paints, light or dark. Both
   # keys live in one [mux] table: TOML refuses a second header.
-  if [ -n "${FNO_DEMO_PREFIX:-}" ] || [ -n "$APP_THEME" ]; then
+  if [ -n "${FNO_DEMO_PREFIX:-}" ] || [ -n "$APP_THEME" ] || [ -n "$THEME_ARG" ]; then
     printf '[mux]\n'
     [ -z "${FNO_DEMO_PREFIX:-}" ] || printf 'prefix = "%s"\n' "$FNO_DEMO_PREFIX"
     # The app knows palette names, not light/dark: footnote-paper paints
-    # light, footnote-superscript dark. Anything else falls back dark.
-    case "$APP_THEME" in
+    # light, footnote-superscript dark. Anything else falls back dark. The
+    # serve lens (--theme dark|light|macchiato) maps to the same twin: the
+    # cells are painted through the [mux] theme config key (theme_resolved
+    # reads mux.theme), so a lens without its twin leaves dark cells under
+    # a light frame and the shot mixes two palettes.
+    case "${APP_THEME:-$THEME_ARG}" in
       light) theme=footnote-paper ;;
       dark) theme=footnote-superscript ;;
       *) theme="" ;;
@@ -467,9 +482,9 @@ unset CLAUDE_CODE_SESSION_ID CLAUDE_SESSION_ID CLAUDECODE CLAUDECODE_SESSION_ID 
   CODEX_COMPANION_TRANSCRIPT_PATH GEMINI_SESSION_ID OPENCODE_SESSION_ID \
   PI_SESSION_ID PI_SESSION_FILE HERMES_SESSION_ID TARGET_SESSION_ID \
   FNO_HARNESS_NAME FNO_HARNESS_SESSION_ID REX_SERVER REX_SESSION REX_BLOCK
-# Under an owner session the server lives as long as its owner. Left alone,
-# the owner is the first short-lived `pane run`, and the server shuts down
-# before the shot. This script owns it instead, so it also dies with us.
+# Under an owner session the server lives as long as its owner. A one-shot
+# `pane run` never names itself the owner, so this script declares itself,
+# and the server dies with us.
 export FNO_OWNER_PID=$$
 
 # The usage cache the connections view reads first: invented readings, probed
@@ -1012,7 +1027,10 @@ agents = [
     row("scout", "claude", "opus", ids[1 + off], "done", sids[0]) | {"context_used_pct": 41},
     row("reviewer", "opencode", "zen", ids[2 + off], "working", sids[2]) | {"context_used_pct": 23},
     # Blocked, so the strip's need-input count and the Input word render.
-    row("pager", "pi", "glm-5", ids[3 + off], "blocked") | {"context_used_pct": 88},
+    # The literal sid gives the first row a session, so its row menu shows
+    # the pin and the do-not-disturb arm every session-carrying row offers.
+    row("pager", "pi", "glm-5", ids[3 + off], "blocked",
+        "6b65e7e1-0000-4000-8000-00000000d5b3") | {"context_used_pct": 88},
     row("scribe", "claude", "sonnet", ids[4 + off], "done") | {"context_used_pct": 15},
     # Paneless threads, so the sideline shows the other states too.
     # Leads dispatch and never host a pane: attachable thread rows.
@@ -1061,27 +1079,50 @@ if os.environ.get("FNO_DEMO_FLATPINS"):
         worker("vega-w1", "demo-sid-vega", "demo-sid-vega-w1"),
     ]
 # --holds adds the hold fixture: keeper carries a live conversation hold
-# (the fno-mail hold record), sentry takes mail only (the register door's
-# bus-only capability), and eval-once is a headless one-shot that paints no
-# row.
+# (the fno-mail hold record), sentinel carries the user-set do-not-disturb
+# hold the row menu's arm writes, sentry takes mail only (the register
+# door's bus-only capability), and eval-once is a headless one-shot that
+# paints no row.
 if os.environ.get("FNO_DEMO_HOLDS"):
     live = {"inside_leg": {"state": "working", "seq": 1, "received_at": now}}
     hold_dir = os.path.join(os.path.dirname(db), "mail", "mail-hold")
     os.makedirs(hold_dir, exist_ok=True)
+    # The badge overlay reads the real wall clock, not the frozen demo
+    # epoch, so the records run a month out or every shoot renders them
+    # expired and the marks vanish.
     until = datetime.datetime.fromtimestamp(
-        int(os.environ["FNO_DEMO_EPOCH"]) + 600, datetime.timezone.utc
+        int(os.environ["FNO_DEMO_EPOCH"]) + 30 * 86400, datetime.timezone.utc
     ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ceiling = until
     keeper_sid = "6b65e7e1-0000-4000-8000-00000000d3e0"
     with open(os.path.join(hold_dir, keeper_sid + ".json"), "w") as f:
         json.dump({"session": keeper_sid, "until": until, "set_by": "conversation",
                    "reason": "conversation", "clock": {"kind": "wall"}}, f)
+    sentinel_sid = "6b65e7e1-0000-4000-8000-00000000d4a7"
+    with open(os.path.join(hold_dir, sentinel_sid + ".json"), "w") as f:
+        json.dump({"session": sentinel_sid, "until": ceiling, "set_by": "user",
+                   "reason": "sideline_menu", "clock": {"kind": "wall"}}, f)
     agents += [
         thread("keeper", "claude", "idle", attach="demo-keeper") | live | {
             "harness_session_id": keeper_sid},
+        thread("sentinel", "claude", "idle", attach="demo-sentinel") | live | {
+            "harness_session_id": sentinel_sid},
         thread("sentry", "codex", "idle", attach="demo-sentry") | live | {
             "delivery_policy": "bus-only", "harness_session_id": "demo-sid-sentry"},
         thread("eval-once", "claude", "idle") | live | {"substrate": "headless"},
     ]
+# --dnd seeds only the pager user hold: the off/armed pair shoots the
+# SAME sidebar with one row toggled, never two different fleets.
+if os.environ.get("FNO_DEMO_DND"):
+    pager_sid = "6b65e7e1-0000-4000-8000-00000000d5b3"
+    hold_dir = os.path.join(os.path.dirname(db), "mail", "mail-hold")
+    os.makedirs(hold_dir, exist_ok=True)
+    ceiling = datetime.datetime.fromtimestamp(
+        int(os.environ["FNO_DEMO_EPOCH"]) + 30 * 86400, datetime.timezone.utc
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with open(os.path.join(hold_dir, pager_sid + ".json"), "w") as f:
+        json.dump({"session": pager_sid, "until": ceiling, "set_by": "user",
+                   "reason": "sideline_menu", "clock": {"kind": "wall"}}, f)
 if os.environ.get("FNO_DEMO_SECOND_WS"):
     ledger = cwd.rsplit("/", 1)[0] + "/ledger"
     agents += [

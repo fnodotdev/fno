@@ -305,6 +305,10 @@ fn world_cmd(root: &Path, exe: &Path) -> Command {
         .env("FNO_DEMO_HOST", "demo-host")
         .env("FNO_CLAUDE_PROJECTS_DIR", root.join("transcripts"))
         .env("FNO_OWNER_PID", std::process::id().to_string());
+    // The transcript pin resolves through the cwd's project slug, so every
+    // world child runs in the fake checkout the seed writes transcripts
+    // for; without it the caller's own cwd slugs the lookup one dir off.
+    cmd.current_dir(root.join("code/checkout"));
     cmd
 }
 
@@ -481,7 +485,14 @@ fn seed_question(root: &Path) -> bool {
 /// view renders a conversation. The FILE is the contract: rows carry
 /// type + message.content like the real transcripts the server reads.
 fn seed_transcript(root: &Path) -> bool {
-    let dir = root.join("transcripts/demo-project");
+    // The dir name is the project slug of the world children's cwd
+    // (world_cmd pins them to code/checkout); that is the only name the
+    // newest-lookup can find.
+    let dir = root
+        .join("transcripts")
+        .join(crate::ui::transcript_tail::claude_project_slug(
+            &root.join("code/checkout"),
+        ));
     if let Err(e) = std::fs::create_dir_all(&dir) {
         eprintln!("fno mux app shot: the transcript seed failed to create its dir: {e}");
         return false;
@@ -512,7 +523,12 @@ fn seed_transcript(root: &Path) -> bool {
 /// store, all under /tmp (a socket path must stay under 104 bytes on
 /// macOS), and every child strips the caller's identity keys.
 fn shot(args: &crate::cli_args::AppShotArgs) -> i32 {
-    let (out, theme, mode) = (args.out.as_str(), args.theme.as_str(), args.mode);
+    let (out, theme, find, mode) = (
+        args.out.as_str(),
+        args.theme.as_str(),
+        args.find.as_deref(),
+        args.mode,
+    );
     if !require_macos("shot") {
         return 2;
     }
@@ -541,6 +557,10 @@ fn shot(args: &crate::cli_args::AppShotArgs) -> i32 {
             return 1;
         }
     }
+    // macOS hands getcwd the physical path (/private/tmp), and the chat
+    // pin slugs that cwd to find the seed, so every pin below uses the
+    // canonical root or the lookup lands one symlink off the seed.
+    world.root = std::fs::canonicalize(&world.root).unwrap_or_else(|_| world.root.clone());
     if let Err(e) = std::fs::write(world.root.join(".fno/config.toml"), "") {
         eprintln!("fno mux app shot: the world config failed: {e}");
         return 1;
@@ -583,14 +603,17 @@ fn shot(args: &crate::cli_args::AppShotArgs) -> i32 {
     if args.sheet {
         cmd.arg("--shot-sheet");
     }
-    if args.picking {
-        cmd.arg("--shot-picking");
+    if args.cmd {
+        cmd.arg("--shot-cmd");
     }
     if let Some(view) = mode {
         cmd.arg("--shot-mode").arg(view.as_spelling());
         if matches!(view, AppView::Chat) {
             cmd.arg("--chat").arg("newest");
         }
+    }
+    if let Some(find) = find {
+        cmd.arg("--shot-find").arg(find);
     }
     match cmd.status() {
         Ok(s) => s.code().unwrap_or(1),

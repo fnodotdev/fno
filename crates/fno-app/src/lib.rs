@@ -23,6 +23,7 @@ mod orchestration;
 pub mod palette;
 mod sheet;
 mod shot;
+mod start;
 mod tabs;
 mod ui;
 mod window;
@@ -77,10 +78,25 @@ pub struct ShotOptions {
     pub theme: String,
     /// View to render (default: the command center board).
     pub mode: Option<MainView>,
-    /// Paint with cmd held: rows and tabs show their digit badges.
-    pub picking: bool,
     /// Open the answer sheet on the newest question once the board lands.
     pub sheet: bool,
+    /// The empty-pane state: the chat pane shows its start view no matter
+    /// what the world's focus carries. The start-view shots set it.
+    pub empty_chat: bool,
+    /// Cmd held: the rows and the start view show their cmd hints. The
+    /// cmd-held shots set it.
+    pub cmd: bool,
+    /// The find bar state the frame paints over the chat view.
+    pub find: Option<FindShot>,
+}
+
+/// The find-bar states `--shot-find` paints.
+#[derive(Clone, Copy, PartialEq)]
+pub enum FindShot {
+    /// The bar open with a query typed; the hint at rest: bare arrows.
+    Bar,
+    /// The bar open, and the cmd-held chord hint forced on.
+    Chords,
 }
 
 /// Run the app (or the headless probe) and return the process exit code.

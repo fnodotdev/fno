@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 #[path = "pr_status_de.rs"]
-mod de;
+pub(crate) mod de;
 
 use crate::lenient_de::parse;
 
@@ -584,6 +584,7 @@ pub(crate) fn read_pr<P: GhProbe>(
     Ok(json!({
         "number": pulls_view.number.clone().unwrap_or(Value::Null),
         "state": map_pr_state(&pulls),
+        "draft": pulls_view.draft.is_some_and(|v| v),
         "statusCheckRollup": rollup,
         "headRefOid": sha,
         "headRefName": head_ref,
@@ -653,7 +654,7 @@ fn graphql_pr_read<P: GhProbe>(
     };
     let query = format!(
         "query{{repository(owner:\"{owner}\",name:\"{repo}\"){{pullRequest(number:{pr}){{\
-number state merged mergedAt url body autoMergeRequest \
+number state merged mergedAt url body autoMergeRequest isDraft \
 headRefOid headRefName baseRefName mergeable mergeStateStatus \
 statusCheckRollup(first:100){{totalCount nodes{{\
 __typename \
@@ -746,6 +747,7 @@ fn parse_graphql_pr(stdout: &str, pr: u64) -> Result<Value, RestReason> {
     let mut out = json!({
         "number": pr,
         "state": state,
+        "draft": pull_view.isDraft.is_some_and(|v| v),
         "statusCheckRollup": rollup,
         "headRefOid": pull_view.headRefOid.as_deref().unwrap_or(""),
         "headRefName": pull_view.headRefName.as_deref().unwrap_or(""),

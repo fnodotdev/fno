@@ -327,6 +327,14 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `app.alert_sound` | bool | `true` | advanced | The attention sound fno-app plays when an agent turns blocked or done (default on). |
 | `app.alert_notification` | bool | `true` | advanced | The macOS notification fno-app posts when an agent turns blocked or done outside the window (default on). |
 | `app.alert_badge` | bool | `true` | advanced | The Dock badge showing the count of blocked agents in fno-app (default on). |
+| `provider_cap.enabled` | bool | `true` | never | Arm the provider cap actor: a lane that hits its usage cap alerts its leads, and its members park until the reset (default on). Off still measures and saves the snapshot, and moves nothing. |
+| `provider_cap.mode` | typing.Literal['park', 'triage', 'ask', 'auto'] | `park` | never | What a capped lane does with its members: park (default; alert the leads, move nothing, resume after the reset) \| triage (a member on a p0 or p1 node, or with an open PR, moves to destinations; the rest park) \| ask (nothing moves until an operator answers; inside sleep_hours it moves without a question) \| auto (every member moves without a question). |
+| `provider_cap.destinations` | list[str] | `[]` | never | Route lanes a moving member tries in order when no fallback grid is set. Empty by default: moving work spends another paid lane, so only an operator names one. |
+| `provider_cap.min_wait_minutes` | int | `30` | never | A reset closer than this many minutes is waited out and never moved (default 30). |
+| `provider_cap.sleep_hours` | str | `` | never | Window as HH:MM-HH:MM, read in sleep_timezone. In ask mode a cap inside the window moves members without a question. Empty (default) means never asleep. |
+| `provider_cap.sleep_timezone` | str | `` | never | IANA zone for sleep_hours, for example America/Los_Angeles. Empty (default) reads the machine's local zone. |
+| `provider_cap.canary_survive_minutes` | int | `15` | never | Minutes a canary session must live after the reset before the return ladder resumes the parked members (default 15). |
+| `provider_cap.quorum` | int | `2` | never | Members on one lane with a fresh capped tail needed to open it (default 2). One member suffices when its 429 names a reset still ahead, or when the account's runtime-state quota lock is set. |
 | `mux.attach_digest` | bool | `true` | advanced | Show a 'while you were gone' catch-up digest overlay on attach after an absence (default on). |
 | `mux.attach_digest_threshold_min` | int | `10` | advanced | Minutes since last detach before the catch-up digest overlay shows (default 10). |
 | `mux.scrollback_lines` | int | `10000` | advanced | History lines each mux pane keeps (default 10000). Each line costs every column of the pane, about 2 MB per 1k lines at 80 columns, so 48 panes at 100k lines hold several GB. Latched at mux server birth; `fno mux kill-server` re-reads. |

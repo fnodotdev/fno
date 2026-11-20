@@ -1994,9 +1994,16 @@ pub const MENU_BINDINGS: &[MenuKeyBinding] = &[
         action: "close-portal",
         key: b'c',
     },
-    // `h` lifts the hold the row wears (Remove hold / Remove DND - one
-    // entry, the mark names itself). Free in menu scope: the popup's own
-    // navigation runs on arrows, and `h` is no other menu byte.
+    // `h` is the hold toggle's byte on BOTH of its faces. The arm (Do not
+    // disturb, built on an unmarked row) and the lift (Remove hold /
+    // Remove DND, built on a marked row) never render together, so the
+    // one byte resolves against whichever face the open menu offers.
+    // Free in menu scope otherwise: the popup's own navigation runs on
+    // arrows, and `h` is no other menu byte.
+    MenuKeyBinding {
+        action: "dnd-row",
+        key: b'h',
+    },
     MenuKeyBinding {
         action: "release-hold",
         key: b'h',

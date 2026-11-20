@@ -109,10 +109,11 @@ pub(crate) fn held(
 
 /// The gate's reading as a hold verdict. Only a held `visual_approval`
 /// cancels; an unknown read (unreadable file list, rate-limited gh) is no
-/// verdict and acts on nothing.
+/// verdict and acts on nothing. An open look ask holds the merge, never CI.
 fn verdict(blocker: Option<&crate::authorized_merge::Blocker>) -> Option<bool> {
     match blocker {
         None => Some(false),
+        Some(b) if b.code == "visual_look_pending" => Some(false),
         Some(b) if b.code == "visual_approval" => Some(true),
         Some(_) => None,
     }
@@ -237,6 +238,8 @@ mod tests {
         assert_eq!(verdict(Some(&unknown)), None);
         let held = Blocker::held("visual_approval", "look");
         assert_eq!(verdict(Some(&held)), Some(true));
+        let pending = Blocker::held("visual_look_pending", "asked");
+        assert_eq!(verdict(Some(&pending)), Some(false));
         assert_eq!(
             verdict(Some(&Blocker::held("review_not_posted", "x"))),
             None

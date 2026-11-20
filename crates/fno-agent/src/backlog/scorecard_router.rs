@@ -30,11 +30,10 @@ pub(crate) struct RowKey {
     pub name: String,
     pub harness: String,
     pub model_norm: String,
-    /// The row's model id as declared, so a spawn or accept line names the
-    /// model the lane really drives (brackets and all).
+    /// The row's model id as declared, so a spawn line names the model the
+    /// lane really drives (brackets and all).
     pub model_raw: String,
     pub vendor: String,
-    pub route: String,
 }
 
 impl RowKey {
@@ -62,7 +61,6 @@ impl RowKey {
             model_norm: norm,
             model_raw,
             vendor,
-            route,
         }
     }
 }
@@ -263,13 +261,17 @@ fn contradicted_laws(stage: &str, band: &str, row: &RowKey, today: NaiveDate) ->
 }
 
 fn spawn_line(row: &RowKey) -> String {
-    let route_flag = if row.route.is_empty() {
-        format!("-m {}", row.model_raw)
+    // The door's route_seam accepts --route on the claude harness only,
+    // and resolve_target then demands the named lane declare a route; so
+    // only a vendor-backed row prints --route, and every other row names
+    // its model id with the --model= form the door forwards.
+    let target_flag = if row.vendor.is_empty() {
+        format!("--model={}", row.model_raw)
     } else {
-        format!("--route {}", row.route)
+        format!("--route {}", row.name)
     };
     format!(
-        "fno agent spawn --as thread -H {} {route_flag} -c <repo>",
+        "fno agent spawn --as thread -H {} {target_flag} --cwd <repo>",
         row.harness
     )
 }
@@ -490,11 +492,6 @@ mod tests {
             model_norm: crate::context_window::normalize_model(model),
             model_raw: model.to_string(),
             vendor: vendor.to_string(),
-            route: if vendor.is_empty() {
-                String::new()
-            } else {
-                format!("{vendor}/{model}")
-            },
         }
     }
 
@@ -648,5 +645,38 @@ mod tests {
             "{props:?}"
         );
         assert_eq!(props.len(), 0, "{props:?}");
+    }
+
+    #[test]
+    fn the_spawn_line_names_only_flags_the_spawn_door_accepts() {
+        // route_seam refuses --route on a non-claude harness and
+        // resolve_target refuses a lane that declares no route, so a bare
+        // row prints the --model= form and only a vendor-backed row prints
+        // --route. The door has no -m or -c flag.
+        let bare = row("codex-luna", "codex", "gpt-6-luna", "");
+        let line = spawn_line(&bare);
+        assert!(
+            line.contains("-H codex --model=gpt-6-luna --cwd <repo>"),
+            "{line}"
+        );
+        assert!(!line.contains("--route"), "{line}");
+        assert!(!line.contains(" -m "), "{line}");
+        assert!(!line.contains(" -c "), "{line}");
+
+        let unrouted_claude = row("claude-sonnet-5-5", "claude", "claude-sonnet-5-5", "");
+        let line = spawn_line(&unrouted_claude);
+        assert!(
+            line.contains("-H claude --model=claude-sonnet-5-5 --cwd <repo>"),
+            "{line}"
+        );
+        assert!(!line.contains("--route"), "{line}");
+
+        let routed = row("zai-flash", "claude", "glm-5.3-flash[1m]", "zai");
+        let line = spawn_line(&routed);
+        assert!(
+            line.contains("-H claude --route zai-flash --cwd <repo>"),
+            "{line}"
+        );
+        assert!(!line.contains(" -c "), "{line}");
     }
 }
