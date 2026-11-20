@@ -3071,13 +3071,20 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
     let board_rx = spawn_preflight("board fetch", {
         let state = ctx.board_state.clone();
         let cwd = ctx.cwd.clone();
-        let rows = std::sync::Arc::clone(&graph_rows);
+        // A failed beat read passes None, so the board still runs its own
+        // scan and reports the store error: an empty shared row set would
+        // read as a silently empty graph.
+        let rows = if graph_error.is_none() {
+            Some(std::sync::Arc::clone(&graph_rows))
+        } else {
+            None
+        };
         move || {
             Ok::<Value, String>(read_board(&BoardOpts {
                 state_path: state,
                 cwd: Some(cwd),
                 budget_ms: BOARD_BUDGET_MS,
-                graph_rows: Some(rows),
+                graph_rows: rows,
                 ..Default::default()
             }))
         }
