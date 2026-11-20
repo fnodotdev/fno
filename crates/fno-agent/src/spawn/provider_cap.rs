@@ -129,6 +129,13 @@ fn registry_rows(registry_path: &std::path::Path) -> Result<Vec<Value>, String> 
         .unwrap_or_default())
 }
 
+/// The zone a vendor writes its naive reset stamps in, when no account record
+/// names one. z.ai's request id carries its local clock: a 1308 logged at
+/// 07:56:01Z carried id `20261120155601...`, so its stamps are UTC+8.
+fn built_in_reset_zone(provider: &str) -> Option<&'static str> {
+    (provider == "zai").then_some("Asia/Shanghai")
+}
+
 /// The id a claude row's transcript is asked for and looked up by. The bridge
 /// request and the member lookup must read this one answer: a spawned
 /// worker's full id lives in `harness_session_id`, so a request that skipped
@@ -860,7 +867,8 @@ pub fn snapshot_with(
             .get(&account)
             .cloned()
             .or_else(|| scan.record_zones.get(&account).cloned())
-            .or_else(|| scan.record_zones.get(&provider).cloned());
+            .or_else(|| scan.record_zones.get(&provider).cloned())
+            .or_else(|| built_in_reset_zone(&provider).map(String::from));
         let reset_raw = health_reset_at(&scan.runtime_state, &account).or_else(|| {
             // No health lock: the newest stamp among the capped members is
             // the lane's reset, naive stamps resolved in the lane's zone.
@@ -2281,6 +2289,19 @@ mod tests {
             assert!(m.capped, "{} must read its 429 tail", m.name);
         }
         assert_eq!(glm[0].state, "open");
+    }
+
+    /// A 1308 names its reset in z.ai's own clock. The lane parks until that
+    /// time with no account record, read from the line logged 2026-11-20.
+    #[test]
+    fn a_zai_1308_reset_resolves_in_the_built_in_zone() {
+        let text = "API Error: Request rejected (429) · [1308][Usage limit reached for 5 hour. Your limit will reset at 2026-11-20 17:46:14][20261120155601b92077bbfa834c3e]";
+        assert_eq!(
+            reset_epoch_from_excerpt(text, built_in_reset_zone("zai"), 1_795_161_361),
+            Some(1_795_167_974),
+            "17:46:14 at UTC+8 is 09:46:14Z"
+        );
+        assert_eq!(built_in_reset_zone("anthropic"), None);
     }
 
     /// A bridge that fails (the resolver errors) reads a NAMED unknown on
