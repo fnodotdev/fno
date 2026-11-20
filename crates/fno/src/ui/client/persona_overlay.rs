@@ -1801,8 +1801,16 @@ fn spawn_record_pane(view: &mut View, node_id: &str) {
         return;
     };
     let reply = crate::mux_cli::control_roundtrip(&sock, &session, command);
-    let Ok(crate::proto::ServerMsg::PaneSpawned { pane_id, .. }) = reply else {
-        return;
+    let pane_id = match reply {
+        Ok(crate::proto::ServerMsg::PaneSpawned { pane_id, .. }) => pane_id,
+        Ok(other) => {
+            view.set_notice(format!("the record pane never opened: {other:?}"));
+            return;
+        }
+        Err(e) => {
+            view.set_notice(format!("the record pane never opened: {e}"));
+            return;
+        }
     };
     if let Some(o) = view.persona.as_mut() {
         o.records.push((pane_id, node_id.to_string()));

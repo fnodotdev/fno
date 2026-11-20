@@ -1322,6 +1322,7 @@ fn stage_gathered(
             | ViewKind::PersonaNoteAfter
             | ViewKind::PersonaEditorPane
             | ViewKind::PersonaDrill
+            | ViewKind::PersonaDrill4
             | ViewKind::PersonaSidelineChip),
         ) => persona_chip_shot(runtime, view, socket, kind)?,
         Some(kind @ (ViewKind::NeedsInputPulseOn | ViewKind::NeedsInputPulseOff)) => {
@@ -1783,7 +1784,24 @@ fn persona_drill4_shot(
     runtime: &tokio::runtime::Runtime,
     view: &mut View,
 ) -> Result<(), ShotError> {
-    persona_detail_shot(runtime, view)?;
+    // The record panes append beside a docked persona pane, so the shot
+    // stages the sideline dock the live chip press opens.
+    let aud = stage_list_customer(runtime, view)?
+        .ok_or("persona-drill4: no customer row in the demo board read")?;
+    view.board_full = false;
+    view.panel_on = true;
+    view.sideline_width = 80;
+    let project = super::persona_overlay::session_project(view);
+    view.persona = super::persona_overlay::open_from(Some(&aud), Some(&project))
+        .map(super::persona_overlay::dock_sideline);
+    super::persona_overlay::spawn_persona_pane(view);
+    if view.persona.as_ref().is_some_and(|o| o.pane.is_none()) {
+        return Err(format!(
+            "persona-drill4: the persona pane never opened: {:?}",
+            view.notice
+        )
+        .into());
+    }
     seed_drill_rows(view);
     for _ in 0..4 {
         super::persona_overlay::keys(view, b"j");
