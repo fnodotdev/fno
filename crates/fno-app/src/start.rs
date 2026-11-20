@@ -78,7 +78,7 @@ pub(crate) fn workspaces(layout: &Layout, now: u64) -> Vec<WorkspaceRow> {
                 .iter()
                 .min_by_key(|a| a.last_activity_age_s.unwrap_or(u64::MAX))?;
             let score = freshest.last_activity_age_s.unwrap_or(u64::MAX);
-            let facts = card_facts(freshest, now);
+            let facts = card_facts(*freshest, now);
             let row = WorkspaceRow {
                 name: base.clone(),
                 cwd: squad.canonical_cwd.clone(),
@@ -88,7 +88,7 @@ pub(crate) fn workspaces(layout: &Layout, now: u64) -> Vec<WorkspaceRow> {
                     .map(str::to_string),
                 agents: members.len(),
                 age: facts.activity.or(facts.created),
-                state: Some(agent_lattice_state(freshest)),
+                state: Some(agent_lattice_state(*freshest)),
             };
             Some((score, row))
         })
@@ -199,6 +199,9 @@ fn card(root: &Root, window: &Window, cx: &mut Context<Root>) -> gpui::Div {
         Kind::Agent if !base.is_empty() => {
             format!("Describe the work. Enter starts an agent in {base}.").into()
         }
+        // The card carries no epic list: an empty draft starts the lead
+        // with no scope, and the modal picks epics.
+        Kind::Lead => "Enter starts a lead with no scope; cmd-n opens the epic picker".into(),
         _ => l.kind.placeholder().into(),
     };
     let text = Field {
