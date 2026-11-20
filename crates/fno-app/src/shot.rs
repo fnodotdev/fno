@@ -44,7 +44,7 @@ pub fn run(opts: ShotOptions) -> i32 {
         .clone()
         .unwrap_or_else(|| "default".to_string());
     let mode = opts.mode.unwrap_or(MainView::Orchestration);
-    let pinned = opts.chat.as_deref().and_then(crate::chat::claude_key);
+    let pinned = opts.chat.as_deref().and_then(crate::chat::resolve_key);
     let out = opts.out.clone();
     let family = opts.font.clone();
     let font_size = opts.font_size;

@@ -29,11 +29,22 @@ pub enum Reply {
     Answered { id: String, receipt: String },
     /// Why the answer door refused question `id`.
     Refused { id: String, why: String },
+    /// The composer's send verdict: the porcelain's own line, or why the
+    /// send never left.
+    Mailed { ok: bool, text: String },
+}
+
+/// The machine the app runs on, then its first lead: who the composer's
+/// message routes to. A machine with no lead refuses the send.
+pub fn owning_lead(fleet: Option<&fno::app_api::client::org_seats::Fleet>) -> Option<String> {
+    let machine = fleet?.machines.iter().find(|m| m.local)?;
+    machine.leads.first().map(|l| l.name.clone())
 }
 
 enum Ask {
     Refresh,
     Answer { id: String, option: u32 },
+    Mail { text: String },
 }
 
 /// Read the fleet and the questions, and the backlog unless `backlog` is
@@ -123,6 +134,40 @@ impl Poller {
                                 }
                                 true
                             }
+                            Ok(Some(Ask::Mail { text })) => {
+                                let reply = match owning_lead(board.fleet()) {
+                                    None => Reply::Mailed {
+                                        ok: false,
+                                        text: "no lead on this machine".into(),
+                                    },
+                                    Some(lead) => {
+                                        let sent = fno::app_api::mail_door::send(
+                                            &lead,
+                                            fno::app_api::mail_door::FROM,
+                                            &text,
+                                        )
+                                        .await;
+                                        match sent {
+                                            fno::app_api::mail_door::MailVerdict::Sent(receipt) => {
+                                                Reply::Mailed {
+                                                    ok: true,
+                                                    text: receipt,
+                                                }
+                                            }
+                                            fno::app_api::mail_door::MailVerdict::Refused(
+                                                reason,
+                                            ) => Reply::Mailed {
+                                                ok: false,
+                                                text: reason,
+                                            },
+                                        }
+                                    }
+                                };
+                                if out.send(reply).is_err() {
+                                    return;
+                                }
+                                true
+                            }
                             // An inactive window reads nothing until it returns.
                             Err(_) => awake.load(Ordering::Relaxed),
                         };
@@ -157,5 +202,13 @@ impl Poller {
 
     pub fn answer(&self, id: String, option: u32) {
         let _ = self.asks.send(Ask::Answer { id, option });
+    }
+
+    /// Route one composer message to the owning lead, off the UI thread.
+    /// The verdict comes back as [`Reply::Mailed`]. False when the poll
+    /// thread is gone: the caller refuses up front instead of waiting on a
+    /// receipt that never lands.
+    pub fn mail(&self, text: String) -> bool {
+        self.asks.send(Ask::Mail { text }).is_ok()
     }
 }
