@@ -1560,6 +1560,12 @@ enum MenuAction {
     PortalAt(Option<Dir>),
     /// Release the row's mail hold; built only on a row wearing a hold mark.
     ReleaseHold,
+    /// Arm the row's session with a user do-not-disturb hold
+    /// (`mail-hold --session <id> --on`): inbound mail parks until the
+    /// lift entry removes it, capped by `mail.hold.max_minutes`. Built
+    /// only on a live, unmarked row carrying a session id - the marked
+    /// row offers the lift instead, so the two never render together.
+    ArmHold,
     /// Pin or unpin the row's session: the keep mark no reaper passes.
     TogglePin,
 }
@@ -1597,6 +1603,7 @@ impl MenuAction {
             MenuAction::ClosePortal => Some("close-portal"),
             MenuAction::PortalPicker => Some("open-in-portal"),
             MenuAction::ReleaseHold => Some("release-hold"),
+            MenuAction::ArmHold => Some("dnd-row"),
             MenuAction::TogglePin => Some("pin-row"),
             _ => None,
         }

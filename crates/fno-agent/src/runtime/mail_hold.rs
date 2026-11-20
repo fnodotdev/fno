@@ -1133,9 +1133,12 @@ pub(crate) fn orphan_stamp_rows(
         .collect()
 }
 
-/// `fno-agent mail-hold --session <id> [--off | --release | --run-parked]`
+/// `fno-agent mail-hold --session <id> [--on | --off | --release | --run-parked]`
 ///
 /// Arm (default): run the conversation arm and report its outcome.
+/// `--on`: write the session's USER hold - do-not-disturb until `--off`,
+/// capped by `mail.hold.max_minutes` - the sideline row menu's arm. A
+/// mail-only row refuses: the gate holds it already, and no record lifts it.
 /// `--off`: remove the session's hold record. No row for the session: exit
 /// 3, nothing written.
 /// `--release`: `--off` plus the release leg - the sideline menu's Release
@@ -1145,6 +1148,7 @@ pub(crate) fn orphan_stamp_rows(
 /// on a held session when the hold ends.
 pub fn run_mail_hold(args: &[String]) -> i32 {
     let mut session: Option<&String> = None;
+    let mut on = false;
     let mut off = false;
     let mut release = false;
     let mut run_parked_mode = false;
@@ -1152,6 +1156,7 @@ pub fn run_mail_hold(args: &[String]) -> i32 {
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--session" => session = iter.next(),
+            "--on" => on = true,
             "--off" => off = true,
             "--release" => release = true,
             "--run-parked" => run_parked_mode = true,
@@ -1168,6 +1173,10 @@ pub fn run_mail_hold(args: &[String]) -> i32 {
     if run_parked_mode {
         return run_parked(session_id);
     }
+    if on && (off || release) {
+        eprintln!("mail-hold: --on is exclusive of --off and --release");
+        return 2;
+    }
     if off || release {
         let Some((matched, _)) = lookup_row(session_id) else {
             eprintln!("mail-hold: no registry row carries session {session_id}");
@@ -1181,6 +1190,36 @@ pub fn run_mail_hold(args: &[String]) -> i32 {
             spawn_release_timer(&matched);
         }
         return 0;
+    }
+    if on {
+        // The sideline row menu's arm: a USER hold running to the ceiling
+        // (mail.hold.max_minutes), so mail parks until --off rather than
+        // for one conversation. A session the registry does not know
+        // refuses like --off, and a mail-only row refuses too: the gate
+        // holds it already and no record lifts that.
+        let Some((matched, policy)) = lookup_row(session_id) else {
+            eprintln!("mail-hold: no registry row carries session {session_id}");
+            return 3;
+        };
+        if policy.as_deref() == Some(MAIL_ONLY) {
+            eprintln!(
+                "mail-hold: {matched} takes bus mail only; the gate holds it already and a DND record would never lift it"
+            );
+            return 3;
+        }
+        return match put_hold(&matched, max_hold(), false, SetBy::User, "sideline_menu") {
+            Ok(_) => {
+                spawn_release_timer(&matched);
+                println!(
+                    "mail-hold: do-not-disturb armed for {matched} (until --off, capped by mail.hold.max_minutes)"
+                );
+                0
+            }
+            Err(e) => {
+                eprintln!("mail-hold: {e}");
+                1
+            }
+        };
     }
     let (outcome, matched) = arm_conversation(session_id);
     match outcome {
@@ -1542,6 +1581,42 @@ pub(crate) mod tests {
                 "the replay went through the raw door: {logged:?}"
             );
             assert!(!pdir.join("1-test.txt").exists(), "the sent file is gone");
+        });
+    }
+
+    /// The sideline menu's by-session arm (`mail-hold --session <id> --on`):
+    /// a user hold running to the ceiling, set by the USER so the
+    /// conversation rules stand aside while it lives and the row badge
+    /// reads [DND], never [HELD].
+    #[test]
+    fn mail_hold_on_arms_a_user_hold_at_the_ceiling() {
+        with_hold_env(|dir| {
+            write_registry(dir, serde_json::json!([registry_row("worker", SID)]));
+            let code = run_mail_hold(&["--session".into(), SID.into(), "--on".into()]);
+            assert_eq!(code, 0, "--on exits 0 on a known session");
+            let hold = stored(SID).expect("the arm wrote a hold");
+            assert_eq!(
+                hold.set_by(),
+                SetBy::User,
+                "the arm is the user's, never the conversation's"
+            );
+            let remaining = hold.until() - chrono::Utc::now();
+            assert!(
+                remaining > max_hold() - chrono::Duration::minutes(1)
+                    && remaining <= max_hold() + chrono::Duration::seconds(5),
+                "the hold runs to the ceiling, not a shorter clock: {remaining:?} vs {:?}",
+                max_hold()
+            );
+        });
+    }
+
+    #[test]
+    fn mail_hold_on_without_a_registry_row_refuses_and_writes_nothing() {
+        with_hold_env(|dir| {
+            write_registry(dir, serde_json::json!([registry_row("worker", SID)]));
+            let code = run_mail_hold(&["--session".into(), OTHER.into(), "--on".into()]);
+            assert_eq!(code, 3, "an unknown session refuses like --off");
+            assert!(stored(OTHER).is_none());
         });
     }
 }

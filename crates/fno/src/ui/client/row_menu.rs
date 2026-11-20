@@ -212,6 +212,15 @@ pub(super) fn build_row_menu(agent: &AgentRow, anchor: Anchor) -> RowMenu {
         };
         add(entry("⤴", label), &[MenuAction::ReleaseHold]);
     }
+    // The arm is the lift's twin and shares its byte: an unmarked live row
+    // with a session id can take a user DND hold straight from the menu.
+    // An exited row's session is gone - nothing reads that hold - and a
+    // row without a session id has no key the store could hold under, the
+    // same gate the pin entry applies. A marked row offers the lift above,
+    // never both faces of the toggle.
+    if !agent.exited && !agent.dnd && agent.harness_session_id.is_some() {
+        add(entry("☾", "Do not disturb"), &[MenuAction::ArmHold]);
+    }
     // Live AND exited rows are renamable; an EXTERNAL row is claude-owned.
     if !agent.external {
         add(entry("✎", "Rename"), &[MenuAction::RenameAgent]);
@@ -303,12 +312,75 @@ mod tests {
             })
             .expect("the removal entry renders");
         assert_eq!(hint, "h", "Remove hold / DND advertises its menu key");
+        assert!(
+            !label_of(&menu, "Do not disturb"),
+            "a marked row offers the lift, never a second hold entry"
+        );
         let plain = focus_agent(3);
         let menu = build_row_menu(&plain, test_anchor());
         assert!(
             !label_of(&menu, "Remove hold") && !label_of(&menu, "Remove DND"),
             "no removal entry without a hold mark"
         );
+    }
+
+    fn offers(menu: &RowMenu, want: &str) -> bool {
+        menu.popup
+            .rows
+            .iter()
+            .any(|r| matches!(r, PopupRow::Entry { label, .. } if label == want))
+    }
+
+    fn hint_of(menu: &RowMenu, want: &str) -> String {
+        menu.popup
+            .rows
+            .iter()
+            .find_map(|r| match r {
+                PopupRow::Entry { label, hint, .. } if label == want => Some(hint.clone()),
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn an_unmarked_live_row_offers_do_not_disturb_with_the_h_hint() {
+        // The arm is the lift's twin and shares its byte: an unmarked live
+        // row with a session id offers Do not disturb, advertising the same
+        // `h` the mark-lift entry carries on a marked row - one key, one
+        // meaning (toggle the hold). The two faces never render together,
+        // so the byte resolves against whichever one the open menu offers.
+        let mut a = focus_agent(3);
+        a.harness_session_id = Some("sid-dnd-arm".into());
+        let menu = build_row_menu(&a, test_anchor());
+        assert!(
+            offers(&menu, "Do not disturb"),
+            "an unmarked live row offers the arm"
+        );
+        assert_eq!(
+            hint_of(&menu, "Do not disturb"),
+            "h",
+            "the arm advertises the toggle byte"
+        );
+    }
+
+    #[test]
+    fn an_exited_row_never_offers_the_do_not_disturb_arm() {
+        // A hold parks inbound mail for a live session; an exited row's
+        // session is gone, so an arm from its row writes a record nothing
+        // reads and a mark nobody can clear by lifting the session.
+        let mut a = focus_agent(3);
+        a.exited = true;
+        a.harness_session_id = Some("sid-dnd-dead".into());
+        let menu = build_row_menu(&a, test_anchor());
+        assert!(!offers(&menu, "Do not disturb"));
+    }
+
+    #[test]
+    fn a_row_without_a_session_id_never_offers_the_do_not_disturb_arm() {
+        // The hold store keys records by session id; a row with none has no
+        // key to hold under - the same gate the pin entry applies.
+        let menu = build_row_menu(&focus_agent(3), test_anchor());
+        assert!(!offers(&menu, "Do not disturb"));
     }
 
     #[test]
@@ -1019,6 +1091,43 @@ pub(super) async fn execute_row_menu_action(
                     Ok(Ok(s)) => format!("release failed ({s}); is fno-agent current?"),
                     Ok(Err(exc)) => format!("release did not start: {exc}"),
                     Err(_) => "release is still running; the hold lifts when it lands".into(),
+                };
+                if let Some(tx) = notice_tx {
+                    let _ = tx.send(text);
+                }
+            });
+        }
+        MenuAction::ArmHold => {
+            // The by-session arm command (mail-hold.rs `--on`): the record
+            // write answers in microseconds; the release timer it arms runs
+            // detached, so the bounded wait below never sits on the
+            // transport. The EXIT is the truth a stale paired binary cannot
+            // paper over: one that predates `--on` exits 2 on the unknown
+            // flag, and the notice must say so, not "armed".
+            let Some(sid) = a.harness_session_id.clone() else {
+                view.set_notice("row carries no session id to hold".into());
+                return Ok(());
+            };
+            let notice_tx = view.reply_notice_tx.clone();
+            let name = a.name.clone();
+            tokio::spawn(async move {
+                let outcome = tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    tokio::process::Command::new(crate::digest_overlay::fno_agent_bin())
+                        .args(["mail-hold", "--session", &sid, "--on"])
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status(),
+                )
+                .await;
+                let text = match outcome {
+                    Ok(Ok(s)) if s.success() => {
+                        format!("do-not-disturb armed for {name}; mail holds until it lifts")
+                    }
+                    Ok(Ok(s)) => format!("dnd arm failed ({s}); is fno-agent current?"),
+                    Ok(Err(exc)) => format!("dnd arm did not start: {exc}"),
+                    Err(_) => "arm is still running; the hold lands when it does".into(),
                 };
                 if let Some(tx) = notice_tx {
                     let _ = tx.send(text);
