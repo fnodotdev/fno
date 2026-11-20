@@ -251,6 +251,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `groom.enabled` | bool | `true` | never | Enable the daily backlog-grooming worker spawn (fno backlog groom). Defaults true. |
 | `evals.gate.daily_usd` | float | `15.0` | never | Daily USD cap on the daemon's evals change gate over the lanes evals.gate.lane_usd prices. 0 turns the gate off. |
 | `evals.gate.lane` | str | `zai-flash` | never | Lane the gate's golden runs use. Defaults zai-flash. |
+| `evals.propose.cycle_usd` | float | `10.0` | never | Per-cycle USD cap on the propose-and-prove loop's base and candidate cohorts, priced at the run lane's evals.gate.lane_usd entry. Over cap the cycle drops candidates from the last; a cap that fits no candidate refuses the cycle. |
 | `evals.enabled` | bool | `true` | never | Enable the headless eval-suite grading-worker spawn. Defaults true. |
 | `evals.schedule_days` | int | `7` | never | Days between scheduled regression-tier runs; the daemon checks each minute (0 disables). |
 | `evals.stale_days` | int | `7` | never | Age in days at which the newest regression-tier run reads STALE in doctor and triage health. |
