@@ -9,6 +9,8 @@ use std::sync::Arc;
 use gpui::{Image, ImageFormat};
 
 use super::markdown::{blocks, Block};
+use serde::Deserialize;
+
 use fno::proto::chat_event::{
     decode_base64, ChatBody, ChatEvent, ContentPart, ImageRef, ToolInput, TurnOutcome, UserOrigin,
 };
@@ -106,46 +108,78 @@ pub struct Ask {
     pub choices: Vec<Choice>,
 }
 
+/// The prompt as the harnesses send it: `questions` at the top, or under
+/// `input` for a harness that wraps the call.
+#[derive(serde::Deserialize, Default)]
+struct RawAsk {
+    #[serde(default)]
+    questions: Vec<RawQuestion>,
+    #[serde(default)]
+    input: Option<Box<RawAsk>>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct RawQuestion {
+    #[serde(default)]
+    header: String,
+    #[serde(default)]
+    question: String,
+    #[serde(default, rename = "multiSelect")]
+    multi_select: bool,
+    #[serde(default)]
+    options: Vec<RawOption>,
+}
+
+/// An option is a bare string or an object with a label and a description.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum RawOption {
+    Text(String),
+    Full {
+        #[serde(default)]
+        label: String,
+        #[serde(default)]
+        description: String,
+    },
+}
+
 impl Ask {
     /// `None` for a shape the strip cannot answer by one pick: no options,
     /// or a multi-select.
     pub fn parse(prompt: &serde_json::Value) -> Option<Ask> {
-        let root = prompt.get("input").unwrap_or(prompt);
-        let q = root.get("questions")?.as_array()?.first()?;
-        if q.get("multiSelect").and_then(|v| v.as_bool()) == Some(true) {
+        let raw = RawAsk::deserialize(prompt).ok()?;
+        let questions = match raw.input {
+            Some(inner) if !inner.questions.is_empty() => inner.questions,
+            _ => raw.questions,
+        };
+        let q = questions.into_iter().next()?;
+        if q.multi_select {
             return None;
         }
-        let text = |v: &serde_json::Value, k: &str| {
-            v.get(k)
-                .and_then(|x| x.as_str())
-                .unwrap_or_default()
-                .trim()
-                .to_string()
-        };
         let choices: Vec<Choice> = q
-            .get("options")?
-            .as_array()?
-            .iter()
+            .options
+            .into_iter()
             .map(|o| {
-                let raw = o
-                    .as_str()
-                    .map(str::to_string)
-                    .unwrap_or_else(|| text(o, "label"));
-                let (label, recommended) = match raw.strip_suffix("(Recommended)") {
+                let (text, detail) = match o {
+                    RawOption::Text(label) => (label, String::new()),
+                    RawOption::Full { label, description } => (label, description),
+                };
+                let text = text.trim();
+                let (label, recommended) = match text.strip_suffix("(Recommended)") {
                     Some(rest) => (rest.trim_end().to_string(), true),
-                    None => (raw, false),
+                    None => (text.to_string(), false),
                 };
                 Choice {
                     label,
-                    detail: text(o, "description"),
+                    detail: detail.trim().to_string(),
                     recommended,
                 }
             })
             .filter(|c| !c.label.is_empty())
             .collect();
-        let prompt = text(q, "question");
+        let prompt = q.question.trim().to_string();
         (!choices.is_empty() && !prompt.is_empty()).then(|| Ask {
-            header: text(q, "header"),
+            header: q.header.trim().to_string(),
             prompt,
             choices,
         })
