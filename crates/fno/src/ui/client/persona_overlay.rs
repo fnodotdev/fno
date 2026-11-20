@@ -1679,7 +1679,6 @@ fn claim_widening_seams(
         // moves by the same amount.
         let mut chain: Vec<(u64, usize, usize)> = Vec::new();
         let mut edge = persona.0;
-        let mut donor = None;
         while chain.len() < 4 {
             let nbr = rects.iter().find(|(pid, r)| {
                 *pid != pane && {
@@ -1692,29 +1691,36 @@ fn claim_widening_seams(
             };
             chain.push((nid, nx, nw));
             if nw > pane_floor(tracked, nid) {
-                donor = Some(chain.len() - 1);
                 break;
             }
             edge = nx;
         }
-        let Some(di) = donor else { break };
+        // The walk ends on the donor, or runs out of neighbours.
+        let Some(&(donor_id, _, dw)) = chain.last() else {
+            break;
+        };
+        let spare = dw.saturating_sub(pane_floor(tracked, donor_id));
+        if spare == 0 {
+            break;
+        }
         let need = target - persona.1;
-        let (_, _, dw) = chain[di];
-        let donate = need.min(dw - pane_floor(tracked, chain[di].0));
+        let donate = need.min(spare);
         // Seams from the donor outward: each boundary sits one column
         // left of where it was, per column donated.
-        for k in (0..=di).rev() {
-            let (nid, nx, nw) = chain[k];
-            let right = if k == 0 { pane } else { chain[k - 1].0 };
+        let rights: Vec<u64> = std::iter::once(pane)
+            .chain(chain.iter().map(|c| c.0))
+            .collect();
+        for (k, &(nid, nx, nw)) in chain.iter().enumerate().rev() {
+            let right = rights.get(k).copied().unwrap_or(pane);
             seams.push(crate::proto::Command::ResizeSeam {
                 a: nid,
                 b: right,
                 pos: (nx + nw - donate) as u16,
             });
         }
-        for (k, &(nid, _, _)) in chain.iter().enumerate().take(di + 1) {
+        for (k, &(nid, _, _)) in chain.iter().enumerate() {
             if let Some(r) = rects.iter_mut().find(|(pid, _)| *pid == nid) {
-                if k == di {
+                if k + 1 == chain.len() {
                     r.1 .2 -= donate;
                 } else {
                     r.1 .0 -= donate;
