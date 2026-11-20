@@ -1537,7 +1537,8 @@ pub fn run_return_lane(
         // Step 2: fresh epoch. Retire the leave question and decision: they
         // answered the reset that passed.
         close_leave_question(home, lane, now_epoch);
-        let _ = std::fs::remove_file(alert_marker(home, &lane.lane));
+        // An absent marker is the common case: the lane never alerted.
+        std::fs::remove_file(alert_marker(home, &lane.lane)).ok();
         let mut candidates = return_candidates(home, lane);
         if candidates.is_empty() {
             journal(
@@ -1872,13 +1873,13 @@ fn alert_once(home: &AgentsHome, lane: &CapLane, plan: &str, now_epoch: i64, dep
     );
     if (deps.alert)(lane, &body) {
         let _ = std::fs::create_dir_all(lanes_dir(home));
-        let _ = std::fs::write(&path, &key);
-        journal(
-            home,
-            &lane.lane,
-            now_epoch,
-            &json!({"step": "alerted", "reset": lane.reset_epoch}),
-        );
+        // An unwritten marker re-alerts next tick; the journal says why.
+        let step = match std::fs::write(&path, &key) {
+            Ok(()) => json!({"step": "alerted", "reset": lane.reset_epoch}),
+            Err(e) => json!({"step": "alerted", "reset": lane.reset_epoch,
+                             "marker": format!("unwritten: {e}")}),
+        };
+        journal(home, &lane.lane, now_epoch, &step);
     }
 }
 

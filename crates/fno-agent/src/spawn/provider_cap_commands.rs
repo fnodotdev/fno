@@ -550,7 +550,7 @@ fn real_deps() -> crate::provider_cap::LeaveDeps {
             ) else {
                 return false;
             };
-            serde_json::from_str::<Value>(&raw).is_ok_and(|v| moves_on_cap(&v))
+            serde_json::from_str::<NodeTriage>(&raw).is_ok_and(|n| moves_on_cap(&n))
         }),
         alert: Box::new(alert_leads),
     }
@@ -558,11 +558,20 @@ fn real_deps() -> crate::provider_cap::LeaveDeps {
 
 /// The triage rule over a node's own record: p0 and p1 work moves, and so
 /// does a node whose PR is open (in review). An unreadable record parks.
-fn moves_on_cap(node: &Value) -> bool {
-    let priority = node.get("priority").and_then(Value::as_str).unwrap_or("");
-    let open_pr = node.get("pr_number").is_some_and(|n| !n.is_null())
-        && node.get("status").and_then(Value::as_str) == Some("in_review");
-    matches!(priority, "p0" | "p1") || open_pr
+fn moves_on_cap(node: &NodeTriage) -> bool {
+    let open_pr = node.pr_number.is_some() && node.status == "in_review";
+    matches!(node.priority.as_str(), "p0" | "p1") || open_pr
+}
+
+/// The node fields the triage rule reads from `fno backlog get`.
+#[derive(serde::Deserialize)]
+struct NodeTriage {
+    #[serde(default)]
+    priority: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    pr_number: Option<u64>,
 }
 
 /// One mail per owning lead of the lane's capped members; the operator
