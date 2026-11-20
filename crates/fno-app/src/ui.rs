@@ -399,6 +399,8 @@ mod tests {
         assert_eq!(age(t0, now + 60), "1m");
         assert_eq!(age(t0, now + 3600), "1h");
         assert_eq!(age(t0, now + 2 * 86_400), "2d");
-        assert_eq!(age("not a stamp", now), "0s");
+        assert_eq!(age("not a stamp", now), "");
+        // A stamp ahead of the clock has no honest age.
+        assert_eq!(age(t0, now - 1), "");
     }
 }
