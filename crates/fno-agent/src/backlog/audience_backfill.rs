@@ -32,13 +32,14 @@ fn parse_row(row: &Value) -> Option<Row> {
     serde_json::from_value(row.clone()).ok()
 }
 
-/// The ruled Q1 mapping (design section 8.1).
-fn audience_tag_scope(tag: &str, project: Option<&str>) -> Option<&'static str> {
-    match (tag, project) {
-        ("audience:internal", _) => Some("internal"),
-        ("audience:user", _) => Some("customers"),
-        ("audience:contributor", Some("fno")) => Some("customer:contributor"),
-        ("audience:contributor", _) => Some("internal"),
+/// The ruled Q1 mapping (design section 8.1): contributor maps to internal.
+/// The plan's "except the docs row" exception holds no rule anywhere, so it
+/// maps nothing; a docs row waits on the user's ruling like any other.
+fn audience_tag_scope(tag: &str) -> Option<&'static str> {
+    match tag {
+        "audience:internal" => Some("internal"),
+        "audience:user" => Some("customers"),
+        "audience:contributor" => Some("internal"),
         _ => None,
     }
 }
@@ -146,7 +147,7 @@ fn backfill_into(
         let tags: Vec<&str> = r.tags.iter().flatten().map(String::as_str).collect();
         let ruled = tags
             .iter()
-            .find_map(|t| audience_tag_scope(t, r.project.as_deref()).map(|scope| (*t, scope)));
+            .find_map(|t| audience_tag_scope(t).map(|scope| (*t, scope)));
         match ruled {
             Some((tag, scope)) => {
                 if apply {
@@ -291,6 +292,7 @@ mod tests {
         let review = dir.join("scope-review.md");
         let rows = vec![
             row("ab-1", &["audience:internal"], "", ""),
+            row("ab-5", &["audience:contributor"], "", ""),
             row("ab-2", &["shaped-note"], "", ""),
             row("ab-3", &[], "internal", ""),
             row("ab-4", &["audience:user"], "", "2026-11-19T00:00:00Z"),
@@ -303,23 +305,30 @@ mod tests {
             });
         assert_eq!(code, 0);
         // The count is the defect's visible symptom: --apply counts too.
-        assert_eq!(mapped, 1, "--apply counts the ruled rows it stamps");
+        assert_eq!(mapped, 2, "--apply counts the ruled rows it stamps");
         assert_eq!(unstamped, 1);
-        // One store write: the ruled row, with the scope stamp, the ruling
-        // why and the tag drop in the one update.
-        assert_eq!(updates.len(), 1, "the store hears only the ruled row");
-        let Some(cmd) = updates.first() else {
-            panic!("the ruled row produces one update: {updates:?}");
-        };
-        assert!(cmd.contains(&"audience=internal".to_string()), "{cmd:?}");
+        // One store write per ruled row: the scope stamp, the ruling why
+        // and the tag drop in the one update.
+        assert_eq!(updates.len(), 2, "the store hears only the ruled rows");
+        assert!(updates.iter().any(|c| {
+            c.contains(&"audience=internal".to_string())
+                && c.contains(&"tags-=audience:internal".to_string())
+        }));
+        // The ruled Q1 mapping: contributor maps to internal; the docs-row
+        // exception holds no rule, so no persona scope ever stamps.
+        assert!(updates.iter().any(|c| {
+            c.contains(&"tags-=audience:contributor".to_string())
+                && c.contains(&"audience=internal".to_string())
+        }));
         assert!(
-            cmd.contains(&"tags-=audience:internal".to_string()),
-            "{cmd:?}"
+            updates
+                .iter()
+                .all(|c| !c.contains(&"customer:contributor".to_string())),
+            "{updates:?}"
         );
-        assert!(
-            cmd.iter().any(|a| a.starts_with("why=backfill: ruled")),
-            "{cmd:?}"
-        );
+        assert!(updates
+            .iter()
+            .all(|c| c.iter().any(|a| a.starts_with("why=backfill: ruled"))));
         // The unmapped row's id reaches the review file, never the store.
         assert!(updates.iter().all(|c| !c.contains(&"ab-2".to_string())));
         let text = std::fs::read_to_string(&review).unwrap();
