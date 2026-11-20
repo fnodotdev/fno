@@ -91,7 +91,19 @@ pub(crate) fn apply(
         None => (route.to_string(), String::new()),
     };
     let route_path: String = match crate::route_recovery::route_file_for(&provider, &model) {
-        Some(path) => path.to_string_lossy().into_owned(),
+        Some(path) => {
+            // The reuse path hands back a file another session may own (a
+            // digest or a twin named by its writer's session), so the
+            // rerouting row publishes its own twin beside it and records a
+            // path that names THIS session; the mint's join, reused.
+            match crate::route_settings::publish_session_entry(&path, &session_id) {
+                Ok(twin) => twin.to_string_lossy().into_owned(),
+                Err(e) => {
+                    eprintln!("resume --route: session twin: {e}");
+                    path.to_string_lossy().into_owned()
+                }
+            }
+        }
         None => {
             let target =
                 crate::spawn_route::resolve_target(route, cwd, &|k: &str| std::env::var(k).ok())
