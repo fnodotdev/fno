@@ -55,7 +55,7 @@ use crate::spawn_gate;
 
 const CLAIM_KEY: &str = "evals:scheduled-run";
 const EXIT_USAGE: i32 = 2;
-const USAGE: &str = "usage: fno-agent evals-arm --history <jsonl> --events <jsonl> --fno-bin <path> --schedule-days N --stale-days N [--summary-json <json|null>] [--questions-store <jsonl>] [--repo DIR] [--graph <path>] [--run --started <rfc3339>] [--run-timeout-s S] [--claims-root DIR]";
+const USAGE: &str = "usage: fno-agent evals-arm --history <jsonl> --events <jsonl> --fno-bin <path> --schedule-days N --stale-days N [--summary-json <json|null>] [--questions-store <jsonl>] [--repo DIR] [--graph <path>] [--run --started <rfc3339> [--propose]] [--run-timeout-s S] [--claims-root DIR]";
 
 /// One JSON receipt line on stdout; the tick phase parses acted/skip_reason/detail.
 fn receipt(acted: u8, skip_reason: Option<&str>, detail: &str) -> i32 {
@@ -84,6 +84,8 @@ struct Opts {
     graph: Option<PathBuf>,
     /// The run-mode child's tier: the regression bank, or the capability leg.
     capability: bool,
+    /// The propose-and-prove leg's detached child.
+    propose: bool,
 }
 
 fn parse_args(args: &[String]) -> Result<Opts, String> {
@@ -102,6 +104,7 @@ fn parse_args(args: &[String]) -> Result<Opts, String> {
         repo: None,
         graph: None,
         capability: false,
+        propose: false,
     };
     let mut i = 0usize;
     while i < args.len() {
@@ -142,6 +145,7 @@ fn parse_args(args: &[String]) -> Result<Opts, String> {
                 o.questions_store = Some(PathBuf::from(value("--questions-store")?))
             }
             "--run" => o.run = true,
+            "--propose" => o.propose = true,
             "--started" => o.started = Some(value("--started")?),
             "--run-timeout-s" => {
                 o.run_timeout_s = value("--run-timeout-s")?
@@ -1085,7 +1089,9 @@ pub fn run_evals_arm(args: &[String]) -> i32 {
             return EXIT_USAGE;
         }
     };
-    if o.run && o.capability {
+    if o.run && o.propose {
+        run_propose_mode(&o)
+    } else if o.run && o.capability {
         run_capability_mode(&o)
     } else if o.run {
         run_run_mode(&o)
@@ -1116,6 +1122,15 @@ pub fn run_evals_arm(args: &[String]) -> i32 {
             if !matches!(seen, "fresh" | "in_flight") {
                 eprintln!("evals-arm: capability leg: {seen}");
             }
+            // One heavy leg per tick: a capability launch this tick holds
+            // the propose cycle to the next.
+            let mut pargv = run_argv_for(&o, &repo, &now.to_rfc3339(), false);
+            pargv.push("--propose".into());
+            let pcan = can_launch && seen != "launched";
+            let pseen = crate::evals_propose::tick(&leg, now, pcan, &pargv, &spawn_detached);
+            if !matches!(pseen, "fresh" | "in_flight") {
+                eprintln!("evals-arm: propose leg: {pseen}");
+            }
         }
         run_tick_mode(
             &o,
@@ -1133,6 +1148,20 @@ fn leg_for<'a>(o: &'a Opts, repo: &'a Path) -> crate::evals_capability::Leg<'a> 
         window_days: o.schedule_days,
         run_timeout_s: o.run_timeout_s,
         claims_root: o.claims_root.as_deref(),
+    }
+}
+
+/// Run mode for `--propose`: the detached propose cycle child.
+fn run_propose_mode(o: &Opts) -> i32 {
+    let Some(repo) = bank_repo(o) else {
+        return receipt(0, Some("propose_args"), "needs a bank");
+    };
+    let r = crate::evals_propose::Run {
+        leg: leg_for(o, &repo),
+    };
+    match crate::evals_propose::run_leg(&r) {
+        0 => receipt(1, None, "propose leg settled"),
+        _ => receipt(0, Some("propose_failed"), "propose leg failed; see stderr"),
     }
 }
 

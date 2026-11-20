@@ -200,6 +200,9 @@ fn drafts_dir(state: &Path) -> PathBuf {
 /// `fno-agent evals drafts`: run the pass now and print its counts.
 pub fn run(args: &[String]) -> i32 {
     let state = crate::evals_candidates::state_root();
+    if args.first().is_some_and(|a| a == "changes") {
+        return crate::evals_propose::changes_cli(&args[1..]);
+    }
     if let Some(sha) = crate::evals::flag_lookup(args, "--from-commit") {
         // Beside the daily drafts, not in them: the drafter reads that folder's yaml.
         let dir = drafts_dir(&state).join("work-product");
@@ -219,7 +222,9 @@ pub fn run(args: &[String]) -> i32 {
         };
     }
     if !args.is_empty() {
-        eprintln!("usage: fno-agent evals drafts [--from-commit <sha>]");
+        eprintln!(
+            "usage: fno-agent evals drafts [changes [--dry-run] [--json]] | [--from-commit <sha>]"
+        );
         return 2;
     }
     match pass(
