@@ -8,7 +8,9 @@
 
 use crate::event_store::{EventQuery, EventRow};
 use crate::harness::Harness;
+use crate::harness_capabilities::ContractError;
 use crate::paths::AgentsHome;
+use crate::reader_route::ReaderRoute;
 use crate::transcript_resolve::{resolve_transcript, ResolvedTranscript, Roots};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
@@ -125,14 +127,6 @@ fn config_i64(cwd: &Path, key: &str, default: i64) -> i64 {
         .unwrap_or(default)
 }
 
-fn config_str(cwd: &Path, key: &str, default: &str) -> String {
-    crate::agents_config::config_lookup(cwd, &["agents", "consult", key])
-        .and_then(|v| v.as_str().map(str::to_string))
-        .map(|m| m.trim().to_string())
-        .filter(|m| !m.is_empty())
-        .unwrap_or_else(|| default.to_string())
-}
-
 /// The lane names `agents.consult.lanes` allows, empty (off) by default.
 fn config_lanes(cwd: &Path) -> Vec<String> {
     crate::agents_config::config_lookup(cwd, &["agents", "consult", "lanes"])
@@ -170,16 +164,30 @@ fn session_lane(deps: &Deps, harness: &str, session: &str) -> Option<String> {
 fn ask(deps: &Deps, harness: &str, session: &str, ask: &Ask) -> i32 {
     let max_calls = config_i64(&deps.cwd, "max_calls", DEFAULT_MAX_CALLS);
     let count = consult_calls(deps, session).len() as i64;
+    let route = crate::reader_route::resolve(
+        &deps.cwd,
+        "consult",
+        Some(crate::reader_route::Legacy {
+            keys: &["agents", "consult", "model"],
+        }),
+        DEFAULT_MODEL,
+    );
     if ask.dry_run {
-        let model = config_str(&deps.cwd, "model", DEFAULT_MODEL);
         let context_bytes = config_i64(&deps.cwd, "context_bytes", DEFAULT_CONTEXT_BYTES);
+        let tail = match fence_tail(&route) {
+            Ok(tail) => tail,
+            Err(e) => {
+                eprintln!("consult: {e}");
+                return EXIT_SPAWN_FAILED;
+            }
+        };
         let answer = json!({
             "max_calls": max_calls,
             "count": count,
-            "model": model,
+            "model": route.label(),
             "context_bytes": context_bytes,
             "transcript": deps.transcript.as_ref().map(|p| p.display().to_string()),
-            "argv_tail": argv_tail(&model),
+            "argv_tail": tail,
         });
         println!("{}", serde_json::to_string(&answer).unwrap_or_default());
         return 0;
@@ -265,8 +273,13 @@ fn ask(deps: &Deps, harness: &str, session: &str, ask: &Ask) -> i32 {
         .replace("{NODE}", node.as_deref().unwrap_or("none"))
         .replace("{DIGEST_PATH}", &digest_path.display().to_string());
     // ── chunk: spawn ──
-    let model = config_str(&deps.cwd, "model", DEFAULT_MODEL);
-    let argv = consult_spawn_argv(&prompt, &deps.cwd.display().to_string(), &model);
+    let argv = match consult_spawn_argv(&prompt, &deps.cwd, &route) {
+        Ok(argv) => argv,
+        Err(e) => {
+            eprintln!("consult: {e}");
+            return EXIT_SPAWN_FAILED;
+        }
+    };
     let spawned = (deps.spawner)(&argv, SPAWN_TIMEOUT_SECS + 60);
     drop(digest_file);
     let _ = std::fs::remove_file(&digest_path);
@@ -278,12 +291,7 @@ fn ask(deps: &Deps, harness: &str, session: &str, ask: &Ask) -> i32 {
         }
     };
     // ── chunk: parse ──
-    let envelope: Value = serde_json::from_str(stdout.trim()).unwrap_or(Value::Null);
-    let guidance = envelope
-        .get("result")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_else(|| stdout.trim().to_string());
+    let (guidance, envelope) = spend(&route.harness, &stdout);
     // ── chunk: print ──
     let usage = |key: &str| {
         envelope
@@ -297,7 +305,7 @@ fn ask(deps: &Deps, harness: &str, session: &str, ask: &Ask) -> i32 {
             "{}",
             serde_json::to_string(&json!({
                 "guidance": guidance,
-                "model": model,
+                "model": route.label(),
                 "exit": rc,
                 "input_tokens": usage("input_tokens"),
                 "output_tokens": usage("output_tokens"),
@@ -306,7 +314,7 @@ fn ask(deps: &Deps, harness: &str, session: &str, ask: &Ask) -> i32 {
             .unwrap_or_default()
         );
     } else {
-        println!("consult ({}):", model);
+        println!("consult ({}):", route.label());
         println!("{guidance}");
     }
     if rc != 0 {
@@ -318,7 +326,7 @@ fn ask(deps: &Deps, harness: &str, session: &str, ask: &Ask) -> i32 {
         harness,
         session,
         ask,
-        &model,
+        &route.label(),
         &envelope,
         rc,
         context_bytes,
@@ -335,39 +343,68 @@ fn ask(deps: &Deps, harness: &str, session: &str, ask: &Ask) -> i32 {
 /// the prompt and the prompt sits directly before the fence: the positional
 /// boundary refuses a spawn-owned flag after the prompt (law d-3244), which
 /// is the exit-2 the old inline shape answered.
-fn consult_spawn_argv(prompt: &str, cwd_display: &str, model: &str) -> Vec<String> {
-    let mut argv = vec!["agents".to_string(), "spawn".to_string()];
-    argv.extend([
-        "--harness".to_string(),
-        "claude".to_string(),
-        "--once".to_string(),
-    ]);
-    argv.extend(["--cwd".to_string(), cwd_display.to_string()]);
-    argv.extend(["--timeout".to_string(), SPAWN_TIMEOUT_SECS.to_string()]);
-    argv.push(prompt.to_string());
-    argv.push("--".to_string());
-    argv.extend(argv_tail(model));
-    argv
+fn consult_spawn_argv(
+    prompt: &str,
+    cwd: &Path,
+    route: &ReaderRoute,
+) -> Result<Vec<String>, ContractError> {
+    let mut argv = crate::reader_route::reader_tools_argv(
+        "consult",
+        prompt,
+        cwd,
+        SPAWN_TIMEOUT_SECS,
+        route,
+        &[],
+    )?;
+    argv.extend(
+        crate::harness_capabilities::packaged_reader_spend_args(&route.harness).unwrap_or_default(),
+    );
+    Ok(argv)
 }
 
-fn argv_tail(model: &str) -> Vec<String> {
-    [
-        "--model",
-        model,
-        "--output-format",
-        "json",
-        "--setting-sources",
-        "",
-        "--strict-mcp-config",
-        "--tools",
-        "Read",
-        "--disable-slash-commands",
-        "--no-chrome",
-        "--no-session-persistence",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect()
+/// The dry-run's tail: the fence the real ask would carry - the model, the
+/// row's tool grant, then its spend-envelope flags. A harness with no
+/// measured tool-bearing row refuses here too, so the dry run shows what
+/// the real ask does, never an argv that would never spawn.
+fn fence_tail(route: &ReaderRoute) -> Result<Vec<String>, ContractError> {
+    let tools = crate::harness_capabilities::packaged_reader_tools_args(&route.harness)
+        .filter(|args| !args.is_empty())
+        .ok_or_else(|| {
+            crate::harness_capabilities::field_error(
+                &route.harness,
+                "reader_tools_args",
+                "no measured tool-bearing reader form; add reader_tools_args to the row",
+            )
+        })?;
+    let mut tail: Vec<String> = Vec::new();
+    if let Some(model) = &route.model {
+        tail.extend(["--model".to_string(), model.clone()]);
+    }
+    tail.extend(tools);
+    tail.extend(
+        crate::harness_capabilities::packaged_reader_spend_args(&route.harness).unwrap_or_default(),
+    );
+    Ok(tail)
+}
+
+/// The per-harness spend reader: a harness whose row carries spend-envelope
+/// flags prints a JSON envelope, and the claude envelope carries `result`,
+/// `usage` and `total_cost_usd`. A row without them reads the raw stdout as
+/// guidance, and every spend figure records as the string `unknown`, never
+/// 0 - no measurement stands behind it.
+fn spend(harness: &str, stdout: &str) -> (String, Value) {
+    let envelope = match crate::harness_capabilities::packaged_reader_spend_args(harness) {
+        Some(args) if !args.is_empty() => {
+            serde_json::from_str::<Value>(stdout.trim()).unwrap_or(Value::Null)
+        }
+        _ => Value::Null,
+    };
+    let guidance = envelope
+        .get("result")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| stdout.trim().to_string());
+    (guidance, envelope)
 }
 
 /// One `consult_call` event per call: identity, spend, and the exit. A figure
@@ -771,7 +808,12 @@ mod tests {
     // argv[2..] is in bounds by construction.
     #[allow(clippy::indexing_slicing)]
     fn the_consult_spawn_line_respects_the_positional_boundary() {
-        let argv = consult_spawn_argv("consult me", "/tmp", "m");
+        let argv = consult_spawn_argv(
+            "consult me",
+            Path::new("/tmp"),
+            &ReaderRoute::pinned("claude", "m"),
+        )
+        .expect("the packaged claude row measures a tool-bearing form");
         let prompt_at = argv
             .iter()
             .position(|a| a == "consult me")

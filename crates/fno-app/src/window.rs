@@ -1317,17 +1317,19 @@ impl Root {
     }
 
     /// The bar's keys: text and backspace edit the query; the terminal's
-    /// first Enter opens the server search and later Enters and Shift+Enters
-    /// step it; the chat steps its own scan. Esc always closes, clearing the
-    /// pane's server highlight even when no reply ever arrived.
+    /// Enter opens the server search, the arrows and the cmd-g chords step
+    /// its matches, the chat steps its own scan. Esc always closes, clearing
+    /// the pane's server highlight even when no reply ever arrived.
     fn find_key(&mut self, k: find::FindKey, cx: &mut Context<Self>) {
         let mut send = None;
         let mut rescan = false;
         let mut escape = false;
         let mut reveal = None;
+        let mut step = None;
         {
             let Some(f) = &mut self.find else { return };
             match k {
+                find::FindKey::Step { older } => step = Some(older),
                 find::FindKey::Edit(text) => {
                     f.edit(&text);
                     if matches!(f.target, find::Target::Chat) {
@@ -1340,8 +1342,8 @@ impl Root {
                         rescan = true;
                     }
                 }
-                find::FindKey::Enter { shift } => match f.target {
-                    find::Target::Pane(p) => {
+                find::FindKey::Enter => {
+                    if let find::Target::Pane(p) = f.target {
                         // (Re)open on a zero reply too: a no-match search_open
                         // already dropped the server's search state, so a step
                         // would only draw its "no active search" Notice.
@@ -1351,30 +1353,17 @@ impl Root {
                                 query: f.query.clone(),
                             });
                             f.searched = true;
-                        } else if f.searched {
-                            send = Some(ClientMsg::SearchStep {
-                                pane: p,
-                                dir: find::step_dir(shift),
-                            });
                         }
                     }
-                    find::Target::Chat => {
-                        if !f.hits.is_empty() {
-                            let cur = f.current.max(1) as usize;
-                            let next = if shift {
-                                (cur + 1).min(f.hits.len())
-                            } else {
-                                (cur - 1).max(1)
-                            };
-                            f.current = next as u32;
-                            if let Some(h) = f.hits.get(next - 1) {
-                                reveal = Some(h.item);
-                            }
-                        }
-                    }
-                },
+                }
                 find::FindKey::Escape => escape = true,
             }
+        }
+        // The step runs outside the bar borrow above: find_step borrows
+        // self again.
+        if let Some(older) = step {
+            self.find_step(older, cx);
+            return;
         }
         if let Some(msg) = send {
             self.send(msg);
@@ -1388,6 +1377,47 @@ impl Root {
         } else {
             self.sync_panes(cx);
         }
+        if let Some(item) = reveal {
+            self.chat.list.scroll_to_reveal_item(item);
+        }
+        cx.notify();
+    }
+
+    /// One step for the arrows and the cmd-g chords: the pane sends
+    /// SearchStep only while the server holds a live match list (an arrow
+    /// before a search, or on a no-match one, is a no-op: a no-match
+    /// search_open dropped it), the chat walks its hit index.
+    fn find_step(&mut self, older: bool, cx: &mut Context<Self>) {
+        let mut reveal = None;
+        let mut pane_step = None;
+        {
+            let Some(f) = &mut self.find else { return };
+            match f.target {
+                find::Target::Pane(p) => {
+                    if f.searched && f.total > 0 {
+                        pane_step = Some((p, find::step_dir(older)));
+                    }
+                }
+                find::Target::Chat => {
+                    if !f.hits.is_empty() {
+                        let cur = f.current.max(1) as usize;
+                        let next = if older {
+                            (cur - 1).max(1)
+                        } else {
+                            (cur + 1).min(f.hits.len())
+                        };
+                        f.current = next as u32;
+                        if let Some(h) = f.hits.get(next - 1) {
+                            reveal = Some(h.item);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some((p, dir)) = pane_step {
+            self.send(ClientMsg::SearchStep { pane: p, dir });
+        }
+        self.sync_panes(cx);
         if let Some(item) = reveal {
             self.chat.list.scroll_to_reveal_item(item);
         }
@@ -1861,6 +1891,7 @@ impl Root {
             }
             Shortcut::NewAgent => self.act(Action::OpenLaunch(None), cx),
             Shortcut::Find => self.find_open(cx),
+            Shortcut::FindStep { older } => self.find_step(older, cx),
         }
     }
 
@@ -2792,6 +2823,7 @@ pub(super) fn root_for_shot(
     family: String,
     font_size: f32,
     picking: bool,
+    find: Option<crate::FindShot>,
     window: &mut Window,
     cx: &mut App,
 ) -> gpui::Entity<Root> {
@@ -2828,6 +2860,17 @@ pub(super) fn root_for_shot(
         // cmd alone is down, before any real modifier event arrives.
         root.picking = picking;
     });
+    if let Some(find) = find {
+        root.update(cx, |root, cx| {
+            // The real paths: the bar opens and the query types exactly
+            // as the user's keystrokes would land.
+            root.find_open(cx);
+            root.find_key(find::FindKey::Edit("the".to_owned()), cx);
+            if find == crate::FindShot::Chords {
+                root.picking = true;
+            }
+        });
+    }
     // The shot window never activates, and the board poll pauses while
     // the window is inactive; the shot needs every feed settled before
     // the capture, so it polls regardless.

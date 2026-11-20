@@ -1,7 +1,8 @@
 //! `fno doctor migrate ids` (rides `census --ids`): the map from every
 //! `q-`/`d-` hex key to the number that replaces it. `--check` counts what
 //! is left to retire; `--dry-run` (the default) builds the map and refuses
-//! on any key the map cannot carry. `--apply` lands with the rewrite.
+//! on any key the map cannot carry. `--apply` and `--rollback` live in
+//! [`apply`].
 
 use super::{answer_links, beat, canonical, current_store, db_path, open_read_at};
 use rusqlite::{params, Connection};
@@ -77,6 +78,9 @@ pub(crate) struct IdMap {
     pub collisions: Vec<(String, Vec<String>)>,
     /// A key numbered only in another store, with that store.
     pub foreign_only: Vec<(String, String)>,
+    /// A later answer to a question an earlier answer took the number of.
+    /// It restates the ruling as its own record, so apply mints it a number.
+    pub fresh: Vec<String>,
 }
 
 impl IdMap {
@@ -100,6 +104,16 @@ fn own_label(conn: &Connection, key: &str, current: &str) -> Option<String> {
     .ok()
 }
 
+/// A decision row's place in commit order; a key with no row sorts last.
+fn seq_of(conn: &Connection, key: &str) -> i64 {
+    conn.query_row(
+        "SELECT seq FROM decisions WHERE event_id = ?1",
+        params![key],
+        |row| row.get(0),
+    )
+    .unwrap_or(i64::MAX)
+}
+
 fn foreign_store(conn: &Connection, key: &str) -> Option<String> {
     conn.query_row(
         "SELECT store FROM fno_numbers WHERE key = ?1 ORDER BY created_at DESC LIMIT 1",
@@ -117,9 +131,30 @@ pub(crate) fn plan_map(conn: &Connection, keys: &BTreeSet<String>, current: &str
     let mut out = IdMap::default();
     let mut by_label: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let links = answer_links(conn);
+    // The earliest answer of a question takes its number. A later one is
+    // its own record: it keeps a number of its own, or apply mints one.
+    let mut first: BTreeMap<&str, (i64, &str)> = BTreeMap::new();
     for key in keys {
+        if let Some(question) = links.get(key) {
+            let seq = seq_of(conn, key);
+            let slot = first.entry(canonical(question)).or_insert((seq, key));
+            if seq < slot.0 {
+                *slot = (seq, key);
+            }
+        }
+    }
+    for key in keys {
+        let later = links
+            .get(key)
+            .and_then(|question| first.get(canonical(question)))
+            .is_some_and(|(_, earliest)| *earliest != key.as_str());
+        if later && own_label(conn, key, current).is_none() {
+            out.fresh.push(key.clone());
+            continue;
+        }
         let via_question = links
             .get(key)
+            .filter(|_| !later)
             .and_then(|question| own_label(conn, canonical(question), current));
         if let Some(label) = via_question {
             out.answers += 1;
@@ -144,9 +179,16 @@ pub(crate) fn plan_map(conn: &Connection, keys: &BTreeSet<String>, current: &str
     out
 }
 
-/// `census --ids [--check|--dry-run] [--json]`.
+/// `census --ids [--check|--dry-run|--apply|--rollback <dir>] [--json]`.
 pub fn run(args: &[String]) -> i32 {
     let json_out = args.iter().any(|a| a == "--json" || a == "-J");
+    if let Some(at) = args.iter().position(|a| a == "--rollback") {
+        let Some(dir) = args.get(at + 1) else {
+            eprintln!("migrate ids: --rollback names the backup dir an apply printed");
+            return 2;
+        };
+        return apply::rollback(std::path::Path::new(dir));
+    }
     let check = args.iter().any(|a| a == "--check");
     if !check {
         // One beat first, so a key filed since the last beat has its number.
@@ -177,6 +219,10 @@ pub fn run(args: &[String]) -> i32 {
         }
         return 0;
     }
+    if args.iter().any(|a| a == "--apply") {
+        drop(conn);
+        return apply::apply(json_out);
+    }
     let Some(conn) = conn else {
         eprintln!("migrate ids: cannot read {}", db_path().display());
         return 1;
@@ -193,6 +239,7 @@ pub fn run(args: &[String]) -> i32 {
                 "unmapped": map.unmapped,
                 "collisions": map.collisions.iter().map(|(l, k)| json!({"label": l, "keys": k})).collect::<Vec<_>>(),
                 "foreign_only": map.foreign_only.iter().map(|(k, s)| json!({"key": k, "store": s})).collect::<Vec<_>>(),
+                "fresh": map.fresh,
             })
         );
     } else {
@@ -201,6 +248,9 @@ pub fn run(args: &[String]) -> i32 {
             map.mapped.len(),
             map.answers
         );
+        for key in &map.fresh {
+            println!("fresh: {key} is a later answer; apply mints it a number of its own");
+        }
         for key in &map.unmapped {
             println!("refused: {key} has no number in any store");
         }
@@ -215,6 +265,9 @@ pub fn run(args: &[String]) -> i32 {
     }
     i32::from(map.refuses())
 }
+
+#[path = "numbers_migrate_apply.rs"]
+mod apply;
 
 #[cfg(test)]
 mod tests {

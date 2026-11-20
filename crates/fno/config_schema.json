@@ -8399,7 +8399,7 @@
    "label": "Question judge model",
    "type": "str",
    "default": "sonnet",
-   "doc": "Model the judge dispatches verdicts with.",
+   "doc": "DEPRECATED: the stage table (agents.profiles.question-judge.model) is the home for the judge model; this key reads as the fallback rung beneath it for one release. Migrate with `fno config set agents.profiles.question-judge.model <model>`.",
    "wizard": "never",
    "question": "",
    "default_source": "",

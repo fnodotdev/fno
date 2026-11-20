@@ -47,6 +47,11 @@ struct Args {
     /// reveal. The proof frame for the badge rule.
     #[arg(long = "shot-picking")]
     shot_picking: bool,
+    /// Find-bar state --shot paints over the chat view: `bar` opens the
+    /// bar with a query typed through the real key path; `chords` also
+    /// forces the cmd-held hint.
+    #[arg(long = "shot-find", value_enum)]
+    shot_find: Option<ShotFind>,
     /// Hold the composited shot window up for a foreign capturer
     /// instead of capturing. Diagnostic.
     #[arg(long = "shot-hold", hide = true)]
@@ -77,6 +82,15 @@ impl ShotView {
     }
 }
 
+/// The --shot-find values.
+#[derive(clap::ValueEnum, Clone)]
+enum ShotFind {
+    /// The bar open, hint at rest.
+    Bar,
+    /// The bar open, cmd-held hint forced.
+    Chords,
+}
+
 fn main() {
     let args = Args::parse();
     let shot = if args.shot {
@@ -93,6 +107,10 @@ fn main() {
             theme: args.shot_theme,
             mode: args.shot_mode.map(ShotView::into_main),
             picking: args.shot_picking,
+            find: args.shot_find.map(|f| match f {
+                ShotFind::Bar => fno_app::FindShot::Bar,
+                ShotFind::Chords => fno_app::FindShot::Chords,
+            }),
             hold: args.shot_hold,
         })
     } else {

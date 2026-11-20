@@ -33,6 +33,8 @@ pub(crate) struct PullsTail {
     pub(crate) body: Option<Value>,
     #[serde(default, deserialize_with = "opt_value_present")]
     pub(crate) auto_merge: Option<Value>,
+    #[serde(default, deserialize_with = "opt_bool")]
+    pub(crate) draft: Option<bool>,
 }
 
 /// One check-runs page: the rows plus the count that bounds the paging loop.
@@ -137,6 +139,23 @@ pub(crate) struct PullFullTail {
     pub(crate) body: Option<Value>,
     #[serde(default, deserialize_with = "opt_value_present")]
     pub(crate) autoMergeRequest: Option<Value>,
+    #[serde(default, deserialize_with = "opt_bool")]
+    pub(crate) isDraft: Option<bool>,
+}
+
+/// The composed status fields the pr-nudge user-gate park reads. Lenient:
+/// a stale cached row that predates the draft key reads None there, which
+/// is today's behavior.
+#[derive(Deserialize, Default)]
+pub(crate) struct StatusParkTail {
+    #[serde(default, deserialize_with = "opt_bool")]
+    pub(crate) settled: Option<bool>,
+    #[serde(default, deserialize_with = "opt_string")]
+    pub(crate) verdict: Option<String>,
+    #[serde(default, deserialize_with = "opt_string")]
+    pub(crate) pr_state: Option<String>,
+    #[serde(default, deserialize_with = "opt_bool")]
+    pub(crate) draft: Option<bool>,
 }
 
 /// The assembled pr_json projection every downstream reader consumes. The
