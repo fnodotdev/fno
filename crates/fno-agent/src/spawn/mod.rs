@@ -77,6 +77,7 @@ pub mod pi;
 pub mod pi_ask;
 pub mod plugin_install;
 pub mod plugins;
+pub mod pr_watch_warning;
 pub mod project_sandbox;
 pub mod provider;
 pub mod provider_cap;

@@ -550,6 +550,12 @@ async fn run_daemon_command(
     // and fall through to the daemon RPC unchanged.
     let mut lease = SpawnLease::default();
     if method == "agent.spawn" && command == "spawn" {
+        if let Some(message) = params.get("message").and_then(|v| v.as_str()) {
+            fno_agent::spawn::pr_watch_warning::warn_if_watcher_down(
+                message,
+                params.get("node").is_some(),
+            );
+        }
         if let Some(code) = run_client_spawn(
             &home,
             args,
