@@ -100,6 +100,11 @@ fn exec_lane(payload: &Value) -> Result<i32, String> {
     if let Some(dir) = config_dir {
         command.env("CLAUDE_CONFIG_DIR", dir);
     }
+    // The native lane bypasses `claude_ask::bg_create`, so it must stamp the
+    // child itself. The handover holder is intentionally not an ambient
+    // identity key: it must survive to the worker's target init.
+    crate::claims::stamp_command_env(&mut command, Some(&name), "claude", None);
+    crate::claude_supervisor::strip_route_carriers(&mut command);
     // The one call every site that can birth a claude supervisor makes before
     // the client execs (claude_ask.rs holds the precedent): claude auto-starts
     // one from the ambient env, and the guard holds every FNO_* key out of
@@ -297,6 +302,18 @@ mod tests {
                     std::env::var_os("FNO_GLOBAL_SETTINGS_PATH"),
                 ),
                 ("FNO_STATE_DIR", std::env::var_os("FNO_STATE_DIR")),
+                ("FNO_AGENT_SELF", std::env::var_os("FNO_AGENT_SELF")),
+                ("FNO_AGENT_HARNESS", std::env::var_os("FNO_AGENT_HARNESS")),
+                ("FNO_HARNESS_NAME", std::env::var_os("FNO_HARNESS_NAME")),
+                (
+                    "FNO_HARNESS_SESSION_ID",
+                    std::env::var_os("FNO_HARNESS_SESSION_ID"),
+                ),
+                (
+                    "FNO_NODE_CLAIM_HOLDER",
+                    std::env::var_os("FNO_NODE_CLAIM_HOLDER"),
+                ),
+                ("FNO_TEST_CAPTURE", std::env::var_os("FNO_TEST_CAPTURE")),
             ];
             std::env::remove_var("FNO_CONFIG");
             std::env::remove_var("FNO_GLOBAL_SETTINGS_PATH");
@@ -397,6 +414,43 @@ mod tests {
         .unwrap();
         assert_eq!(out, 3);
     }
+
+    /// The native lane carries the worker identity into the actual child but
+    /// keeps the dispatch handover proof available for target init.
+    #[test]
+    fn native_child_gets_session_identity_and_handover_holder() {
+        let dir = tempfile::tempdir().unwrap();
+        let _env = EnvPin::take(dir.path());
+        let capture = dir.path().join("child-env");
+        std::env::set_var("FNO_AGENT_HOME", dir.path().join("agents-home"));
+        std::env::set_var("FNO_TEST_CAPTURE", &capture);
+        std::env::set_var("FNO_NODE_CLAIM_HOLDER", "handover-w1");
+        std::env::remove_var("FNO_AGENT_SELF");
+        std::env::remove_var("FNO_AGENT_HARNESS");
+        std::env::remove_var("FNO_HARNESS_NAME");
+        stage_row_with(dir.path(), "env > $FNO_TEST_CAPTURE");
+
+        exec_lane(&serde_json::json!({
+            "harness": "claude", "name": "w1",
+            "payload": "/fno:target x-aaaa",
+            "launcher_session": "lead-1", "provider": "zai", "model": "tm-1",
+            "node": "x-aaaa", "cwd": dir.path(),
+        }))
+        .unwrap();
+
+        let child_env = std::fs::read_to_string(capture).unwrap();
+        assert!(child_env.lines().any(|line| line == "FNO_AGENT_SELF=w1"));
+        assert!(child_env
+            .lines()
+            .any(|line| line == "FNO_AGENT_HARNESS=claude"));
+        assert!(child_env
+            .lines()
+            .any(|line| line == "FNO_HARNESS_NAME=claude"));
+        assert!(child_env
+            .lines()
+            .any(|line| line == "FNO_NODE_CLAIM_HOLDER=handover-w1"));
+    }
+
     /// The streamed scan: a `backgrounded` line amends the pending record
     /// with the head it names; the forward stays byte-faithful; a stream
     /// with no head line leaves every record untouched.
