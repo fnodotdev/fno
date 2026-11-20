@@ -755,6 +755,8 @@ pub fn run(args: &[String]) -> i32 {
                 .iter()
                 .find(|r| crate::backlog::question_intake::str_field(r, "id") == Some(id.as_str()));
             if let Some(row) = row {
+                // Keep these term displays in step with importance_score;
+                // the worked-example test pins the score they mirror.
                 let prio =
                     crate::backlog::question_intake::str_field(row, "priority").unwrap_or("p2");
                 let prio_pts = match prio {
@@ -768,14 +770,19 @@ pub fn run(args: &[String]) -> i32 {
                 let scope_pts = crate::backlog::audience::audience_score_term(
                     crate::backlog::question_intake::str_field(row, "audience").unwrap_or(""),
                 );
-                let age = row
-                    .get("touched_at")
-                    .and_then(crate::backlog_ready::touched_ms)
-                    .map(|s| ((now_ms - s).max(0) / 86_400_000).min(60))
+                let open_dependents = crate::backlog_ready::dependents_fanout(entries_for_receipts)
+                    .get(id.as_str())
+                    .copied()
                     .unwrap_or(0);
+                let age = crate::backlog_ready::get_str(row, "created_at")
+                    .and_then(crate::backlog_ready::parse_iso_str)
+                    .map(|s| crate::backlog_ready::days_between(now_ms, s).max(0))
+                    .unwrap_or(0)
+                    .min(60);
                 eprintln!(
-                    "score: priority {prio}={prio_pts} + encounters {voters}*25={} + scope {scope_pts} + age {age} (fan-out is its own key term)",
-                    (voters * 25).min(100)
+                    "score: priority {prio}={prio_pts} + encounters {voters}*25={} + scope {scope_pts} + fan-out {open_dependents}*10={} + age {age}",
+                    (voters * 25).min(100),
+                    (open_dependents.max(0) * 10).min(50),
                 );
             }
             println!(
