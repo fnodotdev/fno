@@ -452,6 +452,72 @@ fn attach_node(connection: &Connection, node_id: &str, event_id: &str) -> Result
     Ok(())
 }
 
+/// The id migration's key move, copy half: a row under `to` holding
+/// `data` and every other column of `from`, with every join row repointed,
+/// so a shared primary (deletes sent first, foreign keys on) never sees a
+/// join name a missing decision. A `to` row a stopped move already wrote
+/// keeps its data and still takes the joins. False when no `to` row exists.
+pub(crate) fn copy_under_key(
+    conn: &Connection,
+    from: &str,
+    to: &str,
+    data: &str,
+) -> rusqlite::Result<bool> {
+    let columns: Vec<String> = {
+        let mut stmt = conn.prepare(
+            "SELECT name FROM pragma_table_info('decisions') \
+             WHERE name NOT IN ('seq', 'event_id', 'data')",
+        )?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    let list = columns
+        .iter()
+        .map(|c| format!("\"{c}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    conn.execute(
+        &format!(
+            "INSERT INTO decisions (event_id, data, {list}) \
+             SELECT ?2, ?3, {list} FROM decisions WHERE event_id = ?1 \
+             AND NOT EXISTS (SELECT 1 FROM decisions WHERE event_id = ?2)"
+        ),
+        params![from, to, data],
+    )?;
+    let held: bool = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM decisions WHERE event_id = ?1)",
+        params![to],
+        |r| r.get(0),
+    )?;
+    if !held {
+        return Ok(false);
+    }
+    conn.execute(
+        "UPDATE node_decisions SET event_id = ?2 WHERE event_id = ?1",
+        params![from, to],
+    )?;
+    Ok(true)
+}
+
+/// The key move's delete half: the old row goes once no join row names it.
+pub(crate) fn drop_moved_key(conn: &Connection, from: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM decisions WHERE event_id = ?1 \
+         AND NOT EXISTS (SELECT 1 FROM node_decisions WHERE event_id = ?1)",
+        params![from],
+    )
+    .map(drop)
+}
+
+/// One decision row's data rewritten in place, by rowid.
+pub(crate) fn set_data(conn: &Connection, rowid: i64, data: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE decisions SET data = ?1 WHERE rowid = ?2",
+        params![data, rowid],
+    )
+    .map(drop)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

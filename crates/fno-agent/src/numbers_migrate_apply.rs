@@ -433,10 +433,7 @@ impl Apply<'_> {
                     }
                 }
                 None if after != data => {
-                    tx.execute(
-                        "UPDATE decisions SET data = ?1 WHERE rowid = ?2",
-                        params![after, rowid],
-                    )?;
+                    crate::backlog::decisions::set_data(&tx, rowid, &after)?;
                     self.log.push(Undo::Cell {
                         db: db.clone(),
                         table: "decisions".into(),
@@ -617,59 +614,21 @@ impl Apply<'_> {
     }
 }
 
-/// The copy half of a decision's key move: a row under `to` with `data`,
-/// and every join row repointed. A `to` row a stopped move already wrote
-/// keeps its data and still takes the joins. False when no `to` row exists.
+/// The copy half of a decision's key move; the SQL lives with its table.
 fn copy_decision(
     conn: &Connection,
     from: &str,
     to: &str,
     data: &str,
 ) -> Result<bool, MigrateError> {
-    let columns: Vec<String> = {
-        let mut stmt = conn
-            .prepare("SELECT name FROM pragma_table_info('decisions') WHERE name NOT IN ('seq', 'event_id', 'data')")
-            ?;
-        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-        rows.collect::<Result<_, _>>()?
-    };
-    let list = columns
-        .iter()
-        .map(|c| format!("\"{c}\""))
-        .collect::<Vec<_>>()
-        .join(", ");
-    conn.execute(
-        &format!(
-            "INSERT INTO decisions (event_id, data, {list}) \
-             SELECT ?2, ?3, {list} FROM decisions WHERE event_id = ?1 \
-             AND NOT EXISTS (SELECT 1 FROM decisions WHERE event_id = ?2)"
-        ),
-        params![from, to, data],
-    )?;
-    let held: bool = conn.query_row(
-        "SELECT EXISTS (SELECT 1 FROM decisions WHERE event_id = ?1)",
-        params![to],
-        |r| r.get(0),
-    )?;
-    if !held {
-        return Ok(false);
-    }
-    conn.execute(
-        "UPDATE node_decisions SET event_id = ?2 WHERE event_id = ?1",
-        params![from, to],
-    )?;
-    Ok(true)
+    Ok(crate::backlog::decisions::copy_under_key(
+        conn, from, to, data,
+    )?)
 }
 
-/// The delete half: the old row goes once no join row names it.
+/// The delete half of a decision's key move.
 fn drop_decision(conn: &Connection, from: &str) -> Result<(), MigrateError> {
-    conn.execute(
-        "DELETE FROM decisions WHERE event_id = ?1 \
-         AND NOT EXISTS (SELECT 1 FROM node_decisions WHERE event_id = ?1)",
-        params![from],
-    )
-    .map(drop)
-    .map_err(MigrateError::from)
+    Ok(crate::backlog::decisions::drop_moved_key(conn, from)?)
 }
 
 fn write_atomic(path: &Path, text: &str) -> Result<(), MigrateError> {
