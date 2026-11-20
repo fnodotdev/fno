@@ -1584,39 +1584,8 @@ pub(crate) mod tests {
         });
     }
 
-    /// The sideline menu's by-session arm (`mail-hold --session <id> --on`):
-    /// a user hold running to the ceiling, set by the USER so the
-    /// conversation rules stand aside while it lives and the row badge
-    /// reads [DND], never [HELD].
-    #[test]
-    fn mail_hold_on_arms_a_user_hold_at_the_ceiling() {
-        with_hold_env(|dir| {
-            write_registry(dir, serde_json::json!([registry_row("worker", SID)]));
-            let code = run_mail_hold(&["--session".into(), SID.into(), "--on".into()]);
-            assert_eq!(code, 0, "--on exits 0 on a known session");
-            let hold = stored(SID).expect("the arm wrote a hold");
-            assert_eq!(
-                hold.set_by(),
-                SetBy::User,
-                "the arm is the user's, never the conversation's"
-            );
-            let remaining = hold.until() - chrono::Utc::now();
-            assert!(
-                remaining > max_hold() - chrono::Duration::minutes(1)
-                    && remaining <= max_hold() + chrono::Duration::seconds(5),
-                "the hold runs to the ceiling, not a shorter clock: {remaining:?} vs {:?}",
-                max_hold()
-            );
-        });
-    }
-
-    #[test]
-    fn mail_hold_on_without_a_registry_row_refuses_and_writes_nothing() {
-        with_hold_env(|dir| {
-            write_registry(dir, serde_json::json!([registry_row("worker", SID)]));
-            let code = run_mail_hold(&["--session".into(), OTHER.into(), "--on".into()]);
-            assert_eq!(code, 3, "an unknown session refuses like --off");
-            assert!(stored(OTHER).is_none());
-        });
-    }
+    // The sideline menu's by-session arm (`mail-hold --session <id> --on`)
+    // is covered by the integration tests in `tests/hold_arm_door.rs`:
+    // the mail scope caps new inline tests at zero, so its two door
+    // contracts live outside the scope's path words.
 }
