@@ -33,7 +33,7 @@ fn warning_line(word: &str, detail: &str) -> String {
 /// it is down; the payload test is the repo's own definition, the same gate
 /// the codex git-grant refusal uses, so a node-bearing spawn probes too.
 /// Any other payload skips the read and pays no launchctl subprocess.
-pub(crate) fn warn_if_watcher_down(message: &str, node_present: bool) {
+pub fn warn_if_watcher_down(message: &str, node_present: bool) {
     if !crate::pane_spawn::codex::is_code_payload(message) && !node_present {
         return;
     }
