@@ -495,6 +495,9 @@ fn agent_row(
 /// cmd is held.
 fn agents_header_plus(p: &Palette, grid: &Grid, cx: &mut Context<Root>) -> Div {
     div()
+        .flex()
+        .flex_row()
+        .items_center()
         .child(
             ui::clickable(div().id("agents-plus").px_1(), p)
                 .on_click(cx.listener(|root, _, _, cx| root.act(Action::OpenLaunch(None), cx)))
