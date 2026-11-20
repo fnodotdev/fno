@@ -182,6 +182,20 @@ pub(crate) fn find_uuid_backfill_row(entries: &[RegistryEntry], full_uuid: &str)
     found.map_or(UuidBackfill::None, UuidBackfill::One)
 }
 
+/// The uuid backfill write: the canonical id and the harness's own alias
+/// land together. Every consumer from the portal attach (peek) to the
+/// agents-list join reads `harness_session_id`, so a claude row that kept
+/// only the legacy `claude_session_uuid` read session-less everywhere until
+/// a later load re-synced it (x-52fa).
+pub(super) fn backfill_ids(entry: &mut RegistryEntry, session_id: &str) {
+    entry.harness_session_id = Some(session_id.to_string());
+    if entry.harness_kind() == Harness::Codex {
+        entry.codex_session_id = Some(session_id.to_string());
+    } else {
+        entry.claude_session_uuid = Some(session_id.to_string());
+    }
+}
+
 /// The codex thread id a rollout path names: the trailing 36-char uuid of the
 /// file stem (`rollout-<ts>-<uuid>.jsonl`). `None` when the path carries no
 /// stem-shaped uuid, so a plain transcript path can never act as a join.
@@ -341,15 +355,7 @@ pub(super) fn handle_report(ctx: &Ctx, req: &Request) -> Response {
             Some(i) => Some(i),
             None => match find_uuid_backfill_row(&r.entries, &session_id) {
                 UuidBackfill::One(i) => {
-                    // Persist the canonical id AND the in-memory alias: the
-                    // JSON keeps `harness_session_id`, the loaded row matches
-                    // on the per-harness field.
-                    if r.entries[i].harness_kind() == Harness::Codex {
-                        r.entries[i].harness_session_id = Some(session_id.clone());
-                        r.entries[i].codex_session_id = Some(session_id.clone());
-                    } else {
-                        r.entries[i].claude_session_uuid = Some(session_id.clone());
-                    }
+                    backfill_ids(&mut r.entries[i], &session_id);
                     Some(i)
                 }
                 UuidBackfill::None | UuidBackfill::Ambiguous => None,

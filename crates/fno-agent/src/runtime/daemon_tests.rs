@@ -467,6 +467,31 @@ fn find_uuid_backfill_row_refuses_ambiguous_short_collision() {
 }
 
 #[test]
+fn backfill_ids_lands_the_canonical_id_beside_the_harness_alias() {
+    // x-52fa: the claude arm wrote only the legacy uuid field; the
+    // canonical harness_session_id stayed None and every consumer
+    // that reads it (portal attach, agents-list join) saw a
+    // session-less row. The write lands both fields.
+    let mut claude = bg_claude_row("w1", "3228ccad");
+    super::report::backfill_ids(&mut claude, "3228ccad-c078-4b53-a8c9-7199b831eae4");
+    assert_eq!(
+        claude.harness_session_id.as_deref(),
+        Some("3228ccad-c078-4b53-a8c9-7199b831eae4"),
+    );
+    assert_eq!(claude.claude_session_uuid, claude.harness_session_id);
+    // Codex keeps its two-field write; gemini rows never reach the
+    // backfill finder, so the else arm stays claude.
+    let mut codex = rentry("cx1", AgentStatus::Live, None);
+    codex.harness = Some("codex".into());
+    super::report::backfill_ids(&codex, "0f0e1d2c-3b4a-4958-8675-3092f4c1b2a3");
+    assert_eq!(
+        codex.harness_session_id.as_deref(),
+        Some("0f0e1d2c-3b4a-4958-8675-3092f4c1b2a3"),
+    );
+    assert_eq!(codex.codex_session_id, codex.harness_session_id);
+}
+
+#[test]
 fn reconcile_flips_unreachable_live_to_orphaned_and_recovers_orphaned() {
     let entries = vec![
         rentry("live-but-gone", AgentStatus::Live, None),
