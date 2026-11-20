@@ -82,7 +82,3 @@ fn aggregate_refuses_when_the_bank_changed_since_the_pin() {
     assert_eq!(out["qualified"], false);
     assert!(out["reason"].as_str().unwrap().contains("bank changed"));
 }
-
-fn obs(extra: serde_json::Value) -> serde_json::Value {
-    json!({ "obs": extra })
-}
