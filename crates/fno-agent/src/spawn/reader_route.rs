@@ -381,7 +381,8 @@ mod tests {
             &[],
         )
         .unwrap_err();
-        assert!(err.0.contains("codex"), "{err}");
-        assert!(err.0.contains("reader_tools_args"), "{err}");
+        let text = err.to_string();
+        assert!(text.contains("codex"), "{text}");
+        assert!(text.contains("reader_tools_args"), "{text}");
     }
 }
