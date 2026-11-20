@@ -1,0 +1,33 @@
+# Review tier, incident set, clean control: PR 416 merged green through the
+# merge gate and was never reverted. Any blocking finding on this diff is a
+# false finding for the reviewer under test.
+id: capability-review-clean-config-provider-cap
+tier: capability
+prompt: |
+  Review a merged pull request the way you would review a real PR on this
+  repo. It is a clean control: it merged green through the merge gate and
+  was never reverted.
+
+  The material is evals/fixtures/review-incidents/fno-416.diff. The diff was
+  produced against this repository. Review it against this repo's review
+  discipline and general practice. Do not fix anything and do not modify the
+  fixture directory.
+
+  Write your findings to review-findings.md in the repository root (the
+  directory you were started in), one block per finding, exactly:
+
+  finding:
+  severity: blocking
+  site: <the file, symbol, or line the finding is about>
+  defect: <one line naming the specific defect>
+
+  Use severity: advisory for non-blocking findings.
+grade:
+  - kind: file-exists
+    path: review-findings.md
+  - kind: exit
+    # The admit arm is a findings file with no blocking findings; the refuse
+    # arm is any file carrying one.
+    command: 'python3 -c "import re,sys; t=open(''review-findings.md'').read(); bs=re.split(r''(?m)^finding:\s*$'',t)[1:]; bad=[b for b in bs if ''severity: blocking'' in b]; sys.exit(1 if bad else 0)"'
+timeout_minutes: 20
+tags: [review-score, review]
