@@ -206,6 +206,8 @@ pub struct Launch {
     /// harness or project step. A harness with no known on-disk layout
     /// lists none, so its prompt autocompletes nothing.
     skills: Vec<Skill>,
+    /// The popover's selected row and Esc state.
+    pick: skills::Pick,
     harnesses: Vec<HarnessRow>,
     projects: Vec<String>,
     pub draft: Draft,
@@ -232,6 +234,7 @@ impl Launch {
             effort: None,
             worktree: false,
             skills: Vec::new(),
+            pick: skills::Pick::default(),
             harnesses: Vec::new(),
             projects: Vec::new(),
             draft: Draft::default(),
@@ -543,43 +546,58 @@ impl Launch {
         self.worktree = !self.worktree;
     }
 
-    /// The query after the picked harness's sigil, if the draft leads
-    /// with one and holds no space yet.
-    fn skill_query(&self) -> Option<&str> {
-        let sigil = skills::sigil(&self.harness)?;
-        self.draft
-            .text()
-            .strip_prefix(sigil)
-            .filter(|q| !q.contains(char::is_whitespace))
-    }
-
-    /// The skills matching the draft's leading query, grouped by source.
-    /// Only the agent kind lists any.
-    pub(crate) fn skill_completions(&self) -> Vec<Skill> {
-        if self.kind != Kind::Agent {
-            return Vec::new();
-        }
-        let Some(q) = self.skill_query() else {
-            return Vec::new();
-        };
-        skills::matching(&self.skills, q, 6)
-            .into_iter()
+    /// The known project whose basename is `base`.
+    pub(crate) fn project_for_base(&self, base: &str) -> Option<String> {
+        self.projects
+            .iter()
+            .find(|p| p.rsplit('/').next() == Some(base))
             .cloned()
-            .collect()
     }
 
-    /// Tab fills the top match as `<sigil>name ` and keeps the row on the
-    /// task. False when nothing shows, so tab keeps moving rows.
-    pub(crate) fn complete_skill(&mut self) -> bool {
-        let (Some(first), Some(sigil)) = (
-            self.skill_completions().into_iter().next(),
-            skills::sigil(&self.harness),
-        ) else {
+    /// The popover for the draft, agent kind only.
+    pub(crate) fn skill_view(&self) -> Option<skills::View> {
+        if self.kind != Kind::Agent {
+            return None;
+        }
+        skills::view(&self.skills, &self.harness, self.draft.text(), &self.pick)
+    }
+
+    /// The skills the popover shows, grouped by source.
+    pub(crate) fn skill_completions(&self) -> Vec<Skill> {
+        self.skill_view().map(|v| v.rows).unwrap_or_default()
+    }
+
+    /// Up or down moves the popover's row. False when none shows, so the
+    /// key keeps moving the caret.
+    pub(crate) fn skill_step(&mut self, down: bool) -> bool {
+        let Some(v) = self.skill_view() else {
             return false;
         };
+        self.pick.step(self.draft.text(), down, v.rows.len());
+        true
+    }
+
+    /// Esc closes the popover until the draft changes. False when none shows.
+    pub(crate) fn skill_close(&mut self) -> bool {
+        if self.skill_view().is_none() {
+            return false;
+        }
+        self.pick.close(self.draft.text());
+        true
+    }
+
+    /// Tab fills the selected row as `<sigil>name ` and keeps the row on
+    /// the task. False when nothing shows, so tab keeps moving rows.
+    pub(crate) fn complete_skill(&mut self) -> bool {
+        let Some(v) = self.skill_view() else {
+            return false;
+        };
+        let (Some(row), Some(sigil)) = (v.rows.get(v.sel), skills::sigil(&self.harness)) else {
+            return false;
+        };
+        let text = format!("{sigil}{} ", row.name);
         self.draft.select_all();
-        self.draft
-            .replace_selection(&format!("{sigil}{} ", first.name));
+        self.draft.replace_selection(&text);
         true
     }
 
@@ -1036,78 +1054,99 @@ fn axis_picker_rows(l: &Launch, p: &Palette, cx: &mut Context<Root>) -> Div {
         ))
 }
 
-/// The agent kind's skill matches under the task box, grouped by source
-/// with a label per group; tab fills the top one. None show unless the
-/// draft leads with the harness's sigil and the harness lists skills.
-pub(crate) fn skill_hints(l: &Launch, p: &Palette) -> Option<Div> {
-    skill_rows(
-        l.skill_completions(),
-        skills::sigil(&l.harness)?,
-        l.draft.text(),
-        p,
-    )
+/// The agent kind's skill popover above the task box; tab fills the
+/// selected row. None shows unless the draft leads with the harness's
+/// sigil and the harness lists skills.
+pub(crate) fn skill_hints(root: &Root) -> Option<Div> {
+    let l = &root.launch.state;
+    skill_popover(l.skill_view()?, root.adv, &root.palette)
 }
 
-/// The grouped popover rows, shared by the start and chat composers. The
-/// name wears the theme ink with the typed prefix in bold; a long
-/// description cuts to one line.
-pub(crate) fn skill_rows(rows: Vec<Skill>, sigil: char, draft: &str, p: &Palette) -> Option<Div> {
-    if rows.is_empty() {
-        return None;
-    }
-    let query = draft.trim_start_matches(sigil).to_lowercase();
-    let mut col = div()
-        .flex()
-        .flex_col()
-        .min_w_0()
-        .overflow_hidden()
-        .px_2()
-        .gap(px(2.0));
+/// The popover card, shared by the start and chat composers. It floats
+/// above its parent, which must be `relative`. Rows group by source, the
+/// typed prefix is bold, the descriptions share one column and end in an
+/// ellipsis, and the footer counts the matches left out.
+pub(crate) fn skill_popover(v: skills::View, adv: Pixels, p: &Palette) -> Option<Div> {
+    let skills::View {
+        rows,
+        more,
+        sel,
+        query,
+    } = v;
+    let width = rows.iter().map(|s| s.name.chars().count()).max()? + 2;
+    let mut col = div().flex().flex_col().gap(px(1.0));
     let mut group = None;
-    for s in rows {
+    for (i, s) in rows.into_iter().enumerate() {
         if group != Some(s.source) {
             group = Some(s.source);
-            col = col.child(ui::text(s.source.label(), Role::Label, p));
+            col = col.child(
+                div()
+                    .px_2()
+                    .pt_1()
+                    .child(ui::text(s.source.label(), Role::Label, p)),
+            );
         }
-        let at = s.name.to_lowercase().find(&query).unwrap_or(0);
-        let hit = at..(at + query.len()).min(s.name.len());
-        let (pre, mid, post) = match (
-            s.name.get(..hit.start),
-            s.name.get(hit.clone()),
-            s.name.get(hit.end..),
-        ) {
-            (Some(a), Some(b), Some(c)) => (a.to_string(), b.to_string(), c.to_string()),
-            _ => (String::new(), String::new(), s.name.clone()),
-        };
-        col = col.child(
-            div()
-                .flex()
-                .flex_row()
-                .min_w_0()
-                .gap(px(8.0))
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .flex_none()
-                        .text_color(rgb(p.fg))
-                        .child(sigil.to_string())
-                        .child(pre)
-                        .child(div().font_weight(FontWeight::BOLD).child(mid))
-                        .child(post),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .text_ellipsis()
-                        .child(ui::text(s.description, Role::Hint, p)),
-                ),
-        );
+        let (pre, mid, post) = skills::split_match(&s.name, &query);
+        let row = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .px_2()
+            .py(px(2.0))
+            .rounded(px(4.0))
+            .when(i == sel, |d| d.bg(rgb(p.row_fill)))
+            .child(
+                div()
+                    .flex_none()
+                    .w(adv * width as f32)
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .flex()
+                    .flex_row()
+                    .text_color(rgb(p.fg))
+                    .child(pre)
+                    .child(div().font_weight(FontWeight::BOLD).child(mid))
+                    .child(post),
+            )
+            .child(ui::clamp(s.description, Role::Hint, p));
+        col = col.child(row);
     }
-    Some(col)
+    let foot = div()
+        .flex()
+        .flex_row()
+        .justify_between()
+        .px_2()
+        .pt_1()
+        .border_t_1()
+        .border_color(rgb(p.border))
+        .child(ui::text(
+            if more > 0 {
+                format!("{more} more matches")
+            } else {
+                String::new()
+            },
+            Role::Hint,
+            p,
+        ))
+        .child(ui::text("tab inserts · esc closes", Role::Hint, p));
+    Some(
+        div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .bottom(gpui::relative(1.0))
+            .mb(px(6.0))
+            .flex()
+            .flex_col()
+            .gap(px(2.0))
+            .p_1()
+            .rounded(px(8.0))
+            .border_1()
+            .border_color(rgb(p.border))
+            .bg(rgb(p.raised))
+            .child(col)
+            .child(foot),
+    )
 }
 
 /// The lead kind's epic picker under the filter box: up to six matches,

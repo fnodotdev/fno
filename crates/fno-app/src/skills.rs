@@ -104,7 +104,7 @@ fn read_root(root: &Path, source: Source, plugin: &str, out: &mut Vec<Skill>) {
     };
     for e in entries.flatten() {
         let md = e.path().join("SKILL.md");
-        let Ok(text) = std::fs::read_to_string(&md) else {
+        let Some(text) = read_head(&md) else {
             continue;
         };
         let Some(dir) = e.file_name().to_str().map(str::to_string) else {
@@ -123,34 +123,143 @@ fn read_root(root: &Path, source: Source, plugin: &str, out: &mut Vec<Skill>) {
     }
 }
 
-/// The frontmatter `description:` as one line; empty when absent.
+/// The first 4 KiB of a SKILL.md: the frontmatter is all the popover reads.
+fn read_head(path: &Path) -> Option<String> {
+    use std::io::Read;
+    let mut buf = Vec::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(4096)
+        .read_to_end(&mut buf)
+        .ok()?;
+    Some(String::from_utf8_lossy(&buf).into_owned())
+}
+
+/// The frontmatter `description:` as one line; empty when absent. A YAML
+/// block scalar (`>` or `|`) reads as its first indented line.
 fn description(text: &str) -> String {
     let mut lines = text.lines();
     if lines.next().map(str::trim) != Some("---") {
         return String::new();
     }
+    let mut found = false;
     for line in lines {
         if line.trim() == "---" {
             break;
         }
+        if found {
+            let t = line.trim();
+            if !t.is_empty() {
+                return t.to_string();
+            }
+            continue;
+        }
         if let Some(v) = line.strip_prefix("description:") {
-            return v.trim().trim_matches(|c| c == '"' || c == '\'').to_string();
+            let v = v.trim();
+            if matches!(v, ">" | "|" | ">-" | "|-") {
+                found = true;
+                continue;
+            }
+            return v.trim_matches(|c| c == '"' || c == '\'').to_string();
         }
     }
     String::new()
 }
 
-/// Skills whose name contains the query (case-insensitive), prefix hits
-/// first, then the grouped order `list` returns. At most `max` rows.
-pub(crate) fn matching<'a>(skills: &'a [Skill], query: &str, max: usize) -> Vec<&'a Skill> {
+/// Rows the popover shows at most.
+pub(crate) const SHOWN: usize = 7;
+
+/// Skills whose name contains the query (case-insensitive), grouped by
+/// source with prefix hits first inside a group.
+pub(crate) fn matching<'a>(skills: &'a [Skill], query: &str) -> Vec<&'a Skill> {
     let q = query.to_lowercase();
     let mut hits: Vec<&Skill> = skills
         .iter()
         .filter(|s| s.name.to_lowercase().contains(&q))
         .collect();
     hits.sort_by_key(|s| (s.source, !s.name.to_lowercase().starts_with(&q)));
-    hits.truncate(max);
     hits
+}
+
+/// A name split around its first match of `query`: before, match, after.
+pub(crate) fn split_match(name: &str, query: &str) -> (String, String, String) {
+    let at = name.to_lowercase().find(query).unwrap_or(0);
+    let end = (at + query.len()).min(name.len());
+    match (name.get(..at), name.get(at..end), name.get(end..)) {
+        (Some(a), Some(b), Some(c)) => (a.into(), b.into(), c.into()),
+        _ => (String::new(), String::new(), name.into()),
+    }
+}
+
+/// The popover's pick state: the selected row, and the draft text Esc
+/// closed it at. A changed draft resets the row and reopens the popover.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Pick {
+    sel: usize,
+    seen: String,
+    closed_at: Option<String>,
+}
+
+impl Pick {
+    fn sel_at(&self, draft: &str, shown: usize) -> usize {
+        if self.seen == draft {
+            self.sel.min(shown.saturating_sub(1))
+        } else {
+            0
+        }
+    }
+
+    pub(crate) fn step(&mut self, draft: &str, down: bool, shown: usize) {
+        if shown == 0 {
+            return;
+        }
+        let at = self.sel_at(draft, shown);
+        self.seen = draft.to_string();
+        self.sel = if down {
+            (at + 1) % shown
+        } else {
+            (at + shown - 1) % shown
+        };
+    }
+
+    pub(crate) fn close(&mut self, draft: &str) {
+        self.closed_at = Some(draft.to_string());
+    }
+}
+
+/// What the popover shows for a draft.
+pub(crate) struct View {
+    pub(crate) rows: Vec<Skill>,
+    pub(crate) more: usize,
+    pub(crate) sel: usize,
+    /// The typed query, lowercased: the bold span in each name.
+    pub(crate) query: String,
+}
+
+/// The popover for `draft` on `harness`: `None` when the draft holds no
+/// leading `<sigil>query`, the query has a space, nothing matches, or Esc
+/// closed it at this text.
+pub(crate) fn view(skills: &[Skill], harness: &str, draft: &str, pick: &Pick) -> Option<View> {
+    let sigil = sigil(harness)?;
+    let q = draft
+        .strip_prefix(sigil)
+        .filter(|q| !q.contains(char::is_whitespace))?;
+    if pick.closed_at.as_deref() == Some(draft) {
+        return None;
+    }
+    let all = matching(skills, q);
+    if all.is_empty() {
+        return None;
+    }
+    let more = all.len().saturating_sub(SHOWN);
+    let rows: Vec<Skill> = all.into_iter().take(SHOWN).cloned().collect();
+    let sel = pick.sel_at(draft, rows.len());
+    Some(View {
+        rows,
+        more,
+        sel,
+        query: q.to_lowercase(),
+    })
 }
 
 #[cfg(test)]
@@ -245,5 +354,41 @@ mod tests {
             .map(|s| s.name.clone())
             .collect();
         assert_eq!(got, vec!["fno-doc", "my-fno"]);
+    }
+
+    #[test]
+    fn the_popover_steps_closes_and_reopens_on_a_new_draft() {
+        let mk = |n: &str| Skill {
+            source: Source::User,
+            name: n.into(),
+            description: String::new(),
+        };
+        let all = vec![mk("fno-a"), mk("fno-b"), mk("fno-c")];
+        let mut pick = Pick::default();
+        assert_eq!(view(&all, "claude", "/fno", &pick).unwrap().sel, 0);
+        pick.step("/fno", true, 3);
+        assert_eq!(view(&all, "claude", "/fno", &pick).unwrap().sel, 1);
+        pick.step("/fno", false, 3);
+        pick.step("/fno", false, 3);
+        assert_eq!(view(&all, "claude", "/fno", &pick).unwrap().sel, 2);
+        // A longer draft resets the row; a space ends the query.
+        assert_eq!(view(&all, "claude", "/fno-", &pick).unwrap().sel, 0);
+        assert!(view(&all, "claude", "/fno ", &pick).is_none());
+        pick.close("/fno");
+        assert!(view(&all, "claude", "/fno", &pick).is_none());
+        assert!(view(&all, "claude", "/fno-", &pick).is_some());
+    }
+
+    #[test]
+    fn the_view_counts_the_matches_it_leaves_out() {
+        let all: Vec<Skill> = (0..SHOWN + 3)
+            .map(|i| Skill {
+                source: Source::User,
+                name: format!("fno-{i}"),
+                description: String::new(),
+            })
+            .collect();
+        let v = view(&all, "claude", "/fno", &Pick::default()).unwrap();
+        assert_eq!((v.rows.len(), v.more), (SHOWN, 3));
     }
 }

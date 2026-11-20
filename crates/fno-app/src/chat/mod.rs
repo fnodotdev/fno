@@ -161,9 +161,10 @@ pub struct Chat {
     pub next_request: u64,
     /// The composer's bounds at the last paint, where the IME window opens.
     pub composer: Rc<Cell<Bounds<Pixels>>>,
-    /// The shown session's harness skills, read on a switch. User and
-    /// plugin roots only: the chat holds no project path.
+    /// The shown session's harness skills, read on a switch.
     pub skills: Vec<crate::skills::Skill>,
+    /// The popover's selected row and Esc state.
+    pub pick: crate::skills::Pick,
 }
 
 impl Default for Chat {
@@ -183,13 +184,14 @@ impl Default for Chat {
             next_request: 1,
             composer: Rc::new(Cell::new(Bounds::default())),
             skills: Vec::new(),
+            pick: crate::skills::Pick::default(),
         }
     }
 }
 
 impl Chat {
     /// Show `key`, parking the conversation shown now.
-    pub fn switch(&mut self, key: Option<SessionKey>) {
+    pub fn switch(&mut self, key: Option<SessionKey>, project: &str) {
         let conv = key
             .as_ref()
             .and_then(|k| self.parked.remove(k))
@@ -200,7 +202,7 @@ impl Chat {
         }
         self.skills = key
             .as_ref()
-            .map(|k| crate::skills::list(&k.harness, ""))
+            .map(|k| crate::skills::list(&k.harness, project))
             .unwrap_or_default();
         self.key = key;
         self.stream = None;
@@ -211,44 +213,45 @@ impl Chat {
         self.list.reset(self.conv.items.len());
     }
 
-    /// The skills the draft's leading `<sigil>query` matches, grouped by
-    /// source. Empty once the draft holds a space or the harness has no
-    /// sigil.
-    pub fn skill_hits(&self) -> Vec<crate::skills::Skill> {
-        let Some(sigil) = self
-            .key
-            .as_ref()
-            .and_then(|k| crate::skills::sigil(&k.harness))
-        else {
-            return Vec::new();
-        };
-        let Some(q) = self
-            .draft
-            .text()
-            .strip_prefix(sigil)
-            .filter(|q| !q.contains(char::is_whitespace))
-        else {
-            return Vec::new();
-        };
-        crate::skills::matching(&self.skills, q, 6)
-            .into_iter()
-            .cloned()
-            .collect()
+    /// The popover for the draft, grouped by source.
+    pub fn skill_view(&self) -> Option<crate::skills::View> {
+        let harness = &self.key.as_ref()?.harness;
+        crate::skills::view(&self.skills, harness, self.draft.text(), &self.pick)
     }
 
-    /// Tab fills the top match as `<sigil>name `. False when none show.
-    pub fn complete_skill(&mut self) -> bool {
-        let (Some(first), Some(sigil)) = (
-            self.skill_hits().into_iter().next(),
-            self.key
-                .as_ref()
-                .and_then(|k| crate::skills::sigil(&k.harness)),
-        ) else {
+    /// Up or down moves the popover's row. False when none shows.
+    pub fn skill_step(&mut self, down: bool) -> bool {
+        let Some(v) = self.skill_view() else {
             return false;
         };
+        self.pick.step(self.draft.text(), down, v.rows.len());
+        true
+    }
+
+    /// Esc closes the popover until the draft changes. False when none shows.
+    pub fn skill_close(&mut self) -> bool {
+        if self.skill_view().is_none() {
+            return false;
+        }
+        self.pick.close(self.draft.text());
+        true
+    }
+
+    /// Tab fills the selected row as `<sigil>name `. False when none shows.
+    pub fn complete_skill(&mut self) -> bool {
+        let Some(v) = self.skill_view() else {
+            return false;
+        };
+        let sigil = self
+            .key
+            .as_ref()
+            .and_then(|k| crate::skills::sigil(&k.harness));
+        let (Some(row), Some(sigil)) = (v.rows.get(v.sel), sigil) else {
+            return false;
+        };
+        let text = format!("{sigil}{} ", row.name);
         self.draft.select_all();
-        self.draft
-            .replace_selection(&format!("{sigil}{} ", first.name));
+        self.draft.replace_selection(&text);
         true
     }
 

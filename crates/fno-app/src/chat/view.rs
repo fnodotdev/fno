@@ -856,6 +856,7 @@ fn composer(root: &Root, window: &Window, cx: &mut Context<Root>) -> Option<Div>
         .child(ui::kbd("⇧⏎", &p))
         .child(ui::text("new line", Role::Hint, &p));
     let mut bar = div()
+        .relative()
         .flex()
         .flex_col()
         .px_3()
@@ -873,15 +874,12 @@ fn composer(root: &Root, window: &Window, cx: &mut Context<Root>) -> Option<Div>
                 .child(format!("[img {} KB]", att.bytes.len() / 1024)),
         );
     }
-    let sigil = root
+    if let Some(pop) = root
         .chat
-        .key
-        .as_ref()
-        .and_then(|k| crate::skills::sigil(&k.harness));
-    if let Some(rows) = sigil.and_then(|c| {
-        crate::launch::skill_rows(root.chat.skill_hits(), c, root.chat.draft.text(), &p)
-    }) {
-        bar = bar.child(rows.pb_2());
+        .skill_view()
+        .and_then(|v| crate::launch::skill_popover(v, root.adv, &p))
+    {
+        bar = bar.child(pop);
     }
     bar = bar.child(
         div()
