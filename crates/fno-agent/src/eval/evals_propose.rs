@@ -600,7 +600,7 @@ pub(crate) fn assert_ledger(
                 "count_mismatch: a row in {cohort} carries no attempt id"
             )));
         }
-        if !seen.insert(id) {
+        if !seen.insert(id.clone()) {
             return Err(ProposeError::Ledger(format!(
                 "count_mismatch: duplicate attempt id {id:?}"
             )));
