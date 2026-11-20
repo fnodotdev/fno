@@ -431,7 +431,9 @@ pub(crate) fn history_append_locked(
 /// outage.
 pub(crate) fn history_all(store_path: &Path) -> Result<Vec<NameHistoryEntry>, String> {
     let mut rows = local_rows(store_path)?;
-    let (shared, _notice) = crate::name_ledger::read_merged_or_mirror(store_path, &rows)?;
+    let remote = crate::name_ledger::primary(store_path)?;
+    let (shared, _notice) =
+        crate::name_ledger::read_merged_or_mirror(remote.as_ref(), store_path, &rows);
     rows.extend(shared);
     Ok(rows)
 }

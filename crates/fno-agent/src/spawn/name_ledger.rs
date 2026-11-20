@@ -49,10 +49,14 @@ pub(crate) fn route_to_primary(route: Option<Remote>) {
     TEST_PRIMARY.with(|p| *p.borrow_mut() = route);
 }
 
-/// The primary that holds the ledger for `store_path`. Only the shared
-/// `$HOME/.fno/agents` store dials out, so a test or scratch home never
-/// writes a name into the fleet's ledger.
-fn primary(store_path: &Path) -> Result<Option<Remote>, String> {
+/// The primary that holds the ledger for `name_ledger`'s reads. Only the
+/// shared `$HOME/.fno/agents` store dials out, so a test or scratch home
+/// never writes a name into the fleet's ledger. `pub(crate)` so the naming
+/// ceremony resolves the primary itself and holds the malformed-config
+/// refusal at its own existing string-error signature, while the outage
+/// degrade stays a plain tuple (the R6 ratchet holds string-error results
+/// shrink-only).
+pub(crate) fn primary(store_path: &Path) -> Result<Option<Remote>, String> {
     #[cfg(test)]
     {
         let _ = store_path;
@@ -212,27 +216,29 @@ fn merge_tail(
 /// [`read_merged`] with the outage degrade the naming ceremony runs on: an
 /// unreadable primary answers the caller's own rows and returns the one-line
 /// notice, so the beat runs instead of dying on a read that only feeds the
-/// never-reuse judge. A malformed `store.remote_url` still refuses: a typo
-/// never falls back to the mirror in silence.
+/// never-reuse judge. `remote` comes from [`primary`] at the caller, which
+/// holds the malformed-`store.remote_url` refusal at its own `Result`: a
+/// typo never falls back to the mirror in silence.
 pub(crate) fn read_merged_or_mirror(
+    remote: Option<&Remote>,
     store_path: &Path,
     local: &[NameHistoryEntry],
-) -> Result<(Vec<NameHistoryEntry>, Option<String>), String> {
-    let Some(remote) = primary(store_path)? else {
-        return Ok((Vec::new(), None));
+) -> (Vec<NameHistoryEntry>, Option<String>) {
+    let Some(remote) = remote else {
+        return (Vec::new(), None);
     };
-    let shared = match select_all(&remote) {
-        Ok(rows) => merge_tail(&remote, store_path, rows, local),
+    let shared = match select_all(remote) {
+        Ok(rows) => merge_tail(remote, store_path, rows, local),
         Err(error) => {
             let notice = format!(
                 "name ledger at {} is offline; this naming decision is judged against this machine's cached names until it returns ({error})",
                 remote.url()
             );
             notice_once(&notice);
-            return Ok((Vec::new(), Some(notice)));
+            return (Vec::new(), Some(notice));
         }
     };
-    Ok((shared, None))
+    (shared, None)
 }
 
 /// The offline notice prints once per process: one naming ceremony makes
