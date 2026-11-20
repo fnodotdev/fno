@@ -23,7 +23,11 @@ use serde::{Deserialize, Serialize};
 
 use super::alerts;
 use super::alerts::Signal;
-use super::chat::{self, composer::Attachment, Chat};
+use super::chat::{
+    self,
+    composer::{Attachment, Draft},
+    Chat,
+};
 use super::goto;
 use super::grid::{Metrics, PaneView};
 use super::hq::{Poller, Reply};
@@ -76,6 +80,8 @@ pub enum Action {
     SendChat,
     /// Reopen a chat stream that closed.
     Reconnect,
+    /// Route one HQ composer message to the owning lead.
+    Mail(String),
     /// Open the launch composer, with a kind pre-picked when the opener
     /// named one; `None` keeps the retained draft's kind.
     OpenLaunch(Option<launch::Kind>),
@@ -97,6 +103,7 @@ fn click_id(action: &Action) -> &'static str {
         Action::Copy(_) => "copy",
         Action::SendChat => "send_chat",
         Action::Reconnect => "reconnect",
+        Action::Mail(_) => "mail_lead",
         Action::OpenLaunch(_) => "open_launch",
     }
 }
@@ -107,6 +114,15 @@ fn click_id(action: &Action) -> &'static str {
 pub enum AnswerState {
     Sending(u32),
     Done(u32),
+    Refused(String),
+}
+
+/// Where the HQ composer's send stands.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MailState {
+    Sending,
+    /// The porcelain's own verdict line.
+    Sent(String),
     Refused(String),
 }
 
@@ -142,7 +158,7 @@ pub struct Root {
     /// The content size (rows, cols) last sent to the server.
     sent_size: (u16, u16),
     pub(super) board: Board,
-    poller: Option<Poller>,
+    pub(super) poller: Option<Poller>,
     /// The terminal area's bounds at the last paint, for mouse hit tests.
     area: Rc<Cell<Bounds<Pixels>>>,
     /// The pane a left-button drag started in.
@@ -154,6 +170,9 @@ pub struct Root {
     /// The pane the wheel remainder belongs to.
     wheel_pane: Option<u64>,
     pub(super) answers: HashMap<String, AnswerState>,
+    /// The composer's draft and its send state.
+    pub(super) board_draft: Draft,
+    pub(super) mail: Option<MailState>,
     pub(super) agents_open: bool,
     pub(super) chat: Chat,
     /// `--chat <id>`: the session chat mode shows, whatever has focus.
@@ -292,6 +311,8 @@ impl Root {
             wheel: 0.0,
             wheel_pane: None,
             answers: HashMap::new(),
+            board_draft: Default::default(),
+            mail: None,
             agents_open,
             light,
             theme_cwd: theme_cwd.clone(),
@@ -636,6 +657,17 @@ impl Root {
             }
             Action::SendChat => self.submit_chat(cx),
             Action::Reconnect => self.open_chat(cx),
+            Action::Mail(text) => match &self.poller {
+                Some(poller) => {
+                    if poller.mail(text) {
+                        self.mail = Some(MailState::Sending);
+                    } else {
+                        self.mail = Some(MailState::Refused("the board poll stopped".into()));
+                    }
+                    cx.notify();
+                }
+                None => self.say("no board poll: cannot mail".into(), cx),
+            },
             Action::OpenLaunch(kind) => self.open_launch(kind, cx),
         }
         cx.notify();
@@ -1007,6 +1039,13 @@ impl Root {
             }
             Reply::Refused { id, why } => {
                 self.answers.insert(id, AnswerState::Refused(why));
+            }
+            Reply::Mailed { ok, text } => {
+                self.mail = Some(match ok {
+                    true => MailState::Sent(text.clone()),
+                    false => MailState::Refused(text.clone()),
+                });
+                self.say(text, cx);
             }
         }
         cx.notify();
@@ -1744,20 +1783,9 @@ impl Root {
             cx.stop_propagation();
             return;
         }
-        // Esc under a seam drag puts the split back where it was grabbed.
         // After chord: with the key sheet open, esc closes the sheet first.
-        if key.key == "escape" {
-            if let Some(drag) = self.seam_drag.take() {
-                cx.stop_propagation();
-                if drag.last_pos != drag.start_pos {
-                    self.send(ClientMsg::Command(Command::ResizeSeam {
-                        a: drag.seam.a,
-                        b: drag.seam.b,
-                        pos: drag.start_pos,
-                    }));
-                }
-                return;
-            }
+        if key.key == "escape" && self.seam_escape(cx) {
+            return;
         }
         // The composer is modal: its keys never reach the pane behind it,
         // and its text keys still compose through the input handler.
@@ -1778,6 +1806,10 @@ impl Root {
             self.chat_key(&key, window, cx);
             return;
         }
+        if self.main == MainView::Orchestration {
+            orchestration::key(self, &key, cx);
+            return;
+        }
         if self.main == MainView::Mods && mods::key(self, &key, cx) {
             cx.stop_propagation();
             return;
@@ -1794,6 +1826,23 @@ impl Root {
             }
             self.send(ClientMsg::Input(bytes));
         }
+    }
+
+    /// Esc under a seam drag puts the split back where it was grabbed.
+    /// True when a live drag consumed the escape.
+    fn seam_escape(&mut self, cx: &mut Context<Self>) -> bool {
+        if let Some(drag) = self.seam_drag.take() {
+            cx.stop_propagation();
+            if drag.last_pos != drag.start_pos {
+                self.send(ClientMsg::Command(Command::ResizeSeam {
+                    a: drag.seam.a,
+                    b: drag.seam.b,
+                    pos: drag.start_pos,
+                }));
+            }
+            return true;
+        }
+        false
     }
 
     /// One cmd shortcut lands.
@@ -1847,7 +1896,7 @@ impl Root {
     }
 
     /// The paste shortcut: into the open find bar first, then the mods
-    /// sheet, the chat draft, or the focused pane.
+    /// sheet, the chat draft, the board composer, or the focused pane.
     fn paste(&mut self, cx: &mut Context<Self>) {
         let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) else {
             return;
@@ -1863,6 +1912,10 @@ impl Root {
             MainView::Chat => {
                 self.chat.draft.replace_selection(&text);
                 self.chat_moved(cx);
+            }
+            MainView::Orchestration => {
+                self.board_draft.replace_selection(&text);
+                cx.notify();
             }
             _ => {
                 let bytes = keys::paste(&text, self.modes);

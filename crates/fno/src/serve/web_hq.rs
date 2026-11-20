@@ -30,9 +30,10 @@ pub struct OpenQuestion {
     node_origin: Option<crate::backlog_model::OriginSession>,
 }
 
-/// The command center board: the fleet fold, the open questions and the open
-/// PRs. The bridge's `/hq/model.json` and the desktop app both build it here,
-/// so the two never show different seats or questions.
+/// The command center board: the fleet fold, the open questions, the open
+/// PRs and the ready queue. The bridge's `/hq/model.json` and the desktop
+/// app both build it here, so the two never show different seats or
+/// questions.
 #[derive(Default, Clone)]
 pub struct Board {
     /// The fold, its machines as JSON, and when it was read.
@@ -45,6 +46,11 @@ pub struct Board {
     prs: Vec<Value>,
     /// The last backlog read failed; `prs` is the last good list.
     prs_error: Option<String>,
+    /// The ready, unclaimed rows in keeper order, folded beside `prs` from
+    /// the same read.
+    next: Vec<Value>,
+    /// The last backlog read failed; `next` is the last good list.
+    next_error: Option<String>,
     read_at: Option<Instant>,
 }
 
@@ -114,8 +120,14 @@ impl Board {
             Err(reason) => self.questions_error = Some(reason),
         }
         match &backlog.rows_error {
-            Some(reason) => self.prs_error = Some(reason.clone()),
-            None => (self.prs, self.prs_error) = (open_prs(backlog), None),
+            Some(reason) => {
+                self.prs_error = Some(reason.clone());
+                self.next_error = Some(reason.clone());
+            }
+            None => {
+                (self.prs, self.prs_error) = (open_prs(backlog), None);
+                (self.next, self.next_error) = (next_nodes(backlog), None);
+            }
         }
         self.read_at = Some(now);
     }
@@ -161,10 +173,23 @@ impl Board {
         }
     }
 
+    /// The ready, unclaimed backlog rows in keeper order, folded from the
+    /// same read the PRs fold from.
+    pub fn next(&self) -> &[Value] {
+        &self.next
+    }
+
+    /// Why the newest backlog read failed, or that none has run.
+    pub fn next_error(&self) -> Option<&str> {
+        self.next_error.as_deref()
+    }
+
     pub fn model(&self) -> Value {
         let mut waiting = serde_json::Map::new();
         waiting.insert("prs".into(), json!(self.prs));
         waiting.insert("prs_error".into(), json!(self.prs_error));
+        waiting.insert("next".into(), json!(self.next));
+        waiting.insert("next_error".into(), json!(self.next_error));
         match self.questions_error() {
             Some(reason) => waiting.insert("questions_error".into(), json!(reason)),
             None => {
@@ -307,6 +332,46 @@ fn open_prs(backlog: &Inputs) -> Vec<Value> {
                     json!({"node": text(&row.id), "title": text(&row.title), "number": number,
                     "url": url, "merge_status": merge_status})
                 })
+        })
+        .collect()
+}
+
+/// The ready, unclaimed rows in the keeper's selection order: what the board
+/// could dispatch next. Claimed rows already show as seat work, so the
+/// `underway` set drops them here.
+fn next_nodes(backlog: &Inputs) -> Vec<Value> {
+    let text = |v: &Option<String>| v.clone().filter(|s| !s.is_empty());
+    let rank = |id: &Option<String>| {
+        id.as_deref()
+            .and_then(|named| backlog.order.iter().position(|o| o == named))
+            .unwrap_or(usize::MAX)
+    };
+    let mut rows: Vec<&crate::node_row::NodeRow> = backlog
+        .rows
+        .iter()
+        .filter(|row| {
+            row.status.as_ref() == Some(&crate::node_row::Status::Ready)
+                && row
+                    .id
+                    .as_deref()
+                    .is_some_and(|id| !backlog.underway.contains(id))
+        })
+        .collect();
+    // A stable sort keeps the gather order for ids the keeper did not name.
+    rows.sort_by_key(|row| rank(&row.id));
+    rows.iter()
+        .map(|row| {
+            let priority = backlog
+                .effective_priority
+                .get(row.id.as_deref().unwrap_or_default())
+                .cloned()
+                .filter(|p| !p.is_empty())
+                .or_else(|| text(&row.priority));
+            json!({
+                "id": text(&row.id),
+                "title": text(&row.title),
+                "priority": priority,
+            })
         })
         .collect()
 }
@@ -479,5 +544,68 @@ mod tests {
         let m = cache.model().await;
         assert_eq!(m["waiting"]["prs"].as_array().map(Vec::len), Some(2));
         assert_eq!(m["waiting"]["prs_error"], "graph locked");
+    }
+
+    #[tokio::test]
+    async fn next_folds_ready_unclaimed_rows_in_keeper_order() {
+        let cache = HqCache::default();
+        let rows = vec![
+            json!({"id": "x-3", "status": "ready", "title": "third", "priority": "p1"}),
+            json!({"id": "x-1", "status": "ready", "title": "first"}),
+            json!({"id": "x-2", "status": "ready", "title": "claimed"}),
+            json!({"id": "x-4", "status": "in_progress", "title": "active"}),
+        ];
+        let backlog = Inputs {
+            rows: crate::node_row::rows_from_values(rows),
+            order: vec!["x-1".into(), "x-3".into(), "x-2".into()],
+            underway: ["x-2".to_string()].into_iter().collect(),
+            effective_priority: [("x-1".to_string(), "p0".to_string())]
+                .into_iter()
+                .collect(),
+            ..Inputs::default()
+        };
+        cache
+            .board()
+            .await
+            .record(Ok(two_machines()), Ok(questions(&[None])), &backlog, 1, &[]);
+        let m = cache.model().await;
+        assert_eq!(
+            m.pointer("/waiting/next"),
+            Some(&json!([
+                {"id": "x-1", "title": "first", "priority": "p0"},
+                {"id": "x-3", "title": "third", "priority": "p1"},
+            ]))
+        );
+        assert_eq!(m.pointer("/waiting/next_error"), Some(&Value::Null));
+    }
+
+    #[tokio::test]
+    async fn a_failed_backlog_read_keeps_the_last_good_next_and_names_the_reason() {
+        let cache = HqCache::default();
+        let rows = vec![json!({"id": "x-1", "status": "ready", "title": "first"})];
+        let good = Inputs {
+            rows: crate::node_row::rows_from_values(rows),
+            ..Inputs::default()
+        };
+        cache
+            .board()
+            .await
+            .record(Ok(two_machines()), Ok(questions(&[])), &good, 1, &[]);
+        let locked = Inputs {
+            rows_error: Some("graph locked".into()),
+            ..Inputs::default()
+        };
+        cache
+            .board()
+            .await
+            .record(Err("x".into()), Err("x".into()), &locked, 2, &[]);
+        let board = cache.board().await;
+        assert_eq!(board.next_error(), Some("graph locked"));
+        let ids: Vec<&str> = board
+            .next()
+            .iter()
+            .filter_map(|row| row["id"].as_str())
+            .collect();
+        assert_eq!(ids, ["x-1"]);
     }
 }

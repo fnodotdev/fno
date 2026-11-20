@@ -14,8 +14,12 @@
 //! machine's older names migrate on its first naming read or daemon sweep.
 //! The sweep also lands the primary's rows in the local file, so a peer's
 //! bound name resolves here without a dial-out. A configured primary that
-//! cannot be read refuses the naming decision: a name judged fresh on half
-//! the fleet's history is the bug this closes.
+//! cannot be read refuses the sweep's sync read (its caller retries); the
+//! naming read degrades to this machine's mirror with one stderr line, so
+//! one offline machine cannot blind the lead beat. The mirror holds every
+//! name the fleet's history had at the last sweep; a peer's name bound
+//! during the outage can slip through, and the degrade is the trade the
+//! 2026-11-19 r2d2 outage asked for.
 
 use crate::store_remote::{Remote, SqlValue};
 use crate::team_names::NameHistoryEntry;
@@ -45,10 +49,14 @@ pub(crate) fn route_to_primary(route: Option<Remote>) {
     TEST_PRIMARY.with(|p| *p.borrow_mut() = route);
 }
 
-/// The primary that holds the ledger for `store_path`. Only the shared
-/// `$HOME/.fno/agents` store dials out, so a test or scratch home never
-/// writes a name into the fleet's ledger.
-fn primary(store_path: &Path) -> Result<Option<Remote>, String> {
+/// The primary that holds the ledger for `name_ledger`'s reads. Only the
+/// shared `$HOME/.fno/agents` store dials out, so a test or scratch home
+/// never writes a name into the fleet's ledger. `pub(crate)` so the naming
+/// ceremony resolves the primary itself and holds the malformed-config
+/// refusal at its own existing string-error signature, while the outage
+/// degrade stays a plain tuple (the R6 ratchet holds string-error results
+/// shrink-only).
+pub(crate) fn primary(store_path: &Path) -> Result<Option<Remote>, String> {
     #[cfg(test)]
     {
         let _ = store_path;
@@ -184,15 +192,62 @@ pub(crate) fn read_merged(
         )
     };
     let shared = select_all(&remote).map_err(refuse)?;
-    // A failed push still answers the read: the shared rows plus the
-    // caller's own local rows cover every name this decision needs.
-    if let Err(e) = push_missing(&remote, &shared, local) {
+    Ok(merge_tail(&remote, store_path, shared, local))
+}
+
+/// The push/pull both reads run after an answered select: a failed push
+/// still answers the read, the shared rows plus the caller's own local rows
+/// cover every name this decision needs.
+fn merge_tail(
+    remote: &Remote,
+    store_path: &Path,
+    shared: Vec<NameHistoryEntry>,
+    local: &[NameHistoryEntry],
+) -> Vec<NameHistoryEntry> {
+    if let Err(e) = push_missing(remote, &shared, local) {
         eprintln!("name ledger: backfill to {} failed ({e})", remote.url());
     }
     if let Err(e) = pull_missing(store_path, &shared, local) {
         eprintln!("name ledger: pull from {} failed ({e})", remote.url());
     }
-    Ok(shared)
+    shared
+}
+
+/// [`read_merged`] with the outage degrade the naming ceremony runs on: an
+/// unreadable primary answers the caller's own rows and returns the one-line
+/// notice, so the beat runs instead of dying on a read that only feeds the
+/// never-reuse judge. `remote` comes from [`primary`] at the caller, which
+/// holds the malformed-`store.remote_url` refusal at its own `Result`: a
+/// typo never falls back to the mirror in silence.
+pub(crate) fn read_merged_or_mirror(
+    remote: Option<&Remote>,
+    store_path: &Path,
+    local: &[NameHistoryEntry],
+) -> (Vec<NameHistoryEntry>, Option<String>) {
+    let Some(remote) = remote else {
+        return (Vec::new(), None);
+    };
+    let shared = match select_all(remote) {
+        Ok(rows) => merge_tail(remote, store_path, rows, local),
+        Err(error) => {
+            let notice = format!(
+                "name ledger at {} is offline; this naming decision is judged against this machine's cached names until it returns ({error})",
+                remote.url()
+            );
+            notice_once(&notice);
+            return (Vec::new(), Some(notice));
+        }
+    };
+    (shared, None)
+}
+
+/// The offline notice prints once per process: one naming ceremony makes
+/// several ledger reads, and the beat's contract is one line.
+fn notice_once(notice: &str) {
+    static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        eprintln!("name ledger: {notice}");
+    }
 }
 
 /// Push every local row the primary lacks, and land the primary's rows this
@@ -277,8 +332,9 @@ mod tests {
 
     /// Two tempdir stores play the MacBook and the iMac on one primary. A
     /// name one machine bound refuses on the other, naming who and when; a
-    /// row written before the ledger existed lands on the first sync; and an
-    /// unreachable primary refuses the read instead of answering "no names".
+    /// row written before the ledger existed lands on the first sync; the
+    /// sync read refuses on an unreachable primary while the naming read
+    /// degrades to the mirror and still answers.
     #[test]
     fn a_name_used_on_one_machine_is_refused_on_the_other() {
         let macbook = tempfile::tempdir().unwrap();
@@ -329,8 +385,24 @@ mod tests {
             .contains("odile"));
 
         route_to_primary(Some(crate::store_remote::test_primary::dead()));
-        let err = team_names::history_names(&mac_store).unwrap_err();
+        // The sync-side read refuses on an outage; the naming read degrades
+        // to the mirror and still answers with this machine's rows, one
+        // notice in hand.
+        let err = read_merged(&mac_store, &[]).unwrap_err();
         assert!(err.contains("cannot be read"), "{err}");
+        let dead = crate::store_remote::test_primary::dead();
+        let (rows, notice) = read_merged_or_mirror(Some(&dead), &mac_store, &[]);
+        assert!(rows.is_empty());
+        let notice = notice.expect("the dead primary answers the one-line notice");
+        assert!(
+            notice.contains("offline") && notice.contains("cached names"),
+            "{notice}"
+        );
+        let names = team_names::history_names(&mac_store).unwrap();
+        assert!(
+            names.contains("rowan") && names.contains("odile"),
+            "{names:?}"
+        );
         route_to_primary(None);
     }
 
