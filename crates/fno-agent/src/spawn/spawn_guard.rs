@@ -95,7 +95,7 @@ fn decide_with_occupancy(
             let named = crate::store_remote::configured()
                 .ok()
                 .flatten()
-                .map(|remote| format!("{} ({})", remote.host(), remote.url()))
+                .map(|remote| remote.host().to_string())
                 .unwrap_or_else(|| "the claims primary".to_string());
             let detail = format!(
                 "{node_key} claim is unreadable: {error}; not dispatching. {named} is down, so \

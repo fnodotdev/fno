@@ -188,15 +188,25 @@ pub(crate) fn read_merged(
         )
     };
     let shared = select_all(&remote).map_err(refuse)?;
-    // A failed push still answers the read: the shared rows plus the
-    // caller's own local rows cover every name this decision needs.
-    if let Err(e) = push_missing(&remote, &shared, local) {
+    Ok(merge_tail(&remote, store_path, shared, local))
+}
+
+/// The push/pull both reads run after an answered select: a failed push
+/// still answers the read, the shared rows plus the caller's own local rows
+/// cover every name this decision needs.
+fn merge_tail(
+    remote: &Remote,
+    store_path: &Path,
+    shared: Vec<NameHistoryEntry>,
+    local: &[NameHistoryEntry],
+) -> Vec<NameHistoryEntry> {
+    if let Err(e) = push_missing(remote, &shared, local) {
         eprintln!("name ledger: backfill to {} failed ({e})", remote.url());
     }
     if let Err(e) = pull_missing(store_path, &shared, local) {
         eprintln!("name ledger: pull from {} failed ({e})", remote.url());
     }
-    Ok(shared)
+    shared
 }
 
 /// [`read_merged`] with the outage degrade the naming ceremony runs on: an
@@ -212,7 +222,7 @@ pub(crate) fn read_merged_or_mirror(
         return Ok((Vec::new(), None));
     };
     let shared = match select_all(&remote) {
-        Ok(rows) => rows,
+        Ok(rows) => merge_tail(&remote, store_path, rows, local),
         Err(error) => {
             let notice = format!(
                 "name ledger at {} is offline; this naming decision is judged against this machine's cached names until it returns ({error})",
@@ -222,12 +232,6 @@ pub(crate) fn read_merged_or_mirror(
             return Ok((Vec::new(), Some(notice)));
         }
     };
-    if let Err(e) = push_missing(&remote, &shared, local) {
-        eprintln!("name ledger: backfill to {} failed ({e})", remote.url());
-    }
-    if let Err(e) = pull_missing(store_path, &shared, local) {
-        eprintln!("name ledger: pull from {} failed ({e})", remote.url());
-    }
     Ok((shared, None))
 }
 
