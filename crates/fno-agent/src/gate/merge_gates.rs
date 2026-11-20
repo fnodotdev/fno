@@ -1813,8 +1813,9 @@ pub(crate) fn visual_tap_clears_pr<P: GateReads>(
     node: &str,
 ) -> bool {
     !head.is_empty()
-        && visual_tap_approval_texts(probes, cwd, pr, node)
+        && role_approval_texts(probes, cwd, pr, node)
             .iter()
+            .filter(|text| text.to_ascii_lowercase().contains(VISUAL_LOG_TAP))
             .any(|text| text_names_head(text, head))
 }
 
@@ -1825,33 +1826,6 @@ fn decisions_payload<P: GateReads>(probes: &P, cwd: &Path, args: &[&str]) -> Opt
         return None;
     };
     serde_json::from_slice::<Value>(&out).ok()
-}
-
-fn visual_tap_approval_texts<P: GateReads>(
-    probes: &P,
-    cwd: &Path,
-    pr: u64,
-    node: &str,
-) -> Vec<String> {
-    let Some(payload) = role_decisions_payload(probes, cwd, node) else {
-        return Vec::new();
-    };
-    payload
-        .get("decisions")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|row| row.get("subject").and_then(Value::as_str) == Some(node))
-        .filter(|row| {
-            matches!(
-                row.get("lifecycle").and_then(Value::as_str),
-                Some("live") | Some("unscoped")
-            ) && row.get("authority_source").and_then(Value::as_str) == Some("role")
-                && row_is_tap_attested(row)
-        })
-        .map(row_text)
-        .filter(|text| page_names_pr(text, pr))
-        .collect()
 }
 
 fn role_decisions_payload<P: GateReads>(probes: &P, cwd: &Path, node: &str) -> Option<Value> {

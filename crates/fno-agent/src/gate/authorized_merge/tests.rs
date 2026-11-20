@@ -839,7 +839,10 @@ fn a_visual_log_approval_clears_the_per_run_no_merge_at_its_head() {
     assert_eq!(outcome.word(), "merged", "{}", outcome.detail());
     assert_eq!(
         outcome.to_json()["merge_grant"],
-        json!(format!("user head grant {}", &head[..8]))
+        json!(format!(
+            "user head grant {}",
+            head.chars().take(8).collect::<String>()
+        ))
     );
 }
 
