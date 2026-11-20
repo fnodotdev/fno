@@ -191,12 +191,13 @@ impl PrefsCache {
     }
 
     fn get(&mut self) -> Prefs {
-        let path = fno::config_cli::global_settings_path();
+        // The mtime watch follows the file the read follows, pins included.
+        let path =
+            crate::global_config_path().unwrap_or_else(fno::config_cli::global_settings_path);
         let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
         if mtime != self.mtime {
             self.mtime = mtime;
-            let raw = fno::config_cli::parse_config_file(&path)
-                .map(|parsed| fno::config_cli::unwrap_config_dict(&parsed));
+            let raw = crate::global_config_raw();
             self.prefs = prefs_from(raw.as_ref());
         }
         self.prefs

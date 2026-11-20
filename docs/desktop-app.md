@@ -31,9 +31,9 @@ The app never reads that version to judge compatibility. It reads the wire versi
 | Flag | Default | What it does |
 |---|---|---|
 | `--session <name>` | `FNO_SERVER`, then `default` | The mux session to attach to. |
-| `--font <family>` | `SF Mono` | The terminal font family. |
-| `--font-size <pt>` | `13` | The terminal font size. |
-| `--mode <view>` | `chat` | The view the window opens on: `chat`, `terminal`, `orchestration` or `mods`. |
+| `--font <family>` | `app.font`, then `SF Mono` | The terminal font family; overrides what the Settings page wrote. |
+| `--font-size <pt>` | `app.font_size`, then `13` | The terminal font size; overrides the Settings row. |
+| `--mode <view>` | `mux.launch_screen`, then the saved view, then `chat` | The view the window opens on: `chat`, `terminal`, `orchestration` or `mods`. |
 | `--probe` | off | Attach with no window, print two lines, and exit. |
 | `--chat <pin>` | none | Show one session's chat instead of the focused agent's. The pin is `<harness>:<id|newest>` (`claude`, `codex` or `opencode`), a bare session id (the transcript that carries it names the harness), or `newest` (claude: the newest transcript in the current project, ranked by session start; codex: the newest in its sessions tree). With `--probe`, count its events instead of attaching. |
 
@@ -94,11 +94,28 @@ In the terminal view, other keys go to the focused pane as a terminal sends them
 | cmd-1 to cmd-9 | In the terminal view, the session's first nine tabs. In other views, the first nine agent rows. Hold cmd to see the numbers. |
 | cmd-k | Open or close the go-to palette |
 | cmd-/ | Open or close the key sheet |
+| cmd-, | Open or close Settings |
 | cmd-q | Detach and quit |
 
 Cmd-f opens the find bar over the focused view. Typing edits the query. Enter searches in the terminal. The chat scan runs live. Up steps toward the older match. Down steps toward the newer match. The chords ⌘G and ⇧⌘G step to the newer and older match, as in other Mac find bars. Esc closes the bar and clears the highlight. The terminal search reaches the pane's whole server-side scrollback, so a co-viewer sees the jump and the highlight. The counter reads `3/12`, or `no matches`. In the chat the scan runs in the app: matches tint in place and the view follows the current match.
 
 Typed text goes through the macOS input system, so dead keys, option-compose and IME input work. Option on a letter types the composed character, as in Terminal.app. Option on an arrow or backspace still sends the meta form.
+
+## Settings
+
+Cmd-comma or fno > Settings… opens Settings: one panel over the window, in the key sheet's look. It has five sections: Look, Alerts, Machines, Keys and Updates. Esc or a click outside closes it, and a cmd key closes it and runs.
+
+Type to filter: a query matches a row's label, its dotted config key and its section name. The search runs across every section at once. Enter on a boolean flips it. Enter on a short choice steps it to the next value. A row ending in `›` opens a choice page: one numbered line per option, the check on the current value, Enter confirms, Esc cancels. A row you cannot change here dims with the reason under it, and Enter on it writes nothing.
+
+Look holds the theme pin, the terminal font, the font size and the first view. The theme row's page offers Follow macOS plus the built-in themes. Confirming repaints the window at once, the way the appearance observer does. The font page lists the installed monospaced families your Mac has. Font and size apply to the panes live. The chrome (the title bar, lists and labels) stays SF Mono at 12pt. The first-view row writes `mux.launch_screen`, the key the mux reads too. Its three values: last view (the default, the window reopens where you left it), agents and hq.
+
+When an agent turns blocked or done outside the window, the app fires three signals. Alerts holds their switches: the sound, the macOS notification and the Dock badge. They are the `app.alert_*` keys, separate from the daemon's `mux.notify_*` knobs, which govern the TUI.
+
+Machines lists the fleet's hosts read-only: add or connect a host from the mux. Keys restates the key sheet read-only: keys are fixed. Updates shows the app's version. Updates arrive with the release.
+
+Rows write through the same door `fno config set` runs, into the per-user global file, because a Finder-launched app has no project to pin to. A key a project-local file decides already dims with its path. The global write cannot beat it. A refused write shows the CLI's first line under the row and keeps the old value.
+
+The flags still win: `--font`, `--font-size` and `--mode` override the config rows for that launch. Without a flag, the launch ladder is the config value, then the saved view, then the default.
 
 ## Mouse
 

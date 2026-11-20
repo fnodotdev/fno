@@ -132,9 +132,13 @@ pub const SHEET_KEY: &str = "cmd-/";
 /// same action.
 pub const GOTO_KEY: &str = "cmd-k";
 
+/// The key that opens and closes the Settings panel. fno > Settings…
+/// runs the same action.
+pub const SETTINGS_KEY: &str = "cmd-,";
+
 /// Keys bound to gpui actions, not to `shortcut()`: the key sheet's own
 /// test skips them, as it skips ⌘/ today.
-pub const ACTION_KEYS: &[&str] = &["/", "k"];
+pub const ACTION_KEYS: &[&str] = &["/", "k", ","];
 
 /// The key sheet: every key the app reads, by section, as the sheet shows
 /// them.
@@ -151,6 +155,7 @@ pub const SHEET: &[(&str, &[(&str, &str)])] = &[
             ("⌘v", "paste"),
             ("⌘f", "find in the pane or chat"),
             ("⌘q", "detach and quit"),
+            ("⌘,", "settings"),
         ],
     ),
     (
