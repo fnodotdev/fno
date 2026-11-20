@@ -770,10 +770,11 @@ pub fn run(args: &[String]) -> i32 {
                 let scope_pts = crate::backlog::audience::audience_score_term(
                     crate::backlog::question_intake::str_field(row, "audience").unwrap_or(""),
                 );
-                let open_dependents = crate::backlog_ready::dependents_fanout(entries_for_receipts)
-                    .get(id.as_str())
-                    .copied()
-                    .unwrap_or(0);
+                let open_dependents =
+                    crate::backlog_ready::dependents_fanout(&entries_for_receipts)
+                        .get(id.as_str())
+                        .copied()
+                        .unwrap_or(0);
                 let age = crate::backlog_ready::get_str(row, "created_at")
                     .and_then(crate::backlog_ready::parse_iso_str)
                     .map(|s| crate::backlog_ready::days_between(now_ms, s).max(0))
