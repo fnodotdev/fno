@@ -457,10 +457,10 @@ fn seed_question(root: &Path) -> bool {
         )
     };
     let rows = [
-        ask(6 * 3600, "q-demo-0005", "Record the external-review demo for the retro?", "The retro wants a recording of the external review pass.", "philip", "x-067e", ""),
-        ask(4 * 3600, "q-demo-0004", "Should the launch composer complete opencode skills?", "The composer completes claude skills today.", "sol", "x-f7c2", ""),
-        ask(3600, "q-demo-0003", "Renumber the 62 stuck queue items?", "The queue holds 62 items under stale numbers.", "gus", "x-2e4f", ""),
-        ask(18 * 60, "q-demo-0002", "Flip fno-demo public now, or audit first?", "The demo repo is ready; the audit has not run.", "wren", "x-0a33", ""),
+        ask(6 * 3600, "q-demo-0005", "Record the external-review demo for the retro?", "The retro wants a recording of the external review pass.", "philip", "x-dddd", ""),
+        ask(4 * 3600, "q-demo-0004", "Should the launch composer complete opencode skills?", "The composer completes claude skills today.", "sol", "x-cccc", ""),
+        ask(3600, "q-demo-0003", "Renumber the 62 stuck queue items?", "The queue holds 62 items under stale numbers.", "gus", "x-bbbb", ""),
+        ask(18 * 60, "q-demo-0002", "Flip fno-demo public now, or audit first?", "The demo repo is ready; the audit has not run.", "wren", "x-aaaa", ""),
         ask(12, "q-demo-0001", "Owner merge for PR 379?", "The tier keeper holds slot 2 and 379 is green and base-current. Fire the merge command now, or hold for the Tuesday board?", "sol", "",
             r#","options":[{"text":"Merge now","next":"Green, base-current, and the keeper holds the slot."},{"text":"Tuesday board slot","next":"PR 351 lands first, then 289 boards once."},{"text":"Hold for dispatch review","next":"Wait for the approve due 2026-11-23."}],"context":{"recommendation":{"option":1,"why":"Green, base-current, and the keeper holds the slot."}},"subject":"pr-379-merge""#),
         ask(40 * 60, "q-demo-0007", "Send the old-product balance to the archive?", "The old product's balance sheet has no reader.", "gus", "", ""),
