@@ -11,10 +11,13 @@
 //! copying them (x-6e14 route 1). Candidate surfaces are repo text only
 //! (law d-78f7daea): hooks, routing and fnh wait on their own nodes.
 
+use std::collections::BTreeSet;
 use std::fmt;
 
 use serde::Deserialize;
 use serde_json::Value;
+
+use crate::reader_route::ReaderRoute;
 
 use crate::evals::bank::TaskSpec;
 use crate::evals::failure_types::{prove, Catalog};
@@ -25,6 +28,10 @@ use crate::evals_trend::Row;
 /// verdict honest: two merged changes in one probation window read
 /// `confounded` (second pass, change 5).
 pub(crate) const MAX_CLUSTERS: usize = 2;
+
+/// Files per reply cap (change 2). A reply that rewrites the whole repo is
+/// not a candidate.
+pub(crate) const MAX_EDITS: usize = 3;
 
 /// Typed failures of one propose cycle (R6: no new `Result<_, String>` in
 /// this crate). `Display` carries the one-line cause the ledger row reads.
@@ -277,6 +284,168 @@ pub(crate) fn proposer_input(cluster: &Cluster, tasks: &[TaskSpec]) -> String {
     text
 }
 
+/// The proposer's reply, parsed once at the boundary (R1). `verdict` reads
+/// `change` or `keep_base`; `kind` reads `procedure` or `knowledge`; each
+/// edit is one full-file replacement.
+#[derive(Deserialize)]
+pub(crate) struct Reply {
+    pub(crate) verdict: String,
+    pub(crate) kind: String,
+    #[serde(default)]
+    pub(crate) edits: Vec<Edit>,
+    #[serde(default)]
+    pub(crate) reason: String,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct Edit {
+    pub(crate) path: String,
+    pub(crate) content: String,
+}
+
+/// The first JSON object in a model reply.
+pub(crate) fn parse_reply(out: &str) -> Result<Reply, ProposeError> {
+    let (a, b) = (out.find('{'), out.rfind('}'));
+    let (Some(a), Some(b)) = (a, b) else {
+        return Err(ProposeError::Reply("no JSON object in the reply".into()));
+    };
+    serde_json::from_str(&out[a..=b])
+        .map_err(|e| ProposeError::Reply(format!("reply is not the JSON asked for: {e}")))
+}
+
+/// The 8-word runs (windows) of `s`, normalized. Fewer than 8 words
+/// yields none.
+fn eight_grams(s: &str) -> Vec<String> {
+    let words: Vec<&str> = s.split_whitespace().collect();
+    if words.len() < 8 {
+        return Vec::new();
+    }
+    (0..=words.len() - 8)
+        .map(|i| words[i..i + 8].join(" ").to_lowercase())
+        .collect()
+}
+
+/// The reply tripwires (change 2): the path allowlist, at most
+/// MAX_EDITS files per reply, and the 8-word answer-key run. A refusal
+/// names the reason and, for a quoted key, the golden id (AC2-HP).
+pub(crate) fn validate_reply(reply: &Reply, tasks: &[TaskSpec]) -> Result<(), ProposeError> {
+    match reply.verdict.as_str() {
+        "keep_base" => return Ok(()),
+        "change" => {}
+        other => {
+            return Err(ProposeError::Reply(format!(
+                "verdict must be change or keep_base, got {other:?}"
+            )))
+        }
+    }
+    if !matches!(reply.kind.as_str(), "procedure" | "knowledge") {
+        return Err(ProposeError::Reply(format!(
+            "kind must be procedure or knowledge, got {:?}",
+            reply.kind
+        )));
+    }
+    if reply.edits.is_empty() {
+        return Err(ProposeError::Reply("change reply carries no edits".into()));
+    }
+    if reply.edits.len() > MAX_EDITS {
+        return Err(ProposeError::Reply(format!(
+            "at most {MAX_EDITS} files per reply, got {}",
+            reply.edits.len()
+        )));
+    }
+    for edit in &reply.edits {
+        if !allowed_path(&edit.path) {
+            return Err(ProposeError::Reply(format!(
+                "edit path {:?} is outside AGENTS.md, docs/, skills/*/SKILL.md and skills/*/references/ (q-38521bc5)",
+                edit.path
+            )));
+        }
+    }
+    // The 8-word run: per golden, so a refusal names the id (AC2-HP).
+    for (id, keys) in golden_key_grams(tasks) {
+        for edit in &reply.edits {
+            let words: Vec<&str> = edit.content.split_whitespace().collect();
+            if words.len() < 8 {
+                continue;
+            }
+            for i in 0..=words.len() - 8 {
+                if keys.contains(&words[i..i + 8].join(" ").to_lowercase()) {
+                    return Err(ProposeError::Reply(format!(
+                        "answer_key_quote: an edit quotes 8 consecutive words of golden {id}"
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Each golden's answer-key 8-grams: its prompt, expected answer and grade
+/// command or pattern words.
+fn golden_key_grams(tasks: &[TaskSpec]) -> Vec<(String, BTreeSet<String>)> {
+    tasks
+        .iter()
+        .filter_map(|t| {
+            let g = t.golden.as_ref()?;
+            let mut keys = BTreeSet::new();
+            if let Some(p) = &t.prompt {
+                keys.extend(eight_grams(p));
+            }
+            keys.extend(eight_grams(&g.expected));
+            for c in &t.grade {
+                if let Some(cmd) = &c.command {
+                    keys.extend(eight_grams(cmd));
+                }
+                if let Some(pat) = &c.pattern {
+                    keys.extend(eight_grams(pat));
+                }
+            }
+            (!keys.is_empty()).then_some((t.id.clone(), keys))
+        })
+        .collect()
+}
+
+/// Candidate surfaces (change 2, q-38521bc5): repo text only.
+fn allowed_path(p: &str) -> bool {
+    p == "AGENTS.md"
+        || p.starts_with("docs/")
+        || (p.starts_with("skills/") && p.ends_with("/SKILL.md"))
+        || (p.starts_with("skills/") && p.contains("/references/"))
+}
+
+/// The proposer's prompt: the loop's contract and the reply shape.
+/// keep_base is a valid answer when the evidence does not argue for a
+/// change (second pass: the selector never becomes the reward).
+pub(crate) fn propose_prompt(cluster: &Cluster, input: &str) -> String {
+    format!(
+        "You draft one candidate change for one failure type of this repository. Read AGENTS.md, docs/evals.md section Propose and prove, and the files the evidence names.\n\
+Rules: candidates are repo text only (AGENTS.md, docs/, a SKILL.md, or a skill reference page); one full-file replacement per edit; keep_base is a valid answer whenever the evidence does not argue for a change; never restate an eval prompt, its expected answer or its grader.\n\
+Failure type: {kind}\n\
+Evidence:\n{input}\n\
+Reply with one JSON object and nothing else.\n\
+A change: {{\"verdict\":\"change\",\"kind\":\"procedure\",\"edits\":[{{\"path\":\"AGENTS.md\",\"content\":\"<the whole new file>\"}}],\"reason\":\"<one sentence>\"}}\n\
+No change: {{\"verdict\":\"keep_base\",\"kind\":\"procedure\",\"edits\":[],\"reason\":\"<one sentence>\"}}\n\
+Do not invent a rule you cannot cite from a repo file.",
+        kind = cluster.kind,
+    )
+}
+
+/// The proposer's one-shot: reader tools only, no settings, routed through
+/// the reader route profile `evals-propose`, model sonnet, 600 s (the
+/// golden drafter's spawn shape).
+pub(crate) fn spawn_reader(
+    name: &str,
+    prompt: &str,
+    cwd: &std::path::Path,
+    timeout: u64,
+    route: &ReaderRoute,
+) -> Result<(i32, String, String), ProposeError> {
+    let argv = crate::reader_route::reader_tools_argv(name, prompt, cwd, timeout, route, &[])
+        .map_err(|e| ProposeError::Reply(format!("reader argv: {e}")))?;
+    crate::blueprint_judge::headless_spawn(&argv, timeout)
+        .map_err(|e| ProposeError::Reply(format!("spawn: {e}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -422,5 +591,124 @@ mod tests {
         assert!(!text.contains("rule-b"), "{text}");
         assert!(!text.contains("expected-b"), "{text}");
         assert!(answer_keys_stripped(&text, &f.tasks));
+    }
+
+    fn key_task() -> TaskSpec {
+        TaskSpec {
+            id: "golden-key-holder".into(),
+            tier: "capability".into(),
+            grade: vec![crate::evals::bank::GradeCheck {
+                kind: "exit".into(),
+                command: Some("grep -q yes the reply file inside the tree".into()),
+                expect: 0,
+                path: None,
+                pattern: None,
+                max_tool_calls: None,
+                tests: None,
+                rubric: None,
+            }],
+            prompt: Some("one two three four five six seven eight nine ten".into()),
+            repo_fixture: "HEAD".into(),
+            timeout_minutes: 5,
+            tags: vec!["golden".into()],
+            covers: Vec::new(),
+            golden: Some(crate::evals::bank::Golden {
+                source_kind: "correction".into(),
+                source_ref: "c:9".into(),
+                quote: "the reply was wrong".into(),
+                expected: "run the doctor command".into(),
+                rule: "cite the rule".into(),
+                failure_type: "t1".into(),
+                cost: None,
+                outcome: "failed".into(),
+            }),
+            source_path: std::path::PathBuf::new(),
+        }
+    }
+
+    fn reply_with_edits(edits: &[(&str, &str)]) -> Reply {
+        let edits: Vec<serde_json::Value> = edits
+            .iter()
+            .map(|(p, c)| serde_json::json!({"path": p, "content": c}))
+            .collect();
+        let body = serde_json::json!({
+            "verdict": "change",
+            "kind": "procedure",
+            "edits": edits,
+            "reason": "the rule moved",
+        });
+        parse_reply(&body.to_string()).unwrap()
+    }
+
+    #[test]
+    fn a_change_reply_validates_and_keep_base_passes() {
+        let tasks = vec![key_task()];
+        let good = reply_with_edits(&[("AGENTS.md", "the new full file text")]);
+        assert_eq!(good.verdict, "change");
+        assert!(validate_reply(&good, &tasks).is_ok());
+        let keep = parse_reply(
+            &serde_json::json!({
+                "verdict": "keep_base",
+                "kind": "procedure",
+                "edits": [],
+                "reason": "no argued change",
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(keep.verdict, "keep_base");
+        assert!(validate_reply(&keep, &tasks).is_ok());
+        let garbage = parse_reply("not json at all");
+        assert!(garbage.is_err());
+    }
+
+    /// AC2-HP: an edit quoting 8 consecutive words of a golden prompt
+    /// refuses with answer_key_quote and names the golden id.
+    #[test]
+    fn an_edit_quoting_an_answer_key_refuses_and_names_the_golden() {
+        let tasks = vec![key_task()];
+        let quoted = reply_with_edits(&[(
+            "AGENTS.md",
+            "lead in words one two three four five six seven eight nine ten and a tail",
+        )]);
+        let err = validate_reply(&quoted, &tasks).unwrap_err();
+        assert!(format!("{err}").contains("answer_key_quote"), "{err}");
+        assert!(format!("{err}").contains("golden-key-holder"), "{err}");
+    }
+
+    #[test]
+    fn edit_paths_outside_the_allowlist_refuse() {
+        let tasks = vec![key_task()];
+        for path in [
+            "evals/bank/golden-x.yaml",
+            "skills/foo/evals/case.yaml",
+            "crates/x/src/lib.rs",
+            "CLAUDE.md",
+        ] {
+            let bad = reply_with_edits(&[(path, "harmless new text")]);
+            assert!(validate_reply(&bad, &tasks).is_err(), "{path}");
+        }
+        for path in [
+            "AGENTS.md",
+            "docs/x.md",
+            "docs/sub/deep.md",
+            "skills/foo/SKILL.md",
+            "skills/foo/references/page.md",
+        ] {
+            let ok = reply_with_edits(&[(path, "harmless new text")]);
+            assert!(validate_reply(&ok, &tasks).is_ok(), "{path}");
+        }
+    }
+
+    #[test]
+    fn more_than_three_files_refuse() {
+        let tasks = vec![key_task()];
+        let bad = reply_with_edits(&[
+            ("docs/a.md", "t"),
+            ("docs/b.md", "t"),
+            ("docs/c.md", "t"),
+            ("docs/d.md", "t"),
+        ]);
+        assert!(validate_reply(&bad, &tasks).is_err());
     }
 }
