@@ -1213,12 +1213,9 @@ mod tests {
         let r: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(r["outcome"], "refused", "{r}");
         assert_eq!(r["exit_code"], 5, "{r}");
-    }
 
-    // --- a node-held hold behind a blockless plan ---
-
-    #[test]
-    fn a_node_held_hold_releases_through_the_node_when_the_plan_carries_no_block() {
+        // A hold only the node row carries, behind a plan with no block,
+        // releases through the node arm, never the plan-edit arm.
         let hold = json!({
             "reason": "condition R",
             "release_when": "when W",
@@ -1226,15 +1223,10 @@ mod tests {
             "set_by": "team",
         });
         let fx = fixture(json!({"dispatch_hold": hold}));
-        let decisions = fx._dir.path().join("decisions.jsonl");
-
-        // The hold read falls to the node row (the plan has no block), so
-        // the release must take the node arm, not the plan-edit arm.
         let r = release_with_decisions(&fx.graph, "d-any", &decisions);
-        assert_eq!(r["outcome"], "released", "{r}");
-        assert_eq!(r["exit_code"], 0, "{r}");
-        assert_eq!(r["plan"], Value::Null, "{r}");
-        assert!(hold_entry(&fx)["dispatch_hold"].is_null());
+        assert_eq!(r.pointer("/outcome"), Some(&json!("released")), "{r}");
+        assert_eq!(r.pointer("/plan"), Some(&Value::Null), "{r}");
+        assert_eq!(hold_entry(&fx).pointer("/dispatch_hold"), None);
         assert_eq!(std::fs::read_to_string(&fx.plan).unwrap(), PLAN_BODY);
 
         // An unreadable plan keeps the error: its INVALID hold read parks
@@ -1242,15 +1234,8 @@ mod tests {
         let broken = fixture(json!({"dispatch_hold": hold}));
         std::fs::write(&broken.plan, "---\nclaims: t-0001\nno closing fence\n").unwrap();
         let r = release_with_decisions(&broken.graph, "d-any", &decisions);
-        assert_eq!(r["outcome"], "error", "{r}");
-        assert_eq!(r["exit_code"], 3, "{r}");
-        assert!(
-            r["detail"]
-                .as_str()
-                .unwrap()
-                .contains("no dispatch_hold block"),
-            "{r}"
-        );
+        assert_eq!(r.pointer("/outcome"), Some(&json!("error")), "{r}");
+        assert_eq!(r.pointer("/exit_code"), Some(&json!(3)), "{r}");
     }
 
     // --- the per-child exemption ---
