@@ -1829,19 +1829,27 @@ pub struct LeaveDeps {
     pub alert: Box<dyn Fn(&CapLane, &str) -> bool>,
 }
 
-/// The move destination when no fallback grid is configured: Opus, unless
-/// the stranded lane is itself the Anthropic one.
-fn built_in_destination(lane: &CapLane) -> Option<(String, Vec<String>)> {
-    if lane.provider == "anthropic" {
-        return None;
-    }
-    let (id, flags) =
-        crate::spawn_overlay::mint_link(&json!({"provider": "claude", "route": "anthropic/opus"}));
-    let flags = flags
-        .iter()
-        .filter_map(|f| f.as_str().map(String::from))
-        .collect();
-    Some((id, flags))
+/// The move destinations when no fallback grid is configured, in order: the
+/// codex luna lane (its template carries effort xhigh), then claude sonnet
+/// on a thread when codex is unavailable. A target never moves to opus. A
+/// lane is skipped when the stranded lane is that lane's own vendor.
+fn built_in_destinations(lane: &CapLane) -> Vec<(String, Vec<String>)> {
+    [
+        ("codex", "codex-luna", "openai"),
+        ("claude", "claude-sonnet-5-5", "anthropic"),
+    ]
+    .into_iter()
+    .filter(|(_, _, vendor)| lane.provider != *vendor)
+    .map(|(harness, route, _)| {
+        let (id, flags) =
+            crate::spawn_overlay::mint_link(&json!({"provider": harness, "route": route}));
+        let flags = flags
+            .iter()
+            .filter_map(|f| f.as_str().map(String::from))
+            .collect();
+        (id, flags)
+    })
+    .collect()
 }
 
 fn alert_marker(home: &AgentsHome, lane: &str) -> PathBuf {
@@ -1953,7 +1961,7 @@ pub fn run_leave_lane(
             // Trap 3: refresh before reading destination headroom.
             (deps.refresh_usage)();
             let dests = match destinations(scan, "default", &[lane.lane.clone()]) {
-                Ok(d) if d.is_empty() => built_in_destination(lane).into_iter().collect(),
+                Ok(d) if d.is_empty() => built_in_destinations(lane),
                 Ok(d) => d,
                 Err(reason) => {
                     journal(
@@ -1995,106 +2003,99 @@ fn migrate_one(
     now_epoch: i64,
     deps: &LeaveDeps,
 ) {
-    let (dest, flags) = match dests.first() {
-        Some((d, f)) => (d.clone(), f.clone()),
-        None => {
+    if dests.is_empty() {
+        journal(
+            home,
+            &lane.lane,
+            now_epoch,
+            &json!({
+                "step": "unknown", "member": member.name,
+                "reason": "no-destination",
+            }),
+        );
+        return;
+    }
+    // Destinations in order: a spawn the lane refuses (its harness is
+    // unavailable) falls through to the next one.
+    for (dest, flags) in dests {
+        let path = match write_handoff_doc(home, lane, member, dest, now_epoch) {
+            Ok(path) => path,
+            Err(reason) => {
+                journal(
+                    home,
+                    &lane.lane,
+                    now_epoch,
+                    &json!({
+                        "step": "unknown", "member": member.name,
+                        "reason": format!("handoff-doc-failed: {reason}"),
+                    }),
+                );
+                return;
+            }
+        };
+        journal(
+            home,
+            &lane.lane,
+            now_epoch,
+            &json!({
+                "step": "handoff-doc", "member": member.name, "path": path.to_string_lossy(),
+                "destination": dest,
+            }),
+        );
+        let new_sid = match (deps.spawn)(member, flags, &path) {
+            Ok(new_sid) => new_sid,
+            Err(reason) => {
+                journal(
+                    home,
+                    &lane.lane,
+                    now_epoch,
+                    &json!({
+                        "step": "unknown", "member": member.name, "destination": dest,
+                        "reason": format!("spawn-failed: {reason}"),
+                    }),
+                );
+                continue;
+            }
+        };
+        journal(
+            home,
+            &lane.lane,
+            now_epoch,
+            &json!({
+                "step": "spawn", "member": member.name,
+                "successor": new_sid, "destination": dest,
+            }),
+        );
+        if !(deps.confirm)(&new_sid) {
             journal(
                 home,
                 &lane.lane,
                 now_epoch,
                 &json!({
                     "step": "unknown", "member": member.name,
-                    "reason": "no-destination",
+                    "reason": "successor-unconfirmed",
                 }),
             );
             return;
         }
-    };
-    let handoff_path = write_handoff_doc(home, lane, member, &dest, now_epoch);
-    match handoff_path {
-        Ok(path) => {
-            journal(
-                home,
-                &lane.lane,
-                now_epoch,
-                &json!({
-                    "step": "handoff-doc", "member": member.name, "path": path.to_string_lossy(),
-                }),
-            );
-            // The destination's spawn flags ride the grid's answer, so the
-            // successor lands on the destination exactly as a spawn would.
-            match (deps.spawn)(member, &flags, &path) {
-                Ok(new_sid) => {
-                    journal(
-                        home,
-                        &lane.lane,
-                        now_epoch,
-                        &json!({
-                            "step": "spawn", "member": member.name,
-                            "successor": new_sid,
-                        }),
-                    );
-                    if (deps.confirm)(&new_sid) {
-                        journal(
-                            home,
-                            &lane.lane,
-                            now_epoch,
-                            &json!({
-                                "step": "spawn-confirmed", "member": member.name,
-                                "successor": new_sid,
-                            }),
-                        );
-                        match (deps.stop)(member) {
-                            Ok(()) => journal(
-                                home,
-                                &lane.lane,
-                                now_epoch,
-                                &json!({
-                                    "step": "stopped", "member": member.name,
-                                }),
-                            ),
-                            Err(reason) => journal(
-                                home,
-                                &lane.lane,
-                                now_epoch,
-                                &json!({
-                                    "step": "unknown", "member": member.name,
-                                    "reason": format!("stop-failed: {reason}"),
-                                }),
-                            ),
-                        }
-                    } else {
-                        journal(
-                            home,
-                            &lane.lane,
-                            now_epoch,
-                            &json!({
-                                "step": "unknown", "member": member.name,
-                                "reason": "successor-unconfirmed",
-                            }),
-                        );
-                    }
-                }
-                Err(reason) => journal(
-                    home,
-                    &lane.lane,
-                    now_epoch,
-                    &json!({
-                        "step": "unknown", "member": member.name,
-                        "reason": format!("spawn-failed: {reason}"),
-                    }),
-                ),
-            }
-        }
-        Err(reason) => journal(
+        journal(
             home,
             &lane.lane,
             now_epoch,
             &json!({
-                "step": "unknown", "member": member.name,
-                "reason": format!("handoff-doc-failed: {reason}"),
+                "step": "spawn-confirmed", "member": member.name,
+                "successor": new_sid,
             }),
-        ),
+        );
+        let step = match (deps.stop)(member) {
+            Ok(()) => json!({"step": "stopped", "member": member.name}),
+            Err(reason) => json!({
+                "step": "unknown", "member": member.name,
+                "reason": format!("stop-failed: {reason}"),
+            }),
+        };
+        journal(home, &lane.lane, now_epoch, &step);
+        return;
     }
 }
 
@@ -2883,7 +2884,7 @@ mod tests {
     }
 
     /// The default triage on a measured strand: important work moves to the
-    /// built-in Opus destination, the rest parks, the leads hear once, and a
+    /// built-in luna-then-sonnet destinations, the rest parks, the leads hear once, and a
     /// later tick never starts a second migration for the same member.
     #[test]
     fn triage_moves_important_work_parks_the_rest_and_alerts_once() {
@@ -2918,8 +2919,20 @@ mod tests {
         assert_eq!(count("spawn:w-1"), 1, "{calls:?}");
         assert_eq!(count("spawn:w-2"), 0, "{calls:?}");
         assert_eq!(count("alert:zai:zai-main"), 1, "{calls:?}");
-        let (_, flags) = built_in_destination(&lane).expect("zai lane escapes to opus");
-        assert!(flags.windows(2).any(|w| w == ["--route", "anthropic/opus"]));
+        let routes: Vec<String> = built_in_destinations(&lane)
+            .into_iter()
+            .filter_map(|(_, flags)| {
+                flags
+                    .windows(2)
+                    .find(|w| w.first().map(String::as_str) == Some("--route"))
+                    .and_then(|w| w.last().cloned())
+            })
+            .collect();
+        assert_eq!(
+            routes,
+            ["codex-luna", "claude-sonnet-5-5"],
+            "luna first, never opus"
+        );
     }
 
     fn read_journal(home: &AgentsHome) -> Vec<String> {
