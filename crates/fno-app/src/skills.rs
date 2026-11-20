@@ -42,8 +42,28 @@ pub(crate) fn sigil(harness: &str) -> Option<char> {
 /// Every skill the picked harness can run from `project`. Harnesses with
 /// no known on-disk layout list none.
 pub(crate) fn list(harness: &str, project: &str) -> Vec<Skill> {
+    type Key = (String, String);
+    type Cache = std::collections::HashMap<Key, (std::time::Instant, Vec<Skill>)>;
+    // A session switch reads hundreds of SKILL.md heads (140 ms for 336
+    // files measured on a dev machine), so a read stands for 30 seconds.
+    static CACHE: std::sync::Mutex<Option<Cache>> = std::sync::Mutex::new(None);
+    const TTL: std::time::Duration = std::time::Duration::from_secs(30);
+    let key = (harness.to_string(), project.to_string());
+    if let Ok(guard) = CACHE.lock() {
+        if let Some((at, hit)) = guard.as_ref().and_then(|c| c.get(&key)) {
+            if at.elapsed() < TTL {
+                return hit.clone();
+            }
+        }
+    }
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    list_in(harness, project, home.as_deref())
+    let fresh = list_in(harness, project, home.as_deref());
+    if let Ok(mut guard) = CACHE.lock() {
+        guard
+            .get_or_insert_with(Default::default)
+            .insert(key, (std::time::Instant::now(), fresh.clone()));
+    }
+    fresh
 }
 
 pub(crate) fn list_in(harness: &str, project: &str, home: Option<&Path>) -> Vec<Skill> {
@@ -61,6 +81,7 @@ pub(crate) fn list_in(harness: &str, project: &str, home: Option<&Path>) -> Vec<
             read_root(&home.join(".claude/skills"), Source::User, "", &mut out);
             read_plugins(
                 &home.join(".claude/plugins/installed_plugins.json"),
+                &home.join(".claude/settings.json"),
                 &mut out,
             );
         }
@@ -74,7 +95,28 @@ pub(crate) fn list_in(harness: &str, project: &str, home: Option<&Path>) -> Vec<
     out
 }
 
-fn read_plugins(manifest: &Path, out: &mut Vec<Skill>) {
+/// The plugins settings.json turns off: `enabledPlugins` maps
+/// `plugin@market` to a bool, and only an explicit `false` disables one.
+fn disabled_plugins(settings: &Path) -> Vec<String> {
+    let Some(json) = std::fs::read_to_string(settings)
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+    else {
+        return Vec::new();
+    };
+    json.get("enabledPlugins")
+        .and_then(|e| e.as_object())
+        .map(|e| {
+            e.iter()
+                .filter(|(_, v)| v.as_bool() == Some(false))
+                .map(|(k, _)| k.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn read_plugins(manifest: &Path, settings: &Path, out: &mut Vec<Skill>) {
+    let off = disabled_plugins(settings);
     let Ok(text) = std::fs::read_to_string(manifest) else {
         return;
     };
@@ -85,6 +127,9 @@ fn read_plugins(manifest: &Path, out: &mut Vec<Skill>) {
         return;
     };
     for (key, installs) in plugins {
+        if off.contains(key) {
+            continue;
+        }
         let plugin = key.split('@').next().unwrap_or(key);
         let Some(path) = installs
             .as_array()
@@ -390,5 +435,35 @@ mod tests {
             .collect();
         let v = view(&all, "claude", "/fno", &Pick::default()).unwrap();
         assert_eq!((v.rows.len(), v.more), (SHOWN, 3));
+    }
+
+    #[test]
+    fn a_plugin_that_settings_turns_off_lists_no_skills() {
+        let t = Tmp::new();
+        let home = t.path().join("home");
+        let on = home.join("cache/on");
+        let off = home.join("cache/off");
+        skill(&on.join("skills"), "alpha", "a");
+        skill(&off.join("skills"), "beta", "b");
+        std::fs::create_dir_all(home.join(".claude/plugins")).unwrap();
+        std::fs::write(
+            home.join(".claude/plugins/installed_plugins.json"),
+            format!(
+                r#"{{"plugins":{{"on@m":[{{"installPath":"{}"}}],"off@m":[{{"installPath":"{}"}}]}}}}"#,
+                on.display(),
+                off.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            home.join(".claude/settings.json"),
+            r#"{"enabledPlugins":{"on@m":true,"off@m":false}}"#,
+        )
+        .unwrap();
+        let names: Vec<_> = list_in("claude", "", Some(&home))
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
+        assert_eq!(names, vec!["on:alpha".to_string()]);
     }
 }
