@@ -646,6 +646,7 @@ fn rows_body(root: &Root, cx: &mut Context<Root>) -> Div {
                 .rows
                 .get(*si)
                 .and_then(|(_, rows)| section_reason(rows))
+                .map(str::to_string)
             {
                 head = head.child(ui::role(div(), Role::Hint, &p).child(reason));
             }
