@@ -1234,6 +1234,9 @@ pub fn leave_decision(
         }
         None => {}
     }
+    if cfg.mode == "park" {
+        return LeaveDecision::Wait("park-mode".to_string());
+    }
     let Some(reset) = lane.reset_epoch else {
         // An unmeasured window never auto-moves; it asks (or holds an ask).
         return LeaveDecision::Ask;
@@ -1708,7 +1711,7 @@ fn return_tick_survived(
         .collect();
     // Step 6: announce once in ask mode outside sleep hours.
     if state.get("announced_at").is_none()
-        && !matches!(cfg.mode.as_str(), "auto" | "triage")
+        && !matches!(cfg.mode.as_str(), "park" | "auto" | "triage")
         && !in_sleep_window(cfg, now_epoch)
     {
         let n = remaining.len();
@@ -1829,27 +1832,14 @@ pub struct LeaveDeps {
     pub alert: Box<dyn Fn(&CapLane, &str) -> bool>,
 }
 
-/// The move destinations when no fallback grid is configured, in order: the
-/// codex luna lane (its template carries effort xhigh), then claude sonnet
-/// on a thread when codex is unavailable. A target never moves to opus. A
-/// lane is skipped when the stranded lane is that lane's own vendor.
-fn built_in_destinations(lane: &CapLane) -> Vec<(String, Vec<String>)> {
-    [
-        ("codex", "codex-luna", "openai"),
-        ("claude", "claude-sonnet-5-5", "anthropic"),
-    ]
-    .into_iter()
-    .filter(|(_, _, vendor)| lane.provider != *vendor)
-    .map(|(harness, route, _)| {
-        let (id, flags) =
-            crate::spawn_overlay::mint_link(&json!({"provider": harness, "route": route}));
-        let flags = flags
-            .iter()
-            .filter_map(|f| f.as_str().map(String::from))
-            .collect();
-        (id, flags)
-    })
-    .collect()
+/// The move destinations when no fallback grid is configured: the route
+/// lanes `[provider_cap] destinations` names, in order. Each lane template
+/// carries its own harness, model and effort.
+fn configured_destinations(cfg: &ProviderCapConfig) -> Vec<(String, Vec<String>)> {
+    cfg.destinations
+        .iter()
+        .map(|route| (route.clone(), vec!["--route".to_string(), route.clone()]))
+        .collect()
 }
 
 fn alert_marker(home: &AgentsHome, lane: &str) -> PathBuf {
@@ -1914,7 +1904,10 @@ pub fn run_leave_lane(
             "Nothing moves until an operator answers fno agent admit provider-cap decide."
                 .to_string()
         }
-        LeaveDecision::Wait(reason) => format!("Nothing moves ({reason}); the lane parks."),
+        LeaveDecision::Wait(reason) => format!(
+            "Nothing moves ({reason}); the workers park and resume on {} after the reset.",
+            lane.provider
+        ),
     };
     alert_once(home, lane, &plan, now_epoch, deps);
     match decision {
@@ -1961,7 +1954,7 @@ pub fn run_leave_lane(
             // Trap 3: refresh before reading destination headroom.
             (deps.refresh_usage)();
             let dests = match destinations(scan, "default", &[lane.lane.clone()]) {
-                Ok(d) if d.is_empty() => built_in_destinations(lane),
+                Ok(d) if d.is_empty() => configured_destinations(cfg),
                 Ok(d) => d,
                 Err(reason) => {
                     journal(
@@ -2636,7 +2629,7 @@ mod tests {
     /// while compacting: the bridge-resolved transcript's stem names the full
     /// uuid, so the compaction stamp is probed by the right key.
     #[test]
-    fn ac2_arm_config_defaults_to_triage_and_reads_overrides() {
+    fn ac2_arm_config_defaults_to_park_and_reads_overrides() {
         // FNO_CONFIG, when set, is the ONLY config candidate; hold the env
         // lock so a sibling fixture (probe tests set it) cannot own the
         // window while this test reads config discovery.
@@ -2648,7 +2641,8 @@ mod tests {
         std::fs::create_dir_all(root.join(".fno")).unwrap();
         let defaults = provider_cap_config(&root);
         assert!(defaults.enabled);
-        assert_eq!(defaults.mode, "triage");
+        assert_eq!(defaults.mode, "park");
+        assert!(defaults.destinations.is_empty(), "no paid lane by default");
         assert_eq!(defaults.quorum, 2);
         std::fs::write(
             root.join(".fno/config.toml"),
@@ -2815,6 +2809,7 @@ mod tests {
         let lane = lane_fixture(Some(now_epoch_secs() + 600), None);
         let cfg = ProviderCapConfig {
             min_wait_minutes: 30,
+            mode: "triage".into(),
             ..Default::default()
         };
         let calls = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
@@ -2862,6 +2857,7 @@ mod tests {
             // (2026-09-26 23:59 UTC). The test wants "asleep now", always.
             sleep_hours: "00:00-24:00".into(),
             sleep_timezone: String::new(),
+            mode: "ask".into(),
             ..Default::default()
         };
         let calls = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
@@ -2883,11 +2879,11 @@ mod tests {
         );
     }
 
-    /// The default triage on a measured strand: important work moves to the
-    /// built-in luna-then-sonnet destinations, the rest parks, the leads hear once, and a
-    /// later tick never starts a second migration for the same member.
+    /// Triage on a measured strand: important work moves to the configured
+    /// destinations, the rest parks, the leads hear once, and a later tick
+    /// never starts a second migration. The shipped default only parks.
     #[test]
-    fn triage_moves_important_work_parks_the_rest_and_alerts_once() {
+    fn triage_moves_important_work_and_the_default_only_parks() {
         let home =
             AgentsHome::at(std::env::temp_dir().join(format!("pc3t-{}", std::process::id())));
         let _ = std::fs::remove_dir_all(home.root());
@@ -2896,8 +2892,11 @@ mod tests {
         parked.name = "w-2".into();
         parked.node = Some("park".into());
         lane.members.push(parked);
-        let cfg = ProviderCapConfig::default();
-        assert_eq!(cfg.mode, "triage");
+        let cfg = ProviderCapConfig {
+            mode: "triage".into(),
+            destinations: vec!["codex-luna".into(), "claude-sonnet-5-5".into()],
+            ..Default::default()
+        };
         let calls = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
         let deps = rec_deps(calls.clone(), true);
         let (_fixture, grid_scan) = scan_fixture();
@@ -2919,20 +2918,30 @@ mod tests {
         assert_eq!(count("spawn:w-1"), 1, "{calls:?}");
         assert_eq!(count("spawn:w-2"), 0, "{calls:?}");
         assert_eq!(count("alert:zai:zai-main"), 1, "{calls:?}");
-        let routes: Vec<String> = built_in_destinations(&lane)
+        let ids: Vec<String> = configured_destinations(&cfg)
             .into_iter()
-            .filter_map(|(_, flags)| {
-                flags
-                    .windows(2)
-                    .find(|w| w.first().map(String::as_str) == Some("--route"))
-                    .and_then(|w| w.last().cloned())
-            })
+            .map(|(id, _)| id)
             .collect();
-        assert_eq!(
-            routes,
-            ["codex-luna", "claude-sonnet-5-5"],
-            "luna first, never opus"
+        assert_eq!(ids, ["codex-luna", "claude-sonnet-5-5"], "config order");
+        // The shipped default moves nothing to another paid lane.
+        let calls = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let deps = rec_deps(calls.clone(), true);
+        let park_home =
+            AgentsHome::at(std::env::temp_dir().join(format!("pc3p-{}", std::process::id())));
+        let _ = std::fs::remove_dir_all(park_home.root());
+        let out = run_leave_lane(
+            &park_home,
+            &scan,
+            &lane,
+            None,
+            &ProviderCapConfig::default(),
+            now,
+            &deps,
         );
+        assert_eq!(out, "wait: park-mode");
+        let calls = calls.borrow();
+        assert!(calls.iter().all(|c| !c.starts_with("spawn:")), "{calls:?}");
+        assert!(calls.iter().any(|c| c == "alert:zai:zai-main"), "{calls:?}");
     }
 
     fn read_journal(home: &AgentsHome) -> Vec<String> {
