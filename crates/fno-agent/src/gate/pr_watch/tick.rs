@@ -1630,13 +1630,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn stranded_cut_token_names_progress_only_after_a_completed_root() {
-        assert_eq!(stranded_cut_token(0), None);
-        assert_eq!(stranded_cut_token(1), Some("progressing"));
-        assert_eq!(stranded_cut_token(7), Some("progressing"));
-    }
-
-    #[test]
     fn the_deadline_stays_under_the_interval_and_the_env_seam_is_unclamped() {
         let _guard = crate::claims::test_env_lock()
             .lock()
@@ -1665,6 +1658,12 @@ mod tests {
         });
         clock::set_deadline(None);
         assert_eq!(answer.err(), Some(DoorError::Cut));
+        // The cut classifier rides the same semantics: work already landed
+        // reads progress; a wedge (zero completed roots) keeps the starved
+        // cut row.
+        assert_eq!(stranded_cut_token(0), None);
+        assert_eq!(stranded_cut_token(1), Some("progressing"));
+        assert_eq!(stranded_cut_token(7), Some("progressing"));
     }
 }
 

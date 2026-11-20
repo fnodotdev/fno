@@ -2620,14 +2620,11 @@ mod tests {
         assert!(heal.failing);
         assert!(!heal.starved);
         assert_eq!(render_row(heal).split_whitespace().nth(1), Some("FAIL"));
-    }
 
-    #[test]
-    fn a_merge_arm_dispositioning_its_queue_is_not_starved() {
-        // The live 2026-11-20 shape: the queue fully dispositions every tick
-        // (held on a recorded dispatch hold, skipped as merged or parked),
-        // the budget never fires, and the row's skip stays None. Dispositions
-        // are the merge arm's delivery, so the window is not starvation.
+        // The merge arm's delivery is dispositions: the live 2026-11-20
+        // shape held every grant (dispatch hold, merged, parked) with the
+        // budget never firing, so the row's acted counts the dispositions
+        // and the window is not starvation.
         let dir = temp_dir();
         let path = dir.join("events.jsonl");
         write_rows(
