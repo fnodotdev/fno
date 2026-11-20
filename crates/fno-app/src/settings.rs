@@ -859,3 +859,24 @@ mod tests {
         assert!(st.page.is_none());
     }
 }
+
+/// The --shot-settings script: the panel, a filtered query, or the theme
+/// page open. Each drives the real paths, as the find bar's shot does.
+pub(crate) fn apply_shot(state: &mut SettingsState, shot: crate::SettingsShot) {
+    match shot {
+        crate::SettingsShot::Panel => {}
+        crate::SettingsShot::Filter => {
+            state.query.edit("", Some("notify"));
+        }
+        crate::SettingsShot::Page => {
+            state.selected = 0;
+            let _ = key(
+                state,
+                &Key {
+                    key: "enter",
+                    ..Key::default()
+                },
+            );
+        }
+    }
+}

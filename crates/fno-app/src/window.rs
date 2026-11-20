@@ -1736,17 +1736,22 @@ impl Root {
     }
 
     /// ⌘,: toggle the Settings panel. Opening it closes the key sheet and
-    /// the palette, and builds the rows from the live config, fleet and
-    /// installed monospaced faces.
+    /// the palette.
     fn toggle_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings.take().is_some() {
             cx.notify();
             return;
         }
+        let fonts = settings::mono_fonts(window);
+        self.open_settings_with(fonts, cx);
+    }
+
+    /// The open half: rows from the live config, fleet and the given
+    /// faces. The shot path calls it with pre-measured faces.
+    pub(super) fn open_settings_with(&mut self, fonts: Vec<String>, cx: &mut Context<Self>) {
         fno::ui_usage::click("app", "settings_open");
         self.sheet = false;
         self.goto = None;
-        let fonts = settings::mono_fonts(window);
         let config = crate::global_config_raw();
         let machines = self
             .board
@@ -1764,7 +1769,6 @@ impl Root {
         });
         cx.notify();
     }
-
     /// The panel's click-outside close (settings.rs's backdrop listener).
     pub(super) fn close_settings(&mut self, cx: &mut Context<Self>) {
         self.settings = None;
@@ -3002,6 +3006,7 @@ pub(super) fn root_for_shot(
     family: String,
     font_size: f32,
     find: Option<crate::FindShot>,
+    settings: Option<crate::SettingsShot>,
     window: &mut Window,
     cx: &mut App,
 ) -> gpui::Entity<Root> {
@@ -3041,6 +3046,15 @@ pub(super) fn root_for_shot(
             root.find_key(find::FindKey::Edit("the".to_owned()), cx);
             if find == crate::FindShot::Chords {
                 root.picking = true;
+            }
+        });
+    }
+    if let Some(shot) = settings {
+        let fonts = settings::mono_fonts(window);
+        root.update(cx, |root, cx| root.open_settings_with(fonts, cx));
+        root.update(cx, |root, cx| {
+            if let Some(st) = root.settings.as_mut() {
+                settings::apply_shot(st, shot);
             }
         });
     }

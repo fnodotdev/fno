@@ -80,10 +80,23 @@ pub struct ShotOptions {
     pub mode: Option<MainView>,
     /// The find bar state the frame paints over the chat view.
     pub find: Option<FindShot>,
+    /// The Settings panel state the frame paints.
+    pub settings: Option<SettingsShot>,
 }
 
 /// The find-bar states `--shot-find` paints.
 #[derive(Clone, Copy, PartialEq)]
+/// The --shot-settings values.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SettingsShot {
+    /// The open panel.
+    Panel,
+    /// The panel with `notify` typed through the real field.
+    Filter,
+    /// The panel with the Theme choice page open through real Enter.
+    Page,
+}
+
 pub enum FindShot {
     /// The bar open with a query typed; the hint at rest: bare arrows.
     Bar,

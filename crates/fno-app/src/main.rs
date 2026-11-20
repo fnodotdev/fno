@@ -49,6 +49,11 @@ struct Args {
     /// forces the cmd-held hint.
     #[arg(long = "shot-find", value_enum)]
     shot_find: Option<ShotFind>,
+    /// Settings-panel state --shot paints: `panel` opens the panel,
+    /// `filter` types `notify` through the real field, `page` opens the
+    /// Theme choice page through real Enter.
+    #[arg(long = "shot-settings", value_enum)]
+    shot_settings: Option<ShotSettings>,
     /// Hold the composited shot window up for a foreign capturer
     /// instead of capturing. Diagnostic.
     #[arg(long = "shot-hold", hide = true)]
@@ -88,6 +93,17 @@ enum ShotFind {
     Chords,
 }
 
+/// The --shot-settings values.
+#[derive(clap::ValueEnum, Clone)]
+enum ShotSettings {
+    /// The open panel.
+    Panel,
+    /// The panel with `notify` typed.
+    Filter,
+    /// The Theme choice page open.
+    Page,
+}
+
 fn main() {
     let args = Args::parse();
     let shot = if args.shot {
@@ -108,6 +124,11 @@ fn main() {
             find: args.shot_find.map(|f| match f {
                 ShotFind::Bar => fno_app::FindShot::Bar,
                 ShotFind::Chords => fno_app::FindShot::Chords,
+            }),
+            settings: args.shot_settings.map(|s| match s {
+                ShotSettings::Panel => fno_app::SettingsShot::Panel,
+                ShotSettings::Filter => fno_app::SettingsShot::Filter,
+                ShotSettings::Page => fno_app::SettingsShot::Page,
             }),
             hold: args.shot_hold,
         })
