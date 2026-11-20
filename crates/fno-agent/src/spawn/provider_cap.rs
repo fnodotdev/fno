@@ -109,7 +109,7 @@ impl CapSnapshot {
     }
 
     pub fn open_lanes(&self) -> Vec<&CapLane> {
-        self.lanes.iter().filter(|l| l.state == "open").collect()
+        self.lanes.iter().filter(|l| l.state == "capped").collect()
     }
 }
 
@@ -905,9 +905,9 @@ pub fn snapshot_with(
         {
             "returning"
         } else if capped_n >= cfg.quorum as usize || (capped_n >= 1 && reset_epoch.is_some()) {
-            "open"
+            "capped"
         } else {
-            "closed"
+            "clear"
         };
         let missing = if lane_tz.is_some() {
             Vec::new()
@@ -1040,10 +1040,10 @@ pub struct QuotaState {
 pub fn quota_details_from_snapshot(snapshot: &CapSnapshot) -> BTreeMap<String, QuotaState> {
     fn rank(state: &str) -> u8 {
         match state {
-            "open" => 4,
+            "capped" => 4,
             "returning" => 3,
             "unmeasured" => 2,
-            "closed" => 1,
+            "clear" => 1,
             _ => 0,
         }
     }
@@ -2328,7 +2328,7 @@ mod tests {
         let glm: Vec<_> = snap.lanes.iter().filter(|l| l.provider == "zai").collect();
         assert_eq!(glm.len(), 1, "one lane, not one per row");
         assert_eq!(glm[0].members.len(), 3);
-        assert_eq!(glm[0].state, "open");
+        assert_eq!(glm[0].state, "capped");
         assert_eq!(glm[0].reset_epoch, Some(9_999_999_999));
     }
 
@@ -2380,7 +2380,7 @@ mod tests {
             );
             assert!(m.capped, "{} must read its 429 tail", m.name);
         }
-        assert_eq!(lane.state, "open");
+        assert_eq!(lane.state, "capped");
     }
 
     /// A 1308 names its reset in z.ai's own clock. The lane parks until that
@@ -2459,7 +2459,7 @@ mod tests {
         persist_snapshot(
             &home,
             &CapSnapshot {
-                lanes: vec![lane("main", "closed"), lane("backup", "unmeasured")],
+                lanes: vec![lane("main", "clear"), lane("backup", "unmeasured")],
                 measured_at: epoch_to_rfc3339(100),
                 measured_at_epoch: 100,
                 resolver_unavailable: None,
@@ -2504,7 +2504,7 @@ mod tests {
             .iter()
             .find(|l| l.lane == "openai:default")
             .expect("openai:default lane");
-        assert_eq!(lane.state, "closed");
+        assert_eq!(lane.state, "clear");
         let _ = std::fs::remove_dir_all(&root);
 
         let now = 1_789_400_000i64;
@@ -2616,7 +2616,7 @@ mod tests {
             .iter()
             .find(|l| l.lane == "zai:default")
             .expect("zai:default lane");
-        assert_eq!(lane.state, "open");
+        assert_eq!(lane.state, "capped");
         assert_eq!(lane.reset_epoch, Some(1_789_468_862));
         assert!(
             lane.missing_reset_timezone.is_empty(),
@@ -2735,7 +2735,7 @@ mod tests {
             reset_epoch: reset,
             reset_passed_epoch: None,
             missing_reset_timezone: vec![],
-            state: "open".into(),
+            state: "capped".into(),
             members: vec![CapMember {
                 name: "w-1".into(),
                 session_id: Some("99999999-9999-9999-9999-999999999999".into()),

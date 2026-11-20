@@ -356,7 +356,7 @@ fn provider_readings(gate: &GateReading, rows: &[AgentRow]) -> Vec<ProviderCount
             quota: lane
                 .get("quota")
                 .and_then(Value::as_str)
-                .filter(|q| *q != "closed")
+                .filter(|q| *q != "clear")
                 .map(str::to_string),
         });
     }
@@ -697,5 +697,55 @@ mod tests {
             "{providers}"
         );
         assert!(!providers.contains("quota_source"), "{providers}");
+    }
+
+    /// The quota word pins the census filter: the nominal word hides and the
+    /// exceptional word prints, so a lead reads only the lanes worth reading.
+    /// AC3-HP, AC3-ERR.
+    #[test]
+    fn census_hides_the_clear_quota_and_prints_the_capped_word() {
+        let rows = vec![row("chief", Some(900))];
+        let mut gate = gate_with(vec![slot_row("chief", None)]);
+        let mut zai = serde_json::Map::new();
+        zai.insert("cap".into(), serde_json::json!(16));
+        zai.insert("live".into(), serde_json::json!(4));
+        zai.insert("quota".into(), serde_json::json!("clear"));
+        let mut anthropic = serde_json::Map::new();
+        anthropic.insert("cap".into(), serde_json::json!(8));
+        anthropic.insert("live".into(), serde_json::json!(2));
+        anthropic.insert(
+            "quota".into(),
+            serde_json::json!("capped (resets 2026-11-20T18:00:00Z)"),
+        );
+        let mut lanes = serde_json::Map::new();
+        lanes.insert("zai".into(), Value::Object(zai));
+        lanes.insert("anthropic".into(), Value::Object(anthropic));
+        lanes.insert("quota_source".into(), serde_json::json!("snapshot"));
+        gate.lanes = Some(Value::Object(lanes));
+        let team = census(&rows, &gate, None);
+
+        let zai_row = team
+            .providers
+            .iter()
+            .find(|p| p.name == "zai")
+            .expect("zai row");
+        assert_eq!(
+            zai_row.quota, None,
+            "the clear word hides as the nominal state"
+        );
+        let anthropic_row = team
+            .providers
+            .iter()
+            .find(|p| p.name == "anthropic")
+            .expect("anthropic row");
+        assert_eq!(
+            anthropic_row.quota.as_deref(),
+            Some("capped (resets 2026-11-20T18:00:00Z)"),
+            "the capped word prints"
+        );
+
+        let providers = provider_lines(&team.providers, 200).join("\n");
+        assert!(providers.contains("quota capped (resets"), "{providers}");
+        assert!(!providers.contains("quota clear"), "{providers}");
     }
 }
