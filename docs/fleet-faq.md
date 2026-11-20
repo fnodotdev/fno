@@ -88,7 +88,7 @@ The provider-cap actor brings them back, not the watchdog and not a clock. Watch
 
 What happens while the lane is open depends on `[provider_cap] mode`. The default is `park`. When the lane opens, each owning lead gets one mail. The spawn gate refuses new work on the lane until the named reset, and `fno agent top` shows the lane as `PARKED until <reset>`. Nothing moves to another paid lane. After the reset, the parked workers resume on their own lane.
 
-To move important work instead, set `mode = "triage"` and name the lanes in `destinations`, for example `["codex-luna", "claude-sonnet-5-5"]`. A worker whose node is p0 or p1, or has an open PR, then moves with a handoff doc to the first lane that accepts the spawn. The rest still park. Set `mode = "ask"` to move nothing until you answer, or `enabled = false` to turn the actor off.
+To move important work instead, set `mode = "triage"` and name the lanes in `destinations`, for example `["codex-luna", "claude-sonnet-5-5"]`. A worker on a p0 or p1 node, or with an open PR, then moves with a handoff doc. It goes to the first lane that accepts the spawn. The rest still park. Set `mode = "ask"` to move nothing until you answer, or `enabled = false` to turn the actor off.
 
 ## My worker did real work and never reported it
 
