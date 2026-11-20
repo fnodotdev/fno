@@ -257,11 +257,46 @@ impl Conversation {
     /// Fold one event. Returns the index of the row it added or changed.
     pub fn push(&mut self, event: ChatEvent) -> Option<usize> {
         let at = event.at_ms;
+        let closed = self.close_stale(&event.body);
         let row = self.fold(event);
         if let (Some(i), Some(at)) = (row, at) {
             self.began.entry(i).or_insert(at);
         }
-        row
+        match (closed, row) {
+            (Some(c), Some(r)) => Some(c.min(r)),
+            (c, r) => c.or(r),
+        }
+    }
+
+    /// An agent blocked on a question emits nothing until it is answered, so
+    /// any later turn, text or call means the question is over, and so does
+    /// its own failed result. A harness that never records an answer (codex)
+    /// or records a denial as a plain tool result (opencode) would otherwise
+    /// keep the strip in the composer's place for good.
+    fn close_stale(&mut self, body: &ChatBody) -> Option<usize> {
+        let call = match body {
+            ChatBody::ToolFinished { call_id, .. } => Some(call_id.as_str()),
+            ChatBody::UserMessage { .. }
+            | ChatBody::TurnStarted { .. }
+            | ChatBody::TurnEnded { .. }
+            | ChatBody::TextStarted { .. }
+            | ChatBody::ThinkingStarted { .. }
+            | ChatBody::ToolCalled { .. } => None,
+            _ => return None,
+        };
+        let (i, slot) = self
+            .items
+            .iter_mut()
+            .enumerate()
+            .rev()
+            .find_map(|(i, it)| match it {
+                Item::Question {
+                    call_id, answer, ..
+                } if answer.is_none() && call.is_none_or(|c| c == call_id) => Some((i, answer)),
+                _ => None,
+            })?;
+        *slot = Some("no answer recorded".into());
+        Some(i)
     }
 
     fn fold(&mut self, event: ChatEvent) -> Option<usize> {
@@ -419,12 +454,22 @@ mod tests {
         }
         assert!(conv.open_question().is_none());
         assert!(matches!(&conv.items[0], Item::Question { answer: Some(a), .. } if a == "Hook"));
-    }
-
-    #[test]
-    fn a_multi_select_stays_a_plain_line() {
-        let p = json!({"questions": [{"question": "Q", "multiSelect": true, "options": [{"label": "a"}]}]});
-        assert!(Ask::parse(&p).is_none());
+        // A harness that never records an answer: the next turn closes it,
+        // and a multi-select never opens a strip.
+        let mut conv = Conversation::default();
+        let rows = [
+            json!({"kind": "question_asked", "call_id": "q", "prompt": {"questions": [{"question": "Q", "options": [{"label": "a"}]}]}}),
+            json!({"kind": "question_asked", "call_id": "m", "prompt": {"questions": [{"question": "Q", "multiSelect": true, "options": [{"label": "a"}]}]}}),
+            json!({"kind": "turn_started", "turn_id": "t2"}),
+        ];
+        let mut touched = Vec::new();
+        for (seq, body) in rows.into_iter().enumerate() {
+            let line = json!({"seq": seq, "source": {"type": "line", "offset": seq}, "body": body});
+            touched.push(conv.push(serde_json::from_value(line).unwrap()));
+        }
+        assert!(matches!(&conv.items[1], Item::Line(_)));
+        assert_eq!(touched[2], Some(0));
+        assert!(conv.open_question().is_none());
     }
 
     #[test]

@@ -1036,9 +1036,18 @@ impl Root {
             );
             return;
         };
-        let Some(option) = menu.options.get(pick) else {
+        // The pane's menu must be this question's: the row whose label holds
+        // the picked option's text. Any other prompt in the pane (a
+        // permission ask, a stale question) fails closed instead of taking
+        // a keystroke meant for another menu.
+        let want = ask.choices[pick].label.trim().to_lowercase();
+        let Some(option) = menu
+            .options
+            .iter()
+            .find(|o| o.label.to_lowercase().contains(&want))
+        else {
             self.say(
-                "the pane's menu has fewer rows than the question".into(),
+                "the pane's menu is not this question: answer in the pane".into(),
                 cx,
             );
             return;
