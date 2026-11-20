@@ -197,7 +197,7 @@ impl PrefsCache {
         // so a migrated install's switches would read as defaults here.
         let path = fno::config_cli::global_settings_path()
             .parent()
-            .and_then(|dir| crate::pick_global_file(dir.to_path_buf()))
+            .and_then(|dir| crate::pick_global_file(dir))
             .unwrap_or_else(|| fno::config_cli::global_settings_path());
         let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
         if mtime != self.mtime {

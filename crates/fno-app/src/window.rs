@@ -307,6 +307,10 @@ impl Root {
         Self::write_pid_file(&session);
         let sent_size = grid_size(window.viewport_size(), metrics.cell);
         let light = super::palette::appearance_is_light(window.appearance());
+        let font_want = (
+            metrics.font.family.to_string(),
+            f32::from(metrics.font_size),
+        );
         let theme_cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());
         let (palette, theme_warning) = super::palette::for_appearance(light, &theme_cwd);
         // The key layer (config.mux.prefix, [mux.keys]), installed before the
@@ -359,10 +363,7 @@ impl Root {
             find: None,
             launch: launch::Panel::default(),
             settings: None,
-            font_want: (
-                metrics.font.family.to_string(),
-                f32::from(metrics.font_size),
-            ),
+            font_want,
             _settings_write: None,
             preedit: None,
             _reader: None,
@@ -1902,7 +1903,7 @@ impl Root {
     /// move `font_want`, and render re-measures the panes there.
     fn on_settings_write(
         &mut self,
-        out: Result<(), String>,
+        out: Result<(), settings::Refusal>,
         id: String,
         value: String,
         cx: &mut Context<Self>,
@@ -1936,7 +1937,7 @@ impl Root {
                     }
                 }
             }
-            Err(line) => {
+            Err(settings::Refusal(line)) => {
                 if let Some(st) = self.settings.as_mut() {
                     st.note = Some(line);
                 }
@@ -2898,9 +2899,9 @@ impl Render for Root {
                 f32::from(self.metrics.font_size),
             )
         {
-            let (family, size) = self.font_want.clone();
+            let (family, want) = self.font_want.clone();
             let font = font(family);
-            let size_px = px(size);
+            let size_px = px(want);
             let text = window.text_system();
             let id = text.resolve_font(&font);
             let width = text

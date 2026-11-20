@@ -117,7 +117,7 @@ pub enum FindShot {
 /// The same FNO_CONFIG / FNO_GLOBAL_SETTINGS_PATH pin rules the loader
 /// walks, mirrored here because the reader twin (`digest_overlay.rs`
 /// `global_config_toml`) is pub(crate).
-pub fn global_config_raw() -> Option<serde::json::Value> {
+pub fn global_config_raw() -> Option<serde_json::Value> {
     let dir = fno::config_cli::global_settings_path()
         .parent()?
         .to_path_buf();
@@ -157,7 +157,7 @@ fn pick_global_file(dir: &Path) -> Option<PathBuf> {
 
 /// One dotted key's raw value out of the settings dict.
 fn raw_get(config: Option<&serde_json::Value>, key: &str) -> Option<serde_json::Value> {
-    config.and_then(|raw| fno::config_cli::raw_get(raw, key))
+    config.and_then(|raw| fno::config_cli::raw_get(raw, key).cloned())
 }
 
 /// The launch ladder in one pure function: a flag wins, then `app.font` /
@@ -178,8 +178,11 @@ pub fn launch_prefs(
         .or_else(|| raw_get(config, "app.font").and_then(|v| v.as_str().map(str::to_string)))
         .unwrap_or_else(|| "SF Mono".to_string());
     let font_size = size_flag
-        .or_else(|| raw_get(config, "app.font_size").and_then(|v| v.as_f64()))
-        .map(|f| f as f32)
+        .or_else(|| {
+            raw_get(config, "app.font_size")
+                .and_then(|v| v.as_f64())
+                .map(|f| f as f32)
+        })
         .unwrap_or(13.0);
     let view = mode_flag
         .or_else(|| {
@@ -241,6 +244,7 @@ pub fn run(opts: Options) -> i32 {
             font_size: opts.font_size.unwrap_or(13.0),
             empty_chat: shot.empty_chat,
             cmd: shot.cmd,
+            settings: shot.settings,
         });
     }
     if let Some(home) = std::env::var_os("HOME").and_then(|h| h.into_string().ok()) {

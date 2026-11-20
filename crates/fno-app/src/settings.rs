@@ -20,7 +20,7 @@ use super::keys::{Key, SHEET};
 use super::palette::Palette;
 use super::ui::{self, Edit, LineField, Role};
 use super::window::Root;
-use fno::app_api::web_hq::Machine;
+use fno::app_api::client::org_seats::Machine;
 use fno::ui::theme::THEME_NAMES;
 
 /// The five sections, in panel order.
@@ -122,8 +122,9 @@ fn project_pin(id: &str, cwd: &Path) -> Option<String> {
 /// One dotted key's raw value out of the settings dict. The RAW read: the
 /// schema default never reads as a written key (the launch ladder's rule).
 fn raw_value(config: Option<&Value>, key: &str) -> Option<Value> {
-    config.and_then(|raw| fno::config_cli::raw_get(raw, key))
+    config.and_then(|raw| fno::config_cli::raw_get(raw, key).cloned())
 }
+
 /// The Look section: the theme pin, the font, its size, the first view.
 fn look_rows(config: Option<&Value>, cwd: &Path, fonts: &[String]) -> Vec<Row> {
     let theme = raw_value(config, "mux.theme").and_then(|v| v.as_str().map(str::to_string));
@@ -132,7 +133,7 @@ fn look_rows(config: Option<&Value>, cwd: &Path, fonts: &[String]) -> Vec<Row> {
             reason: format!("set in {path}, which outranks the global file"),
         },
         None => Mode::Page {
-            options: theme_choices(&theme),
+            options: theme_choices(),
             current: theme_current(&theme),
         },
     };
@@ -195,7 +196,7 @@ fn look_rows(config: Option<&Value>, cwd: &Path, fonts: &[String]) -> Vec<Row> {
         },
         Row {
             id: "mux.launch_screen",
-            label: "First view",
+            label: "First view".to_string(),
             value: launch_raw.unwrap_or_else(|| "last view".to_string()),
             mode: Mode::Cycle {
                 options: launch_list.iter().map(|s| s.to_string()).collect(),
@@ -205,7 +206,7 @@ fn look_rows(config: Option<&Value>, cwd: &Path, fonts: &[String]) -> Vec<Row> {
     ]
 }
 
-fn theme_choices(theme: &Option<String>) -> Vec<Choice> {
+fn theme_choices() -> Vec<Choice> {
     let mut out = vec![Choice {
         value: String::new(),
         doc: "follow the system appearance",
@@ -428,7 +429,11 @@ pub(crate) fn key(state: &mut SettingsState, k: &Key) -> Option<Event> {
             }
             _ => {
                 if let Some((_, options, sel)) = state.page.as_mut() {
-                    if let Some(d) = k.key_char.and_then(|c| c.to_digit(10)) {
+                    if let Some(d) = k
+                        .key_char
+                        .and_then(|c| c.chars().next())
+                        .and_then(|c| c.to_digit(10))
+                    {
                         let idx = d.wrapping_sub(1) as usize;
                         if idx < options.len() {
                             *sel = idx;
@@ -588,7 +593,10 @@ fn rows_body(root: &Root, cx: &mut Context<Root>) -> Div {
 fn row_line(row: &Row, selected: bool, p: &Palette, cx: &mut Context<Root>) -> Div {
     let _ = cx;
     let (glyph, value) = match &row.mode {
-        Mode::Toggle { on } => (if *on { "on" } else { "off" }, row.value.clone()),
+        Mode::Toggle { on } => (
+            (if *on { "on" } else { "off" }).to_string(),
+            row.value.clone(),
+        ),
         Mode::Cycle { .. } => (" ".to_string(), format!("< {} >", row.value)),
         Mode::Page { .. } => ("›".to_string(), row.value.clone()),
         Mode::Locked { .. } => ("×".to_string(), row.value.clone()),
@@ -656,15 +664,19 @@ pub(crate) fn mono_fonts(window: &Window) -> Vec<String> {
             let id = ts.resolve_font(&gpui::font(f));
             let i = ts.advance(id, px(12.0), 'i').map(|s| s.width);
             let m = ts.advance(id, px(12.0), 'm').map(|s| s.width);
-            i.is_some() && i == m
+            matches!((i, m), (Ok(a), Ok(b)) if a == b)
         })
         .collect()
 }
 
+/// Why a settings write failed: the CLI's first line, painted under the row.
+#[derive(Debug)]
+pub(crate) struct Refusal(pub String);
+
 /// One bounded `fno config set/unset` shell-out: spawn, poll 3s, kill on
 /// expiry - the mux's `spawn_scoped` bound, mirrored with std handles.
 /// `Err` carries the CLI's first stderr line for the row to paint.
-pub(crate) fn bounded_write(set: bool, id: &str, value: Option<&str>) -> Result<(), String> {
+pub(crate) fn bounded_write(set: bool, id: &str, value: Option<&str>) -> Result<(), Refusal> {
     let mut cmd = std::process::Command::new("fno");
     cmd.arg("config");
     match (set, value) {
@@ -680,7 +692,7 @@ pub(crate) fn bounded_write(set: bool, id: &str, value: Option<&str>) -> Result<
         .stderr(std::process::Stdio::piped());
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("fno config spawn failed: {e}"))?;
+        .map_err(|e| Refusal(format!("fno config spawn failed: {e}")))?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
     loop {
         match child.try_wait() {
@@ -692,14 +704,14 @@ pub(crate) fn bounded_write(set: bool, id: &str, value: Option<&str>) -> Result<
                     .and_then(|o| String::from_utf8(o.stderr).ok())
                     .and_then(|e| e.lines().next().map(str::to_string))
                     .unwrap_or_else(|| format!("fno config set {id} failed"));
-                return Err(line);
+                return Err(Refusal(line));
             }
             Ok(None) if std::time::Instant::now() >= deadline => {
                 let _ = child.kill();
-                return Err(format!("fno config {id} timed out"));
+                return Err(Refusal(format!("fno config {id} timed out")));
             }
             Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
-            Err(e) => return Err(format!("fno config {id}: {e}")),
+            Err(e) => return Err(Refusal(format!("fno config {id}: {e}"))),
         }
     }
 }
