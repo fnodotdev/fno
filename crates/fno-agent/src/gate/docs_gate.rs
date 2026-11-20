@@ -74,16 +74,32 @@ fn docs_value(body: &str) -> Option<String> {
         .map(String::from)
 }
 
-/// True when a value points at a doc: a `#<n>` PR ref, a URL, or a path or
-/// markdown file name. A bare word such as `owed` or `todo` points at none.
+/// Strip the punctuation a sentence puts around a token: `(next.mdx),`.
+fn trim_token(t: &str) -> &str {
+    t.trim_matches(|c: char| {
+        matches!(
+            c,
+            '(' | ')' | '[' | ']' | ',' | ';' | ':' | '.' | '"' | '\''
+        )
+    })
+}
+
+/// True when a value points at a doc: a `#<n>` PR ref, `PR <n>`, a URL, or a
+/// path or markdown file name. Trailing punctuation never hides the doc. A
+/// bare word such as `owed` or `todo` points at none.
 fn value_points_at_doc(value: &str) -> bool {
-    value.split_whitespace().any(|t| {
+    let tokens: Vec<&str> = value.split_whitespace().map(trim_token).collect();
+    tokens.iter().enumerate().any(|(i, t)| {
         t.contains("://")
             || t.ends_with(".md")
             || t.ends_with(".mdx")
             || t.split('#')
                 .skip(1)
                 .any(|n| n.chars().next().is_some_and(|c| c.is_ascii_digit()))
+            || (t.eq_ignore_ascii_case("pr")
+                && tokens
+                    .get(i + 1)
+                    .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit())))
     })
 }
 
@@ -193,6 +209,13 @@ mod tests {
         assert!(body_names_doc(
             "Docs: https://github.com/o/fno-web/pull/9\n"
         ));
+        // Punctuation around the doc token never hides it; `PR <n>` names a PR.
+        assert!(body_names_doc("Docs: docs/next.mdx,\n"));
+        assert!(body_names_doc("Docs: (docs/next.mdx)\n"));
+        assert!(body_names_doc("Docs: fno-web#244, merged\n"));
+        assert!(body_names_doc("Docs: PR 244\n"));
+        assert!(body_names_doc("Docs: see pr 244.\n"));
+        assert!(!body_names_doc("Docs: PR owed\n"));
         // The lowercase spelling carries the same meaning.
         assert!(body_names_doc("docs: docs/reference/pr.mdx\n"));
         assert!(body_names_doc(
