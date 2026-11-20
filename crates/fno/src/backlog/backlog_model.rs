@@ -1428,6 +1428,21 @@ pub fn node(inp: &Inputs, id: &str) -> Option<NodeView> {
 /// sweep runs first so one snapshot binds the order, the underway epics and
 /// the card flags.
 pub async fn gather(graph: &Path, agents: Vec<AgentRow>) -> Inputs {
+    gather_with(graph, agents, FlowRead::Read).await
+}
+
+/// Whether a gather reads the delivery `flow` aggregate. The read ships
+/// every row and the whole ledger to a classifier child, about a third of a
+/// list's wall time on a 7,900-row graph, so a consumer that never shows the
+/// scoreboard skips it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum FlowRead {
+    Read,
+    Skip,
+}
+
+/// [`gather`] with the flow read named by the caller.
+pub async fn gather_with(graph: &Path, agents: Vec<AgentRow>, flow: FlowRead) -> Inputs {
     // One claim snapshot binds the order, the underway epics and the card
     // flags. A failed sweep is an errors line, never an empty board: the
     // keeper then reads the claim store itself and refuses when it cannot.
@@ -1441,7 +1456,7 @@ pub async fn gather(graph: &Path, agents: Vec<AgentRow>) -> Inputs {
     }
     let graph = graph.to_path_buf();
     tokio::task::spawn_blocking(move || {
-        gather_blocking(&graph, agents, live_claims, errors, sweep_failed)
+        gather_blocking(&graph, agents, live_claims, errors, sweep_failed, flow)
     })
     .await
     .unwrap_or_else(|e| Inputs {
@@ -1488,6 +1503,7 @@ fn gather_blocking(
     live_claims: HashMap<String, String>,
     mut errors: Vec<String>,
     sweep_failed: bool,
+    flow_read: FlowRead,
 ) -> Inputs {
     let backend_name = external_backend_name();
     let external = external_backend_selected();
@@ -1547,7 +1563,8 @@ fn gather_blocking(
                 (Vec::new(), HashSet::new(), HashMap::new())
             }
         };
-    // (5) The ledger at <state root>/ledger.json.
+    // (5) The ledger at <state root>/ledger.json. A caller that skips flow
+    // never reads it either.
     let path = ledger_path();
     /// The ledger document; only its rows ride to the classifier.
     #[derive(Default, Deserialize)]
@@ -1555,9 +1572,10 @@ fn gather_blocking(
     struct Ledger {
         entries: Value,
     }
-    let ledger: Vec<Value> = match std::fs::read_to_string(&path) {
-        Err(_) => Vec::new(),
-        Ok(text) => match serde_json::from_str::<Value>(&text) {
+    let ledger_text = (flow_read == FlowRead::Read).then(|| std::fs::read_to_string(&path));
+    let ledger: Vec<Value> = match ledger_text {
+        None | Some(Err(_)) => Vec::new(),
+        Some(Ok(text)) => match serde_json::from_str::<Value>(&text) {
             Ok(v) => match Ledger::deserialize(&v).unwrap_or_default().entries {
                 Value::Array(entries) => entries,
                 _ => Vec::new(),
@@ -1569,7 +1587,9 @@ fn gather_blocking(
         },
     };
     // (6) Flow over the rows and the ledger.
-    let flow = if external {
+    let flow = if flow_read == FlowRead::Skip {
+        json!({"available": false, "reason": "this read skips the flow aggregate"})
+    } else if external {
         json!({"available": false, "reason": "no ledger flow on an external backend"})
     } else {
         match store_client::flow(graph, &rows, &ledger) {
