@@ -1269,15 +1269,23 @@ pub(crate) fn check_lane_quota_lock(
         return Ok(());
     };
     let reset_unknown = lane.reset_epoch.is_none();
-    if reset_unknown {
-        let target = lane
-            .missing_reset_timezone
-            .first()
-            .map(String::as_str)
-            .unwrap_or(&lane.account);
+    if let Some(target) = lane
+        .missing_reset_timezone
+        .first()
+        .filter(|_| reset_unknown)
+    {
         warnings.push(format!(
             "spawn-gate: provider lane {} has an unknown reset; refusing; set reset_timezone on the [[accounts.records]] entry for {target}; no worker launched",
             lane.lane
+        ));
+    } else if reset_unknown {
+        // The zone is known, so the 429s named no reset at all: a rate
+        // refusal (1302), not the usage window. The hold runs from the
+        // newest capped 429.
+        warnings.push(format!(
+            "spawn-gate: provider lane {} is returning 429s that name no reset; refusing for up to {}h after the newest; no worker launched",
+            lane.lane,
+            UNKNOWN_RESET_HOLD_S / 3600
         ));
     } else {
         let when = chrono_like_iso(lane.reset_epoch.unwrap() as f64);
