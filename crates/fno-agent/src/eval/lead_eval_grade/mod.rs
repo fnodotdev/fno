@@ -486,7 +486,8 @@ mod tests {
         let dir = eval_dir(root.path());
         let value = json!({"session": "abcdef1234567890"});
         let fake = spawn_with("=== part3-failures.md ===\nonly this\n");
-        let err = grade_with(&dir, &value, &ReaderRoute::pinned("claude", "opus"), &fake).unwrap_err();
+        let err =
+            grade_with(&dir, &value, &ReaderRoute::pinned("claude", "opus"), &fake).unwrap_err();
         assert!(err.contains("part4-reforms.md"), "{err}");
         assert!(std::fs::read_to_string(dir.join("part3-failures.md"))
             .unwrap()
