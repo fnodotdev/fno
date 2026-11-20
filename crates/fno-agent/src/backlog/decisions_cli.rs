@@ -178,6 +178,14 @@ pub(crate) enum CoreError {
     ValueError(String),
 }
 
+impl std::fmt::Display for CoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CoreError::Read(s) | CoreError::ValueError(s) => f.write_str(s),
+        }
+    }
+}
+
 pub(crate) struct ListOut {
     pub(crate) label: String,
     pub(crate) rows: Vec<Value>,

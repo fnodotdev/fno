@@ -15,6 +15,8 @@
 //! the `decisions` array alone.
 
 use serde_json::{json, Value};
+
+use super::decisions_cli::CoreError;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::SystemTime;
@@ -214,13 +216,12 @@ fn store_rows() -> StoreRead {
 /// same StoreKey the decisions rows cache under: one store version costs
 /// one graph read per process, so the merge gate's per-PR law listing
 /// stops re-reading the whole graph on every call.
-pub(crate) fn cached_graph_entries() -> Result<Arc<Vec<Value>>, String> {
+pub(crate) fn cached_graph_entries() -> Result<Arc<Vec<Value>>, CoreError> {
     let graph = crate::graph_get::default_graph_path();
     let jsonl = crate::decision_index::default_state_path("decisions.jsonl");
-    graph_from_cache(
-        store_key(&graph, &jsonl),
-        super::decisions_cli::read_graph_entries,
-    )
+    graph_from_cache(store_key(&graph, &jsonl), || {
+        super::decisions_cli::read_graph_entries().map_err(super::decisions_cli::CoreError::Read)
+    })
 }
 
 /// The cache half of `cached_graph_entries`, keyed and reader taken
@@ -228,10 +229,10 @@ pub(crate) fn cached_graph_entries() -> Result<Arc<Vec<Value>>, String> {
 /// graph store.
 fn graph_from_cache(
     key: StoreKey,
-    read: impl FnOnce() -> Result<Vec<Value>, String>,
-) -> Result<Arc<Vec<Value>>, String> {
+    read: impl FnOnce() -> Result<Vec<Value>, CoreError>,
+) -> Result<Arc<Vec<Value>>, CoreError> {
     let Ok(mut guard) = cached_store().lock() else {
-        return Err("the store cache lock poisoned".to_string());
+        return Err(CoreError::Read("the store cache lock poisoned".to_string()));
     };
     if let Some(entry) = guard.as_ref() {
         if entry.key == key {
@@ -302,14 +303,15 @@ fn render_rows(rows: &[Value], damaged: usize, query: &Query) -> Answer {
     // The law listing (no subject) needs the graph when any row reads it:
     // the cached read answers with no store clone and one graph read per
     // store version, instead of one per render.
-    let cached_read = if soft.is_none() && any_row_reads_graph(rows, query.lane) {
-        Some(cached_graph_entries())
-    } else {
-        None
-    };
+    let cached_read =
+        if soft.is_none() && super::decisions_cli::any_row_reads_graph(rows, query.lane) {
+            Some(cached_graph_entries())
+        } else {
+            None
+        };
     let (graph_rows, unread) = match cached_read {
         Some(Ok(rows)) => (Some(rows), None),
-        Some(Err(reason)) => (None, Some(reason)),
+        Some(Err(e)) => (None, Some(e.to_string())),
         None => (None, None),
     };
     let ent = super::decisions_cli::GraphEntries {
