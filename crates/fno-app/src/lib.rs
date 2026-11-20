@@ -85,6 +85,10 @@ pub struct ShotOptions {
     pub cmd: bool,
     /// The find bar state the frame paints over the chat view.
     pub find: Option<FindShot>,
+    /// Text the frame's composer holds.
+    pub draft: Option<String>,
+    /// Harness the start composer shows picked.
+    pub harness: Option<String>,
 }
 
 /// The find-bar states `--shot-find` paints.
@@ -139,6 +143,8 @@ pub fn run(opts: Options) -> i32 {
             font_size: opts.font_size,
             empty_chat: shot.empty_chat,
             cmd: shot.cmd,
+            draft: shot.draft,
+            harness: shot.harness,
         });
     }
     if let Some(home) = std::env::var_os("HOME").and_then(|h| h.into_string().ok()) {

@@ -318,6 +318,12 @@ impl Launch {
         };
     }
 
+    /// The shot's harness pick, with the skills reread for it.
+    pub(crate) fn set_harness_for_shot(&mut self, harness: String) {
+        self.harness = harness;
+        self.refresh_skills();
+    }
+
     /// One kind pick lands, the kind row's flip or a cmd-digit: the
     /// derived caches follow the new kind.
     pub(crate) fn set_kind(&mut self, kind: Kind) {
@@ -1033,33 +1039,72 @@ fn axis_picker_rows(l: &Launch, p: &Palette, cx: &mut Context<Root>) -> Div {
 /// The agent kind's skill matches under the task box, grouped by source
 /// with a label per group; tab fills the top one. None show unless the
 /// draft leads with the harness's sigil and the harness lists skills.
-fn skill_hints(l: &Launch, p: &Palette) -> Option<Div> {
-    skill_rows(l.skill_completions(), skills::sigil(&l.harness)?, p)
+pub(crate) fn skill_hints(l: &Launch, p: &Palette) -> Option<Div> {
+    skill_rows(
+        l.skill_completions(),
+        skills::sigil(&l.harness)?,
+        l.draft.text(),
+        p,
+    )
 }
 
-/// The grouped popover rows, shared by the start and chat composers.
-pub(crate) fn skill_rows(rows: Vec<Skill>, sigil: char, p: &Palette) -> Option<Div> {
+/// The grouped popover rows, shared by the start and chat composers. The
+/// name wears the theme ink with the typed prefix in bold; a long
+/// description cuts to one line.
+pub(crate) fn skill_rows(rows: Vec<Skill>, sigil: char, draft: &str, p: &Palette) -> Option<Div> {
     if rows.is_empty() {
         return None;
     }
-    let mut col = div().flex().flex_col().px_2().gap(px(2.0));
+    let query = draft.trim_start_matches(sigil).to_lowercase();
+    let mut col = div()
+        .flex()
+        .flex_col()
+        .min_w_0()
+        .overflow_hidden()
+        .px_2()
+        .gap(px(2.0));
     let mut group = None;
     for s in rows {
         if group != Some(s.source) {
             group = Some(s.source);
             col = col.child(ui::text(s.source.label(), Role::Label, p));
         }
+        let at = s.name.to_lowercase().find(&query).unwrap_or(0);
+        let hit = at..(at + query.len()).min(s.name.len());
+        let (pre, mid, post) = match (
+            s.name.get(..hit.start),
+            s.name.get(hit.clone()),
+            s.name.get(hit.end..),
+        ) {
+            (Some(a), Some(b), Some(c)) => (a.to_string(), b.to_string(), c.to_string()),
+            _ => (String::new(), String::new(), s.name.clone()),
+        };
         col = col.child(
             div()
                 .flex()
                 .flex_row()
+                .min_w_0()
                 .gap(px(8.0))
                 .child(
                     div()
-                        .text_color(rgb(p.accent))
-                        .child(format!("{sigil}{}", s.name)),
+                        .flex()
+                        .flex_row()
+                        .flex_none()
+                        .text_color(rgb(p.fg))
+                        .child(sigil.to_string())
+                        .child(pre)
+                        .child(div().font_weight(FontWeight::BOLD).child(mid))
+                        .child(post),
                 )
-                .child(ui::text(s.description, Role::Hint, p)),
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child(ui::text(s.description, Role::Hint, p)),
+                ),
         );
     }
     Some(col)

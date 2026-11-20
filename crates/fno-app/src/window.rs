@@ -1589,6 +1589,7 @@ impl Root {
                 }
             }
             "enter" => self.launch.state.draft.replace_selection("\n"),
+            "tab" if self.launch.state.complete_skill() => {}
             "backspace" => self.launch.state.draft.backspace(),
             "delete" => self.launch.state.draft.delete(),
             "left" if cmd => self.launch.state.draft.home(shift),
@@ -3049,6 +3050,8 @@ pub(super) fn root_for_shot(
     find: Option<crate::FindShot>,
     empty_chat: bool,
     cmd: bool,
+    draft: Option<String>,
+    harness: Option<String>,
     window: &mut Window,
     cx: &mut App,
 ) -> gpui::Entity<Root> {
@@ -3087,6 +3090,17 @@ pub(super) fn root_for_shot(
         }
         if cmd {
             root.picking = true;
+        }
+        if let Some(h) = harness {
+            root.launch.state.set_harness_for_shot(h);
+        }
+        if let Some(text) = draft {
+            if root.shot_empty_chat {
+                root.launch.state.refresh_skills();
+                root.launch.state.draft.replace_selection(&text);
+            } else {
+                root.chat.draft.replace_selection(&text);
+            }
         }
     });
     if let Some(find) = find {
