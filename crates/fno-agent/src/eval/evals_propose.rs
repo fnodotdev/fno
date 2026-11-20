@@ -1886,6 +1886,7 @@ mod tests {
     const BANK_A: &str = "id: golden-answer-the-question\ntier: capability\nprompt: p-a\ngrade:\n  - kind: file-exists\n    path: reply.md\ntimeout_minutes: 5\ntags: [golden]\ngolden:\n  source: {kind: correction, ref: \"c:1\"}\n  quote: quote-a\n  expected: expected-a\n  rule: rule-a\n  failure_type: t1\n  cost: trust\n  outcome: failed\n";
     const BANK_B: &str = "id: golden-agent-decide-no-operator-authority\ntier: capability\nprompt: prompt-b words here\ngrade:\n  - kind: exit\n    command: \"grep -q zb reply.md\"\n  - kind: grep\n    path: reply.md\n    pattern: zb-marker\ntimeout_minutes: 5\ntags: [golden]\ngolden:\n  source: {kind: correction, ref: \"c:2\"}\n  quote: quote-b\n  expected: expected-b\n  rule: rule-b\n  failure_type: t1\n  cost: trust\n  outcome: failed\n";
     const FIXTURE_OK: &str = "cases:\n  - {id: g1, label: good, files: {\"reply.md\": \"yes\\n\"}}\n  - {id: g2, label: good, files: {\"reply.md\": \"yes 2\\n\"}}\n  - {id: g3, label: good, files: {\"reply.md\": \"yes 3\\n\"}}\n  - {id: b1, label: bad, files: {}}\n  - {id: b2, label: bad, files: {}}\n  - {id: b3, label: bad, files: {}}\n";
+    const FIXTURE_B: &str = "cases:\n  - {id: g1, label: good, files: {\"reply.md\": \"zb-marker\\n\"}}\n  - {id: g2, label: good, files: {\"reply.md\": \"zb-marker 2\\n\"}}\n  - {id: g3, label: good, files: {\"reply.md\": \"zb-marker 3\\n\"}}\n  - {id: b1, label: bad, files: {}}\n  - {id: b2, label: bad, files: {\"reply.md\": \"no\\n\"}}\n  - {id: b3, label: bad, files: {}}\n";
     const CATALOG: &str =
         "cost_order: [trust]\ntypes:\n  - {id: t1, cost: trust, description: type one}\n";
 
@@ -1912,13 +1913,17 @@ mod tests {
         std::fs::create_dir_all(&bank).unwrap();
         std::fs::create_dir_all(&metrics).unwrap();
         std::fs::write(bank.join("failure-types.yaml"), CATALOG).unwrap();
-        for (name, body) in [
-            ("golden-answer-the-question.yaml", BANK_A),
-            ("golden-agent-decide-no-operator-authority.yaml", BANK_B),
+        for (name, body, fixture) in [
+            ("golden-answer-the-question.yaml", BANK_A, FIXTURE_OK),
+            (
+                "golden-agent-decide-no-operator-authority.yaml",
+                BANK_B,
+                FIXTURE_B,
+            ),
         ] {
             std::fs::write(bank.join(name), body).unwrap();
             let id = name.trim_end_matches(".yaml");
-            std::fs::write(metrics.join(format!("{id}.yaml")), FIXTURE_OK).unwrap();
+            std::fs::write(metrics.join(format!("{id}.yaml")), fixture).unwrap();
         }
         if extra_unproved {
             let body = BANK_B
@@ -2481,50 +2486,73 @@ mod tests {
         assert!(at(&receipt, "/generated_at").as_str().is_some());
     }
 
-    /// Change 1: the preregistered split, the cluster pick and the stripped proposer input (AC1-HP, AC1-EDGE), and the dry run that prints them.
-    fn the_proposer_reads_train_goldens_only() {
-        the_split_is_preregistered();
-        proposer_input_carries_train_only_and_strips_answer_keys();
-        an_unproved_type_never_picks();
-        a_held_out_only_cluster_reads_quotes_only();
-        dry_run_prints_clusters_and_calls_no_model();
-    }
-
-    /// Change 2: a reply that leaves repo text, edits more than 3 files or quotes an answer key refuses; keep_base passes (AC2-HP).
-    fn the_reply_tripwires_refuse() {
-        a_change_reply_validates_and_keep_base_passes();
-        an_edit_quoting_an_answer_key_refuses_and_names_the_golden();
-        edit_paths_outside_the_allowlist_refuse();
-        more_than_three_files_refuse();
-    }
-
-    /// Change 3: the sign-checked gain rule, the cap and the count-identity ledger (AC3-HP, AC3-EDGE, AC3-LEDGER).
-    fn the_gain_budget_and_ledger_rules() {
-        gain_reads_the_rule();
-        the_ledger_refuses_a_count_mismatch_and_a_duplicate();
-        the_cap_drops_candidates_before_the_base_refuses();
-    }
-
-    /// Change 4: one PR per gain, a row per cluster, keep_base spends no candidate cohort, an open PR reads already_open (AC4-HP, AC4-EDGE, AC2-EDGE).
-    fn a_cycle_ships_at_most_one_pr_per_gain() {
-        a_cycle_opens_one_pr_and_lands_a_row_per_cluster();
-        keep_base_runs_no_candidate_cohort();
-        ship_reads_already_open_and_opens_one_pr_otherwise();
-    }
-
-    /// Change 5: a lost gain opens one revert and records retired; an unproved cluster golden suspends (AC6-HP, AC6-EDGE).
-    fn probation_retires_or_suspends() {
-        probation_retires_a_change_that_stopped_paying();
-        probation_suspends_on_an_unproved_golden();
-    }
-
-    /// One declaration for the module's contracts, one helper per change.
+    /// One declaration for the module's contracts. Each helper runs under
+    /// `catch_unwind`, so one red run names every broken contract at once.
     #[test]
     fn all_contracts_in_one_declaration() {
-        the_proposer_reads_train_goldens_only();
-        the_reply_tripwires_refuse();
-        the_gain_budget_and_ledger_rules();
-        a_cycle_ships_at_most_one_pr_per_gain();
-        probation_retires_or_suspends();
+        let checks: [(&str, fn()); 17] = [
+            ("the_split_is_preregistered", the_split_is_preregistered),
+            (
+                "proposer_input_carries_train_only_and_strips_answer_keys",
+                proposer_input_carries_train_only_and_strips_answer_keys,
+            ),
+            ("an_unproved_type_never_picks", an_unproved_type_never_picks),
+            (
+                "a_held_out_only_cluster_reads_quotes_only",
+                a_held_out_only_cluster_reads_quotes_only,
+            ),
+            (
+                "dry_run_prints_clusters_and_calls_no_model",
+                dry_run_prints_clusters_and_calls_no_model,
+            ),
+            (
+                "a_change_reply_validates_and_keep_base_passes",
+                a_change_reply_validates_and_keep_base_passes,
+            ),
+            (
+                "an_edit_quoting_an_answer_key_refuses_and_names_the_golden",
+                an_edit_quoting_an_answer_key_refuses_and_names_the_golden,
+            ),
+            (
+                "edit_paths_outside_the_allowlist_refuse",
+                edit_paths_outside_the_allowlist_refuse,
+            ),
+            ("more_than_three_files_refuse", more_than_three_files_refuse),
+            ("gain_reads_the_rule", gain_reads_the_rule),
+            (
+                "the_ledger_refuses_a_count_mismatch_and_a_duplicate",
+                the_ledger_refuses_a_count_mismatch_and_a_duplicate,
+            ),
+            (
+                "the_cap_drops_candidates_before_the_base_refuses",
+                the_cap_drops_candidates_before_the_base_refuses,
+            ),
+            (
+                "a_cycle_opens_one_pr_and_lands_a_row_per_cluster",
+                a_cycle_opens_one_pr_and_lands_a_row_per_cluster,
+            ),
+            (
+                "keep_base_runs_no_candidate_cohort",
+                keep_base_runs_no_candidate_cohort,
+            ),
+            (
+                "ship_reads_already_open_and_opens_one_pr_otherwise",
+                ship_reads_already_open_and_opens_one_pr_otherwise,
+            ),
+            (
+                "probation_retires_a_change_that_stopped_paying",
+                probation_retires_a_change_that_stopped_paying,
+            ),
+            (
+                "probation_suspends_on_an_unproved_golden",
+                probation_suspends_on_an_unproved_golden,
+            ),
+        ];
+        let failed: Vec<&str> = checks
+            .iter()
+            .filter(|(_, check)| std::panic::catch_unwind(*check).is_err())
+            .map(|(name, _)| *name)
+            .collect();
+        assert!(failed.is_empty(), "failed contracts: {failed:?}");
     }
 }
