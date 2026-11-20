@@ -288,6 +288,25 @@ impl Conversation {
             })
     }
 
+    /// Record the answer on the newest question with this call id.
+    fn answer_question(&mut self, call_id: &str, said: String) -> Option<usize> {
+        let (i, slot) = self
+            .items
+            .iter_mut()
+            .enumerate()
+            .rev()
+            .find_map(|(i, it)| match it {
+                Item::Question {
+                    call_id: id,
+                    answer,
+                    ..
+                } if id.as_str() == call_id => Some((i, answer)),
+                _ => None,
+            })?;
+        *slot = Some(said);
+        Some(i)
+    }
+
     /// Fold one event. Returns the index of the row it added or changed.
     pub fn push(&mut self, event: ChatEvent) -> Option<usize> {
         let at = event.at_ms;
@@ -326,7 +345,9 @@ impl Conversation {
             .find_map(|(i, it)| match it {
                 Item::Question {
                     call_id, answer, ..
-                } if answer.is_none() && call.is_none_or(|c| c == call_id) => Some((i, answer)),
+                } if answer.is_none() && call.is_none_or(|c| c == call_id.as_str()) => {
+                    Some((i, answer))
+                }
                 _ => None,
             })?;
         *slot = Some("no answer recorded".into());
@@ -399,24 +420,10 @@ impl Conversation {
                     serde_json::Value::String(s) => s.clone(),
                     other => other.to_string(),
                 };
-                let open = self
-                    .items
-                    .iter_mut()
-                    .enumerate()
-                    .rev()
-                    .find_map(|(i, it)| match it {
-                        Item::Question {
-                            call_id: id,
-                            answer,
-                            ..
-                        } if *id == call_id => Some((i, answer)),
-                        _ => None,
-                    });
-                if let Some((i, slot)) = open {
-                    *slot = Some(said);
-                    return Some(i);
+                match self.answer_question(&call_id, said.clone()) {
+                    Some(i) => return Some(i),
+                    None => Item::Line(format!("answered: {said}")),
                 }
-                Item::Line(format!("answered: {said}"))
             }
             ChatBody::SubagentStarted { task, .. } => Item::Line(format!(
                 "subagent started: {}",

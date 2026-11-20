@@ -1040,7 +1040,10 @@ impl Root {
         // the picked option's text. Any other prompt in the pane (a
         // permission ask, a stale question) fails closed instead of taking
         // a keystroke meant for another menu.
-        let want = ask.choices[pick].label.trim().to_lowercase();
+        let Some(choice) = ask.choices.get(pick) else {
+            return;
+        };
+        let want = choice.label.trim().to_lowercase();
         let Some(option) = menu
             .options
             .iter()

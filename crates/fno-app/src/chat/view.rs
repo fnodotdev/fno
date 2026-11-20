@@ -12,7 +12,7 @@ use gpui::{
 
 use super::field::Field;
 use super::markdown::{Block, Inline, Runs};
-use super::model::{Ask, Content, Item, Picture};
+use super::model::{Ask, Choice, Content, Item, Picture};
 use super::{Closed, EMPTY_AFTER};
 use crate::find;
 use crate::palette::Palette;
@@ -845,79 +845,91 @@ fn question_strip(root: &Root, ask: &Ask, p: Palette, cx: &mut Context<Root>) ->
                 ),
         );
     for (i, choice) in ask.choices.iter().enumerate() {
-        let picked = i == pick;
-        let mut row = div()
-            .id(ElementId::NamedInteger("choice".into(), i as u64))
-            .flex()
-            .flex_row()
-            .items_start()
-            .gap_2()
-            .px_2()
-            .py_1()
-            .rounded(px(4.0))
-            .cursor_pointer()
-            .hover(move |s| s.bg(rgb(p.hover)))
-            .on_click(cx.listener(move |root, _, _, cx| root.act(Action::PickChoice(i), cx)))
-            .child(
-                div()
-                    .flex_none()
-                    .text_color(rgb(if picked { p.fg } else { p.muted }))
-                    .child(if picked { "●" } else { "○" }),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_color(rgb(p.fg))
-                    .child(choice.label.clone()),
-            );
-        if picked {
-            row = row.bg(rgb(p.row_fill));
-        }
-        if choice.recommended {
-            row = row.child(
-                div()
-                    .flex_none()
-                    .px_1()
-                    .rounded(px(3.0))
-                    .bg(rgb(p.fg))
-                    .text_color(rgb(p.bg))
-                    .child("recommended"),
-            );
-        }
-        strip = strip.child(row);
+        strip = strip.child(choice_row(i, choice, i == pick, p, cx));
     }
-    let picked = ask.choices.get(pick);
-    strip.child(
-        div()
-            .flex()
-            .flex_row()
-            .gap_2()
-            .mt_1()
-            .pt_2()
-            .border_t_1()
-            .border_color(rgb(p.border))
-            .px_2()
-            .child(
-                div()
-                    .flex_none()
-                    .max_w(relative(0.4))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(rgb(p.fg))
-                    .child(
-                        picked
-                            .map(|c| c.label.split(':').next().unwrap_or(&c.label).to_string())
-                            .unwrap_or_default(),
-                    ),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_color(rgb(p.muted))
-                    .child(picked.map(|c| c.detail.clone()).unwrap_or_default()),
-            ),
-    )
+    strip.child(choice_detail(ask.choices.get(pick), p))
+}
+
+/// One option row: the dot, the label and, for the agent's pick, the chip.
+fn choice_row(
+    i: usize,
+    choice: &Choice,
+    picked: bool,
+    p: Palette,
+    cx: &mut Context<Root>,
+) -> Stateful<Div> {
+    let mut row = div()
+        .id(ElementId::NamedInteger("choice".into(), i as u64))
+        .flex()
+        .flex_row()
+        .items_start()
+        .gap_2()
+        .px_2()
+        .py_1()
+        .rounded(px(4.0))
+        .cursor_pointer()
+        .hover(move |s| s.bg(rgb(p.hover)))
+        .on_click(cx.listener(move |root, _, _, cx| root.act(Action::PickChoice(i), cx)))
+        .child(
+            div()
+                .flex_none()
+                .text_color(rgb(if picked { p.fg } else { p.muted }))
+                .child(if picked { "●" } else { "○" }),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_color(rgb(p.fg))
+                .child(choice.label.clone()),
+        );
+    if picked {
+        row = row.bg(rgb(p.row_fill));
+    }
+    if choice.recommended {
+        row = row.child(
+            div()
+                .flex_none()
+                .px_1()
+                .rounded(px(3.0))
+                .bg(rgb(p.fg))
+                .text_color(rgb(p.bg))
+                .child("recommended"),
+        );
+    }
+    row
+}
+
+/// The picked option's short name and description, under the rows.
+fn choice_detail(picked: Option<&Choice>, p: Palette) -> Div {
+    div()
+        .flex()
+        .flex_row()
+        .gap_2()
+        .mt_1()
+        .pt_2()
+        .border_t_1()
+        .border_color(rgb(p.border))
+        .px_2()
+        .child(
+            div()
+                .flex_none()
+                .max_w(relative(0.4))
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(p.fg))
+                .child(
+                    picked
+                        .map(|c| c.label.split(':').next().unwrap_or(&c.label).to_string())
+                        .unwrap_or_default(),
+                ),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_color(rgb(p.muted))
+                .child(picked.map(|c| c.detail.clone()).unwrap_or_default()),
+        )
 }
 
 fn composer(root: &Root, window: &Window, cx: &mut Context<Root>) -> Option<Div> {
