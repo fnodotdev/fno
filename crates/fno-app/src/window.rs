@@ -1836,6 +1836,41 @@ impl Root {
         cx.notify();
     }
 
+    /// A Settings font write moved `font_want`: re-measure the cell here,
+    /// where the text system can measure, and hand every pane the new
+    /// metrics - the grid resize follows on the next paint.
+    fn apply_font_want(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.font_want
+            == (
+                self.metrics.font.family.to_string(),
+                f32::from(self.metrics.font_size),
+            )
+        {
+            return;
+        }
+        let (family, want) = self.font_want.clone();
+        let font = font(family);
+        let size_px = px(want);
+        let text = window.text_system();
+        let id = text.resolve_font(&font);
+        let width = text
+            .advance(id, size_px, 'm')
+            .map(|s| s.width)
+            .unwrap_or(size_px * 0.6);
+        let scale = window.scale_factor();
+        let snap = |v: Pixels| px((f32::from(v) * scale).round() / scale);
+        let metrics = Metrics {
+            font,
+            font_size: size_px,
+            cell: size(snap(width), snap(size_px * 1.25)),
+        };
+        self.metrics = metrics.clone();
+        for view in self.panes.values() {
+            view.update(cx, |v, _| v.metrics = metrics.clone());
+        }
+        cx.notify();
+    }
+
     /// ⌘,: toggle the Settings panel. Opening it closes the key sheet and
     /// the palette.
     fn toggle_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
@@ -1894,7 +1929,8 @@ impl Root {
                     settings::bounded_write(set, &id, if set { Some(&value) } else { None })
                 })
                 .await;
-            let _ = this.update(cx, |root, cx| root.on_settings_write(out, id2, v2, cx));
+            this.update(cx, |root, cx| root.on_settings_write(out, id2, v2, cx))
+                .ok();
         }));
     }
 
@@ -2890,37 +2926,7 @@ impl Render for Root {
             });
         }
         self.adv = ui::advance(window, ui::BODY);
-        // A Settings font write moved `font_want`: re-measure the cell
-        // here, where the text system can measure, and hand every pane
-        // the new metrics - the grid resize follows on the next paint.
-        if self.font_want
-            != (
-                self.metrics.font.family.to_string(),
-                f32::from(self.metrics.font_size),
-            )
-        {
-            let (family, want) = self.font_want.clone();
-            let font = font(family);
-            let size_px = px(want);
-            let text = window.text_system();
-            let id = text.resolve_font(&font);
-            let width = text
-                .advance(id, size_px, 'm')
-                .map(|s| s.width)
-                .unwrap_or(size_px * 0.6);
-            let scale = window.scale_factor();
-            let snap = |v: Pixels| px((f32::from(v) * scale).round() / scale);
-            let metrics = Metrics {
-                font,
-                font_size: size_px,
-                cell: size(snap(width), snap(size_px * 1.25)),
-            };
-            self.metrics = metrics.clone();
-            for view in self.panes.values() {
-                view.update(cx, |v, _| v.metrics = metrics.clone());
-            }
-            cx.notify();
-        }
+        self.apply_font_want(window, cx);
         self.width = window.viewport_size().width;
 
         let main = match self.main {
@@ -3292,7 +3298,12 @@ pub(super) fn root_for_shot(
     }
     if let Some(shot) = settings {
         let fonts = settings::mono_fonts(window);
-        root.update(cx, |root, cx| root.open_settings_with(fonts, cx));
+        // The demo world pins its theme in a project file; the panel's
+        // rows read the global file alone, so the Theme row stays editable.
+        root.update(cx, |root, cx| {
+            root.theme_cwd = PathBuf::from("/");
+            root.open_settings_with(fonts, cx)
+        });
         root.update(cx, |root, _| {
             if let Some(st) = root.settings.as_mut() {
                 settings::apply_shot(st, shot);

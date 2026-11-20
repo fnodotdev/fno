@@ -327,7 +327,9 @@ pub(crate) fn visible<'a>(rows: &'a [SectionRows], query: &str) -> Vec<(usize, &
             q.is_empty()
                 || r.label.to_lowercase().contains(&q)
                 || r.id.contains(&q)
-                || SECTIONS[*si].to_lowercase().contains(&q)
+                || SECTIONS
+                    .get(*si)
+                    .is_some_and(|s| s.to_lowercase().contains(&q))
         })
         .collect()
 }
@@ -353,7 +355,9 @@ pub(crate) fn resolve_enter(rows: &[SectionRows], q: &str, sel: usize) -> Outcom
             if options.len() < 2 {
                 return Outcome::None;
             }
-            let next = options[(current + 1) % options.len()].clone();
+            let Some(next) = options.get((current + 1) % options.len()).cloned() else {
+                return Outcome::None;
+            };
             if next == "last view" {
                 Outcome::Unset { id: row.id }
             } else {
@@ -578,7 +582,9 @@ fn rows_body(root: &Root, cx: &mut Context<Root>) -> Div {
     let list = div()
         .id("settings-rows")
         .flex_1()
+        .min_w_0()
         .min_h_0()
+        .overflow_x_hidden()
         .overflow_y_scroll()
         .children(
             vis.iter()
@@ -589,7 +595,7 @@ fn rows_body(root: &Root, cx: &mut Context<Root>) -> Div {
 }
 
 /// One row: label left, value right, the mode glyph leading, a locked
-/// row's reason dimmed under it.
+/// row's reason dimmed under it while the row is selected.
 fn row_line(row: &Row, selected: bool, p: &Palette, cx: &mut Context<Root>) -> Div {
     let _ = cx;
     let (glyph, value) = match &row.mode {
@@ -607,11 +613,12 @@ fn row_line(row: &Row, selected: bool, p: &Palette, cx: &mut Context<Root>) -> D
         .child(div().flex_1())
         .child(ui::role(div(), Role::Meta, p).child(value));
     match &row.mode {
-        Mode::Locked { reason } => div()
+        Mode::Locked { reason } if selected => div()
             .flex_none()
+            .min_w_0()
             .child(line)
             .child(ui::role(div(), Role::Hint, p).px_3().child(reason.clone())),
-        _ => div().flex_none().child(line),
+        _ => div().flex_none().min_w_0().child(line),
     }
 }
 
@@ -721,7 +728,7 @@ mod tests {
         let rows = build_rows(Some(&cfg(&[])), Path::new("/"), &[], &[]);
         let names: Vec<&str> = rows.iter().map(|(name, _)| *name).collect();
         assert_eq!(names, ["Look", "Alerts", "Machines", "Keys", "Updates"]);
-        let machines = &rows[2].1;
+        let machines = &rows.get(2).expect("machines section").1;
         assert_eq!(machines.len(), 0, "no fleet, no rows");
         let m = Machine {
             host: "m2".into(),
@@ -732,15 +739,18 @@ mod tests {
             ..Machine::default()
         };
         let rows = build_rows(Some(&cfg(&[])), Path::new("/"), &[m], &[]);
-        let machines = &rows[2].1;
+        let machines = &rows.get(2).expect("machines section").1;
         assert_eq!(machines.len(), 1);
         assert_eq!(
-            machines[0].mode,
+            machines.first().expect("one machine").mode,
             Mode::Locked {
                 reason: "add or connect a host from the mux".into()
             }
         );
-        assert_eq!(machines[0].value, "0 seats seen 42s ago");
+        assert_eq!(
+            machines.first().expect("one machine").value,
+            "0 seats seen 42s ago"
+        );
     }
 
     /// The filter matches a label, the dotted key, and the section name.
