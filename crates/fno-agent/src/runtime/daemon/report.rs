@@ -355,7 +355,9 @@ pub(super) fn handle_report(ctx: &Ctx, req: &Request) -> Response {
             Some(i) => Some(i),
             None => match find_uuid_backfill_row(&r.entries, &session_id) {
                 UuidBackfill::One(i) => {
-                    backfill_ids(&mut r.entries[i], &session_id);
+                    if let Some(entry) = r.entries.get_mut(i) {
+                        backfill_ids(entry, &session_id);
+                    }
                     Some(i)
                 }
                 UuidBackfill::None | UuidBackfill::Ambiguous => None,
