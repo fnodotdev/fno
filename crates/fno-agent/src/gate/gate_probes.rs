@@ -869,7 +869,8 @@ pub(crate) fn dispatch_hold_rows(root: &Path, facts: &PrFacts, entries: &[Value]
     // A graph that names no project for this root scopes nothing: every row
     // stays a candidate, never an assumed clear (`row_matches_project`).
     let canonical = crate::paths::canonical_repo_root(root).unwrap_or_else(|| root.to_path_buf());
-    let project = crate::backlog_ready::detect_project(entries, &canonical.to_string_lossy());
+    let entry_refs: Vec<&Value> = entries.iter().collect();
+    let project = crate::backlog_ready::detect_project(&entry_refs, &canonical.to_string_lossy());
     let keys = crate::org_board::prs::pr_binding_keys(
         facts.number as i64,
         &facts.head_ref,
