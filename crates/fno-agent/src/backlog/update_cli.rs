@@ -1630,7 +1630,7 @@ fn apply_mutators(
     if let Some(v) = &args.audience {
         if v.to_lowercase() == "null" {
             return Err(refused(
-                "Error: scope= null refuses: a node always names who it serves. Pass a scope.",
+                "Error: audience= null refuses: a node always names who it serves. Pass an audience.",
                 1,
             ));
         }
