@@ -117,9 +117,9 @@ impl Board {
         }
         self.questions_read = true;
         match questions {
-            Ok(fold) => {
+            Ok(mut fold) => {
+                self.answered = answered_newest_first(std::mem::take(&mut fold.answered));
                 self.questions = open_questions(fold, backlog, agents);
-                self.answered = answered_newest_first(fold.answered);
                 self.questions_error = None;
             }
             Err(reason) => self.questions_error = Some(reason),
