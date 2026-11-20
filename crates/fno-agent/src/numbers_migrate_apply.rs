@@ -30,6 +30,8 @@ pub(crate) enum MigrateError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Graph(#[from] crate::backlog::StoreDbError),
     /// A seam that reports its failure as text: the share flush, the
     /// numbers primary, the graph opener, the key census.
     #[error("{0}")]
@@ -405,8 +407,7 @@ impl Apply<'_> {
     fn backlog(&mut self, graph: &Path) -> Result<(), MigrateError> {
         let map = self.map;
         let db = crate::backlog::database_path(graph);
-        let mut conn = crate::backlog::open_holding_lock(graph)
-            .map_err(|e| MigrateError::Store(e.to_string()))?;
+        let mut conn = crate::backlog::open_holding_lock(graph)?;
         let rows: Vec<(i64, String, String)> = {
             let mut stmt =
                 conn.prepare("SELECT rowid, event_id, data FROM decisions ORDER BY seq")?;
@@ -868,11 +869,16 @@ pub(crate) fn apply(json_out: bool) -> i32 {
         }
         return 1;
     }
-    let t = &run.tally;
+    print_receipt(&run.tally, &dir, map.mapped.len(), &current, json_out);
+    0
+}
+
+/// The apply receipt: what moved, and the rollback command for it.
+fn print_receipt(t: &Tally, dir: &Path, mapped: usize, current: &str, json_out: bool) {
     if json_out {
         println!(
             "{}",
-            json!({"applied": true, "backup": dir, "mapped": map.mapped.len(), "tally": t})
+            json!({"applied": true, "backup": dir, "mapped": mapped, "tally": t})
         );
     } else {
         println!(
@@ -880,7 +886,7 @@ pub(crate) fn apply(json_out: bool) -> i32 {
              decisions moved: {}, numbers rows: {}, text cells: {}, event rows: {} ({} duplicates gone), files: {}\n  \
              backup and undo log: {}\n  \
              rollback: fno doctor migrate ids --rollback {}",
-            map.mapped.len(),
+            mapped,
             t.decisions,
             t.numbers,
             t.cells,
@@ -891,7 +897,6 @@ pub(crate) fn apply(json_out: bool) -> i32 {
             dir.display()
         );
     }
-    0
 }
 
 /// Every rewrite, in order: numbers, the shared backlog, each event db with
@@ -989,8 +994,7 @@ fn undo_all(entries: Vec<Undo>) -> Vec<String> {
     for (graph, labels) in moved {
         let done = (|| -> Result<(), MigrateError> {
             crate::backlog_share::flush(&graph)?;
-            let conn = crate::backlog::open_holding_lock(&graph)
-                .map_err(|e| MigrateError::Store(e.to_string()))?;
+            let conn = crate::backlog::open_holding_lock(&graph)?;
             for label in &labels {
                 drop_decision(&conn, label)?;
             }
@@ -1010,6 +1014,33 @@ fn changed(n: usize) -> Result<(), MigrateError> {
     } else {
         Ok(())
     }
+}
+
+/// Take one event line back while its hash still reads what apply wrote.
+fn undo_line(
+    conn: &Connection,
+    table: &str,
+    rowid: i64,
+    before: &str,
+    after_hash: &str,
+) -> Result<(), MigrateError> {
+    let current: Option<Vec<u8>> = conn
+        .query_row(
+            &format!("SELECT row_hash FROM {table} WHERE rowid = ?1"),
+            params![rowid],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let held = current.map(|h| h.iter().map(|b| format!("{b:02x}")).collect::<String>());
+    if held.as_deref() != Some(after_hash) {
+        return changed(0);
+    }
+    conn.execute(
+        &format!("UPDATE {table} SET line = ?1, row_hash = ?2 WHERE rowid = ?3"),
+        params![before, sha(before.as_bytes()), rowid],
+    )
+    .map(drop)
+    .map_err(MigrateError::from)
 }
 
 fn undo_one(entry: &Undo) -> Result<(), MigrateError> {
@@ -1047,26 +1078,7 @@ fn undo_one(entry: &Undo) -> Result<(), MigrateError> {
             rowid,
             before,
             after_hash,
-        } => {
-            let conn = open(db)?;
-            let current: Option<Vec<u8>> = conn
-                .query_row(
-                    &format!("SELECT row_hash FROM {table} WHERE rowid = ?1"),
-                    params![rowid],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            let held = current.map(|h| h.iter().map(|b| format!("{b:02x}")).collect::<String>());
-            if held.as_deref() != Some(after_hash.as_str()) {
-                return changed(0);
-            }
-            conn.execute(
-                &format!("UPDATE {table} SET line = ?1, row_hash = ?2 WHERE rowid = ?3"),
-                params![before, sha(before.as_bytes()), rowid],
-            )
-            .map(drop)
-            .map_err(MigrateError::from)
-        }
+        } => undo_line(&open(db)?, table, *rowid, before, after_hash),
         Undo::Gone { db, table, row } => insert_row(&open(db)?, table, row),
         Undo::Rekey {
             db,
@@ -1091,8 +1103,7 @@ fn undo_one(entry: &Undo) -> Result<(), MigrateError> {
             before,
             after,
         } => {
-            let conn = crate::backlog::open_holding_lock(graph)
-                .map_err(|e| MigrateError::Store(e.to_string()))?;
+            let conn = crate::backlog::open_holding_lock(graph)?;
             let held: Option<String> = conn
                 .query_row(
                     "SELECT data FROM decisions WHERE event_id = ?1",
