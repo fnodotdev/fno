@@ -315,7 +315,7 @@ pub fn publish_session_entry(recorded: &Path, session_id: &str) -> std::io::Resu
         return Ok(dest);
     }
     let tmp = tmp_beside(&dest);
-    let _ = std::fs::remove_file(&tmp);
+    std::fs::remove_file(&tmp).ok();
     if std::fs::hard_link(recorded, &tmp).is_ok() {
         std::fs::rename(&tmp, &dest)?;
     } else {
