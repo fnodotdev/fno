@@ -3186,25 +3186,6 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_persona_file_names_its_path() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("persona-walk-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        pin_customers_dir(&dir);
-        let o = open_page("fno", "absent-persona");
-        unpin_customers_dir();
-        std::fs::remove_dir_all(&dir).ok();
-        let text = o
-            .lines
-            .iter()
-            .map(|l| l.text.clone())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(text.contains("no persona file at"));
-        assert!(text.contains("absent-persona.md"));
-    }
-
-    #[test]
     fn approve_stamps_the_status_line_and_keeps_every_other_byte() {
         let dir = std::env::temp_dir().join(format!("persona-approve-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -3247,15 +3228,16 @@ mod tests {
     fn open_from_picks_page_picker_or_none() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("persona-walk-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let root = dir.join("fno");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("solo.md"), fixture_doc("solo")).unwrap();
+        std::fs::write(root.join("vibe.md"), fixture_doc("vibe")).unwrap();
         pin_customers_dir(&dir);
         let single = open_from(Some(&"customer:solo".to_string()), Some("fno"));
         let multi = open_from(
             Some(&"customer:solo,customer:vibe".to_string()),
             Some("fno"),
         );
-        unpin_customers_dir();
-        std::fs::remove_dir_all(&dir).ok();
         assert!(single.is_some_and(|o| o.cursor.is_none()));
         let m = multi.unwrap();
         assert_eq!(m.cursor, Some(0));
@@ -3271,17 +3253,7 @@ mod tests {
         assert!(personas_in(Some("customers")).is_empty());
         assert!(personas_in(None).is_empty());
         assert!(personas_in(Some("audience?")).is_empty());
-    }
-
-    #[test]
-    fn the_picker_moves_and_drills_into_a_real_page() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("persona-walk-{}", std::process::id()));
-        let root = dir.join("fno");
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("solo.md"), fixture_doc("solo")).unwrap();
-        std::fs::write(root.join("vibe.md"), fixture_doc("vibe")).unwrap();
-        pin_customers_dir(&dir);
+        // The picker moves, drills into a real page, and a page closes on x.
         let mut o = open_list("fno personas", "fno", vec!["solo".into(), "vibe".into()]);
         assert!(matches!(apply_keys(&mut o, b"j"), Flow::Stay));
         assert_eq!(o.cursor, Some(1));
@@ -3291,9 +3263,20 @@ mod tests {
         }
         let mut page = open_page("fno", "solo");
         assert!(matches!(apply_keys(&mut page, b"x"), Flow::Close));
+        // A missing persona file names its path.
+        let o = open_page("fno", "absent-persona");
+        let text = o
+            .lines
+            .iter()
+            .map(|l| l.text.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("no persona file at"), "{text:?}");
+        assert!(text.contains("absent-persona.md"), "{text:?}");
         unpin_customers_dir();
         std::fs::remove_dir_all(&dir).ok();
     }
+
     #[test]
     fn the_job_paragraph_wraps_with_a_hanging_indent() {
         let long = "Ship the first feature tonight. The demo cuts scope to one screen: the board, one pane, and the feed beside it. Anything past that waits for the first paying user.";
