@@ -1850,7 +1850,7 @@ fn alert_marker(home: &AgentsHome, lane: &str) -> PathBuf {
 
 /// One alert per strand: the marker names the reset it announced, and the
 /// return ladder drops it when the lane comes back.
-fn alert_once(home: &AgentsHome, lane: &CapLane, now_epoch: i64, deps: &LeaveDeps) {
+fn alert_once(home: &AgentsHome, lane: &CapLane, plan: &str, now_epoch: i64, deps: &LeaveDeps) {
     let key = lane
         .reset_epoch
         .map_or_else(|| "unknown".to_string(), |r| r.to_string());
@@ -1868,9 +1868,8 @@ fn alert_once(home: &AgentsHome, lane: &CapLane, now_epoch: i64, deps: &LeaveDep
         .map(|m| m.name.as_str())
         .collect();
     let body = format!(
-        "control: provider lane {} hit its usage limit; it resets at {when}. Workers on p0/p1 nodes or with an open PR move to Opus; the rest park and resume on {} after the reset. Capped: {}.",
+        "control: provider lane {} hit its usage limit; it resets at {when}. {plan} Capped: {}.",
         lane.lane,
-        lane.provider,
         capped.join(", ")
     );
     if (deps.alert)(lane, &body) {
@@ -1895,8 +1894,21 @@ pub fn run_leave_lane(
     now_epoch: i64,
     deps: &LeaveDeps,
 ) -> String {
-    alert_once(home, lane, now_epoch, deps);
     let decision = leave_decision(lane, now_epoch, answer, cfg);
+    let triage = cfg.mode == "triage" && answer.is_none();
+    let plan = match &decision {
+        LeaveDecision::Act(_) if triage => format!(
+            "Workers on p0/p1 nodes or with an open PR move off the lane; the rest park and resume on {} after the reset.",
+            lane.provider
+        ),
+        LeaveDecision::Act(_) => "Its workers move off the lane.".to_string(),
+        LeaveDecision::Ask => {
+            "Nothing moves until an operator answers fno agent admit provider-cap decide."
+                .to_string()
+        }
+        LeaveDecision::Wait(reason) => format!("Nothing moves ({reason}); the lane parks."),
+    };
+    alert_once(home, lane, &plan, now_epoch, deps);
     match decision {
         LeaveDecision::Wait(reason) => {
             journal(
@@ -1929,7 +1941,6 @@ pub fn run_leave_lane(
         }
         LeaveDecision::Act(names) => {
             let started = migration_started(home, &lane.lane);
-            let triage = cfg.mode == "triage" && answer.is_none();
             let acting: Vec<&CapMember> = lane
                 .members
                 .iter()

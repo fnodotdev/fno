@@ -595,7 +595,7 @@ fn alert_leads(lane: &crate::provider_cap::CapLane, body: &str) -> bool {
                 "mail",
                 "send",
                 "--from-name",
-                "provider-cap",
+                "fno/provider-cap",
                 "--origin",
                 "scheduler",
                 "--to-lead",
