@@ -1315,8 +1315,8 @@ mod tests {
         );
         assert!(!newest_run_terminal_rows(&[nowork], "x-node"));
         assert!(
-            !newest_run_terminal_rows(&[done.clone(), other], "x-node"),
-            "another node's terminal run is not this row's"
+            newest_run_terminal_rows(&[done.clone(), other], "x-node"),
+            "a newer run for another node is skipped, not a verdict for this one"
         );
 
         // The park: terminated or draft + settled green open pauses,
