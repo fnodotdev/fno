@@ -234,11 +234,30 @@ struct NodeRow {
     #[serde(default)]
     id: String,
     #[serde(default)]
-    pr_number: Option<i64>,
+    pr_number: Option<PrNumber>,
     #[serde(default)]
     sessions: Vec<NodeSessionJson>,
     #[serde(default)]
     cwd: String,
+}
+
+/// The stored PR link: the writer emits an integer, and an unparseable or
+/// legacy string value reads as no link instead of dropping the whole
+/// merged row from the weekly ledger and the per-PR view alike.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum PrNumber {
+    Int(i64),
+    Text(String),
+}
+
+impl PrNumber {
+    fn to_number(self) -> Option<i64> {
+        match self {
+            PrNumber::Int(n) => Some(n),
+            PrNumber::Text(s) => s.parse().ok(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -374,7 +393,7 @@ pub(crate) fn merged_nodes(notes: &mut Vec<String>) -> Vec<MergedNode> {
                     created,
                     completed,
                     node: r.id,
-                    pr: r.pr_number,
+                    pr: r.pr_number.and_then(PrNumber::to_number),
                     sessions: r
                         .sessions
                         .into_iter()
@@ -721,11 +740,19 @@ mod tests {
             node: node.to_string(),
             title: title.to_string(),
             asked,
+            answered: None,
         }
     }
 
     fn m(created: DateTime<Utc>, completed: DateTime<Utc>) -> MergedNode {
-        MergedNode { created, completed }
+        MergedNode {
+            created,
+            completed,
+            node: "x-1".to_string(),
+            pr: None,
+            sessions: Vec::new(),
+            cwd: String::new(),
+        }
     }
 
     /// AC1: the fold counts windowed questions and merged nodes and states

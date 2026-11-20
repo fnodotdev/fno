@@ -1,4 +1,4 @@
-//! Per-PR attention for the doctor door (x-b9cf): the human cost per merged
+//! Per-PR attention for the doctor door: the human cost per merged
 //! PR in a day window - user turns, questions asked, wait time - beside the
 //! per-day guardrail (reverts, hours main was red). The store readers live
 //! in `attention_ledger`; nothing here re-reads a store this crate already
