@@ -703,6 +703,10 @@ impl Root {
                 None => self.say("no board poll: cannot answer".into(), cx),
             },
             Action::OpenAnswer(id) => {
+                // The sheet answers what the toast announced.
+                if self.question_toast.as_ref().is_some_and(|(t, _)| *t == id) {
+                    self.question_toast = None;
+                }
                 self.answer = Some(answer::Sheet::new(id));
             }
             Action::CloseAnswer => self.answer = None,
@@ -1129,6 +1133,7 @@ impl Root {
                 }
                 if first_read && self.sheet_on_first_read {
                     if let Some(q) = board.questions_newest_first().first() {
+                        self.question_toast = None;
                         self.answer = Some(answer::Sheet::new(q.item.id.clone()));
                     }
                 }

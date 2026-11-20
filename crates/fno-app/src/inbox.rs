@@ -4,7 +4,7 @@
 //! right edge. Hovering an open row swaps its fact columns for the Answer
 //! button, the comp's hover state.
 
-use gpui::{div, prelude::*, px, rgb, Context, Div, ElementId};
+use gpui::{div, prelude::*, px, rgb, Context, Div, ElementId, Stateful};
 
 use super::ui::{self, Role};
 use super::window::{Action, Root};
@@ -16,7 +16,7 @@ const COLS: [usize; 3] = [10, 8, 4];
 
 /// The Inbox body: the Open and Answered sections over one scroll, and the
 /// hint line under them.
-pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
+pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Stateful<Div> {
     let p = root.palette;
     let now = fno::app_api::digest_overlay::now_secs();
     let mut out = div()
@@ -44,10 +44,14 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
     out = out.child(open_section(&questions, &p, now, root, cx));
     let answered = root.board.answered();
     out = out.child(answered_section(answered, &p, now, root));
-    out.child(ui::quiet(
-        "Click a question to answer it in place. The asking agent keeps working.",
-        &p,
-    ))
+    out.child(
+        ui::quiet(
+            "Click a question to answer it in place. The asking agent keeps working.",
+            &p,
+        )
+        .px_3()
+        .pt_3(),
+    )
 }
 
 /// The Open section: one row per question the fold lists, the count in the
@@ -96,7 +100,7 @@ fn question_row(
     now: u64,
     root: &Root,
     cx: &mut Context<Root>,
-) -> Div {
+) -> Stateful<Div> {
     let small = root.adv * (ui::SMALL / ui::BODY);
     let action = Action::OpenAnswer(q.id.clone());
     let id = format!("inbox-q-{i}");
@@ -168,7 +172,14 @@ fn fact_cell(
     p: &super::palette::Palette,
     small: gpui::Pixels,
 ) -> Div {
-    ui::cell(v.unwrap_or_default(), chars, true, Role::Fact, p, small)
+    ui::cell(
+        v.unwrap_or_default().to_string(),
+        chars,
+        true,
+        Role::Fact,
+        p,
+        small,
+    )
 }
 
 /// The Answered section: what the fold recently settled, the answer at

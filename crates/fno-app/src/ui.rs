@@ -286,11 +286,17 @@ pub fn advance(window: &gpui::Window, size: f32) -> Pixels {
 /// buckets the TUI's sideline uses. An absent or unparseable stamp shows
 /// nothing.
 pub fn age(stamp: &str, now: u64) -> String {
-    let past = chrono::DateTime::parse_from_rfc3339(stamp)
+    let Some(past) = chrono::DateTime::parse_from_rfc3339(stamp)
         .ok()
         .map(|t| t.timestamp())
-        .unwrap_or(0);
-    let s = (now as i64 - past).max(0);
+    else {
+        return String::new();
+    };
+    // A stamp ahead of the clock (a skewed host, a frozen demo clock) has
+    // no honest age.
+    let Some(s) = (now as i64).checked_sub(past).filter(|s| *s >= 0) else {
+        return String::new();
+    };
     match s {
         0..=59 => format!("{s}s"),
         60..=3599 => format!("{}m", s / 60),

@@ -301,7 +301,7 @@ fn world_cmd(root: &Path, exe: &Path) -> Command {
         .env("FNO_MUX_DIR", root.join("mux"))
         .env("FNO_AGENT_HOME", root.join(".fno/agents"))
         .env("FNO_CLAIMS_ROOT", root.join("claimroot"))
-        .env("FNO_DEMO_EPOCH", "1794096000")
+        .env("FNO_DEMO_EPOCH", DEMO_EPOCH.to_string())
         .env("FNO_DEMO_HOST", "demo-host")
         .env("FNO_CLAUDE_PROJECTS_DIR", root.join("transcripts"))
         .env("FNO_OWNER_PID", std::process::id().to_string());
@@ -326,6 +326,9 @@ fn wait_for_socket(sock: &Path) -> bool {
 struct IdeaSeedOut {
     id: Option<String>,
 }
+
+/// The frozen clock the shot world's app reads, in epoch seconds.
+const DEMO_EPOCH: i64 = 1_794_096_000;
 
 /// The demo chat session: the transcript file the seed writes and the
 /// adopt seed registers, one uuid both sides name.
@@ -430,18 +433,27 @@ fn seed_fleet(root: &Path, front: &Path, node_id: &str) -> bool {
 /// rail, the Inbox and the answer sheet all paint real rows. The FILE is
 /// the contract: the shape the event store writes.
 fn seed_question(root: &Path) -> bool {
-    let now = chrono::Utc::now();
-    let ts = |secs: i64| (now - chrono::Duration::seconds(secs)).to_rfc3339();
+    // The app's clock reads the demo epoch, so the asks stamp from it and
+    // their ages paint. The answered fold keeps a row 15 minutes by the
+    // wall clock, so the answers stamp from real time.
+    let epoch = chrono::DateTime::from_timestamp(DEMO_EPOCH, 0).unwrap_or_default();
+    let ts = |secs: i64| (epoch - chrono::Duration::seconds(secs)).to_rfc3339();
+    let wall = |secs: i64| (chrono::Utc::now() - chrono::Duration::seconds(secs)).to_rfc3339();
     let ask = |secs: i64, id: &str, q: &str, body: &str, asker: &str, node: &str, extra: &str| {
         format!(
-            r#"{{"ts":"{}","type":"operator_question","source":"rust","data":{{"question_id":"{id}","question":"{q}","ask":"{body}","asker":"{asker}","node":"{node}"{extra},"blocks":[]}}}}"#,
-            ts(secs)
+            r#"{{"ts":"{}","type":"operator_question","source":"rust","data":{{"question_id":"{id}","question":"{q}\n{body}","ask":"{body}","asker":"{asker}"{node}{extra},"blocks":[]}}}}"#,
+            ts(secs),
+            node = if node.is_empty() {
+                String::new()
+            } else {
+                format!(r#","node":"{node}""#)
+            },
         )
     };
     let answer = |secs: i64, id: &str, words: &str| {
         format!(
             r#"{{"ts":"{}","type":"attention_answer","source":"daemon","data":{{"item_id":"{id}","sink":"mux","words":"{words}","superseded":false}}}}"#,
-            ts(secs)
+            wall(secs)
         )
     };
     let rows = [
@@ -449,10 +461,10 @@ fn seed_question(root: &Path) -> bool {
         ask(4 * 3600, "q-demo-0004", "Should the launch composer complete opencode skills?", "The composer completes claude skills today.", "sol", "x-f7c2", ""),
         ask(3600, "q-demo-0003", "Renumber the 62 stuck queue items?", "The queue holds 62 items under stale numbers.", "gus", "x-2e4f", ""),
         ask(18 * 60, "q-demo-0002", "Flip fno-demo public now, or audit first?", "The demo repo is ready; the audit has not run.", "wren", "x-0a33", ""),
-        ask(12, "q-demo-0001", "Owner merge for PR 379?", "The tier keeper holds slot 2 and 379 is green and base-current. Fire the merge command now, or hold for the Tuesday board?", "sol", "none",
+        ask(12, "q-demo-0001", "Owner merge for PR 379?", "The tier keeper holds slot 2 and 379 is green and base-current. Fire the merge command now, or hold for the Tuesday board?", "sol", "",
             r#","options":[{"text":"Merge now","next":"Green, base-current, and the keeper holds the slot."},{"text":"Tuesday board slot","next":"PR 351 lands first, then 289 boards once."},{"text":"Hold for dispatch review","next":"Wait for the approve due 2026-11-23."}],"context":{"recommendation":{"option":1,"why":"Green, base-current, and the keeper holds the slot."}},"subject":"pr-379-merge""#),
-        ask(40 * 60, "q-demo-0007", "Send the old-product balance to the archive?", "The old product's balance sheet has no reader.", "gus", "none", ""),
-        ask(30 * 60, "q-demo-0006", "May a PR merge when no CI run is green?", "A PR with every run cancelled reads not red.", "sol", "none", ""),
+        ask(40 * 60, "q-demo-0007", "Send the old-product balance to the archive?", "The old product's balance sheet has no reader.", "gus", "", ""),
+        ask(30 * 60, "q-demo-0006", "May a PR merge when no CI run is green?", "A PR with every run cancelled reads not red.", "sol", "", ""),
         answer(9 * 60, "q-demo-0007", "archived to attic/"),
         answer(3 * 60, "q-demo-0006", "no, hold and watch"),
     ];

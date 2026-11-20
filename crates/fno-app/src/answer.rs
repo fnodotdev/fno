@@ -6,7 +6,9 @@
 //! Answer submits the typed words, AnswerPick::Words, or the picked choice,
 //! the option path the board rows already ride.
 
-use gpui::{div, prelude::*, px, rgb, rgba, Context, Div, ElementId, FontWeight, MouseButton};
+use gpui::{
+    div, prelude::*, px, rgb, rgba, Context, Div, ElementId, FontWeight, MouseButton, Stateful,
+};
 
 use super::chat::composer::Draft;
 use super::keys::Key;
@@ -65,7 +67,7 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
 
 /// The sheet's gone state: the board no longer lists the question, so the
 /// panel explains itself instead of dying quietly.
-fn gone(root: &Root, cx: &mut Context<Root>) -> Div {
+fn gone(root: &Root, cx: &mut Context<Root>) -> Stateful<Div> {
     let p = root.palette;
     div()
         .id("answer-sheet")
@@ -89,7 +91,7 @@ fn gone(root: &Root, cx: &mut Context<Root>) -> Div {
 }
 
 /// The sheet body for one open question.
-fn sheet(q: &QuestionItem, root: &Root, cx: &mut Context<Root>) -> Div {
+fn sheet(q: &QuestionItem, root: &Root, cx: &mut Context<Root>) -> Stateful<Div> {
     let p = root.palette;
     let state = root.answers.get(&q.id);
     let sending = matches!(
@@ -131,7 +133,12 @@ fn sheet(q: &QuestionItem, root: &Root, cx: &mut Context<Root>) -> Div {
     if let Some(line) = subtitle(q, root, now) {
         out = out.child(ui::text(line, Role::Meta, &p));
     }
-    if let Some(body) = q.body.as_deref().map(str::trim).filter(|b| !b.is_empty()) {
+    // The title is the question's first line; the body shows what follows.
+    let body = q
+        .body
+        .as_deref()
+        .map(|b| b.trim().strip_prefix(q.title.as_str()).unwrap_or(b).trim());
+    if let Some(body) = body.filter(|b| !b.is_empty()) {
         out = out.child(
             div()
                 .font_family(ui::PROSE)
@@ -163,7 +170,12 @@ fn sheet(q: &QuestionItem, root: &Root, cx: &mut Context<Root>) -> Div {
 
 /// One choice row: the picked dot, the recommended chevron, the option's
 /// text, and the recommended tag. A click picks; Answer sends.
-fn choice_row(o: &QuestionOption, q: &QuestionItem, root: &Root, cx: &mut Context<Root>) -> Div {
+fn choice_row(
+    o: &QuestionOption,
+    q: &QuestionItem,
+    root: &Root,
+    cx: &mut Context<Root>,
+) -> Stateful<Div> {
     let p = root.palette;
     let sheet_pick = root.answer.as_ref().and_then(|s| s.pick);
     let recommended = q.recommendation.as_ref().map(|r| r.option);

@@ -521,7 +521,12 @@ fn agent_row(
 /// the ⌘N hint shares the digit badges' cmd flag, so it shows only while
 /// cmd is held.
 fn agents_header_plus(p: &Palette, grid: &Grid, cx: &mut Context<Root>) -> Div {
+    // One row: a stacked hint would grow the header while cmd is held.
     div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_1()
         .child(
             ui::clickable(div().id("agents-plus").px_1(), p)
                 .on_click(cx.listener(|root, _, _, cx| root.act(Action::OpenLaunch(None), cx)))
