@@ -2935,18 +2935,6 @@ mod tests {
     }
 
     #[test]
-    fn personas_in_splits_the_customer_items_only() {
-        assert_eq!(
-            personas_in(Some("customer:a,customer:b")),
-            vec!["a".to_string(), "b".to_string()]
-        );
-        assert!(personas_in(Some("internal")).is_empty());
-        assert!(personas_in(Some("customers")).is_empty());
-        assert!(personas_in(None).is_empty());
-        assert!(personas_in(Some("audience?")).is_empty());
-    }
-
-    #[test]
     fn dock_columns_splits_host_and_column_from_the_held_seam() {
         let v = View::new((40, 140), "s".into(), LayoutView::default());
         let (host, col) = dock_columns(&v, 140).expect("140 columns dock");
@@ -3093,8 +3081,8 @@ mod tests {
             pane: Some(7),
             widen: false,
             edit_pane: None,
-            claim_pane: None,
-            records: vec![(9, "ab-2".into()), (8, "ab-3".into())],
+            claim_pane: Some(9),
+            records: vec![(9, "ab-1".into()), (8, "ab-2".into()), (7, "ab-3".into())],
             folded: Vec::new(),
             title: "solo".into(),
             lines: Vec::new(),
@@ -3115,21 +3103,22 @@ mod tests {
             home: Home::Float,
             drill: true,
         });
-        // The trail is detail + two panes: at the cap. A further drill
-        // folds the oldest visible record, its pane dying best-effort.
+        // A further drill folds the oldest visible record, its pane dying
+        // best-effort; the pane that held the claim loses the claim.
         assert!(super::fold_oldest_record(&mut v));
         {
             let o = v.persona.as_ref().unwrap();
-            assert_eq!(o.records, vec![(8, "ab-3".to_string())]);
-            assert_eq!(o.folded, vec!["ab-2".to_string()]);
+            assert_eq!(o.records, vec![(8, "ab-2".into()), (7, "ab-3".into())]);
+            assert_eq!(o.folded, vec!["ab-1".to_string()]);
             assert_eq!(o.claim_pane, None, "the folded pane owed no claim any more");
         }
+        assert!(super::fold_oldest_record(&mut v));
         // One fold per drill: with one pane left the helper declines.
         assert!(!super::fold_oldest_record(&mut v));
-        // The breadcrumb names the folded record, oldest first.
+        // The breadcrumb names the folded records, oldest first.
         assert_eq!(
             super::folded_breadcrumb(None, &v.persona.as_ref().unwrap().folded),
-            "\u{2039} ab-2"
+            "\u{2039} ab-1 \u{b7} ab-2"
         );
     }
 
@@ -3272,6 +3261,16 @@ mod tests {
         assert_eq!(m.cursor, Some(0));
         assert_eq!(m.personas, vec!["solo".to_string(), "vibe".to_string()]);
         assert!(open_from(Some(&"internal".to_string()), Some("fno")).is_none());
+        // The split the picker list reads: customer: items carry, every
+        // other audience shape lands empty.
+        assert_eq!(
+            personas_in(Some("customer:a,customer:b")),
+            vec!["a".to_string(), "b".to_string()]
+        );
+        assert!(personas_in(Some("internal")).is_empty());
+        assert!(personas_in(Some("customers")).is_empty());
+        assert!(personas_in(None).is_empty());
+        assert!(personas_in(Some("audience?")).is_empty());
     }
 
     #[test]
@@ -3489,8 +3488,24 @@ mod tests {
             body.contains("Ship it in the mux."),
             "the edit landed: {body:?}"
         );
+        // The dock keeps its home: the branch that paints the record panes
+        // while the editor runs beside them.
+        let (mut dv, ddir) = drill_view("editdock", &["demo-1"]);
+        if let Some(o) = dv.persona.as_mut() {
+            o.home = Home::SidelineBoard;
+            o.pane = Some(6);
+            o.records = vec![(9, "demo-1".into())];
+        }
+        crate::client::persona_overlay::keys(&mut dv, b"e");
+        assert!(dv.persona.as_ref().is_some_and(|o| o.edit_spawn.is_some()));
+        assert!(
+            dv.persona.as_ref().map(|o| o.home) == Some(Home::SidelineBoard),
+            "the dock keeps its home"
+        );
+        assert!(sibling_pane(&dv).is_none());
         unpin_customers_dir();
         std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&ddir).ok();
     }
 
     #[test]
@@ -3580,15 +3595,20 @@ One person.
         let mut v = crate::client::tests::two_pane_view();
         let mut b = crate::client::backlog_board::BoardView::new(0);
         b.inputs = Some(crate::backlog_model::Inputs {
-            rows: vec![crate::node_row::NodeRow::from_value(serde_json::json!({
-                "id": "demo-1", "title": "Ship the persona page", "audience": "customer:solo"
-            }))],
+            rows: ["demo-1", "demo-2"]
+                .iter()
+                .map(|id| {
+                    crate::node_row::NodeRow::from_value(serde_json::json!({
+                        "id": id, "title": id, "audience": "customer:solo"
+                    }))
+                })
+                .collect(),
             ..Default::default()
         });
         v.backlog_board = Some(b);
         v.persona = Some(open_page("fno", "solo"));
         let entries = serving_for(&v, "solo");
-        assert_eq!(entries.len(), 1);
+        assert_eq!(entries.len(), 2);
         assert!(entries
             .first()
             .is_some_and(|e| matches!(e.kind, ServeKind::Node)));
@@ -3600,6 +3620,17 @@ One person.
         assert!(v.persona.is_some());
         let detail = v.backlog_board.as_ref().unwrap().detail.as_ref().unwrap();
         assert_eq!(detail.node_id, "demo-1");
+        // A second Enter with no docked pane acts again: the record
+        // repoints to the next serving node and the trail stays empty.
+        crate::client::persona_overlay::keys(&mut v, b"j");
+        crate::client::persona_overlay::keys(&mut v, b"\r");
+        let shown = v
+            .backlog_board
+            .as_ref()
+            .and_then(|b| b.detail.as_ref())
+            .map(|d| d.node_id.clone());
+        assert_eq!(shown.as_deref(), Some("demo-2"), "the second Enter acts");
+        assert!(v.persona.as_ref().is_some_and(|o| o.records.is_empty()));
         let mut v2 = crate::client::tests::two_pane_view();
         v2.questions_fold = Some(crate::needs_overlay::QuestionsFold {
             items: vec![crate::needs_overlay::QuestionItem {
@@ -3665,68 +3696,6 @@ One person.
         v.backlog_board = Some(b);
         v.persona = Some(open_page("fno", "solo"));
         (v, dir)
-    }
-
-    #[test]
-    fn a_second_enter_without_a_docked_pane_repoints_the_record() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let (mut v, dir) = drill_view("enter2", &["demo-1", "demo-2"]);
-        for key in [&b"j"[..], b"\r", b"j", b"\r"] {
-            keys(&mut v, key);
-        }
-        let shown = v
-            .backlog_board
-            .as_ref()
-            .and_then(|b| b.detail.as_ref())
-            .map(|d| d.node_id.clone());
-        assert_eq!(shown.as_deref(), Some("demo-2"), "the second Enter acts");
-        assert!(v.persona.as_ref().is_some_and(|o| o.records.is_empty()));
-        unpin_customers_dir();
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn folds_land_oldest_first_in_the_breadcrumb() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let (mut v, dir) = drill_view("foldorder", &[]);
-        if let Some(o) = v.persona.as_mut() {
-            o.pane = Some(7);
-            o.records = vec![(9, "ab-1".into()), (8, "ab-2".into()), (7, "ab-3".into())];
-        }
-        assert!(fold_oldest_record(&mut v));
-        assert!(fold_oldest_record(&mut v));
-        let folded = v
-            .persona
-            .as_ref()
-            .map(|o| o.folded.clone())
-            .unwrap_or_default();
-        assert_eq!(folded, vec!["ab-1".to_string(), "ab-2".to_string()]);
-        assert_eq!(
-            folded_breadcrumb(None, &folded),
-            "\u{2039} ab-1 \u{b7} ab-2"
-        );
-        unpin_customers_dir();
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn the_edit_key_keeps_a_docked_trail_painting_its_record_panes() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let (mut v, dir) = drill_view("editdock", &["demo-1"]);
-        if let Some(o) = v.persona.as_mut() {
-            o.home = Home::SidelineBoard;
-            o.pane = Some(6);
-            o.records = vec![(9, "demo-1".into())];
-        }
-        keys(&mut v, b"e");
-        assert!(v.persona.as_ref().is_some_and(|o| o.edit_spawn.is_some()));
-        assert!(
-            v.persona.as_ref().map(|o| o.home) == Some(Home::SidelineBoard),
-            "the dock keeps its home, the branch that paints the record panes"
-        );
-        assert!(sibling_pane(&v).is_none());
-        unpin_customers_dir();
-        std::fs::remove_dir_all(&dir).ok();
     }
 }
 
