@@ -3,6 +3,7 @@
 //! terminal emulator of its own.
 
 mod alerts;
+mod answer;
 mod app_state;
 mod boxdraw;
 mod chat;
@@ -11,6 +12,7 @@ mod find;
 mod goto;
 mod grid;
 mod hq;
+mod inbox;
 pub mod keys;
 pub(crate) mod launch;
 mod left_pane;

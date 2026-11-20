@@ -3,7 +3,7 @@
 //! and hosts the chat view and the orchestration board.
 
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use super::alerts;
 use super::alerts::Signal;
+use super::answer;
 use super::chat::{
     self,
     composer::{Attachment, Draft},
@@ -55,9 +56,12 @@ pub enum MainView {
     Orchestration,
     /// The mods and layouts from `fno config plugins ls`.
     Mods,
+    /// The navigation for questions and decisions: Open and Answered.
+    Inbox,
 }
 
-/// What a click in the left pane, the strip or the board does.
+/// What a click or a key in the left pane, the strip, the board or the
+/// sheets does.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     Send(Command),
@@ -66,6 +70,15 @@ pub enum Action {
         id: String,
         option: u32,
     },
+    /// Open the answer sheet on one question.
+    OpenAnswer(String),
+    /// Close the answer sheet without answering.
+    CloseAnswer,
+    /// Record the sheet's picked choice; Answer sends it.
+    AnswerChoice(u32),
+    /// The sheet's Answer button and Enter: the typed words win over the
+    /// picked choice.
+    SubmitAnswer,
     Show(MainView),
     /// Show every agent in the left pane, or only the first few.
     ToggleAgents,
@@ -94,6 +107,10 @@ fn click_id(action: &Action) -> &'static str {
         Action::Send(_) => "send_command",
         Action::Notice(_) => "notice",
         Action::Answer { .. } => "answer",
+        Action::OpenAnswer(_) => "open_answer",
+        Action::CloseAnswer => "close_answer",
+        Action::AnswerChoice(_) => "answer_choice",
+        Action::SubmitAnswer => "submit_answer",
         Action::Show(_) => "show_view",
         Action::ToggleAgents => "toggle_agents",
         Action::ToggleKeySheet => "toggle_key_sheet",
@@ -114,6 +131,9 @@ fn click_id(action: &Action) -> &'static str {
 pub enum AnswerState {
     Sending(u32),
     Done(u32),
+    /// A typed answer in flight or recorded; the door took the words.
+    SendingWords,
+    DoneWords,
     Refused(String),
 }
 
@@ -128,6 +148,8 @@ pub enum MailState {
 
 /// How long a notice stays in the corner.
 const NOTICE_FOR: Duration = Duration::from_secs(4);
+/// How long a question arrival toast stays top-right.
+const QUESTION_TOAST_FOR: Duration = Duration::from_secs(8);
 
 /// The most wheel lines one event sends, so a fling cannot flood the socket.
 const WHEEL_CAP: i32 = 10;
@@ -181,6 +203,21 @@ pub struct Root {
     pub(super) picking: bool,
     /// The key sheet (cmd-/) covers the window.
     pub(super) sheet: bool,
+    /// The answer sheet: the one question it holds, the choice the user
+    /// picked, and the typed draft. Esc and Later close; Answer submits the
+    /// typed words, else the pick.
+    pub(super) answer: Option<answer::Sheet>,
+    /// The arrival toast: the question it names and the timer generation,
+    /// so only the newest toast's expiry clears it.
+    question_toast: Option<(String, u64)>,
+    question_toast_gen: u64,
+    /// Every question id any board read has listed. Arrival = an id the set
+    /// has not met; the first read seeds it silently, unless the shot flag
+    /// below is set, so an app open never toasts a backlog.
+    seen_questions: HashSet<String>,
+    /// The shot window toasts on its first read: the capture wants the
+    /// arrival toast in frame.
+    toast_on_first_read: bool,
     /// The go-to palette (cmd-k) covers the window.
     pub(super) goto: Option<goto::GoTo>,
     /// The find bar (cmd-f) over the focused pane or the chat.
@@ -205,6 +242,7 @@ pub struct Root {
     _activation: Option<Subscription>,
     _appearance: Option<Subscription>,
     _notice: Option<Task<()>>,
+    _question_toast: Option<Task<()>>,
     _alerts: Option<Task<()>>,
     _alerts_tick: Option<Task<()>>,
     /// The attention signals: the lattice diff, the switch cache, the badge.
@@ -324,6 +362,11 @@ impl Root {
             pinned,
             picking: false,
             sheet: false,
+            answer: None,
+            question_toast: None,
+            question_toast_gen: 0,
+            seen_questions: HashSet::new(),
+            toast_on_first_read: false,
             goto: None,
             find: None,
             launch: launch::Panel::default(),
@@ -336,6 +379,7 @@ impl Root {
             _activation: None,
             _appearance: None,
             _notice: None,
+            _question_toast: None,
             _alerts: None,
             _alerts_tick: None,
             alerts: alerts::Alerts::new(),
@@ -496,6 +540,7 @@ impl Root {
                     "terminal" => self.show(MainView::Terminal, cx),
                     "orchestration" => self.show(MainView::Orchestration, cx),
                     "mods" => self.show(MainView::Mods, cx),
+                    "inbox" => self.show(MainView::Inbox, cx),
                     other => {
                         self.notice = Some(format!("fno mux app: unknown view {other:?}"));
                         self.notice_failed = true;
@@ -609,6 +654,25 @@ impl Root {
         }));
     }
 
+    /// Raise the arrival toast for one question. The element reads the
+    /// board live at paint, so a question the board drops hides the toast
+    /// even before the timer does.
+    fn say_question(&mut self, id: String, cx: &mut Context<Self>) {
+        self.question_toast_gen += 1;
+        let gen = self.question_toast_gen;
+        self.question_toast = Some((id, gen));
+        cx.notify();
+        self._question_toast = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(QUESTION_TOAST_FOR).await;
+            let _ = this.update(cx, |root, cx| {
+                if root.question_toast.as_ref().is_some_and(|(_, g)| *g == gen) {
+                    root.question_toast = None;
+                    cx.notify();
+                }
+            });
+        }));
+    }
+
     pub(super) fn act(&mut self, action: Action, cx: &mut Context<Self>) {
         fno::ui_usage::click("app", click_id(&action));
         match action {
@@ -630,6 +694,16 @@ impl Root {
                 }
                 None => self.say("no board poll: cannot answer".into(), cx),
             },
+            Action::OpenAnswer(id) => {
+                self.answer = Some(answer::Sheet::new(id));
+            }
+            Action::CloseAnswer => self.answer = None,
+            Action::AnswerChoice(n) => {
+                if let Some(s) = self.answer.as_mut() {
+                    s.pick = Some(n);
+                }
+            }
+            Action::SubmitAnswer => answer::submit(self, cx),
             Action::Show(view) => self.show(view, cx),
             Action::ToggleAgents => {
                 self.agents_open = !self.agents_open;
@@ -1020,6 +1094,31 @@ impl Root {
     fn on_hq(&mut self, reply: Reply, cx: &mut Context<Self>) {
         match reply {
             Reply::Board(board) => {
+                // Arrival: an id the seen set has not met. The first read
+                // seeds the set silently - an app open never toasts a
+                // backlog - unless the shot wants the toast in frame.
+                let first_read = self.seen_questions.is_empty();
+                let ids: Vec<String> = board
+                    .questions()
+                    .iter()
+                    .map(|q| q.item.id.clone())
+                    .collect();
+                let arrivals: Vec<String> = ids
+                    .iter()
+                    .filter(|i| !self.seen_questions.contains(*i))
+                    .cloned()
+                    .collect();
+                self.seen_questions.extend(ids);
+                if board.questions_error().is_none() && (!first_read || self.toast_on_first_read) {
+                    // Newest first, so the first hit is the newest arrival.
+                    let newest = board
+                        .questions_newest_first()
+                        .into_iter()
+                        .find_map(|q| arrivals.contains(&q.item.id).then(|| q.item.id.clone()));
+                    if let Some(id) = newest {
+                        self.say_question(id, cx);
+                    }
+                }
                 self.board = *board;
                 // A question the read no longer lists needs no answer state;
                 // a refusal stays so the row keeps its reason.
@@ -1032,8 +1131,17 @@ impl Root {
                 self.answers.retain(|id, _| open.contains(&id.as_str()));
             }
             Reply::Answered { id, receipt } => {
-                if let Some(AnswerState::Sending(option)) = self.answers.get(&id).cloned() {
-                    self.answers.insert(id, AnswerState::Done(option));
+                match self.answers.get(&id).cloned() {
+                    Some(AnswerState::Sending(option)) => {
+                        self.answers.insert(id.clone(), AnswerState::Done(option));
+                    }
+                    Some(AnswerState::SendingWords) => {
+                        self.answers.insert(id.clone(), AnswerState::DoneWords);
+                    }
+                    _ => {}
+                }
+                if self.answer.as_ref().is_some_and(|s| s.id == id) {
+                    self.answer = None;
                 }
                 self.say(receipt, cx);
             }
@@ -1762,6 +1870,13 @@ impl Root {
         if self.launch_key(&key, cx) {
             return;
         }
+        // The answer sheet is modal the same way: esc closes, enter
+        // submits, the editing keys and text land in its draft. A cmd or
+        // ctrl key falls through, so the shortcuts keep running under it.
+        if answer::key(self, &key, cx) {
+            cx.stop_propagation();
+            return;
+        }
         if let Some(action) = keys::shortcut(&key) {
             cx.stop_propagation();
             self.cmd_action(action, window, cx);
@@ -1864,12 +1979,19 @@ impl Root {
         }
     }
 
-    /// The paste shortcut: into the open find bar first, then the mods
-    /// sheet, the chat draft, the board composer, or the focused pane.
+    /// The paste shortcut: into the open answer sheet's draft, the open
+    /// find bar, then the mods sheet, the chat draft, the board composer,
+    /// or the focused pane.
     fn paste(&mut self, cx: &mut Context<Self>) {
         let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) else {
             return;
         };
+        // The open answer sheet takes the paste into its draft.
+        if let Some(s) = self.answer.as_mut() {
+            s.draft.replace_selection(&text);
+            cx.notify();
+            return;
+        }
         // The open bar takes the paste into its query, ahead of the draft
         // and the pane.
         if self.find.is_some() {
@@ -2495,6 +2617,10 @@ impl Render for Root {
                 .font_family(ui::MONO)
                 .text_size(px(ui::BODY))
                 .into_any_element(),
+            MainView::Inbox => crate::inbox::render(self, cx)
+                .font_family(ui::MONO)
+                .text_size(px(ui::BODY))
+                .into_any_element(),
         };
         // The bar floats over the target view's top right; find_gc keeps the
         // target and the view in step, so a live bar always sits over its
@@ -2546,6 +2672,67 @@ impl Render for Root {
                 .text_size(px(ui::BODY))
                 .child(text)
         });
+        // The arrival toast: a raised card top-right, the diamond, who
+        // asked, a preview of the question, and the Answer door. It reads
+        // the board live, so a dropped question hides it at once.
+        let qtoast = self
+            .question_toast
+            .as_ref()
+            .and_then(|(id, _)| self.board.questions().iter().find(|q| q.item.id == *id))
+            .map(|q| {
+                let item = &q.item;
+                let ask = item
+                    .asker
+                    .as_ref()
+                    .map(|a| a.handle.as_str())
+                    .unwrap_or("an agent");
+                let open = Action::OpenAnswer(item.id.clone());
+                div()
+                    .absolute()
+                    .top(px(ui::TITLE_H + 24.0))
+                    .right(px(12.0))
+                    .w(px(420.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .px_3()
+                    .py_2()
+                    .rounded(px(6.0))
+                    .border_1()
+                    .border_color(rgb(self.palette.border))
+                    .bg(rgb(self.palette.raised))
+                    .font_family(ui::MONO)
+                    .text_size(px(ui::BODY))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(6.0))
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_color(rgb(self.palette.warn))
+                                    .child("◆"),
+                            )
+                            .child(
+                                ui::role(div().flex_1().min_w_0(), Role::Name, &self.palette)
+                                    .child(format!("New question from {ask}")),
+                            )
+                            .child(
+                                ui::button(
+                                    ElementId::Name("toast-answer".into()),
+                                    "Answer",
+                                    ui::Button::Primary,
+                                    &self.palette,
+                                )
+                                .on_click(
+                                    cx.listener(move |root, _, _, cx| root.act(open.clone(), cx)),
+                                ),
+                            ),
+                    )
+                    .child(ui::cut(&item.title, 52))
+            });
         div()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
@@ -2575,12 +2762,14 @@ impl Render for Root {
                     .flex_col()
                     .child(strip)
                     .child(main)
-                    .children(toast),
+                    .children(toast)
+                    .children(qtoast),
             )
             .when(self.launch.open, |d| {
                 d.child(launch::render(self, window, cx))
             })
             .when(self.sheet, |d| d.child(sheet::render(self, cx)))
+            .when(self.answer.is_some(), |d| d.child(answer::render(self, cx)))
             .when(self.goto.is_some(), |d| d.child(goto::render(self, cx)))
     }
 }
@@ -2821,7 +3010,10 @@ pub(super) fn root_for_shot(
             cx,
         )
     });
-    root.update(cx, |root, _| root.shot = true);
+    root.update(cx, |root, _| {
+        root.shot = true;
+        root.toast_on_first_read = true;
+    });
     // The shot window never activates, and the board poll pauses while
     // the window is inactive; the shot needs every feed settled before
     // the capture, so it polls regardless.
