@@ -13,7 +13,7 @@
 //! into one shared function deletes this note.
 
 use fno::app_api::client::agent_sort::sideline_order;
-use fno::app_api::web_hq::{Board, OpenQuestion};
+use fno::app_api::web_hq::Board;
 use fno::needs_overlay::QuestionItem;
 use fno::proto::{AgentRow, Command, SquadMeta};
 use fno::search_query::fuzzy_hit;

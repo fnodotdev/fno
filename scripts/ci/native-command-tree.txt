@@ -9,7 +9,7 @@ mux app	group	visible	-	-
 mux app close	leaf	visible	-	!--session,--json,--server
 mux app focus	leaf	visible	-	!--session,--json,--server
 mux app open	leaf	visible	-	!--session,--focus,--json,--mode,--server
-mux app shot	leaf	visible	-	--mode,--out,--theme
+mux app shot	leaf	visible	-	--find,--mode,--out,--theme
 mux app show	leaf	visible	-	!--session,--json,--server
 mux app state	leaf	visible	-	--json,-J
 mux attach	leaf	visible	-	-
