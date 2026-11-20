@@ -1887,7 +1887,8 @@ impl Root {
             cx.background_executor()
                 .timer(Duration::from_millis(ms))
                 .await;
-            let _ = this.update(cx, |root, cx| root.flush_quiet(cx));
+            // A window closed mid-timer has nothing left to flush.
+            this.update(cx, |root, cx| root.flush_quiet(cx)).ok();
         })
         .detach();
     }
