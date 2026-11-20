@@ -341,7 +341,8 @@ fn clear_saved_job(
         }
         // A stop that exits nonzero is judged by what still holds the
         // session below, not by its exit code.
-        run_job_verb("stop", &short, job_root.as_deref())?;
+        run_job_verb("stop", &short, job_root.as_deref())
+            .map_err(|e| format!("resume --route: `claude stop {short}` failed: {e}"))?;
         // The argv census misses a job its supervisor hosts, so a listed
         // job also answers from the roster.
         let still_listed_running = remove
@@ -356,7 +357,8 @@ fn clear_saved_job(
         }
     }
     if remove {
-        let out = run_job_verb("rm", &short, job_root.as_deref())?;
+        let out = run_job_verb("rm", &short, job_root.as_deref())
+            .map_err(|e| format!("resume --route: `claude rm {short}` failed: {e}"))?;
         if !out.status.success() {
             return Err(format!(
                 "resume --route: `claude rm {short}` exited {}: {}; the saved job would \
@@ -386,26 +388,17 @@ fn run_job_verb(
     verb: &str,
     short: &str,
     root: Option<&Path>,
-) -> Result<std::process::Output, String> {
-    let ran = tokio::runtime::Builder::new_current_thread()
+) -> std::io::Result<std::process::Output> {
+    tokio::runtime::Builder::new_current_thread()
         .enable_all()
-        .build()
-        .map_err(|e| format!("resume --route: runtime build failed: {e}"))?
+        .build()?
         .block_on(crate::lifecycle_child::bounded_claude_job_verb_in(
             verb,
             short,
             std::time::Duration::from_secs(15),
             root,
-        ));
-    match ran {
-        Ok(Ok(out)) => Ok(out),
-        Ok(Err(e)) => Err(format!(
-            "resume --route: `claude {verb} {short}` failed: {e}"
-        )),
-        Err(_) => Err(format!(
-            "resume --route: `claude {verb} {short}` timed out after 15s"
-        )),
-    }
+        ))
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "timed out after 15s"))?
 }
 
 #[cfg(test)]
