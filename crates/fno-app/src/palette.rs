@@ -108,14 +108,13 @@ fn saturation(c: u32) -> f32 {
     (hi - lo) / (1.0 - (2.0 * l - 1.0).abs())
 }
 
-/// The theme's one hue: its terminal blue, else its own hued title, border
-/// or brand, else the ink. A gray candidate is skipped, and a theme with no
-/// hue at all gets `ink` (monochrome inverse fill: ink ground, base text),
-/// never a blue the theme does not own.
+/// The theme's accent: its own hued title, border or brand, else the ink.
+/// The terminal-16 blue is not a candidate: the footnote themes are
+/// monochrome and carry that table for terminal output only, so a blue
+/// button would be a hue the theme never chose. A gray candidate is
+/// skipped. With no hue at all the accent is `ink` (monochrome inverse
+/// fill: ink ground, base text).
 fn accent(t: &Theme, bg: u32, ink: u32) -> u32 {
-    if let Some(c) = terminal16_slot(4, t) {
-        return rgb_or(c, XTERM16[4]);
-    }
     [t.title, t.border, t.brand]
         .into_iter()
         .filter_map(|c| match c {
@@ -317,12 +316,11 @@ mod tests {
         }
     }
 
-    /// `terminal` has no terminal table and no hued title, border or brand:
-    /// the accent falls back to the ink, never xterm blue.
+    /// `terminal` has no hued title, border or brand, and the footnote twins'
+    /// terminal-16 blue is not an accent: both get the ink, never a blue.
     #[test]
     fn a_theme_with_no_hued_slot_gets_the_ink_as_accent() {
         let t = Theme::from_name("terminal").0;
-        assert!(terminal16_slot(4, &t).is_none());
         let p = Palette::from_theme(&t);
         assert_eq!(p.accent, p.fg);
         assert!(contrast(p.accent, p.bg) >= 3.0);
