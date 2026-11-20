@@ -159,7 +159,7 @@ pub(crate) fn render(root: &Root, window: &Window, cx: &mut Context<Root>) -> gp
                 .children(header_row(&facts, &p))
                 .child(card(root, window, cx))
                 .children(recent(&rows, &p, cx))
-                .children(hints(root, &p)),
+                .child(hints(root, &p)),
         )
 }
 
@@ -397,12 +397,11 @@ fn recent(rows: &[WorkspaceRow], p: &Palette, cx: &mut Context<Root>) -> Option<
     )
 }
 
-/// The hint row, cmd held only, and only real chords: every binding named
-/// here exists in the app's key table.
-fn hints(root: &Root, p: &Palette) -> Option<gpui::Div> {
-    if !root.picking {
-        return None;
-    }
+/// The hint row: real chords only, every binding named here exists in the
+/// app's key table. The row's slot is reserved in both states: the content
+/// fades out while cmd is up and never unmounts, so a cmd press adds no
+/// height and the centered block never shifts.
+fn hints(root: &Root, p: &Palette) -> gpui::Div {
     let pair = |keys: &'static str, label: &'static str| {
         div()
             .flex()
@@ -412,29 +411,28 @@ fn hints(root: &Root, p: &Palette) -> Option<gpui::Div> {
             .child(ui::kbd(keys, p))
             .child(ui::quiet(label, p))
     };
-    Some(
-        div()
-            .flex()
-            .flex_row()
-            .flex_wrap()
-            .items_center()
-            .gap_x(px(18.0))
-            .gap_y(px(6.0))
-            .child(pair("⌘N", "new agent, lead or shell"))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(6.0))
-                    .child(ui::kbd("⌘1", p))
-                    .child(ui::quiet("to", p))
-                    .child(ui::kbd("⌘9", p))
-                    .child(ui::quiet("jump to a row", p)),
-            )
-            .child(pair("⌘K", "palette"))
-            .child(pair("⌘D", "split")),
-    )
+    div()
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .items_center()
+        .gap_x(px(18.0))
+        .gap_y(px(6.0))
+        .when(!root.picking, |d| d.opacity(0.0))
+        .child(pair("⌘N", "new agent, lead or shell"))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(6.0))
+                .child(ui::kbd("⌘1", p))
+                .child(ui::quiet("to", p))
+                .child(ui::kbd("⌘9", p))
+                .child(ui::quiet("jump to a row", p)),
+        )
+        .child(pair("⌘K", "palette"))
+        .child(pair("⌘D", "split"))
 }
 
 #[cfg(test)]
