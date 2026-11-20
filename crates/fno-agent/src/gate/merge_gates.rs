@@ -1592,10 +1592,12 @@ fn open_look_names_head(root: &Path, pr: u64, head: &str) -> bool {
     })
 }
 
-/// The open question page whose title or ask cell names the PR: a look the
-/// user was asked for and has not answered. Body prose is not read, since a
-/// look page names sibling PRs in its downside line. The page's sequential
-/// alias (D3505) names it when present, else its question id.
+/// The open question page whose title or ask cell names the PR and whose
+/// body carries the shots: a look the user was asked for and has not
+/// answered. A question with no screens is no look ask. Body prose never
+/// names the PR, since a look page names sibling PRs in its downside line.
+/// The page's sequential alias (D3505) names it when present, else its
+/// question id.
 fn open_look_ask(root: &Path, pr: u64) -> Option<String> {
     question_read_dirs(root, false)
         .iter()
@@ -1604,10 +1606,11 @@ fn open_look_ask(root: &Path, pr: u64) -> Option<String> {
                 .unwrap_or_default()
                 .into_iter()
                 .find_map(|(_stem, text)| {
-                    let (front, _) = crate::attention_file::parse_page(&text)?;
+                    let (front, body) = crate::attention_file::parse_page(&text)?;
                     let asks = front.status == "open"
                         && stamp_allows(&front.project, stamp)
-                        && (page_names_pr(&front.title, pr) || page_names_pr(&front.ask, pr));
+                        && (page_names_pr(&front.title, pr) || page_names_pr(&front.ask, pr))
+                        && body.lines().any(|l| l.trim() == "## Screens");
                     asks.then(|| {
                         front
                             .aliases

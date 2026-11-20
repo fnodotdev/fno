@@ -1731,8 +1731,16 @@ fn a_paint_pr_merges_on_a_missing_look_and_holds_on_a_declined_page() {
     // asked and has not answered, so the merge holds instead of warning.
     std::fs::write(
         &page,
+        "---\nquestion_id: q-xc129\nstatus: open\ntitle: May PR 7 merge?\n---\nbody\n",
+    )
+    .unwrap();
+    // A question with no shots is no look ask: it warns like a missing look.
+    let no_shots = crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).unwrap();
+    assert_eq!(no_shots.code, "visual_approval");
+    std::fs::write(
+        &page,
         "---\nquestion_id: q-xc129\nstatus: open\ntitle: May PR 7 merge?\n\
-         aliases:\n- May PR 7 merge?\n- D3505\n---\nbody\n",
+         aliases:\n- May PR 7 merge?\n- D3505\n---\n## Screens\n\n![[q-xc129-1.png]]\n",
     )
     .unwrap();
     let pending = crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).unwrap();
@@ -1756,7 +1764,7 @@ fn a_paint_pr_merges_on_a_missing_look_and_holds_on_a_declined_page() {
     // A sibling PR named only in an open page's body prose is no ask.
     std::fs::write(
         &page,
-        "---\nquestion_id: q-xc129\nstatus: open\ntitle: May PR 8 merge?\n---\nships before PR 7\n",
+        "---\nquestion_id: q-xc129\nstatus: open\ntitle: May PR 8 merge?\n---\n## Screens\n\nships before PR 7\n",
     )
     .unwrap();
     let warns = crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).unwrap();
