@@ -35,6 +35,10 @@ const PREWARM: Duration = Duration::from_secs(5);
 
 pub fn run(opts: ShotOptions) -> i32 {
     let hold = opts.hold;
+    // The pin resolves before the theme pin chdirs: the newest lookup
+    // reads the cwd's project slug, and the pin dir would slug one dir
+    // off the world's seed.
+    let pinned = opts.chat.as_deref().and_then(crate::chat::resolve_key);
     if let Err(e) = theme_pin(&opts.theme) {
         eprintln!("fno-app --shot: {e}");
         return 2;
@@ -44,10 +48,12 @@ pub fn run(opts: ShotOptions) -> i32 {
         .clone()
         .unwrap_or_else(|| "default".to_string());
     let mode = opts.mode.unwrap_or(MainView::Orchestration);
-    let pinned = opts.chat.as_deref().and_then(crate::chat::resolve_key);
+    let find = opts.find;
     let out = opts.out.clone();
     let family = opts.font.clone();
     let font_size = opts.font_size;
+    let empty_chat = opts.empty_chat;
+    let cmd = opts.cmd;
     // Pre-warm before gpui starts: connect and drain to the world's
     // first layout on plain sockets, so the one frame the window paints
     // synchronously at open carries the world's data. gpui draws once at
@@ -79,7 +85,8 @@ pub fn run(opts: ShotOptions) -> i32 {
             },
             move |window, cx| {
                 crate::window::root_for_shot(
-                    &session, mode, pinned, warmed, family, font_size, window, cx,
+                    &session, mode, pinned, warmed, family, font_size, find, empty_chat, cmd,
+                    window, cx,
                 )
             },
         );

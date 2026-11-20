@@ -967,7 +967,7 @@ fn revive_parked_claude_session(
 ) -> Result<(), (i32, String)> {
     // A revive brings the session back from down: the same second-writer
     // gate the relaunch arm runs, before anything launches.
-    if let Some(code) = crate::resume_gate::gate_and_reserve(home, row_name, session_id) {
+    if let Some(code) = crate::resume_gate::gate_and_reserve(home, row_name, session_id, "claude") {
         return Err((code, "node-held".to_string()));
     }
     if let Err((code, msg)) = acquire_resume_session_claim(session_uuid, None, None) {
@@ -1613,7 +1613,7 @@ pub(crate) fn relaunch_exited_claude_with(
     }
     // A down-route launch refuses when another holder took the node or PR:
     // the same gate the dead arm runs before its relaunch.
-    if let Some(code) = crate::resume_gate::gate_and_reserve(home, row_name, &uuid) {
+    if let Some(code) = crate::resume_gate::gate_and_reserve(home, row_name, &uuid, "claude") {
         return code;
     }
     eprintln!(

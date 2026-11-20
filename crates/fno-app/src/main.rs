@@ -43,10 +43,23 @@ struct Args {
     /// View --shot renders (default: the command center board).
     #[arg(long = "shot-mode", value_enum)]
     shot_mode: Option<ShotView>,
+    /// Find-bar state --shot paints over the chat view: `bar` opens the
+    /// bar with a query typed through the real key path; `chords` also
+    /// forces the cmd-held hint.
+    #[arg(long = "shot-find", value_enum)]
+    shot_find: Option<ShotFind>,
     /// Hold the composited shot window up for a foreign capturer
     /// instead of capturing. Diagnostic.
     #[arg(long = "shot-hold", hide = true)]
     shot_hold: bool,
+    /// The chat pane keeps its empty start view for the frame, whatever
+    /// the world's focus carries. Shot-only.
+    #[arg(long = "shot-empty-chat", hide = true)]
+    shot_empty_chat: bool,
+    /// Cmd held: the rows and the start view show their cmd hints.
+    /// Shot-only.
+    #[arg(long = "shot-cmd", hide = true)]
+    shot_cmd: bool,
 }
 
 /// The --shot-mode values. The kebab spellings mirror MainView.
@@ -73,6 +86,15 @@ impl ShotView {
     }
 }
 
+/// The --shot-find values.
+#[derive(clap::ValueEnum, Clone)]
+enum ShotFind {
+    /// The bar open, hint at rest.
+    Bar,
+    /// The bar open, cmd-held hint forced.
+    Chords,
+}
+
 fn main() {
     let args = Args::parse();
     let shot = if args.shot {
@@ -88,7 +110,13 @@ fn main() {
             out: std::path::PathBuf::from(out),
             theme: args.shot_theme,
             mode: args.shot_mode.map(ShotView::into_main),
+            find: args.shot_find.map(|f| match f {
+                ShotFind::Bar => fno_app::FindShot::Bar,
+                ShotFind::Chords => fno_app::FindShot::Chords,
+            }),
             hold: args.shot_hold,
+            empty_chat: args.shot_empty_chat,
+            cmd: args.shot_cmd,
         })
     } else {
         None

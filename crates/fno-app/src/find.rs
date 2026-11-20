@@ -92,24 +92,25 @@ impl Find {
     }
 }
 
-/// Enter walks to the older match, Shift+Enter to the newer: the same
+/// Up walks to the older match, Down to the newer: the same
 /// directions the server steps `Prev`/`Next` in, and the same the chat scan
 /// keeps (its hits are oldest first).
-pub fn step_dir(shift: bool) -> BlockDir {
-    if shift {
-        BlockDir::Next
-    } else {
+pub fn step_dir(older: bool) -> BlockDir {
+    if older {
         BlockDir::Prev
+    } else {
+        BlockDir::Next
     }
 }
 
 /// The keys the bar consumes while it is open. Cmd keys keep their
-/// shortcuts; arrows and every other key keep its pane and chat routing.
+/// shortcuts; every other key keeps its pane and chat routing.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FindKey {
     Edit(String),
     Backspace,
-    Enter { shift: bool },
+    Enter,
+    Step { older: bool },
     Escape,
 }
 
@@ -118,9 +119,11 @@ pub fn key(k: &Key) -> Option<FindKey> {
         return None;
     }
     match k.key {
-        "enter" => Some(FindKey::Enter { shift: k.shift }),
+        "enter" => Some(FindKey::Enter),
         "escape" => Some(FindKey::Escape),
         "backspace" => Some(FindKey::Backspace),
+        "up" => Some(FindKey::Step { older: true }),
+        "down" => Some(FindKey::Step { older: false }),
         // is_text also admits space by key name: its key_char can be absent,
         // and a dropped Edit would send the space into the pane instead.
         _ if keys::is_text(k) => Some(FindKey::Edit(
@@ -168,8 +171,9 @@ pub fn chat_ranges(
 
 /// The one-line bar over the view's top right: query, caret, counter and
 /// the keys. Raised, border, muted and accent only: the app's existing
-/// terminal-native look.
-pub fn bar(f: &Find, p: Palette) -> Div {
+/// terminal-native look. The hint paints the bare arrows; while cmd alone
+/// is down it shows each arrow's chord, the palette's shortcut form.
+pub fn bar(f: &Find, p: Palette, picking: bool) -> Div {
     let counter = f.counter().map(|c| {
         let color = if f.total > 0 { p.accent } else { p.muted };
         div().flex_none().text_color(rgb(color)).child(c)
@@ -203,7 +207,11 @@ pub fn bar(f: &Find, p: Palette) -> Div {
             div()
                 .flex_none()
                 .text_color(rgb(p.muted))
-                .child("⏎ older  ⇧⏎ newer  esc"),
+                .child(if picking {
+                    "↑ ⇧⌘G   ↓ ⌘G"
+                } else {
+                    "↑ ↓"
+                }),
         )
 }
 
@@ -223,13 +231,13 @@ mod tests {
     }
 
     #[test]
-    fn enter_walks_older_and_shift_enter_walks_newer() {
-        assert_eq!(step_dir(false), BlockDir::Prev);
-        assert_eq!(step_dir(true), BlockDir::Next);
+    fn up_walks_older_and_down_walks_newer() {
+        assert_eq!(step_dir(true), BlockDir::Prev);
+        assert_eq!(step_dir(false), BlockDir::Next);
     }
 
     #[test]
-    fn the_bar_takes_text_enter_and_escape_and_leaves_the_rest_routed() {
+    fn the_bar_takes_text_arrows_enter_and_escape_and_leaves_the_rest_routed() {
         assert_eq!(
             key(&mk("f", Some("f"), false, false)),
             Some(FindKey::Edit("f".into()))
@@ -244,13 +252,14 @@ mod tests {
             key(&mk("space", None, false, false)),
             Some(FindKey::Edit(" ".into()))
         );
+        assert_eq!(key(&mk("enter", None, false, false)), Some(FindKey::Enter));
         assert_eq!(
-            key(&mk("enter", None, false, false)),
-            Some(FindKey::Enter { shift: false })
+            key(&mk("up", None, false, false)),
+            Some(FindKey::Step { older: true })
         );
         assert_eq!(
-            key(&mk("enter", None, false, true)),
-            Some(FindKey::Enter { shift: true })
+            key(&mk("down", None, false, false)),
+            Some(FindKey::Step { older: false })
         );
         assert_eq!(
             key(&mk("escape", None, false, false)),
@@ -260,10 +269,10 @@ mod tests {
             key(&mk("backspace", None, false, false)),
             Some(FindKey::Backspace)
         );
-        // Cmd keys keep their shortcuts, arrows keep their pane routing, and
-        // a ctrl combo never edits the query.
+        // Cmd keys keep their shortcuts, and a ctrl combo never edits the
+        // query.
         assert_eq!(key(&mk("f", Some("f"), true, false)), None);
-        assert_eq!(key(&mk("up", None, false, false)), None);
+        assert_eq!(key(&mk("up", None, true, false)), None);
         let ctrl = Key {
             key: "a",
             ctrl: true,

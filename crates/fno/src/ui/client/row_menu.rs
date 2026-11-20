@@ -4,6 +4,221 @@
 
 use super::*;
 
+/// (US2) The right-click / `m` row context menu over a sideline agent
+/// row. The target is pinned by NAME (not index) so a layout reshuffle between
+/// open and click can only turn an action into a stale-name refusal, never
+/// redirect it to a different agent (Concurrency). `actions` runs parallel to
+/// the popup's flat targets (`popup.sel` indexes it directly).
+pub(super) struct RowMenu {
+    pub(super) popup: Popup,
+    /// What the menu acts on, pinned at open. Execution fails closed if it no
+    /// longer resolves, so a layout reshuffle between open and click can only
+    /// produce a stale-target refusal, never a redirected action.
+    pub(super) target: MenuTarget,
+    pub(super) actions: Vec<MenuAction>,
+}
+
+/// What a row menu is acting on. A right-click resolves one of these at open
+/// time; execution re-resolves it against the LIVE layout, so a target that
+/// moved or vanished becomes a Notice rather than a misrouted action.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum MenuTarget {
+    Agent(AgentIdent),
+    /// A section header (a squad name row or a `~` band). `label` is cosmetic
+    /// (the confirm prompt); `key` is the persisted section identity and `squad`
+    /// the runtime one, present for a squad header and `None` for a `~` band
+    /// (which has no squad).
+    Section {
+        key: SectionKey,
+        label: String,
+        squad: Option<u64>,
+    },
+    /// A tab-strip cell (the tab menu). Pinned by stable [`TabId`]; execution
+    /// re-resolves it against the live layout, so a tab that closed between
+    /// open and pick is a Notice, never a redirected action.
+    Tab(TabId),
+    /// The shared open-session chooser's row (`open_chooser.rs`). Identified
+    /// and resolved exactly like [`MenuTarget::Agent`]; the difference is
+    /// the bookkeeping: an executed pick persists as the chooser's next
+    /// pre-selection.
+    OpenSession(AgentIdent),
+}
+
+/// The disambiguating identity of an agent row, captured when a row menu opens.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct AgentIdent {
+    pub(super) name: String,
+    pane_id: Option<u64>,
+    attach_id: Option<String>,
+}
+
+impl AgentIdent {
+    pub(super) fn of(a: &AgentRow) -> Self {
+        AgentIdent {
+            name: a.name.clone(),
+            pane_id: a.pane_id,
+            attach_id: a.attach_id.clone(),
+        }
+    }
+    fn matches(&self, a: &AgentRow) -> bool {
+        a.name == self.name && a.pane_id == self.pane_id && a.attach_id == self.attach_id
+    }
+}
+
+/// What a context-menu entry does, resolved against the LIVE agent row (found by
+/// name) at execution time - a stale target becomes a Notice, not a wrong action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MenuAction {
+    /// Attach a bg (paneless) agent by repointing the focused pane.
+    OpenHere,
+    /// Attach a bg (paneless) agent as a new tab.
+    NewTab,
+    /// Attach a bg agent as a directional split of the current tab.
+    Split(Dir),
+    /// Relocate a pane-hosted row's LIVE pane `dir`-ward (`Command::MovePane`,
+    /// PTY intact). Not `Split`/`AttachAgent`: on a session that already holds a
+    /// live pane, `AttachAgent` reconciles to an idempotent focus of that pane
+    /// ("already attached; focused existing pane") and so cannot relocate
+    /// anything. `MovePane` is the only command that moves a live leaf, and it
+    /// is what `commit_row_drag` already sends for a `RowSource::Pane` - one
+    /// gesture, one meaning.
+    MoveDir(Dir),
+    /// Break a pane-hosted row's live pane out into its own tab
+    /// (`Command::BreakPane`) - the menu twin of dragging its grip to the strip.
+    BreakOut,
+    /// Detach a pane-hosted worker while keeping its PTY live.
+    Detach,
+    /// Close ONLY the portal seat showing this row (`Command::ClosePortal`)
+    /// - the viewer pane, never the row: the thread keeps running and can
+    /// be shown again anywhere. Built only when the row wears a portal.
+    ClosePortal,
+    /// Relocate a pane-hosted row's live pane into ANOTHER workspace. Opens the
+    /// move picker (the same numbered picker `m` uses for a tab); the chosen
+    /// workspace's active-tab focus pane is the `MovePane` anchor, so the live
+    /// pane grafts in beside it and de-recruits from its source (the
+    /// `move_pane_cross_tab` path the row drag already uses). Appended in
+    /// [`View::open_row_menu`] only when another workspace exists,
+    /// so the entry never offers a move with no destination.
+    MoveToWorkspace,
+    /// Focus an existing pane-hosted row.
+    Focus,
+    /// Open the read-only peek overlay.
+    Peek,
+    /// Toggle the git working-diff pane for this row's worktree.
+    Diff,
+    /// Stop a live row (StopAgent, or StopExternal for a daemon-roster row).
+    Stop,
+    /// Remove an exited row (RemoveAgent, or RemoveExternal for a roster row).
+    Remove,
+    /// Remove EVERY exited row in the target section. The section comes
+    /// from [`MenuTarget::Section`], so this stays payload-free and `Copy`.
+    ClearDead,
+    /// Open the rename overlay for a workspace section header - menu parity with
+    /// selector `r`. Only built for a section carrying a squad id.
+    Rename,
+    /// Reorder a workspace section `delta` slots on the sideline - menu parity
+    /// with selector `J`/`K`, bound to the same `Command::MoveSquad`.
+    MoveSquad(i32),
+    /// Remove a whole workspace. Routed through the same
+    /// `ConfirmKind::RemoveSquad` confirm the keyboard path uses - a mouse
+    /// click must not skip the destructive-action gate.
+    RemoveSquad,
+    /// (5.1) Tab-menu entries, all bound to existing wire commands and
+    /// all resolved against the pinned [`TabId`] at execute: a new tab on the
+    /// target's squad, the rename overlay, a strip reorder, a join of the whole
+    /// tab into the viewed tab as `dir` split of the focused pane, and the
+    /// confirm-gated close.
+    TabNew,
+    TabRename,
+    TabReorder(i32),
+    /// Open the move-to-position prompt on the pinned tab: type the
+    /// 1-based destination, the client computes the delta and sends ONE
+    /// `Command::ReorderTab`. The direct-destination gesture the ±1 pair
+    /// cannot be - moving tab 22 to slot 3 costs one prompt, not nineteen
+    /// presses.
+    TabMoveTo,
+    TabJoin(Dir),
+    /// Split the VIEWED tab from its own menu cell: a `Command::SplitDir`
+    /// on the focused pane, the menu twin of the `%` family. Only the
+    /// viewed tab's menu offers it; other tabs' menus offer Join.
+    TabSplit(Dir),
+    TabClose,
+    /// (6.2) Respawn an exited row - the menu twin of peek `r`, the
+    /// same `Command::RespawnAgent`.
+    Resume,
+    /// Reattach a live paneless row whose server-side session is still present.
+    Reattach,
+    /// A workspace section's Add folder: opens the picker of live-row folders.
+    AddFolder,
+    /// (6.2) Mail this agent - opens the SAME peek overlay and its
+    /// free-text composer (`peek_input`) that peek `m` opens, never a second
+    /// input surface.
+    Mail,
+    /// Rename a sideline row's registry LABEL - opens the shared rename
+    /// overlay on `RenameTarget::Agent`. Built only for a non-external,
+    /// unambiguous agent row.
+    RenameAgent,
+    /// Open the portal PICKER for this row - the same numbered picker
+    /// sideline `P` opens (open portals plus a new-portal row), so a
+    /// right-click offers a portal choice where it offers placement.
+    PortalPicker,
+    /// Attach a paneless LIVE thread that carries no attach id as a NEW
+    /// portal view: `Some(dir)` splits a fresh portal `dir`-ward of the
+    /// active tab, `None` opens a standalone new-portal seat. Chooser-only:
+    /// built by `open_chooser::build_open_chooser`, never the row menu.
+    PortalAt(Option<Dir>),
+    /// Release the row's mail hold; built only on a row wearing a hold mark.
+    ReleaseHold,
+    /// Arm the row's session with a user do-not-disturb hold
+    /// (`mail-hold --session <id> --on`): inbound mail parks until the
+    /// lift entry removes it, capped by `mail.hold.max_minutes`. Built
+    /// only on a live, unmarked row carrying a session id - the marked
+    /// row offers the lift instead, so the two never render together.
+    ArmHold,
+    /// Pin or unpin the row's session: the keep mark no reaper passes.
+    TogglePin,
+}
+
+impl MenuAction {
+    /// The stable id this action's in-menu accelerator is registered
+    /// under in `keys::menu_bindings`, when it has one. The drawn hint and the
+    /// dispatched byte both resolve through this id, so the key the menu
+    /// advertises and the key it answers cannot drift. The tab commands and the
+    /// settled rename/close/remove pair carry one; everything else is
+    /// Enter/click only and renders no key.
+    pub(super) fn accelerator_id(&self) -> Option<&'static str> {
+        match self {
+            MenuAction::TabNew => Some("new-tab"),
+            MenuAction::TabRename => Some("rename-tab"),
+            MenuAction::Rename => Some("rename-workspace"),
+            MenuAction::TabClose => Some("close-tab"),
+            MenuAction::TabReorder(delta) => Some(if *delta < 0 {
+                "move-tab-left"
+            } else {
+                "move-tab-right"
+            }),
+            MenuAction::TabMoveTo => Some("move-tab-to"),
+            MenuAction::Remove => Some("remove-row"),
+            // The row-menu commands join the keyboard: every entry that
+            // can carry a key now shows one, and the drawn glyph and the
+            // dispatched byte both resolve through the same menu-scope id.
+            MenuAction::Stop => Some("stop-row"),
+            MenuAction::Peek => Some("peek-row"),
+            MenuAction::Mail => Some("mail-row"),
+            MenuAction::RenameAgent => Some("rename-agent"),
+            MenuAction::Diff => Some("diff-row"),
+            MenuAction::OpenHere => Some("open-here"),
+            MenuAction::Resume => Some("resume-row"),
+            MenuAction::ClosePortal => Some("close-portal"),
+            MenuAction::PortalPicker => Some("open-in-portal"),
+            MenuAction::ReleaseHold => Some("release-hold"),
+            MenuAction::ArmHold => Some("dnd-row"),
+            MenuAction::TogglePin => Some("pin-row"),
+            _ => None,
+        }
+    }
+}
+
 /// An entry whose action has an IN-MENU accelerator: the hint is the
 /// live glyph from the menu scope (`keys::menu_key_for`), never a prefix chord
 /// - the open menu does not run prefix chords, so advertising one describes an
@@ -212,6 +427,15 @@ pub(super) fn build_row_menu(agent: &AgentRow, anchor: Anchor) -> RowMenu {
         };
         add(entry("⤴", label), &[MenuAction::ReleaseHold]);
     }
+    // The arm is the lift's twin and shares its byte: an unmarked live row
+    // with a session id can take a user DND hold straight from the menu.
+    // An exited row's session is gone - nothing reads that hold - and a
+    // row without a session id has no key the store could hold under, the
+    // same gate the pin entry applies. A marked row offers the lift above,
+    // never both faces of the toggle.
+    if !agent.exited && !agent.dnd && agent.harness_session_id.is_some() {
+        add(entry("☾", "Do not disturb"), &[MenuAction::ArmHold]);
+    }
     // Live AND exited rows are renamable; an EXTERNAL row is claude-owned.
     if !agent.external {
         add(entry("✎", "Rename"), &[MenuAction::RenameAgent]);
@@ -303,12 +527,75 @@ mod tests {
             })
             .expect("the removal entry renders");
         assert_eq!(hint, "h", "Remove hold / DND advertises its menu key");
+        assert!(
+            !label_of(&menu, "Do not disturb"),
+            "a marked row offers the lift, never a second hold entry"
+        );
         let plain = focus_agent(3);
         let menu = build_row_menu(&plain, test_anchor());
         assert!(
             !label_of(&menu, "Remove hold") && !label_of(&menu, "Remove DND"),
             "no removal entry without a hold mark"
         );
+    }
+
+    fn offers(menu: &RowMenu, want: &str) -> bool {
+        menu.popup
+            .rows
+            .iter()
+            .any(|r| matches!(r, PopupRow::Entry { label, .. } if label == want))
+    }
+
+    fn hint_of(menu: &RowMenu, want: &str) -> String {
+        menu.popup
+            .rows
+            .iter()
+            .find_map(|r| match r {
+                PopupRow::Entry { label, hint, .. } if label == want => Some(hint.clone()),
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn an_unmarked_live_row_offers_do_not_disturb_with_the_h_hint() {
+        // The arm is the lift's twin and shares its byte: an unmarked live
+        // row with a session id offers Do not disturb, advertising the same
+        // `h` the mark-lift entry carries on a marked row - one key, one
+        // meaning (toggle the hold). The two faces never render together,
+        // so the byte resolves against whichever one the open menu offers.
+        let mut a = focus_agent(3);
+        a.harness_session_id = Some("sid-dnd-arm".into());
+        let menu = build_row_menu(&a, test_anchor());
+        assert!(
+            offers(&menu, "Do not disturb"),
+            "an unmarked live row offers the arm"
+        );
+        assert_eq!(
+            hint_of(&menu, "Do not disturb"),
+            "h",
+            "the arm advertises the toggle byte"
+        );
+    }
+
+    #[test]
+    fn an_exited_row_never_offers_the_do_not_disturb_arm() {
+        // A hold parks inbound mail for a live session; an exited row's
+        // session is gone, so an arm from its row writes a record nothing
+        // reads and a mark nobody can clear by lifting the session.
+        let mut a = focus_agent(3);
+        a.exited = true;
+        a.harness_session_id = Some("sid-dnd-dead".into());
+        let menu = build_row_menu(&a, test_anchor());
+        assert!(!offers(&menu, "Do not disturb"));
+    }
+
+    #[test]
+    fn a_row_without_a_session_id_never_offers_the_do_not_disturb_arm() {
+        // The hold store keys records by session id; a row with none has no
+        // key to hold under - the same gate the pin entry applies.
+        let menu = build_row_menu(&focus_agent(3), test_anchor());
+        assert!(!offers(&menu, "Do not disturb"));
     }
 
     #[test]
@@ -1008,17 +1295,74 @@ pub(super) async fn execute_row_menu_action(
                         .args(["mail-hold", "--session", &sid, "--release"])
                         .stdin(std::process::Stdio::null())
                         .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status(),
+                        .stderr(std::process::Stdio::piped())
+                        .output(),
                 )
                 .await;
                 let text = match outcome {
-                    Ok(Ok(s)) if s.success() => {
+                    Ok(Ok(out)) if out.status.success() => {
                         format!("hold released for {name}; held mail is delivering")
                     }
-                    Ok(Ok(s)) => format!("release failed ({s}); is fno-agent current?"),
+                    // A refusal's reason rides stderr (no registry row,
+                    // stale binary): the notice shows it, never a bare
+                    // exit code that names nothing.
+                    Ok(Ok(out)) => {
+                        let why = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                        if why.is_empty() {
+                            format!("release failed ({}); is fno-agent current?", out.status)
+                        } else {
+                            format!("release failed: {why}")
+                        }
+                    }
                     Ok(Err(exc)) => format!("release did not start: {exc}"),
                     Err(_) => "release is still running; the hold lifts when it lands".into(),
+                };
+                if let Some(tx) = notice_tx {
+                    let _ = tx.send(text);
+                }
+            });
+        }
+        MenuAction::ArmHold => {
+            // The by-session arm command (mail-hold.rs `--on`): the record
+            // write answers in microseconds; the release timer it arms runs
+            // detached, so the bounded wait below never sits on the
+            // transport. The EXIT is the truth a stale paired binary cannot
+            // paper over: one that predates `--on` exits 2 on the unknown
+            // flag, and the notice must say so, not "armed".
+            let Some(sid) = a.harness_session_id.clone() else {
+                view.set_notice("row carries no session id to hold".into());
+                return Ok(());
+            };
+            let notice_tx = view.reply_notice_tx.clone();
+            let name = a.name.clone();
+            tokio::spawn(async move {
+                let outcome = tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    tokio::process::Command::new(crate::digest_overlay::fno_agent_bin())
+                        .args(["mail-hold", "--session", &sid, "--on"])
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::piped())
+                        .output(),
+                )
+                .await;
+                let text = match outcome {
+                    Ok(Ok(out)) if out.status.success() => {
+                        format!("do-not-disturb armed for {name}; mail holds until it lifts")
+                    }
+                    // A refusal's reason rides stderr (bus-only row, no
+                    // registry row, stale binary): the notice shows it,
+                    // never a bare exit code that names nothing.
+                    Ok(Ok(out)) => {
+                        let why = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                        if why.is_empty() {
+                            format!("dnd arm failed ({}); is fno-agent current?", out.status)
+                        } else {
+                            format!("dnd arm failed: {why}")
+                        }
+                    }
+                    Ok(Err(exc)) => format!("dnd arm did not start: {exc}"),
+                    Err(_) => "arm is still running; the hold lands when it does".into(),
                 };
                 if let Some(tx) = notice_tx {
                     let _ = tx.send(text);
