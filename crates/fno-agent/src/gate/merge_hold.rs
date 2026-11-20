@@ -814,6 +814,13 @@ fn release_hold(
         Err(e) => return receipt("error", 2, format!("plan read failed: {e}")).to_string(),
     };
     let Some(new_text) = remove_hold_block(&original) else {
+        // A readable plan with no dispatch_hold key keeps its hold on the
+        // node row: release there, the way hold_read falls through to the
+        // node field. An unreadable plan keeps this error - its INVALID
+        // hold read parks the node either way.
+        if read_frontmatter(&probe).is_some_and(|fm| !fm.contains_key("dispatch_hold")) {
+            return release_node_hold(entry, node_id, graph, evidence, decisions_jsonl);
+        }
         return receipt(
             "error",
             3,
@@ -1205,6 +1212,44 @@ mod tests {
         let r: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(r["outcome"], "refused", "{r}");
         assert_eq!(r["exit_code"], 5, "{r}");
+    }
+
+    // --- a node-held hold behind a blockless plan ---
+
+    #[test]
+    fn a_node_held_hold_releases_through_the_node_when_the_plan_carries_no_block() {
+        let hold = json!({
+            "reason": "condition R",
+            "release_when": "when W",
+            "review_on": "2026-12-01",
+            "set_by": "team",
+        });
+        let fx = fixture(json!({"dispatch_hold": hold}));
+        let decisions = fx._dir.path().join("decisions.jsonl");
+
+        // The hold read falls to the node row (the plan has no block), so
+        // the release must take the node arm, not the plan-edit arm.
+        let r = release_with_decisions(&fx.graph, "d-any", &decisions);
+        assert_eq!(r["outcome"], "released", "{r}");
+        assert_eq!(r["exit_code"], 0, "{r}");
+        assert_eq!(r["plan"], Value::Null, "{r}");
+        assert!(hold_entry(&fx).get("dispatch_hold").is_none());
+        assert_eq!(std::fs::read_to_string(&fx.plan).unwrap(), PLAN_BODY);
+
+        // An unreadable plan keeps the error: its INVALID hold read parks
+        // the node either way, so a "released" receipt would lie.
+        let broken = fixture(json!({"dispatch_hold": hold}));
+        std::fs::write(&broken.plan, "---\nclaims: t-0001\nno closing fence\n").unwrap();
+        let r = release_with_decisions(&broken.graph, "d-any", &decisions);
+        assert_eq!(r["outcome"], "error", "{r}");
+        assert_eq!(r["exit_code"], 3, "{r}");
+        assert!(
+            r["detail"]
+                .as_str()
+                .unwrap()
+                .contains("no dispatch_hold block"),
+            "{r}"
+        );
     }
 
     // --- the per-child exemption ---
