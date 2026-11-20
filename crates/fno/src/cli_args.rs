@@ -327,7 +327,8 @@ pub enum AppOp {
     #[command(disable_help_flag = true)]
     Focus(AppFocusArgs),
     /// `mux app shot --out <path> [--theme dark|light] [--mode <view>]
-    /// [--find bar|chords]`: render one offscreen demo frame and write a
+    /// [--find bar|chords] [--ask rows|overflow]`: render one offscreen
+    /// demo frame and write a
     /// png; never opens a window on any display
     #[command(disable_help_flag = true)]
     Shot(AppShotArgs),
@@ -434,6 +435,10 @@ pub struct AppShotArgs {
     /// the bar with a query typed; `chords` also holds the cmd hint
     #[arg(long, value_parser = ["bar", "chords"])]
     pub find: Option<String>,
+    /// Seed an open ask-the-user question in the chat: `rows` is the short
+    /// options frame, `overflow` makes the first option wrap
+    #[arg(long, value_parser = ["rows", "overflow"])]
+    pub ask: Option<String>,
 }
 
 /// `mux thread`'s operation set: `reseat` is the one declared operation;
