@@ -70,6 +70,7 @@ agents loop control
 agents mail
 agents mail ack
 agents mail admin
+agents mail admin backfill
 agents mail admin drain-self
 agents mail admin hold
 agents mail admin pane-prepare
