@@ -129,7 +129,14 @@ pub fn run(opts: ShotOptions) -> i32 {
         let _: () = unsafe { msg_send![w, setIgnoresMouseEvents: true] };
         let _: () = unsafe { msg_send![w, setSharingType: 1usize] };
         let _: () = unsafe { msg_send![w, setAlphaValue: 0.01f64] };
-        eprintln!("fno-app --shot: window birth at one percent: occlusion={occl}");
+        // The read-back shows what the window itself claims, so a
+        // reverted setter never hides behind the server-side read.
+        // SAFETY: plain reads on the window this process owns.
+        let level_after: i64 = unsafe { msg_send![w, level] };
+        let alpha_after: f64 = unsafe { msg_send![w, alphaValue] };
+        eprintln!(
+            "fno-app --shot: window birth at one percent: level={level_after} alpha={alpha_after} occlusion={occl}"
+        );
         cx.spawn(async move |cx| {
             // The board feeds land after the first paint. Poll the
             // board's settled flag, refresh once the feeds land, then
@@ -142,7 +149,9 @@ pub fn run(opts: ShotOptions) -> i32 {
             }
             // Hold mode: leave the near-invisible composited window up
             // for a foreign capturer, skip the raise and the capture.
-            // Diagnostics only; the shot door never sets it.
+            // A foreign capture during hold reads one-percent precision
+            // (the raise is skipped): enough for layout, never for a
+            // color proof. Diagnostics only; the shot door never sets it.
             let code = if hold {
                 eprintln!("fno-app --shot: hold mode: the capture is skipped");
                 std::thread::sleep(std::time::Duration::from_secs(8));
@@ -158,9 +167,9 @@ pub fn run(opts: ShotOptions) -> i32 {
                 // own spawn latency covers the composite (measured: full
                 // precision with the capture fired right after the
                 // refresh). This instant is the shot's only visible
-                // window, about the capture tool's runtime; the node's
-                // decision d-d26ff23d keeps it, with the refusal branch
-                // as the recorded reversal.
+                // window, about the capture tool's runtime; the recorded
+                // worker decision for this node keeps it, with the
+                // refusal branch as the recorded reversal.
                 // SAFETY: setter on the window this process owns.
                 let _: () = unsafe { msg_send![w, setAlphaValue: 1.0f64] };
                 handle.update(cx, |_, window, _| window.refresh()).ok();
