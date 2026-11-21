@@ -46,16 +46,16 @@ pub(crate) fn wake_meter_text(
         if turn.text.is_empty() {
             continue;
         }
+        let prov =
+            crate::provenance::classify_turn(&turn.obj, &crate::provenance::BusIndex::empty(), "");
         // A held-park heartbeat turn is neither machine nor user: the lead
         // re-parked, so the turn measures nothing about the wake balance,
         // and a permanently parked lead must not read OVER on heartbeats
-        // alone. The marker is lead_wake::park_beat_text's.
-        if turn.text.contains("held-park heartbeat") {
-            continue;
-        }
-        let prov =
-            crate::provenance::classify_turn(&turn.obj, &crate::provenance::BusIndex::empty(), "");
+        // alone. Only machine-provenance turns skip, so a typed turn
+        // quoting the marker still counts as user. The marker is
+        // lead_wake::park_beat_text's own token seam.
         match wake_class(prov) {
+            Some(true) if turn.text.contains("daemon (held-park heartbeat") => {}
             Some(true) => machine += 1,
             Some(false) => user += 1,
             None => {}
@@ -202,5 +202,24 @@ mod tests {
             result["over"], true,
             "a real wake with no typed turn still flags OVER"
         );
+        // A typed turn that QUOTES the wake's marker phrase still counts as
+        // user: the marker is the wake text's own token seam, not a bare
+        // phrase any reply can carry.
+        let mut lines = lines;
+        lines.push(row(
+            "The daemon said \"daemon (held-park heartbeat, 1442m since the last beat)\" but a question just landed; taking the beat now.",
+            "2026-09-24T12:09:00Z",
+            false,
+        ));
+        let result = wake_meter_text("claude", &lines.join("\n"), None).unwrap();
+        assert_eq!(
+            result["machine"], 1,
+            "the quoted phrase stays out of machine"
+        );
+        assert_eq!(
+            result["user"], 1,
+            "the quoted phrase still counts as a typed turn"
+        );
+        assert_eq!(result["over"], false);
     }
 }
