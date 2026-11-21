@@ -107,8 +107,8 @@ pub(super) fn agent_status_word(a: &AgentRow) -> String {
     format!("{harness} · {status}")
 }
 
-/// One session's detail word: `N tab(s) · M pane(s)`, as the sidebar shows.
-pub(super) fn session_detail(s: &SquadMeta) -> String {
+/// One workspace's detail word: `N tab(s) · M pane(s)`, as the sidebar shows.
+pub(super) fn workspace_detail(s: &SquadMeta) -> String {
     let tabs = s.tabs.len();
     format!(
         "{tabs} tab{} · {} pane{}",
@@ -139,7 +139,7 @@ fn question_detail(q: &fno::needs_overlay::QuestionItem, now_secs: u64) -> Strin
 fn session_item(s: &fno::proto::SquadMeta, active: u64) -> Row {
     Row::Item {
         label: s.name.clone(),
-        detail: session_detail(s),
+        detail: workspace_detail(s),
         identity: None,
         card: None,
         state: None,

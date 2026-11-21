@@ -32,7 +32,7 @@ use fno::proto::{AgentLaunchRequest, AgentLaunchUpdate, AgentRow, LaunchState};
 /// workers. Shell runs a local shell command in a new terminal pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
-    Agent,
+    Worker,
     Lead,
     Shell,
 }
@@ -40,7 +40,7 @@ pub enum Kind {
 impl Kind {
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Kind::Agent => "agent",
+            Kind::Worker => "worker",
             Kind::Lead => "lead",
             Kind::Shell => "shell",
         }
@@ -49,7 +49,7 @@ impl Kind {
     /// The one dim line under the pick: why this kind, from the HQ guide.
     fn why(self) -> &'static str {
         match self {
-            Kind::Agent => "An agent runs one task. Pick it when one session can finish the work.",
+            Kind::Worker => "A worker runs one task. Pick it when one worker can finish the work.",
             Kind::Lead => "A lead hands a stream of tasks to workers. Pick the epics it covers.",
             Kind::Shell => "A shell command runs in a new terminal pane on this machine.",
         }
@@ -57,16 +57,16 @@ impl Kind {
 
     pub(crate) fn placeholder(self) -> &'static str {
         match self {
-            Kind::Agent => "the task, as one message",
+            Kind::Worker => "the task, as one message",
             Kind::Lead => "filter the epics, ⏎ picks the top match",
             Kind::Shell => "the shell command",
         }
     }
 
-    /// The kind a cmd-digit picks, in the header's order: agent, lead, shell.
+    /// The kind a cmd-digit picks, in the header's order: worker, lead, shell.
     pub(crate) fn from_index(n: u8) -> Option<Kind> {
         match n {
-            1 => Some(Kind::Agent),
+            1 => Some(Kind::Worker),
             2 => Some(Kind::Lead),
             3 => Some(Kind::Shell),
             _ => None,
@@ -103,7 +103,7 @@ impl Row {
     /// carries no model, effort or worktree picks, and the task row wraps.
     fn next(self, back: bool, kind: Kind) -> Row {
         let chain: &[Row] = match kind {
-            Kind::Agent => &[
+            Kind::Worker => &[
                 Row::Kind,
                 Row::Harness,
                 Row::Project,
@@ -224,7 +224,7 @@ impl Launch {
     /// A fresh panel: no picks yet, the catalog read once.
     pub fn fresh() -> Self {
         let mut launch = Launch {
-            kind: Kind::Agent,
+            kind: Kind::Worker,
             harness: String::new(),
             project: String::new(),
             gone: false,
@@ -338,7 +338,7 @@ impl Launch {
     /// Read the picked harness's skills for the completion list: claude
     /// lists project, user and plugin skills, codex its own root.
     pub(crate) fn refresh_skills(&mut self) {
-        self.skills = if self.kind == Kind::Agent {
+        self.skills = if self.kind == Kind::Worker {
             skills::list(&self.harness, &self.project)
         } else {
             Vec::new()
@@ -554,9 +554,9 @@ impl Launch {
             .cloned()
     }
 
-    /// The popover for the draft, agent kind only.
+    /// The popover for the draft, worker kind only.
     pub(crate) fn skill_view(&self) -> Option<skills::View> {
-        if self.kind != Kind::Agent {
+        if self.kind != Kind::Worker {
             return None;
         }
         skills::view(&self.skills, &self.harness, self.draft.text(), &self.pick)
@@ -693,9 +693,9 @@ impl Launch {
         match self.row {
             Row::Kind => {
                 let next = match self.kind {
-                    Kind::Agent => Kind::Lead,
+                    Kind::Worker => Kind::Lead,
                     Kind::Lead => Kind::Shell,
-                    Kind::Shell => Kind::Agent,
+                    Kind::Shell => Kind::Worker,
                 };
                 self.set_kind(next);
                 KeyOut::Taken
@@ -847,7 +847,7 @@ pub(super) fn render(root: &Root, window: &Window, cx: &mut Context<Root>) -> Di
                     div()
                         .flex_1()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child("New session"),
+                        .child("New worker"),
                 )
                 .child(ui::kbd("esc", &p)),
         )
@@ -856,14 +856,14 @@ pub(super) fn render(root: &Root, window: &Window, cx: &mut Context<Root>) -> Di
                 .flex()
                 .flex_row()
                 .gap(px(4.0))
-                .child(segment(Kind::Agent, l.kind == Kind::Agent, &p, cx))
+                .child(segment(Kind::Worker, l.kind == Kind::Worker, &p, cx))
                 .child(segment(Kind::Lead, l.kind == Kind::Lead, &p, cx))
                 .child(segment(Kind::Shell, l.kind == Kind::Shell, &p, cx)),
         )
         .child(ui::text(l.kind.why(), Role::Meta, &p))
         .child(harness_row(l, &p, cx))
         .child(project_row(l, &p, cx))
-        .when(l.kind == Kind::Agent, |d| {
+        .when(l.kind == Kind::Worker, |d| {
             d.child(axis_picker_rows(l, &p, cx))
         })
         .child(task_box(root, window, cx))
@@ -1017,7 +1017,7 @@ fn picker_row(
     .child(ui::clamp(value, Role::Name, p))
 }
 
-/// The agent kind's three launch-axis pickers: model, effort, worktree.
+/// The worker kind's three launch-axis pickers: model, effort, worktree.
 fn axis_picker_rows(l: &Launch, p: &Palette, cx: &mut Context<Root>) -> Div {
     div()
         .child(picker_row(
@@ -1054,7 +1054,7 @@ fn axis_picker_rows(l: &Launch, p: &Palette, cx: &mut Context<Root>) -> Div {
         ))
 }
 
-/// The agent kind's skill popover above the task box; tab fills the
+/// The worker kind's skill popover above the task box; tab fills the
 /// selected row. None shows unless the draft leads with the harness's
 /// sigil and the harness lists skills.
 pub(crate) fn skill_hints(root: &Root) -> Option<gpui::AnyElement> {
@@ -1312,9 +1312,9 @@ mod tests {
     }
 
     #[test]
-    fn an_agent_submit_sends_bare_text() {
+    fn a_worker_submit_sends_bare_text() {
         let mut l = Launch::fresh();
-        l.kind = Kind::Agent;
+        l.kind = Kind::Worker;
         l.harness = "claude".into();
         l.project = "/w".into();
         l.draft.replace_selection("fix the crash");
@@ -1327,9 +1327,9 @@ mod tests {
         // next() is pure: the result must be assigned back, or the walk
         // never moves.
         let mut l = Launch::fresh();
-        // Agent: the full chain wraps task -> kind.
+        // Worker: the full chain wraps task -> kind.
         l.row = Row::Task;
-        l.row = l.row.next(false, Kind::Agent);
+        l.row = l.row.next(false, Kind::Worker);
         assert_eq!(l.row, Row::Kind);
         // Shell: kind -> project -> task, no harness or axes.
         l.row = Row::Kind;
@@ -1390,7 +1390,7 @@ mod tests {
     #[test]
     fn the_request_carries_the_picked_axes_and_the_worktree_flip() {
         let mut l = Launch::fresh();
-        l.kind = Kind::Agent;
+        l.kind = Kind::Worker;
         l.harness = "claude".into();
         l.project = "/w".into();
         l.model = Some("opus".into());
@@ -1407,7 +1407,7 @@ mod tests {
     #[test]
     fn the_agent_task_box_autocompletes_the_harness_s_skills() {
         let mut l = Launch::fresh();
-        l.kind = Kind::Agent;
+        l.kind = Kind::Worker;
         l.harness = "claude".into();
         l.skills = vec![sk("target"), sk("think")];
         l.draft.replace_selection("/ta");
@@ -1503,7 +1503,7 @@ mod tests {
 
     #[test]
     fn cmd_digits_one_two_three_map_to_the_three_kinds() {
-        assert_eq!(Kind::from_index(1), Some(Kind::Agent));
+        assert_eq!(Kind::from_index(1), Some(Kind::Worker));
         assert_eq!(Kind::from_index(2), Some(Kind::Lead));
         assert_eq!(Kind::from_index(3), Some(Kind::Shell));
         assert_eq!(Kind::from_index(4), None);

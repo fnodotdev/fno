@@ -1925,8 +1925,8 @@ impl Root {
             "enter" if !shift => {
                 cx.stop_propagation();
                 let empty = self.launch.state.draft.text().trim().is_empty();
-                let agent = self.launch.state.kind == crate::launch::Kind::Agent;
-                if !(agent && empty) {
+                let worker = self.launch.state.kind == crate::launch::Kind::Worker;
+                if !(worker && empty) {
                     self.submit_launch(cx);
                 }
             }
