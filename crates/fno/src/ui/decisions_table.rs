@@ -79,19 +79,25 @@ const AUDIENCE_MIN_W: usize = 14;
 const AUDIENCE_MAX_W: usize = 30;
 const RULING_MIN_W: usize = 24;
 
-/// The audience cell: the chip word, then any persona jobs.
-fn audience_cell(r: &DecisionRow) -> String {
-    let word = r
+/// The audience cell: the chip word, then the persona jobs that fit whole
+/// within `w`. A job that would not fit is dropped, never cut mid-word.
+fn audience_cell(r: &DecisionRow, w: usize) -> String {
+    let mut cell = r
         .audience
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .unwrap_or("audience?");
-    if r.job.is_empty() {
-        word.to_string()
-    } else {
-        format!("{word} {}", r.job.join(","))
+        .unwrap_or("audience?")
+        .to_string();
+    for (i, job) in r.job.iter().enumerate() {
+        let sep = if i == 0 { " " } else { "," };
+        if cell.chars().count() + sep.len() + job.chars().count() > w {
+            break;
+        }
+        cell.push_str(sep);
+        cell.push_str(job);
     }
+    cell
 }
 
 fn fit(s: &str, n: usize) -> String {
@@ -132,7 +138,7 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
     // 14-column cell.
     let aud_w = shown
         .iter()
-        .map(|r| audience_cell(r).chars().count())
+        .map(|r| audience_cell(r, usize::MAX).chars().count())
         .max()
         .unwrap_or(0)
         .clamp(AUDIENCE_MIN_W, AUDIENCE_MAX_W)
@@ -152,7 +158,7 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
             "{} {} {} {} {} {} {} {} {} {}",
             fit(&r.lifecycle, 10),
             fit(&r.lane, 12),
-            fit(&audience_cell(r), aud_w),
+            fit(&audience_cell(r, aud_w), aud_w),
             fit(r.ts.get(..10).unwrap_or(&r.ts), 10),
             fit(&r.decider(), 10),
             if r.has_quote() { "Q" } else { " " },
@@ -377,6 +383,12 @@ mod tests {
             page.contains("customer:solo-founder"),
             "chip cut in:\n{page}"
         );
+        // A job that does not fit is dropped whole, never cut mid-word.
+        t.rows[0].job = vec!["alpha".into(), "beta-long-job-name".into()];
+        let jobs = render(&t, 140, 12).join("\n");
+        assert!(jobs.contains("customer:solo-founder alpha"), "{jobs}");
+        assert!(!jobs.contains("beta"), "job cut in:\n{jobs}");
+        t.rows[0].job.clear();
         // A narrow pane keeps the ruling rather than widening the chip.
         let narrow = render(&t, 110, 12).join("\n");
         assert!(narrow.contains("ship it"), "ruling lost in:\n{narrow}");
