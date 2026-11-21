@@ -3908,7 +3908,9 @@ mod tests {
         let _env = crate::law_match::scope_tests::DoorEnv::new();
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join(".fno").join("agents");
-        let attention = home.join("state").join("attention");
+        // attention_dir folds under the state root, the agents home's
+        // parent, so the index lands beside agents/, not inside it.
+        let attention = dir.path().join(".fno").join("state").join("attention");
         std::fs::create_dir_all(&attention).unwrap();
         let qdir = dir.path().join("questions");
         std::fs::create_dir_all(&qdir).unwrap();

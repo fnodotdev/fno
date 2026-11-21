@@ -190,16 +190,19 @@ mod tests {
             #[serde(default)]
             over: Option<bool>,
         }
+        // A daemon wake reaches the lead over the mail lane, so the
+        // transcript rows are fno_mail rows (machine provenance), never
+        // meta rows: the heartbeat skips on the marker guard alone.
         let park_lines = vec![
             row(
-                "Automatic lead-wake from the fno daemon (held-park heartbeat, 1442m since the last beat): every row in scope still waits on a question, so the cadence wake sleeps. Run your check-in to re-stamp the park or start work: fno agent hq checkin.",
+                "<fno_mail from=\"fno-lead-wake\">Automatic lead-wake from the fno daemon (held-park heartbeat, 1442m since the last beat): every row in scope still waits on a question, so the cadence wake sleeps. Run your check-in to re-stamp the park or start work: fno agent hq checkin.</fno_mail>",
                 "2026-09-24T12:06:00Z",
-                true,
+                false,
             ),
             row(
-                "Automatic lead-wake from the fno daemon: no check-in beat journaled for 51m and the beat is due at 55m. Run your check-in now: fno agent hq checkin.",
+                "<fno_mail from=\"fno-lead-wake\">Automatic lead-wake from the fno daemon: no check-in beat journaled for 51m and the beat is due at 55m. Run your check-in now: fno agent hq checkin.</fno_mail>",
                 "2026-09-24T12:07:00Z",
-                true,
+                false,
             ),
         ];
         let view =
