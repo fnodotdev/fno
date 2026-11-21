@@ -117,7 +117,7 @@ pub fn step(
     let existing = rows
         .iter()
         .position(|r| r["type"] == "ntfy" && r["url"].is_string() && r["topic"].is_string());
-    let (next_rows, url, topic, env) = match existing {
+    let (next_rows, url, topic, _env) = match existing {
         Some(i) => {
             let r = rows[i].clone();
             let url = r["url"].as_str().unwrap_or_default().to_string();
