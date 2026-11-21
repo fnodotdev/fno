@@ -967,7 +967,7 @@ mod tests {
     /// here at the producer; the relay-source sweep that used to re-check
     /// it from the loopcheck holds gate was cut under the G3 keep rules.
     #[test]
-    fn chat_answer_line_names_question_authority_and_quote() {
+    fn clear_answer_line_pins_question_authority_and_quote() {
         let line = chat_answer_line("q-1");
         assert!(
             line.contains("clear q-1") && line.contains("--authority chat_attested --quote"),
