@@ -1107,9 +1107,70 @@ pub(crate) fn authoritative_sync_prepared(
         connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let report = write_changed_ids(&transaction, before, after, true, changed)?;
     stamp_version(&transaction, version)?;
-    confirm_ids_landed_in(&transaction, after, &report.present_ids)?;
+    confirm_ids_landed_in(&transaction, after, &report.present_ids, true)?;
     transaction.commit()?;
     Ok(version.to_string())
+}
+
+/// The publish for a write whose snapshot is older than the store: the
+/// whole-graph version moved, but a version that moves for EVERY write says
+/// nothing about the rows this write touches. Under the write lock each
+/// touched row's stored write count must equal the count the snapshot read
+/// (a new id must still be absent, and no other id may hold its slug).
+/// Then only those rows land, and the store gets a version chained from the
+/// one it holds, because the snapshot's own digest no longer describes the
+/// store. `Ok(None)` means a touched row moved: nothing was written and the
+/// caller retries on a fresh snapshot. A write that needs seconds to plan
+/// on a large graph otherwise loses to any writer that lands meanwhile.
+pub(crate) fn authoritative_sync_rebased(
+    graph: &Path,
+    before: &[Value],
+    after: &[Value],
+    changed: &[String],
+    snapshot_rows: &std::collections::BTreeMap<String, i64>,
+    snapshot_digest: &str,
+) -> Result<Option<String>, StoreDbError> {
+    use sha2::{Digest, Sha256};
+
+    let mut connection = open_holding_lock(graph)?;
+    let transaction =
+        connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let ids: Vec<&str> = changed.iter().map(String::as_str).collect();
+    let stored = nodes::versions(&transaction, Some(&ids))?;
+    if ids
+        .iter()
+        .any(|id| stored.get(*id) != snapshot_rows.get(*id))
+    {
+        return Ok(None);
+    }
+    for row in after {
+        let Some(id) = RowFacts::id_of(row).filter(|id| ids.contains(id)) else {
+            continue;
+        };
+        let Some(slug) = row.get("slug").and_then(Value::as_str) else {
+            continue;
+        };
+        let held_elsewhere: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM nodes WHERE slug = ?1 AND id <> ?2)",
+            params![slug, id],
+            |found| found.get(0),
+        )?;
+        if held_elsewhere {
+            return Ok(None);
+        }
+    }
+    let version = format!(
+        "sqlite:{:x}",
+        Sha256::digest(format!(
+            "{}\0{snapshot_digest}",
+            stored_version(&transaction)?
+        ))
+    );
+    let report = write_changed_ids(&transaction, before, after, true, changed)?;
+    stamp_version(&transaction, &version)?;
+    confirm_ids_landed_in(&transaction, after, &report.present_ids, false)?;
+    transaction.commit()?;
+    Ok(Some(version))
 }
 
 /// The ids whose canonical row differs between the two row sets, sorted.
@@ -1216,6 +1277,7 @@ fn confirm_ids_landed_in(
     connection: &Connection,
     after: &[Value],
     changed_present: &[String],
+    exact_total: bool,
 ) -> Result<(), StoreDbError> {
     const SQLITE_BIND_BATCH: usize = 900;
     let stored_count: i64 = connection.query_row(
@@ -1260,7 +1322,9 @@ fn confirm_ids_landed_in(
         .map(String::as_str)
         .filter(|id| !stored.contains(*id))
         .collect();
-    if stored_count == after.len() as i64 && missing.is_empty() {
+    // A rebased write sees only its own rows: rows other writers added or
+    // removed since its snapshot make the total differ without any loss.
+    if (!exact_total || stored_count == after.len() as i64) && missing.is_empty() {
         return Ok(());
     }
     Err(StoreDbError::Refused(format!(
