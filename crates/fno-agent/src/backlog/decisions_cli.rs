@@ -1852,7 +1852,7 @@ fn render_markdown(report: &Value) -> String {
 /// carries no session provenance, so rows written before the field existed
 /// read exactly as they always did.
 fn provenance_lines(row: &Value) -> Vec<String> {
-    let Some(sp) = row.get("session_provenance").filter(|v| v.is_object()) else {
+    let Some(sp) = row.pointer("/session_provenance").filter(|v| v.is_object()) else {
         return Vec::new();
     };
     let mut lines = Vec::new();

@@ -2220,13 +2220,12 @@ mod tests {
         let code = decide_door_write(decide_argv(&argv), DecideIdentity::Ambient);
         assert_eq!(code, 0);
         let (rows, _) = crate::law_match::all_decision_rows().expect("rows");
-        let text_at = |r: &Value, k: &str| r.get(k).and_then(Value::as_str).unwrap_or("");
         let row = rows
             .iter()
-            .find(|r| text_at(r, "subject") == "x-provnode")
+            .find(|r| decision_row_str(r, "subject") == "x-provnode")
             .expect("the row landed");
         let sp = row
-            .get("session_provenance")
+            .pointer("/session_provenance")
             .expect("the row carries session provenance");
         assert_eq!(sp["session_id"], json!(session));
         assert_eq!(sp["harness"], json!("claude"));
@@ -2260,10 +2259,10 @@ mod tests {
         let (rows, _) = crate::law_match::all_decision_rows().expect("rows");
         let row = rows
             .iter()
-            .find(|r| r.get("subject").and_then(Value::as_str) == Some("x-provold"))
+            .find(|r| decision_row_str(r, "subject") == "x-provold")
             .expect("the row landed");
         assert!(
-            row.get("session_provenance").is_none(),
+            row.pointer("/session_provenance").is_none(),
             "an injected identity pins no session: {row}"
         );
     }
