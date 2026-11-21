@@ -1690,7 +1690,7 @@ mod tests {
         let stub = dir.path().join("close_leg_stub.sh");
         std::fs::write(
             &stub,
-            "#!/bin/sh\nprintf started > \"$MARKER_DIR/started\"\nsleep 4\nprintf done > \"$MARKER_DIR/done\"\n",
+            "#!/bin/sh\nprintf started > \"$MARKER_DIR/started\"\nsleep 6\nprintf done > \"$MARKER_DIR/done\"\n",
         )
         .unwrap();
         use std::os::unix::fs::PermissionsExt;
@@ -1726,7 +1726,7 @@ mod tests {
         );
         let started = markers.join("started");
         let done = markers.join("done");
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(12);
         while !done.exists() {
             assert!(started.exists(), "the detached leg never launched");
             assert!(
@@ -1743,7 +1743,7 @@ mod tests {
             !markers.join("worker-returned").exists(),
             "the worker's group kill never landed"
         );
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(8);
         while Instant::now() < deadline {
             assert!(
                 !done.exists(),
