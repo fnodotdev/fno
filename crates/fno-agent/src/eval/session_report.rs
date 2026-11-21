@@ -1892,7 +1892,7 @@ mod tests {
             let (_h, home) = temp_home("bg-rebind");
             seed_registry(&home, promoted_bg_row(&cwd));
             let path = manifest(&cwd);
-            std::fs::create_dir_all(crate::paths::space_dir(&cwd)).unwrap();
+            std::fs::create_dir_all(path.parent().expect("manifest dir")).unwrap();
             let old = "aaaabbbb-1111-4222-8333-ccccdddd0000";
             std::fs::write(
                 &path,
