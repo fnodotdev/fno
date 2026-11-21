@@ -956,7 +956,17 @@ fn record_docs_pr(cwd: &Path, body_file: &str) {
         None => None,
     };
     let origin = crate::pr_list::origin_slug(cwd, None).ok();
-    let url = match canonical.as_deref() {
+    // A short-form token carries no owner: the alias map fills it when the
+    // repo moved, else the origin's owner does, so the recorded url is one
+    // GitHub can resolve.
+    let qualified = canonical.map(|slug| match slug.split_once('/') {
+        Some(_) => slug,
+        None => match origin.as_deref().and_then(|o| o.split('/').next()) {
+            Some(owner) => format!("{owner}/{slug}"),
+            None => slug,
+        },
+    });
+    let url = match qualified.as_deref() {
         None | Some("") => match origin {
             Some(o) => format!("https://github.com/{o}/pull/{number}"),
             None => {

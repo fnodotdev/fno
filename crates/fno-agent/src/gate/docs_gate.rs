@@ -144,6 +144,13 @@ pub fn docs_pr_ref(body: &str) -> Option<(Option<String>, i64)> {
         if prev_pr && !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()) {
             return Some((None, t.parse().unwrap_or_default()));
         }
+        if t.contains("://") {
+            let slug = crate::backlog::pr_link::repo_slug_from_url(Some(t));
+            let number = crate::backlog::pr_link::pr_number_from_url(Some(t));
+            if let (Some(slug), Some(number)) = (slug, number) {
+                return Some((Some(slug), number));
+            }
+        }
     }
     None
 }

@@ -666,6 +666,10 @@ fn record_folded_pr(flow: &mut FlowResult, pr: i64, repo: &Path) {
         return;
     }
     let default = crate::gate_probes::default_branch_cached(repo, &slug, run);
+    if base == default.unwrap_or_default() {
+        // No stack: the normal merge records no fold, silently.
+        return;
+    }
     let owner = slug.split('/').next().unwrap_or_default();
     let head = format!("{}:{}", owner, crate::claims::encode_key(&base));
     let endpoint = format!("repos/{slug}/pulls?state=open&head={head}");
@@ -677,7 +681,7 @@ fn record_folded_pr(flow: &mut FlowResult, pr: i64, repo: &Path) {
         .as_array()
         .and_then(|rows| rows.first())
         .and_then(|row| row.pointer("/number").and_then(Value::as_u64));
-    let bound_pr = match fold_target(&base, default.as_deref(), bound_pr) {
+    let bound_pr = match fold_target(&base, None, bound_pr) {
         Ok(bound_pr) => bound_pr,
         Err(reason) => {
             flow.lines
