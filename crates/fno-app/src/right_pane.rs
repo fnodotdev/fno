@@ -443,7 +443,6 @@ fn card_frame(
         .gap(px(6.0))
         .child(ui::clamp(title.to_string(), Role::Name, p))
         .children(count.map(|n| ui::text(n.to_string(), Role::Fact, p)))
-        .child(ui::text(id.to_string(), Role::Hint, p))
         .child(
             div()
                 .id(ElementId::Name(format!("right-fold-{i}").into()))
@@ -461,6 +460,7 @@ fn card_frame(
     let frame = div()
         .flex()
         .flex_col()
+        .min_w_0()
         .gap_1()
         .p_2()
         .bg(rgb(p.raised))
@@ -691,7 +691,9 @@ fn questions_card(
         );
     }
     let n = qs.len();
-    let mut out = div().flex().flex_col();
+    // min_w_0 down the chain lets each title truncate to an ellipsis
+    // inside the card padding instead of clipping at the card edge.
+    let mut out = div().flex().flex_col().min_w_0();
     for (i, q) in qs.iter().take(TOP).enumerate() {
         let action = Action::OpenAnswer(q.item.id.clone());
         let pp = *p;
@@ -700,6 +702,8 @@ fn questions_card(
                 .id(ElementId::Name(format!("right-q-{i}").into()))
                 .flex()
                 .flex_row()
+                .min_w_0()
+                .overflow_hidden()
                 .gap(px(6.0))
                 .cursor_pointer()
                 .hover(move |s| s.bg(rgb(pp.hover)))

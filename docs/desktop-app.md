@@ -51,7 +51,7 @@ The title bar has a fixed height that no `--font-size` changes. On the left it n
 
 ## The session panel
 
-In Chat and Terminal, a panel at the right edge shows the session you are on. Option-cmd-B (⌥⌘B) shows or hides it, and the app keeps that choice across restarts. The panel names the agent, then its repo, branch and machine. A list of cards follows. Each card shows its title, a count, its id (for example `fno.changes`), a chevron that folds it and a × that removes it.
+In Chat and Terminal, a panel at the right edge shows the session you are on. Option-cmd-B (⌥⌘B) shows or hides it, and the app keeps that choice across restarts. The panel names the agent, then its repo, branch and machine. A list of cards follows. Each card shows its title, a count, a chevron that folds it and a × that removes it.
 
 - Pull request (`fno.pr`) shows the session's PR number, and a click opens the PR. With no PR it reads "no PR yet".
 - Changes (`fno.changes`) counts the lines added and removed since the branch's merge base, working tree included. It also lists the three biggest files. The app reads the diff in the pane's own directory every 10 seconds while the panel is open.
