@@ -43,7 +43,7 @@ pub fn owning_lead(fleet: Option<&fno::app_api::client::org_seats::Fleet>) -> Op
 
 enum Ask {
     Refresh,
-    Answer { id: String, option: u32 },
+    Answer { id: String, pick: AnswerPick },
     Mail { text: String },
 }
 
@@ -119,13 +119,8 @@ impl Poller {
                         due = match tokio::time::timeout(POLL_EVERY, ask_rx.recv()).await {
                             Ok(None) => return,
                             Ok(Some(Ask::Refresh)) => true,
-                            Ok(Some(Ask::Answer { id, option })) => {
-                                let reply = match fno::needs_overlay::answer(
-                                    &id,
-                                    AnswerPick::Option(option),
-                                )
-                                .await
-                                {
+                            Ok(Some(Ask::Answer { id, pick })) => {
+                                let reply = match fno::needs_overlay::answer(&id, pick).await {
                                     Ok(receipt) => Reply::Answered { id, receipt },
                                     Err(why) => Reply::Refused { id, why },
                                 };
@@ -200,8 +195,11 @@ impl Poller {
         }
     }
 
-    pub fn answer(&self, id: String, option: u32) {
-        let _ = self.asks.send(Ask::Answer { id, option });
+    /// One answer, a choice or the user's words, off the UI thread. The
+    /// verdict comes back as [`Reply::Answered`] or [`Reply::Refused`].
+    /// False when the poll thread is gone.
+    pub fn answer(&self, id: String, pick: AnswerPick) -> bool {
+        self.asks.send(Ask::Answer { id, pick }).is_ok()
     }
 
     /// Route one composer message to the owning lead, off the UI thread.

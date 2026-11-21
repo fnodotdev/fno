@@ -240,13 +240,13 @@ fn catalog_nodes(
 /// The rows after the node section: questions, views and commands.
 fn catalog_fixed(questions: &[&QuestionItem]) -> Vec<Target> {
     let mut out: Vec<Target> = Vec::new();
-    // Questions: the same row the sidebar's Questions section sends.
+    // Questions: the same row the sidebar's For-you section sends.
     for q in questions {
         out.push(Target {
             kind: Kind::Question,
             label: q.title.clone(),
             detail: q.node.clone().unwrap_or_else(|| q.kind.clone()),
-            action: Action::Show(MainView::Orchestration),
+            action: Action::OpenAnswer(q.id.clone()),
         });
     }
     // Views: the tab bar's own table.
@@ -590,7 +590,7 @@ mod tests {
             targets.iter().filter(|t| t.kind == Kind::Question).count(),
             1
         );
-        assert_eq!(targets.iter().filter(|t| t.kind == Kind::View).count(), 4);
+        assert_eq!(targets.iter().filter(|t| t.kind == Kind::View).count(), 5);
         assert!(
             targets.iter().any(|t| t.label == "agent-11"),
             "the 12th agent's row exists although the sidebar folds it"

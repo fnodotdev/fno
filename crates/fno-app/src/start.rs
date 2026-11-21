@@ -248,6 +248,7 @@ fn card(root: &Root, window: &Window, cx: &mut Context<Root>) -> Stateful<gpui::
         .child(text);
     div()
         .id("start-card")
+        .relative()
         .flex()
         .flex_col()
         .gap(px(6.0))
@@ -257,6 +258,7 @@ fn card(root: &Root, window: &Window, cx: &mut Context<Root>) -> Stateful<gpui::
         .border_1()
         .border_color(rgb(p.border))
         .bg(rgb(p.raised))
+        .children(launch::skill_hints(root))
         .child(field)
         .child(chips(root, &p, cx))
         .children(launch::phase_line(l, &p))

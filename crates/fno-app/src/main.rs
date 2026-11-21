@@ -58,6 +58,9 @@ struct Args {
     /// instead of capturing. Diagnostic.
     #[arg(long = "shot-hold", hide = true)]
     shot_hold: bool,
+    /// Open the answer sheet on the newest question: the sheet proof.
+    #[arg(long = "shot-sheet", hide = true)]
+    shot_sheet: bool,
     /// The chat pane keeps its empty start view for the frame, whatever
     /// the world's focus carries. Shot-only.
     #[arg(long = "shot-empty-chat", hide = true)]
@@ -66,6 +69,13 @@ struct Args {
     /// Shot-only.
     #[arg(long = "shot-cmd", hide = true)]
     shot_cmd: bool,
+    /// Text typed into the start composer (or the chat composer when the
+    /// pane has a session) before the frame. Shot-only.
+    #[arg(long = "shot-draft", hide = true)]
+    shot_draft: Option<String>,
+    /// Harness the start composer shows picked. Shot-only.
+    #[arg(long = "shot-harness", hide = true)]
+    shot_harness: Option<String>,
 }
 
 /// The --shot-mode values. The kebab spellings mirror MainView.
@@ -79,6 +89,8 @@ enum ShotView {
     Orchestration,
     /// The mods and layouts feed
     Mods,
+    /// The inbox
+    Inbox,
 }
 
 impl ShotView {
@@ -88,6 +100,7 @@ impl ShotView {
             ShotView::Terminal => fno_app::MainView::Terminal,
             ShotView::Orchestration => fno_app::MainView::Orchestration,
             ShotView::Mods => fno_app::MainView::Mods,
+            ShotView::Inbox => fno_app::MainView::Inbox,
         }
     }
 }
@@ -139,8 +152,11 @@ fn main() {
                 ShotSettings::Page => fno_app::SettingsShot::Page,
             }),
             hold: args.shot_hold,
+            sheet: args.shot_sheet,
             empty_chat: args.shot_empty_chat,
             cmd: args.shot_cmd,
+            draft: args.shot_draft,
+            harness: args.shot_harness,
         })
     } else {
         None

@@ -275,6 +275,43 @@ pub fn personas_in_scope(scope: &str) -> Vec<&str> {
         .collect()
 }
 
+/// The scoping gate (D3526): filing takes the coarse audience and the why,
+/// and a node carries its persona and its acceptance by the time it is
+/// scoped - the move to ready, a blueprint, or a target start. `stage`
+/// names that moment in the refusal. `Some(text)` refuses; the caller adds
+/// its own prefix (`refused:` for the doors, the command name for init).
+pub fn scoping_refusal(entry: &Value, stage: &str) -> Option<String> {
+    let id = crate::backlog::question_intake::str_field(entry, "id").unwrap_or("?");
+    let done = crate::backlog::question_intake::str_field(entry, "done_means")
+        .map(str::trim)
+        .unwrap_or("");
+    if done.is_empty() {
+        return Some(format!(
+            "{id} is not scoped: --done-means is required by {stage}: the acceptance a merge \
+             check can read. Supply it with: fno backlog update {id} done_means=<text>"
+        ));
+    }
+    let audience = stored_audience(entry)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("");
+    if audience.is_empty() || audience == "audience?" {
+        return Some(format!(
+            "{id} is not scoped: --audience is required by {stage}: the record names who it \
+             serves. Supply it with: fno backlog update {id} audience=internal|customers|customer:<persona>"
+        ));
+    }
+    let names_coarse_customers = audience.split(',').map(str::trim).any(|t| t == "customers");
+    if names_coarse_customers && personas_in_scope(audience).is_empty() {
+        return Some(format!(
+            "{id} is not scoped: --audience customers needs its persona by {stage}: the persona \
+             file must exist and the jobs it serves get named. Supply it with: fno backlog update \
+             {id} audience=customer:<persona>"
+        ));
+    }
+    None
+}
+
 /// The single scope term the board score uses: the highest-impact audience a
 /// stored scope names. A list takes its strongest member, never a sum.
 pub fn audience_score_term(audience: &str) -> u32 {
@@ -402,6 +439,43 @@ mod tests {
             parse_audience(Some("customers"), "fno").unwrap(),
             "customers"
         );
+    }
+
+    // The scoping gate's three refusals, each naming the stage and the flag
+    // that supplies the missing fact; a scoped row passes.
+    #[test]
+    fn scoping_refusal_names_the_stage_and_the_flag() {
+        let stage = "the move to ready";
+        let no_done = serde_json::json!({ "id": "x-a1", "audience": "internal" });
+        let msg = scoping_refusal(&no_done, stage).unwrap();
+        assert!(msg.contains("done-means"), "{msg}");
+        assert!(msg.contains(stage), "{msg}");
+        assert!(msg.contains("done_means=<text>"), "{msg}");
+
+        let no_audience = serde_json::json!({ "id": "x-a2", "done_means": "green" });
+        let msg = scoping_refusal(&no_audience, stage).unwrap();
+        assert!(msg.contains("--audience"), "{msg}");
+
+        let coarse = serde_json::json!({
+            "id": "x-a3",
+            "audience": "customers",
+            "done_means": "green"
+        });
+        let msg = scoping_refusal(&coarse, stage).unwrap();
+        assert!(msg.contains("customer:<persona>"), "{msg}");
+
+        let scoped = serde_json::json!({
+            "id": "x-a4",
+            "audience": "customer:solo-operator",
+            "done_means": "green"
+        });
+        assert!(scoping_refusal(&scoped, stage).is_none());
+        let internal_scoped = serde_json::json!({
+            "id": "x-a5",
+            "audience": "internal",
+            "done_means": "green"
+        });
+        assert!(scoping_refusal(&internal_scoped, stage).is_none());
     }
 
     #[test]

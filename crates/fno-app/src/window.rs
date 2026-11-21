@@ -3,7 +3,7 @@
 //! and hosts the chat view and the orchestration board.
 
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use super::alerts;
 use super::alerts::Signal;
+use super::answer;
 use super::chat::{
     self,
     composer::{Attachment, Draft},
@@ -55,9 +56,12 @@ pub enum MainView {
     Orchestration,
     /// The mods and layouts from `fno config plugins ls`.
     Mods,
+    /// The navigation for questions and decisions: Open and Answered.
+    Inbox,
 }
 
-/// What a click in the left pane, the strip or the board does.
+/// What a click or a key in the left pane, the strip, the board or the
+/// sheets does.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     Send(Command),
@@ -66,6 +70,15 @@ pub enum Action {
         id: String,
         option: u32,
     },
+    /// Open the answer sheet on one question.
+    OpenAnswer(String),
+    /// Close the answer sheet without answering.
+    CloseAnswer,
+    /// Record the sheet's picked choice; Answer sends it.
+    PickAnswer(u32),
+    /// The sheet's Answer button and Enter: the typed words win over the
+    /// picked choice.
+    SubmitAnswer,
     Show(MainView),
     /// Show every agent in the left pane, or only the first few.
     ToggleAgents,
@@ -78,6 +91,10 @@ pub enum Action {
     CloseSheet,
     Copy(String),
     SendChat,
+    /// Move the open question's pick to one row.
+    PickChoice(usize),
+    /// Answer the open question with the picked row.
+    AnswerChoice,
     /// The start view's send: the launch panel's own submit door.
     SubmitLaunch,
     /// Reopen a chat stream that closed.
@@ -96,6 +113,10 @@ fn click_id(action: &Action) -> &'static str {
         Action::Send(_) => "send_command",
         Action::Notice(_) => "notice",
         Action::Answer { .. } => "answer",
+        Action::OpenAnswer(_) => "open_answer",
+        Action::CloseAnswer => "close_answer",
+        Action::PickAnswer(_) => "pick_answer",
+        Action::SubmitAnswer => "submit_answer",
         Action::Show(_) => "show_view",
         Action::ToggleAgents => "toggle_agents",
         Action::ToggleKeySheet => "toggle_key_sheet",
@@ -104,6 +125,8 @@ fn click_id(action: &Action) -> &'static str {
         Action::CloseSheet => "close_sheet",
         Action::Copy(_) => "copy",
         Action::SendChat => "send_chat",
+        Action::PickChoice(_) => "pick_choice",
+        Action::AnswerChoice => "answer_choice",
         Action::SubmitLaunch => "submit_launch",
         Action::Reconnect => "reconnect",
         Action::Mail(_) => "mail_lead",
@@ -117,6 +140,9 @@ fn click_id(action: &Action) -> &'static str {
 pub enum AnswerState {
     Sending(u32),
     Done(u32),
+    /// A typed answer in flight or recorded; the door took the words.
+    SendingWords,
+    DoneWords,
     Refused(String),
 }
 
@@ -131,6 +157,8 @@ pub enum MailState {
 
 /// How long a notice stays in the corner.
 const NOTICE_FOR: Duration = Duration::from_secs(4);
+/// How long a question arrival toast stays top-right.
+const QUESTION_TOAST_FOR: Duration = Duration::from_secs(8);
 /// The terminal client's quiet windows, mirrored: 40ms releases a held Esc
 /// candidate, 400ms keeps a typed tab number together before it resolves
 /// on its own.
@@ -195,6 +223,26 @@ pub struct Root {
     pub(super) picking: bool,
     /// The key sheet (cmd-/) covers the window.
     pub(super) sheet: bool,
+    /// The answer sheet: the one question it holds, the choice the user
+    /// picked, and the typed draft. Esc and Later close; Answer submits the
+    /// typed words, else the pick.
+    pub(super) answer: Option<answer::Sheet>,
+    /// The arrival toast: the question it names and the timer generation,
+    /// so only the newest toast's expiry clears it.
+    question_toast: Option<(String, u64)>,
+    question_toast_gen: u64,
+    /// Every question id any board read has listed. Arrival = an id the set
+    /// has not met; the first read seeds it silently, unless the shot flag
+    /// below is set, so an app open never toasts a backlog.
+    seen_questions: HashSet<String>,
+    /// A good question read has seeded `seen_questions`.
+    questions_seeded: bool,
+    /// The shot window toasts on its first read: the capture wants the
+    /// arrival toast in frame.
+    toast_on_first_read: bool,
+    /// The shot window opens the answer sheet on the newest question when
+    /// the first board read lands: the sheet proof.
+    sheet_on_first_read: bool,
     /// The go-to palette (cmd-k) covers the window.
     pub(super) goto: Option<goto::GoTo>,
     /// The find bar (cmd-f) over the focused pane or the chat.
@@ -225,6 +273,7 @@ pub struct Root {
     _activation: Option<Subscription>,
     _appearance: Option<Subscription>,
     _notice: Option<Task<()>>,
+    _question_toast: Option<Task<()>>,
     _alerts: Option<Task<()>>,
     _alerts_tick: Option<Task<()>>,
     /// The attention signals: the lattice diff, the switch cache, the badge.
@@ -357,6 +406,13 @@ impl Root {
             pinned,
             picking: false,
             sheet: false,
+            answer: None,
+            question_toast: None,
+            question_toast_gen: 0,
+            seen_questions: HashSet::new(),
+            questions_seeded: false,
+            toast_on_first_read: false,
+            sheet_on_first_read: false,
             goto: None,
             find: None,
             launch: launch::Panel::default(),
@@ -371,6 +427,7 @@ impl Root {
             _activation: None,
             _appearance: None,
             _notice: None,
+            _question_toast: None,
             _alerts: None,
             _alerts_tick: None,
             alerts: alerts::Alerts::new(),
@@ -526,11 +583,33 @@ impl Root {
                     record_ui_state(self, cx);
                     cx.quit();
                 }
+                fno::app_control::AppCommand::Answer { option } => {
+                    let open = self
+                        .chat
+                        .conv
+                        .open_question()
+                        .map(|(_, ask)| ask.choices.len());
+                    match open {
+                        Some(n) if (1..=n).contains(option) => {
+                            self.chat.pick = option - 1;
+                            self.answer_choice(cx);
+                        }
+                        Some(n) => self.say(
+                            format!("fno mux app answer: the question has {n} options"),
+                            cx,
+                        ),
+                        None => self.say(
+                            "fno mux app answer: no question waits in this chat".into(),
+                            cx,
+                        ),
+                    }
+                }
                 fno::app_control::AppCommand::View { view } => match view.as_str() {
                     "chat" => self.show(MainView::Chat, cx),
                     "terminal" => self.show(MainView::Terminal, cx),
                     "orchestration" => self.show(MainView::Orchestration, cx),
                     "mods" => self.show(MainView::Mods, cx),
+                    "inbox" => self.show(MainView::Inbox, cx),
                     other => {
                         self.notice = Some(format!("fno mux app: unknown view {other:?}"));
                         self.notice_failed = true;
@@ -644,6 +723,94 @@ impl Root {
         }));
     }
 
+    /// Raise the arrival toast for one question. The element reads the
+    /// board live at paint, so a question the board drops hides the toast
+    /// even before the timer does. The shot holds it: the capture wants
+    /// the surface in frame, not a timed one.
+    fn say_question(&mut self, id: String, cx: &mut Context<Self>) {
+        self.question_toast_gen += 1;
+        let gen = self.question_toast_gen;
+        self.question_toast = Some((id, gen));
+        cx.notify();
+        if self.shot {
+            return;
+        }
+        self._question_toast = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(QUESTION_TOAST_FOR).await;
+            let _ = this.update(cx, |root, cx| {
+                if root.question_toast.as_ref().is_some_and(|(_, g)| *g == gen) {
+                    root.question_toast = None;
+                    cx.notify();
+                }
+            });
+        }));
+    }
+
+    /// The arrival toast: a raised card top-right, the diamond, who
+    /// asked, a preview of the question, and the Answer door. It reads
+    /// the board live, so a dropped question hides it at once.
+    /// The Inbox lists the question itself, so it never toasts there.
+    fn question_toast_card(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        self.question_toast
+            .as_ref()
+            .filter(|_| self.main != MainView::Inbox)
+            .and_then(|(id, _)| self.board.questions().iter().find(|q| q.item.id == *id))
+            .map(|q| {
+                let item = &q.item;
+                let ask = item
+                    .asker
+                    .as_ref()
+                    .map(|a| a.handle.as_str())
+                    .unwrap_or("an agent");
+                let open = Action::OpenAnswer(item.id.clone());
+                div()
+                    .absolute()
+                    .top(px(ui::TITLE_H + 24.0))
+                    .right(px(12.0))
+                    .w(px(420.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .px_3()
+                    .py_2()
+                    .rounded(px(6.0))
+                    .border_1()
+                    .border_color(rgb(self.palette.border))
+                    .bg(rgb(self.palette.raised))
+                    .font_family(ui::MONO)
+                    .text_size(px(ui::BODY))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(6.0))
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_color(rgb(self.palette.warn))
+                                    .child("◆"),
+                            )
+                            .child(
+                                ui::role(div().flex_1().min_w_0(), ui::Role::Name, &self.palette)
+                                    .child(format!("New question from {ask}")),
+                            )
+                            .child(
+                                ui::button(
+                                    "toast-answer",
+                                    "Answer",
+                                    ui::Button::Primary,
+                                    &self.palette,
+                                )
+                                .on_click(
+                                    cx.listener(move |root, _, _, cx| root.act(open.clone(), cx)),
+                                ),
+                            ),
+                    )
+                    .child(ui::cut(&item.title, 52))
+            })
+    }
+
     pub(super) fn act(&mut self, action: Action, cx: &mut Context<Self>) {
         fno::ui_usage::click("app", click_id(&action));
         match action {
@@ -657,14 +824,32 @@ impl Root {
             }
             Action::Notice(text) => self.say(text, cx),
             Action::Answer { id, option } => match &self.poller {
-                // A row already sent or answered takes no second click.
-                Some(_) if self.answers.contains_key(&id) => {}
+                // A row already sent or answered takes no second click; a
+                // refused one takes a retry.
+                Some(_) if answer::in_flight_or_done(self.answers.get(&id)) => {}
                 Some(poller) => {
-                    poller.answer(id.clone(), option);
-                    self.answers.insert(id, AnswerState::Sending(option));
+                    if poller.answer(id.clone(), fno::needs_overlay::AnswerPick::Option(option)) {
+                        self.answers.insert(id, AnswerState::Sending(option));
+                    } else {
+                        self.say("the board poll stopped: cannot answer".into(), cx);
+                    }
                 }
                 None => self.say("no board poll: cannot answer".into(), cx),
             },
+            Action::OpenAnswer(id) => {
+                // The sheet answers what the toast announced.
+                if self.question_toast.as_ref().is_some_and(|(t, _)| *t == id) {
+                    self.question_toast = None;
+                }
+                self.answer = Some(answer::Sheet::new(id));
+            }
+            Action::CloseAnswer => self.answer = None,
+            Action::PickAnswer(n) => {
+                if let Some(s) = self.answer.as_mut() {
+                    s.pick = Some(n);
+                }
+            }
+            Action::SubmitAnswer => answer::submit(self, cx),
             Action::Show(view) => self.show(view, cx),
             Action::ToggleAgents => {
                 self.agents_open = !self.agents_open;
@@ -691,6 +876,15 @@ impl Root {
                 self.say(format!("copied {n} characters"), cx);
             }
             Action::SendChat => self.submit_chat(cx),
+            Action::PickChoice(i) => {
+                // A second click on the picked row answers with it.
+                if self.chat.pick == i {
+                    self.answer_choice(cx);
+                } else {
+                    self.chat.pick = i;
+                }
+            }
+            Action::AnswerChoice => self.answer_choice(cx),
             Action::SubmitLaunch => self.submit_launch(cx),
             Action::Reconnect => self.open_chat(cx),
             Action::Mail(text) => match &self.poller {
@@ -849,6 +1043,20 @@ impl Root {
         record_ui_state(self, cx);
     }
 
+    /// The project path a session runs in, for its project skills: the
+    /// launch panel's known project whose basename is the row's cwd.
+    fn chat_project(&self, key: Option<&SessionKey>) -> String {
+        let base = key.and_then(|k| {
+            self.layout
+                .agents
+                .iter()
+                .find(|a| a.harness_session_id.as_deref() == Some(k.session_id.as_str()))
+                .and_then(|a| a.cwd_base.clone())
+        });
+        base.and_then(|b| self.launch.state.project_for_base(&b))
+            .unwrap_or_default()
+    }
+
     /// In chat mode, stream the focused pane's agent session. A new focus
     /// parks the shown conversation and resumes the new one where it left.
     fn sync_chat(&mut self, cx: &mut Context<Self>) {
@@ -861,7 +1069,8 @@ impl Root {
         if self.main != MainView::Chat || key == self.chat.key {
             return;
         }
-        self.chat.switch(key);
+        let project = self.chat_project(key.as_ref());
+        self.chat.switch(key, &project);
         self.open_chat(cx);
         // The shown conversation changed: chat find re-scans the new rows.
         self.find_rescan(cx);
@@ -1002,6 +1211,81 @@ impl Root {
         }
     }
 
+    /// Answer the open question with the picked row. Where the mux already
+    /// read the harness's own menu off the pane and pinned a keystroke per
+    /// row, the answer goes through `PaneAnswer`, which the server checks
+    /// against the live grid before it types. Claude's question screen has
+    /// no extracted menu, but its rows take their own number as a key, so a
+    /// pick there types that digit into the pane.
+    fn answer_choice(&mut self, cx: &mut Context<Self>) {
+        let Some((_, ask)) = self.chat.conv.open_question() else {
+            return;
+        };
+        let pick = self.chat.pick.min(ask.choices.len().saturating_sub(1));
+        let Some(choice) = ask.choices.get(pick) else {
+            return;
+        };
+        let want = choice.label.trim().to_lowercase();
+        let Some(key) = self.chat.key.clone() else {
+            return;
+        };
+        // The row is addressed by pane id and the server re-checks the pane
+        // before it types, so the pane need not be on screen.
+        let row = self.layout.agents.iter().find(|a| {
+            !a.exited
+                && a.pane_id.is_some()
+                && a.harness_session_id.as_deref() == Some(key.session_id.as_str())
+        });
+        let Some((pane, menu)) = row.and_then(|a| a.pane_id.map(|p| (p, a.answerable.clone())))
+        else {
+            self.say("no pane hosts this session: answer in the pane".into(), cx);
+            return;
+        };
+        let digit = u8::try_from(pick).ok().filter(|p| *p < 9).map(|p| b'1' + p);
+        match (menu, digit) {
+            (Some(menu), _) => {
+                // The pane's menu must be this question's: the row whose
+                // label holds the picked option's text. Any other prompt in
+                // the pane (a permission ask, a stale question) fails closed
+                // instead of taking a keystroke meant for another menu.
+                let Some(option) = menu
+                    .options
+                    .iter()
+                    .find(|o| o.label.to_lowercase().contains(&want))
+                else {
+                    self.say(
+                        "the pane's menu is not this question: answer in the pane".into(),
+                        cx,
+                    );
+                    return;
+                };
+                self.send(ClientMsg::PaneAnswer {
+                    pane,
+                    fingerprint: menu.fingerprint,
+                    region_lines: u16::try_from(menu.region_lines).unwrap_or(u16::MAX),
+                    keystroke: option.keystroke.clone(),
+                });
+            }
+            (None, Some(digit)) if key.harness == "claude" => {
+                let request_id = self.chat.next_request;
+                self.chat.next_request += 1;
+                // The server types only into a pane the client views, so
+                // bring the question's pane into view first.
+                self.send(ClientMsg::Command(Command::FocusPane(pane)));
+                self.send(ClientMsg::PaneInput(proto::pane_input::PaneInputRequest {
+                    request_id,
+                    pane,
+                    expected_identity: key.session_id.clone(),
+                    bytes: vec![digit],
+                }));
+            }
+            _ => self.say(
+                "the pane shows no menu to answer: answer in the pane".into(),
+                cx,
+            ),
+        }
+    }
+
     /// One clipboard paste: text routes by view; a clipboard image with no
     /// text attaches to the chat draft, and the send re-puts it and types
     /// the harness's image-paste keystroke (submit_chat).
@@ -1068,6 +1352,42 @@ impl Root {
     fn on_hq(&mut self, reply: Reply, cx: &mut Context<Self>) {
         match reply {
             Reply::Board(board) => {
+                // Arrival: an id the seen set has not met. The first read
+                // seeds the set silently - an app open never toasts a
+                // backlog - unless the shot wants the toast in frame.
+                let first_read = !self.questions_seeded;
+                let ids: Vec<String> = board
+                    .questions()
+                    .iter()
+                    .map(|q| q.item.id.clone())
+                    .collect();
+                let arrivals: Vec<String> = ids
+                    .iter()
+                    .filter(|i| !self.seen_questions.contains(*i))
+                    .cloned()
+                    .collect();
+                self.seen_questions.extend(ids);
+                // A good read seeds the set, even an empty one, so the first
+                // question after an empty open still toasts.
+                if board.read_yet() && board.questions_error().is_none() {
+                    self.questions_seeded = true;
+                }
+                if board.questions_error().is_none() && (!first_read || self.toast_on_first_read) {
+                    // Newest first, so the first hit is the newest arrival.
+                    let newest = board
+                        .questions_newest_first()
+                        .into_iter()
+                        .find_map(|q| arrivals.contains(&q.item.id).then(|| q.item.id.clone()));
+                    if let Some(id) = newest {
+                        self.say_question(id, cx);
+                    }
+                }
+                if first_read && self.sheet_on_first_read {
+                    if let Some(q) = board.questions_newest_first().first() {
+                        self.question_toast = None;
+                        self.answer = Some(answer::Sheet::new(q.item.id.clone()));
+                    }
+                }
                 self.board = *board;
                 // A question the read no longer lists needs no answer state;
                 // a refusal stays so the row keeps its reason.
@@ -1080,8 +1400,17 @@ impl Root {
                 self.answers.retain(|id, _| open.contains(&id.as_str()));
             }
             Reply::Answered { id, receipt } => {
-                if let Some(AnswerState::Sending(option)) = self.answers.get(&id).cloned() {
-                    self.answers.insert(id, AnswerState::Done(option));
+                match self.answers.get(&id).cloned() {
+                    Some(AnswerState::Sending(option)) => {
+                        self.answers.insert(id.clone(), AnswerState::Done(option));
+                    }
+                    Some(AnswerState::SendingWords) => {
+                        self.answers.insert(id.clone(), AnswerState::DoneWords);
+                    }
+                    _ => {}
+                }
+                if self.answer.as_ref().is_some_and(|s| s.id == id) {
+                    self.answer = None;
                 }
                 self.say(receipt, cx);
             }
@@ -1168,7 +1497,8 @@ impl Root {
             if let Some(key) = launch::stream_key(&self.layout.agents, &name) {
                 self.launch.show = None;
                 self.pinned = Some(key.clone());
-                self.chat.switch(Some(key));
+                let project = self.chat_project(Some(&key));
+                self.chat.switch(Some(key), &project);
                 self.open_chat(cx);
             }
         }
@@ -1601,6 +1931,9 @@ impl Root {
                 }
             }
             "enter" => self.launch.state.draft.replace_selection("\n"),
+            "tab" if self.launch.state.complete_skill() => {}
+            "escape" if self.launch.state.skill_close() => {}
+            "up" | "down" if self.launch.state.skill_step(key.key == "down") => {}
             "backspace" => self.launch.state.draft.backspace(),
             "delete" => self.launch.state.draft.delete(),
             "left" if cmd => self.launch.state.draft.home(shift),
@@ -1745,6 +2078,20 @@ impl Root {
         if self.chat.draft.marked().is_some() {
             return;
         }
+        // An open question takes the movement keys and Enter in the
+        // composer's place.
+        if let Some((_, ask)) = self.chat.conv.open_question() {
+            let last = ask.choices.len().saturating_sub(1);
+            match key.key {
+                "up" => self.chat.pick = self.chat.pick.saturating_sub(1),
+                "down" => self.chat.pick = (self.chat.pick + 1).min(last),
+                "enter" => self.answer_choice(cx),
+                _ => return,
+            }
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
         let (shift, alt, cmd) = (key.shift, key.alt, key.cmd);
         let vertical = matches!(key.key, "up" | "down");
         if !vertical {
@@ -1753,6 +2100,9 @@ impl Root {
         match key.key {
             "enter" if !shift => self.submit_chat(cx),
             "enter" => self.chat.draft.replace_selection("\n"),
+            "tab" if self.chat.complete_skill() => {}
+            "escape" if self.chat.skill_close() => {}
+            "up" | "down" if self.chat.skill_step(key.key == "down") => {}
             "backspace" => self.chat.draft.backspace(),
             "delete" => self.chat.draft.delete(),
             "left" if cmd => self.chat.draft.home(shift),
@@ -2082,6 +2432,13 @@ impl Root {
         if self.launch_key(&key, cx) {
             return;
         }
+        // The answer sheet is modal the same way: esc closes, enter
+        // submits, the editing keys and text land in its draft. A cmd or
+        // ctrl key falls through, so the shortcuts keep running under it.
+        if answer::key(self, &key, cx) {
+            cx.stop_propagation();
+            return;
+        }
         if let Some(action) = keys::shortcut(&key) {
             cx.stop_propagation();
             self.cmd_action(action, window, cx);
@@ -2301,12 +2658,19 @@ impl Root {
         }
     }
 
-    /// The paste shortcut: into the open find bar first, then the mods
-    /// sheet, the chat draft, the board composer, or the focused pane.
+    /// The paste shortcut: into the open answer sheet's draft, the open
+    /// find bar, then the mods sheet, the chat draft, the board composer,
+    /// or the focused pane.
     fn paste(&mut self, cx: &mut Context<Self>) {
         let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) else {
             return;
         };
+        // The open answer sheet takes the paste into its draft.
+        if let Some(s) = self.answer.as_mut() {
+            s.draft.replace_selection(&text);
+            cx.notify();
+            return;
+        }
         // The open bar takes the paste into its query, ahead of the draft
         // and the pane.
         if self.find.is_some() {
@@ -2916,6 +3280,13 @@ impl InputHandler for TermInput {
     }
 }
 
+/// A board-style view in the mono face at body size.
+fn mono_view(view: impl IntoElement + Styled) -> gpui::AnyElement {
+    view.font_family(ui::MONO)
+        .text_size(px(ui::BODY))
+        .into_any_element()
+}
+
 impl Render for Root {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let size_now = grid_size(window.viewport_size(), self.metrics.cell);
@@ -2933,14 +3304,9 @@ impl Render for Root {
         let main = match self.main {
             MainView::Chat => self.chat_view(window, cx).into_any_element(),
             MainView::Terminal => self.terminal(cx).into_any_element(),
-            MainView::Orchestration => orchestration::render(self, cx)
-                .font_family(ui::MONO)
-                .text_size(px(ui::BODY))
-                .into_any_element(),
-            MainView::Mods => mods::render(self, cx)
-                .font_family(ui::MONO)
-                .text_size(px(ui::BODY))
-                .into_any_element(),
+            MainView::Orchestration => mono_view(orchestration::render(self, cx)),
+            MainView::Mods => mono_view(mods::render(self, cx)),
+            MainView::Inbox => mono_view(crate::inbox::render(self, cx)),
         };
         // The bar floats over the target view's top right; find_gc keeps the
         // target and the view in step, so a live bar always sits over its
@@ -2992,6 +3358,7 @@ impl Render for Root {
                 .text_size(px(ui::BODY))
                 .child(text)
         });
+        let qtoast = self.question_toast_card(cx);
         let page = div()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
@@ -3022,7 +3389,8 @@ impl Render for Root {
                     .flex_col()
                     .child(strip)
                     .child(main)
-                    .children(toast),
+                    .children(toast)
+                    .children(qtoast),
             );
         self.overlays(page, window, cx)
     }
@@ -3041,6 +3409,7 @@ impl Root {
             d.child(launch::render(self, window, cx))
         })
         .when(self.sheet, |d| d.child(sheet::render(self, cx)))
+        .when(self.answer.is_some(), |d| d.child(answer::render(self, cx)))
         .when(self.goto.is_some(), |d| d.child(goto::render(self, cx)))
         .when(self.settings.is_some(), |d| {
             d.child(settings::render(self, cx))
@@ -3259,6 +3628,9 @@ pub(super) fn root_for_shot(
     settings: Option<crate::SettingsShot>,
     empty_chat: bool,
     cmd: bool,
+    sheet: bool,
+    draft: Option<String>,
+    harness: Option<String>,
     window: &mut Window,
     cx: &mut App,
 ) -> gpui::Entity<Root> {
@@ -3291,12 +3663,25 @@ pub(super) fn root_for_shot(
     });
     root.update(cx, |root, _| {
         root.shot = true;
+        root.toast_on_first_read = true;
+        root.sheet_on_first_read = sheet;
         if empty_chat {
             root.shot_empty_chat = true;
-            root.chat.switch(None);
+            root.chat.switch(None, "");
         }
         if cmd {
             root.picking = true;
+        }
+        if let Some(h) = harness {
+            root.launch.state.set_harness_for_shot(h);
+        }
+        if let Some(text) = draft {
+            if root.shot_empty_chat {
+                root.launch.state.refresh_skills();
+                root.launch.state.draft.replace_selection(&text);
+            } else {
+                root.chat.draft.replace_selection(&text);
+            }
         }
     });
     if let Some(find) = find {

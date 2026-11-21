@@ -577,6 +577,7 @@ pub(super) fn portal_replay_placement(placement: &PanePlacement, portal_idx: u8)
 /// or a row on another machine, which its seat shows through the link.
 pub(super) enum ReachKey<'a> {
     Row(&'a str),
+    #[cfg_attr(not(feature = "web"), allow(dead_code))]
     Remote(&'a crate::proto::RemoteRow),
 }
 
@@ -710,6 +711,15 @@ impl Core {
         // carries only its `name@host`, which is also the key its portal
         // stores, and its seat runs the link instead of a tier argv.
         let (row, link) = match key {
+            #[cfg(not(feature = "web"))]
+            ReachKey::Remote(_) => {
+                self.notice(
+                    client_id,
+                    "remote links need the full fno build (the web feature)".to_string(),
+                );
+                return Flow::Continue;
+            }
+            #[cfg(feature = "web")]
             ReachKey::Remote(remote) => match crate::mux_link::pane_argv(remote) {
                 Ok(argv) => {
                     let row = RegistryAgent {

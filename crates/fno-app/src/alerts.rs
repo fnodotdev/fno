@@ -403,7 +403,7 @@ mod mac {
                     let tx = &*(*tx as *const UnboundedSender<u64>);
                     // A closed window loop has nowhere to put the click;
                     // dropping it is the correct handling.
-                    drop(tx.send(pane as u64));
+                    tx.send(pane as u64).ok();
                 }
             }
             // The runtime frees the response only after the handler

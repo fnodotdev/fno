@@ -211,10 +211,23 @@ fn options(q: &fno::needs_overlay::QuestionItem, root: &Root, cx: &mut Context<R
     let p = root.palette;
     let mut out = div().flex().flex_col().gap_1().pt_2();
     let state = root.answers.get(&q.id);
+    let sending_words = matches!(
+        state,
+        Some(AnswerState::SendingWords) | Some(AnswerState::DoneWords)
+    );
     if let Some(AnswerState::Sending(n) | AnswerState::Done(n)) = state {
         let (text, color) = match state {
             Some(AnswerState::Done(_)) => (format!("answered: option {n}"), p.ok),
             _ => (format!("sending option {n}…"), p.muted),
+        };
+        return out.child(ui::text(text, Role::Meta, &p).text_color(rgb(color)).py_1());
+    }
+    if sending_words {
+        let done = matches!(state, Some(AnswerState::DoneWords));
+        let (text, color) = if done {
+            ("answered".to_string(), p.ok)
+        } else {
+            ("sending your answer…".to_string(), p.muted)
         };
         return out.child(ui::text(text, Role::Meta, &p).text_color(rgb(color)).py_1());
     }
@@ -392,7 +405,7 @@ fn next_column(root: &Root) -> Div {
         let id = row["id"].as_str().unwrap_or_default();
         let title = row["title"].as_str().unwrap_or_default();
         let priority = row["priority"].as_str().unwrap_or_default();
-        let mut line = div()
+        let line = div()
             .flex()
             .flex_row()
             .items_center()

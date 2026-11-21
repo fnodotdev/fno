@@ -203,7 +203,7 @@ pub(crate) struct DecideDoor {
     keep: Vec<String>,
 }
 
-const DECIDE_USAGE: &str = "usage: fno inbox decide <subject> <decision> [--question-id q] [--rationale s] [--option s]... [--supersedes d-x] [--answers-ask s] [--class c] [--overturns s-or-d] --audience internal|customers|customer:<persona> [--why s] [--job p/s] [--expiry node|pr|date:<when>|never] [--keep d-x]... [--decided-by name] [--authority operator|role|agent|beastmode] [--graduation k] [--graduation-ref r] [--read cmd]... [--origin o]";
+const DECIDE_USAGE: &str = "usage: fno inbox decide <subject> <decision> [--question-id q] [--rationale s] [--option s]... [--supersedes d-x] [--answers-ask s] [--class c] [--overturns s-or-d] --audience internal|customers|customer:<persona> --why s [--job p/s] [--expiry node|pr|date:<when>|never] [--keep d-x]... [--decided-by name] [--authority operator|role|agent|beastmode] [--graduation k] [--graduation-ref r] [--read cmd]... [--origin o]  -- a ruling records in one step: audience and why are required when it lands, and a customer ruling names its persona there too.";
 
 pub(crate) fn parse_decide_door(args: &[String]) -> Result<DecideDoor, String> {
     let mut door = DecideDoor {

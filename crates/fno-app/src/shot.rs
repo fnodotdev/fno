@@ -54,6 +54,9 @@ pub fn run(opts: ShotOptions) -> i32 {
     let font_size = opts.font_size;
     let empty_chat = opts.empty_chat;
     let cmd = opts.cmd;
+    let sheet = opts.sheet;
+    let draft = opts.draft.clone();
+    let harness = opts.harness.clone();
     // Pre-warm before gpui starts: connect and drain to the world's
     // first layout on plain sockets, so the one frame the window paints
     // synchronously at open carries the world's data. gpui draws once at
@@ -82,6 +85,9 @@ pub fn run(opts: ShotOptions) -> i32 {
                 opts.settings,
                 empty_chat,
                 cmd,
+                sheet,
+                draft,
+                harness,
                 window,
                 cx,
             )
