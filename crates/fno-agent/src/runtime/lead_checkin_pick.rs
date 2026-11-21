@@ -29,20 +29,24 @@ fn target(id: &str) -> String {
 /// its owner is usually the lead's own epic.
 fn offers(bp: &Value) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
-    // Seat entries are objects ({scope, children}), not id strings: the
-    // offer rides the scope and its command is the seat line.
-    for s in bp
-        .get("seat_leads")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        if let Some(scope) = s.get("scope").and_then(Value::as_str) {
-            out.push((
-                scope.to_string(),
-                format!("fno agent spawn --as thread --promote {scope} \"/fno:lead\""),
-            ));
-        }
+    // Seat entries are typed on read (the blueprint's own SeatScope shape):
+    // the offer rides the scope and its command is the seat line.
+    let seats: Vec<crate::lead_checkin_blueprint::SeatScope> = bp["seat_leads"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| serde_json::from_value(s.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    for s in &seats {
+        out.push((
+            s.scope.clone(),
+            format!(
+                "fno agent spawn --as thread --promote {} \"/fno:lead\"",
+                s.scope
+            ),
+        ));
     }
     for id in ids(bp, "starts") {
         out.push((id.clone(), format!("start /fno:blueprint subagent {id}")));

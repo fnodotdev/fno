@@ -9,6 +9,7 @@
 //! `config_value_deep`; the shipped table lives beside this file and is
 //! `include_str!`ed like `merge_posture.toml`.
 
+use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -349,7 +350,7 @@ fn stop_block(
     let mut reason = block_reason(row);
     if row.id == LEAD_IDLE_PICK_RULE {
         if let Some((beat, _)) = idle_beat(ctx) {
-            if let Some(line) = beat["data"].get("pick_line").and_then(Value::as_str) {
+            if let Some(line) = beat.data.pick_line.as_deref() {
                 reason.push_str(&format!(" Your beat printed: {line}"));
             }
         }
@@ -480,14 +481,12 @@ fn predicate(ctx: &Ctx, name: &str, ev: Option<&Value>) -> bool {
             .and_then(Value::as_str)
             .is_some_and(|v| !v.trim().is_empty()),
         "class_user_only" => ev.is_some_and(|e| class_user_only(ctx, e)),
-        "lead_idle_reactive_pick" => {
-            idle_beat(ctx).is_some_and(|(beat, _)| idle_beat_blocks(&beat))
-        }
-        "lead_spawn_gate_refused" => idle_beat(ctx).is_some_and(|(beat, journals)| {
-            let Some(node) = beat["data"]["pick_node"].as_str() else {
+        "lead_idle_reactive_pick" => idle_beat(ctx).is_some_and(|(row, _)| idle_beat_blocks(&row)),
+        "lead_spawn_gate_refused" => idle_beat(ctx).is_some_and(|(row, journals)| {
+            let Some(node) = row.data.pick_node.as_deref() else {
                 return false;
             };
-            let Some(since_ms) = row_ts_ms(&beat) else {
+            let Some(since_ms) = row.ts_ms() else {
                 return false;
             };
             gate_refused_since(&journals, node, since_ms)
@@ -500,10 +499,68 @@ fn predicate(ctx: &Ctx, name: &str, ev: Option<&Value>) -> bool {
 /// The rule id whose block reason names the beat's actual pick line.
 const LEAD_IDLE_PICK_RULE: &str = "lead_idle_pick_unanswered";
 
+/// The beat row's typed read: the keys the idle-pick rules consume. Every
+/// field defaults, so a beat whose data carries another shape reads all
+/// None and never blocks (the unmeasured-beat fail-open).
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct BeatRow {
+    ts: Option<String>,
+    data: BeatFacts,
+}
+
+/// The beat-data keys the block reads on.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct BeatFacts {
+    scope_live_workers: Option<u64>,
+    reactive: Option<bool>,
+    pick_offered: Option<String>,
+    pick: Option<String>,
+    pick_node: Option<String>,
+    pick_line: Option<String>,
+}
+
+impl BeatRow {
+    /// The row's top-level ts as epoch millis, for the refusal comparison.
+    fn ts_ms(&self) -> Option<i64> {
+        self.ts
+            .as_deref()
+            .and_then(|t| t.parse::<chrono::DateTime<chrono::Utc>>().ok())
+            .map(|t| t.timestamp_millis())
+    }
+}
+
+/// A refused-spawn row's typed read: the row wraps its facts under `data`.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct RefusalRow {
+    data: RefusalData,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct RefusalData {
+    node: Option<String>,
+    argv: Option<Vec<String>>,
+}
+
+impl RefusalData {
+    /// The node match or the argv match: a seat pick names a scope, not a
+    /// node, so the promote token in the refused argv is its evidence.
+    fn matches(&self, node: &str) -> bool {
+        self.node.as_deref() == Some(node)
+            || self
+                .argv
+                .as_deref()
+                .is_some_and(|argv| argv.iter().any(|a| a == node))
+    }
+}
+
 /// The newest `lead_checkin` beat row for the scope this session holds, with
 /// the journals it was read from. `None` when the session holds no live team
 /// or no beat was journaled: an unmeasured beat never blocks a stop.
-fn idle_beat(ctx: &Ctx) -> Option<(Value, Vec<PathBuf>)> {
+fn idle_beat(ctx: &Ctx) -> Option<(BeatRow, Vec<PathBuf>)> {
     let teams = crate::territory::live_teams(&ctx.home.registry_json()).ok()?;
     let scope = teams
         .iter()
@@ -518,33 +575,26 @@ fn idle_beat(ctx: &Ctx) -> Option<(Value, Vec<PathBuf>)> {
     let beat =
         crate::runtime::lead_history::previous_beat(&journals, &scope, Some(&ctx.session), false)
             .ok()??;
-    Some((beat, journals))
+    let row: BeatRow = serde_json::from_value(beat).unwrap_or_default();
+    Some((row, journals))
 }
 
 /// The idle-beat facts the rule blocks on: zero live scope workers, a pick
 /// still on offer with no `--pick` answer, and the beat's own `reactive` tag
 /// saying the last offer went untaken. Every key must read: a beat whose
 /// worker reading failed carries no count and never blocks.
-fn idle_beat_blocks(beat: &Value) -> bool {
-    let d = &beat["data"];
-    d.get("scope_live_workers").and_then(Value::as_u64) == Some(0)
-        && d.get("reactive").and_then(Value::as_bool) == Some(true)
-        && d.get("pick_offered")
-            .and_then(Value::as_str)
+fn idle_beat_blocks(row: &BeatRow) -> bool {
+    let d = &row.data;
+    d.scope_live_workers == Some(0)
+        && d.reactive == Some(true)
+        && d.pick_offered
+            .as_deref()
             .is_some_and(|s| !s.trim().is_empty())
-        && d.get("pick")
-            .and_then(Value::as_str)
+        && d.pick
+            .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .is_none()
-}
-
-/// The beat row's top-level ts as epoch millis, for the refusal comparison.
-fn row_ts_ms(beat: &Value) -> Option<i64> {
-    beat.get("ts")
-        .and_then(Value::as_str)
-        .and_then(|t| t.parse::<chrono::DateTime<chrono::Utc>>().ok())
-        .map(|t| t.timestamp_millis())
 }
 
 /// A spawn the gate refused for `node` after `since_ms`, in any journal the
@@ -560,15 +610,10 @@ fn gate_refused_since(journals: &[PathBuf], node: &str, since_ms: i64) -> bool {
             .iter()
             .any(|r| {
                 r.ts_ms > since_ms
-                    && serde_json::from_str::<Value>(&r.line)
-                        .ok()
-                        .and_then(|v| v.get("data").cloned())
-                        .is_some_and(|d| {
-                            d.get("node").and_then(Value::as_str) == Some(node)
-                                || d.get("argv").and_then(Value::as_array).is_some_and(|argv| {
-                                    argv.iter().filter_map(Value::as_str).any(|a| a == node)
-                                })
-                        })
+                    && serde_json::from_str::<RefusalRow>(&r.line)
+                        .unwrap_or_default()
+                        .data
+                        .matches(node)
             })
     })
 }

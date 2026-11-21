@@ -36,6 +36,7 @@
 //! correctly: GitHub only silently demotes an *approving* review from the
 //! PR's author, never a comment-type one.
 
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -188,6 +189,16 @@ impl Answer {
 fn answer_with_event(mut a: Answer, event: &'static str) -> Answer {
     a.event = Some(event);
     a
+}
+
+/// The attestation keys the default-resolution leg reads, typed once per
+/// attestation. Every field defaults, so a row of another shape reads None.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct AttestFacts {
+    verdict: Option<String>,
+    head_sha: Option<String>,
+    reviewer: Option<String>,
 }
 
 /// Drop a trailing `[bot]` for comparison (GitHub appends it to app logins).
@@ -842,21 +853,10 @@ pub fn publish(payload: &Value, gh: &dyn Gh, env: &dyn Fn(&str) -> Option<String
         let journals = [crate::paths::events_path(cwd)];
         match newest_head_attestation(&journals, &head) {
             Some(att) => {
-                verdict = att
-                    .get("verdict")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                head_sha = att
-                    .get("head_sha")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                reviewer = att
-                    .get("reviewer")
-                    .and_then(Value::as_str)
-                    .unwrap_or("manual")
-                    .to_string();
+                let facts: AttestFacts = serde_json::from_value(att).unwrap_or_default();
+                verdict = facts.verdict.unwrap_or_default();
+                head_sha = facts.head_sha.unwrap_or_default();
+                reviewer = facts.reviewer.unwrap_or_else(|| "manual".to_string());
             }
             None => {
                 return Answer::done(
@@ -1172,13 +1172,13 @@ The alias will be removed in a future release.\n"
             .to_string(),
         "dry_run": dry_run,
     });
-    let mut answer = publish(&payload, &GhReal, &|name: &str| std::env::var(name).ok()).to_json();
+    let posted = publish(&payload, &GhReal, &|name: &str| std::env::var(name).ok());
     let cwd = Path::new(payload.get("cwd").and_then(Value::as_str).unwrap_or("."));
     let journals = [crate::paths::events_path(cwd)];
-    answer["round"] = publish_round(&payload, &GhReal, &journals).to_json();
-    let receipt = answer.get("receipt").and_then(Value::as_str).unwrap_or("");
-    eprint!("{receipt}\n");
-    answer.get("exit").and_then(Value::as_i64).unwrap_or(1) as i32
+    publish_round(&payload, &GhReal, &journals);
+    let exit = posted.exit();
+    eprint!("{}\n", posted.receipt);
+    exit
 }
 
 #[cfg(test)]

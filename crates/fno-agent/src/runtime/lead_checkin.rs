@@ -1427,7 +1427,11 @@ fn collect_readings(
                 .unwrap_or_else(|| crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR.to_string());
             let other_owned = crate::lead_checkin_blueprint::other_owned_scopes(&folded, &scope);
             let seat = crate::lead_checkin_blueprint::seat_leads(
-                &scope, seat_level, &seat_rows, &folded, &board,
+                &scope,
+                seat_level,
+                &seat_rows,
+                folded.as_ref().ok(),
+                board.as_ref().ok(),
             );
             crate::lead_checkin_blueprint::r_blueprint(
                 &board,
