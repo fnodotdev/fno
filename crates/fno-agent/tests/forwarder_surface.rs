@@ -194,7 +194,8 @@ fn requests_beat_delivers_and_records_the_batch() {
     };
     let report = run_requests_beat(&cfg(), &home, rows, &mut poster, now);
     assert_eq!(report.acted, 1, "only the in-window, dated row ships");
-    let payload: Value = serde_json::from_str(&poster.bodies[0]).unwrap();
+    let body = poster.bodies.first().unwrap();
+    let payload: Value = serde_json::from_str(body).unwrap();
     let scope = payload.pointer("/resourceLogs/0/scopeLogs/0").unwrap();
     assert_eq!(
         scope.pointer("/scope/name").and_then(Value::as_str),
