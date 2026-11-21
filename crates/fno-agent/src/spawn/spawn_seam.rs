@@ -555,6 +555,27 @@ pub fn stage_evals_claude_config() -> Option<PathBuf> {
     let dir = evals_claude_config_dir()?;
     let source = ambient_claude_config_root()?;
     std::fs::create_dir_all(&dir).ok()?;
+    // A stage interrupted by a dead runner leaves its temp behind; a stage
+    // past this age sweeps it. A live stage's temp is seconds old and is
+    // never swept mid-write.
+    let now = std::time::SystemTime::now();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if !name.to_string_lossy().contains(".stage-") {
+                continue;
+            }
+            let stale = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|m| now.duration_since(m).ok())
+                .is_some_and(|age| age >= STAGE_MIN_AGE);
+            if stale {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
     static STAGE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let tag = format!(
         "{}-{}",
@@ -592,6 +613,10 @@ pub fn stage_evals_claude_config() -> Option<PathBuf> {
 
 /// The state files a pinned worker needs copied to run headless.
 const STAGED_STATE_FILES: [&str; 3] = [".credentials.json", ".claude.json", "settings.json"];
+
+/// How old a stage temp must read before a sweep calls it abandoned and not
+/// a write still settling (the same bound the Claude temp reaper holds).
+const STAGE_MIN_AGE: std::time::Duration = std::time::Duration::from_secs(3600);
 
 /// The context entries a pinned worker reads through symlinks to the ambient
 /// root, so a capability worker keeps the installed plugin and the user's
@@ -865,6 +890,21 @@ mod tests {
         }
         let staged = stage_evals_claude_config().expect("staged sandbox");
         assert_eq!(staged, state.path().join("evals").join("claude-config"));
+        // An abandoned temp from a dead runner sweeps on a later stage; a
+        // fresh temp (a live stage) survives.
+        let orphan = staged.join(".claude.json.stage-dead");
+        std::fs::write(&orphan, b"{}").unwrap();
+        {
+            let f = std::fs::File::options().write(true).open(&orphan).unwrap();
+            f.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(7200))
+                .unwrap();
+        }
+        let fresh = staged.join(".credentials.json.stage-live");
+        std::fs::write(&fresh, b"{}").unwrap();
+        assert!(stage_evals_claude_config().is_some());
+        assert!(!orphan.exists());
+        assert!(fresh.exists());
+        std::fs::remove_file(&fresh).ok();
         let creds = std::fs::read(staged.join(".credentials.json")).unwrap();
         assert_eq!(creds, br#"{"auth":1}"#);
         let onboarding = std::fs::read(staged.join(".claude.json")).unwrap();
