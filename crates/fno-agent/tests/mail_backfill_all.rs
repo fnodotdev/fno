@@ -93,5 +93,11 @@ fn all_mode_scans_joins_and_refuses_like_the_engine_promises() {
         "2026-05-01T00:00:00Z".into(),
     ]);
     assert_eq!(refused.unwrap_err(), 2, "--all with a window refuses");
+    let missing = backfill_summary(&["--since".into()]);
+    assert_eq!(
+        missing.unwrap_err(),
+        2,
+        "a valueless --since refuses, never silently defaults"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }

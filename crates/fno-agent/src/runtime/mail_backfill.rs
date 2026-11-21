@@ -344,6 +344,19 @@ struct BackfillRun {
     apply: bool,
 }
 
+/// The value after a value-taking flag: a following flag or end-of-line
+/// refuses, the same rule `--root` holds. A silent default would scan or
+/// write a window the operator never named.
+fn next_value(args: &[String], i: usize, flag: &str) -> Result<String, i32> {
+    match args.get(i + 1) {
+        Some(v) if !v.starts_with("--") => Ok(v.clone()),
+        _ => {
+            eprintln!("mail-backfill run: {flag} needs a value");
+            Err(2)
+        }
+    }
+}
+
 /// Parse the `run` argv: the window flags and their refusal, the wide
 /// --all bounds, the default scan root, and the write posture. Err
 /// carries the exit code, with the reason on stderr.
@@ -358,11 +371,11 @@ fn parse_backfill_run(args: &[String]) -> Result<BackfillRun, i32> {
     while i < args.len() {
         match args.get(i).map(String::as_str) {
             Some("--since") => {
-                since = args.get(i + 1).cloned().unwrap_or_default();
+                since = next_value(args, i, "--since")?;
                 i += 2;
             }
             Some("--until") => {
-                until = args.get(i + 1).cloned().unwrap_or_default();
+                until = next_value(args, i, "--until")?;
                 i += 2;
             }
             Some("--all") => {
@@ -370,7 +383,7 @@ fn parse_backfill_run(args: &[String]) -> Result<BackfillRun, i32> {
                 i += 1;
             }
             Some("--live") => {
-                live = args.get(i + 1).cloned().unwrap_or_default();
+                live = next_value(args, i, "--live")?;
                 i += 2;
             }
             Some("--root") => {

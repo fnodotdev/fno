@@ -1246,6 +1246,27 @@ async fn messages_empty_board_names_the_backfill_import() {
         !text.contains("backfill"),
         "a board with rows never names the import: {text}"
     );
+    // The Archive arm: an empty archive withholds the import line too. Its
+    // emptiness is by design, not a missing import.
+    b.list_tab = ListTab::Archive;
+    b.snapshot.apply(json!({
+        "participants": [],
+        "threads": [],
+        "channels": [],
+        "announcements": [],
+        "unreadable": 0,
+    }));
+    let text = b
+        .tree_column(100)
+        .iter()
+        .map(|l| l.text.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !text.contains("backfill"),
+        "an empty archive never names the import: {text}"
+    );
+    b.list_tab = ListTab::Agents;
     crate::view_store::clear_test_path();
 }
 
