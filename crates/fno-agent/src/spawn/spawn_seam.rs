@@ -553,7 +553,7 @@ pub fn evals_claude_config_dir() -> Option<PathBuf> {
 /// source entry stages nothing for it and never fails the spawn.
 pub fn stage_evals_claude_config() -> Option<PathBuf> {
     let dir = evals_claude_config_dir()?;
-    let source = ambient_claude_config_root()?;
+    let source = crate::claude_drive::ambient_claude_config_root()?;
     std::fs::create_dir_all(&dir).ok()?;
     // A stage interrupted by a dead runner leaves its temp behind; a stage
     // past this age sweeps it. A live stage's temp is seconds old and is
@@ -624,15 +624,6 @@ const STAGE_MIN_AGE: std::time::Duration = std::time::Duration::from_secs(3600);
 /// the user's memory loaded and its plugins off through the settings gate.
 const MIRRORED_CONTEXT_ENTRIES: [&str; 5] =
     ["plugins", "commands", "agents", "skills", "CLAUDE.md"];
-
-/// The config root a spawn would otherwise run against: `CLAUDE_CONFIG_DIR`,
-/// else `$HOME/.claude`. `None` when even `$HOME` is unreadable.
-fn ambient_claude_config_root() -> Option<PathBuf> {
-    if let Some(cfg) = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|v| !v.is_empty()) {
-        return Some(PathBuf::from(cfg));
-    }
-    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude"))
-}
 
 /// A `--cwd` naming a repo no project declares pins the worktree policy to
 /// `never` for this spawn and prints the receipt. An operator-set policy wins.

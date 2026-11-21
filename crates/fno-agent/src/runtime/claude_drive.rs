@@ -56,6 +56,17 @@ impl std::fmt::Display for DriveError {
 
 impl std::error::Error for DriveError {}
 
+/// The Claude config root a spawn would otherwise run against:
+/// `CLAUDE_CONFIG_DIR`, else `$HOME/.claude`. Reads Claude Code's OWN config
+/// location (the allowlisted read this file exists for); fno's own state
+/// never lands here. `None` when even `$HOME` is unreadable.
+pub fn ambient_claude_config_root() -> Option<PathBuf> {
+    if let Some(cfg) = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(cfg));
+    }
+    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude"))
+}
+
 /// The Claude projects (transcript) base dir.
 pub fn claude_projects_dir() -> PathBuf {
     if let Some(v) = std::env::var_os(PROJECTS_DIR_ENV) {
