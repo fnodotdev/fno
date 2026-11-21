@@ -53,6 +53,9 @@ mod de;
 #[path = "lead_checkin_prompt_parked.rs"]
 pub(crate) mod prompt_parked;
 
+#[path = "lead_checkin_rate_limits.rs"]
+mod rate_limits;
+
 /// The numeric keys this command owns and diffs versus the previous beat.
 const NUMERIC_DIFF_KEYS: [&str; 11] = [
     "open_prs",
@@ -1284,6 +1287,10 @@ fn collect_readings(
             )
         }
     });
+    let h_rate_limits = spawn_reading(beat_started, "rate_limits", {
+        let events_paths = events_paths.clone();
+        move || rate_limits::reading(&events_paths)
+    });
     let h_laws = spawn_reading(beat_started, "laws", || crate::law_recheck::collect(true));
     let h_machine = spawn_reading(beat_started, "machine", {
         let events_paths = events_paths.clone();
@@ -1452,6 +1459,7 @@ fn collect_readings(
     h_capacity.collect_into(&mut readings, beat_started);
     h_layout.collect_into(&mut readings, beat_started);
     h_telemetry.collect_into(&mut readings, beat_started);
+    h_rate_limits.collect_into(&mut readings, beat_started);
     h_laws.collect_into(&mut readings, beat_started);
     h_machine.collect_into(&mut readings, beat_started);
 
@@ -2021,6 +2029,22 @@ fn render_lines_with(
                 lines.extend(Some(render(&reading.value)).filter(|l| !l.is_empty()));
             }
         }
+    }
+
+    // Rate limits print only when the window holds one: zero hits read no
+    // line, so the beat's shape never changes for a clean fleet.
+    match by_name("rate_limits") {
+        Some(r) if !r.ok => lines.push(format!("READER FAILED rate_limits: {}", r.error)),
+        Some(r) if r.value.get("hits").and_then(Value::as_u64).unwrap_or(0) > 0 => {
+            lines.push(format!(
+                "rate limits: {}",
+                r.value
+                    .get("summary")
+                    .and_then(Value::as_str)
+                    .unwrap_or("?")
+            ));
+        }
+        _ => {}
     }
 
     match by_name("session_orders") {
