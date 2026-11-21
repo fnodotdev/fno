@@ -954,6 +954,41 @@ mod tests {
         assert_eq!(idle["matched"], false);
     }
 
+    /// fnh's redesigned consent band and the [a] always-allow variant of the
+    /// old band read blocked; a reply that prints the question line alone,
+    /// or an "allow" line without the y/n grammar, matches nothing. Row
+    /// strings are pinned by fnh's own TUI test (fn-f728 view.rs), where
+    /// the caret ❯ sits on the selected option, not always option 1.
+    #[test]
+    fn footnote_screen_rules_read_the_consent_band_and_always_variant() {
+        let caret_one = evaluate_screen_json(
+            "footnote",
+            "transcript scroll\n Bash ls\n Do you want to proceed?\n ❯ 1. Yes\n   2. No",
+        )
+        .unwrap();
+        assert_eq!(caret_one["state"], "blocked");
+        assert_eq!(caret_one["rule_id"], "permission_ask");
+        let caret_two = evaluate_screen_json(
+            "footnote",
+            " Bash ls\n Do you want to proceed?\n   1. Yes\n ❯ 2. Yes, always allow Bash(ls)\n   3. No",
+        )
+        .unwrap();
+        assert_eq!(caret_two["state"], "blocked");
+        assert_eq!(caret_two["rule_id"], "permission_ask");
+        let always = evaluate_screen_json(
+            "footnote",
+            " allow Bash ls?  [y] yes  [a] Always allow Bash(ls)  [n] no",
+        )
+        .unwrap();
+        assert_eq!(always["state"], "blocked");
+        assert_eq!(always["rule_id"], "permission_ask");
+        let question_only =
+            evaluate_screen_json("footnote", "model reply\n Do you want to proceed?").unwrap();
+        assert_eq!(question_only["matched"], false);
+        let plain_allow = evaluate_screen_json("footnote", " allow Bash ls?  [y] yes").unwrap();
+        assert_eq!(plain_allow["matched"], false);
+    }
+
     fn view(text: &str) -> ScreenView<'_> {
         ScreenView {
             visible_text: text,
