@@ -166,7 +166,7 @@ pub struct Chat {
     /// The shown session's harness skills, read on a switch.
     pub skills: Vec<crate::skills::Skill>,
     /// The popover's selected row and Esc state.
-    pub pick: crate::skills::Pick,
+    pub skill_pick: crate::skills::Pick,
 }
 
 impl Default for Chat {
@@ -187,7 +187,7 @@ impl Default for Chat {
             next_request: 1,
             composer: Rc::new(Cell::new(Bounds::default())),
             skills: Vec::new(),
-            pick: crate::skills::Pick::default(),
+            skill_pick: crate::skills::Pick::default(),
         }
     }
 }
@@ -220,7 +220,7 @@ impl Chat {
     /// The popover for the draft, grouped by source.
     pub fn skill_view(&self) -> Option<crate::skills::View> {
         let harness = &self.key.as_ref()?.harness;
-        crate::skills::view(&self.skills, harness, self.draft.text(), &self.pick)
+        crate::skills::view(&self.skills, harness, self.draft.text(), &self.skill_pick)
     }
 
     /// Up or down moves the popover's row. False when none shows.
@@ -228,7 +228,7 @@ impl Chat {
         let Some(v) = self.skill_view() else {
             return false;
         };
-        self.pick.step(self.draft.text(), down, v.rows.len());
+        self.skill_pick.step(self.draft.text(), down, v.rows.len());
         true
     }
 
@@ -237,7 +237,7 @@ impl Chat {
         if self.skill_view().is_none() {
             return false;
         }
-        self.pick.close(self.draft.text());
+        self.skill_pick.close(self.draft.text());
         true
     }
 
