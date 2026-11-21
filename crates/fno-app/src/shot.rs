@@ -54,6 +54,7 @@ pub fn run(opts: ShotOptions) -> i32 {
     let font_size = opts.font_size;
     let empty_chat = opts.empty_chat;
     let cmd = opts.cmd;
+    let tap = opts.tap;
     let sheet = opts.sheet;
     let draft = opts.draft.clone();
     let harness = opts.harness.clone();
@@ -140,10 +141,7 @@ pub fn run(opts: ShotOptions) -> i32 {
             // frame present, then capture. The display link keeps
             // running (the window stays composited at visible occlusion),
             // so the refresh presents for real.
-            let settled = wait_settled(cx, &handle).await;
-            if !settled {
-                eprintln!("fno-app --shot: the board feeds never settled; capturing anyway");
-            }
+            settle_then_tap(cx, &handle, w, tap).await;
             // The capture phase. The server's composited tile re-composites
             // only when a frame presents, and the tile's color precision
             // keys to the alpha at composite time: raising alpha alone
@@ -307,6 +305,36 @@ unsafe fn ns_string(s: &str) -> *const c_void {
     let s: *mut objc::runtime::Object =
         msg_send![class!(NSString), stringWithUTF8String: c.as_ptr()];
     s as *const c_void
+}
+
+/// Wait for the board feeds to settle, then post the optional tap and
+/// let the frame it opened present before the capture.
+async fn settle_then_tap(
+    cx: &mut gpui::AsyncApp,
+    handle: &gpui::WindowHandle<crate::window::Root>,
+    w: *mut objc::runtime::Object,
+    tap: Option<(f64, f64)>,
+) {
+    let settled = wait_settled(cx, handle).await;
+    if !settled {
+        eprintln!("fno-app --shot: the board feeds never settled; capturing anyway");
+    }
+    // The tap: one real click inside the shot window before the
+    // capture. The events queue in the app and run its own mouse
+    // path, so the fold opens the way a user's click opens it,
+    // not through a seeded state.
+    if let Some((tx, ty)) = tap {
+        // SAFETY: reads on the window this process owns.
+        unsafe { tap_window_point(w, tx, ty) };
+        // The yield lets the run loop dispatch the queued click.
+        cx.background_executor()
+            .timer(Duration::from_millis(300))
+            .await;
+        handle.update(cx, |_, window, _| window.refresh()).ok();
+        cx.background_executor()
+            .timer(Duration::from_millis(150))
+            .await;
+    }
 }
 
 /// Poll until the board has read every feed and the chat's event count
@@ -548,6 +576,48 @@ fn flatten_png(path: &std::path::Path) -> Result<(), FrameError> {
         .finish()
         .map_err(|e| FrameError::Png(e.to_string()))?;
     Ok(())
+}
+
+/// One real left click at the window-relative logical point. The down
+/// and up go into NSApp's own event queue, addressed to the shot window
+/// by number, so AppKit dispatches them to the view's mouseDown and
+/// mouseUp exactly as it would a user's click. The window server never
+/// hit-tests them. A CGEvent posted to the pid at the same point left
+/// the fold shut in both themes (measured). The click-through flag stays up the whole
+/// time, so no user click can reach the shot window. The events only
+/// dispatch once the caller yields to the run loop. SAFETY: reads and
+/// class-method calls on the window this process owns.
+unsafe fn tap_window_point(w: *mut objc::runtime::Object, tx: f64, ty: f64) {
+    let frame: core_graphics::geometry::CGRect = msg_send![w, frame];
+    let num: i64 = msg_send![w, windowNumber];
+    // AppKit window coordinates put the origin at the bottom left.
+    let at = core_graphics::geometry::CGPoint {
+        x: tx,
+        y: frame.size.height - ty,
+    };
+    eprintln!(
+        "fno-app --shot: tap window ({tx},{ty}) -> window-local ({:.0},{:.0})",
+        at.x, at.y
+    );
+    let app: *mut objc::runtime::Object = msg_send![class!(NSApplication), sharedApplication];
+    // NSEventTypeLeftMouseDown=1, NSEventTypeLeftMouseUp=2.
+    for kind in [1u64, 2u64] {
+        let ev: *mut objc::runtime::Object = msg_send![class!(NSEvent),
+            mouseEventWithType: kind
+            location: at
+            modifierFlags: 0u64
+            timestamp: 0f64
+            windowNumber: num
+            context: std::ptr::null::<c_void>()
+            eventNumber: 0i64
+            clickCount: 1i64
+            pressure: 1f32];
+        if ev.is_null() {
+            eprintln!("fno-app --shot: the tap event did not create");
+            return;
+        }
+        let _: () = msg_send![app, postEvent: ev atStart: false];
+    }
 }
 
 /// The app's one window and its backing scale, found through

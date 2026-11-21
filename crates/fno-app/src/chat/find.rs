@@ -148,6 +148,7 @@ mod tests {
             part: "p".into(),
             text: "hidden merge".into(),
             md: OnceCell::new(),
+            redacted: false,
         }];
         assert!(chat_matches(&items, &HashSet::new(), "merge").is_empty());
         let mut open = HashSet::new();
