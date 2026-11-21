@@ -721,7 +721,7 @@ mod tests {
     struct EnvPin(&'static str, Option<std::ffi::OsString>);
 
     impl EnvPin {
-        fn set(name: &'static str, value: &std::ffi::OsStr) -> Self {
+        fn set(name: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
             let old = std::env::var_os(name);
             std::env::set_var(name, value);
             EnvPin(name, old)
