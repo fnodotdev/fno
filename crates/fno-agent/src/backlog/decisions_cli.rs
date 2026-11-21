@@ -780,9 +780,9 @@ pub(crate) fn list_core_over(
         if let Some(_subject) = subject {
             let mut keep = !want_id.is_empty() && id_of(row).to_lowercase() == want_id;
             if !keep {
-                keep = matcher.as_ref().is_some_and(|m| {
-                    m.matches(subject_of(row), row.get("ts").and_then(Value::as_str))
-                });
+                keep = matcher
+                    .as_ref()
+                    .is_some_and(|m| m.matches(subject_of(row), Some(rows_str(row, "ts"))));
             }
             if !keep {
                 continue;
@@ -1073,7 +1073,7 @@ pub(crate) fn near_miss_subjects(
         let folded = recorded.trim().to_lowercase();
         if folded.is_empty()
             || folded == want
-            || matcher.matches(recorded, row.get("ts").and_then(Value::as_str))
+            || matcher.matches(recorded, Some(rows_str(row, "ts")))
         {
             continue;
         }

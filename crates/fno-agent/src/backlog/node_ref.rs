@@ -253,7 +253,7 @@ impl<'a> ResolutionIndex<'a> {
         if !exact && created_after(hit, recorded_at) {
             return None;
         }
-        hit.get("id").and_then(Value::as_str).map(str::to_string)
+        entry_id_string(hit)
     }
 
     fn resolve_tiers_with(&self, query: &str, number_tier: bool) -> Option<&'a Value> {
@@ -295,9 +295,7 @@ impl<'a> ResolutionIndex<'a> {
 
     /// The id `resolve` lands on: the `resolved_once` shape over the index.
     pub fn resolve_id(&self, query: &str) -> Option<String> {
-        self.resolve(query)
-            .and_then(|e| e.get("id").and_then(Value::as_str))
-            .map(str::to_string)
+        self.resolve(query).and_then(entry_id_string)
     }
 
     /// The matcher's two-call dance over the index: the spelling, then its
@@ -308,14 +306,15 @@ impl<'a> ResolutionIndex<'a> {
     }
 }
 
+fn entry_id_string(entry: &Value) -> Option<String> {
+    entry["id"].as_str().map(str::to_string)
+}
+
 /// Whether a node was created after `at`. An unreadable stamp on either side
 /// answers false: the caller keeps the plain resolution.
 fn created_after(node: &Value, at: Option<&str>) -> bool {
     let parse = |s: &str| chrono::DateTime::parse_from_rfc3339(s).ok();
-    let created = node
-        .get("created_at")
-        .and_then(Value::as_str)
-        .and_then(parse);
+    let created = node["created_at"].as_str().and_then(parse);
     match (created, at.and_then(parse)) {
         (Some(created), Some(at)) => created > at,
         _ => false,
