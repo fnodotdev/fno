@@ -1115,8 +1115,9 @@ pub fn parked_path(home: &crate::paths::AgentsHome) -> PathBuf {
 /// passes the `Stopped` record's identity, so a park the incident did not
 /// cause (the legacy manual sentinel, a cargo build waiting at an
 /// admission door) records nothing: a fleet clear must not wake what it
-/// did not hold. Rows merge across stops and dedupe, like the `--now`
-/// sidecar, so one clear wakes all of them.
+/// did not hold. One row per session, kept current across stops under the
+/// [`crate::chokepoint::FLEET_STOP_PARKED`] lock, so one clear wakes all
+/// of them.
 pub fn record_parked(
     home: &crate::paths::AgentsHome,
     session: &str,
@@ -1134,14 +1135,23 @@ pub fn record_parked(
         generation,
     };
     let path = parked_path(home);
+    let lock_path = path.with_extension("json.lock");
+    let lock = match crate::chokepoint::take(&crate::chokepoint::FLEET_STOP_PARKED, &lock_path) {
+        Ok(lock) => lock,
+        Err(refused) => {
+            eprintln!("fleet-incident: parked record busy: {}", refused.row);
+            return;
+        }
+    };
     let mut all = read_parked(&path);
-    if all.contains(&row) {
-        return;
-    }
+    // One row per session, not one per stop: a second park refreshes the
+    // row with the hold that currently binds it.
+    all.retain(|existing| existing.session != row.session);
     all.push(row);
     if let Err(error) = write_parked(&path, &all) {
         eprintln!("fleet-incident: park record not written: {error}");
     }
+    let _ = lock.unlock();
 }
 
 /// Split the sidecar into the rows one clear wakes and the rows it leaves:
@@ -1196,6 +1206,19 @@ fn wake_parked_with(
     deliver: &mut dyn FnMut(&Parked) -> Result<(), &'static str>,
 ) -> (Vec<String>, Vec<(String, &'static str)>) {
     let path = parked_path(home);
+    // The same single-writer rule the park side runs under: a clear racing
+    // a park would lose the row the park wrote.
+    let lock_path = path.with_extension("json.lock");
+    let lock = match crate::chokepoint::take(&crate::chokepoint::FLEET_STOP_PARKED, &lock_path) {
+        Ok(lock) => lock,
+        Err(refused) => {
+            eprintln!(
+                "fleet-incident: parked record busy, no wake this clear: {}",
+                refused.row
+            );
+            return (Vec::new(), Vec::new());
+        }
+    };
     let rows = read_parked(&path);
     let (to_wake, remaining) = plan_wakes(&rows, target);
     let (mut woken, mut missed) = (Vec::new(), Vec::new());
@@ -1215,6 +1238,7 @@ fn wake_parked_with(
     } else if let Err(error) = write_parked(&path, &remaining) {
         eprintln!("fleet-incident: parked record not rewritten: {error}");
     }
+    let _ = lock.unlock();
     (woken, missed)
 }
 
@@ -1873,6 +1897,7 @@ mod tests {
         let (all, none) = plan_wakes(&rows, None);
         assert_eq!(all.len(), 2);
         assert!(none.is_empty());
+        drop_parked_files(&home);
         cleanup(&path);
     }
 
@@ -1907,7 +1932,16 @@ mod tests {
         assert_eq!(woken, vec!["uuuu-4444".to_string()]);
         assert!(missed.is_empty());
         assert!(!parked_path(&home).exists());
+        drop_parked_files(&home);
         cleanup(&path);
+    }
+
+    /// The parked sidecar and its lock live beside the breaker file
+    /// `cleanup` removes; drop them so the temp directory empties.
+    fn drop_parked_files(home: &crate::paths::AgentsHome) {
+        let parked = parked_path(home);
+        let _ = std::fs::remove_file(&parked);
+        let _ = std::fs::remove_file(parked.with_extension("json.lock"));
     }
 }
 
