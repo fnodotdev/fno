@@ -687,7 +687,7 @@ async fn run(args: WebArgs, socket: PathBuf) -> i32 {
 }
 
 fn router(state: AppState) -> Router {
-    Router::new()
+    let routes = Router::new()
         .route("/", get(page))
         .route("/backlog", get(backlog))
         .route("/backlog/model.json", get(backlog_model))
@@ -710,7 +710,13 @@ fn router(state: AppState) -> Router {
             state.clone(),
             invite_gate,
         ))
-        .with_state(state)
+        .with_state(state);
+    routes.clone().nest(
+        // The board answers at the root and under the /fno prefix: a
+        // tailscale route that maps a subpath (the Oct 18 report's
+        // /fno/backlog URL shape) reaches the same routes instead of 404.
+        "/fno", routes,
+    )
 }
 
 /// Every request needs at least a viewer invite when `web.invites` is set.
@@ -2988,6 +2994,62 @@ console.log("backlog page helpers: 18 cases ok");
         assert!(reply.contains("data-current=\"hq\""), "{reply}");
         let reply = ask("/fleet?t=right").await;
         assert!(reply.starts_with("HTTP/1.1 404"), "{reply}");
+        server.abort();
+    }
+
+    // AC3-HP second half: the deep link opens the question even under the
+    // /fno path prefix a tailscale route can mount (the Oct 18 report's
+    // /fno/backlog shape). The prefix must reach the auth wall, a green
+    // token, and the page itself, or the phone lands on a 404.
+    #[tokio::test]
+    async fn the_board_answers_under_the_fno_prefix_mount() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (tx, _) = broadcast::channel(4);
+        let (_shutdown_tx, shutdown) = tokio::sync::watch::channel(false);
+        let hq = Arc::new(crate::web_hq::HqCache::default());
+        let fleet = serde_json::json!({"machines": [{"host": "u", "sessions": []}]});
+        let none = backlog_model::Inputs::default();
+        hq.board()
+            .await
+            .record(Ok(fleet), Err("x".into()), &none, 1, &[]);
+        hq.first.set(()).unwrap();
+        let state = AppState {
+            tx,
+            snap: Arc::new(Mutex::new(Snapshot::default())),
+            token: Arc::<str>::from("right"),
+            rundown_html: std::env::temp_dir().join("fno-web-hq-lead.html"),
+            rundown_republish: false,
+            hq,
+            writable: true,
+            invites: None,
+            model: Default::default(),
+            shutdown,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router(state)).await.unwrap();
+        });
+        let ask = |path: &'static str| async move {
+            let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let req =
+                format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+            stream.write_all(req.as_bytes()).await.unwrap();
+            let mut reply = String::new();
+            stream.read_to_string(&mut reply).await.unwrap();
+            reply
+        };
+        assert!(
+            ask("/fno/backlog").await.starts_with("HTTP/1.1 401"),
+            "the prefix reaches the auth wall"
+        );
+        let reply = ask("/fno/backlog?t=right").await;
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        let reply = ask("/fno/hq/model.json?t=right").await;
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        let reply = ask("/fno/hq?t=right").await;
+        assert!(reply.contains("data-current=\"hq\""), "{reply}");
         server.abort();
     }
     fn tiny_frame() -> proto::Frame {
