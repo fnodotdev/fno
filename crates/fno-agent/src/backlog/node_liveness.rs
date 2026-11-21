@@ -452,9 +452,7 @@ fn listing_shows_running(listing: &crate::claude_roster::ClaudeAgentsSnapshot, j
     if !listing.is_known() {
         return true;
     }
-    listing
-        .find(job)
-        .is_some_and(|row| row.has_live_process(true))
+    listing.holds_session(job)
 }
 
 /// The node's newest registry worker with a session to resume, and its
