@@ -82,8 +82,11 @@ fn parse_shot_name<'a>(stem: &'a str, node_tokens: &[&str]) -> Result<ParsedShot
         .split('-')
         .filter(|p| !crate::visual_screen::is_head_token(p))
         .collect();
-    let theme = match parts.last() {
-        Some(&"dark") | Some(&"light") => parts.pop().unwrap(),
+    let theme = match parts.last().copied() {
+        Some(t) if t == "dark" || t == "light" => {
+            parts.pop();
+            t
+        }
         _ => return Err(NameError::NoTheme(stem.to_string())),
     };
     let role = match parts.last() {

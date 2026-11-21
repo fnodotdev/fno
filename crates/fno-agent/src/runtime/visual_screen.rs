@@ -823,7 +823,10 @@ mod tests {
         ];
         let (pairs, loose) = pair_shots(&names, Some("bbbb2222bbbb999999"));
         assert_eq!(pairs.len(), 1);
-        assert_eq!(pairs[0].view, "x-1-chat-dark");
+        assert_eq!(
+            pairs.first().map(|p| p.view.as_str()),
+            Some("x-1-chat-dark")
+        );
         assert!(loose.is_empty());
     }
 
