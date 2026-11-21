@@ -1117,17 +1117,14 @@ fn write_update(
     linked_size: Option<&str>,
     pr: &DerivedPr,
 ) -> Result<(), Refusal> {
-    const ATTEMPTS: usize = 3;
+    const ATTEMPTS: usize = 5;
     for attempt in 0..ATTEMPTS {
-        // The version anchors BEFORE the row read: a commit that lands between
-        // the two makes this attempt's base_version stale, so the store
-        // refuses and the retry converges. The reverse order would publish
-        // the stale snapshot over the concurrent commit as a no-conflict
-        // write - a lost update.
-        let base_version = graph_store::base_version(graph)
+        // One read transaction returns the version stamp and the rows, so the
+        // plan and its pre-image come from the same instant. A write by another
+        // session to a row this update does not touch no longer refuses it.
+        let (base_version, snapshot) = graph_store::read_snapshot(graph)
             .map_err(|e| refused(format!("graph read failed: {e}"), 1))?;
-        let rows = graph_store::read_rows(graph)
-            .map_err(|e| refused(format!("graph read failed: {e}"), 1))?;
+        let rows = snapshot.rows.clone();
         let planned = plan_mutation(
             graph,
             rows,
@@ -1148,16 +1145,23 @@ fn write_update(
                 repaint_old_parent,
                 details_counts,
             } => {
-                match graph_store::locked_mutate(
-                    graph,
-                    MutateInput {
-                        entries: working,
-                        canonical_path: None,
-                        base_version,
-                        plan_rungs: Some(rungs),
-                    },
-                    LOCK_TIMEOUT,
-                ) {
+                // A parent or type change validates against rows the write does
+                // not touch (the cycle and epic-depth checks), so it keeps the
+                // whole-graph version check; every other update publishes over
+                // its snapshot.
+                let reads_other_rows = reparents_or_retypes(&snapshot.rows, &working, &node_id);
+                let input = MutateInput {
+                    entries: working,
+                    canonical_path: None,
+                    base_version,
+                    plan_rungs: Some(rungs),
+                };
+                let published = if reads_other_rows {
+                    graph_store::locked_mutate(graph, input, LOCK_TIMEOUT)
+                } else {
+                    graph_store::locked_mutate_snapshot(graph, input, snapshot, LOCK_TIMEOUT)
+                };
+                match published {
                     Ok(_) => {
                         // The dispatch-brief warning echoes once, after the
                         // write lands and before the receipt - the shape the
@@ -1248,6 +1252,22 @@ fn write_update(
         }
     }
     unreachable!("every loop arm returns")
+}
+
+/// True when the planned row's `parent` or `type` differs from the snapshot's.
+fn reparents_or_retypes(before: &[Value], after: &[Value], node_id: &str) -> bool {
+    let find = |rows: &[Value]| {
+        rows.iter()
+            .find(|r| RowFacts::id_of(r) == Some(node_id))
+            .cloned()
+    };
+    let (Some(old), Some(new)) = (find(before), find(after)) else {
+        return true;
+    };
+    let (Some(old), Some(new)) = (RowFacts::of(&old), RowFacts::of(&new)) else {
+        return true;
+    };
+    old.parent().value() != new.parent().value() || old.kind().value() != new.kind().value()
 }
 
 enum MutationPlan {
