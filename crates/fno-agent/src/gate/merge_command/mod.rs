@@ -1403,7 +1403,7 @@ mod fold_target_tests {
         // AC4: a merged PR whose base is another PR's branch binds that PR;
         // the default branch, a bare base, or a branchless stack binds none.
         assert_eq!(
-            fold_target("feature/x-297c", Some("main"), Some(351)),
+            fold_target("feature/side-branch", Some("main"), Some(351)),
             Ok(351)
         );
         assert_eq!(
