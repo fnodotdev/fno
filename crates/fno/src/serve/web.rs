@@ -3047,7 +3047,7 @@ console.log("backlog page helpers: 18 cases ok");
         hq.board().await.record(
             Ok(fleet),
             Err("x".into()),
-            Err("gone".into()),
+            crate::requests_model::RequestsRead::Failed("gone".into()),
             &none,
             1,
             &[],
@@ -3120,9 +3120,14 @@ console.log("backlog page helpers: 18 cases ok");
         let hq = Arc::new(crate::web_hq::HqCache::default());
         let fleet = serde_json::json!({"machines": [{"host": "u", "sessions": []}]});
         let none = backlog_model::Inputs::default();
-        hq.board()
-            .await
-            .record(Ok(fleet), Err("x".into()), &none, 1, &[]);
+        hq.board().await.record(
+            Ok(fleet),
+            Err("x".into()),
+            crate::requests_model::RequestsRead::Rows(Vec::new()),
+            &none,
+            1,
+            &[],
+        );
         hq.first.set(()).unwrap();
         let state = AppState {
             tx,
