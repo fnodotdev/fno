@@ -140,9 +140,11 @@ pub(crate) fn deliver_via_pane_state(
         server: server.to_string(),
         address: pane_id.to_string(),
         fno_id: Some(session.to_string()),
-        // The gate's pass rides the pane write: a `control:` directive or the
-        // pane's own send lands on a held pane (AC17-EDGE); a plain send
-        // carries no pass and the pane's DND refusal stands.
+        // The gate's pass rides the pane write: the pane's own send always
+        // lands, and a `control:` directive lands on a held pane when the
+        // hold is the user's; under a live conversation hold the directive
+        // waits with everything else. A plain send carries no pass and the
+        // pane's DND refusal stands.
         hold_pass: crate::mail_hold::gate(session, Some(text), chrono::Utc::now())
             .pass
             .is_some(),

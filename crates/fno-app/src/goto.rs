@@ -21,7 +21,7 @@ use fno::search_query::fuzzy_hit;
 use gpui::{div, prelude::*, px, rgb, rgba, Context, Div, Stateful};
 
 use super::launch;
-use super::left_pane::{agent_identity, agent_row_action, agent_status_word, session_detail};
+use super::left_pane::{agent_identity, agent_row_action, agent_status_word, workspace_detail};
 use super::link::Layout;
 use super::tabs::VIEWS;
 use super::window::{Action, MainView, Root};
@@ -41,7 +41,7 @@ pub(super) const MAX_QUERY: usize = 256;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Kind {
     Agent,
-    Session,
+    Workspace,
     Node,
     Question,
     View,
@@ -52,7 +52,7 @@ impl Kind {
     fn word(self) -> &'static str {
         match self {
             Kind::Agent => "agent",
-            Kind::Session => "session",
+            Kind::Workspace => "workspace",
             Kind::Node => "node",
             Kind::Question => "question",
             Kind::View => "view",
@@ -76,8 +76,8 @@ pub(super) struct Target {
 /// palette never builds a launch path of its own.
 pub(super) const COMMANDS: &[(&str, &str, fn() -> Action)] = &[
     ("Keyboard shortcuts", "⌘/", || Action::ToggleKeySheet),
-    ("New session", "⌘N", || {
-        Action::OpenLaunch(Some(launch::Kind::Agent))
+    ("New worker", "⌘N", || {
+        Action::OpenLaunch(Some(launch::Kind::Worker))
     }),
     ("New lead", "⌘N", || {
         Action::OpenLaunch(Some(launch::Kind::Lead))
@@ -101,7 +101,7 @@ pub(super) struct SeatRef<'a> {
 // [[CHUNK-5]]
 
 /// The palette's catalog: every agent (the sidebar folds past ten rows,
-/// the palette does not), then sessions, nodes, questions, views and
+/// the palette does not), then workspaces, nodes, questions, views and
 /// commands, in catalog order. `seats` are fleet seats joined to their
 /// machine's host.
 pub(super) fn targets(layout: &Layout, board: &Board, now: u64) -> Vec<Target> {
@@ -167,12 +167,12 @@ fn catalog(
             action: Action::Show(MainView::Orchestration),
         });
     }
-    // Sessions next.
+    // Workspaces next.
     for s in squads {
         out.push(Target {
-            kind: Kind::Session,
+            kind: Kind::Workspace,
             label: s.name.clone(),
-            detail: session_detail(s),
+            detail: workspace_detail(s),
             action: Action::Send(Command::SelectSquad(s.id)),
         });
     }
@@ -423,7 +423,7 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
     for (i, &at) in order.iter().take(ROWS_SHOWN).enumerate() {
         // rank only ever returns catalog indices.
         let t = targets.get(at).expect("rank returns in-range indices");
-        body = body.child(row(root, t, at, i, i == sel, &p, cx));
+        body = body.child(row(t, at, i, i == sel, &p, cx));
     }
     if order.is_empty() {
         body = body.child(ui::quiet(format!("nothing matches \"{query}\""), &p));
@@ -485,7 +485,6 @@ fn field(query: &str, p: &Palette) -> Div {
 /// One ranked row: kind word, label, detail. Clicked rows run their
 /// action; the selected row carries the row-fill band.
 fn row(
-    root: &Root,
     t: &Target,
     at: usize,
     i: usize,
@@ -579,7 +578,7 @@ mod tests {
         let targets = catalog(&agents, &squads, &qrefs, &seats, 0);
         assert_eq!(targets.iter().filter(|t| t.kind == Kind::Agent).count(), 12);
         assert_eq!(
-            targets.iter().filter(|t| t.kind == Kind::Session).count(),
+            targets.iter().filter(|t| t.kind == Kind::Workspace).count(),
             2
         );
         let node_rows: Vec<&Target> = targets.iter().filter(|t| t.kind == Kind::Node).collect();

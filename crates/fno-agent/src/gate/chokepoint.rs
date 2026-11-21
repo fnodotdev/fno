@@ -76,6 +76,10 @@ pub static GH_QUOTA: Chokepoint = lock("gh-quota", 60, OnExpiry::Refuse);
 pub static HARNESS_DAEMON: Chokepoint = lock("harness-daemon", 10, OnExpiry::Refuse);
 pub static FLEET_INCIDENT: Chokepoint = lock("fleet-incident", 10, OnExpiry::Refuse);
 pub static TEST_HOLD: Chokepoint = lock("test-hold", 10, OnExpiry::Refuse);
+/// Held across one parked-sidecar read-modify-write; the park boundary
+/// fires in many loop processes at once, unlike the single-writer `--now`
+/// sidecar.
+pub static FLEET_STOP_PARKED: Chokepoint = lock("fleet-stop-parked", 10, OnExpiry::Refuse);
 pub static PLUGIN_REGISTRY: Chokepoint = lock("plugin-registry", 10, OnExpiry::Refuse);
 pub static CLAUDE_VAULT: Chokepoint = lock("claude-vault", 10, OnExpiry::Refuse);
 pub static OPENCODE_ASK: Chokepoint = lock("opencode-ask", 10, OnExpiry::Refuse);
@@ -107,6 +111,7 @@ pub static REGISTRY: &[&Chokepoint] = &[
     &HARNESS_DAEMON,
     &FLEET_INCIDENT,
     &TEST_HOLD,
+    &FLEET_STOP_PARKED,
     &PLUGIN_REGISTRY,
     &CLAUDE_VAULT,
     &OPENCODE_ASK,

@@ -613,13 +613,6 @@ fn emit_failed(reason: &str) -> i32 {
     emit(&DeliveryState::failed(reason))
 }
 
-/// The glyph legacy stored turns use as their one-line body separator
-/// ("header ⏎ body" on ONE physical line). The live delivery no longer
-/// types it: user law d-b720d23c puts a real newline between header and
-/// body. The readers still parse the stored form, and the relay hop's
-/// one-line wire keeps it.
-pub(crate) const NEWLINE_GLYPH: &str = " ⏎ ";
-
 /// Flatten a mail body to its typable keystrokes (C17: mail is a delivery,
 /// never a paste). Every newline run (`\r\n`, `\n`, `\r`) becomes ONE LF
 /// byte (0x0a): the node's spike (2026-10-10, proof by delivery in real

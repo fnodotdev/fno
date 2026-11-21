@@ -7,6 +7,7 @@
 
 mod asks_topics;
 mod exchanges;
+mod you_thread;
 use super::*;
 use crate::messages_model::MessagesSnapshot;
 use crate::text_style::{TLine, TSeg, TextStyle};
@@ -388,6 +389,11 @@ pub(crate) struct MessagesBoard {
     /// The `AnchorJumped` reply resolves it; a reply naming another pane is
     /// dropped.
     pub(crate) pending_jump: Option<(String, u64, u64)>,
+    /// The You items whose worker-mail band is open, by turn id.
+    pub(crate) you_open: HashSet<String>,
+    /// The You thread last opened and the read mark it held before the
+    /// open: the since-you-left card counts what is newer.
+    pub(crate) you_seen: Option<(String, String)>,
 }
 
 /// The memo behind [`MessagesBoard::tree_rows`] and
@@ -433,6 +439,8 @@ impl MessagesBoard {
             marks: RefCell::new(None),
             picker: None,
             pending_jump: None,
+            you_open: HashSet::new(),
+            you_seen: None,
         }
     }
 
@@ -1337,69 +1345,9 @@ impl MessagesBoard {
         (lines, owners)
     }
 
-    /// Column 3 for a selected You thread: the operator's typed turn flush
-    /// right, then the assistant's reply on the left, one item at a time,
-    /// with the same burst clock and wrap idioms `thread_lines` uses. Owners index
-    /// ITEMS (two bubbles per item), so the cursor indexes `item = cur/2`.
+    /// Column 3 for a selected You thread; the paint lives in `you_thread`.
     fn you_thread_lines(&self, w: usize, sid: &str) -> (Vec<TLine>, Vec<Option<usize>>) {
-        let title = self.thread_title();
-        let mut lines = vec![title];
-        let mut owners: Vec<Option<usize>> = vec![None];
-        let wrap_w = w.saturating_sub(2).max(1);
-        let items = self.you_items(sid);
-        if items.is_empty() {
-            let wrapped = TLine::meta("(no You items)").wrap(wrap_w);
-            owners.extend(std::iter::repeat(None).take(wrapped.len()));
-            lines.extend(wrapped);
-            return (lines, owners);
-        }
-        let agent_name = self
-            .you_row(sid)
-            .map(|t| text_of(t, "name").to_string())
-            .unwrap_or_else(|| sid.get(..8).unwrap_or(sid).to_string());
-        let mut last: Option<(String, bool)> = None;
-        for (item_index, item) in items.iter().enumerate() {
-            let selected = item_index == self.cursors[2];
-            let ts = item.get("ts").and_then(Value::as_str).unwrap_or("");
-            let typed = item.get("typed_text").and_then(Value::as_str).unwrap_or("");
-            let reply = item.get("reply_text").and_then(Value::as_str).unwrap_or("");
-            if let Some((prev, prev_right)) = &last {
-                if Self::ts_gap_minutes(prev, ts).is_none_or(|g| g >= 5) {
-                    push_time(&mut lines, &mut owners, prev, *prev_right, w);
-                }
-            }
-            // The reply is the item's last send; with none, the user's turn.
-            last = Some((ts.to_string(), reply.is_empty()));
-            // The operator's typed turn, flush right under its own Me label.
-            if !typed.is_empty() {
-                push_blank(&mut lines, &mut owners);
-                let mut block = vec![TLine::of(&[seg("Me", TextStyle::Badge)])];
-                block.extend(body_lines(typed, bubble_w(wrap_w), TextStyle::Item));
-                flush_right(&mut block, wrap_w);
-                for mut line in block {
-                    line.band = selected;
-                    lines.push(line);
-                    owners.push(Some(item_index));
-                }
-            }
-            // The assistant's reply, under the session's name.
-            if !reply.is_empty() {
-                push_blank(&mut lines, &mut owners);
-                let mut label = TLine::of(&[seg(agent_name.clone(), TextStyle::Badge)]);
-                label.band = selected;
-                lines.push(label);
-                owners.push(Some(item_index));
-                for mut line in body_lines(reply, wrap_w, TextStyle::Item) {
-                    line.band = selected;
-                    lines.push(line);
-                    owners.push(Some(item_index));
-                }
-            }
-        }
-        if let Some((prev, prev_right)) = &last {
-            push_time(&mut lines, &mut owners, prev, *prev_right, w);
-        }
-        (lines, owners)
+        self.you_thread_body(w, sid)
     }
 
     /// The selected You thread's items, oldest first.
@@ -2188,8 +2136,20 @@ async fn act(
                     last_ts,
                     ..
                 } => {
-                    b.mark_read(&format!("you:{session_id}"), last_ts);
-                    b.sel_thread = Some(format!("you:{session_id}"));
+                    // The card reads the mark as it stood; the new mark is
+                    // the newest stamp shown, worker mail included.
+                    let key = format!("you:{session_id}");
+                    let before = b.read_marks().get(&key).cloned();
+                    b.you_seen = before.map(|m| (session_id.clone(), m));
+                    let newest = you_thread::newest_stamp(&b.you_item_views(session_id));
+                    let mark = [newest.as_str(), last_ts.as_str()]
+                        .into_iter()
+                        .chain(b.you_seen.as_ref().map(|(_, m)| m.as_str()))
+                        .max()
+                        .unwrap_or_default()
+                        .to_string();
+                    b.mark_read(&key, &mark);
+                    b.sel_thread = Some(key);
                     b.cursors[2] = b.you_items(session_id).len().saturating_sub(1);
                     b.col = Col::Thread;
                 }
@@ -2209,6 +2169,14 @@ async fn act(
                     b.asks_view = AsksView::Topic(t.name.clone());
                     b.cursors[2] = 0;
                 }
+                return Ok(());
+            }
+            if let Some(sid) = b
+                .sel_thread
+                .clone()
+                .and_then(|s| s.strip_prefix("you:").map(String::from))
+            {
+                b.toggle_you_band(&sid);
                 return Ok(());
             }
             if let Some(sent) = selected_sent_row(b).filter(|r| text_of(r, "state") == "parked") {

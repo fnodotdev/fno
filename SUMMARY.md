@@ -1,25 +1,27 @@
-# SUMMARY - Pid newtype and one process-FFI module
+# SUMMARY - By-lane scorecard under 30s, ledger cost coverage repaired
 
-Node x-57de. Plan: `internal/fno/plans/20261112-pid-newtype-process-ffi-x-57de.md` (quick-plan, route 1 chosen).
+Plan: `internal/fno/plans/20261120-calibration-bylane-stall-ledger-cost-x-8121.md` (quick-plan, blueprint by opus architect under claim target-session:76183bd9).
 
 ## What landed
 
-`crates/fno-agent/src/runtime/pid.rs` is the one process-FFI module: `Pid(NonZeroI32)` admitting 1..=i32::MAX, `SignalResult` (Sent / AlreadyGone / Failed(io::Error)), `Creation`, and typed wrappers for every reader (start_time, started_epoch, created_ms, zombie, parent_pid, cwd, open_file_paths, bsd, bsd_checked, task, thread_handles, thread_info, short_bsd). One `KinfoProcScratch`/`KinfoProcHead` declaration, one start-time reader per OS. `build.rs` copies the body verbatim (minus the tests module) to `crates/fno/src/pid.rs`, so both crates resolve `crate::pid`.
+Task 1.1 (`perf(eval)`): one shared `fold_deliveries_parallel` helper folds deliveries on a bounded pool of at most eight scoped threads. Contiguous chunks keep every row and verdict in delivery order. Per-worker failure counters sum into the same totals. Both spellings rewired: `fix_of_fix_by_pr` (scorecard join) and the stability report build loop. 823 serial blame subprocesses at ~75ms now run pool-width wide. Contract test covers order, skip positions, exactly-once counter sums.
 
-About 110 call sites across both crates now route every kill, probe, killpg and proc_pidinfo/proc_pidpath read through the module. The done-probe grep reads 0 raw sites outside the module. Local const `PROC_PIDLISTTHREADS = 6` covers the constant libc 0.2.191 does not export.
+Task 1.2 (`fix(eval)`): `backfill_tasks_json` is incremental and cost-preserving. Measured entries (numeric cost and tokens) print KEEP and skip the transcript re-parse. The cost write carries a preserve guard. An unpriced recompute keeps measured dollars and refreshes only the token fields. The recompute leg also stamps `duration_minutes`. Three contract tests cover the decision and guard functions.
 
-## Deviations from the plan
+Task 1.3 (`fix(config)`): the two pricing doors in crate fno fire the stale-gated book fetch before they price. The doors are the `fno whoami cost` arm and the doctor cost-check. A fresh book costs one stat.
 
-- Parse-at-entry instead of Pid-taking signatures: public fn signatures are unchanged; each site parses its own raw pid (`Pid::new(..)`, `Pid::try_from(..)`) and keeps its own refuse polarity. This kept the diff mechanical and the wire protocol untouched.
-- census on Linux: the parent_pid leg read `ps` by spawn; it now reads `/proc/<pid>/stat` through the module, same field, no subprocess.
-- orphans cwd read: strict UTF-8 lossy variance unified to the module's reader.
-- gc.rs: an out-of-range pid now reads as not-ours (false). The old cast could wrap negative and reach a kill broadcast form.
-- test_run / machine_load / evals group kills: a 0-pid now refuses instead of signalling the caller's own group. The old `kill(0, sig)` broadcast was never an intended effect.
-- Review round 1 added `Pid::kill_child_group(&Child)`: 17 call sites repeated `from_child(...).signal_group(SIGKILL)` by hand; the helper is the one correct form to copy. Two sites keep distinct semantics (a plain single-process SIGKILL in the keeper-test Drop, and bounded_spawn's kill-then-reap) and stay explicit.
-- `libc::PROC_PIDLISTTHREADS` is not exported by libc 0.2.191; the module carries a local `const PROC_PIDLISTTHREADS: libc::c_int = 6` (stable Darwin ABI value, census's old definition).
+Task 1.4 (`fix(backlog)`): the scorecard's ledger loader resolves the configured ledger path. It hardcoded the retired `~/.fno/ledger.json` and read an empty file on current-layout hosts. Found mid-flight, fixed in the same commit. The calibration output gains a ledger cost coverage line with priced/total, the unpriced split, and rate-book presence. Test covers the split contract.
 
-## Validation
+Task 1.5: fno-web doc PR for `reference/cost.mdx` plus a docs.json entry. The PR opens separately. The fno PR body names it per D2707.
 
-Local builds compile both crates green (run under the memory-pressure job cap). `cargo test` is left to CI per the fleet-incident law of the day; the pid module's unit tests (AC1-AC5) run there. Gates: `check-file-budget.sh` green (daemon.rs, mux_cli.rs, server.rs all net 0), done-probe grep 0, generated copies verified byte-identical to canonical modulo the generated header and the stripped tests module.
+## Deviations and notes
 
-origin/main moved during the run (c7d3477615); per the merge law the PR opens as-is and any conflict resolves by merging main at the GitHub conflict, never a rebase.
+- The machine gate bars local cargo test runs. Tests were authored before the code they prove. CI runs them, so RED was not watched locally.
+- fmt caught a parse error in `preserved_backfill_cost` before the push. Fixed in the same unpushed commit.
+- Diff budget overrun: +366/-94 against the +300 allowance. The node's named work exceeds it. Stated in the PR body per the budget rule.
+- Worker width ships at the plan's cap of eight. No build go exists for width timing. The done probe is the outcome read.
+- Absorbed x-89ae (same stall, 60s close-probe symptom). Contained children x-8454 and x-23ed share the price-book fix. The PR names both.
+
+## Verification
+
+Local gates: `cargo fmt --check` green in both changed crates. `scripts/ci/check-file-budget.sh` ok. Style lint green on changed markdown. CI builds and tests the push (D3323). Post-merge: run `fno doctor update`, then the plan's done probes, then the `--since 28` close-probe check.

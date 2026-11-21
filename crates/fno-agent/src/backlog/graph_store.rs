@@ -2848,8 +2848,46 @@ fn locked_mutate_flavored(
     before_publish: Option<&mut dyn FnMut(&[Value]) -> Result<(), StoreError>>,
     stored_statuses: bool,
 ) -> Result<MutateOutcome, StoreError> {
-    let prepared = prepare_mutate(path, input, stored_statuses)?;
+    let prepared = prepare_mutate(path, input, stored_statuses, None)?;
     commit_prepared(path, prepared, timeout, before_publish)
+}
+
+/// A caller's own read of the store: the version stamp, row write counts and
+/// rows all come from one read transaction.
+pub struct MutateSnapshot {
+    pub rows: Vec<Value>,
+    raw: Vec<Value>,
+    row_versions: std::collections::BTreeMap<String, i64>,
+}
+
+/// Read the stamp and the rows a [`locked_mutate_snapshot`] call publishes
+/// over. The stamp is the `base_version` of the matching [`MutateInput`].
+pub fn read_snapshot(path: &Path) -> Result<(String, MutateSnapshot), StoreError> {
+    let read = crate::backlog::read_snapshot_rows(path).map_err(StoreError::Db)?;
+    Ok((
+        read.version,
+        MutateSnapshot {
+            rows: read.rows,
+            raw: read.raw,
+            row_versions: read.row_versions,
+        },
+    ))
+}
+
+/// [`locked_mutate`] for a writer that planned over `snapshot` and passes the
+/// version stamp [`read_snapshot`] returned. The snapshot IS the pre-image, so
+/// the store is not read again, and a store that moved while the writer
+/// planned refuses it only when a row the write touches moved too. On a graph
+/// that other sessions write every few seconds a plan that takes longer than
+/// that otherwise loses every attempt.
+pub fn locked_mutate_snapshot(
+    path: &Path,
+    input: MutateInput,
+    snapshot: MutateSnapshot,
+    timeout: Duration,
+) -> Result<MutateOutcome, StoreError> {
+    let prepared = prepare_mutate(path, input, false, Some(snapshot))?;
+    commit_prepared(path, prepared, timeout, None)
 }
 
 /// The pure half of the mutate cycle, computed from `raw` and the caller's
@@ -2867,10 +2905,16 @@ struct PreparedMutate {
     baseline: Vec<Value>,
     begin_version: String,
     base_version: String,
+    /// Each row's stored write count, read BEFORE `raw`: a row whose count
+    /// differs at commit was written after the snapshot began.
+    row_versions: std::collections::BTreeMap<String, i64>,
     dropped: usize,
     closure_releases: Vec<(String, String)>,
     is_canonical: bool,
     changed_ids: Vec<String>,
+    /// With a snapshot: the changed ids the writer itself touched, the set a
+    /// rebased publish claims. None means every changed id.
+    touched_ids: Option<Vec<String>>,
     version: String,
 }
 
@@ -2878,6 +2922,7 @@ fn prepare_mutate(
     path: &Path,
     input: MutateInput,
     stored_statuses: bool,
+    snapshot: Option<MutateSnapshot>,
 ) -> Result<PreparedMutate, StoreError> {
     let MutateInput {
         entries: working_entries,
@@ -2894,11 +2939,22 @@ fn prepare_mutate(
     // `commit_prepared` proves `raw` current; a write landing between the
     // two reads surfaces as Conflict and the caller retries, the same
     // surface a stale base_version already produced.
-    let begin_version = crate::backlog::version(path).map_err(StoreError::Db)?;
-    let raw = if stored_statuses {
-        crate::backlog::read_entries_stored(path).map_err(StoreError::Db)?
-    } else {
-        crate::backlog::read_entries(path).map_err(StoreError::Db)?
+    let mut planned: Option<Vec<Value>> = None;
+    let (row_versions, begin_version, raw) = match snapshot {
+        Some(snapshot) => {
+            planned = Some(snapshot.rows);
+            (snapshot.row_versions, base_version.clone(), snapshot.raw)
+        }
+        None => {
+            let row_versions = crate::backlog::row_versions(path, None).map_err(StoreError::Db)?;
+            let begin_version = crate::backlog::version(path).map_err(StoreError::Db)?;
+            let raw = if stored_statuses {
+                crate::backlog::read_entries_stored(path).map_err(StoreError::Db)?
+            } else {
+                crate::backlog::read_entries(path).map_err(StoreError::Db)?
+            };
+            (row_versions, begin_version, raw)
+        }
     };
 
     // Pre-image defaults for the curation snapshot, re-derived through the
@@ -3055,16 +3111,24 @@ fn prepare_mutate(
     let mut baseline = raw.clone();
     canonicalize_entries(&mut baseline);
     let (changed_ids, version) = crate::backlog::diff_and_version(&baseline, &entries);
+    // The planned rows meet the same canonical form the entries already have,
+    // or every row the canonicalizer adds a key to would read as touched.
+    let touched_ids = planned.map(|mut planned| {
+        canonicalize_entries(&mut planned);
+        crate::backlog::rows_touched(&planned, &entries, &changed_ids)
+    });
     Ok(PreparedMutate {
         raw,
         entries,
         baseline,
         begin_version,
         base_version,
+        row_versions,
         dropped,
         closure_releases,
         is_canonical,
         changed_ids,
+        touched_ids,
         version,
     })
 }
@@ -3082,9 +3146,15 @@ fn commit_prepared(
     let _lock = BoundedLock::acquire(path, timeout)?;
     let recheck_started = Instant::now();
     let current = crate::backlog::version(path).map_err(StoreError::Db)?;
-    if current != prepared.begin_version || current != prepared.base_version {
+    // The caller's rows and `raw` came from one store state only when the
+    // two stamps agree. A store that moved on since then is no conflict by
+    // itself: the whole-graph version moves for every write, so on a busy
+    // graph it would refuse each write whose planning takes seconds. The
+    // publish below then checks the touched rows instead.
+    if prepared.begin_version != prepared.base_version {
         return Err(StoreError::Conflict);
     }
+    let rebase = current != prepared.begin_version;
     _lock.note_phase("version_recheck", recheck_started);
     // The epic child cap holds at this seam too: every whole-graph writer
     // (update parent=, idea --parent, contain, decompose, the rollup
@@ -3112,16 +3182,34 @@ fn commit_prepared(
     }
 
     let publish_started = Instant::now();
-    let (version, publish_retries) = crate::backlog::retry_on_busy(|| {
-        crate::backlog::authoritative_sync_prepared(
-            path,
-            &prepared.baseline,
-            &prepared.entries,
-            &prepared.changed_ids,
-            &prepared.version,
-        )
+    let (published, publish_retries) = crate::backlog::retry_on_busy(|| {
+        if rebase {
+            crate::backlog::authoritative_sync_rebased(
+                path,
+                &prepared.baseline,
+                &prepared.entries,
+                prepared
+                    .touched_ids
+                    .as_deref()
+                    .unwrap_or(&prepared.changed_ids),
+                &prepared.row_versions,
+                &prepared.version,
+            )
+        } else {
+            crate::backlog::authoritative_sync_prepared(
+                path,
+                &prepared.baseline,
+                &prepared.entries,
+                &prepared.changed_ids,
+                &prepared.version,
+            )
+            .map(Some)
+        }
     })
     .map_err(StoreError::Db)?;
+    let Some(version) = published else {
+        return Err(StoreError::Conflict);
+    };
     _lock.note_phase("authoritative_sync", publish_started);
     _lock.note_count("publish_retries", publish_retries as u64);
     let lock_held = _lock.held_for();
