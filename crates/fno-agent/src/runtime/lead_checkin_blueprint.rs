@@ -1117,7 +1117,7 @@ mod tests {
             "{reading}"
         );
         let reading = drained(&[]);
-        assert_eq!(reading["offers"], json!([]), "{reading}");
+        assert_eq!(reading.get("offers"), Some(&json!([])), "{reading}");
         assert!(
             render_lines(&reading)
                 .iter()
