@@ -339,8 +339,8 @@ fn start_winch_painters(sock: &Path, cwd: &Path, a: &mut FakeClient, panes: &[(u
     }
 }
 
-/// (x-27c7) One mail delivery - a bracketed paste, then a separate Enter -
-/// must resize no pane and change no client's area, with two clients of
+/// One mail delivery - a bracketed paste, then a separate Enter - must
+/// resize no pane and change no client's area, with two clients of
 /// different sizes attached. Both panes run the WINCH-counting painter, so
 /// a stray winsize write on the receiver or its tab neighbour moves a count.
 #[test]
@@ -404,7 +404,7 @@ fn multiclient_mail_delivery_resizes_no_pane() {
     }
 }
 
-/// (x-ce6a) The REAL mail pane lane byte shape resizes no pane either: the
+/// The REAL mail pane lane byte shape resizes no pane either: the
 /// lane types the envelope as LF-terminated lines (C17, never a bracketed
 /// paste) through a plain `pane send --stdin --raw` (`guarded` defaults
 /// false, pane_args.rs), settles the enter delay, writes a separate CR, and
