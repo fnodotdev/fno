@@ -1084,10 +1084,10 @@ fn arm_role_manifest(
         // stamp would have used (the rebind below cannot run on a file that
         // is not there). Re-decide against the committed row first: a vacate
         // that committed while this report ran would otherwise re-arm a
-        // scope whose crown is gone (the vacate's own remove already ran, so
+        // scope whose role is gone (the vacate's own remove already ran, so
         // nothing would correct the phantom). An unreadable registry keeps
         // the write (fail-soft; the guarded writer stays the last word).
-        if !crown_still_stands(registry, &arm.row) {
+        if !role_still_stands(registry, &arm.row) {
             return;
         }
         let spec = crate::lead_state::ManifestSpec {
@@ -1119,9 +1119,9 @@ fn arm_role_manifest(
 /// True while the named row still holds a role stamp: the concurrent-vacate
 /// re-check the fresh arm runs against the committed registry just before it
 /// writes. An unreadable registry reads true, so a transient read cannot
-/// strand a crown whose heal already proved its id (fail-soft, like every
+/// strand a role whose heal already proved its id (fail-soft, like every
 /// arm here).
-fn crown_still_stands(registry: &Path, row_name: &str) -> bool {
+fn role_still_stands(registry: &Path, row_name: &str) -> bool {
     let Ok(doc) = crate::daemon::load_registry_asserted(registry) else {
         return true;
     };
@@ -1790,7 +1790,9 @@ mod tests {
     }
 
     fn arm_env(lead_config: &str) -> ArmEnv {
-        let lock = crate::claims::test_env_lock().lock();
+        let lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let spaces = tempfile::tempdir().unwrap();
         let config = tempfile::tempdir().unwrap();
         std::fs::write(config.path().join("config.toml"), lead_config).expect("config");
@@ -1804,7 +1806,7 @@ mod tests {
     }
 
     /// A promoted bg row as the mint writes it: the 8-hex jobId short id, no
-    /// uuid yet, and the crown already stamped.
+    /// uuid yet, and the role already stamped.
     fn promoted_bg_row(cwd: &std::path::Path) -> Value {
         json!({
             "name": "w1",
@@ -1828,137 +1830,120 @@ mod tests {
 
     /// A bg settle can only pass the row's short id, the guard refused it,
     /// and the receipt said the manifest was NOT armed. The heal is the
-    /// manifest's first writer: a promoted row whose report backfills the
-    /// full uuid ends with a manifest naming that uuid and the crown.
+    /// manifest's first writer. Four arms of one contract: a promoted row's
+    /// report arms a manifest naming the uuid and the role; a lead loop that
+    /// is off arms nothing; an existing manifest rebinds field-wise; a role
+    /// vacated while the report ran arms nothing.
     #[test]
-    fn a_healed_bg_promoted_row_arms_its_manifest() {
-        let _env = arm_env("[lead]\nenabled = true\n");
-        let (_d, cwd) = arm_cwd();
-        let (_h, home) = temp_home("bg-arm");
-        seed_registry(&home, promoted_bg_row(&cwd));
+    fn a_healed_bg_promoted_row_arms_its_manifest_only_while_its_role_stands() {
         let sid = "3228ccad-c078-4e1a-9b2f-3c4d5e6f7a8b";
-        let resp = handle_session_report(
-            &home,
-            &emitter(&home),
-            &req(report_params("claude", sid, json!({}))),
-        );
-        assert!(
-            response_json(&resp)["stored"].as_bool() == Some(true),
-            "report stored: {}",
-            response_json(&resp)
-        );
-        let path = crate::lead_state::manifest_path(&crate::paths::space_dir(&cwd), "root")
-            .expect("manifest path");
-        let content = std::fs::read_to_string(&path).expect("the heal armed the manifest");
-        assert!(
-            content.contains(&format!("harness_session_id: {sid}")),
-            "content: {content}"
-        );
-        assert!(content.contains("role_scope: root"), "content: {content}");
-        assert!(
-            content.contains("role_grantor: human"),
-            "content: {content}"
-        );
-        assert!(content.contains("role_level: 1"), "content: {content}");
-    }
-
-    /// The same heal with the lead loop off writes nothing (AC2): the
-    /// guarded arm is a no-op when `config.lead.enabled` is false.
-    #[test]
-    fn a_heal_with_the_lead_loop_off_arms_nothing() {
-        let _env = arm_env("[lead]\nenabled = false\n");
-        let (_d, cwd) = arm_cwd();
-        let (_h, home) = temp_home("bg-lead-off");
-        seed_registry(&home, promoted_bg_row(&cwd));
-        let sid = "3228ccad-c078-4e1a-9b2f-3c4d5e6f7a8b";
-        let resp = handle_session_report(
-            &home,
-            &emitter(&home),
-            &req(report_params("claude", sid, json!({}))),
-        );
-        assert!(response_json(&resp)["stored"].as_bool() == Some(true));
-        let path = crate::lead_state::manifest_path(&crate::paths::space_dir(&cwd), "root")
-            .expect("manifest path");
-        assert!(!path.is_file(), "no manifest under a lead loop that is off");
-    }
-
-    /// An existing manifest is rebound field-wise: the session id moves and
-    /// the rest of the frontmatter survives (AC3).
-    #[test]
-    fn an_existing_manifest_rebinds_and_keeps_its_fields() {
-        let _env = arm_env("[lead]\nenabled = true\n");
-        let (_d, cwd) = arm_cwd();
-        let (_h, home) = temp_home("bg-rebind");
-        seed_registry(&home, promoted_bg_row(&cwd));
-        let space = crate::paths::space_dir(&cwd);
-        let path = crate::lead_state::manifest_path(&space, "root").expect("manifest path");
-        std::fs::create_dir_all(&space).unwrap();
-        let old = "aaaabbbb-1111-4222-8333-ccccdddd0000";
-        std::fs::write(
-            &path,
-            format!(
-                "---\nfno_id: fno-test\ncreated_at: 2026-11-20T00:00:00Z\nscope: root\nshape: \
-                 pass\nharness: claude\nharness_session_id: {old}\nmodel: \nowner_cwd: {}\n\
-                 budget_max_iterations: 40\nrespawn_count: 0\nrespawn_ceiling: 4\nwake_times: \n\
-                 role_level: 1\nrole_scope: root\nrole_grantor: human\n",
-                cwd.display()
-            ),
-        )
-        .unwrap();
-        let sid = "3228ccad-c078-4e1a-9b2f-3c4d5e6f7a8b";
-        let resp = handle_session_report(
-            &home,
-            &emitter(&home),
-            &req(report_params("claude", sid, json!({}))),
-        );
-        assert!(response_json(&resp)["stored"].as_bool() == Some(true));
-        let content = std::fs::read_to_string(&path).unwrap();
-        assert!(
-            content.contains(&format!("harness_session_id: {sid}")),
-            "content: {content}"
-        );
-        assert!(!content.contains(old), "content: {content}");
-        assert!(
-            content.contains("role_grantor: human"),
-            "content: {content}"
-        );
-    }
-
-    /// A crown vacated while the report ran arms nothing (the round-1
-    /// finding): the fresh arm re-decides against the committed registry
-    /// before it writes, so a vacated scope never carries a phantom
-    /// manifest naming the healing session.
-    #[test]
-    fn a_fresh_arm_redecides_a_vacated_crown() {
-        let _env = arm_env("[lead]\nenabled = true\n");
-        let (_d, cwd) = arm_cwd();
-        let (_h, home) = temp_home("bg-vacated");
-        // The crown was cleared on the committed row (the vacate wrote) by
-        // the time the arm runs.
-        seed_registry(&home, claude_row());
-        let arm = ManifestArm {
-            row: "w1".to_string(),
-            scope: "root".to_string(),
-            cwd: cwd.display().to_string(),
-            harness: Some("claude".to_string()),
-            role_level: Some(1),
-            role_grantor: Some("human".to_string()),
-            model: None,
+        let report = |home: &AgentsHome| {
+            let resp = handle_session_report(
+                home,
+                &emitter(home),
+                &req(report_params("claude", sid, json!({}))),
+            );
+            assert!(
+                response_json(&resp)["stored"].as_bool() == Some(true),
+                "report stored: {}",
+                response_json(&resp)
+            );
         };
-        let sid = "3228ccad-c078-4e1a-9b2f-3c4d5e6f7a8b";
-        arm_role_manifest(
-            &arm,
-            &home.registry_json(),
-            sid,
-            Some("w1"),
-            &emitter(&home),
-        );
-        let path = crate::lead_state::manifest_path(&crate::paths::space_dir(&cwd), "root")
-            .expect("manifest path");
-        assert!(
-            !path.is_file(),
-            "a vacated crown never gains a phantom manifest"
-        );
+        let manifest = |cwd: &std::path::Path| {
+            crate::lead_state::manifest_path(&crate::paths::space_dir(cwd), "root")
+                .expect("manifest path")
+        };
+
+        // First writer: the heal arms the uuid and the role.
+        {
+            let _env = arm_env("[lead]\nenabled = true\n");
+            let (_d, cwd) = arm_cwd();
+            let (_h, home) = temp_home("bg-arm");
+            seed_registry(&home, promoted_bg_row(&cwd));
+            report(&home);
+            let content = std::fs::read_to_string(manifest(&cwd)).expect("the heal armed it");
+            for want in [
+                format!("harness_session_id: {sid}"),
+                "role_scope: root".to_string(),
+                "role_grantor: human".to_string(),
+                "role_level: 1".to_string(),
+            ] {
+                assert!(content.contains(&want), "{want} in: {content}");
+            }
+        }
+
+        // The lead loop off: the guarded arm is a no-op.
+        {
+            let _env = arm_env("[lead]\nenabled = false\n");
+            let (_d, cwd) = arm_cwd();
+            let (_h, home) = temp_home("bg-lead-off");
+            seed_registry(&home, promoted_bg_row(&cwd));
+            report(&home);
+            assert!(!manifest(&cwd).is_file(), "no manifest with the loop off");
+        }
+
+        // An existing manifest rebinds: the session id moves, the rest stays.
+        {
+            let _env = arm_env("[lead]\nenabled = true\n");
+            let (_d, cwd) = arm_cwd();
+            let (_h, home) = temp_home("bg-rebind");
+            seed_registry(&home, promoted_bg_row(&cwd));
+            let path = manifest(&cwd);
+            std::fs::create_dir_all(crate::paths::space_dir(&cwd)).unwrap();
+            let old = "aaaabbbb-1111-4222-8333-ccccdddd0000";
+            std::fs::write(
+                &path,
+                format!(
+                    "---\nfno_id: fno-test\ncreated_at: 2026-11-20T00:00:00Z\nscope: root\n\
+                     shape: pass\nharness: claude\nharness_session_id: {old}\nmodel: \n\
+                     owner_cwd: {}\nbudget_max_iterations: 40\nrespawn_count: 0\n\
+                     respawn_ceiling: 4\nwake_times: \nrole_level: 1\nrole_scope: root\n\
+                     role_grantor: human\n",
+                    cwd.display()
+                ),
+            )
+            .unwrap();
+            report(&home);
+            let content = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                content.contains(&format!("harness_session_id: {sid}")),
+                "content: {content}"
+            );
+            assert!(!content.contains(old), "content: {content}");
+            assert!(
+                content.contains("role_grantor: human"),
+                "content: {content}"
+            );
+        }
+
+        // The fresh arm re-decides against the committed row: a role cleared
+        // while the report ran never gains a phantom manifest.
+        {
+            let _env = arm_env("[lead]\nenabled = true\n");
+            let (_d, cwd) = arm_cwd();
+            let (_h, home) = temp_home("bg-vacated");
+            seed_registry(&home, claude_row());
+            let arm = ManifestArm {
+                row: "w1".to_string(),
+                scope: "root".to_string(),
+                cwd: cwd.display().to_string(),
+                harness: Some("claude".to_string()),
+                role_level: Some(1),
+                role_grantor: Some("human".to_string()),
+                model: None,
+            };
+            arm_role_manifest(
+                &arm,
+                &home.registry_json(),
+                sid,
+                Some("w1"),
+                &emitter(&home),
+            );
+            assert!(
+                !manifest(&cwd).is_file(),
+                "a vacated role never gains a phantom manifest"
+            );
+        }
     }
 
     #[test]
