@@ -1761,17 +1761,17 @@ mod tests {
         assert_eq!(item_state(&queued, &acked), "acked");
         // The asks-you rule reads the end reply's last line only.
         let asks = item_json(&mk("x", "Opened PR 12.\n\nShould I merge it?"), &acked);
-        assert_eq!(asks.get("asks_you"), Some(&json!(true)));
+        assert_eq!(asks.pointer("/asks_you"), Some(&json!(true)));
         let asks = item_json(
             &mk("x", "Opened PR 12.\n\nShould I merge it?"),
             &Default::default(),
         );
-        assert_eq!(asks.get("state"), Some(&json!("answered")));
+        assert_eq!(asks.pointer("/state"), Some(&json!("answered")));
         let told = item_json(
             &mk("x", "Want it merged? I did.\nMerged as 805f4200."),
             &acked,
         );
-        assert_eq!(told.get("asks_you"), Some(&json!(false)));
+        assert_eq!(told.pointer("/asks_you"), Some(&json!(false)));
         assert!(reply_asks_user("Which one, `a` or `b`?`"));
     }
 

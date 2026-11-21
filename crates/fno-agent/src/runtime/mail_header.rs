@@ -1206,7 +1206,7 @@ mod tests {
         let quoted =
             header_turns("`quill · fmail-123abc456def · plain` see `@x · fmail-0123456789ab`");
         assert!(
-            matches!(quoted.as_slice(), [one] if one.get("sender") == Some(&Value::from("quill")))
+            matches!(quoted.as_slice(), [one] if one.pointer("/sender") == Some(&Value::from("quill")))
         );
 
         // The one-line delivered form: the transcript renders the turn on
