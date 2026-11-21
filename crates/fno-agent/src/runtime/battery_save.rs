@@ -1,8 +1,9 @@
 //! The daemon's battery-save arm: at or below 5 percent on battery, save
 //! state at once, so a dead-battery shutdown restores like a clean reboot.
-//! One save per discharge episode; the latch clears when the source
-//! returns to AC. A machine without a battery (a desktop on AC, or an
-//! unknown `pmset` shape) never fires and costs one 60-second probe.
+//! One successful save per discharge episode; a failed save retries on the
+//! next beat, and the latch clears when the source returns to AC. A
+//! machine without a battery (a desktop on AC, or an unknown `pmset`
+//! shape) never fires and costs one 60-second probe.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,8 +40,9 @@ pub struct PowerReading {
 /// recognize (the binary is missing, or macOS changed the shape): the beat
 /// skips rather than guess.
 pub fn parse_pmset_batt(text: &str) -> Option<PowerReading> {
-    let source_line = text.lines().find(|l| l.starts_with("Now drawing from '"))?;
-    let rest = source_line.strip_prefix("Now drawing from '")?;
+    let rest = text
+        .lines()
+        .find_map(|l| l.strip_prefix("Now drawing from '"))?;
     let quote = rest.find('\'')?;
     let source = match &rest[..quote] {
         "AC Power" => PowerSource::Ac,
@@ -83,7 +85,8 @@ pub fn should_save(reading: &PowerReading, threshold: u8) -> bool {
 }
 
 /// One discharge episode: the source this episode drew from, and whether
-/// the save already fired in it.
+/// the save already succeeded in it. A save that errored leaves `saved`
+/// false, so the next beat retries until the episode ends.
 #[derive(Default)]
 struct Episode {
     source: Option<PowerSource>,
@@ -106,10 +109,11 @@ impl Default for Arm {
     }
 }
 
-/// One probe beat's episode bookkeeping: an unrecognized reading skips, a
-/// source change opens a new episode and re-arms the save, and the save
-/// fires once per discharge episode at or below the threshold.
-fn episode_beat(episode: &Mutex<Episode>, reading: Option<PowerReading>) -> bool {
+/// The firing half of one probe beat: an unrecognized reading skips, a
+/// source change opens a new episode and re-arms the save, and the beat
+/// fires at or below the threshold unless this episode already saved.
+/// `episode_settle` records the outcome afterward.
+fn episode_take(episode: &Mutex<Episode>, reading: Option<PowerReading>) -> bool {
     let Some(reading) = reading else {
         // A reading the parser does not recognize skips the beat. The
         // error was already logged at the probe site; staying silent here
@@ -121,11 +125,16 @@ fn episode_beat(episode: &Mutex<Episode>, reading: Option<PowerReading>) -> bool
         episode.source = Some(reading.source);
         episode.saved = false;
     }
-    if !should_save(&reading, BATTERY_SAVE_THRESHOLD_PCT) || episode.saved {
-        return false;
+    should_save(&reading, BATTERY_SAVE_THRESHOLD_PCT) && !episode.saved
+}
+
+/// The settling half: a successful save latches the episode; a failed one
+/// stays armed, so the next 60-second beat retries until the episode ends.
+fn episode_settle(episode: &Mutex<Episode>, saved: bool) {
+    if saved {
+        let mut episode = episode.lock().unwrap_or_else(|e| e.into_inner());
+        episode.saved = true;
     }
-    episode.saved = true;
-    true
 }
 
 pub fn maybe_tick(arm: &Arm) {
@@ -141,12 +150,15 @@ pub fn maybe_tick(arm: &Arm) {
     }
     let flag = Arc::clone(&arm.in_flight);
     let episode = Arc::clone(&arm.episode);
-    std::thread::spawn(move || {
+    // SweepGate releases the one-in-flight flag on drop, so a panic in the
+    // probe or the save cannot wedge the arm shut (the daemon loop's rule).
+    tokio::task::spawn_blocking(move || {
+        let _gate = crate::daemon::SweepGate(flag);
         let reading = probe();
-        if episode_beat(&episode, reading) {
-            save_state();
+        if episode_take(&episode, reading) {
+            let saved = save_state();
+            episode_settle(&episode, saved);
         }
-        flag.store(false, Ordering::SeqCst);
     });
 }
 
@@ -180,30 +192,33 @@ fn probe() -> Option<PowerReading> {
     }
 }
 
-/// The save itself: every leg is best-effort and logs its own failure, so
-/// one unreachable store never blocks the next leg. The outbox keeps its
-/// rows when the primary is unreachable, so the daemon's regular share
-/// beat carries them later.
-fn save_state() {
+/// The save itself: every leg runs even when the one before it failed, and
+/// the `true` answer means no leg errored. The outbox keeps its rows when
+/// the primary is unreachable, so a retry on the next beat sends them.
+fn save_state() -> bool {
     let graph = crate::backlog::settings::graph_path();
+    let mut saved = true;
     if let Err(error) = crate::backlog::backlog_share::flush(&graph) {
         tracing::warn!(%error, "battery-save: outbox flush failed");
+        saved = false;
     }
     if let Err(error) = crate::backlog::backlog_share::sync(&graph) {
         tracing::warn!(%error, "battery-save: outbox sync failed");
+        saved = false;
     }
-    checkpoint_graph(&graph);
+    saved &= checkpoint_graph(&graph);
+    saved
 }
 
 /// Fold the graph's WAL into the main file, so a dead-battery shutdown is
 /// followed by a first open that replays nothing. Every commit is already
 /// `synchronous=FULL` durable, so this is a recovery-smoothing leg, not a
 /// durability one; a busy store (a writer mid-batch) skips until the next
-/// episode.
-fn checkpoint_graph(graph: &Path) {
+/// beat.
+fn checkpoint_graph(graph: &Path) -> bool {
     let db = crate::backlog::database_path(graph);
     if !db.exists() {
-        return;
+        return true;
     }
     let opened = rusqlite::Connection::open(&db).and_then(|conn| {
         conn.busy_timeout(CHECKPOINT_BUSY_WAIT)?;
@@ -212,7 +227,9 @@ fn checkpoint_graph(graph: &Path) {
     });
     if let Err(error) = opened {
         tracing::warn!(%error, "battery-save: graph WAL checkpoint failed");
+        return false;
     }
+    true
 }
 
 #[cfg(test)]
@@ -316,18 +333,39 @@ mod tests {
             percent: None,
         };
         assert!(
-            !episode_beat(&episode, Some(high)),
+            !episode_take(&episode, Some(high)),
             "above threshold, no save"
         );
-        assert!(episode_beat(&episode, Some(low)), "first crossing fires");
+        assert!(episode_take(&episode, Some(low)), "first crossing fires");
+        episode_settle(&episode, true);
         assert!(
-            !episode_beat(&episode, Some(low)),
+            !episode_take(&episode, Some(low)),
             "the same episode does not refire"
         );
-        assert!(!episode_beat(&episode, Some(ac)), "AC itself never fires");
+        assert!(!episode_take(&episode, Some(ac)), "AC itself never fires");
         assert!(
-            episode_beat(&episode, Some(low)),
+            episode_take(&episode, Some(low)),
             "a new discharge episode re-arms"
+        );
+    }
+
+    #[test]
+    fn a_failed_save_stays_armed_for_the_next_beat() {
+        let episode = Mutex::new(Episode::default());
+        let low = PowerReading {
+            source: PowerSource::Battery,
+            percent: Some(3),
+        };
+        assert!(episode_take(&episode, Some(low)), "crossing fires");
+        episode_settle(&episode, false);
+        assert!(
+            episode_take(&episode, Some(low)),
+            "a failed save retries on the next beat"
+        );
+        episode_settle(&episode, true);
+        assert!(
+            !episode_take(&episode, Some(low)),
+            "a successful save latches the episode"
         );
     }
 }
