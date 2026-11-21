@@ -348,7 +348,7 @@ fn stop_block(
     let mut reason = block_reason(row);
     if row.id == LEAD_IDLE_PICK_RULE {
         if let Some((beat, _)) = idle_beat(ctx) {
-            if let Some(line) = beat["data"]["pick_line"].and_then(Value::as_str) {
+            if let Some(line) = beat["data"].get("pick_line").and_then(Value::as_str) {
                 reason.push_str(&format!(" Your beat printed: {line}"));
             }
         }
@@ -540,7 +540,8 @@ fn idle_beat_blocks(beat: &Value) -> bool {
 
 /// The beat row's top-level ts as epoch millis, for the refusal comparison.
 fn row_ts_ms(beat: &Value) -> Option<i64> {
-    s_str(beat, "ts")
+    beat.get("ts")
+        .and_then(Value::as_str)
         .and_then(|t| t.parse::<chrono::DateTime<chrono::Utc>>().ok())
         .map(|t| t.timestamp_millis())
 }

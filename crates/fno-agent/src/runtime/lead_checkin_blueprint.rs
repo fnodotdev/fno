@@ -58,7 +58,7 @@ pub(crate) fn seat_leads(
     folded: &Result<Value, String>,
     board: &Result<Value, String>,
 ) -> Result<Vec<Value>, String> {
-    if !level.is_some_and(|l| *l <= 1) {
+    if !level.is_some_and(|l| l <= 1) {
         return Ok(Vec::new());
     }
     let owned = folded
