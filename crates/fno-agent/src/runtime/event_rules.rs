@@ -29,6 +29,7 @@ const EXCERPT_CHARS: usize = 600;
 /// fails the table load test, never the runtime match below.
 const PREDICATES: &[&str] = &[
     "promoted",
+    "lead_or_user_turn",
     "last_message_decision_ask",
     "turn_filed_question",
     "route_self",
@@ -443,6 +444,19 @@ fn predicate(ctx: &Ctx, name: &str, ev: Option<&Value>) -> bool {
         "promoted" => {
             crate::decision_trace::actor_kind_in(ctx.home, Some(&ctx.session), "hook") == "lead"
         }
+        // A promoted lead, or any session the user typed into this turn (a
+        // mux-witnessed Enter in the turn window, the same witness the
+        // conversation hold arms from). A dispatched worker has neither:
+        // its queued turn is the dispatch prompt, not the operator talking.
+        "lead_or_user_turn" => {
+            crate::decision_trace::actor_kind_in(ctx.home, Some(&ctx.session), "hook") == "lead"
+                || crate::operator_witness::submitted_since(
+                    ctx.journal,
+                    &ctx.session,
+                    ctx.window_ms,
+                    now_ms(),
+                )
+        }
         "last_message_decision_ask" => decision_ask(&ctx.last_message),
         "turn_filed_question" => turn_filed_question(ctx),
         "route_self" => {
@@ -510,8 +524,19 @@ fn decision_ask(text: &str) -> bool {
                         .skip_while(blank)
                         .take_while(item)
                         .count()
-                        >= 2))
+                        >= 2)
+                // A closing either-or question carries its options in the
+                // ask line itself: "Should I merge now or wait for codex?"
+                // has no numbered list to lean on.
+                || (line.trim_end().ends_with('?') && either_or(line)))
     })
+}
+
+/// ` or ` between alternatives in the ask line itself. The marker is the
+/// spaced word, so "for", "work" and "order" never match; a question that
+/// names no second alternative stays out (a report may end in a question).
+fn either_or(line: &str) -> bool {
+    line.to_lowercase().contains(" or ")
 }
 
 fn is_numbered_item(line: &str) -> bool {
@@ -1134,6 +1159,24 @@ mod tests {
             }));
         }
 
+        /// The `operator_submit` row the mux writes when it witnesses the
+        /// user's Enter in the session pane. `session` is the payload's
+        /// session id string; the store matches it through the canonical
+        /// handle, so the seed canonicalizes the same way.
+        fn operator_submit(&self, session: &str, submit_ms: i64) {
+            self.seed(json!({
+                "ts": crate::events::now_rfc3339(),
+                "type": "operator_submit",
+                "source": "daemon",
+                "data": {
+                    "mux_session": "main", "pane": 7, "via": "pane",
+                    "submit_ms": submit_ms,
+                    "resolution": "ok",
+                    "harness_session": crate::identity::canonical_handle(session),
+                }
+            }));
+        }
+
         fn spans(&self) -> Vec<Value> {
             crate::event_store::query_events(
                 &self.journal,
@@ -1303,6 +1346,13 @@ mod tests {
                        2. I mail the workers. One PR still needs your visual approval.\n\
                        3. I hand off to a fresh lead.";
         assert!(!decision_ask(approve));
+        // A closing either-or question carries its options in the ask line
+        // itself.
+        assert!(decision_ask("Should I merge now or wait for codex?"));
+        assert!(decision_ask("Merge now, or wait for the rerun?"));
+        // No second alternative, no fire: a report may end in a question.
+        assert!(!decision_ask("Should I merge now?"));
+        assert!(!decision_ask("Was the flag named beta?"));
     }
 
     fn r1_unpromoted_and_cap_legs() {
@@ -1337,6 +1387,82 @@ mod tests {
             true,
             "the last fire's span carries cap_reached"
         );
+    }
+
+    // A non-lead session the user typed into owes its either-or chat ask to
+    // the board. The witness is the store the conversation hold arms from;
+    // the payload is the four-field Stop shape every harness sends.
+    #[test]
+    fn nonlead_session_the_user_typed_into_blocks_on_either_or_ask() {
+        let lock = crate::claims::test_env_lock();
+        let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let rig = Rig::new(false);
+        rig.operator_submit(SESSION, now_ms());
+        let fires = eval_stop_in(
+            &rig.cwd,
+            &rig.journal,
+            &rig.home,
+            &rig.payload("Should I merge now or wait for codex?"),
+        );
+        let block = fires
+            .iter()
+            .find(|f| f.rule == "chat_ask_unfiled")
+            .expect("a user-typed non-lead session blocks on the either-or ask");
+        assert!(block.reason.contains("rule chat_ask_unfiled"));
+    }
+
+    // The ask shape alone widens nothing: a dispatched worker with no
+    // witnessed user turn still passes (its queued turn is the dispatch
+    // prompt, not the operator talking).
+    #[test]
+    fn dispatched_worker_without_user_turn_still_passes() {
+        let lock = crate::claims::test_env_lock();
+        let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let rig = Rig::new(false);
+        let fires = eval_stop_in(
+            &rig.cwd,
+            &rig.journal,
+            &rig.home,
+            &rig.payload("Should I merge now or wait for codex?"),
+        );
+        assert!(
+            fires.is_empty(),
+            "a worker with no user turn owes no chat ask"
+        );
+    }
+
+    // One leg per harness Stop payload shape. All four adapters hand the
+    // engine the same four fields: claude and codex in-process (stop.rs
+    // eval_stop), agy and opencode through `hook rules --event stop`, whose
+    // transport entry ends in this same eval_stop call. Each adapter passes
+    // its own session-id value grammar; the engine canonicalizes any string,
+    // so each leg proves the shape reaches the rule, not the id grammar.
+    #[test]
+    fn every_harness_stop_payload_shape_reaches_the_rule() {
+        let lock = crate::claims::test_env_lock();
+        let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let shapes = [
+            ("claude", "claude-stop-payload-session"),
+            ("codex", "codex-stop-payload-session"),
+            ("agy", "agy-conversation-id"),
+            ("opencode", "opencode-session-id"),
+        ];
+        for (harness, session_id) in shapes {
+            let rig = Rig::new(false);
+            rig.operator_submit(session_id, now_ms());
+            let payload = json!({
+                "session_id": session_id,
+                "last_assistant_message": "Should I merge now or wait for codex?",
+                "transcript_path": "",
+                "cwd": rig.cwd.display().to_string(),
+            })
+            .to_string();
+            let fires = eval_stop_in(&rig.cwd, &rig.journal, &rig.home, &payload);
+            assert!(
+                fires.iter().any(|f| f.rule == "chat_ask_unfiled"),
+                "{harness} payload shape blocks on the either-or ask"
+            );
+        }
     }
 
     fn r2_and_r3_legs() {
