@@ -174,7 +174,7 @@ fn probe() -> Option<PowerReading> {
     cmd.arg("-g").arg("batt");
     // The bounded spawn seam: null stdin, own process group, transient
     // spawn failures retried. `output()` is a disallowed method here.
-    let mut child = match crate::bounded_spawn::spawn_bounded_command(cmd) {
+    let child = match crate::bounded_spawn::spawn_bounded_command(cmd) {
         Ok(child) => child,
         Err(error) => {
             // No `pmset` on this machine (a Linux dev box, a container):
