@@ -93,6 +93,10 @@ pub struct ShotOptions {
     pub cmd: bool,
     /// The find bar state the frame paints over the chat view.
     pub find: Option<FindShot>,
+    /// Window-relative logical x,y the frame clicks through a posted
+    /// mouse event before the capture: the proof frame for real
+    /// interaction on the running demo window.
+    pub tap: Option<(f64, f64)>,
     /// Text the frame's composer holds.
     pub draft: Option<String>,
     /// Harness the start composer shows picked.
@@ -260,6 +264,7 @@ pub fn run(opts: Options) -> i32 {
             font_size: opts.font_size.unwrap_or(13.0),
             empty_chat: shot.empty_chat,
             cmd: shot.cmd,
+            tap: shot.tap,
             sheet: shot.sheet,
             draft: shot.draft,
             harness: shot.harness,
