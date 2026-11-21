@@ -3320,15 +3320,17 @@ mod tests {
             }
         };
         let stub_query = |pr: i64, _repo: Option<&str>, _cwd: Option<&str>, _files: bool| {
-            Ok(match pr {
+            let mut s = match pr {
                 910 => state(910, "MERGED", Some("2026-11-20T00:05:00Z")),
                 _ => state(pr, "CLOSED", None),
-            })
+            };
+            // The scan records a merged PR only when its body's closure
+            // line names the node: that naming is the binding evidence.
+            s.body = Some("Fixes x-aaaa001".to_string());
+            Ok(s)
         };
         let records = scan_merge_drift(&entries, None, None, stub_query);
-        // Only the MERGED PR is drift; the CLOSED-PR control produces no
-        // record at all, which is exactly why the sweep can never close it.
-        assert_eq!(records.len(), 1, "{records:?}");
+        assert_eq!(records.len(), 2, "{records:?}");
         let sweep = partition_and_probe(records, &entries, false, false);
         assert_eq!(
             sweep.closeable.len(),
@@ -3339,9 +3341,10 @@ mod tests {
             sweep.closeable.first().map(|r| r.node_id.as_str()),
             Some("x-aaaa001")
         );
-        assert!(
-            sweep.closed_unmerged.is_empty(),
-            "a CLOSED PR is not drift; the partition stays empty"
+        assert_eq!(
+            sweep.closed_unmerged.first().map(|r| r.node_id.as_str()),
+            Some("x-bbbb002"),
+            "the CLOSED-PR control lands in closed_unmerged, left in_review"
         );
 
         let result = std::cell::RefCell::new(CloseResult {
@@ -3419,14 +3422,13 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let markers = dir.path().join("markers");
         std::fs::create_dir_all(&markers).unwrap();
-        let stub = dir.path().join("close_leg_stub.sh");
-        std::fs::write(
-            &stub,
+        // write_exec_stub, not a bare write: a sibling test's fork can hold
+        // the write fd open and the exec dies with Text file busy.
+        let stub = crate::write_exec_stub(
+            dir.path(),
+            "close_leg_stub.sh",
             "#!/bin/sh\nprintf started > \"$MARKER_DIR/started\"\nprintf $$ > \"$MARKER_DIR/leg-pid\"\nwhile [ ! -f \"$MARKER_DIR/release\" ]; do sleep 0.1; done\nprintf done > \"$MARKER_DIR/done\"\n",
-        )
-        .unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        );
 
         let run_worker = |detached: bool| {
             for m in ["started", "done", "release", "leg-pid", "worker-returned"] {
