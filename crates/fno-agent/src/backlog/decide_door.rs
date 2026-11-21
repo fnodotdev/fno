@@ -1117,10 +1117,7 @@ decision index. Run `fno backlog decide-reindex` before retrying."
     }
     // The session provenance reads the transcript once, after every gate:
     // a refused row records nothing, so it pins nothing and pays no read.
-    let session_provenance = capture_session_provenance(id);
-    if let (Some(sp), Some(map)) = (session_provenance, data.as_object_mut()) {
-        map.insert("session_provenance".into(), sp);
-    }
+    apply_session_provenance(&mut data, id);
     if let Some(r) = door
         .rationale
         .as_deref()
@@ -1572,6 +1569,18 @@ fn resolve_session_transcript(session: &str, harness: &str) -> Option<std::path:
         "claude" => crate::claude_drive::find_transcript(session),
         "codex" => crate::codex_store::codex_rollout_path(None, session),
         _ => None,
+    }
+}
+
+/// The write-site fold: capture the caller's session provenance and stamp it
+/// onto the row's data. A named helper so the write test pins the insertion
+/// directly, without driving the whole door and its store machinery.
+fn apply_session_provenance(data: &mut Value, id: DecideIdentity) {
+    let Some(sp) = capture_session_provenance(id) else {
+        return;
+    };
+    if let Some(map) = data.as_object_mut() {
+        map.insert("session_provenance".into(), sp);
     }
 }
 
@@ -2193,18 +2202,17 @@ mod tests {
     /// provenance on the row: the full session id, harness, transcript
     /// path, and the user turn the row answers (the last real user turn
     /// the transcript held when the row landed). The seeded identity drives
-    /// the capture deterministically; the ambient prover reads the host.
+    /// the capture deterministically; the write fold stamps the row's data
+    /// map directly, so the pin exercises no door or store machinery.
     #[test]
     fn a_seeded_session_records_the_session_provenance() {
-        let env = DoorEnv::new();
-        crate::paths::pin_test_claims_root(env.0.path());
         let _env_lock = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        // A claude store the transcript resolver scans, planted beside the
-        // temp home so the test never reads the real one.
-        let config = env.0.path().join("claude-config");
-        let projects = config.join("projects").join("-repo");
+        // A claude store the transcript resolver scans, planted in a temp
+        // dir so the test never reads the real one.
+        let config = tempfile::tempdir().expect("tempdir");
+        let projects = config.path().join("projects").join("-repo");
         std::fs::create_dir_all(&projects).expect("mkdir");
         let session = "4d2c3d68-7d5c-4c1e-9a51-2f8e0a9b1c3d";
         std::fs::write(
@@ -2220,32 +2228,15 @@ mod tests {
         )
         .expect("writes");
         let _config =
-            crate::claims::EnvVarGuard::set("CLAUDE_CONFIG_DIR", config.to_str().unwrap());
-        let _env_lock = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let argv = [
-            "x-provnode",
-            "Record the ruling",
-            "--authority",
-            "agent",
-            "--why",
-            "provenance test",
-        ];
-        // The seeded identity drives the capture without the ambient
-        // prover: the census walk reads whatever host the suite lands on,
-        // and on the CI runner it blocked the suite for thirteen minutes.
-        let code = decide_door_write(
-            decide_argv(&argv),
-            DecideIdentity::Seeded(session, "claude"),
-        );
-        assert_eq!(code, 0);
-        let (rows, _) = crate::law_match::all_decision_rows().expect("rows");
-        let row = rows
-            .iter()
-            .find(|r| decision_row_str(r, "subject") == "x-provnode")
-            .expect("the row landed");
-        let sp = row
+            crate::claims::EnvVarGuard::set("CLAUDE_CONFIG_DIR", config.path().to_str().unwrap());
+        let mut data = json!({
+            "decision_id": "d-prov0001",
+            "subject": "x-provnode",
+            "decided_by": "4d2c3d68",
+            "authority_source": "agent",
+        });
+        apply_session_provenance(&mut data, DecideIdentity::Seeded(session, "claude"));
+        let sp = data
             .pointer("/session_provenance")
             .expect("the row carries session provenance");
         assert_eq!(sp["session_id"], json!(session));
