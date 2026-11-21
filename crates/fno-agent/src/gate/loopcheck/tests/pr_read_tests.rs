@@ -66,7 +66,7 @@ exit 1
         dir.path(),
         false,
         false, // no_external=false: the review reads run, and the pin holds on them too
-        &[],
+        &["chatgpt-codex-connector".to_string()], // a required login: the else arm runs (Read 3 + 4)
         &[],
         false,
         &[],
@@ -124,7 +124,7 @@ exit 1
     // so a drained GraphQL bucket cannot park a fire whose merge question
     // these reads answer.
     assert!(
-        recorded.contains("COVERAGE pr view 7 --json reviews,comments"),
+        recorded.contains("COVERAGE pr view 7 --repo b/r --json reviews,comments"),
         "the reviews read rode the coverage shim: {recorded}"
     );
     for row in recorded.lines() {
