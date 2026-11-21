@@ -86,6 +86,7 @@ struct UpdateArgs {
     add_pr: Option<String>,
     add_pr_url: Option<String>,
     add_pr_note: Option<String>,
+    add_pr_status: Option<String>,
     remove_pr: Option<String>,
     /// `--to <new-id>`: the in-place node-id rename through
     /// `reid_cli::reid_write`. One operation per call.
@@ -160,6 +161,7 @@ impl UpdateArgs {
             add_pr: None,
             add_pr_url: None,
             add_pr_note: None,
+            add_pr_status: None,
             remove_pr: None,
             reid_to: None,
             door: Vec::new(),
@@ -263,6 +265,7 @@ impl UpdateArgs {
                 "--repo" => take_value!(a.repo),
                 "--add-pr-url" => take_value!(a.add_pr_url),
                 "--add-pr-note" => take_value!(a.add_pr_note),
+                "--add-pr-status" => take_value!(a.add_pr_status),
                 "--to" => take_value!(a.reid_to),
                 other => {
                     if let Some(op) = update_ops::parse_op_token(raw) {
@@ -546,6 +549,7 @@ fn run_external_bind_with(
         && args.repo.is_none()
         && args.add_pr_url.is_none()
         && args.add_pr_note.is_none()
+        && args.add_pr_status.is_none()
         && args
             .ops
             .iter()
@@ -607,6 +611,7 @@ fn run_reid(args: &UpdateArgs, new_id: &str) -> i32 {
         (args.repo.is_some(), "--repo"),
         (args.add_pr_url.is_some(), "--add-pr-url"),
         (args.add_pr_note.is_some(), "--add-pr-note"),
+        (args.add_pr_status.is_some(), "--add-pr-status"),
         (!args.door.is_empty(), "--status/--leave/--set"),
     ] {
         if set {
@@ -650,6 +655,7 @@ fn run_door_relay(args: &UpdateArgs) -> i32 {
     note("--repo", args.repo.is_some(), &mut legacy);
     note("--add-pr-url", args.add_pr_url.is_some(), &mut legacy);
     note("--add-pr-note", args.add_pr_note.is_some(), &mut legacy);
+    note("--add-pr-status", args.add_pr_status.is_some(), &mut legacy);
     if !legacy.is_empty() {
         legacy.sort_unstable();
         eprintln!(
@@ -812,6 +818,7 @@ fn derive_pr_links(
         || args.add_pr.is_some()
         || args.add_pr_url.is_some()
         || args.add_pr_note.is_some()
+        || args.add_pr_status.is_some()
         || args.remove_pr.is_some();
     if !pr_flags {
         return Ok(DerivedPr {
@@ -852,11 +859,21 @@ fn derive_pr_links(
         .as_deref()
         .is_some_and(|v| v.to_lowercase() == "null");
 
-    if args.add_pr.is_none() && (args.add_pr_url.is_some() || args.add_pr_note.is_some()) {
+    if args.add_pr.is_none()
+        && (args.add_pr_url.is_some() || args.add_pr_note.is_some() || args.add_pr_status.is_some())
+    {
         return Err(refused(
-            "Error: --add-pr-url and --add-pr-note require additional_prs+=",
+            "Error: --add-pr-url, --add-pr-note and --add-pr-status require additional_prs+=",
             2,
         ));
+    }
+    if let Some(status) = args.add_pr_status.as_deref() {
+        if !matches!(status.trim(), "merged" | "open" | "closed") {
+            return Err(refused(
+                "Error: --add-pr-status takes merged, open or closed",
+                2,
+            ));
+        }
     }
     if args.repo.is_some() {
         if args.pr_url.is_some() && !clearing_url {
@@ -2063,6 +2080,9 @@ fn apply_mutators(
             if let Some(note) = &args.add_pr_note {
                 entry.insert("note".into(), json!(note));
             }
+            if let Some(status) = &args.add_pr_status {
+                entry.insert("merge_status".into(), json!(status.trim()));
+            }
             let mut replaced = false;
             for item in list.iter_mut() {
                 let Some(map) = item.as_object_mut() else {
@@ -2572,6 +2592,47 @@ const UPDATE_HELP: &str = include_str!("update_help.txt");
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn add_pr_status_requires_the_add_op_and_a_known_word() {
+        // AC5: --add-pr-status rides additional_prs+=; alone, or with a word
+        // outside merged|open|closed, the derive refuses before any write.
+        let argv: Vec<String> = ["x-aaaa1111", "--add-pr-status", "merged"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let args = match UpdateArgs::parse(&argv) {
+            ParsedUpdate::Args(args) => args,
+            ParsedUpdate::Refusal { message, .. } => panic!("parse refused: {message}"),
+        };
+        let err = derive_pr_links(&args, None, Path::new(".")).unwrap_err();
+        assert!(
+            err.message.contains("require additional_prs+="),
+            "{}",
+            err.message
+        );
+        let argv: Vec<String> = [
+            "x-aaaa1111",
+            "--add-pr",
+            "244",
+            "--add-pr-status",
+            "exploded",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let args = match UpdateArgs::parse(&argv) {
+            ParsedUpdate::Args(args) => args,
+            ParsedUpdate::Refusal { message, .. } => panic!("parse refused: {message}"),
+        };
+        let err = derive_pr_links(&args, None, Path::new(".")).unwrap_err();
+        assert!(
+            err.message
+                .contains("--add-pr-status takes merged, open or closed"),
+            "{}",
+            err.message
+        );
+    }
 
     #[test]
     fn an_unknown_flag_refuses_with_the_retired_message() {
