@@ -3326,10 +3326,18 @@ mod tests {
             })
         };
         let records = scan_merge_drift(&entries, None, None, stub_query);
-        assert_eq!(records.len(), 2, "{records:?}");
+        assert_eq!(records.len(), 2);
         let sweep = partition_and_probe(records, &entries, false, false);
-        assert_eq!(sweep.closeable.len(), 1, "{sweep:?}");
-        assert_eq!(sweep.closed_unmerged.len(), 1, "{sweep:?}");
+        assert_eq!(
+            sweep.closeable.len(),
+            1,
+            "closeable should hold only the merged node"
+        );
+        assert_eq!(
+            sweep.closed_unmerged.len(),
+            1,
+            "closed_unmerged should hold only the closed-PR control"
+        );
         assert_eq!(sweep.closeable[0].node_id, "x-aaaa001");
         assert_eq!(sweep.closed_unmerged[0].node_id, "x-bbbb002");
 

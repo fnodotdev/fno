@@ -1799,7 +1799,10 @@ mod tests {
         // Only a failed group kill reaches this line; name it for the parent.
         let _ = std::fs::write(
             Path::new(markers).join("worker-returned"),
-            format!("{outcome:?}"),
+            format!(
+                "run_leg returned: code={} timed_out={} spawn_error={:?}",
+                outcome.code, outcome.timed_out, outcome.spawn_error
+            ),
         );
     }
 }
