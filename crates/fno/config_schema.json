@@ -52,6 +52,43 @@
     "title": "AppBlock",
     "type": "object"
    },
+   "BuddyBlock": {
+    "description": "Buddy mod settings (nested under 'config.buddy').\n\nThe buddy mod (plugins/buddy) reads the section once per session with `fno config get buddy` and falls back to the same defaults when fno is missing or the binary predates the section. The keys own the mod's fixed numbers: the reroll economy (bank cap, ships per earned reroll, the daily reroll), the event-reaction model-line cooldown and model alias, and the fleet read interval.",
+    "properties": {
+     "daily_reroll": {
+      "default": true,
+      "title": "Daily Reroll",
+      "type": "boolean"
+     },
+     "fleet_interval_s": {
+      "default": 300,
+      "title": "Fleet Interval S",
+      "type": "integer"
+     },
+     "model": {
+      "default": "haiku",
+      "title": "Model",
+      "type": "string"
+     },
+     "model_line_cooldown_s": {
+      "default": 10,
+      "title": "Model Line Cooldown S",
+      "type": "integer"
+     },
+     "reroll_bank": {
+      "default": 3,
+      "title": "Reroll Bank",
+      "type": "integer"
+     },
+     "ships_per_reroll": {
+      "default": 2,
+      "title": "Ships Per Reroll",
+      "type": "integer"
+     }
+    },
+    "title": "BuddyBlock",
+    "type": "object"
+   },
    "ProviderCapBlock": {
     "description": "Provider usage-cap actor settings (nested under 'config.provider_cap').\n\nA provider's usage cap arms this actor, independent of recovery.watchdog. It alone decides whether a cap may move sessions. A malformed value reads as its default.\n\nKnobs:\n  enabled                - arm the actor (default on).\n  mode                   - park (default), triage, ask or auto.\n  destinations           - route lanes a moving member tries, in order.\n  min_wait_minutes       - a reset closer than this is waited out.\n  sleep_hours            - HH:MM-HH:MM window in which ask mode moves without a question.\n  sleep_timezone         - IANA zone for sleep_hours (empty = local).\n  canary_survive_minutes - minutes a canary lives before parked members resume.\n  quorum                 - members on one lane needed to open a cap.",
     "properties": {
@@ -4154,6 +4191,9 @@
    },
    "app": {
     "$ref": "#/$defs/AppBlock"
+   },
+   "buddy": {
+    "$ref": "#/$defs/BuddyBlock"
    },
    "provider_cap": {
     "$ref": "#/$defs/ProviderCapBlock"
@@ -8839,6 +8879,72 @@
    "question": "",
    "default_source": "",
    "doc": "Legacy look workflow setting. Missing looks no longer cancel CI.",
+   "edit": "editor"
+  },
+  {
+   "path": "buddy.reroll_bank",
+   "label": "Reroll bank cap",
+   "type": "int",
+   "default": 3,
+   "wizard": "never",
+   "question": "",
+   "default_source": "default",
+   "doc": "The most rerolls the buddy banks. A reroll earned with a full bank is lost (default 3).",
+   "edit": "editor"
+  },
+  {
+   "path": "buddy.ships_per_reroll",
+   "label": "Ships per reroll",
+   "type": "int",
+   "default": 2,
+   "wizard": "never",
+   "question": "",
+   "default_source": "default",
+   "doc": "Shipped fleet PRs that earn one reroll (default 2).",
+   "edit": "editor"
+  },
+  {
+   "path": "buddy.daily_reroll",
+   "label": "Daily reroll",
+   "type": "bool",
+   "default": true,
+   "wizard": "never",
+   "question": "",
+   "default_source": "default",
+   "doc": "Grant one reroll each day (default on).",
+   "edit": "toggle"
+  },
+  {
+   "path": "buddy.model_line_cooldown_s",
+   "label": "Model line cooldown (s)",
+   "type": "int",
+   "default": 10,
+   "wizard": "never",
+   "question": "",
+   "default_source": "default",
+   "doc": "Fewest seconds between buddy model lines fired by tool-result reactions: at most one per cooldown. Canned lines cost no model call and do not wait (default 10).",
+   "edit": "editor"
+  },
+  {
+   "path": "buddy.model",
+   "label": "Model alias",
+   "type": "str",
+   "default": "haiku",
+   "wizard": "never",
+   "question": "",
+   "default_source": "default",
+   "doc": "The model alias every buddy line asks for through the session's API client (default haiku).",
+   "edit": "editor"
+  },
+  {
+   "path": "buddy.fleet_interval_s",
+   "label": "Fleet read interval (s)",
+   "type": "int",
+   "default": 300,
+   "wizard": "never",
+   "question": "",
+   "default_source": "default",
+   "doc": "Seconds between fleet reads; one read serves every session on the machine (default 300).",
    "edit": "editor"
   }
  ]

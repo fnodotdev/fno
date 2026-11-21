@@ -401,3 +401,9 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `merge.architect.vision_paths` | list[str] | `[]` | advanced | Additional project vision files. Paths may be absolute or relative to the canonical repository. |
 | `merge.visual_paint_paths` | list[str] \| None | _(none)_ | advanced | Render-surface paths whose PRs warn when no look is recorded at their head; the merge proceeds and the look request routes to the lead for the Visual Log page after it lands. Explicit head-scoped user declines retain authority. |
 | `merge.visual_shot_workflows` | list[str] \| None | _(none)_ | advanced | Legacy look workflow setting. Missing looks no longer cancel CI. |
+| `buddy.reroll_bank` | int | `3` | never | The most rerolls the buddy banks. A reroll earned with a full bank is lost (default 3). |
+| `buddy.ships_per_reroll` | int | `2` | never | Shipped fleet PRs that earn one reroll (default 2). |
+| `buddy.daily_reroll` | bool | `true` | never | Grant one reroll each day (default on). |
+| `buddy.model_line_cooldown_s` | int | `10` | never | Fewest seconds between buddy model lines fired by tool-result reactions: at most one per cooldown. Canned lines cost no model call and do not wait (default 10). |
+| `buddy.model` | str | `haiku` | never | The model alias every buddy line asks for through the session's API client (default haiku). |
+| `buddy.fleet_interval_s` | int | `300` | never | Seconds between fleet reads; one read serves every session on the machine (default 300). |
