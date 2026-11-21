@@ -153,6 +153,69 @@ pub fn mint_token() -> Option<String> {
     Some(buf.iter().map(|b| format!("{b:02x}")).collect())
 }
 
+/// The next sink rows for one run: the existing ntfy row gains the view base, or a fresh phone row is minted with its token written to the env file first. `None` names a half-finished step whose line already landed in `out`.
+fn sink_rows_next(
+    rows: &[Value],
+    view_base: &str,
+    ask: &mut dyn Ask,
+    me: &str,
+    home: &Path,
+    out: &mut Outcome,
+) -> Option<(Vec<Value>, String, String)> {
+    // One ntfy row on this machine: amend it, never a duplicate push.
+    let parse_ntfy = |r: &Value| {
+        serde_json::from_value::<NtfySinkRow>(r.clone())
+            .map(|s| s.kind == "ntfy")
+            .unwrap_or(false)
+    };
+    let existing = rows.iter().position(|r| parse_ntfy(r));
+    match existing {
+        Some(i) => {
+            let row = rows
+                .get(i)
+                .and_then(|r| serde_json::from_value::<NtfySinkRow>(r.clone()).ok())
+                .expect("the position predicate parsed this same row");
+            let mut next = rows.to_vec();
+            if let Some(obj) = next.get_mut(i).and_then(|r| r.as_object_mut()) {
+                obj.insert("view_base_url".to_string(), json!(view_base));
+            }
+            Some((next, row.url, row.topic))
+        }
+        None => {
+            let topic = ask
+                .line(&format!("ntfy topic (Enter = {}):", default_topic(me)))
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| default_topic(me));
+            let env = "FNO_SINK_PHONE_TOKEN".to_string();
+            let token = mint_token().unwrap_or_default();
+            if token.is_empty() {
+                out.needs_human
+                    .push("attention-remote: cannot mint a sink token".to_string());
+                return None;
+            }
+            // The set validates the token, so the env write lands first, the
+            // same order messaging uses.
+            let env_file = home.join(".fno/.env");
+            if let Err(e) = crate::setup_messaging::write_env(&env_file, &env, Some(&token)) {
+                out.needs_human
+                    .push(format!("attention-remote: cannot write {ENV_FILE}: {e}"));
+                return None;
+            }
+            let mut next = rows.to_vec();
+            next.push(json!({
+                "name": "phone",
+                "type": "ntfy",
+                "url": DEFAULT_SERVER,
+                "topic": topic,
+                "token_env": env,
+                "view_base_url": view_base,
+            }));
+            Some((next, DEFAULT_SERVER.to_string(), topic))
+        }
+    }
+}
+
 /// The prompting step. `rows` are the current `attention.sinks` rows, `invites` the current `web.invites` rows; `set_sinks` and `set_invites` are the validated `fno config set` doors; `tailscale` carries the status and serve seams.
 pub fn step(
     rows: Vec<Value>,
@@ -174,57 +237,10 @@ pub fn step(
         }
     };
     let view_base = format!("https://{dns}");
-    // One ntfy row on this machine: amend it, never a duplicate push.
-    let parse_ntfy = |r: &Value| {
-        serde_json::from_value::<NtfySinkRow>(r.clone())
-            .map(|s| s.kind == "ntfy")
-            .unwrap_or(false)
-    };
-    let existing = rows.iter().position(|r| parse_ntfy(r));
-    let (next_rows, url, topic) = match existing {
-        Some(i) => {
-            let row = rows
-                .get(i)
-                .and_then(|r| serde_json::from_value::<NtfySinkRow>(r.clone()).ok())
-                .expect("the position predicate parsed this same row");
-            let mut next = rows.clone();
-            if let Some(obj) = next.get_mut(i).and_then(|r| r.as_object_mut()) {
-                obj.insert("view_base_url".to_string(), json!(view_base));
-            }
-            (next, row.url, row.topic)
-        }
-        None => {
-            let topic = ask
-                .line(&format!("ntfy topic (Enter = {}):", default_topic(&me)))
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| default_topic(&me));
-            let env = "FNO_SINK_PHONE_TOKEN".to_string();
-            let token = mint_token().unwrap_or_default();
-            if token.is_empty() {
-                out.needs_human
-                    .push("attention-remote: cannot mint a sink token".to_string());
-                return out;
-            }
-            // The set validates the token, so the env write lands first, the
-            // same order messaging uses.
-            let env_file = home.join(".fno/.env");
-            if let Err(e) = crate::setup_messaging::write_env(&env_file, &env, Some(&token)) {
-                out.needs_human
-                    .push(format!("attention-remote: cannot write {ENV_FILE}: {e}"));
-                return out;
-            }
-            let mut next = rows.clone();
-            next.push(json!({
-                "name": "phone",
-                "type": "ntfy",
-                "url": DEFAULT_SERVER,
-                "topic": topic,
-                "token_env": env,
-                "view_base_url": view_base,
-            }));
-            (next, DEFAULT_SERVER.to_string(), topic)
-        }
+    let (next_rows, url, topic) = match sink_rows_next(&rows, &view_base, ask, &me, home, &mut out)
+    {
+        Some(next) => next,
+        None => return out,
     };
     // Fill the invites owner row: the tailnet login answers the HQ door.
     let parse_invite = |r: &Value| {
