@@ -159,7 +159,15 @@ fn mode(
 /// hairline at its foot.
 pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
     let p = root.palette;
-    let mut here = div().flex().flex_row().flex_none().items_center().gap_2();
+    // The breadcrumb yields width first, so a narrow main column (the
+    // session panel open) clips the agent name, never the view switch.
+    let mut here = div()
+        .flex()
+        .flex_row()
+        .min_w_0()
+        .overflow_hidden()
+        .items_center()
+        .gap_2();
     let chat = root.chat.key.as_ref().map(|k| k.session_id.as_str());
     for (i, part) in context(&root.layout, root.main, chat)
         .into_iter()

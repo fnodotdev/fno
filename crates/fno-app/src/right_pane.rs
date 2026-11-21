@@ -182,9 +182,14 @@ pub fn parse_numstat(text: &str) -> Diffstat {
     out
 }
 
-/// A diff read that failed, as the one line the Changes card paints.
+/// Why the Changes card has no diff to show.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DiffFailed(pub String);
+pub enum DiffFailed {
+    /// The pane's directory is outside any git work tree: a fact, not an error.
+    NotARepo,
+    /// git ran and failed: its first stderr line.
+    Git(String),
+}
 
 /// The diff of `cwd` against its merge base with the remote's default
 /// branch, working tree included; against HEAD when no remote base reads.
@@ -199,6 +204,9 @@ fn read_changes(cwd: &str) -> Result<Diffstat, DiffFailed> {
             .filter(|o| o.status.success())
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
     };
+    if git(&["rev-parse", "--is-inside-work-tree"]).as_deref() != Some("true") {
+        return Err(DiffFailed::NotARepo);
+    }
     let base = git(&["rev-parse", "--abbrev-ref", "origin/HEAD"])
         .and_then(|up| git(&["merge-base", "HEAD", &up]))
         .unwrap_or_else(|| "HEAD".to_string());
@@ -207,11 +215,11 @@ fn read_changes(cwd: &str) -> Result<Diffstat, DiffFailed> {
         .arg(cwd)
         .args(["diff", "--numstat", &base])
         .output()
-        .map_err(|e| DiffFailed(e.to_string()))?;
+        .map_err(|e| DiffFailed::Git(e.to_string()))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
         let line = err.lines().next().unwrap_or("git diff failed");
-        return Err(DiffFailed(line.to_string()));
+        return Err(DiffFailed::Git(line.to_string()));
     }
     Ok(parse_numstat(&String::from_utf8_lossy(&out.stdout)))
 }
@@ -512,7 +520,10 @@ fn changes_card(
         .map(|(_, r)| r);
     let body = match read {
         None => div().child(ui::quiet("reading…", p)),
-        Some(Err(e)) => div().child(ui::text(e.0.clone(), Role::Fact, p).text_color(rgb(p.error))),
+        Some(Err(DiffFailed::NotARepo)) => div().child(ui::quiet("not a git repository", p)),
+        Some(Err(DiffFailed::Git(e))) => {
+            div().child(ui::text(e.clone(), Role::Fact, p).text_color(rgb(p.error)))
+        }
         Some(Ok(d)) if d.files.is_empty() => div().child(ui::quiet("no changes", p)),
         Some(Ok(d)) => {
             let n = d.files.len();
