@@ -155,11 +155,26 @@ pub(crate) fn needs_overlay_lines(
                     } else {
                         ""
                     };
-                    lines.push(tail_styled(
-                        &format!("   {} {}", need_glyph(NeedKind::Question), q.title),
-                        stale,
-                        TextStyle::WARN,
-                    ));
+                    let chip = q
+                        .audience
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or("audience?");
+                    // The chip leads the row so a long title cannot push it
+                    // off the overlay.
+                    lines.push(
+                        TLine::parts(&[
+                            (
+                                &format!("   {} ", need_glyph(NeedKind::Question)),
+                                TextStyle::Item,
+                            ),
+                            (&format!("{chip} \u{b7} "), TextStyle::Meta),
+                            (&q.title, TextStyle::Item),
+                            (stale, TextStyle::WARN),
+                        ])
+                        .pad_to(ANSWER_OVERLAY_W),
+                    );
                 }
                 NeedsOverlayRow::Need(r) => {
                     let tag = match r.kind {
@@ -243,7 +258,48 @@ pub(crate) fn needs_overlay_lines(
     lines
 }
 
-/// `head` at item level and `tail` at `style`, padded to the overlay width.
-fn tail_styled(head: &str, tail: &str, style: TextStyle) -> TLine {
-    TLine::parts(&[(head, TextStyle::Item), (tail, style)]).pad_to(ANSWER_OVERLAY_W)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn question(title: &str, audience: Option<&str>) -> crate::needs_overlay::QuestionItem {
+        crate::needs_overlay::QuestionItem {
+            id: title.into(),
+            title: title.into(),
+            audience: audience.map(Into::into),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn question_rows_carry_the_audience_chip() {
+        let projection = NeedsProjection {
+            rows: vec![
+                NeedsOverlayRow::Question(question("scoped ask", Some("customer:solo-founder"))),
+                NeedsOverlayRow::Question(question("bare ask", None)),
+                NeedsOverlayRow::Question(question(
+                    "a very long question title that runs well past the overlay width",
+                    Some("customer:vibe-coder"),
+                )),
+            ],
+            mine_shown: 0,
+            mine_total: 0,
+            need_shown: 3,
+            need_total: 3,
+        };
+        let lines = needs_overlay_lines(&projection, 0, NeedsFooter::AsOf, NeedsFooter::AsOf);
+        assert!(lines
+            .iter()
+            .any(|l| l.contains("scoped ask") && l.contains("customer:solo-founder")));
+        assert!(lines
+            .iter()
+            .any(|l| l.contains("bare ask") && l.contains("audience?")));
+        // The chip survives a title longer than the row.
+        assert!(lines.iter().any(|l| {
+            l.chars()
+                .take(ANSWER_OVERLAY_W)
+                .collect::<String>()
+                .contains("customer:vibe-coder")
+        }));
+    }
 }
