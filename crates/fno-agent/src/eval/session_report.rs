@@ -404,7 +404,7 @@ pub(crate) fn handle_session_report(
     // Set when this report is the successor's first self-identification: the
     // primary id filled on a promoted row. The manifest arm runs after the
     // registry write commits.
-    let mut manifest_arm: Option<(String, String, Option<String>)> = None;
+    let mut manifest_arm: Option<ManifestArm> = None;
     // Set when this report fills an empty primary id on the worker's own
     // row: spawn_guard's parked pending sessions row (the deferred open)
     // opens here, the same trigger the retired Python
@@ -769,15 +769,8 @@ pub(crate) fn handle_session_report(
     // `_arm_role_after_identification`): spawn-time succession has no successor
     // id at settle, so the transfer leaves the manifest naming the outgoing
     // session and the successor holds with no levers until this rewrite names it.
-    if let Some((scope, cwd, row_harness)) = manifest_arm {
-        arm_role_manifest(
-            &scope,
-            &cwd,
-            row_harness.as_deref(),
-            &session_id,
-            row_name.as_deref(),
-            emitter,
-        );
+    if let Some(arm) = manifest_arm {
+        arm_role_manifest(&arm, &session_id, row_name.as_deref(), emitter);
     }
 
     // The row moved to a new pane: announce it, same kind and nested
@@ -1006,33 +999,53 @@ fn pane_side_lookup(report_cwd: &str) -> Option<crate::pane_claim::PaneClaim> {
     crate::pane_claim::from_pane_side(&pane_rows, &table.0, report_cwd)
 }
 
+/// The promoted-row fields a manifest arm needs, copied out before the
+/// registry write lock drops.
+struct ManifestArm {
+    scope: String,
+    cwd: String,
+    harness: Option<String>,
+    role_level: Option<u32>,
+    role_grantor: Option<String>,
+    model: Option<String>,
+}
+
 /// The promoted-row read that decides the arm: a role stamp plus a scope on
 /// the row the report just identified, with the row's own harness so the
 /// rebind never leaves the manifest naming the arming path's harness.
-fn promoted_first_fill(entry: &RegistryEntry, out: &mut Option<(String, String, Option<String>)>) {
+fn promoted_first_fill(entry: &RegistryEntry, out: &mut Option<ManifestArm>) {
     if entry.role_level.is_none() {
         return;
     }
     if let Some(scope) = entry.role_scope.as_deref().filter(|s| !s.is_empty()) {
-        let harness = entry.harness.clone().filter(|h| !h.trim().is_empty());
-        *out = Some((scope.to_string(), entry.cwd.clone(), harness));
+        *out = Some(ManifestArm {
+            scope: scope.to_string(),
+            cwd: entry.cwd.clone(),
+            harness: entry.harness.clone().filter(|h| !h.trim().is_empty()),
+            role_level: entry.role_level,
+            role_grantor: entry.role_grantor.clone(),
+            model: entry.requested_model.clone(),
+        });
     }
 }
 
 /// Rebind one scope's lead manifest to the session that just identified
-/// itself, fail-soft like the Python arm: a failed write emits
-/// `role_manifest_arm_failed` and never fails the report. A scope with no
-/// manifest yet is a fresh grant, not a stale succession; that arm stays
-/// Python's. `row_harness` rides when the row carries one, so a manifest
-/// naming the predecessor's harness never outlives the succession.
+/// itself, fail-soft: a failed write emits `role_manifest_arm_failed` and
+/// never fails the report. A scope with no manifest yet is the bg shape:
+/// the settle could only pass the row's short id, the guard refused it, and
+/// the receipt said the manifest was NOT armed. The heal just proved a
+/// transcript-matchable id, so this is the arm point: the same guarded
+/// writer the settle and grant paths run, which also keeps a lead loop
+/// that is off writing nothing. `harness` rides when the row carries one,
+/// so a manifest naming the predecessor's harness never outlives the
+/// succession.
 fn arm_role_manifest(
-    scope: &str,
-    cwd: &str,
-    row_harness: Option<&str>,
+    arm: &ManifestArm,
     session_id: &str,
     row_name: Option<&str>,
     emitter: &EventEmitter,
 ) {
+    let scope = &arm.scope;
     let fail = |error: String| {
         let _ = emitter.emit(
             "role_manifest_arm_failed",
@@ -1045,12 +1058,12 @@ fn arm_role_manifest(
         );
     };
     // The stop hook matches the manifest id against the transcript basename,
-    // so only a full uuid may name itself (the same shape Python's arm
-    // refuses).
+    // so only a full uuid may name itself (the same shape the settle and
+    // grant arms refuse).
     if !fno_mail::session::is_uuid_shape(session_id) {
         return;
     }
-    let Some(space) = crate::paths::space_dir_opt(Path::new(cwd)) else {
+    let Some(space) = crate::paths::space_dir_opt(Path::new(&arm.cwd)) else {
         return;
     };
     let path = match crate::lead_state::manifest_path(&space, scope) {
@@ -1058,11 +1071,29 @@ fn arm_role_manifest(
         Err(e) => return fail(e),
     };
     if !path.is_file() {
+        // Never armed: write it fresh, carrying the role fields the settle
+        // stamp would have used (the rebind below cannot run on a file that
+        // is not there).
+        let spec = crate::lead_state::ManifestSpec {
+            scope: scope.clone(),
+            harness_session_id: Some(session_id.to_string()),
+            owner_cwd: Some(arm.cwd.clone()),
+            role_level: arm.role_level.map(|l| json!(l)),
+            role_scope: Some(scope.clone()),
+            role_grantor: arm.role_grantor.clone(),
+            model: arm.model.clone(),
+            harness: arm.harness.clone(),
+            ..Default::default()
+        };
+        let lead_on = crate::lead_state::lead_loop_enabled(Path::new(&arm.cwd));
+        if let Err(e) = crate::lead_state::arm_manifest(&space, &spec, lead_on) {
+            fail(e);
+        }
         return;
     }
     let mut fields = vec![("harness_session_id", session_id)];
-    if let Some(row_harness) = row_harness {
-        fields.push(("harness", row_harness));
+    if let Some(row_harness) = &arm.harness {
+        fields.push(("harness", row_harness.as_str()));
     }
     if let Err(e) = crate::lead_state::set_manifest_fields(&space, scope, &fields, None) {
         fail(e);
@@ -1708,6 +1739,157 @@ mod tests {
         unsafe {
             libc::utimensat(libc::AT_FDCWD, c.as_ptr(), times.as_ptr(), 0);
         }
+    }
+
+    /// The env a manifest-arm test isolates: the spaces root and the config
+    /// both redirect to temp dirs, under the claims test env lock, and the
+    /// vars drop with the guard.
+    struct ArmEnv {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        _spaces: tempfile::TempDir,
+        _config: tempfile::TempDir,
+    }
+
+    impl Drop for ArmEnv {
+        fn drop(&mut self) {
+            std::env::remove_var("FNO_SPACES_DIR");
+            std::env::remove_var("FNO_CONFIG");
+        }
+    }
+
+    fn arm_env(lead_config: &str) -> ArmEnv {
+        let lock = crate::claims::test_env_lock().lock();
+        let spaces = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        std::fs::write(config.path().join("config.toml"), lead_config).expect("config");
+        std::env::set_var("FNO_SPACES_DIR", spaces.path());
+        std::env::set_var("FNO_CONFIG", config.path().join("config.toml"));
+        ArmEnv {
+            _lock: lock,
+            _spaces: spaces,
+            _config: config,
+        }
+    }
+
+    /// A promoted bg row as the mint writes it: the 8-hex jobId short id, no
+    /// uuid yet, and the crown already stamped.
+    fn promoted_bg_row(cwd: &std::path::Path) -> Value {
+        json!({
+            "name": "w1",
+            "cwd": cwd.display().to_string(),
+            "status": "live",
+            "created_at": "2026-09-26T00:00:00Z",
+            "harness": "claude",
+            "short_id": "3228ccad",
+            "role_level": 1,
+            "role_scope": "root",
+            "role_grantor": "human"
+        })
+    }
+
+    fn arm_cwd() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().join("repo");
+        std::fs::create_dir_all(&cwd).unwrap();
+        (dir, cwd)
+    }
+
+    /// A bg settle can only pass the row's short id, the guard refused it,
+    /// and the receipt said the manifest was NOT armed. The heal is the
+    /// manifest's first writer: a promoted row whose report backfills the
+    /// full uuid ends with a manifest naming that uuid and the crown.
+    #[test]
+    fn a_healed_bg_promoted_row_arms_its_manifest() {
+        let _env = arm_env("[lead]\nenabled = true\n");
+        let (_d, cwd) = arm_cwd();
+        let (_h, home) = temp_home("bg-arm");
+        seed_registry(&home, promoted_bg_row(&cwd));
+        let sid = "3228ccad-c078-4e1a-9b2f-3c4d5e6f7a8b";
+        let resp = handle_session_report(
+            &home,
+            &emitter(&home),
+            &req(report_params("claude", sid, json!({}))),
+        );
+        assert!(
+            response_json(&resp)["stored"].as_bool() == Some(true),
+            "report stored: {}",
+            response_json(&resp)
+        );
+        let path = crate::lead_state::manifest_path(&crate::paths::space_dir(&cwd), "root")
+            .expect("manifest path");
+        let content = std::fs::read_to_string(&path).expect("the heal armed the manifest");
+        assert!(
+            content.contains(&format!("harness_session_id: {sid}")),
+            "content: {content}"
+        );
+        assert!(content.contains("role_scope: root"), "content: {content}");
+        assert!(
+            content.contains("role_grantor: human"),
+            "content: {content}"
+        );
+        assert!(content.contains("role_level: 1"), "content: {content}");
+    }
+
+    /// The same heal with the lead loop off writes nothing (AC2): the
+    /// guarded arm is a no-op when `config.lead.enabled` is false.
+    #[test]
+    fn a_heal_with_the_lead_loop_off_arms_nothing() {
+        let _env = arm_env("[lead]\nenabled = false\n");
+        let (_d, cwd) = arm_cwd();
+        let (_h, home) = temp_home("bg-lead-off");
+        seed_registry(&home, promoted_bg_row(&cwd));
+        let sid = "3228ccad-c078-4e1a-9b2f-3c4d5e6f7a8b";
+        let resp = handle_session_report(
+            &home,
+            &emitter(&home),
+            &req(report_params("claude", sid, json!({}))),
+        );
+        assert!(response_json(&resp)["stored"].as_bool() == Some(true));
+        let path = crate::lead_state::manifest_path(&crate::paths::space_dir(&cwd), "root")
+            .expect("manifest path");
+        assert!(!path.is_file(), "no manifest under a lead loop that is off");
+    }
+
+    /// An existing manifest is rebound field-wise: the session id moves and
+    /// the rest of the frontmatter survives (AC3).
+    #[test]
+    fn an_existing_manifest_rebinds_and_keeps_its_fields() {
+        let _env = arm_env("[lead]\nenabled = true\n");
+        let (_d, cwd) = arm_cwd();
+        let (_h, home) = temp_home("bg-rebind");
+        seed_registry(&home, promoted_bg_row(&cwd));
+        let space = crate::paths::space_dir(&cwd);
+        let path = crate::lead_state::manifest_path(&space, "root").expect("manifest path");
+        std::fs::create_dir_all(&space).unwrap();
+        let old = "aaaabbbb-1111-4222-8333-ccccdddd0000";
+        std::fs::write(
+            &path,
+            format!(
+                "---\nfno_id: fno-test\ncreated_at: 2026-11-20T00:00:00Z\nscope: root\nshape: \
+                 pass\nharness: claude\nharness_session_id: {old}\nmodel: \nowner_cwd: {}\n\
+                 budget_max_iterations: 40\nrespawn_count: 0\nrespawn_ceiling: 4\nwake_times: \n\
+                 role_level: 1\nrole_scope: root\nrole_grantor: human\n",
+                cwd.display()
+            ),
+        )
+        .unwrap();
+        let sid = "3228ccad-c078-4e1a-9b2f-3c4d5e6f7a8b";
+        let resp = handle_session_report(
+            &home,
+            &emitter(&home),
+            &req(report_params("claude", sid, json!({}))),
+        );
+        assert!(response_json(&resp)["stored"].as_bool() == Some(true));
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            content.contains(&format!("harness_session_id: {sid}")),
+            "content: {content}"
+        );
+        assert!(!content.contains(old), "content: {content}");
+        assert!(
+            content.contains("role_grantor: human"),
+            "content: {content}"
+        );
     }
 
     #[test]
