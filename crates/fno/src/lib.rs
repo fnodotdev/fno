@@ -103,6 +103,8 @@ pub use mux::{
     mux_cli, mux_log, notify_command, pane_argv, pane_cwd, proto, pty, redact, review_invocation,
     server, server_stats, shell_init, squad, squad_cascade, squad_store, vt, workspace_sidecar,
 };
+#[cfg(feature = "web")]
+pub(crate) use serve::web_answer;
 #[cfg(feature = "app")]
 pub use serve::{app_api, backlog_snapshot, chat_events, frame_ansi, frame_html, org_root};
 #[cfg(feature = "web")]
@@ -111,8 +113,6 @@ pub use serve::{attention_api, chat_ws, mux_link, observe, share, web};
 pub(crate) use serve::{screen, web_agent, web_core, web_hq};
 #[cfg(feature = "web")]
 pub(crate) use serve::{web_invites, web_trace};
-#[cfg(feature = "web")]
-pub(crate) use serve::web_answer;
 #[cfg(feature = "app")]
 pub use sessions::{
     agents_history, argv_witness, process_admission, restore_gate, restore_liveness,

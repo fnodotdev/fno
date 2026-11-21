@@ -16,8 +16,6 @@ pub mod frame_ansi;
 pub mod frame_html;
 #[cfg(feature = "app")]
 pub mod mail_door;
-#[cfg(feature = "app")]
-pub(crate) mod web_core;
 #[cfg(feature = "web")]
 pub mod mux_link;
 #[cfg(feature = "web")]
@@ -34,6 +32,8 @@ pub mod web;
 pub(crate) mod web_agent;
 #[cfg(feature = "web")]
 pub(crate) mod web_answer;
+#[cfg(feature = "app")]
+pub(crate) mod web_core;
 #[cfg(feature = "app")]
 pub(crate) mod web_hq;
 #[cfg(feature = "web")]

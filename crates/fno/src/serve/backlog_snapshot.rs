@@ -444,7 +444,10 @@ fn render_one(
         payload = to_public_payload(payload);
     }
     Ok((
-        snapshot_page(&crate::web_core::house(crate::web_core::BACKLOG_PAGE), &payload)?,
+        snapshot_page(
+            &crate::web_core::house(crate::web_core::BACKLOG_PAGE),
+            &payload,
+        )?,
         count,
     ))
 }

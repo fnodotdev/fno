@@ -15,8 +15,8 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crate::proto::{self, Frame, ObserverHello, ObserverVia, ServerMsg};
-use crate::server::observers::clean_label;
 use crate::screen::Screen;
+use crate::server::observers::clean_label;
 use crate::{frame_ansi, share, web};
 
 /// Parsed `fno mux serve --observe` arguments.

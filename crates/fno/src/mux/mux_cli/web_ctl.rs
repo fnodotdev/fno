@@ -96,7 +96,8 @@ fn reap_partition(dir: &std::path::Path) -> (Vec<String>, Vec<String>, Vec<Strin
             unreadable.push(session);
             continue;
         };
-        let Ok(marker) = serde_json::from_value::<crate::web_core::BridgeMarker>(state.clone()) else {
+        let Ok(marker) = serde_json::from_value::<crate::web_core::BridgeMarker>(state.clone())
+        else {
             unreadable.push(session);
             continue;
         };
