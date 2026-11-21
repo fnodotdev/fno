@@ -615,9 +615,11 @@ pub fn band_routing(out: &mut String) {
         let declared = rows.as_ref().map(|m| m.len()).unwrap_or(0);
         if let Some(rows) = &rows {
             for row in rows {
-                let name = py_str(row.get("name").unwrap_or(&Value::Null))
-                    .trim()
-                    .to_string();
+                let parsed: DeclaredModelRow = match serde_json::from_value(row.clone()) {
+                    Ok(parsed) => parsed,
+                    Err(_) => continue,
+                };
+                let name = parsed.name.unwrap_or_default().trim().to_string();
                 if !name.is_empty() && !declared_rows.contains(&name) {
                     declared_rows.push(name);
                 }
@@ -684,19 +686,40 @@ fn grid_pick(command: &str, difficulty: &str) -> Result<Option<String>, ()> {
         "model_occupied": false,
         "work_command": command,
     });
-    let answer = agents_call(&["route-slot"], Some(&payload)).map_err(|_| ())?;
+    let answer: RouteSlotAnswer =
+        serde_json::from_value(agents_call(&["route-slot"], Some(&payload)).map_err(|_| ())?)
+            .map_err(|_| ())?;
     let lane = answer
-        .get("candidate")
-        .and_then(|c| c.get("lane"))
-        .and_then(|l| l.as_str())
-        .map(str::trim)
-        .unwrap_or_default()
-        .to_string();
-    if answer.get("status").and_then(Value::as_str) == Some("pick") && !lane.is_empty() {
+        .candidate
+        .and_then(|c| c.lane)
+        .map(|l| l.trim().to_string())
+        .unwrap_or_default();
+    if answer.status.as_deref() == Some("pick") && !lane.is_empty() {
         Ok(Some(lane))
     } else {
         Ok(None)
     }
+}
+
+/// The modeless route-slot answer, typed once at the readout's boundary;
+/// only the fields the readout consumes (R1: no field walks past this line).
+#[derive(serde::Deserialize)]
+struct RouteSlotAnswer {
+    status: Option<String>,
+    candidate: Option<RouteSlotCandidate>,
+}
+
+#[derive(serde::Deserialize)]
+struct RouteSlotCandidate {
+    lane: Option<String>,
+}
+
+/// One `[[routing.models]]` row, read for its name alone; a row whose name
+/// is not a string is a config fault the typed read drops, never a phantom
+/// row name in the readout.
+#[derive(serde::Deserialize)]
+struct DeclaredModelRow {
+    name: Option<String>,
 }
 
 /// The grid readout's text: one line per command naming the pick per
