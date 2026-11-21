@@ -1202,7 +1202,7 @@ mod tests {
     fn click_prefers_the_hq_page_when_a_view_base_is_set() {
         let mut sink = ntfy_sink();
         sink.view_base_url = Some("https://phone.example".to_string());
-        let item = &ready_items()[0];
+        let item = ready_items().first().unwrap();
         let did = delivery_id(&sink.name, &item.id, "item.opened");
         let body: Value = serde_json::from_str(&ntfy_body(item, &sink, &did)).unwrap();
         assert_eq!(body["click"], "https://phone.example/hq?question=q-9");
@@ -1227,7 +1227,7 @@ mod tests {
     #[test]
     fn click_falls_back_to_the_json_route_without_a_view_base() {
         let sink = ntfy_sink();
-        let item = &ready_items()[0];
+        let item = ready_items().first().unwrap();
         let did = delivery_id(&sink.name, &item.id, "item.opened");
         let body: Value = serde_json::from_str(&ntfy_body(item, &sink, &did)).unwrap();
         assert_eq!(
@@ -1244,7 +1244,7 @@ mod tests {
         let mut sink = ntfy_sink();
         sink.answer_base_url = None;
         sink.view_base_url = Some("https://phone.example".to_string());
-        let item = &ready_items()[0];
+        let item = ready_items().first().unwrap();
         let did = delivery_id(&sink.name, &item.id, "item.opened");
         let body: Value = serde_json::from_str(&ntfy_body(item, &sink, &did)).unwrap();
         assert_eq!(body["click"], "https://phone.example/hq?question=q-9");

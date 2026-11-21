@@ -38,18 +38,28 @@ fn terminal_path() -> Option<PathBuf> {
     terminal_stamp_path().ok()
 }
 
-/// The one write: create the parent, write to a temp name, rename into place, 0600. A caller on the hook path wraps it in the TERM_PROGRAM guard.
+/// The one write: create the parent, write to a temp name, rename into place, 0600. Every leg is best effort by construction: a failed leg returns and this fire simply carries no stamp, so the dispatch falls back to its candidate list. A failed write or permission step leaves the tmp file behind; the next fire's write truncates it. A caller on the hook path wraps it in the TERM_PROGRAM guard.
 pub fn stamp_terminal(path: &Path, term_program: &str) {
     if term_program.trim().is_empty() {
         return;
     }
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if std::fs::create_dir_all(parent).is_err() {
+        return;
     }
     let tmp = path.with_extension("tmp");
-    let _ = std::fs::write(&tmp, term_program.as_bytes());
-    let _ = std::fs::set_permissions(&tmp, std::os::unix::fs::PermissionsExt::from_mode(0o600));
-    let _ = std::fs::rename(&tmp, path);
+    if std::fs::write(&tmp, term_program.as_bytes()).is_err() {
+        return;
+    }
+    if std::fs::set_permissions(&tmp, std::os::unix::fs::PermissionsExt::from_mode(0o600)).is_err()
+    {
+        return;
+    }
+    if std::fs::rename(&tmp, path).is_err() {
+        return;
+    }
 }
 
 /// The one read: the trimmed first line.
