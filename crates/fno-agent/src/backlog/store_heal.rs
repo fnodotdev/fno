@@ -838,8 +838,6 @@ pub fn run_heal_token(args: &[String]) -> i32 {
                 }
             },
             "--all-sources" => all_sources = true,
-            // Retired: healing is machine-wide; accepted as a silent no-op.
-            "--cross-project" => {}
             "-h" | "--help" => {
                 println!("usage: fno agent heal-token <token> [--registry FILE] [--all-sources]");
                 return 0;

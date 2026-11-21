@@ -501,12 +501,9 @@ pub(crate) struct AttachArgs {
 pub(crate) fn parse_attach_args(rest: &[String]) -> Result<AttachArgs, (i32, String)> {
     let mut name: Option<String> = None;
     let (mut inline, mut dial) = (false, None);
-    // Retired (d-460ea8c7): the store heal is machine-wide; the flag rides
-    // along as a silent no-op so the old taught remedy still parses.
     let mut words = rest.iter();
     while let Some(a) = words.next() {
         match a.as_str() {
-            "--cross-project" => {}
             "--inline" => inline = true,
             "--dial" => {
                 // The host comes off the fleet map, and ssh reads a leading dash

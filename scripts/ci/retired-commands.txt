@@ -19,7 +19,10 @@ claude stop|fno agent stop|d-1900e419
 fno done|fno backlog done (same flags)|d-9de9f05b
 fno decide|fno inbox decide|d-add90c60
 fno law|fno inbox decisions|d-add90c60
-fno mail|fno agent mail (the form every skill already teaches)|d-b93d7754
+# user law D2741 reverses d-b93d7754: root fno mail is the mail command, and
+# the D972-era nested spelling is what no string may teach. The root and the
+# singular nested spelling (fno agent mail) are both live.
+fno agents mail|fno mail|user law D2741 reverses d-b93d7754
 fno test|fno doctor test|d-df6c29a6
 fno workspace|fno agent workspace|d-cf2d6fe1
 fno project|fno config project|d-344fe242
