@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use super::alerts;
 use super::alerts::Signal;
 use super::answer;
+use super::app_state::GroupBy;
 use super::chat::{
     self,
     composer::{Attachment, Draft},
@@ -82,6 +83,30 @@ pub enum Action {
     Show(MainView),
     /// Open the inline field that names a new workspace.
     NewWorkspace,
+    /// Open one workspace's context menu (a right-click on its header).
+    OpenWorkspaceMenu(u64),
+    /// Open the header +'s two-item menu: a new worker or a new shell.
+    OpenAddMenu(u64),
+    /// Cycle the Workspaces section's grouping: workspaces, state, machine.
+    CycleGrouping,
+    /// Close the open context menu without acting.
+    CloseWorkspaceMenu,
+    /// Select a workspace, then open a shell tab in it.
+    NewTabIn(u64),
+    /// Open the inline field seeded with the workspace's current name.
+    RenameWorkspace(u64),
+    /// Reorder one workspace by delta, as the sideline order does.
+    MoveWorkspace(u64, i32),
+    /// Open the close-workspace confirm for one workspace.
+    RemoveWorkspace(u64),
+    /// The confirm's own Close button: the command fires, the sheet goes.
+    ConfirmCloseWorkspace(u64),
+    /// The confirm's Keep button: nothing is sent.
+    KeepWorkspace,
+    /// Open the launch composer with the workspace's cwd preset.
+    NewWorker(u64),
+    /// A new shell tab under the + menu's workspace.
+    NewShell(u64),
     /// Fold or open one workspace: the id resolves to the persisted fold
     /// key (its canonical cwd, else its name) at act time.
     ToggleWorkspace(u64),
@@ -125,7 +150,18 @@ fn click_id(action: &Action) -> &'static str {
         Action::Show(_) => "show_view",
         Action::NewWorkspace => "new_workspace",
         Action::ToggleWorkspace(_) => "toggle_workspace",
-        Action::ToggleElsewhere => "toggle_elsewhere",
+        Action::OpenWorkspaceMenu(_) => "open_workspace_menu",
+        Action::OpenAddMenu(_) => "open_add_menu",
+        Action::CycleGrouping => "cycle_grouping",
+        Action::CloseWorkspaceMenu => "close_workspace_menu",
+        Action::NewTabIn(_) => "new_tab_in",
+        Action::RenameWorkspace(_) => "rename_workspace",
+        Action::MoveWorkspace(_, _) => "move_workspace",
+        Action::RemoveWorkspace(_) => "remove_workspace",
+        Action::ConfirmCloseWorkspace(_) => "confirm_close_workspace",
+        Action::KeepWorkspace => "keep_workspace",
+        Action::NewWorker(_) => "new_worker",
+        Action::NewShell(_) => "new_shell",
         Action::ToggleKeySheet => "toggle_key_sheet",
         Action::ToggleChat(_) => "toggle_chat",
         Action::OpenSheet(_) => "open_sheet",
@@ -174,6 +210,16 @@ const DIGIT_FLUSH_MS: u64 = 400;
 
 /// The most wheel lines one event sends, so a fling cannot flood the socket.
 const WHEEL_CAP: i32 = 10;
+
+/// The close-workspace confirm's facts: the wording the TUI uses, plus
+/// the count it names.
+pub(super) struct WorkspaceConfirm {
+    pub squad: u64,
+    pub name: String,
+    pub panes: usize,
+    /// The last workspace: closing it ends the session.
+    pub last: bool,
+}
 
 /// The inline workspace-name field's own state: the draft the input
 /// handler routes into, the field's layout state, and the workspace being
@@ -235,9 +281,16 @@ pub struct Root {
     /// The persisted fold keys (workspace cwds, or names when the cwd is
     /// empty); absence means open.
     pub(super) folds: HashSet<String>,
+    /// The Workspaces section's grouping.
+    pub(super) group_by: GroupBy,
     /// The inline workspace-name field: it names a new workspace, or
     /// renames the workspace it carries.
     pub(super) squad_field: Option<SquadField>,
+    /// The workspace whose menu shows, by squad id, with the menu's kind:
+    /// `true` is the header +'s add menu, `false` the context menu.
+    pub(super) workspace_menu: Option<(u64, bool)>,
+    /// The close-workspace confirm: the wording facts the sheet reads.
+    pub(super) workspace_confirm: Option<WorkspaceConfirm>,
     pub(super) chat: Chat,
     /// `--chat <id>`: the session chat mode shows, whatever has focus.
     pub(super) pinned: Option<SessionKey>,
@@ -344,11 +397,14 @@ impl Root {
         main: MainView,
         pinned: Option<SessionKey>,
         folds: HashSet<String>,
+        group_by: GroupBy,
         metrics: Metrics,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        Self::new_with_link(session, main, pinned, folds, metrics, None, window, cx)
+        Self::new_with_link(
+            session, main, pinned, folds, group_by, metrics, None, window, cx,
+        )
     }
 
     /// The shot path's constructor: `prewarmed` hands a link already
@@ -359,6 +415,7 @@ impl Root {
         main: MainView,
         pinned: Option<SessionKey>,
         folds: HashSet<String>,
+        group_by: GroupBy,
         metrics: Metrics,
         prewarmed: Option<super::link::WarmedLink>,
         window: &mut Window,
@@ -409,6 +466,7 @@ impl Root {
             board_draft: Default::default(),
             mail: None,
             folds,
+            group_by,
             squad_field: None,
             light,
             theme_cwd: theme_cwd.clone(),
@@ -647,6 +705,7 @@ impl Root {
                         &self.board,
                         now,
                         &self.folds,
+                        self.group_by,
                         streamed,
                         launched,
                     )
@@ -892,6 +951,86 @@ impl Root {
                     self.folds.insert(key);
                 }
                 record_ui_state(self, cx);
+            }
+            Action::OpenWorkspaceMenu(id) => {
+                // One menu at a time; a second right-click moves it.
+                self.workspace_menu = Some((id, false));
+            }
+            Action::OpenAddMenu(id) => self.workspace_menu = Some((id, true)),
+            Action::CycleGrouping => {
+                self.group_by = match self.group_by {
+                    GroupBy::Workspaces => GroupBy::State,
+                    GroupBy::State => GroupBy::Machine,
+                    GroupBy::Machine => GroupBy::Workspaces,
+                };
+                record_ui_state(self, cx);
+            }
+            Action::CloseWorkspaceMenu => self.workspace_menu = None,
+            Action::NewTabIn(id) => {
+                self.workspace_menu = None;
+                self.send(ClientMsg::Command(Command::SelectSquad(id)));
+                self.send(ClientMsg::Command(Command::NewTab));
+            }
+            Action::NewShell(id) => self.act(Action::NewTabIn(id), cx),
+            Action::RenameWorkspace(id) => {
+                self.workspace_menu = None;
+                let name = self
+                    .layout
+                    .squads
+                    .iter()
+                    .find(|s| s.id == id)
+                    .map(|s| s.name.clone())
+                    .unwrap_or_default();
+                self.squad_field = Some(SquadField {
+                    draft: Draft::from(name),
+                    field: Rc::new(chat::field::FieldState::default()),
+                    squad: Some(id),
+                });
+            }
+            Action::MoveWorkspace(id, delta) => {
+                self.workspace_menu = None;
+                self.send(ClientMsg::Command(Command::MoveSquad { squad: id, delta }));
+            }
+            Action::RemoveWorkspace(id) => {
+                self.workspace_menu = None;
+                let hit = self
+                    .layout
+                    .squads
+                    .iter()
+                    .enumerate()
+                    .find(|(_, s)| s.id == id);
+                match hit {
+                    Some((i, s)) => {
+                        let last = self.layout.squads.len() == 1;
+                        self.workspace_confirm = Some(WorkspaceConfirm {
+                            squad: s.id,
+                            name: s.name.clone(),
+                            panes: s.panes,
+                            last,
+                        });
+                        // The menu's index feeds the move buttons; the
+                        // unused position keeps the enumerate honest.
+                        let _ = i;
+                    }
+                    None => self.say(format!("no workspace {id} here"), cx),
+                }
+            }
+            Action::ConfirmCloseWorkspace(id) => {
+                self.workspace_confirm = None;
+                self.send(ClientMsg::Command(Command::RemoveSquad(id)));
+            }
+            Action::KeepWorkspace => self.workspace_confirm = None,
+            Action::NewWorker(id) => {
+                self.workspace_menu = None;
+                let cwd = self
+                    .layout
+                    .squads
+                    .iter()
+                    .find(|s| s.id == id)
+                    .map(|s| s.canonical_cwd.clone())
+                    .unwrap_or_default();
+                self.open_launch(Some(crate::launch::Kind::Worker), cx);
+                self.launch.state.preset_project(&cwd);
             }
             Action::ToggleKeySheet => {
                 self.sheet = !self.sheet;
@@ -2417,6 +2556,21 @@ impl Root {
                 self.squad_field = None;
                 match squad {
                     Some(id) => {
+                        // A name-keyed workspace's fold entry moves to the
+                        // new name, so a folded workspace stays folded; a
+                        // cwd-keyed one keeps its key.
+                        let moved = self
+                            .layout
+                            .squads
+                            .iter()
+                            .find(|s| s.id == id)
+                            .and_then(|s| super::left_pane::rename_fold_move(s, &name));
+                        if let Some((old, new)) = moved {
+                            if self.folds.remove(&old) {
+                                self.folds.insert(new);
+                                record_ui_state(self, cx);
+                            }
+                        }
                         self.send(ClientMsg::Command(Command::RenameSquad { squad: id, name }))
                     }
                     None => self.send(ClientMsg::Command(Command::NewSquad { name, origin: None })),
@@ -2513,6 +2667,14 @@ impl Root {
         // workspace, Esc cancels, the editing keys edit its draft. A cmd or
         // ctrl key falls through to the shortcuts.
         if self.squad_field_key(&key, cx) {
+            return;
+        }
+        // The workspace menu closes on Esc; a key that is not Esc falls
+        // through, so the shortcuts keep running under the menu.
+        if self.workspace_menu.is_some() && key.key == "escape" {
+            self.workspace_menu = None;
+            cx.stop_propagation();
+            cx.notify();
             return;
         }
         // The answer sheet is modal the same way: esc closes, enter
@@ -3549,6 +3711,9 @@ impl Root {
         .when(self.settings.is_some(), |d| {
             d.child(settings::render(self, cx))
         })
+        .when(self.workspace_confirm.is_some(), |d| {
+            d.child(left_pane::confirm_sheet(self, cx))
+        })
     }
 }
 
@@ -3558,6 +3723,7 @@ impl Root {
 struct UiState {
     view: MainView,
     folds: HashSet<String>,
+    group_by: GroupBy,
     chat_key: Option<SessionKey>,
     path: Option<PathBuf>,
 }
@@ -3576,6 +3742,7 @@ fn record_ui_state(root: &Root, cx: &mut App) {
     let ui = cx.global_mut::<UiState>();
     ui.view = root.main;
     ui.folds = root.folds.clone();
+    ui.group_by = root.group_by;
     ui.chat_key = root.chat.key.clone();
 }
 
@@ -3605,6 +3772,7 @@ fn persist_window_state(window: &Window, cx: &mut App) {
         },
         pinned: ui.chat_key.clone(),
         folds: ui.folds.clone(),
+        group_by: ui.group_by,
     };
     if let Err(e) = super::app_state::save(path, &state) {
         eprintln!("fno-app: window state save failed: {e}");
@@ -3681,6 +3849,7 @@ pub fn run(
             .as_ref()
             .map(|s| s.folds.clone())
             .unwrap_or_default();
+        let group_by = restored.as_ref().map(|s| s.group_by).unwrap_or_default();
         // Where the exit paths write; a HOME-less environment saves nothing.
         let state_path = super::app_state::state_path();
         let opened = cx.open_window(
@@ -3719,6 +3888,7 @@ pub fn run(
                         main,
                         pinned.clone(),
                         folds.clone(),
+                        group_by,
                         metrics,
                         window,
                         cx,
@@ -3728,6 +3898,7 @@ pub fn run(
                     cx.set_global(UiState {
                         view: main,
                         folds,
+                        group_by,
                         chat_key: pinned,
                         path: state_path,
                     });

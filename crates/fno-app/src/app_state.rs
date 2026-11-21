@@ -30,6 +30,17 @@ pub fn state_path() -> Option<PathBuf> {
     )
 }
 
+/// What the Workspaces section groups its rows by: the workspace's own
+/// nesting (the default), or flat bands by agent state or by machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GroupBy {
+    #[default]
+    Workspaces,
+    State,
+    Machine,
+}
+
 /// Which window mode the saved frame belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -61,6 +72,9 @@ pub struct AppState {
     /// carries none opens every workspace.
     #[serde(default)]
     pub folds: HashSet<String>,
+    /// The Workspaces section's grouping; the default opens nested.
+    #[serde(default)]
+    pub group_by: GroupBy,
 }
 
 /// The ways a save can fail. Best-effort callers drop the error.
@@ -136,6 +150,7 @@ mod tests {
                 subagent: None,
             }),
             folds: HashSet::new(),
+            group_by: GroupBy::default(),
         }
     }
 

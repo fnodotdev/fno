@@ -6,9 +6,11 @@
 use std::collections::HashSet;
 
 use gpui::{
-    div, prelude::*, px, rgb, Context, Div, ElementId, FontWeight, Pixels, Stateful, Window,
+    div, prelude::*, px, rgb, rgba, Context, Div, ElementId, FontWeight, MouseButton, Pixels,
+    Stateful, Window,
 };
 
+use super::app_state::GroupBy;
 use super::link::Layout;
 use super::palette::Palette;
 use super::ui;
@@ -38,6 +40,17 @@ pub(super) fn fold_key(s: &SquadMeta) -> String {
 /// `None` or names a squad the layout does not carry.
 const ELSEWHERE_KEY: &str = "Elsewhere";
 
+/// A rename's fold re-key: a workspace whose fold key is its name (a
+/// cwd-less NewSquad workspace) moves the entry to the new name, so a
+/// folded workspace stays folded. A cwd-keyed workspace keeps its key.
+/// `None` when nothing moves.
+pub(super) fn rename_fold_move(s: &SquadMeta, new_name: &str) -> Option<(String, String)> {
+    if !s.canonical_cwd.is_empty() || s.name == new_name {
+        return None;
+    }
+    Some((s.name.clone(), new_name.to_string()))
+}
+
 /// What a row says about "where I am". Only the focused agent carries the
 /// cursor; the active session and the local machine carry a quiet word.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +71,9 @@ pub enum Row {
         warn: Option<usize>,
         /// The Agents header alone: the circled + opens the composer.
         plus: bool,
+        /// The Workspaces header alone: the button that cycles the
+        /// grouping (workspaces, state, machine).
+        grouping: bool,
     },
     /// A workspace's header row: the fold caret, the name, the active
     /// mark, and its agents' state rollup. A click on the name selects
@@ -74,7 +90,7 @@ pub enum Row {
     /// A fold-able group that is not a workspace: Elsewhere now, the state
     /// and machine bands under the other groupings later.
     Group {
-        title: &'static str,
+        title: String,
         rollup: Vec<(LatticeState, usize)>,
         open: bool,
     },
@@ -104,6 +120,7 @@ fn header(title: &'static str) -> Row {
         rollup: Vec::new(),
         warn: None,
         plus: false,
+        grouping: false,
     }
 }
 
@@ -201,6 +218,7 @@ pub fn rows(
     board: &Board,
     now_secs: u64,
     folds: &HashSet<String>,
+    group_by: GroupBy,
     streamed: Option<&str>,
     launched: Option<(&str, &str)>,
 ) -> Vec<Row> {
@@ -209,9 +227,10 @@ pub fn rows(
         title: "Workspaces",
         rollup: Vec::new(),
         warn: None,
-        // The header's circled + names a new workspace inline; the old
-        // start row is gone.
+        // The header's circled + names a new workspace inline; the button
+        // left of it cycles the grouping.
         plus: true,
+        grouping: true,
     }];
 
     // A pane with a harness-carrying agent on it is an agent row and never
@@ -222,56 +241,62 @@ pub fn rows(
         .filter(|a| a.harness.is_some())
         .filter_map(|a| a.pane_id)
         .collect();
-    for s in &layout.squads {
-        let squad_agents: Vec<&AgentRow> = agents
-            .iter()
-            .filter(|a| a.squad == Some(s.id) && a.harness.is_some())
-            .copied()
-            .collect();
-        let shells: Vec<&PaneMeta> = s
-            .tabs
-            .iter()
-            .flat_map(|t| t.panes.iter())
-            .filter(|p| !used.contains(&p.id))
-            .collect();
-        let open = !folds.contains(&fold_key(s));
-        out.push(Row::Workspace {
-            id: s.id,
-            name: s.name.clone(),
-            active: s.id == layout.active_squad,
-            open,
-            rollup: section_rollup(squad_agents.iter().map(|a| agent_lattice_state(a))),
-        });
-        if open {
-            if squad_agents.is_empty() && shells.is_empty() {
-                out.push(Row::Empty("no agents in this workspace"));
-            }
-            for a in &squad_agents {
-                out.push(agent_item(a, layout, now_secs, streamed, launched));
-            }
-            for p in shells {
-                out.push(shell_item(p));
+    if group_by != GroupBy::Workspaces {
+        push_grouped(
+            &mut out, layout, board, &agents, &used, group_by, folds, now_secs, streamed, launched,
+        );
+    } else {
+        for s in &layout.squads {
+            let squad_agents: Vec<&AgentRow> = agents
+                .iter()
+                .filter(|a| a.squad == Some(s.id) && a.harness.is_some())
+                .copied()
+                .collect();
+            let shells: Vec<&PaneMeta> = s
+                .tabs
+                .iter()
+                .flat_map(|t| t.panes.iter())
+                .filter(|p| !used.contains(&p.id))
+                .collect();
+            let open = !folds.contains(&fold_key(s));
+            out.push(Row::Workspace {
+                id: s.id,
+                name: s.name.clone(),
+                active: s.id == layout.active_squad,
+                open,
+                rollup: section_rollup(squad_agents.iter().map(|a| agent_lattice_state(a))),
+            });
+            if open {
+                if squad_agents.is_empty() && shells.is_empty() {
+                    out.push(Row::Empty("no agents in this workspace"));
+                }
+                for a in &squad_agents {
+                    out.push(agent_item(a, layout, now_secs, streamed, launched));
+                }
+                for p in shells {
+                    out.push(shell_item(p));
+                }
             }
         }
-    }
 
-    // Agents outside every carried squad: a remote-fleet row, or one whose
-    // workspace this server does not know. Shown only when non-empty.
-    let elsewhere: Vec<&AgentRow> = agents
-        .iter()
-        .filter(|a| a.harness.is_some() && !layout.squads.iter().any(|s| a.squad == Some(s.id)))
-        .copied()
-        .collect();
-    if !elsewhere.is_empty() {
-        let open = !folds.contains(ELSEWHERE_KEY);
-        out.push(Row::Group {
-            title: ELSEWHERE_KEY,
-            rollup: section_rollup(elsewhere.iter().map(|a| agent_lattice_state(a))),
-            open,
-        });
-        if open {
-            for a in &elsewhere {
-                out.push(agent_item(a, layout, now_secs, streamed, launched));
+        // Agents outside every carried squad: a remote-fleet row, or one whose
+        // workspace this server does not know. Shown only when non-empty.
+        let elsewhere: Vec<&AgentRow> = agents
+            .iter()
+            .filter(|a| a.harness.is_some() && !layout.squads.iter().any(|s| a.squad == Some(s.id)))
+            .copied()
+            .collect();
+        if !elsewhere.is_empty() {
+            let open = !folds.contains(ELSEWHERE_KEY);
+            out.push(Row::Group {
+                title: ELSEWHERE_KEY.to_string(),
+                rollup: section_rollup(elsewhere.iter().map(|a| agent_lattice_state(a))),
+                open,
+            });
+            if open {
+                for a in &elsewhere {
+                    out.push(agent_item(a, layout, now_secs, streamed, launched));
+                }
             }
         }
     }
@@ -338,6 +363,129 @@ pub fn rows(
         });
     }
     out
+}
+
+/// The State and Machine bands. The Workspaces grouping nests by squad; the
+/// other two flatten into bands whose headers fold by the same rule as
+/// workspace headers. The Machine axis joins the Board's fleet: the
+/// machine whose seats name the agent's session id, else the local
+/// machine. Shells join on `PaneMeta.host`, else the local machine's name.
+#[allow(clippy::too_many_arguments)]
+fn push_grouped(
+    out: &mut Vec<Row>,
+    layout: &Layout,
+    board: &Board,
+    agents: &[&AgentRow],
+    used: &HashSet<u64>,
+    group_by: GroupBy,
+    folds: &HashSet<String>,
+    now_secs: u64,
+    streamed: Option<&str>,
+    launched: Option<(&str, &str)>,
+) {
+    let local = local_machine_name(board);
+    let band_of = |a: &AgentRow| -> String {
+        match group_by {
+            GroupBy::State => match agent_lattice_state(a) {
+                LatticeState::Blocked | LatticeState::DoneUnseen => "Needs input",
+                LatticeState::Working | LatticeState::Unmeasured | LatticeState::Empty => "Working",
+                LatticeState::Idle | LatticeState::Exited => "Done",
+            }
+            .to_string(),
+            GroupBy::Machine => machine_of(board, a),
+            GroupBy::Workspaces => String::new(),
+        }
+    };
+    // First-appearance band order, then the agents of each band in
+    // sideline order.
+    let mut bands: Vec<(String, Vec<&AgentRow>)> = Vec::new();
+    for a in agents.iter().copied() {
+        let key = band_of(a);
+        match bands.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, members)) => members.push(a),
+            None => bands.push((key, vec![a])),
+        }
+    }
+    for (title, members) in &bands {
+        let open = !folds.contains(title.as_str());
+        out.push(Row::Group {
+            title: title.clone(),
+            rollup: section_rollup(members.iter().map(|a| agent_lattice_state(a))),
+            open,
+        });
+        if !open {
+            continue;
+        }
+        for a in members {
+            let mut row = agent_item(a, layout, now_secs, streamed, launched);
+            if group_by == GroupBy::State {
+                // The band carries the state, so the row's detail word
+                // gains the workspace the agent runs in.
+                let ws = layout
+                    .squads
+                    .iter()
+                    .find(|s| a.squad == Some(s.id))
+                    .map(|s| s.name.clone());
+                if let (Some(name), Row::Item { detail, .. }) = (ws, &mut row) {
+                    if !name.is_empty() && !detail.is_empty() {
+                        detail.push_str(" · ");
+                        detail.push_str(&name);
+                    }
+                }
+            }
+            out.push(row);
+        }
+        if group_by == GroupBy::Machine {
+            push_machine_shells(out, layout, used, title, &local);
+        }
+    }
+}
+
+/// The local machine's own word: the Machines section's name for itself.
+fn local_machine_name(board: &Board) -> String {
+    board
+        .fleet()
+        .and_then(|f| f.machines.iter().find(|m| m.local))
+        .map(|m| m.display_name.clone().unwrap_or_else(|| m.host.clone()))
+        .unwrap_or_else(|| "this machine".to_string())
+}
+
+/// The machine an agent joins: the fleet machine whose seats name the
+/// agent's session id, else the local machine.
+fn machine_of(board: &Board, a: &AgentRow) -> String {
+    if let Some(f) = board.fleet() {
+        for m in &f.machines {
+            for lead in &m.leads {
+                for seat in &lead.seats {
+                    if seat.session_id.is_some() && seat.session_id == a.harness_session_id {
+                        return m.display_name.clone().unwrap_or_else(|| m.host.clone());
+                    }
+                }
+            }
+        }
+    }
+    local_machine_name(board)
+}
+
+/// One band's shells under the Machine grouping: panes matching no harness
+/// agent, joined to their band by `PaneMeta.host`, else the local name.
+fn push_machine_shells(
+    out: &mut Vec<Row>,
+    layout: &Layout,
+    used: &HashSet<u64>,
+    title: &str,
+    local: &str,
+) {
+    for s in &layout.squads {
+        for pane in s.tabs.iter().flat_map(|t| t.panes.iter()) {
+            if used.contains(&pane.id) {
+                continue;
+            }
+            if pane.host.as_deref().unwrap_or(local) == title {
+                out.push(shell_item(pane));
+            }
+        }
+    }
 }
 
 /// An agent row's fact slots in their fixed order: model, cost, context,
@@ -541,6 +689,16 @@ fn agent_row(
         }))
 }
 
+/// The Workspaces header's group button: one glyph per mode, and a click
+/// cycles workspaces -> state -> machine -> workspaces.
+fn grouping_button(p: &Palette, cx: &mut Context<Root>) -> Div {
+    div().child(
+        ui::clickable(div().id("grouping-cycle").px_1(), p)
+            .on_click(cx.listener(|root, _, _, cx| root.act(Action::CycleGrouping, cx)))
+            .child(div().text_color(rgb(p.faint)).child("⇄".to_string())),
+    )
+}
+
 /// The Workspaces header's right side: the circled + names a new workspace
 /// inline, under the header.
 fn workspaces_header_plus(p: &Palette, cx: &mut Context<Root>) -> Div {
@@ -569,6 +727,7 @@ fn header_marks(
     rollup: &[(LatticeState, usize)],
     open: bool,
     fold: Option<u64>,
+    add: Option<u64>,
     p: &Palette,
     cx: &mut Context<Root>,
 ) -> Div {
@@ -585,6 +744,22 @@ fn header_marks(
                         .child(lattice_glyph(*state).0.to_string()),
                 )
                 .child(n.to_string()),
+        );
+    }
+    if let Some(squad) = add {
+        // The circled + opens the add menu: a new worker or a new shell
+        // under this workspace. It sits faint; hover and the current mark
+        // lift it.
+        marks = marks.child(
+            ui::clickable(
+                div().id(SharedString::from(format!("add-{squad}"))).px_1(),
+                p,
+            )
+            .on_click(cx.listener(move |root, _, _, cx| {
+                cx.stop_propagation();
+                root.act(Action::OpenAddMenu(squad), cx);
+            }))
+            .child(div().text_color(rgb(p.faint)).child("⊕".to_string())),
         );
     }
     match fold {
@@ -617,6 +792,10 @@ fn workspace_header(
         .on_click(
             cx.listener(move |root, _, _, cx| root.act(Action::Send(Command::SelectSquad(id)), cx)),
         )
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |root, _, _, cx| root.act(Action::OpenWorkspaceMenu(id), cx)),
+        )
         .child(
             ui::role(div(), ui::Role::Label, p)
                 .flex_1()
@@ -631,6 +810,7 @@ fn workspace_header(
             rollup,
             open,
             Some(id),
+            Some(id),
             p,
             cx,
         ))
@@ -640,7 +820,7 @@ fn workspace_header(
 /// the fold, there is no select and no menu.
 fn group_header(
     i: usize,
-    title: &'static str,
+    title: &str,
     rollup: &[(LatticeState, usize)],
     open: bool,
     p: &Palette,
@@ -656,7 +836,15 @@ fn group_header(
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(title),
         )
-        .child(header_marks("elsewhere-fold", rollup, open, None, p, cx))
+        .child(header_marks(
+            "elsewhere-fold",
+            rollup,
+            open,
+            None,
+            None,
+            p,
+            cx,
+        ))
 }
 
 /// The inline workspace-name field: one row under the Workspaces header
@@ -702,6 +890,7 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
             rollup,
             warn,
             plus,
+            grouping,
         } => div().id(i).px_3().child(
             ui::section(title, &p).justify_between().child(
                 div()
@@ -729,6 +918,7 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
                             .child(div().text_color(rgb(p.warn)).child("◆"))
                             .child(n.to_string())
                     }))
+                    .when(grouping, |right| right.child(grouping_button(&p, cx)))
                     .when(plus, |right| right.child(workspaces_header_plus(&p, cx))),
             ),
         ),
@@ -807,6 +997,171 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
             item
         }
     }
+}
+
+/// One menu item row: the label, and the action a click sends.
+fn menu_item(
+    key: &'static str,
+    squad: u64,
+    label: &str,
+    action: Option<Action>,
+    p: &Palette,
+    cx: &mut Context<Root>,
+) -> AnyElement {
+    let row = ui::clickable(
+        ui::row(SharedString::from(format!("{key}-{squad}")), false, p).w(px(WIDTH - 12.0)),
+    );
+    match action {
+        Some(action) => row
+            .on_click(cx.listener(move |root, _, _, cx| root.act(action.clone(), cx)))
+            .child(ui::text(label, ui::Role::Name, p))
+            .into_any_element(),
+        // A greyed item keeps its row: the move items at the list edges.
+        None => row
+            .child(ui::text(label, ui::Role::Name, p).text_color(rgb(p.faint)))
+            .into_any_element(),
+    }
+}
+
+/// The workspace's in-place menu, right under its header: the context
+/// menu's five items, or the add menu's two. Move items grey out at the
+/// list edges, as the reference shows.
+fn menu_rows(
+    squad: u64,
+    layout: &Layout,
+    kind: Option<(u64, bool)>,
+    p: &Palette,
+    cx: &mut Context<Root>,
+) -> Vec<AnyElement> {
+    let add_menu = matches!(kind, Some((s, true)) if s == squad);
+    let idx = layout
+        .squads
+        .iter()
+        .position(|s| s.id == squad)
+        .unwrap_or(0);
+    let count = layout.squads.len();
+    if add_menu {
+        vec![
+            menu_item(
+                "menu-new-worker",
+                squad,
+                "New worker",
+                Some(Action::NewWorker(squad)),
+                p,
+                cx,
+            ),
+            menu_item(
+                "menu-new-shell",
+                squad,
+                "New shell",
+                Some(Action::NewShell(squad)),
+                p,
+                cx,
+            ),
+        ]
+    } else {
+        vec![
+            menu_item(
+                "menu-newtab",
+                squad,
+                "New Tab",
+                Some(Action::NewTabIn(squad)),
+                p,
+                cx,
+            ),
+            menu_item(
+                "menu-rename",
+                squad,
+                "Rename Workspace…",
+                Some(Action::RenameWorkspace(squad)),
+                p,
+                cx,
+            ),
+            menu_item(
+                "menu-moveup",
+                squad,
+                "Move Workspace Up",
+                (idx > 0).then_some(Action::MoveWorkspace(squad, -1)),
+                p,
+                cx,
+            ),
+            menu_item(
+                "menu-movedown",
+                squad,
+                "Move Workspace Down",
+                (idx < count - 1).then_some(Action::MoveWorkspace(squad, 1)),
+                p,
+                cx,
+            ),
+            menu_item(
+                "menu-close",
+                squad,
+                "Close Workspace",
+                Some(Action::RemoveWorkspace(squad)),
+                p,
+                cx,
+            ),
+        ]
+    }
+}
+
+/// The close-workspace confirm: a small sheet over a dimmed window, in the
+/// TUI's own wording, with the pane count it names.
+pub(super) fn confirm_sheet(root: &Root, cx: &mut Context<Root>) -> Div {
+    let p = root.palette;
+    let Some(c) = root.workspace_confirm.as_ref() else {
+        return div();
+    };
+    let word = if c.last {
+        format!(
+            "close workspace {} ({} panes) - last workspace, ends the session?",
+            c.name, c.panes
+        )
+    } else {
+        format!("close workspace {} ({} panes)?", c.name, c.panes)
+    };
+    div()
+        .absolute()
+        .inset_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(rgba(0x0000_0066))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|root, _, _, cx| root.act(Action::KeepWorkspace, cx)),
+        )
+        .child(
+            div()
+                .id("workspace-confirm")
+                .flex()
+                .flex_col()
+                .w(px(420.0))
+                .gap_2()
+                .p_3()
+                .rounded(px(8.0))
+                .bg(rgb(p.raised))
+                .child(ui::text(word, ui::Role::Name, p))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            ui::button("close-workspace-button", "Close", ui::Button::Primary, &p)
+                                .on_click(cx.listener(move |root, _, _, cx| {
+                                    root.act(Action::ConfirmCloseWorkspace(c.squad), cx)
+                                })),
+                        )
+                        .child(
+                            ui::button("keep-workspace-button", "Keep", ui::Button::Quiet, &p)
+                                .on_click(cx.listener(|root, _, _, cx| {
+                                    root.act(Action::KeepWorkspace, cx)
+                                })),
+                        ),
+                ),
+        )
 }
 
 /// `adv` is one SF Mono advance at the body size.
@@ -898,6 +1253,14 @@ pub(super) fn render(
                 pane = pane.child(squad_field_row(field, root, window, cx));
             }
         }
+        // The workspace menu opens in place, right under its header row.
+        if let Row::Workspace { id, .. } = &row {
+            if Some(*id) == root.workspace_menu.map(|(squad, _)| squad) {
+                for el in menu_rows(*id, &root.layout, root.workspace_menu, &grid.p, cx) {
+                    pane = pane.child(el);
+                }
+            }
+        }
     }
     div()
         .id("left-pane")
@@ -916,6 +1279,7 @@ pub(super) fn render(
 
 #[cfg(test)]
 mod tests {
+    use super::super::app_state::GroupBy;
     use super::*;
     use fno::proto::{AgentBadge, PaneMeta, SquadMeta, TabMeta};
 
@@ -937,6 +1301,14 @@ mod tests {
             label: label.into(),
             cwd: Some(cwd.into()),
             ..PaneMeta::default()
+        }
+    }
+
+    /// A shell on the remote machine, for the machine-band test.
+    fn shell_pane() -> PaneMeta {
+        PaneMeta {
+            host: Some("m2-mbp".into()),
+            ..pane(20, "shell", "/r/sh")
         }
     }
 
@@ -969,17 +1341,25 @@ mod tests {
             agents: vec![a],
             ..Layout::default()
         };
-        let rows = rows(&layout, &Board::default(), 100, &no_folds(), None, None);
+        let rows = rows(
+            &layout,
+            &Board::default(),
+            100,
+            &no_folds(),
+            GroupBy::Workspaces,
+            None,
+            None,
+        );
         // The section header leads with the plus, the squadless agent lands
         // in the Elsewhere group under its open header.
         assert!(matches!(rows.first(), Some(Row::Header { plus: true, .. })));
         assert!(matches!(
             rows.get(1),
             Some(Row::Group {
-                title: "Elsewhere",
+                ref title,
                 open: true,
                 ..
-            })
+            }) if title == "Elsewhere"
         ));
         assert!(matches!(
             rows.get(2),
@@ -1016,7 +1396,15 @@ mod tests {
             agents: vec![a, b, c, loose],
             ..Layout::default()
         };
-        let rows = rows(&layout, &Board::default(), 100, &no_folds(), None, None);
+        let rows = rows(
+            &layout,
+            &Board::default(),
+            100,
+            &no_folds(),
+            GroupBy::Workspaces,
+            None,
+            None,
+        );
         let kind_of = |r: &Row| -> String {
             match r {
                 Row::Header { title, .. } => format!("header {title}"),
@@ -1089,7 +1477,15 @@ mod tests {
         // header stays.
         let mut folds = HashSet::new();
         folds.insert("/r".to_string());
-        let folded = rows(&layout, &Board::default(), 100, &folds, None, None);
+        let folded = rows(
+            &layout,
+            &Board::default(),
+            100,
+            &folds,
+            GroupBy::Workspaces,
+            None,
+            None,
+        );
         assert!(matches!(
             folded.get(1),
             Some(Row::Workspace { open: false, .. })
@@ -1103,7 +1499,15 @@ mod tests {
             squads: vec![squad(3, "empty", vec![tab(12, "main", vec![])])],
             ..Layout::default()
         };
-        let rows = rows(&bare, &Board::default(), 100, &no_folds(), None, None);
+        let rows = rows(
+            &bare,
+            &Board::default(),
+            100,
+            &no_folds(),
+            GroupBy::Workspaces,
+            None,
+            None,
+        );
         assert!(matches!(
             rows.get(2),
             Some(Row::Empty("no agents in this workspace"))
@@ -1125,7 +1529,15 @@ mod tests {
         };
         let none = fno::backlog_model::Inputs::default();
         board.record(Err("no fleet".into()), Ok(fold), &none, 1, &[]);
-        let rows = rows(&Layout::default(), &board, 100, &no_folds(), None, None);
+        let rows = rows(
+            &Layout::default(),
+            &board,
+            100,
+            &no_folds(),
+            GroupBy::Workspaces,
+            None,
+            None,
+        );
         let qrow = rows.iter().find_map(|r| match r {
             Row::Item { label, action, .. } if label.starts_with("Questions") => {
                 Some((label.clone(), action.clone()))
@@ -1158,7 +1570,15 @@ mod tests {
             1,
             &[],
         );
-        let err_rows = rows(&Layout::default(), &failed, 100, &no_folds(), None, None);
+        let err_rows = rows(
+            &Layout::default(),
+            &failed,
+            100,
+            &no_folds(),
+            GroupBy::Workspaces,
+            None,
+            None,
+        );
         assert!(err_rows
             .iter()
             .any(|r| matches!(r, Row::Error(e) if e == "needs timed out")));
@@ -1178,7 +1598,15 @@ mod tests {
             agents,
             ..Layout::default()
         };
-        let rows = rows(&layout, &Board::default(), 100, &no_folds(), None, None);
+        let rows = rows(
+            &layout,
+            &Board::default(),
+            100,
+            &no_folds(),
+            GroupBy::Workspaces,
+            None,
+            None,
+        );
         // The sideline's default Status sort: blocked, then working, then idle.
         let names: Vec<&str> = rows
             .iter()
@@ -1250,6 +1678,7 @@ mod tests {
             &Board::default(),
             100,
             &no_folds(),
+            GroupBy::Workspaces,
             None,
             Some(("t-land-the-fix", "land the checkout fix")),
         );
@@ -1268,7 +1697,15 @@ mod tests {
         assert_eq!(mark("land the checkout fix", &marked), Some(Mark::Cursor));
         assert_eq!(mark("scout", &marked), Some(Mark::None));
         // Without a pending launch the same paneless row carries none.
-        let plain = rows(&layout, &Board::default(), 100, &no_folds(), None, None);
+        let plain = rows(
+            &layout,
+            &Board::default(),
+            100,
+            &no_folds(),
+            GroupBy::Workspaces,
+            None,
+            None,
+        );
         assert_eq!(mark("t-land-the-fix", &plain), Some(Mark::None));
     }
 
@@ -1335,5 +1772,151 @@ mod tests {
         let cut = name_room(wide, wide * (ui::SMALL / ui::BODY), gap);
         assert!(cut < 18, "a narrow pane cuts the name: room {cut}");
         assert!(cut >= NAME_MIN);
+    }
+    #[test]
+    fn grouping_by_state_buckets_agents_and_names_the_workspace_in_detail() {
+        // A blocked agent sits under Needs input, a working one under
+        // Working, an idle one under Done; the row's detail names its
+        // workspace; a band folds by its title.
+        let agents = vec![
+            agent("idle", 1, None, 7),
+            agent("stuck", 2, Some(AgentBadge::Blocked), 7),
+            agent("busy", 3, Some(AgentBadge::Working), 7),
+        ];
+        let layout = Layout {
+            squads: vec![squad(7, "fno", vec![tab(10, "main", vec![])])],
+            active_squad: 7,
+            focus: 3,
+            agents,
+            ..Layout::default()
+        };
+        let rows = rows(
+            &layout,
+            &Board::default(),
+            100,
+            &no_folds(),
+            GroupBy::State,
+            None,
+            None,
+        );
+        let bands: Vec<&str> = rows
+            .iter()
+            .filter_map(|r| match r {
+                Row::Group { title, .. } => Some(title.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(bands, ["Needs input", "Working", "Done"]);
+        let stuck = rows
+            .iter()
+            .find_map(|r| match r {
+                Row::Item { label, detail, .. } if label == "stuck" => Some(detail.clone()),
+                _ => None,
+            })
+            .expect("the blocked row shows");
+        assert!(stuck.contains("fno"), "detail names the workspace: {stuck}");
+        // A band folds by its title, the same user-only rule.
+        let mut folds = HashSet::new();
+        folds.insert("Working".to_string());
+        let folded = rows(
+            &layout,
+            &Board::default(),
+            100,
+            &folds,
+            GroupBy::State,
+            None,
+            None,
+        );
+        assert!(folded
+            .iter()
+            .all(|r| !matches!(r, Row::Item { label, .. } if label == "busy")));
+        assert!(folded
+            .iter()
+            .any(|r| matches!(r, Row::Group { title, open, .. } if title == "Working" && !open)));
+    }
+
+    #[test]
+    fn grouping_by_machine_joins_the_fleet_and_shells_follow_their_host() {
+        // A remote agent joins host m2-mbp through the fleet seat's session
+        // id; agents with no seat join, and host-less shells, land on the
+        // local machine's name. A shell's own host wins over the local
+        // default.
+        let mut remote = agent("remote-one", 5, None, 9);
+        remote.harness_session_id = Some("sess-remote".to_string());
+        let mut local_agent = agent("local-one", 6, Some(AgentBadge::Blocked), 7);
+        local_agent.harness_session_id = Some("sess-local".to_string());
+        let layout = Layout {
+            squads: vec![
+                squad(7, "fno", vec![tab(10, "main", vec![shell_pane()])]),
+                squad(9, "tools", vec![tab(11, "main", vec![])]),
+            ],
+            agents: vec![remote, local_agent],
+            ..Layout::default()
+        };
+        // The Board's raw fleet map: machine u is local, m2-mbp carries the
+        // remote seat. fold derives the seats the join reads.
+        let fleet = serde_json::json!({
+            "machines": [
+                {"host": "u", "local": true, "fresh": true, "sessions": [
+                    {"name": "local-one", "session_id": "sess-local"}
+                ]},
+                {"host": "m2-mbp", "fresh": true, "age_s": 0, "sessions": [
+                    {"name": "remote-one", "session_id": "sess-remote"}
+                ]},
+            ]
+        });
+        let mut board = Board::default();
+        let none = fno::backlog_model::Inputs::default();
+        board.record(Ok(fleet), Err("no questions".into()), &none, 1, &[]);
+        let rows = rows(
+            &layout,
+            &board,
+            100,
+            &no_folds(),
+            GroupBy::Machine,
+            None,
+            None,
+        );
+        let bands: Vec<String> = rows
+            .iter()
+            .filter_map(|r| match r {
+                Row::Group { title, .. } => Some(title.clone()),
+                _ => None,
+            })
+            .collect();
+        // The blocked local agent leads the sideline order, so its band is
+        // first; the remote seat joins m2-mbp.
+        assert_eq!(bands, ["u", "m2-mbp"]);
+        // The remote agent's row sits under m2-mbp, the local one under u,
+        // and the shell whose host is m2-mbp follows the same band, after
+        // the band's agents.
+        let under = |band: &str| -> Vec<String> {
+            let mut out: Vec<String> = Vec::new();
+            let mut in_band = false;
+            for r in &rows {
+                match r {
+                    Row::Group { title, .. } => in_band = title == band,
+                    Row::Item { label, card, .. } if in_band && card.is_some() => {
+                        out.push(label.clone())
+                    }
+                    _ => {}
+                }
+            }
+            out
+        };
+        assert_eq!(under("u"), ["local-one"]);
+        assert_eq!(under("m2-mbp"), ["remote-one"]);
+        // The shell row follows its host's band (after the band's agents).
+        let shell_pos = rows
+            .iter()
+            .position(|r| matches!(r, Row::Item { label, card: None, .. } if label == "shell"));
+        let remote_pos = rows
+            .iter()
+            .position(|r| matches!(r, Row::Item { label, .. } if label == "remote-one"));
+        let m2 = rows
+            .iter()
+            .position(|r| matches!(r, Row::Group { title, .. } if title == "m2-mbp"));
+        assert!(m2 < remote_pos.unwrap());
+        assert!(remote_pos.unwrap() < shell_pos.unwrap());
     }
 }

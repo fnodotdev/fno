@@ -300,6 +300,19 @@ impl Launch {
 
     /// Open (or re-open) the panel: a fresh attempt's phase, the task row
     /// focused, and `kind` set when the opener named one.
+    /// Preset the project row to one workspace's canonical cwd, so a New
+    /// worker pick from a workspace header starts there. The cwd stays a
+    /// candidate: refresh_projects re-adds the workspaces' cwds anyway.
+    pub(crate) fn preset_project(&mut self, cwd: &str) {
+        if cwd.is_empty() {
+            return;
+        }
+        self.project = cwd.to_string();
+        if !self.projects.iter().any(|p| p == cwd) {
+            self.projects.push(cwd.to_string());
+        }
+    }
+
     pub(crate) fn open(&mut self, kind: Option<Kind>) {
         if let Some(k) = kind {
             self.kind = k;
