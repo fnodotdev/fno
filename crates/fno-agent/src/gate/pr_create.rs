@@ -936,7 +936,7 @@ fn record_docs_pr(cwd: &Path, body_file: &str) {
         return;
     };
     let node_id = crate::target_orient::read_manifest(cwd).and_then(|m| {
-        crate::backlog::row_facts::str_field(&m, "input")
+        crate::target_orient::manifest_get(&m, "input")
             .map(str::to_string)
             .filter(|s| !s.is_empty())
     });

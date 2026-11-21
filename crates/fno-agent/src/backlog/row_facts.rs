@@ -70,6 +70,10 @@ pub(crate) fn int_field(row: &Value, key: &str) -> Option<i64> {
     row.get(key).and_then(Value::as_i64)
 }
 
+pub(crate) fn int_field_in(map: &Map<String, Value>, key: &str) -> Option<i64> {
+    map.get(key).and_then(Value::as_i64)
+}
+
 pub(crate) fn list_field<'a>(row: &'a Value, key: &str) -> &'a [Value] {
     row.get(key)
         .and_then(Value::as_array)

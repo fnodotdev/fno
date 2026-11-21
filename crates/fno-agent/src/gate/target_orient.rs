@@ -69,6 +69,11 @@ pub fn read_manifest(project_root: &Path) -> Option<BTreeMap<String, String>> {
     }
 }
 
+/// One manifest field, read by key.
+pub fn manifest_get(manifest: &BTreeMap<String, String>, key: &str) -> Option<&str> {
+    manifest.get(key).map(String::as_str)
+}
+
 /// The session manifest path: the worktree slice of the space when that
 /// exists, else the pre-space checkout manifest (the Python read's exact
 /// order: space first when present, legacy fallback when not).

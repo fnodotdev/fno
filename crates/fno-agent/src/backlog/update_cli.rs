@@ -2089,7 +2089,7 @@ fn apply_mutators(
                 let Some(map) = item.as_object_mut() else {
                     continue;
                 };
-                if crate::backlog::row_facts::int_field(map, "number") == Some(num) {
+                if crate::backlog::row_facts::int_field_in(map, "number") == Some(num) {
                     for (k, val) in entry.clone() {
                         map.insert(k, val);
                     }
