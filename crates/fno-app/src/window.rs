@@ -45,7 +45,7 @@ use fno::proto::chat_event::SessionKey;
 use fno::proto::{self, ClientMsg, Command, Frame, MouseEvent, MouseKind};
 use fno::tree::Rect;
 
-actions!(fno_app, [KeyboardShortcuts, GoTo, OpenSettings]);
+actions!(fno_app, [KeyboardShortcuts, GoTo, OpenSettings, ShowHosts]);
 
 /// What fills the main area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, Serialize, Deserialize)]
@@ -2595,6 +2595,19 @@ impl Root {
         self.open_settings_with(fonts, cx);
     }
 
+    /// The footer's host button: regroup the left list by machine so the
+    /// fleet's hosts sit in view, and back out again on a second click.
+    /// The connect flow itself lives in the mux; this is the app's own
+    /// hosts surface.
+    fn show_hosts(&mut self, _: &ShowHosts, _: &mut Window, cx: &mut Context<Self>) {
+        fno::ui_usage::click("app", "hosts_open");
+        self.group_by = match self.group_by {
+            GroupBy::Machine => GroupBy::Workspaces,
+            _ => GroupBy::Machine,
+        };
+        cx.notify();
+    }
+
     /// The open half: rows from the live config, fleet and the given
     /// faces. The shot path calls it with pre-measured faces.
     pub(super) fn open_settings_with(&mut self, fonts: Vec<String>, cx: &mut Context<Self>) {
@@ -3867,6 +3880,7 @@ impl Render for Root {
             .on_action(cx.listener(Self::toggle_sheet))
             .on_action(cx.listener(Self::toggle_goto))
             .on_action(cx.listener(Self::toggle_settings))
+            .on_action(cx.listener(Self::show_hosts))
             // A click on a row, a tab or a view name lands on no focusable
             // element and would leave the window with no key focus.
             .on_any_mouse_down(cx.listener(|root, _, window, _| window.focus(&root.focus)))

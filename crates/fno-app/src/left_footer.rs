@@ -1,6 +1,7 @@
-//! The left pane's foot: the account on the left and a Settings gear on
-//! the right. It sits below the scroll list, outside it, so it never
-//! scrolls away. No machine chip: Machines stay in the list.
+//! The left pane's foot: the account on the left, and a host button and
+//! a Settings gear on the right. It sits below the scroll list, outside
+//! it, so it never scrolls away. No machine chip: Machines stay in the
+//! list.
 
 use std::sync::OnceLock;
 
@@ -8,7 +9,7 @@ use gpui::{div, prelude::*, px, rgb, Div};
 
 use super::palette::Palette;
 use super::ui::{self, Role};
-use super::window::OpenSettings;
+use super::window::{OpenSettings, ShowHosts};
 
 static NAME: OnceLock<Option<String>> = OnceLock::new();
 
@@ -31,7 +32,8 @@ pub fn chip_name(read: Option<&str>) -> &str {
         .unwrap_or("You")
 }
 
-/// The footer row: a round initial and the name, then the gear.
+/// The footer row: a round initial and the name, then the host and
+/// gear buttons.
 pub(super) fn render(p: &Palette) -> Div {
     let name = chip_name(NAME.get().and_then(|n| n.as_deref())).to_string();
     let initial = name
@@ -63,6 +65,34 @@ pub(super) fn render(p: &Palette) -> Div {
                 .child(ui::text(initial, Role::Label, p)),
         )
         .child(ui::clamp(name, Role::Name, p))
+        // The host button: a drawn monitor, monochrome so it takes both
+        // palettes the way the gear does. One click regroups the list by
+        // machine; the connect flow itself lives in the mux.
+        .child(
+            ui::clickable(
+                div()
+                    .id("left-footer-hosts")
+                    .flex_none()
+                    .p(px(3.0))
+                    .rounded(px(4.0))
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap(px(1.0)),
+                p,
+            )
+            .on_click(|_, window, cx| window.dispatch_action(Box::new(ShowHosts), cx))
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(12.0))
+                    .h(px(9.0))
+                    .border_1()
+                    .border_color(rgb(p.muted))
+                    .rounded(px(2.0)),
+            )
+            .child(div().flex_none().w(px(6.0)).h(px(1.0)).bg(rgb(p.muted))),
+        )
         .child(
             div()
                 .id("left-footer-settings")
