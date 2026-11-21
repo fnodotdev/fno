@@ -157,13 +157,19 @@ fn the_gate_never_targets_a_docs_twin_row() {
     let tmp = TempDir::new().unwrap();
     let cwd = tmp.path();
     fs::create_dir_all(cwd.join(".fno")).unwrap();
-    let state = state_root(cwd);
-    fs::create_dir_all(&state).unwrap();
+    // The config writes BEFORE state_root reads it: a lane without the run
+    // door's FNO_STATE_DIR pin resolves the state root from this file.
+    let state = tmp.path().join("state");
     fs::write(
         cwd.join(".fno/config.toml"),
-        "[review]\nrequired_bots = [\"chatgpt-codex-connector\"]\n",
+        format!(
+            "state_dir = \"{}\"\n[review]\nrequired_bots = [\"chatgpt-codex-connector\"]\n",
+            state.display()
+        ),
     )
     .unwrap();
+    let state = state_root(cwd);
+    fs::create_dir_all(&state).unwrap();
     let graph = fno_agent::runtime::state_layout::graph_anchor(&state);
     let transcript = cwd.join("transcript.jsonl");
     fs::write(
