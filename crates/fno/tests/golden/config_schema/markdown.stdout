@@ -76,6 +76,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `telemetry.otlp.endpoint` | str | `` | advanced | OTLP collector URL, http(s); `/v1/logs` is appended when absent. |
 | `telemetry.otlp.headers_env` | str | `FNO_OTLP_HEADERS` | advanced | Env var holding the export auth headers as `name=value,...`. |
 | `telemetry.otlp.log_content` | bool | `false` | advanced | Export event titles as log text (default off: only the event kind). |
+| `telemetry.otlp.forward_requests` | bool | `false` | advanced | Also forward the masked api_request records from otel.db through the export arm (needs telemetry.otlp.enabled). |
 | `telemetry.eval_events.enabled` | bool | `false` | advanced | Send each eval run to PostHog as an event (default off). |
 | `telemetry.eval_events.host` | str | `https://us.i.posthog.com` | advanced | PostHog ingest host, https only. |
 | `telemetry.eval_events.token_env` | str | `FNO_POSTHOG_PROJECT_TOKEN` | advanced | Env var holding the PostHog project token. |

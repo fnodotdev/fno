@@ -193,6 +193,8 @@ endpoint = ""
 headers_env = "FNO_OTLP_HEADERS"
 # Export event titles as log text (default off: only the event kind).
 log_content = false
+# Also forward the masked api_request records from otel.db through the export arm (needs telemetry.otlp.enabled).
+forward_requests = false
 
 [telemetry.eval_events]
 # Send each eval run to PostHog as an event (default off).
