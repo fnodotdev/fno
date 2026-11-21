@@ -4122,7 +4122,7 @@ pub(crate) mod scope_tests {
             concat!(
                 "{\"ts\":\"2026-08-29T19:00:00Z\",\"type\":\"operator_decision\",\"source\":\"test\",",
                 "\"data\":{\"decision_id\":\"d-e1e1e111\",\"subject\":\"evidence-seed\",",
-                "\"decision\":\"The evidence seed.\",\"authority_source\":\"operator\"}}\n"
+                "\"decision\":\"The evidence seed.\",\"authority_source\":\"chat_attested\"}}\n"
             ),
         )
         .expect("writes");
