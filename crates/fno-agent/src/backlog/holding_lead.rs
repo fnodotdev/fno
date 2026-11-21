@@ -274,14 +274,9 @@ pub(crate) fn stamp_at_close(node: &Value, rows: &[Value]) -> Value {
                 let cwd = text_at(node, "cwd")
                     .map(PathBuf::from)
                     .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-                match journal_events(&cwd, scope) {
-                    Some(events) => {
-                        let now =
-                            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-                        Value::Array(holders_over_window(&events, s_at(node, "created_at"), &now))
-                    }
-                    None => Value::Null,
-                }
+                let events = journal_events(&cwd, scope);
+                let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+                epic_holders_field(events.as_deref(), s_at(node, "created_at"), &now)
             }
             None => Value::Null,
         };
@@ -290,6 +285,16 @@ pub(crate) fn stamp_at_close(node: &Value, rows: &[Value]) -> Value {
         }
     }
     stamp
+}
+
+/// The epic's `holders` field: the journal holders over the window. A
+/// failed walk answers null (unmeasured); a walk with no window rows
+/// answers an empty list (measured empty).
+fn epic_holders_field(events: Option<&[Value]>, created_at: Option<&str>, done: &str) -> Value {
+    match events {
+        Some(events) => Value::Array(holders_over_window(events, created_at, done)),
+        None => Value::Null,
+    }
 }
 
 /// The batch backfill: every done row without a stamp gets `(id, stamp)`
@@ -326,12 +331,11 @@ pub(crate) fn derive_batch(ctx: &mut DeriveCtx, rows: &[Value]) -> Vec<(String, 
         );
         if s_at(node, "type") == Some("epic") {
             let holders = match (scope.as_deref(), done_at) {
-                (Some(scope), Some(done)) => ctx
-                    .events_for(scope)
-                    .map(|events| {
-                        Value::Array(holders_over_window(events, s_at(node, "created_at"), done))
-                    })
-                    .unwrap_or(Value::Null),
+                (Some(scope), Some(done)) => epic_holders_field(
+                    ctx.events_for(scope).map(|v| v.as_slice()),
+                    s_at(node, "created_at"),
+                    done,
+                ),
                 _ => Value::Null,
             };
             if let Some(obj) = stamp.as_object_mut() {
@@ -343,9 +347,6 @@ pub(crate) fn derive_batch(ctx: &mut DeriveCtx, rows: &[Value]) -> Vec<(String, 
     out
 }
 
-/// The single-row backfill convenience, over its own one-row context. The
-/// maintenance leg uses `derive_batch` so a pass pays one journal scan per
-/// distinct scope, never one per node.
 #[cfg(test)]
 mod tests {
     use super::*;
