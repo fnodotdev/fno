@@ -170,17 +170,25 @@ pub(super) fn workspace_detail(s: &SquadMeta) -> String {
 /// cmd-1 picks the first.
 pub(super) fn agent_actions(root: &Root) -> Vec<Action> {
     let now = fno::app_api::digest_overlay::now_secs();
-    rows(&root.layout, &root.board, now, &root.folds, None, None)
-        .into_iter()
-        .filter_map(|r| match r {
-            Row::Item {
-                card: Some(_),
-                action,
-                ..
-            } => action,
-            _ => None,
-        })
-        .collect()
+    rows(
+        &root.layout,
+        &root.board,
+        now,
+        &root.folds,
+        root.group_by,
+        None,
+        None,
+    )
+    .into_iter()
+    .filter_map(|r| match r {
+        Row::Item {
+            card: Some(_),
+            action,
+            ..
+        } => action,
+        _ => None,
+    })
+    .collect()
 }
 
 /// One shell pane's sidebar row: the pane label and its cwd, `$HOME` cut to
@@ -1195,6 +1203,7 @@ pub(super) fn render(
         &root.board,
         now_secs,
         &root.folds,
+        root.group_by,
         shown,
         launched,
     );
