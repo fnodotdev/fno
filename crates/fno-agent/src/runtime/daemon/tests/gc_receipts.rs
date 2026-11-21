@@ -809,6 +809,9 @@ fn idle_exit_fires_on_terminal_rows_with_no_live_worker() {
     // The fail-safe side: an unreadable registry is an absence with two
     // explanations, and the daemon must stay resident rather than exit on
     // a transient read failure (the old code exited: unwrap_or(true)).
+    std::fs::remove_dir_all(home.root()).ok();
+    let home = short_home("idle-unreadable");
+    home.ensure_root().unwrap();
     crate::registry_store::seed_raw(&home.registry_json(), "not json at all{");
     assert!(
         !no_live_worker(&home),
