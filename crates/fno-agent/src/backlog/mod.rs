@@ -1922,6 +1922,33 @@ pub(crate) fn read_entries_where_defaulted_no_overlay(
     query_rows(&read_connection(graph)?, query, Some(keep_malformed), false)
 }
 
+/// One read transaction's view of the graph for a writer that plans over it:
+/// the version stamp, each row's write count, the raw export the store diffs
+/// against, and the defaulted rows the writer plans over. One transaction
+/// keeps all four describing the same store state.
+pub(crate) struct SnapshotRead {
+    pub(crate) version: String,
+    pub(crate) row_versions: std::collections::BTreeMap<String, i64>,
+    pub(crate) raw: Vec<Value>,
+    pub(crate) rows: Vec<Value>,
+}
+
+pub(crate) fn read_snapshot_rows(graph: &Path) -> Result<SnapshotRead, StoreDbError> {
+    let connection = read_connection(graph)?;
+    let transaction = connection.unchecked_transaction()?;
+    let version = meta(&transaction, "version")?.ok_or("SQLite graph has no version")?;
+    let row_versions = nodes::versions(&transaction, None)?;
+    let query = RowQuery::default();
+    let raw = query_rows(&transaction, &query, None, true)?;
+    let rows = query_rows(&transaction, &query, Some(false), true)?;
+    Ok(SnapshotRead {
+        version,
+        row_versions,
+        raw,
+        rows,
+    })
+}
+
 /// The old whole-export enumeration, without materializing any node bodies.
 pub fn row_ordinals(graph: &Path) -> Result<std::collections::HashMap<String, i64>, StoreDbError> {
     let connection = read_connection(graph)?;

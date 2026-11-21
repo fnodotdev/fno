@@ -2852,20 +2852,26 @@ fn locked_mutate_flavored(
     commit_prepared(path, prepared, timeout, before_publish)
 }
 
-/// A caller's own read of the store, taken in the order a rebased publish
-/// needs: row write counts, then the version stamp, then the rows.
+/// A caller's own read of the store: the version stamp, row write counts and
+/// rows all come from one read transaction.
 pub struct MutateSnapshot {
     pub rows: Vec<Value>,
+    raw: Vec<Value>,
     row_versions: std::collections::BTreeMap<String, i64>,
 }
 
 /// Read the stamp and the rows a [`locked_mutate_snapshot`] call publishes
 /// over. The stamp is the `base_version` of the matching [`MutateInput`].
 pub fn read_snapshot(path: &Path) -> Result<(String, MutateSnapshot), StoreError> {
-    let row_versions = crate::backlog::row_versions(path, None).map_err(StoreError::Db)?;
-    let base = base_version(path)?;
-    let rows = read_rows(path)?;
-    Ok((base, MutateSnapshot { rows, row_versions }))
+    let read = crate::backlog::read_snapshot_rows(path).map_err(StoreError::Db)?;
+    Ok((
+        read.version,
+        MutateSnapshot {
+            rows: read.rows,
+            raw: read.raw,
+            row_versions: read.row_versions,
+        },
+    ))
 }
 
 /// [`locked_mutate`] for a writer that planned over `snapshot` and passes the
@@ -2931,7 +2937,7 @@ fn prepare_mutate(
     // two reads surfaces as Conflict and the caller retries, the same
     // surface a stale base_version already produced.
     let (row_versions, begin_version, raw) = match snapshot {
-        Some(snapshot) => (snapshot.row_versions, base_version.clone(), snapshot.rows),
+        Some(snapshot) => (snapshot.row_versions, base_version.clone(), snapshot.raw),
         None => {
             let row_versions = crate::backlog::row_versions(path, None).map_err(StoreError::Db)?;
             let begin_version = crate::backlog::version(path).map_err(StoreError::Db)?;

@@ -16,7 +16,7 @@ fn node(id: &str) -> Value {
         "slug": format!("slug-{id}"),
         "title": format!("Node {id}"),
         "type": "feature",
-        "status": "ready",
+        "status": "idea",
         "priority": "p2",
         "details": "d",
     })
@@ -28,7 +28,7 @@ fn node_under(id: &str, parent: &str) -> Value {
         "slug": format!("slug-{id}"),
         "title": format!("Node {id}"),
         "type": "feature",
-        "status": "ready",
+        "status": "idea",
         "priority": "p2",
         "details": "d",
         "parent": parent,
