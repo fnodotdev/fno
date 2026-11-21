@@ -74,13 +74,12 @@ esac"#,
 
 /// The node row the store holds: only a docs twin, or a code row beside it.
 fn node_row(id: &str, prs: Value) -> Value {
-    let mut row = json!({
+    json!({
         "id": id, "slug": id, "title": id, "type": "feature",
         "status": "in_progress", "priority": "p2", "domain": "code",
         "created_at": "2026-11-21T00:00:00+00:00",
-    });
-    row["additional_prs"] = prs;
-    row
+        "additional_prs": prs,
+    })
 }
 
 fn twin_row() -> Value {
@@ -219,7 +218,8 @@ fn the_gate_never_targets_a_docs_twin_row() {
         &graph,
         &[node_row(
             "x-twin",
-            json!([twin_row()[0].clone(), code_row()[0].clone()]),
+            json!([{"number": 265, "url": "https://github.com/footnote-sh/fno-web/pull/265", "note": "docs"},
+                   {"number": 100, "url": "https://github.com/fnodotdev/fno/pull/100"}]),
         )],
     )
     .unwrap();
