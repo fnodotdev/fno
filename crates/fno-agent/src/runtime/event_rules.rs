@@ -1711,10 +1711,11 @@ mod tests {
             .filter(|f| f.rule == "lead_idle_pick_unanswered")
             .collect();
         assert_eq!(blocks.len(), 1, "{fires:?}");
+        let block = blocks.first().expect("the idle pick block fires");
         assert!(
-            blocks[0].reason.contains("x-idle1"),
+            block.reason.contains("x-idle1"),
             "the reason names the pick command: {}",
-            blocks[0].reason
+            block.reason
         );
     }
 

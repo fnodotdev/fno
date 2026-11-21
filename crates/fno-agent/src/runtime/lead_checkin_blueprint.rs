@@ -702,11 +702,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            reading["seat_leads"],
-            json!([{"scope": "x-eSeat", "children": ["x-seat1"]}]),
+            reading.get("seat_leads"),
+            Some(&json!([{"scope": "x-eSeat", "children": ["x-seat1"]}])),
             "{reading}"
         );
-        assert_eq!(reading["target_ready"], json!(["x-own1"]), "{reading}");
+        assert_eq!(
+            reading.get("target_ready"),
+            Some(&json!(["x-own1"])),
+            "{reading}"
+        );
         assert_eq!(
             reading["skips"],
             json!([{"id": "x-seat1",
