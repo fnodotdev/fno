@@ -436,7 +436,7 @@ fn lower_op(
             }
         },
         ("has_brief", update_ops::Op::Set) => a.has_brief = Some(value),
-        ("scope", update_ops::Op::Set) => a.audience = Some(value),
+        ("audience", update_ops::Op::Set) => a.audience = Some(value),
         ("why", update_ops::Op::Set) => a.why = Some(value),
         ("done_means", update_ops::Op::Set) => a.done_means = Some(value),
         ("job", update_ops::Op::Set) => a.job = Some(value),
@@ -2641,6 +2641,18 @@ mod tests {
                     assert_eq!(message, format!("Error: {flag} is retired. Use {form}."));
                 }
             }
+        }
+    }
+
+    #[test]
+    fn an_audience_token_reaches_the_audience_field() {
+        let argv: Vec<String> = ["x-aaaa1111", "audience=user", "why=the customer changed"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        match UpdateArgs::parse(&argv) {
+            ParsedUpdate::Args(a) => assert_eq!(a.audience.as_deref(), Some("user")),
+            ParsedUpdate::Refusal { message, .. } => panic!("audience= must parse: {message}"),
         }
     }
 
