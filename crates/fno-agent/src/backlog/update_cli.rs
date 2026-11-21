@@ -1246,7 +1246,10 @@ fn reparents_or_retypes(before: &[Value], after: &[Value], node_id: &str) -> boo
     let (Some(old), Some(new)) = (find(before), find(after)) else {
         return true;
     };
-    old["parent"] != new["parent"] || old["type"] != new["type"]
+    let (Some(old), Some(new)) = (RowFacts::of(&old), RowFacts::of(&new)) else {
+        return true;
+    };
+    old.parent().value() != new.parent().value() || old.kind().value() != new.kind().value()
 }
 
 enum MutationPlan {
