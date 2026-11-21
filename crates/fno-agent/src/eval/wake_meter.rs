@@ -177,12 +177,10 @@ mod tests {
         assert_eq!(result["user"], 3);
         assert!((result["ratio"].as_f64().unwrap() - 3.333_333).abs() < 1e-5);
         assert_eq!(result["over"], true);
-    }
-
-    /// A held-park heartbeat turn counts neither machine nor user: a lead
-    /// whose only turns are heartbeats reads machine 0 and no OVER flag.
-    #[test]
-    fn a_held_park_heartbeat_turn_leaves_the_machine_count_out() {
+        // The held-park exclusion, same counting contract: a heartbeat turn
+        // is neither machine nor user, so a lead whose only turns are
+        // heartbeats reads machine 0; only machine-provenance turns skip,
+        // so a typed turn quoting the marker still counts as user.
         #[derive(serde::Deserialize, Default)]
         struct MeterView {
             #[serde(default)]
@@ -192,52 +190,49 @@ mod tests {
             #[serde(default)]
             over: Option<bool>,
         }
-        let lines = vec![
+        let park_lines = vec![
             row(
                 "Automatic lead-wake from the fno daemon (held-park heartbeat, 1442m since the last beat): every row in scope still waits on a question, so the cadence wake sleeps. Run your check-in to re-stamp the park or start work: fno agent hq checkin.",
-                "2026-09-24T12:00:00Z",
+                "2026-09-24T12:06:00Z",
                 true,
             ),
             row(
                 "Automatic lead-wake from the fno daemon: no check-in beat journaled for 51m and the beat is due at 55m. Run your check-in now: fno agent hq checkin.",
-                "2026-09-24T12:05:00Z",
+                "2026-09-24T12:07:00Z",
                 true,
             ),
         ];
         let view =
             |result: Value| -> MeterView { serde_json::from_value(result).unwrap_or_default() };
-        let result = view(wake_meter_text("claude", &lines.join("\n"), None).unwrap());
+        let parked = view(wake_meter_text("claude", &park_lines.join("\n"), None).unwrap());
         assert_eq!(
-            result.machine,
+            parked.machine,
             Some(1),
             "only the non-heartbeat wake counts"
         );
-        assert_eq!(result.user, Some(0));
+        assert_eq!(parked.user, Some(0));
         assert_eq!(
-            result.over,
+            parked.over,
             Some(true),
             "a real wake with no typed turn still flags OVER"
         );
-        // A typed turn that QUOTES the wake's marker phrase still counts as
-        // user: the marker is the wake text's own token seam, not a bare
-        // phrase any reply can carry.
-        let mut lines = lines;
-        lines.push(row(
+        let mut quoted_lines = park_lines;
+        quoted_lines.push(row(
             "The daemon said \"daemon (held-park heartbeat, 1442m since the last beat)\" but a question just landed; taking the beat now.",
-            "2026-09-16T12:09:00Z",
+            "2026-09-24T12:09:00Z",
             false,
         ));
-        let result = view(wake_meter_text("claude", &lines.join("\n"), None).unwrap());
+        let quoted = view(wake_meter_text("claude", &quoted_lines.join("\n"), None).unwrap());
         assert_eq!(
-            result.machine,
+            quoted.machine,
             Some(1),
             "the quoted phrase stays out of machine"
         );
         assert_eq!(
-            result.user,
+            quoted.user,
             Some(1),
             "the quoted phrase still counts as a typed turn"
         );
-        assert_eq!(result.over, Some(false));
+        assert_eq!(quoted.over, Some(false));
     }
 }

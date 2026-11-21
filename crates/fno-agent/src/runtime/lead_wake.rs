@@ -742,7 +742,7 @@ mod tests {
     }
 
     #[test]
-    fn the_operator_lane_waits_for_a_second_missed_beat_in_a_row() {
+    fn the_wake_ladder_and_the_parked_gate_walk_together() {
         let teams = vec![team("x-aaa", 2, "candor", "s-l2a")];
         let beat = 3300;
         let now = 1_000_000_000;
@@ -818,37 +818,20 @@ mod tests {
             plans.is_empty(),
             "one operator notice per lapse; a fresh check-in re-arms"
         );
-    }
-
-    fn park(ids: &[&str]) -> BTreeMap<String, ParkState> {
-        BTreeMap::from([(
+        // The parked gate walks the same map: a held park sleeps inside the
+        // heartbeat window, an unreadable recheck also sleeps (fail-closed),
+        // a moved set lifts in either direction, the lift's receipt holds
+        // the next pass, and the daily heartbeat plans with the marker.
+        let parks = BTreeMap::from([(
             "x-aaa".to_string(),
             ParkState {
-                ids: ids.iter().map(|s| s.to_string()).collect(),
+                ids: vec!["q-1".to_string(), "q-2".to_string()],
             },
-        )])
-    }
-
-    fn parked_team() -> (Vec<Team>, BTreeMap<String, Option<i64>>, i64) {
-        let beat = 3300;
-        let now = 1_000_000_000;
-        let last = now - 4000; // inside the cadence wake window
-        (
-            vec![team("x-aaa", 2, "candor", "s-l2a")],
-            BTreeMap::from([("x-aaa".to_string(), Some(last))]),
-            beat,
-        )
-    }
-
-    /// AC1: a held park inside the heartbeat window plans no wake, and an
-    /// unreadable recheck also plans none (fail-closed; the heartbeat
-    /// bounds the stall).
-    #[test]
-    fn a_held_park_sleeps_through_the_cadence_wake() {
-        let (teams, beats, beat) = parked_team();
-        let now = 1_000_000_000;
-        let parks = park(&["q-1", "q-2"]);
-        let mut held = |_scope: &str, _park: &ParkState| -> ParkVerdict { ParkVerdict::Held };
+        )]);
+        let mut held = |_scope: &str, park: &ParkState| -> ParkVerdict {
+            assert!(park.ids.contains(&"q-1".to_string()));
+            ParkVerdict::Held
+        };
         let plans = plan_wakes(
             &teams,
             &beats,
@@ -877,18 +860,9 @@ mod tests {
             plans.is_empty(),
             "a stale attention read must not page a parked lead every tick"
         );
-    }
-
-    /// AC2: a question leaving the stamped set lifts the park in the same
-    /// pass; the lift rides the receipt ladder, so one wake per lapse holds.
-    #[test]
-    fn an_answered_question_lifts_the_park_within_one_tick() {
-        let (teams, beats, beat) = parked_team();
-        let now = 1_000_000_000;
-        let parks = park(&["q-1", "q-2"]);
         let mut lifted = |scope: &str, park: &ParkState| -> ParkVerdict {
             assert_eq!(scope, "x-aaa");
-            assert!(park.ids.contains(&"q-1".to_string()));
+            assert!(park.ids.contains(&"q-2".to_string()));
             ParkVerdict::Lifted
         };
         let plans = plan_wakes(
@@ -905,7 +879,6 @@ mod tests {
             !plans.first().expect("the lift plans").park_beat,
             "a lift wake carries the normal wake text, not the heartbeat"
         );
-        // The lift's receipt holds later passes until the beat moves.
         let last = beats.get("x-aaa").copied().flatten().expect("beat ts");
         let wakes = BTreeMap::from([("x-aaa".to_string(), last + 400)]);
         let plans = plan_wakes(&teams, &beats, &wakes, &parks, beat, now + 900, &mut lifted);
@@ -913,16 +886,10 @@ mod tests {
             plans.is_empty(),
             "one lift wake per lapse; the receipt holds the next pass"
         );
-    }
-
-    /// A new question in scope moves the set the other way and lifts too.
-    #[test]
-    fn a_new_question_moves_the_set_and_lifts_the_park() {
-        let (teams, beats, beat) = parked_team();
-        let now = 1_000_000_000;
-        let parks = park(&["q-1"]);
+        // A set that grew lifts too: the parked premise "nothing changed"
+        // no longer holds in either direction.
         let mut grew = |_scope: &str, park: &ParkState| -> ParkVerdict {
-            assert_eq!(park.ids.len(), 1);
+            assert_eq!(park.ids.len(), 2);
             ParkVerdict::Lifted
         };
         let plans = plan_wakes(
@@ -934,28 +901,17 @@ mod tests {
             now,
             &mut grew,
         );
-        assert_eq!(
-            plans.len(),
-            1,
-            "a moved set lifts the park in either direction"
-        );
-    }
-
-    /// Past the heartbeat window a parked lead plans again, and the wake
-    /// carries the held-park marker so the meter leaves the re-park out.
-    #[test]
-    fn the_daily_heartbeat_wakes_a_still_parked_lead() {
-        let (teams, beats, beat) = parked_team();
-        let now = 1_000_000_000 + PARK_HEARTBEAT_SECS + 600;
-        let parks = park(&["q-1"]);
-        let mut held = |_scope: &str, _park: &ParkState| -> ParkVerdict { ParkVerdict::Held };
+        assert_eq!(plans.len(), 1, "a moved set lifts the park");
+        // Past the heartbeat window the parked lead plans again, and the
+        // wake carries the held-park marker the wake meter excludes.
+        let later = now + PARK_HEARTBEAT_SECS + 600;
         let plans = plan_wakes(
             &teams,
             &beats,
             &BTreeMap::new(),
             &parks,
             beat,
-            now,
+            later,
             &mut held,
         );
         assert_eq!(plans.len(), 1, "the daily heartbeat wakes a parked lead");
