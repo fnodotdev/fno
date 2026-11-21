@@ -397,7 +397,7 @@ pub fn test_send(kind: &str, row: &Value, token: &str, http: &mut dyn Http) -> S
 /// Write `key=value` to the env file, replacing an existing line, mode
 /// 0600; `None` removes the line instead. The new file lands beside it and
 /// renames over it, so a failed write never loses the other keys.
-fn write_env(path: &Path, key: &str, value: Option<&str>) -> std::io::Result<()> {
+pub(crate) fn write_env(path: &Path, key: &str, value: Option<&str>) -> std::io::Result<()> {
     let old = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
