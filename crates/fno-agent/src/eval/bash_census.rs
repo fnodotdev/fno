@@ -15,7 +15,6 @@
 //! guessed one.
 
 use crate::claude_ask::claude_cwd_slug;
-use crate::claude_drive::claude_projects_dir;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -354,7 +353,7 @@ mod tests {
         assert_eq!(rc, 0);
 
         let slug = claude_cwd_slug(&fx.cwd);
-        let dir = claude_projects_dir().join(&slug);
+        let dir = crate::claude_drive::claude_projects_dir().join(&slug);
         let files = qualifying_files(&dir, 365);
         let mut census = Census {
             files: files.len(),

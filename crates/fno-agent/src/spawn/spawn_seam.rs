@@ -572,7 +572,7 @@ pub fn stage_evals_claude_config() -> Option<PathBuf> {
                 .and_then(|m| now.duration_since(m).ok())
                 .is_some_and(|age| age >= STAGE_MIN_AGE);
             if stale {
-                let _ = std::fs::remove_file(entry.path());
+                std::fs::remove_file(entry.path()).ok();
             }
         }
     }
@@ -589,9 +589,9 @@ pub fn stage_evals_claude_config() -> Option<PathBuf> {
         };
         let tmp = dir.join(format!("{name}.stage-{tag}"));
         if std::fs::write(&tmp, &bytes).is_ok() {
-            let _ = std::fs::rename(&tmp, dir.join(name));
+            std::fs::rename(&tmp, dir.join(name)).ok();
         } else {
-            let _ = std::fs::remove_file(&tmp);
+            std::fs::remove_file(&tmp).ok();
         }
     }
     for name in MIRRORED_CONTEXT_ENTRIES {
@@ -606,7 +606,7 @@ pub fn stage_evals_claude_config() -> Option<PathBuf> {
         {
             continue;
         }
-        let _ = std::os::unix::fs::symlink(&from, &to);
+        std::os::unix::fs::symlink(&from, &to).ok();
     }
     Some(dir)
 }

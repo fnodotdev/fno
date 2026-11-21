@@ -197,7 +197,7 @@ mod tests {
         std::fs::create_dir_all(&sandbox).unwrap();
         let dirs = claude_projects_dirs();
         assert_eq!(dirs.len(), 2);
-        assert_eq!(dirs[1], sandbox);
+        assert_eq!(dirs.get(1), Some(&sandbox));
         match previous {
             Some(v) => unsafe { std::env::set_var("FNO_STATE_DIR", v) },
             None => unsafe { std::env::remove_var("FNO_STATE_DIR") },
