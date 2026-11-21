@@ -84,7 +84,7 @@ An epic stays small enough to finish. Its finish line is set at the start. So ne
 
 Rank is not yours. It is the user's pin. `fno backlog rank` refuses agent sessions. To put a row next, set `priority=p0`. This is bounded and receipted. It appears as a split vote in `fno backlog demand`.
 
-Scoping gates dispatch: filing takes the coarse audience and the why, and `done-means` (plus a customer node's `customer:<persona>`) must be on the node by the move to ready, a blueprint, or target start. Target start refuses an unscoped node and names the flag, so set the facts when you scope the node, not at spawn time: `fno backlog update <id> --set done-means="<what done reads as>"`.
+Scoping gates dispatch. Filing takes the coarse audience and the why. `done-means` and a customer node's `customer:<persona>` must be on the node by the move to ready, a blueprint, or target start. When you scope the node, set the facts there: `fno backlog update <id> --set done-means="<what done reads as>"`. Target start refuses an unscoped node and names the flag.
 
 Then read [the fleet FAQ](../../../docs/fleet-faq.md) for one thing only: an entry whose `Graduates to:` line landed since your last check-in. Move it to Retired in a PR, naming the PR that closed it. Retirement normally rides the PR that closes the gap, so it needs no beat. This check is the backstop, for a gap somebody closed without reading that file.
 
