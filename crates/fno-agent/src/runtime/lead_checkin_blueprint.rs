@@ -714,7 +714,6 @@ mod tests {
             "{reading}"
         );
         let _ = std::fs::remove_dir_all(&dir);
-        l0_seat_legs();
     }
 
     /// The seat legs: the L0 integration, the pure walk, and the rendered
@@ -816,6 +815,7 @@ mod tests {
             "{reading}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+        l0_seat_legs();
     }
 
     /// A missing session id fails the reading: it must never read as
