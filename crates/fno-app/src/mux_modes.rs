@@ -4,7 +4,7 @@
 //! chord does the same thing in both front doors. `window.rs` owns the
 //! sockets and the keyboard routing.
 
-use gpui::{div, prelude::*, px, rgb, Div, SharedString, Stateful};
+use gpui::{div, prelude::*, px, rgb, Div, SharedString};
 
 use crate::keys::Key;
 use crate::link::Layout;
@@ -186,7 +186,7 @@ impl RowMenu {
         self.selected = (self.selected as i32 + by).rem_euclid(len.max(1)) as usize;
     }
 
-    pub(super) fn view(&self, root: &Root, cx: &mut gpui::Context<Root>) -> Stateful<Div> {
+    pub(super) fn view(&self, root: &Root, cx: &mut gpui::Context<Root>) -> Div {
         let p = root.palette;
         let rows = self.items.iter().enumerate().map(|(i, (label, _))| {
             let fill = if i == self.selected {
@@ -207,7 +207,7 @@ impl RowMenu {
                 .child(div().text_color(rgb(p.faint)).child(format!("{}", i + 1)))
                 .child(*label)
         });
-        div()
+        let panel = div()
             .id("row-menu")
             .absolute()
             .top(px(ui::TITLE_H + 8.0))
@@ -231,7 +231,19 @@ impl RowMenu {
                     .child(SharedString::from(self.title.clone())),
             )
             .children(rows)
-            .child(ui::kbd("↑↓ move · enter or 1-9 runs · esc closes", &p).px_2())
+            .child(ui::kbd("↑↓ move · enter or 1-9 runs · esc closes", &p).px_2());
+        // A click anywhere off the panel closes the menu.
+        div()
+            .absolute()
+            .inset_0()
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|root, _, _, cx| {
+                    root.row_menu = None;
+                    cx.notify();
+                }),
+            )
+            .child(panel)
     }
 }
 
