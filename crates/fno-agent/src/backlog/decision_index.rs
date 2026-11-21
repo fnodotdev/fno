@@ -554,6 +554,15 @@ pub fn is_user_ruling(row: &Value) -> bool {
 /// Door subjects that name one PR: `merge-grant:<repo>#<n>@<sha>` and kin.
 const PR_DOOR_PREFIXES: &[&str] = &["merge-grant:", "merge-freeze:", "pr-hold:"];
 
+/// Whether the subject names one PR through a door prefix. A per-head door
+/// row is a machine contract the merge and hold gates read, never a policy
+/// law, so the record door's no-conflict gate exempts it: each head's
+/// subject is fresh by construction.
+pub fn is_pr_door_subject(subject: &str) -> bool {
+    let s = subject.trim();
+    PR_DOOR_PREFIXES.iter().any(|p| s.starts_with(p))
+}
+
 /// The repository-scoped PR a subject names, door prefix and head pin cut
 /// first. A bare PR number never proves closure.
 pub fn pr_expiry_ref(subject: Option<&str>) -> Option<Value> {

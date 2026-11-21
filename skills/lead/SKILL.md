@@ -118,9 +118,9 @@ A titled lead answers the open questions in its scope, and escalates only what t
 - **Escalate the deny classes only:** `irreversible`, `money-security`, `outside-reach`, `taste` and `law-change`. Decide and log everything else.
 - **Silence has a default.** Past the deadline, take the recommended option and record it. When the call is irreversible, wait.
 - **A held question is not news.** Report only a new, overdue, or asked-about one.
-- **Record a superuser chat answer.** Use `fno inbox decisions set` for a decision change. Else use `fno inbox decide <node> "<answer>" --authority role --rationale "superuser in chat: <their words>"`.
+- **Record a superuser chat answer.** Read `fno inbox decisions <subject> --lane law --state live --json` first. `single` or `conflict` clears the law door: use `fno inbox decisions set`. Anything else conflicts with nothing. It is a plain decision: `fno inbox decide <node> "<answer>" --authority role --rationale "superuser in chat: <their words>"`. The law door refuses a law that conflicts with nothing and points here.
 
-A titled lead is not the superuser: the `operator` authority is refused on an agent session, and a decision stays superuser tier. Its channels: `fno backlog note <node> <text>` for a row, a [merge hold](references/cli-commands.md#merge-holds) for a merge condition, and `fno inbox decisions set` for a user's durable rule. Read a ruling back with `fno backlog decisions <subject>`.
+A titled lead is not the superuser: the `operator` authority is refused on an agent session, and a decision stays superuser tier. Its channels: `fno backlog note <node> <text>` for a row, a [merge hold](references/cli-commands.md#merge-holds) for a merge condition, and `fno inbox decisions set` for a user's durable rule. When a standing rule conflicts with nothing, record a plain decision: `fno inbox decide <subject> "<decision>" --why "<why>" --expiry never`. Read a ruling back with `fno backlog decisions <subject>`.
 
 ## Dispatch: the check-in list is the work order
 
