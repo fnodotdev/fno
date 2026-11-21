@@ -740,20 +740,82 @@ pub fn decoded_transcript(text: &str) -> String {
 /// delivered-mail header (the sender without its `@`). The transcript receipt
 /// reader's header-side input, beside `legacy_tags`.
 pub fn header_turns(text: &str) -> Vec<Value> {
-    text.lines()
-        .filter_map(|line| {
-            let trimmed = line.trim();
+    delivered_headers(text)
+        .into_iter()
+        .filter(|h| h.line_start)
+        .map(|h| serde_json::json!({"id": h.id, "sender": h.sender}))
+        .collect()
+}
+
+/// One delivered header and the body it carries.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeliveredHeader {
+    /// The sender without its `@`.
+    pub sender: String,
+    pub id: String,
+    /// The same-line tail (the one-line forms), else the lines after the
+    /// header up to the next header or held-release line.
+    pub body: String,
+    /// False when the header sits after typed words on its line: the
+    /// harness glued queued mail onto a typed turn.
+    pub line_start: bool,
+}
+
+/// Every delivered header in `text`, each with its body. A header may open
+/// mid-line after typed words, the shape `typed_part` cuts at.
+pub fn delivered_headers(text: &str) -> Vec<DeliveredHeader> {
+    let mut out: Vec<DeliveredHeader> = Vec::new();
+    let mut body: Vec<&str> = Vec::new();
+    let flush = |out: &mut Vec<DeliveredHeader>, body: &mut Vec<&str>| {
+        if let Some(last) = out.last_mut() {
+            if last.body.is_empty() {
+                last.body = body.join("\n").trim().to_string();
+            }
+        }
+        body.clear();
+    };
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if is_held_release_line(trimmed) || is_held_release_fold_line(trimmed) {
+            flush(&mut out, &mut body);
+            continue;
+        }
+        let found = trimmed.match_indices("`@").map(|(i, _)| i).find_map(|i| {
+            let span = &trimmed[i..];
+            if !is_header_line(span) {
+                return None;
+            }
+            let (inner, tail) = split_header_span(span)?;
+            let (sender, id, _) = header_fields(inner)?;
+            Some((i, sender, id, tail))
+        });
+        let found = found.or_else(|| {
+            // The `name · id` form with no `@` reads only at line start.
             if !is_header_line(trimmed) {
                 return None;
             }
-            let (inner, _) = split_header_span(trimmed)?;
+            let (inner, tail) = split_header_span(trimmed)?;
             let (sender, id, _) = header_fields(inner)?;
-            Some(serde_json::json!({
-                "id": id.to_string(),
-                "sender": sender.trim_start_matches('@').to_string(),
-            }))
-        })
-        .collect()
+            Some((0, sender, id, tail))
+        });
+        match found {
+            Some((at, sender, id, tail)) => {
+                flush(&mut out, &mut body);
+                let tail = tail.trim();
+                let tail = tail.strip_prefix('⏎').unwrap_or(tail).trim();
+                out.push(DeliveredHeader {
+                    sender: sender.trim_start_matches('@').to_string(),
+                    id: id.to_string(),
+                    body: tail.to_string(),
+                    line_start: at == 0,
+                });
+            }
+            None if !out.is_empty() => body.push(line),
+            None => {}
+        }
+    }
+    flush(&mut out, &mut body);
+    out
 }
 
 /// True when `text` holds a real legacy `<fno_mail` open tag (boundary-aware,

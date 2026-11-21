@@ -52,6 +52,94 @@ pub(crate) struct YouItem {
     /// never reached one before the span closed.
     #[serde(default)]
     pub end_reply: String,
+    /// What arrived after this turn's span closed and before the next typed
+    /// turn: worker mail, and the lead's end replies to it.
+    #[serde(default)]
+    pub gap: Vec<GapEntry>,
+}
+
+/// One row of a gap band. Only relay mail counts (fno mail, cross-session,
+/// teammate, native peer, bus rows); a task notification or a harness row
+/// is this session's own machinery and records nothing.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum GapEntry {
+    Mail {
+        ts: String,
+        sender: String,
+        msg_id: String,
+        summary: String,
+    },
+    /// The lead's end reply in a turn mail opened, cut to 400 chars.
+    LeadUpdate { ts: String, text: String },
+}
+
+/// The gap entries one relay row carries: one per delivered header, else
+/// one for the whole row (a legacy tag or a peer row with no header).
+fn mail_entries(text: &str, ts: &str) -> Vec<GapEntry> {
+    let headers = crate::mail_header::delivered_headers(text);
+    if !headers.is_empty() {
+        return headers
+            .into_iter()
+            .map(|h| GapEntry::Mail {
+                ts: ts.to_string(),
+                sender: h.sender,
+                msg_id: h.id,
+                summary: crate::mail_header::summary_of(&h.body),
+            })
+            .collect();
+    }
+    let open_end = text.find('>').map_or(0, |e| e + 1);
+    let sender = ["from", "teammate_id", "from_session"]
+        .iter()
+        .find_map(|a| attr_value(&text[..open_end], a))
+        .unwrap_or_else(|| "peer".to_string());
+    let body = text.get(open_end..).unwrap_or(text);
+    let body = body.split("</").next().unwrap_or(body);
+    vec![GapEntry::Mail {
+        ts: ts.to_string(),
+        sender,
+        msg_id: crate::mail_header::delivered_msg_id(text).unwrap_or_default(),
+        summary: crate::mail_header::summary_of(body),
+    }]
+}
+
+/// `name="value"` inside an open tag, with a boundary before the name.
+fn attr_value(tag: &str, name: &str) -> Option<String> {
+    let needle = format!(" {name}=\"");
+    let at = tag.find(&needle)? + needle.len();
+    let end = tag[at..].find('"')?;
+    Some(tag[at..at + end].to_string()).filter(|v| !v.is_empty())
+}
+
+/// Relay kinds a band counts: another agent speaking.
+fn is_worker_mail(p: Provenance) -> bool {
+    matches!(
+        p,
+        Provenance::Relay(
+            crate::provenance::RelayKind::FnoMail
+                | crate::provenance::RelayKind::CrossSession
+                | crate::provenance::RelayKind::TeammateMessage
+                | crate::provenance::RelayKind::NativePeer
+                | crate::provenance::RelayKind::BusRow
+        )
+    )
+}
+
+/// Where a gap entry lands: the open item, else the newest closed item,
+/// else the suffix walk's `lead_gap`.
+fn gap_sink<'a>(
+    open: &'a mut Option<OpenItem>,
+    items: &'a mut [YouItem],
+    lead_gap: &'a mut Vec<GapEntry>,
+) -> &'a mut Vec<GapEntry> {
+    if let Some(o) = open.as_mut() {
+        return &mut o.gap;
+    }
+    match items.last_mut() {
+        Some(i) => &mut i.gap,
+        None => lead_gap,
+    }
 }
 
 /// Where a walk stopped: the trailing item's resume state. `item_start` is
@@ -107,6 +195,7 @@ struct OpenItem {
     typed_text: String,
     turn_id: String,
     end_reply: Option<String>,
+    gap: Vec<GapEntry>,
 }
 
 /// One walk's output: complete items plus the trailing item's resume state.
@@ -118,6 +207,9 @@ pub(crate) struct WalkOut {
     /// Absolute line index the consumed offset sits at, the base the next
     /// suffix walk needs so derived turn ids fold a stable row number.
     pub lines: u64,
+    /// Gap entries read before the walk's first item: on a suffix walk they
+    /// belong to the cached last item; on a full walk nothing holds them.
+    pub lead_gap: Vec<GapEntry>,
 }
 
 /// Walk one transcript's text into You items. `base` is the absolute offset
@@ -145,6 +237,10 @@ pub(crate) fn walk(
     let mut headless = false;
     let mut first_user_seen = false;
     let mut resuming = resume.is_some();
+    let mut lead_gap: Vec<GapEntry> = Vec::new();
+    // True from a worker-mail close until the lead's next end reply: that
+    // reply answers the mail, so it is a lead update in the band.
+    let mut mail_turn = false;
     if let Some(tail) = resume {
         // The reply is NOT seeded: the re-read from item_start rebuilds it
         // from the same rows, and seeding would offset every row number the
@@ -154,6 +250,7 @@ pub(crate) fn walk(
             typed_text: tail.typed_text,
             turn_id: tail.turn_id,
             end_reply: None,
+            gap: Vec::new(),
         });
         item_start = Some(tail.item_start);
         open_line = Some(tail.item_line);
@@ -170,6 +267,7 @@ pub(crate) fn walk(
                 reply_text: reply.join("\n\n"),
                 turn_id: o.turn_id,
                 end_reply: o.end_reply.unwrap_or_default(),
+                gap: o.gap,
             });
         }
         reply.clear();
@@ -199,6 +297,7 @@ pub(crate) fn walk(
                 reply_text: reply.join("\n\n"),
                 turn_id: o.turn_id,
                 end_reply: o.end_reply.unwrap_or_default(),
+                gap: o.gap,
             });
         }
         reply.clear();
@@ -207,6 +306,7 @@ pub(crate) fn walk(
             typed_text: text,
             turn_id,
             end_reply: None,
+            gap: Vec::new(),
         });
         *item_start = Some(line_start);
         *open_line = Some(line_index);
@@ -253,7 +353,10 @@ pub(crate) fn walk(
                     continue;
                 }
                 let prompt = att.get("prompt").and_then(Value::as_str).unwrap_or("");
+                let ts = turn_stamp(&obj).unwrap_or("");
                 let Some(typed_prompt) = typed_part(prompt) else {
+                    gap_sink(&mut open, &mut items, &mut lead_gap).extend(mail_entries(prompt, ts));
+                    mail_turn = true;
                     close(&mut open, &mut reply, &mut item_start, &mut items);
                     continue;
                 };
@@ -264,11 +367,20 @@ pub(crate) fn walk(
                     // is the id fold: the queue derives its digest from the
                     // same classify output.
                     crate::provenance::Verdict::Operator(cleaned) => cleaned,
+                    crate::provenance::Verdict::BusRow => {
+                        gap_sink(&mut open, &mut items, &mut lead_gap)
+                            .extend(mail_entries(prompt, ts));
+                        mail_turn = true;
+                        close(&mut open, &mut reply, &mut item_start, &mut items);
+                        continue;
+                    }
                     _ => {
+                        mail_turn = false;
                         close(&mut open, &mut reply, &mut item_start, &mut items);
                         continue;
                     }
                 };
+                mail_turn = false;
                 open_new(
                     &mut open,
                     &mut reply,
@@ -295,6 +407,7 @@ pub(crate) fn walk(
                     .and_then(Value::as_str)
                     .is_some_and(|e| e.starts_with("sdk"));
                 if crate::provenance::json_truthy(obj.get("isMeta")) {
+                    mail_turn = false;
                     close(&mut open, &mut reply, &mut item_start, &mut items);
                     continue;
                 }
@@ -307,18 +420,33 @@ pub(crate) fn walk(
                 let seed = !first_user_seen && headless && p == Provenance::Unknown;
                 first_user_seen |= matches!(p, Provenance::Unknown | Provenance::Operator);
                 let typed = matches!(p, Provenance::Unknown | Provenance::Operator) && !seed;
+                let ts = turn_stamp(&obj).unwrap_or("");
                 if !typed {
+                    mail_turn = is_worker_mail(p);
+                    if mail_turn {
+                        gap_sink(&mut open, &mut items, &mut lead_gap)
+                            .extend(mail_entries(&turn_text(&obj), ts));
+                    }
                     close(&mut open, &mut reply, &mut item_start, &mut items);
                     continue;
                 }
-                let text = turn_text(&obj);
-                if text.trim().is_empty() {
+                let full = turn_text(&obj);
+                if full.trim().is_empty() {
                     continue;
                 }
-                let Some(text) = typed_part(&text) else {
+                let Some(text) = typed_part(&full) else {
+                    gap_sink(&mut open, &mut items, &mut lead_gap).extend(mail_entries(&full, ts));
+                    mail_turn = true;
                     close(&mut open, &mut reply, &mut item_start, &mut items);
                     continue;
                 };
+                // Mail the harness glued after the typed words arrived
+                // before this turn: it joins the previous item's gap.
+                let glued = &full[full.find(text.as_str()).map_or(0, |i| i + text.len())..];
+                if !crate::mail_header::delivered_headers(glued).is_empty() {
+                    gap_sink(&mut open, &mut items, &mut lead_gap).extend(mail_entries(glued, ts));
+                }
+                mail_turn = false;
                 let cleaned = crate::provenance::classify(&turn_text(&obj)).unwrap_or_default();
                 open_new(
                     &mut open,
@@ -335,27 +463,34 @@ pub(crate) fn walk(
                 );
             }
             Some("assistant") => {
-                let Some(o) = open.as_mut() else {
-                    continue;
-                };
                 let text = turn_text(&obj);
-                if !text.trim().is_empty() {
-                    reply.push(text.clone());
-                }
                 // The end-of-turn reply: the row the harness closed the turn
                 // with (repeated_asks.rs reads the same two fields). A
                 // sidechain's end_turn is another agent's work, never this
                 // reply.
                 let sidechain = obj.get("isSidechain").and_then(Value::as_bool) == Some(true);
-                if o.end_reply.is_none()
-                    && !sidechain
+                let ends = !sidechain
                     && obj
                         .get("message")
                         .and_then(|m| m.get("stop_reason"))
                         .and_then(Value::as_str)
                         == Some("end_turn")
-                    && !text.trim().is_empty()
-                {
+                    && !text.trim().is_empty();
+                if open.is_none() {
+                    if ends && mail_turn {
+                        mail_turn = false;
+                        gap_sink(&mut open, &mut items, &mut lead_gap)
+                            .push(lead_update(&text, turn_stamp(&obj).unwrap_or("")));
+                    }
+                    continue;
+                }
+                let Some(o) = open.as_mut() else {
+                    continue;
+                };
+                if !text.trim().is_empty() {
+                    reply.push(text.clone());
+                }
+                if o.end_reply.is_none() && ends {
                     o.end_reply = Some(text);
                 }
             }
@@ -374,13 +509,17 @@ pub(crate) fn walk(
                         if text.trim().is_empty() {
                             continue;
                         }
-                        if matches!(
-                            classify_turn(&obj, bus, session),
-                            Provenance::Harness(_) | Provenance::Relay(_)
-                        ) {
+                        let p = classify_turn(&obj, bus, session);
+                        if matches!(p, Provenance::Harness(_) | Provenance::Relay(_)) {
+                            mail_turn = is_worker_mail(p);
+                            if mail_turn {
+                                gap_sink(&mut open, &mut items, &mut lead_gap)
+                                    .extend(mail_entries(&text, turn_stamp(&obj).unwrap_or("")));
+                            }
                             close(&mut open, &mut reply, &mut item_start, &mut items);
                             continue;
                         }
+                        mail_turn = false;
                         if crate::provenance::classify(&text).is_err() {
                             // Harness machinery (bare commands, skip rules):
                             // the queue refuses it, so no ack join exists.
@@ -430,17 +569,25 @@ pub(crate) fn walk(
                         );
                     }
                     Some("assistant") => {
+                        let text = turn_text(&obj);
+                        let ends = payload.get("phase").and_then(Value::as_str)
+                            == Some("final_answer")
+                            && !text.trim().is_empty();
+                        if open.is_none() {
+                            if ends && mail_turn {
+                                mail_turn = false;
+                                gap_sink(&mut open, &mut items, &mut lead_gap)
+                                    .push(lead_update(&text, turn_stamp(&obj).unwrap_or("")));
+                            }
+                            continue;
+                        }
                         let Some(o) = open.as_mut() else {
                             continue;
                         };
-                        let text = turn_text(&obj);
                         if !text.trim().is_empty() {
                             reply.push(text.clone());
                         }
-                        if o.end_reply.is_none()
-                            && payload.get("phase").and_then(Value::as_str) == Some("final_answer")
-                            && !text.trim().is_empty()
-                        {
+                        if o.end_reply.is_none() && ends {
                             o.end_reply = Some(text);
                         }
                     }
@@ -461,6 +608,7 @@ pub(crate) fn walk(
             typed_text: o.typed_text.clone(),
             turn_id: o.turn_id.clone(),
             end_reply: o.end_reply.unwrap_or_default(),
+            gap: o.gap,
         });
         tail = Some(WalkTail {
             item_start: item_start.unwrap_or(base),
@@ -476,6 +624,14 @@ pub(crate) fn walk(
         tail,
         consumed,
         lines,
+        lead_gap,
+    }
+}
+
+fn lead_update(text: &str, ts: &str) -> GapEntry {
+    GapEntry::LeadUpdate {
+        ts: ts.to_string(),
+        text: text.trim().chars().take(400).collect(),
     }
 }
 
@@ -528,12 +684,15 @@ struct YouEntry {
     /// The trailing item's resume state, `None` when the transcript ended on
     /// a machine row (the next advance reads only new bytes).
     open: Option<WalkTail>,
+    /// Gap entries read before the transcript's first typed turn: no item
+    /// holds them, so the projection names the count.
+    #[serde(default)]
+    gap_dropped: u64,
 }
 
-/// Bumped 2026-11-21: the shared header shape test now reads the OneLine
-/// lane's `header body` rows as mail, so cached walks computed by the old
-/// reader hold stale typed_text and item counts.
-const YOU_CACHE_VERSION: u32 = 5;
+/// Bumped 2026-11-21 to 6: items carry the gap band, so a cached walk
+/// computed before it holds no worker mail at all.
+const YOU_CACHE_VERSION: u32 = 6;
 
 /// The loaded cache plus its lock discipline. `save` is best effort: an
 /// unwritable cache degrades the next projection to a full re-walk.
@@ -592,19 +751,31 @@ impl YouStore {
                     let out = walk(&text, start, line_base, bus, session, e.open.clone());
                     let keep = e.items.len().saturating_sub(usize::from(e.open.is_some()));
                     let mut items = e.items[..keep].to_vec();
-                    items.extend(out.items);
-                    WalkOut {
-                        items,
-                        tail: out.tail,
-                        consumed: out.consumed,
-                        lines: out.lines,
+                    // A suffix after a closed item opens mid-gap: what it
+                    // read before its first opener belongs to that item.
+                    let mut dropped = e.gap_dropped;
+                    match items.last_mut() {
+                        Some(last) => last.gap.extend(out.lead_gap),
+                        None => dropped += out.lead_gap.len() as u64,
                     }
+                    items.extend(out.items);
+                    (
+                        WalkOut {
+                            items,
+                            tail: out.tail,
+                            consumed: out.consumed,
+                            lines: out.lines,
+                            lead_gap: Vec::new(),
+                        },
+                        dropped,
+                    )
                 }
                 Err(_) => full_walk(path, bus, session),
             }
         } else {
             full_walk(path, bus, session)
         };
+        let (out, gap_dropped) = out;
         let mut head_len = size.min(crate::transcript_activity::HEAD_SAMPLE_BYTES);
         let head_sha = crate::transcript_activity::head_sample(path, head_len).unwrap_or_default();
         if head_sha.is_empty() {
@@ -621,9 +792,15 @@ impl YouStore {
                 head_len,
                 items: out.items.clone(),
                 open: out.tail,
+                gap_dropped,
             },
         );
         out.items
+    }
+
+    /// The gap entries the session's walk could hang on no item.
+    pub(crate) fn gap_dropped(&self, session: &str) -> u64 {
+        self.cache.entries.get(session).map_or(0, |e| e.gap_dropped)
     }
 
     /// Atomic save, mode 600. A read-only store (contended lock, no home)
@@ -658,15 +835,24 @@ impl YouStore {
     }
 }
 
-fn full_walk(path: &Path, bus: &BusIndex, session: &str) -> WalkOut {
+/// A walk from byte zero, with the count of gap entries no item holds.
+fn full_walk(path: &Path, bus: &BusIndex, session: &str) -> (WalkOut, u64) {
     match std::fs::read_to_string(path) {
-        Ok(text) => walk(&text, 0, 0, bus, session, None),
-        Err(_) => WalkOut {
-            items: Vec::new(),
-            tail: None,
-            consumed: 0,
-            lines: 0,
-        },
+        Ok(text) => {
+            let mut out = walk(&text, 0, 0, bus, session, None);
+            let dropped = std::mem::take(&mut out.lead_gap).len() as u64;
+            (out, dropped)
+        }
+        Err(_) => (
+            WalkOut {
+                items: Vec::new(),
+                tail: None,
+                consumed: 0,
+                lines: 0,
+                lead_gap: Vec::new(),
+            },
+            0,
+        ),
     }
 }
 
@@ -786,6 +972,7 @@ pub(crate) fn project_you(inputs: &YouInputs) -> Vec<Value> {
         if items.is_empty() {
             continue;
         }
+        let gap_dropped = store.gap_dropped(&sid);
         let items: Vec<Value> = items.iter().map(|i| item_json(i, &acked)).collect();
         rows.push(json!({
             "session_id": sid,
@@ -799,6 +986,7 @@ pub(crate) fn project_you(inputs: &YouInputs) -> Vec<Value> {
                 .unwrap_or_default()
                 .to_string(),
             "items": items,
+            "gap_dropped": gap_dropped,
         }));
     }
     if persist {
@@ -867,8 +1055,27 @@ fn item_json(item: &YouItem, acked: &std::collections::HashSet<String>) -> Value
             "state".into(),
             Value::String(item_state(item, acked).into()),
         );
+        obj.insert(
+            "asks_you".into(),
+            Value::Bool(reply_asks_user(&item.end_reply)),
+        );
     }
     v
+}
+
+/// True when the end reply hands the turn back with a question: its last
+/// non-empty line, closing quotes and code marks trimmed, ends with `?`.
+/// The one rule the You thread's "waiting on you" state and the requests
+/// pass read.
+pub(crate) fn reply_asks_user(end_reply: &str) -> bool {
+    end_reply
+        .lines()
+        .map(str::trim)
+        .rfind(|l| !l.is_empty())
+        .is_some_and(|l| {
+            l.trim_end_matches(['"', '\'', '`', '*', '_', ')', '\u{201d}', '\u{2019}'])
+                .ends_with('?')
+        })
 }
 
 /// An item's state: `acked` when its turn id sits in the session ledger;
@@ -1053,7 +1260,7 @@ pub(crate) fn asks_since(
             &crate::operator_turns::ledger_path(&inputs.capture_dir, &sid),
         )
         .unwrap_or_default();
-        for item in full_walk(&path, &bus, &sid).items {
+        for item in full_walk(&path, &bus, &sid).0.items {
             if item.ts.as_str() < since {
                 continue;
             }
@@ -1538,6 +1745,7 @@ mod tests {
             reply_text: reply.into(),
             turn_id: "t-3".into(),
             end_reply: end.into(),
+            gap: Vec::new(),
         };
         // AC3: a pure "queued" stub is a non-answer.
         let queued = mk("Queued; I will report when it lands.", "");
@@ -1551,6 +1759,138 @@ mod tests {
         let mut acked = std::collections::HashSet::new();
         acked.insert("t-3".to_string());
         assert_eq!(item_state(&queued, &acked), "acked");
+        // The asks-you rule reads the end reply's last line only.
+        let asks = item_json(&mk("x", "Opened PR 12.\n\nShould I merge it?"), &acked);
+        assert_eq!(asks["asks_you"], true);
+        let asks = item_json(
+            &mk("x", "Opened PR 12.\n\nShould I merge it?"),
+            &Default::default(),
+        );
+        assert_eq!(asks["state"], "answered");
+        let told = item_json(
+            &mk("x", "Want it merged? I did.\nMerged as 805f4200."),
+            &acked,
+        );
+        assert_eq!(told["asks_you"], false);
+        assert!(reply_asks_user("Which one, `a` or `b`?`"));
+    }
+
+    fn end_turn_row(text: &str, ts: &str) -> String {
+        json!({
+            "type": "assistant",
+            "timestamp": ts,
+            "message": {"role": "assistant", "content": text, "stop_reason": "end_turn"},
+        })
+        .to_string()
+    }
+
+    /// Worker mail between two typed turns lands on the first item's gap,
+    /// one entry per header; a task notification and a stop-hook row
+    /// close the span and record nothing.
+    #[test]
+    fn worker_mail_folds_into_the_gap_machinery_does_not() {
+        let raw = [
+            row("user", "how is the board?", "2026-11-21T00:00:00Z"),
+            end_turn_row("Two PRs are red.", "2026-11-21T00:00:01Z"),
+            row(
+                "user",
+                "`@atticus · fmail-0123456789ab`\nPR 12 merged. Main is green.",
+                "2026-11-21T00:00:02Z",
+            ),
+            end_turn_row("Noted 12.", "2026-11-21T00:00:03Z"),
+            queued_row(
+                "`@atticus · fmail-0123456789ac` CI red on 13\n`@t-board · fmail-0123456789ad`\nNeeds a ruling.",
+                "2026-11-21T00:00:04Z",
+            ),
+            row("user", "and the gate?", "2026-11-21T00:00:05Z"),
+            end_turn_row("Green.", "2026-11-21T00:00:06Z"),
+            row(
+                "user",
+                "<task-notification>build done</task-notification>",
+                "2026-11-21T00:00:07Z",
+            ),
+            meta_row(),
+            row("user", "thanks", "2026-11-21T00:00:08Z"),
+        ]
+        .join("\n");
+        let out = walk(&raw, 0, 0, &BusIndex::empty(), "sess", None);
+        let items = out.items;
+        assert_eq!(items.len(), 3);
+        let senders: Vec<&str> = items[0]
+            .gap
+            .iter()
+            .filter_map(|g| match g {
+                GapEntry::Mail { sender, .. } => Some(sender.as_str()),
+                GapEntry::LeadUpdate { .. } => None,
+            })
+            .collect();
+        assert_eq!(senders, ["atticus", "atticus", "t-board"]);
+        assert!(matches!(
+            &items[0].gap[0],
+            GapEntry::Mail { msg_id, summary, .. }
+                if msg_id == "fmail-0123456789ab" && summary.starts_with("PR 12 merged")
+        ));
+        assert!(matches!(
+            &items[0].gap[1],
+            GapEntry::LeadUpdate { text, .. } if text == "Noted 12."
+        ));
+        assert!(matches!(
+            &items[0].gap[2],
+            GapEntry::Mail { summary, .. } if summary.starts_with("CI red on 13")
+        ));
+        assert_eq!(items[0].end_reply, "Two PRs are red.");
+        assert!(items[1].gap.is_empty(), "{:?}", items[1].gap);
+        assert!(out.lead_gap.is_empty());
+    }
+
+    /// A cached entry that ended on a closed item: the suffix's mail and
+    /// the lead's reply to it land on that cached item; no item is added.
+    #[test]
+    fn a_suffix_after_a_closed_item_lands_its_gap_on_the_cached_item() {
+        let file = temp_transcript("gap-resume.jsonl");
+        let part1 = [
+            row("user", "start the review", "2026-11-21T00:00:00Z"),
+            end_turn_row("Started.", "2026-11-21T00:00:01Z"),
+            meta_row(),
+        ]
+        .join("\n");
+        std::fs::write(&file, format!("{part1}\n")).expect("write part 1");
+        let mut store = YouStore::open(PathBuf::from("/dev/null"), false);
+        let items = store.advance(&file, "s1", &BusIndex::empty());
+        assert_eq!(items.len(), 1);
+        assert!(items[0].gap.is_empty());
+
+        let part2 = [
+            row(
+                "user",
+                "`@quill · fmail-aaaaaaaaaaaa` review posted",
+                "2026-11-21T00:00:04Z",
+            ),
+            row(
+                "user",
+                "`@quill · fmail-aaaaaaaaaaab` one P2",
+                "2026-11-21T00:00:05Z",
+            ),
+            end_turn_row("Fixing the P2.", "2026-11-21T00:00:06Z"),
+        ]
+        .join("\n");
+        let mut text = std::fs::read_to_string(&file).expect("read");
+        text.push_str(&part2);
+        text.push('\n');
+        std::fs::write(&file, &text).expect("write part 2");
+        let items = store.advance(&file, "s1", &BusIndex::empty());
+        assert_eq!(items.len(), 1);
+        let kinds: Vec<&str> = items[0]
+            .gap
+            .iter()
+            .map(|g| match g {
+                GapEntry::Mail { .. } => "mail",
+                GapEntry::LeadUpdate { .. } => "lead_update",
+            })
+            .collect();
+        assert_eq!(kinds, ["mail", "mail", "lead_update"]);
+        assert_eq!(store.gap_dropped("s1"), 0);
+        let _ = std::fs::remove_file(&file);
     }
 
     /// AC5: asks_rows flattens two fixture sessions, pending rows first
