@@ -430,8 +430,8 @@ mod tests {
     fn request_groups_nodes_first_then_shared_mentions() {
         let rows = vec![
             row(
-                "node:x-fe8a",
-                Some("x-fe8a"),
+                "node:n1",
+                Some("n1"),
                 "ship the board",
                 "shipped as #483",
             ),
@@ -440,7 +440,7 @@ mod tests {
         ];
         let groups = super::request_groups(&rows);
         assert_eq!(groups.len(), 2);
-        assert_eq!(groups[0].name, "x-fe8a");
+        assert_eq!(groups[0].name, "n1");
         assert_eq!(groups[0].rows, vec![0]);
         assert_eq!(groups[1].name, "fno doctor test");
         assert_eq!(groups[1].rows, vec![1, 2]);
