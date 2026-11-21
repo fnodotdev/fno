@@ -842,6 +842,22 @@ fn derive_pr_links(
             }
         }
     }
+    if args.add_pr.is_none()
+        && (args.add_pr_url.is_some() || args.add_pr_note.is_some() || args.add_pr_status.is_some())
+    {
+        return Err(refused(
+            "Error: --add-pr-url, --add-pr-note and --add-pr-status require additional_prs+=",
+            2,
+        ));
+    }
+    if let Some(status) = args.add_pr_status.as_deref() {
+        if !matches!(status.trim(), "merged" | "open" | "closed") {
+            return Err(refused(
+                "Error: --add-pr-status takes merged, open or closed",
+                2,
+            ));
+        }
+    }
     // The node as it stands now, for cwd and current-PR reads (the Python
     // `_node_before_update` cache, read eagerly here).
     let pre_node: Option<Value> = {
@@ -860,22 +876,6 @@ fn derive_pr_links(
         .as_deref()
         .is_some_and(|v| v.to_lowercase() == "null");
 
-    if args.add_pr.is_none()
-        && (args.add_pr_url.is_some() || args.add_pr_note.is_some() || args.add_pr_status.is_some())
-    {
-        return Err(refused(
-            "Error: --add-pr-url, --add-pr-note and --add-pr-status require additional_prs+=",
-            2,
-        ));
-    }
-    if let Some(status) = args.add_pr_status.as_deref() {
-        if !matches!(status.trim(), "merged" | "open" | "closed") {
-            return Err(refused(
-                "Error: --add-pr-status takes merged, open or closed",
-                2,
-            ));
-        }
-    }
     if args.repo.is_some() {
         if args.pr_url.is_some() && !clearing_url {
             return Err(refused(
