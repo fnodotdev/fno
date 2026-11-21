@@ -1667,8 +1667,10 @@ pub fn run_fleet_incident(args: &[String]) -> i32 {
                     } else if action == "clear" {
                         // A targeted clear wakes only the loops its own
                         // record parked; the rows a wider hold parked stay
-                        // for the machine-wide clear.
-                        let (woken, missed) = wake_parked(&home, target.as_deref());
+                        // for the machine-wide clear. The record carries
+                        // the target: the local binding moved into the
+                        // transition's metadata above.
+                        let (woken, missed) = wake_parked(&home, record.target.as_deref());
                         if !woken.is_empty() {
                             eprintln!("fleet-incident: woke {} parked session(s)", woken.len());
                         }
