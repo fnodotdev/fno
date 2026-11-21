@@ -1845,7 +1845,7 @@ mod tests {
             );
             assert!(
                 response_json(&resp)
-                    .pointer("/stored")
+                    .pointer("/result/stored")
                     .and_then(Value::as_bool)
                     == Some(true),
                 "report stored: {}",
