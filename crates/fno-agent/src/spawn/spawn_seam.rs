@@ -507,7 +507,11 @@ pub fn worker_writable_dirs(cwd: &Path) -> Vec<String> {
             let leaf = plans.file_name().and_then(|n| n.to_str()) == Some("plans");
             let named = crate::plans_path::project_folder(Some(cwd), false)
                 .ok()
-                .is_some_and(|name| slice.file_name().is_some_and(|n| n == name.as_os_str()));
+                .is_some_and(|name| {
+                    slice
+                        .file_name()
+                        .is_some_and(|n| n == std::ffi::OsStr::new(&name))
+                });
             if leaf && named && !roots.iter().any(|root| slice.starts_with(root)) {
                 roots.push(slice);
             }
