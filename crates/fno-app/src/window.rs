@@ -135,10 +135,6 @@ pub enum Action {
     /// Open the launch composer, with a kind pre-picked when the opener
     /// named one; `None` keeps the retained draft's kind.
     OpenLaunch(Option<launch::Kind>),
-    /// Show or hide the session panel, as ⌥⌘B does.
-    ToggleRightPane,
-    /// A click inside the session panel.
-    Panel(right_pane::PanelAct),
 }
 
 /// The stable control id a click's [`Action`] ships to the usage events arm
@@ -180,8 +176,6 @@ fn click_id(action: &Action) -> &'static str {
         Action::Reconnect => "reconnect",
         Action::Mail(_) => "mail_lead",
         Action::OpenLaunch(_) => "open_launch",
-        Action::ToggleRightPane => "toggle_right_pane",
-        Action::Panel(_) => "session_panel",
     }
 }
 
@@ -1010,15 +1004,16 @@ impl Root {
                 None => self.say("no board poll: cannot mail".into(), cx),
             },
             Action::OpenLaunch(kind) => self.open_launch(kind, cx),
-            Action::ToggleRightPane => {
-                self.right.saved.open = !self.right.saved.open;
-                record_ui_state(self, cx);
-            }
-            Action::Panel(act) => {
-                right_pane::act(self, act);
-                record_ui_state(self, cx);
-            }
         }
+        cx.notify();
+    }
+
+    /// A session panel click, or ⌥⌘B. Kept out of `act` so every panel
+    /// verb persists the window state in one place.
+    pub(super) fn act_panel(&mut self, act: right_pane::PanelAct, cx: &mut Context<Self>) {
+        fno::ui_usage::click("app", act.click_id());
+        right_pane::act(self, act);
+        record_ui_state(self, cx);
         cx.notify();
     }
 
@@ -3115,7 +3110,7 @@ impl Root {
             }
             Shortcut::Find => self.find_open(cx),
             Shortcut::FindStep { older } => self.find_step(older, cx),
-            Shortcut::TogglePanel => self.act(Action::ToggleRightPane, cx),
+            Shortcut::TogglePanel => self.act_panel(right_pane::PanelAct::Toggle, cx),
         }
     }
 

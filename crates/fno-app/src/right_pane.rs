@@ -4,6 +4,7 @@
 //! Each card is keyed by its id, so a later card joins the list without a
 //! layout change. Chat and Terminal mount it; ⌥⌘B folds it.
 
+use fno::process_admission::std_output;
 use std::collections::{HashMap, HashSet};
 use std::process::Command as Proc;
 use std::time::{Duration, Instant};
@@ -121,15 +122,31 @@ impl Panel {
     }
 }
 
-/// What a click inside the panel does.
+/// What a panel click, or ⌥⌘B, does.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PanelAct {
+    /// Show or hide the whole panel.
+    Toggle,
     Fold(String),
     Close(String),
     Add(String),
     ToggleAdd,
     /// Open a URL or a file with the system handler.
     Open(String),
+}
+
+impl PanelAct {
+    /// The stable control id the usage events arm records.
+    pub fn click_id(&self) -> &'static str {
+        match self {
+            PanelAct::Toggle => "toggle_right_pane",
+            PanelAct::Fold(_) => "session_panel_fold",
+            PanelAct::Close(_) => "session_panel_close",
+            PanelAct::Add(_) => "session_panel_add",
+            PanelAct::ToggleAdd => "session_panel_add_list",
+            PanelAct::Open(_) => "session_panel_open",
+        }
+    }
 }
 
 /// Whether the panel takes a column in this view.
@@ -195,11 +212,7 @@ pub enum DiffFailed {
 /// branch, working tree included; against HEAD when no remote base reads.
 fn read_changes(cwd: &str) -> Result<Diffstat, DiffFailed> {
     let git = |args: &[&str]| {
-        Proc::new("git")
-            .arg("-C")
-            .arg(cwd)
-            .args(args)
-            .output()
+        std_output(Proc::new("git").arg("-C").arg(cwd).args(args))
             .ok()
             .filter(|o| o.status.success())
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
@@ -210,12 +223,13 @@ fn read_changes(cwd: &str) -> Result<Diffstat, DiffFailed> {
     let base = git(&["rev-parse", "--abbrev-ref", "origin/HEAD"])
         .and_then(|up| git(&["merge-base", "HEAD", &up]))
         .unwrap_or_else(|| "HEAD".to_string());
-    let out = Proc::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args(["diff", "--numstat", &base])
-        .output()
-        .map_err(|e| DiffFailed::Git(e.to_string()))?;
+    let out = std_output(
+        Proc::new("git")
+            .arg("-C")
+            .arg(cwd)
+            .args(["diff", "--numstat", &base]),
+    )
+    .map_err(|e| DiffFailed::Git(e.to_string()))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
         let line = err.lines().next().unwrap_or("git diff failed");
@@ -282,6 +296,7 @@ pub fn start(cx: &mut Context<Root>) -> Task<()> {
 pub fn act(root: &mut Root, act: PanelAct) {
     let saved = &mut root.right.saved;
     match act {
+        PanelAct::Toggle => saved.open = !saved.open,
         PanelAct::Fold(id) => {
             if !saved.folded.remove(&id) {
                 saved.folded.insert(id);
@@ -298,7 +313,9 @@ pub fn act(root: &mut Root, act: PanelAct) {
         PanelAct::Open(target) => {
             // A short-lived `open`; waited on its own thread, so no zombie.
             std::thread::spawn(move || {
-                let _ = Proc::new("open").arg(target).status();
+                if let Err(e) = Proc::new("open").arg(&target).status() {
+                    eprintln!("fno-app: cannot open {target}: {e}");
+                }
             });
         }
     }
@@ -414,8 +431,8 @@ fn card_frame(
     p: &Palette,
     cx: &mut Context<Root>,
 ) -> Div {
-    let fold = Action::Panel(PanelAct::Fold(id.to_string()));
-    let close = Action::Panel(PanelAct::Close(id.to_string()));
+    let fold = PanelAct::Fold(id.to_string());
+    let close = PanelAct::Close(id.to_string());
     let header = div()
         .flex()
         .flex_row()
@@ -429,14 +446,14 @@ fn card_frame(
                 .id(ElementId::Name(format!("right-fold-{i}").into()))
                 .cursor_pointer()
                 .child(ui::text(if folded { "▸" } else { "▾" }, Role::Meta, p))
-                .on_click(cx.listener(move |root, _, _, cx| root.act(fold.clone(), cx))),
+                .on_click(cx.listener(move |root, _, _, cx| root.act_panel(fold.clone(), cx))),
         )
         .child(
             div()
                 .id(ElementId::Name(format!("right-close-{i}").into()))
                 .cursor_pointer()
                 .child(ui::text("×", Role::Meta, p))
-                .on_click(cx.listener(move |root, _, _, cx| root.act(close.clone(), cx))),
+                .on_click(cx.listener(move |root, _, _, cx| root.act_panel(close.clone(), cx))),
         );
     let frame = div()
         .flex()
@@ -462,14 +479,14 @@ fn link_line(
     p: &Palette,
     cx: &mut Context<Root>,
 ) -> Stateful<Div> {
-    let action = Action::Panel(PanelAct::Open(target));
+    let action = PanelAct::Open(target);
     let p = *p;
     div()
         .id(ElementId::Name(id.into()))
         .cursor_pointer()
         .hover(move |s| s.text_color(rgb(p.fg)))
         .child(ui::clamp(text, Role::Body, &p))
-        .on_click(cx.listener(move |root, _, _, cx| root.act(action.clone(), cx)))
+        .on_click(cx.listener(move |root, _, _, cx| root.act_panel(action.clone(), cx)))
 }
 
 fn pr_card(a: &AgentRow, p: &Palette, cx: &mut Context<Root>) -> (String, Option<usize>, Div) {
@@ -713,13 +730,13 @@ fn view_card(root: &Root, target: &str, p: &Palette) -> (String, Option<usize>, 
 /// The list's last row: "+ panel", which lists installed view mods not
 /// shown yet.
 fn add_row(root: &Root, p: &Palette, cx: &mut Context<Root>) -> Div {
-    let toggle = Action::Panel(PanelAct::ToggleAdd);
+    let toggle = PanelAct::ToggleAdd;
     let mut out = div().flex().flex_col().child(
         div()
             .id("right-add")
             .cursor_pointer()
             .child(ui::text("+ panel", Role::Meta, p))
-            .on_click(cx.listener(move |root, _, _, cx| root.act(toggle.clone(), cx))),
+            .on_click(cx.listener(move |root, _, _, cx| root.act_panel(toggle.clone(), cx))),
     );
     if !root.right.adding {
         return out;
@@ -749,14 +766,14 @@ fn add_row(root: &Root, p: &Palette, cx: &mut Context<Root>) -> Div {
     let mut offered: Vec<(String, String)> = offered.into_iter().collect();
     offered.sort();
     for (i, (target, title)) in offered.into_iter().enumerate() {
-        let add = Action::Panel(PanelAct::Add(target));
+        let add = PanelAct::Add(target);
         out = out.child(
             div()
                 .id(ElementId::Name(format!("right-add-{i}").into()))
                 .cursor_pointer()
                 .pl_3()
                 .child(ui::text(title, Role::Body, p))
-                .on_click(cx.listener(move |root, _, _, cx| root.act(add.clone(), cx))),
+                .on_click(cx.listener(move |root, _, _, cx| root.act_panel(add.clone(), cx))),
         );
     }
     out

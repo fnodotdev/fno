@@ -16,9 +16,7 @@ static NAME: OnceLock<Option<String>> = OnceLock::new();
 pub fn prime() {
     std::thread::spawn(|| {
         NAME.get_or_init(|| {
-            std::process::Command::new("id")
-                .arg("-F")
-                .output()
+            fno::process_admission::std_output(std::process::Command::new("id").arg("-F"))
                 .ok()
                 .filter(|o| o.status.success())
                 .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
