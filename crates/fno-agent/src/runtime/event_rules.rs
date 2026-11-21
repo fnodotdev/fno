@@ -1688,6 +1688,7 @@ mod tests {
             "data": {
                 "scope": "e-63be",
                 "holder_session": rig.session,
+                "change": "beat legs: a seeded idle beat",
                 "scope_live_workers": 0,
                 "reactive": true,
                 "pick_offered": format!("fno agent spawn \"/fno:target {node}\""),
@@ -1731,6 +1732,8 @@ mod tests {
             "source": "daemon",
             "data": {
                 "node": "x-idle2",
+                "argv": ["spawn", "/fno:target x-idle2"],
+                "exit_code": 6,
                 "reason": "share cap: 2 of 2 slots held",
             },
         }));
@@ -1751,6 +1754,7 @@ mod tests {
             "data": {
                 "node": null,
                 "argv": ["spawn", "--as", "thread", "--promote", "x-eSeat", "/fno:lead"],
+                "exit_code": 6,
                 "reason": "share cap: 2 of 2 slots held",
             },
         }));
@@ -1772,6 +1776,7 @@ mod tests {
             "data": {
                 "scope": "e-63be",
                 "holder_session": rig.session,
+                "change": "beat legs: a seeded idle beat",
                 "scope_live_workers": 0,
                 "reactive": true,
                 "pick_offered": "fno agent spawn \"/fno:target x-idle3\"",
@@ -1794,6 +1799,7 @@ mod tests {
             "data": {
                 "scope": "e-63be",
                 "holder_session": rig.session,
+                "change": "beat legs: a seeded idle beat",
                 "reactive": true,
                 "pick_offered": "fno agent spawn \"/fno:target x-idle4\"",
                 "pick_node": "x-idle4",
