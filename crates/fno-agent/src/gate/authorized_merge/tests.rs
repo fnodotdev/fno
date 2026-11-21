@@ -1265,6 +1265,62 @@ fn a_gh_proxy_admit_banner_ahead_of_a_real_refusal_reads_the_refusal_not_the_ban
     );
     assert!(!detail.contains("draft guard unavailable"), "{detail}");
     // The same failed-merge fixture also routes the channel refusals: two
+    // shapes name the graphql channel, not the merge - GitHub's primary
+    // exhaustion and fno's own budget hold. Both retry through the REST PUT
+    // with the same head pin (a tight channel routes to another instead of
+    // refusing). The withhold row: a secondary rate limit is token-wide, so
+    // the REST retry would trip it too - it holds and fires no retry.
+    let fake = Fake {
+        gh_ok: false,
+        gh_output: "gh: GraphQL: API rate limit exceeded for user ID 1".to_string(),
+        gh_recovery_ok: Some(true),
+        ..clean()
+    };
+    let outcome = effect(&fake, &request(Effect::Merge), &authorized);
+    let Outcome::Merged { note, .. } = outcome else {
+        unreachable!()
+    };
+    assert_eq!(note.as_deref(), Some("merged server-side (rest fallback)"));
+    let calls = fake.gh_calls.borrow();
+    let put = calls
+        .iter()
+        .find(|c| c.first().map(String::as_str) == Some("api"))
+        .expect("the REST retry fires");
+    assert!(put.contains(&"--method".to_string()) && put.contains(&"PUT".to_string()));
+    assert!(put.iter().any(|a| a.contains("pulls/7/merge")));
+    assert!(put.contains(&"sha=abc123".to_string()));
+    drop(calls);
+    let fake = Fake {
+        gh_ok: false,
+        gh_output: "gh budget: GitHub rate limit held locally (user token: backoff 900s left); \
+                    this command did not reach GitHub and no other channel serves it (App token: \
+                    none for this call). Retry after 900s. Ledger: fno-agent fleet-incident \
+                    gh-budget status"
+            .to_string(),
+        gh_recovery_ok: Some(true),
+        ..clean()
+    };
+    let outcome = effect(&fake, &request(Effect::Merge), &authorized);
+    let Outcome::Merged { note, .. } = outcome else {
+        unreachable!()
+    };
+    assert_eq!(note.as_deref(), Some("merged server-side (rest fallback)"));
+    // The withhold: a secondary limit holds and fires no api retry.
+    let fake = Fake {
+        gh_ok: false,
+        gh_output: "gh: You have exceeded a secondary rate limit".to_string(),
+        ..clean()
+    };
+    let outcome = effect(&fake, &request(Effect::Merge), &authorized);
+    assert_eq!(outcome.word(), "held", "{outcome:?}");
+    assert!(
+        fake.gh_calls
+            .borrow()
+            .iter()
+            .all(|c| c.first().map(String::as_str) != Some("api")),
+        "a secondary limit fires no REST retry"
+    );
+}
 
 #[test]
 fn hold_probe_fails_closed_on_every_non_success() {
