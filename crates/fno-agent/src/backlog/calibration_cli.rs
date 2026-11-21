@@ -341,22 +341,18 @@ fn run_by_lane(
     if dropped > 0 {
         println!("  dropped, session time unparseable: {dropped}");
     }
-    let with_n = ledger_pricing["unpriced_with_sessions"]
-        .as_i64()
-        .unwrap_or(0);
-    let legacy_n = ledger_pricing["unpriced_legacy"].as_i64().unwrap_or(0);
+    let with_n = ledger_pricing.unpriced_with_sessions;
+    let legacy_n = ledger_pricing.unpriced_legacy;
     let mut note = String::new();
     if with_n > 0 || legacy_n > 0 {
         note = format!("; unpriced: {with_n} with session ids, {legacy_n} legacy no-session");
     }
-    if !ledger_pricing["book_present"].as_bool().unwrap_or(false) {
+    if !ledger_pricing.book_present {
         note.push_str("; rate book missing");
     }
     println!(
         "  ledger cost coverage: {}/{} entries priced ({}%){note}",
-        ledger_pricing["priced"].as_i64().unwrap_or(0),
-        ledger_pricing["total"].as_i64().unwrap_or(0),
-        ledger_pricing["pct"].as_i64().unwrap_or(0)
+        ledger_pricing.priced, ledger_pricing.total, ledger_pricing.pct
     );
     println!(
         "\n  {:<24}{:<10}{:<14}{:<22}{:>6}{:>7}{:>13}{:>10}{:>10}{:>9}{:>9}{:>7}{:>7}{:>7}{:>6}",

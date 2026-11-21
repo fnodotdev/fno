@@ -1072,6 +1072,23 @@ fn backfill_entry_decision(cost_usd: Option<f64>, tokens_total: Option<f64>) -> 
     }
 }
 
+/// The ledger-entry fields the backfill loop reads, typed at the parse
+/// boundary (docs/rust-style.md R1). Every field defaults: a legacy entry
+/// carrying none of them parses as unpriced rather than failing the pass.
+#[derive(Deserialize, Default)]
+struct BackfillEntryView {
+    #[serde(default)]
+    sessions: Vec<Value>,
+    #[serde(default)]
+    branch: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    cost_usd: Option<f64>,
+    #[serde(default)]
+    tokens_total: Option<f64>,
+}
+
 /// The cost field a backfill writes: the recompute's dollars when it priced,
 /// else the entry's measured cost preserved - an unpriced recompute never
 /// replaces a numeric cost with null. `None` recomputed over `None` existing
@@ -1114,23 +1131,12 @@ fn backfill_tasks_json(dry_run: bool) -> i32 {
         },
     };
     for entry in entries.iter_mut() {
-        let sessions = entry
-            .get("sessions")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let branch = entry
-            .get("branch")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        let title = entry
-            .get("title")
-            .and_then(Value::as_str)
-            .unwrap_or("Untitled")
-            .to_string();
-        let existing_cost = entry.get("cost_usd").and_then(Value::as_f64);
-        let existing_tokens = entry.get("tokens_total").and_then(Value::as_f64);
-        if let BackfillEntry::Keep(cost) = backfill_entry_decision(existing_cost, existing_tokens) {
+        let view = serde_json::from_value::<BackfillEntryView>(entry.clone()).unwrap_or_default();
+        let sessions = view.sessions;
+        let branch = view.branch;
+        let title = view.title.unwrap_or_else(|| "Untitled".to_string());
+        if let BackfillEntry::Keep(cost) = backfill_entry_decision(view.cost_usd, view.tokens_total)
+        {
             println!("  KEEP: {title} - priced ${cost:.2}");
             continue;
         }
