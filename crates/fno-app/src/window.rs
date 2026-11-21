@@ -36,6 +36,7 @@ use super::keys::{self, Key, Modes, Shortcut};
 use super::launch::{self, Launch};
 use super::link::{Event, Layout, Link};
 use super::mouse::{self, Hit};
+use super::mux_modes::{self, MenuAct, MenuKey, Step};
 use super::palette::Palette;
 use super::{find, left_pane, mods, orchestration, settings, sheet, tabs, ui};
 use fno::app_api::web_hq::Board;
@@ -247,6 +248,12 @@ pub struct Root {
     pub(super) goto: Option<goto::GoTo>,
     /// The find bar (cmd-f) over the focused pane or the chat.
     pub(super) find: Option<find::Find>,
+    /// Keyboard scroll mode (prefix+PgUp): the pane it holds, until q or Esc.
+    pub(super) scroll_mode: Option<u64>,
+    /// The rename-tab prompt (prefix+,).
+    pub(super) rename: Option<mux_modes::Rename>,
+    /// The focused agent's row menu (prefix+P).
+    pub(super) row_menu: Option<mux_modes::RowMenu>,
     /// The launch composer: retained state, open flag, id mint, and the
     /// row the last launch named. Esc closes and keeps the draft.
     pub(super) launch: launch::Panel,
@@ -415,6 +422,9 @@ impl Root {
             sheet_on_first_read: false,
             goto: None,
             find: None,
+            scroll_mode: None,
+            rename: None,
+            row_menu: None,
             launch: launch::Panel::default(),
             settings: None,
             font_want,
@@ -1832,6 +1842,146 @@ impl Root {
         }
     }
 
+    /// A command-block action on the focused pane. The server answers a pane
+    /// with no blocks, or one still busy on a rerun, with its own notice.
+    fn block_op(&mut self, op: keys::BlockOp) {
+        let pane = self.layout.focus;
+        self.send(match op {
+            keys::BlockOp::Jump(dir) => ClientMsg::BlockJump { pane, dir },
+            keys::BlockOp::Select(dir) => ClientMsg::BlockSelect { pane, dir },
+            keys::BlockOp::Rerun => ClientMsg::BlockRerun { pane },
+        });
+    }
+
+    /// prefix+PgUp: hold the keyboard for the focused pane's shared scroll.
+    fn scroll_open(&mut self, cx: &mut Context<Self>) {
+        self.scroll_mode = Some(self.layout.focus);
+        cx.notify();
+    }
+
+    /// prefix+`,`: the rename prompt for the active tab.
+    fn rename_open(&mut self, cx: &mut Context<Self>) {
+        match mux_modes::Rename::open(&self.layout) {
+            Some(rename) => {
+                self.rename = Some(rename);
+                cx.notify();
+            }
+            None => {
+                alerts::beep();
+                self.say("no active tab to rename".into(), cx);
+            }
+        }
+    }
+
+    /// prefix+P: the row menu of the agent in the focused pane.
+    fn row_menu_open(&mut self, cx: &mut Context<Self>) {
+        self.row_menu = Some(mux_modes::RowMenu::open(
+            &self.layout.agents,
+            self.layout.focus,
+        ));
+        cx.notify();
+    }
+
+    /// Run one row-menu item and close the menu.
+    pub(super) fn row_menu_run(&mut self, at: usize, cx: &mut Context<Self>) {
+        let item = self
+            .row_menu
+            .take()
+            .and_then(|m| m.items.into_iter().nth(at))
+            .map(|(_, act)| act);
+        match item {
+            Some(MenuAct::Run(action)) => self.act(action, cx),
+            Some(MenuAct::Rename) => self.rename_open(cx),
+            None => {}
+        }
+        cx.notify();
+    }
+
+    /// prefix+Z: focus the next pane whose agent waits on the user, wrapping
+    /// after the last. Nothing waiting beeps and says so.
+    fn focus_next_waiting(&mut self, cx: &mut Context<Self>) {
+        let now = fno::app_api::digest_overlay::now_secs();
+        match mux_modes::next_waiting(&self.layout.agents, self.layout.focus, now) {
+            Some((pane, name, at, of)) => {
+                self.send(ClientMsg::Command(Command::FocusPane(pane)));
+                self.say(format!("{name} ({at} of {of} waiting)"), cx);
+            }
+            None => {
+                alerts::beep();
+                self.say("no agent is waiting on you".into(), cx);
+            }
+        }
+    }
+
+    /// True when the row menu, the rename prompt or scroll mode consumed the
+    /// key. Cmd keys fall through to their shortcuts.
+    fn mux_modes_take(&mut self, key: &Key, cx: &mut Context<Self>) -> bool {
+        if let Some(menu) = self.row_menu.as_ref() {
+            if key.cmd {
+                return false;
+            }
+            let pick = menu.key(key);
+            cx.stop_propagation();
+            match pick {
+                MenuKey::Move(by) => {
+                    if let Some(m) = self.row_menu.as_mut() {
+                        m.step(by);
+                    }
+                    cx.notify();
+                }
+                MenuKey::Run(at) => self.row_menu_run(at, cx),
+                MenuKey::Close => {
+                    self.row_menu = None;
+                    cx.notify();
+                }
+                MenuKey::Swallow => {}
+            }
+            return true;
+        }
+        if let Some(r) = self.rename.as_mut() {
+            if key.cmd {
+                return false;
+            }
+            cx.stop_propagation();
+            let text = match (key.key_char, key.key) {
+                (None, "space") => Some(" "),
+                (text, _) => text.filter(|_| !key.ctrl),
+            };
+            match r.field.edit(key.key, text) {
+                ui::Edit::Typed => cx.notify(),
+                ui::Edit::Close => {
+                    self.rename = None;
+                    cx.notify();
+                }
+                ui::Edit::Submit => {
+                    let cmd = r.command();
+                    self.rename = None;
+                    self.send(ClientMsg::Command(cmd));
+                    cx.notify();
+                }
+            }
+            return true;
+        }
+        let Some(pane) = self.scroll_mode else {
+            return false;
+        };
+        if self.main != MainView::Terminal || pane != self.layout.focus {
+            self.scroll_mode = None;
+            cx.notify();
+            return false;
+        }
+        let rows = self.frames.get(&pane).map_or(24, |f| i32::from(f.rows));
+        match mux_modes::scroll_step(key, pane, rows) {
+            Step::Pass => return false,
+            Step::Send(msg) => self.send(msg),
+            Step::Leave => self.scroll_mode = None,
+            Step::Swallow => {}
+        }
+        cx.stop_propagation();
+        cx.notify();
+        true
+    }
+
     /// Scan the conversation for the query, keeping the current match by its
     /// (item, block, range start) so a streaming row appends without moving
     /// the highlight; a replaced row falls back to the newest match.
@@ -2439,6 +2589,9 @@ impl Root {
             cx.stop_propagation();
             return;
         }
+        if self.mux_modes_take(&key, cx) {
+            return;
+        }
         if let Some(action) = keys::shortcut(&key) {
             cx.stop_propagation();
             self.cmd_action(action, window, cx);
@@ -2517,6 +2670,11 @@ impl Root {
                 cx.quit();
             }
             keys::MuxAction::Notice(text) => self.say(text, cx),
+            keys::MuxAction::Block(op) => self.block_op(op),
+            keys::MuxAction::ScrollMode => self.scroll_open(cx),
+            keys::MuxAction::Rename => self.rename_open(cx),
+            keys::MuxAction::RowMenu => self.row_menu_open(cx),
+            keys::MuxAction::NextWaiting => self.focus_next_waiting(cx),
             keys::MuxAction::Bell => {
                 alerts::beep();
                 let name = String::from_utf8_lossy(key).escape_debug().to_string();
@@ -3411,6 +3569,13 @@ impl Root {
         .when(self.sheet, |d| d.child(sheet::render(self, cx)))
         .when(self.answer.is_some(), |d| d.child(answer::render(self, cx)))
         .when(self.goto.is_some(), |d| d.child(goto::render(self, cx)))
+        .children(self.row_menu.as_ref().map(|m| m.view(self, cx)))
+        .children(self.rename.as_ref().map(|r| r.bar(&self.palette)))
+        .children(
+            self.scroll_mode
+                .filter(|p| *p == self.layout.focus && self.main == MainView::Terminal)
+                .map(|_| mux_modes::scroll_bar(&self.palette)),
+        )
         .when(self.settings.is_some(), |d| {
             d.child(settings::render(self, cx))
         })
