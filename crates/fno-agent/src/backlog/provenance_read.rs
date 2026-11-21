@@ -98,14 +98,117 @@ fn pr_block(row: &Value) -> Value {
     json!({"number": row.get("pr_number"), "url": row.get("pr_url")})
 }
 
-fn render_pr_line(pr: &Value) -> String {
-    let url = pr["url"].as_str().filter(|u| !u.is_empty());
-    match (pr["number"].as_i64(), url) {
-        (None, None) => "  pr: (none)".to_string(),
-        (None, Some(url)) => format!("  pr: {url}"),
-        (Some(n), None) => format!("  pr: #{n}"),
-        (Some(n), Some(url)) => format!("  pr: #{n} {url}"),
+/// The repo slug a recorded url names, verbatim from what was recorded.
+fn pr_repo_slug(url: Option<&str>) -> Option<&str> {
+    url.and_then(crate::backlog::pr_link::repo_slug_from_url)
+}
+
+/// The parts a pr line renders beyond the link: the repo slug, the merge
+/// status and the note. A line with nothing to say keeps the bare shape.
+fn pr_suffix_parts(slug: Option<&str>, status: Option<&str>, note: Option<&str>) -> Vec<String> {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(slug) = slug {
+        parts.push(slug.to_string());
     }
+    if let Some(status) = status {
+        parts.push(status.to_string());
+    }
+    if let Some(note) = note {
+        parts.push(format!("note: {note}"));
+    }
+    parts
+}
+
+/// The pr lines a row renders: the primary from `pr_number`/`pr_url` with
+/// the row's `merge_status`, then one line per `additional_prs` entry.
+/// Bare-int and bare-url entry shapes render like `pr_refs_of` reads them.
+fn render_pr_lines(row: &Value) -> Vec<String> {
+    let mut lines = Vec::new();
+    let number = row.get("pr_number").and_then(Value::as_i64);
+    let url = text_at(row, "pr_url").filter(|u| !u.is_empty());
+    let status = text_at(row, "merge_status").filter(|s| !s.is_empty());
+    let slug = pr_repo_slug(url.as_deref());
+    lines.push(format!(
+        "  pr: {}{}",
+        render_pr_ref(number, url.as_deref()),
+        suffix(&pr_suffix_parts(slug, status.as_deref(), None))
+    ));
+    let defaults: Vec<Value> = Vec::new();
+    let entries = row
+        .get("additional_prs")
+        .and_then(Value::as_array)
+        .unwrap_or(&defaults);
+    for entry in entries {
+        let (number, url, status, note) = match entry {
+            Value::Object(_) => (
+                entry.get("number").and_then(Value::as_i64),
+                entry
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .filter(|u| !u.is_empty()),
+                entry
+                    .get("merge_status")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty()),
+                entry
+                    .get("note")
+                    .and_then(Value::as_str)
+                    .filter(|n| !n.is_empty()),
+            ),
+            Value::Number(n) => (n.as_i64(), None, None, None),
+            Value::String(url) => (None, Some(url.as_str()), None, None),
+            _ => (None, None, None, None),
+        };
+        let slug = pr_repo_slug(url);
+        lines.push(format!(
+            "  pr: {}{}",
+            render_pr_ref(number, url),
+            suffix(&pr_suffix_parts(slug, status, note))
+        ));
+    }
+    lines
+}
+
+/// The `  pr: ` reference half of a pr line: `#<n> <url>`, `#<n>`, `<url>`,
+/// or `(none)`.
+fn render_pr_ref(number: Option<i64>, url: Option<&str>) -> String {
+    match (number, url) {
+        (None, None) => "(none)".to_string(),
+        (None, Some(url)) => url.to_string(),
+        (Some(n), None) => format!("#{n}"),
+        (Some(n), Some(url)) => format!("#{n} {url}"),
+    }
+}
+
+/// Wrap parts in ` (...)`, empty when there are no parts.
+fn suffix(parts: &[String]) -> String {
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", parts.join(", "))
+    }
+}
+
+/// The json `additional_prs` array: every entry reduced to the four keys a
+/// reader consumes, `[]` when the row carries none.
+fn pr_entries_json(row: &Value) -> Value {
+    let defaults: Vec<Value> = Vec::new();
+    let list = row
+        .get("additional_prs")
+        .and_then(Value::as_array)
+        .unwrap_or(&defaults);
+    Value::Array(
+        list.iter()
+            .map(|entry| {
+                json!({
+                    "number": entry.get("number"),
+                    "url": entry.get("url"),
+                    "merge_status": entry.get("merge_status"),
+                    "note": entry.get("note"),
+                })
+            })
+            .collect(),
+    )
 }
 
 /// `harness_session_id` to registry status. None when the registry cannot be
@@ -611,6 +714,7 @@ fn run_external(id: &str, spawned: bool, json_out: bool) -> i32 {
             "title": node.get("title"),
             "edges": [edge_json("node_birth", birth.as_ref()), edge_json("spawn", spawn.as_ref())],
             "pr": pr_block(&sc),
+            "additional_prs": pr_entries_json(&sc),
             "sessions": sessions,
             "lifecycle": null,
             "source_node_id": sc.get("source_node_id"),
@@ -641,7 +745,9 @@ fn run_external(id: &str, spawned: bool, json_out: bool) -> i32 {
         "  spawn: {}",
         text_at(&sc, "spawned_by_session").unwrap_or("(none)")
     );
-    println!("{}", render_pr_line(&pr_block(&sc)));
+    for line in render_pr_lines(&sc) {
+        println!("{line}");
+    }
     println!("  sessions: {} row(s)", sessions.len());
     for (d, nid) in &walk {
         println!(
@@ -739,6 +845,7 @@ pub fn run(tail: &[String]) -> i32 {
             "title": node.get("title"),
             "edges": [edge_json("node_birth", birth.as_ref()), edge_json("spawn", spawn.as_ref())],
             "pr": pr_block(node),
+            "additional_prs": pr_entries_json(node),
             "sessions": sessions,
             "lifecycle": roster,
             "source_node_id": origin,
@@ -777,7 +884,7 @@ pub fn run(tail: &[String]) -> i32 {
         lines.push(format!("    plan: {plan}"));
     }
     fmt_edge(&mut lines, "spawn", spawn.as_ref());
-    lines.push(render_pr_line(&pr_block(node)));
+    lines.extend(render_pr_lines(node));
     lines.push(if related.is_empty() {
         "  related: (none)".to_string()
     } else {
@@ -850,6 +957,29 @@ mod tests {
             .map(|(_, r)| text_at(r, "id").unwrap())
             .collect();
         assert_eq!(ids, ["b", "c"]);
+    }
+
+    #[test]
+    fn provenance_renders_primary_and_every_additional_pr() {
+        let row = json!({
+            "pr_number": 289,
+            "pr_url": "https://github.com/fnodotdev/fno/pull/289",
+            "merge_status": "merged",
+            "additional_prs": [
+                {"number": 351, "url": "https://github.com/fnodotdev/fno/pull/351", "merge_status": "merged", "note": "folded"},
+                {"number": 244, "url": "https://github.com/footnote-sh/fno-web/pull/244", "merge_status": "merged", "note": "docs"},
+                {"number": 7}
+            ]
+        });
+        let lines = render_pr_lines(&row);
+        assert_eq!(lines.len(), 4);
+        assert_eq!(
+            lines[0],
+            "  pr: #289 https://github.com/fnodotdev/fno/pull/289 (fnodotdev/fno, merged)"
+        );
+        assert_eq!(lines[1], "  pr: #351 https://github.com/fnodotdev/fno/pull/351 (fnodotdev/fno, merged, note: folded)");
+        assert_eq!(lines[2], "  pr: #244 https://github.com/footnote-sh/fno-web/pull/244 (footnote-sh/fno-web, merged, note: docs)");
+        assert_eq!(lines[3], "  pr: #7");
     }
 
     #[test]
