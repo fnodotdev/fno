@@ -530,7 +530,10 @@ struct YouEntry {
     open: Option<WalkTail>,
 }
 
-const YOU_CACHE_VERSION: u32 = 4;
+/// Bumped 2026-11-21: the shared header shape test now reads the OneLine
+/// lane's `header body` rows as mail, so cached walks computed by the old
+/// reader hold stale typed_text and item counts.
+const YOU_CACHE_VERSION: u32 = 5;
 
 /// The loaded cache plus its lock discipline. `save` is best effort: an
 /// unwritable cache degrades the next projection to a full re-walk.
@@ -1197,6 +1200,26 @@ mod tests {
         );
         assert_eq!(items[1].typed_text, "ship it then");
         assert_eq!(items[1].reply_text, "Opening the PR.");
+    }
+
+    /// The OneLine lane (a paneless claude session) types mail as ONE
+    /// physical line: header, one space, body. It must read as delivered
+    /// mail - no typed item, no ask row - like the two-line law form does.
+    #[test]
+    fn a_one_line_lane_mail_opens_no_item() {
+        let raw = [
+            row(
+                "user",
+                "`@fno-lead-wake · fmail-2707317efcfb` no check-in · the beat is 55m",
+                "2026-10-27T00:00:00Z",
+            ),
+            assistant_row("Beating on.", "2026-10-27T00:00:01Z"),
+            row("user", "now my own ask", "2026-10-27T00:00:02Z"),
+        ]
+        .join("\n");
+        let items = walk(&raw, 0, 0, &BusIndex::empty(), "sess", None).items;
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].typed_text, "now my own ask");
     }
 
     /// A human queued command opens its own item; a pasted bus row closes

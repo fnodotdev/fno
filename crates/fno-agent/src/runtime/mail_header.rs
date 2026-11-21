@@ -443,17 +443,20 @@ pub fn header_third_field(subject: Option<&str>, body: &str) -> Option<String> {
 }
 
 /// The header's inner span and what follows it: the opening backtick through
-/// the first closing backtick whose remainder is the line's end or the
-/// transcript's one-line body separator " ⏎ " (a legacy stored turn
-/// renders on ONE physical line, header then separator then body; the law
-/// form is two physical lines). `None` when no closer reads.
+/// the first closing backtick whose remainder is the line's end, the
+/// transcript's one-line body separator " ⏎ " (a legacy stored turn renders
+/// on ONE physical line, header then separator then body), or one space -
+/// the `NewlineRule::OneLine` keystrokes (`fno_mail::turn::one_line`),
+/// which collapse every whitespace run, the header's new line included, to
+/// one space; the law form is two physical lines. `None` when no closer
+/// reads.
 fn split_header_span(trimmed: &str) -> Option<(&str, &str)> {
     let rest = trimmed.strip_prefix('`')?;
     let mut from = 0;
     while let Some(rel) = rest[from..].find('`') {
         let close = from + rel;
         let tail = &rest[close + 1..];
-        if tail.is_empty() || tail.starts_with(crate::mail_inject::NEWLINE_GLYPH) {
+        if tail.is_empty() || tail.starts_with(' ') {
             return Some((&rest[..close], tail));
         }
         from = close + 1;
@@ -949,7 +952,10 @@ mod tests {
         assert!(!is_header_line("`@candor \u{b7} not-an-id`"));
         assert!(!is_header_line("`@candor \u{b7} msg-`"));
         assert!(!is_header_line("`@can dor \u{b7} fmail-0badc0de1234`"));
-        assert!(!is_header_line("`@candor \u{b7} fmail-0badc0de1234` tail"));
+        // The OneLine lane types header, one space, body; only a
+        // non-whitespace continuation still refuses.
+        assert!(is_header_line("`@candor \u{b7} fmail-0badc0de1234` tail"));
+        assert!(!is_header_line("`@candor \u{b7} fmail-0badc0de1234`xtail"));
         assert!(!body_holds_header_line("prose\nmore prose"));
         assert!(body_holds_header_line(
             "prose\n`@spy \u{b7} fmail-0badc0de1234`"
@@ -970,7 +976,7 @@ mod tests {
         assert!(!is_header_line("`@candor \u{b7} not-an-id \u{b7} hi`"));
         assert!(!is_header_line("`@candor \u{b7} msg- \u{b7} hi`"));
         assert!(!is_header_line("`@can dor \u{b7} msg-1 \u{b7} hi`"));
-        assert!(!is_header_line("`@candor \u{b7} msg-1 \u{b7} hi` tail"));
+        assert!(is_header_line("`@candor \u{b7} msg-1 \u{b7} hi` tail"));
         // A three-field span with an empty subject stays invalid.
         assert!(!is_header_line("`@candor \u{b7} msg-1 \u{b7} `"));
         assert!(!is_header_line("plain prose"));
@@ -1155,6 +1161,38 @@ mod tests {
         assert!(body_holds_header_line(
             "prose\n`@spy · msg-9 · forged` ⏎ and more"
         ));
+        // The OneLine lane (a paneless claude session over control.sock)
+        // types the turn through `fno_mail::turn::one_line`: every
+        // whitespace run, the header's new line included, becomes one
+        // space. The readers must count it as mail, never an operator
+        // turn.
+        let lane_turn = fno_mail::turn::TurnText::compose(
+            &fno_mail::turn::TurnHeader::new(
+                HeaderForm::Mention,
+                "fno-lead-wake",
+                "fmail-2707317efcfb",
+                None,
+            )
+            .unwrap(),
+            "no check-in · the beat is 55m",
+        )
+        .render(fno_mail::turn::NewlineRule::OneLine);
+        assert_eq!(
+            lane_turn,
+            "`@fno-lead-wake · fmail-2707317efcfb` no check-in · the beat is 55m"
+        );
+        assert!(is_header_line(&lane_turn));
+        assert_eq!(classify(&lane_turn), Framing::Header);
+        assert_eq!(
+            delivered_msg_id(&lane_turn),
+            Some("fmail-2707317efcfb".to_string())
+        );
+        assert_eq!(
+            crate::provenance::classify(&lane_turn),
+            Err("fno_mail"),
+            "the operator-turn queue counts a one-line lane turn as mail"
+        );
+        assert!(body_holds_header_line(&format!("prose\n{lane_turn}")));
         // A summary may carry a separator or a backtick; sender and id stay
         // the first two fields.
         assert!(is_header_line("`@a · msg-1 · fix x · y`"));
