@@ -429,12 +429,7 @@ mod tests {
     #[test]
     fn request_groups_nodes_first_then_shared_mentions() {
         let rows = vec![
-            row(
-                "node:n1",
-                Some("n1"),
-                "ship the board",
-                "shipped as #483",
-            ),
+            row("node:n1", Some("n1"), "ship the board", "shipped as #483"),
             row("ask:t1", None, "run `fno doctor test` first", ""),
             row("ask:t2", None, "`fno doctor test` failed again", ""),
         ];
