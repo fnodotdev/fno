@@ -14,7 +14,7 @@ use crate::cli_args::{AppOp, AppView};
 /// and this group's guide lives behind the `fno whoami guide app` topic,
 /// so the refusal is the one self-teaching surface.
 pub fn bare_usage() -> String {
-    "fno mux app: an operation word is required: open, show, focus, shot, state or close. \
+    "fno mux app: an operation word is required: open, show, focus, answer, shot, state or close. \
      The full guide prints at `fno whoami guide app`."
         .to_string()
 }
@@ -82,7 +82,14 @@ pub fn run(op: AppOp) -> i32 {
         AppOp::Open(args) => open(&args.mode, args.focus.as_deref(), &args.common),
         AppOp::Show(args) => show(args.view, &args.common),
         AppOp::Focus(args) => focus(&args.agent, &args.common),
-        AppOp::Shot(args) => shot(&args.out, &args.theme, args.find.as_deref(), args.mode),
+        AppOp::Answer(args) => answer(args.option, &args.common),
+        AppOp::Shot(args) => shot(
+            &args.out,
+            &args.theme,
+            args.find.as_deref(),
+            args.mode,
+            args.ask.as_deref(),
+        ),
         AppOp::State { json } => state(json.json),
         AppOp::Close { common } => close(&common),
     }
@@ -176,6 +183,32 @@ fn focus(agent: &str, common: &crate::cli_args::MuxCommon) -> i32 {
         Ok(()) => 0,
         Err(e) => {
             eprintln!("fno mux app focus: {e}");
+            1
+        }
+    }
+}
+
+/// `mux app answer <option>`: pick option N on the pending question in the
+/// running app, through the path a click on that row rides. Refuses naming
+/// the session when no live app answers the pid file.
+fn answer(option: u32, common: &crate::cli_args::MuxCommon) -> i32 {
+    if !require_macos("answer") {
+        return 2;
+    }
+    let session = session_or_default(common.server.as_ref());
+    if running_app_pid(&session).is_none() {
+        eprintln!(
+            "fno mux app answer: no fno-app runs for session {session}; open one with fno mux app open --server {session}"
+        );
+        return 3;
+    }
+    let cmd = crate::app_control::AppCommand::Answer {
+        option: option as usize,
+    };
+    match crate::app_control::append(&session, &cmd) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("fno mux app answer: {e}");
             1
         }
     }
@@ -446,10 +479,44 @@ fn seed_question(root: &Path) -> bool {
     }
 }
 
+/// The turn that leaves an ask-the-user call open: the agent's lead-in
+/// text, then an `AskUserQuestion` tool use with no result after it. With
+/// `long`, the first option is long enough to wrap.
+fn ask_rows(long: bool) -> String {
+    let first = if long {
+        "Stop hook only: post the all-stop through the target stop hook when the loop ends, so the announcement lands in this session's transcript and nowhere else. (Recommended)"
+    } else {
+        "Stop hook only: post the all-stop when this session's loop ends (Recommended)"
+    };
+    let input = serde_json::json!({"questions": [{
+        "header": "Land",
+        "question": "Where should the all-stop announcement land?",
+        "multiSelect": false,
+        "options": [
+            {"label": first, "description": "Posts once at loop end, in this session's transcript. The HQ feed stays quiet."},
+            {"label": "HQ feed only: broadcast the all-stop to every agent on the fleet", "description": "Every agent on the fleet reads it at once. This session's transcript carries no line."},
+            {"label": "Both: the stop hook post at loop end and the HQ feed broadcast", "description": "The transcript and the fleet both carry it. The announcement lands twice."}
+        ]
+    }]});
+    let text = serde_json::json!({
+        "parentUuid": null, "isSidechain": false, "type": "assistant", "uuid": "a3",
+        "message": {"id": "m3", "role": "assistant", "content": [{"type": "text",
+            "text": "The stop hook reads the intent tag, but the all-stop branch returns before the announcement fires. Pick where it lands and I will wire it."}]},
+        "sessionId": "00000000-0000-4000-8000-000000000001"
+    });
+    let call = serde_json::json!({
+        "parentUuid": null, "isSidechain": false, "type": "assistant", "uuid": "a4",
+        "message": {"id": "m4", "role": "assistant", "content": [{"type": "tool_use",
+            "id": "toolu_ask", "name": "AskUserQuestion", "input": input}]},
+        "sessionId": "00000000-0000-4000-8000-000000000001"
+    });
+    format!("{text}\n{call}\n")
+}
+
 /// A claude-shaped transcript in the world's projects dir, so the chat
 /// view renders a conversation. The FILE is the contract: rows carry
 /// type + message.content like the real transcripts the server reads.
-fn seed_transcript(root: &Path) -> bool {
+fn seed_transcript(root: &Path, ask: Option<&str>) -> bool {
     // The dir name is the project slug of the world children's cwd
     // (world_cmd pins them to code/checkout); that is the only name the
     // newest-lookup can find.
@@ -473,6 +540,10 @@ fn seed_transcript(root: &Path) -> bool {
         r#"{"parentUuid":null,"isSidechain":false,"type":"assistant","uuid":"a2","message":{"id":"m2","role":"assistant","content":[{"type":"text","text":"Frontmost identical across the three reads, no keystrokes, no Dock bounce, and the frame lands. The window composites invisible the whole time."}]},"sessionId":"00000000-0000-4000-8000-000000000001"}"#,
         "\n",
     );
+    let rows = match ask {
+        Some(kind) => format!("{rows}{}", ask_rows(kind == "overflow")),
+        None => rows.to_string(),
+    };
     match std::fs::write(dir.join(format!("{session}.jsonl")), rows) {
         Ok(()) => true,
         Err(e) => {
@@ -487,7 +558,13 @@ fn seed_transcript(root: &Path) -> bool {
 /// the caller's own state: its own HOME, mux dir, agents home and graph
 /// store, all under /tmp (a socket path must stay under 104 bytes on
 /// macOS), and every child strips the caller's identity keys.
-fn shot(out: &str, theme: &str, find: Option<&str>, mode: Option<AppView>) -> i32 {
+fn shot(
+    out: &str,
+    theme: &str,
+    find: Option<&str>,
+    mode: Option<AppView>,
+    ask: Option<&str>,
+) -> i32 {
     if !require_macos("shot") {
         return 2;
     }
@@ -545,7 +622,7 @@ fn shot(out: &str, theme: &str, find: Option<&str>, mode: Option<AppView>) -> i3
         return 1;
     };
     // The transcript lands first: the adopt seed reads it as evidence.
-    let transcript = seed_transcript(&world.root);
+    let transcript = seed_transcript(&world.root, ask);
     let fleet = seed_fleet(&world.root, &front, &first_node);
     let question = seed_question(&world.root);
     if !(transcript && fleet && question) {
@@ -658,10 +735,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bare_usage_names_the_six_commands() {
+    fn bare_usage_names_the_seven_commands() {
         let line = bare_usage();
         assert!(
-            line.contains("open, show, focus, shot, state or close"),
+            line.contains("open, show, focus, answer, shot, state or close"),
             "{line}"
         );
         assert!(line.contains("fno whoami guide app"), "{line}");
