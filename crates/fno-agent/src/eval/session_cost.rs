@@ -1573,41 +1573,34 @@ mod tests {
         assert_eq!(out["unpriced_model"], "m1");
     }
 
+    /// The incremental backfill's decision and cost guard, one table: a
+    /// measured entry keeps instead of re-parsing; a missing cost or token
+    /// count recomputes; the write never replaces a measured cost with
+    /// null. Covers `backfill_entry_decision` and `preserved_backfill_cost`
+    /// on the same rows a real pass sees.
     #[test]
-    fn backfill_keeps_a_measured_entry() {
-        // An entry carrying both a numeric cost and a token count is
-        // measured; the incremental pass keeps it instead of re-parsing.
-        assert!(matches!(
-            backfill_entry_decision(Some(6.72), Some(1_000.0)),
-            BackfillEntry::Keep(cost) if cost == 6.72
-        ));
-    }
-
-    #[test]
-    fn backfill_recomputes_when_cost_or_tokens_missing() {
-        assert!(matches!(
-            backfill_entry_decision(None, None),
-            BackfillEntry::Recompute
-        ));
-        // Priced but tokenless recomputes: tokens are fillable even where a
-        // re-price would be blocked.
-        assert!(matches!(
-            backfill_entry_decision(Some(6.72), None),
-            BackfillEntry::Recompute
-        ));
-        assert!(matches!(
-            backfill_entry_decision(None, Some(10.0)),
-            BackfillEntry::Recompute
-        ));
-    }
-
-    #[test]
-    fn backfill_preserve_guard_never_nulls_a_measured_cost() {
-        // A priced recompute writes the new dollars.
+    fn backfill_decision_and_cost_preserve_table() {
+        assert!(
+            matches!(
+                backfill_entry_decision(Some(6.72), Some(1_000.0)),
+                BackfillEntry::Keep(cost) if cost == 6.72
+            ),
+            "a measured entry keeps instead of re-parsing"
+        );
+        for (cost, tokens) in [(None, None), (Some(6.72), None), (None, Some(10.0))] {
+            assert!(
+                matches!(
+                    backfill_entry_decision(cost, tokens),
+                    BackfillEntry::Recompute
+                ),
+                "a missing cost or token count recomputes: {cost:?}/{tokens:?}"
+            );
+        }
+        // A priced recompute writes the new dollars; an unpriced recompute
+        // keeps the measured ones; unpriced over unmeasured stays null,
+        // never a zero.
         assert_eq!(preserved_backfill_cost(Some(6.72), Some(9.5)), json!(9.5));
-        // An unpriced recompute keeps the measured dollars.
         assert_eq!(preserved_backfill_cost(Some(6.72), None), json!(6.72));
-        // Unpriced over unmeasured stays null, never a zero.
         assert_eq!(preserved_backfill_cost(None, None), Value::Null);
     }
 }
