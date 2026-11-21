@@ -3,7 +3,7 @@
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-use crate::setup_messaging::{machine, sink_rows, Ask, Outcome, TermAsk};
+use crate::setup_messaging::{machine, Ask, Outcome};
 
 /// The re-entry command every skip names.
 pub const REENTER: &str = "fno config setup run --only attention-remote";
@@ -117,7 +117,7 @@ pub fn step(
     let existing = rows
         .iter()
         .position(|r| r["type"] == "ntfy" && r["url"].is_string() && r["topic"].is_string());
-    let (mut next_rows, url, topic, env) = match existing {
+    let (next_rows, url, topic, env) = match existing {
         Some(i) => {
             let r = rows[i].clone();
             let url = r["url"].as_str().unwrap_or_default().to_string();
