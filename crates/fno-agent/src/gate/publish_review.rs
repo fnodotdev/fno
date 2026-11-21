@@ -148,6 +148,10 @@ fn receipt(status: &str, reason: &str) -> String {
     }
 }
 
+fn round_receipt(status: &str, reason: &str) -> String {
+    format!("round: {status} ({reason})")
+}
+
 impl Answer {
     fn done(status: &'static str, reason: impl Into<String>) -> Self {
         let reason = reason.into();
@@ -166,7 +170,7 @@ impl Answer {
     pub fn exit(&self) -> i32 {
         match self.status {
             "posted" => 0,
-            "skipped" if self.reason.starts_with("no head-pinned attestation") => 2,
+            "skipped" if self.reason.starts_with("no review attestation") => 2,
             "skipped" if self.reason.starts_with("dry-run:") => 0,
             _ => 1,
         }
@@ -514,6 +518,7 @@ impl RoundAnswer {
             "reason": self.reason,
             "findings": self.findings,
             "inline_posted": self.inline_posted,
+            "receipt": round_receipt(self.status, &self.reason),
         })
     }
 }
@@ -614,6 +619,15 @@ fn failed_round_answer(
 /// refuse a COMMENT-type one - which is what lets this post land with no
 /// `review.bot_identity` configured at all.
 pub fn publish_round(payload: &Value, gh: &dyn Gh, journals: &[PathBuf]) -> RoundAnswer {
+    // A dry run writes nothing, and the round POST is a write, so it answers
+    // the skip before any gh call, mirroring the bot leg's dry-run posture.
+    if payload
+        .get("dry_run")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return RoundAnswer::done("skipped", "dry-run: round not posted", "", "");
+    }
     let cwd = Path::new(payload.get("cwd").and_then(Value::as_str).unwrap_or("."));
     let pr_number = payload.get("pr_number").and_then(Value::as_u64);
 
@@ -797,6 +811,18 @@ fn git_head(cwd: &Path) -> Option<String> {
     }
 }
 
+/// The checked-out branch of `cwd`, `None` on a detached HEAD or a failed
+/// read: no branch means no branch-scoped row to fall back to.
+fn git_branch(cwd: &Path) -> Option<String> {
+    let out = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(cwd)
+        .output()
+        .ok()?;
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !s.is_empty() && s != "HEAD").then_some(s)
+}
+
 /// The gate chain + POST, shared by both doors. Never panics on payload
 /// shape: a malformed field reads as its empty default and lands in the same
 /// refusals a real value would.
@@ -808,8 +834,9 @@ pub fn publish(payload: &Value, gh: &dyn Gh, env: &dyn Fn(&str) -> Option<String
         .unwrap_or(false);
     let pr_number = payload.get("pr_number").and_then(Value::as_u64);
 
-    // Default resolution (the command door): verdict/head/reviewer come from the
-    // newest head-pinned attestation for HEAD, never from memory.
+    // Default resolution (the command door): verdict/head/reviewer come from
+    // the newest attestation for HEAD, falling back to the branch row (a
+    // round carried across a rebase), never from memory.
     let mut verdict = payload
         .get("verdict")
         .and_then(Value::as_str)
@@ -840,31 +867,34 @@ pub fn publish(payload: &Value, gh: &dyn Gh, env: &dyn Fn(&str) -> Option<String
         // journal by migrating it on first resolve, so no hand-built path
         // may sit beside it (the state-roots lint refuses exactly that).
         let journals = [crate::paths::events_path(cwd)];
-        match newest_head_attestation(&journals, &head) {
-            Some(att) => {
-                verdict = att
-                    .get("verdict")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                head_sha = att
-                    .get("head_sha")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                reviewer = att
-                    .get("reviewer")
-                    .and_then(Value::as_str)
-                    .unwrap_or("manual")
-                    .to_string();
-            }
-            None => {
-                return Answer::done(
-                    "skipped",
-                    "no head-pinned attestation for HEAD; pass --verdict explicitly",
-                );
-            }
-        }
+        // Head-pinned first: the attestation is evidence about ONE commit.
+        // A round carried across a rebase lives on the branch row the round
+        // leg and the merge gate read, so the fallback consults it; an
+        // exact-head lookup alone goes silent there.
+        let att = newest_head_attestation(&journals, &head).or_else(|| {
+            git_branch(cwd).and_then(|branch| newest_branch_attestation(&journals, &branch))
+        });
+        let Some(att) = att else {
+            return Answer::done(
+                "skipped",
+                "no review attestation for HEAD or its branch; pass --verdict explicitly",
+            );
+        };
+        verdict = att
+            .get("verdict")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        head_sha = att
+            .get("head_sha")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        reviewer = att
+            .get("reviewer")
+            .and_then(Value::as_str)
+            .unwrap_or("manual")
+            .to_string();
     }
     if reviewer.is_empty() {
         reviewer = "manual".to_string();
@@ -1097,9 +1127,11 @@ pub fn run_publish_review(args: &[String]) -> i32 {
 
 /// The typer-shaped flags: `--pr-number N`, the hidden deprecated `--pr N`
 /// alias, `--verdict V`, `--dry-run`/`-N`; `--flag=value` spellings work
-/// throughout. Prints only the bot-review receipt on stderr and exits with
-/// the answer's own exit (the deleted Python door's exact contract), though
-/// both legs run on this call like the stdin door.
+/// throughout. Prints the bot-review receipt, then the round receipt, on
+/// stderr. The exit is the deleted Python door's contract (0 posted, 2 the
+/// no-attestation miss, 1 everything else) with one lift: when the bot leg
+/// only skipped and the round leg posted, stale-posted or found the round
+/// already posted, the round proof exists on the PR, so the exit is 0.
 fn run_publish_argv(args: &[String]) -> i32 {
     let mut pr_number: Option<i64> = None;
     let mut pr_legacy: Option<i64> = None;
@@ -1172,13 +1204,21 @@ The alias will be removed in a future release.\n"
             .to_string(),
         "dry_run": dry_run,
     });
-    let mut answer = publish(&payload, &GhReal, &|name: &str| std::env::var(name).ok()).to_json();
+    let bot = publish(&payload, &GhReal, &|name: &str| std::env::var(name).ok());
     let cwd = Path::new(payload.get("cwd").and_then(Value::as_str).unwrap_or("."));
     let journals = [crate::paths::events_path(cwd)];
-    answer["round"] = publish_round(&payload, &GhReal, &journals).to_json();
-    let receipt = answer.get("receipt").and_then(Value::as_str).unwrap_or("");
-    eprint!("{receipt}\n");
-    answer.get("exit").and_then(Value::as_i64).unwrap_or(1) as i32
+    let round = publish_round(&payload, &GhReal, &journals);
+    eprint!("{}\n", bot.receipt);
+    eprint!("{}\n", round_receipt(round.status, &round.reason));
+    // The lift needs a bot-leg SKIP, never a refusal or failure: a refused
+    // mirror or a failed POST keeps its nonzero exit even when the
+    // caller-auth round landed.
+    let bot_skipped = bot.status == "skipped";
+    let round_posted = matches!(round.status, "posted" | "stale-posted" | "already-posted");
+    if bot_skipped && round_posted {
+        return 0;
+    }
+    bot.exit()
 }
 
 #[cfg(test)]
@@ -1534,7 +1574,7 @@ mod tests {
         assert_eq!(dry.exit(), 0);
         let no_att = Answer::done(
             "skipped",
-            "no head-pinned attestation for HEAD; pass --verdict explicitly",
+            "no review attestation for HEAD or its branch; pass --verdict explicitly",
         );
         assert_eq!(no_att.exit(), 2);
         let refused = Answer::done("refused", "bot identity b is the PR author");

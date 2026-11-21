@@ -55,14 +55,18 @@ Options:
                           blocking). Repeat or comma-separate. Refuses an id
                           that does not resolve.
   --audience internal|customers|customer:<persona>|ask
-                          Who this node serves. No default. customer:<persona>
-                          needs the persona file; ask mints the node at
-                          audience?, files the question and holds dispatch;
-                          a --parent create carries the parent's audience
-                          and the receipt says so.
+                          Who this node serves. Required, coarse at filing: a
+                          customer node names its customer:<persona> when the
+                          node is scoped. customer:<persona> needs the persona
+                          file; ask mints the node at audience?, files the
+                          question and holds dispatch; a --parent create
+                          carries the parent's audience and the receipt says
+                          so.
   --why TEXT              The goal behind the ask, quoted from the user's
                           words when the ask came from him. Required.
-  --done-means TEXT       Acceptance a merge check can read. Required.
+  --done-means TEXT       Acceptance a merge check can read. Optional at
+                          filing; required when the node is scoped: the move
+                          to ready, a blueprint, or target start.
   --job <persona>/<job-slug>
                           The persona job served. Required with
                           customer:<persona>.

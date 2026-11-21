@@ -15,18 +15,15 @@ const UNKNOWN: &str = "unknown";
 /// window bounces the node; an un-time-boundable fix counts against it.
 const FOLLOWUP_DAYS: i64 = 14;
 
-/// The native ledger read: `<agents home>/../ledger.json`, `entries` wrapper
-/// or root array, empty on any read failure. One loader for the escalation
-/// view and the by-lane scorecard, so the file shape has one reader. A
-/// present-but-unparseable file warns instead of reading silently as empty.
+/// The native ledger read at the configured ledger path - the same
+/// resolution the register and the backfill write through - `entries`
+/// wrapper or root array, empty on any read failure. One loader for the
+/// escalation view and the by-lane scorecard, so the file shape and the
+/// path have one reader. A present-but-unparseable file warns instead of
+/// reading silently as empty.
 pub(crate) fn ledger_rows() -> Vec<Value> {
-    let home = crate::paths::AgentsHome::from_env();
-    let fno_dir = home
-        .root()
-        .parent()
-        .map(std::path::Path::to_path_buf)
-        .unwrap_or_else(|| std::path::PathBuf::from(".fno"));
-    let raw = std::fs::read_to_string(fno_dir.join("ledger.json")).unwrap_or_default();
+    let path = crate::paths_cli::ledger_json(&std::env::current_dir().unwrap_or_default());
+    let raw = std::fs::read_to_string(&path).unwrap_or_default();
     match serde_json::from_str::<Value>(&raw) {
         Ok(v) => v
             .get("entries")
@@ -37,8 +34,9 @@ pub(crate) fn ledger_rows() -> Vec<Value> {
         Err(err) => {
             if !raw.trim().is_empty() {
                 eprintln!(
-                    "fno-agent: ledger.json is present but unreadable ({err}); lane and \
-escalation reads see no ledger rows rather than a partial parse."
+                    "fno-agent: {} is present but unreadable ({err}); lane and \
+escalation reads see no ledger rows rather than a partial parse.",
+                    path.display()
                 );
             }
             Vec::new()

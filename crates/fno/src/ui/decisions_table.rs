@@ -75,6 +75,43 @@ impl Table {
     }
 }
 
+const AUDIENCE_MIN_W: usize = 14;
+const AUDIENCE_MAX_W: usize = 44;
+const RULING_MIN_W: usize = 24;
+
+/// The audience cell: the audience personas, then the persona jobs, each kept
+/// whole. Parts that do not fit within `w` are dropped, never cut mid-word.
+fn audience_cell(r: &DecisionRow, w: usize) -> String {
+    let audience = r
+        .audience
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("audience?");
+    let personas: Vec<&str> = audience.split(',').map(str::trim).collect();
+    let mut cell = String::new();
+    for (i, part) in personas
+        .iter()
+        .copied()
+        .chain(r.job.iter().map(String::as_str))
+        .enumerate()
+    {
+        let sep = if i == 0 {
+            ""
+        } else if i == personas.len() {
+            " "
+        } else {
+            ","
+        };
+        if i > 0 && cell.chars().count() + sep.len() + part.chars().count() > w {
+            break;
+        }
+        cell.push_str(sep);
+        cell.push_str(part);
+    }
+    cell
+}
+
 fn fit(s: &str, n: usize) -> String {
     let flat: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut out: String = flat.chars().take(n).collect();
@@ -107,9 +144,24 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
     // The description column shrinks before the ruling vanishes: 80
     // fixed columns plus one gap precede it, and a docked host pane is
     // narrower than the full view's 98-column floor.
-    let desc_w = 16.min(w.saturating_sub(81));
-    let text_w = w.saturating_sub(81 + desc_w + 1);
-    let columns = table_columns(desc_w, text_w);
+    // The audience column grows to the longest chip shown, so a chip like
+    // customer:solo-founder is not cut mid-word. It stops growing once the
+    // ruling would drop under RULING_MIN_W, so a narrow pane keeps the old
+    // 14-column cell.
+    let aud_w = shown
+        .iter()
+        .map(|r| audience_cell(r, usize::MAX).chars().count())
+        .max()
+        .unwrap_or(0)
+        .clamp(AUDIENCE_MIN_W, AUDIENCE_MAX_W)
+        .min(
+            w.saturating_sub(66 + 1 + 16 + 1 + RULING_MIN_W)
+                .max(AUDIENCE_MIN_W),
+        );
+    let fixed = 66 + aud_w;
+    let desc_w = 16.min(w.saturating_sub(fixed + 1));
+    let text_w = w.saturating_sub(fixed + 1 + desc_w + 1);
+    let columns = table_columns(aud_w, desc_w, text_w);
     let mut out = vec![head, format!("\x1b[1m{columns}\x1b[0m")];
     let body_rows = h.saturating_sub(5);
     let top = t.pick.saturating_sub(body_rows.saturating_sub(1));
@@ -118,22 +170,7 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
             "{} {} {} {} {} {} {} {} {} {}",
             fit(&r.lifecycle, 10),
             fit(&r.lane, 12),
-            fit(
-                &{
-                    let audience_word = r
-                        .audience
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                        .unwrap_or("audience?");
-                    if r.job.is_empty() {
-                        audience_word.to_string()
-                    } else {
-                        format!("{audience_word} {}", r.job.join(","))
-                    }
-                },
-                14
-            ),
+            fit(&audience_cell(r, aud_w), aud_w),
             fit(r.ts.get(..10).unwrap_or(&r.ts), 10),
             fit(&r.decider(), 10),
             if r.has_quote() { "Q" } else { " " },
@@ -187,13 +224,13 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
 /// The column header row: the fixed labels plus the width-aware
 /// description and decision labels. A narrow dock shortens the
 /// description word rather than cutting it mid-token.
-fn table_columns(desc_w: usize, text_w: usize) -> String {
+fn table_columns(aud_w: usize, desc_w: usize, text_w: usize) -> String {
     let desc_label = if desc_w >= 11 { "description" } else { "desc" };
     format!(
         "{} {} {} {} {} {} {} {} {} {}",
         fit("state", 10),
         fit("lane", 12),
-        fit("audience", 14),
+        fit("audience", aud_w),
         fit("date", 10),
         fit("who", 10),
         "Q",
@@ -347,5 +384,34 @@ mod tests {
         t.apply(Key::State);
         assert_eq!(t.pick, 0);
         assert_eq!(t.shown().len(), 1);
+    }
+
+    fn first_row(t: &mut Table) -> &mut DecisionRow {
+        t.rows.first_mut().expect("the seeded table has a row")
+    }
+
+    #[test]
+    fn a_long_audience_chip_is_not_cut_mid_word() {
+        let mut t = table();
+        first_row(&mut t).audience = Some("customer:solo-founder".into());
+        let page = render(&t, 140, 12).join("\n");
+        assert!(
+            page.contains("customer:solo-founder"),
+            "chip cut in:\n{page}"
+        );
+        // A job that does not fit is dropped whole, never cut mid-word.
+        first_row(&mut t).job = vec!["alpha".into(), "beta-long-job-name".into()];
+        let jobs = render(&t, 140, 12).join("\n");
+        assert!(jobs.contains("customer:solo-founder alpha"), "{jobs}");
+        assert!(!jobs.contains("beta"), "job cut in:\n{jobs}");
+        first_row(&mut t).job.clear();
+        first_row(&mut t).audience = Some("customer:solo-founder,customer:vibe-coder".into());
+        let two = render(&t, 140, 12).join("\n");
+        assert!(!two.contains("vibe"), "persona cut in:\n{two}");
+        let wide = render(&t, 200, 12).join("\n");
+        assert!(wide.contains("customer:vibe-coder"), "{wide}");
+        // A narrow pane keeps the ruling rather than widening the chip.
+        let narrow = render(&t, 110, 12).join("\n");
+        assert!(narrow.contains("ship it"), "ruling lost in:\n{narrow}");
     }
 }

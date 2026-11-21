@@ -46,12 +46,17 @@ const _: () =
 /// The caller identity a decide run resolves under: `Ambient` reads the
 /// process truth (the ancestry prover); `Forced` injects a handle (`Some`)
 /// or a scrubbed identity (`None`), the seam the tests drive where the law
-/// door injects a caller. A `Forced` handle holds no team.
+/// door injects a caller. A `Forced` handle holds no team. `Seeded` is the
+/// write-path test identity: it carries the full session triple so the
+/// provenance capture runs without the ambient prover, whose census walk
+/// reads whatever host the suite lands on.
 #[derive(Clone, Copy)]
 pub(crate) enum DecideIdentity {
     Ambient,
     #[cfg_attr(not(test), expect(dead_code))]
     Forced(Option<&'static str>),
+    #[cfg(test)]
+    Seeded(&'static str, &'static str),
 }
 
 /// The canonical handle of the agent session this process runs as, `None`
@@ -61,7 +66,11 @@ pub(crate) fn ambient_agent_handle() -> Option<String> {
 }
 
 impl DecideIdentity {
-    fn agent(self) -> Option<String> {
+    /// The full session identity this process resolves as: the session id
+    /// and harness the ambient prover names, `None` when the caller is no
+    /// agent session or the run injected an identity (a test seam carries a
+    /// handle, never a transcript).
+    fn session_identity(self) -> Option<(String, String)> {
         match self {
             Self::Ambient => {
                 let get = |name: &str| std::env::var(name).ok();
@@ -73,14 +82,26 @@ impl DecideIdentity {
                 );
                 let session = ident.session_id.as_deref().map(str::trim).unwrap_or("");
                 let harness = ident.harness.as_deref().map(str::trim).unwrap_or("");
-                if session.is_empty() || harness.is_empty() {
-                    None
-                } else {
-                    Some(crate::identity::canonical_handle(session))
-                }
+                (!session.is_empty() && !harness.is_empty())
+                    .then(|| (session.to_string(), harness.to_string()))
             }
+            Self::Forced(_) => None,
+            #[cfg(test)]
+            Self::Seeded(session, harness) => {
+                Some(((*session).to_string(), (*harness).to_string()))
+            }
+        }
+    }
+
+    fn agent(self) -> Option<String> {
+        match self {
+            Self::Ambient => self
+                .session_identity()
+                .map(|(session, _)| crate::identity::canonical_handle(&session)),
             Self::Forced(None) => None,
             Self::Forced(Some(h)) => Some((*h).to_string()),
+            #[cfg(test)]
+            Self::Seeded(session, _) => Some(crate::identity::canonical_handle(session)),
         }
     }
 
@@ -90,6 +111,8 @@ impl DecideIdentity {
         match self {
             Self::Ambient => ambient_role_covers(handle, subject),
             Self::Forced(_) => false,
+            #[cfg(test)]
+            Self::Seeded(_, _) => false,
         }
     }
 }
@@ -203,7 +226,7 @@ pub(crate) struct DecideDoor {
     keep: Vec<String>,
 }
 
-const DECIDE_USAGE: &str = "usage: fno inbox decide <subject> <decision> [--question-id q] [--rationale s] [--option s]... [--supersedes d-x] [--answers-ask s] [--class c] [--overturns s-or-d] --audience internal|customers|customer:<persona> [--why s] [--job p/s] [--expiry node|pr|date:<when>|never] [--keep d-x]... [--decided-by name] [--authority operator|role|agent|beastmode] [--graduation k] [--graduation-ref r] [--read cmd]... [--origin o]";
+const DECIDE_USAGE: &str = "usage: fno inbox decide <subject> <decision> [--question-id q] [--rationale s] [--option s]... [--supersedes d-x] [--answers-ask s] [--class c] [--overturns s-or-d] --audience internal|customers|customer:<persona> --why s [--job p/s] [--expiry node|pr|date:<when>|never] [--keep d-x]... [--decided-by name] [--authority operator|role|agent|beastmode] [--graduation k] [--graduation-ref r] [--read cmd]... [--origin o]  -- a ruling records in one step: audience and why are required when it lands, and a customer ruling names its persona there too.";
 
 pub(crate) fn parse_decide_door(args: &[String]) -> Result<DecideDoor, String> {
     let mut door = DecideDoor {
@@ -1092,6 +1115,9 @@ decision index. Run `fno backlog decide-reindex` before retrying."
     if let Some(a) = &provenance.authority_source {
         data["authority_source"] = json!(a);
     }
+    // The session provenance reads the transcript once, after every gate:
+    // a refused row records nothing, so it pins nothing and pays no read.
+    apply_session_provenance(&mut data, id);
     if let Some(r) = door
         .rationale
         .as_deref()
@@ -1500,6 +1526,90 @@ fn attended_provenance(
         attested_by: Some(origin.unwrap_or(decider).to_string()),
         relayed_by: None,
     }
+}
+
+/// The session provenance a decide row carries: the full session id, the
+/// harness, the transcript path, and the id of the user turn the row
+/// answers (the user's message for a relayed ruling). The turn pointer is
+/// pinned at write time because a transcript only grows: the turn a ruling
+/// came from is the last real user turn on disk when the row lands, and no
+/// later read can recover which one that was. `None` when this process
+/// resolves as no session (an attended terminal or an injected identity),
+/// which leaves the row reading exactly as rows before the field did.
+fn capture_session_provenance(id: DecideIdentity) -> Option<Value> {
+    let (session, harness) = id.session_identity()?;
+    let transcript = resolve_session_transcript(&session, &harness);
+    let mut out = Map::new();
+    out.insert("session_id".into(), json!(session));
+    out.insert("harness".into(), json!(harness));
+    if let Some(path) = &transcript {
+        out.insert("transcript".into(), json!(path.display().to_string()));
+    }
+    if let Some(turn) = transcript.as_deref().and_then(last_user_turn) {
+        let (turn_id, text, ts) = turn;
+        out.insert("turn_id".into(), json!(turn_id));
+        if !text.is_empty() {
+            out.insert(
+                "turn_excerpt".into(),
+                json!(crate::runtime::operator_turns::excerpt(&text)),
+            );
+        }
+        if let Some(ts) = ts {
+            out.insert("turn_ts".into(), json!(ts));
+        }
+    }
+    Some(Value::Object(out))
+}
+
+/// The transcript file a session's rows live in, per harness. A harness
+/// that keeps no readable transcript (opencode keys a SQLite store) answers
+/// `None`; the row still carries the session id and harness.
+fn resolve_session_transcript(session: &str, harness: &str) -> Option<std::path::PathBuf> {
+    match harness {
+        "claude" => crate::claude_drive::find_transcript(session),
+        "codex" => crate::codex_store::codex_rollout_path(None, session),
+        _ => None,
+    }
+}
+
+/// The write-site fold: capture the caller's session provenance and stamp it
+/// onto the row's data. A named helper so the write test pins the insertion
+/// directly, without driving the whole door and its store machinery.
+fn apply_session_provenance(data: &mut Value, id: DecideIdentity) {
+    let Some(sp) = capture_session_provenance(id) else {
+        return;
+    };
+    if let Some(map) = data.as_object_mut() {
+        map.insert("session_provenance".into(), sp);
+    }
+}
+
+/// The last row in a transcript a person typed: a user turn the classifier
+/// admits, so machine shapes (task notifications, command echoes) never
+/// stand in for the ruling. Returns the turn id (the row's uuid, else the
+/// derived digest the operator-turn queue mints), its classified text and
+/// its timestamp.
+fn last_user_turn(path: &std::path::Path) -> Option<(String, String, Option<String>)> {
+    let f = std::fs::File::open(path).ok()?;
+    let mut best: Option<(String, String, Option<String>)> = None;
+    for (line_no, line) in std::io::BufRead::lines(std::io::BufReader::new(f)).enumerate() {
+        let Ok(line) = line else {
+            continue;
+        };
+        let Ok(rec) = serde_json::from_str::<Value>(line.trim()) else {
+            continue;
+        };
+        if !crate::provenance::is_user_turn(&rec) {
+            continue;
+        }
+        let Ok(text) = crate::provenance::classify(&crate::provenance::turn_text(&rec)) else {
+            continue;
+        };
+        let turn_id = crate::runtime::operator_turns::turn_id(&rec, &text, line_no);
+        let ts = crate::provenance::turn_stamp(&rec).map(str::to_string);
+        best = Some((turn_id, text, ts));
+    }
+    best
 }
 
 /// The correction span and its attrs: parented at the overturned span, with
@@ -2085,6 +2195,87 @@ mod tests {
         assert!(
             !closed.contains("q-3c4d5e6f"),
             "a coordination note never retires the user's ask"
+        );
+    }
+
+    /// A decide run carrying a full session triple pins the session
+    /// provenance on the row: the full session id, harness, transcript
+    /// path, and the user turn the row answers (the last real user turn
+    /// the transcript held when the row landed). The seeded identity drives
+    /// the capture deterministically; the write fold stamps the row's data
+    /// map directly, so the pin exercises no door or store machinery.
+    #[test]
+    fn a_seeded_session_records_the_session_provenance() {
+        let _env_lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // A claude store the transcript resolver scans, planted in a temp
+        // dir so the test never reads the real one.
+        let config = tempfile::tempdir().expect("tempdir");
+        let projects = config.path().join("projects").join("-repo");
+        std::fs::create_dir_all(&projects).expect("mkdir");
+        let session = "4d2c3d68-7d5c-4c1e-9a51-2f8e0a9b1c3d";
+        std::fs::write(
+            projects.join(format!("{session}.jsonl")),
+            concat!(
+                r#"{"type":"user","uuid":"u-early","timestamp":"2026-11-20T10:00:00.000Z","message":{"role":"user","content":"earlier ask"}}"#,
+                "\n",
+                r#"{"type":"assistant","uuid":"a-1","timestamp":"2026-11-20T10:00:05.000Z","message":{"role":"assistant","content":[{"type":"text","text":"on it"}]}}"#,
+                "\n",
+                r#"{"type":"user","uuid":"u-ruling","timestamp":"2026-11-20T10:01:00.000Z","message":{"role":"user","content":"the docs gate reads the #NNN form"}}"#,
+                "\n",
+            ),
+        )
+        .expect("writes");
+        let _config =
+            crate::claims::EnvVarGuard::set("CLAUDE_CONFIG_DIR", config.path().to_str().unwrap());
+        let mut data = json!({
+            "decision_id": "d-prov0001",
+            "subject": "x-provnode",
+            "decided_by": "4d2c3d68",
+            "authority_source": "agent",
+        });
+        apply_session_provenance(&mut data, DecideIdentity::Seeded(session, "claude"));
+        let sp = data
+            .pointer("/session_provenance")
+            .expect("the row carries session provenance");
+        assert_eq!(sp["session_id"], json!(session));
+        assert_eq!(sp["harness"], json!("claude"));
+        let stored = sp["transcript"].as_str().expect("transcript path stored");
+        assert!(stored.ends_with(&format!("{session}.jsonl")), "{stored}");
+        assert_eq!(sp["turn_id"], json!("u-ruling"));
+        assert_eq!(
+            sp["turn_excerpt"],
+            json!("the docs gate reads the #NNN form")
+        );
+        assert_eq!(sp["turn_ts"], json!("2026-11-20T10:01:00.000Z"));
+    }
+
+    /// An injected identity (the test seam, and any caller with no session)
+    /// records no session provenance: the row reads with the decided_by
+    /// prefix exactly as rows before the field always did.
+    #[test]
+    fn an_injected_identity_records_no_session_provenance() {
+        let env = DoorEnv::new();
+        crate::paths::pin_test_claims_root(env.0.path());
+        let argv = [
+            "x-provold",
+            "Record the ruling",
+            "--authority",
+            "agent",
+            "--why",
+            "provenance test",
+        ];
+        let code = decide_door_write(decide_argv(&argv), DecideIdentity::Forced(Some("cl-prov1")));
+        assert_eq!(code, 0);
+        let (rows, _) = crate::law_match::all_decision_rows().expect("rows");
+        let row = rows
+            .iter()
+            .find(|r| decision_row_str(r, "subject") == "x-provold")
+            .expect("the row landed");
+        assert!(
+            row.pointer("/session_provenance").is_none(),
+            "an injected identity pins no session: {row}"
         );
     }
 }

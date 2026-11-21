@@ -57,7 +57,9 @@ pub struct AddArgs {
     /// The goal behind the ask (`--why`); the user's words when the ask came
     /// from him. Required.
     pub why: Option<String>,
-    /// Acceptance a merge check can read (`--done-means`). Required.
+    /// Acceptance a merge check can read (`--done-means`). Optional at
+    /// filing; required by the scoping gates (move to ready, blueprint,
+    /// target start).
     pub done_means: Option<String>,
     /// The persona jobs served (`--job <persona>/<job-slug>`, repeatable);
     /// one per named persona when the scope names personas.
@@ -1272,6 +1274,9 @@ fn prompt_value(label: &str, hint: &str) -> Option<String> {
 
 /// Fill the who/why fields the door would refuse on, from one prompted line
 /// each. Only what is missing is asked; a present flag is never overwritten.
+/// --done-means is not asked here: it is staged (D3526) and becomes required
+/// when the node is scoped, so an interactive filer is never prompted into
+/// guessing an acceptance.
 fn prompt_missing_record_fields(args: &mut AddArgs) {
     if args.why.as_deref().map(str::trim).unwrap_or("").is_empty() {
         if let Some(w) = prompt_value(
@@ -1281,26 +1286,12 @@ fn prompt_missing_record_fields(args: &mut AddArgs) {
             args.why = Some(w);
         }
     }
-    if args
-        .done_means
-        .as_deref()
-        .map(str::trim)
-        .unwrap_or("")
-        .is_empty()
-    {
-        if let Some(d) = prompt_value(
-            "done-means",
-            "required: the acceptance a merge check can read",
-        ) {
-            args.done_means = Some(d);
-        }
-    }
     // A --parent create inherits the parent's audience, so it prompts
     // nothing: asking would override the carry with an explicit value.
     if args.audience.is_none() && args.parent.is_none() {
         if let Some(a) = prompt_value(
             "audience",
-            "who this record serves: internal, customers, customer:<persona>, or ask (mint held until the operator answers)",
+            "who this record serves: internal, customers, customer:<persona>, or ask (mint held until the operator answers); the coarse audience files the node, a customer node names its persona when it is scoped",
         ) {
             args.audience = Some(a);
         }
@@ -1349,23 +1340,14 @@ pub(crate) fn create_node(
         ));
     }
     // Who and why have no default on a node: each filing names who it serves
-    // and the goal behind the ask, and a node states what done means. A
-    // carried scope still refuses a missing why or done-means.
+    // and the goal behind the ask. The acceptance is staged (D3526): filing
+    // takes the coarse audience and the why, and --done-means becomes
+    // required when the node is scoped - the move to ready, a blueprint, or
+    // a target start - so a filer who has only seen a symptom never guesses
+    // an acceptance. A carried scope still refuses a missing why.
     if args.why.as_deref().map(str::trim).unwrap_or("").is_empty() {
         return Err(refused(
             "Error: --why is required: the goal behind the ask, quoted from the user's words when the ask came from him.",
-            1,
-        ));
-    }
-    if args
-        .done_means
-        .as_deref()
-        .map(str::trim)
-        .unwrap_or("")
-        .is_empty()
-    {
-        return Err(refused(
-            "Error: --done-means is required: the acceptance a merge check can read.",
             1,
         ));
     }
@@ -1553,16 +1535,15 @@ pub(crate) fn create_node(
     }
     let (minted, node, rollup_lines, dropped, source_node_id) = loop {
         retry += 1;
-        let base_version = crate::graph_store::base_version(&graph)
+        let (base_version, snapshot) = crate::graph_store::read_snapshot(&graph)
             .map_err(|e| refused(format!("graph read failed: {e}"), 1))?;
-        let rows = crate::graph_store::read_rows(&graph)
-            .map_err(|e| refused(format!("graph read failed: {e}"), 1))?;
+        let rows: &[Value] = &snapshot.rows;
         let known_ids: std::collections::BTreeSet<String> = rows
             .iter()
             .filter_map(|r| r.get("id").and_then(Value::as_str))
             .map(str::to_string)
             .collect();
-        if let Some(row) = reuse(&rows) {
+        if let Some(row) = reuse(rows) {
             let id = row
                 .get("id")
                 .and_then(Value::as_str)
@@ -1578,7 +1559,7 @@ pub(crate) fn create_node(
         // Fail closed BEFORE minting: an unresolvable assertion names the flag.
         let resolved_source_node: Option<String> = match &args.source_node {
             Some(token) => {
-                let resolved = node_ref::resolve_asserted_id(token, &rows, "--source-node", None)
+                let resolved = node_ref::resolve_asserted_id(token, rows, "--source-node", None)
                     .map_err(|e| refused(e.0, e.1))?;
                 Some(resolved)
             }
@@ -1708,7 +1689,7 @@ pub(crate) fn create_node(
         // Refuse a birth --parent that cannot hold the child; the scope and
         // lenient pass-through cases are named in strand.birth_parent_refusal.
         if let Some(parent) = &args.parent {
-            if let Some(message) = birth_parent_refusal(&rows, &node, parent) {
+            if let Some(message) = birth_parent_refusal(rows, &node, parent) {
                 return Err(refused(message, 1));
             }
         }
@@ -1717,7 +1698,7 @@ pub(crate) fn create_node(
         // its parent edge lands in the SAME write, so no window exists where the
         // node is linked without a receipt. Strictly non-fatal: any failure
         // degrades to the orphan line.
-        let mut working = rows.clone();
+        let mut working = rows.to_vec();
         let rollup_lines: Vec<String>;
         {
             let mut entries = working.clone();
@@ -1756,7 +1737,7 @@ pub(crate) fn create_node(
         // every commit (a plan-less filing's stored status lands as idea), the
         // same recompute commit_rows_via_store ran.
         crate::graph_store::recompute_statuses_with_plan_rungs(&mut working, None);
-        match crate::graph_store::locked_mutate(
+        match crate::graph_store::locked_mutate_snapshot(
             &graph,
             crate::graph_store::MutateInput {
                 entries: working,
@@ -1764,6 +1745,7 @@ pub(crate) fn create_node(
                 base_version,
                 plan_rungs: None,
             },
+            snapshot,
             crate::graph_store::DEFAULT_LOCK_TIMEOUT,
         ) {
             Ok(_) => break (minted, node, rollup_lines, dropped, source_node_id),

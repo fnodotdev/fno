@@ -282,6 +282,17 @@ Then read what already moves on the same files. Run `fno backlog collisions prs 
    references emit a warning and are skipped so intake never fails on
    a missing sibling.
 
+   Intake binds the plan and lands the node ready, and ready is a scoped
+   rung: the node carries `done-means` and, for a customer node, its
+   `customer:<persona>` before it dispatches. Filing staged those
+   facts (the coarse audience and the why were enough at filing); blueprint
+   is where they land. For a plan bound to an existing node, the
+   move-to-ready door refuses the bind until both are set and names the
+   flag. For intake-minted nodes, set them at intake time:
+   `fno backlog update "$NODE_ID" done_means="<acceptance a merge
+   check can read>"` (and `audience=customer:<persona>` when the plan
+   serves customers). Target start refuses the node without them.
+
    The user-facing `no-adopt` modifier (and `--no-adopt` flag) keep their
    names: that surface is a separate breaking change (see the rename plan's
    Out of Scope). Setting either skips this step entirely. The plan file is

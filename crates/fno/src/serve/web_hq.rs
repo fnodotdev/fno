@@ -10,7 +10,7 @@ use crate::backlog_model::Inputs;
 use crate::client::org_seats::{self, Fleet};
 use crate::digest_overlay::ObsidianCfg;
 use crate::link::{plan_link, PlanLink};
-use crate::needs_overlay::{QuestionItem, QuestionsFold};
+use crate::needs_overlay::{AnsweredItem, QuestionItem, QuestionsFold};
 
 #[cfg_attr(not(feature = "web"), allow(dead_code))]
 pub const REFRESH_AFTER: Duration = Duration::from_secs(60);
@@ -43,6 +43,10 @@ pub struct Board {
     failure: Option<(String, Instant)>,
     /// The last good question read. A failed read keeps it and sets the error.
     questions: Vec<OpenQuestion>,
+    /// The same read's recently answered rows, newest first: the Inbox's
+    /// Answered section. A failed read keeps the last good list with the
+    /// open one.
+    answered: Vec<AnsweredItem>,
     questions_error: Option<String>,
     questions_read: bool,
     prs: Vec<Value>,
@@ -116,7 +120,8 @@ impl Board {
         }
         self.questions_read = true;
         match questions {
-            Ok(fold) => {
+            Ok(mut fold) => {
+                self.answered = answered_newest_first(std::mem::take(&mut fold.answered));
                 self.questions = open_questions(fold, backlog, agents);
                 self.questions_error = None;
             }
@@ -174,6 +179,12 @@ impl Board {
             (None, false) => Some("not read yet"),
             (None, true) => None,
         }
+    }
+
+    /// The last good read's recently answered rows, newest first. The stamps
+    /// sort as strings, as the open list's `created_at` does.
+    pub fn answered(&self) -> &[AnsweredItem] {
+        &self.answered
     }
 
     /// The ready, unclaimed backlog rows in keeper order, folded from the
@@ -254,6 +265,13 @@ fn open_questions(
             }
         })
         .collect()
+}
+
+/// The answered rows newest first by their `at` stamp.
+fn answered_newest_first(items: Vec<AnsweredItem>) -> Vec<AnsweredItem> {
+    let mut out = items;
+    out.sort_by(|a, b| b.at.cmp(&a.at));
+    out
 }
 
 fn question_json(open: &OpenQuestion) -> Value {
@@ -610,5 +628,44 @@ mod tests {
             .filter_map(|row| row["id"].as_str())
             .collect();
         assert_eq!(ids, ["x-1"]);
+    }
+
+    #[test]
+    fn the_board_keeps_answered_rows_newest_first_and_through_a_failed_read() {
+        let item = |id: &str, at: &str| crate::needs_overlay::AnsweredItem {
+            id: id.into(),
+            title: format!("title {id}"),
+            answer: "no, hold and watch".into(),
+            at: at.into(),
+            ..Default::default()
+        };
+        let fold = |answered: Vec<crate::needs_overlay::AnsweredItem>| QuestionsFold {
+            answered,
+            ..QuestionsFold::default()
+        };
+        let mut board = Board::default();
+        board.record(
+            Err("no fleet".into()),
+            Ok(fold(vec![
+                item("q-old", "2026-11-17T09:00:00Z"),
+                item("q-new", "2026-11-19T09:00:00Z"),
+            ])),
+            &Inputs::default(),
+            1,
+            &[],
+        );
+        let ids: Vec<&str> = board.answered().iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(ids, ["q-new", "q-old"]);
+        // A failed question read keeps the last good answered list beside the
+        // open one and names the reason.
+        board.record(
+            Err("no fleet".into()),
+            Err("needs timed out".into()),
+            &Inputs::default(),
+            2,
+            &[],
+        );
+        assert_eq!(board.answered().len(), 2);
+        assert_eq!(board.questions_error(), Some("needs timed out"));
     }
 }

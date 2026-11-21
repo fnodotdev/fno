@@ -39,4 +39,6 @@ pub(crate) mod web_hq;
 #[cfg(feature = "web")]
 pub(crate) mod web_invites;
 #[cfg(feature = "web")]
+pub(crate) mod web_mine;
+#[cfg(feature = "web")]
 pub(crate) mod web_trace;

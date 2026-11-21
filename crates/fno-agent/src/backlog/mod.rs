@@ -1107,9 +1107,110 @@ pub(crate) fn authoritative_sync_prepared(
         connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let report = write_changed_ids(&transaction, before, after, true, changed)?;
     stamp_version(&transaction, version)?;
-    confirm_ids_landed_in(&transaction, after, &report.present_ids)?;
+    confirm_ids_landed_in(&transaction, after, &report.present_ids, true)?;
     transaction.commit()?;
     Ok(version.to_string())
+}
+
+/// The publish for a write whose snapshot is older than the store: the
+/// whole-graph version moved, but a version that moves for EVERY write says
+/// nothing about the rows this write touches. Under the write lock each
+/// touched row's stored write count must equal the count the snapshot read
+/// (a new id must still be absent, and no other id may hold its slug).
+/// Then only those rows land, and the store gets a version chained from the
+/// one it holds, because the snapshot's own digest no longer describes the
+/// store. `Ok(None)` means a touched row moved: nothing was written and the
+/// caller retries on a fresh snapshot. A write that needs seconds to plan
+/// on a large graph otherwise loses to any writer that lands meanwhile.
+pub(crate) fn authoritative_sync_rebased(
+    graph: &Path,
+    before: &[Value],
+    after: &[Value],
+    changed: &[String],
+    snapshot_rows: &std::collections::BTreeMap<String, i64>,
+    snapshot_digest: &str,
+) -> Result<Option<String>, StoreDbError> {
+    use sha2::{Digest, Sha256};
+
+    let mut connection = open_holding_lock(graph)?;
+    let transaction =
+        connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let ids: Vec<&str> = changed.iter().map(String::as_str).collect();
+    let stored = nodes::versions(&transaction, Some(&ids))?;
+    if ids
+        .iter()
+        .any(|id| stored.get(*id) != snapshot_rows.get(*id))
+    {
+        return Ok(None);
+    }
+    for row in after {
+        let Some(id) = RowFacts::id_of(row).filter(|id| ids.contains(id)) else {
+            continue;
+        };
+        let Some(slug) = RowFacts::of(row).and_then(|facts| facts.slug().as_str()) else {
+            continue;
+        };
+        let held_elsewhere: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM nodes WHERE slug = ?1 AND id <> ?2)",
+            params![slug, id],
+            |found| found.get(0),
+        )?;
+        if held_elsewhere {
+            return Ok(None);
+        }
+    }
+    // The epic child cap counts a parent's children, and a sibling filed
+    // meanwhile never touches this write's rows. A parent that gained
+    // children since the snapshot sends the write back to re-plan.
+    let before_by_id: std::collections::HashMap<&str, &Value> = before
+        .iter()
+        .filter_map(|row| RowFacts::id_of(row).map(|id| (id, row)))
+        .collect();
+    let parent_of = |row: &Value| {
+        RowFacts::of(row)
+            .and_then(|facts| facts.parent().as_str())
+            .map(str::to_string)
+    };
+    for row in after {
+        let Some(id) = RowFacts::id_of(row).filter(|id| ids.contains(id)) else {
+            continue;
+        };
+        let Some(parent) = parent_of(row).filter(|parent| !parent.is_empty()) else {
+            continue;
+        };
+        if before_by_id
+            .get(id)
+            .and_then(|old| parent_of(*old))
+            .as_deref()
+            == Some(parent.as_str())
+        {
+            continue;
+        }
+        let seen = before
+            .iter()
+            .filter(|old| parent_of(*old).as_deref() == Some(parent.as_str()))
+            .count() as i64;
+        let now: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM nodes WHERE parent_id = ?1",
+            params![parent],
+            |found| found.get(0),
+        )?;
+        if now > seen {
+            return Ok(None);
+        }
+    }
+    let version = format!(
+        "sqlite:{:x}",
+        Sha256::digest(format!(
+            "{}\0{snapshot_digest}",
+            stored_version(&transaction)?
+        ))
+    );
+    let report = write_changed_ids(&transaction, before, after, true, changed)?;
+    stamp_version(&transaction, &version)?;
+    confirm_ids_landed_in(&transaction, after, &report.present_ids, false)?;
+    transaction.commit()?;
+    Ok(Some(version))
 }
 
 /// The ids whose canonical row differs between the two row sets, sorted.
@@ -1216,6 +1317,7 @@ fn confirm_ids_landed_in(
     connection: &Connection,
     after: &[Value],
     changed_present: &[String],
+    exact_total: bool,
 ) -> Result<(), StoreDbError> {
     const SQLITE_BIND_BATCH: usize = 900;
     let stored_count: i64 = connection.query_row(
@@ -1260,7 +1362,9 @@ fn confirm_ids_landed_in(
         .map(String::as_str)
         .filter(|id| !stored.contains(*id))
         .collect();
-    if stored_count == after.len() as i64 && missing.is_empty() {
+    // A rebased write sees only its own rows: rows other writers added or
+    // removed since its snapshot make the total differ without any loss.
+    if (!exact_total || stored_count == after.len() as i64) && missing.is_empty() {
         return Ok(());
     }
     Err(StoreDbError::Refused(format!(
@@ -1818,6 +1922,33 @@ pub(crate) fn read_entries_where_defaulted_no_overlay(
     query_rows(&read_connection(graph)?, query, Some(keep_malformed), false)
 }
 
+/// One read transaction's view of the graph for a writer that plans over it:
+/// the version stamp, each row's write count, the raw export the store diffs
+/// against, and the defaulted rows the writer plans over. One transaction
+/// keeps all four describing the same store state.
+pub(crate) struct SnapshotRead {
+    pub(crate) version: String,
+    pub(crate) row_versions: std::collections::BTreeMap<String, i64>,
+    pub(crate) raw: Vec<Value>,
+    pub(crate) rows: Vec<Value>,
+}
+
+pub(crate) fn read_snapshot_rows(graph: &Path) -> Result<SnapshotRead, StoreDbError> {
+    let connection = read_connection(graph)?;
+    let transaction = connection.unchecked_transaction()?;
+    let version = meta(&transaction, "version")?.ok_or("SQLite graph has no version")?;
+    let row_versions = nodes::versions(&transaction, None)?;
+    let query = RowQuery::default();
+    let raw = query_rows(&transaction, &query, None, true)?;
+    let rows = query_rows(&transaction, &query, Some(false), true)?;
+    Ok(SnapshotRead {
+        version,
+        row_versions,
+        raw,
+        rows,
+    })
+}
+
 /// The old whole-export enumeration, without materializing any node bodies.
 pub fn row_ordinals(graph: &Path) -> Result<std::collections::HashMap<String, i64>, StoreDbError> {
     let connection = read_connection(graph)?;
@@ -2206,6 +2337,38 @@ fn sorted_value(value: &Value) -> Value {
         Value::Array(rows) => Value::Array(rows.iter().map(sorted_value).collect()),
         _ => value.clone(),
     }
+}
+
+/// The ids among `candidates` whose row in `entries` differs from the row a
+/// writer planned over. The store diff against the raw export also flags rows
+/// that merely lack normalised defaults, and a rebased write must claim only
+/// the rows it actually changed.
+pub(crate) fn rows_touched(
+    planned: &[Value],
+    entries: &[Value],
+    candidates: &[String],
+) -> Vec<String> {
+    let index = |rows: &[Value]| -> std::collections::HashMap<String, usize> {
+        rows.iter()
+            .enumerate()
+            .filter_map(|(at, row)| RowFacts::id_of(row).map(|id| (id.to_string(), at)))
+            .collect()
+    };
+    let planned_at = index(planned);
+    let entries_at = index(entries);
+    candidates
+        .iter()
+        .filter(
+            |id| match (planned_at.get(id.as_str()), entries_at.get(id.as_str())) {
+                (Some(&before), Some(&after)) => match (planned.get(before), entries.get(after)) {
+                    (Some(old), Some(new)) => canonical_row(old) != canonical_row(new),
+                    _ => true,
+                },
+                _ => true,
+            },
+        )
+        .cloned()
+        .collect()
 }
 
 fn canonical_row(row: &Value) -> String {

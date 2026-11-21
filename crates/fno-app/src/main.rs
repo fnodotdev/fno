@@ -58,6 +58,9 @@ struct Args {
     /// instead of capturing. Diagnostic.
     #[arg(long = "shot-hold", hide = true)]
     shot_hold: bool,
+    /// Open the answer sheet on the newest question: the sheet proof.
+    #[arg(long = "shot-sheet", hide = true)]
+    shot_sheet: bool,
     /// The chat pane keeps its empty start view for the frame, whatever
     /// the world's focus carries. Shot-only.
     #[arg(long = "shot-empty-chat", hide = true)]
@@ -86,6 +89,8 @@ enum ShotView {
     Orchestration,
     /// The mods and layouts feed
     Mods,
+    /// The inbox
+    Inbox,
 }
 
 impl ShotView {
@@ -95,6 +100,7 @@ impl ShotView {
             ShotView::Terminal => fno_app::MainView::Terminal,
             ShotView::Orchestration => fno_app::MainView::Orchestration,
             ShotView::Mods => fno_app::MainView::Mods,
+            ShotView::Inbox => fno_app::MainView::Inbox,
         }
     }
 }
@@ -146,6 +152,7 @@ fn main() {
                 ShotSettings::Page => fno_app::SettingsShot::Page,
             }),
             hold: args.shot_hold,
+            sheet: args.shot_sheet,
             empty_chat: args.shot_empty_chat,
             cmd: args.shot_cmd,
             draft: args.shot_draft,

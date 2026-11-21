@@ -222,6 +222,68 @@ fn typing_row(
     })
 }
 
+/// The fields of a witness row the arm rule reads, parsed at the boundary
+/// (R1): the resolution of the pane bind and the harness session it bound.
+#[derive(serde::Deserialize, Default)]
+struct SubmitArmFields {
+    #[serde(default)]
+    data: SubmitArmData,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct SubmitArmData {
+    #[serde(default)]
+    resolution: Option<String>,
+    #[serde(default)]
+    harness_session: Option<String>,
+}
+
+/// The session a submit's witness row arms, or None: only a resolved bind
+/// (registry row or portal row, `resolution: "ok"`) carries an address,
+/// and an empty one arms nothing. Pure so the row rule is testable without
+/// a server fixture.
+pub(super) fn arm_session_from_row(event: &serde_json::Value) -> Option<String> {
+    let fields: SubmitArmFields = serde_json::from_value(event.clone()).ok()?;
+    if fields.data.resolution.as_deref() != Some("ok") {
+        return None;
+    }
+    fields.data.harness_session.filter(|s| !s.is_empty())
+}
+
+/// Fire-and-forget conversation arm for one resolved submit: a detached
+/// `fno-agent mail-hold --session <id>` (the bare door's default action is
+/// the conversation arm), so the hold is live from the Enter instead of
+/// from the harness prompt hook, which for a queued prompt fires minutes
+/// after the witness expired (the 2026-11-19 interrupt: 72 of 81 witnessed
+/// submits sat in stretches with no hold). A one-shot thread spawns and
+/// waits the child, so the keystroke path never blocks and no zombie is
+/// left behind. A failed spawn is silent: the hook-side arm still covers
+/// the session, and no hold is worse than a late hold.
+fn spawn_conversation_arm(bin: std::path::PathBuf, harness_session: String) {
+    std::thread::spawn(move || {
+        let mut command = std::process::Command::new(bin);
+        command
+            .args(["mail-hold", "--session", &harness_session])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        if let Ok(mut child) = command.spawn() {
+            // Fire-and-forget: the wait only reaps the child so the server
+            // holds no zombie; the exit status names nothing we act on.
+            let _status = child.wait();
+        }
+    });
+}
+
+#[cfg(test)]
+#[path = "tests/submit_arm_tests.rs"]
+mod submit_arm_tests;
+
 impl Core {
     /// Node id for a `human_touch` event on `pane`: the pane's `FNO_NODE`
     /// provenance, or a node-shaped owning-squad cwd basename. Missing
@@ -281,9 +343,14 @@ impl Core {
     /// hand-started harness in a shell pane) writes `via: shell`,
     /// `resolution: unresolved`: the submit still counts, no transcript can
     /// join it. A failed append bumps `touch_emit_failures` and never
-    /// touches the keystroke path.
+    /// touches the keystroke path. A resolved submit also fires the
+    /// conversation arm ([`Self::spawn_conversation_arm`]) so the hold is
+    /// live from the Enter.
     pub(super) fn witness_submit(&self, pane: u64) {
         let event = self.witness_row(pane, "operator_submit");
+        if let Some(sid) = arm_session_from_row(&event) {
+            spawn_conversation_arm(crate::digest_overlay::fno_agent_bin(), sid);
+        }
         crate::pane_send_audit::queue_agents_event(
             &crate::pane_send_audit::pane_send_audit_events_path(),
             event,
@@ -374,13 +441,16 @@ impl Core {
 
     /// The tail of the `CoreMsg::Input` arm, one call from `handle_msg` so
     /// server.rs only shrinks: touch telemetry, the typing witness and the
-    /// submit witness. The mux arms no hold - a keystroke only witnesses a
-    /// human Enter (or a live draft, `operator_typing`), and the
-    /// conversation hold is armed by the harness prompt hook. A keystroke
-    /// here is past the relay guard - PaneSend and relay writes never reach
-    /// this - and past the reply classifier: terminal-generated loopback
-    /// (focus reports, query replies, mouse encodings) is not steering, so
-    /// a viewed row witnesses nothing.
+    /// submit witness. A keystroke only witnesses a human Enter (or a live
+    /// draft, `operator_typing`), and a resolved submit also arms the
+    /// conversation hold through the bare `mail-hold` door
+    /// ([`Self::spawn_conversation_arm`]): the harness prompt hook stays the
+    /// re-arm path, but it fires late for a prompt the harness queued
+    /// mid-answer, so Enter-time arming is what keeps a live chat covered.
+    /// A keystroke here is past the relay guard - PaneSend and relay writes
+    /// never reach this - and past the reply classifier: terminal-generated
+    /// loopback (focus reports, query replies, mouse encodings) is not
+    /// steering, so a viewed row witnesses nothing.
     pub(super) fn input_tail(&mut self, focus: u64, bytes: &[u8]) {
         self.input_tail_at(focus, bytes, Instant::now());
     }
