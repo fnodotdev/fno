@@ -1591,9 +1591,18 @@ TR_D="$ROOT/transcript-board-node.jsonl"
   printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"${TS_BASE}:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"what blocks ${IDS[0]} on the requests board\"}}"
   printf '%s\n' "{\"type\":\"assistant\",\"timestamp\":\"${TS_BASE}:01.000Z\",\"message\":{\"role\":\"assistant\",\"content\":\"the fold landed in #483; the board paints this week\"},\"stop_reason\":\"end_turn\"}"
 } > "$TR_D"
+printf '{"transcript": "%s"}\n' "$TR_B" > "$CAPTURE/bbb22222-2222-4bbb-9bbb-bbbbbbbbbb2.scan.json"
 printf '{"transcript": "%s"}\n' "$TR_C" > "$CAPTURE/ccc33333-3333-4ccc-9ccc-ccccccccccc3.scan.json"
 printf '{"transcript": "%s"}\n' "$TR_D" > "$CAPTURE/ddd44444-4444-4ddd-9ddd-ddddddddddd4.scan.json"
 touch "$TR_A" "$TR_B" "$TR_C" "$TR_D"
+# The windowed requests fold (ask_turns_since) enumerates transcripts under
+# FNO_CLAUDE_PROJECTS_DIR, not the capture-dir scan files (those feed only
+# the unwindowed asks walk), so the board asks also land there under their
+# session ids.
+BOARD_SLUG="demo"
+mkdir -p "$FNO_CLAUDE_PROJECTS_DIR/$BOARD_SLUG"
+cp "$TR_C" "$FNO_CLAUDE_PROJECTS_DIR/$BOARD_SLUG/ccc33333-3333-4ccc-9ccc-ccccccccccc3.jsonl"
+cp "$TR_D" "$FNO_CLAUDE_PROJECTS_DIR/$BOARD_SLUG/ddd44444-4444-4ddd-9ddd-ddddddddddd4.jsonl"
 
 sleep 6
 

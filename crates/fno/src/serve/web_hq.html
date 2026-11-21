@@ -178,6 +178,7 @@ function reqRow(r) {
     r.reply_excerpt ? "reply: " + r.reply_excerpt : "",
   ].filter(Boolean).join(" | ");
   t.append(el("code", null, meta));
+  r0.append(t);
   return r0;
 }
 
