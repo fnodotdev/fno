@@ -1295,10 +1295,13 @@ mod tests {
         let row = |rid: &str, ts: &str| {
             let mut r = api_request(rid, "sess-fwd", 3_050_000);
             {
-                let attrs = r["attributes"].as_array_mut().unwrap();
+                let attrs = r
+                    .get_mut("attributes")
+                    .and_then(Value::as_array_mut)
+                    .unwrap();
                 for a in attrs.iter_mut() {
-                    if a["key"] == "event.timestamp" {
-                        a["value"] = json!({"stringValue": ts});
+                    if a.get("key").and_then(Value::as_str) == Some("event.timestamp") {
+                        *a.get_mut("value").unwrap() = json!({"stringValue": ts});
                     }
                 }
             }
@@ -1316,7 +1319,7 @@ mod tests {
         )
         .unwrap();
         let mut undated = api_request("req-d", "sess-fwd", 1);
-        undated["attributes"] = json!([
+        *undated.get_mut("attributes").unwrap() = json!([
             {"key": "event.name", "value": {"stringValue": "api_request"}},
             {"key": "session.id", "value": {"stringValue": "sess-fwd"}},
             {"key": "request_id", "value": {"stringValue": "req-d"}}

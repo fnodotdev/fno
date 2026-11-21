@@ -1220,28 +1220,45 @@ mod tests {
     fn requests_body_ships_identity_and_numbers() {
         let row = request_row("rid:shape", Some("2026-11-20T11:00:00Z"));
         let doc: Value = serde_json::from_str(&requests_body(&[&row])).unwrap();
-        let scope = &doc["resourceLogs"][0]["scopeLogs"][0];
-        assert_eq!(scope["scope"]["name"], "fno.api_requests");
-        let rec = &scope["logRecords"][0];
-        assert_eq!(rec["eventName"], "fno.api_request");
+        let scope = doc.pointer("/resourceLogs/0/scopeLogs/0").unwrap();
+        assert_eq!(
+            scope.pointer("/scope/name").and_then(Value::as_str),
+            Some("fno.api_requests")
+        );
+        let rec = scope.pointer("/logRecords/0").unwrap();
+        assert_eq!(
+            rec.get("eventName").and_then(Value::as_str),
+            Some("fno.api_request")
+        );
         let attrs = |k: &str| -> Value {
-            rec["attributes"]
-                .as_array()
+            rec.get("attributes")
+                .and_then(Value::as_array)
                 .unwrap()
                 .iter()
-                .find(|a| a["key"] == k)
-                .map(|a| a["value"].clone())
+                .find(|a| a.get("key").and_then(Value::as_str) == Some(k))
+                .and_then(|a| a.get("value"))
+                .cloned()
                 .unwrap_or(Value::Null)
         };
-        assert_eq!(attrs("session.id")["stringValue"], "s-1");
-        assert_eq!(attrs("fno.cost_usd")["doubleValue"], 3.05);
-        assert_eq!(attrs("fno.input_tokens")["intValue"], 100);
-        assert_eq!(attrs("skill.name")["stringValue"], "fno:target");
-        assert_eq!(attrs("fno.model")["stringValue"], "claude-sonnet-5");
+        let s = |k: &str| {
+            attrs(k)
+                .get("stringValue")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
+        let i = |k: &str| attrs(k).get("intValue").and_then(Value::as_i64);
+        assert_eq!(s("session.id"), "s-1");
         assert_eq!(
-            attrs("fno.row.id")["stringValue"],
-            request_row_id("rid:shape")
+            attrs("fno.cost_usd")
+                .get("doubleValue")
+                .and_then(Value::as_f64),
+            Some(3.05)
         );
+        assert_eq!(i("fno.input_tokens"), Some(100));
+        assert_eq!(s("skill.name"), "fno:target");
+        assert_eq!(s("fno.model"), "claude-sonnet-5");
+        assert_eq!(s("fno.row.id"), request_row_id("rid:shape"));
         assert_eq!(
             attrs("plugin.name"),
             Value::Null,
@@ -1268,7 +1285,10 @@ mod tests {
         let state = load_state(&home);
         let (pending, detail) = select_pending_requests(&rows, &state, now);
         assert_eq!(pending.len(), 1, "cutoff and undated filters hold");
-        assert_eq!(pending[0].1.dedupe_key, "rid:fresh");
+        assert_eq!(
+            pending.first().map(|(_, r)| r.dedupe_key.as_str()),
+            Some("rid:fresh")
+        );
         assert!(
             detail.iter().any(|d| d.contains("undated")),
             "the undated skip is named: {detail:?}"
