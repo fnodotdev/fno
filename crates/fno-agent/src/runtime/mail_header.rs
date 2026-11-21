@@ -780,23 +780,19 @@ pub fn delivered_headers(text: &str) -> Vec<DeliveredHeader> {
             flush(&mut out, &mut body);
             continue;
         }
-        let found = trimmed.match_indices("`@").map(|(i, _)| i).find_map(|i| {
-            let span = &trimmed[i..];
-            if !is_header_line(span) {
-                return None;
-            }
-            let (inner, tail) = split_header_span(span)?;
+        // A header that opens the line wins; else the first `@ header after
+        // typed words on the line (queued mail glued onto a typed turn).
+        let at_start = is_header_line(trimmed).then_some(0);
+        let at = at_start.or_else(|| {
+            trimmed
+                .match_indices("`@")
+                .map(|(i, _)| i)
+                .find(|&i| i > 0 && is_header_line(&trimmed[i..]))
+        });
+        let found = at.and_then(|i| {
+            let (inner, tail) = split_header_span(&trimmed[i..])?;
             let (sender, id, _) = header_fields(inner)?;
             Some((i, sender, id, tail))
-        });
-        let found = found.or_else(|| {
-            // The `name · id` form with no `@` reads only at line start.
-            if !is_header_line(trimmed) {
-                return None;
-            }
-            let (inner, tail) = split_header_span(trimmed)?;
-            let (sender, id, _) = header_fields(inner)?;
-            Some((0, sender, id, tail))
         });
         match found {
             Some((at, sender, id, tail)) => {
@@ -1205,6 +1201,12 @@ mod tests {
         assert_eq!(turns[0]["sender"], "candor");
         assert_eq!(turns[1]["sender"], "quill");
         assert!(header_turns("prose\nno headers here").is_empty());
+        // A line-start header keeps its row when its same-line body quotes
+        // an @-header span.
+        let quoted =
+            header_turns("`quill · fmail-123abc456def · plain` see `@x · fmail-0123456789ab`");
+        assert_eq!(quoted.len(), 1);
+        assert_eq!(quoted[0]["sender"], "quill");
 
         // The one-line delivered form: the transcript renders the turn on
         // ONE physical line, header then " ⏎ " then the body, so the shape

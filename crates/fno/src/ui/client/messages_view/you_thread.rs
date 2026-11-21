@@ -100,7 +100,7 @@ impl YouItemView {
 pub(super) fn item_views(items: &[Value]) -> Vec<YouItemView> {
     items
         .iter()
-        .map(|v| serde_json::from_value(v.clone()).unwrap_or_default())
+        .map(|v| YouItemView::deserialize(v).unwrap_or_default())
         .collect()
 }
 
@@ -194,18 +194,15 @@ pub(super) fn since_card(items: &[YouItemView], mark: &str) -> Option<String> {
     }
     let mut parts: Vec<String> = Vec::new();
     if mails > 0 {
-        let from = if senders.len() == 1 {
-            "1 sender".to_string()
-        } else {
-            format!("{} senders", senders.len())
-        };
-        parts.push(format!("{mails} worker messages from {from}"));
+        let from = counted(senders.len(), "sender");
+        parts.push(format!("{} from {from}", counted(mails, "worker message")));
     }
     if updates > 0 {
-        parts.push(format!("{updates} lead updates"));
+        parts.push(counted(updates, "lead update"));
     }
     if replies > 0 {
-        parts.push(format!("{replies} replies to you"));
+        let noun = if replies == 1 { "reply" } else { "replies" };
+        parts.push(format!("{replies} {noun} to you"));
     }
     let mut card = format!("Since you last looked: {}", parts.join(", "));
     if let Some((_, word)) = pinned(items) {
@@ -265,6 +262,12 @@ impl MessagesBoard {
                 let mut block = vec![TLine::of(&[seg("Me", TextStyle::Badge)])];
                 block.extend(body_lines(typed, bubble_w(wrap_w), TextStyle::Item));
                 flush_right(&mut block, wrap_w);
+                // An open ask names its state under the bubble.
+                if let Some(word) = item.shown().open_word() {
+                    let mut state = vec![TLine::meta(word)];
+                    flush_right(&mut state, wrap_w);
+                    block.extend(state);
+                }
                 for mut line in block {
                     line.band = selected;
                     lines.push(line);
@@ -343,6 +346,15 @@ impl MessagesBoard {
             self.you_open.insert(key);
         }
         true
+    }
+}
+
+/// `1 lead update`, `2 lead updates`.
+fn counted(n: usize, noun: &str) -> String {
+    if n == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{n} {noun}s")
     }
 }
 
