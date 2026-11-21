@@ -547,7 +547,9 @@ fn row_ts_ms(beat: &Value) -> Option<i64> {
 
 /// A spawn the gate refused for `node` after `since_ms`, in any journal the
 /// beat reads. `agent_spawn_refused` is the one feed-visible refusal row that
-/// names the node (`spawn_gate.rs` emits it at the single refusal site).
+/// names the node (`spawn_gate.rs` emits it at the single refusal site). The
+/// row's argv matches too: a seat pick names a scope, not a node, so the
+/// promote token in the refused argv is the seat-pick's evidence.
 fn gate_refused_since(journals: &[PathBuf], node: &str, since_ms: i64) -> bool {
     let query = crate::event_store::EventQuery::of_types(&["agent_spawn_refused"]);
     journals.iter().any(|j| {
@@ -558,14 +560,13 @@ fn gate_refused_since(journals: &[PathBuf], node: &str, since_ms: i64) -> bool {
                 r.ts_ms > since_ms
                     && serde_json::from_str::<Value>(&r.line)
                         .ok()
-                        .and_then(|v| {
-                            v.get("data")
-                                .and_then(|d| d.get("node"))
-                                .and_then(Value::as_str)
-                                .map(str::to_string)
+                        .and_then(|v| v.get("data").cloned())
+                        .is_some_and(|d| {
+                            d.get("node").and_then(Value::as_str) == Some(node)
+                                || d.get("argv").and_then(Value::as_array).is_some_and(|argv| {
+                                    argv.iter().filter_map(Value::as_str).any(|a| a == node)
+                                })
                         })
-                        .as_deref()
-                        == Some(node)
             })
     })
 }
@@ -1570,6 +1571,26 @@ mod tests {
         assert!(
             !fires.iter().any(|f| f.rule == "lead_idle_pick_unanswered"),
             "a refused pick is not an untaken one: {fires:?}"
+        );
+
+        // A seat pick names a scope, not a node: the refused argv carries the
+        // promote token, and that is the allow evidence.
+        let rig = Rig::new(true);
+        idle_beat_row(&rig, "x-eSeat");
+        rig.seed(json!({
+            "ts": crate::events::now_rfc3339(),
+            "type": "agent_spawn_refused",
+            "source": "daemon",
+            "data": {
+                "node": null,
+                "argv": ["spawn", "--as", "thread", "--promote", "x-eSeat", "/fno:lead"],
+                "reason": "share cap: 2 of 2 slots held",
+            },
+        }));
+        let fires = eval_stop_in(&rig.cwd, &rig.journal, &rig.home, &rig.payload("done"));
+        assert!(
+            !fires.iter().any(|f| f.rule == "lead_idle_pick_unanswered"),
+            "a refused seat pick rides the argv token: {fires:?}"
         );
     }
 
