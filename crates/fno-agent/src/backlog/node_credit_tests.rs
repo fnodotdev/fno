@@ -29,11 +29,9 @@ fn holder_at_picks_newest_row_at_or_before_completed() {
         holder_from_events(&events, "2026-11-19T00:00:00Z").expect("a row inside the bound");
     assert_eq!(name.as_deref(), Some("Barnaby"));
     assert_eq!(holder.as_deref(), Some("s-a"));
-    // A succession after the close never steals the credit.
-    let (name, holder) =
-        holder_from_events(&events, "2026-11-10T00:00:00Z").expect("the older row");
-    assert_eq!(holder.as_deref(), Some("s-a"));
-    let _ = name;
+    // A bound between the two rows keeps the older tenure's credit, and a
+    // bound before every row credits nobody.
+    assert!(holder_from_events(&events, "2026-11-10T00:00:00Z").is_none());
 }
 
 #[test]
