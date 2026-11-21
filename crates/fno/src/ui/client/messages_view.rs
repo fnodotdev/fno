@@ -1040,6 +1040,14 @@ impl MessagesBoard {
         if self.filter == ListFilter::Broadcasts && rows.is_empty() {
             lines.extend(TLine::meta("(no broadcast groups)").wrap(wrap_w));
         }
+        if self.snapshot.projection.is_some() && self.filter == ListFilter::All && rows.is_empty() {
+            lines.extend(
+                TLine::meta(
+                    "No mail yet. Import past sessions: fno mail admin backfill --all --apply",
+                )
+                .wrap(wrap_w),
+            );
+        }
         lines.push(TLine::meta(""));
         for (i, row) in rows.iter().enumerate() {
             let mut line = match row {
