@@ -171,6 +171,145 @@ pub(crate) fn seat_leads(
         .collect()
 }
 
+/// The most adjacent blueprint offers a drained beat names.
+const OFFER_LINES: usize = 2;
+
+/// The statuses a node may hold and still be offered for a blueprint: open
+/// work that no state parks.
+const OFFERABLE_STATUSES: [&str; 4] = ["intake", "triage", "ready", "next"];
+
+/// The graph-row fields the offer walk reads, typed once at the read.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct OfferMeta {
+    tags: Vec<String>,
+    archived_at: Option<Value>,
+}
+
+/// One printed offer: the node, how it sits near the scope, its title.
+#[derive(Serialize, Deserialize, Default)]
+#[serde(default)]
+struct Offer {
+    id: String,
+    near: String,
+    title: String,
+}
+
+/// One offer candidate's sort key: hops to a shared ancestor, audience miss,
+/// domain miss, priority, the shared ancestor, then the node id and title.
+type OfferKey<'a> = (usize, bool, bool, String, String, &'a str, String);
+
+/// Planless high or L nodes outside this scope that the lifecycle table
+/// routes to /blueprint, nearest the scope first. A drained scope with free
+/// blueprint slots offers these instead of a bare "no unplanned node" beat.
+/// Nearness is the hop count to a shared ancestor on the parent chains; the
+/// scope's audience or domain wins a tie, then priority and id. Nodes a live
+/// team owns, rows this scope already queues, claimed and user-only rows
+/// never print.
+pub(crate) fn adjacent_offers(
+    scope: &str,
+    entries: &[Value],
+    other_owned: &HashMap<String, String>,
+    queued: &std::collections::HashSet<&str>,
+    floor: &str,
+    limit: usize,
+) -> Vec<Value> {
+    use crate::lead_checkin::s_str;
+    if limit == 0 {
+        return Vec::new();
+    }
+    let by_id: HashMap<&str, &Value> = entries
+        .iter()
+        .filter_map(|e| s_str(e, "id").map(|id| (id, e)))
+        .collect();
+    let chain = |start: &str| -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let mut cur = Some(start.to_string());
+        while let Some(id) = cur {
+            if out.contains(&id) {
+                break;
+            }
+            cur = by_id
+                .get(id.as_str())
+                .and_then(|e| s_str(e, "parent"))
+                .map(str::to_string);
+            out.push(id);
+        }
+        out
+    };
+    let audience = |row: &Value| -> Option<String> {
+        OfferMeta::deserialize(row)
+            .unwrap_or_default()
+            .tags
+            .into_iter()
+            .find(|t| t.starts_with("audience:"))
+    };
+    let mine = chain(scope);
+    let me = by_id.get(scope).copied();
+    let my_audience = me.and_then(audience);
+    let my_domain = me.and_then(|m| s_str(m, "domain"));
+    let mut ranked: Vec<OfferKey> = Vec::new();
+    for row in entries {
+        let Some(id) = s_str(row, "id") else { continue };
+        let open = s_str(row, "status").is_some_and(|s| OFFERABLE_STATUSES.contains(&s));
+        let locked = s_str(row, "locked_by").is_some_and(|l| !l.is_empty());
+        let archived = OfferMeta::deserialize(row)
+            .unwrap_or_default()
+            .archived_at
+            .is_some_and(|v| !v.is_null() && v != Value::Bool(false));
+        if !open
+            || locked
+            || archived
+            || queued.contains(id)
+            || other_owned.contains_key(id)
+            || mine.iter().any(|m| m == id)
+        {
+            continue;
+        }
+        let high = s_str(row, "difficulty") == Some("high")
+            || s_str(row, "size").is_some_and(|z| z.eq_ignore_ascii_case("l"));
+        let routes = matches!(
+            crate::backlog_ready::effective_command_with_floor(row, floor),
+            Ok((Some(c), _)) if c == "/blueprint"
+        );
+        if !high || !routes {
+            continue;
+        }
+        let (distance, via) = chain(id)
+            .iter()
+            .enumerate()
+            .find_map(|(i, a)| mine.iter().position(|m| m == a).map(|j| (i + j, a.clone())))
+            .unwrap_or((usize::MAX, String::new()));
+        ranked.push((
+            distance,
+            my_audience.is_none() || audience(row) != my_audience,
+            my_domain.is_none() || s_str(row, "domain") != my_domain,
+            s_str(row, "priority").unwrap_or("p9").to_string(),
+            via,
+            id,
+            s_str(row, "title").unwrap_or("").to_string(),
+        ));
+    }
+    ranked.sort();
+    ranked
+        .into_iter()
+        .take(limit)
+        .map(|(distance, _, _, _, via, id, title)| {
+            let near = if distance == usize::MAX {
+                "no shared ancestor".to_string()
+            } else {
+                format!("shares {via}")
+            };
+            serde_json::to_value(Offer {
+                id: id.to_string(),
+                near,
+                title,
+            })
+            .unwrap_or_default()
+        })
+        .collect()
+}
+
 /// The most idea children a beat routes or names as idle.
 const IDEA_LINES: usize = 3;
 
@@ -213,6 +352,8 @@ pub(crate) fn r_blueprint(
     idea_children: &Result<usize, String>,
     idea_rows: &[Value],
     seat_leads: &[SeatScope],
+    scope: &str,
+    entries: &[Value],
 ) -> Result<Value, String> {
     let session_id = session_id
         .ok_or_else(|| "no session id; cannot count this lead's blueprint subagents".to_string())?;
@@ -408,6 +549,19 @@ pub(crate) fn r_blueprint(
         };
         skips.push(json!({ "id": null, "reason": reason }));
     }
+    // A drained scope names adjacent work instead of a bare no-change beat:
+    // nothing to start, route or build here, and blueprint slots free.
+    let drained = candidates.is_empty()
+        && target_ready.is_empty()
+        && plan_ready.is_empty()
+        && seat_scopes.is_empty()
+        && running < ceiling;
+    let offers = if drained {
+        let limit = OFFER_LINES.min(ceiling - running);
+        adjacent_offers(scope, entries, other_owned, &queued, floor, limit)
+    } else {
+        Vec::new()
+    };
     // Open, planless rows: the unplanned queue and the idea children, read
     // once; the batch lines group the ones that read as one subject.
     let batch = crate::lead_checkin_batch::groups(
@@ -433,6 +587,7 @@ pub(crate) fn r_blueprint(
         "slots": slots_v,
         "seat_leads": seat_scopes,
         "starts": starts,
+        "offers": offers,
         "target_ready": target_ready,
         "plan_ready": plan_ready,
         "idea_children": idea_children_json,
@@ -472,6 +627,13 @@ pub(crate) fn render_lines(bp: &Value) -> Vec<String> {
         lines.push(format!(
             "  start /fno:blueprint subagent {}",
             dash(Some(&id))
+        ));
+    }
+    for offer in ids("offers") {
+        let o = Offer::deserialize(&offer).unwrap_or_default();
+        lines.push(format!(
+            "  offer: /fno:blueprint subagent {} ({}, outside this scope): {}",
+            o.id, o.near, o.title,
         ));
     }
     for id in ids("target_ready") {
@@ -659,6 +821,8 @@ mod tests {
             &idea_children,
             &[],
             &seat_leads,
+            "",
+            &[],
         );
         match prior_provider {
             Some(v) => std::env::set_var("FNO_ROUTE_PROVIDER", v),
@@ -844,9 +1008,11 @@ mod tests {
     /// on 2026-09-28 two p0 children of an L2-held epic leaked as
     /// target-ready past the outer team's beat, and a lead that trusted the
     /// line would have seated a duplicate worker in another lead's territory.
-    /// The row skips naming the team that owns it.
+    /// The row skips naming the team that owns it. A drained scope's offer
+    /// line honors the same owner map, and also drops claimed, low-difficulty
+    /// and already-queued rows, then ranks the rest nearest first.
     #[test]
-    fn a_child_of_a_deeper_live_team_never_prints_as_start_or_target_ready() {
+    fn a_child_of_a_deeper_live_team_never_prints_as_start_target_ready_or_offer() {
         let dir = std::env::temp_dir().join(format!("fno-bp-owned-{}", std::process::id()));
         let reading = blueprint_reading_owned(
             &dir,
@@ -878,6 +1044,33 @@ mod tests {
             "{reading}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+
+        let entries = vec![
+            json!({"id": "x-top", "type": "epic", "status": "ready"}),
+            json!({"id": "x-scope", "parent": "x-top", "type": "epic", "status": "ready"}),
+            json!({"id": "x-sib", "parent": "x-top", "status": "ready",
+                "difficulty": "high", "title": "sibling work"}),
+            json!({"id": "x-far", "status": "ready", "difficulty": "high", "title": "far"}),
+            json!({"id": "x-low", "parent": "x-top", "status": "ready", "difficulty": "low"}),
+            json!({"id": "x-held", "parent": "x-top", "status": "ready",
+                "difficulty": "high", "locked_by": "sess-9"}),
+            json!({"id": "x-owned", "parent": "x-top", "status": "ready", "difficulty": "high"}),
+            json!({"id": "x-kid", "parent": "x-scope", "status": "ready",
+                "difficulty": "high", "title": "inside"}),
+        ];
+        let owned = HashMap::from([("x-owned".to_string(), "x-team".to_string())]);
+        let queued = std::collections::HashSet::from(["x-kid"]);
+        let offers = adjacent_offers("x-scope", &entries, &owned, &queued, "high", 2);
+        let ids: Vec<&str> = offers.iter().filter_map(|o| o["id"].as_str()).collect();
+        assert_eq!(ids, ["x-sib", "x-far"], "{offers:?}");
+        let lines = render_lines(&json!({"offers": offers}));
+        assert!(
+            lines.iter().any(|l| l.starts_with(
+                "  offer: /fno:blueprint subagent x-sib (shares x-top, outside this scope)"
+            )),
+            "{lines:?}"
+        );
+        assert!(adjacent_offers("x-scope", &entries, &owned, &queued, "high", 0).is_empty());
     }
 
     /// An unread owner read is the reading's error, never an empty filter:

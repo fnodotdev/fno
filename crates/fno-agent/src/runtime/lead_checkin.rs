@@ -1456,6 +1456,8 @@ fn collect_readings(
                 }),
                 &idea_rows,
                 &seat,
+                &scope,
+                &seat_rows,
             )
         }
     });
