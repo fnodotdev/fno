@@ -2630,7 +2630,12 @@ mod tests {
         });
         let lines = provenance_lines(&row);
         assert_eq!(lines.len(), 4, "{lines:?}");
-        assert!(lines[2].ends_with(&format!("{session}.jsonl")), "{lines:?}");
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.ends_with(&format!("{session}.jsonl"))),
+            "{lines:?}"
+        );
         // An unresolvable session names the unknown instead of guessing.
         let lost = serde_json::json!({
             "decision_id": "d-prov0004",

@@ -1105,8 +1105,8 @@ decision index. Run `fno backlog decide-reindex` before retrying."
     // The session provenance reads the transcript once, after every gate:
     // a refused row records nothing, so it pins nothing and pays no read.
     let session_provenance = capture_session_provenance(id);
-    if let Some(sp) = session_provenance {
-        data["session_provenance"] = sp;
+    if let (Some(sp), Some(map)) = (session_provenance, data.as_object_mut()) {
+        map.insert("session_provenance".into(), sp);
     }
     if let Some(r) = door
         .rationale
