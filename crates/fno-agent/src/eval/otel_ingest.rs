@@ -236,6 +236,7 @@ async fn handle_conn(mut stream: tokio::net::TcpStream, db: PathBuf, journal: Pa
         .await;
 }
 
+#[derive(Debug)]
 enum IngestError {
     Payload,
     Storage(rusqlite::Error),
