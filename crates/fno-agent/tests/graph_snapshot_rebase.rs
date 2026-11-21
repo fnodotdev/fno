@@ -38,6 +38,16 @@ fn node_under(id: &str, parent: &str) -> Value {
 fn seeded(dir: &tempfile::TempDir) -> std::path::PathBuf {
     let graph = dir.path().join("graph.json");
     graph_store::seed_rows(&graph, &[node("a-1"), node("b-1")]).unwrap();
+    // A seeded row lacks the normalised keys every later write adds, so the
+    // first write would claim every row. One write over all of them stands in
+    // for a graph that has been written before.
+    mutate_rows(&graph, DEFAULT_LOCK_TIMEOUT, None, None, |rows| {
+        for obj in rows.iter_mut().filter_map(Value::as_object_mut) {
+            obj.insert("details".into(), json!("normalised"));
+        }
+        Ok(true)
+    })
+    .unwrap();
     graph
 }
 
