@@ -119,6 +119,36 @@ pub fn body_names_doc(body: &str) -> bool {
     }
 }
 
+/// The PR a `Docs:` line names, as the token's verbatim repo slug (or None
+/// for a same-repo PR or `PR <n>`) with its number. None when the line
+/// escapes with a reason, names a `.md`/`.mdx` path, or names no PR.
+/// Canonicalization against the rename aliases is the caller's job.
+pub fn docs_pr_ref(body: &str) -> Option<(Option<String>, i64)> {
+    let value = docs_value(body)?;
+    if value == "none" || value.starts_with("none,") {
+        return None;
+    }
+    let mut prev_pr = false;
+    for token in value.split_whitespace() {
+        let t = trim_token(token);
+        if t.eq_ignore_ascii_case("pr") {
+            prev_pr = true;
+            continue;
+        }
+        if let Some((prefix, n)) = t.rsplit_once('#') {
+            if !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) && n.parse::<i64>().is_ok() {
+                let slug = (!prefix.is_empty()).then(|| prefix.to_string());
+                return Some((slug, n.parse().unwrap_or_default()));
+            }
+        }
+        if prev_pr && !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()) {
+            return Some((None, t.parse().unwrap_or_default()));
+        }
+    }
+    None
+}
+
+
 /// The missing-doc text: the touched files, the two accepted body forms,
 /// and the two skills that write and check the doc. Create prints it as a
 /// notice and proceeds; the merge doors print it as a warning.
@@ -194,6 +224,34 @@ mod tests {
 
     fn paths(a: &[&str]) -> Vec<String> {
         a.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn docs_pr_ref_names_the_url_repo_the_hash_ref_and_the_bare_pr() {
+        // AC2-HP: the hash ref, the owner-qualified hash ref, the full url,
+        // the comma annotation and PR <n> all name a PR. AC2-EDGE: the
+        // reasoned none, the bare none, a file path and no line name none.
+        assert_eq!(
+            docs_pr_ref("Docs: fno-web#45"),
+            Some((Some("fno-web".to_string()), 45))
+        );
+        assert_eq!(
+            docs_pr_ref("Docs: fnodotdev/fno-web#244 fno-sh-docs/guides/manage-backlog.next.mdx"),
+            Some((Some("fnodotdev/fno-web".to_string()), 244))
+        );
+        assert_eq!(
+            docs_pr_ref("Docs: https://github.com/o/fno-web/pull/9"),
+            Some((Some("o/fno-web".to_string()), 9))
+        );
+        assert_eq!(
+            docs_pr_ref("Docs: fno-web#244, merged"),
+            Some((Some("fno-web".to_string()), 244))
+        );
+        assert_eq!(docs_pr_ref("Docs: PR 45"), Some((None, 45)));
+        assert_eq!(docs_pr_ref("Docs: none, no user surface"), None);
+        assert_eq!(docs_pr_ref("Docs: none\n"), None);
+        assert_eq!(docs_pr_ref("Docs: docs/x.next.mdx"), None);
+        assert_eq!(docs_pr_ref("no Docs line"), None);
     }
 
     #[test]
