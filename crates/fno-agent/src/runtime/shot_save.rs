@@ -46,6 +46,7 @@ fn resolve_head(rest: &[String]) -> Result<String, i32> {
 }
 
 /// Why a shot stem cannot be saved under the head-keyed name.
+#[derive(Debug)]
 enum NameError {
     NoTheme(String),
     NoRole(String),
