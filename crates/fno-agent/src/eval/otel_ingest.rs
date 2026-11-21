@@ -1305,6 +1305,7 @@ mod tests {
         };
         ingest(
             &db,
+            &agents.events_jsonl(),
             body(json!([
                 row("req-a", "2026-11-20T11:00:00Z"),
                 row("req-b", "2026-11-20T09:00:00Z"),
@@ -1318,7 +1319,11 @@ mod tests {
             {"key": "session.id", "value": {"stringValue": "sess-fwd"}},
             {"key": "request_id", "value": {"stringValue": "req-d"}}
         ]);
-        ingest(&db, body(json!([undated])).as_bytes());
+        ingest(
+            &db,
+            &agents.events_jsonl(),
+            body(json!([undated])).as_bytes(),
+        );
         let got = requests_in_window(&db, cutoff).unwrap();
         let keys: Vec<&str> = got.iter().map(|r| r.dedupe_key.as_str()).collect();
         assert_eq!(
