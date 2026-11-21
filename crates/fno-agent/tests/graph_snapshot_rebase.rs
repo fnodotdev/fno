@@ -22,6 +22,19 @@ fn node(id: &str) -> Value {
     })
 }
 
+fn node_under(id: &str, parent: &str) -> Value {
+    json!({
+        "id": id,
+        "slug": format!("slug-{id}"),
+        "title": format!("Node {id}"),
+        "type": "feature",
+        "status": "ready",
+        "priority": "p2",
+        "details": "d",
+        "parent": parent,
+    })
+}
+
 fn seeded(dir: &tempfile::TempDir) -> std::path::PathBuf {
     let graph = dir.path().join("graph.json");
     graph_store::seed_rows(&graph, &[node("a-1"), node("b-1")]).unwrap();
@@ -93,14 +106,10 @@ fn a_write_refuses_when_its_parent_gained_a_child_while_it_planned() {
     let graph = seeded(&dir);
     let (base_version, snapshot) = read_snapshot(&graph).unwrap();
     let mut entries = snapshot.rows.clone();
-    let mut child = node("c-1");
-    child["parent"] = json!("a-1");
-    entries.push(child);
+    entries.push(node_under("c-1", "a-1"));
     // A sibling lands under the same parent while this write plans.
     mutate_rows(&graph, DEFAULT_LOCK_TIMEOUT, None, None, |rows| {
-        let mut sibling = node("d-1");
-        sibling["parent"] = json!("a-1");
-        rows.push(sibling);
+        rows.push(node_under("d-1", "a-1"));
         Ok(true)
     })
     .unwrap();
