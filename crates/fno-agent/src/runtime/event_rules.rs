@@ -56,6 +56,7 @@ struct Row {
 /// `notify` carries the (title, body, pointer) the caller sends through
 /// `notify_operator` - the engine decides, the caller executes, so tests
 /// never spawn a process.
+#[derive(Debug)]
 pub struct Fire {
     pub rule: String,
     pub action: &'static str,
