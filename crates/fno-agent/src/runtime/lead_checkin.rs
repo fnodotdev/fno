@@ -1289,7 +1289,7 @@ fn collect_readings(
     });
     let h_rate_limits = spawn_reading(beat_started, "rate_limits", {
         let events_paths = events_paths.clone();
-        move || rate_limits::reading(&events_paths)
+        move || Ok(rate_limits::reading(&events_paths))
     });
     let h_laws = spawn_reading(beat_started, "laws", || crate::law_recheck::collect(true));
     let h_machine = spawn_reading(beat_started, "machine", {
@@ -2031,18 +2031,14 @@ fn render_lines_with(
         }
     }
 
-    // Rate limits print only when the window holds one: zero hits read no
-    // line, so the beat's shape never changes for a clean fleet.
+    // Rate limits print only when the window holds one: the reading answers
+    // null on a clean window, so the beat's shape never changes for it.
     match by_name("rate_limits") {
         Some(r) if !r.ok => lines.push(format!("READER FAILED rate_limits: {}", r.error)),
-        Some(r) if r.value.get("hits").and_then(Value::as_u64).unwrap_or(0) > 0 => {
-            lines.push(format!(
-                "rate limits: {}",
-                r.value
-                    .get("summary")
-                    .and_then(Value::as_str)
-                    .unwrap_or("?")
-            ));
+        Some(r) => {
+            if let Some(summary) = r.value.as_str() {
+                lines.push(format!("rate limits: {summary}"));
+            }
         }
         _ => {}
     }

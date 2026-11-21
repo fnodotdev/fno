@@ -578,10 +578,10 @@ mod tests {
         // one file, so the count proves the mirror fired).
         assert_eq!(landed.len(), 2, "{rows:?}");
         for row in &landed {
-            assert_eq!(row["data"]["path"], "pr_merge");
-            assert_eq!(row["data"]["pr"], 7);
-            assert_eq!(row["data"]["repo"], "o/r");
-            assert_eq!(row["data"]["head"], "abc123");
+            assert_eq!(row.pointer("/data/path"), Some(&json!("pr_merge")));
+            assert_eq!(row.pointer("/data/pr"), Some(&json!(7)));
+            assert_eq!(row.pointer("/data/repo"), Some(&json!("o/r")));
+            assert_eq!(row.pointer("/data/head"), Some(&json!("abc123")));
         }
         let armed_rows: Vec<_> = rows.iter().filter(|r| kind(r, "merge_armed")).collect();
         assert_eq!(armed_rows.len(), 2, "{rows:?}");

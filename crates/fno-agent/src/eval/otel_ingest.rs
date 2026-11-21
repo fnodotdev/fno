@@ -127,7 +127,8 @@ async fn run_on_port_ready(
                         let db = db.clone();
                         let journal = journal.clone();
                         tokio::spawn(async move {
-                            let _ = tokio::time::timeout(Duration::from_secs(30), handle_conn(stream, db, journal)).await;
+                            let _handled =
+                                tokio::time::timeout(Duration::from_secs(30), handle_conn(stream, db, journal)).await;
                         });
                     }
                     Err(error) => {
@@ -487,7 +488,7 @@ fn store_event(
     // A redelivered batch IGNOREs here, so the alert emits exactly once per
     // first-seen telemetry record.
     if inserted > 0 && name == "api_error" {
-        emit_rate_limit(&attributes, journal);
+        emit_rate_limit(record, journal);
     }
     Ok(())
 }
@@ -498,35 +499,79 @@ fn store_event(
 /// scoreboard lanes view counted nothing and a lead never saw a hit.
 /// `session_id` and `node_id` ride the event store's own column extraction;
 /// the route is stamped because a custom base URL's 529 belongs to that
-/// provider, never to the Anthropic account.
-fn emit_rate_limit(attributes: &HashMap<&str, &Value>, journal: &Path) {
-    let text = |key: &str| attributes.get(key).and_then(|v| value_str(v));
-    let Some(status) = attributes
-        .get("status_code")
-        .and_then(|v| value_i64(v))
+/// provider, never to the Anthropic account. The attribute bag parses once
+/// into typed structs (rust-style R1).
+fn emit_rate_limit(record: &Value, journal: &Path) {
+    let Ok(parsed) = serde_json::from_value::<AlertRecord>(record.clone()) else {
+        return;
+    };
+    let find = |key: &str| {
+        parsed
+            .attributes
+            .iter()
+            .find(|a| a.key == key)
+            .map(|a| &a.value)
+    };
+    let Some(value) = find("status_code").and_then(|v| v.int_value.as_ref()) else {
+        return;
+    };
+    // proto3 JSON maps 64-bit ints to strings; accept both spellings.
+    let Some(status) = value
+        .as_i64()
+        .or_else(|| value.as_str().and_then(|s| s.parse().ok()))
         .filter(|s| *s == 429 || *s == 529)
     else {
         return;
     };
-    let session = text("session.id").unwrap_or("unknown");
-    let custom_route = attributes
-        .get("anthropropic.custom_base_url")
-        .and_then(|v| v.get("boolValue").and_then(Value::as_bool))
-        .unwrap_or(false);
+    let session = find("session.id")
+        .and_then(|v| v.string_value.as_deref())
+        .unwrap_or("unknown");
     let mut data = serde_json::json!({
         "session_id": session,
         "status": status,
-        "provider": text("anthropropic.provider").unwrap_or("unknown"),
-        "model": text("model").unwrap_or("unknown"),
-        "custom_base_url": custom_route,
+        "provider": find("anthropropic.provider")
+            .and_then(|v| v.string_value.as_deref())
+            .unwrap_or("unknown"),
+        "model": find("model")
+            .and_then(|v| v.string_value.as_deref())
+            .unwrap_or("unknown"),
+        "custom_base_url": find("anthropropic.custom_base_url")
+            .and_then(|v| v.bool_value)
+            .unwrap_or(false),
     });
-    if let Some(node) = node_for_session(&session) {
-        data["node_id"] = Value::String(node);
+    if let Some(node) = node_for_session(session) {
+        if let Some(map) = data.as_object_mut() {
+            map.insert("node_id".to_string(), Value::String(node));
+        }
     }
     let emitter = crate::runtime::events::EventEmitter::new(journal, "daemon");
     if let Err(error) = emitter.emit("provider_rate_limited", &data) {
         eprintln!("fno OTEL ingest: the provider_rate_limited row did not land: {error}");
     }
+}
+
+/// One OTLP log-record attribute, the typed shape `emit_rate_limit` reads
+/// (rust-style R1). `int_value` stays a raw JSON value because proto3 maps
+/// 64-bit ints to strings and some exporters send numbers.
+#[derive(serde::Deserialize)]
+struct AlertRecord {
+    #[serde(default)]
+    attributes: Vec<AlertAttr>,
+}
+
+#[derive(serde::Deserialize)]
+struct AlertAttr {
+    key: String,
+    #[serde(default)]
+    value: AlertValue,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct AlertValue {
+    string_value: Option<String>,
+    int_value: Option<Value>,
+    bool_value: Option<bool>,
 }
 
 /// Best-effort node provenance: the claim (live or stale; this is
@@ -1114,7 +1159,7 @@ mod tests {
             })
             .collect();
         assert_eq!(statuses, vec![429, 429, 529]);
-        let first: &crate::event_store::EventRow = &rows[0];
+        let first: &crate::event_store::EventRow = rows.first().unwrap();
         let line: Value = serde_json::from_str(&first.line).unwrap();
         assert_eq!(line.pointer("/data/session_id"), Some(&json!("sess-429")));
         assert_eq!(

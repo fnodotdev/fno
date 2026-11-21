@@ -1,8 +1,9 @@
 // The check-in `rate_limits` reading - provider_rate_limited rows across
 // the beat's journals, via #[path] mod, so it shares lead_checkin's module
-// scope. Quiet when nothing hit: a lead who was never rate-limited reads no
-// line, and one who was reads it on the next beat.
+// scope. Quiet when nothing hit: the reading answers null and the beat
+// prints no line; one hit and the summary rides the next beat.
 
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -13,7 +14,25 @@ const LOOKBACK_MS: i64 = 24 * 3600 * 1000;
 /// Sessions named in the summary line; the hit count stays whole.
 const MAX_SESSIONS: usize = 5;
 
-pub(crate) fn reading(events_paths: &[PathBuf]) -> Result<Value, String> {
+/// One committed event row's envelope, parsed once (rust-style R1).
+#[derive(Deserialize)]
+struct RowLine {
+    #[serde(default)]
+    data: RowData,
+}
+
+#[derive(Deserialize, Default)]
+struct RowData {
+    status: Option<i64>,
+    custom_base_url: Option<bool>,
+    session_id: Option<String>,
+    node_id: Option<String>,
+}
+
+/// The summary line for the 24h window, or null when it holds no row. The
+/// caller renders the string and drops the null, so a clean fleet changes
+/// the beat's shape by nothing.
+pub(crate) fn reading(events_paths: &[PathBuf]) -> Value {
     let since = chrono::Utc::now().timestamp_millis() - LOOKBACK_MS;
     let query = crate::event_store::EventQuery {
         types: vec!["provider_rate_limited".to_string()],
@@ -25,44 +44,37 @@ pub(crate) fn reading(events_paths: &[PathBuf]) -> Result<Value, String> {
         // Fail soft per journal, the way the usage export reads: a journal
         // that does not exist yet (fresh install) is an empty read, never a
         // READER FAILED line on every beat.
-        let found = crate::event_store::query_events(path, &query).unwrap_or_default();
-        rows.extend(found);
+        rows.extend(crate::event_store::query_events(path, &query).unwrap_or_default());
     }
     // One emitter writes one journal, but the beat can be handed overlapping
     // paths; the row id, not the path, decides.
     let mut seen = HashSet::new();
     rows.retain(|r| seen.insert(r.event_id.clone()));
-    let hits = rows.len();
-    if hits == 0 {
-        return Ok(json!({ "hits": 0 }));
+    if rows.is_empty() {
+        return Value::Null;
     }
     let mut sessions: Vec<String> = Vec::new();
     let mut nodes: Vec<String> = Vec::new();
     let mut statuses: std::collections::BTreeMap<i64, usize> = Default::default();
     let mut custom = 0usize;
     for row in &rows {
-        let Ok(line) = serde_json::from_str::<Value>(&row.line) else {
+        let Ok(line) = serde_json::from_str::<RowLine>(&row.line) else {
             continue;
         };
-        let data = line.get("data").cloned().unwrap_or(Value::Null);
-        if let Some(s) = data.get("status").and_then(Value::as_i64) {
+        if let Some(s) = line.data.status {
             *statuses.entry(s).or_default() += 1;
         }
-        if data
-            .get("custom_base_url")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
+        if line.data.custom_base_url == Some(true) {
             custom += 1;
         }
-        if let Some(sid) = data.get("session_id").and_then(Value::as_str) {
-            if !sessions.iter().any(|s| s == sid) {
-                sessions.push(sid.to_string());
+        if let Some(sid) = line.data.session_id {
+            if !sessions.contains(&sid) {
+                sessions.push(sid);
             }
         }
-        if let Some(node) = data.get("node_id").and_then(Value::as_str) {
-            if !nodes.iter().any(|n| n == node) {
-                nodes.push(node.to_string());
+        if let Some(node) = line.data.node_id {
+            if !nodes.contains(&node) {
+                nodes.push(node);
             }
         }
     }
@@ -73,7 +85,9 @@ pub(crate) fn reading(events_paths: &[PathBuf]) -> Result<Value, String> {
         .collect::<Vec<_>>()
         .join(", ");
     let mut summary = format!(
-        "{hits} in 24h ({status_word}; sessions: {})",
+        "{} in 24h ({}; sessions: {})",
+        rows.len(),
+        status_word,
         if sessions.is_empty() {
             "-".to_string()
         } else {
@@ -88,5 +102,5 @@ pub(crate) fn reading(events_paths: &[PathBuf]) -> Result<Value, String> {
             "; {custom} on a custom base URL route (that provider, not the Anthropic account)"
         ));
     }
-    Ok(json!({ "hits": hits, "summary": summary }))
+    json!(summary)
 }
