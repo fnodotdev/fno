@@ -795,6 +795,7 @@ fn run_native(args: &UpdateArgs) -> Result<(), Refusal> {
 /// The PR links a wave-5 call resolves before the lock: the derived values
 /// the mutator stores plus the clearing flag the receipts need. All empty
 /// for a call without PR flags.
+#[derive(Debug)]
 struct DerivedPr {
     pr_number: Option<i64>,
     pr_url: Option<String>,
@@ -2088,7 +2089,7 @@ fn apply_mutators(
                 let Some(map) = item.as_object_mut() else {
                     continue;
                 };
-                if map.get("number").and_then(Value::as_i64) == Some(num) {
+                if crate::backlog::row_facts::int_field(map, "number") == Some(num) {
                     for (k, val) in entry.clone() {
                         map.insert(k, val);
                     }

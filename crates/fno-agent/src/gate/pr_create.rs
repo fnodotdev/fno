@@ -935,9 +935,8 @@ fn record_docs_pr(cwd: &Path, body_file: &str) {
     let Some((slug, number)) = crate::docs_gate::docs_pr_ref(&body) else {
         return;
     };
-    let node_id = crate::target_orient::read_manifest(cwd).ok().and_then(|m| {
-        m.get("input")
-            .and_then(Value::as_str)
+    let node_id = crate::target_orient::read_manifest(cwd).and_then(|m| {
+        crate::backlog::row_facts::str_field(&m, "input")
             .map(str::to_string)
             .filter(|s| !s.is_empty())
     });

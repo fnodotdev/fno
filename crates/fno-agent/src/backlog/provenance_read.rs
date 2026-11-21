@@ -95,12 +95,15 @@ fn spawn_edge(node: &Value) -> Option<Value> {
 }
 
 fn pr_block(row: &Value) -> Value {
-    json!({"number": row.get("pr_number"), "url": row.get("pr_url")})
+    json!({
+        "number": crate::backlog::row_facts::int_field(row, "pr_number"),
+        "url": crate::backlog::row_facts::str_field(row, "pr_url"),
+    })
 }
 
 /// The repo slug a recorded url names, verbatim from what was recorded.
-fn pr_repo_slug(url: Option<&str>) -> Option<&str> {
-    url.and_then(crate::backlog::pr_link::repo_slug_from_url)
+fn pr_repo_slug(url: Option<&str>) -> Option<String> {
+    url.and_then(|u| crate::backlog::pr_link::repo_slug_from_url(Some(u)))
 }
 
 /// The parts a pr line renders beyond the link: the repo slug, the merge
@@ -124,36 +127,24 @@ fn pr_suffix_parts(slug: Option<&str>, status: Option<&str>, note: Option<&str>)
 /// Bare-int and bare-url entry shapes render like `pr_refs_of` reads them.
 fn render_pr_lines(row: &Value) -> Vec<String> {
     let mut lines = Vec::new();
-    let number = row.get("pr_number").and_then(Value::as_i64);
+    let number = crate::backlog::row_facts::int_field(row, "pr_number");
     let url = text_at(row, "pr_url").filter(|u| !u.is_empty());
     let status = text_at(row, "merge_status").filter(|s| !s.is_empty());
     let slug = pr_repo_slug(url.as_deref());
     lines.push(format!(
         "  pr: {}{}",
         render_pr_ref(number, url.as_deref()),
-        suffix(&pr_suffix_parts(slug, status.as_deref(), None))
+        suffix(&pr_suffix_parts(slug.as_deref(), status.as_deref(), None))
     ));
-    let defaults: Vec<Value> = Vec::new();
-    let entries = row
-        .get("additional_prs")
-        .and_then(Value::as_array)
-        .unwrap_or(&defaults);
+    let entries = crate::backlog::row_facts::list_field(row, "additional_prs");
     for entry in entries {
         let (number, url, status, note) = match entry {
             Value::Object(_) => (
-                entry.get("number").and_then(Value::as_i64),
-                entry
-                    .get("url")
-                    .and_then(Value::as_str)
-                    .filter(|u| !u.is_empty()),
-                entry
-                    .get("merge_status")
-                    .and_then(Value::as_str)
+                crate::backlog::row_facts::int_field(entry, "number"),
+                crate::backlog::row_facts::str_field(entry, "url").filter(|u| !u.is_empty()),
+                crate::backlog::row_facts::str_field(entry, "merge_status")
                     .filter(|s| !s.is_empty()),
-                entry
-                    .get("note")
-                    .and_then(Value::as_str)
-                    .filter(|n| !n.is_empty()),
+                crate::backlog::row_facts::str_field(entry, "note").filter(|n| !n.is_empty()),
             ),
             Value::Number(n) => (n.as_i64(), None, None, None),
             Value::String(url) => (None, Some(url.as_str()), None, None),
@@ -163,7 +154,7 @@ fn render_pr_lines(row: &Value) -> Vec<String> {
         lines.push(format!(
             "  pr: {}{}",
             render_pr_ref(number, url),
-            suffix(&pr_suffix_parts(slug, status, note))
+            suffix(&pr_suffix_parts(slug.as_deref(), status, note))
         ));
     }
     lines
@@ -192,19 +183,15 @@ fn suffix(parts: &[String]) -> String {
 /// The json `additional_prs` array: every entry reduced to the four keys a
 /// reader consumes, `[]` when the row carries none.
 fn pr_entries_json(row: &Value) -> Value {
-    let defaults: Vec<Value> = Vec::new();
-    let list = row
-        .get("additional_prs")
-        .and_then(Value::as_array)
-        .unwrap_or(&defaults);
+    let list = crate::backlog::row_facts::list_field(row, "additional_prs");
     Value::Array(
         list.iter()
             .map(|entry| {
                 json!({
-                    "number": entry.get("number"),
-                    "url": entry.get("url"),
-                    "merge_status": entry.get("merge_status"),
-                    "note": entry.get("note"),
+                    "number": crate::backlog::row_facts::int_field(entry, "number"),
+                    "url": crate::backlog::row_facts::str_field(entry, "url"),
+                    "merge_status": crate::backlog::row_facts::str_field(entry, "merge_status"),
+                    "note": crate::backlog::row_facts::str_field(entry, "note"),
                 })
             })
             .collect(),

@@ -626,7 +626,7 @@ fn do_merge(
     // not an oversight: do not fold it into one pass.
     let receipt = authorized_merge(pr, repo, &ask, false, timeout_s);
     let code = emit_authorized_outcome(flow, pr, &receipt, &strategy);
-    if receipt.get("outcome").and_then(Value::as_str) == Some("merged") {
+    if crate::backlog::row_facts::str_field(&receipt, "outcome") == Some("merged") {
         record_folded_pr(flow, pr, repo);
     }
     code
@@ -653,9 +653,7 @@ fn record_folded_pr(flow: &mut FlowResult, pr: i64, repo: &Path) {
         .filter(|r| r.ok)
         .and_then(|r| serde_json::from_str::<Value>(&r.stdout).ok())
         .unwrap_or(Value::Null);
-    let base = facts
-        .get("baseRefName")
-        .and_then(Value::as_str)
+    let base = crate::backlog::row_facts::str_field(&facts, "baseRefName")
         .unwrap_or_default()
         .to_string();
     if base.is_empty() {
@@ -665,7 +663,7 @@ fn record_folded_pr(flow: &mut FlowResult, pr: i64, repo: &Path) {
         ));
         return;
     }
-    let default = crate::gate_probes::default_branch_cached(repo, &slug, run);
+    let default = crate::gate_probes::default_branch_cached(repo, &slug, &run);
     if base == default.unwrap_or_default() {
         // No stack: the normal merge records no fold, silently.
         return;
@@ -682,17 +680,28 @@ fn record_folded_pr(flow: &mut FlowResult, pr: i64, repo: &Path) {
         .and_then(|rows| rows.first())
         .and_then(|row| row.pointer("/number").and_then(Value::as_u64));
     let bound_pr = match fold_target(&base, None, bound_pr) {
-        Ok(bound_pr) => bound_pr,
-        Err(reason) => {
-            flow.lines
-                .push((true, format!("pr-merge: fold not recorded: {reason}\n")));
+        FoldTarget::Bind(bound_pr) => bound_pr,
+        FoldTarget::UnreadableBase => {
+            flow.lines.push((
+                true,
+                "pr-merge: fold not recorded: the base ref is unreadable\n".to_string(),
+            ));
             return;
         }
+        FoldTarget::NoStack => {
+            flow.lines.push((
+                true,
+                format!("pr-merge: fold not recorded: no open PR heads {base}\n"),
+            ));
+            return;
+        }
+        // No stack: the normal merge records no fold, silently.
+        FoldTarget::DefaultBranch => return,
     };
     let bound = crate::authorized_merge::pr_bound_entry(repo, bound_pr);
     let Some(node_id) = bound
         .as_ref()
-        .and_then(|row| row.get("id").and_then(Value::as_str))
+        .and_then(|row| crate::backlog::row_facts::str_field(row, "id"))
     else {
         flow.lines.push((
             true,
@@ -720,18 +729,25 @@ fn record_folded_pr(flow: &mut FlowResult, pr: i64, repo: &Path) {
 /// The stacked PR a fold record binds to, or the reason none happens: an
 /// unreadable base, the default branch (no stack), or no open PR heading
 /// the base branch.
-fn fold_target(
-    base: &str,
-    default: Option<&str>,
-    stacked_first: Option<u64>,
-) -> Result<u64, String> {
+#[derive(Debug, PartialEq)]
+enum FoldTarget {
+    Bind(u64),
+    UnreadableBase,
+    DefaultBranch,
+    NoStack,
+}
+
+fn fold_target(base: &str, default: Option<&str>, stacked_first: Option<u64>) -> FoldTarget {
     if base.is_empty() {
-        return Err("the base ref is unreadable".to_string());
+        return FoldTarget::UnreadableBase;
     }
     if base == default.unwrap_or_default() {
-        return Err(format!("{base} is the default branch"));
+        return FoldTarget::DefaultBranch;
     }
-    stacked_first.ok_or_else(|| format!("no open PR heads {base}"))
+    match stacked_first {
+        Some(n) => FoldTarget::Bind(n),
+        None => FoldTarget::NoStack,
+    }
 }
 
 /// Close the nodes a merged PR's closure line names, in this process, so a
@@ -1408,19 +1424,19 @@ mod fold_target_tests {
         // the default branch, a bare base, or a branchless stack binds none.
         assert_eq!(
             fold_target("feature/side-branch", Some("main"), Some(351)),
-            Ok(351)
+            FoldTarget::Bind(351)
         );
         assert_eq!(
             fold_target("main", Some("main"), Some(351)),
-            Err("main is the default branch".to_string())
+            FoldTarget::DefaultBranch
         );
         assert_eq!(
             fold_target("feature/absent", Some("main"), None),
-            Err("no open PR heads feature/absent".to_string())
+            FoldTarget::NoStack
         );
         assert_eq!(
             fold_target("", Some("main"), Some(351)),
-            Err("the base ref is unreadable".to_string())
+            FoldTarget::UnreadableBase
         );
     }
 }
