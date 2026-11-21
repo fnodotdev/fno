@@ -931,6 +931,13 @@ pub(crate) fn claim_names_current_session(holder: &str, rec: &crate::claims::Cla
         if handover_row_is_ours(&entries, worker, own_sid.as_deref()) {
             return true;
         }
+        // The pid proof: a worker whose session-id markers do not resolve
+        // in its own subprocess still descends from the harness process the
+        // spawn registered under its name.
+        let (ambient_pid, _) = crate::spawn_context::session_identity_ambient(std::process::id());
+        if handover_row_pid_is_ours(&entries, worker, ambient_pid) {
+            return true;
+        }
         // The session-id proof: proven identity lands in session_id, an
         // ambient-only creator is demoted to dispatched_by_session metadata.
         // Either way a window naming THIS session was minted for it: the
@@ -996,6 +1003,25 @@ pub(crate) fn handover_row_is_ours(
     };
     entries.iter().any(|e| {
         e.harness_session_id.as_deref().map(str::trim) == Some(own)
+            && (e.name == worker
+                || e.harness_title.as_deref() == Some(worker)
+                || e.aliases.iter().any(|a| a == worker))
+    })
+}
+
+/// True when a registry row answering to `worker` carries this session's own
+/// durable pid. Same label arms as `handover_row_is_ours`; the pid replaces
+/// the session id for a worker whose id markers do not resolve.
+pub(crate) fn handover_row_pid_is_ours(
+    entries: &[RegistryEntry],
+    worker: &str,
+    own_pid: Option<u32>,
+) -> bool {
+    let Some(own) = own_pid else {
+        return false;
+    };
+    entries.iter().any(|e| {
+        e.pid == Some(own)
             && (e.name == worker
                 || e.harness_title.as_deref() == Some(worker)
                 || e.aliases.iter().any(|a| a == worker))
@@ -2615,6 +2641,20 @@ mod start_progress_tests {
             ..Default::default()
         };
         assert!(handover_row_is_ours(&[renamed], "t-w", Some("sid-1")));
+        // A worker whose session id does not resolve joins by its own pid.
+        let pinned = RegistryEntry {
+            name: "t-w".into(),
+            pid: Some(8709),
+            ..Default::default()
+        };
+        assert!(handover_row_pid_is_ours(
+            &[pinned.clone()],
+            "t-w",
+            Some(8709)
+        ));
+        assert!(!handover_row_pid_is_ours(&[pinned.clone()], "t-w", Some(1)));
+        assert!(!handover_row_pid_is_ours(&[pinned.clone()], "t-w", None));
+        assert!(!handover_row_pid_is_ours(&[pinned], "absent", Some(8709)));
     }
 
     #[test]
