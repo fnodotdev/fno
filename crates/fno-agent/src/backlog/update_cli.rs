@@ -2662,7 +2662,7 @@ mod tests {
         // The apply path on a node with an empty audience stores the value.
         let mut rows = vec![serde_json::json!({
             "id": "x-aaaa1111", "slug": "aaaa1111", "title": "t",
-            "status": "intake", "project": "fno", "audience": ""
+            "project": "fno", "audience": ""
         })];
         let pr = DerivedPr {
             pr_number: None,
