@@ -2624,6 +2624,18 @@ impl Root {
         cx.notify();
     }
 
+    /// The connect-a-host step's keys: esc closes it; anything else falls
+    /// through to the shortcuts. True consumes the key.
+    fn hosts_key(&mut self, key: &keys::Key, cx: &mut Context<Self>) -> bool {
+        if self.hosts.is_none() || key.key != "escape" {
+            return false;
+        }
+        self.hosts = None;
+        cx.stop_propagation();
+        cx.notify();
+        true
+    }
+
     /// A picked fleet host: its seats lead the list, grouped by machine.
     pub(super) fn pick_host(&mut self, name: String, cx: &mut Context<Self>) {
         self.hosts = None;
@@ -2913,10 +2925,7 @@ impl Root {
             return;
         }
         // The connect-a-host step closes on Esc the same way.
-        if self.hosts.is_some() && key.key == "escape" {
-            self.hosts = None;
-            cx.stop_propagation();
-            cx.notify();
+        if self.hosts_key(&key, cx) {
             return;
         }
         // The answer sheet is modal the same way: esc closes, enter
