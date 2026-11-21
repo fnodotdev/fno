@@ -84,3 +84,49 @@ fn python_spellings_match_repr_and_difflib() {
         vec!["apple", "ape"]
     );
 }
+
+#[test]
+fn the_grid_readout_names_a_pick_per_difficulty_and_the_unreachable_declared_rows() {
+    let commands = vec!["target".to_string()];
+    let lane = |s: &str| Ok(Some(s.to_string()));
+    let probed = vec![
+        lane("claude-haiku"),
+        lane("claude-sonnet"),
+        lane("claude-opus"),
+    ];
+    let declared = vec![
+        "claude-opus-5-5".to_string(),
+        "zai-flash".to_string(),
+        "claude-haiku-5-5".to_string(),
+    ];
+    let out = reporters::grid_readout(&commands, &probed, &declared).expect("probes answered");
+    // concat!, not a backslash continuation: a continuation strips the next
+    // line's leading whitespace, which would silently drop the remedy line's
+    // six-space indent and pin the wrong bytes.
+    assert_eq!(
+        out,
+        concat!(
+            "band routing: grid (no profile lanes) target low->claude-haiku medium->claude-sonnet high->claude-opus\n",
+            "band routing: grid unreachable (declared, never picked at low, medium or high) claude-opus-5-5, zai-flash, claude-haiku-5-5\n",
+            "      A declared row wins only by sorting ahead: cost_per_mtok_in or a snapshot percentile ranks it first; rows without either are ranked by weakest clearing band, then name (docs/architecture/role-based-model-routing.md)\n",
+        )
+    );
+}
+
+#[test]
+fn a_failed_or_short_grid_probe_degrades_and_a_picked_row_is_never_named_unreachable() {
+    let commands = vec!["target".to_string()];
+    let failed = vec![
+        Ok(Some("claude-haiku".to_string())),
+        Err(()),
+        Ok(Some("claude-opus".to_string())),
+    ];
+    assert!(reporters::grid_readout(&commands, &failed, &["zai-flash".to_string()]).is_none());
+    let short = vec![Ok(Some("claude-haiku".to_string()))];
+    assert!(reporters::grid_readout(&commands, &short, &["zai-flash".to_string()]).is_none());
+    let placed = vec![Ok(Some("zai-flash".to_string())), Ok(None), Ok(None)];
+    let out =
+        reporters::grid_readout(&commands, &placed, &["zai-flash".to_string()]).expect("answered");
+    assert!(out.contains("target low->zai-flash medium->none high->none"));
+    assert!(!out.contains("unreachable"));
+}
