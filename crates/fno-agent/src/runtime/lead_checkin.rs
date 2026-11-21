@@ -1402,6 +1402,8 @@ fn collect_readings(
         let cwd = cwd.clone();
         let scope = scope.clone();
         let idea_children = idea_children.clone();
+        let seat_rows = std::sync::Arc::clone(rows);
+        let seat_level = ctx.level;
         let idea_rows: Vec<Value> = idea_children
             .as_ref()
             .ok()
@@ -1424,6 +1426,9 @@ fn collect_readings(
                 .and_then(|v| v.as_str().map(str::to_string))
                 .unwrap_or_else(|| crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR.to_string());
             let other_owned = crate::lead_checkin_blueprint::other_owned_scopes(&folded, &scope);
+            let seat = crate::lead_checkin_blueprint::seat_leads(
+                &scope, seat_level, &seat_rows, &folded, &board,
+            );
             crate::lead_checkin_blueprint::r_blueprint(
                 &board,
                 &cwd,
@@ -1439,6 +1444,7 @@ fn collect_readings(
                         .ok_or_else(|| "idea children unreadable".to_string())
                 }),
                 &idea_rows,
+                &seat,
             )
         }
     });

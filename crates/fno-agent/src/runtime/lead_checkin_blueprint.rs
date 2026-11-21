@@ -42,8 +42,102 @@ pub(crate) fn other_owned_scopes(
 
 /// The default blueprint-subagent ceiling when no provider budget applies
 /// (no new config key: a registry row is barred, so the default is a named
-/// Rust constant). Two per lead, with one always running: law d-c100e5ec.
+/// Rust constant). Two per lead with one always running: law d-c100e5ec.
 pub(crate) const DEFAULT_BLUEPRINT_CEILING: usize = 2;
+
+/// The leadless epic sub-scopes an L0/L1 beat seats: epics that hold
+/// dispatchable children on this beat and no live team of their own. One
+/// entry per epic: its scope id and the dispatchable rows that ride it. An
+/// unresolved level seats nothing (an unpromoted session has no grant the
+/// spawn gate would accept), and an L2+ lead builds its own org's work
+/// rather than seating over a sibling.
+pub(crate) fn seat_leads(
+    scope: &str,
+    level: Option<i64>,
+    entries: &[Value],
+    folded: &Result<Value, String>,
+    board: &Result<Value, String>,
+) -> Result<Vec<Value>, String> {
+    if !level.is_some_and(|l| *l <= 1) {
+        return Ok(Vec::new());
+    }
+    let owned = folded
+        .as_ref()
+        .map_err(Clone::clone)?
+        .get("owned_scopes")
+        .and_then(|v| v.as_object())
+        .ok_or_else(|| {
+            folded
+                .as_ref()
+                .err()
+                .cloned()
+                .unwrap_or_else(|| "the fold's owner map is unreadable".to_string())
+        })?;
+    let by_id: HashMap<&str, &Value> = entries
+        .iter()
+        .filter_map(|e| Some((e.get("id")?.as_str()?, e)))
+        .collect();
+    let rows: Vec<Value> = board
+        .as_ref()
+        .map_err(Clone::clone)?
+        .get("queues")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|q| {
+            matches!(
+                q.get("name").and_then(Value::as_str),
+                Some("unplanned") | Some("undispatched")
+            )
+        })
+        .flat_map(|q| {
+            q.get("rows")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+        })
+        .collect();
+    let row_ids: Vec<&str> = rows
+        .iter()
+        .filter_map(|r| r.get("id").and_then(Value::as_str))
+        .collect();
+    // One walk per dispatchable row: the first open epic on its parent chain
+    // that no live team owns is the seat scope. The walk stops at this
+    // session's own scope and at any live team's node, so a level-1 lead
+    // only ever seats a strict descendant of its own scope (the
+    // strict-subset grant rule, territory.rs), while a level-0 lead can
+    // seat over any leadless epic in the project.
+    let mut grouped: std::collections::BTreeMap<&str, Vec<&str>> = Default::default();
+    for row in &row_ids {
+        let mut cur = Some(*row);
+        let mut seat: Option<&str> = None;
+        while let Some(id) = cur {
+            if id == scope || owned.contains_key(id) {
+                break;
+            }
+            let Some(e) = by_id.get(id) else {
+                break;
+            };
+            let open = !matches!(
+                e.get("status").and_then(Value::as_str),
+                Some("done") | Some("superseded")
+            );
+            if e.get("type").and_then(Value::as_str) == Some("epic") && open {
+                seat = Some(id);
+                break;
+            }
+            cur = e.get("parent").and_then(Value::as_str);
+        }
+        if let Some(epic) = seat {
+            grouped.entry(epic).or_default().push(row);
+        }
+    }
+    let mut seats: Vec<Value> = Vec::new();
+    for (epic, children) in grouped {
+        seats.push(json!({"scope": epic, "children": children}));
+    }
+    Ok(seats)
+}
 
 /// The most idea children a beat routes or names as idle.
 const IDEA_LINES: usize = 3;
@@ -86,6 +180,7 @@ pub(crate) fn r_blueprint(
     other_owned: &Result<HashMap<String, String>, String>,
     idea_children: &Result<usize, String>,
     idea_rows: &[Value],
+    seat_leads: &Result<Vec<Value>, String>,
 ) -> Result<Value, String> {
     let session_id = session_id
         .ok_or_else(|| "no session id; cannot count this lead's blueprint subagents".to_string())?;
@@ -160,6 +255,43 @@ pub(crate) fn r_blueprint(
             Err(refusal) => skips.push(json!({"id": id, "reason": refusal})),
         }
     }
+    // Leadless epics with dispatchable children seat a sub-lead instead of
+    // printing their rows as this lead's work: one seat-lead line replaces
+    // every start, target-ready and plan-ready line those children would
+    // have printed, and seat rows never count toward the start ceiling.
+    let seat = seat_leads.as_ref().map_err(Clone::clone)?;
+    let seat_pairs: Vec<(String, String)> = seat
+        .iter()
+        .flat_map(|s| {
+            let epic = s
+                .get("scope")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            s.get("children")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(move |c| c.as_str().map(|cid| (cid.to_string(), epic.clone())))
+        })
+        .collect();
+    let is_seat_row = |id: &str| seat_pairs.iter().any(|(r, _)| r == id);
+    candidates.retain(|id| !is_seat_row(id));
+    target_ready.retain(|id| !is_seat_row(id));
+    for (row, epic) in &seat_pairs {
+        skips.push(json!(
+            {"id": row, "reason": format!("rides leadless epic {epic}: its seat-lead line carries the work")}
+        ));
+    }
+    let seat_scopes: Vec<Value> = seat
+        .iter()
+        .filter(|s| {
+            let scope_id = s.get("scope").and_then(Value::as_str).unwrap_or_default();
+            seat_pairs.iter().any(|(_, e)| e == scope_id)
+        })
+        .cloned()
+        .collect();
     let provider = std::env::var("FNO_ROUTE_PROVIDER").unwrap_or_default();
     let provider_cap = crate::spawn_gate_lanes::provider_subagents_cap(cwd, &provider);
     let ceiling = blueprint_ceiling(provider_cap);
@@ -191,6 +323,7 @@ pub(crate) fn r_blueprint(
             None => plan_ready.push(id.to_string()),
         }
     }
+    plan_ready.retain(|id| !is_seat_row(id));
     let (pr_v, slots_v, gate_reason): (Value, Value, Option<String>) = match (plans_ready, &slots) {
         (Some(pr), Ok(s)) => {
             if pr < *s {
@@ -274,6 +407,7 @@ pub(crate) fn r_blueprint(
         "ceiling_source": ceiling_source,
         "plans_ready": pr_v,
         "slots": slots_v,
+        "seat_leads": seat_scopes,
         "starts": starts,
         "target_ready": target_ready,
         "plan_ready": plan_ready,
@@ -304,6 +438,12 @@ pub(crate) fn render_lines(bp: &Value) -> Vec<String> {
         dash(bp.get("plans_ready")),
         dash(bp.get("slots")),
     )];
+    for s in ids("seat_leads") {
+        let scope = crate::lead_checkin::s_str(&s, "scope").unwrap_or("-");
+        lines.push(format!(
+            "  seat-lead: fno agent spawn --as thread --promote {scope} \"/fno:lead\""
+        ));
+    }
     for id in ids("starts") {
         lines.push(format!(
             "  start /fno:blueprint subagent {}",
@@ -450,6 +590,7 @@ mod tests {
             floor,
             Ok(HashMap::new()),
             Ok(0),
+            vec![],
         )
     }
 
@@ -465,6 +606,7 @@ mod tests {
         floor: &str,
         other_owned: Result<HashMap<String, String>, String>,
         idea_children: Result<usize, String>,
+        seat_leads: Vec<Value>,
     ) -> Result<Value, String> {
         // The FNO_CONFIG pin below is the SOLE config candidate for every
         // concurrent reader, so it must not interleave with another test's
@@ -492,6 +634,7 @@ mod tests {
             &other_owned,
             &idea_children,
             &[],
+            &Ok(seat_leads),
         );
         match prior_provider {
             Some(v) => std::env::set_var("FNO_ROUTE_PROVIDER", v),
@@ -502,6 +645,108 @@ mod tests {
             None => std::env::remove_var("FNO_CONFIG"),
         }
         reading
+    }
+
+    /// An L0 beat seats a leadless epic's dispatchable children: the rows
+    /// leave the dispatch lists, print no target-ready line, and ride skips
+    /// naming the seat. Seat rows never count toward the start ceiling.
+    #[test]
+    fn an_l0_beat_seats_a_leadless_epics_children() {
+        let dir = std::env::temp_dir().join(format!("fno-bp-seat-{}", std::process::id()));
+        let board = json!({
+            "queues": [{
+                "name": "unplanned", "status": "ok", "count": 2,
+                "rows": [
+                    {"id": "x-own1", "difficulty": "low"},
+                    {"id": "x-seat1", "parent": "x-eSeat", "difficulty": "low"},
+                ]
+            }]
+        });
+        let reading = blueprint_reading_owned(
+            &dir,
+            "",
+            board,
+            Some("sess-1"),
+            vec![],
+            Ok(4),
+            "high",
+            Ok(HashMap::new()),
+            Ok(0),
+            vec![json!({"scope": "x-eSeat", "children": ["x-seat1"]})],
+        )
+        .unwrap();
+        assert_eq!(
+            reading["seat_leads"],
+            json!([{"scope": "x-eSeat", "children": ["x-seat1"]}]),
+            "{reading}"
+        );
+        assert_eq!(reading["target_ready"], json!(["x-own1"]), "{reading}");
+        assert_eq!(
+            reading["skips"],
+            json!([{"id": "x-seat1",
+                "reason": "rides leadless epic x-eSeat: its seat-lead line carries the work"}]),
+            "{reading}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The seat walk: a row's parent chain seats under the first open epic
+    /// no live team owns; the walk stops at this lead's own scope and at a
+    /// live team's node, and an L2+ (or untitled) beat seats nothing.
+    #[test]
+    fn the_seat_walk_keys_on_leadless_epics_and_the_level() {
+        let entries = vec![
+            json!({"id": "x-mine", "type": "epic", "status": "ready"}),
+            json!({"id": "x-e1", "type": "epic", "status": "ready", "parent": "x-mine"}),
+            json!({"id": "x-c1", "parent": "x-e1"}),
+            json!({"id": "x-c2", "parent": "x-c1"}),
+            json!({"id": "x-owned1", "type": "epic", "status": "ready", "parent": "x-mine"}),
+            json!({"id": "x-o1", "parent": "x-owned1"}),
+            json!({"id": "x-done", "type": "epic", "status": "done", "parent": "x-mine"}),
+            json!({"id": "x-d1", "parent": "x-done"}),
+        ];
+        let board = json!({"queues": [{"name": "unplanned", "status": "ok", "count": 4,
+            "rows": [{"id": "x-c1"}, {"id": "x-c2"}, {"id": "x-o1"}, {"id": "x-d1"}]}]});
+        let folded = Ok(json!({"owned_scopes": {"x-owned1": "x-team", "x-o1": "x-team"}}));
+        let seat = seat_leads("x-mine", Some(1), &entries, &folded, &Ok(board)).unwrap();
+        assert_eq!(
+            seat,
+            vec![json!({"scope": "x-e1", "children": ["x-c1", "x-c2"]})]
+        );
+        assert!(
+            seat_leads("x-mine", Some(2), &entries, &folded, &Ok(json!({})))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            seat_leads("x-mine", None, &entries, &folded, &Ok(json!({})))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// The rendered seat-lead line names the scope, the thread lane and the
+    /// lead payload, with no --name: the nameless promote form the grant
+    /// gate accepts from a holding session.
+    #[test]
+    fn the_seat_lead_line_names_scope_lane_and_payload() {
+        let lines = render_lines(&json!({
+            "seat_leads": [{"scope": "x-eSeat", "children": ["x-seat1"]}],
+            "starts": [],
+            "target_ready": [],
+            "plan_ready": [],
+            "idle": [],
+            "batch": [],
+            "skips": [],
+        }));
+        let seat_line = lines.iter().find(|l| l.contains("seat-lead:"));
+        assert!(seat_line.is_some(), "{lines:?}");
+        assert!(
+            seat_line.unwrap().contains("--promote x-eSeat"),
+            "{lines:?}"
+        );
+        assert!(seat_line.unwrap().contains("--as thread"), "{lines:?}");
+        assert!(seat_line.unwrap().contains("\"/fno:lead\""), "{lines:?}");
     }
 
     /// The happy path: 4 unplanned candidates, running 0, ceiling capped to
@@ -587,6 +832,7 @@ mod tests {
                 ("x-c2".to_string(), "x-cccc".to_string()),
             ])),
             Ok(0),
+            vec![],
         )
         .unwrap();
         assert_eq!(reading["target_ready"], json!(["x-mine"]), "{reading}");
@@ -617,6 +863,7 @@ mod tests {
             "high",
             Err("a live team's scope does not compile: e-x: unknown".to_string()),
             Ok(0),
+            vec![],
         );
         assert!(reading.is_err());
         let _ = std::fs::remove_dir_all(&dir);

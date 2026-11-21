@@ -29,6 +29,12 @@ fn target(id: &str) -> String {
 /// its owner is usually the lead's own epic.
 fn offers(bp: &Value) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
+    for s in ids(bp, "seat_leads") {
+        out.push((
+            s.clone(),
+            format!("fno agent spawn --as thread --promote {s} \"/fno:lead\""),
+        ));
+    }
     for id in ids(bp, "starts") {
         out.push((id.clone(), format!("start /fno:blueprint subagent {id}")));
     }
