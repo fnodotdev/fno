@@ -76,26 +76,38 @@ impl Table {
 }
 
 const AUDIENCE_MIN_W: usize = 14;
-const AUDIENCE_MAX_W: usize = 30;
+const AUDIENCE_MAX_W: usize = 44;
 const RULING_MIN_W: usize = 24;
 
-/// The audience cell: the chip word, then the persona jobs that fit whole
-/// within `w`. A job that would not fit is dropped, never cut mid-word.
+/// The audience cell: the audience personas, then the persona jobs, each kept
+/// whole. Parts that do not fit within `w` are dropped, never cut mid-word.
 fn audience_cell(r: &DecisionRow, w: usize) -> String {
-    let mut cell = r
+    let audience = r
         .audience
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .unwrap_or("audience?")
-        .to_string();
-    for (i, job) in r.job.iter().enumerate() {
-        let sep = if i == 0 { " " } else { "," };
-        if cell.chars().count() + sep.len() + job.chars().count() > w {
+        .unwrap_or("audience?");
+    let personas: Vec<&str> = audience.split(',').map(str::trim).collect();
+    let mut cell = String::new();
+    for (i, part) in personas
+        .iter()
+        .copied()
+        .chain(r.job.iter().map(String::as_str))
+        .enumerate()
+    {
+        let sep = if i == 0 {
+            ""
+        } else if i == personas.len() {
+            " "
+        } else {
+            ","
+        };
+        if i > 0 && cell.chars().count() + sep.len() + part.chars().count() > w {
             break;
         }
         cell.push_str(sep);
-        cell.push_str(job);
+        cell.push_str(part);
     }
     cell
 }
@@ -389,6 +401,11 @@ mod tests {
         assert!(jobs.contains("customer:solo-founder alpha"), "{jobs}");
         assert!(!jobs.contains("beta"), "job cut in:\n{jobs}");
         t.rows[0].job.clear();
+        t.rows[0].audience = Some("customer:solo-founder,customer:vibe-coder".into());
+        let two = render(&t, 140, 12).join("\n");
+        assert!(!two.contains("vibe"), "persona cut in:\n{two}");
+        let wide = render(&t, 200, 12).join("\n");
+        assert!(wide.contains("customer:vibe-coder"), "{wide}");
         // A narrow pane keeps the ruling rather than widening the chip.
         let narrow = render(&t, 110, 12).join("\n");
         assert!(narrow.contains("ship it"), "ruling lost in:\n{narrow}");
