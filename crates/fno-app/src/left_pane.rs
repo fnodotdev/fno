@@ -6,8 +6,8 @@
 use std::collections::HashSet;
 
 use gpui::{
-    div, prelude::*, px, rgb, rgba, AnyElement, Context, Div, ElementId, FontWeight, MouseButton,
-    Pixels, SharedString, Stateful, Window,
+    div, prelude::*, px, rgb, rgba, AnyElement, Context, Div, FontWeight, MouseButton, Pixels,
+    SharedString, Stateful, Window,
 };
 
 use super::app_state::GroupBy;
@@ -787,7 +787,6 @@ fn caret_glyph(open: bool) -> &'static str {
 /// right end. The caret is its own click target: it folds without
 /// selecting the workspace.
 fn header_marks(
-    id: impl Into<ElementId>,
     rollup: &[(LatticeState, usize)],
     open: bool,
     fold: Option<u64>,
@@ -869,15 +868,7 @@ fn workspace_header(
                 .child(ui::cut(name, 24)),
         )
         .when(active, |left| left.child(ui::tag("current", p.muted, p)))
-        .child(header_marks(
-            SharedString::from(format!("fold-{id}")),
-            rollup,
-            open,
-            Some(id),
-            Some(id),
-            p,
-            cx,
-        ))
+        .child(header_marks(rollup, open, Some(id), Some(id), p, cx))
 }
 
 /// One fold-able group that is not a workspace: the whole header toggles
@@ -900,15 +891,7 @@ fn group_header(
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(title.to_string()),
         )
-        .child(header_marks(
-            "elsewhere-fold",
-            rollup,
-            open,
-            None,
-            None,
-            p,
-            cx,
-        ))
+        .child(header_marks(rollup, open, None, None, p, cx))
 }
 
 /// The inline workspace-name field: one row under the Workspaces header
@@ -1102,11 +1085,11 @@ fn menu_item(
     match action {
         Some(action) => row
             .on_click(cx.listener(move |root, _, _, cx| root.act(action.clone(), cx)))
-            .child(ui::text(label, ui::Role::Name, p))
+            .child(ui::text(label.to_string(), ui::Role::Name, p))
             .into_any_element(),
         // A greyed item keeps its row: the move items at the list edges.
         None => row
-            .child(ui::text(label, ui::Role::Name, p).text_color(rgb(p.faint)))
+            .child(ui::text(label.to_string(), ui::Role::Name, p).text_color(rgb(p.faint)))
             .into_any_element(),
     }
 }
@@ -1200,6 +1183,7 @@ pub(super) fn confirm_sheet(root: &Root, cx: &mut Context<Root>) -> Div {
     let Some(c) = root.workspace_confirm.as_ref() else {
         return div();
     };
+    let squad = c.squad;
     let word = if c.last {
         format!(
             "close workspace {} ({} panes) - last workspace, ends the session?",
@@ -1239,7 +1223,7 @@ pub(super) fn confirm_sheet(root: &Root, cx: &mut Context<Root>) -> Div {
                         .child(
                             ui::button("close-workspace-button", "Close", ui::Button::Primary, &p)
                                 .on_click(cx.listener(move |root, _, _, cx| {
-                                    root.act(Action::ConfirmCloseWorkspace(c.squad), cx)
+                                    root.act(Action::ConfirmCloseWorkspace(squad), cx)
                                 })),
                         )
                         .child(
@@ -1334,6 +1318,10 @@ pub(super) fn render(
         badges,
     };
     for (i, row) in rows.into_iter().enumerate() {
+        let menu_squad = match &row {
+            Row::Workspace { id, .. } => Some(*id),
+            _ => None,
+        };
         pane = pane.child(row_element(i, row, &grid, cx));
         // The inline name field sits right under the Workspaces header,
         // where the name it edits will read as a workspace.
@@ -1343,9 +1331,9 @@ pub(super) fn render(
             }
         }
         // The workspace menu opens in place, right under its header row.
-        if let Row::Workspace { id, .. } = &row {
-            if Some(*id) == root.workspace_menu.map(|(squad, _)| squad) {
-                for el in menu_rows(*id, &root.layout, root.workspace_menu, &grid.p, cx) {
+        if let Some(id) = menu_squad {
+            if Some(id) == root.workspace_menu.map(|(squad, _)| squad) {
+                for el in menu_rows(id, &root.layout, root.workspace_menu, &grid.p, cx) {
                     pane = pane.child(el);
                 }
             }
@@ -1658,6 +1646,7 @@ mod tests {
             &Board::default(),
             100,
             &no_folds(),
+            GroupBy::Workspaces,
             None,
             None,
         );
