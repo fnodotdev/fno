@@ -995,6 +995,75 @@ mod tests {
         conn.execute_batch("DROP TRIGGER refuse_cost").unwrap();
         drop(conn);
 
+        // The rate-limit alert: a first-seen 429 api_error mints exactly one
+        // provider_rate_limited row in the agents journal, a redelivered
+        // batch mints none, a second distinct burst mints its own row, a 529
+        // rides the same kind with its own status, and a non-rate-limit
+        // status mints nothing.
+        let api_error = |status: &str, seq: &str| {
+            json!({
+                "attributes": [
+                    {"key": "event.name", "value": {"stringValue": "api_error"}},
+                    {"key": "session.id", "value": {"stringValue": "sess-429"}},
+                    {"key": "status_code", "value": {"intValue": status}},
+                    {"key": "model", "value": {"stringValue": "claude-opus-5-5"}},
+                    {"key": "anthropropic.provider", "value": {"stringValue": "claude"}},
+                    {"key": "event.sequence", "value": {"intValue": seq}},
+                    {"key": "event.timestamp", "value": {"stringValue": "2026-11-21T00:00:00Z"}},
+                ]
+            })
+        };
+        let alert_payload = body(json!([api_error("429", "1")]));
+        assert_eq!(post(port, "/v1/logs", &alert_payload).await, 200);
+        // The exporter redelivers the same batch: one record, one alert.
+        assert_eq!(post(port, "/v1/logs", &alert_payload).await, 200);
+        // A distinct burst mints its own row; a 529 rides the same kind.
+        let burst = body(json!([api_error("429", "2"), api_error("529", "3")]));
+        assert_eq!(post(port, "/v1/logs", &burst).await, 200);
+        // A 400 is an error but not a rate limit: no alert.
+        let bad = body(json!([api_error("400", "4")]));
+        assert_eq!(post(port, "/v1/logs", &bad).await, 200);
+        let alert_rows = crate::event_store::query_events(
+            &home.events_jsonl(),
+            &crate::event_store::EventQuery {
+                types: vec!["provider_rate_limited".to_string()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(alert_rows.len(), 3, "one per distinct first-seen record");
+        let statuses: Vec<i64> = alert_rows
+            .iter()
+            .filter_map(|r| {
+                let line: Value = serde_json::from_str(&r.line).ok()?;
+                line.pointer("/data/status").and_then(Value::as_i64)
+            })
+            .collect();
+        assert_eq!(statuses, vec![429, 429, 529]);
+        let first_alert = alert_rows.first().unwrap();
+        let alert_line: Value = serde_json::from_str(&first_alert.line).unwrap();
+        assert_eq!(
+            alert_line.pointer("/data/session_id"),
+            Some(&json!("sess-429"))
+        );
+        assert_eq!(
+            alert_line.pointer("/data/provider"),
+            Some(&json!("claude")),
+            "the provider attribute ships so a custom route is nameable"
+        );
+        assert_eq!(
+            alert_line.pointer("/data/model"),
+            Some(&json!("claude-opus-5-5"))
+        );
+        assert!(
+            alert_line.pointer("/data/node_id").is_none(),
+            "a session with no claim names no node, never a guess"
+        );
+        assert_eq!(
+            first_alert.r#type, "provider_rate_limited",
+            "the kind lands under its declared schema name"
+        );
+
         shutdown.store(true, Ordering::SeqCst);
         tokio::time::timeout(Duration::from_secs(3), task)
             .await
@@ -1100,81 +1169,6 @@ mod tests {
                 Some("sess-unmetered")
             ),
             crate::team_spend::SessionMeter::Unmetered
-        );
-    }
-
-    /// The rate-limit alert: a first-seen 429 api_error mints exactly one
-    /// provider_rate_limited row in the agents journal, a redelivered batch
-    /// mints none, a second distinct burst mints its own row, a 529 rides
-    /// the same kind with its own status, and a non-rate-limit status mints
-    /// nothing.
-    #[tokio::test]
-    async fn rate_limited_api_error_emits_one_provider_rate_limited_row() {
-        let (home, _td) = home();
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let (port, task) = started(&home, Arc::clone(&shutdown)).await;
-        let api_error = |status: &str, seq: &str| {
-            json!({
-                "attributes": [
-                    {"key": "event.name", "value": {"stringValue": "api_error"}},
-                    {"key": "session.id", "value": {"stringValue": "sess-429"}},
-                    {"key": "status_code", "value": {"intValue": status}},
-                    {"key": "model", "value": {"stringValue": "claude-opus-5-5"}},
-                    {"key": "anthropropic.provider", "value": {"stringValue": "claude"}},
-                    {"key": "event.sequence", "value": {"intValue": seq}},
-                    {"key": "event.timestamp", "value": {"stringValue": "2026-11-21T00:00:00Z"}},
-                ]
-            })
-        };
-        let payload = body(json!([api_error("429", "1")]));
-        assert_eq!(post(port, "/v1/logs", &payload).await, 200);
-        // The exporter redelivers the same batch: one record, one alert.
-        assert_eq!(post(port, "/v1/logs", &payload).await, 200);
-        // A distinct burst mints its own row; a 529 rides the same kind.
-        let burst = body(json!([api_error("429", "2"), api_error("529", "3")]));
-        assert_eq!(post(port, "/v1/logs", &burst).await, 200);
-        // A 400 is an error but not a rate limit: no alert.
-        let bad = body(json!([api_error("400", "4")]));
-        assert_eq!(post(port, "/v1/logs", &bad).await, 200);
-        shutdown.store(true, Ordering::SeqCst);
-        tokio::time::timeout(Duration::from_secs(3), task)
-            .await
-            .unwrap()
-            .unwrap();
-
-        let rows = crate::event_store::query_events(
-            &home.events_jsonl(),
-            &crate::event_store::EventQuery {
-                types: vec!["provider_rate_limited".to_string()],
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        assert_eq!(rows.len(), 3, "one per distinct first-seen record");
-        let statuses: Vec<i64> = rows
-            .iter()
-            .filter_map(|r| {
-                let line: Value = serde_json::from_str(&r.line).ok()?;
-                line.pointer("/data/status").and_then(Value::as_i64)
-            })
-            .collect();
-        assert_eq!(statuses, vec![429, 429, 529]);
-        let first: &crate::event_store::EventRow = rows.first().unwrap();
-        let line: Value = serde_json::from_str(&first.line).unwrap();
-        assert_eq!(line.pointer("/data/session_id"), Some(&json!("sess-429")));
-        assert_eq!(
-            line.pointer("/data/provider"),
-            Some(&json!("claude")),
-            "the provider attribute ships so a custom route is nameable"
-        );
-        assert_eq!(line.pointer("/data/model"), Some(&json!("claude-opus-5-5")));
-        assert!(
-            line.pointer("/data/node_id").is_none(),
-            "a session with no claim names no node, never a guess"
-        );
-        assert_eq!(
-            first.r#type, "provider_rate_limited",
-            "the kind lands under its declared schema name"
         );
     }
 
