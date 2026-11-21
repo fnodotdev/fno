@@ -20,9 +20,9 @@ fn the_gate_pins_every_pr_read_to_the_node_pr_url_repo() {
     let dir = tempfile::tempdir().unwrap();
     let calls = dir.path().join("calls");
     let oid = "a".repeat(40);
-    let script = format!(
+    let loopcheck_script = format!(
         r#"#!/bin/sh
-printf '%s\n' "$*" >> "$RECORD_CALLS"
+printf '%s\n' "LOOPCHECK $*" >> "$RECORD_CALLS"
 case "$*" in
   *pr*view*)
     echo '{{"state":"OPEN","number":7,"headRefName":"feature","headRefOid":"{oid}","mergeable":"MERGEABLE","mergeStateStatus":"clean","baseRefName":"main","author":{{"login":"jj"}},"url":"https://github.com/b/r/pull/7"}}'
@@ -30,12 +30,30 @@ case "$*" in
   *pr*checks*)
     echo '[]'
     exit 0 ;;
+  *pulls/7/comments*)
+    echo '[{{"body":"![high] fix this"}}]'
+    exit 0 ;;
+  *pulls/7/commits*)
+    echo '[{{"commit":{{"committer":{{"date":"2026-01-02T03:04:05Z"}}}}}}]'
+    exit 0 ;;
 esac
-echo 'unexpected gh call' >&2
+echo "unexpected loopcheck call: $*" >&2
 exit 1
 "#
     );
-    let gh = crate::write_exec_stub(dir.path(), "gh-pin", &script);
+    let coverage_script = r#"#!/bin/sh
+printf '%s\n' "COVERAGE $*" >> "$RECORD_CALLS"
+case "$*" in
+  *pr*view*)
+    echo '{"reviews":[],"comments":[],"headRefOid":"c0ffee","baseRefName":"main"}'
+    exit 0 ;;
+esac
+echo "unexpected coverage call: $*" >&2
+exit 1
+"#
+    .to_string();
+    let gh = crate::write_exec_stub(dir.path(), "fno-gh-loopcheck", &loopcheck_script);
+    let _coverage = crate::write_exec_stub(dir.path(), "fno-gh-coverage", &coverage_script);
     std::env::set_var("RECORD_CALLS", &calls);
     let events = dir.path().join("events.jsonl");
     let global = dir.path().join("global.jsonl");
@@ -47,7 +65,7 @@ exit 1
         "git",
         dir.path(),
         false,
-        true, // no_external: the review reads stay out; the pin is the point
+        false, // no_external=false: the review reads run, and the pin holds on them too
         &[],
         &[],
         false,
@@ -68,14 +86,14 @@ exit 1
         &[],
         Some("b/r"),
     )
-    .unwrap_or_else(|_| panic!("the pinned read answers"));
+    .unwrap_or_else(|_| panic!("every read answers"));
     std::env::remove_var("RECORD_CALLS");
     assert_eq!(info.number, 7);
     let recorded = std::fs::read_to_string(&calls).unwrap();
     let mut pr_view_pinned = false;
     let mut checks_pinned = false;
     for row in recorded.lines() {
-        if row.contains("pr view") {
+        if row.contains("LOOPCHECK pr view") {
             assert!(
                 row.contains("--repo b/r"),
                 "the terminal read pins the node repo: {row}"
@@ -99,6 +117,30 @@ exit 1
         "the terminal read ran with the pin: {recorded}"
     );
     assert!(checks_pinned, "the checks read ran: {recorded}");
+    // The folded transport contract: the ordinary fire's review reads ride
+    // the REST transports, never the loopcheck broker. The reviews read is
+    // answered by the coverage shim (the promise-fire transport) and the
+    // commits read rides the raw commits endpoint pinned to the node repo,
+    // so a drained GraphQL bucket cannot park a fire whose merge question
+    // these reads answer.
+    assert!(
+        recorded.contains("COVERAGE pr view 7 --json reviews,comments"),
+        "the reviews read rode the coverage shim: {recorded}"
+    );
+    for row in recorded.lines() {
+        assert!(
+            !(row.starts_with("LOOPCHECK") && row.contains("reviews")),
+            "the loopcheck shim never served a reviews read: {row}"
+        );
+        assert!(
+            !(row.starts_with("LOOPCHECK") && row.contains("--json commits")),
+            "the commits read rides the api endpoint, not pr view: {row}"
+        );
+    }
+    assert!(
+        recorded.contains("LOOPCHECK api repos/b/r/pulls/7/commits"),
+        "the commits read rode the REST endpoint pinned to the node repo: {recorded}"
+    );
 }
 
 /// The unmeasured fold: a green checks read over a head whose
@@ -182,106 +224,5 @@ exit 1
         matches!(info.ci_conclusion, CiConclusion::Pending),
         "a green read over an unmeasured head holds: {:?}",
         info.ci_conclusion
-    );
-}
-
-/// The ordinary fire's review-side reads stay off the GraphQL broker: the
-/// reviews read is answered by the fno-gh-coverage shim (REST pages, the
-/// promise-fire transport), and the commits read rides the raw commits
-/// endpoint. A drained GraphQL bucket must not park a fire whose merge
-/// question these reads answer.
-#[test]
-fn ordinary_fire_review_reads_ride_rest_transports() {
-    let _guard = crate::claims::test_env_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let calls = dir.path().join("calls");
-    let oid = "a".repeat(40);
-    let loopcheck_script = format!(
-        r#"#!/bin/sh
-printf '%s\n' "LOOPCHECK $*" >> "$RECORD_CALLS"
-case "$*" in
-  *pr*view*)
-    echo '{{"state":"OPEN","number":7,"headRefName":"feature","headRefOid":"{oid}","mergeable":"MERGEABLE","mergeStateStatus":"clean","baseRefName":"main","author":{{"login":"jj"}},"url":"https://github.com/b/r/pull/7"}}'
-    exit 0 ;;
-  *pr*checks*)
-    echo '[]'
-    exit 0 ;;
-  *pulls/7/comments*)
-    echo '[{{"body":"![high] fix this"}}]'
-    exit 0 ;;
-  *pulls/7/commits*)
-    echo '[{{"commit":{{"committer":{{"date":"2026-01-02T03:04:05Z"}}}}}}]'
-    exit 0 ;;
-esac
-echo "unexpected loopcheck call: $*" >&2
-exit 1
-"#
-    );
-    let coverage_script = r#"#!/bin/sh
-printf '%s\n' "COVERAGE $*" >> "$RECORD_CALLS"
-case "$*" in
-  *pr*view*)
-    echo '{"reviews":[],"comments":[],"headRefOid":"c0ffee","baseRefName":"main"}'
-    exit 0 ;;
-esac
-echo "unexpected coverage call: $*" >&2
-exit 1
-"#
-    .to_string();
-    let loopcheck_bin = crate::write_exec_stub(dir.path(), "fno-gh-loopcheck", &loopcheck_script);
-    let _coverage_bin = crate::write_exec_stub(dir.path(), "fno-gh-coverage", &coverage_script);
-    std::env::set_var("RECORD_CALLS", &calls);
-    let events = dir.path().join("events.jsonl");
-    let global = dir.path().join("global.jsonl");
-    std::fs::write(&events, "").unwrap();
-    std::fs::write(&global, "").unwrap();
-    let head = "b".repeat(40);
-    let info = pr_read::read_pr_info(
-        loopcheck_bin.to_str().unwrap(),
-        "git",
-        dir.path(),
-        false,
-        false, // no_external=false: the review reads run
-        &[],
-        &[],
-        false,
-        &[],
-        &[],
-        &[],
-        &head,
-        &events,
-        &global,
-        "a/r",
-        None,
-        Some("7"),
-        None,
-        true,
-        2,
-        100,
-        None,
-        &[],
-        Some("b/r"),
-    )
-    .unwrap_or_else(|_| panic!("every read answers"));
-    std::env::remove_var("RECORD_CALLS");
-    assert_eq!(info.number, 7);
-    let recorded = std::fs::read_to_string(&calls).unwrap();
-    assert!(
-        recorded.contains("COVERAGE pr view 7 --json reviews,comments"),
-        "the reviews read rode the coverage shim: {recorded}"
-    );
-    for row in recorded.lines() {
-        assert!(
-            !(row.starts_with("LOOPCHECK") && row.contains("reviews")),
-            "the loopcheck shim never served a reviews read: {row}"
-        );
-        assert!(
-            !(row.starts_with("LOOPCHECK") && row.contains("--json commits")),
-            "the commits read rides the api endpoint, not pr view: {row}"
-        );
-    }
-    assert!(
-        recorded.contains("LOOPCHECK api repos/b/r/pulls/7/commits"),
-        "the commits read rode the REST endpoint pinned to the node repo: {recorded}"
     );
 }
