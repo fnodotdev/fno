@@ -246,10 +246,10 @@ fn status_read(payload: &Value) -> (i32, String, String) {
         .unwrap_or(false);
     // The command's readers act on `ready` and the local gates, so it composes
     // here and never serves a peer's row. The session node's PR repo pins the
-    // read: a node whose pr_url names another repo must not be answered from
-    // the ambient origin's same-number PR.
-    let session_repo =
-        crate::gate::loopcheck::pr_read::session_node_pr_target(Path::new(cwd_str)).1;
+    // read: the repo the node's rows record for THIS pr, so a cross-repo
+    // additional_prs row pins its own repo and a number no row names keeps
+    // the ambient origin.
+    let session_repo = crate::gate::loopcheck::pr_read::session_node_pr_repo(cwd, pr);
     let (mut code, mut out, mut stderr_lines, calls) =
         cached_status_in(cwd_str, pr, refresh, None, false, session_repo.as_deref());
     // The pinned read: `--expect-head SHA` (or `HEAD`, the checkout's own

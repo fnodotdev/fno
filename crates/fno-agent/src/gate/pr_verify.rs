@@ -257,9 +257,7 @@ fn verify_merged(
             "cwd": cwd.to_string_lossy(),
             "pr": number,
             "drop_coverage": true,
-            "repo": crate::gate::loopcheck::pr_read::session_node_pr_target(cwd)
-                .1
-                .filter(|s| !s.is_empty()),
+            "repo": crate::gate::loopcheck::pr_read::session_node_pr_repo(cwd, number),
         });
         let (code, stdout, _stderr) = crate::pr_status::status_ci(&payload);
         if code != 0 {

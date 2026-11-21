@@ -324,11 +324,10 @@ fn check_one(
     };
     fields.insert("pr".into(), json!(pr));
     // The session node's PR repo pins the reads, the same pin the wait
-    // applies: a push row from a cutover worktree must not watch the ambient
-    // origin's same-number PR.
-    let node_repo = crate::gate::loopcheck::pr_read::session_node_pr_target(cwd)
-        .1
-        .filter(|s| !s.is_empty());
+    // applies: the repo the node's rows record for this push row's pr, so a
+    // cross-repo additional_prs row pins its own repo and a number no row
+    // names keeps the ambient origin.
+    let node_repo = crate::gate::loopcheck::pr_read::session_node_pr_repo(cwd, pr);
     let (head, _) = crate::pr_status::cache::head_read_in(cwd, pr, node_repo.as_deref());
     let block = head.unwrap_or_else(|| json!({"head_sha": ""}));
     let (_, payload, _, _) = crate::pr_status::cache::cached_status_in(

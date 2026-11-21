@@ -335,15 +335,28 @@ fn dispatch(sub: &str, tail: &[String]) -> i32 {
         }
         "info" => {
             let cwd = current_cwd_string();
-            let node_repo =
-                crate::gate::loopcheck::pr_read::session_node_pr_target(std::path::Path::new(&cwd))
-                    .1;
+            // The pin answers the operand's number when one is named (the
+            // repo the session node's rows record for it), else the node's
+            // own newest PR repo.
+            let operand = pr_operand(tail);
+            let node_repo = match operand {
+                Some(pr) => crate::gate::loopcheck::pr_read::session_node_pr_repo(
+                    std::path::Path::new(&cwd),
+                    pr,
+                ),
+                None => {
+                    crate::gate::loopcheck::pr_read::session_node_pr_target(std::path::Path::new(
+                        &cwd,
+                    ))
+                    .1
+                }
+            };
             let mut ask = json!({
                 "op": "status-pr-info",
                 "cwd": cwd,
                 "repo": option_value(tail, "--repo").or(node_repo),
             });
-            if let Some(pr) = pr_operand(tail) {
+            if let Some(pr) = operand {
                 ask["pr"] = json!(pr);
             }
             let answer = crate::pr_info::run_op(&ask);
