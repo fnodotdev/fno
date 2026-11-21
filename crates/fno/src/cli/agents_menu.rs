@@ -103,6 +103,7 @@ const MAIL_ADMIN: &[Node] = &[
     command("sent", &["mail", "sent"], "List mail this session sent, with claim state."),
     command("team", &["mail", "team"], "Announce one body to a fleet scope as one bus line."),
     command("withdraw", &["mail", "withdraw"], "Retract a message the recipient has not picked up."),
+    command("backfill", &["mail", "backfill"], "Import past cross-session mail from transcripts into the bus log; dry run by default, --apply writes."),
     command("teach", &["mail-teach"], "The fmail read-command lesson state."),
     command("mcp", &["mcp"], "MCP sidecar client commands."),
 ];

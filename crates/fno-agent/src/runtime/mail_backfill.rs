@@ -2,11 +2,11 @@
 //!
 //! Mail an outage bypassed (sent over the harness's native cross-session
 //! transport while `fno mail send` was down) goes back into the bus log as
-//! durable rows that never re-deliver. The whole engine lives here once and
-//! Python keeps one thin transport (`fno agent mail backfill` resolves the
-//! window and the paths, then runs the command): the transcript scan, the
-//! sender/receiver join, the deterministic archive id (the idempotency
-//! key), the envelope assembly, and the write through the bus-append door.
+//! durable rows that never re-deliver. The whole engine lives here once:
+//! the transcript scan, the sender/receiver join, the deterministic
+//! archive id (the idempotency key), the envelope assembly, and the write
+//! through the bus-append door. `fno mail admin backfill` is the front
+//! door; this module owns every decision the command makes.
 //!
 //! Contract: provenance is the point. A send without a row uuid has no
 //! stable id and is skipped loud, never half-attributed; an id already in
@@ -78,13 +78,17 @@ fn parse_blocks(text: &str) -> Vec<serde_json::Value> {
 }
 
 /// Entry: `run` only. The one public shape is the JSON summary line; an
-/// unknown subcommand refuses loud on stderr with exit 2. The msgid/block/
-/// row plumbing was transport-era and retired in this port: the engine
-/// calls the same bodies directly.
+/// unknown subcommand refuses loud on stderr with exit 2.
 pub fn run_mail_backfill(args: &[String]) -> i32 {
     let sub = args.first().map(String::as_str).unwrap_or("");
     match sub {
-        "run" => run_backfill(&args[1.min(args.len())..]),
+        "run" => match backfill_summary(&args[1.min(args.len())..]) {
+            Ok(summary) => {
+                println!("{summary}");
+                0
+            }
+            Err(code) => code,
+        },
         other => {
             eprintln!("mail-backfill: unknown subcommand {other:?} (expected run)");
             2
@@ -94,8 +98,7 @@ pub fn run_mail_backfill(args: &[String]) -> i32 {
 
 // ---------------------------------------------------------------------------
 // The scan-and-write engine (`run`): the transcript scan, the sender-side
-// join, and the durable write through the bus-append door. Python keeps the
-// CLI transport only.
+// join, and the durable write through the bus-append door.
 // ---------------------------------------------------------------------------
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -145,6 +148,9 @@ fn bound_epoch(flag: &str, value: &str) -> Result<f64, String> {
 /// Overrides: --since / --until.
 const OUTAGE_SINCE: &str = "2026-10-07T08:42:47Z";
 const OUTAGE_UNTIL: &str = "2026-10-07T12:52:39Z";
+
+/// The dry-run summary's `rows` sample head: the count stays in `joined`.
+const DRY_ROWS_SAMPLE: usize = 200;
 
 /// Window membership for one row timestamp: rows without a parseable stamp
 /// stay in (the mtime prefilter already bounded them loosely).
@@ -325,13 +331,15 @@ fn join(sends: &[SendRow], blocks: &[BlockRow]) -> (Vec<(usize, usize)>, usize) 
 
 /// The whole engine: scan roots, window-filter the sender side, join, and
 /// (with --apply) write each joined pair as an audit-only envelope through
-/// the bus-append door. Prints one JSON summary line.
-fn run_backfill(args: &[String]) -> i32 {
+/// the bus-append door. Returns the JSON summary line; Err carries the exit
+/// code of a refusal (2) or a failed write (1), with the reason on stderr.
+fn backfill_summary(args: &[String]) -> Result<Value, i32> {
     let mut since = String::new();
     let mut until = String::new();
     let mut live = String::new();
     let mut roots: Vec<String> = Vec::new();
     let mut apply = false;
+    let mut all = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -342,6 +350,10 @@ fn run_backfill(args: &[String]) -> i32 {
             "--until" => {
                 until = args.get(i + 1).cloned().unwrap_or_default();
                 i += 2;
+            }
+            "--all" => {
+                all = true;
+                i += 1;
             }
             "--live" => {
                 live = args.get(i + 1).cloned().unwrap_or_default();
@@ -354,7 +366,7 @@ fn run_backfill(args: &[String]) -> i32 {
                     Some(v) if !v.starts_with("--") => roots.push(v.clone()),
                     _ => {
                         eprintln!("mail-backfill run: --root needs a path");
-                        return 2;
+                        return Err(2);
                     }
                 }
                 i += 2;
@@ -365,33 +377,53 @@ fn run_backfill(args: &[String]) -> i32 {
             }
             other => {
                 eprintln!("mail-backfill run: unknown argument {other}");
-                return 2;
+                return Err(2);
             }
         }
     }
-    let since = if since.is_empty() {
-        OUTAGE_SINCE.to_string()
+    if all && (!since.is_empty() || !until.is_empty()) {
+        eprintln!("mail-backfill run: --all scans every transcript; drop --since/--until");
+        return Err(2);
+    }
+    let (since_e, until_e) = if all {
+        // No window: the bounds open wide so the mtime prefilter and the
+        // per-row stamp filter both pass every row unchanged.
+        (f64::NEG_INFINITY, f64::INFINITY)
     } else {
-        since
-    };
-    let until = if until.is_empty() {
-        OUTAGE_UNTIL.to_string()
-    } else {
-        until
-    };
-    let (since_e, until_e) = match bound_epoch("since", &since) {
-        Ok(s) => match bound_epoch("until", &until) {
-            Ok(u) => (s, u),
+        let since = if since.is_empty() {
+            OUTAGE_SINCE.to_string()
+        } else {
+            since
+        };
+        let until = if until.is_empty() {
+            OUTAGE_UNTIL.to_string()
+        } else {
+            until
+        };
+        match bound_epoch("since", &since) {
+            Ok(s) => match bound_epoch("until", &until) {
+                Ok(u) => (s, u),
+                Err(e) => {
+                    eprintln!("mail-backfill run: {e}");
+                    return Err(2);
+                }
+            },
             Err(e) => {
                 eprintln!("mail-backfill run: {e}");
-                return 2;
+                return Err(2);
             }
-        },
-        Err(e) => {
-            eprintln!("mail-backfill run: {e}");
-            return 2;
         }
     };
+    if roots.is_empty() {
+        // No --root: scan the Claude projects home, the transcript base
+        // every Claude Code session writes under, so the bare front-door
+        // form finds the user's history.
+        roots.push(
+            crate::claude_drive::claude_projects_dir()
+                .to_string_lossy()
+                .to_string(),
+        );
+    }
     let mut files: Vec<PathBuf> = Vec::new();
     for root in &roots {
         collect_jsonl(Path::new(root), 0, &mut files);
@@ -449,7 +481,7 @@ fn run_backfill(args: &[String]) -> i32 {
                 Ok(false) => {}
                 Err(e) => {
                     eprintln!("mail-backfill run: {e}");
-                    return 1;
+                    return Err(1);
                 }
             }
         }
@@ -463,11 +495,17 @@ fn run_backfill(args: &[String]) -> i32 {
             }));
         }
     }
-    println!(
-        "{}",
-        json!({"written": written, "joined": pairs.len(), "skipped": skipped, "rows": rows_out})
-    );
-    0
+    // An all-history dry run can join thousands of pairs; the summary keeps
+    // the count and `rows` only a sample head, with the cut named.
+    let truncated = rows_out.len().saturating_sub(DRY_ROWS_SAMPLE);
+    rows_out.truncate(DRY_ROWS_SAMPLE);
+    Ok(json!({
+        "written": written,
+        "joined": pairs.len(),
+        "skipped": skipped,
+        "rows_truncated": truncated,
+        "rows": rows_out,
+    }))
 }
 
 /// Write one joined pair: derive the archive id, skip an id already in the
@@ -573,5 +611,51 @@ mod engine_tests {
         );
         assert!(pairs.is_empty());
         assert_eq!(skipped, 1);
+    }
+
+    /// `--all` joins a pair stamped far outside the outage window (no window
+    /// means every row scans), stays dry without `--apply`, and refuses a
+    /// window combined with `--all` instead of silently intersecting.
+    #[test]
+    fn all_mode_joins_whole_history_and_refuses_a_window() {
+        let root = std::env::temp_dir().join(format!("bf-all-{}", std::process::id()));
+        let proj = root.join("proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        let body = "the deploy held because the other lane still owned the merge slot today";
+        let send_line = json!({
+            "type": "assistant",
+            "uuid": "row-u1",
+            "timestamp": "2026-05-01T10:00:00Z",
+            "sessionId": "s-sender",
+            "message": {"content": [{"type": "tool_use", "name": "SendMessage",
+                "input": {"message": body, "summary": "held"}}]},
+        });
+        let block_line = json!({
+            "type": "user",
+            "timestamp": "2026-05-01T10:00:05Z",
+            "sessionId": "s-receiver",
+            "message": {"content": format!(
+                "<cross-session-message from-name=\"s-sender\">\n{body}\n</cross-session-message>")},
+        });
+        std::fs::write(proj.join("sender.jsonl"), format!("{send_line}\n")).unwrap();
+        std::fs::write(proj.join("receiver.jsonl"), format!("{block_line}\n")).unwrap();
+        let root_s = root.to_string_lossy().to_string();
+        let summary = backfill_summary(&["--all".into(), "--root".into(), root_s.clone()])
+            .expect("--all dry run joins the pair outside any window");
+        assert_eq!(summary["joined"], 1, "{summary}");
+        assert_eq!(summary["written"], 0, "{summary}");
+        assert_eq!(summary["rows_truncated"], 0, "{summary}");
+        assert_eq!(
+            summary["rows"].as_array().map(Vec::len),
+            Some(1),
+            "{summary}"
+        );
+        let refused = backfill_summary(&[
+            "--all".into(),
+            "--since".into(),
+            "2026-05-01T00:00:00Z".into(),
+        ]);
+        assert_eq!(refused.unwrap_err(), 2, "--all with a window refuses");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
