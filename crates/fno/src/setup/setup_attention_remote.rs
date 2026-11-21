@@ -39,7 +39,45 @@ pub trait Tailscale {
     fn serve(&mut self, port: u16) -> Result<String, RemoteError>;
 }
 
-/// The real seam: two `tailscale` child processes.
+/// The `Self` block of `tailscale status --json`, parsed once. A missing block reads empty, which the empty-name check below refuses.
+#[derive(serde::Deserialize, Default)]
+struct TailscaleStatus {
+    #[serde(rename = "Self", default)]
+    self_: TailscaleSelf,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct TailscaleSelf {
+    #[serde(rename = "DNSName", default)]
+    dns_name: String,
+    #[serde(rename = "LoginName", default)]
+    login_name: String,
+}
+
+/// One ntfy sink row as the amend path reads it: type ntfy with string url and topic.
+#[derive(serde::Deserialize)]
+struct NtfySinkRow {
+    #[serde(rename = "type")]
+    kind: String,
+    url: String,
+    topic: String,
+}
+
+/// One ntfy sink row as the reachable check read structs: type ntfy with a string view base.
+#[derive(serde::Deserialize)]
+struct ViewSinkRow {
+    #[serde(rename = "type")]
+    kind: String,
+    view_base_url: String,
+}
+
+/// One invite row as the owner-row check reads it.
+#[derive(serde::Deserialize)]
+struct InviteRow {
+    email: String,
+}
+
+/// The real seam: two `tailscale` child processes through the spawn seam the crate gates on.
 pub struct CmdTailscale;
 
 impl Tailscale for CmdTailscale {
@@ -47,30 +85,25 @@ impl Tailscale for CmdTailscale {
         let out = std::process::Command::new("tailscale")
             .arg("status")
             .arg("--json")
-            .output()
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|child| child.wait_with_output())
             .map_err(|e| RemoteError::Tailscale(format!("tailscale: {e}")))?;
         if !out.status.success() {
             return Err(RemoteError::Tailscale(
                 String::from_utf8_lossy(&out.stderr).trim().to_string(),
             ));
         }
-        let v: Value = serde_json::from_slice(&out.stdout)
+        let v: TailscaleStatus = serde_json::from_slice(&out.stdout)
             .map_err(|e| RemoteError::Tailscale(format!("tailscale: {e}")))?;
-        let dns = v["Self"]["DNSName"]
-            .as_str()
-            .unwrap_or_default()
-            .trim_end_matches('.')
-            .to_string();
-        let login = v["Self"]["LoginName"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string();
-        if dns.is_empty() || login.is_empty() {
+        let dns = v.self_.dns_name.trim_end_matches('.').to_string();
+        if dns.is_empty() || v.self_.login_name.is_empty() {
             return Err(RemoteError::Tailscale(String::from(
                 "tailscale status --json names no Self.DNSName/LoginName; is this machine on a tailnet?",
             )));
         }
-        Ok((dns, login))
+        Ok((dns, v.self_.login_name))
     }
 
     fn serve(&mut self, port: u16) -> Result<String, RemoteError> {
@@ -78,7 +111,10 @@ impl Tailscale for CmdTailscale {
             .arg("serve")
             .arg("--bg")
             .arg(format!("http://127.0.0.1:{port}"))
-            .output()
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|child| child.wait_with_output())
             .map_err(|e| RemoteError::Tailscale(format!("tailscale: {e}")))?;
         if !out.status.success() {
             return Err(RemoteError::Tailscale(
@@ -91,8 +127,11 @@ impl Tailscale for CmdTailscale {
 
 /// Whether this machine already carries an ntfy row with a `view_base_url`.
 pub fn view_reachable(rows: &[Value]) -> bool {
-    rows.iter()
-        .any(|r| r["type"] == "ntfy" && r["view_base_url"].is_string())
+    rows.iter().any(|r| {
+        serde_json::from_value::<ViewSinkRow>(r.clone())
+            .map(|s| s.kind == "ntfy")
+            .unwrap_or(false)
+    })
 }
 
 /// The default topic: `fno-questions-` plus the machine id's safe characters, so two machines never share a public topic by accident.
@@ -136,18 +175,23 @@ pub fn step(
     };
     let view_base = format!("https://{dns}");
     // One ntfy row on this machine: amend it, never a duplicate push.
-    let existing = rows
-        .iter()
-        .position(|r| r["type"] == "ntfy" && r["url"].is_string() && r["topic"].is_string());
-    let (next_rows, url, topic, _env) = match existing {
+    let parse_ntfy = |r: &Value| {
+        serde_json::from_value::<NtfySinkRow>(r.clone())
+            .map(|s| s.kind == "ntfy")
+            .unwrap_or(false)
+    };
+    let existing = rows.iter().position(|r| parse_ntfy(r));
+    let (next_rows, url, topic) = match existing {
         Some(i) => {
-            let r = rows[i].clone();
-            let url = r["url"].as_str().unwrap_or_default().to_string();
-            let topic = r["topic"].as_str().unwrap_or_default().to_string();
-            let env = r["token_env"].as_str().unwrap_or_default().to_string();
+            let row = rows
+                .get(i)
+                .and_then(|r| serde_json::from_value::<NtfySinkRow>(r.clone()).ok())
+                .expect("the position predicate parsed this same row");
             let mut next = rows.clone();
-            next[i]["view_base_url"] = json!(view_base);
-            (next, url, topic, env)
+            if let Some(obj) = next.get_mut(i).and_then(|r| r.as_object_mut()) {
+                obj.insert("view_base_url".to_string(), json!(view_base));
+            }
+            (next, row.url, row.topic)
         }
         None => {
             let topic = ask
@@ -179,12 +223,17 @@ pub fn step(
                 "token_env": env,
                 "view_base_url": view_base,
             }));
-            (next, DEFAULT_SERVER.to_string(), topic, env)
+            (next, DEFAULT_SERVER.to_string(), topic)
         }
     };
     // Fill the invites owner row: the tailnet login answers the HQ door.
+    let parse_invite = |r: &Value| {
+        serde_json::from_value::<InviteRow>(r.clone())
+            .map(|s| s.email == login)
+            .unwrap_or(false)
+    };
     let mut next_invites = invites.clone();
-    if !next_invites.iter().any(|r| r["email"] == login) {
+    if !next_invites.iter().any(|r| parse_invite(r)) {
         next_invites.push(json!({
             "email": login,
             "scope": "*",
