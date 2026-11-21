@@ -304,6 +304,17 @@
      }
     },
     {
+     "name": "buddy",
+     "default": {
+      "reroll_bank": 3,
+      "ships_per_reroll": 2,
+      "daily_reroll": true,
+      "model_line_cooldown_s": 10,
+      "model": "haiku",
+      "fleet_interval_s": 300
+     }
+    },
+    {
      "name": "provider_cap",
      "default": {
       "enabled": true,
@@ -1363,6 +1374,35 @@
     {
      "name": "font_size",
      "default": 13.0
+    }
+   ]
+  },
+  "BuddyBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "reroll_bank",
+     "default": 3
+    },
+    {
+     "name": "ships_per_reroll",
+     "default": 2
+    },
+    {
+     "name": "daily_reroll",
+     "default": true
+    },
+    {
+     "name": "model_line_cooldown_s",
+     "default": 10
+    },
+    {
+     "name": "model",
+     "default": "haiku"
+    },
+    {
+     "name": "fleet_interval_s",
+     "default": 300
     }
    ]
   },
