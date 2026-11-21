@@ -423,7 +423,7 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
     for (i, &at) in order.iter().take(ROWS_SHOWN).enumerate() {
         // rank only ever returns catalog indices.
         let t = targets.get(at).expect("rank returns in-range indices");
-        body = body.child(row(root, t, at, i, i == sel, &p, cx));
+        body = body.child(row(t, at, i, i == sel, &p, cx));
     }
     if order.is_empty() {
         body = body.child(ui::quiet(format!("nothing matches \"{query}\""), &p));
@@ -485,7 +485,6 @@ fn field(query: &str, p: &Palette) -> Div {
 /// One ranked row: kind word, label, detail. Clicked rows run their
 /// action; the selected row carries the row-fill band.
 fn row(
-    root: &Root,
     t: &Target,
     at: usize,
     i: usize,

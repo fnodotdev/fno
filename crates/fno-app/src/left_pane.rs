@@ -6,8 +6,8 @@
 use std::collections::HashSet;
 
 use gpui::{
-    div, prelude::*, px, rgb, rgba, Context, Div, ElementId, FontWeight, MouseButton, Pixels,
-    Stateful, Window,
+    div, prelude::*, px, rgb, rgba, AnyElement, Context, Div, ElementId, FontWeight, MouseButton,
+    Pixels, SharedString, Stateful, Window,
 };
 
 use super::app_state::GroupBy;
@@ -38,7 +38,7 @@ pub(super) fn fold_key(s: &SquadMeta) -> String {
 
 /// The Elsewhere group's fold key, where agents land when their squad is
 /// `None` or names a squad the layout does not carry.
-const ELSEWHERE_KEY: &str = "Elsewhere";
+pub(super) const ELSEWHERE_KEY: &str = "Elsewhere";
 
 /// A rename's fold re-key: a workspace whose fold key is its name (a
 /// cwd-less NewSquad workspace) moves the entry to the new name, so a
@@ -199,7 +199,7 @@ fn shell_item(p: &PaneMeta) -> Row {
     let cwd = p
         .cwd
         .as_deref()
-        .filter(|c| !home.is_empty())
+        .filter(|_| !home.is_empty())
         .map(|c| c.replacen(&home, "~", 1))
         .unwrap_or_default();
     Row::Item {
@@ -211,6 +211,39 @@ fn shell_item(p: &PaneMeta) -> Row {
         question: false,
         mark: Mark::None,
         action: Some(Action::Send(Command::FocusPane(p.id))),
+    }
+}
+
+/// One agent's sidebar row.
+fn agent_item(
+    a: &AgentRow,
+    layout: &Layout,
+    now_secs: u64,
+    streamed: Option<&str>,
+    launched: Option<(&str, &str)>,
+) -> Row {
+    let state = agent_lattice_state(a);
+    let label = match launched {
+        Some((name, task)) if name == a.name && !task.is_empty() => task.to_string(),
+        _ => a.name.clone(),
+    };
+    Row::Item {
+        label,
+        detail: agent_status_word(a),
+        identity: agent_identity(a),
+        card: Some(card_facts(a, now_secs)),
+        state: Some(state),
+        question: false,
+        mark: if match streamed {
+            Some(sid) => a.harness_session_id.as_deref() == Some(sid),
+            None => a.pane_id == Some(layout.focus),
+        } || launched.is_some_and(|(n, _)| n == a.name)
+        {
+            Mark::Cursor
+        } else {
+            Mark::None
+        },
+        action: Some(agent_row_action(a)),
     }
 }
 
@@ -795,7 +828,7 @@ fn header_marks(
     }
     match fold {
         Some(id) => marks.child(
-            ui::clickable(div().id(id).px_1(), p)
+            ui::clickable(div().id(("fold", id)).px_1(), p)
                 .on_click(cx.listener(move |root, _, _, cx| {
                     cx.stop_propagation();
                     root.act(Action::ToggleWorkspace(id), cx);
@@ -865,7 +898,7 @@ fn group_header(
                 .min_w_0()
                 .overflow_hidden()
                 .font_weight(FontWeight::SEMIBOLD)
-                .child(title),
+                .child(title.to_string()),
         )
         .child(header_marks(
             "elsewhere-fold",
@@ -885,7 +918,6 @@ fn squad_field_row(
     field: &super::window::SquadField,
     root: &Root,
     window: &Window,
-    cx: &mut Context<Root>,
 ) -> Stateful<Div> {
     let p = root.palette;
     let text = super::chat::field::Field {
@@ -974,7 +1006,7 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
             title,
             rollup,
             open,
-        } => group_header(i, title, &rollup, open, &p, cx),
+        } => group_header(i, &title, &rollup, open, &p, cx),
         Row::Item {
             label,
             detail,
@@ -1065,6 +1097,7 @@ fn menu_item(
 ) -> AnyElement {
     let row = ui::clickable(
         ui::row(SharedString::from(format!("{key}-{squad}")), false, p).w(px(WIDTH - 12.0)),
+        p,
     );
     match action {
         Some(action) => row
@@ -1196,7 +1229,7 @@ pub(super) fn confirm_sheet(root: &Root, cx: &mut Context<Root>) -> Div {
                 .p_3()
                 .rounded(px(8.0))
                 .bg(rgb(p.raised))
-                .child(ui::text(word, ui::Role::Name, p))
+                .child(ui::text(word, ui::Role::Name, &p))
                 .child(
                     div()
                         .flex()
@@ -1306,7 +1339,7 @@ pub(super) fn render(
         // where the name it edits will read as a workspace.
         if i == 0 {
             if let Some(field) = root.squad_field.as_ref() {
-                pane = pane.child(squad_field_row(field, root, window, cx));
+                pane = pane.child(squad_field_row(field, root, window));
             }
         }
         // The workspace menu opens in place, right under its header row.
@@ -1523,20 +1556,28 @@ mod tests {
             agents: vec![a],
             ..Layout::default()
         };
-        let open_rows = rows(&layout, &Board::default(), 100, &no_folds(), None, None);
+        let open_rows = rows(
+            &layout,
+            &Board::default(),
+            100,
+            &no_folds(),
+            GroupBy::Workspaces,
+            None,
+            None,
+        );
         assert!(matches!(
             open_rows.get(1),
             Some(Row::Workspace { open: true, .. })
         ));
         assert!(matches!(
             open_rows.get(2),
-            Some(Row::Item { label, .. } if label == "alpha")
+            Some(Row::Item { label, .. }) if label == "alpha"
         ));
         // The fold key is the canonical cwd; folding hides the rows, the
         // header stays.
         let mut folds = HashSet::new();
         folds.insert("/r".to_string());
-        let folded = rows(
+        let folded = super::rows(
             &layout,
             &Board::default(),
             100,
@@ -1551,7 +1592,7 @@ mod tests {
         ));
         assert!(matches!(
             folded.get(2),
-            Some(Row::Item { label, .. } if label.starts_with("Questions"))
+            Some(Row::Item { label, .. }) if label.starts_with("Questions")
         ));
         // An empty workspace says so under its open header.
         let bare = Layout {
@@ -1612,7 +1653,7 @@ mod tests {
             .any(|r| matches!(r, Row::Item { label, .. } if label == "ship it?")));
         // Before the first read the row waits; a failed read keeps its
         // error line under the row.
-        let fresh = rows(
+        let fresh = super::rows(
             &Layout::default(),
             &Board::default(),
             100,
@@ -1629,7 +1670,7 @@ mod tests {
             1,
             &[],
         );
-        let err_rows = rows(
+        let err_rows = super::rows(
             &Layout::default(),
             &failed,
             100,
@@ -1788,6 +1829,7 @@ mod tests {
             &Board::default(),
             100 + 7200,
             &no_folds(),
+            GroupBy::Workspaces,
             None,
             None,
         );
@@ -1878,7 +1920,7 @@ mod tests {
         // A band folds by its title, the same user-only rule.
         let mut folds = HashSet::new();
         folds.insert("Working".to_string());
-        let folded = rows(
+        let folded = super::rows(
             &layout,
             &Board::default(),
             100,
@@ -1976,7 +2018,7 @@ mod tests {
         let m2 = rows
             .iter()
             .position(|r| matches!(r, Row::Group { title, .. } if title == "m2-mbp"));
-        assert!(m2 < remote_pos.unwrap());
+        assert!(m2.unwrap() < remote_pos.unwrap());
         assert!(remote_pos.unwrap() < shell_pos.unwrap());
     }
 }

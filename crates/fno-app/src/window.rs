@@ -150,6 +150,7 @@ fn click_id(action: &Action) -> &'static str {
         Action::Show(_) => "show_view",
         Action::NewWorkspace => "new_workspace",
         Action::ToggleWorkspace(_) => "toggle_workspace",
+        Action::ToggleElsewhere => "toggle_elsewhere",
         Action::OpenWorkspaceMenu(_) => "open_workspace_menu",
         Action::OpenAddMenu(_) => "open_add_menu",
         Action::CycleGrouping => "cycle_grouping",
@@ -468,6 +469,8 @@ impl Root {
             folds,
             group_by,
             squad_field: None,
+            workspace_menu: None,
+            workspace_confirm: None,
             light,
             theme_cwd: theme_cwd.clone(),
             session: session.clone(),
@@ -981,8 +984,10 @@ impl Root {
                     .find(|s| s.id == id)
                     .map(|s| s.name.clone())
                     .unwrap_or_default();
+                let mut draft = Draft::default();
+                draft.replace_selection(&name);
                 self.squad_field = Some(SquadField {
-                    draft: Draft::from(name),
+                    draft,
                     field: Rc::new(chat::field::FieldState::default()),
                     squad: Some(id),
                 });
@@ -1879,7 +1884,7 @@ impl Root {
         let mut send = None;
         let mut rescan = false;
         let mut escape = false;
-        let mut reveal = None;
+        let reveal = None;
         let mut step = None;
         {
             let Some(f) = &mut self.find else { return };
@@ -3963,7 +3968,8 @@ pub(super) fn root_for_shot(
             session.to_string(),
             mode,
             pinned,
-            false,
+            HashSet::new(),
+            GroupBy::Workspaces,
             metrics,
             Some(warmed),
             window,
