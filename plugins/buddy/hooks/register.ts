@@ -1,8 +1,8 @@
 import type { EngineInterface, On } from 'claude-code'
 
-import { type Companion, type Soul, RARITY_STARS, RARITY_THEME, STAT_NAMES, type StatName, embody, hatch, rarityColor, restore } from './companion'
+import { type Companion, type Soul, RARITY_STARS, RARITY_THEME, STAT_NAMES, type StatName, embody, hatch, peakStat, rarityColor, restore } from './companion'
 import { HATCH_FRAMES, HATCH_FRAME_MS, HATCH_MIN_ROUNDS, HATCH_WOBBLE, IDLE_SEQUENCE, PET_HEARTS, RAINBOW, renderFace, renderSprite } from './sprites'
-import { type FeedRow, addressedBy, cleanPersonality, cleanReaction, idlePrompt, lastPrompt, loudReason, type Reason, turnOutput, newsFact, newsPrompt, personalityPrompt, reactionPrompt, summarizeTurn, systemPrompt } from './voice'
+import { type FeedRow, addressedBy, cleanPersonality, cleanReaction, EVENT_LINES, eventKind, idlePrompt, lastPrompt, loudReason, moodFor, type Reason, streakLine, turnOutput, newsFact, newsPrompt, personalityPrompt, reactionPrompt, summarizeTurn, systemPrompt } from './voice'
 
 const TICK_MS = 500
 const BUBBLE_MS = 30_000
@@ -55,6 +55,12 @@ let paneDrawnAt = -Infinity
 let paneAsked = false
 let reactedAt = -Infinity
 let recent: string[] = []
+// Tool-result events: consecutive fails this session, their times for the mood
+// window, and the last model line an event fired (the cooldown clock).
+let failStreak = 0
+let errorTimes: number[] = []
+let lastEventModelAt = -Infinity
+let mood: 'calm' | 'chaotic' = 'calm'
 // The /buddy output row draws as the card; a fresh soul's first card plays the hatch first.
 const CARD_MARK = '\u2063'
 const HATCH_MARK = '\u2064'
@@ -221,15 +227,50 @@ function say(text: string, now: number): void {
 }
 
 // Rerolls are earned: one free a day, one per SHIPS_PER_REROLL PRs the fleet ships, banked up to REROLL_BANK.
-// ponytail: fixed numbers; a [buddy] section in config.toml can own them once someone wants to tune them.
+// The [buddy] section of config.toml owns these numbers (read once at session start);
+// the constants here are the fallback when fno is missing or predates the section.
 const REROLL_BANK = 3
 const SHIPS_PER_REROLL = 2
+export type BuddyConfig = {
+  reroll_bank: number
+  ships_per_reroll: number
+  daily_reroll: boolean
+  model_line_cooldown_s: number
+  model: string
+  fleet_interval_s: number
+}
+const cfg: BuddyConfig = { reroll_bank: REROLL_BANK, ships_per_reroll: SHIPS_PER_REROLL, daily_reroll: true, model_line_cooldown_s: 10, model: 'haiku', fleet_interval_s: 300 }
+const CONFIG_KEYS: Record<keyof BuddyConfig, 'number' | 'boolean' | 'string'> = {
+  reroll_bank: 'number',
+  ships_per_reroll: 'number',
+  daily_reroll: 'boolean',
+  model_line_cooldown_s: 'number',
+  model: 'string',
+  fleet_interval_s: 'number',
+}
+// One `fno config get buddy` call prints the whole section as JSON; per-key
+// type checks so a half-written section cannot poison the rest.
+async function readBuddyConfig($: EngineInterface): Promise<void> {
+  const out = await $.process.run(['fno', 'config', 'get', 'buddy'], { timeoutMs: 10_000 }).catch(() => null)
+  if (!out || out.exitCode !== 0) return
+  let section: any
+  try {
+    section = JSON.parse(out.stdout)
+  } catch {
+    return
+  }
+  for (const [key, kind] of Object.entries(CONFIG_KEYS)) {
+    const v = section?.[key]
+    if (typeof v === kind) cfg[key] = v
+  }
+}
 export type Rerolls = { bank: number; day: string; ships: number; shipAt: number }
 
-export function refill(r: Rerolls | undefined, today: string, shippedAt: number[] = []): Rerolls {
-  let { bank, day, ships, shipAt } = r ?? { bank: 0, day: '', ships: 0, shipAt: 0 }
-  if (day !== today) {
-    bank = Math.min(REROLL_BANK, bank + 1)
+export function refill(r: Rerolls | undefined, today: string, shippedAt: number[] = [], bank = cfg.reroll_bank, shipsPer = cfg.ships_per_reroll, daily = cfg.daily_reroll): Rerolls {
+  let { bank: have, day, ships, shipAt } = r ?? { bank: 0, day: '', ships: 0, shipAt: 0 }
+  let next = have
+  if (daily && day !== today) {
+    next = Math.min(bank, next + 1)
     day = today
   }
   // shipAt is the newest ship already counted, so every session reading the same feed counts a PR once.
@@ -237,12 +278,12 @@ export function refill(r: Rerolls | undefined, today: string, shippedAt: number[
     if (at <= shipAt) continue
     shipAt = at
     ships += 1
-    if (ships >= SHIPS_PER_REROLL) {
+    if (ships >= shipsPer) {
       ships = 0
-      bank = Math.min(REROLL_BANK, bank + 1)
+      next = Math.min(bank, next + 1)
     }
   }
-  return { bank, day, ships, shipAt }
+  return { bank: next, day, ships, shipAt }
 }
 
 const today = (now: number) => new Date(now).toLocaleDateString('en-CA')
@@ -281,7 +322,7 @@ function cardTree(ui: any, c: Companion, said: string, r: Rerolls): any {
       ...(said
         ? [Box({ flexDirection: 'column', marginTop: 1, children: [Text({ dimColor: true, children: ['last said'] }), Box({ borderStyle: 'round', borderColor: 'inactive', paddingX: 1, children: [Text({ dimColor: true, italic: true, children: [said] })] })] })]
         : []),
-      Box({ marginTop: 1, children: [Text({ dimColor: true, children: [`rerolls ${r.bank}/${REROLL_BANK}`] })] }),
+      Box({ marginTop: 1, children: [Text({ dimColor: true, children: [`rerolls ${r.bank}/${cfg.reroll_bank}`] })] }),
     ],
   })
 }
@@ -354,7 +395,7 @@ async function projectContext($: EngineInterface): Promise<string> {
 }
 
 function rerollLine(r: Rerolls): string {
-  return `rerolls: ${r.bank}/${REROLL_BANK} · one more per ${SHIPS_PER_REROLL} shipped PRs (${r.ships}/${SHIPS_PER_REROLL}) and one each day`
+  return `rerolls: ${r.bank}/${cfg.reroll_bank} · one more per ${cfg.ships_per_reroll} shipped PRs (${r.ships}/${cfg.ships_per_reroll})${cfg.daily_reroll ? ' and one each day' : ''}`
 }
 
 function card(c: Companion, r: Rerolls): string {
@@ -510,15 +551,15 @@ async function react($: EngineInterface, why: Reason | 'idle' = 'turn', context?
   const summary = context ?? summarizeTurn(messages)
   if (why === 'turn' && !summary.trim()) return
   const reply = await $.model.complete({
-    model: 'haiku',
-    system: systemPrompt(c),
+    model: cfg.model,
+    system: systemPrompt(c, mood),
     prompt: why === 'idle' ? idlePrompt(summary) : reactionPrompt(summary, why, recent),
     maxTokens: 160,
     timeoutMs: 20_000,
   })
   const line = reply.isAnswered ? cleanReaction(reply.text) : ''
   if (!line || buddy?.seed !== c.seed) return
-  recent = [...recent, line].slice(-3)
+  recent = [...recent, line].slice(-5)
   lastSaid = line
   const now = await $.clock.now()
   say(line, now)
@@ -592,7 +633,7 @@ async function readFeed($: EngineInterface, now: number): Promise<void> {
   }
   feedSince = since
   await $.store.set('newsSince', since)
-  const earned = after.bank > before ? `+1 reroll (${after.bank}/${REROLL_BANK})` : ''
+  const earned = after.bank > before ? `+1 reroll (${after.bank}/${cfg.reroll_bank})` : ''
   if (line && buddy) {
     const c = buddy
     const reply = await $.model.complete({ model: 'haiku', system: systemPrompt(c), prompt: newsPrompt(line), maxTokens: 160, timeoutMs: 20_000 }).catch(() => null)
@@ -630,7 +671,7 @@ export function fleetLine(gate: any, outstanding: any, prs: any): string {
 async function readFleet($: EngineInterface, now: number): Promise<void> {
   if (feedOff || muted || !buddy || now - drawnAt > SEEN_MS) return
   const shared = (await $.store.get('fleet')) as { at: number; line: string } | undefined
-  if (shared && now - shared.at < FLEET_MS - 10_000) {
+  if (shared && now - shared.at < cfg.fleet_interval_s * 1000 - 10_000) {
     fleet = shared.line
     return
   }
@@ -728,6 +769,7 @@ export function register(on: On) {
     if (deferred) muted = true
     // A buddy that is off runs nothing at start: no process, no settings read.
     if (!muted) {
+      await readBuddyConfig($)
       const settings = await readSettings($)
       stateDir = await findStateDir($, settings)
       // The fno mux sets both in each pane it hosts, and writes <mux dir>/<session>.visible.json.
@@ -775,7 +817,7 @@ export function register(on: On) {
       if ((await $.clock.now()) < hatchUntil) $.ui.invalidate('ui.render')
     })
     $.clock.every(FEED_MS, async () => readFeed($, await $.clock.now()))
-    $.clock.every(FLEET_MS / 5, async () => readFleet($, await $.clock.now()))
+    $.clock.every(cfg.fleet_interval_s * 200, async () => readFleet($, await $.clock.now()))
     for (const name of COMMANDS) {
       try {
         await $.command.register({ name, description: name === 'bbb' ? 'Bring back buddy: your terminal companion' : 'Your terminal companion: show it, pet it, roll a new one, or turn it off', argumentHint: '[pet|roll|statusline|pane|off|on|bye]', immediate: true })
@@ -891,6 +933,49 @@ export function register(on: On) {
           react($, why).catch(() => {})
         }
       }
+    }
+    return next(e)
+  })
+
+  // Tool results, live: the bridge fires per Bash result, so the buddy reacts
+  // to what happens instead of waiting for the turn to end. The streak and the
+  // mood count whatever the session does; a line waits for a person, the same
+  // attended gate every other model call sits behind.
+  on('classic.PostToolUse', { tool_name: 'Bash' }, async ($, e, next) => {
+    if (!buddy || muted || deferred) return next(e)
+    const now = await $.clock.now()
+    const response = (e as any).tool_response
+    const text = typeof response === 'string' ? response : typeof response?.stdout === 'string' ? `${response.stdout}\n${response.stderr ?? ''}` : ''
+    const kind = eventKind(text)
+    if (!kind) return next(e)
+    const c = buddy
+    let line: string
+    let was = 0
+    if (kind === 'all-green') {
+      if (failStreak === 0) return next(e)
+      was = failStreak
+      failStreak = 0
+      line = EVENT_LINES.recovery[peakStat(c)]
+    } else {
+      failStreak += 1
+      errorTimes = [...errorTimes, now]
+      mood = moodFor(errorTimes, now)
+      line = streakLine(failStreak) ?? EVENT_LINES[kind][peakStat(c)]
+    }
+    if (!attended(now)) return next(e)
+    recent = [...recent, line].slice(-5)
+    lastSaid = line
+    say(line, now)
+    $.ui.invalidate('ui.render')
+    await remember($, c, kind, line, now)
+    // One model line per cooldown rides the event, with the streak and the mood along.
+    if (now - lastEventModelAt >= cfg.model_line_cooldown_s * 1000) {
+      lastEventModelAt = now
+      reactedAt = now
+      const why: Reason = kind === 'all-green' ? 'turn' : kind
+      const streakNote = kind === 'all-green' ? ` after ${was} in a row` : failStreak > 1 ? `, ${failStreak} in a row` : ''
+      const context = `A command just finished (${kind}${streakNote}, mood: ${mood}). Output tail:\n${text.slice(-400)}`
+      react($, why, context).catch(() => {})
     }
     return next(e)
   })

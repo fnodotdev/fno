@@ -21,12 +21,13 @@ A mod is the right way to do this. A mod runs inside Claude Code, with no fork a
 
 - **The sprite.** The buddy is one of 18 species. It has a rarity, eyes, and sometimes a hat. Five stats set its voice: debugging, patience, chaos, wisdom, and snark.
 - **Rarity colors.** In the dark theme, common is gray, uncommon green, rare blue, epic purple, and legendary gold. The card, the status line, and the Desktop sprite all draw the color of your Claude Code theme. A custom theme draws the dark theme's colors in the status line.
-- **Idle talk.** When nothing happens for 2 minutes, the buddy says something of its own. It is one model call, in its personality, about what the session is doing. The buddy has no canned lines.
-- **Reactions.** After a turn, one model call reads the last exchange and answers in the voice of the buddy. Ordinary turns wait 30 seconds between reactions, as the original did. A turn that says the buddy's name, fails tests, hits an error, or lands a diff over 80 lines gets a reaction at once. Petting and hatching get one too. The last three lines go along, so the buddy does not repeat itself.
+- **Idle talk.** When nothing happens for 2 minutes, the buddy says something of its own. It is one model call, in its personality, about what the session is doing. Idle talk and turn reactions are written live; only the tool-result quick lines are canned.
+- **Reactions.** After a turn, one model call reads the last exchange and answers in the voice of the buddy. Ordinary turns wait 30 seconds between reactions, as the original did. A turn that says the buddy's name, fails tests, hits an error, or lands a diff over 80 lines gets a reaction at once. Petting and hatching get one too. The last five lines go along, so the buddy does not repeat itself.
+- **Tool results.** While a command runs, the buddy watches its Bash results. A failing test, build, type check, or lint gets a canned quick line the moment it lands (no model call, picked by the buddy's top stat), the third, tenth, and twentieth failure in a row get an escalated line, and the green run after a streak gets a we fixed it. One model line rides the event at most once every `buddy.model_line_cooldown_s` seconds, and it names the streak and the mood. Three failures inside five minutes put the buddy in a chaotic mood, and five quiet minutes calm it down again. An ordinary green run with no streak behind it stays quiet.
 - **Observations.** Every observation the buddy makes goes to `~/.fno/state/buddy/observations.jsonl`, one JSON row each with the time, the name, the reason, and the line. Read it with `tail ~/.fno/state/buddy/observations.jsonl`.
 - **Fleet news.** When `fno-agent` is on your PATH, the buddy reads the fleet activity feed every 2 minutes. It tells you when a node ships a PR, when a node finishes, and when a question waits for you. It says the news in its own voice with one model call. If that call fails, it says the plain fact.
 - **The fno CLI is optional.** Fleet news and fleet counts need the `fno` CLI. Without it, the buddy still talks about your own session.
-- **Fleet counts.** Beside its name, the buddy shows live workers, questions that wait for you, and your open PRs. One read every 5 minutes serves every session.
+- **Fleet counts.** Beside its name, the buddy shows live workers, questions that wait for you, and your open PRs. One read every `buddy.fleet_interval_s` seconds (5 minutes by default) serves every session.
 
 ## Only where you can see it
 
@@ -68,7 +69,22 @@ You get rerolls in two ways:
 - **One reroll each day.** The day follows the clock of the Claude Code process, which can be UTC.
 - **One reroll for every 2 PRs that your fleet ships.** The buddy counts shipped PRs from the fleet feed. Each PR counts one time, even when many sessions read the same feed.
 
-You can keep 3 rerolls at most. A reroll that you earn with a full bank is lost. The card shows your bank, for example `rerolls: 2/3`. When the bank is empty, `/buddy roll` tells you how to get the next reroll, and your buddy stays.
+You can keep `buddy.reroll_bank` rerolls at most (3 by default). A reroll that you earn with a full bank is lost. The card shows your bank, for example `rerolls: 2/3`. When the bank is empty, `/buddy roll` tells you how to get the next reroll, and your buddy stays.
+
+## The [buddy] section in config.toml
+
+The mod's fixed numbers live in the `[buddy]` section of config.toml (`.fno/config.toml` project-local, `~/.fno/config.toml` global). The mod reads the section once at session start with `fno config get buddy` and falls back to the same values when fno is missing or predates the section.
+
+| Key | Default | What it does |
+| :- | :- | :- |
+| `buddy.reroll_bank` | 3 | The most rerolls the buddy banks. |
+| `buddy.ships_per_reroll` | 2 | Shipped fleet PRs that earn one reroll. |
+| `buddy.daily_reroll` | on | The one reroll each day. |
+| `buddy.model_line_cooldown_s` | 10 | Fewest seconds between model lines fired by tool-result events. |
+| `buddy.model` | haiku | The model alias every buddy line asks for. |
+| `buddy.fleet_interval_s` | 300 | Seconds between fleet reads. |
+
+A set lands in the next session: `fno config set buddy.reroll_bank 5` raises the card's bank cap the next time any session starts.
 
 ## Commands
 
@@ -95,7 +111,7 @@ If you hatched a buddy before Claude Code removed it, its name and personality a
 
 Each model line is one call on your own plan, with a limit of 80 output tokens. `/buddy off` stops these calls for every session.
 
-The buddy asks for the `haiku` model through the API client of your session. On an Anthropic session, that is Claude Haiku. If your session uses a different endpoint, the `haiku` name goes to that endpoint. For example, a session with `ANTHROPIC_DEFAULT_HAIKU_MODEL` set to a GLM model gets GLM lines.
+The buddy asks for the `buddy.model` alias (haiku by default) through the API client of your session. On an Anthropic session, that is Claude Haiku. If your session uses a different endpoint, the alias goes to that endpoint. For example, a session with `ANTHROPIC_DEFAULT_HAIKU_MODEL` set to a GLM model gets GLM lines.
 
 ## Storage
 
