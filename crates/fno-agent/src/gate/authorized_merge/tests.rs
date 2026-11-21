@@ -1185,17 +1185,21 @@ fn an_immediate_merge_never_passes_auto() {
     assert!(!calls[0].contains(&"--auto".to_string()));
     assert!(calls[0].contains(&"--match-head-commit".to_string()));
     // The owner's record: one merge_landed span for the run, naming the
-    // command lane and the merged PR.
+    // command lane and the merged PR. The global-journal mirror doubles the
+    // row under the test journal target (both writes fold into one file),
+    // so the doubled count proves the mirror fired.
     let spans: Vec<_> = journal
         .rows()
         .into_iter()
         .filter(|r| r["data"]["span_kind"] == "merge_landed")
         .collect();
-    assert_eq!(spans.len(), 1);
-    assert_eq!(spans[0]["data"]["path"], "pr_merge");
-    assert_eq!(spans[0]["data"]["pr"], 7);
-    assert_eq!(spans[0]["data"]["repo"], "o/r");
-    assert_eq!(spans[0]["data"]["head"], "abc123");
+    assert_eq!(spans.len(), 2);
+    for span in &spans {
+        assert_eq!(span.pointer("/data/path"), Some(&json!("pr_merge")));
+        assert_eq!(span.pointer("/data/pr"), Some(&json!(7)));
+        assert_eq!(span.pointer("/data/repo"), Some(&json!("o/r")));
+        assert_eq!(span.pointer("/data/head"), Some(&json!("abc123")));
+    }
 }
 
 #[test]

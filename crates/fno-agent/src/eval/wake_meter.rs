@@ -48,7 +48,14 @@ pub(crate) fn wake_meter_text(
         }
         let prov =
             crate::provenance::classify_turn(&turn.obj, &crate::provenance::BusIndex::empty(), "");
+        // A held-park heartbeat turn is neither machine nor user: the lead
+        // re-parked, so the turn measures nothing about the wake balance,
+        // and a permanently parked lead must not read OVER on heartbeats
+        // alone. Only machine-provenance turns skip, so a typed turn
+        // quoting the marker still counts as user. The marker is
+        // lead_wake::park_beat_text's own token seam.
         match wake_class(prov) {
+            Some(true) if turn.text.contains("daemon (held-park heartbeat") => {}
             Some(true) => machine += 1,
             Some(false) => user += 1,
             None => {}
@@ -170,5 +177,65 @@ mod tests {
         assert_eq!(result["user"], 3);
         assert!((result["ratio"].as_f64().unwrap() - 3.333_333).abs() < 1e-5);
         assert_eq!(result["over"], true);
+        // The held-park exclusion, same counting contract: a heartbeat turn
+        // is neither machine nor user, so a lead whose only turns are
+        // heartbeats reads machine 0; only machine-provenance turns skip,
+        // so a typed turn quoting the marker still counts as user.
+        #[derive(serde::Deserialize, Default)]
+        struct MeterView {
+            #[serde(default)]
+            machine: Option<u64>,
+            #[serde(default)]
+            user: Option<u64>,
+            #[serde(default)]
+            over: Option<bool>,
+        }
+        // A daemon wake reaches the lead over the mail lane, so the
+        // transcript rows are fno_mail rows (machine provenance), never
+        // meta rows: the heartbeat skips on the marker guard alone.
+        let park_lines = vec![
+            row(
+                "<fno_mail from=\"fno-lead-wake\">Automatic lead-wake from the fno daemon (held-park heartbeat, 1442m since the last beat): every row in scope still waits on a question, so the cadence wake sleeps. Run your check-in to re-stamp the park or start work: fno agent hq checkin.</fno_mail>",
+                "2026-09-24T12:06:00Z",
+                false,
+            ),
+            row(
+                "<fno_mail from=\"fno-lead-wake\">Automatic lead-wake from the fno daemon: no check-in beat journaled for 51m and the beat is due at 55m. Run your check-in now: fno agent hq checkin.</fno_mail>",
+                "2026-09-24T12:07:00Z",
+                false,
+            ),
+        ];
+        let view =
+            |result: Value| -> MeterView { serde_json::from_value(result).unwrap_or_default() };
+        let parked = view(wake_meter_text("claude", &park_lines.join("\n"), None).unwrap());
+        assert_eq!(
+            parked.machine,
+            Some(1),
+            "only the non-heartbeat wake counts"
+        );
+        assert_eq!(parked.user, Some(0));
+        assert_eq!(
+            parked.over,
+            Some(true),
+            "a real wake with no typed turn still flags OVER"
+        );
+        let mut quoted_lines = park_lines;
+        quoted_lines.push(row(
+            "The daemon said \"daemon (held-park heartbeat, 1442m since the last beat)\" but a question just landed; taking the beat now.",
+            "2026-09-24T12:09:00Z",
+            false,
+        ));
+        let quoted = view(wake_meter_text("claude", &quoted_lines.join("\n"), None).unwrap());
+        assert_eq!(
+            quoted.machine,
+            Some(1),
+            "the quoted phrase stays out of machine"
+        );
+        assert_eq!(
+            quoted.user,
+            Some(1),
+            "the quoted phrase still counts as a typed turn"
+        );
+        assert_eq!(quoted.over, Some(false));
     }
 }

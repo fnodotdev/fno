@@ -99,7 +99,7 @@ Apply the first matching lever to each row, in this order:
 2. Run `fno backlog encounter <node> --evidence "what it cost"` to vote the node up. When evidence contradicts the filed priority, use `fno backlog update <node> priority=p1`. `p0` needs `--blocks-everything` and means the fleet is down.
 3. If no role covers a row, start a new small epic. Do not grow a running epic. A vote or priority does not dispatch. See [A finding starts a new epic](references/check-in.md#a-finding-starts-a-new-epic).
 4. If the row is the problem, run `fno backlog undefer` or `supersede`.
-5. Keep a worker on the top unplanned node. Run the `start`, `target-ready` or `plan-ready` command, without `--name`.
+5. Keep a worker on the top unplanned node. Run the `seat-lead`, `start`, `target-ready` or `plan-ready` command, without `--name`.
 
 Your job between beats is to start work. Run the `pick:` line and every startable line, in check-in order, and nothing the check-in omits. Fold a `batch:` group with `fno backlog contain` first. Decide reversible in-scope questions yourself. Detail: [between beats](references/check-in.md#between-beats).
 
@@ -121,9 +121,9 @@ A titled lead answers the open questions in its scope, and escalates only what t
 
 A titled lead is not the superuser: the `operator` authority is refused on an agent session, and a decision stays superuser tier. Its channels: `fno backlog note <node> <text>` for a row, a [merge hold](references/cli-commands.md#merge-holds) for a merge condition, and `fno inbox decisions set` for a user's durable rule. Read a ruling back with `fno backlog decisions <subject>`.
 
-## The one dispatch exception
+## Dispatch: the check-in list is the work order
 
-The tenured lead does not dispatch. A `--once` pass dispatches only through its kickoff and its org, as [the one-wave pass](references/once.md) says. The single exception: `fno agent session status` shows the dispatching arm red, and the spawn is journaled `lead_dispatch_exception` naming the arm and the node BEFORE the spawn fires. A spawn without that row is a defect. Journal it with:
+A titled lead starts work. Law D1527 routes every dispatch by difficulty. The check-in is the work order: run the `pick:` line and every `seat-lead`, `start`, `target-ready` and `plan-ready` line it prints, in check-in order. The Stop row `lead_idle_pick_unanswered` blocks a stop that leaves a beat's pick untaken with zero live scope workers. A spawn the gate refused lets the stop pass, and the refusal row is the evidence. A `--once` pass still dispatches only through its kickoff and its org, as [the one-wave pass](references/once.md) says. The single exception: `fno agent session status` shows the dispatching arm red, and the spawn is journaled `lead_dispatch_exception` naming the arm and the node BEFORE the spawn fires. A spawn without that row is a defect. Journal it with:
 
 `fno doctor event emit -t lead_dispatch_exception -s loop -d '{"scope":"<scope>","arm":"<arm>","node":"<id>"}'`
 

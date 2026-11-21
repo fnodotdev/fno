@@ -442,13 +442,65 @@ fn one_line(text: &str, cap: usize) -> String {
 /// reading, never `held: none`: the arm being down must not read as "no
 /// questions".
 pub(crate) fn held_reading(scope: &str) -> Result<Value, String> {
+    let rows = held_rows_for(scope).map_err(|e| e.to_string())?;
+    let (quiet, due): (Vec<Value>, Vec<Value>) = rows
+        .into_iter()
+        .partition(|r| r.pointer("/quiet").is_some_and(|q| !q.is_null()));
+    Ok(json!({"open": due.len(), "quiet": quiet.len(), "rows": due}))
+}
+
+/// The held reads' typed error (rust-style R6): one seam, one enum;
+/// `Display` keeps the String-shaped callers whole.
+pub(crate) enum HeldReadError {
+    Index(String),
+    Stale(u64),
+    Dir,
+    Pages(String),
+}
+
+impl std::fmt::Display for HeldReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HeldReadError::Index(e) => write!(f, "{e}"),
+            HeldReadError::Stale(age) => {
+                write!(
+                    f,
+                    "items.json is {age}s old; the attention arm is not beating"
+                )
+            }
+            HeldReadError::Dir => write!(f, "items.json names no questions_dir"),
+            HeldReadError::Pages(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+/// Every open question id for the scope, quiet ones included: the exact set
+/// the wake arm's park recheck compares against the beat's stamp,
+/// so the arm's verdict and the stamp share one source and shape. The rows
+/// deserialize once at this boundary; a row without an id drops out.
+pub(crate) fn held_open_ids(scope: &str) -> Result<Vec<String>, HeldReadError> {
+    #[derive(serde::Deserialize, Default)]
+    struct HeldIdRow {
+        #[serde(default)]
+        question_id: Option<String>,
+    }
+    let value = Value::Array(held_rows_for(scope)?);
+    let rows: Vec<HeldIdRow> = serde_json::from_value(value).unwrap_or_default();
+    Ok(rows.into_iter().filter_map(|r| r.question_id).collect())
+}
+
+/// The shared head of the held reads: the attention arm's index, the
+/// staleness gate, the pages read, and the per-scope fold. A missing or
+/// stale items.json is a failed read, never `held: none`.
+fn held_rows_for(scope: &str) -> Result<Vec<Value>, HeldReadError> {
     let index_path = crate::attention_arm::attention_dir()
-        .map_err(|e| e.to_string())?
+        .map_err(|e| HeldReadError::Index(e.to_string()))?
         .join("items.json");
-    let raw = std::fs::read_to_string(&index_path)
-        .map_err(|_| "the attention arm has not written items.json".to_string())?;
-    let index: Value =
-        serde_json::from_str(&raw).map_err(|e| format!("items.json unreadable: {e}"))?;
+    let raw = std::fs::read_to_string(&index_path).map_err(|_| {
+        HeldReadError::Index("the attention arm has not written items.json".to_string())
+    })?;
+    let index: Value = serde_json::from_str(&raw)
+        .map_err(|e| HeldReadError::Index(format!("items.json unreadable: {e}")))?;
     let as_of = index.get("as_of").and_then(Value::as_u64).unwrap_or(0);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -456,24 +508,19 @@ pub(crate) fn held_reading(scope: &str) -> Result<Value, String> {
         .unwrap_or(0);
     let age = now.saturating_sub(as_of);
     if age > 600 {
-        return Err(format!(
-            "items.json is {age}s old; the attention arm is not beating"
-        ));
+        return Err(HeldReadError::Stale(age));
     }
     let dir = index
         .get("questions_dir")
         .and_then(Value::as_str)
         .filter(|d| !d.is_empty())
-        .ok_or("items.json names no questions_dir")?;
-    let mut pages = read_question_pages(std::path::Path::new(dir))?;
+        .ok_or(HeldReadError::Dir)?;
+    let mut pages = read_question_pages(std::path::Path::new(dir)).map_err(HeldReadError::Pages)?;
     pages.sort_by(|a, b| a.0.cmp(&b.0));
     let items = serde_json::from_value::<CachedItems>(index)
         .unwrap_or_default()
         .items;
-    let (quiet, due): (Vec<Value>, Vec<Value>) = held_from_pages(&pages, scope, &items, now as i64)
-        .into_iter()
-        .partition(|r| r.pointer("/quiet").is_some_and(|q| !q.is_null()));
-    Ok(json!({"open": due.len(), "quiet": quiet.len(), "rows": due}))
+    Ok(held_from_pages(&pages, scope, &items, now as i64))
 }
 
 /// The fields of the arm's cached items that the held fold reads.
