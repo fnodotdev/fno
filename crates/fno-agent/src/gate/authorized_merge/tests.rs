@@ -1634,6 +1634,81 @@ fn the_main_red_gate_refuses_red_and_exempts_only_the_declared_repair() {
             err_words(&clearing)
         );
     }
+
+    // The probe's truth under the wiring: the exemption reads the tagged
+    // node from a real store. The live refusal (2026-11-21) had the slice's
+    // light projection precede the full carrier rows, so the tag check read
+    // the tag-less twin and refused the very lane it named. The store shape
+    // is the incident's: tags on the node, pr_number set, primary_pr null,
+    // and the Fixes line as the last body line. Each store phase holds the
+    // env pin inside its own block: the pin carries the shared env lock,
+    // and a std Mutex never relocks on one thread.
+    {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".fno")).unwrap();
+        let (_env_lock, _env) = pin_graph_env(tmp.path());
+        crate::graph_store::seed_rows(
+            &crate::org_board::scope::graph_json_path(tmp.path()),
+            &[json!({
+                "id": "x-9999",
+                "status": "in_progress",
+                "project": "fno",
+                "tags": [MAIN_REPAIR_TAG],
+                "pr_number": 497,
+                "pr_url": "https://github.com/o/r/pull/497",
+                "primary_pr": null
+            })],
+        )
+        .unwrap();
+        let incident = PrFacts {
+            number: 497,
+            head_ref: "fix/pr-read-e0308".to_string(),
+            url: "https://github.com/o/r/pull/497".to_string(),
+            body: Some("Fixes x-9999\n".to_string()),
+            ..open_facts()
+        };
+        assert_eq!(main_repair_hold_probe(tmp.path(), &incident), None);
+    }
+
+    // The withhold arm: the exemption is for the PR whose own node is the
+    // repair. An untagged PR bound beside a tagged lane still holds, and the
+    // sentence names the lane.
+    {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".fno")).unwrap();
+        let (_env_lock, _env) = pin_graph_env(tmp.path());
+        crate::graph_store::seed_rows(
+            &crate::org_board::scope::graph_json_path(tmp.path()),
+            &[
+                json!({
+                    "id": "x-1111",
+                    "status": "in_progress",
+                    "project": "fno",
+                    "pr_number": 7,
+                    "pr_url": "https://github.com/o/r/pull/7"
+                }),
+                json!({
+                    "id": "x-8888",
+                    "status": "in_progress",
+                    "project": "fno",
+                    "tags": [MAIN_REPAIR_TAG]
+                }),
+            ],
+        )
+        .unwrap();
+        let untagged = PrFacts {
+            number: 7,
+            head_ref: "feature/x-1111".to_string(),
+            url: "https://github.com/o/r/pull/7".to_string(),
+            body: Some("Fixes x-1111\n".to_string()),
+            ..open_facts()
+        };
+        let hold = main_repair_hold_probe(tmp.path(), &untagged);
+        assert!(
+            hold.as_deref().is_some_and(|h| h.contains("x-8888")),
+            "{hold:?}"
+        );
+    }
 }
 
 /// The refused word of a decide on `fake`, for a failure message.
@@ -2375,78 +2450,4 @@ fn pin_graph_env(tmp: &Path) -> (std::sync::MutexGuard<'static, ()>, GraphEnvRes
     let prior_home = std::env::var_os("FNO_HOME");
     std::env::set_var("FNO_HOME", tmp);
     (lock, GraphEnvRestore(prior_spaces, prior_home))
-}
-
-#[test]
-fn a_main_repair_tagged_node_exempts_its_pr_even_when_a_light_row_shadows_it() {
-    // The live refusal (2026-11-21): the slice's light projection precedes
-    // the full carrier rows, so the tag check read the tag-less twin and
-    // refused the very lane it named. The store shape is the incident's:
-    // tags on the node, pr_number set, primary_pr null, and the Fixes line
-    // as the last body line.
-    let tmp = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(tmp.path().join(".fno")).unwrap();
-    let (_env_lock, _env) = pin_graph_env(tmp.path());
-    crate::graph_store::seed_rows(
-        &crate::org_board::scope::graph_json_path(tmp.path()),
-        &[json!({
-            "id": "x-9999",
-            "status": "in_progress",
-            "project": "fno",
-            "tags": [MAIN_REPAIR_TAG],
-            "pr_number": 497,
-            "pr_url": "https://github.com/o/r/pull/497",
-            "primary_pr": null
-        })],
-    )
-    .unwrap();
-    let facts = PrFacts {
-        number: 497,
-        head_ref: "fix/pr-read-e0308".to_string(),
-        url: "https://github.com/o/r/pull/497".to_string(),
-        body: Some("Fixes x-9999\n".to_string()),
-        ..open_facts()
-    };
-    assert_eq!(main_repair_hold_probe(tmp.path(), &facts), None);
-}
-
-#[test]
-fn the_main_repair_hold_still_names_the_declared_lane_for_an_untagged_pr() {
-    // The withhold arm: the exemption is for the PR whose own node is the
-    // repair. An untagged PR bound beside a tagged lane still holds, and the
-    // sentence names the lane.
-    let tmp = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(tmp.path().join(".fno")).unwrap();
-    let (_env_lock, _env) = pin_graph_env(tmp.path());
-    crate::graph_store::seed_rows(
-        &crate::org_board::scope::graph_json_path(tmp.path()),
-        &[
-            json!({
-                "id": "x-1111",
-                "status": "in_progress",
-                "project": "fno",
-                "pr_number": 7,
-                "pr_url": "https://github.com/o/r/pull/7"
-            }),
-            json!({
-                "id": "x-8888",
-                "status": "in_progress",
-                "project": "fno",
-                "tags": [MAIN_REPAIR_TAG]
-            }),
-        ],
-    )
-    .unwrap();
-    let facts = PrFacts {
-        number: 7,
-        head_ref: "feature/x-1111".to_string(),
-        url: "https://github.com/o/r/pull/7".to_string(),
-        body: Some("Fixes x-1111\n".to_string()),
-        ..open_facts()
-    };
-    let hold = main_repair_hold_probe(tmp.path(), &facts);
-    assert!(
-        hold.as_deref().is_some_and(|h| h.contains("x-8888")),
-        "{hold:?}"
-    );
 }
