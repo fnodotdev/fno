@@ -39,7 +39,7 @@ use super::link::{Event, Layout, Link};
 use super::mouse::{self, Hit};
 use super::mux_modes::{self, MenuAct, MenuKey, Step};
 use super::palette::Palette;
-use super::{find, left_pane, mods, orchestration, settings, sheet, tabs, ui};
+use super::{find, left_pane, mods, orchestration, right_pane, settings, sheet, tabs, ui};
 use fno::app_api::web_hq::Board;
 use fno::proto::chat_event::SessionKey;
 use fno::proto::{self, ClientMsg, Command, Frame, MouseEvent, MouseKind};
@@ -333,6 +333,9 @@ pub struct Root {
     /// The launch composer: retained state, open flag, id mint, and the
     /// row the last launch named. Esc closes and keeps the draft.
     pub(super) launch: launch::Panel,
+    /// The session panel at the right edge (⌥⌘B).
+    pub(super) right: right_pane::Panel,
+    _right: Option<Task<()>>,
     /// The Settings panel (cmd-,): rows, query, page; None while closed.
     pub(super) settings: Option<settings::SettingsState>,
     /// The font face and size the terminal metrics should carry: the
@@ -388,9 +391,9 @@ fn wire_window(root: &mut Root, window: &mut Window, cx: &mut Context<Root>) {
     }));
 }
 
-fn grid_size(viewport: Size<Pixels>, cell: Size<Pixels>) -> (u16, u16) {
+fn grid_size(viewport: Size<Pixels>, cell: Size<Pixels>, right: Pixels) -> (u16, u16) {
     let height = viewport.height - px(ui::TITLE_H);
-    let width = viewport.width - px(left_pane::WIDTH);
+    let width = viewport.width - px(left_pane::WIDTH) - right;
     let rows = ((height / cell.height).floor() - 1.0).max(1.0);
     let cols = ((width / cell.width).floor() - 1.0).max(1.0);
     (
@@ -430,7 +433,8 @@ impl Root {
         cx: &mut Context<Self>,
     ) -> Self {
         Self::write_pid_file(&session);
-        let sent_size = grid_size(window.viewport_size(), metrics.cell);
+        // The panel's column joins at the first paint, which resends the size.
+        let sent_size = grid_size(window.viewport_size(), metrics.cell, px(0.0));
         let light = super::palette::appearance_is_light(window.appearance());
         let font_want = (
             metrics.font.family.to_string(),
@@ -501,6 +505,8 @@ impl Root {
             rename: None,
             row_menu: None,
             launch: launch::Panel::default(),
+            right: right_pane::Panel::default(),
+            _right: None,
             settings: None,
             font_want,
             preedit: None,
@@ -526,6 +532,8 @@ impl Root {
         root.wire_alerts(cx);
         root.start_board_poll(cx);
         root.start_plugins(cx);
+        root._right = Some(right_pane::start(cx));
+        super::left_footer::prime();
         // The control channel: the drain loop applies rows through the
         // same paths clicks ride (focus, view switch, quit).
         crate::control::spawn_poll(session.clone(), cx);
@@ -997,6 +1005,15 @@ impl Root {
             },
             Action::OpenLaunch(kind) => self.open_launch(kind, cx),
         }
+        cx.notify();
+    }
+
+    /// A session panel click, or ⌥⌘B. Kept out of `act` so every panel
+    /// action persists the window state in one place.
+    pub(super) fn act_panel(&mut self, act: right_pane::PanelAct, cx: &mut Context<Self>) {
+        fno::ui_usage::click("app", act.click_id());
+        right_pane::act(self, act);
+        record_ui_state(self, cx);
         cx.notify();
     }
 
@@ -3093,6 +3110,7 @@ impl Root {
             }
             Shortcut::Find => self.find_open(cx),
             Shortcut::FindStep { older } => self.find_step(older, cx),
+            Shortcut::TogglePanel => self.act_panel(right_pane::PanelAct::Toggle, cx),
         }
     }
 
@@ -3766,7 +3784,13 @@ fn mono_view(view: impl IntoElement + Styled) -> gpui::AnyElement {
 
 impl Render for Root {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let size_now = grid_size(window.viewport_size(), self.metrics.cell);
+        // The panel narrows the grid only where it shares the row with it.
+        let right = if right_pane::mounted(self) && self.main == MainView::Terminal {
+            px(right_pane::WIDTH)
+        } else {
+            px(0.0)
+        };
+        let size_now = grid_size(window.viewport_size(), self.metrics.cell, right);
         if size_now != self.sent_size && self.link.is_some() {
             self.sent_size = size_now;
             self.send(ClientMsg::Resize {
@@ -3868,7 +3892,10 @@ impl Render for Root {
                     .child(main)
                     .children(toast)
                     .children(qtoast),
-            );
+            )
+            .when(right_pane::mounted(self), |d| {
+                d.child(right_pane::render(self, cx))
+            });
         self.overlays(page, window, cx)
     }
 }
@@ -3912,6 +3939,7 @@ struct UiState {
     folds: HashSet<String>,
     group_by: GroupBy,
     chat_key: Option<SessionKey>,
+    right: right_pane::Saved,
     path: Option<PathBuf>,
 }
 
@@ -3931,6 +3959,7 @@ fn record_ui_state(root: &Root, cx: &mut App) {
     ui.folds = root.folds.clone();
     ui.group_by = root.group_by;
     ui.chat_key = root.chat.key.clone();
+    ui.right = root.right.saved.clone();
 }
 
 /// Write the state file from the global plus the window's live frame.
@@ -3960,6 +3989,7 @@ fn persist_window_state(window: &Window, cx: &mut App) {
         pinned: ui.chat_key.clone(),
         folds: ui.folds.clone(),
         group_by: ui.group_by,
+        right: ui.right.clone(),
     };
     if let Err(e) = super::app_state::save(path, &state) {
         eprintln!("fno-app: window state save failed: {e}");
@@ -4037,6 +4067,10 @@ pub fn run(
             .map(|s| s.folds.clone())
             .unwrap_or_default();
         let group_by = restored.as_ref().map(|s| s.group_by).unwrap_or_default();
+        let right = restored
+            .as_ref()
+            .map(|s| s.right.clone())
+            .unwrap_or_default();
         // Where the exit paths write; a HOME-less environment saves nothing.
         let state_path = super::app_state::state_path();
         let opened = cx.open_window(
@@ -4070,7 +4104,7 @@ pub fn run(
                     cell: size(snap(width), snap(font_size * 1.25)),
                 };
                 cx.new(|cx| {
-                    let root = Root::new(
+                    let mut root = Root::new(
                         session,
                         main,
                         pinned.clone(),
@@ -4080,6 +4114,7 @@ pub fn run(
                         window,
                         cx,
                     );
+                    root.right.saved = right.clone();
                     // The exit paths read this snapshot; the mutation sites
                     // keep it current while the window lives.
                     cx.set_global(UiState {
@@ -4087,6 +4122,7 @@ pub fn run(
                         folds,
                         group_by,
                         chat_key: pinned,
+                        right,
                         path: state_path,
                     });
                     window.on_window_should_close(cx, |window, cx| {

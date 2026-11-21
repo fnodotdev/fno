@@ -1382,6 +1382,7 @@ pub(super) fn render(
         .border_color(rgb(p.border))
         .font_family(ui::MONO)
         .child(pane)
+        .child(super::left_footer::render(&p))
 }
 
 #[cfg(test)]
