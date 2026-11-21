@@ -266,6 +266,7 @@ pub mod session_names_fold;
 pub(crate) mod session_receipt;
 pub mod session_start_bytes;
 pub mod session_truth;
+pub(crate) mod shot_save;
 pub mod silence_sweep;
 pub mod slot_cutover;
 pub mod source_pin;

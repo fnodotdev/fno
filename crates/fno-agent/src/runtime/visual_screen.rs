@@ -9,7 +9,12 @@
 //!
 //! Shots pair by name. The main side carries a `before` or `main` token. The
 //! PR side carries `after` or no token, so `x-1-settings-dark.png` pairs with
-//! `x-1-settings-before-dark.png`.
+//! `x-1-settings-before-dark.png`. A name may also carry the head it shows as
+//! one 12-hex dash token, `<node>-<head12>-settings-after-dark.png`: the head
+//! is the shot's identity, so both sides strip it before pairing, and the PR
+//! side whose head matches the critique wins the pair. An earlier round's
+//! after shot then goes loose instead of pairing stale paint into a new
+//! critique.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -38,25 +43,46 @@ pub(crate) enum PairDiff {
     SizeChanged,
 }
 
+/// One dash token of a shot name that names the head the shot shows: a full
+/// 12-hex token, so a view or theme word never reads as one.
+pub(crate) fn is_head_token(part: &str) -> bool {
+    part.len() == 12 && part.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// The head token a shot name carries, if any.
+pub(crate) fn name_head(name: &str) -> Option<&str> {
+    name.trim_end_matches(".png")
+        .split('-')
+        .find(|p| is_head_token(p))
+}
+
 fn split_token(stem: &str) -> (String, bool) {
-    let parts: Vec<&str> = stem.split('-').collect();
+    let mut parts: Vec<&str> = stem.split('-').collect();
+    // The head token is the shot's identity, not its view: both pairing
+    // sides strip it, so a base-head before shot pairs a PR-head after shot.
+    parts.retain(|p| !is_head_token(p));
     match parts
         .iter()
         .position(|p| matches!(*p, "before" | "main" | "after"))
     {
         Some(at) => {
             let main_side = parts[at] != "after";
-            let mut rest = parts.clone();
+            let mut rest = parts.to_vec();
             rest.remove(at);
             (rest.join("-"), main_side)
         }
-        None => (stem.to_string(), false),
+        None => (parts.join("-"), false),
     }
 }
 
-/// Pair the shot names (file names or `folder/name`). A name with no partner
-/// comes back second: the critic cannot compare a view it has half of.
-pub(crate) fn pair_shots(shots: &[String]) -> (Vec<ShotPair>, Vec<String>) {
+/// Pair the shot names (file names or `folder/name`). `head` is the sha the
+/// critique is for: the PR-side shot carrying its head token wins the pair.
+/// When every same-view PR-side candidate is head-tagged and none matches,
+/// the pair does not form, so a critique never describes paint from another
+/// head. An untagged candidate still pairs, which keeps the legacy
+/// vault copies working. A name with no partner comes back second: the
+/// critic cannot compare a view it has half of.
+pub(crate) fn pair_shots(shots: &[String], head: Option<&str>) -> (Vec<ShotPair>, Vec<String>) {
     let mut main: Vec<(String, String)> = Vec::new();
     let mut pr: Vec<(String, String)> = Vec::new();
     for name in shots {
@@ -67,10 +93,21 @@ pub(crate) fn pair_shots(shots: &[String]) -> (Vec<ShotPair>, Vec<String>) {
             pr.push((key, name.clone()));
         }
     }
+    let wanted = head.map(|h| &h[..h.len().min(12)]);
     let mut pairs = Vec::new();
     let mut loose = Vec::new();
     for (key, b) in main {
-        match pr.iter().position(|(k, _)| *k == key) {
+        let at = match wanted {
+            Some(w) => pr
+                .iter()
+                .position(|(k, n)| *k == key && name_head(n) == Some(w))
+                .or_else(|| {
+                    pr.iter()
+                        .position(|(k, n)| *k == key && name_head(n).is_none())
+                }),
+            None => pr.iter().position(|(k, _)| *k == key),
+        };
+        match at {
             Some(i) => pairs.push(ShotPair {
                 view: key,
                 before: b,
@@ -239,7 +276,7 @@ pub(crate) fn theme_of(view: &str) -> String {
 /// under `<node>-shots/boxed/`. A shot that cannot be read goes to `left`
 /// and is never `identical`.
 pub(crate) fn prep(node: &str, head: &str, shots: &[String], dir: &Path) -> Critique {
-    let (pairs, loose) = pair_shots(shots);
+    let (pairs, loose) = pair_shots(shots, Some(head));
     let mut out = Critique {
         head: head.to_string(),
         ..Critique::default()
@@ -324,6 +361,10 @@ pub fn run_critique_prep(args: &[String]) -> i32 {
         return 1;
     }
     let critique = prep(node, &head, &shots, &dir);
+    if critique.views.is_empty() && !shots.is_empty() {
+        report_pair_failure(&shots, node, &head);
+        return 1;
+    }
     let path = dir.join(format!("{node}-critique.json"));
     match serde_json::to_string_pretty(&critique)
         .map_err(|e| e.to_string())
@@ -337,6 +378,36 @@ pub fn run_critique_prep(args: &[String]) -> i32 {
             eprintln!("cannot write {}: {e}", path.display());
             1
         }
+    }
+}
+
+/// The door refuses when saved shots exist but no view pairs. The refusal
+/// teaches the lookup: the heads already on disk, and the save door, so the
+/// before pair reads from the vault instead of a regeneration.
+fn report_pair_failure(shots: &[String], node: &str, head: &str) {
+    let mut heads: Vec<&str> = shots.iter().filter_map(|s| name_head(s)).collect();
+    heads.sort();
+    heads.dedup();
+    let mine = &head[..head.len().min(12)];
+    if heads.contains(&mine) {
+        eprintln!(
+            "shots saved at {mine} do not pair: a view needs a before/main side and an after \
+             side per theme; name the pair {node}-<view>-before-<theme>.png and \
+             {node}-<view>-after-<theme>.png"
+        );
+    } else if heads.is_empty() {
+        eprintln!(
+            "no shot name pairs and none carries a head token: name shots \
+             {node}-<head12>-<view>-<role>-<theme>.png or re-save existing shots with \
+             `fno-agent visual shot-save <node> <png...>`"
+        );
+    } else {
+        eprintln!(
+            "no saved shots at {mine}; heads on disk: {}; shoot the PR side and run \
+             `fno-agent visual shot-save {node} <png...>`; the before pair reads from the \
+             vault, never re-shot",
+            heads.join(", ")
+        );
     }
 }
 
@@ -574,7 +645,7 @@ mod tests {
             "x-0000-stray.png",
         ]
         .map(String::from);
-        let (pairs, loose) = pair_shots(&names);
+        let (pairs, loose) = pair_shots(&names, None);
         let views: Vec<&str> = pairs.iter().map(|p| p.view.as_str()).collect();
         assert_eq!(views, ["x-0000-connections-dark", "x-0000-settings-dark"]);
         assert_eq!(loose, ["x-0000-stray.png"]);
@@ -677,5 +748,81 @@ mod tests {
             read_critique(d, "x-1", "h1", &rules),
             CritiqueRead::Unfilled(_)
         ));
+    }
+
+    #[test]
+    fn head_keyed_names_pair_across_rounds() {
+        let base = "313522b78d12";
+        let round1 = "aaaa1111aaaa";
+        let round2 = "bbbb2222bbbb";
+        let names = [
+            format!("x-1-{base}-chat-before-dark.png"),
+            format!("x-1-{base}-chat-before-light.png"),
+            format!("x-1-{round1}-chat-after-dark.png"),
+            format!("x-1-{round1}-chat-after-light.png"),
+            format!("x-1-{round2}-chat-after-dark.png"),
+            format!("x-1-{round2}-chat-after-light.png"),
+        ]
+        .map(String::from);
+        // Round two: the after side matching the new head pairs the base
+        // before side; the older round's after shots go loose, on disk.
+        let (pairs, loose) = pair_shots(&names, Some("bbbb2222bbbb999999"));
+        assert_eq!(pairs.len(), 2);
+        assert!(pairs.iter().all(|p| p.after.contains(round2)));
+        assert!(pairs.iter().all(|p| p.before.contains(base)));
+        assert_eq!(
+            loose,
+            [
+                format!("x-1-{round1}-chat-after-dark.png"),
+                round1_loose_light(&names),
+            ]
+        );
+    }
+
+    fn round1_loose_light(names: &[String]) -> String {
+        names
+            .iter()
+            .find(|n| n.contains("chat-after-light") && n.contains("aaaa1111aaaa"))
+            .unwrap()
+            .clone()
+    }
+
+    #[test]
+    fn a_stale_head_never_pairs_into_the_new_critique() {
+        let base = "313522b78d12";
+        let names = [
+            format!("x-1-{base}-chat-before-dark.png"),
+            format!("x-1-aaaa1111aaaa-chat-after-dark.png"),
+        ]
+        .map(String::from);
+        // The requested head has no saved after shot: the pair must not
+        // form, so the critique cannot describe another head's paint.
+        let (pairs, loose) = pair_shots(&names, Some("bbbb2222bbbb999999"));
+        assert!(pairs.is_empty());
+        assert_eq!(loose.len(), 2);
+    }
+
+    #[test]
+    fn untagged_legacy_names_still_pair_under_a_head() {
+        let names = [
+            "x-1-chat-before-dark.png".to_string(),
+            "x-1-chat-after-dark.png".to_string(),
+        ];
+        let (pairs, loose) = pair_shots(&names, Some("bbbb2222bbbb999999"));
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].view, "x-1-chat-dark");
+        assert!(loose.is_empty());
+    }
+
+    #[test]
+    fn is_head_token_reads_only_a_full_hex_token() {
+        assert!(is_head_token("313522b78d12"));
+        assert!(!is_head_token("before"));
+        assert!(!is_head_token("dark"));
+        assert!(!is_head_token("chat"));
+        // A shorter or longer hex run is not a head token: node suffixes and
+        // full 40-char shas do not strip out of a name.
+        assert!(!is_head_token("bed8"));
+        assert!(!is_head_token("313522b78d123456789012345678901234567890"));
     }
 }
