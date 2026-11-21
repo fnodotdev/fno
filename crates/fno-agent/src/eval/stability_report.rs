@@ -456,8 +456,10 @@ fn compute(
         blame_runs_failed: u64,
         diff_failures: u64,
     }
-    let (folded, counters) =
-        fold_deliveries_parallel(&deliveries, fold_worker_cap(), |delivery, c| {
+    let (folded, counters) = fold_deliveries_parallel(
+        &deliveries,
+        fold_worker_cap(),
+        |delivery, c: &mut FoldCounters| {
             if delivery.time < since {
                 return None;
             }
@@ -496,7 +498,8 @@ fn compute(
                 young_lines,
                 removed_lines,
             })
-        });
+        },
+    );
     report.blame_runs_failed = counters.iter().map(|c| c.blame_runs_failed).sum();
     report.diff_failures = counters.iter().map(|c| c.diff_failures).sum();
     report.rows = folded.into_iter().flatten().collect();
@@ -600,6 +603,7 @@ where
     let slots: Mutex<Vec<Option<(Vec<Option<R>>, Acc)>>> =
         Mutex::new((0..workers).map(|_| None).collect());
     std::thread::scope(|scope| {
+        let task = &task;
         let mut handles = Vec::with_capacity(workers);
         for w in 0..workers {
             let start = (w * chunk).min(deliveries.len());
@@ -649,25 +653,26 @@ pub(crate) fn fix_of_fix_by_pr(
     // The blame reads dominate the scorecard wall clock (823 subprocesses on
     // a 21-day window), so the wanted fix deliveries fold on the bounded
     // pool; the map builds in walk order, byte-identical to the serial loop.
-    let folded = fold_deliveries_parallel(&deliveries, fold_worker_cap(), |delivery, _c| {
-        if delivery.time < since || !wanted.contains(&delivery.pr) || delivery.kind != "fix" {
-            return None;
-        }
-        let parent = format!("{}^1", delivery.sha);
-        let mut blame_failures = 0;
-        let verdict = match fix_of_fix(
-            repo,
-            &parent,
-            delivery,
-            &by_sha,
-            fix_window_days,
-            &mut blame_failures,
-        ) {
-            Ok((verdict, _, _)) => verdict,
-            Err(_) => None,
-        };
-        Some((delivery.pr, verdict))
-    });
+    let (folded, _counters) =
+        fold_deliveries_parallel(&deliveries, fold_worker_cap(), |delivery, _c: &mut ()| {
+            if delivery.time < since || !wanted.contains(&delivery.pr) || delivery.kind != "fix" {
+                return None;
+            }
+            let parent = format!("{}^1", delivery.sha);
+            let mut blame_failures = 0;
+            let verdict = match fix_of_fix(
+                repo,
+                &parent,
+                delivery,
+                &by_sha,
+                fix_window_days,
+                &mut blame_failures,
+            ) {
+                Ok((verdict, _, _)) => verdict,
+                Err(_) => None,
+            };
+            Some((delivery.pr, verdict))
+        });
     let mut out: BTreeMap<u64, Option<bool>> = BTreeMap::new();
     for (pr, verdict) in folded.into_iter().flatten() {
         out.insert(pr, verdict);
