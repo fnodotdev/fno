@@ -105,7 +105,7 @@ pub struct Diffstat {
 pub struct Panel {
     pub saved: Saved,
     /// The cwd the last read ran in and what it found.
-    changes: Option<(String, Result<Diffstat, String>)>,
+    changes: Option<(String, Result<Diffstat, DiffFailed>)>,
     read_at: Option<Instant>,
     reading: bool,
     /// The "+ panel" list is open.
@@ -182,9 +182,13 @@ pub fn parse_numstat(text: &str) -> Diffstat {
     out
 }
 
+/// A diff read that failed, as the one line the Changes card paints.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffFailed(pub String);
+
 /// The diff of `cwd` against its merge base with the remote's default
 /// branch, working tree included; against HEAD when no remote base reads.
-fn read_changes(cwd: &str) -> Result<Diffstat, String> {
+fn read_changes(cwd: &str) -> Result<Diffstat, DiffFailed> {
     let git = |args: &[&str]| {
         Proc::new("git")
             .arg("-C")
@@ -203,10 +207,11 @@ fn read_changes(cwd: &str) -> Result<Diffstat, String> {
         .arg(cwd)
         .args(["diff", "--numstat", &base])
         .output()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| DiffFailed(e.to_string()))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
-        return Err(err.lines().next().unwrap_or("git diff failed").to_string());
+        let line = err.lines().next().unwrap_or("git diff failed");
+        return Err(DiffFailed(line.to_string()));
     }
     Ok(parse_numstat(&String::from_utf8_lossy(&out.stdout)))
 }
@@ -507,7 +512,7 @@ fn changes_card(
         .map(|(_, r)| r);
     let body = match read {
         None => div().child(ui::quiet("reading…", p)),
-        Some(Err(e)) => div().child(ui::text(e.clone(), Role::Fact, p).text_color(rgb(p.error))),
+        Some(Err(e)) => div().child(ui::text(e.0.clone(), Role::Fact, p).text_color(rgb(p.error))),
         Some(Ok(d)) if d.files.is_empty() => div().child(ui::quiet("no changes", p)),
         Some(Ok(d)) => {
             let n = d.files.len();
@@ -682,7 +687,7 @@ fn view_card(root: &Root, target: &str, p: &Palette) -> (String, Option<usize>, 
     let (title, view) = root.ext.panel_view(target);
     let body = match view {
         None => div().child(ui::quiet("reading…", p)),
-        Some(Err(e)) => div().child(ui::text(e, Role::Fact, p).text_color(rgb(p.error))),
+        Some(Err(e)) => div().child(ui::text(e.0, Role::Fact, p).text_color(rgb(p.error))),
         Some(Ok(view)) => {
             let mut out = div().flex().flex_col().gap_1();
             for block in &view.blocks {

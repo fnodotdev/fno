@@ -303,9 +303,14 @@ impl Page {
     }
 
     /// A panel card's title and view; no view while its read is out.
-    pub(super) fn panel_view(&self, want: &str) -> (Option<String>, Option<Result<&View, String>>) {
+    pub(super) fn panel_view(
+        &self,
+        want: &str,
+    ) -> (Option<String>, Option<Result<&View, ReadFailed>>) {
         let Some((_, c)) = self.rows.iter().find(|(p, c)| target(p, c) == want) else {
-            let gone = self.read.then(|| Err("not installed".to_string()));
+            let gone = self
+                .read
+                .then(|| Err(ReadFailed("not installed".to_string())));
             return (None, gone);
         };
         let view = c
@@ -313,7 +318,7 @@ impl Page {
             .as_ref()
             .and_then(|path| self.panel.get(path))
             .and_then(Option::as_ref)
-            .map(|r| r.as_ref().map_err(|e| e.0.clone()));
+            .map(|r| r.as_ref().map_err(Clone::clone));
         (Some(c.title.clone()), view)
     }
 
