@@ -927,6 +927,73 @@ impl Root {
             }
             Action::SubmitAnswer => answer::submit(self, cx),
             Action::Show(view) => self.show(view, cx),
+            Action::NewWorkspace
+            | Action::ToggleWorkspace(_)
+            | Action::ToggleElsewhere
+            | Action::OpenWorkspaceMenu(_)
+            | Action::OpenAddMenu(_)
+            | Action::CycleGrouping
+            | Action::CloseWorkspaceMenu
+            | Action::NewTabIn(_)
+            | Action::NewShell(_)
+            | Action::RenameWorkspace(_)
+            | Action::MoveWorkspace(_, _)
+            | Action::RemoveWorkspace(_)
+            | Action::ConfirmCloseWorkspace(_)
+            | Action::KeepWorkspace
+            | Action::NewWorker(_) => self.act_workspace(action, cx),
+            Action::ToggleKeySheet => {
+                self.sheet = !self.sheet;
+                if self.sheet {
+                    self.goto = None;
+                }
+            }
+            Action::ToggleChat(i) => {
+                let open = &mut self.chat.conv.expanded;
+                if !open.remove(&i) {
+                    open.insert(i);
+                }
+                self.chat.list.splice(i..i + 1, 1);
+            }
+            Action::OpenSheet(i) => self.chat.sheet = Some(i),
+            Action::CloseSheet => self.chat.sheet = None,
+            Action::Copy(text) => {
+                let n = text.chars().count();
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                self.say(format!("copied {n} characters"), cx);
+            }
+            Action::SendChat => self.submit_chat(cx),
+            Action::PickChoice(i) => {
+                // A second click on the picked row answers with it.
+                if self.chat.pick == i {
+                    self.answer_choice(cx);
+                } else {
+                    self.chat.pick = i;
+                }
+            }
+            Action::AnswerChoice => self.answer_choice(cx),
+            Action::SubmitLaunch => self.submit_launch(cx),
+            Action::Reconnect => self.open_chat(cx),
+            Action::Mail(text) => match &self.poller {
+                Some(poller) => {
+                    if poller.mail(text) {
+                        self.mail = Some(MailState::Sending);
+                    } else {
+                        self.mail = Some(MailState::Refused("the board poll stopped".into()));
+                    }
+                    cx.notify();
+                }
+                None => self.say("no board poll: cannot mail".into(), cx),
+            },
+            Action::OpenLaunch(kind) => self.open_launch(kind, cx),
+        }
+        cx.notify();
+    }
+
+    /// The workspace actions: the menus, the fold, the rename field and the
+    /// close confirm.
+    fn act_workspace(&mut self, action: Action, cx: &mut Context<Self>) {
+        match action {
             Action::NewWorkspace => {
                 self.squad_field = Some(SquadField {
                     draft: Draft::default(),
@@ -1037,52 +1104,8 @@ impl Root {
                 self.open_launch(Some(crate::launch::Kind::Worker), cx);
                 self.launch.state.preset_project(&cwd);
             }
-            Action::ToggleKeySheet => {
-                self.sheet = !self.sheet;
-                if self.sheet {
-                    self.goto = None;
-                }
-            }
-            Action::ToggleChat(i) => {
-                let open = &mut self.chat.conv.expanded;
-                if !open.remove(&i) {
-                    open.insert(i);
-                }
-                self.chat.list.splice(i..i + 1, 1);
-            }
-            Action::OpenSheet(i) => self.chat.sheet = Some(i),
-            Action::CloseSheet => self.chat.sheet = None,
-            Action::Copy(text) => {
-                let n = text.chars().count();
-                cx.write_to_clipboard(ClipboardItem::new_string(text));
-                self.say(format!("copied {n} characters"), cx);
-            }
-            Action::SendChat => self.submit_chat(cx),
-            Action::PickChoice(i) => {
-                // A second click on the picked row answers with it.
-                if self.chat.pick == i {
-                    self.answer_choice(cx);
-                } else {
-                    self.chat.pick = i;
-                }
-            }
-            Action::AnswerChoice => self.answer_choice(cx),
-            Action::SubmitLaunch => self.submit_launch(cx),
-            Action::Reconnect => self.open_chat(cx),
-            Action::Mail(text) => match &self.poller {
-                Some(poller) => {
-                    if poller.mail(text) {
-                        self.mail = Some(MailState::Sending);
-                    } else {
-                        self.mail = Some(MailState::Refused("the board poll stopped".into()));
-                    }
-                    cx.notify();
-                }
-                None => self.say("no board poll: cannot mail".into(), cx),
-            },
-            Action::OpenLaunch(kind) => self.open_launch(kind, cx),
+            _ => {}
         }
-        cx.notify();
     }
 
     /// Open the composer over whatever view shows. A fresh open re-reads

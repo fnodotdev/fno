@@ -293,61 +293,86 @@ pub fn rows(
             &mut out, layout, board, &agents, &used, group_by, folds, now_secs, streamed, launched,
         );
     } else {
-        for s in &layout.squads {
-            let squad_agents: Vec<&AgentRow> = agents
-                .iter()
-                .filter(|a| a.squad == Some(s.id) && a.harness.is_some())
-                .copied()
-                .collect();
-            let shells: Vec<&PaneMeta> = s
-                .tabs
-                .iter()
-                .flat_map(|t| t.panes.iter())
-                .filter(|p| !used.contains(&p.id))
-                .collect();
-            let open = !folds.contains(&fold_key(s));
-            out.push(Row::Workspace {
-                id: s.id,
-                name: s.name.clone(),
-                active: s.id == layout.active_squad,
-                open,
-                rollup: section_rollup(squad_agents.iter().map(|a| agent_lattice_state(a))),
-            });
-            if open {
-                if squad_agents.is_empty() && shells.is_empty() {
-                    out.push(Row::Empty("no agents in this workspace"));
-                }
-                for a in &squad_agents {
-                    out.push(agent_item(a, layout, now_secs, streamed, launched));
-                }
-                for p in shells {
-                    out.push(shell_item(p));
-                }
-            }
-        }
+        push_workspaces(
+            &mut out, layout, &agents, &used, folds, now_secs, streamed, launched,
+        );
+    }
 
-        // Agents outside every carried squad: a remote-fleet row, or one whose
-        // workspace this server does not know. Shown only when non-empty.
-        let elsewhere: Vec<&AgentRow> = agents
+    push_questions(&mut out, board);
+    push_machines(&mut out, board);
+    out
+}
+
+/// The Workspaces grouping: each squad's header, its agents, then its
+/// shells, with the Elsewhere group trailing.
+#[allow(clippy::too_many_arguments)]
+fn push_workspaces(
+    out: &mut Vec<Row>,
+    layout: &Layout,
+    agents: &[&AgentRow],
+    used: &HashSet<u64>,
+    folds: &HashSet<String>,
+    now_secs: u64,
+    streamed: Option<&str>,
+    launched: Option<(&str, &str)>,
+) {
+    for s in &layout.squads {
+        let squad_agents: Vec<&AgentRow> = agents
             .iter()
-            .filter(|a| a.harness.is_some() && !layout.squads.iter().any(|s| a.squad == Some(s.id)))
+            .filter(|a| a.squad == Some(s.id) && a.harness.is_some())
             .copied()
             .collect();
-        if !elsewhere.is_empty() {
-            let open = !folds.contains(ELSEWHERE_KEY);
-            out.push(Row::Group {
-                title: ELSEWHERE_KEY.to_string(),
-                rollup: section_rollup(elsewhere.iter().map(|a| agent_lattice_state(a))),
-                open,
-            });
-            if open {
-                for a in &elsewhere {
-                    out.push(agent_item(a, layout, now_secs, streamed, launched));
-                }
+        let shells: Vec<&PaneMeta> = s
+            .tabs
+            .iter()
+            .flat_map(|t| t.panes.iter())
+            .filter(|p| !used.contains(&p.id))
+            .collect();
+        let open = !folds.contains(&fold_key(s));
+        out.push(Row::Workspace {
+            id: s.id,
+            name: s.name.clone(),
+            active: s.id == layout.active_squad,
+            open,
+            rollup: section_rollup(squad_agents.iter().map(|a| agent_lattice_state(a))),
+        });
+        if open {
+            if squad_agents.is_empty() && shells.is_empty() {
+                out.push(Row::Empty("no agents in this workspace"));
+            }
+            for a in &squad_agents {
+                out.push(agent_item(a, layout, now_secs, streamed, launched));
+            }
+            for p in shells {
+                out.push(shell_item(p));
             }
         }
     }
 
+    // Agents outside every carried squad: a remote-fleet row, or one whose
+    // workspace this server does not know. Shown only when non-empty.
+    let elsewhere: Vec<&AgentRow> = agents
+        .iter()
+        .filter(|a| a.harness.is_some() && !layout.squads.iter().any(|s| a.squad == Some(s.id)))
+        .copied()
+        .collect();
+    if !elsewhere.is_empty() {
+        let open = !folds.contains(ELSEWHERE_KEY);
+        out.push(Row::Group {
+            title: ELSEWHERE_KEY.to_string(),
+            rollup: section_rollup(elsewhere.iter().map(|a| agent_lattice_state(a))),
+            open,
+        });
+        if open {
+            for a in &elsewhere {
+                out.push(agent_item(a, layout, now_secs, streamed, launched));
+            }
+        }
+    }
+}
+
+/// The one questions row and a failed read's error line under it.
+fn push_questions(out: &mut Vec<Row>, board: &Board) {
     // One row for the open questions; the list itself lives in the HQ view
     // the row opens. A failed read keeps its error line under the row.
     let questions = board.questions_newest_first();
@@ -369,7 +394,10 @@ pub fn rows(
     if let (true, Some(e)) = (board.read_yet(), board.questions_error()) {
         out.push(Row::Error(e.to_string()));
     }
+}
 
+/// The Machines section: the fleet's hosts with their seat counts.
+fn push_machines(out: &mut Vec<Row>, board: &Board) {
     // Before the first read, a section waits; after it, a failure is an error.
     let failed = |e: Option<&str>| -> Option<Row> {
         match (board.read_yet(), e) {
@@ -409,7 +437,6 @@ pub fn rows(
             action: None,
         });
     }
-    out
 }
 
 /// The State and Machine bands. The Workspaces grouping nests by squad; the
@@ -795,20 +822,7 @@ fn header_marks(
     cx: &mut Context<Root>,
 ) -> Div {
     let mut marks = div().flex().flex_row().items_center().gap(px(8.0));
-    for (state, n) in rollup {
-        marks = marks.child(
-            ui::role(div(), ui::Role::Fact, p)
-                .flex()
-                .flex_row()
-                .gap(px(3.0))
-                .child(
-                    div()
-                        .text_color(rgb(state_color(p, *state)))
-                        .child(lattice_glyph(*state).0.to_string()),
-                )
-                .child(n.to_string()),
-        );
-    }
+    marks = marks.children(rollup_counts(rollup, p));
     if let Some(squad) = add {
         // The circled + opens the add menu: a new worker or a new shell
         // under this workspace. It sits faint; hover and the current mark
@@ -927,6 +941,54 @@ fn squad_field_row(
         .child(ui::text("name", ui::Role::Hint, &p))
 }
 
+/// A rollup's per-state counts: the state glyph in its color, then the
+/// number.
+fn rollup_counts(rollup: &[(LatticeState, usize)], p: &Palette) -> Vec<Div> {
+    rollup
+        .iter()
+        .map(|(state, n)| {
+            ui::role(div(), ui::Role::Fact, p)
+                .flex()
+                .flex_row()
+                .gap(px(3.0))
+                .child(
+                    div()
+                        .text_color(rgb(state_color(p, *state)))
+                        .child(lattice_glyph(*state).0.to_string()),
+                )
+                .child(n.to_string())
+        })
+        .collect()
+}
+
+/// An item row's leading cell: an agent shows its harness initial with
+/// the state glyph as a badge on the corner; every other row keeps the
+/// bare glyph.
+fn lead_cell(initial: Option<String>, glyph: String, color: u32, adv: Pixels, p: &Palette) -> Div {
+    match initial {
+        Some(initial) => div()
+            .relative()
+            .w(adv * 2.0)
+            .flex_none()
+            .text_color(rgb(p.fg))
+            .child(initial)
+            .child(
+                div()
+                    .absolute()
+                    .bottom(px(-2.0))
+                    .right(px(2.0))
+                    .text_size(px(ui::SMALL - 3.0))
+                    .text_color(rgb(color))
+                    .child(glyph),
+            ),
+        None => div()
+            .w(adv * 2.0)
+            .flex_none()
+            .text_color(rgb(color))
+            .child(glyph),
+    }
+}
+
 /// One sidebar row as an element.
 fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> Stateful<Div> {
     let (p, adv) = (grid.p, grid.adv);
@@ -944,18 +1006,7 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
                     .flex_row()
                     .items_center()
                     .gap(px(8.0))
-                    .children(rollup.into_iter().map(|(state, n)| {
-                        ui::role(div(), ui::Role::Fact, &p)
-                            .flex()
-                            .flex_row()
-                            .gap(px(3.0))
-                            .child(
-                                div()
-                                    .text_color(rgb(state_color(&p, state)))
-                                    .child(lattice_glyph(state).0.to_string()),
-                            )
-                            .child(n.to_string())
-                    }))
+                    .children(rollup_counts(&rollup, &p))
                     .children(warn.map(|n| {
                         ui::role(div(), ui::Role::Fact, &p)
                             .flex()
@@ -1018,28 +1069,7 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
                 .and_then(|_| detail.split(" · ").next())
                 .and_then(|h| h.chars().next())
                 .map(|c| c.to_uppercase().to_string());
-            let lead = match harness_initial {
-                Some(initial) => div()
-                    .relative()
-                    .w(adv * 2.0)
-                    .flex_none()
-                    .text_color(rgb(p.fg))
-                    .child(initial)
-                    .child(
-                        div()
-                            .absolute()
-                            .bottom(px(-2.0))
-                            .right(px(2.0))
-                            .text_size(px(ui::SMALL - 3.0))
-                            .text_color(rgb(glyph_color))
-                            .child(glyph),
-                    ),
-                None => div()
-                    .w(adv * 2.0)
-                    .flex_none()
-                    .text_color(rgb(glyph_color))
-                    .child(glyph),
-            };
+            let lead = lead_cell(harness_initial, glyph, glyph_color, adv, &p);
             let mut item = ui::row(i, cursor, &p).w(px(WIDTH)).child(lead);
             let weight = if blocked || cursor {
                 FontWeight::SEMIBOLD
@@ -1507,11 +1537,11 @@ mod tests {
             "group Elsewhere open=true".to_string(),
             "item delta".to_string(),
         ];
-        for (i, w) in want.iter().enumerate() {
+        assert!(kinds.len() >= want.len(), "too few rows: {kinds:?}");
+        for (i, (k, w)) in kinds.iter().zip(want.iter()).enumerate() {
             assert!(
-                kinds[i].starts_with(w.as_str()),
-                "row {i}: got {}, want prefix {w}",
-                kinds[i]
+                k.starts_with(w.as_str()),
+                "row {i}: got {k}, want prefix {w}"
             );
         }
         // No row reads the old section words, and no "+N more" row exists.
@@ -1710,14 +1740,14 @@ mod tests {
             .collect();
         assert_eq!(names, ["stuck", "busy", "idle"]);
         assert!(matches!(
-            &rows[1],
-            Row::Workspace {
+            rows.get(1),
+            Some(Row::Workspace {
                 id: 7,
                 active: true,
                 open: true,
                 rollup,
                 ..
-            } if rollup == &vec![
+            }) if rollup == &vec![
                 (LatticeState::Blocked, 1),
                 (LatticeState::Working, 1),
                 (LatticeState::Idle, 1),
