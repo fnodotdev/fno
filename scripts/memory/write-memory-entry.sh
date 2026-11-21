@@ -11,6 +11,15 @@
 #                       or a dedup hit). Proves the write is grounded in a
 #                       real read this turn, not a hallucinated memory of the
 #                       file's contents.
+#   --evidence EVID     "<session-id>:<transcript offset>" pointing at the
+#                       transcript lines that justified this entry. Required
+#                       for every candidate write (not --empty-pass); stamped
+#                       into the entry frontmatter so a later reviewer or a
+#                       use-tracked retirement pass can read why the entry
+#                       exists. On an update to an entry that predates the
+#                       field, this update's pointer is inserted; an existing
+#                       pointer is never clobbered (the update stanza already
+#                       names the updating session).
 #   --empty-pass        Declare an explicit empty pass (no candidate). Writes
 #                       only the gate artifact + event. The LLM ran the
 #                       pre-promise pass and concluded nothing was memory-
@@ -60,6 +69,7 @@ CANDIDATE_JSON=""
 EMPTY_PASS=0
 REPO_ROOT_ARG=""
 SOURCE_SHA256=""
+EVIDENCE=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -67,6 +77,7 @@ while [[ $# -gt 0 ]]; do
         --session-id)     SESSION_ID="$2"; shift 2 ;;
         --candidate)      CANDIDATE_JSON="$2"; shift 2 ;;
         --source-sha256)  SOURCE_SHA256="$2"; shift 2 ;;
+        --evidence)       EVIDENCE="$2"; shift 2 ;;
         --empty-pass)     EMPTY_PASS=1; shift 1 ;;
         --repo-root)      REPO_ROOT_ARG="$2"; shift 2 ;;
         *) echo "write-memory-entry: unknown arg: $1" >&2; exit 1 ;;
@@ -80,6 +91,8 @@ if [[ "$EMPTY_PASS" == "1" ]]; then
 else
     [[ -z "$MEMORY_DIR" || -z "$SESSION_ID" || -z "$CANDIDATE_JSON" ]] && {
         log "missing required args"; exit 1; }
+    [[ -z "$EVIDENCE" ]] && {
+        log "missing required arg: --evidence (an auto-written entry must carry a \"session-id:transcript-offset\" pointer naming the transcript that justified it)"; exit 1; }
 fi
 
 # Resolve TWO independent roots. The old code resolved a single
@@ -254,6 +267,7 @@ description: $ENTRY_DESC
 type: $ENTRY_TYPE
 auto_generated: true
 source_session: $SESSION_ID
+evidence: $EVIDENCE
 created_at: $(now_iso)
 ---
 EOF
@@ -352,11 +366,19 @@ ${ENTRY_BODY}"
     # Use ENVIRON instead of `awk -v` because `-v var="$value"` interprets
     # backslash escapes (a `\n` literal in the description would become an
     # actual newline). ENVIRON passes the value through verbatim.
-    new_fm=$(DESC="$ENTRY_DESC" awk '
-        BEGIN { in_fm=0; seen=0; desc=ENVIRON["DESC"] }
+    # Entries written before evidence existed carry no pointer; insert this
+    # update's pointer at the closing fence so such entries converge as they
+    # are touched. An existing pointer is never clobbered: the update stanza
+    # already names the updating session.
+    new_fm=$(DESC="$ENTRY_DESC" EVIDENCE="$EVIDENCE" awk '
+        BEGIN { in_fm=0; seen=0; saw_ev=0; desc=ENVIRON["DESC"] }
         $0 == "---" {
             if (seen == 0) { in_fm=1; seen=1; print; next }
-            else if (in_fm == 1) { in_fm=0; print; exit }
+            else if (in_fm == 1) {
+                in_fm=0
+                if (saw_ev == 0) print "evidence: " ENVIRON["EVIDENCE"]
+                print; exit
+            }
         }
         in_fm == 1 && $0 ~ /^description:/ {
             if (length(desc) > length($0) - length("description: ")) {
@@ -366,6 +388,7 @@ ${ENTRY_BODY}"
             }
             next
         }
+        in_fm == 1 && $0 ~ /^evidence:/ { saw_ev=1; print; next }
         in_fm == 1 { print }
     ' "$TARGET")
     write_atomic "$TARGET" "${new_fm}

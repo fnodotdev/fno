@@ -9,7 +9,10 @@
 #
 # Emits JSON to stdout. The CALLER (a main-thread LLM step in /fno:ship pr check or
 # the stop hook) decides what is memory-worthy and calls write-memory-entry.sh.
-# This script only discovers signal; it does not launch an agent.
+# This script only discovers signal; it does not launch an agent. Each write
+# must pass --evidence "<session-id>:<transcript offset>": every auto-written
+# entry carries that pointer (the recipe lives in skills/ship/references/check.md),
+# and the writer refuses a candidate without it.
 #
 # Sentinel handling:
 #   - PR state MERGED: discovery runs, sentinel removed on success.
