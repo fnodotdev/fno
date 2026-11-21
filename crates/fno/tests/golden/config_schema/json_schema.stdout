@@ -333,7 +333,7 @@
       "type": "object"
     },
     "AppBlock": {
-      "description": "fno-app (the desktop app) settings (nested under 'config.app').\n\nThe app reads the GLOBAL settings file (~/.fno/settings.yaml): a Finder-launched app has no project cwd. The three switches gate the attention signals the app itself fires when an agent turns blocked or done outside the window: the notification (a macOS notification whose tap focuses the agent's chat), the sound and the Dock badge. The app derives the transitions from the layout it already renders, so these switches are independent of the daemon's mux.notify_on_blocked / mux.notify_on_done knobs, which govern the TUI and the osascript fallback.",
+      "description": "fno-app (the desktop app) settings (nested under 'config.app').\n\nThe app reads the GLOBAL settings file (~/.fno/settings.yaml): a Finder-launched app has no project cwd. The three switches gate the attention signals the app itself fires when an agent turns blocked or done outside the window: the notification (a macOS notification whose tap focuses the agent's chat), the sound and the Dock badge. The app derives the transitions from the layout it already renders, so these switches are independent of the daemon's mux.notify_on_blocked / mux.notify_on_done knobs, which govern the TUI and the osascript fallback. The font and font_size keys hold the terminal pane's face and point size; the app's Settings page writes them and re-measures the panes live.",
       "properties": {
         "alert_badge": {
           "default": true,
@@ -349,6 +349,18 @@
           "default": true,
           "title": "Alert Sound",
           "type": "boolean"
+        },
+        "font": {
+          "default": "SF Mono",
+          "title": "Font",
+          "type": "string"
+        },
+        "font_size": {
+          "default": 13.0,
+          "maximum": 32,
+          "minimum": 8,
+          "title": "Font Size",
+          "type": "number"
         }
       },
       "title": "AppBlock",
@@ -690,6 +702,43 @@
         }
       },
       "title": "BranchBlock",
+      "type": "object"
+    },
+    "BuddyBlock": {
+      "description": "Buddy mod settings (nested under 'config.buddy').\n\nThe buddy mod (plugins/buddy) reads the section once per session with `fno config get buddy` and falls back to the same defaults when fno is missing or the binary predates the section. The keys own the mod's fixed numbers: the reroll economy (bank cap, ships per earned reroll, the daily reroll), the event-reaction model-line cooldown and model alias, and the fleet read interval.",
+      "properties": {
+        "daily_reroll": {
+          "default": true,
+          "title": "Daily Reroll",
+          "type": "boolean"
+        },
+        "fleet_interval_s": {
+          "default": 300,
+          "title": "Fleet Interval S",
+          "type": "integer"
+        },
+        "model": {
+          "default": "haiku",
+          "title": "Model",
+          "type": "string"
+        },
+        "model_line_cooldown_s": {
+          "default": 10,
+          "title": "Model Line Cooldown S",
+          "type": "integer"
+        },
+        "reroll_bank": {
+          "default": 3,
+          "title": "Reroll Bank",
+          "type": "integer"
+        },
+        "ships_per_reroll": {
+          "default": 2,
+          "title": "Ships Per Reroll",
+          "type": "integer"
+        }
+      },
+      "title": "BuddyBlock",
       "type": "object"
     },
     "BuildBlock": {
@@ -3845,6 +3894,21 @@
       "title": "WatchdogBlock",
       "type": "object"
     },
+    "WebBlock": {
+      "description": "Web answer settings (nested under 'config.web').\n\n``invites`` rows stay raw tables: the bridge checks each one and names a refusal.",
+      "properties": {
+        "invites": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Invites",
+          "type": "array"
+        }
+      },
+      "title": "WebBlock",
+      "type": "object"
+    },
     "WordCapBlock": {
       "description": "Per-surface masked-word caps for style rule 7.\n\nOne number per surface that is read MID-TURN. The surface set itself lives\nin the style gate (crates/fno-agent/src/backlog/style_check.rs) and is not\nconfigurable: a project may move a number here, and may never cap a surface\nthe checker says is uncapped.\n\nBounds come from a validator, not from `Field(80, ge=1)`. A positional\ndefault plus a constraint makes mypy resolve this class's `default_factory`\nuse below as `Callable[[], Never]`, and `fno.config` is held to mypy strict.\n`MaintainBlock` above is the same shape for the same reason.",
       "properties": {
@@ -4053,6 +4117,9 @@
     "branch": {
       "$ref": "#/$defs/BranchBlock"
     },
+    "buddy": {
+      "$ref": "#/$defs/BuddyBlock"
+    },
     "build": {
       "$ref": "#/$defs/BuildBlock"
     },
@@ -4244,6 +4311,9 @@
     },
     "user": {
       "$ref": "#/$defs/UserBlock"
+    },
+    "web": {
+      "$ref": "#/$defs/WebBlock"
     },
     "work": {
       "$ref": "#/$defs/WorkBlock"

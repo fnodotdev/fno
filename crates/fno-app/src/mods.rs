@@ -700,7 +700,7 @@ fn confirm(root: &Root, cx: &mut Context<Root>) -> Option<Div> {
                     ui::button("ext-cancel", "Cancel", Button::Quiet, &p)
                         .on_click(on(Act::CancelConfirm, cx)),
                 )
-                .child(ui::kbd("⏎ esc", &p)),
+                .children(root.picking.then(|| ui::kbd("⏎ esc", &p))),
         ),
     )
 }
@@ -721,7 +721,14 @@ fn more(root: &Root, cx: &mut Context<Root>) -> Div {
                     ui::button("ext-install", "Install from URL", Button::Quiet, &p)
                         .on_click(on(Act::Install, cx)),
                 )
-                .child(ui::kbd("I", &p).mr_3())
+                // Badge rule: the key shows only while cmd is held. It
+                // mounts in both states so the row never reflows when it
+                // reveals.
+                .child(
+                    ui::kbd("I", &p)
+                        .mr_3()
+                        .opacity(if root.picking { 1.0 } else { 0.0 }),
+                )
                 .when(page.gallery == Gallery::Idle, |d| {
                     d.child(
                         ui::button("ext-browse", "Browse published packs", Button::Quiet, &p)
@@ -985,7 +992,7 @@ fn detail(root: &Root, cx: &mut Context<Root>) -> Div {
                 ui::button("ext-open", "Open", Button::Quiet, &p)
                     .on_click(on(Act::Open(want.to_string()), cx)),
             )
-            .child(ui::kbd("O", &p));
+            .when(root.picking, |c| c.child(ui::kbd("O", &p)));
     }
     out = out.child(controls);
     if !c.preview.is_empty() {

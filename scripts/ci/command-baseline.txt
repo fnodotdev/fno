@@ -268,9 +268,6 @@ fno-agent task-context-prepare
 fno-agent task-context-revalidate
 fno-agent task-context-show
 fno-agent task-context-stage
-fno-agent team-fold
-fno-agent team-orphans
-fno-agent term-ledger
 fno-agent term-shape
 fno-agent term-state
 fno-agent terminals

@@ -14,6 +14,7 @@ Workflow commands (orchestration, reasoning-required) invoke plugin-qualified pe
 | `review` | Review a diff. Routes: `default` (inline lane), `peer` (cross-model), `prove-it`, `cleanup`. |
 | `pr` | PR lifecycle: create inline, check, merged. |
 | `fix` | Repair. Routes: `fix` (default), `investigate`. |
+| `vision` | Draft and propose a VISION.md for a repo that has none. Grills at most 5 thin parts, ships a PR the user merges. |
 
 Everything else stays invocable by full name: `blueprint`, `execute` (`execute waves` for orchestration), `ship` (`ship pr` = `pr`, `ship doc`), `setup`, `triage`, `agent`, `mail`, `law`, `ship-docs`, `audit`, `speculate`. The session skill list enumerates them; this set is the entry point, not an access boundary.
 
