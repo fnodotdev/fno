@@ -1,9 +1,13 @@
-//! The native left pane: agents, sessions, questions and machines. Agents
-//! order through the TUI sideline's own comparator, and a click sends the
-//! command the sideline click sends. A section whose read failed shows the
-//! error and keeps its last good rows.
+//! The native left pane: workspaces with their agents and shells, one
+//! questions row, and the machines. Agents order through the TUI sideline's
+//! own comparator, and a click sends the command the sideline click sends.
+//! A section whose read failed shows the error and keeps its last good rows.
 
-use gpui::{div, prelude::*, px, rgb, Context, Div, FontWeight, Pixels, Stateful};
+use std::collections::HashSet;
+
+use gpui::{
+    div, prelude::*, px, rgb, Context, Div, ElementId, FontWeight, Pixels, Stateful, Window,
+};
 
 use super::link::Layout;
 use super::palette::Palette;
@@ -15,13 +19,24 @@ use fno::app_api::client::card_line::{binding_suffix, card_facts, CardFacts};
 use fno::app_api::client::header_band::section_rollup;
 use fno::app_api::lattice::{lattice_glyph, status_long, LatticeState};
 use fno::app_api::web_hq::Board;
-use fno::proto::{AgentRow, Command, SquadMeta};
+use fno::proto::{AgentRow, Command, PaneMeta, SquadMeta};
 
 pub const WIDTH: f32 = 320.0;
-/// The agents shown before a "+N more" row, so the sections below stay above
-/// the fold. Ten one-line rows keep every section header in the default
-/// 1360x840 window.
-pub const AGENTS_SHOWN: usize = 10;
+
+/// A workspace's fold key: its canonical cwd, or its name when the cwd is
+/// empty (a NewSquad workspace). Squad ids reset with the server, so they
+/// are no key. A committed rename of a name-keyed workspace moves its entry.
+pub(super) fn fold_key(s: &SquadMeta) -> String {
+    if s.canonical_cwd.is_empty() {
+        s.name.clone()
+    } else {
+        s.canonical_cwd.clone()
+    }
+}
+
+/// The Elsewhere group's fold key, where agents land when their squad is
+/// `None` or names a squad the layout does not carry.
+const ELSEWHERE_KEY: &str = "Elsewhere";
 
 /// What a row says about "where I am". Only the focused agent carries the
 /// cursor; the active session and the local machine carry a quiet word.
@@ -44,6 +59,25 @@ pub enum Row {
         /// The Agents header alone: the circled + opens the composer.
         plus: bool,
     },
+    /// A workspace's header row: the fold caret, the name, the active
+    /// mark, and its agents' state rollup. A click on the name selects
+    /// the workspace; the caret folds it.
+    Workspace {
+        id: u64,
+        name: String,
+        /// The workspace the window's view is on.
+        active: bool,
+        /// The user's fold choice; absence from the set means open.
+        open: bool,
+        rollup: Vec<(LatticeState, usize)>,
+    },
+    /// A fold-able group that is not a workspace: Elsewhere now, the state
+    /// and machine bands under the other groupings later.
+    Group {
+        title: &'static str,
+        rollup: Vec<(LatticeState, usize)>,
+        open: bool,
+    },
     Item {
         label: String,
         detail: String,
@@ -51,16 +85,13 @@ pub enum Row {
         identity: Option<String>,
         /// The mux card's served facts; `None` for anything but an agent.
         card: Option<CardFacts>,
-        /// An agent's lattice state; `None` for sessions, machines, questions.
+        /// An agent's lattice state; `None` for shells, machines, questions.
         state: Option<LatticeState>,
         /// A question: it needs the user.
         question: bool,
         mark: Mark,
         action: Option<Action>,
     },
-    /// The agents past [`AGENTS_SHOWN`], folded, or the row that folds
-    /// them back.
-    More { hidden: usize },
     /// A failed read. The section's last good rows follow it.
     Error(String),
     /// A section with nothing to show, and why.
@@ -118,82 +149,11 @@ pub(super) fn workspace_detail(s: &SquadMeta) -> String {
     )
 }
 
-/// One question's rail detail: what it is about, then how long it has
-/// waited. The node id leads when the question has one; otherwise the
-/// asker's handle; otherwise the kind.
-fn question_detail(q: &fno::needs_overlay::QuestionItem, now_secs: u64) -> String {
-    let about = q
-        .node
-        .clone()
-        .or_else(|| q.asker.as_ref().map(|a| a.handle.clone()))
-        .unwrap_or_else(|| q.kind.clone());
-    let age = ui::age(&q.created_at, now_secs);
-    if age.is_empty() {
-        about
-    } else {
-        format!("{about} {age}")
-    }
-}
-
-/// One session's sidebar row; `active` is the session the window shows.
-fn session_item(s: &fno::proto::SquadMeta, active: u64) -> Row {
-    Row::Item {
-        label: s.name.clone(),
-        detail: workspace_detail(s),
-        identity: None,
-        card: None,
-        state: None,
-        question: false,
-        mark: if s.id == active {
-            Mark::Current("current")
-        } else {
-            Mark::None
-        },
-        action: Some(Action::Send(Command::SelectSquad(s.id))),
-    }
-}
-
-/// One agent's sidebar row.
-fn agent_item(
-    a: &AgentRow,
-    layout: &Layout,
-    now_secs: u64,
-    streamed: Option<&str>,
-    launched: Option<(&str, &str)>,
-) -> Row {
-    let action = agent_row_action(a);
-    let state = agent_lattice_state(a);
-    // The launch's own row reads as the task the composer carried: the
-    // registry name stays the mail key, the display follows the task.
-    let label = match launched {
-        Some((name, task)) if name == a.name && !task.is_empty() => task.to_string(),
-        _ => a.name.clone(),
-    };
-    Row::Item {
-        label,
-        detail: agent_status_word(a),
-        identity: agent_identity(a),
-        card: Some(card_facts(a, now_secs)),
-        state: Some(state),
-        question: false,
-        mark: if match streamed {
-            Some(sid) => a.harness_session_id.as_deref() == Some(sid),
-            None => a.pane_id == Some(layout.focus),
-        } || launched.is_some_and(|(n, _)| n == a.name)
-        {
-            Mark::Cursor
-        } else {
-            Mark::None
-        },
-        action: Some(action),
-    }
-}
-
 /// The sidebar's agent rows' click actions, in the order they show:
 /// cmd-1 picks the first.
 pub(super) fn agent_actions(root: &Root) -> Vec<Action> {
     let now = fno::app_api::digest_overlay::now_secs();
-    rows(&root.layout, &root.board, now, root.agents_open, None, None)
+    rows(&root.layout, &root.board, now, &root.folds, None, None)
         .into_iter()
         .filter_map(|r| match r {
             Row::Item {
@@ -206,53 +166,137 @@ pub(super) fn agent_actions(root: &Root) -> Vec<Action> {
         .collect()
 }
 
+/// One shell pane's sidebar row: the pane label and its cwd, `$HOME` cut to
+/// `~`. A click focuses the pane, the same command the TUI's pane click
+/// sends.
+fn shell_item(p: &PaneMeta) -> Row {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let cwd = p
+        .cwd
+        .as_deref()
+        .filter(|c| !home.is_empty())
+        .map(|c| c.replacen(&home, "~", 1))
+        .unwrap_or_default();
+    Row::Item {
+        label: p.label.clone(),
+        detail: cwd,
+        identity: None,
+        card: None,
+        state: None,
+        question: false,
+        mark: Mark::None,
+        action: Some(Action::Send(Command::FocusPane(p.id))),
+    }
+}
+
 /// `streamed` is the session the main view streams, when it streams one: its
 /// agent carries the cursor, else the focused pane's agent does. `launched`
 /// is the (name, task) the composer launched most recently: that row carries
 /// the cursor and the readable task as its label from its first paint, and a
-/// row click hands both back to the user.
+/// row click hands both back to the user. `folds` is the persisted set of
+/// fold keys (workspace cwds, or names when the cwd is empty); absence means
+/// open, so every workspace opens by default.
 pub fn rows(
     layout: &Layout,
     board: &Board,
     now_secs: u64,
-    agents_open: bool,
+    folds: &HashSet<String>,
     streamed: Option<&str>,
     launched: Option<(&str, &str)>,
 ) -> Vec<Row> {
     let agents = fno::app_api::client::agent_sort::sideline_order(&layout.agents, now_secs);
     let mut out = vec![Row::Header {
-        title: "Agents",
-        rollup: section_rollup(agents.iter().map(|a| agent_lattice_state(a))),
+        title: "Workspaces",
+        rollup: Vec::new(),
         warn: None,
-        // The header's circled + opens the composer; the old start row is
-        // gone.
+        // The header's circled + names a new workspace inline; the old
+        // start row is gone.
         plus: true,
     }];
-    if agents.is_empty() {
-        out.push(Row::Empty("no agents in this session"));
-    }
-    let total = agents.len();
-    let shown = if agents_open {
-        total
-    } else {
-        total.min(AGENTS_SHOWN)
-    };
-    for a in agents.into_iter().take(shown) {
-        out.push(agent_item(a, layout, now_secs, streamed, launched));
-    }
-    if total > AGENTS_SHOWN {
-        out.push(Row::More {
-            hidden: total - shown,
+
+    // A pane with a harness-carrying agent on it is an agent row and never
+    // a shell. The server mints bare panes as `harness: None` rows, so the
+    // match runs against the agents only.
+    let used: HashSet<u64> = agents
+        .iter()
+        .filter(|a| a.harness.is_some())
+        .filter_map(|a| a.pane_id)
+        .collect();
+    for s in &layout.squads {
+        let squad_agents: Vec<&AgentRow> = agents
+            .iter()
+            .filter(|a| a.squad == Some(s.id) && a.harness.is_some())
+            .copied()
+            .collect();
+        let shells: Vec<&PaneMeta> = s
+            .tabs
+            .iter()
+            .flat_map(|t| t.panes.iter())
+            .filter(|p| !used.contains(&p.id))
+            .collect();
+        let open = !folds.contains(&fold_key(s));
+        out.push(Row::Workspace {
+            id: s.id,
+            name: s.name.clone(),
+            active: s.id == layout.active_squad,
+            open,
+            rollup: section_rollup(squad_agents.iter().map(|a| agent_lattice_state(a))),
         });
+        if open {
+            if squad_agents.is_empty() && shells.is_empty() {
+                out.push(Row::Empty("no agents in this workspace"));
+            }
+            for a in &squad_agents {
+                out.push(agent_item(a, layout, now_secs, streamed, launched));
+            }
+            for p in shells {
+                out.push(shell_item(p));
+            }
+        }
     }
 
-    out.push(header("Sessions"));
-    out.extend(
-        layout
-            .squads
-            .iter()
-            .map(|s| session_item(s, layout.active_squad)),
-    );
+    // Agents outside every carried squad: a remote-fleet row, or one whose
+    // workspace this server does not know. Shown only when non-empty.
+    let elsewhere: Vec<&AgentRow> = agents
+        .iter()
+        .filter(|a| a.harness.is_some() && !layout.squads.iter().any(|s| a.squad == Some(s.id)))
+        .copied()
+        .collect();
+    if !elsewhere.is_empty() {
+        let open = !folds.contains(ELSEWHERE_KEY);
+        out.push(Row::Group {
+            title: ELSEWHERE_KEY,
+            rollup: section_rollup(elsewhere.iter().map(|a| agent_lattice_state(a))),
+            open,
+        });
+        if open {
+            for a in &elsewhere {
+                out.push(agent_item(a, layout, now_secs, streamed, launched));
+            }
+        }
+    }
+
+    // One row for the open questions; the list itself lives in the HQ view
+    // the row opens. A failed read keeps its error line under the row.
+    let questions = board.questions_newest_first();
+    let (qlabel, qdetail) = match (board.read_yet(), board.questions_error()) {
+        (false, _) => ("Questions".to_string(), "reading…".to_string()),
+        (true, Some(e)) => ("Questions".to_string(), e.to_string()),
+        (true, None) => (format!("Questions {}", questions.len()), String::new()),
+    };
+    out.push(Row::Item {
+        label: qlabel,
+        detail: qdetail,
+        identity: None,
+        card: None,
+        state: None,
+        question: false,
+        mark: Mark::None,
+        action: Some(Action::Show(MainView::Orchestration)),
+    });
+    if let (true, Some(e)) = (board.read_yet(), board.questions_error()) {
+        out.push(Row::Error(e.to_string()));
+    }
 
     // Before the first read, a section waits; after it, a failure is an error.
     let failed = |e: Option<&str>| -> Option<Row> {
@@ -262,32 +306,6 @@ pub fn rows(
             (true, None) => None,
         }
     };
-    let questions = board.questions_newest_first();
-    let counted = board.read_yet() && board.questions_error().is_none();
-    out.push(Row::Header {
-        title: "For you",
-        rollup: Vec::new(),
-        warn: counted.then_some(questions.len()),
-        plus: false,
-    });
-    out.extend(failed(board.questions_error()));
-    if questions.is_empty() && board.questions_error().is_none() {
-        out.push(Row::Empty("nothing waits on you"));
-    }
-    for q in questions {
-        let q = &q.item;
-        out.push(Row::Item {
-            label: q.title.clone(),
-            detail: question_detail(q, now_secs),
-            identity: None,
-            card: None,
-            state: None,
-            question: true,
-            mark: Mark::None,
-            action: Some(Action::OpenAnswer(q.id.clone())),
-        });
-    }
-
     out.push(header("Machines"));
     out.extend(failed(board.fleet_error()));
     for m in board
@@ -345,7 +363,15 @@ const AGE_W: usize = 4;
 const COL_GAP: usize = 2;
 /// The name column's bounds, in body advances.
 const NAME_MIN: usize = 6;
-const NAME_MAX: usize = 12;
+
+/// The room the name column can take, in body advances: the pane width
+/// less the padding, the glyph column, the age column and the gaps. The
+/// facts share whatever the name leaves, so this is the only cut bound a
+/// name reads.
+fn name_room(adv: Pixels, small: Pixels, gap: Pixels) -> usize {
+    let inside = px(WIDTH) - px(24.0) - adv * 2.0 - small * (AGE_W + 1) as f32 - gap * 3.0;
+    ((inside / adv).floor() as usize).max(NAME_MIN)
+}
 
 /// The fact columns every agent row shares: each shown slot's index and
 /// width, the widest value any shown agent has there. A slot no agent fills
@@ -485,8 +511,6 @@ struct Grid {
     cols: Vec<(usize, usize)>,
     /// Per row, the cmd-digit badge it shows while cmd is held.
     badges: Vec<Option<usize>>,
-    /// Cmd is held right now; the header's shortcut hint reads it.
-    picking: bool,
 }
 
 /// An agent row's cells. While cmd is held, `badge` sits over the age at
@@ -517,44 +541,156 @@ fn agent_row(
         }))
 }
 
-/// The Agents header's right side: the circled + opens the composer and
-/// the ⌘N hint shares the digit badges' cmd flag, so it shows only while
-/// cmd is held.
-fn agents_header_plus(p: &Palette, grid: &Grid, cx: &mut Context<Root>) -> Div {
-    // One row: a stacked hint would grow the header while cmd is held.
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap_1()
-        .child(
-            ui::clickable(div().id("agents-plus").px_1(), p)
-                .on_click(cx.listener(|root, _, _, cx| root.act(Action::OpenLaunch(None), cx)))
-                .child(div().text_color(rgb(p.faint)).child("⊕".to_string())),
-        )
-        .when(grid.picking, |right| right.child(ui::kbd("⌘N", p)))
+/// The Workspaces header's right side: the circled + names a new workspace
+/// inline, under the header.
+fn workspaces_header_plus(p: &Palette, cx: &mut Context<Root>) -> Div {
+    div().child(
+        ui::clickable(div().id("workspaces-plus").px_1(), p)
+            .on_click(cx.listener(|root, _, _, cx| root.act(Action::NewWorkspace, cx)))
+            .child(div().text_color(rgb(p.faint)).child("⊕".to_string())),
+    )
 }
 
-/// The folded-agents row: the count, or the fold-back control.
-fn more_row(
-    i: usize,
-    hidden: usize,
+/// A fold caret glyph: `▾` open, `▸` folded, one step larger than the
+/// state glyphs so the fold reads first.
+fn caret_glyph(open: bool) -> &'static str {
+    if open {
+        "▾"
+    } else {
+        "▸"
+    }
+}
+
+/// The state rollup glyphs one header carries, with the fold caret at the
+/// right end. The caret is its own click target: it folds without
+/// selecting the workspace.
+fn header_marks(
+    id: impl Into<ElementId>,
+    rollup: &[(LatticeState, usize)],
+    open: bool,
+    fold: Option<u64>,
     p: &Palette,
-    adv: Pixels,
+    cx: &mut Context<Root>,
+) -> Div {
+    let mut marks = div().flex().flex_row().items_center().gap(px(8.0));
+    for (state, n) in rollup {
+        marks = marks.child(
+            ui::role(div(), ui::Role::Fact, p)
+                .flex()
+                .flex_row()
+                .gap(px(3.0))
+                .child(
+                    div()
+                        .text_color(rgb(state_color(p, *state)))
+                        .child(lattice_glyph(*state).0.to_string()),
+                )
+                .child(n.to_string()),
+        );
+    }
+    match fold {
+        Some(id) => marks.child(
+            ui::clickable(div().id(id).px_1(), p)
+                .on_click(cx.listener(move |root, _, _, cx| {
+                    cx.stop_propagation();
+                    root.act(Action::ToggleWorkspace(id), cx);
+                }))
+                .child(div().text_color(rgb(p.muted)).child(caret_glyph(open))),
+        ),
+        None => marks.child(div().text_color(rgb(p.muted)).child(caret_glyph(open))),
+    }
+}
+
+/// One workspace's header row: the name selects the workspace, the active
+/// one carries the quiet mark, the caret folds, and the rollup counts its
+/// agents per state.
+fn workspace_header(
+    i: usize,
+    id: u64,
+    name: &str,
+    active: bool,
+    open: bool,
+    rollup: &[(LatticeState, usize)],
+    p: &Palette,
     cx: &mut Context<Root>,
 ) -> Stateful<Div> {
     ui::clickable(ui::row(i, false, p).w(px(WIDTH)), p)
-        .on_click(cx.listener(|root, _, _, cx| root.act(Action::ToggleAgents, cx)))
-        .child(div().w(adv * 2.0).flex_none())
-        .child(ui::text(
-            if hidden > 0 {
-                format!("+{hidden} more")
-            } else {
-                "show fewer".to_string()
-            },
-            ui::Role::Hint,
+        .on_click(
+            cx.listener(move |root, _, _, cx| root.act(Action::Send(Command::SelectSquad(id)), cx)),
+        )
+        .child(
+            ui::role(div(), ui::Role::Label, p)
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(ui::cut(name, 24)),
+        )
+        .when(active, |left| left.child(ui::tag("current", p.muted, p)))
+        .child(header_marks(
+            SharedString::from(format!("fold-{id}")),
+            rollup,
+            open,
+            Some(id),
             p,
+            cx,
         ))
+}
+
+/// One fold-able group that is not a workspace: the whole header toggles
+/// the fold, there is no select and no menu.
+fn group_header(
+    i: usize,
+    title: &'static str,
+    rollup: &[(LatticeState, usize)],
+    open: bool,
+    p: &Palette,
+    cx: &mut Context<Root>,
+) -> Stateful<Div> {
+    ui::clickable(ui::row(i, false, p).w(px(WIDTH)), p)
+        .on_click(cx.listener(|root, _, _, cx| root.act(Action::ToggleElsewhere, cx)))
+        .child(
+            ui::role(div(), ui::Role::Label, p)
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(title),
+        )
+        .child(header_marks("elsewhere-fold", rollup, open, None, p, cx))
+}
+
+/// The inline workspace-name field: one row under the Workspaces header
+/// carrying the text field. Enter commits, Esc cancels; the key path lives
+/// on the window, the text routing in its input handler.
+fn squad_field_row(
+    field: &super::window::SquadField,
+    root: &Root,
+    window: &Window,
+    cx: &mut Context<Root>,
+) -> Stateful<Div> {
+    let p = root.palette;
+    let text = super::chat::field::Field {
+        draft: field.draft.clone(),
+        placeholder: "workspace name".into(),
+        fg: rgb(p.fg).into(),
+        muted: rgb(p.muted).into(),
+        selection: (p.accent << 8) | 0x55,
+        focused: root.has_focus(window),
+        state: field.field.clone(),
+    };
+    ui::row("squad-field-row", false, &p)
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .py_1()
+                .px_2()
+                .rounded(px(4.0))
+                .bg(rgb(p.raised))
+                .child(text),
+        )
+        .child(ui::kbd("⏎", &p))
+        .child(ui::text("name", ui::Role::Hint, &p))
 }
 
 /// One sidebar row as an element.
@@ -593,7 +729,7 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
                             .child(div().text_color(rgb(p.warn)).child("◆"))
                             .child(n.to_string())
                     }))
-                    .when(plus, |right| right.child(agents_header_plus(&p, grid, cx))),
+                    .when(plus, |right| right.child(workspaces_header_plus(&p, cx))),
             ),
         ),
         Row::Error(e) => div()
@@ -606,7 +742,18 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
             .px_3()
             .py_1()
             .child(ui::text(why, ui::Role::Fact, &p)),
-        Row::More { hidden } => more_row(i, hidden, &p, adv, cx),
+        Row::Workspace {
+            id,
+            name,
+            active,
+            open,
+            rollup,
+        } => workspace_header(i, id, &name, active, open, &rollup, &p, cx),
+        Row::Group {
+            title,
+            rollup,
+            open,
+        } => group_header(i, title, &rollup, open, &p, cx),
         Row::Item {
             label,
             detail,
@@ -667,6 +814,7 @@ pub(super) fn render(
     root: &Root,
     now_secs: u64,
     adv: Pixels,
+    window: &Window,
     cx: &mut Context<Root>,
 ) -> Stateful<Div> {
     let p = root.palette;
@@ -694,11 +842,11 @@ pub(super) fn render(
         &root.layout,
         &root.board,
         now_secs,
-        root.agents_open,
+        &root.folds,
         shown,
         launched,
     );
-    let name_w = rows
+    let max_name = rows
         .iter()
         .filter_map(|r| match r {
             Row::Item {
@@ -709,11 +857,14 @@ pub(super) fn render(
             _ => None,
         })
         .max()
-        .unwrap_or(0)
-        .clamp(NAME_MIN, NAME_MAX);
+        .unwrap_or(0);
     // The row's inside, less the glyph, the name, the age and the gaps
-    // between those four, in small advances.
+    // between those four, in small advances. The name takes the longest
+    // agent name up to the whole room; the fact columns share the rest and
+    // drop whole from the right, so a name cuts only when even zero facts
+    // leave too little room.
     let gap = px(8.0);
+    let name_w = max_name.min(name_room(adv, small, gap));
     let left =
         px(WIDTH) - px(24.0) - adv * (2 + name_w) as f32 - small * (AGE_W + 1) as f32 - gap * 3.0;
     let budget = (left / small).floor().max(0.0) as usize;
@@ -737,10 +888,16 @@ pub(super) fn render(
         name_w,
         cols,
         badges,
-        picking: root.picking,
     };
     for (i, row) in rows.into_iter().enumerate() {
         pane = pane.child(row_element(i, row, &grid, cx));
+        // The inline name field sits right under the Workspaces header,
+        // where the name it edits will read as a workspace.
+        if i == 0 {
+            if let Some(field) = root.squad_field.as_ref() {
+                pane = pane.child(squad_field_row(field, root, window, cx));
+            }
+        }
     }
     div()
         .id("left-pane")
@@ -760,25 +917,49 @@ pub(super) fn render(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fno::proto::{AgentBadge, SquadMeta, TabMeta};
+    use fno::proto::{AgentBadge, PaneMeta, SquadMeta, TabMeta};
 
-    fn agent(name: &str, pane: u64, badge: Option<AgentBadge>) -> AgentRow {
+    fn agent(name: &str, pane: u64, badge: Option<AgentBadge>, squad: u64) -> AgentRow {
         serde_json::from_value(serde_json::json!({
-            "squad": null, "name": name, "pane_id": pane, "badge": badge,
-            "reason": null, "exited": false,
+            "squad": squad, "name": name, "pane_id": pane, "badge": badge,
+            "harness": "claude", "reason": null, "exited": false,
         }))
         .unwrap()
     }
 
-    fn tab(id: u64, name: &str) -> TabMeta {
-        serde_json::from_value(serde_json::json!({"id": id, "name": name})).unwrap()
+    fn tab(id: u64, name: &str, panes: Vec<PaneMeta>) -> TabMeta {
+        serde_json::from_value(serde_json::json!({"id": id, "name": name, "panes": panes})).unwrap()
+    }
+
+    fn pane(id: u64, label: &str, cwd: &str) -> PaneMeta {
+        PaneMeta {
+            id,
+            label: label.into(),
+            cwd: Some(cwd.into()),
+            ..PaneMeta::default()
+        }
+    }
+
+    fn squad(id: u64, name: &str, tabs: Vec<TabMeta>) -> SquadMeta {
+        SquadMeta {
+            id,
+            name: name.into(),
+            canonical_cwd: "/r".into(),
+            tabs,
+            active_tab: 0,
+            panes: 0,
+        }
+    }
+
+    fn no_folds() -> HashSet<String> {
+        HashSet::new()
     }
 
     #[test]
     fn an_unmeasured_exit_is_not_exited_and_a_bound_agent_shows_node_and_pr() {
         let a: AgentRow = serde_json::from_value(serde_json::json!({
             "squad": null, "name": "gone", "pane_id": 1, "badge": null,
-            "reason": null, "exited": true, "unmeasured": true,
+            "harness": "claude", "reason": null, "exited": true, "unmeasured": true,
             "node": "x-aaaa", "pr": 84,
         }))
         .unwrap();
@@ -788,78 +969,149 @@ mod tests {
             agents: vec![a],
             ..Layout::default()
         };
-        let rows = rows(&layout, &Board::default(), 100, false, None, None);
-        // The header leads the section and carries the composer's +; the
-        // agent's item follows with no start row between them.
+        let rows = rows(&layout, &Board::default(), 100, &no_folds(), None, None);
+        // The section header leads with the plus, the squadless agent lands
+        // in the Elsewhere group under its open header.
         assert!(matches!(rows.first(), Some(Row::Header { plus: true, .. })));
         assert!(matches!(
             rows.get(1),
-            Some(Row::Item { state: Some(LatticeState::Unmeasured), detail, .. }) if detail.ends_with("unknown")
+            Some(Row::Group {
+                title: "Elsewhere",
+                open: true,
+                ..
+            })
+        ));
+        assert!(matches!(
+            rows.get(2),
+            Some(Row::Item { state: Some(LatticeState::Unmeasured), detail, .. })
+                if detail.ends_with("unknown")
         ));
     }
 
     #[test]
-    fn an_agent_row_carries_the_mux_cards_served_facts_and_nothing_unserved() {
-        let served: AgentRow = serde_json::from_value(serde_json::json!({
-            "squad": null, "name": "rich", "pane_id": 1, "badge": null,
-            "reason": null, "exited": false, "harness": "claude",
-            "model": "claude-opus-5-5", "session_cost_cents": 4497,
-            "started_at": 100, "context_used_pct": 41, "session_tokens": 12345,
-            "last_activity_age_s": 90,
-        }))
-        .unwrap();
-        let bare = agent("bare", 2, None);
+    fn workspaces_nest_their_agents_then_shells_and_elsewhere_trails() {
+        // Two squads: fno with agents A and B plus one shell pane, tools
+        // with agent C. A fourth agent names no squad.
+        let mut a = agent("alpha", 1, None, 7);
+        a.pane_id = Some(1);
+        let b = agent("beta", 2, Some(AgentBadge::Blocked), 7);
+        let c = agent("gamma", 3, None, 9);
+        let mut loose = agent("delta", 0, None, 0);
+        loose.squad = None;
         let layout = Layout {
-            agents: vec![served, bare],
+            squads: vec![
+                squad(
+                    7,
+                    "fno",
+                    vec![tab(
+                        10,
+                        "main",
+                        vec![pane(1, "alpha", "/r/fno"), pane(4, "shell", "/r/tools/sub")],
+                    )],
+                ),
+                squad(9, "tools", vec![tab(11, "main", vec![])]),
+            ],
+            active_squad: 7,
+            focus: 1,
+            agents: vec![a, b, c, loose],
             ..Layout::default()
         };
-        let rows = rows(&layout, &Board::default(), 100 + 7200, false, None, None);
-        let card = |name: &str| {
-            rows.iter().find_map(|r| match r {
-                Row::Item { label, card, .. } if label == name => card.clone(),
+        let rows = rows(&layout, &Board::default(), 100, &no_folds(), None, None);
+        let kind_of = |r: &Row| -> String {
+            match r {
+                Row::Header { title, .. } => format!("header {title}"),
+                Row::Workspace { name, open, .. } => format!("ws {name} open={open}"),
+                Row::Group { title, open, .. } => format!("group {title} open={open}"),
+                Row::Item { label, detail, .. } => format!("item {label} [{detail}]"),
+                Row::Error(e) => format!("error {e}"),
+                Row::Empty(why) => format!("empty {why}"),
+            }
+        };
+        let kinds: Vec<String> = rows.iter().map(kind_of).collect();
+        // Header, fno's agents in sideline order, then fno's shell pane,
+        // then tools' agent; the shell's cwd keeps its absolute form when
+        // it names no home prefix.
+        let want = [
+            "header Workspaces".to_string(),
+            "ws fno open=true".to_string(),
+            "item beta".to_string(),
+            "item alpha".to_string(),
+            "item shell [/r/tools/sub]".to_string(),
+            "ws tools open=true".to_string(),
+            "item gamma".to_string(),
+            "group Elsewhere open=true".to_string(),
+            "item delta".to_string(),
+        ];
+        for (i, w) in want.iter().enumerate() {
+            assert!(
+                kinds[i].starts_with(w.as_str()),
+                "row {i}: got {}, want prefix {w}",
+                kinds[i]
+            );
+        }
+        // No row reads the old section words, and no "+N more" row exists.
+        for k in &kinds {
+            assert!(!k.contains("Sessions") && !k.contains("Agents"), "{k}");
+            assert!(!k.contains("more"), "{k}");
+        }
+        // The shell row focuses its pane; every agent row keeps its own click.
+        let shell = rows
+            .iter()
+            .find_map(|r| match r {
+                Row::Item { label, action, .. } if label == "shell" => Some(action.clone()),
                 _ => None,
             })
-        };
-        let rich = card("rich").expect("agent rows carry a card");
-        assert!(rich.model.as_deref().is_some_and(|m| m.starts_with("opus")));
-        assert_eq!(rich.cost.as_deref(), Some("~$44.97"));
-        assert_eq!(rich.created.as_deref(), Some("2h"));
-        assert_eq!(rich.context.as_deref(), Some("41%"));
-        assert_eq!(rich.tokens.as_deref(), Some("12.3k tok"));
-        assert!(rich.activity.is_some());
-        assert_eq!(card("bare").unwrap(), CardFacts::default());
-        // The columns are the widest value per slot, and the bare agent's
-        // empty slots leave no column of their own. A tight budget drops
-        // whole slots from the right: model, cost and context stay.
-        let model = rich.model.as_deref().unwrap().chars().count();
-        let wide = columns(&rows, 200);
-        assert_eq!(wide, [(0, model), (1, 7), (2, 3), (3, 9), (4, 5)]);
-        let tight = columns(&rows, model + COL_GAP + 7 + COL_GAP + 3 + COL_GAP + 8);
-        assert_eq!(tight, [(0, model), (1, 7), (2, 3)]);
+            .flatten();
+        assert_eq!(shell, Some(Action::Send(Command::FocusPane(4))));
+        // A squadless agent never paints twice: delta shows once.
+        assert_eq!(kinds.iter().filter(|k| k.contains("delta")).count(), 1);
     }
 
     #[test]
-    fn rows_follow_the_sideline_order_and_keep_last_good_on_a_failed_read() {
-        let agents = vec![
-            agent("idle", 1, None),
-            agent("stuck", 2, Some(AgentBadge::Blocked)),
-            agent("busy", 3, Some(AgentBadge::Working)),
-        ];
-        let squad = SquadMeta {
-            id: 7,
-            name: "fno".into(),
-            canonical_cwd: "/r".into(),
-            tabs: vec![tab(10, "main"), tab(11, "review")],
-            active_tab: 1,
-            panes: 3,
-        };
-        let mut layout = Layout {
-            squads: vec![squad],
+    fn a_folded_workspace_hides_its_rows_and_every_workspace_opens_by_default() {
+        let a = agent("alpha", 1, None, 7);
+        let layout = Layout {
+            squads: vec![squad(7, "fno", vec![tab(10, "main", vec![])])],
             active_squad: 7,
-            focus: 3,
-            agents,
+            agents: vec![a],
             ..Layout::default()
         };
+        let open_rows = rows(&layout, &Board::default(), 100, &no_folds(), None, None);
+        assert!(matches!(
+            open_rows.get(1),
+            Some(Row::Workspace { open: true, .. })
+        ));
+        assert!(matches!(
+            open_rows.get(2),
+            Some(Row::Item { label, .. } if label == "alpha")
+        ));
+        // The fold key is the canonical cwd; folding hides the rows, the
+        // header stays.
+        let mut folds = HashSet::new();
+        folds.insert("/r".to_string());
+        let folded = rows(&layout, &Board::default(), 100, &folds, None, None);
+        assert!(matches!(
+            folded.get(1),
+            Some(Row::Workspace { open: false, .. })
+        ));
+        assert!(matches!(
+            folded.get(2),
+            Some(Row::Item { label, .. } if label.starts_with("Questions"))
+        ));
+        // An empty workspace says so under its open header.
+        let bare = Layout {
+            squads: vec![squad(3, "empty", vec![tab(12, "main", vec![])])],
+            ..Layout::default()
+        };
+        let rows = rows(&bare, &Board::default(), 100, &no_folds(), None, None);
+        assert!(matches!(
+            rows.get(2),
+            Some(Row::Empty("no agents in this workspace"))
+        ));
+    }
+
+    #[test]
+    fn one_questions_row_carries_the_count_and_opens_hq() {
         let mut board = Board::default();
         let question = fno::needs_overlay::QuestionItem {
             id: "q-1".into(),
@@ -873,66 +1125,105 @@ mod tests {
         };
         let none = fno::backlog_model::Inputs::default();
         board.record(Err("no fleet".into()), Ok(fold), &none, 1, &[]);
-        board.record(
+        let rows = rows(&Layout::default(), &board, 100, &no_folds(), None, None);
+        let qrow = rows.iter().find_map(|r| match r {
+            Row::Item { label, action, .. } if label.starts_with("Questions") => {
+                Some((label.clone(), action.clone()))
+            }
+            _ => None,
+        });
+        let (label, action) = qrow.expect("one questions row");
+        assert_eq!(label, "Questions 1");
+        assert_eq!(action, Some(Action::Show(MainView::Orchestration)));
+        // No question titles in the pane.
+        assert!(!rows
+            .iter()
+            .any(|r| matches!(r, Row::Item { label, .. } if label == "ship it?")));
+        // Before the first read the row waits; a failed read keeps its
+        // error line under the row.
+        let fresh = rows(
+            &Layout::default(),
+            &Board::default(),
+            100,
+            &no_folds(),
+            None,
+            None,
+        );
+        assert!(fresh.iter().any(|r| matches!(r, Row::Item { label, detail, .. } if label == "Questions" && detail == "reading…")));
+        let mut failed = Board::default();
+        failed.record(
             Err("no fleet".into()),
             Err("needs timed out".into()),
             &none,
-            2,
+            1,
             &[],
         );
+        let err_rows = rows(&Layout::default(), &failed, 100, &no_folds(), None, None);
+        assert!(err_rows
+            .iter()
+            .any(|r| matches!(r, Row::Error(e) if e == "needs timed out")));
+    }
 
-        let rows = rows(&layout, &board, 100, false, None, None);
-        let items = |rows: &[Row]| -> Vec<(String, Option<Action>)> {
-            rows.iter()
-                .filter_map(|r| match r {
-                    Row::Item { label, action, .. } => Some((label.clone(), action.clone())),
-                    _ => None,
-                })
-                .collect()
+    #[test]
+    fn the_workspace_header_rolls_up_its_agents_and_marks_the_active_one() {
+        let agents = vec![
+            agent("idle", 1, None, 7),
+            agent("stuck", 2, Some(AgentBadge::Blocked), 7),
+            agent("busy", 3, Some(AgentBadge::Working), 7),
+        ];
+        let layout = Layout {
+            squads: vec![squad(7, "fno", vec![tab(10, "main", vec![])])],
+            active_squad: 7,
+            focus: 3,
+            agents,
+            ..Layout::default()
         };
+        let rows = rows(&layout, &Board::default(), 100, &no_folds(), None, None);
         // The sideline's default Status sort: blocked, then working, then idle.
-        let got = items(&rows);
-        let names: Vec<&str> = got.iter().take(3).map(|(n, _)| n.as_str()).collect();
-        assert_eq!(names, ["stuck", "busy", "idle"]);
-        let stuck = got.iter().find(|(n, _)| n == "stuck").unwrap();
-        assert_eq!(stuck.1, Some(Action::Send(Command::FocusPane(2))));
-        // One cursor: the focused agent. The active session says "current".
-        let marks: Vec<Mark> = rows
+        let names: Vec<&str> = rows
             .iter()
             .filter_map(|r| match r {
-                Row::Item { mark, .. } => Some(*mark),
+                Row::Item {
+                    card: Some(_),
+                    label,
+                    ..
+                } => Some(label.as_str()),
                 _ => None,
             })
             .collect();
-        assert_eq!(marks.iter().filter(|m| **m == Mark::Cursor).count(), 1);
-        assert!(marks.contains(&Mark::Current("current")));
-        // The Agents header rolls up blocked 1, working 1, idle 1.
-        assert!(
-            matches!(&rows[0], Row::Header { rollup, .. } if rollup == &vec![
+        assert_eq!(names, ["stuck", "busy", "idle"]);
+        assert!(matches!(
+            &rows[1],
+            Row::Workspace {
+                id: 7,
+                active: true,
+                open: true,
+                rollup,
+                ..
+            } if rollup == &vec![
                 (LatticeState::Blocked, 1),
                 (LatticeState::Working, 1),
                 (LatticeState::Idle, 1),
-            ])
-        );
-        // The failed question read names its error and keeps "ship it?".
-        let at = rows
+            ]
+        ));
+        // One cursor: the focused agent.
+        let cursors = rows
             .iter()
-            .position(|r| *r == Row::Error("needs timed out".into()))
-            .expect("the error line shows");
-        assert!(matches!(&rows[at + 1], Row::Item { label, .. } if label == "ship it?"));
-        assert!(rows.contains(&Row::Error("no fleet".into())));
-
-        // The strip shows both tabs and selects by id; a rename shows on the
-        // next layout.
-        let strip = super::super::tabs::strip(&layout);
-        assert_eq!(strip.len(), 2);
-        assert!(strip[1].active);
-        assert_eq!(strip[0].action, Action::Send(Command::SelectTab(10)));
-        layout.squads[0].tabs[0] = TabMeta {
-            named: true,
-            ..tab(10, "build")
-        };
-        assert_eq!(super::super::tabs::strip(&layout)[0].label, "build");
+            .filter(|r| {
+                matches!(
+                    r,
+                    Row::Item {
+                        mark: Mark::Cursor,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(cursors, 1);
+        // The failed fleet read keeps its error line in Machines.
+        assert!(rows
+            .iter()
+            .any(|r| matches!(r, Row::Error(e) if e == "no fleet")));
     }
 
     #[test]
@@ -942,12 +1233,12 @@ mod tests {
         // takes it over.
         let a: AgentRow = serde_json::from_value(serde_json::json!({
             "squad": null, "name": "t-land-the-fix", "pane_id": null,
-            "badge": null, "reason": null, "exited": false,
+            "harness": "claude", "badge": null, "reason": null, "exited": false,
         }))
         .unwrap();
         let other: AgentRow = serde_json::from_value(serde_json::json!({
             "squad": null, "name": "scout", "pane_id": null,
-            "badge": null, "reason": null, "exited": false,
+            "harness": "claude", "badge": null, "reason": null, "exited": false,
         }))
         .unwrap();
         let layout = Layout {
@@ -958,7 +1249,7 @@ mod tests {
             &layout,
             &Board::default(),
             100,
-            false,
+            &no_folds(),
             None,
             Some(("t-land-the-fix", "land the checkout fix")),
         );
@@ -977,7 +1268,72 @@ mod tests {
         assert_eq!(mark("land the checkout fix", &marked), Some(Mark::Cursor));
         assert_eq!(mark("scout", &marked), Some(Mark::None));
         // Without a pending launch the same paneless row carries none.
-        let plain = rows(&layout, &Board::default(), 100, false, None, None);
+        let plain = rows(&layout, &Board::default(), 100, &no_folds(), None, None);
         assert_eq!(mark("t-land-the-fix", &plain), Some(Mark::None));
+    }
+
+    #[test]
+    fn an_agent_row_carries_the_mux_cards_served_facts_and_nothing_unserved() {
+        let served: AgentRow = serde_json::from_value(serde_json::json!({
+            "squad": 7, "name": "rich", "pane_id": 1, "badge": null,
+            "harness": "claude", "reason": null, "exited": false,
+            "model": "claude-opus-5-5", "session_cost_cents": 4497,
+            "started_at": 100, "context_used_pct": 41, "session_tokens": 12345,
+            "last_activity_age_s": 90,
+        }))
+        .unwrap();
+        let layout = Layout {
+            squads: vec![squad(7, "fno", vec![tab(10, "main", vec![])])],
+            agents: vec![served],
+            ..Layout::default()
+        };
+        let rows = rows(
+            &layout,
+            &Board::default(),
+            100 + 7200,
+            &no_folds(),
+            None,
+            None,
+        );
+        let card = |name: &str| {
+            rows.iter().find_map(|r| match r {
+                Row::Item { label, card, .. } if label == name => card.clone(),
+                _ => None,
+            })
+        };
+        let rich = card("rich").expect("agent rows carry a card");
+        assert!(rich.model.as_deref().is_some_and(|m| m.starts_with("opus")));
+        assert_eq!(rich.cost.as_deref(), Some("~$44.97"));
+        assert_eq!(rich.created.as_deref(), Some("2h"));
+        assert_eq!(rich.context.as_deref(), Some("41%"));
+        assert_eq!(rich.tokens.as_deref(), Some("12.3k tok"));
+        assert!(rich.activity.is_some());
+        // The columns are the widest value per slot, and a tight budget
+        // drops whole slots from the right: model, cost and context stay.
+        let model = rich.model.as_deref().unwrap().chars().count();
+        let wide = columns(&rows, 200);
+        assert_eq!(wide, [(0, model), (1, 7), (2, 3), (3, 9), (4, 5)]);
+        let tight = columns(&rows, model + COL_GAP + 7 + COL_GAP + 3 + COL_GAP + 8);
+        assert_eq!(tight, [(0, model), (1, 7), (2, 3)]);
+    }
+
+    #[test]
+    fn the_name_takes_the_room_and_the_facts_drop_first() {
+        // At the pane's own width the room exceeds the name: a long name
+        // shows whole, and the facts share what is left.
+        let adv = px(8.0);
+        let small = adv * (ui::SMALL / ui::BODY);
+        let gap = px(8.0);
+        let room = name_room(adv, small, gap);
+        assert!(
+            room >= 18,
+            "an 18-char name shows whole at 320px: room {room}"
+        );
+        // Only when even zero fact columns leave too little room does the
+        // name cut: a huge advance stands in for a narrow pane.
+        let wide = px(40.0);
+        let cut = name_room(wide, wide * (ui::SMALL / ui::BODY), gap);
+        assert!(cut < 18, "a narrow pane cuts the name: room {cut}");
+        assert!(cut >= NAME_MIN);
     }
 }

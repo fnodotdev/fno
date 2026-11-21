@@ -80,8 +80,13 @@ pub enum Action {
     /// picked choice.
     SubmitAnswer,
     Show(MainView),
-    /// Show every agent in the left pane, or only the first few.
-    ToggleAgents,
+    /// Open the inline field that names a new workspace.
+    NewWorkspace,
+    /// Fold or open one workspace: the id resolves to the persisted fold
+    /// key (its canonical cwd, else its name) at act time.
+    ToggleWorkspace(u64),
+    /// Fold or open the trailing Elsewhere group.
+    ToggleElsewhere,
     /// Open or close the key sheet, as ⌘/ and the palette's command row do.
     ToggleKeySheet,
     /// Open or close one chat thinking row.
@@ -118,7 +123,9 @@ fn click_id(action: &Action) -> &'static str {
         Action::PickAnswer(_) => "pick_answer",
         Action::SubmitAnswer => "submit_answer",
         Action::Show(_) => "show_view",
-        Action::ToggleAgents => "toggle_agents",
+        Action::NewWorkspace => "new_workspace",
+        Action::ToggleWorkspace(_) => "toggle_workspace",
+        Action::ToggleElsewhere => "toggle_elsewhere",
         Action::ToggleKeySheet => "toggle_key_sheet",
         Action::ToggleChat(_) => "toggle_chat",
         Action::OpenSheet(_) => "open_sheet",
@@ -168,6 +175,16 @@ const DIGIT_FLUSH_MS: u64 = 400;
 /// The most wheel lines one event sends, so a fling cannot flood the socket.
 const WHEEL_CAP: i32 = 10;
 
+/// The inline workspace-name field's own state: the draft the input
+/// handler routes into, the field's layout state, and the workspace being
+/// renamed when the field edits one (`None` names a new workspace).
+pub(super) struct SquadField {
+    pub draft: Draft,
+    pub field: Rc<chat::field::FieldState>,
+    /// The workspace being renamed; `None` when the field names a new one.
+    pub squad: Option<u64>,
+}
+
 pub struct Root {
     pub(super) main: MainView,
     link: Option<Link>,
@@ -215,7 +232,12 @@ pub struct Root {
     /// The composer's draft and its send state.
     pub(super) board_draft: Draft,
     pub(super) mail: Option<MailState>,
-    pub(super) agents_open: bool,
+    /// The persisted fold keys (workspace cwds, or names when the cwd is
+    /// empty); absence means open.
+    pub(super) folds: HashSet<String>,
+    /// The inline workspace-name field: it names a new workspace, or
+    /// renames the workspace it carries.
+    pub(super) squad_field: Option<SquadField>,
     pub(super) chat: Chat,
     /// `--chat <id>`: the session chat mode shows, whatever has focus.
     pub(super) pinned: Option<SessionKey>,
@@ -321,21 +343,12 @@ impl Root {
         session: String,
         main: MainView,
         pinned: Option<SessionKey>,
-        agents_open: bool,
+        folds: HashSet<String>,
         metrics: Metrics,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        Self::new_with_link(
-            session,
-            main,
-            pinned,
-            agents_open,
-            metrics,
-            None,
-            window,
-            cx,
-        )
+        Self::new_with_link(session, main, pinned, folds, metrics, None, window, cx)
     }
 
     /// The shot path's constructor: `prewarmed` hands a link already
@@ -345,7 +358,7 @@ impl Root {
         session: String,
         main: MainView,
         pinned: Option<SessionKey>,
-        agents_open: bool,
+        folds: HashSet<String>,
         metrics: Metrics,
         prewarmed: Option<super::link::WarmedLink>,
         window: &mut Window,
@@ -395,7 +408,8 @@ impl Root {
             answers: HashMap::new(),
             board_draft: Default::default(),
             mail: None,
-            agents_open,
+            folds,
+            squad_field: None,
             light,
             theme_cwd: theme_cwd.clone(),
             session: session.clone(),
@@ -632,7 +646,7 @@ impl Root {
                         &self.layout,
                         &self.board,
                         now,
-                        self.agents_open,
+                        &self.folds,
                         streamed,
                         launched,
                     )
@@ -851,8 +865,32 @@ impl Root {
             }
             Action::SubmitAnswer => answer::submit(self, cx),
             Action::Show(view) => self.show(view, cx),
-            Action::ToggleAgents => {
-                self.agents_open = !self.agents_open;
+            Action::NewWorkspace => {
+                self.squad_field = Some(SquadField {
+                    draft: Draft::default(),
+                    field: Rc::new(chat::field::FieldState::default()),
+                    squad: None,
+                });
+            }
+            Action::ToggleWorkspace(id) => {
+                let key = self
+                    .layout
+                    .squads
+                    .iter()
+                    .find(|s| s.id == id)
+                    .map(super::left_pane::fold_key);
+                if let Some(key) = key {
+                    if !self.folds.remove(&key) {
+                        self.folds.insert(key);
+                    }
+                    record_ui_state(self, cx);
+                }
+            }
+            Action::ToggleElsewhere => {
+                let key = super::left_pane::ELSEWHERE_KEY.to_string();
+                if !self.folds.remove(&key) {
+                    self.folds.insert(key);
+                }
                 record_ui_state(self, cx);
             }
             Action::ToggleKeySheet => {
@@ -2359,6 +2397,45 @@ impl Root {
         true
     }
 
+    /// The workspace-name field's keys. Enter commits and never inserts a
+    /// newline (the launch panel's own shape): a new workspace sends
+    /// NewSquad, a rename sends RenameSquad. Esc cancels; a blank or
+    /// whitespace name is sent as-is, because the server's notice is the
+    /// honest answer (nothing created, or the name reverts to its derived
+    /// label).
+    fn squad_field_key(&mut self, key: &Key, cx: &mut Context<Self>) -> bool {
+        let Some(f) = self.squad_field.as_mut() else {
+            return false;
+        };
+        if key.cmd || key.ctrl {
+            return false;
+        }
+        match key.key {
+            "enter" if !key.shift => {
+                let name = f.draft.text().trim().to_string();
+                let squad = f.squad;
+                self.squad_field = None;
+                match squad {
+                    Some(id) => {
+                        self.send(ClientMsg::Command(Command::RenameSquad { squad: id, name }))
+                    }
+                    None => self.send(ClientMsg::Command(Command::NewSquad { name, origin: None })),
+                }
+            }
+            "escape" => self.squad_field = None,
+            "backspace" => f.draft.backspace(),
+            "delete" => f.draft.delete(),
+            "left" => f.draft.left(key.shift),
+            "right" => f.draft.right(key.shift),
+            "home" => f.draft.home(key.shift),
+            "end" => f.draft.end(key.shift),
+            _ => return false,
+        }
+        cx.stop_propagation();
+        cx.notify();
+        true
+    }
+
     /// True when the open find bar consumed the key: an edit, a step, close.
     fn find_takes(&mut self, key: &Key, cx: &mut Context<Self>) -> bool {
         if self.find.is_none() {
@@ -2430,6 +2507,12 @@ impl Root {
         // The composer is modal: its keys never reach the pane behind it,
         // and its text keys still compose through the input handler.
         if self.launch_key(&key, cx) {
+            return;
+        }
+        // The workspace-name field is modal the same way: Enter names the
+        // workspace, Esc cancels, the editing keys edit its draft. A cmd or
+        // ctrl key falls through to the shortcuts.
+        if self.squad_field_key(&key, cx) {
             return;
         }
         // The answer sheet is modal the same way: esc closes, enter
@@ -2609,7 +2692,14 @@ impl Root {
             }
             Shortcut::Command(c) => self.send(ClientMsg::Command(c)),
             Shortcut::Cut => {
-                if crate::start::visible(self) && self.launch.state.draft.has_selection() {
+                if let Some(f) = self.squad_field.as_mut() {
+                    if f.draft.has_selection() {
+                        let text = f.draft.selected_text().to_string();
+                        cx.write_to_clipboard(ClipboardItem::new_string(text));
+                        f.draft.replace_selection("");
+                        cx.notify();
+                    }
+                } else if crate::start::visible(self) && self.launch.state.draft.has_selection() {
                     let text = self.launch.state.draft.selected_text().to_string();
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
                     self.launch.state.draft.replace_selection("");
@@ -2623,7 +2713,10 @@ impl Root {
                 }
             }
             Shortcut::SelectAll => {
-                if crate::start::visible(self) {
+                if let Some(f) = self.squad_field.as_mut() {
+                    f.draft.select_all();
+                    cx.notify();
+                } else if crate::start::visible(self) {
                     self.launch.state.draft.select_all();
                     self.launch.state.field.reveal.set(true);
                     cx.notify();
@@ -2640,7 +2733,7 @@ impl Root {
                 cx.quit();
             }
             // While the composer is open, cmd-1/2/3 switch its kind
-            // (agent, lead, shell) instead of picking a tab or a row.
+            // (worker, lead, shell) instead of picking a tab or a row.
             Shortcut::Pick(n) => {
                 if self.launch.open {
                     if let Some(kind) = launch::Kind::from_index(n) {
@@ -2652,7 +2745,10 @@ impl Root {
                 }
                 self.pick(n, cx);
             }
-            Shortcut::NewAgent => self.act(Action::OpenLaunch(None), cx),
+            Shortcut::NewAgent => {
+                self.squad_field = None;
+                self.act(Action::OpenLaunch(None), cx);
+            }
             Shortcut::Find => self.find_open(cx),
             Shortcut::FindStep { older } => self.find_step(older, cx),
         }
@@ -2668,6 +2764,11 @@ impl Root {
         // The open answer sheet takes the paste into its draft.
         if let Some(s) = self.answer.as_mut() {
             s.draft.replace_selection(&text);
+            cx.notify();
+            return;
+        }
+        if let Some(f) = self.squad_field.as_mut() {
+            f.draft.replace_selection(&text);
             cx.notify();
             return;
         }
@@ -3003,6 +3104,12 @@ impl EntityInputHandler for Root {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<String> {
+        if let Some(f) = self.squad_field.as_ref() {
+            let d = &f.draft;
+            let r = d.range_from_utf16(&range);
+            *adjusted = Some(d.range_to_utf16(&r));
+            return Some(d.text()[r].to_string());
+        }
         if self.launch.open {
             let d = &self.launch.state.draft;
             let r = d.range_from_utf16(&range);
@@ -3026,6 +3133,14 @@ impl EntityInputHandler for Root {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
+        if let Some(f) = self.squad_field.as_ref() {
+            let d = &f.draft;
+            let range = d.range_to_utf16(&d.selection());
+            return Some(UTF16Selection {
+                range,
+                reversed: d.caret() < d.selection().end,
+            });
+        }
         if self.launch.open || crate::start::visible(self) {
             let d = &self.launch.state.draft;
             let range = d.range_to_utf16(&d.selection());
@@ -3054,6 +3169,10 @@ impl EntityInputHandler for Root {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Range<usize>> {
+        if let Some(f) = self.squad_field.as_ref() {
+            let d = &f.draft;
+            return d.marked().map(|m| d.range_to_utf16(&m));
+        }
         if self.launch.open || crate::start::visible(self) {
             let d = &self.launch.state.draft;
             return d.marked().map(|m| d.range_to_utf16(&m));
@@ -3066,6 +3185,11 @@ impl EntityInputHandler for Root {
     }
 
     fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(f) = self.squad_field.as_mut() {
+            f.draft.unmark();
+            cx.notify();
+            return;
+        }
         if self.launch.open || crate::start::visible(self) {
             self.launch.state.draft.unmark();
             cx.notify();
@@ -3088,6 +3212,11 @@ impl EntityInputHandler for Root {
     ) {
         // The palette's query owns the keyboard while it shows.
         if self.goto.is_some() {
+            return;
+        }
+        if let Some(f) = self.squad_field.as_mut() {
+            f.draft.replace_utf16(range, text, false, None);
+            cx.notify();
             return;
         }
         if self.launch.open || crate::start::visible(self) {
@@ -3125,6 +3254,12 @@ impl EntityInputHandler for Root {
     ) {
         // The palette's query owns the keyboard while it shows.
         if self.goto.is_some() {
+            return;
+        }
+        if let Some(f) = self.squad_field.as_mut() {
+            f.draft
+                .replace_utf16(range, new_text, true, new_selected_range);
+            cx.notify();
             return;
         }
         if self.launch.open {
@@ -3324,7 +3459,7 @@ impl Render for Root {
             _ => main,
         };
         let now = fno::app_api::digest_overlay::now_secs();
-        let left = left_pane::render(self, now, self.adv, cx).text_size(px(ui::BODY));
+        let left = left_pane::render(self, now, self.adv, window, cx).text_size(px(ui::BODY));
         let strip = tabs::render(self, cx)
             .font_family(ui::MONO)
             .text_size(px(ui::BODY));
@@ -3422,7 +3557,7 @@ impl Root {
 /// button, write it beside the window's live frame to the state file.
 struct UiState {
     view: MainView,
-    agents_open: bool,
+    folds: HashSet<String>,
     chat_key: Option<SessionKey>,
     path: Option<PathBuf>,
 }
@@ -3440,7 +3575,7 @@ fn record_ui_state(root: &Root, cx: &mut App) {
     }
     let ui = cx.global_mut::<UiState>();
     ui.view = root.main;
-    ui.agents_open = root.agents_open;
+    ui.folds = root.folds.clone();
     ui.chat_key = root.chat.key.clone();
 }
 
@@ -3469,7 +3604,7 @@ fn persist_window_state(window: &Window, cx: &mut App) {
             h: f32::from(bounds.size.height),
         },
         pinned: ui.chat_key.clone(),
-        agents_open: ui.agents_open,
+        folds: ui.folds.clone(),
     };
     if let Err(e) = super::app_state::save(path, &state) {
         eprintln!("fno-app: window state save failed: {e}");
@@ -3542,7 +3677,10 @@ pub fn run(
         let window_bounds = initial_window_bounds(restored.as_ref(), cx);
         // The fold a quit left behind seeds the left pane; the exit paths
         // read the rest from the UiState global.
-        let agents_open = restored.as_ref().map(|s| s.agents_open).unwrap_or(false);
+        let folds = restored
+            .as_ref()
+            .map(|s| s.folds.clone())
+            .unwrap_or_default();
         // Where the exit paths write; a HOME-less environment saves nothing.
         let state_path = super::app_state::state_path();
         let opened = cx.open_window(
@@ -3580,7 +3718,7 @@ pub fn run(
                         session,
                         main,
                         pinned.clone(),
-                        agents_open,
+                        folds.clone(),
                         metrics,
                         window,
                         cx,
@@ -3589,7 +3727,7 @@ pub fn run(
                     // keep it current while the window lives.
                     cx.set_global(UiState {
                         view: main,
-                        agents_open,
+                        folds,
                         chat_key: pinned,
                         path: state_path,
                     });
