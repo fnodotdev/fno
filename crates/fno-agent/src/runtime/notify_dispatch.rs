@@ -424,7 +424,7 @@ fn dispatch_local(title: &str, message: &str) -> bool {
         // names the operator's last terminal for the launchd daemon, whose
         // own env is empty. Either way the dictionary-capable terminals stay
         // behind it as fallbacks before the plain toast.
-        let primary = app.or_else(|| crate::terminal_stamp::stamped_terminal_app());
+        let primary = app.or_else(|| crate::runtime::terminal_stamp::stamped_terminal_app());
         let script = toast_script(&toast_candidates(primary), title, message);
         let _ = run_bounded(
             Command::new("osascript")

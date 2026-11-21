@@ -108,8 +108,7 @@ pub fn step(
     let (dns, login) = match tailscale.status() {
         Ok(pair) => pair,
         Err(e) => {
-            out.needs_human
-                .push(format!("attention-remote: {e}"));
+            out.needs_human.push(format!("attention-remote: {e}"));
             return out;
         }
     };
@@ -130,10 +129,7 @@ pub fn step(
         }
         None => {
             let topic = ask
-                .line(&format!(
-                    "ntfy topic (Enter = {}):",
-                    default_topic(&me)
-                ))
+                .line(&format!("ntfy topic (Enter = {}):", default_topic(&me)))
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| default_topic(&me));
@@ -147,12 +143,9 @@ pub fn step(
             // The set validates the token, so the env write lands first, the
             // same order messaging uses.
             let env_file = home.join(".fno/.env");
-            if let Err(e) =
-                crate::setup_messaging::write_env(&env_file, &env, Some(&token))
-            {
-                out.needs_human.push(format!(
-                    "attention-remote: cannot write {ENV_FILE}: {e}"
-                ));
+            if let Err(e) = crate::setup_messaging::write_env(&env_file, &env, Some(&token)) {
+                out.needs_human
+                    .push(format!("attention-remote: cannot write {ENV_FILE}: {e}"));
                 return out;
             }
             let mut next = rows.clone();
@@ -169,10 +162,7 @@ pub fn step(
     };
     // Fill the invites owner row: the tailnet login answers the HQ door.
     let mut next_invites = invites.clone();
-    if !next_invites
-        .iter()
-        .any(|r| r["email"] == login)
-    {
+    if !next_invites.iter().any(|r| r["email"] == login) {
         next_invites.push(json!({
             "email": login,
             "scope": "*",
@@ -181,12 +171,15 @@ pub fn step(
     }
     // The serve route: the bridge port mapped at the tailnet root.
     match tailscale.serve(BRIDGE_PORT) {
-        Ok(line) => out.done.push(format!(
-            "attention-remote: serve route set: {line}"
-        )),
-        Err(e) => out.needs_human.push(format!(
-            "attention-remote: the serve route needs a human: tailscale serve --bg http://127.0.0.1:{BRIDGE_PORT} ({e})"
-        ));
+        Ok(line) => {
+            out.done
+                .push(format!("attention-remote: serve route set: {line}"));
+        }
+        Err(e) => {
+            out.needs_human.push(format!(
+                "attention-remote: the serve route needs a human: tailscale serve --bg http://127.0.0.1:{BRIDGE_PORT} ({e})"
+            ));
+        }
     }
     if let Err(e) = set_sinks(&Value::Array(next_rows).to_string()) {
         out.needs_human
@@ -201,8 +194,9 @@ pub fn step(
         ));
     }
     if let Err(e) = set_invites(&Value::Array(next_invites).to_string()) {
-        out.needs_human
-            .push(format!("attention-remote: cannot write the invites row: {e}"));
+        out.needs_human.push(format!(
+            "attention-remote: cannot write the invites row: {e}"
+        ));
     }
     out
 }

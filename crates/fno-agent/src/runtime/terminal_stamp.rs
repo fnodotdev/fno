@@ -23,18 +23,19 @@ pub fn stamp_from_env() {
     if cfg!(test) {
         return;
     }
-    stamp_terminal(&terminal_path(), &term);
+    if let Some(path) = terminal_path() {
+        stamp_terminal(&path, &term);
+    }
 }
 
 /// Read the raw stamped `TERM_PROGRAM` value, if any. Best effort.
 pub fn read_stamp() -> Option<String> {
-    let path = terminal_path();
+    let path = terminal_path()?;
     read_raw(&path)
 }
 
-fn terminal_path() -> PathBuf {
-    terminal_stamp_path().unwrap_or_else(|_| PathBuf::from("/dev/null"))
-    // /dev/null reads empty, so a failed resolution reads as no stamp.
+fn terminal_path() -> Option<PathBuf> {
+    terminal_stamp_path().ok()
 }
 
 /// The one write: create the parent, write to a temp name, rename into place, 0600. A caller on the hook path wraps it in the TERM_PROGRAM guard.
@@ -63,7 +64,7 @@ pub fn read_raw(path: &Path) -> Option<String> {
 /// when no stamp exists or the value maps to nothing.
 pub fn stamped_terminal_app() -> Option<&'static str> {
     let term = read_stamp()?;
-    crate::notify_dispatch::terminal_app(&term, "")
+    crate::runtime::notify_dispatch::terminal_app(&term, "")
 }
 
 #[cfg(test)]
