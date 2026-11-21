@@ -32,7 +32,7 @@ Every placement flag needs `--as pane`. Without it the spawn refuses and names t
 
 ## Harness args
 
-Everything after the prompt is harness argv, never parsed. A spawn-owned flag there refuses and prints the corrected line. Before the prompt, an unowned flag passes only in the `--flag=value` form; the space form refuses and names the legal positions. The `+flag` spelling is the short form: `+flag` and `+flag=value` fold to their `--` spelling before the boundary reads the line, so `fno agent spawn --name w claude fix the bug +model=opus` rides `--model=opus` as harness argv with no `--` typing. A token that is not flag-shaped never folds: `+1`, a lone `+`, and a quoted phrase stay prompt text. The payload after `--` or `--argv` stays byte-exact, so nothing folds there. `--harness-arg <value>` pushes a token verbatim when the fold is not enough.
+Everything after the prompt is harness argv, never parsed. A spawn-owned flag there refuses and prints the corrected line. Before the prompt, an unowned flag passes only in the `--flag=value` form. The space form refuses and names the legal positions. The `+flag` spelling is the short form: `+flag` and `+flag=value` fold to their `--` spelling before the boundary reads the line, so `fno agent spawn --name w claude fix the bug +model=opus` rides `--model=opus` as harness argv with no `--` typing. A token that is not flag-shaped never folds: `+1`, a lone `+`, and a quoted phrase stay prompt text. The payload after `--` or `--argv` stays byte-exact, so nothing folds there. When the fold is not enough, `--harness-arg <value>` pushes a token verbatim.
 
 ## Credentials
 
