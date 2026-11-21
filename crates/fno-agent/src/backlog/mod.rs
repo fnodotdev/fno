@@ -187,6 +187,7 @@ pub mod question_ladder;
 pub mod question_probe;
 pub mod question_sweep;
 pub mod repeated_asks;
+pub mod requests_fold;
 pub mod row_truth;
 pub mod row_verdict;
 pub mod rules;
