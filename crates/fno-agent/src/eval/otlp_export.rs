@@ -489,7 +489,7 @@ pub(crate) fn prune(state: &mut ExportState, now_ms: i64) {
 }
 
 /// One beat's outcome for the tick row.
-pub(crate) struct BeatReport {
+pub struct BeatReport {
     pub acted: u64,
     pub skip: Option<&'static str>,
     pub detail: Vec<String>,
