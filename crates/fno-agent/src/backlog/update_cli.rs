@@ -2646,14 +2646,35 @@ mod tests {
 
     #[test]
     fn an_audience_token_reaches_the_audience_field() {
-        let argv: Vec<String> = ["x-aaaa1111", "audience=user", "why=the customer changed"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        match UpdateArgs::parse(&argv) {
-            ParsedUpdate::Args(a) => assert_eq!(a.audience.as_deref(), Some("user")),
+        let argv: Vec<String> = [
+            "x-aaaa1111",
+            "audience=internal",
+            "why=the customer changed",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let args = match UpdateArgs::parse(&argv) {
+            ParsedUpdate::Args(a) => a,
             ParsedUpdate::Refusal { message, .. } => panic!("audience= must parse: {message}"),
-        }
+        };
+        assert_eq!(args.audience.as_deref(), Some("internal"));
+        // The apply path on a node with an empty audience stores the value.
+        let mut rows = vec![serde_json::json!({
+            "id": "x-aaaa1111", "slug": "aaaa1111", "title": "t",
+            "status": "intake", "project": "fno", "audience": ""
+        })];
+        let pr = DerivedPr {
+            pr_number: None,
+            pr_url: None,
+            add_pr_url: None,
+            clearing_number: false,
+        };
+        apply_mutators(&mut rows, 0, &args, None, false, None, None, &pr)
+            .unwrap_or_else(|_| panic!("audience=internal must apply"));
+        assert_eq!(rows[0]["audience"], "internal");
+        assert_eq!(rows[0]["audience_history"][0]["from"], "");
+        assert_eq!(rows[0]["audience_history"][0]["to"], "internal");
     }
 
     #[test]
