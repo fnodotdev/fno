@@ -413,7 +413,10 @@ fn environment(a: &AgentRow, pane_host: Option<&str>, p: &Palette) -> Div {
         .flex_col()
         .pt_3()
         .child(ui::text(a.name.clone(), Role::Heading, p))
-        .child(ui::text(repo.to_string(), Role::Meta, p))
+        // A repo named like its agent would print the same text twice.
+        .when(repo != a.name, |d| {
+            d.child(ui::text(repo.to_string(), Role::Meta, p))
+        })
         .child(ui::text(branch.to_string(), Role::Meta, p))
         .child(ui::text(host.to_string(), Role::Fact, p))
 }
@@ -634,7 +637,7 @@ fn outputs_card(
         return (
             title,
             None,
-            div().child(ui::quiet("Outputs read claude sessions only", p)),
+            div().child(ui::quiet("no outputs: this pane runs no claude session", p)),
         );
     }
     let streamed = root.chat.key.as_ref().map(|k| k.session_id.as_str());
