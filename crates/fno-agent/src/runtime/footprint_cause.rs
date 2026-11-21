@@ -2141,7 +2141,7 @@ pub fn footprint_command(json_output: bool, cause_only: bool) -> i32 {
 }
 
 // ---------------------------------------------------------------------------
-// Spawn-rate reading (x-302a): the axis the sustained-CPU meter cannot see
+// Spawn-rate reading: the axis the sustained-CPU meter cannot see
 // ---------------------------------------------------------------------------
 
 /// The two-sample window: default, bounds. The reading sleeps between two
