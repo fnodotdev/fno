@@ -1772,23 +1772,22 @@ fn build_data(readings: &[Reading], scope: &str) -> Map<String, Value> {
 /// saw.
 fn stamp_held_park(readings: &[Reading], data: &mut Map<String, Value>, scope: &str) {
     let get = |name: &str| readings.iter().find(|r| r.name == name);
-    if get("held").filter(|r| r.ok).is_none() {
+    let Some(held) = get("held").filter(|r| r.ok) else {
         return;
-    }
-    let inputs_idle = data.get("open_prs").and_then(Value::as_i64) == Some(0)
-        && data.get("blueprint_target_ready").and_then(Value::as_u64) == Some(0)
-        && data.get("blueprint_running").and_then(Value::as_u64) == Some(0)
-        && data.get("scope_live_workers").and_then(Value::as_u64) == Some(0);
-    if !inputs_idle {
-        return;
-    }
-    let held = get("held").filter(|r| r.ok).map(|r| &r.value);
-    let open = held.and_then(|h| h.get("open")).and_then(Value::as_u64);
-    let quiet = held.and_then(|h| h.get("quiet")).and_then(Value::as_u64);
-    let (Some(open), Some(quiet)) = (open, quiet) else {
+    };
+    let held_view = de::parse::<de::HeldTail>(&held.value);
+    let (Some(open), Some(quiet)) = (held_view.open, held_view.quiet) else {
         return;
     };
     if open + quiet == 0 {
+        return;
+    }
+    let beat = de::BeatData::snapshot(data);
+    let inputs_idle = beat.open_prs == Some(0)
+        && beat.blueprint_target_ready == Some(0)
+        && beat.blueprint_running == Some(0)
+        && beat.scope_live_workers == Some(0);
+    if !inputs_idle {
         return;
     }
     let Ok(ids) = crate::lead_answers::held_open_ids(scope) else {
@@ -3764,23 +3763,20 @@ mod tests {
             Some(v) => std::env::set_var("FNO_AGENT_HOME", v),
             None => std::env::remove_var("FNO_AGENT_HOME"),
         }
+        let beat = de::BeatData::snapshot(&data);
+        assert_eq!(beat.held_park, Some(true), "{:?}", beat.held_park);
+        assert_eq!(beat.held_park_open, Some(3));
         assert_eq!(
-            data.get("held_park"),
-            Some(&json!(true)),
-            "{:?}",
-            data.get("held_park")
-        );
-        assert_eq!(data.get("held_park_open"), Some(&json!(3)));
-        assert_eq!(
-            data.get("held_park_qs"),
-            Some(&json!(["q-park-1"])),
+            beat.held_park_qs,
+            Some(vec!["q-park-1".to_string()]),
             "the quiet question is in the stamped set"
         );
         // A busy board (open PRs) refuses the stamp; the fixture scope is
         // never parked while PRs are open.
         let busy = sample_readings(board7(), org4(), cap_ok(), workers3());
         let data = build_data(&busy, "x-bbbb");
-        assert_eq!(data.get("held_park"), None, "open PRs hold the park off");
+        let beat = de::BeatData::snapshot(&data);
+        assert_eq!(beat.held_park, None, "open PRs hold the park off");
         // A failed held read refuses the stamp even with idle inputs.
         let mut unread = sample_readings(
             json!({"open_prs": 0, "free_claim_no_driver": 0, "blocked": 0, "blocked_on": []}),
@@ -3790,11 +3786,8 @@ mod tests {
         );
         set_reading(&mut unread, Reading::failed("held", "arm down".into()));
         let data = build_data(&unread, "x-bbbb");
-        assert_eq!(
-            data.get("held_park"),
-            None,
-            "a failed held read stamps nothing"
-        );
+        let beat = de::BeatData::snapshot(&data);
+        assert_eq!(beat.held_park, None, "a failed held read stamps nothing");
     }
     // AC2: the handoff signal reads the true beat-to-beat direction. Two
     // consecutive rises trip it; one rise, flat, or falling does not; and the

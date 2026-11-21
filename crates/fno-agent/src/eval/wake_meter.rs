@@ -183,6 +183,15 @@ mod tests {
     /// whose only turns are heartbeats reads machine 0 and no OVER flag.
     #[test]
     fn a_held_park_heartbeat_turn_leaves_the_machine_count_out() {
+        #[derive(serde::Deserialize, Default)]
+        struct MeterView {
+            #[serde(default)]
+            machine: Option<u64>,
+            #[serde(default)]
+            user: Option<u64>,
+            #[serde(default)]
+            over: Option<bool>,
+        }
         let lines = vec![
             row(
                 "Automatic lead-wake from the fno daemon (held-park heartbeat, 1442m since the last beat): every row in scope still waits on a question, so the cadence wake sleeps. Run your check-in to re-stamp the park or start work: fno agent hq checkin.",
@@ -195,11 +204,18 @@ mod tests {
                 true,
             ),
         ];
-        let result = wake_meter_text("claude", &lines.join("\n"), None).unwrap();
-        assert_eq!(result["machine"], 1, "only the non-heartbeat wake counts");
-        assert_eq!(result["user"], 0);
+        let view =
+            |result: Value| -> MeterView { serde_json::from_value(result).unwrap_or_default() };
+        let result = view(wake_meter_text("claude", &lines.join("\n"), None).unwrap());
         assert_eq!(
-            result["over"], true,
+            result.machine,
+            Some(1),
+            "only the non-heartbeat wake counts"
+        );
+        assert_eq!(result.user, Some(0));
+        assert_eq!(
+            result.over,
+            Some(true),
             "a real wake with no typed turn still flags OVER"
         );
         // A typed turn that QUOTES the wake's marker phrase still counts as
@@ -208,18 +224,20 @@ mod tests {
         let mut lines = lines;
         lines.push(row(
             "The daemon said \"daemon (held-park heartbeat, 1442m since the last beat)\" but a question just landed; taking the beat now.",
-            "2026-09-24T12:09:00Z",
+            "2026-09-16T12:09:00Z",
             false,
         ));
-        let result = wake_meter_text("claude", &lines.join("\n"), None).unwrap();
+        let result = view(wake_meter_text("claude", &lines.join("\n"), None).unwrap());
         assert_eq!(
-            result["machine"], 1,
+            result.machine,
+            Some(1),
             "the quoted phrase stays out of machine"
         );
         assert_eq!(
-            result["user"], 1,
+            result.user,
+            Some(1),
             "the quoted phrase still counts as a typed turn"
         );
-        assert_eq!(result["over"], false);
+        assert_eq!(result.over, Some(false));
     }
 }

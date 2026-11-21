@@ -612,6 +612,21 @@ pub(crate) struct BeatData {
     pub(crate) held_park: Option<bool>,
     #[serde(default, deserialize_with = "opt_u64")]
     pub(crate) held_park_open: Option<u64>,
+    #[serde(default, deserialize_with = "opt_vec_string")]
+    pub(crate) held_park_qs: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "opt_u64")]
+    pub(crate) blueprint_running: Option<u64>,
+    #[serde(default, deserialize_with = "opt_u64")]
+    pub(crate) blueprint_target_ready: Option<u64>,
+}
+
+/// The held reading's tail, as the park stamp reads it.
+#[derive(Deserialize, Default)]
+pub(crate) struct HeldTail {
+    #[serde(default, deserialize_with = "opt_u64")]
+    pub(crate) open: Option<u64>,
+    #[serde(default, deserialize_with = "opt_u64")]
+    pub(crate) quiet: Option<u64>,
 }
 
 impl BeatData {
