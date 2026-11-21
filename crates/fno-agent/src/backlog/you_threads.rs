@@ -1761,17 +1761,17 @@ mod tests {
         assert_eq!(item_state(&queued, &acked), "acked");
         // The asks-you rule reads the end reply's last line only.
         let asks = item_json(&mk("x", "Opened PR 12.\n\nShould I merge it?"), &acked);
-        assert_eq!(asks["asks_you"], true);
+        assert_eq!(asks.get("asks_you"), Some(&json!(true)));
         let asks = item_json(
             &mk("x", "Opened PR 12.\n\nShould I merge it?"),
             &Default::default(),
         );
-        assert_eq!(asks["state"], "answered");
+        assert_eq!(asks.get("state"), Some(&json!("answered")));
         let told = item_json(
             &mk("x", "Want it merged? I did.\nMerged as 805f4200."),
             &acked,
         );
-        assert_eq!(told["asks_you"], false);
+        assert_eq!(told.get("asks_you"), Some(&json!(false)));
         assert!(reply_asks_user("Which one, `a` or `b`?`"));
     }
 
@@ -1814,9 +1814,10 @@ mod tests {
         ]
         .join("\n");
         let out = walk(&raw, 0, 0, &BusIndex::empty(), "sess", None);
-        let items = out.items;
-        assert_eq!(items.len(), 3);
-        let senders: Vec<&str> = items[0]
+        let [first, second, _] = out.items.as_slice() else {
+            panic!("three items: {:?}", out.items);
+        };
+        let senders: Vec<&str> = first
             .gap
             .iter()
             .filter_map(|g| match g {
@@ -1825,21 +1826,24 @@ mod tests {
             })
             .collect();
         assert_eq!(senders, ["atticus", "atticus", "t-board"]);
+        let [mail, update, glued, _] = first.gap.as_slice() else {
+            panic!("four gap entries: {:?}", first.gap);
+        };
         assert!(matches!(
-            &items[0].gap[0],
+            mail,
             GapEntry::Mail { msg_id, summary, .. }
                 if msg_id == "fmail-0123456789ab" && summary.starts_with("PR 12 merged")
         ));
         assert!(matches!(
-            &items[0].gap[1],
+            update,
             GapEntry::LeadUpdate { text, .. } if text == "Noted 12."
         ));
         assert!(matches!(
-            &items[0].gap[2],
+            glued,
             GapEntry::Mail { summary, .. } if summary.starts_with("CI red on 13")
         ));
-        assert_eq!(items[0].end_reply, "Two PRs are red.");
-        assert!(items[1].gap.is_empty(), "{:?}", items[1].gap);
+        assert_eq!(first.end_reply, "Two PRs are red.");
+        assert!(second.gap.is_empty(), "{:?}", second.gap);
         assert!(out.lead_gap.is_empty());
     }
 
@@ -1857,8 +1861,7 @@ mod tests {
         std::fs::write(&file, format!("{part1}\n")).expect("write part 1");
         let mut store = YouStore::open(PathBuf::from("/dev/null"), false);
         let items = store.advance(&file, "s1", &BusIndex::empty());
-        assert_eq!(items.len(), 1);
-        assert!(items[0].gap.is_empty());
+        assert!(matches!(items.as_slice(), [only] if only.gap.is_empty()));
 
         let part2 = [
             row(
@@ -1879,8 +1882,10 @@ mod tests {
         text.push('\n');
         std::fs::write(&file, &text).expect("write part 2");
         let items = store.advance(&file, "s1", &BusIndex::empty());
-        assert_eq!(items.len(), 1);
-        let kinds: Vec<&str> = items[0]
+        let [cached] = items.as_slice() else {
+            panic!("one item: {items:?}");
+        };
+        let kinds: Vec<&str> = cached
             .gap
             .iter()
             .map(|g| match g {

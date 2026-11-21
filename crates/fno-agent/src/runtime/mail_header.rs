@@ -1205,8 +1205,9 @@ mod tests {
         // an @-header span.
         let quoted =
             header_turns("`quill · fmail-123abc456def · plain` see `@x · fmail-0123456789ab`");
-        assert_eq!(quoted.len(), 1);
-        assert_eq!(quoted[0]["sender"], "quill");
+        assert!(
+            matches!(quoted.as_slice(), [one] if one.get("sender") == Some(&Value::from("quill")))
+        );
 
         // The one-line delivered form: the transcript renders the turn on
         // ONE physical line, header then " ⏎ " then the body, so the shape

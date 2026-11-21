@@ -1235,7 +1235,7 @@ async fn you_thread_band_pin_and_card() {
             "participants": [], "threads": [], "system": {}, "channels": [],
             "announcements": [], "unreadable": 0,
             "you": [{"session_id": "lead", "name": "gavin",
-                "last_ts": items.last().map(|i| i["ts"].clone()), "items": items}],
+                "last_ts": items.last().and_then(|i| i.get("ts").cloned()), "items": items}],
         })
     };
     let b = view.messages_board.as_mut().expect("open");
@@ -1272,7 +1272,8 @@ async fn you_thread_band_pin_and_card() {
     let lines = texts(b);
     // AC3-PIN: under the title, the newest open ask and its state.
     assert_eq!(
-        lines[1], "Open: is the gate green yet? \u{b7} working",
+        lines.get(1).map(String::as_str),
+        Some("Open: is the gate green yet? \u{b7} working"),
         "{lines:?}"
     );
     // AC3-HP: one closed band, the typed turns directly around it.
@@ -1281,11 +1282,12 @@ async fn you_thread_band_pin_and_card() {
         .position(|t| t.trim_start().starts_with("> 12 messages from workers"))
         .expect("band line");
     assert_eq!(
-        lines[band].trim(),
-        "> 12 messages from workers: atticus 5, t-board 4, +2 more"
+        lines.get(band).map(|t| t.trim()),
+        Some("> 12 messages from workers: atticus 5, t-board 4, +2 more")
     );
-    let above = lines[..band].iter().rev().find(|t| !t.trim().is_empty());
-    let below = lines[band + 1..].iter().find(|t| !t.trim().is_empty());
+    let (before, after) = lines.split_at(band);
+    let above = before.iter().rev().find(|t| !t.trim().is_empty());
+    let below = after.iter().skip(1).find(|t| !t.trim().is_empty());
     assert_eq!(
         above.map(|t| t.trim()),
         Some("watch the fleet"),

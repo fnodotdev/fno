@@ -234,7 +234,8 @@ impl MessagesBoard {
         if let Some((i, word)) = pinned(&items) {
             let tail = format!(" \u{b7} {word}");
             let room = wrap_w.saturating_sub("Open: ".len() + tail.chars().count());
-            let typed = cut_chars(items[i].typed_text.lines().next().unwrap_or(""), room);
+            let first = items.get(i).and_then(|it| it.typed_text.lines().next());
+            let typed = cut_chars(first.unwrap_or(""), room);
             lines.push(TLine::of(&[
                 seg("Open: ", TextStyle::Badge),
                 seg(typed, TextStyle::Item),
