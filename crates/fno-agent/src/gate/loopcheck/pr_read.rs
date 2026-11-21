@@ -906,14 +906,19 @@ pub(super) fn read_pr_info(
         // cap that fires on a broken read spends a budget that may be
         // unspent.
         if !no_external && (!coverage.coverage.is_covered() || !blockers.is_empty()) {
+            // Same transport as Read 3: the coverage adapter answers the
+            // reviews read from the REST pages. The field set carries
+            // comments so the adapter's coverage matcher serves it; the
+            // parser below reads .reviews only.
+            let reviews_bin = coverage_adapter(gh_bin);
             let mut reviews_args = vec!["pr", "view"];
             reviews_args.extend(sel.iter().copied());
             if let Some((_, flag)) = repo_pin {
                 reviews_args.extend(flag);
             }
-            reviews_args.extend(["--json", "reviews"]);
+            reviews_args.extend(["--json", "reviews,comments"]);
             match bounded_read(
-                gh_bin.as_ref(),
+                reviews_bin.as_ref(),
                 &reviews_args,
                 cwd,
                 "pr_reviews",
@@ -976,7 +981,13 @@ pub(super) fn read_pr_info(
             blockers.iter().any(|b| b.hard),
         )
     } else {
-        // Read 3: top-level reviews + issue comments
+        // Read 3: top-level reviews + issue comments. The read rides the
+        // coverage adapter on EVERY intent, not only promise fires: under
+        // fno-gh-coverage this exact field set answers from the REST pages
+        // (the adapter's coverage_reviews), so a drained GraphQL bucket can
+        // no longer park the fire until its reset. The merge decision reads
+        // the same payload on both intents; the transport should not differ.
+        let reviews_bin = coverage_adapter(gh_bin);
         let mut reviews_args = vec!["pr", "view"];
         reviews_args.extend(sel.iter().copied());
         if let Some((_, flag)) = repo_pin {
@@ -984,7 +995,7 @@ pub(super) fn read_pr_info(
         }
         reviews_args.extend(["--json", "reviews,comments"]);
         let reviews_out = bounded_read(
-            gh_bin.as_ref(),
+            reviews_bin.as_ref(),
             &reviews_args,
             cwd,
             "pr_reviews",
@@ -1098,15 +1109,19 @@ pub(super) fn read_pr_info(
                 && blocking_severity(c.get("body").and_then(|v| v.as_str()).unwrap_or("")).is_some()
         });
         let commit_dates: Vec<String> = if has_blocking_candidate {
-            let mut commits_args = vec!["pr", "view"];
-            commits_args.extend(sel.iter().copied());
-            if let Some((_, flag)) = repo_pin {
-                commits_args.extend(flag);
-            }
-            commits_args.extend(["--json", "commits"]);
+            // Commit timestamps ride the REST commits endpoint, Read 4's
+            // shape, not `pr view --json commits`: the gh shape is a
+            // GraphQL read, and a drained GraphQL bucket must not park a
+            // fire whose only remaining question is a commit date.
+            // --paginate may emit CONCATENATED JSON arrays, so parse as a
+            // stream; committedDate lives at commit.committer.date here.
+            let commits_target = match repo_pin {
+                Some((slug, _)) => format!("repos/{slug}/pulls/{number}/commits"),
+                None => format!("repos/{{owner}}/{{repo}}/pulls/{number}/commits"),
+            };
             let commits_out = bounded_read(
                 gh_bin.as_ref(),
-                &commits_args,
+                &["api", &commits_target, "--paginate"],
                 cwd,
                 "pr_commits",
                 stopgate_read_timeout(),
@@ -1117,21 +1132,25 @@ pub(super) fn read_pr_info(
                     failed_read_tail(&commits_out),
                 ));
             }
-            let commits_json: Value = serde_json::from_slice(&commits_out.stdout)
-                .map_err(|_| GhReadError::parse_failed("pr_commits_parse"))?;
-            commits_json
-                .get("commits")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|c| {
-                            c.get("committedDate")
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.to_string())
-                        })
-                        .collect()
-                })
-                .unwrap_or_default()
+            let mut commit_dates: Vec<String> = Vec::new();
+            for page in
+                serde_json::Deserializer::from_slice(&commits_out.stdout).into_iter::<Value>()
+            {
+                let page = page.map_err(|_| GhReadError::parse_failed("pr_commits_parse"))?;
+                match page.as_array() {
+                    Some(arr) => commit_dates.extend(
+                        arr.iter()
+                            .filter_map(|c| {
+                                c.pointer("/commit/committer/date")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_string)
+                            })
+                            .collect::<Vec<_>>(),
+                    ),
+                    None => return Err(GhReadError::parse_failed("pr_commits_parse")),
+                }
+            }
+            commit_dates
         } else {
             Vec::new()
         };

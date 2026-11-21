@@ -3894,6 +3894,21 @@
       "title": "WatchdogBlock",
       "type": "object"
     },
+    "WebBlock": {
+      "description": "Web answer settings (nested under 'config.web').\n\n``invites`` rows stay raw tables: the bridge checks each one and names a refusal.",
+      "properties": {
+        "invites": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Invites",
+          "type": "array"
+        }
+      },
+      "title": "WebBlock",
+      "type": "object"
+    },
     "WordCapBlock": {
       "description": "Per-surface masked-word caps for style rule 7.\n\nOne number per surface that is read MID-TURN. The surface set itself lives\nin the style gate (crates/fno-agent/src/backlog/style_check.rs) and is not\nconfigurable: a project may move a number here, and may never cap a surface\nthe checker says is uncapped.\n\nBounds come from a validator, not from `Field(80, ge=1)`. A positional\ndefault plus a constraint makes mypy resolve this class's `default_factory`\nuse below as `Callable[[], Never]`, and `fno.config` is held to mypy strict.\n`MaintainBlock` above is the same shape for the same reason.",
       "properties": {
@@ -4296,6 +4311,9 @@
     },
     "user": {
       "$ref": "#/$defs/UserBlock"
+    },
+    "web": {
+      "$ref": "#/$defs/WebBlock"
     },
     "work": {
       "$ref": "#/$defs/WorkBlock"

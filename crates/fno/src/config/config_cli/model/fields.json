@@ -173,6 +173,12 @@
      }
     },
     {
+     "name": "web",
+     "default": {
+      "invites": []
+     }
+    },
+    {
      "name": "research",
      "default": {
       "output_dir": null
@@ -918,6 +924,15 @@
     {
      "name": "spaces_dir",
      "default": null
+    }
+   ]
+  },
+  "WebBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "invites",
+     "default": []
     }
    ]
   },
@@ -3594,6 +3609,7 @@
   "telemetry.usage_report.enabled",
   "attention.enabled",
   "attention.sinks",
+  "web.invites",
   "research.output_dir",
   "done_probes",
   "approvals.authorized_principals",

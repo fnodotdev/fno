@@ -195,7 +195,20 @@ pub fn record_outcome(request: &Request, facts: &PrFacts, outcome: &Outcome) {
     attrs.insert("path".into(), json!(path));
     attrs.insert("grant".into(), json!(grant));
     let journal = crate::law_match::project_events_journal_in(&request.cwd);
-    write_span(&journal, span_kind, trace_for(session, source), attrs);
+    write_span(
+        &journal,
+        span_kind,
+        trace_for(session.clone(), source),
+        attrs.clone(),
+    );
+    // The project journal is per-repo by design, so the feed (root store +
+    // agents journal) never saw a merge land. A landed merge mirrors the
+    // same span into the global journal beside the CI rows, so the feed's
+    // store holds a merge-landed row of its own.
+    if span_kind == "merge_landed" {
+        let global = crate::daemon::global_events_path(&crate::paths::AgentsHome::from_env());
+        write_span(&global, span_kind, trace_for(session, source), attrs);
+    }
 }
 
 /// The freeze history: one span when a merge freeze is set
@@ -560,11 +573,16 @@ mod tests {
         let rows = journal.rows();
         let kind = |r: &Value, k: &str| r["data"]["span_kind"] == k;
         let landed: Vec<_> = rows.iter().filter(|r| kind(r, "merge_landed")).collect();
-        assert_eq!(landed.len(), 1, "{rows:?}");
-        assert_eq!(landed[0]["data"]["path"], "pr_merge");
-        assert_eq!(landed[0]["data"]["pr"], 7);
-        assert_eq!(landed[0]["data"]["repo"], "o/r");
-        assert_eq!(landed[0]["data"]["head"], "abc123");
+        // Two rows: the project journal's own span and the global-journal
+        // mirror (the feed's store; the test target folds both writes into
+        // one file, so the count proves the mirror fired).
+        assert_eq!(landed.len(), 2, "{rows:?}");
+        for row in &landed {
+            assert_eq!(row.pointer("/data/path"), Some(&json!("pr_merge")));
+            assert_eq!(row.pointer("/data/pr"), Some(&json!(7)));
+            assert_eq!(row.pointer("/data/repo"), Some(&json!("o/r")));
+            assert_eq!(row.pointer("/data/head"), Some(&json!("abc123")));
+        }
         let armed_rows: Vec<_> = rows.iter().filter(|r| kind(r, "merge_armed")).collect();
         assert_eq!(armed_rows.len(), 2, "{rows:?}");
         let paths: Vec<_> = armed_rows

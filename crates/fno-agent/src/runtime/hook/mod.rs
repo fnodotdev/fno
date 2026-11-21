@@ -47,6 +47,7 @@ use std::path::{Path, PathBuf};
 /// Dispatch one hook entry by name. Transport, not a client command: `main()`
 /// calls this before the runtime builds, so a fire costs one process.
 pub fn dispatch(args: &[String]) -> i32 {
+    crate::runtime::terminal_stamp::stamp_from_env();
     match args.first().map(String::as_str) {
         Some("bg-process-guard") => bg_process_guard::run(&args[1..]),
         Some("backlog-impostor") => backlog_impostor::run(&args[1..]),

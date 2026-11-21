@@ -7,6 +7,7 @@
 //! A missing or corrupt file reads as no state: a first run and a damaged
 //! file both open the default window, never refuse to launch.
 
+use std::collections::HashSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -27,6 +28,17 @@ pub fn state_path() -> Option<PathBuf> {
             .join("fno-app")
             .join("window-state.json"),
     )
+}
+
+/// What the Workspaces section groups its rows by: the workspace's own
+/// nesting (the default), or flat bands by agent state or by machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GroupBy {
+    #[default]
+    Workspaces,
+    State,
+    Machine,
 }
 
 /// Which window mode the saved frame belongs to.
@@ -55,7 +67,14 @@ pub struct AppState {
     pub view: MainView,
     pub bounds: SavedBounds,
     pub pinned: Option<fno_proto::chat_event::SessionKey>,
-    pub agents_open: bool,
+    /// The left pane's folded workspaces, by fold key (canonical cwd, else
+    /// name); absence from the set means open, so an older file that
+    /// carries none opens every workspace.
+    #[serde(default)]
+    pub folds: HashSet<String>,
+    /// The Workspaces section's grouping; the default opens nested.
+    #[serde(default)]
+    pub group_by: GroupBy,
 }
 
 /// The ways a save can fail. Best-effort callers drop the error.
@@ -130,7 +149,8 @@ mod tests {
                 session_id: "abc123".into(),
                 subagent: None,
             }),
-            agents_open: true,
+            folds: HashSet::new(),
+            group_by: GroupBy::default(),
         }
     }
 
@@ -158,6 +178,24 @@ mod tests {
         std::fs::write(&corrupt, "{not json").unwrap();
         assert_eq!(load(&corrupt), None);
         let _ = std::fs::remove_file(&corrupt);
+    }
+
+    #[test]
+    fn a_v1_file_without_folds_still_loads_and_opens_every_workspace() {
+        // A state file written before the fold set existed carries no
+        // folds field; serde's default fills an empty set, so every
+        // workspace opens, and the agents_open field it does carry is
+        // ignored.
+        let path = tmp_path("pre-folds");
+        let _ = std::fs::remove_file(&path);
+        let text = format!(
+            r#"{{"version":{},"view":"Chat","bounds":{{"mode":"windowed","x":0.0,"y":0.0,"w":800.0,"h":600.0}},"pinned":null,"agents_open":true}}"#,
+            STATE_VERSION
+        );
+        std::fs::write(&path, text).unwrap();
+        let state = load(&path);
+        assert_eq!(state.map(|s| s.folds), Some(HashSet::new()));
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

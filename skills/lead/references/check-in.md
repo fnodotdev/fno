@@ -56,7 +56,7 @@ A failed reader prints `READER FAILED <name>: <reason>` on its own line, and the
 
 Keep a worker on the territory's top unplanned node. Run the command the line names: `start /fno:blueprint subagent <id>` or `target-ready: fno agent spawn "/fno:target <id>"` or `plan-ready: fno agent spawn "/fno:target <id>"`. Leave out `--name`. Spawn then names the worker for the node's slug, for example `t-visual-approval-gate`. A name carries no model. The registry row records the model the lane launched. This designs or builds work without a user request. The floor is `dispatch.blueprint_floor`. A lead can still blueprint one medium node by hand.
 
-For each `start`, `target-ready` or `plan-ready` line, run the command it names, in check-in order. Do not start nodes the check-in omits. Its list is the ceiling. A `skip` needs no action. The row records it. A chat ask blocks Stop (rule chat_ask_unfiled).
+For each `seat-lead`, `start`, `target-ready` or `plan-ready` line, run the command it names, in check-in order. Do not start nodes the check-in omits. Its list is the ceiling. A `skip` needs no action. The row records it. A chat ask blocks Stop (rule chat_ask_unfiled).
 
 Your job between beats is to start work. Run the `pick:` line. Keep every startable line started. Fold a `batch:` group with `fno backlog contain` before you spawn its members one by one, because one PR can close several nodes. Decide reversible in-scope questions yourself. Judge every look against the user's recorded words: see [Before you rule a look](visual-log-taps.md#before-you-rule-a-look). An empty blueprint slot beside a medium node is correct, not idle: a lead blueprints only high, size L, or premise-blocked nodes.
 

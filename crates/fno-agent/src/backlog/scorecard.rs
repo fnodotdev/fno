@@ -869,6 +869,58 @@ pub fn coverage(records: &[Value], dropped_unparsed: u64) -> Value {
     })
 }
 
+/// The pricing-relevant fields of one ledger row, typed at the parse
+/// boundary (docs/rust-style.md R1). An absent cost reads unpriced; an
+/// absent sessions list reads legacy, matching what the register writes
+/// for a run still in flight.
+#[derive(serde::Deserialize, Default)]
+struct PricingRow {
+    #[serde(default)]
+    cost_usd: Option<f64>,
+    #[serde(default)]
+    sessions: Vec<Value>,
+}
+
+/// The ledger's priced coverage behind the scorecard's cost columns: priced
+/// entries over all entries, the unpriced split into entries still carrying
+/// session ids (in-flight runs or transcripts that no longer resolve) and
+/// legacy entries with no session id at all, plus the rate-book presence -
+/// the reason every model reads unpriced at once on a host whose models.dev
+/// cache is missing. Computed from ledger fields plus one cache stat; never
+/// a fabricated zero.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub(crate) struct LedgerPricing {
+    pub priced: u64,
+    pub total: u64,
+    pub pct: i64,
+    pub unpriced_with_sessions: u64,
+    pub unpriced_legacy: u64,
+    pub book_present: bool,
+}
+
+pub(crate) fn priced_coverage(rows: &[Value], book_present: bool) -> LedgerPricing {
+    let parsed: Vec<PricingRow> = rows
+        .iter()
+        .filter_map(|r| serde_json::from_value(r.clone()).ok())
+        .collect();
+    let total = parsed.len() as u64;
+    let priced_n = parsed.iter().filter(|r| r.cost_usd.is_some()).count() as u64;
+    LedgerPricing {
+        priced: priced_n,
+        total,
+        pct: pct(priced_n, total),
+        unpriced_with_sessions: parsed
+            .iter()
+            .filter(|r| r.cost_usd.is_none() && !r.sessions.is_empty())
+            .count() as u64,
+        unpriced_legacy: parsed
+            .iter()
+            .filter(|r| r.cost_usd.is_none() && r.sessions.is_empty())
+            .count() as u64,
+        book_present,
+    }
+}
+
 /// Per-PR fail-review counts from the journal, the feed behind
 /// `review_findings_per_node`: one batched read over the same journal the
 /// friction read walks. `review_coverage` rows map each PR to the heads its
@@ -945,6 +997,24 @@ the review findings column reads as unknown rather than a measured zero."
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn priced_coverage_splits_unpriced_by_session_ids() {
+        let rows = vec![
+            json!({"cost_usd": 1.0, "sessions": ["a"]}),
+            json!({"cost_usd": 2.0, "sessions": []}),
+            json!({"cost_usd": Value::Null, "sessions": ["a"]}),
+            json!({"cost_usd": Value::Null, "sessions": []}),
+            json!({"sessions": ["a"]}),
+        ];
+        let cov = priced_coverage(&rows, false);
+        assert_eq!(cov.priced, 2, "{cov:?}");
+        assert_eq!(cov.total, 5);
+        assert_eq!(cov.pct, 40);
+        assert_eq!(cov.unpriced_with_sessions, 2);
+        assert_eq!(cov.unpriced_legacy, 1);
+        assert_eq!(cov.book_present, false);
+    }
 
     /// A merged node with one execute session; cost_sessions empty unless a
     /// cost is given, so the ledger fallback can fill it.

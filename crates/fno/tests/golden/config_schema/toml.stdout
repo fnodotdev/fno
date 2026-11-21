@@ -224,6 +224,10 @@ enabled = true
 # Push sinks for open questions: a list of tables with name, type (ntfy or webhook), url, topic, token_env, answer_base_url and body (title-only or full).
 sinks = []
 
+[web]
+# Who may answer on the HQ page over a tailnet: a list of tables with email, scope (* or a node id) and role (viewer, commenter, editor, owner).
+invites = []
+
 [research]
 # Landing dir for the `fno do research` doc deliverable (brief + sources sidecar); vault area, not repo-relative. Unset => ship fails loud (never guesses).
 # output_dir = <unset>   # optional; no default

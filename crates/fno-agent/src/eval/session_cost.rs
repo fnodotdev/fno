@@ -1056,10 +1056,55 @@ fn print_metrics(metrics: &SessionMetrics, as_json: bool) {
     println!("{}", "─".repeat(50));
 }
 
+/// Whether the incremental backfill touches a ledger entry at all: an entry
+/// already carrying a numeric cost and a token count is measured - KEEP,
+/// the common case that stops a full pass from re-parsing every transcript
+/// and stops taking minutes. Anything else recomputes.
+enum BackfillEntry {
+    Keep(f64),
+    Recompute,
+}
+
+fn backfill_entry_decision(cost_usd: Option<f64>, tokens_total: Option<f64>) -> BackfillEntry {
+    match (cost_usd, tokens_total) {
+        (Some(cost), Some(_)) => BackfillEntry::Keep(cost),
+        _ => BackfillEntry::Recompute,
+    }
+}
+
+/// The ledger-entry fields the backfill loop reads, typed at the parse
+/// boundary (docs/rust-style.md R1). Every field defaults: a legacy entry
+/// carrying none of them parses as unpriced rather than failing the pass.
+#[derive(Deserialize, Default)]
+struct BackfillEntryView {
+    #[serde(default)]
+    sessions: Vec<Value>,
+    #[serde(default)]
+    branch: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    cost_usd: Option<f64>,
+    #[serde(default)]
+    tokens_total: Option<f64>,
+}
+
+/// The cost field a backfill writes: the recompute's dollars when it priced,
+/// else the entry's measured cost preserved - an unpriced recompute never
+/// replaces a numeric cost with null. `None` recomputed over `None` existing
+/// stays null (unmeasured, never a zero).
+fn preserved_backfill_cost(existing_cost: Option<f64>, recomputed: Option<f64>) -> Value {
+    match recomputed {
+        Some(cost) => json!(py_round(cost, 2)),
+        None => existing_cost.map(|cost| json!(cost)).unwrap_or(Value::Null),
+    }
+}
+
 /// Recalculate costs for every ledger entry with branch-level attribution.
 /// One dedup set per entry (the logical sum): resumed sessions copy history
 /// lines into new transcript files, so per-file dedup alone would re-count
-/// history across the entry's sessions.
+/// history across the entry's sessions. Incremental: measured entries keep,
+/// the rest recompute with the preserve guard on cost.
 fn backfill_tasks_json(dry_run: bool) -> i32 {
     let ledger = crate::paths_cli::ledger_json(&std::env::current_dir().unwrap_or_default());
     if !ledger.exists() {
@@ -1086,15 +1131,16 @@ fn backfill_tasks_json(dry_run: bool) -> i32 {
         },
     };
     for entry in entries.iter_mut() {
-        let sessions = entry
-            .get("sessions")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let branch = entry
-            .get("branch")
-            .and_then(Value::as_str)
-            .map(str::to_string);
+        let view = serde_json::from_value::<BackfillEntryView>(entry.clone()).unwrap_or_default();
+        let sessions = view.sessions;
+        let branch = view.branch;
+        let title = view.title.unwrap_or_else(|| "Untitled".to_string());
+        let existing_cost = view.cost_usd;
+        let existing_tokens = view.tokens_total;
+        if let BackfillEntry::Keep(cost) = backfill_entry_decision(existing_cost, existing_tokens) {
+            println!("  KEEP: {title} - priced ${cost:.2}");
+            continue;
+        }
         let mut all_metrics: Vec<SessionMetrics> = Vec::new();
         let mut entry_seen: HashSet<DedupKey> = HashSet::new();
         for sid_value in &sessions {
@@ -1118,13 +1164,7 @@ fn backfill_tasks_json(dry_run: bool) -> i32 {
             all_metrics.push(metrics);
         }
         if all_metrics.is_empty() {
-            println!(
-                "  SKIP: {} — no transcripts found",
-                entry
-                    .get("title")
-                    .and_then(Value::as_str)
-                    .unwrap_or("Untitled")
-            );
+            println!("  SKIP: {title} - no transcripts found");
             continue;
         }
         let combined = merge_metrics(&all_metrics);
@@ -1132,33 +1172,31 @@ fn backfill_tasks_json(dry_run: bool) -> i32 {
             Some(name) => format!("branch:{name}"),
             None => "full session".to_string(),
         };
-        println!(
-            "\n  {}",
-            entry
-                .get("title")
-                .and_then(Value::as_str)
-                .unwrap_or("Untitled")
-        );
+        println!("\n  {title}");
         println!("    Attribution: {attribution}");
         println!(
             "    Cost: ${:.2} (was: ${:.2})",
             combined.cost_usd,
-            entry.get("cost_usd").and_then(Value::as_f64).unwrap_or(0.0)
+            existing_cost.unwrap_or(0.0)
         );
+        if combined.unpriced && existing_cost.is_some() {
+            println!(
+                "    Keeps measured cost: ${:.2} - an unpriced recompute never nulls a priced entry",
+                existing_cost.unwrap_or(0.0)
+            );
+        }
         println!(
             "    Tokens: {} | Compactions: {}",
             format_tokens(combined.total_tokens()),
             combined.compaction_count
         );
         if !dry_run {
-            entry["cost_usd"] = if combined.unpriced {
-                Value::Null
-            } else {
-                json!(py_round(combined.cost_usd, 2))
-            };
+            let recomputed = (!combined.unpriced).then(|| combined.cost_usd);
+            entry["cost_usd"] = preserved_backfill_cost(existing_cost, recomputed);
             entry["tokens_total"] = json!(combined.total_tokens());
             entry["cache_read_tokens"] = json!(combined.cache_read_tokens);
             entry["compactions"] = json!(combined.compaction_count);
+            entry["duration_minutes"] = json!(py_round(combined.duration_minutes(), 1));
         }
     }
     if dry_run {
@@ -1533,5 +1571,36 @@ mod tests {
         // Unpriced model: null cost, never a fallback tier.
         assert_eq!(out["cost_usd"], serde_json::Value::Null);
         assert_eq!(out["unpriced_model"], "m1");
+    }
+
+    /// The incremental backfill's decision and cost guard, one table: a
+    /// measured entry keeps instead of re-parsing; a missing cost or token
+    /// count recomputes; the write never replaces a measured cost with
+    /// null. Covers `backfill_entry_decision` and `preserved_backfill_cost`
+    /// on the same rows a real pass sees.
+    #[test]
+    fn backfill_decision_and_cost_preserve_table() {
+        assert!(
+            matches!(
+                backfill_entry_decision(Some(6.72), Some(1_000.0)),
+                BackfillEntry::Keep(cost) if cost == 6.72
+            ),
+            "a measured entry keeps instead of re-parsing"
+        );
+        for (cost, tokens) in [(None, None), (Some(6.72), None), (None, Some(10.0))] {
+            assert!(
+                matches!(
+                    backfill_entry_decision(cost, tokens),
+                    BackfillEntry::Recompute
+                ),
+                "a missing cost or token count recomputes: {cost:?}/{tokens:?}"
+            );
+        }
+        // A priced recompute writes the new dollars; an unpriced recompute
+        // keeps the measured ones; unpriced over unmeasured stays null,
+        // never a zero.
+        assert_eq!(preserved_backfill_cost(Some(6.72), Some(9.5)), json!(9.5));
+        assert_eq!(preserved_backfill_cost(Some(6.72), None), json!(6.72));
+        assert_eq!(preserved_backfill_cost(None, None), Value::Null);
     }
 }
