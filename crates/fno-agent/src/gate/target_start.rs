@@ -931,6 +931,13 @@ pub(crate) fn claim_names_current_session(holder: &str, rec: &crate::claims::Cla
         if handover_row_is_ours(&entries, worker, own_sid.as_deref()) {
             return true;
         }
+        // The harness stamps its own session id into the worker's env. A
+        // spawned row can carry no pid, and the resolver can decline an env
+        // it reads as inherited; the stamped id still names the row.
+        let env_sid = std::env::var("CLAUDE_CODE_SESSION_ID").ok();
+        if handover_row_is_ours(&entries, worker, env_sid.as_deref()) {
+            return true;
+        }
         // The pid proof: a worker whose session-id markers do not resolve
         // in its own subprocess still descends from the harness process the
         // spawn registered under its name.
