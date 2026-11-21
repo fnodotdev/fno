@@ -24,6 +24,7 @@ pub mod attention_file;
 pub mod attention_http;
 pub mod attention_reply;
 pub mod attention_route;
+pub mod battery_save;
 pub mod board_render_arm;
 pub(crate) mod boot_revival;
 pub mod burn_watch;

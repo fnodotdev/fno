@@ -32,6 +32,9 @@ pub(super) struct FleetArms {
     tool_scan_in_flight: Arc<std::sync::atomic::AtomicBool>,
     last_tool_scan: Instant,
     // The periodic arms: each module owns its cadence, gate and memory.
+    // The battery-save arm: at or below 5% on battery, flush the outbox and
+    // checkpoint the graph so a dead-battery shutdown restores clean.
+    battery_save: crate::battery_save::Arm,
     build_marks: crate::build_marks::Arm,
     machine_watch: crate::machine_watch::Arm,
     claude_restart_watch: crate::claude_restart_watch::Arm,
@@ -151,6 +154,7 @@ impl FleetArms {
             last_tool_scan: Instant::now(),
             machine_watch: crate::machine_watch::Arm::default(),
             claude_restart_watch: crate::claude_restart_watch::Arm::default(),
+            battery_save: crate::battery_save::Arm::default(),
             build_marks: crate::build_marks::Arm::default(),
             merge_close: crate::merge_close::Arm::default(),
             symptom_recheck: crate::symptom_recheck::Arm::default(),
@@ -377,6 +381,7 @@ impl FleetArms {
             ctx.home.events_jsonl(),
         );
         crate::machine_watch::maybe_tick(&self.machine_watch, ctx.home.clone());
+        crate::battery_save::maybe_tick(&self.battery_save);
         crate::claude_restart_watch::maybe_tick(&self.claude_restart_watch, ctx.home.clone());
         crate::merge_close::maybe_tick(&self.merge_close, ctx.home.clone());
         crate::symptom_recheck::maybe_tick(&self.symptom_recheck, ctx.home.clone());
