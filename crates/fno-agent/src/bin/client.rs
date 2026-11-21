@@ -4096,10 +4096,6 @@ fn parse_switch_flag(
         "--force" | "-F" => {
             params.insert("force".into(), Value::Bool(true));
         }
-        "--cross-project" if command == "rm" || command == "stop" => {
-            // Retired (d-460ea8c7): the store heal is machine-wide;
-            // accepted as a silent no-op for one release.
-        }
         "--dry-run" if command == "spawn" => {
             // Plan the spawn and print it; launch, register and settle nothing.
             params.insert("dry_run".into(), Value::Bool(true));

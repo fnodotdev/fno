@@ -85,8 +85,6 @@ pub fn parse_resume_args(rest: &[String]) -> Result<ResumeArgs, i32> {
     while let Some(a) = iter.next() {
         match a.as_str() {
             "--print-command" => parsed.print_command = true,
-            // Retired (d-460ea8c7): healing is machine-wide; silent no-op.
-            "--cross-project" => {}
             "--dry-run" => parsed.dry_run = true,
             "--allow-new-id" => parsed.allow_new_id = true,
             "--message-already-queued" => parsed.message_already_queued = true,
