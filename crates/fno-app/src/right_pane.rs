@@ -441,8 +441,7 @@ fn card_frame(
         .flex_row()
         .items_center()
         .gap(px(6.0))
-        .child(one_line(title.to_string(), Role::Name, p))
-        .child(div().flex_1())
+        .child(ui::clamp(title.to_string(), Role::Name, p))
         .children(count.map(|n| ui::text(n.to_string(), Role::Fact, p)))
         .child(
             div()
@@ -477,20 +476,6 @@ fn card_frame(
     }
 }
 
-/// One line that ends in an ellipsis at the card's edge. Not `ui::clamp`:
-/// gpui reuses a nowrap text layout's first, untruncated size, so a
-/// `truncate()` here clips mid-glyph. A one-line clamp keeps the wrap
-/// width in the layout key and draws the ellipsis. No `flex_1`: a zero
-/// basis measures the text at min-content and wraps after one word, so the
-/// line keeps its natural basis and only shrinks, as the breadcrumb does.
-fn one_line(t: impl Into<gpui::SharedString>, r: Role, p: &Palette) -> Div {
-    ui::role(div(), r, p)
-        .min_w_0()
-        .line_clamp(1)
-        .text_ellipsis()
-        .child(t.into())
-}
-
 /// A line that opens `target` on click.
 fn link_line(
     id: String,
@@ -507,7 +492,7 @@ fn link_line(
         .w_full()
         .cursor_pointer()
         .hover(move |s| s.text_color(rgb(p.fg)))
-        .child(one_line(text, Role::Body, &p))
+        .child(ui::clamp(text, Role::Body, &p))
         .on_click(cx.listener(move |root, _, _, cx| root.act_panel(action.clone(), cx)))
 }
 
@@ -583,9 +568,8 @@ fn changes_card(
                         .flex_row()
                         .w_full()
                         .gap(px(6.0))
-                        .child(one_line(path.clone(), Role::Meta, p))
-                        .child(div().flex_1())
-                        .child(ui::text(format!("+{add} -{del}"), Role::Fact, p).flex_none()),
+                        .child(ui::clamp(path.clone(), Role::Meta, p))
+                        .child(ui::text(format!("+{add} -{del}"), Role::Fact, p)),
                 );
             }
             if n > TOP {
@@ -730,7 +714,7 @@ fn questions_card(
                 .cursor_pointer()
                 .hover(move |s| s.bg(rgb(pp.hover)))
                 .child(div().flex_none().text_color(rgb(p.warn)).child("◆"))
-                .child(one_line(q.item.title.clone(), Role::Body, p))
+                .child(ui::clamp(q.item.title.clone(), Role::Body, p))
                 .on_click(cx.listener(move |root, _, _, cx| root.act(action.clone(), cx))),
         );
     }
