@@ -608,12 +608,16 @@ where
         for w in 0..workers {
             let start = (w * chunk).min(deliveries.len());
             let end = (start + chunk).min(deliveries.len());
-            let slice = &deliveries[start..end];
+            let slice = deliveries.get(start..end).unwrap_or(&[]);
             let slots = &slots;
             handles.push(scope.spawn(move || {
                 let mut acc = Acc::default();
                 let part: Vec<Option<R>> = slice.iter().map(|d| task(d, &mut acc)).collect();
-                slots.lock().expect("fold slots")[w] = Some((part, acc));
+                *slots
+                    .lock()
+                    .expect("fold slots")
+                    .get_mut(w)
+                    .expect("worker slot exists") = Some((part, acc));
             }));
         }
         for handle in handles {
