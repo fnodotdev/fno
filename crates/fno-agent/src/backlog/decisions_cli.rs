@@ -534,7 +534,9 @@ impl<'a> Matcher<'a> {
         }
     }
 
-    fn matches(&self, recorded: &str) -> bool {
+    /// `recorded_at` is the row's own timestamp: a number-spelled subject
+    /// never names a node created after the ruling.
+    fn matches(&self, recorded: &str, recorded_at: Option<&str>) -> bool {
         if recorded.trim().to_lowercase() == self.want {
             return true;
         }
@@ -542,14 +544,11 @@ impl<'a> Matcher<'a> {
             return false;
         };
         let mut cache = self.cache.borrow_mut();
-        if !cache.contains_key(recorded) {
-            let resolved = self.index.resolve_id(recorded).or_else(|| {
-                self.index
-                    .resolve_id(recorded.trim().to_lowercase().as_str())
-            });
-            cache.insert(recorded.to_string(), resolved);
-        }
-        cache.get(recorded).and_then(|r| r.as_deref()) == Some(node.as_str())
+        let key = format!("{recorded}\u{0}{}", recorded_at.unwrap_or(""));
+        let resolved = cache
+            .entry(key)
+            .or_insert_with(|| self.index.resolve_stored_id(recorded, recorded_at));
+        resolved.as_deref() == Some(node.as_str())
     }
 }
 /// The listing read, `list_decisions` verbatim: store rows flattened and
@@ -781,7 +780,9 @@ pub(crate) fn list_core_over(
         if let Some(_subject) = subject {
             let mut keep = !want_id.is_empty() && id_of(row).to_lowercase() == want_id;
             if !keep {
-                keep = matcher.as_ref().is_some_and(|m| m.matches(subject_of(row)));
+                keep = matcher
+                    .as_ref()
+                    .is_some_and(|m| m.matches(subject_of(row), Some(rows_str(row, "ts"))));
             }
             if !keep {
                 continue;
@@ -1070,7 +1071,10 @@ pub(crate) fn near_miss_subjects(
     for row in rows {
         let recorded = subject_of(row);
         let folded = recorded.trim().to_lowercase();
-        if folded.is_empty() || folded == want || matcher.matches(recorded) {
+        if folded.is_empty()
+            || folded == want
+            || matcher.matches(recorded, Some(rows_str(row, "ts")))
+        {
             continue;
         }
         if want.contains(&folded) || folded.contains(&want) {

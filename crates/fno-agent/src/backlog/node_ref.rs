@@ -233,6 +233,30 @@ impl<'a> ResolutionIndex<'a> {
     /// legacy `ab-`, dash variants. A dash-leading query refuses before any
     /// lookup, the leaked-flag contract.
     pub fn resolve(&self, query: &str) -> Option<&'a Value> {
+        self.resolve_tiers_with(query, true)
+    }
+
+    /// `resolve_twice` for a subject a row recorded at `recorded_at`. A hit
+    /// through the number tier alone must name a node that existed by then:
+    /// an all-digit hash id whose node is gone would otherwise
+    /// attach to the later node that took that display number. Either
+    /// timestamp unreadable keeps the plain answer.
+    pub fn resolve_stored_id(&self, stored: &str, recorded_at: Option<&str>) -> Option<String> {
+        let stored = stored.trim();
+        let hit = self
+            .resolve_tiers_with(stored, true)
+            .or_else(|| self.resolve_tiers_with(stored.to_lowercase().as_str(), true))?;
+        let exact = self.resolve_tiers_with(stored, false).is_some()
+            || self
+                .resolve_tiers_with(stored.to_lowercase().as_str(), false)
+                .is_some();
+        if !exact && created_after(hit, recorded_at) {
+            return None;
+        }
+        entry_id_string(hit)
+    }
+
+    fn resolve_tiers_with(&self, query: &str, number_tier: bool) -> Option<&'a Value> {
         if query.starts_with('-') {
             return None;
         }
@@ -242,9 +266,11 @@ impl<'a> ResolutionIndex<'a> {
         if let Some(e) = self.by_alias.get(query) {
             return Some(e);
         }
-        if let Some(id) = crate::numbers::resolve_node(query) {
-            if let Some(e) = self.by_id.get(id.as_str()) {
-                return Some(e);
+        if number_tier {
+            if let Some(id) = crate::numbers::resolve_node(query) {
+                if let Some(e) = self.by_id.get(id.as_str()) {
+                    return Some(e);
+                }
             }
         }
         let q_lc = query.to_lowercase();
@@ -269,9 +295,7 @@ impl<'a> ResolutionIndex<'a> {
 
     /// The id `resolve` lands on: the `resolved_once` shape over the index.
     pub fn resolve_id(&self, query: &str) -> Option<String> {
-        self.resolve(query)
-            .and_then(|e| e.get("id").and_then(Value::as_str))
-            .map(str::to_string)
+        self.resolve(query).and_then(entry_id_string)
     }
 
     /// The matcher's two-call dance over the index: the spelling, then its
@@ -279,6 +303,21 @@ impl<'a> ResolutionIndex<'a> {
     pub fn resolve_twice(&self, stripped: &str) -> Option<String> {
         self.resolve_id(stripped)
             .or_else(|| self.resolve_id(stripped.to_lowercase().as_str()))
+    }
+}
+
+fn entry_id_string(entry: &Value) -> Option<String> {
+    entry["id"].as_str().map(str::to_string)
+}
+
+/// Whether a node was created after `at`. An unreadable stamp on either side
+/// answers false: the caller keeps the plain resolution.
+fn created_after(node: &Value, at: Option<&str>) -> bool {
+    let parse = |s: &str| chrono::DateTime::parse_from_rfc3339(s).ok();
+    let created = node["created_at"].as_str().and_then(parse);
+    match (created, at.and_then(parse)) {
+        (Some(created), Some(at)) => created > at,
+        _ => false,
     }
 }
 
@@ -671,6 +710,15 @@ pub fn release_contained(entries: &mut [Value], node_id: &str) -> Result<(), Str
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_node_created_after_the_ruling_is_never_its_subject() {
+        let node = json!({"id": "x-aaaa", "created_at": "2026-10-12T16:10:19+00:00"});
+        assert!(created_after(&node, Some("2026-08-25T00:00:00Z")));
+        assert!(!created_after(&node, Some("2026-11-01T00:00:00Z")));
+        assert!(!created_after(&node, None));
+        assert!(!created_after(&node, Some("not a time")));
+    }
 
     #[test]
     fn resolvers_refuse_a_flag_shaped_token_before_the_graph() {

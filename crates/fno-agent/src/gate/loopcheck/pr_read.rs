@@ -358,7 +358,11 @@ pub(crate) fn session_node_pr_repo(cwd: &Path, pr: u64) -> Option<String> {
         Ok(Some(n)) => n,
         _ => return None,
     };
-    pr_repo_from_rows(&numbered_pr_rows(&node), pr)
+    let rows: Vec<_> = numbered_pr_rows(&node)
+        .into_iter()
+        .map(|(number, status, history, url, _)| (number, status, history, url))
+        .collect();
+    pr_repo_from_rows(&rows, pr)
 }
 
 /// The pure half of [`session_node_pr_repo`]: the url slug of the numbered
