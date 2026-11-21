@@ -1312,7 +1312,8 @@ mod tests {
                 row("req-c", "2026-11-19T00:00:00Z"),
             ]))
             .as_bytes(),
-        );
+        )
+        .unwrap();
         let mut undated = api_request("req-d", "sess-fwd", 1);
         undated["attributes"] = json!([
             {"key": "event.name", "value": {"stringValue": "api_request"}},
@@ -1323,7 +1324,8 @@ mod tests {
             &db,
             &agents.events_jsonl(),
             body(json!([undated])).as_bytes(),
-        );
+        )
+        .unwrap();
         let got = requests_in_window(&db, cutoff).unwrap();
         let keys: Vec<&str> = got.iter().map(|r| r.dedupe_key.as_str()).collect();
         assert_eq!(
