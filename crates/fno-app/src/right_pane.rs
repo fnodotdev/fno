@@ -712,9 +712,16 @@ fn add_row(root: &Root, p: &Palette, cx: &mut Context<Root>) -> Div {
         .into_iter()
         .filter(|(target, _)| !shown.contains(target.as_str()))
         .collect();
-    for id in DEFAULT_CARDS {
+    let builtin = [
+        ("fno.pr", "Pull request"),
+        ("fno.changes", "Changes"),
+        ("fno.context", "Context"),
+        ("fno.outputs", "Outputs"),
+        ("fno.questions", "Questions"),
+    ];
+    for (id, title) in builtin {
         if !shown.contains(id) {
-            offered.insert(id.to_string(), id.to_string());
+            offered.insert(id.to_string(), title.to_string());
         }
     }
     if offered.is_empty() {
