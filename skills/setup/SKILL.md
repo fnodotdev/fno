@@ -56,6 +56,10 @@ The step refuses a file it cannot merge safely, such as an opencode file with co
 
 The run writes `<state_dir>/sidecar/wizard-report.json`. It prints the path as `wizard-report: <path>`. Check that `run_id` is newer than your launch. Also check that `status` is not `running`. The run writes a `running` stub before the final report. Then report the red rows and their fixes, the files it wrote, and `next_action`.
 
+## Offer the vision draft
+
+After the report, check the repo this setup serves for the judge's three vision homes (`VISION.md`, `.agents/context/VISION.md`, `docs/vision.md`) and for a set `config.project.vision`. When all are absent, offer the draft: `/fno:vision` detects the gap, drafts VISION.md from the repo's own material, and opens it as a PR the user edits and merges. Start nothing without a yes. A turn the user typed may ask in chat; a machine wake files the question page instead. The full procedure and the mode split: [skills/vision/SKILL.md](../vision/SKILL.md).
+
 ## Modes
 
 | Invocation | Effect |
