@@ -1,0 +1,17 @@
+# Capability: the vision skill's detection list stays the judge's own
+# three-home list. The skill text cites vision_file in
+# crates/fno-agent/src/eval/blueprint_judge.rs as the authority and says
+# never to keep a second list; this eval makes that citation a checked
+# invariant, so a Rust-side list change reds here instead of drifting.
+id: vision-detection-list-matches-judge
+tier: regression
+prompt: |
+  No agent work. This is a graded invariant check: the three homes in
+  skills/vision/SKILL.md step 1 (Detect) must equal, in order, the list
+  vision_file reads in crates/fno-agent/src/eval/blueprint_judge.rs.
+  Run python3 skills/vision/evals/check-detection-list.py to see it pass.
+grade:
+  - kind: exit
+    command: "python3 skills/vision/evals/check-detection-list.py"
+timeout_minutes: 5
+tags: [vision, drift-guard]
