@@ -118,8 +118,8 @@ pub(crate) fn json_line_with_hold_pass(
         "to": to,
         "status": status,
     });
-    if let Some(p) = hold_pass {
-        v["hold_pass"] = json!(p);
+    if let (Some(p), Some(obj)) = (hold_pass, v.as_object_mut()) {
+        obj.insert("hold_pass".to_string(), json!(p));
     }
     v.to_string()
 }
