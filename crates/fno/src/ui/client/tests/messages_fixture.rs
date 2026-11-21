@@ -1182,6 +1182,94 @@ async fn messages_wheel_scrolls_pointer_column() {
     crate::view_store::clear_test_path();
 }
 
+/// An empty board names the import command; a board with rows (and the
+/// not-read-yet arm) never does.
+#[tokio::test]
+async fn messages_empty_board_names_the_backfill_import() {
+    use super::super::LayoutView;
+    use serde_json::json;
+    let mut view = View::new(
+        (24, 100),
+        "main".into(),
+        LayoutView {
+            squads: Vec::new(),
+            active_squad: 0,
+            panes: Vec::new(),
+            focus: 0,
+            area: (0, 0),
+            agents: Vec::new(),
+            focus_node: None,
+        },
+    );
+    check_fixture(&mut view);
+    let prefs = tempfile::tempdir().unwrap();
+    crate::view_store::set_test_path(prefs.path());
+    let b = view.messages_board.as_mut().expect("open");
+    b.snapshot.apply(json!({
+        "participants": [],
+        "threads": [],
+        "channels": [],
+        "announcements": [],
+        "unreadable": 0,
+    }));
+    let text = b
+        .tree_column(100)
+        .iter()
+        .map(|l| l.text.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        text.contains("fno mail admin backfill --all --apply"),
+        "the empty board must name the import command: {text}"
+    );
+    // The withhold arm: a board with rows never names the import.
+    b.snapshot.apply(json!({
+        "participants": [
+            {"key":"s1","name":"first","system":false,"live":true,"last_ts":"2026-10-01T09:00:00Z"}
+        ],
+        "threads": [
+            {"chat_id":"chat-x1","participants":["s1"],
+             "rows":[{"id":"m1","ts":"2026-10-01T09:00:00Z","from":"first","from_key":"s1","to_key":"s1","summary":"hi","body":"hi","system":false}],
+             "last_ts":"2026-10-01T09:00:00Z"}
+        ],
+        "channels": [],
+        "announcements": [],
+        "unreadable": 0,
+    }));
+    let text = b
+        .tree_column(100)
+        .iter()
+        .map(|l| l.text.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !text.contains("backfill"),
+        "a board with rows never names the import: {text}"
+    );
+    // The Archive arm: an empty archive withholds the import line too. Its
+    // emptiness is by design, not a missing import.
+    b.list_tab = ListTab::Archive;
+    b.snapshot.apply(json!({
+        "participants": [],
+        "threads": [],
+        "channels": [],
+        "announcements": [],
+        "unreadable": 0,
+    }));
+    let text = b
+        .tree_column(100)
+        .iter()
+        .map(|l| l.text.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !text.contains("backfill"),
+        "an empty archive never names the import: {text}"
+    );
+    b.list_tab = ListTab::Agents;
+    crate::view_store::clear_test_path();
+}
+
 /// The lead's You thread folds worker mail into one band per gap, pins the
 /// newest open ask, keeps a band open across a refresh, and paints the
 /// since-you-left card only when something is newer than the read mark.
