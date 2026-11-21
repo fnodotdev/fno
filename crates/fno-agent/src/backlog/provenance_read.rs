@@ -909,6 +909,10 @@ pub fn run(tail: &[String]) -> i32 {
     0
 }
 
+#[path = "provenance_render_tests.rs"]
+#[cfg(test)]
+mod provenance_render_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -944,29 +948,6 @@ mod tests {
             .map(|(_, r)| text_at(r, "id").unwrap())
             .collect();
         assert_eq!(ids, ["b", "c"]);
-    }
-
-    #[test]
-    fn provenance_renders_primary_and_every_additional_pr() {
-        let row = json!({
-            "pr_number": 289,
-            "pr_url": "https://github.com/fnodotdev/fno/pull/289",
-            "merge_status": "merged",
-            "additional_prs": [
-                {"number": 351, "url": "https://github.com/fnodotdev/fno/pull/351", "merge_status": "merged", "note": "folded"},
-                {"number": 244, "url": "https://github.com/footnote-sh/fno-web/pull/244", "merge_status": "merged", "note": "docs"},
-                {"number": 7}
-            ]
-        });
-        let lines = render_pr_lines(&row);
-        assert_eq!(lines.len(), 4);
-        assert_eq!(
-            lines[0],
-            "  pr: #289 https://github.com/fnodotdev/fno/pull/289 (fnodotdev/fno, merged)"
-        );
-        assert_eq!(lines[1], "  pr: #351 https://github.com/fnodotdev/fno/pull/351 (fnodotdev/fno, merged, note: folded)");
-        assert_eq!(lines[2], "  pr: #244 https://github.com/footnote-sh/fno-web/pull/244 (footnote-sh/fno-web, merged, note: docs)");
-        assert_eq!(lines[3], "  pr: #7");
     }
 
     #[test]

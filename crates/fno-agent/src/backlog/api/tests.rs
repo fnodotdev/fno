@@ -496,11 +496,12 @@ fn pull_request_record_appends_beside_an_empty_primary_and_refuses_a_duplicate()
     assert!(first.success);
     let node = first.node.as_ref().unwrap();
     assert!(node.primary_pr.is_none());
-    let extras = node.additional_prs.as_ref().unwrap();
+    let extras = node.additional_prs.as_deref().unwrap_or_default();
     assert_eq!(extras.len(), 1);
-    assert_eq!(extras[0].number, Some(244));
-    assert_eq!(extras[0].merge_status.as_deref(), Some("merged"));
-    assert_eq!(extras[0].note.as_deref(), Some("docs"));
+    let extra = extras.first().expect("one recorded entry");
+    assert_eq!(extra.number, Some(244));
+    assert_eq!(extra.merge_status.as_deref(), Some("merged"));
+    assert_eq!(extra.note.as_deref(), Some("docs"));
     let again = pull_request_record(
         &store,
         "ab-one",
