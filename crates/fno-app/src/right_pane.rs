@@ -467,10 +467,12 @@ fn card_frame(
         .border_1()
         .border_color(rgb(p.border))
         .child(header);
+    // The body takes the card's width, so a row's clamp truncates against
+    // that width rather than collapsing to its own min-content of zero.
     if folded {
         frame
     } else {
-        frame.child(body)
+        frame.child(body.w_full().min_w_0())
     }
 }
 
@@ -486,6 +488,8 @@ fn link_line(
     let p = *p;
     div()
         .id(ElementId::Name(id.into()))
+        .flex()
+        .w_full()
         .cursor_pointer()
         .hover(move |s| s.text_color(rgb(p.fg)))
         .child(ui::clamp(text, Role::Body, &p))
@@ -562,6 +566,7 @@ fn changes_card(
                     div()
                         .flex()
                         .flex_row()
+                        .w_full()
                         .gap(px(6.0))
                         .child(ui::clamp(path.clone(), Role::Meta, p))
                         .child(ui::text(format!("+{add} -{del}"), Role::Fact, p)),
@@ -702,6 +707,7 @@ fn questions_card(
                 .id(ElementId::Name(format!("right-q-{i}").into()))
                 .flex()
                 .flex_row()
+                .w_full()
                 .min_w_0()
                 .overflow_hidden()
                 .gap(px(6.0))

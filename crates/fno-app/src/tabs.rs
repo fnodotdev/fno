@@ -169,15 +169,21 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
         .items_center()
         .gap_2();
     let chat = root.chat.key.as_ref().map(|k| k.session_id.as_str());
-    for (i, part) in context(&root.layout, root.main, chat)
-        .into_iter()
-        .enumerate()
-    {
+    let parts = context(&root.layout, root.main, chat);
+    let last = parts.len().saturating_sub(1);
+    for (i, part) in parts.into_iter().enumerate() {
         if i > 0 {
-            here = here.child(ui::role(div(), Role::Hint, &p).child("/"));
+            here = here.child(ui::role(div(), Role::Hint, &p).flex_none().child("/"));
         }
         let r = if i == 1 { Role::Heading } else { Role::Meta };
-        here = here.child(ui::role(div(), r, &p).whitespace_nowrap().child(part));
+        // Only the agent name gives way, and it ends in an ellipsis.
+        let cell = ui::role(div(), r, &p).whitespace_nowrap();
+        let cell = if i == last && i > 1 {
+            cell.min_w_0().truncate()
+        } else {
+            cell.flex_none()
+        };
+        here = here.child(cell.child(part));
     }
     let mut tabs = div().flex().flex_row().h_full().min_w_0().overflow_hidden();
     if root.main == MainView::Terminal {
