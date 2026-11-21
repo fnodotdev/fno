@@ -50,3 +50,14 @@ default = true
 [rule.when]
 events = ["journal:operator_question"]
 predicates = ["actor_is_session", "reversible", "has_recommendation", "why_user_set", "not:class_user_only"]
+
+[[rule]]
+id = "lead_idle_pick_unanswered"
+action = "block"
+what = "your beat offered a pick and your scope has no live worker"
+why = "an idle fleet is the lead's defect to fix; a start the spawn gate refused is the gate's evidence to carry, an untaken pick is not"
+instead = "run the pick's command, or answer the beat with --pick \"<what you started>\"; a spawn the gate refused lets the stop pass"
+default = true
+[rule.when]
+events = ["stop"]
+predicates = ["promoted", "lead_idle_reactive_pick", "not:lead_spawn_gate_refused"]
