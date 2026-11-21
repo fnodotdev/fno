@@ -1136,12 +1136,8 @@ pub fn record_parked(
     };
     let path = parked_path(home);
     let lock_path = path.with_extension("json.lock");
-    let lock = match crate::chokepoint::take(&crate::chokepoint::FLEET_STOP_PARKED, &lock_path) {
-        Ok(lock) => lock,
-        Err(refused) => {
-            eprintln!("fleet-incident: parked record busy: {}", refused.row);
-            return;
-        }
+    let Some(lock) = parked_lock(&lock_path) else {
+        return;
     };
     let mut all = read_parked(&path);
     // One row per session, not one per stop: a second park refreshes the
@@ -1198,6 +1194,17 @@ pub fn wake_parked(
     wake_parked_with(home, target, &mut deliver_resume)
 }
 
+/// Take the parked-sidecar chokepoint lock, naming a refusal on stderr.
+fn parked_lock(lock_path: &Path) -> Option<crate::chokepoint::Held> {
+    match crate::chokepoint::take(&crate::chokepoint::FLEET_STOP_PARKED, lock_path) {
+        Ok(lock) => Some(lock),
+        Err(refused) => {
+            eprintln!("fleet-incident: parked record busy: {}", refused.row);
+            None
+        }
+    }
+}
+
 /// [`wake_parked`] with the delivery lane injected, so tests read the plan
 /// instead of shelling the resume door.
 fn wake_parked_with(
@@ -1206,21 +1213,19 @@ fn wake_parked_with(
     deliver: &mut dyn FnMut(&Parked) -> Result<(), &'static str>,
 ) -> (Vec<String>, Vec<(String, &'static str)>) {
     let path = parked_path(home);
-    // The same single-writer rule the park side runs under: a clear racing
-    // a park would lose the row the park wrote.
     let lock_path = path.with_extension("json.lock");
-    let lock = match crate::chokepoint::take(&crate::chokepoint::FLEET_STOP_PARKED, &lock_path) {
-        Ok(lock) => lock,
-        Err(refused) => {
-            eprintln!(
-                "fleet-incident: parked record busy, no wake this clear: {}",
-                refused.row
-            );
+    // Phase 1, locked: read and plan. The lock drops before any delivery -
+    // a resume can take minutes, and a park racing the clear must not
+    // starve on the chokepoint wait, or its row is lost for good.
+    let to_wake = {
+        let Some(lock) = parked_lock(&lock_path) else {
             return (Vec::new(), Vec::new());
-        }
+        };
+        let planned = plan_wakes(&read_parked(&path), target).0;
+        let _ = lock.unlock();
+        planned
     };
-    let rows = read_parked(&path);
-    let (to_wake, remaining) = plan_wakes(&rows, target);
+    // Phase 2, unlocked: deliver. Every attempt is named either way.
     let (mut woken, mut missed) = (Vec::new(), Vec::new());
     for row in &to_wake {
         match deliver(row) {
@@ -1228,14 +1233,22 @@ fn wake_parked_with(
             Err(reason) => missed.push((row.session.clone(), reason)),
         }
     }
-    if remaining.is_empty() {
-        // A sidecar left behind would wake the same loops at the next clear.
+    // Phase 3, locked: drop the rows this clear attempted, keep the rows
+    // parks wrote while it ran, and remove the file when none remain. A
+    // sidecar left behind would wake the same loops at the next clear.
+    let attempted: Vec<&str> = to_wake.iter().map(|row| row.session.as_str()).collect();
+    let Some(lock) = parked_lock(&lock_path) else {
+        return (woken, missed);
+    };
+    let mut all = read_parked(&path);
+    all.retain(|row| !attempted.contains(&row.session.as_str()));
+    if all.is_empty() {
         if let Err(error) = std::fs::remove_file(&path) {
             if error.kind() != std::io::ErrorKind::NotFound {
                 eprintln!("fleet-incident: {}: {error}", path.display());
             }
         }
-    } else if let Err(error) = write_parked(&path, &remaining) {
+    } else if let Err(error) = write_parked(&path, &all) {
         eprintln!("fleet-incident: parked record not rewritten: {error}");
     }
     let _ = lock.unlock();
