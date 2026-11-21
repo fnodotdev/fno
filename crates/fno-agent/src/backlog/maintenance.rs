@@ -2556,6 +2556,7 @@ fn run_repo_moved(flags: Flags, seams: &Seams, entries: &[Value], out: &mut Out)
 fn run_lead_backfill(flags: Flags, seams: &Seams, entries: &[Value], out: &mut Out) -> i32 {
     let mut ctx = super::holding_lead::derive_ctx(entries);
     let derived = super::holding_lead::derive_batch(&mut ctx, entries);
+    let mut written = 0usize;
     if flags.apply && !derived.is_empty() {
         let pairs = derived.clone();
         let result = crate::graph_store::mutate_rows(
@@ -2580,6 +2581,7 @@ fn run_lead_backfill(flags: Flags, seams: &Seams, entries: &[Value], out: &mut O
                         }
                     }
                 }
+                written = wrote;
                 Ok(wrote > 0)
             },
         );
@@ -2594,7 +2596,7 @@ fn run_lead_backfill(flags: Flags, seams: &Seams, entries: &[Value], out: &mut O
         let payload = json!({
             "lead_backfill": {
                 "candidates": derived.len(),
-                "applied": if flags.apply { derived.len() } else { 0 },
+                "applied": written,
                 "dry_run": !flags.apply,
                 "nodes": derived.iter().map(|(id, stamp)| {
                     json!({
@@ -2609,7 +2611,8 @@ fn run_lead_backfill(flags: Flags, seams: &Seams, entries: &[Value], out: &mut O
         out.line(payload.to_string());
     } else {
         out.line(format!(
-            "lead-backfill: {} done node(s) {}",
+            "lead-backfill: {} of {} done node(s) {}",
+            written,
             derived.len(),
             if flags.apply {
                 "stamped"

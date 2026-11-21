@@ -863,7 +863,7 @@ fn close_node(args: &DoneArgs, task_id: &str) -> i32 {
         super::done_rich::warm_parent_promises(&rows, task_id)
     };
 
-    // Cost stamp: the ledger's per-plan credit the node never captured.
+    // Cost stamp: the ledger's per-plan cost the node never captured.
     let rollup = rollup_from_ledger(&node);
     let env_session = crate::identity::claude_env_session_id();
 

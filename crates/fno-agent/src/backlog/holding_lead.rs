@@ -152,7 +152,7 @@ fn holders_over_window(events: &[Value], created_at: Option<&str>, before: &str)
         };
         picked.insert(holder, (name, ts));
     }
-    picked
+    let mut out: Vec<Value> = picked
         .into_iter()
         .map(|(holder, (name, ts))| {
             json!({
@@ -161,7 +161,11 @@ fn holders_over_window(events: &[Value], created_at: Option<&str>, before: &str)
                 "since": ts.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             })
         })
-        .collect()
+        .collect();
+    // Tenure order, not session-id order: the map keyed by session sorts by
+    // id, so the succession history needs its own sort on the since stamp.
+    out.sort_by_key(|h| s_at(h, "since").and_then(instant));
+    out
 }
 
 /// The node's owning team scope through the same owner read the org fold
@@ -391,10 +395,13 @@ mod tests {
 
     #[test]
     fn holders_over_window_dedupes_and_orders_oldest_first() {
+        // The older tenure carries the alphabetically larger id, so a
+        // session-id ordering cannot fake tenure order: s-z (Barnaby, from
+        // 11-18) must come before s-a (Avery, from 11-19).
         let events = vec![
-            row("2026-11-20T12:00:00Z", Some("Avery"), Some("s-b")),
-            row("2026-11-19T12:00:00Z", Some("Avery"), Some("s-b")),
-            row("2026-11-18T12:00:00Z", Some("Barnaby"), Some("s-a")),
+            row("2026-11-20T12:00:00Z", Some("Avery"), Some("s-a")),
+            row("2026-11-19T12:00:00Z", Some("Avery"), Some("s-a")),
+            row("2026-11-18T12:00:00Z", Some("Barnaby"), Some("s-z")),
             row("2026-11-01T12:00:00Z", Some("Early"), Some("s-0")),
         ];
         let holders = holders_over_window(
@@ -407,11 +414,12 @@ mod tests {
             2,
             "the pre-window row and the re-check-in dedupe"
         );
-        assert_eq!(s_at(&holders[0], "holder_session"), Some("s-a"));
-        assert_eq!(s_at(&holders[1], "holder_session"), Some("s-b"));
+        assert_eq!(s_at(&holders[0], "holder_session"), Some("s-z"));
+        assert_eq!(s_at(&holders[0], "name"), Some("Barnaby"));
+        assert_eq!(s_at(&holders[1], "holder_session"), Some("s-a"));
         assert_eq!(
             s_at(&holders[1], "name"),
-            Some("Barnaby"),
+            Some("Avery"),
             "the first label in the window wins"
         );
         assert!(holders_over_window(&events, None, "bad-ts").is_empty());
