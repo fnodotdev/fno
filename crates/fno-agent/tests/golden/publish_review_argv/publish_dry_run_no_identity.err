@@ -1,1 +1,2 @@
-bot-review: skipped (no head-pinned attestation for HEAD; pass --verdict explicitly)
+bot-review: skipped (review.bot_identity unset)
+round: skipped (dry-run: round not posted)
