@@ -219,8 +219,13 @@ pub fn run_bash_census(args: &[String]) -> i32 {
     }
 
     let slug = claude_cwd_slug(&cwd);
-    let dir = claude_projects_dir().join(&slug);
-    let files = qualifying_files(&dir, days);
+    // An eval worker pins its config root under the fno eval dir, so the
+    // census reads that sandbox base too; the ambient root keeps answering
+    // for pre-pin transcripts.
+    let mut files = Vec::new();
+    for base in crate::claude_drive::claude_projects_dirs() {
+        files.extend(qualifying_files(&base.join(&slug), days));
+    }
 
     let mut census = Census {
         files: files.len(),

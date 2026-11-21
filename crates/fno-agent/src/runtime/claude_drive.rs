@@ -77,6 +77,25 @@ pub fn find_transcript(session_uuid: &str) -> Option<PathBuf> {
     find_transcript_in(&claude_projects_dir(), session_uuid)
 }
 
+/// The projects bases a transcript scan reads: the ambient root, plus the
+/// evals sandbox when it exists (a sealed eval worker pins it). The
+/// `PROJECTS_DIR_ENV` override replaces the list entirely, the same way it
+/// replaces [`claude_projects_dir`], so a caller pointing the base at a
+/// fixture never picks up an ambient sibling.
+pub fn claude_projects_dirs() -> Vec<PathBuf> {
+    if std::env::var_os(PROJECTS_DIR_ENV).is_some() {
+        return vec![claude_projects_dir()];
+    }
+    let mut dirs = vec![claude_projects_dir()];
+    if let Some(dir) = crate::spawn_seam::evals_claude_config_dir() {
+        let projects = dir.join("projects");
+        if projects.is_dir() {
+            dirs.push(projects);
+        }
+    }
+    dirs
+}
+
 /// Same discovery under the isolated account's config dir: a row the roster
 /// read from a `[[accounts.records]]` root keeps its transcripts under that
 /// root, so the ambient scan would miss it. `None` or an unknown account id
@@ -153,5 +172,36 @@ mod tests {
         assert_eq!(find_transcript("bad-uuid"), None);
         std::env::remove_var(PROJECTS_DIR_ENV);
         std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn projects_dirs_override_replaces_and_sandbox_appends() {
+        let base = tmpdir("override");
+        // SAFETY: single-key env write, restored below; the crate's other
+        // env-scoped tests hold the same contract.
+        unsafe { std::env::set_var(PROJECTS_DIR_ENV, &base) };
+        assert_eq!(claude_projects_dirs(), vec![base.clone()]);
+        unsafe { std::env::remove_var(PROJECTS_DIR_ENV) };
+        std::fs::remove_dir_all(&base).ok();
+
+        let state = tmpdir("state");
+        // SAFETY: same contract as above, for the state root.
+        let previous = std::env::var_os("FNO_STATE_DIR");
+        unsafe { std::env::set_var("FNO_STATE_DIR", &state) };
+        assert_eq!(
+            claude_projects_dirs().len(),
+            1,
+            "no sandbox on disk yet: ambient only"
+        );
+        let sandbox = state.join("evals").join("claude-config").join("projects");
+        std::fs::create_dir_all(&sandbox).unwrap();
+        let dirs = claude_projects_dirs();
+        assert_eq!(dirs.len(), 2);
+        assert_eq!(dirs[1], sandbox);
+        match previous {
+            Some(v) => unsafe { std::env::set_var("FNO_STATE_DIR", v) },
+            None => unsafe { std::env::remove_var("FNO_STATE_DIR") },
+        }
+        std::fs::remove_dir_all(&state).ok();
     }
 }
