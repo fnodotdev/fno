@@ -96,6 +96,7 @@ pub mod relations;
 pub mod render;
 pub mod requests;
 pub mod row_facts;
+pub mod row_render;
 pub mod schema_v4;
 pub mod scorecard;
 pub mod scorecard_router;

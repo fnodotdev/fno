@@ -14,6 +14,7 @@ use super::birth::resolve_transcript_detail;
 use super::done_rich::read_external;
 use super::node_ref::resolve_tiers;
 use super::render::py_json_pretty;
+use super::row_render::{pr_entries_json, render_pr_lines};
 use super::settings;
 use super::workflows::{active_backend_name, text_at};
 use crate::graph_store;
@@ -99,103 +100,6 @@ fn pr_block(row: &Value) -> Value {
         "number": crate::backlog::row_facts::int_field(row, "pr_number"),
         "url": crate::backlog::row_facts::str_field(row, "pr_url"),
     })
-}
-
-/// The repo slug a recorded url names, verbatim from what was recorded.
-fn pr_repo_slug(url: Option<&str>) -> Option<String> {
-    url.and_then(|u| crate::backlog::pr_link::repo_slug_from_url(Some(u)))
-}
-
-/// The parts a pr line renders beyond the link: the repo slug, the merge
-/// status and the note. A line with nothing to say keeps the bare shape.
-fn pr_suffix_parts(slug: Option<&str>, status: Option<&str>, note: Option<&str>) -> Vec<String> {
-    let mut parts: Vec<String> = Vec::new();
-    if let Some(slug) = slug {
-        parts.push(slug.to_string());
-    }
-    if let Some(status) = status {
-        parts.push(status.to_string());
-    }
-    if let Some(note) = note {
-        parts.push(format!("note: {note}"));
-    }
-    parts
-}
-
-/// The pr lines a row renders: the primary from `pr_number`/`pr_url` with
-/// the row's `merge_status`, then one line per `additional_prs` entry.
-/// Bare-int and bare-url entry shapes render like `pr_refs_of` reads them.
-fn render_pr_lines(row: &Value) -> Vec<String> {
-    let mut lines = Vec::new();
-    let number = crate::backlog::row_facts::int_field(row, "pr_number");
-    let url = text_at(row, "pr_url").filter(|u| !u.is_empty());
-    let status = text_at(row, "merge_status").filter(|s| !s.is_empty());
-    let slug = pr_repo_slug(url.as_deref());
-    lines.push(format!(
-        "  pr: {}{}",
-        render_pr_ref(number, url.as_deref()),
-        suffix(&pr_suffix_parts(slug.as_deref(), status.as_deref(), None))
-    ));
-    let entries = crate::backlog::row_facts::list_field(row, "additional_prs");
-    for entry in entries {
-        let (number, url, status, note) = match entry {
-            Value::Object(_) => (
-                crate::backlog::row_facts::int_field(entry, "number"),
-                crate::backlog::row_facts::str_field(entry, "url").filter(|u| !u.is_empty()),
-                crate::backlog::row_facts::str_field(entry, "merge_status")
-                    .filter(|s| !s.is_empty()),
-                crate::backlog::row_facts::str_field(entry, "note").filter(|n| !n.is_empty()),
-            ),
-            Value::Number(n) => (n.as_i64(), None, None, None),
-            Value::String(url) => (None, Some(url.as_str()), None, None),
-            _ => (None, None, None, None),
-        };
-        let slug = pr_repo_slug(url);
-        lines.push(format!(
-            "  pr: {}{}",
-            render_pr_ref(number, url),
-            suffix(&pr_suffix_parts(slug.as_deref(), status, note))
-        ));
-    }
-    lines
-}
-
-/// The `  pr: ` reference half of a pr line: `#<n> <url>`, `#<n>`, `<url>`,
-/// or `(none)`.
-fn render_pr_ref(number: Option<i64>, url: Option<&str>) -> String {
-    match (number, url) {
-        (None, None) => "(none)".to_string(),
-        (None, Some(url)) => url.to_string(),
-        (Some(n), None) => format!("#{n}"),
-        (Some(n), Some(url)) => format!("#{n} {url}"),
-    }
-}
-
-/// Wrap parts in ` (...)`, empty when there are no parts.
-fn suffix(parts: &[String]) -> String {
-    if parts.is_empty() {
-        String::new()
-    } else {
-        format!(" ({})", parts.join(", "))
-    }
-}
-
-/// The json `additional_prs` array: every entry reduced to the four keys a
-/// reader consumes, `[]` when the row carries none.
-fn pr_entries_json(row: &Value) -> Value {
-    let list = crate::backlog::row_facts::list_field(row, "additional_prs");
-    Value::Array(
-        list.iter()
-            .map(|entry| {
-                json!({
-                    "number": crate::backlog::row_facts::int_field(entry, "number"),
-                    "url": crate::backlog::row_facts::str_field(entry, "url"),
-                    "merge_status": crate::backlog::row_facts::str_field(entry, "merge_status"),
-                    "note": crate::backlog::row_facts::str_field(entry, "note"),
-                })
-            })
-            .collect(),
-    )
 }
 
 /// `harness_session_id` to registry status. None when the registry cannot be
@@ -908,10 +812,6 @@ pub fn run(tail: &[String]) -> i32 {
     println!("{}", lines.join("\n"));
     0
 }
-
-#[path = "provenance_render_test.rs"]
-#[cfg(test)]
-mod provenance_render_test;
 
 #[cfg(test)]
 mod tests {

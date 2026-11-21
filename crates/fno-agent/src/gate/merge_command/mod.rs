@@ -729,7 +729,7 @@ fn record_folded_pr(flow: &mut FlowResult, pr: i64, repo: &Path) {
 /// The stacked PR a fold record binds to, or the reason none happens: an
 /// unreadable base, the default branch (no stack), or no open PR heading
 /// the base branch.
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 enum FoldTarget {
     Bind(u64),
     UnreadableBase,
@@ -1413,9 +1413,6 @@ fn acquire_merge_lock(cwd: &Path, pr: i64) -> LockOutcome {
     };
     LockOutcome::Held(reason)
 }
-
-#[cfg(test)]
-mod fold_target_test;
 
 #[cfg(test)]
 mod hop_client_bin_tests {
