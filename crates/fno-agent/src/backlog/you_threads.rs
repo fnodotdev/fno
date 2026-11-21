@@ -1219,7 +1219,10 @@ mod tests {
         .join("\n");
         let items = walk(&raw, 0, 0, &BusIndex::empty(), "sess", None).items;
         assert_eq!(items.len(), 1);
-        assert_eq!(items[0].typed_text, "now my own ask");
+        assert_eq!(
+            items.first().map(|item| item.typed_text.as_str()),
+            Some("now my own ask")
+        );
     }
 
     /// A human queued command opens its own item; a pasted bus row closes
