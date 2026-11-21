@@ -2211,8 +2211,13 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
                     // Nothing live under this subject means nothing conflicts,
                     // and a law only settles a conflict between rulings. The
                     // plain decision door records it; this door stays
-                    // conflict-only.
-                    0 => return door_refuse(&no_conflict_refusal(door.subject.trim(), false)),
+                    // conflict-only. A PR door subject (merge-grant,
+                    // merge-freeze lift, pr-hold) is a per-head machine
+                    // contract, never a policy law, so it keeps the old path.
+                    0 if !decision_index::is_pr_door_subject(&door.subject) => {
+                        return door_refuse(&no_conflict_refusal(door.subject.trim(), false))
+                    }
+                    0 => auto_superseded = None,
                     1 => {
                         auto_superseded = Some(same[0].clone());
                         supersedes = Some(same[0].clone());
@@ -2234,7 +2239,10 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
             // fires on a fresh install too. A store that exists but reads
             // damaged proves nothing: the gate skips, and a legal write never
             // blocks on a broken read.
-            Err(_) if decision_store_absent() => {
+            Err(_)
+                if decision_store_absent()
+                    && !decision_index::is_pr_door_subject(&door.subject) =>
+            {
                 return door_refuse(&no_conflict_refusal(door.subject.trim(), true));
             }
             Err(_) => auto_superseded = None,
@@ -4177,5 +4185,17 @@ pub(crate) mod scope_tests {
         );
         assert_eq!(code, 0, "a conflict records: {code}");
         assert!(env.index_text().contains("The replacement ruling."));
+
+        // A PR door subject is a per-head machine contract: each fresh head
+        // records with no live law under it, on the old path.
+        let code = record_door_write(
+            door(
+                "merge-grant:o/r#2131@e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+                "Merge authorized for this head.",
+            ),
+            "Merge authorized for this head.".to_string(),
+            &Caller::as_authority("chat_attested"),
+        );
+        assert_eq!(code, 0, "a per-head door subject records: {code}");
     }
 }
