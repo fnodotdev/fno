@@ -386,22 +386,26 @@ mod tests {
         assert_eq!(t.shown().len(), 1);
     }
 
+    fn first_row(t: &mut Table) -> &mut DecisionRow {
+        t.rows.first_mut().expect("the seeded table has a row")
+    }
+
     #[test]
     fn a_long_audience_chip_is_not_cut_mid_word() {
         let mut t = table();
-        t.rows[0].audience = Some("customer:solo-founder".into());
+        first_row(&mut t).audience = Some("customer:solo-founder".into());
         let page = render(&t, 140, 12).join("\n");
         assert!(
             page.contains("customer:solo-founder"),
             "chip cut in:\n{page}"
         );
         // A job that does not fit is dropped whole, never cut mid-word.
-        t.rows[0].job = vec!["alpha".into(), "beta-long-job-name".into()];
+        first_row(&mut t).job = vec!["alpha".into(), "beta-long-job-name".into()];
         let jobs = render(&t, 140, 12).join("\n");
         assert!(jobs.contains("customer:solo-founder alpha"), "{jobs}");
         assert!(!jobs.contains("beta"), "job cut in:\n{jobs}");
-        t.rows[0].job.clear();
-        t.rows[0].audience = Some("customer:solo-founder,customer:vibe-coder".into());
+        first_row(&mut t).job.clear();
+        first_row(&mut t).audience = Some("customer:solo-founder,customer:vibe-coder".into());
         let two = render(&t, 140, 12).join("\n");
         assert!(!two.contains("vibe"), "persona cut in:\n{two}");
         let wide = render(&t, 200, 12).join("\n");
