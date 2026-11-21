@@ -570,17 +570,17 @@ mod tests {
                 "s1",
                 "t1",
                 "2026-11-05T00:00:00Z",
-                "ship the x-c678 merge stamp fix",
+                "ship the x-cccc merge stamp fix",
             ),
             turn(
                 "s2",
                 "t2",
                 "2026-11-11T00:00:00Z",
-                "x-c678 is still broken on the stamp",
+                "x-cccc is still broken on the stamp",
             ),
         ];
         let nodes = [node(
-            "x-c678",
+            "x-cccc",
             "done",
             Some("2026-11-10T00:00:00Z"),
             "2026-11-10T00:00:00Z",

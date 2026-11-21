@@ -543,8 +543,9 @@ pub(crate) struct YouStore {
     /// Persisted on save; a contended lock runs advance read-only.
     persist: bool,
     /// The requests reach keeps only what an ask row reads: each reply cut
-    /// to its head and tail, and only the sessions this run advanced, so a
-    /// month of transcripts stays a small file.
+    /// to its head and tail, and drops a session this run did not advance
+    /// once its newest item is older than `TRIM_KEEP_DAYS`, so a narrow
+    /// `--since` run never evicts the wider window another read cached.
     trim: bool,
     visited: std::collections::HashSet<String>,
 }
@@ -553,6 +554,7 @@ pub(crate) struct YouStore {
 /// its tail, which tells whether the reply ended on a question.
 const TRIM_HEAD: usize = 600;
 const TRIM_TAIL: usize = 40;
+const TRIM_KEEP_DAYS: i64 = 60;
 
 fn trim_reply(text: &mut String) {
     let n = text.chars().count();
@@ -674,8 +676,13 @@ impl YouStore {
             return;
         }
         if self.trim {
+            let cutoff = (chrono::Utc::now() - chrono::Duration::days(TRIM_KEEP_DAYS))
+                .format("%Y-%m-%dT%H:%M:%S")
+                .to_string();
             let visited = &self.visited;
-            self.cache.entries.retain(|sid, _| visited.contains(sid));
+            self.cache.entries.retain(|sid, e| {
+                visited.contains(sid) || e.items.last().is_some_and(|i| i.ts >= cutoff)
+            });
         }
         let Ok(doc) = serde_json::to_vec(&self.cache) else {
             return;
