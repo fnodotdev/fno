@@ -74,10 +74,12 @@ pub fn run(opts: ShotOptions) -> i32 {
         // never activates: no Dock icon, no menu bar, and the window
         // below never becomes key (focus: false), so the user's key
         // window is untouched through the whole run.
-        // SAFETY: plain setter on this process's own NSApplication.
+        // SAFETY: plain read on this process's own NSApplication.
         let app: *mut objc::runtime::Object =
             unsafe { msg_send![class!(NSApplication), sharedApplication] };
-        // 1 is NSApplicationActivationPolicyAccessory.
+        // SAFETY: plain setter on this process's own NSApplication; the
+        // value 1 is NSApplicationActivationPolicyAccessory, so the
+        // process never activates and no Dock icon appears.
         let _: () = unsafe { msg_send![app, setActivationPolicy: 1i64] };
         let out = out.clone();
         let family = family.clone();
@@ -125,15 +127,23 @@ pub fn run(opts: ShotOptions) -> i32 {
             cx.quit();
             return;
         };
-        // SAFETY: setters on the window this process owns.
+        // SAFETY: setter on the window this process owns; the floating
+        // level keeps occlusion visible under covering windows.
         let _: () = unsafe { msg_send![w, setLevel: 3i64] };
+        // SAFETY: setter on the window this process owns; mouse events
+        // pass through, so nothing the user clicks reaches the window.
         let _: () = unsafe { msg_send![w, setIgnoresMouseEvents: true] };
+        // SAFETY: setter on the window this process owns; sharing stays
+        // read-only, the spelling the capture service accepts.
         let _: () = unsafe { msg_send![w, setSharingType: 1usize] };
+        // SAFETY: setter on the window this process owns; one-percent
+        // alpha composites the window without showing it.
         let _: () = unsafe { msg_send![w, setAlphaValue: 0.01f64] };
         // The read-back shows what the window itself claims, so a
         // reverted setter never hides behind the server-side read.
-        // SAFETY: plain reads on the window this process owns.
+        // SAFETY: plain read of the window's own level claim.
         let level_after: i64 = unsafe { msg_send![w, level] };
+        // SAFETY: plain read of the window's own alpha claim.
         let alpha_after: f64 = unsafe { msg_send![w, alphaValue] };
         eprintln!(
             "fno-app --shot: window birth at one percent: level={level_after} alpha={alpha_after} occlusion={occl}"
