@@ -2109,11 +2109,16 @@ fn effect<P: Probes>(probes: &P, request: &Request, authorized: &Authorized) -> 
         },
         Ok(_) => {
             // gh refuses before merging when the branch is checked out in
-            // another worktree, which is every worktree-first run. Recover
-            // through the REST endpoint, carrying the same pin: `sha` is that
-            // endpoint's `--match-head-commit`, so the retry cannot quietly
-            // land a head the decision never saw.
-            if request.effect == Effect::Merge && checkout_refused(&output) {
+            // another worktree, which is every worktree-first run. And when
+            // the refusal names the graphql channel - a drained bucket, or
+            // fno's own hold on it - rather than the merge itself, the REST
+            // merge endpoint is untouched and serves the write. Both retries
+            // carry the same pin: `sha` is that endpoint's
+            // `--match-head-commit`, so the retry cannot quietly land a head
+            // the decision never saw.
+            if request.effect == Effect::Merge
+                && (checkout_refused(&output) || graphql_channel_refused(&output))
+            {
                 let api = vec![
                     "api".to_string(),
                     "--method".to_string(),
@@ -2126,9 +2131,14 @@ fn effect<P: Probes>(probes: &P, request: &Request, authorized: &Authorized) -> 
                 ];
                 if let Ok((true, _)) = probes.run_gh(cwd, &api) {
                     // The recovery WORKED, so it carries no cleanup failure.
+                    let note = if checkout_refused(&output) {
+                        "merged server-side (worktree fallback)"
+                    } else {
+                        "merged server-side (rest fallback)"
+                    };
                     return Outcome::Merged {
                         head: authorized.head.clone(),
-                        note: Some("merged server-side (worktree fallback)".to_string()),
+                        note: Some(note.to_string()),
                         cleanup_failure: None,
                         merge_grant: authorized.merge_grant.clone(),
                         warnings: authorized.warnings.clone(),
@@ -2155,6 +2165,19 @@ fn effect<P: Probes>(probes: &P, request: &Request, authorized: &Authorized) -> 
 fn checkout_refused(output: &str) -> bool {
     let lower = output.to_lowercase();
     lower.contains("is already used by worktree") || lower.contains("already checked out")
+}
+
+/// The merge write rides GitHub's GraphQL mutation, so two refusals name the
+/// channel, not the merge: fno's own budget hold on a drained graphql bucket
+/// ("gh budget: ... held locally ... this command did not reach GitHub",
+/// gh_budget's refusal_line), and GitHub's primary graphql exhaustion ("API
+/// rate limit exceeded"). Both leave the REST merge endpoint (core bucket)
+/// untouched, so the retry routes there - the law that a tight channel routes
+/// to another instead of refusing. "secondary rate limit" stays out: that
+/// limiter is token-wide and the REST retry would trip it too.
+fn graphql_channel_refused(output: &str) -> bool {
+    output.contains("gh budget: GitHub rate limit held locally")
+        || output.to_lowercase().contains("api rate limit exceeded")
 }
 
 /// The fno gh proxy prefixes its own stderr lines with `fno config:`,
