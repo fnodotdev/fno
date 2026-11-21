@@ -1311,6 +1311,31 @@ fn plan_mutation(
         .collect();
     recompute_statuses_with_plan_rungs(&mut rows, Some(&rungs));
 
+    // The scoping gate (D3526): a plan bind that lands ready IS the move to
+    // ready, so the field-operator path gates the same transition the patch
+    // door gates. The pre-image row (`node`) carries the stored status this
+    // call started from; only the transition refuses, an already-ready row
+    // takes ordinary writes ungated, and containers stay exempt: their ready
+    // comes from the children rollup, never from a scoping fact of their own.
+    let old_status_ready =
+        RowFacts::of(&node).and_then(|facts| facts.status().as_str()) == Some("ready");
+    let new_status = rows
+        .get(idx)
+        .and_then(RowFacts::of)
+        .and_then(|facts| facts.status().as_str())
+        .unwrap_or("");
+    if new_status == "ready"
+        && !old_status_ready
+        && super::patch::container_children_summary(&rows, &node_id).is_none()
+    {
+        if let Some(msg) = rows
+            .get(idx)
+            .and_then(|row| crate::backlog::audience::scoping_refusal(row, "the move to ready"))
+        {
+            return Err(refused(format!("Error: {msg}"), 1));
+        }
+    }
+
     Ok(MutationPlan::Applied {
         working: rows,
         rungs,

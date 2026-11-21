@@ -765,7 +765,16 @@ fn plan(mut rows: Vec<Value>, req: &PatchRequest) -> Result<Planned, PatchRefusa
             "refused: --status and --leave are different moves; run one per call",
         ));
     }
-    // Normalize the pre-image first: the door's old-vs-new verdicts and
+    // The stored status the node carries INTO this patch, read before the
+    // derived normalization: the scoping gate compares the stored pre-image,
+    // not the derived one a ready-rung node already reads.
+    let idx = resolve_index(&rows, &req.node)?;
+    let stored_status_before = rows
+        .get(idx)
+        .and_then(|row| crate::backlog::question_intake::str_field(row, "status"))
+        .unwrap_or("")
+        .to_string();
+    // Normalize the pre-image: the door's old-vs-new verdicts and
     // leave no-op checks key on the DERIVED status, and a row whose stored
     // status drifted (a fixture, or a legacy writer) would else mislead.
     let rungs: BTreeMap<String, String> = rows
@@ -776,7 +785,6 @@ fn plan(mut rows: Vec<Value>, req: &PatchRequest) -> Result<Planned, PatchRefusa
         .collect();
     recompute_statuses_with_plan_rungs(&mut rows, Some(&rungs));
 
-    let idx = resolve_index(&rows, &req.node)?;
     let id = rows
         .get(idx)
         .and_then(RowFacts::id_of)
@@ -863,6 +871,31 @@ fn plan(mut rows: Vec<Value>, req: &PatchRequest) -> Result<Planned, PatchRefusa
         .unwrap_or("")
         .to_string();
 
+    // The scoping gate (D3526): a move INTO ready is the move to ready, so
+    // the node must carry its persona and its acceptance by then. The
+    // comparison reads the stored pre-image, not the derived one: a
+    // ready-rung node reads derived ready before this door runs, and an
+    // unscoped node must still refuse its first ready landing. An
+    // already-ready stored row takes ordinary field writes ungated; only the
+    // transition refuses. Containers stay exempt: their ready comes from the
+    // children rollup, which no scoping fact of their own feeds, so a
+    // priority or details write on an epic with a ready child must land. A
+    // move headed ELSEWHERE never gates: a park-facts clear can derive ready
+    // as a side effect while the caller asked for idea, and the verdict that
+    // caller needs is the rung mismatch naming plan_path=null, not scoping.
+    let heads_to_ready = target.is_none() || target.as_deref() == Some("ready");
+    if new_status == "ready"
+        && stored_status_before != "ready"
+        && heads_to_ready
+        && container_children_summary(&rows, &id).is_none()
+    {
+        if let Some(row) = rows.get(idx) {
+            if let Some(msg) = crate::backlog::audience::scoping_refusal(row, "the move to ready") {
+                return Err(PatchRefusal::refused(format!("refused: {msg}")));
+            }
+        }
+    }
+
     if let Some(word) = target {
         if new_status != word {
             return Err(status_mismatch(&rows, idx, &id, word, &new_status, &rungs));
@@ -890,7 +923,7 @@ fn plan(mut rows: Vec<Value>, req: &PatchRequest) -> Result<Planned, PatchRefusa
 
 /// A short "N done, N ready" summary of `id`'s children, or `None` when
 /// `id` has no children (the leaf-node refusal case is unaffected).
-fn container_children_summary(rows: &[Value], id: &str) -> Option<String> {
+pub(crate) fn container_children_summary(rows: &[Value], id: &str) -> Option<String> {
     let mut counts: std::collections::BTreeMap<&str, usize> = Default::default();
     let mut n = 0usize;
     for row in rows {
@@ -1484,6 +1517,10 @@ mod tests {
                 "deferred_at": "2026-01-01T00:00:00+00:00",
                 "deferred_reason": "waiting",
                 "status": "deferred",
+                // The row is scoped so plan() passes and the test exercises
+                // the commit-cycle lock, not the scoping gate.
+                "audience": "internal",
+                "done_means": "the merge check reads the acceptance",
             }),
         );
         graph_store::seed_rows(&graph, &[target]).expect("seed graph.db");
@@ -1511,5 +1548,85 @@ mod tests {
             }
             Ok(receipt) => panic!("expected contention refusal, got {receipt:?}"),
         }
+    }
+
+    // The scoping gate: the move to ready refuses an unscoped node, naming
+    // the stage and the flag that supplies the missing fact; a scoped node
+    // lands; an already-ready stored row takes a field write ungated.
+    #[test]
+    fn the_move_to_ready_refuses_a_node_without_done_means() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = plan_file(&dir, "ready-plan.md", Some("ready"));
+        let victim = node(
+            "x-s1",
+            json!({
+                "plan_path": plan,
+                "audience": "internal",
+            }),
+        );
+        let (_d, graph) = write_graph(&[victim]);
+        let message = refusal_of(&graph, &req("x-s1", Some("ready"), &[]));
+        assert!(message.contains("done-means"), "{message}");
+        assert!(message.contains("the move to ready"), "{message}");
+        assert!(message.contains("done_means=<text>"), "{message}");
+    }
+
+    // A container rolls up to ready from its children, so an ordinary field
+    // write on an epic with a ready child lands ungated.
+    #[test]
+    fn a_container_with_a_ready_child_takes_a_field_write_ungated() {
+        let epic = node("x-e1", json!({ "audience": "internal" }));
+        let dir = tempfile::tempdir().unwrap();
+        let plan = plan_file(&dir, "ready-plan.md", Some("ready"));
+        let child = node(
+            "x-c1",
+            json!({
+                "plan_path": plan,
+                "parent": "x-e1",
+                "audience": "internal",
+                "done_means": "the merge check reads the acceptance",
+            }),
+        );
+        let (_d, graph) = write_graph(&[epic, child]);
+        let receipt = apply(&graph, &req("x-e1", None, &[("priority", "p1")]))
+            .expect("an epic with a ready child takes a field write ungated");
+        assert_eq!(receipt.status.to, "ready");
+    }
+
+    #[test]
+    fn the_move_to_ready_refuses_a_coarse_customers_audience_without_persona() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = plan_file(&dir, "ready-plan.md", Some("ready"));
+        let victim = node(
+            "x-s2",
+            json!({
+                "plan_path": plan,
+                "audience": "customers",
+                "done_means": "the merge check reads the acceptance",
+            }),
+        );
+        let (_d, graph) = write_graph(&[victim]);
+        let message = refusal_of(&graph, &req("x-s2", Some("ready"), &[]));
+        assert!(message.contains("customer:<persona>"), "{message}");
+        assert!(message.contains("the move to ready"), "{message}");
+    }
+
+    #[test]
+    fn a_scoped_node_moves_to_ready_and_a_ready_row_writes_ungated() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = plan_file(&dir, "ready-plan.md", Some("ready"));
+        let scoped = node(
+            "x-s3",
+            json!({
+                "plan_path": plan,
+                "audience": "customer:solo-operator",
+                "done_means": "the merge check reads the acceptance",
+            }),
+        );
+        let (_d, graph) = write_graph(&[scoped]);
+        let receipt = apply(&graph, &req("x-s3", Some("ready"), &[])).expect("scoped move lands");
+        assert_eq!(receipt.status.to, "ready");
+        apply(&graph, &req("x-s3", None, &[("details", "a note")]))
+            .expect("an already-ready row takes a field write ungated");
     }
 }
