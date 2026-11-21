@@ -604,49 +604,22 @@ pub fn band_routing(out: &mut String) {
     }
     let settings = Settings::load();
     let refused = !super::schema_walk::refusals(settings.json_schema(), &settings.raw).is_empty();
-    let mut declared_rows: Vec<String> = Vec::new();
     let (declared, roles) = if refused {
         (0, false)
     } else {
-        let rows = settings
+        let declared = settings
             .get("routing.models")
             .as_array()
-            .map(|m| m.to_vec());
-        let declared = rows.as_ref().map(|m| m.len()).unwrap_or(0);
-        if let Some(rows) = &rows {
-            for row in rows {
-                let parsed: DeclaredModelRow = match serde_json::from_value(row.clone()) {
-                    Ok(parsed) => parsed,
-                    Err(_) => continue,
-                };
-                let name = parsed.name.unwrap_or_default().trim().to_string();
-                if !name.is_empty() && !declared_rows.contains(&name) {
-                    declared_rows.push(name);
-                }
-            }
-        }
+            .map(|m| m.len())
+            .unwrap_or(0);
         (
             declared,
             super::truthy(&settings.get("model_routing.roles")),
         )
     };
-    if declared > 0 && !declared_rows.is_empty() && !row_names.is_empty() {
-        let mut probed: Vec<Result<Option<String>, ()>> = Vec::new();
-        for command in &commands {
-            for difficulty in GRID_DIFFICULTIES {
-                probed.push(grid_pick(command, difficulty));
-            }
-        }
-        if let Some(lines) = grid_readout(&commands, &probed, &declared_rows) {
-            out.push_str(&lines);
-            if roles {
-                out.push_str(
-                    "\n      Note: model_routing.roles is set, but it routes by ROLE, not by band.",
-                );
-                out.push('\n');
-            }
-            return;
-        }
+    if declared > 0 && !row_names.is_empty() && print_grid_readout(out, &commands, &settings, roles)
+    {
+        return;
     }
     row_names.sort();
     let built_in = if row_names.is_empty() {
@@ -665,6 +638,50 @@ pub fn band_routing(out: &mut String) {
         );
     }
     out.push('\n');
+}
+
+/// The grid branch of the band routing readout: collect the declared rows,
+/// probe the walk once per command and difficulty, and print the readout.
+/// True when the readout printed and the inactive line must not.
+fn print_grid_readout(
+    out: &mut String,
+    commands: &[String],
+    settings: &Settings,
+    roles: bool,
+) -> bool {
+    let mut declared_rows: Vec<String> = Vec::new();
+    if let Some(rows) = settings.get("routing.models").as_array() {
+        for row in rows {
+            let parsed: DeclaredModelRow = match serde_json::from_value(row.clone()) {
+                Ok(parsed) => parsed,
+                Err(_) => continue,
+            };
+            let name = parsed.name.unwrap_or_default().trim().to_string();
+            if !name.is_empty() && !declared_rows.contains(&name) {
+                declared_rows.push(name);
+            }
+        }
+    }
+    if declared_rows.is_empty() {
+        return false;
+    }
+    let mut probed: Vec<Result<Option<String>, ()>> = Vec::new();
+    for command in commands {
+        for difficulty in GRID_DIFFICULTIES {
+            probed.push(grid_pick(command, difficulty));
+        }
+    }
+    let Some(lines) = grid_readout(commands, &probed, &declared_rows) else {
+        return false;
+    };
+    out.push_str(&lines);
+    if roles {
+        out.push_str(
+            "\n      Note: model_routing.roles is set, but it routes by ROLE, not by band.",
+        );
+        out.push('\n');
+    }
+    true
 }
 
 /// One modeless `route-slot` probe: the row the grid walk lands on for this
@@ -737,11 +754,10 @@ pub(crate) fn grid_readout(
     }
     let mut picked: BTreeSet<String> = BTreeSet::new();
     let mut lines = String::new();
-    let mut idx = 0;
-    for command in commands {
+    for (command, chunk) in commands.iter().zip(probed.chunks(GRID_DIFFICULTIES.len())) {
         let mut parts: Vec<String> = Vec::new();
-        for difficulty in GRID_DIFFICULTIES {
-            match &probed[idx] {
+        for (difficulty, result) in GRID_DIFFICULTIES.iter().zip(chunk.iter()) {
+            match result {
                 Err(()) => return None,
                 Ok(Some(lane)) => {
                     picked.insert(lane.clone());
@@ -749,7 +765,6 @@ pub(crate) fn grid_readout(
                 }
                 Ok(None) => parts.push(format!("{difficulty}->none")),
             }
-            idx += 1;
         }
         lines.push_str(&format!(
             "band routing: grid (no profile lanes) {command} {}\n",
