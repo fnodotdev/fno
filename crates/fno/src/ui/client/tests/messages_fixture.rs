@@ -1235,7 +1235,7 @@ async fn you_thread_band_pin_and_card() {
             "participants": [], "threads": [], "system": {}, "channels": [],
             "announcements": [], "unreadable": 0,
             "you": [{"session_id": "lead", "name": "gavin",
-                "last_ts": items.last().and_then(|i| i.get("ts").cloned()), "items": items}],
+                "last_ts": items.last().and_then(|i| i.pointer("/ts").cloned()), "items": items}],
         })
     };
     let b = view.messages_board.as_mut().expect("open");
