@@ -20,7 +20,7 @@ use fno::needs_overlay::{AnswerPick, QuestionItem, QuestionOption};
 const SHEET_W: f32 = 560.0;
 
 /// The sheet's held state: which question, which choice the user picked,
-/// and what they typed. `pick` feeds Action::AnswerChoice; the draft feeds
+/// and what they typed. `pick` feeds Action::PickAnswer; the draft feeds
 /// the words path.
 pub(super) struct Sheet {
     pub(super) id: String,
@@ -188,7 +188,7 @@ fn choice_row(
     } else {
         (String::new(), p.faint)
     };
-    let action = Action::AnswerChoice(o.n);
+    let action = Action::PickAnswer(o.n);
     let id = format!("answer-choice-{}", o.n);
     div()
         .id(ElementId::Name(id.into()))

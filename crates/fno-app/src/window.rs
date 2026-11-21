@@ -75,7 +75,7 @@ pub enum Action {
     /// Close the answer sheet without answering.
     CloseAnswer,
     /// Record the sheet's picked choice; Answer sends it.
-    AnswerChoice(u32),
+    PickAnswer(u32),
     /// The sheet's Answer button and Enter: the typed words win over the
     /// picked choice.
     SubmitAnswer,
@@ -115,7 +115,7 @@ fn click_id(action: &Action) -> &'static str {
         Action::Answer { .. } => "answer",
         Action::OpenAnswer(_) => "open_answer",
         Action::CloseAnswer => "close_answer",
-        Action::AnswerChoice(_) => "answer_choice",
+        Action::PickAnswer(_) => "pick_answer",
         Action::SubmitAnswer => "submit_answer",
         Action::Show(_) => "show_view",
         Action::ToggleAgents => "toggle_agents",
@@ -844,7 +844,7 @@ impl Root {
                 self.answer = Some(answer::Sheet::new(id));
             }
             Action::CloseAnswer => self.answer = None,
-            Action::AnswerChoice(n) => {
+            Action::PickAnswer(n) => {
                 if let Some(s) = self.answer.as_mut() {
                     s.pick = Some(n);
                 }
