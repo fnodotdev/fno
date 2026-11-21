@@ -1403,6 +1403,7 @@ mod tests {
         r1_unpromoted_and_cap_legs();
         r2_and_r3_legs();
         stop_stamp_binds_the_question_to_the_asking_session_leg();
+        idle_pick_legs();
     }
 
     #[test]
@@ -1581,7 +1582,6 @@ mod tests {
 
     /// An idle lead whose beat offered a pick with zero scope workers is
     /// blocked, and the block reason names the pick command it printed.
-    #[test]
     fn an_idle_lead_with_an_untaken_pick_is_blocked() {
         let rig = Rig::new(true);
         idle_beat_row(&rig, "x-idle1");
@@ -1601,7 +1601,6 @@ mod tests {
     /// The same stop passes when the spawn gate refused the pick's start:
     /// the refusal row for the pick's node, newer than the beat, is the
     /// evidence that the idleness is the gate's, not the lead's.
-    #[test]
     fn a_spawn_gate_refusal_lets_the_idle_lead_stop() {
         let rig = Rig::new(true);
         idle_beat_row(&rig, "x-idle2");
@@ -1643,7 +1642,6 @@ mod tests {
 
     /// A beat whose pick was answered, whose worker reading failed (no count
     /// key), or whose session holds no live team never blocks.
-    #[test]
     fn an_answered_pick_or_unread_count_or_untitled_session_never_blocks() {
         let rig = Rig::new(true);
         rig.seed(json!({
@@ -1694,5 +1692,13 @@ mod tests {
             !fires.iter().any(|f| f.rule == "lead_idle_pick_unanswered"),
             "an untitled session holds no scope to idle: {fires:?}"
         );
+    }
+
+    /// The idle-pick row's legs, run beside the other rule legs from the
+    /// engine test: block, refusal-evidence, and the never-block arms.
+    fn idle_pick_legs() {
+        an_idle_lead_with_an_untaken_pick_is_blocked();
+        a_spawn_gate_refusal_lets_the_idle_lead_stop();
+        an_answered_pick_or_unread_count_or_untitled_session_never_blocks();
     }
 }

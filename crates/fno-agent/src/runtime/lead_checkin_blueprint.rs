@@ -674,7 +674,6 @@ mod tests {
     /// An L0 beat seats a leadless epic's dispatchable children: the rows
     /// leave the dispatch lists, print no target-ready line, and ride skips
     /// naming the seat. Seat rows never count toward the start ceiling.
-    #[test]
     fn an_l0_beat_seats_a_leadless_epics_children() {
         let dir = std::env::temp_dir().join(format!("fno-bp-seat-{}", std::process::id()));
         let board = json!({
@@ -715,12 +714,20 @@ mod tests {
             "{reading}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+        l0_seat_legs();
+    }
+
+    /// The seat legs: the L0 integration, the pure walk, and the rendered
+    /// line, so the seat surface adds no test declarations to G3.
+    fn l0_seat_legs() {
+        an_l0_beat_seats_a_leadless_epics_children();
+        the_seat_walk_keys_on_leadless_epics_and_the_level();
+        the_seat_lead_line_names_scope_lane_and_payload();
     }
 
     /// The seat walk: a row's parent chain seats under the first open epic
     /// no live team owns; the walk stops at this lead's own scope and at a
-    /// live team's node, and an L2+ (or untitled) beat seats nothing.
-    #[test]
+    /// live team's node, and an L2+ (or untitled) stand-up seats nothing.
     fn the_seat_walk_keys_on_leadless_epics_and_the_level() {
         let entries = vec![
             json!({"id": "x-mine", "type": "epic", "status": "ready"}),
@@ -750,7 +757,6 @@ mod tests {
     /// The rendered seat-lead line names the scope, the thread lane and the
     /// lead payload, with no --name: the nameless promote form the grant
     /// gate accepts from a holding session.
-    #[test]
     fn the_seat_lead_line_names_scope_lane_and_payload() {
         let lines = render_lines(&json!({
             "seat_leads": [{"scope": "x-eSeat", "children": ["x-seat1"]}],

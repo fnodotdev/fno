@@ -136,7 +136,6 @@ mod tests {
 
     /// A seat entry offers its scope's seat command, before any start line:
     /// seating precedes building in the pick order.
-    #[test]
     fn a_seat_entry_offers_the_seat_command_first() {
         let bp = json!({
             "seat_leads": [{"scope": "x-eSeat", "children": ["x-seat1"]}],
@@ -182,5 +181,6 @@ mod tests {
         );
         assert_eq!(*at(&answered, "reactive"), false);
         assert_eq!(*at(&answered, "pick"), "planned it");
+        a_seat_entry_offers_the_seat_command_first();
     }
 }
