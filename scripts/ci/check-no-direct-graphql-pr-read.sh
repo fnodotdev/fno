@@ -13,7 +13,7 @@ digest=$(printf '%s\n' "$matches" | LC_ALL=C sort | shasum -a 256 | awk '{print 
 # reserve gate is deleted, so its caller rows leave the inventory; the
 # remaining rows are documentation and the enforcement-boundary checks
 # below still hold.
-# Re-pinned 2026-11-20 (x-118b): six scripts/ops rows classify
+# Re-pinned 2026-11-20: six scripts/ops rows classify
 # operator-one-shot, one loopcheck argv row left when the commits read moved
 # to the REST commits endpoint, and the proxy boundary pin migrated to
 # run_proxy_main.

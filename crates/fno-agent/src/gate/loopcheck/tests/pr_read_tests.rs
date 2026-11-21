@@ -262,7 +262,7 @@ exit 1
         &[],
         Some("b/r"),
     )
-    .unwrap_or_else(|e| panic!("every read answers: {e:?}"));
+    .unwrap_or_else(|_| panic!("every read answers"));
     std::env::remove_var("RECORD_CALLS");
     assert_eq!(info.number, 7);
     let recorded = std::fs::read_to_string(&calls).unwrap();
