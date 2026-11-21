@@ -1711,6 +1711,11 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "skill_invoked",
     "pr_opened",
     "node_done",
+    // One first-seen rate-limited api_error (status_code 429 or 529) the
+    // OTel receiver ingests (eval/otel_ingest.rs); session and node ride
+    // the store's identity columns, and the scoreboard lanes view plus the
+    // lead check-in read it.
+    "provider_rate_limited",
 ];
 
 /// Build the unified events.jsonl envelope JSON Schema and the
