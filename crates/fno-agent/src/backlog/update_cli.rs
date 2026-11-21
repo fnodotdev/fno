@@ -1099,17 +1099,14 @@ fn write_update(
     linked_size: Option<&str>,
     pr: &DerivedPr,
 ) -> Result<(), Refusal> {
-    const ATTEMPTS: usize = 3;
+    const ATTEMPTS: usize = 5;
     for attempt in 0..ATTEMPTS {
-        // The version anchors BEFORE the row read: a commit that lands between
-        // the two makes this attempt's base_version stale, so the store
-        // refuses and the retry converges. The reverse order would publish
-        // the stale snapshot over the concurrent commit as a no-conflict
-        // write - a lost update.
-        let base_version = graph_store::base_version(graph)
+        // One read transaction returns the version stamp and the rows, so the
+        // plan and its pre-image come from the same instant. A write by another
+        // session to a row this update does not touch no longer refuses it.
+        let (base_version, snapshot) = graph_store::read_snapshot(graph)
             .map_err(|e| refused(format!("graph read failed: {e}"), 1))?;
-        let rows = graph_store::read_rows(graph)
-            .map_err(|e| refused(format!("graph read failed: {e}"), 1))?;
+        let rows = snapshot.rows.clone();
         let planned = plan_mutation(
             graph,
             rows,
@@ -1130,7 +1127,7 @@ fn write_update(
                 repaint_old_parent,
                 details_counts,
             } => {
-                match graph_store::locked_mutate(
+                match graph_store::locked_mutate_snapshot(
                     graph,
                     MutateInput {
                         entries: working,
@@ -1138,6 +1135,7 @@ fn write_update(
                         base_version,
                         plan_rungs: Some(rungs),
                     },
+                    snapshot,
                     LOCK_TIMEOUT,
                 ) {
                     Ok(_) => {
