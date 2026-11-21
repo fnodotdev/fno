@@ -8,11 +8,11 @@ allowed-tools: Read
 
 The `footnote` plugin is installed. Two surfaces compose: workflow skills and atomic `fno` CLI commands. Never hand-edit the state files the CLI manages.
 
-**Workflow commands** run plugin-qualified: `/fno:target`, `/fno:think`, `/fno:review`, `/fno:ship pr`, `/fno:fix`, `/fno:vision` (drafts a VISION.md for a repo that has none). Codex spells `$fno:`. **CLI primitives** run exact state transitions: `fno backlog done <id>`, `fno do pr status <n>`. A state transition runs the CLI primitive, never a skill.
+**Workflow commands** run plugin-qualified: `/fno:target`, `/fno:think`, `/fno:review`, `/fno:ship pr`, `/fno:fix`. Codex spells `$fno:`. **CLI primitives** run exact state transitions: `fno backlog done <id>`, `fno do pr status <n>`. A state transition runs the CLI primitive, never a skill.
 
 **Missing `fno`?** Nothing installs `fno` unasked: the hooks only print the install plan. If absent, tell the user the installer fetches the release tarball, checks its sha256, and links binaries into `~/.local/bin`, then ask. On a yes run `bash "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/postinstall.sh"`: `installer exit 0` means done, any other exit means failed. The binary lands at `~/.local/bin/fno`. Bare `fno` works once PATH carries that folder. No new session is needed. Only a no blocks: say what is blocked and stop cleanly. Then run the user's command right here.
 
-**Full guide:** the version-matched guide (mail receipts, panes, mesh, fno-app) prints on demand: `fno whoami guide` whole, `fno whoami guide <topic>` for one.
+**Full guide:** the version-matched guide (mail receipts, panes, mesh, fno-app, vision) prints on demand: `fno whoami guide` whole, `fno whoami guide <topic>` for one.
 
 ## Relay compression contract
 
