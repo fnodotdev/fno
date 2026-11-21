@@ -1048,7 +1048,10 @@ impl MessagesBoard {
         if self.filter == ListFilter::Broadcasts && rows.is_empty() {
             lines.extend(TLine::meta("(no broadcast groups)").wrap(wrap_w));
         }
-        if self.snapshot.projection.is_some() && self.filter == ListFilter::All && rows.is_empty() {
+        // The You row is a standing affordance, never content: an empty
+        // board is one where no row but You paints.
+        let only_you = rows.iter().all(|r| matches!(r, TreeRow::Asks { .. }));
+        if self.snapshot.projection.is_some() && self.filter == ListFilter::All && only_you {
             lines.extend(
                 TLine::meta(
                     "No mail yet. Import past sessions: fno mail admin backfill --all --apply",
