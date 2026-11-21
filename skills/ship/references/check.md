@@ -509,6 +509,12 @@ SESSION_ID=$(grep -E "^[[:space:]]*session_id:" "$STATE_DIR/target-state.md" 2>/
 _CANON_ROOT="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)")"
 MEMORY_DIR="${HOME}/.claude/projects/$(printf '%s' "$_CANON_ROOT" | sed 's|/|-|g')/memory"
 
+# Evidence pointer: "<session id>:<transcript offset>" (same recipe as the
+# pre-promise pass). The writer refuses a candidate without it, and
+# use-tracked retirement reads the pointer.
+TRANSCRIPT="${HOME}/.claude/projects/$(printf '%s' "$PWD" | sed 's|/|-|g')/${SESSION_ID}.jsonl"
+EVIDENCE="${SESSION_ID}:$(wc -l < "$TRANSCRIPT" 2>/dev/null || echo 0)"
+
 CANDIDATE='<JSON for this candidate>'
 
 # Read-before-write, same guard as the pre-promise recipe. A memory
@@ -535,6 +541,7 @@ fi
 bash "${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/scripts/memory/write-memory-entry.sh" \
     --memory-dir "$MEMORY_DIR" \
     --session-id "$SESSION_ID" \
+    --evidence "$EVIDENCE" \
     --candidate "$CANDIDATE" \
     --source-sha256 "$SOURCE_SHA256"
 # exit 3 = staged, not written (hand-written existing entry, or a stale/
