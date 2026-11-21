@@ -111,13 +111,13 @@ The login key is the first 16 hex digits of the SHA-256 of the lowercased login,
 | `fno backlog get <id>` or `fno backlog get <id> --json` | The graph row as one object, when its `project` is the file's project and the caller's invite covers it |
 | `fno backlog list` or `fno backlog list --json` | `{rows, total, showing, hidden}` over the rows of that project the caller's invite covers |
 
-An invite covers a node when its scope is `*`, the node, or an ancestor of the node. Any other argv, an extra flag, or a node outside the invite answers nothing. The block then keeps its declared rows, and the page names the refused read. A hosted row is the raw graph row: the computed keys of the CLI `get` (`_number`, `_reading`, `_resolved_cwd`, `children`) are absent. A local feed keeps its own reader, which runs the read as a process.
+An invite whose scope is `*`, the node, or an ancestor of the node covers that node. Any other argv, an extra flag, or a node outside the invite answers nothing. The block then keeps its declared rows, and the page names the refused read. A hosted row is the raw graph row: the computed keys of the CLI `get` (`_number`, `_reading`, `_resolved_cwd`, `children`) are absent. A local feed keeps its own reader, which runs the read as a process.
 
-`POST /hq/mine/look` with `{"project", "look"}` stores the look. A look is a pick from closed sets: `theme` auto, light or dark; `density` comfortable or compact; `accent` ink, blue, green or violet from the house tokens. A value outside the set, or an unknown field, answers 400. Raw CSS is not a choice, because a `url()` in CSS can send data off the page. The accent tints the Mine frame only, since hue carries state everywhere else. The page applies the look of the first project file, and a change posts to that file.
+`POST /hq/mine/look` with `{"project", "look"}` stores the look. A look is a pick from closed sets. `theme` is auto, light or dark. `density` is comfortable or compact. `accent` is ink, blue, green or violet from the house tokens. A value outside the set, or an unknown field, answers 400. Raw CSS is not a choice, because a `url()` in CSS can send data off the page. The accent tints the Mine frame only, since hue carries state everywhere else. The page applies the look of the first project file, and a change posts to that file.
 
-What a hosted user may change, and what never changes:
+What a hosted user can change, and what never changes:
 
-| Surface | A hosted user may change it | How |
+| Surface | A hosted user can change it | How |
 |---|---|---|
 | Look | yes | Theme, density and accent from the closed sets above. |
 | Panels | yes | Views in their own Mine section. |
