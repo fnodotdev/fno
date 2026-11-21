@@ -1009,11 +1009,9 @@ pub fn apply_with_timeout(
 ) -> Result<PatchReceipt, PatchRefusal> {
     const ATTEMPTS: usize = 3;
     for attempt in 0..ATTEMPTS {
-        let version =
-            graph_store::base_version(graph).map_err(|e| PatchRefusal::error(e.to_string()))?;
-        let rows = graph_store::read_rows(graph)
+        let (version, snapshot) = graph_store::read_snapshot(graph)
             .map_err(|e| PatchRefusal::error(format!("graph read failed: {e}")))?;
-        let planned = plan(rows, req)?;
+        let planned = plan(snapshot.rows.clone(), req)?;
         if planned.changes.is_empty() {
             return Ok(PatchReceipt {
                 node: planned.node_id,
@@ -1026,7 +1024,7 @@ pub fn apply_with_timeout(
                 unchanged: true,
             });
         }
-        match graph_store::locked_mutate(
+        match graph_store::locked_mutate_snapshot(
             graph,
             MutateInput {
                 entries: planned.working,
@@ -1034,6 +1032,7 @@ pub fn apply_with_timeout(
                 base_version: version,
                 plan_rungs: Some(planned.rungs),
             },
+            snapshot,
             lock_timeout,
         ) {
             Ok(outcome) => {

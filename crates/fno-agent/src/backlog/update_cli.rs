@@ -1106,13 +1106,11 @@ fn write_update(
         // refuses and the retry converges. The reverse order would publish
         // the stale snapshot over the concurrent commit as a no-conflict
         // write - a lost update.
-        let base_version = graph_store::base_version(graph)
-            .map_err(|e| refused(format!("graph read failed: {e}"), 1))?;
-        let rows = graph_store::read_rows(graph)
+        let (base_version, snapshot) = graph_store::read_snapshot(graph)
             .map_err(|e| refused(format!("graph read failed: {e}"), 1))?;
         let planned = plan_mutation(
             graph,
-            rows,
+            snapshot.rows.clone(),
             args,
             details,
             details_from_file,
@@ -1130,7 +1128,7 @@ fn write_update(
                 repaint_old_parent,
                 details_counts,
             } => {
-                match graph_store::locked_mutate(
+                match graph_store::locked_mutate_snapshot(
                     graph,
                     MutateInput {
                         entries: working,
@@ -1138,6 +1136,7 @@ fn write_update(
                         base_version,
                         plan_rungs: Some(rungs),
                     },
+                    snapshot,
                     LOCK_TIMEOUT,
                 ) {
                     Ok(_) => {
