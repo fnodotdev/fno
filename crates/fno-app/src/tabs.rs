@@ -176,12 +176,14 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
             here = here.child(ui::role(div(), Role::Hint, &p).flex_none().child("/"));
         }
         let r = if i == 1 { Role::Heading } else { Role::Meta };
-        // Only the agent name gives way, and it ends in an ellipsis.
-        let cell = ui::role(div(), r, &p).whitespace_nowrap();
+        // Only the agent name gives way, and it ends in an ellipsis: a
+        // one-line clamp, as the tab labels use, since a nowrap truncate
+        // reuses its untruncated layout and clips mid-glyph.
+        let cell = ui::role(div(), r, &p);
         let cell = if i == last && i > 1 {
-            cell.min_w_0().truncate()
+            cell.min_w_0().line_clamp(1).text_ellipsis()
         } else {
-            cell.flex_none()
+            cell.flex_none().whitespace_nowrap()
         };
         here = here.child(cell.child(part));
     }
