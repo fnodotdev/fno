@@ -63,7 +63,7 @@ struct NtfySinkRow {
     topic: String,
 }
 
-/// One ntfy sink row as the reachable check read structs: type ntfy with a string view base.
+/// One ntfy sink row as the reachable check reads it: type ntfy with a non-empty string view base, since an empty one is a half-written row.
 #[derive(serde::Deserialize)]
 struct ViewSinkRow {
     #[serde(rename = "type")]
@@ -129,7 +129,7 @@ impl Tailscale for CmdTailscale {
 pub fn view_reachable(rows: &[Value]) -> bool {
     rows.iter().any(|r| {
         serde_json::from_value::<ViewSinkRow>(r.clone())
-            .map(|s| s.kind == "ntfy")
+            .map(|s| s.kind == "ntfy" && !s.view_base_url.is_empty())
             .unwrap_or(false)
     })
 }
