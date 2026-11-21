@@ -12,9 +12,11 @@ use crate::digest_overlay::ObsidianCfg;
 use crate::link::{plan_link, PlanLink};
 use crate::needs_overlay::{AnsweredItem, QuestionItem, QuestionsFold};
 
+#[cfg_attr(not(feature = "web"), allow(dead_code))]
 pub const REFRESH_AFTER: Duration = Duration::from_secs(60);
 
 #[derive(Default)]
+#[cfg_attr(not(feature = "web"), allow(dead_code))]
 pub struct HqCache {
     state: tokio::sync::Mutex<Board>,
     /// The first read: every request before it waits on the same one.
@@ -58,6 +60,7 @@ pub struct Board {
     read_at: Option<Instant>,
 }
 
+#[cfg_attr(not(feature = "web"), allow(dead_code))]
 impl HqCache {
     /// True when the caller should start a refresh. Claiming stamps the
     /// attempt, so a burst of reads starts one and a lost refresh retries.

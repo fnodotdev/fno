@@ -1007,6 +1007,20 @@ impl Root {
         record_ui_state(self, cx);
     }
 
+    /// The project path a session runs in, for its project skills: the
+    /// launch panel's known project whose basename is the row's cwd.
+    fn chat_project(&self, key: Option<&SessionKey>) -> String {
+        let base = key.and_then(|k| {
+            self.layout
+                .agents
+                .iter()
+                .find(|a| a.harness_session_id.as_deref() == Some(k.session_id.as_str()))
+                .and_then(|a| a.cwd_base.clone())
+        });
+        base.and_then(|b| self.launch.state.project_for_base(&b))
+            .unwrap_or_default()
+    }
+
     /// In chat mode, stream the focused pane's agent session. A new focus
     /// parks the shown conversation and resumes the new one where it left.
     fn sync_chat(&mut self, cx: &mut Context<Self>) {
@@ -1019,7 +1033,8 @@ impl Root {
         if self.main != MainView::Chat || key == self.chat.key {
             return;
         }
-        self.chat.switch(key);
+        let project = self.chat_project(key.as_ref());
+        self.chat.switch(key, &project);
         self.open_chat(cx);
         // The shown conversation changed: chat find re-scans the new rows.
         self.find_rescan(cx);
@@ -1371,7 +1386,8 @@ impl Root {
             if let Some(key) = launch::stream_key(&self.layout.agents, &name) {
                 self.launch.show = None;
                 self.pinned = Some(key.clone());
-                self.chat.switch(Some(key));
+                let project = self.chat_project(Some(&key));
+                self.chat.switch(Some(key), &project);
                 self.open_chat(cx);
             }
         }
@@ -1804,6 +1820,9 @@ impl Root {
                 }
             }
             "enter" => self.launch.state.draft.replace_selection("\n"),
+            "tab" if self.launch.state.complete_skill() => {}
+            "escape" if self.launch.state.skill_close() => {}
+            "up" | "down" if self.launch.state.skill_step(key.key == "down") => {}
             "backspace" => self.launch.state.draft.backspace(),
             "delete" => self.launch.state.draft.delete(),
             "left" if cmd => self.launch.state.draft.home(shift),
@@ -1956,6 +1975,9 @@ impl Root {
         match key.key {
             "enter" if !shift => self.submit_chat(cx),
             "enter" => self.chat.draft.replace_selection("\n"),
+            "tab" if self.chat.complete_skill() => {}
+            "escape" if self.chat.skill_close() => {}
+            "up" | "down" if self.chat.skill_step(key.key == "down") => {}
             "backspace" => self.chat.draft.backspace(),
             "delete" => self.chat.draft.delete(),
             "left" if cmd => self.chat.draft.home(shift),
@@ -3482,6 +3504,8 @@ pub(super) fn root_for_shot(
     empty_chat: bool,
     cmd: bool,
     sheet: bool,
+    draft: Option<String>,
+    harness: Option<String>,
     window: &mut Window,
     cx: &mut App,
 ) -> gpui::Entity<Root> {
@@ -3518,10 +3542,21 @@ pub(super) fn root_for_shot(
         root.sheet_on_first_read = sheet;
         if empty_chat {
             root.shot_empty_chat = true;
-            root.chat.switch(None);
+            root.chat.switch(None, "");
         }
         if cmd {
             root.picking = true;
+        }
+        if let Some(h) = harness {
+            root.launch.state.set_harness_for_shot(h);
+        }
+        if let Some(text) = draft {
+            if root.shot_empty_chat {
+                root.launch.state.refresh_skills();
+                root.launch.state.draft.replace_selection(&text);
+            } else {
+                root.chat.draft.replace_selection(&text);
+            }
         }
     });
     if let Some(find) = find {

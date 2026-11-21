@@ -314,6 +314,7 @@ fn paint_bline(
         return;
     }
     record_node_spans(r, c0, w, line, roles);
+    record_audience_spans(r, c0, w, line, roles);
     let mut sc = c0;
     for (j, ch) in line.text.chars().enumerate() {
         if sc - c0 >= w || sc >= cols {
@@ -439,5 +440,81 @@ pub(crate) fn paint_title_row(
             &[Role::Text(TextStyle::Meta)],
             theme,
         );
+    }
+}
+
+thread_local! {
+    /// The chip spans the last compose painted, parked at node_spans_end.
+    static AUDIENCE_PAINTED: std::cell::RefCell<Vec<NodeSpan>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    /// The collecting slot during the compose window.
+    static AUDIENCE_SPANS: std::cell::RefCell<Option<Vec<NodeSpan>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The audience chip painted at `(row, col)` by the last compose, if any:
+/// the tap target that opens the persona overlay.
+pub(crate) fn audience_at(row: usize, col: usize) -> Option<String> {
+    AUDIENCE_PAINTED.with(|p| {
+        p.borrow()
+            .iter()
+            .find(|s| s.row == row && col >= s.col && col < s.col + s.len)
+            .map(|s| s.id.clone())
+    })
+}
+
+/// Record the audience-chip runs of one painted line: the screen rectangle
+/// of each maximal Meta-role run that reads `customer:...`, so a press on
+/// the chip opens the persona overlay (the row's Enter keeps opening the
+/// node detail). Mirrors the node-id recording in [`record_node_spans`].
+fn record_audience_spans(r: usize, c0: usize, w: usize, line: &TLine, roles: &[Role]) {
+    AUDIENCE_SPANS.with(|slot| {
+        let mut guard = slot.borrow_mut();
+        let Some(spans) = guard.as_mut() else {
+            return;
+        };
+        let meta = TextStyle::Meta.role();
+        let mut col = c0;
+        let mut open = false;
+        let mut text = String::new();
+        let mut start = 0usize;
+        for (j, ch) in line.text.chars().enumerate() {
+            let is_meta = roles.get(j).copied() == Some(meta);
+            if is_meta && !open {
+                open = true;
+                text = String::new();
+                start = col;
+            } else if !is_meta && open {
+                open = false;
+                audience_run(spans, r, c0, w, start, std::mem::take(&mut text));
+            }
+            if open {
+                text.push(ch);
+            }
+            col += char_w(ch);
+        }
+        if open {
+            audience_run(spans, r, c0, w, start, text);
+        }
+    });
+}
+
+/// One maximal `customer:...` run, fully painted: park it.
+fn audience_run(
+    spans: &mut Vec<NodeSpan>,
+    r: usize,
+    c0: usize,
+    w: usize,
+    start: usize,
+    text: String,
+) {
+    let word = text.trim_start_matches(|c: char| !c.is_ascii_alphanumeric());
+    if word.starts_with("customer") && start + text.chars().count() <= c0 + w {
+        spans.push(NodeSpan {
+            row: r,
+            col: start,
+            len: text.chars().count(),
+            id: word.to_string(),
+        });
     }
 }

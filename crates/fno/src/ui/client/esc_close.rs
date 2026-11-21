@@ -137,6 +137,16 @@ mod tests {
                 Box::new(|v| v.digest.is_none()),
             ),
             (
+                "persona",
+                Box::new(|v| {
+                    v.persona = super::super::persona_overlay::open_from(
+                        Some(&"customer:walk-fixture".to_string()),
+                        Some("fno"),
+                    );
+                }),
+                Box::new(|v| v.persona.is_none()),
+            ),
+            (
                 "needs me",
                 Box::new(|v| {
                     v.mine_fold = Some(Vec::new());

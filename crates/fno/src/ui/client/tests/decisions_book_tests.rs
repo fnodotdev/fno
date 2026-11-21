@@ -32,7 +32,7 @@ fn the_book_paints_sections_and_faces_with_no_ids() {
         book_row(
             "d-1",
             "merge-guard-purpose",
-            "law",
+            "user",
             "live",
             "2026-11-05T00:00:00Z",
             "A merge guard stops a PR only when it does not solve the plan's problems.",
@@ -40,7 +40,7 @@ fn the_book_paints_sections_and_faces_with_no_ids() {
         book_row(
             "d-2",
             "look-rows-forward",
-            "coord",
+            "agent",
             "unscoped",
             "2026-11-05T01:00:00Z",
             "A look approval rolls forward to every later head until merge.",
@@ -84,7 +84,7 @@ fn the_book_toggle_returns_to_the_flat_table() {
     let rows = vec![book_row(
         "d-3",
         "ask-length",
-        "law",
+        "user",
         "live",
         "2026-11-05T02:00:00Z",
         "Keep the ask short. The flat table paints the raw slug.",
@@ -114,7 +114,7 @@ fn retract_takes_its_reason_inline_and_runs_the_door_with_no_pane() {
     let row = book_row(
         "d-7",
         "merge-guard",
-        "law",
+        "user",
         "live",
         "2026-11-05T00:00:00Z",
         "x",
@@ -153,4 +153,45 @@ fn retract_takes_its_reason_inline_and_runs_the_door_with_no_pane() {
     crate::client::decisions_view::keys(&mut v, b"\x1b");
     assert!(v.decisions_board.is_some(), "Esc cancels the entry only");
     assert_eq!(crate::client::decisions_view::last_door_argv(), None);
+}
+
+#[test]
+fn enter_on_a_persona_chip_row_opens_the_overlay_and_a_bare_row_keeps_the_noop() {
+    let mut v = two_pane_view();
+    let mut chip = book_row(
+        "d-1",
+        "meter-usage",
+        "user",
+        "live",
+        "2026-11-05T00:00:00Z",
+        "Meter usage in whole units.",
+    );
+    chip.audience = Some("customer:walk-fixture".into());
+    crate::client::decisions_view::open_rows(&mut v, vec![chip]);
+    crate::client::decisions_view::keys(&mut v, b"\r");
+    assert!(
+        v.persona.is_some(),
+        "the chip row's Enter opens the persona overlay"
+    );
+    // Esc routes through the persona overlay: the precedence chain hands
+    // keys to it ahead of the decisions board, so the close goes through
+    // the overlay's own keys, exactly as the live dispatch does.
+    crate::client::persona_overlay::keys(&mut v, b"\x1b");
+    assert!(v.persona.is_none(), "esc closes the overlay");
+    crate::client::decisions_view::open_rows(
+        &mut v,
+        vec![book_row(
+            "d-2",
+            "hold-build",
+            "agent",
+            "live",
+            "2026-11-05T01:00:00Z",
+            "Hold the build until the queue drains.",
+        )],
+    );
+    crate::client::decisions_view::keys(&mut v, b"\r");
+    assert!(
+        v.persona.is_none(),
+        "a row that names no persona keeps the old no-op"
+    );
 }

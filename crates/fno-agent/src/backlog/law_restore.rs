@@ -79,8 +79,7 @@ pub fn run_restore(argv: &[String]) -> i32 {
         Err(message) => return door_refuse(&message),
     };
     // The record door's user gate: a restored wide law signs like a new one.
-    if let Some(refusal) = data
-        .get("scope")
+    if let Some(refusal) = crate::backlog::audience::stored_audience(&data)
         .and_then(Value::as_str)
         .and_then(wide_scope_refusal)
     {
@@ -151,7 +150,7 @@ fn restored_data(token: &str, rows: &[Value], caller: &Caller) -> Result<Value, 
             && row_subject(r)
                 .trim()
                 .eq_ignore_ascii_case(row_subject(old).trim())
-            && field(r, "scope") == field(old, "scope")
+            && audience_of(r) == audience_of(old)
     }) {
         return Err(format!(
             "{} is live under the subject {:?}; retract or supersede it instead of \
@@ -189,6 +188,17 @@ fn restored_data(token: &str, rows: &[Value], caller: &Caller) -> Result<Value, 
 
 fn field<'a>(row: &'a Value, key: &str) -> &'a str {
     row.get(key).and_then(Value::as_str).unwrap_or("")
+}
+
+/// Stored rows predate the audience rename; both spellings read as the same
+/// field.
+fn audience_of(row: &Value) -> &str {
+    let a = field(row, "audience");
+    if a.is_empty() {
+        field(row, "scope")
+    } else {
+        a
+    }
 }
 
 fn newest<'a>(rows: &'a [Value], keep: impl Fn(&Value) -> bool) -> Option<&'a Value> {

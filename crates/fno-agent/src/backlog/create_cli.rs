@@ -51,6 +51,17 @@ pub struct AddArgs {
     pub source_node: Option<String>,
     pub source_kind: String,
     pub related: Vec<String>,
+    /// Who the node serves (`--audience`): no default; a `--parent` create
+    /// carries the parent's scope and the receipt says so.
+    pub audience: Option<String>,
+    /// The goal behind the ask (`--why`); the user's words when the ask came
+    /// from him. Required.
+    pub why: Option<String>,
+    /// Acceptance a merge check can read (`--done-means`). Required.
+    pub done_means: Option<String>,
+    /// The persona jobs served (`--job <persona>/<job-slug>`, repeatable);
+    /// one per named persona when the scope names personas.
+    pub job: Vec<String>,
     // The legacy `new` word's extras (node_builder.cmd_new's surface):
     // scoped opt-outs and inbox provenance.
     pub source_project: Option<String>,
@@ -103,6 +114,10 @@ fn flag_name(arg: &str) -> Option<&str> {
         "--source-session-id",
         "--prefix",
         "--related",
+        "--audience",
+        "--why",
+        "--done-means",
+        "--job",
     ];
     if long.contains(&arg) {
         return Some(arg);
@@ -198,6 +213,10 @@ pub fn parse(tail: &[String]) -> ParsedAdd {
                     "--source-inbox-thread" => args.source_inbox_thread = Some(value),
                     "--source-session-id" => args.source_session_id = Some(value),
                     "--prefix" => args.prefix = Some(value.to_lowercase()),
+                    "--audience" => args.audience = Some(value),
+                    "--why" => args.why = Some(value),
+                    "--done-means" => args.done_means = Some(value),
+                    "--job" => args.job.push(value),
                     _ => unreachable!("long flags covered"),
                 }
             }
@@ -1135,7 +1154,7 @@ fn append_creation_vote(graph: &Path, node_id: &str, evidence: &str) {
 /// inside it, then the post-write ladder. Every post step is non-fatal
 /// except the readback guard.
 pub fn run(tail: &[String]) -> i32 {
-    let args = match parse(tail) {
+    let mut args = match parse(tail) {
         ParsedAdd::Help => {
             print!("{ADD_HELP}");
             return 0;
@@ -1146,6 +1165,7 @@ pub fn run(tail: &[String]) -> i32 {
         }
         ParsedAdd::Args(a) => a,
     };
+    prompt_missing_record_fields(&mut args);
     match create_node(&args, &|_| None) {
         Ok(born) => {
             // stderr, not stdout: the JSON payload stays machine-readable,
@@ -1222,6 +1242,71 @@ pub(crate) fn cited_runbook(details: &str) -> Option<String> {
     })
 }
 
+/// A bare create at a real terminal prompts for the who/why instead of
+/// refusing: the v0.1.0 tester path (lead ruling, 2026-11-16). Agent
+/// sessions keep the refusal: their stdin is a pane pty, and a prompt there
+/// would hang the pane. Non-tty callers (scripts, the golden replays) keep
+/// it too, so the recorded doors stay verbatim.
+fn interactive_stdin() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdin().is_terminal()
+        && std::env::var_os("CLAUDECODE").is_none()
+        && std::env::var_os("CLAUDE_CODE_SESSION_ID").is_none()
+        && std::env::var_os("CODEX_THREAD_ID").is_none()
+}
+
+/// One prompted line. Empty input leaves the field as it was, so the
+/// caller's refusal still fires; the prompt rides stderr because stdout is
+/// the receipt surface.
+fn prompt_value(label: &str, hint: &str) -> Option<String> {
+    if !interactive_stdin() {
+        return None;
+    }
+    eprintln!("{label}: {hint}");
+    eprint!("> ");
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line).ok()?;
+    let trimmed = line.trim().to_string();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
+/// Fill the who/why fields the door would refuse on, from one prompted line
+/// each. Only what is missing is asked; a present flag is never overwritten.
+fn prompt_missing_record_fields(args: &mut AddArgs) {
+    if args.why.as_deref().map(str::trim).unwrap_or("").is_empty() {
+        if let Some(w) = prompt_value(
+            "why",
+            "required: the goal behind the ask, quoted from the user's words when the ask came from him",
+        ) {
+            args.why = Some(w);
+        }
+    }
+    if args
+        .done_means
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("")
+        .is_empty()
+    {
+        if let Some(d) = prompt_value(
+            "done-means",
+            "required: the acceptance a merge check can read",
+        ) {
+            args.done_means = Some(d);
+        }
+    }
+    // A --parent create inherits the parent's audience, so it prompts
+    // nothing: asking would override the carry with an explicit value.
+    if args.audience.is_none() && args.parent.is_none() {
+        if let Some(a) = prompt_value(
+            "audience",
+            "who this record serves: internal, customers, customer:<persona>, or ask (mint held until the operator answers)",
+        ) {
+            args.audience = Some(a);
+        }
+    }
+}
+
 pub(crate) fn create_node(
     args: &AddArgs,
     reuse: &dyn Fn(&[Value]) -> Option<Value>,
@@ -1260,6 +1345,27 @@ pub(crate) fn create_node(
                 args.source_kind,
                 sorted_source_kinds()
             ),
+            1,
+        ));
+    }
+    // Who and why have no default on a node: each filing names who it serves
+    // and the goal behind the ask, and a node states what done means. A
+    // carried scope still refuses a missing why or done-means.
+    if args.why.as_deref().map(str::trim).unwrap_or("").is_empty() {
+        return Err(refused(
+            "Error: --why is required: the goal behind the ask, quoted from the user's words when the ask came from him.",
+            1,
+        ));
+    }
+    if args
+        .done_means
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("")
+        .is_empty()
+    {
+        return Err(refused(
+            "Error: --done-means is required: the acceptance a merge check can read.",
             1,
         ));
     }
@@ -1383,6 +1489,68 @@ pub(crate) fn create_node(
     // unused_assignments names.
     #[allow(unused_assignments)]
     let mut filing_think: (Option<String>, Option<String>) = (None, None);
+    // The audience has no default. An explicit --audience wins; a --parent create
+    // carries the parent's scope and the receipt names the carry. Neither
+    // refuses: the author names who the node serves or points at a parent
+    // that already did.
+    let mut scope_carried_from: Option<String> = None;
+    // --audience ask: the who is undecided on purpose. The row stores audience?,
+    // one question goes to the lead with the node linked, and the node
+    // holds from dispatch until a scope lands (backlog_ready selection).
+    let scope_ask = args.audience.as_deref().map(str::trim) == Some("ask");
+    let effective_scope = if scope_ask {
+        Some("audience?".to_string())
+    } else {
+        match args.audience.as_deref().map(str::trim) {
+            Some(s) if !s.is_empty() => Some(s.to_string()),
+            _ => {
+                let parent_scope = args.parent.as_deref().and_then(|pid| {
+                    crate::graph_store::read_rows(&graph).ok().and_then(|rows| {
+                        rows.iter()
+                            .find(|r| {
+                                crate::backlog::question_intake::str_field(r, "id") == Some(pid)
+                            })
+                            .and_then(|r| crate::backlog::question_intake::str_field(r, "audience"))
+                            .map(String::from)
+                    })
+                });
+                match parent_scope {
+                    Some(s) => {
+                        scope_carried_from = args.parent.clone();
+                        Some(s)
+                    }
+                    None => None,
+                }
+            }
+        }
+    };
+    let project_id = resolved_project.as_deref().unwrap_or("fno");
+    // A derived value of audience? (a --audience ask, a fork carry from a parent
+    // whose scope is still undecided) is the undecided state: store scope?,
+    // skip the job check; only the explicit --audience ask files the question.
+    let undecided = effective_scope.as_deref() == Some("audience?");
+    let scope: String = if undecided {
+        "audience?".to_string()
+    } else {
+        match crate::backlog::audience::parse_audience(effective_scope.as_deref(), project_id) {
+            Ok(s) => s,
+            Err(e) => {
+                // The tester path: name the prompt door when no audience was
+                // passed at all, so the refusal points at --audience ask.
+                let hint = if effective_scope.is_none() {
+                    " Pass --audience ask to file now: the node mints at audience? and the operator answers the question."
+                } else {
+                    ""
+                };
+                return Err(refused(format!("Error: {}{hint}", e.0), 1));
+            }
+        }
+    };
+    if !undecided {
+        if let Err(e) = crate::backlog::audience::validate_job(&scope, &args.job, project_id) {
+            return Err(refused(format!("Error: {}", e.0), 1));
+        }
+    }
     let (minted, node, rollup_lines, dropped, source_node_id) = loop {
         retry += 1;
         let base_version = crate::graph_store::base_version(&graph)
@@ -1471,6 +1639,10 @@ pub(crate) fn create_node(
             "title": args.title,
             "type": args.type_,
             "project": resolved_project,
+            "audience": scope,
+            "why": args.why,
+            "done_means": args.done_means,
+            "job": args.job,
             "cwd": resolved_cwd,
             // Plan-less birth: the derived status the Python write stored.
             "status": "idea",
@@ -1610,6 +1782,76 @@ pub(crate) fn create_node(
     // pipe through jq. Every receipt here is advisory human output.
     for line in &rollup_lines {
         super::receipt::emit_line_to(std::io::stderr(), line);
+    }
+    // The scope receipt: a carried value always says so, an explicit value
+    // never reads as carried.
+    if let Some(parent) = &scope_carried_from {
+        super::receipt::emit_line_to(
+            std::io::stderr(),
+            &format!("audience: carried {scope} from {parent}"),
+        );
+    } else {
+        super::receipt::emit_line_to(std::io::stderr(), &format!("audience: {scope}"));
+    }
+    // --audience ask: one question to the lead, the node linked, one per node.
+    // The question rides a full question file: the intake refuses flag-only
+    // options (they carry no What happens next), so the ask generates the
+    // sections itself from what the create door knows.
+    if scope_ask {
+        let ask_file = crate::outstanding_cmds::question_file_text(
+            crate::outstanding_cmds::QuestionFile {
+                question: "Which customer does the node serve?",
+                options: &[
+                    ("internal", "the node records audience internal and leaves the hold"),
+                    ("customers", "the node serves every customer persona of this project"),
+                    ("customer:<persona>", "name the persona file under profile/customers and the job it serves"),
+                ],
+                blocked_because: "the node holds at audience? and no live dispatcher takes it until the audience is set",
+                rationale: "the create door refuses a default: each record names who it serves, and these are the three audiences it accepts",
+                downside: "the question waits on the operator and the node stays off the dispatch lane meanwhile",
+                recommend: 1,
+                recommend_why: "internal, when the node is this project's own operation; name the persona otherwise",
+                not_thought_through: "whether the named persona file exists; the update door checks that when the audience is set",
+                tried: "the create door has no default to offer: the who is genuinely undecided at filing time",
+                evidence: "the create door minted the node at audience? and filed this question",
+                reversible: "yes",
+                meanwhile: "the node stays on the board at audience?; everything but dispatch keeps moving",
+            },
+        );
+        match crate::outstanding_cmds::file_ask(
+            crate::outstanding_cmds::AskFiling {
+                text: ask_file,
+                template: false,
+                ask: Some(format!("fno backlog update {minted} audience=<audience>")),
+                options: Vec::new(),
+                blocks: vec![minted.clone()],
+                node: Some(minted.clone()),
+                subject: Some(format!("audience ask for {minted}")),
+                // The ask itself serves this project's own operation.
+                audience: Some("internal".to_string()),
+                why: args.why.clone(),
+                job: Vec::new(),
+                images: Vec::new(),
+            },
+            &cwd_root,
+        ) {
+            (0, Some(qid)) => {
+                super::receipt::emit_line_to(
+                    std::io::stderr(),
+                    &format!(
+                        "audience: ask filed {qid}; held from dispatch until the audience is set"
+                    ),
+                );
+            }
+            (code, _) => {
+                super::receipt::emit_line_to(
+                    std::io::stderr(),
+                    &format!(
+                        "audience: ask filing exited {code}; the node still holds at audience?"
+                    ),
+                );
+            }
+        }
     }
     // Name a captured origin on stderr. Silent when no signal existed at
     // all, never silent when one was found and rejected.
@@ -2931,7 +3173,8 @@ pub fn run_idea(tail: &[String]) -> i32 {
             eprintln!("{message}");
             return exit;
         }
-        ParsedIdea::Args(a) => {
+        ParsedIdea::Args(mut a) => {
+            prompt_missing_record_fields(&mut a.add);
             if a.wave_of.is_none() {
                 emit_prior_work(&a);
             }

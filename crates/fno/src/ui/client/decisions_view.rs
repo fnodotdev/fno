@@ -23,6 +23,13 @@ pub(crate) struct DecisionsBoard {
     entry: Option<Entry>,
 }
 
+impl DecisionsBoard {
+    /// The row the cursor holds, for the persona overlay's chip read.
+    pub(crate) fn selected_row(&self) -> Option<&DecisionRow> {
+        self.table.selected()
+    }
+}
+
 /// The text a retract (its reason) or an overrule (the new ruling) waits on.
 struct Entry {
     row: DecisionRow,
@@ -162,6 +169,42 @@ fn paint_ansi(row: &mut [Cell], line: &str) {
     }
 }
 
+/// The decisions table inside a docked host column: the same render the
+/// full paint uses, scoped to the rect and cleared first, so no pane
+/// text bleeds through the docked page.
+pub(crate) fn paint_column(
+    view: &View,
+    cells: &mut [Cell],
+    rows: usize,
+    cols: usize,
+    host: (usize, usize, usize, usize),
+) {
+    let (top, left, h, w) = host;
+    for r in top..(top + h).min(rows) {
+        let base = r * cols + left;
+        if let Some(span) = cells.get_mut(base..base + w) {
+            span.fill(Cell::default());
+        }
+    }
+    let Some(b) = &view.decisions_board else {
+        return;
+    };
+    let title = crate::text_style::TLine::meta("decisions");
+    backlog_style::paint_panel(cells, rows, cols, top, w, 1, &[title], None, &view.theme);
+    // The table render carries its own ANSI styling: parse it straight
+    // into the column cells the way paint_full does, never as raw text.
+    for (i, line) in render(&b.table, w, h.saturating_sub(1)).iter().enumerate() {
+        let r = top + 1 + i;
+        if r >= rows {
+            break;
+        }
+        let base = r * cols + left;
+        if let Some(row) = cells.get_mut(base..base + w) {
+            paint_ansi(row, line);
+        }
+    }
+}
+
 pub(crate) fn paint_full(view: &View, cells: &mut [Cell], rows: usize, cols: usize) {
     cells[..rows * cols].fill(Cell::default());
     view.paint_top_row(cells, cols, cols);
@@ -280,6 +323,25 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) {
     {
         entry_keys(view, bytes);
         return;
+    }
+    // Enter on the selected row: the table binds no Enter today, so the
+    // row's audience chip takes the free slot and opens the persona
+    // overlay. A row that names no persona keeps the old no-op.
+    if bytes == b"\r" || bytes == b"\n" {
+        let project = persona_overlay::session_project(view);
+        let persona = view
+            .decisions_board
+            .as_ref()
+            .and_then(|b| b.table.selected())
+            .and_then(|row| persona_overlay::open_from(row.audience.as_ref(), Some(&project)))
+            .map(|mut o| {
+                o.home = persona_overlay::Home::Decision;
+                o
+            });
+        if let Some(p) = persona {
+            view.persona = Some(p);
+            return;
+        }
     }
     let key = if bytes == b"\x1b" {
         Key::Quit
@@ -450,4 +512,28 @@ pub(crate) async fn mouse(
         }
     }
     Ok(())
+}
+
+/// Move the table selection to the named decision, if the visible rows
+/// hold it. The persona overlay's serving dispatch lands here.
+pub(crate) fn select_decision(view: &mut View, id: &str) {
+    let Some(b) = view.decisions_board.as_mut() else {
+        return;
+    };
+    let target =
+        crate::decisions_overlay::visible(&b.table.rows, &b.table.filter, &b.table.reviewed)
+            .iter()
+            .position(|r| r.decision_id == id);
+    if let Some(i) = target {
+        b.table.pick = i;
+    }
+}
+
+/// The table's rows, for readers outside this module (the persona
+/// overlay's serving read).
+pub(crate) fn rows(view: &View) -> &[crate::decisions_overlay::DecisionRow] {
+    let Some(b) = view.decisions_board.as_ref() else {
+        return &[];
+    };
+    &b.table.rows
 }

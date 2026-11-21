@@ -46,7 +46,7 @@ impl<'a> LineupSources<'a> {
 fn graph_row<'a>(graph_rows: &'a [Value], id: &str) -> Option<&'a Value> {
     graph_rows
         .iter()
-        .find(|g| g.get("id").and_then(Value::as_str) == Some(id))
+        .find(|g| crate::backlog::question_intake::str_field(g, "id") == Some(id))
 }
 
 /// The seated model, as `harness/model`. The live worker's observed seat
@@ -112,6 +112,7 @@ pub(crate) fn lineup_rows(
             "number": crate::announce::row_str(row, "number"),
             "title": graph.and_then(|g| g.get("title")),
             "difficulty": graph.and_then(|g| g.get("difficulty")),
+            "scope": graph.and_then(|g| crate::backlog::question_intake::str_field(g, "audience")),
             "pr": graph
                 .and_then(|g| g.get("pr_number"))
                 .or_else(|| row.get("pr_number")),
@@ -140,6 +141,7 @@ pub(crate) fn lineup_rows(
             "node": id,
             "title": graph.and_then(|g| g.get("title")),
             "difficulty": graph.and_then(|g| g.get("difficulty")),
+            "scope": graph.and_then(|g| crate::backlog::question_intake::str_field(g, "audience")),
             "pr": graph.and_then(|g| g.get("pr_number")),
             "model": difficulty.and_then(|d| planned(d, priority.unwrap_or(""))),
             "status": "on deck",
@@ -156,8 +158,8 @@ fn cell(v: Option<&Value>) -> String {
 pub(crate) fn render_lineup(rows: &[Value]) -> Vec<String> {
     let mut out = vec![
         "lineup:".to_string(),
-        "| node | title | difficulty | PR | harness/model | status |".to_string(),
-        "|---|---|---|---|---|---|".to_string(),
+        "| node | title | difficulty | who it serves | PR | harness/model | status |".to_string(),
+        "|---|---|---|---|---|---|---|".to_string(),
     ];
     for row in rows.iter().take(MAX_ORG_ROWS) {
         // The number leads when the store minted one (`x-5555 (x-aaaa)`,
@@ -179,10 +181,11 @@ pub(crate) fn render_lineup(rows: &[Value]) -> Vec<String> {
             _ => "-".to_string(),
         };
         out.push(format!(
-            "| {} | {} | {} | {} | {} | {} |",
+            "| {} | {} | {} | {} | {} | {} | {} |",
             node,
             cell(row.get("title")),
             cell(row.get("difficulty")),
+            cell(row.get("audience")),
             cell(row.get("pr")),
             cell(row.get("model")),
             cell(row.get("status")),

@@ -19,13 +19,20 @@ def tmp_graph(tmp_path, monkeypatch) -> Path:
 
 def test_new_p0_requires_breaking_acknowledgment(tmp_graph):
     """Every CLI birth path applies the p0 acknowledgment before mutation."""
-    refused = native_backlog("backlog", "new", "Not actually broken", "--priority", "p0")
+    refused = native_backlog(
+        "backlog", "new",
+        "Not actually broken", "--priority", "p0",
+        "--audience", "internal", "--why", "the p0 acknowledgment flow needs a node",
+        "--done-means", "the p0 node files with the acknowledgment",
+    )
     assert refused.exit_code != 0
     assert "p0 blocks everything else, usually a bug" in refused.output + refused.stderr
     assert backlog_rows(path=tmp_graph) == []
 
     accepted = native_backlog(
-        "backlog", "new", "Broken service", "--priority", "p0", "--blocks-everything"
+        "backlog", "new", "Broken service", "--priority", "p0", "--blocks-everything",
+        "--audience", "internal", "--why", "the service is down for every customer",
+        "--done-means", "the node carries the acknowledgment",
     )
     assert accepted.exit_code == 0, accepted.output + accepted.stderr
     assert backlog_rows(path=tmp_graph)[0]["blocks_everything"] is True

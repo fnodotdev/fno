@@ -69,6 +69,13 @@ struct Args {
     /// Shot-only.
     #[arg(long = "shot-cmd", hide = true)]
     shot_cmd: bool,
+    /// Text typed into the start composer (or the chat composer when the
+    /// pane has a session) before the frame. Shot-only.
+    #[arg(long = "shot-draft", hide = true)]
+    shot_draft: Option<String>,
+    /// Harness the start composer shows picked. Shot-only.
+    #[arg(long = "shot-harness", hide = true)]
+    shot_harness: Option<String>,
 }
 
 /// The --shot-mode values. The kebab spellings mirror MainView.
@@ -148,6 +155,8 @@ fn main() {
             sheet: args.shot_sheet,
             empty_chat: args.shot_empty_chat,
             cmd: args.shot_cmd,
+            draft: args.shot_draft,
+            harness: args.shot_harness,
         })
     } else {
         None

@@ -1,12 +1,12 @@
 //! The `fno config` read doors, the schema and the model catalog.
 
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 pub mod config_cli;
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 pub mod config_defaults;
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 pub mod config_doctor;
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 pub mod config_schema;
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 pub mod model_catalog;

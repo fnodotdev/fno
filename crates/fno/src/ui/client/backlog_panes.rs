@@ -27,6 +27,38 @@ pub(crate) struct PaneRegions {
 /// Narrowest either pane may get when the seam moves.
 const MIN_PANE_W: usize = 20;
 
+/// An overlay's hint strip wrapped to `w` columns at its own `" · "` key
+/// pairs. The board's own sheet wraps (`hint_lines`), and the strip names
+/// the same kind of keys, so a narrow host column wraps it too: a hard
+/// clip reads as a broken key ("n not" for "n note").
+fn wrap_segments(text: &str, w: usize) -> Vec<TLine> {
+    if w == 0 {
+        return vec![TLine::meta(text)];
+    }
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for seg in text.split(" \u{b7} ") {
+        let candidate = if line.is_empty() {
+            seg.to_string()
+        } else {
+            format!("{line} \u{b7} {seg}")
+        };
+        if candidate.chars().count() > w && !line.is_empty() {
+            lines.push(TLine::meta(std::mem::take(&mut line)));
+            line = seg.to_string();
+        } else {
+            line = candidate;
+        }
+    }
+    if !line.is_empty() {
+        lines.push(TLine::meta(line));
+    }
+    if lines.is_empty() {
+        lines.push(TLine::meta(text));
+    }
+    lines
+}
+
 /// The board width range the seam may take in a host `w` columns wide.
 pub(crate) fn seam_bounds(w: usize) -> (usize, usize) {
     (MIN_PANE_W, w.saturating_sub(MIN_PANE_W + 1).max(MIN_PANE_W))
@@ -39,23 +71,34 @@ pub(crate) fn regions(
     rect: (usize, usize, usize, usize),
     hint_h: usize,
     seam_w: Option<usize>,
+    detail_off: bool,
 ) -> PaneRegions {
     let (top, left, h, w) = rect;
     // Region heights: the hint rows the text needs (capped by the caller),
     // the filter bar's two-row body, the rest split between the panes.
     let bar_h = 2.min(h.saturating_sub(hint_h));
     let panes_h = h.saturating_sub(bar_h + hint_h);
-    let side_by_side = w >= 100;
-    let board_w = if side_by_side {
+    let side_by_side = w >= 100 && !detail_off;
+    let board_w = if detail_off {
+        w
+    } else if side_by_side {
         let (lo, hi) = seam_bounds(w);
-        super::edge_drag::clamp(seam_w.unwrap_or(w * 55 / 100), lo, hi)
+        // Rightmost widest: the detail pane takes the bigger default
+        // share unless the operator dragged the board seam.
+        super::edge_drag::clamp(seam_w.unwrap_or(w * 45 / 100), lo, hi)
     } else {
         w
     };
     // Side by side, the seam column holds a rule so board text never runs
     // into detail text; the detail pane starts one column right of it.
-    let detail_w = w.saturating_sub(board_w + 1);
-    let (board, detail) = if side_by_side {
+    let detail_w = if detail_off {
+        0
+    } else {
+        w.saturating_sub(board_w + 1)
+    };
+    let (board, detail) = if detail_off {
+        ((top + bar_h, left, panes_h, w), (top + bar_h, left, 0, 0))
+    } else if side_by_side {
         (
             (top + bar_h, left, panes_h, board_w),
             (top + bar_h, left + board_w + 1, panes_h, detail_w),
@@ -106,6 +149,8 @@ pub(crate) fn paint(
     owner: bool,
     seam_w: Option<usize>,
     theme: &Theme,
+    overlay_hint: Option<&str>,
+    detail_off: bool,
 ) {
     let started = std::time::Instant::now();
     let (top, _left, h, w) = rect;
@@ -119,14 +164,21 @@ pub(crate) fn paint(
     // floor, and the 4-row cap keeps the panes their rows. Unowned, it dims
     // the same way the title rows already do, so the side pane never reads
     // as ready to act while typing lands somewhere else.
-    let hint = hint_lines(b, focus_pane, w);
+    let hint = match overlay_hint {
+        // An overlay owns the keyboard: the strip names its keys, never
+        // the board's. Wrapped at the " · " segment boundaries, the way
+        // the board's own sheet wraps: a narrow host column would
+        // otherwise hard-clip mid-token ("n not" for "n note").
+        Some(text) => wrap_segments(text, w),
+        None => hint_lines(b, focus_pane, w),
+    };
     let hint: Vec<TLine> = if owner {
         hint
     } else {
         hint.into_iter().map(TLine::dimmed).collect()
     };
     let hint_h = if h >= 6 { hint.len().min(4) } else { 0 };
-    let laid_out = regions(rect, hint_h, seam_w);
+    let laid_out = regions(rect, hint_h, seam_w, detail_off);
     let bar_h = laid_out.bar.2;
     // The filter bar: the capped two-row cell wrap, unframed, carrying the
     // board's one esc chip on its top-right (it owned the framed title row
@@ -136,7 +188,9 @@ pub(crate) fn paint(
         .as_ref()
         .map(|board| filter_bar_lines(b, board, w))
         .unwrap_or_default();
-    backlog_style::paint_panel(cells, rows, cols, top, w, bar_h, &bar_body, None, theme);
+    backlog_style::paint_panel_at(
+        cells, rows, cols, _left, top, w, bar_h, &bar_body, None, theme,
+    );
     paint_esc_chip(cells, rows, cols, top, _left, w, theme);
     let board_rect = laid_out.board;
     let detail_rect = laid_out.detail;
@@ -145,6 +199,15 @@ pub(crate) fn paint(
     // still serves a recompose: it re-blits the cached lines instead of
     // re-rendering every card.
     let board_inner_w = board_rect.3;
+    // The kanban paint falls back to the list shape when the pane cannot
+    // give each column a readable card; the title row names what painted.
+    // Both the key's `columns` and `w` carry the decision, so the cache
+    // splits on it.
+    let list_fallback = b.query.view == crate::backlog_model::View::Kanban
+        && crate::client::backlog_board::kanban_falls_back_to_list(
+            b.layout.columns.len(),
+            board_inner_w,
+        );
     let bkey = crate::client::backlog_board::BodyKey {
         gen: b.body_gen,
         lane: b.lane,
@@ -157,7 +220,7 @@ pub(crate) fn paint(
         columns: b.layout.columns.clone(),
     };
     let follow = b.board_body_cached(bkey, || {
-        if b.query.view == crate::backlog_model::View::List {
+        if b.query.view == crate::backlog_model::View::List || list_fallback {
             list_lines(b, board_inner_w)
         } else {
             render(b, board_inner_w)
@@ -180,6 +243,7 @@ pub(crate) fn paint(
             match b.query.view {
                 crate::backlog_model::View::List => "list",
                 crate::backlog_model::View::Graph => "graph",
+                crate::backlog_model::View::Kanban if list_fallback => "list",
                 crate::backlog_model::View::Kanban => "kanban",
             }
         ),
@@ -190,10 +254,11 @@ pub(crate) fn paint(
         b.strip_board_band();
     }
     let board_lines = b.board_lines_ref();
-    backlog_style::paint_panel(
+    backlog_style::paint_panel_at(
         cells,
         rows,
         cols,
+        board_rect.1,
         board_rect.0 + 1,
         board_rect.3,
         board_rect.2.saturating_sub(1),
@@ -202,13 +267,17 @@ pub(crate) fn paint(
         theme,
     );
     // The detail pane: the focused node, else the cursor card's node,
-    // scrolled by the pane's scroll offset.
-    let node = b
-        .detail
-        .as_ref()
-        .map(|d| d.node_id.clone())
-        .or_else(|| cursor_card_id(b))
-        .unwrap_or_default();
+    // scrolled by the pane's scroll offset. Suppressed while a drill
+    // owns the record in its own column beside the persona.
+    let node = if detail_off {
+        String::new()
+    } else {
+        b.detail
+            .as_ref()
+            .map(|d| d.node_id.clone())
+            .or_else(|| cursor_card_id(b))
+            .unwrap_or_default()
+    };
     let detail_inner_w = detail_rect.3;
     let dkey = crate::client::backlog_board::DetailKey {
         gen: b.body_gen,
@@ -269,7 +338,9 @@ pub(crate) fn paint(
     // The hint: the wrapped sheet, painted once more in the new key-role
     // style the hint_lines builder produced.
     let hint_top = top + h - hint_h;
-    backlog_style::paint_panel(cells, rows, cols, hint_top, w, hint_h, &hint, None, theme);
+    backlog_style::paint_panel_at(
+        cells, rows, cols, _left, hint_top, w, hint_h, &hint, None, theme,
+    );
     let micros = started.elapsed().as_micros();
     b.record_paint(micros);
 }
@@ -451,6 +522,15 @@ pub(crate) fn list_lines(b: &BoardView, w: usize) -> (Vec<TLine>, Option<usize>)
                     "\u{25cf}"
                 } else if card.blocked {
                     "\u{2298}"
+                } else if card
+                    .audience
+                    .as_deref()
+                    .map(str::trim)
+                    .is_some_and(|a| a.starts_with("customer"))
+                {
+                    // The card marker: a customer-facing row keeps its
+                    // glyph when the row narrows past the chip text.
+                    "\u{25c6}"
                 } else {
                     " "
                 };
@@ -467,6 +547,10 @@ pub(crate) fn list_lines(b: &BoardView, w: usize) -> (Vec<TLine>, Option<usize>)
                     TSeg {
                         text: format!(" {}", card.title),
                         role: TextStyle::Item,
+                    },
+                    TSeg {
+                        text: format!(" \u{b7} {}", card.audience_chip()),
+                        role: TextStyle::Meta,
                     },
                 ]);
                 line.band = sel;
@@ -536,9 +620,11 @@ mod tests {
             true,
             None,
             &theme,
+            None,
+            false,
         );
         let hint_h = hint_lines(&b, false, cols).len().min(4);
-        let r = regions((0, 0, rows, cols), hint_h, None);
+        let r = regions((0, 0, rows, cols), hint_h, None, false);
         let (top, col, h) = r.seam.expect("w >= 100 lays out side by side");
         assert_eq!(col, r.board.1 + r.board.3);
         assert_eq!(r.detail.1, col + 1);
@@ -546,7 +632,9 @@ mod tests {
         for row in top..top + h {
             assert_eq!(cells[row * cols + col].c, '\u{2502}', "row {row}");
         }
-        assert!(regions((0, 0, rows, 80), hint_h, None).seam.is_none());
+        assert!(regions((0, 0, rows, 80), hint_h, None, false)
+            .seam
+            .is_none());
     }
     fn board_with_fixture() -> BoardView {
         let rows = vec![serde_json::json!({"id": "x-1", "status": "ready", "priority": "p2"})];
@@ -585,6 +673,7 @@ fn enter_word(b: &BoardView) -> String {
     let sels = node_detail::sel_list(&nv);
     match sels.get(d.sel.min(sels.len().saturating_sub(1))) {
         Some(Sel::Link(_)) => "open".into(),
+        Some(Sel::Audience) => "open".into(),
         Some(Sel::Session(i)) => {
             let Some(s) = nv.sessions.get(*i) else {
                 return "none".into();

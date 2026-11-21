@@ -24,6 +24,7 @@ pub mod palette;
 mod settings;
 mod sheet;
 mod shot;
+mod skills;
 mod start;
 mod tabs;
 mod ui;
@@ -91,6 +92,10 @@ pub struct ShotOptions {
     pub cmd: bool,
     /// The find bar state the frame paints over the chat view.
     pub find: Option<FindShot>,
+    /// Text the frame's composer holds.
+    pub draft: Option<String>,
+    /// Harness the start composer shows picked.
+    pub harness: Option<String>,
     /// The Settings panel state the frame paints.
     pub settings: Option<SettingsShot>,
 }
@@ -255,6 +260,8 @@ pub fn run(opts: Options) -> i32 {
             empty_chat: shot.empty_chat,
             cmd: shot.cmd,
             sheet: shot.sheet,
+            draft: shot.draft,
+            harness: shot.harness,
             settings: shot.settings,
         });
     }

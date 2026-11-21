@@ -58,6 +58,17 @@ pub struct Question {
     pub options: Vec<String>,
     pub blocks: Vec<String>,
     pub subject: Option<String>,
+    /// Who the question serves (`--scope`); absent on rows filed before the
+    /// stamp, so old rows render byte-identical.
+    #[serde(default)]
+    pub audience: Option<String>,
+    /// The goal behind the ask (`--why`); the user's words when the ask came
+    /// from him.
+    #[serde(default)]
+    pub why: Option<String>,
+    /// The persona jobs the question names (`--job <persona>/<job-slug>`).
+    #[serde(default)]
+    pub job: Vec<String>,
     pub live: Option<bool>,
     /// The asking machine on a copy pulled from another machine of the
     /// store; `None` (JSON null) for a question asked here.
@@ -239,7 +250,7 @@ fn opt_str(data: &Map<String, Value>, key: &str) -> Option<String> {
     }
 }
 
-fn str_list(data: &Map<String, Value>, key: &str) -> Vec<String> {
+pub(crate) fn str_list(data: &Map<String, Value>, key: &str) -> Vec<String> {
     data.get(key)
         .and_then(Value::as_array)
         .map(|a| {
@@ -424,6 +435,9 @@ pub fn fold_questions(raw: &str) -> Vec<Question> {
                         options: str_list(data, "options"),
                         blocks: str_list(data, "blocks"),
                         subject: opt_str(data, "subject"),
+                        audience: opt_str(data, "audience"),
+                        why: opt_str(data, "why"),
+                        job: str_list(data, "job"),
                         live: None,
                         host: opt_str(data, "origin_machine")
                             .filter(|m| *m != crate::claims::machine_id())
@@ -1080,6 +1094,12 @@ fn render_questions(o: &Outstanding, ctx: &RenderCtx, lines: &mut Vec<String>) {
                 })
             });
             let mut details: Vec<String> = where_.into_iter().collect();
+            if let Some(audience) = &q.audience {
+                details.push(audience.clone());
+            }
+            if !q.job.is_empty() {
+                details.push(q.job.join(", "));
+            }
             if let Some(host) = &q.host {
                 details.push(format!("on {host}"));
             }

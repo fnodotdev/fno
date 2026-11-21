@@ -2084,7 +2084,7 @@ pub(crate) fn append_answer_row_stamped(
 /// Mint the operator law row a user answer deserves: the clear door stamps
 /// `operator` authority for every user-lane answer, but only the file arm's
 /// settle path ever reached that door, so a board answer left no row for
-/// `fno backlog decisions --lane law` to recover. Best effort: the answer
+/// `fno backlog decisions --lane user` to recover. Best effort: the answer
 /// row above is the durable half; the door's live_decision read never mints
 /// a second row for the same question, so the file lane's later clear is a
 /// no-op resume.

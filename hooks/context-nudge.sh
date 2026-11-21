@@ -625,7 +625,7 @@ if [[ "$FIRE_CTX" -eq 1 && ! -f "$CTX_LATCH" ]]; then
             _compact_core="context: ${USED_PCT}% used (${USED_TOKENS:-?} of ${WINDOW_TOKENS:-?} tokens). You are past the session compact trigger (${GENERAL_TRIGGER}%). Returns diminish well before this window fills, so a long run degrades from here. Compact now: your session id, mail handle, and claims all survive it. ${_compact_ask}"
         fi
         if [[ -n "$PLAN_PATH" ]]; then
-            REASON="${_compact_core} You have a plan bound, so the plan, STATE.md and SUMMARY.md survive the compact - but your in-flight judgment does not. Before you compact, flush what is only in volatile state: commit small fixes in this PR as their own atomic commit, 'fno backlog carveout add -k deferred \"...\"' for separable work, 'fno backlog idea' for new findings, and note any plan drift in SUMMARY.md."
+            REASON="${_compact_core} You have a plan bound, so the plan, STATE.md and SUMMARY.md survive the compact - but your in-flight judgment does not. Before you compact, flush what is only in volatile state: commit small fixes in this PR as their own atomic commit, 'fno backlog carveout add -k deferred \"...\"' for separable work, 'fno backlog idea --audience internal --why ... --done-means ...' for new findings, and note any plan drift in SUMMARY.md."
         else
             CANON_DOC=""
             if command -v fno >/dev/null 2>&1; then

@@ -3393,7 +3393,8 @@ fn node_binding_entries(graph_path: &Path, facts: &PrFacts) -> Option<Vec<Value>
 /// [`node_binding_probe`], so a unit test needs no filesystem. The three
 /// keys are the board classifier's own (`org_board::prs::pr_binding_keys`).
 fn node_binding_from_entries(root: &Path, entries: &[Value], facts: &PrFacts) -> ProbeOutcome {
-    if detect_project(entries, &root.to_string_lossy()).is_none() {
+    let entry_refs: Vec<&Value> = entries.iter().collect();
+    if detect_project(&entry_refs, &root.to_string_lossy()).is_none() {
         return ProbeOutcome::Clear;
     }
     let Some(body) = facts.body.as_deref() else {

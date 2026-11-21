@@ -11,11 +11,11 @@
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-/// The contract's default port (the OpenAPI servers block).
-pub const DEFAULT_ATTENTION_PORT: u16 = 8724;
+pub use crate::web_core::DEFAULT_ATTENTION_PORT;
+pub(crate) use crate::web_core::{journal_path, journal_rows};
 
 /// The items fold's budget, feed_overlay's figure for a comparable
 /// multi-store read.
@@ -76,13 +76,6 @@ fn row_bool(v: &Value, key: &str) -> Option<bool> {
         .and_then(|d| d.get(key))
         .or_else(|| v.get(key))
         .and_then(Value::as_bool)
-}
-
-/// Every syntactically valid journal line, torn tails skipped.
-pub(crate) fn journal_rows(text: &str) -> impl Iterator<Item = Value> + '_ {
-    text.lines()
-        .filter(|l| !l.trim().is_empty())
-        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
 }
 
 /// Whether the journal ever asked this question id.
@@ -434,26 +427,6 @@ fn answer_row(
 // ---------------------------------------------------------------------------
 // Config and IO
 // ---------------------------------------------------------------------------
-
-/// The `.fno` state base, the same anchor as agents_view's (`FNO_AGENT_HOME`'s
-/// parent > `$HOME/.fno`). Mirrored here: agents_view is over the shrink-only
-/// line budget, so it takes no new surface.
-fn fno_dir() -> PathBuf {
-    if let Some(v) = std::env::var_os("FNO_AGENT_HOME") {
-        return PathBuf::from(&v)
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from(".fno"));
-    }
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".fno")
-}
-
-pub(crate) fn journal_path() -> PathBuf {
-    fno_dir().join("questions.jsonl")
-}
 
 /// Sink tokens for the answer door: `[[attention.sinks]]` rows in the cwd
 /// config then the global config, a name seen once keeps its first token.

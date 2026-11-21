@@ -10,6 +10,7 @@
 //! called reach (decision_index.rs).
 
 use crate::decision_index::SpecError;
+use serde_json::Value;
 use std::path::PathBuf;
 
 const USAGE: &str = "--scope takes internal (this project's own operation), customers (every customer) or customer:<persona> (one persona)";
@@ -187,15 +188,28 @@ fn persona_name_mismatch(file: &std::path::Path, persona: &str) -> Option<String
 /// already carries.
 fn first_who_sentence(body: &str) -> Option<String> {
     let section = body.split("## Who they are").nth(1)?;
-    let line = section
-        .lines()
-        .find(|l| !l.trim().is_empty() && !l.trim().starts_with('#'))?;
-    let sentence = line.split(". ").next().unwrap_or(line);
-    let mut sentence = sentence.trim().to_string();
+    // The sentence may wrap across source lines; join the paragraph
+    // before cutting, so the description never ends mid-thought.
+    let mut prose = String::new();
+    for l in section.lines() {
+        let t = l.trim();
+        if t.is_empty() || t.starts_with('#') {
+            if !prose.is_empty() {
+                break;
+            }
+            continue;
+        }
+        if !prose.is_empty() {
+            prose.push(' ');
+        }
+        prose.push_str(t);
+    }
+    let first = prose.split(". ").next()?;
+    let mut sentence = first.trim().to_string();
     if !sentence.ends_with('.') {
         sentence.push('.');
     }
-    Some(sentence)
+    (sentence.chars().count() > 1).then_some(sentence)
 }
 fn resolve_persona_file(dir: &std::path::Path, persona: &str) -> PathBuf {
     let laid_out = dir.join(persona).join("PERSONA.md");
@@ -243,6 +257,120 @@ pub fn parse_audience(raw: Option<&str>, project_id: &str) -> Result<String, Spe
             None => Err(SpecError(format!("--scope {raw:?} is not an audience. {USAGE}"))),
         },
     }
+}
+
+/// Stored rows predate the audience rename; both spellings read the same
+/// field.
+pub fn stored_audience(row: &Value) -> Option<&Value> {
+    row.get("audience").or_else(|| row.get("scope"))
+}
+
+/// Every persona slug a stored scope names, in stored order. A plain
+/// `internal` or `customers` scope names none.
+pub fn personas_in_scope(scope: &str) -> Vec<&str> {
+    scope
+        .split(',')
+        .filter_map(|v| v.trim().strip_prefix("customer:"))
+        .filter(|p| persona_slug_ok(p))
+        .collect()
+}
+
+/// The single scope term the board score uses: the highest-impact audience a
+/// stored scope names. A list takes its strongest member, never a sum.
+pub fn audience_score_term(audience: &str) -> u32 {
+    audience
+        .split(',')
+        .map(str::trim)
+        .map(|v| match v {
+            v if v.starts_with("customer:") => 60,
+            "customers" => 50,
+            _ => 0,
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// Check a typed `--job <persona>/<job-slug>` against the record's scope.
+/// Required with `customer:<persona>` (the file must carry a
+/// `### <job-slug>` heading under a `## Jobs` section), optional with
+/// `customers`, refused with `internal`.
+pub fn validate_job(scope: &str, jobs: &[String], project_id: &str) -> Result<(), SpecError> {
+    let trimmed: Vec<&str> = jobs
+        .iter()
+        .map(|j| j.trim())
+        .filter(|j| !j.is_empty())
+        .collect();
+    let named_personas = personas_in_scope(scope);
+    if named_personas.is_empty() {
+        if !trimmed.is_empty() {
+            if scope == "internal" {
+                return Err(SpecError(
+                    "--job is refused with --audience internal: an internal record keeps its free-text reason in the why".to_string(),
+                ));
+            }
+            // `customers` may name jobs for any personas it cares to name.
+            return Ok(());
+        }
+        return Ok(());
+    }
+    // One job per named persona: each persona file must carry the heading.
+    for persona in &named_personas {
+        let job = trimmed.iter().find(|j| {
+            j.split_once('/')
+                .map(|(p, _)| p == *persona)
+                .unwrap_or(false)
+        });
+        let Some(job) = job else {
+            return Err(SpecError(format!(
+                "--job <persona>/<job-slug> is required for {persona}: a product record for one persona names the job it serves"
+            )));
+        };
+        let Some((job_persona, job_slug)) = job.split_once('/') else {
+            return Err(SpecError(format!(
+                "--job {job} is not a persona/job pair. The shape is <persona>/<job-slug>, e.g. {persona}/<job-slug>"
+            )));
+        };
+        let file = persona_file(project_id, job_persona);
+        let text = std::fs::read_to_string(&file).map_err(|_| {
+            SpecError(format!(
+                "--job {job} needs the persona file {}, and it does not exist",
+                file.display()
+            ))
+        })?;
+        let in_jobs = text.lines().any(|l| l.trim() == "## Jobs");
+        let heading = text
+            .lines()
+            .any(|l| l.contains("###") && l.trim().trim_start_matches('#').trim() == job_slug);
+        if !(in_jobs && heading) {
+            return Err(SpecError(format!(
+                "the persona file {} carries no ### {job_slug} heading under a ## Jobs section, so --job {job} names no job it lists",
+                file.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The one-paragraph summary a session surface prints for a persona: the
+/// first non-heading, non-frontmatter line of the persona file.
+pub fn persona_summary(persona: &str, project_id: &str) -> Option<String> {
+    let file = persona_file(project_id, persona);
+    let text = std::fs::read_to_string(&file).ok()?;
+    let mut in_frontmatter = text.starts_with("---");
+    for line in text.lines().skip(1) {
+        let trimmed = line.trim();
+        if in_frontmatter {
+            if trimmed == "---" {
+                in_frontmatter = false;
+            }
+            continue;
+        }
+        if trimmed.starts_with('#') || trimmed.is_empty() {
+            continue;
+        }
+        return Some(trimmed.to_string());
+    }
+    None
 }
 
 fn persona_slug_ok(slug: &str) -> bool {

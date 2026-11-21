@@ -856,6 +856,7 @@ fn composer(root: &Root, window: &Window, cx: &mut Context<Root>) -> Option<Div>
         .child(ui::kbd("⇧⏎", &p))
         .child(ui::text("new line", Role::Hint, &p));
     let mut bar = div()
+        .relative()
         .flex()
         .flex_col()
         .px_3()
@@ -872,6 +873,18 @@ fn composer(root: &Root, window: &Window, cx: &mut Context<Root>) -> Option<Div>
                 .text_color(rgb(p.muted))
                 .child(format!("[img {} KB]", att.bytes.len() / 1024)),
         );
+    }
+    if let Some(pop) = root.chat.skill_view().and_then(|v| {
+        crate::launch::skill_popover(
+            v,
+            root.adv,
+            root.chat.composer.get().size.width,
+            px(700.0),
+            true,
+            &p,
+        )
+    }) {
+        bar = bar.child(pop);
     }
     bar = bar.child(
         div()

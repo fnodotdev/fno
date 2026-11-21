@@ -198,14 +198,39 @@ fn file_hold(ask: &ThreadAsk) -> Result<String, HoldError> {
         ask.action,
         ask.resources.join(", ")
     );
+    let allow_next = format!("the worker runs {} once and reports back", ask.action);
+    let file = crate::outstanding_cmds::question_file_text(crate::outstanding_cmds::QuestionFile {
+        question: &text,
+        options: &[
+            ("allow_once", &allow_next),
+            ("deny", "the worker sees the denial and stops asking"),
+        ],
+        blocked_because: "the session holds until a person answers",
+        rationale: "the worker cannot run the action before a person allows it once",
+        downside: "the session waits on a person while it holds",
+        recommend: 1,
+        recommend_why: "allow_once, the narrowest grant that lets the session keep working",
+        not_thought_through: "whether a longer-lived grant is wanted; nothing auto-renews",
+        tried: "the worker cannot self-approve its own permission ask",
+        evidence: "the thread-permission door filed this hold as a question",
+        reversible: "no",
+        meanwhile: "the worker holds and the session can keep other work moving",
+    });
     let filing = crate::outstanding_cmds::AskFiling {
-        text,
+        text: file,
         template: false,
         ask: Some(format!("fno agent ask {who} --answer allow_once|deny")),
-        options: vec!["allow_once".to_string(), "deny".to_string()],
+        options: Vec::new(),
         blocks: Vec::new(),
         node: None,
         subject: Some(format!("{who} permission ask")),
+        // A machine permission ask serves this project's own operation.
+        audience: Some("internal".to_string()),
+        why: Some(format!(
+            "{who} asks to run {} so the session can keep working",
+            ask.action
+        )),
+        job: Vec::new(),
         images: Vec::new(),
     };
     match crate::outstanding_cmds::file_ask(filing, &ask.cwd) {

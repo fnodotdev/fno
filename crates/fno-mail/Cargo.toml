@@ -12,7 +12,6 @@ rust-version = "1.89"
 description = "The fno mail protocol: envelope, bus log, address forms, delivery states, the lane trait and session ids."
 license = "Apache-2.0"
 repository = "https://github.com/fnodotdev/fno"
-homepage = "https://github.com/fnodotdev/fno"
 documentation = "https://docs.rs/fno-mail"
 readme = "README.md"
 publish = true

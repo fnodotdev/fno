@@ -48,6 +48,7 @@ pub(crate) use queues::{not_read_status, unreadable_status, NODE_ID_BODY};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub(crate) use crate::territory::compile_scope_ids;
 pub(crate) use budget::{now_secs_board, Budget, HAND_RUN_BUDGET_MS};
@@ -476,6 +477,10 @@ pub struct BoardOpts {
     /// second store read inside the board's budgeted slice; None reads the
     /// store as before.
     pub registry: Option<crate::state::Registry>,
+    /// Graph rows a caller already materialized this fire (the check-in
+    /// beat's graph read). The board reuses them instead of paying a second
+    /// full scan; None reads the store as before.
+    pub graph_rows: Option<std::sync::Arc<Vec<Value>>>,
 }
 
 impl Default for BoardOpts {
@@ -486,6 +491,7 @@ impl Default for BoardOpts {
             state_path: None,
             cwd: None,
             registry: None,
+            graph_rows: None,
         }
     }
 }
@@ -513,7 +519,7 @@ pub fn read_board(opts: &BoardOpts) -> Value {
     let scope_read = match resolve_scope(
         opts,
         &cwd,
-        pre.entries.as_deref(),
+        pre.entries.as_ref().map(|v| v.as_slice()),
         pre.graph_error.as_deref(),
         &mut sources,
     ) {
@@ -626,7 +632,7 @@ fn start_slices(budget: &mut Budget) -> SourceSlices {
 
 /// What the reads before the concurrent section landed.
 struct SequentialReads {
-    entries: Option<Vec<Value>>,
+    entries: Option<Arc<Vec<Value>>>,
     graph_error: Option<String>,
     slices: SourceSlices,
     claims: SourceRead,
@@ -646,7 +652,7 @@ fn read_sequential_sources(
     sources: &mut Map<String, Value>,
     warnings: &mut Vec<String>,
 ) -> SequentialReads {
-    let (entries, graph_error) = read_graph_entries(cwd, budget, warnings);
+    let (entries, graph_error) = read_graph_entries(opts, cwd, budget, warnings);
 
     // The reference charged slices sequentially; this collector charges them
     // in the same order but runs the four subprocess reads CONCURRENTLY, for
@@ -667,7 +673,7 @@ fn read_sequential_sources(
     let (claimed_nodes, mut holders) = read_claimed_slice(
         slices.stalled,
         &claims,
-        entries.as_deref(),
+        entries.as_ref().map(|v| v.as_slice()),
         budget,
         sources,
         warnings,
@@ -681,7 +687,7 @@ fn read_sequential_sources(
     let s_drivers = budget.start(SRC_DRIVERS);
     let (drivers, driver_name_tokens) = read_drivers_slice(
         s_drivers,
-        entries.as_deref(),
+        entries.as_ref().map(|v| v.as_slice()),
         opts.registry.as_ref(),
         budget,
         sources,
@@ -734,10 +740,11 @@ const BOARD_GRAPH_FIELDS: &[&str] = &[
 
 /// The graph and, when it did not read, the reason.
 fn read_graph_entries(
+    opts: &BoardOpts,
     cwd: &Path,
     budget: &Budget,
     warnings: &mut Vec<String>,
-) -> (Option<Vec<Value>>, Option<String>) {
+) -> (Option<Arc<Vec<Value>>>, Option<String>) {
     // The graph: ONE read, shared by undispatched, claimed-node lookups, PR
     // binding, and team scope. It asks the store (`backlog::api::rows`),
     // never the file: the store applies the same defaults the Python board's
@@ -747,10 +754,15 @@ fn read_graph_entries(
     // no time left it is marked unreadable and skipped, never run unbudgeted
     // (the collector measured 40,776ms against a 30,000ms
     // budget, and an unbounded in-process read cannot honor a deadline).
+    // A caller that already read the rows this fire (the check-in beat) hands
+    // them over and this scan never runs.
+    if let Some(rows) = &opts.graph_rows {
+        return (Some(Arc::clone(rows)), None);
+    }
     let graph_path = graph_json_path(cwd);
     let store = crate::backlog::api::Store::new(&graph_path);
     let mut graph_error = None;
-    let entries: Option<Vec<Value>> = match budget.source_deadline() {
+    let entries: Option<Arc<Vec<Value>>> = match budget.source_deadline() {
         None => {
             let error = "board budget exhausted".to_string();
             warnings.push(format!("graph not read: {error}"));
@@ -772,6 +784,7 @@ fn read_graph_entries(
                 ..Default::default()
             },
         )
+        .map(|rows| Arc::new(rows))
         .map_err(|error| crate::backlog::api::ApiError(error.to_string()))
         {
             Ok(e) => Some(e),
@@ -965,7 +978,7 @@ fn read_concurrent_phase(
     };
     let ctx = ConcurrentCtx {
         slices: pre.slices,
-        entries: pre.entries.as_deref(),
+        entries: pre.entries.as_ref().map(|v| v.as_slice()),
         claims: &pre.claims,
         cwd,
         max_pr_reads: opts.max_pr_reads,
@@ -1220,10 +1233,10 @@ fn join_read(
 fn spawn_ready<'scope>(
     s: &'scope std::thread::Scope<'scope, '_>,
     dl: std::time::Instant,
-    ctx: &ConcurrentCtx<'_>,
+    ctx: &ConcurrentCtx<'scope>,
     worked_ids: HashSet<String>,
 ) -> std::thread::ScopedJoinHandle<'scope, SourceRead> {
-    let entries = ctx.entries.map(|e| e.to_vec());
+    let entries = ctx.entries;
     let cwd = ctx.cwd.to_path_buf();
     let spent_err = ctx.spent_err.clone();
     s.spawn(move || {
@@ -2127,7 +2140,7 @@ mod tests {
         let mut inputs = inputs_with(json!([]), json!([]), json!([]));
         // entries: None reads as an unreadable queue of its own; an empty
         // list keeps the fixture's failure count at exactly the two legs.
-        inputs.entries = Some(Vec::new());
+        inputs.entries = Some(Arc::new(Vec::new()));
         inputs.undispatched = SourceRead::over_budget(
             "fno backlog undispatched --json: killed at its 28.5s slice of the board budget; the source did not fail",
         );
@@ -2150,12 +2163,12 @@ mod tests {
         // worker while every queue read clean; the status stamp is never
         // revoked, so this queue is the only one that can carry it.
         let mut inputs = inputs_with(json!([]), json!([]), json!([]));
-        inputs.entries = Some(vec![json!({
+        inputs.entries = Some(Arc::new(vec![json!({
             "id": "x-dddd",
             "priority": "p1",
             "status": "in_progress",
             "title": "dead handoff",
-        })]);
+        })]));
         let board = build_board(&inputs);
         let queues = board.get("queues").and_then(Value::as_array).unwrap();
         let unheld = queues
