@@ -476,4 +476,38 @@ fn api_comment_thread_write_and_reply_state_rules() {
             threaded_note.0
         );
     }
+
+    #[test]
+    fn pull_request_record_appends_beside_an_empty_primary_and_refuses_a_duplicate() {
+        // AC3-HP: the record door appends to additional_prs and never fills
+        // the primary; recording the same number and url again refuses.
+        let (_pin, _d1, _d2, store, _other) = store_pair();
+        let first = pull_request_record(
+            &store,
+            "ab-one",
+            244,
+            Some("https://github.com/o/fno-web/pull/244"),
+            Some("docs"),
+            Some("merged"),
+        )
+        .unwrap();
+        assert!(first.success);
+        let node = first.node.as_ref().unwrap();
+        assert!(node.primary_pr.is_none());
+        let extras = node.additional_prs.as_ref().unwrap();
+        assert_eq!(extras.len(), 1);
+        assert_eq!(extras[0].number, Some(244));
+        assert_eq!(extras[0].merge_status.as_deref(), Some("merged"));
+        assert_eq!(extras[0].note.as_deref(), Some("docs"));
+        let again = pull_request_record(
+            &store,
+            "ab-one",
+            244,
+            Some("https://github.com/o/fno-web/pull/244"),
+            Some("docs"),
+            Some("merged"),
+        )
+        .unwrap();
+        assert!(!again.success);
+    }
 }
