@@ -54,8 +54,8 @@ impl Tailscale for CmdTailscale {
                 String::from_utf8_lossy(&out.stderr).trim().to_string(),
             ));
         }
-        let v: Value =
-            serde_json::from_slice(&out.stdout).map_err(|e| format!("tailscale: {e}"))?;
+        let v: Value = serde_json::from_slice(&out.stdout)
+            .map_err(|e| RemoteError::Tailscale(format!("tailscale: {e}")))?;
         let dns = v["Self"]["DNSName"]
             .as_str()
             .unwrap_or_default()
