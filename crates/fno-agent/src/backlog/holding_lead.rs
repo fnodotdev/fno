@@ -23,7 +23,7 @@
 //! All resolution degrades: a fault stamps unknown and never fails the close.
 
 use serde_json::{json, Map, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use super::workflows::text_at;

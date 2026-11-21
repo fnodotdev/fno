@@ -17,7 +17,7 @@ use crate::context_window::normalize_model;
 use crate::evals_trend::{round4, wilson_rate};
 use crate::scoreboard_provider::{node_outcome, num_opt, parse_local, pct, percentile, round2};
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 pub(crate) const UNATTRIBUTED: &str = "unattributed";
 pub(crate) const UNRECORDED: &str = "unrecorded";
@@ -851,7 +851,7 @@ struct LeadAcc {
 /// A record's grouping key: the stored title, or `unknown` when the stamp
 /// is absent, null, or carries no title.
 fn group_of(title: Option<&str>) -> String {
-    title.unwrap_or(super::scorecard_consts_UNKNOWN).to_string()
+    title.unwrap_or(UNKNOWN).to_string()
 }
 
 /// A variable-key read: the ratchet counts literal-key reads, so new
