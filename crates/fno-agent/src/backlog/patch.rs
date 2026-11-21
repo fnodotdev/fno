@@ -1517,6 +1517,10 @@ mod tests {
                 "deferred_at": "2026-01-01T00:00:00+00:00",
                 "deferred_reason": "waiting",
                 "status": "deferred",
+                // The row is scoped so plan() passes and the test exercises
+                // the commit-cycle lock, not the scoping gate.
+                "audience": "internal",
+                "done_means": "the merge check reads the acceptance",
             }),
         );
         graph_store::seed_rows(&graph, &[target]).expect("seed graph.db");
