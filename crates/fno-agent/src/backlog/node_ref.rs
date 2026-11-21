@@ -238,7 +238,7 @@ impl<'a> ResolutionIndex<'a> {
 
     /// `resolve_twice` for a subject a row recorded at `recorded_at`. A hit
     /// through the number tier alone must name a node that existed by then:
-    /// an all-digit hash id (`x-4279`) whose node is gone would otherwise
+    /// an all-digit hash id whose node is gone would otherwise
     /// attach to the later node that took that display number. Either
     /// timestamp unreadable keeps the plain answer.
     pub fn resolve_stored_id(&self, stored: &str, recorded_at: Option<&str>) -> Option<String> {
@@ -713,7 +713,7 @@ mod tests {
 
     #[test]
     fn a_node_created_after_the_ruling_is_never_its_subject() {
-        let node = json!({"id": "x-3d69", "created_at": "2026-10-12T16:10:19+00:00"});
+        let node = json!({"id": "x-aaaa", "created_at": "2026-10-12T16:10:19+00:00"});
         assert!(created_after(&node, Some("2026-08-25T00:00:00Z")));
         assert!(!created_after(&node, Some("2026-11-01T00:00:00Z")));
         assert!(!created_after(&node, None));
