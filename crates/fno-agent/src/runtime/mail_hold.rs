@@ -709,7 +709,8 @@ pub fn gate(token: &str, body: Option<&str>, now: chrono::DateTime<chrono::Utc>)
     // reaches a DND'd session. A conversation hold is the user's live chat;
     // a `control:` nudge landing mid-chat is the 2026-11-19 interrupt, so
     // it waits for the grace with everything else. Own sends passed above.
-    if body.is_some_and(body_is_control) && hold.set_by() == SetBy::User {
+    if body.is_some_and(body_is_control) && hold.as_ref().is_some_and(|h| h.set_by() == SetBy::User)
+    {
         return deliver(Some("control"));
     }
     GateVerdict {
