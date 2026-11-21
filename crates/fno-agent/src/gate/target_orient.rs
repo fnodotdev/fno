@@ -70,7 +70,7 @@ pub fn read_manifest(project_root: &Path) -> Option<BTreeMap<String, String>> {
 }
 
 /// One manifest field, read by key.
-pub fn manifest_get(manifest: &BTreeMap<String, String>, key: &str) -> Option<&str> {
+pub fn manifest_get<'a>(manifest: &'a BTreeMap<String, String>, key: &str) -> Option<&'a str> {
     manifest.get(key).map(String::as_str)
 }
 

@@ -1416,7 +1416,7 @@ fn acquire_merge_lock(cwd: &Path, pr: i64) -> LockOutcome {
 
 #[cfg(test)]
 mod fold_target_tests {
-    use super::fold_target;
+    use super::{fold_target, FoldTarget};
 
     #[test]
     fn fold_target_names_the_stacked_pr_or_the_reason_there_is_none() {
