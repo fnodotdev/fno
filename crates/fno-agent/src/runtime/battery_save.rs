@@ -68,13 +68,17 @@ fn percent_of_line(line: &str) -> Option<u8> {
     let pct = line.find('%')?;
     let bytes = line.as_bytes();
     let mut start = pct;
-    while start > 0 && bytes[start - 1].is_ascii_digit() {
+    while start > 0
+        && bytes
+            .get(start - 1)
+            .is_some_and(|byte| byte.is_ascii_digit())
+    {
         start -= 1;
     }
     if start == pct {
         return None;
     }
-    line[start..pct].parse::<u8>().ok()
+    line.get(start..pct)?.parse::<u8>().ok()
 }
 
 /// The save fires when the machine runs on battery or UPS at or below the
@@ -166,17 +170,24 @@ pub fn maybe_tick(arm: &Arm) {
 /// or unreadable `pmset`, or output it cannot parse. The failure is logged
 /// here once per beat; the beat itself stays quiet.
 fn probe() -> Option<PowerReading> {
-    let out = std::process::Command::new("pmset")
-        .arg("-g")
-        .arg("batt")
-        .output();
-    let out = match out {
-        Ok(out) => out,
+    let mut cmd = std::process::Command::new("pmset");
+    cmd.arg("-g").arg("batt");
+    // The bounded spawn seam: null stdin, own process group, transient
+    // spawn failures retried. `output()` is a disallowed method here.
+    let mut child = match crate::bounded_spawn::spawn_bounded_command(cmd) {
+        Ok(child) => child,
         Err(error) => {
             // No `pmset` on this machine (a Linux dev box, a container):
             // the arm has nothing to watch, and one line per beat is the
             // honest record of that.
-            tracing::debug!(%error, "battery-save: pmset unavailable");
+            tracing::debug!(?error, "battery-save: pmset unavailable");
+            return None;
+        }
+    };
+    let out = match child.wait_with_output() {
+        Ok(out) => out,
+        Err(error) => {
+            tracing::debug!(%error, "battery-save: pmset read failed");
             return None;
         }
     };
