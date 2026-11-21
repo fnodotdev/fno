@@ -29,11 +29,20 @@ fn target(id: &str) -> String {
 /// its owner is usually the lead's own epic.
 fn offers(bp: &Value) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
-    for s in ids(bp, "seat_leads") {
-        out.push((
-            s.clone(),
-            format!("fno agent spawn --as thread --promote {s} \"/fno:lead\""),
-        ));
+    // Seat entries are objects ({scope, children}), not id strings: the
+    // offer rides the scope and its command is the seat line.
+    for s in bp
+        .get("seat_leads")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(scope) = s.get("scope").and_then(Value::as_str) {
+            out.push((
+                scope.to_string(),
+                format!("fno agent spawn --as thread --promote {scope} \"/fno:lead\""),
+            ));
+        }
     }
     for id in ids(bp, "starts") {
         out.push((id.clone(), format!("start /fno:blueprint subagent {id}")));
@@ -119,6 +128,26 @@ mod tests {
 
     fn at<'a>(data: &'a Map<String, Value>, key: &str) -> &'a Value {
         data.get(key).unwrap_or(&Value::Null)
+    }
+
+    /// A seat entry offers its scope's seat command, before any start line:
+    /// seating precedes building in the pick order.
+    #[test]
+    fn a_seat_entry_offers_the_seat_command_first() {
+        let bp = json!({
+            "seat_leads": [{"scope": "x-eSeat", "children": ["x-seat1"]}],
+            "starts": ["x-1"],
+            "target_ready": [],
+            "plan_ready": [],
+            "skips": [],
+        });
+        let mut data = Map::new();
+        annotate(&mut data, Some(&bp), None, None);
+        assert_eq!(
+            *at(&data, "pick_offered"),
+            "fno agent spawn --as thread --promote x-eSeat \"/fno:lead\""
+        );
+        assert_eq!(*at(&data, "pick_node"), "x-eSeat");
     }
 
     #[test]
