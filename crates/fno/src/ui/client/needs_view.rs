@@ -255,11 +255,6 @@ pub(crate) fn needs_overlay_lines(
     lines
 }
 
-/// `head` at item level and `tail` at `style`, padded to the overlay width.
-fn tail_styled(head: &str, tail: &str, style: TextStyle) -> TLine {
-    TLine::parts(&[(head, TextStyle::Item), (tail, style)]).pad_to(ANSWER_OVERLAY_W)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
