@@ -329,11 +329,20 @@ fn join(sends: &[SendRow], blocks: &[BlockRow]) -> (Vec<(usize, usize)>, usize) 
     (out, skipped)
 }
 
-/// The whole engine: scan roots, window-filter the sender side, join, and
-/// (with --apply) write each joined pair as an audit-only envelope through
-/// the bus-append door. Returns the JSON summary line; Err carries the exit
-/// code of a refusal (2) or a failed write (1), with the reason on stderr.
-pub fn backfill_summary(args: &[String]) -> Result<Value, i32> {
+/// One parsed `run` invocation: the window bounds as epoch seconds, the
+/// bus target, the scan roots, and whether the run writes.
+struct BackfillRun {
+    since_e: f64,
+    until_e: f64,
+    live: String,
+    roots: Vec<String>,
+    apply: bool,
+}
+
+/// Parse the `run` argv: the window flags and their refusal, the wide
+/// --all bounds, the default scan root, and the write posture. Err
+/// carries the exit code, with the reason on stderr.
+fn parse_backfill_run(args: &[String]) -> Result<BackfillRun, i32> {
     let mut since = String::new();
     let mut until = String::new();
     let mut live = String::new();
@@ -342,24 +351,24 @@ pub fn backfill_summary(args: &[String]) -> Result<Value, i32> {
     let mut all = false;
     let mut i = 0;
     while i < args.len() {
-        match args[i].as_str() {
-            "--since" => {
+        match args.get(i).map(String::as_str) {
+            Some("--since") => {
                 since = args.get(i + 1).cloned().unwrap_or_default();
                 i += 2;
             }
-            "--until" => {
+            Some("--until") => {
                 until = args.get(i + 1).cloned().unwrap_or_default();
                 i += 2;
             }
-            "--all" => {
+            Some("--all") => {
                 all = true;
                 i += 1;
             }
-            "--live" => {
+            Some("--live") => {
                 live = args.get(i + 1).cloned().unwrap_or_default();
                 i += 2;
             }
-            "--root" => {
+            Some("--root") => {
                 // A following flag is never a path: consuming it would scan
                 // a directory named "--apply" and report a quiet zero.
                 match args.get(i + 1) {
@@ -371,14 +380,15 @@ pub fn backfill_summary(args: &[String]) -> Result<Value, i32> {
                 }
                 i += 2;
             }
-            "--apply" => {
+            Some("--apply") => {
                 apply = true;
                 i += 1;
             }
-            other => {
+            Some(other) => {
                 eprintln!("mail-backfill run: unknown argument {other}");
                 return Err(2);
             }
+            None => break,
         }
     }
     if all && (!since.is_empty() || !until.is_empty()) {
@@ -400,19 +410,15 @@ pub fn backfill_summary(args: &[String]) -> Result<Value, i32> {
         } else {
             until
         };
-        match bound_epoch("since", &since) {
-            Ok(s) => match bound_epoch("until", &until) {
-                Ok(u) => (s, u),
-                Err(e) => {
-                    eprintln!("mail-backfill run: {e}");
-                    return Err(2);
-                }
-            },
-            Err(e) => {
-                eprintln!("mail-backfill run: {e}");
-                return Err(2);
-            }
-        }
+        let since_e = bound_epoch("since", &since).map_err(|e| {
+            eprintln!("mail-backfill run: {e}");
+            2
+        })?;
+        let until_e = bound_epoch("until", &until).map_err(|e| {
+            eprintln!("mail-backfill run: {e}");
+            2
+        })?;
+        (since_e, until_e)
     };
     if roots.is_empty() {
         // No --root: scan the Claude projects home, the transcript base
@@ -424,8 +430,29 @@ pub fn backfill_summary(args: &[String]) -> Result<Value, i32> {
                 .to_string(),
         );
     }
+    Ok(BackfillRun {
+        since_e,
+        until_e,
+        live,
+        roots,
+        apply,
+    })
+}
+
+/// One scan's harvest: every transcript row in window, and the joined
+/// pairs the attribution fold found.
+struct Scan {
+    sends: Vec<SendRow>,
+    blocks: Vec<BlockRow>,
+    pairs: Vec<(usize, usize)>,
+    skipped: usize,
+}
+
+/// Collect the transcript files under the run's roots, read the rows in
+/// window, and join each send to its receiver landing by body head.
+fn scan_join(run: &BackfillRun) -> Scan {
     let mut files: Vec<PathBuf> = Vec::new();
-    for root in &roots {
+    for root in &run.roots {
         collect_jsonl(Path::new(root), 0, &mut files);
     }
     let mut sends: Vec<SendRow> = Vec::new();
@@ -438,7 +465,7 @@ pub fn backfill_summary(args: &[String]) -> Result<Value, i32> {
         let Ok(age) = mtime.duration_since(std::time::UNIX_EPOCH) else {
             continue;
         };
-        if age.as_secs_f64() < since_e {
+        if age.as_secs_f64() < run.since_e {
             continue;
         }
         let Ok(raw) = std::fs::read_to_string(path) else {
@@ -452,7 +479,7 @@ pub fn backfill_summary(args: &[String]) -> Result<Value, i32> {
                 continue;
             };
             let ts = obj.get("timestamp").and_then(Value::as_str).unwrap_or("");
-            if !ts_in_window(ts, since_e, until_e) {
+            if !ts_in_window(ts, run.since_e, run.until_e) {
                 continue;
             }
             let p = path.to_string_lossy().to_string();
@@ -461,13 +488,28 @@ pub fn backfill_summary(args: &[String]) -> Result<Value, i32> {
         }
     }
     let (pairs, skipped) = join(&sends, &blocks);
+    Scan {
+        sends,
+        blocks,
+        pairs,
+        skipped,
+    }
+}
+
+/// The whole engine: parse, scan and join, then (with --apply) write each
+/// joined pair as an audit-only envelope through the bus-append door.
+/// Returns the JSON summary line; Err carries the exit code of a refusal
+/// (2) or a failed write (1), with the reason on stderr.
+pub fn backfill_summary(args: &[String]) -> Result<Value, i32> {
+    let run = parse_backfill_run(args)?;
+    let scan = scan_join(&run);
     let mut written = 0usize;
     let mut rows_out: Vec<Value> = Vec::new();
-    if apply {
-        let live_path = backfill_live_path(if live.is_empty() {
+    if run.apply {
+        let live_path = backfill_live_path(if run.live.is_empty() {
             None
         } else {
-            Some(live.as_str())
+            Some(run.live.as_str())
         });
         let mut existing: std::collections::HashSet<String> = std::collections::HashSet::new();
         for seg in fno_mail::log::read_bus_segments(&live_path) {
@@ -475,8 +517,8 @@ pub fn backfill_summary(args: &[String]) -> Result<Value, i32> {
                 existing.insert(id.to_string());
             }
         }
-        for (si, bi) in &pairs {
-            match write_pair(&sends[*si], &blocks[*bi], &existing, &live_path) {
+        for (si, bi) in &scan.pairs {
+            match write_pair(&scan.sends[*si], &scan.blocks[*bi], &existing, &live_path) {
                 Ok(true) => written += 1,
                 Ok(false) => {}
                 Err(e) => {
@@ -486,12 +528,12 @@ pub fn backfill_summary(args: &[String]) -> Result<Value, i32> {
             }
         }
     } else {
-        for (si, bi) in &pairs {
+        for (si, bi) in &scan.pairs {
             rows_out.push(json!({
-                "ts": sends[*si].ts,
-                "from_session": sends[*si].sender_session,
-                "to_session": blocks[*bi].receiver_session,
-                "body_head": norm_head(&sends[*si].body, 60),
+                "ts": scan.sends[*si].ts,
+                "from_session": scan.sends[*si].sender_session,
+                "to_session": scan.blocks[*bi].receiver_session,
+                "body_head": norm_head(&scan.sends[*si].body, 60),
             }));
         }
     }
@@ -501,8 +543,8 @@ pub fn backfill_summary(args: &[String]) -> Result<Value, i32> {
     rows_out.truncate(DRY_ROWS_SAMPLE);
     Ok(json!({
         "written": written,
-        "joined": pairs.len(),
-        "skipped": skipped,
+        "joined": scan.pairs.len(),
+        "skipped": scan.skipped,
         "rows_truncated": truncated,
         "rows": rows_out,
     }))

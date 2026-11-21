@@ -48,7 +48,7 @@ pub fn run(rest: &[String]) -> i32 {
         "backfill" => {
             let mut argv: Vec<String> = Vec::with_capacity(rest.len());
             argv.push("run".to_string());
-            argv.extend(rest[1..].iter().cloned());
+            argv.extend(rest.iter().skip(1).cloned());
             crate::mail_backfill::run_mail_backfill(&argv)
         }
         "hold" | "dnd" => hold::run_hold(&rest[1..]),
