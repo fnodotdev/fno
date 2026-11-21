@@ -264,5 +264,9 @@ fn the_gate_never_targets_a_docs_twin_row() {
     );
 
     // The journal landed for the completed fire (the sandboxed project log).
-    assert!(project_events(cwd).exists());
+    // The journal path anchor is virtual; the store file is the real one.
+    assert!(
+        fno_agent::event_store::store_path(&project_events(cwd)).exists(),
+        "the fire recorded its events"
+    );
 }
