@@ -291,6 +291,15 @@ pub(crate) fn r_blueprint(
             seat_pairs.iter().any(|(_, e)| e == scope_id)
         })
         .cloned()
+        .map(|mut s| {
+            // The journal entry keeps IDEA_LINES children as evidence; the
+            // full list already rides the skips, so the seat row stays well
+            // under the event cap on a large board.
+            if let Some(children) = s.get_mut("children").and_then(Value::as_array_mut) {
+                children.truncate(IDEA_LINES);
+            }
+            s
+        })
         .collect();
     let provider = std::env::var("FNO_ROUTE_PROVIDER").unwrap_or_default();
     let provider_cap = crate::spawn_gate_lanes::provider_subagents_cap(cwd, &provider);
