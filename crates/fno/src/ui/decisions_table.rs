@@ -81,6 +81,9 @@ const AUDIENCE_W: usize = 22;
 /// Every column before the description, gaps included: state 10, lane 12,
 /// audience, date 10, who 10, Q 1, node 9, PR 6, and eight single gaps.
 const FIXED_W: usize = 66 + AUDIENCE_W;
+/// The ruling keeps this many columns before the description takes any, so the
+/// wider audience cell never pushes the decision text off a docked pane.
+const MIN_TEXT_W: usize = 12;
 
 fn fit(s: &str, n: usize) -> String {
     let flat: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -114,7 +117,7 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
     // The description column shrinks before the ruling vanishes: FIXED_W
     // columns plus one gap precede it, and a docked host pane is
     // narrower than the full view's 98-column floor.
-    let desc_w = 16.min(w.saturating_sub(FIXED_W + 1));
+    let desc_w = 16.min(w.saturating_sub(FIXED_W + 1 + MIN_TEXT_W + 1));
     let text_w = w.saturating_sub(FIXED_W + 1 + desc_w + 1);
     let columns = table_columns(desc_w, text_w);
     let mut out = vec![head, format!("\x1b[1m{columns}\x1b[0m")];
