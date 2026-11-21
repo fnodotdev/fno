@@ -46,6 +46,13 @@ pub(crate) fn wake_meter_text(
         if turn.text.is_empty() {
             continue;
         }
+        // A held-park heartbeat turn is neither machine nor user: the lead
+        // re-parked, so the turn measures nothing about the wake balance,
+        // and a permanently parked lead must not read OVER on heartbeats
+        // alone. The marker is lead_wake::park_beat_text's.
+        if turn.text.contains("held-park heartbeat") {
+            continue;
+        }
         let prov =
             crate::provenance::classify_turn(&turn.obj, &crate::provenance::BusIndex::empty(), "");
         match wake_class(prov) {
@@ -170,5 +177,30 @@ mod tests {
         assert_eq!(result["user"], 3);
         assert!((result["ratio"].as_f64().unwrap() - 3.333_333).abs() < 1e-5);
         assert_eq!(result["over"], true);
+    }
+
+    /// A held-park heartbeat turn counts neither machine nor user: a lead
+    /// whose only turns are heartbeats reads machine 0 and no OVER flag.
+    #[test]
+    fn a_held_park_heartbeat_turn_leaves_the_machine_count_out() {
+        let lines = vec![
+            row(
+                "Automatic lead-wake from the fno daemon (held-park heartbeat, 1442m since the last beat): every row in scope still waits on a question, so the cadence wake sleeps. Run your check-in to re-stamp the park or start work: fno agent hq checkin.",
+                "2026-09-24T12:00:00Z",
+                true,
+            ),
+            row(
+                "Automatic lead-wake from the fno daemon: no check-in beat journaled for 51m and the beat is due at 55m. Run your check-in now: fno agent hq checkin.",
+                "2026-09-24T12:05:00Z",
+                true,
+            ),
+        ];
+        let result = wake_meter_text("claude", &lines.join("\n"), None).unwrap();
+        assert_eq!(result["machine"], 1, "only the non-heartbeat wake counts");
+        assert_eq!(result["user"], 0);
+        assert_eq!(
+            result["over"], true,
+            "a real wake with no typed turn still flags OVER"
+        );
     }
 }

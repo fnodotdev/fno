@@ -442,6 +442,31 @@ fn one_line(text: &str, cap: usize) -> String {
 /// reading, never `held: none`: the arm being down must not read as "no
 /// questions".
 pub(crate) fn held_reading(scope: &str) -> Result<Value, String> {
+    let rows = held_rows_for(scope)?;
+    let (quiet, due): (Vec<Value>, Vec<Value>) = rows
+        .into_iter()
+        .partition(|r| r.pointer("/quiet").is_some_and(|q| !q.is_null()));
+    Ok(json!({"open": due.len(), "quiet": quiet.len(), "rows": due}))
+}
+
+/// Every open question id for the scope, quiet ones included: the exact set
+/// the wake arm's park recheck compares against the beat's stamp,
+/// so the arm's verdict and the stamp share one source and shape.
+pub(crate) fn held_open_ids(scope: &str) -> Result<Vec<String>, String> {
+    Ok(held_rows_for(scope)?
+        .iter()
+        .filter_map(|r| {
+            r.get("question_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect())
+}
+
+/// The shared head of the held reads: the attention arm's index, the
+/// staleness gate, the pages read, and the per-scope fold. A missing or
+/// stale items.json is a failed read, never `held: none`.
+fn held_rows_for(scope: &str) -> Result<Vec<Value>, String> {
     let index_path = crate::attention_arm::attention_dir()
         .map_err(|e| e.to_string())?
         .join("items.json");
@@ -470,10 +495,7 @@ pub(crate) fn held_reading(scope: &str) -> Result<Value, String> {
     let items = serde_json::from_value::<CachedItems>(index)
         .unwrap_or_default()
         .items;
-    let (quiet, due): (Vec<Value>, Vec<Value>) = held_from_pages(&pages, scope, &items, now as i64)
-        .into_iter()
-        .partition(|r| r.pointer("/quiet").is_some_and(|q| !q.is_null()));
-    Ok(json!({"open": due.len(), "quiet": quiet.len(), "rows": due}))
+    Ok(held_from_pages(&pages, scope, &items, now as i64))
 }
 
 /// The fields of the arm's cached items that the held fold reads.

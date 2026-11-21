@@ -608,6 +608,10 @@ pub(crate) struct BeatData {
     pub(crate) scope_idea_children: Option<u64>,
     #[serde(default, deserialize_with = "opt_u64")]
     pub(crate) blueprint_slots: Option<u64>,
+    #[serde(default, deserialize_with = "opt_bool")]
+    pub(crate) held_park: Option<bool>,
+    #[serde(default, deserialize_with = "opt_u64")]
+    pub(crate) held_park_open: Option<u64>,
 }
 
 impl BeatData {
