@@ -1063,30 +1063,7 @@ impl Root {
                 self.workspace_menu = None;
                 self.send(ClientMsg::Command(Command::MoveSquad { squad: id, delta }));
             }
-            Action::RemoveWorkspace(id) => {
-                self.workspace_menu = None;
-                let hit = self
-                    .layout
-                    .squads
-                    .iter()
-                    .enumerate()
-                    .find(|(_, s)| s.id == id);
-                match hit {
-                    Some((i, s)) => {
-                        let last = self.layout.squads.len() == 1;
-                        self.workspace_confirm = Some(WorkspaceConfirm {
-                            squad: s.id,
-                            name: s.name.clone(),
-                            panes: s.panes,
-                            last,
-                        });
-                        // The menu's index feeds the move buttons; the
-                        // unused position keeps the enumerate honest.
-                        let _ = i;
-                    }
-                    None => self.say(format!("no workspace {id} here"), cx),
-                }
-            }
+            Action::RemoveWorkspace(id) => self.ask_close_workspace(id, cx),
             Action::ConfirmCloseWorkspace(id) => {
                 self.workspace_confirm = None;
                 self.send(ClientMsg::Command(Command::RemoveSquad(id)));
@@ -1105,6 +1082,23 @@ impl Root {
                 self.launch.state.preset_project(&cwd);
             }
             _ => {}
+        }
+    }
+
+    /// The Close menu item: ask first, naming the pane count.
+    fn ask_close_workspace(&mut self, id: u64, cx: &mut Context<Self>) {
+        self.workspace_menu = None;
+        let last = self.layout.squads.len() == 1;
+        match self.layout.squads.iter().find(|s| s.id == id) {
+            Some(s) => {
+                self.workspace_confirm = Some(WorkspaceConfirm {
+                    squad: s.id,
+                    name: s.name.clone(),
+                    panes: s.panes,
+                    last,
+                });
+            }
+            None => self.say(format!("no workspace {id} here"), cx),
         }
     }
 
