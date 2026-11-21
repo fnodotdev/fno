@@ -155,11 +155,23 @@ pub(crate) fn needs_overlay_lines(
                     } else {
                         ""
                     };
-                    lines.push(tail_styled(
-                        &format!("   {} {}", need_glyph(NeedKind::Question), q.title),
-                        stale,
-                        TextStyle::WARN,
-                    ));
+                    let chip = q
+                        .audience
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or("audience?");
+                    lines.push(
+                        TLine::parts(&[
+                            (
+                                &format!("   {} {}", need_glyph(NeedKind::Question), q.title),
+                                TextStyle::Item,
+                            ),
+                            (&format!("  \u{b7} {chip}"), TextStyle::Meta),
+                            (stale, TextStyle::WARN),
+                        ])
+                        .pad_to(ANSWER_OVERLAY_W),
+                    );
                 }
                 NeedsOverlayRow::Need(r) => {
                     let tag = match r.kind {

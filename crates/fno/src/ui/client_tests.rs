@@ -9920,6 +9920,28 @@ fn needs_overlay_lines_renders_stale_question_with_explanation() {
 }
 
 #[test]
+fn needs_overlay_question_rows_carry_the_audience_chip() {
+    let mut v = view_with_agents(vec![]);
+    v.mine_fold = Some(Vec::new());
+    v.needs_fold = Some(Vec::new());
+    let mut scoped = question_item("q-5", &["a"], Some(true));
+    scoped.audience = Some("customer:solo-founder".into());
+    let unscoped = question_item("q-6", &["a"], Some(true));
+    v.questions_fold = Some(crate::needs_overlay::QuestionsFold {
+        items: vec![scoped, unscoped],
+        ..Default::default()
+    });
+    let projection = v.needs_projection();
+    let lines = needs_overlay_lines(&projection, 0, NeedsFooter::AsOf, NeedsFooter::AsOf);
+    assert!(lines
+        .iter()
+        .any(|l| l.contains("ask for q-5") && l.contains("customer:solo-founder")));
+    assert!(lines
+        .iter()
+        .any(|l| l.contains("ask for q-6") && l.contains("audience?")));
+}
+
+#[test]
 fn needs_queue_filters_to_live_blocked_rows() {
     let mut working = blocked_row("working", 2, None);
     working.badge = Some(AgentBadge::Working);

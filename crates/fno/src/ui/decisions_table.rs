@@ -75,6 +75,24 @@ impl Table {
     }
 }
 
+const AUDIENCE_MIN_W: usize = 14;
+const AUDIENCE_MAX_W: usize = 30;
+
+/// The audience cell: the chip word, then any persona jobs.
+fn audience_cell(r: &DecisionRow) -> String {
+    let word = r
+        .audience
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("audience?");
+    if r.job.is_empty() {
+        word.to_string()
+    } else {
+        format!("{word} {}", r.job.join(","))
+    }
+}
+
 fn fit(s: &str, n: usize) -> String {
     let flat: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut out: String = flat.chars().take(n).collect();
@@ -107,9 +125,19 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
     // The description column shrinks before the ruling vanishes: 80
     // fixed columns plus one gap precede it, and a docked host pane is
     // narrower than the full view's 98-column floor.
-    let desc_w = 16.min(w.saturating_sub(81));
-    let text_w = w.saturating_sub(81 + desc_w + 1);
-    let columns = table_columns(desc_w, text_w);
+    // The audience column grows to the longest chip shown, so a chip like
+    // customer:solo-founder is not cut mid-word; the description and ruling
+    // columns give up the width.
+    let aud_w = shown
+        .iter()
+        .map(|r| audience_cell(r).chars().count())
+        .max()
+        .unwrap_or(0)
+        .clamp(AUDIENCE_MIN_W, AUDIENCE_MAX_W);
+    let fixed = 66 + aud_w;
+    let desc_w = 16.min(w.saturating_sub(fixed + 1));
+    let text_w = w.saturating_sub(fixed + 1 + desc_w + 1);
+    let columns = table_columns(aud_w, desc_w, text_w);
     let mut out = vec![head, format!("\x1b[1m{columns}\x1b[0m")];
     let body_rows = h.saturating_sub(5);
     let top = t.pick.saturating_sub(body_rows.saturating_sub(1));
@@ -118,22 +146,7 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
             "{} {} {} {} {} {} {} {} {} {}",
             fit(&r.lifecycle, 10),
             fit(&r.lane, 12),
-            fit(
-                &{
-                    let audience_word = r
-                        .audience
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                        .unwrap_or("audience?");
-                    if r.job.is_empty() {
-                        audience_word.to_string()
-                    } else {
-                        format!("{audience_word} {}", r.job.join(","))
-                    }
-                },
-                14
-            ),
+            fit(&audience_cell(r), aud_w),
             fit(r.ts.get(..10).unwrap_or(&r.ts), 10),
             fit(&r.decider(), 10),
             if r.has_quote() { "Q" } else { " " },
@@ -187,13 +200,13 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
 /// The column header row: the fixed labels plus the width-aware
 /// description and decision labels. A narrow dock shortens the
 /// description word rather than cutting it mid-token.
-fn table_columns(desc_w: usize, text_w: usize) -> String {
+fn table_columns(aud_w: usize, desc_w: usize, text_w: usize) -> String {
     let desc_label = if desc_w >= 11 { "description" } else { "desc" };
     format!(
         "{} {} {} {} {} {} {} {} {} {}",
         fit("state", 10),
         fit("lane", 12),
-        fit("audience", 14),
+        fit("audience", aud_w),
         fit("date", 10),
         fit("who", 10),
         "Q",
@@ -347,5 +360,16 @@ mod tests {
         t.apply(Key::State);
         assert_eq!(t.pick, 0);
         assert_eq!(t.shown().len(), 1);
+    }
+
+    #[test]
+    fn a_long_audience_chip_is_not_cut_mid_word() {
+        let mut t = table();
+        t.rows[0].audience = Some("customer:solo-founder".into());
+        let page = render(&t, 140, 12).join("\n");
+        assert!(
+            page.contains("customer:solo-founder"),
+            "chip cut in:\n{page}"
+        );
     }
 }
