@@ -279,6 +279,8 @@ pub struct PullRequestInput {
     pub url: Option<String>,
     #[serde(default)]
     pub note: Option<String>,
+    #[serde(default)]
+    pub merge_status: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -1594,6 +1596,66 @@ pub fn pull_request_attach(
                     .get_or_insert_with(Vec::new)
                     .push(pr.clone());
             }
+            *row = parsed.to_json();
+            updated = Some(parsed);
+            break;
+        }
+        Ok(updated.is_some())
+    })?;
+    if ok {
+        Ok(Payload {
+            success: true,
+            node: updated,
+            version: fresh_version(store),
+        })
+    } else {
+        refusal(store)
+    }
+}
+
+/// Record one side PR on a node's `additional_prs`. Append-only: the
+/// primary slot stays whatever it is, because the create path records side
+/// PRs while the primary is still empty. A duplicate (same number with a
+/// matching or absent url on either side) writes nothing and reports
+/// `success: false`, so a rerun is safe.
+pub fn pull_request_record(
+    store: &Store,
+    id: &str,
+    number: i64,
+    url: Option<&str>,
+    note: Option<&str>,
+    merge_status: Option<&str>,
+) -> Result<Payload<Node>, ApiError> {
+    let mut updated: Option<Node> = None;
+    let ok = mutate(store, "pull_request_record", |rows| {
+        for row in rows.iter_mut() {
+            if RowFacts::id_of(row) != Some(id) {
+                continue;
+            }
+            let Ok(mut parsed) = Node::from_json(row) else {
+                return Ok(false);
+            };
+            let extras = parsed.additional_prs.get_or_insert_with(Vec::new);
+            let same_url = |a: Option<&str>, b: Option<&str>| match (a, b) {
+                (Some(a), Some(b)) => {
+                    crate::additional_prs::normalize_url(a)
+                        == crate::additional_prs::normalize_url(b)
+                }
+                _ => true,
+            };
+            let duplicate = extras
+                .iter()
+                .any(|extra| extra.number == Some(number) && same_url(extra.url.as_deref(), url));
+            if duplicate {
+                return Ok(false);
+            }
+            extras.push(PullRequest {
+                number: Some(number),
+                url: url.map(str::to_string),
+                merge_status: merge_status.map(str::to_string),
+                note: note.map(str::to_string),
+                extras: serde_json::Map::new(),
+            });
             *row = parsed.to_json();
             updated = Some(parsed);
             break;
