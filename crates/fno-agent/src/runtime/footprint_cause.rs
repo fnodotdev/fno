@@ -2569,7 +2569,10 @@ mod tests {
 
     #[test]
     fn spawn_rate_attributes_new_pids_to_their_parent_rows() {
-        let before = vec![row(100, 1, 60, 0.0, "claude --bg")];
+        let before = vec![
+            row(100, 1, 60, 0.0, "claude --bg"),
+            row(200, 1, 60, 0.0, "bash"),
+        ];
         let after = vec![
             row(100, 1, 63, 0.0, "claude --bg"),
             row(101, 100, 0, 0.0, "(bash)"),
