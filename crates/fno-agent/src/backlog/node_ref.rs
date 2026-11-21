@@ -233,6 +233,21 @@ impl<'a> ResolutionIndex<'a> {
     /// legacy `ab-`, dash variants. A dash-leading query refuses before any
     /// lookup, the leaked-flag contract.
     pub fn resolve(&self, query: &str) -> Option<&'a Value> {
+        self.resolve_tiers_with(query, true)
+    }
+
+    /// `resolve_id` for a subject a row stored long ago: no number tier.
+    /// Display numbers are reassigned as nodes come and go, so a stored
+    /// `x-4279` whose node is gone stays dead and never attaches to the node
+    /// that now holds that number. Write doors store the hash form already.
+    pub fn resolve_stored_id(&self, stored: &str) -> Option<String> {
+        self.resolve_tiers_with(stored, false)
+            .or_else(|| self.resolve_tiers_with(stored.trim().to_lowercase().as_str(), false))
+            .and_then(|e| e.get("id").and_then(Value::as_str))
+            .map(str::to_string)
+    }
+
+    fn resolve_tiers_with(&self, query: &str, number_tier: bool) -> Option<&'a Value> {
         if query.starts_with('-') {
             return None;
         }
@@ -242,9 +257,11 @@ impl<'a> ResolutionIndex<'a> {
         if let Some(e) = self.by_alias.get(query) {
             return Some(e);
         }
-        if let Some(id) = crate::numbers::resolve_node(query) {
-            if let Some(e) = self.by_id.get(id.as_str()) {
-                return Some(e);
+        if number_tier {
+            if let Some(id) = crate::numbers::resolve_node(query) {
+                if let Some(e) = self.by_id.get(id.as_str()) {
+                    return Some(e);
+                }
             }
         }
         let q_lc = query.to_lowercase();

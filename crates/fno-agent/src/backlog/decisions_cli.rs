@@ -543,10 +543,7 @@ impl<'a> Matcher<'a> {
         };
         let mut cache = self.cache.borrow_mut();
         if !cache.contains_key(recorded) {
-            let resolved = self.index.resolve_id(recorded).or_else(|| {
-                self.index
-                    .resolve_id(recorded.trim().to_lowercase().as_str())
-            });
+            let resolved = self.index.resolve_stored_id(recorded);
             cache.insert(recorded.to_string(), resolved);
         }
         cache.get(recorded).and_then(|r| r.as_deref()) == Some(node.as_str())
