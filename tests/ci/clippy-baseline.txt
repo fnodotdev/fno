@@ -14309,10 +14309,6 @@ crates/fno/src/notify_dispatch.rs	clippy::indexing_slicing	positionals[2]
 crates/fno/src/notify_dispatch.rs	clippy::let_underscore_must_use	let _ = child.kill();
 crates/fno/src/notify_dispatch.rs	clippy::let_underscore_must_use	let _ = child.wait();
 crates/fno/src/serve/observe.rs	clippy::indexing_slicing	if tx.send(buf[..n].to_vec()).is_err() {
-crates/fno/src/serve/observe.rs	clippy::let_underscore_must_use	let _ = crossterm::terminal::disable_raw_mode();
-crates/fno/src/serve/observe.rs	clippy::let_underscore_must_use	let _ = out.flush();
-crates/fno/src/serve/observe.rs	clippy::let_underscore_must_use	let _ = out.write_all(b"\\x1b[0m\\x1b[?25h\\x1b[?1049l");
-crates/fno/src/serve/observe.rs	clippy::let_underscore_must_use	let _ = out.write_all(b"\\x1b[?1049h\\x1b[?25l\\x1b[2J");
 crates/fno/src/serve/observe.rs	clippy::let_underscore_must_use	let _ = stdout.flush();
 crates/fno/src/serve/observe.rs	clippy::let_underscore_must_use	let _ = stdout.write_all(&out);
 crates/fno/src/ui/org_model.rs	clippy::indexing_slicing	(at == 0 || agent.name.as_bytes()[at - 1] == b'-')
@@ -15521,7 +15517,6 @@ crates/fno/src/serve/web.rs	clippy::indexing_slicing	assert_eq!(v["port"], 8944)
 crates/fno/src/serve/web.rs	clippy::indexing_slicing	assert_eq!(v["rev"], env!("FNO_MUX_CRATES_REV"));
 crates/fno/src/serve/web.rs	clippy::indexing_slicing	model["writable"] = serde_json::json!(st.writable);
 crates/fno/src/serve/web.rs	clippy::indexing_slicing	sends.len() == 1 && sends[0].contains("if (SHARE) ws.send(JSON.stringify({ knock:"),
-crates/fno/src/serve/web.rs	clippy::indexing_slicing	token: state["token"].as_str().unwrap_or_default().to_string(),
 crates/fno/src/serve/web.rs	clippy::indexing_slicing	v["session"].is_null(),
 crates/fno/src/serve/web.rs	clippy::indexing_slicing	v["started"].as_u64(),
 crates/fno/src/serve/web.rs	clippy::let_underscore_must_use	let _ = child.kill().await;
@@ -15838,3 +15833,8 @@ crates/fno/src/install/doctor_update_tests.rs	clippy::indexing_slicing	assert_eq
 crates/fno/src/install/doctor_update_tests.rs	clippy::indexing_slicing	assert_eq!(listed[1]["mode"].as_str(), Some("stray"));
 crates/fno/src/install/doctor_update_tests.rs	clippy::indexing_slicing	let listed = record["sites"].as_array().expect("sites list");
 crates/fno/src/install/doctor_update_tests.rs	clippy::indexing_slicing	record["data_home"].as_str(),
+crates/fno/src/serve/screen.rs	clippy::let_underscore_must_use	let _ = crossterm::terminal::disable_raw_mode();
+crates/fno/src/serve/screen.rs	clippy::let_underscore_must_use	let _ = out.flush();
+crates/fno/src/serve/screen.rs	clippy::let_underscore_must_use	let _ = out.write_all(b"\\x1b[0m\\x1b[?25h\\x1b[?1049l");
+crates/fno/src/serve/screen.rs	clippy::let_underscore_must_use	let _ = out.write_all(b"\\x1b[?1049h\\x1b[?25l\\x1b[2J");
+crates/fno/src/serve/web_core.rs	clippy::indexing_slicing	token: state["token"].as_str().unwrap_or_default().to_string(),
