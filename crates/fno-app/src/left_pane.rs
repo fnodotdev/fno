@@ -73,7 +73,7 @@ pub enum Row {
         plus: bool,
         /// The Workspaces header alone: the button that cycles the
         /// grouping (workspaces, state, machine).
-        grouping: bool,
+        grouping: Option<GroupBy>,
     },
     /// A workspace's header row: the fold caret, the name, the active
     /// mark, and its agents' state rollup. A click on the name selects
@@ -120,7 +120,7 @@ fn header(title: &'static str) -> Row {
         rollup: Vec::new(),
         warn: None,
         plus: false,
-        grouping: false,
+        grouping: None,
     }
 }
 
@@ -232,9 +232,18 @@ pub fn rows(
 ) -> Vec<Row> {
     let agents = fno::app_api::client::agent_sort::sideline_order(&layout.agents, now_secs);
     let mut workspaces = header("Workspaces");
-    if let Row::Header { plus, grouping, .. } = &mut workspaces {
+    if let Row::Header {
+        plus,
+        grouping,
+        rollup,
+        ..
+    } = &mut workspaces
+    {
         *plus = true;
-        *grouping = true;
+        *grouping = Some(group_by);
+        // The header counts every agent per state, so a blocked agent
+        // shows even with every workspace folded.
+        *rollup = section_rollup(agents.iter().map(|a| agent_lattice_state(a)));
     }
     let mut out = vec![workspaces];
 
@@ -499,7 +508,9 @@ fn push_machine_shells(
 fn slots(card: &CardFacts, identity: Option<&str>) -> [Option<String>; SLOTS] {
     [
         card.model.clone(),
-        card.cost.clone(),
+        // The cost slot stays empty: rows show no cost, and a slot no
+        // agent fills takes no column.
+        None,
         card.context.clone(),
         card.tokens.clone(),
         card.created.as_ref().map(|c| format!("up {c}")),
@@ -696,11 +707,16 @@ fn agent_row(
 
 /// The Workspaces header's group button: one glyph per mode, and a click
 /// cycles workspaces -> state -> machine -> workspaces.
-fn grouping_button(p: &Palette, cx: &mut Context<Root>) -> Div {
+fn grouping_button(mode: GroupBy, p: &Palette, cx: &mut Context<Root>) -> Div {
+    let glyph = match mode {
+        GroupBy::Workspaces => "▤",
+        GroupBy::State => "◔",
+        GroupBy::Machine => "▣",
+    };
     div().child(
         ui::clickable(div().id("grouping-cycle").px_1(), p)
             .on_click(cx.listener(|root, _, _, cx| root.act(Action::CycleGrouping, cx)))
-            .child(div().text_color(rgb(p.faint)).child("⇄".to_string())),
+            .child(div().text_color(rgb(p.faint)).child(glyph.to_string())),
     )
 }
 
@@ -923,7 +939,7 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
                             .child(div().text_color(rgb(p.warn)).child("◆"))
                             .child(n.to_string())
                     }))
-                    .when(grouping, |right| right.child(grouping_button(&p, cx)))
+                    .children(grouping.map(|mode| grouping_button(mode, &p, cx)))
                     .when(plus, |right| right.child(workspaces_header_plus(&p, cx))),
             ),
         ),
@@ -1755,12 +1771,13 @@ mod tests {
         assert_eq!(rich.tokens.as_deref(), Some("12.3k tok"));
         assert!(rich.activity.is_some());
         // The columns are the widest value per slot, and a tight budget
-        // drops whole slots from the right: model, cost and context stay.
+        // drops whole slots from the right: model and context stay. The
+        // cost slot is empty by design, so it takes no column.
         let model = rich.model.as_deref().unwrap().chars().count();
         let wide = columns(&rows, 200);
-        assert_eq!(wide, [(0, model), (1, 7), (2, 3), (3, 9), (4, 5)]);
-        let tight = columns(&rows, model + COL_GAP + 7 + COL_GAP + 3 + COL_GAP + 8);
-        assert_eq!(tight, [(0, model), (1, 7), (2, 3)]);
+        assert_eq!(wide, [(0, model), (2, 3), (3, 9), (4, 5)]);
+        let tight = columns(&rows, model + COL_GAP + 3 + COL_GAP + 8);
+        assert_eq!(tight, [(0, model), (2, 3)]);
     }
 
     #[test]
