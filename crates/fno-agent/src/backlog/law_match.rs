@@ -1939,8 +1939,11 @@ pub(crate) fn door_refuse(message: &str) -> i32 {
 /// The no-conflict refusal: the same text whether the index read empty or
 /// the store is absent, because both prove the same fact: nothing live
 /// conflicts with this ruling, and a law only settles a conflict between
-/// rulings. The pointer names the plain decision door.
-fn no_conflict_refusal(subject: &str, missing_store: bool) -> String {
+/// rulings. The pointer names the plain decision door. The scope rides the
+/// message because the decide skill's step-3 read is machine-wide while the
+/// door's conflict count is scope-equal, so a cross-project law can read
+/// `single` in the skill and refuse here.
+fn no_conflict_refusal(subject: &str, scope: &str, missing_store: bool) -> String {
     let store = if missing_store {
         " (the decision store does not exist yet)"
     } else {
@@ -1952,10 +1955,10 @@ fn no_conflict_refusal(subject: &str, missing_store: bool) -> String {
         " If this ruling retires an existing decision under another spelling, pass --supersedes <id>."
     };
     format!(
-        "no live law under the subject {subject:?} conflicts with this ruling{store}, and a law \
-         only settles a conflict between rulings. Record a plain decision instead: \
-         fno inbox decide {subject:?} \"<decision>\" --audience internal --why \"<why>\" \
-         --rationale \"<why>\" (--expiry never makes one standing).{supersede_hint}"
+        "no live law under the subject {subject:?} conflicts with this ruling (searched scope \
+         {scope}){store}, and a law only settles a conflict between rulings. Record a plain \
+         decision instead: fno inbox decide {subject:?} \"<decision>\" --audience internal \
+         --why \"<why>\" --rationale \"<why>\" (--expiry never makes one standing).{supersede_hint}"
     )
 }
 
@@ -2215,7 +2218,11 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
                     // merge-freeze lift, pr-hold) is a per-head machine
                     // contract, never a policy law, so it keeps the old path.
                     0 if !decision_index::is_pr_door_subject(&door.subject) => {
-                        return door_refuse(&no_conflict_refusal(door.subject.trim(), false))
+                        return door_refuse(&no_conflict_refusal(
+                            door.subject.trim(),
+                            &scope,
+                            false,
+                        ))
                     }
                     0 => auto_superseded = None,
                     1 => {
@@ -2243,7 +2250,7 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
                 if decision_store_absent()
                     && !decision_index::is_pr_door_subject(&door.subject) =>
             {
-                return door_refuse(&no_conflict_refusal(door.subject.trim(), true));
+                return door_refuse(&no_conflict_refusal(door.subject.trim(), &scope, true));
             }
             Err(_) => auto_superseded = None,
         }
