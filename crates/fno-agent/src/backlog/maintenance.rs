@@ -16,6 +16,7 @@ use std::time::Instant;
 #[path = "maintenance_validity.rs"]
 pub(crate) mod validity;
 
+use super::workflows::text_at;
 use crate::backlog_ready::{days_between, get_str, parse_iso_ms, truthy};
 use crate::graph_store::StoreError;
 use validity::{normalize_title, py_str, SweepSeams};
@@ -59,6 +60,13 @@ Options:
   --min-number N     With --repo-moved: only stored PR numbers >= N move.
                      After the new repo binds its own PRs, pass one above
                      its highest number so its rows stay put.
+  --lead-backfill    One-shot attribution backfill; runs alone and ignores
+                     the other legs. For every done node with no
+                     holding_lead field, derive the lead that held the
+                     node's scope at completed_at from the lead_checkin
+                     journal. Never overwrites an existing stamp; a node
+                     with no history reads unknown. Dry run by default;
+                     --apply writes.
   -h, --help         Show this message and exit.";
 
 // ---------------------------------------------------------------------------
@@ -74,6 +82,7 @@ pub(crate) struct Flags {
     pub suspect_reverts: bool,
     pub vision_sweep: bool,
     pub repo_moved: Vec<(String, String)>,
+    pub lead_backfill: bool,
     /// `--min-number N`: with `--repo-moved`, only stored PR numbers >= N move.
     pub min_number: Option<i64>,
 }
@@ -97,6 +106,7 @@ fn parse_flags(tail: &[String]) -> Result<Flags, i32> {
             "--no-validity" => flags.no_validity = true,
             "--suspect-reverts" => flags.suspect_reverts = true,
             "--vision-sweep" => flags.vision_sweep = true,
+            "--lead-backfill" => flags.lead_backfill = true,
             "--repo-moved" => {
                 let Some(spec) = iter.next() else {
                     eprintln!("{USAGE}\n\nError: --repo-moved needs OLD=NEW");
@@ -1673,6 +1683,11 @@ pub(crate) fn run_pass(flags: Flags, seams: &Seams, out: &mut Out) -> i32 {
         return run_repo_moved(flags, seams, &entries, out);
     }
 
+    // The attribution backfill runs alone, the same one-shot shape.
+    if flags.lead_backfill {
+        return run_lead_backfill(flags, seams, &entries, out);
+    }
+
     if flags.suspect_reverts {
         // A read-only retro sweep, not another leg.
         let reverts = detect_suspect_reverts(&entries, &(seams.events)());
@@ -2532,6 +2547,97 @@ fn run_repo_moved(flags: Flags, seams: &Seams, entries: &[Value], out: &mut Out)
         ));
     }
     0
+}
+
+/// The one-shot attribution backfill: every done node without a stamp gets
+/// the journal's holder at `completed_at`. Dry run default; `--apply`
+/// writes. Insert-only at write time: a row that grew a stamp between the
+/// detect pass and the write keeps its stamp and drops out of the count.
+fn run_lead_backfill(flags: Flags, seams: &Seams, entries: &[Value], out: &mut Out) -> i32 {
+    let mut ctx = super::holding_lead::derive_ctx(entries);
+    let derived = super::holding_lead::derive_batch(&mut ctx, entries);
+    if flags.apply && !derived.is_empty() {
+        let pairs = derived.clone();
+        let result = crate::graph_store::mutate_rows(
+            &seams.graph,
+            std::time::Duration::from_secs(120),
+            None,
+            None,
+            |ents| {
+                let mut wrote = 0usize;
+                for (id, stamp) in &pairs {
+                    if let Some(r) = ents
+                        .iter_mut()
+                        .find(|r| text_at(r, "id") == Some(id.as_str()))
+                    {
+                        if s_status_done(r) && !super::holding_lead::is_stamped(r) {
+                            r.as_object_mut()
+                                .ok_or(StoreError::Invalid(format!(
+                                    "row {id} is not a JSON object"
+                                )))?
+                                .insert(super::holding_lead::FIELD.into(), stamp.clone());
+                            wrote += 1;
+                        }
+                    }
+                }
+                Ok(wrote > 0)
+            },
+        );
+        if let Err(e) = result {
+            out.err(format!(
+                "Error: backlog maintain --lead-backfill write failed: {e}"
+            ));
+            return 1;
+        }
+    }
+    if flags.json {
+        let payload = json!({
+            "lead_backfill": {
+                "candidates": derived.len(),
+                "applied": if flags.apply { derived.len() } else { 0 },
+                "dry_run": !flags.apply,
+                "nodes": derived.iter().map(|(id, stamp)| {
+                    json!({
+                        "id": id,
+                        "name": stamp_value(stamp, "name").unwrap_or(super::holding_lead::UNKNOWN),
+                        "holder_session": stamp_value(stamp, "holder_session"),
+                        "title": stamp_value(stamp, "title"),
+                    })
+                }).collect::<Vec<_>>(),
+            }
+        });
+        out.line(payload.to_string());
+    } else {
+        out.line(format!(
+            "lead-backfill: {} done node(s) {}",
+            derived.len(),
+            if flags.apply {
+                "stamped"
+            } else {
+                "would stamp (dry run; pass --apply to write)"
+            }
+        ));
+        for (id, stamp) in derived.iter().take(20) {
+            let name = stamp_value(stamp, "name").unwrap_or(super::holding_lead::UNKNOWN);
+            let holder = stamp_value(stamp, "holder_session").unwrap_or("-");
+            out.line(format!("  {id}  {name}  {holder}"));
+        }
+        if derived.len() > 20 {
+            out.line(format!("  ... and {} more", derived.len() - 20));
+        }
+    }
+    0
+}
+
+/// The row's done check for the backfill legs: the status word alone, the
+/// same read the detect pass applies.
+fn s_status_done(row: &Value) -> bool {
+    text_at(row, "status") == Some("done")
+}
+
+/// A stamp subfield as a string slice, for the report lines.
+fn stamp_value<'a>(stamp: &'a Value, key: &str) -> Option<&'a str> {
+    stamp.get(key).and_then(Value::as_str)
 }
 
 pub fn run_maintain(tail: &[String]) -> i32 {

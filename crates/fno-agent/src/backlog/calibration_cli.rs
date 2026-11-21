@@ -289,6 +289,7 @@ fn run_by_lane(
         }
     }
     let cells = scorecard::fold_cells(&built.records);
+    let by_lead = scorecard::fold_by_lead(&built.records);
     let cov = scorecard::coverage(&built.records, built.dropped_unparsed);
     // The router folds its verdicts from the same cells the table reads;
     // proposals ride the output and write nothing to config.
@@ -307,6 +308,7 @@ fn run_by_lane(
                 "since_days": since_days,
                 "coverage": cov,
                 "cells": cells,
+                "by_lead": by_lead,
                 "proposals": proposals,
             }))
         );
@@ -404,6 +406,33 @@ fn run_by_lane(
                 .map(|f| format!("{f}"))
                 .unwrap_or_else(|| "n/a".to_string()),
         );
+    }
+    if !by_lead.is_empty() {
+        println!("\n-- by lead (closed work grouped by stored team title) --");
+        println!(
+            "  {:<28}{:>6}{:>8}{:>10}{:>9}  {}",
+            "lead title", "nodes", "merged", "spend$", "$ ok", "holders"
+        );
+        for c in &by_lead {
+            println!(
+                "  {:<28}{:>6}{:>8}{:>10}{:>9}  {}",
+                c["lead_title"].as_str().unwrap_or_default(),
+                c["nodes"].as_i64().unwrap_or(0),
+                c["merged"].as_i64().unwrap_or(0),
+                c["spend_usd"].as_f64()
+                    .map(|f| format!("{f:.2}"))
+                    .unwrap_or_else(|| "n/a".to_string()),
+                if c["spend_measured"].as_bool().unwrap_or(false) {
+                    "yes"
+                } else {
+                    "no"
+                },
+                c["holders"]
+                    .as_array()
+                    .map(|hs| hs.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", "))
+                    .unwrap_or_default(),
+            );
+        }
     }
     if let Some(props) = &proposals {
         println!(
