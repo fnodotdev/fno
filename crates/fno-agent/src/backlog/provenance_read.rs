@@ -909,9 +909,9 @@ pub fn run(tail: &[String]) -> i32 {
     0
 }
 
-#[path = "provenance_render_tests.rs"]
+#[path = "provenance_render_test.rs"]
 #[cfg(test)]
-mod provenance_render_tests;
+mod provenance_render_test;
 
 #[cfg(test)]
 mod tests {

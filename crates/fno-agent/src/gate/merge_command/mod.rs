@@ -1415,7 +1415,7 @@ fn acquire_merge_lock(cwd: &Path, pr: i64) -> LockOutcome {
 }
 
 #[cfg(test)]
-mod fold_target_tests;
+mod fold_target_test;
 
 #[cfg(test)]
 mod hop_client_bin_tests {
