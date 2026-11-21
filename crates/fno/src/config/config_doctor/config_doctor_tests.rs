@@ -100,11 +100,16 @@ fn the_grid_readout_names_a_pick_per_difficulty_and_the_unreachable_declared_row
         "claude-haiku-5-5".to_string(),
     ];
     let out = reporters::grid_readout(&commands, &probed, &declared).expect("probes answered");
+    // concat!, not a backslash continuation: a continuation strips the next
+    // line's leading whitespace, which would silently drop the remedy line's
+    // six-space indent and pin the wrong bytes.
     assert_eq!(
         out,
-        "band routing: grid (no profile lanes) target low->claude-haiku medium->claude-sonnet high->claude-opus\n\
-         band routing: grid unreachable (declared, never picked at low, medium or high) claude-opus-5-5, zai-flash, claude-haiku-5-5\n\
-         A declared row wins only by sorting ahead: cost_per_mtok_in or a snapshot percentile ranks it first; rows without either are ranked by weakest clearing band, then name (docs/architecture/role-based-model-routing.md)\n"
+        concat!(
+            "band routing: grid (no profile lanes) target low->claude-haiku medium->claude-sonnet high->claude-opus\n",
+            "band routing: grid unreachable (declared, never picked at low, medium or high) claude-opus-5-5, zai-flash, claude-haiku-5-5\n",
+            "      A declared row wins only by sorting ahead: cost_per_mtok_in or a snapshot percentile ranks it first; rows without either are ranked by weakest clearing band, then name (docs/architecture/role-based-model-routing.md)\n",
+        )
     );
 }
 
