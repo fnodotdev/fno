@@ -19,8 +19,9 @@ const THEME_LIGHT: &str = "footnote-paper";
 const SHOT_SIZE: (f32, f32) = (1280.0, 800.0);
 
 /// How long the shot waits for the board feeds to settle before it
-/// captures.
-const SETTLE_BUDGET: Duration = Duration::from_secs(10);
+/// captures. The first read joins the fleet fold over the network
+/// primary, so a slow fleet needs more than ten seconds.
+const SETTLE_BUDGET: Duration = Duration::from_secs(40);
 
 /// The poll cadence while the feeds settle.
 const SETTLE_POLL: Duration = Duration::from_millis(150);
