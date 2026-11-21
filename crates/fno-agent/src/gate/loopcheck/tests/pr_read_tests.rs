@@ -239,6 +239,15 @@ fn docs_note_rows_never_become_the_live_pr_target() {
     let _guard = crate::claims::test_env_lock();
     let dir = tempfile::tempdir().unwrap();
     std::env::set_var("FNO_STATE_DIR", dir.path());
+    // Drop restores the env even when an assert fails, so a red run here
+    // cannot reroute later tests' graph reads to this tempdir.
+    struct StateDirPin;
+    impl Drop for StateDirPin {
+        fn drop(&mut self) {
+            std::env::remove_var("FNO_STATE_DIR");
+        }
+    }
+    let _pin = StateDirPin;
     let graph = crate::runtime::state_layout::graph_anchor(dir.path());
     let row = |id: &str, prs: serde_json::Value| {
         crate::backlog::model::Node::from_json(&serde_json::json!({
@@ -285,6 +294,4 @@ fn docs_note_rows_never_become_the_live_pr_target() {
         pr_read::manifest_node_pr_target(dir.path(), Some("ab-code-only")),
         Some(("100".to_string(), Some("fnodotdev/fno".to_string())))
     );
-
-    std::env::remove_var("FNO_STATE_DIR");
 }
