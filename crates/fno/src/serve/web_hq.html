@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
 <title>fno hq</title>
 <style>
 /* fno-house */
@@ -45,6 +47,9 @@ tbody tr{cursor:pointer}tbody tr:hover,tbody tr:focus-visible{background:var(--b
 .dhead h2{margin:0;font-size:14px;line-height:1.35;font-weight:700}.dnode{font-size:11.5px;color:var(--overlay1)}.dbody{padding:10px 14px 18px;overflow:auto;display:flex;flex-direction:column;gap:14px}.sec h3{margin:0 0 6px;font-size:11px;color:var(--overlay1);font-weight:700}.sec h3::before{content:"## "}
 .kv{display:grid;grid-template-columns:110px minmax(0,1fr);gap:4px 12px;font-size:12px;margin:0}.kv dt{color:var(--overlay1)}.kv dd{margin:0;min-width:0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}.mono{font-size:11.5px}.dbox{margin:0;border:1px solid var(--surface0);background:var(--base);padding:8px 10px;font:inherit;font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;max-height:280px;overflow:auto}.dbox.none{color:var(--overlay1)}.dbox b{font-weight:700}.dbox code{font:inherit;color:var(--yellow)}.sec:first-child .dbox{max-height:170px}.links{display:flex;flex-direction:column;gap:6px}.lkb{flex:none;border:1px solid var(--surface1);background:var(--mantle);color:var(--subtext0);font:inherit;font-size:11px;padding:2px 8px;cursor:pointer;min-height:24px;text-decoration:none;display:inline-flex;align-items:center}.lkb:hover{color:var(--text);border-color:var(--text)}
 @media (max-width:640px){.drawer{top:auto;left:8px;right:8px;bottom:8px;width:auto;height:78vh;transform:translateY(calc(100% + 16px))}.kv{grid-template-columns:96px minmax(0,1fr)}}
+/* Mine: the caller's own views. The accent tints this frame only. */
+#mine{border-color:var(--accent,var(--surface0))}#mine[hidden]{display:none}#mine .mhead{display:flex;flex-wrap:wrap;align-items:center;gap:6px}#mine .mhead h2{margin-right:auto;color:var(--accent,var(--overlay1))}#mine .mhead select{background:var(--base);border:1px solid var(--surface1);color:var(--text);font:12px var(--mono);min-height:26px}#mine table{min-width:0}#mine ul{margin:0;padding-left:18px}#mine p{margin:0}
+body[data-density="compact"] .wrap{gap:6px;padding-top:6px}body[data-density="compact"] .panel{padding:6px 8px;gap:3px}body[data-density="compact"] th,body[data-density="compact"] td{padding:3px 8px}
 </style>
 </head>
 <body>
@@ -53,6 +58,7 @@ tbody tr{cursor:pointer}tbody tr:hover,tbody tr:focus-visible{background:var(--b
   <span class="lbl">view</span><div class="seg" role="tablist" aria-label="View"><button role="tab" id="tab-synapse" data-fno="tab" aria-selected="true">synapse</button><button role="tab" id="tab-table" data-fno="tab" aria-selected="false">table</button><button role="tab" id="tab-decisions" data-fno="tab" aria-selected="false">decisions</button></div></header>
 <div class="wrap">
   <div id="banners"></div>
+  <section class="panel" id="mine" hidden aria-label="Mine"></section>
   <section class="fleet" id="machines" aria-label="Machines"><p class="empty">reading the fleet</p></section>
   <div class="filters" id="chips"><label>Machine</label></div>
   <div class="view" id="view-synapse">
@@ -841,6 +847,88 @@ document.addEventListener("click", (e) => {
   if (!t) return;
   fetch((nav ? nav.dataset.base : "./") + "ui/click?t=" + encodeURIComponent(token), {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify({screen: "web_hq", control: t.dataset.fno}), keepalive: true}).catch(() => { /* quiet-ok: the click count is fire-and-forget */ });
 }, true);
+})();
+</script>
+<script>
+// Mine: the caller's own views from hq/mine.json, drawn with textContent
+// only, and the caller's look. A login with no view sees no section.
+(() => {
+const nav = document.querySelector("nav.fno-nav");
+const base = nav ? nav.dataset.base : "./";
+const token = new URLSearchParams(location.search).get("t") || "";
+const box = document.getElementById("mine");
+const ACCENT = {blue: "var(--blue)", green: "var(--green)", violet: "var(--violet)"};
+const CHOICES = {theme: ["auto", "light", "dark"], density: ["comfortable", "compact"], accent: ["ink", "blue", "green", "violet"]};
+const el = (tag, text) => { const n = document.createElement(tag); if (text != null) n.textContent = text; return n; };
+function applyLook(look) {
+  const root = document.documentElement;
+  if (look.theme === "light" || look.theme === "dark") root.dataset.theme = look.theme;
+  else delete root.dataset.theme;
+  if (look.density === "compact") document.body.dataset.density = "compact";
+  else delete document.body.dataset.density;
+  if (ACCENT[look.accent]) box.style.setProperty("--accent", ACCENT[look.accent]);
+  else box.style.removeProperty("--accent");
+}
+function block(b) {
+  if (b.kind === "heading") return el("h3", b.text);
+  if (b.kind === "text") return el("p", b.text);
+  if (b.kind === "list") { const ul = el("ul"); for (const i of b.items || []) ul.append(el("li", i)); return ul; }
+  if (b.kind === "key_value") {
+    const dl = el("dl"); dl.className = "kv";
+    for (const e of b.entries || []) dl.append(el("dt", e.key), el("dd", e.value));
+    return dl;
+  }
+  if (b.kind === "table") {
+    const t = el("table"), thead = el("thead"), head = el("tr"), body = el("tbody");
+    const keys = (b.columns || []).map(c => c.key.replace(/^\//, ""));
+    for (const c of b.columns || []) head.append(el("th", c.title));
+    for (const r of b.rows || []) { const tr = el("tr"); for (const k of keys) tr.append(el("td", r[k] || "")); body.append(tr); }
+    thead.append(head); t.append(thead, body);
+    const wrap = el("div"); wrap.className = "tscroll"; wrap.append(t);
+    return wrap;
+  }
+  return el("p", "this block kind is not drawn here: " + b.kind);
+}
+function lookControl(look, project, note) {
+  const row = el("div"); row.className = "mhead";
+  row.append(el("h2", "Mine"));
+  for (const [field, values] of Object.entries(CHOICES)) {
+    const sel = el("select"); sel.setAttribute("aria-label", field);
+    for (const v of values) { const o = el("option", field + ": " + v); o.value = v; o.selected = look[field] === v; sel.append(o); }
+    sel.addEventListener("change", async () => {
+      const next = Object.assign({}, look, {[field]: sel.value});
+      let res;
+      try { res = await fetch(base + "hq/mine/look?t=" + encodeURIComponent(token), {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify({project, look: next})}); } catch (e) { res = null; note.textContent = "the look did not save: " + e.message; }
+      if (res && res.ok) { Object.assign(look, (await res.json()).look); applyLook(look); note.textContent = ""; }
+      else { sel.value = look[field]; if (res) note.textContent = "the look did not save: " + await res.text(); }
+    });
+    row.append(sel);
+  }
+  return row;
+}
+async function loadMine() {
+  let body;
+  try {
+    const res = await fetch(base + "hq/mine.json?t=" + encodeURIComponent(token), {cache: "no-store"});
+    if (!res.ok) return;
+    body = await res.json();
+  } catch (e) { return; /* quiet-ok: Mine is optional; the rest of the page stands */ }
+  applyLook(body.look || {});
+  const projects = body.projects || [];
+  if (!projects.some(p => (p.views || []).length || p.broken)) { box.hidden = true; return; }
+  const note = el("p");
+  box.replaceChildren(body.look_project ? lookControl(Object.assign({}, body.look), body.look_project, note) : el("h2", "Mine"), note);
+  for (const p of projects) {
+    if (p.broken) { box.append(el("p", p.project + ": the store file does not parse, so nothing draws: " + p.broken)); continue; }
+    for (const v of p.views || []) {
+      box.append(el("h3", (v.title || "view") + " · " + p.project));
+      for (const b of v.blocks || []) box.append(block(b));
+    }
+    for (const argv of p.refused || []) box.append(el("p", "live read `" + argv + "` is not a hosted read or is outside your invite; the declared rows show"));
+  }
+  box.hidden = false;
+}
+loadMine();
 })();
 </script>
 </body>
