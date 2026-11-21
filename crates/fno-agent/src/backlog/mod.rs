@@ -1147,7 +1147,7 @@ pub(crate) fn authoritative_sync_rebased(
         let Some(id) = RowFacts::id_of(row).filter(|id| ids.contains(id)) else {
             continue;
         };
-        let Some(slug) = row.get("slug").and_then(Value::as_str) else {
+        let Some(slug) = RowFacts::of(row).and_then(|facts| facts.slug().as_str()) else {
             continue;
         };
         let held_elsewhere: bool = transaction.query_row(
@@ -1167,8 +1167,8 @@ pub(crate) fn authoritative_sync_rebased(
         .filter_map(|row| RowFacts::id_of(row).map(|id| (id, row)))
         .collect();
     let parent_of = |row: &Value| {
-        row.get("parent")
-            .and_then(Value::as_str)
+        RowFacts::of(row)
+            .and_then(|facts| facts.parent().as_str())
             .map(str::to_string)
     };
     for row in after {
