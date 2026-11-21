@@ -49,6 +49,10 @@ struct Args {
     /// forces the cmd-held hint.
     #[arg(long = "shot-find", value_enum)]
     shot_find: Option<ShotFind>,
+    /// Window-relative X,Y in logical points the shot clicks through a
+    /// posted mouse event before the capture.
+    #[arg(long = "shot-tap", value_name = "X,Y")]
+    shot_tap: Option<String>,
     /// Settings-panel state --shot paints: `panel` opens the panel,
     /// `filter` types `alert` through the real field, `page` opens the
     /// Theme choice page through real Enter.
@@ -114,6 +118,12 @@ enum ShotFind {
     Chords,
 }
 
+/// Parse the --shot-tap X,Y pair.
+fn parse_point(s: &str) -> Option<(f64, f64)> {
+    let (x, y) = s.split_once(',')?;
+    Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+}
+
 /// The --shot-settings values.
 #[derive(clap::ValueEnum, Clone)]
 enum ShotSettings {
@@ -146,6 +156,7 @@ fn main() {
                 ShotFind::Bar => fno_app::FindShot::Bar,
                 ShotFind::Chords => fno_app::FindShot::Chords,
             }),
+            tap: args.shot_tap.as_deref().and_then(parse_point),
             settings: args.shot_settings.map(|s| match s {
                 ShotSettings::Panel => fno_app::SettingsShot::Panel,
                 ShotSettings::Filter => fno_app::SettingsShot::Filter,

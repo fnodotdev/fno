@@ -224,6 +224,10 @@ enabled = true
 # Push sinks for open questions: a list of tables with name, type (ntfy or webhook), url, topic, token_env, answer_base_url and body (title-only or full).
 sinks = []
 
+[web]
+# Who may answer on the HQ page over a tailnet: a list of tables with email, scope (* or a node id) and role (viewer, commenter, editor, owner).
+invites = []
+
 [research]
 # Landing dir for the `fno do research` doc deliverable (brief + sources sidecar); vault area, not repo-relative. Unset => ship fails loud (never guesses).
 # output_dir = <unset>   # optional; no default
@@ -861,6 +865,10 @@ alert_sound = true
 alert_notification = true
 # The Dock badge showing the count of blocked agents in fno-app (default on).
 alert_badge = true
+# The terminal pane font family. fno-app's Settings page paints it as a choice page over the installed monospaced families; a name the text system cannot resolve falls back to the platform mono at launch. The chrome (labels, lists, title bar) stays SF Mono.
+font = "SF Mono"
+# The terminal pane font size in points, bounded 8 to 32. fno-app's Settings page cycles it through 11, 12, 13, 14, 15, 16 and 18, and the panes re-measure their cells live.
+font_size = 13.0
 
 [provider_cap]
 # Arm the provider cap actor: a lane that hits its usage cap alerts its leads, and its members park until the reset (default on). Off still measures and saves the snapshot, and moves nothing.
@@ -987,3 +995,17 @@ diff_chars = 80000
 routes = ["claude-opus-5-5", "claude-opus", "codex-sol"]
 # Additional project vision files. Paths may be absolute or relative to the canonical repository.
 vision_paths = []
+
+[buddy]
+# The most rerolls the buddy banks. A reroll earned with a full bank is lost (default 3).
+reroll_bank = 3
+# Shipped fleet PRs that earn one reroll (default 2).
+ships_per_reroll = 2
+# Grant one reroll each day (default on).
+daily_reroll = true
+# Fewest seconds between buddy model lines fired by tool-result reactions: at most one per cooldown. Canned lines cost no model call and do not wait (default 10).
+model_line_cooldown_s = 10
+# The model alias every buddy line asks for through the session's API client (default haiku).
+model = "haiku"
+# Seconds between fleet reads; one read serves every session on the machine (default 300).
+fleet_interval_s = 300

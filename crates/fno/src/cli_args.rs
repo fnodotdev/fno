@@ -459,6 +459,10 @@ pub struct AppShotArgs {
     /// the bar with a query typed; `chords` also holds the cmd hint
     #[arg(long, value_parser = ["bar", "chords"])]
     pub find: Option<String>,
+    /// Window-relative X,Y in logical points the frame clicks through a
+    /// posted mouse event before the capture
+    #[arg(long, value_name = "X,Y")]
+    pub tap: Option<String>,
     /// Seed an open ask-the-user question in the chat: `rows` is the short
     /// options frame, `overflow` makes the first option wrap
     #[arg(long, value_parser = ["rows", "overflow"])]
