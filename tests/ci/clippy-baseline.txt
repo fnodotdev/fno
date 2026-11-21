@@ -15850,3 +15850,6 @@ crates/fno/src/serve/screen.rs	clippy::let_underscore_must_use	let _ = out.flush
 crates/fno/src/serve/screen.rs	clippy::let_underscore_must_use	let _ = out.write_all(b"\\x1b[0m\\x1b[?25h\\x1b[?1049l");
 crates/fno/src/serve/screen.rs	clippy::let_underscore_must_use	let _ = out.write_all(b"\\x1b[?1049h\\x1b[?25l\\x1b[2J");
 crates/fno/src/serve/web_core.rs	clippy::indexing_slicing	token: state["token"].as_str().unwrap_or_default().to_string(),
+crates/fno-agent/src/runtime/attention_http.rs	clippy::indexing_slicing	assert_eq!(body["click"], "https://phone.example/hq?question=q-9");
+crates/fno-agent/src/runtime/attention_http.rs	clippy::indexing_slicing	body["click"],
+crates/fno-agent/src/runtime/attention_http.rs	clippy::indexing_slicing	let actions = body["actions"].as_array().unwrap();
