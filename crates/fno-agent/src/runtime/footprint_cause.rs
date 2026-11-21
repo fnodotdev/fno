@@ -2154,6 +2154,27 @@ pub(crate) const SPAWN_RATE_WINDOW_MAX_S: u64 = 30;
 /// stayed under its sustained bar; a healthy idle baseline reads under 10.
 pub(crate) const SPAWN_RATE_ALARM_PER_SEC: f64 = 20.0;
 
+/// The spawn-rate reading: the typed shape the command prints and tests
+/// assert, so no reader goes back through JSON field indexing.
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct SpawnRateReading {
+    pub window_seconds: f64,
+    pub new_processes: u64,
+    pub machine_per_second: f64,
+    pub cores: u64,
+    pub per_core_per_second: f64,
+    pub alarm_per_second: f64,
+    pub unattributed_gone: u64,
+    pub parents: Vec<SpawnRateParent>,
+    pub exit_code: i32,
+}
+
+impl SpawnRateReading {
+    fn payload(&self) -> Value {
+        serde_json::to_value(self).unwrap_or(Value::Null)
+    }
+}
+
 /// One attributed spawner in the spawn-rate reading.
 #[derive(Debug, Clone, serde::Serialize)]
 pub(crate) struct SpawnRateParent {
@@ -2214,7 +2235,7 @@ pub(crate) fn spawn_rate_reading(
     after: &[ProcRow],
     window: Duration,
     alarm_per_sec: f64,
-) -> (Value, i32) {
+) -> (SpawnRateReading, i32) {
     let before_pids: BTreeSet<u32> = before.iter().map(|r| r.pid).collect();
     let by_pid: BTreeMap<u32, &ProcRow> = after.iter().map(|r| (r.pid, r)).collect();
     let me = std::process::id();
@@ -2258,18 +2279,18 @@ pub(crate) fn spawn_rate_reading(
     } else {
         0
     };
-    let payload = json!({
-        "window_seconds": window_s,
-        "new_processes": total,
-        "machine_per_second": machine_per_second,
-        "cores": cpu_capacity_cores(),
-        "per_core_per_second": machine_per_second / cpu_capacity_cores() as f64,
-        "alarm_per_second": alarm_per_sec,
-        "unattributed_gone": gone,
-        "parents": rows,
-        "exit_code": code,
-    });
-    (payload, code)
+    let reading = SpawnRateReading {
+        window_seconds: window_s,
+        new_processes: total,
+        machine_per_second,
+        cores: cpu_capacity_cores(),
+        per_core_per_second: machine_per_second / cpu_capacity_cores() as f64,
+        alarm_per_second: alarm_per_sec,
+        unattributed_gone: gone,
+        parents: rows,
+        exit_code: code,
+    };
+    (reading, code)
 }
 
 /// `census --spawn-rate` / `fno doctor footprint --spawn-rate`: the
@@ -2281,37 +2302,33 @@ pub fn spawn_rate_command(json_output: bool, secs: Option<u64>, alarm: Option<f6
     let (before, _) = crate::census::process_table();
     std::thread::sleep(Duration::from_secs(clamped));
     let (after, _) = crate::census::process_table();
-    let (payload, code) =
+    let (reading, code) =
         spawn_rate_reading(&before, &after, Duration::from_secs(clamped), alarm_per_sec);
     if json_output {
-        println!("{}", sorted_json(&payload));
+        println!("{}", sorted_json(&reading.payload()));
         return code;
     }
     println!(
         "spawn rate: {:.1} processes/s over {:.1}s ({} new; {:.2}/core; alarm {:.1}/s)",
-        payload["machine_per_second"].as_f64().unwrap_or(0.0),
-        payload["window_seconds"].as_f64().unwrap_or(0.0),
-        payload["new_processes"].as_u64().unwrap_or(0),
-        payload["per_core_per_second"].as_f64().unwrap_or(0.0),
-        payload["alarm_per_second"].as_f64().unwrap_or(0.0),
+        reading.machine_per_second,
+        reading.window_seconds,
+        reading.new_processes,
+        reading.per_core_per_second,
+        reading.alarm_per_second,
     );
-    let rows = payload["parents"].as_array().cloned().unwrap_or_default();
+    let rows = &reading.parents;
     if rows.is_empty() {
         println!("spawners: none");
     } else {
         println!("spawners:");
-        for p in &rows {
+        for p in rows {
             println!(
                 "  pid {} {} {} children ({:.1}/s): {}",
-                p["parent_pid"].as_u64().unwrap_or(0),
-                p["family"].as_str().unwrap_or("?"),
-                p["new_children"].as_u64().unwrap_or(0),
-                p["per_second"].as_f64().unwrap_or(0.0),
-                p["parent"].as_str().unwrap_or("?"),
+                p.parent_pid, p.family, p.new_children, p.per_second, p.parent,
             );
         }
     }
-    let gone = payload["unattributed_gone"].as_u64().unwrap_or(0);
+    let gone = reading.unattributed_gone;
     if gone > 0 {
         println!("unattributed (parent gone mid-window): {gone}");
     }
@@ -2561,16 +2578,19 @@ mod tests {
             row(201, 200, 0, 0.0, "(Python)"),
             row(202, 999, 0, 0.0, "(bash)"),
         ];
-        let (payload, code) = spawn_rate_reading(&before, &after, Duration::from_secs(3), 20.0);
+        let (reading, code) = spawn_rate_reading(&before, &after, Duration::from_secs(3), 20.0);
         assert_eq!(code, 0);
-        assert_eq!(payload["new_processes"].as_u64(), Some(4));
-        let parents = payload["parents"].as_array().unwrap();
-        let top = &parents[0];
-        assert_eq!(top["parent_pid"].as_u64(), Some(100));
-        assert_eq!(top["new_children"].as_u64(), Some(2));
-        assert_eq!(top["family"].as_str(), Some("claude_session"));
-        assert_eq!(payload["unattributed_gone"].as_u64(), Some(1));
-        assert!((payload["machine_per_second"].as_f64().unwrap() - 4.0 / 3.0).abs() < 1e-9);
+        assert_eq!(reading.new_processes, 4);
+        assert_eq!(reading.unattributed_gone, 1);
+        assert!((reading.machine_per_second - 4.0 / 3.0).abs() < 1e-9);
+        let tops: Vec<(u32, u64)> = reading
+            .parents
+            .iter()
+            .map(|p| (p.parent_pid, p.new_children))
+            .collect();
+        assert_eq!(tops, vec![(100, 2), (200, 1)]);
+        let families: Vec<&str> = reading.parents.iter().map(|p| p.family.as_str()).collect();
+        assert_eq!(families, vec!["claude_session", "other"]);
     }
 
     #[test]
@@ -2603,8 +2623,8 @@ mod tests {
     fn spawn_rate_drops_the_table_readers_own_children() {
         let me = std::process::id();
         let after = vec![row(900_000, me, 0, 0.0, "ps -A -o pid=,ppid=")];
-        let (payload, code) = spawn_rate_reading(&[], &after, Duration::from_secs(3), 20.0);
+        let (reading, code) = spawn_rate_reading(&[], &after, Duration::from_secs(3), 20.0);
         assert_eq!(code, 0);
-        assert_eq!(payload["new_processes"].as_u64(), Some(0));
+        assert_eq!(reading.new_processes, 0);
     }
 }
