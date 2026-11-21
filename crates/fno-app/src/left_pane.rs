@@ -705,6 +705,16 @@ fn agent_row(
         }))
 }
 
+/// A workspace or group header row: a hairline above it and an 8px gap,
+/// except for the first one, which sits right under the section header
+/// (row 0 is the section header, row 1 the first band).
+fn band_row(i: usize, p: &Palette) -> Stateful<Div> {
+    let border = p.border;
+    ui::row(i, false, p).w(px(WIDTH)).when(i > 1, move |d| {
+        d.mt(px(8.0)).border_t_1().border_color(rgb(border))
+    })
+}
+
 /// The Workspaces header's group button: one glyph per mode, and a click
 /// cycles workspaces -> state -> machine -> workspaces.
 fn grouping_button(mode: GroupBy, p: &Palette, cx: &mut Context<Root>) -> Div {
@@ -809,7 +819,7 @@ fn workspace_header(
     p: &Palette,
     cx: &mut Context<Root>,
 ) -> Stateful<Div> {
-    ui::clickable(ui::row(i, false, p).w(px(WIDTH)), p)
+    ui::clickable(band_row(i, p), p)
         .on_click(
             cx.listener(move |root, _, _, cx| root.act(Action::Send(Command::SelectSquad(id)), cx)),
         )
@@ -847,7 +857,7 @@ fn group_header(
     p: &Palette,
     cx: &mut Context<Root>,
 ) -> Stateful<Div> {
-    ui::clickable(ui::row(i, false, p).w(px(WIDTH)), p)
+    ui::clickable(band_row(i, p), p)
         .on_click(cx.listener(|root, _, _, cx| root.act(Action::ToggleElsewhere, cx)))
         .child(
             ui::role(div(), ui::Role::Label, p)
@@ -985,13 +995,37 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
                 (None, true) => ("◆".to_string(), p.warn),
                 (None, false) => (String::new(), p.faint),
             };
-            let mut item = ui::row(i, cursor, &p).w(px(WIDTH)).child(
-                div()
+            // An agent row leads with its harness mark (the harness
+            // word's initial) and the state glyph as a badge on its
+            // corner; every other row keeps the bare glyph.
+            let harness_initial = card
+                .as_ref()
+                .and_then(|_| detail.split(" · ").next())
+                .and_then(|h| h.chars().next())
+                .map(|c| c.to_uppercase().to_string());
+            let lead = match harness_initial {
+                Some(initial) => div()
+                    .relative()
+                    .w(adv * 2.0)
+                    .flex_none()
+                    .text_color(rgb(p.fg))
+                    .child(initial)
+                    .child(
+                        div()
+                            .absolute()
+                            .bottom(px(-2.0))
+                            .right(px(2.0))
+                            .text_size(px(ui::SMALL - 3.0))
+                            .text_color(rgb(glyph_color))
+                            .child(glyph),
+                    ),
+                None => div()
                     .w(adv * 2.0)
                     .flex_none()
                     .text_color(rgb(glyph_color))
                     .child(glyph),
-            );
+            };
+            let mut item = ui::row(i, cursor, &p).w(px(WIDTH)).child(lead);
             let weight = if blocked || cursor {
                 FontWeight::SEMIBOLD
             } else {
