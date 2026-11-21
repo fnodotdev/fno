@@ -470,8 +470,10 @@ fn refuse_codex_unreachable_tools(args: &[String], cwd: &Path) -> Result<(), i32
 }
 
 /// The write grants a worker spawned at `cwd` needs: the state root, the
-/// claim store's root, the two registry directories, and this spawn's plan
-/// directory. Absolute, deduplicated, existing only, in that order.
+/// claim store's root, the two registry directories, this spawn's plan
+/// directory, and the vault slice beside that plans directory (the parent
+/// that carries `decision-log.md` and the backlog docs). Absolute,
+/// deduplicated, existing only, in that order.
 pub fn worker_writable_dirs(cwd: &Path) -> Vec<String> {
     let mut roots: Vec<PathBuf> = Vec::new();
     roots.extend(crate::agents_config::state_dir(cwd));
@@ -490,7 +492,19 @@ pub fn worker_writable_dirs(cwd: &Path) -> Vec<String> {
             roots.push(dir);
         }
     }
-    roots.extend(crate::plans_path::plans_content_dir(cwd));
+    if let Some(plans) = crate::plans_path::plans_content_dir(cwd) {
+        roots.push(plans.clone());
+        // The vault slice beside the plans dir: decision_log reads
+        // `plans.parent()`, so the ruling file and the backlog docs the
+        // worker must reach live there. Under the default sentinel the
+        // parent is the space dir inside the state-root grant, and the
+        // containment check below adds nothing.
+        if let Some(slice) = plans.parent().map(Path::to_path_buf) {
+            if !roots.iter().any(|root| slice.starts_with(root)) {
+                roots.push(slice);
+            }
+        }
+    }
     let mut out: Vec<String> = Vec::new();
     for cand in roots {
         let Ok(resolved) = cand.canonicalize() else {
@@ -688,6 +702,79 @@ mod tests {
         let cwd = Path::new(".");
         assert!(granted_dirs(cwd, true).is_empty());
         assert_eq!(granted_dirs(cwd, false), worker_writable_dirs(cwd));
+    }
+
+    /// One env pin that restores the previous value on drop. Scoped here so
+    /// the seam test does not depend on another module's fixture.
+    struct EnvPin(&'static str, Option<std::ffi::OsString>);
+
+    impl EnvPin {
+        fn set(name: &'static str, value: &std::ffi::OsStr) -> Self {
+            let old = std::env::var_os(name);
+            std::env::set_var(name, value);
+            EnvPin(name, old)
+        }
+    }
+
+    impl Drop for EnvPin {
+        fn drop(&mut self) {
+            match self.1.take() {
+                Some(v) => std::env::set_var(self.0, v),
+                None => std::env::remove_var(self.0),
+            }
+        }
+    }
+
+    #[test]
+    fn the_vault_slice_beside_a_vault_plans_dir_is_granted_and_a_covered_parent_is_not() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let base = std::env::temp_dir().join(format!("fno-seam-vault-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let proj = base.join("proj");
+        std::fs::create_dir_all(proj.join(".fno")).unwrap();
+        let config = base.join("config.toml");
+
+        // Scenario A: a vault plans dir grants the slice beside it.
+        let plans = base.join("vault/internal/fno/plans");
+        std::fs::create_dir_all(&plans).unwrap();
+        std::fs::write(&config, format!("plans_dir = \"{}\"\n", plans.display())).unwrap();
+        let _cfg = EnvPin::set("FNO_CONFIG", &config);
+        let _state = EnvPin::set("FNO_STATE_DIR", &base.join("state"));
+        let dirs = worker_writable_dirs(&proj);
+        let slice = plans
+            .parent()
+            .unwrap()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            dirs.contains(&slice),
+            "the vault slice rides the grant: {dirs:?}"
+        );
+
+        // Scenario B: a plans dir inside the state root adds no parent grant.
+        let covered = base.join("state/spaces/fno/plans");
+        std::fs::create_dir_all(&covered).unwrap();
+        std::fs::write(&config, format!("plans_dir = \"{}\"\n", covered.display())).unwrap();
+        let dirs = worker_writable_dirs(&proj);
+        let covered_str = covered
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let slice_str = covered.parent().unwrap().to_string_lossy().into_owned();
+        assert!(
+            dirs.contains(&covered_str),
+            "the covered plans dir still rides: {dirs:?}"
+        );
+        assert!(
+            !dirs.contains(&slice_str),
+            "no parent already under a grant joins: {dirs:?}"
+        );
+        std::fs::remove_dir_all(&base).ok();
     }
 
     #[test]
