@@ -1240,15 +1240,13 @@ fn write_update(
 fn reparents_or_retypes(before: &[Value], after: &[Value], node_id: &str) -> bool {
     let find = |rows: &[Value]| {
         rows.iter()
-            .find(|r| r.get("id").and_then(Value::as_str) == Some(node_id))
+            .find(|r| RowFacts::id_of(r) == Some(node_id))
             .cloned()
     };
     let (Some(old), Some(new)) = (find(before), find(after)) else {
         return true;
     };
-    ["parent", "type"]
-        .iter()
-        .any(|k| old.get(*k) != new.get(*k))
+    old["parent"] != new["parent"] || old["type"] != new["type"]
 }
 
 enum MutationPlan {
