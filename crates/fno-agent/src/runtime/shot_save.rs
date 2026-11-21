@@ -37,12 +37,10 @@ fn resolve_head(rest: &[String]) -> Result<String, i32> {
         return Err(2);
     }
     let cwd = std::env::current_dir().unwrap_or_default();
-    match std::process::Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(&cwd)
-        .output()
-    {
-        Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).trim().to_string()),
+    let mut cmd = std::process::Command::new("git");
+    cmd.args(["rev-parse", "HEAD"]).current_dir(&cwd);
+    match crate::bounded_cmd::output_with_timeout(cmd, 10) {
+        Some(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).trim().to_string()),
         _ => Err(1),
     }
 }
@@ -87,12 +85,12 @@ fn parse_shot_name<'a>(stem: &'a str, node_tokens: &[&str]) -> Result<ParsedShot
         Some(&"dark") | Some(&"light") => parts.pop().unwrap(),
         _ => return Err(NameError::NoTheme(stem.to_string())),
     };
-    let role_at = match parts.len().checked_sub(2) {
-        Some(i) if ROLES.contains(&parts[i]) => i,
+    let role = match parts.last() {
+        Some(&r) if ROLES.contains(&r) => r,
         _ => return Err(NameError::NoRole(stem.to_string())),
     };
-    let role = parts[role_at];
-    let mut view = parts[..role_at].to_vec();
+    parts.pop();
+    let mut view = parts;
     // A legacy vault name starts with the node's own tokens; the save door
     // re-inserts them, so a leading node run drops off either way.
     if view.starts_with(node_tokens) {
@@ -192,4 +190,36 @@ pub(crate) fn run_shot_save(args: &[String]) -> i32 {
         }
     }
     exit
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_reads_the_short_and_vault_shapes() {
+        let short = parse_shot_name("chat-after-dark", &[]).expect("the short shape parses");
+        assert_eq!(short.view, "chat");
+        assert_eq!(short.role, "after");
+        assert_eq!(short.theme, "dark");
+        let vault = parse_shot_name("x-bed8-chat-before-dark", &["x", "bed8"])
+            .expect("the vault shape parses");
+        assert_eq!(vault.view, "chat");
+        assert_eq!(vault.role, "before");
+        // A head token in the name is ignored by the parse.
+        let keyed = parse_shot_name("x-1-313522b78d12-chat-after-light", &["x", "1"])
+            .expect("a head-keyed name parses");
+        assert_eq!(keyed.view, "chat");
+        assert_eq!(keyed.theme, "light");
+    }
+
+    #[test]
+    fn parse_refuses_the_junk_shapes() {
+        // No view token.
+        assert!(parse_shot_name("before-dark", &[]).is_err());
+        // No role token beside the theme.
+        assert!(parse_shot_name("chat-dark", &[]).is_err());
+        // No theme token at the end.
+        assert!(parse_shot_name("chat-after", &[]).is_err());
+    }
 }
