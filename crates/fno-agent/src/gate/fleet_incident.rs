@@ -22,6 +22,9 @@
 //! binary and a running suite finishes. `merges` holds the one merge
 //! primitive. `loops` holds live target and lead loops at their next turn end;
 //! `stop --now` also interrupts every running turn ([`crate::stop_now`]).
+//! A clear follows the record outward: it types the resume turn into the
+//! sessions `--now` interrupted and wakes the loops the hold parked
+//! ([`wake_parked`]), naming every session the wake could not reach.
 //!
 //! A file that exists but cannot be read or parsed is
 //! [`Verdict::Unavailable`], never clear (AC1-EDGE): an unreadable breaker
@@ -1043,7 +1046,9 @@ fn now_refusal(
 
 /// The running turns follow a machine-wide record: a `--now` stop presses
 /// Esc in each one, and a clear types the resume turn into every session
-/// a `--now` stop interrupted.
+/// a `--now` stop interrupted. A clear also wakes the loops the hold
+/// parked at their turn end ([`wake_parked`]): an idle parked loop has no
+/// running turn for the `--now` sidecar to carry.
 fn follow_turns(home: &crate::paths::AgentsHome, record: &IncidentRecord) {
     if record.state == "stopped" && record.now {
         match crate::stop_now::interrupt_running(home) {
@@ -1069,7 +1074,161 @@ fn follow_turns(home: &crate::paths::AgentsHome, record: &IncidentRecord) {
         for (session, reason) in missed {
             eprintln!("fleet-incident: could not resume {session}: {reason}");
         }
+        let (woken, missed) = wake_parked(home, None);
+        if !woken.is_empty() {
+            eprintln!("fleet-incident: woke {} parked session(s)", woken.len());
+        }
+        for (session, reason) in missed {
+            eprintln!("fleet-incident: could not wake {session}: {reason}");
+        }
     }
+}
+
+/// One loop the `loops` hold parked at its turn end, recorded when the
+/// park happened. A parked loop sits idle with no running turn, so the
+/// `--now` sidecar never carries it and only this row tells the clear
+/// who to wake.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Parked {
+    pub session: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    /// The record that held it: `None` for the machine-wide breaker, or
+    /// `session:<id>` / `territory:<scope>` for a targeted one. A clear
+    /// wakes only the rows its own record parked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_by: Option<String>,
+    pub generation: u64,
+}
+
+/// The resume prompt the all-clear sends every loop the hold parked.
+pub const PARKED_RESUME_TEXT: &str =
+    "All clear: the fleet stop is lifted. The hold parked your loop at its turn end. Pick the work back up.";
+
+/// The sidecar beside the breaker naming the loops the hold parked.
+pub fn parked_path(home: &crate::paths::AgentsHome) -> PathBuf {
+    home.fleet_stop_json()
+        .with_file_name("fleet-stop-parked.json")
+}
+
+/// Record one loop an incident hold parked at its turn end. The caller
+/// passes the `Stopped` record's identity, so a park the incident did not
+/// cause (the legacy manual sentinel, a cargo build waiting at an
+/// admission door) records nothing: a fleet clear must not wake what it
+/// did not hold. Rows merge across stops and dedupe, like the `--now`
+/// sidecar, so one clear wakes all of them.
+pub fn record_parked(
+    home: &crate::paths::AgentsHome,
+    session: &str,
+    cwd: &str,
+    held_by: Option<&str>,
+    generation: u64,
+) {
+    if session.is_empty() {
+        return;
+    }
+    let row = Parked {
+        session: session.to_string(),
+        cwd: Some(cwd.to_string()),
+        held_by: held_by.map(str::to_string),
+        generation,
+    };
+    let path = parked_path(home);
+    let mut all = read_parked(&path);
+    if all.contains(&row) {
+        return;
+    }
+    all.push(row);
+    if let Err(error) = write_parked(&path, &all) {
+        eprintln!("fleet-incident: park record not written: {error}");
+    }
+}
+
+/// Split the sidecar into the rows one clear wakes and the rows it leaves:
+/// a targeted clear wakes only the loops its own record parked; the
+/// machine-wide clear wakes all of them.
+fn plan_wakes(rows: &[Parked], target: Option<&str>) -> (Vec<Parked>, Vec<Parked>) {
+    match target {
+        None => (rows.to_vec(), Vec::new()),
+        Some(target) => rows
+            .iter()
+            .cloned()
+            .partition(|row| row.held_by.as_deref() == Some(target)),
+    }
+}
+
+/// Deliver the parked resume through the native resume door: a parked loop
+/// may be live-idle or long exited, and the door reaches both. The reason
+/// tokens are the door's own.
+fn deliver_resume(row: &Parked) -> Result<(), &'static str> {
+    let (sent, reason) = crate::runtime::mail_cli::send::engine::wake_and_deliver(
+        &row.session,
+        PARKED_RESUME_TEXT,
+        row.cwd.as_deref(),
+    );
+    if sent {
+        Ok(())
+    } else {
+        Err(match reason.as_str() {
+            "no-session-uuid" => "no-session-uuid",
+            "wake-unrouted" => "wake-unrouted",
+            _ => "resume-failed",
+        })
+    }
+}
+
+/// Wake the loops the `loops` hold parked, then drop the sidecar. A
+/// targeted clear keeps the rows its own record did not park, so the
+/// machine-wide clear still finds them. Returns the sessions woken and
+/// those the wake missed.
+pub fn wake_parked(
+    home: &crate::paths::AgentsHome,
+    target: Option<&str>,
+) -> (Vec<String>, Vec<(String, &'static str)>) {
+    wake_parked_with(home, target, &mut deliver_resume)
+}
+
+/// [`wake_parked`] with the delivery lane injected, so tests read the plan
+/// instead of shelling the resume door.
+fn wake_parked_with(
+    home: &crate::paths::AgentsHome,
+    target: Option<&str>,
+    deliver: &mut dyn FnMut(&Parked) -> Result<(), &'static str>,
+) -> (Vec<String>, Vec<(String, &'static str)>) {
+    let path = parked_path(home);
+    let rows = read_parked(&path);
+    let (to_wake, remaining) = plan_wakes(&rows, target);
+    let (mut woken, mut missed) = (Vec::new(), Vec::new());
+    for row in &to_wake {
+        match deliver(row) {
+            Ok(()) => woken.push(row.session.clone()),
+            Err(reason) => missed.push((row.session.clone(), reason)),
+        }
+    }
+    if remaining.is_empty() {
+        // A sidecar left behind would wake the same loops at the next clear.
+        if let Err(error) = std::fs::remove_file(&path) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                eprintln!("fleet-incident: {}: {error}", path.display());
+            }
+        }
+    } else if let Err(error) = write_parked(&path, &remaining) {
+        eprintln!("fleet-incident: parked record not rewritten: {error}");
+    }
+    (woken, missed)
+}
+
+fn read_parked(path: &Path) -> Vec<Parked> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn write_parked(path: &Path, rows: &[Parked]) -> std::io::Result<()> {
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_string(rows)?)?;
+    std::fs::rename(&tmp, path)
 }
 
 /// One receipt line, JSON, on stdout: the resulting state, its generation,
@@ -1468,6 +1627,17 @@ pub fn run_fleet_incident(args: &[String]) -> i32 {
                             }
                         }
                         follow_turns(&home, &record);
+                    } else if action == "clear" {
+                        // A targeted clear wakes only the loops its own
+                        // record parked; the rows a wider hold parked stay
+                        // for the machine-wide clear.
+                        let (woken, missed) = wake_parked(&home, target.as_deref());
+                        if !woken.is_empty() {
+                            eprintln!("fleet-incident: woke {} parked session(s)", woken.len());
+                        }
+                        for (session, reason) in missed {
+                            eprintln!("fleet-incident: could not wake {session}: {reason}");
+                        }
                     }
                     0
                 }
@@ -1679,6 +1849,64 @@ mod tests {
         assert!(stopped.unwrap_err().contains("incident owns the breaker"));
         assert!(cleared.unwrap_err().contains("incident owns the breaker"));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn an_incident_park_records_once_and_a_targeted_clear_wakes_only_its_own_rows() {
+        let path = tmp_path("park");
+        let dir = path.parent().unwrap().to_path_buf();
+        let home = crate::paths::AgentsHome::at(dir);
+        record_parked(&home, "uuuu-1111", "/repo/a", None, 7);
+        record_parked(&home, "uuuu-2222", "/repo/b", Some("session:uuuu-2222"), 8);
+        // The same park fires at every turn end while the hold stands: one
+        // row per session, not one per boundary.
+        record_parked(&home, "uuuu-1111", "/repo/a", None, 7);
+        let rows = read_parked(&parked_path(&home));
+        assert_eq!(rows.len(), 2, "dedupe keeps one row per session: {rows:?}");
+
+        let (to_wake, left) = plan_wakes(&rows, Some("session:uuuu-2222"));
+        assert_eq!(to_wake.len(), 1);
+        assert_eq!(to_wake[0].session, "uuuu-2222");
+        assert_eq!(left.len(), 1);
+        // The machine-wide clear wakes both.
+        let (all, none) = plan_wakes(&rows, None);
+        assert_eq!(all.len(), 2);
+        assert!(none.is_empty());
+        cleanup(&path);
+    }
+
+    #[test]
+    fn the_parked_wake_names_its_misses_and_keeps_foreign_rows_for_the_wider_clear() {
+        let path = tmp_path("wake");
+        let dir = path.parent().unwrap().to_path_buf();
+        let home = crate::paths::AgentsHome::at(dir);
+        record_parked(&home, "uuuu-3333", "/repo/c", Some("session:uuuu-3333"), 9);
+        record_parked(&home, "uuuu-4444", "/repo/d", None, 9);
+
+        // The targeted clear attempts its own row, fails it, names the
+        // miss, and leaves the machine-held row for the wider clear.
+        let (woken, missed) = wake_parked_with(&home, Some("session:uuuu-3333"), &mut |_| {
+            Err("resume-failed")
+        });
+        assert!(woken.is_empty());
+        assert_eq!(missed, vec![("uuuu-3333".to_string(), "resume-failed")]);
+        let rows = read_parked(&parked_path(&home));
+        assert_eq!(
+            rows.len(),
+            1,
+            "the machine-held row stays for the wider clear: {rows:?}"
+        );
+        assert_eq!(rows[0].session, "uuuu-4444");
+
+        // The machine-wide clear wakes the rest and drops the sidecar.
+        let (woken, missed) = wake_parked_with(&home, None, &mut |row| {
+            assert_eq!(row.session, "uuuu-4444");
+            Ok(())
+        });
+        assert_eq!(woken, vec!["uuuu-4444".to_string()]);
+        assert!(missed.is_empty());
+        assert!(!parked_path(&home).exists());
         cleanup(&path);
     }
 }
