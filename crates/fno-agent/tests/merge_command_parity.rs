@@ -545,6 +545,26 @@ fn replace_span(
     out
 }
 
+/// The build stamp peel must match the line the merge door actually prints:
+/// a dirty build appends `-dirty` to the rev, a clean one appends nothing,
+/// and anything else stays raw so a malformed stamp fails loudly.
+#[test]
+fn build_stamp_peel_matches_the_producer_line() {
+    assert_eq!(
+        common::strip_merge_door_build_line("merge-door build 0123456789ab\nrest"),
+        Some("rest")
+    );
+    assert_eq!(
+        common::strip_merge_door_build_line("merge-door build 0123456789ab-dirty\n"),
+        Some("")
+    );
+    assert_eq!(
+        common::strip_merge_door_build_line("merge-door build zz\n"),
+        None
+    );
+    assert_eq!(common::strip_merge_door_build_line("no stamp\n"), None);
+}
+
 /// Mirror of the `held \d+s` -> `held <T>s` mask: the wait duration depends
 /// on machine speed, so it freezes as a placeholder.
 fn collapse_held_durations(text: &str) -> String {
