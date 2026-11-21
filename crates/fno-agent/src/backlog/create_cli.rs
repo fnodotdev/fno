@@ -1535,16 +1535,15 @@ pub(crate) fn create_node(
     }
     let (minted, node, rollup_lines, dropped, source_node_id) = loop {
         retry += 1;
-        let base_version = crate::graph_store::base_version(&graph)
+        let (base_version, snapshot) = crate::graph_store::read_snapshot(&graph)
             .map_err(|e| refused(format!("graph read failed: {e}"), 1))?;
-        let rows = crate::graph_store::read_rows(&graph)
-            .map_err(|e| refused(format!("graph read failed: {e}"), 1))?;
+        let rows: &[Value] = &snapshot.rows;
         let known_ids: std::collections::BTreeSet<String> = rows
             .iter()
             .filter_map(|r| r.get("id").and_then(Value::as_str))
             .map(str::to_string)
             .collect();
-        if let Some(row) = reuse(&rows) {
+        if let Some(row) = reuse(rows) {
             let id = row
                 .get("id")
                 .and_then(Value::as_str)
@@ -1560,7 +1559,7 @@ pub(crate) fn create_node(
         // Fail closed BEFORE minting: an unresolvable assertion names the flag.
         let resolved_source_node: Option<String> = match &args.source_node {
             Some(token) => {
-                let resolved = node_ref::resolve_asserted_id(token, &rows, "--source-node", None)
+                let resolved = node_ref::resolve_asserted_id(token, rows, "--source-node", None)
                     .map_err(|e| refused(e.0, e.1))?;
                 Some(resolved)
             }
@@ -1690,7 +1689,7 @@ pub(crate) fn create_node(
         // Refuse a birth --parent that cannot hold the child; the scope and
         // lenient pass-through cases are named in strand.birth_parent_refusal.
         if let Some(parent) = &args.parent {
-            if let Some(message) = birth_parent_refusal(&rows, &node, parent) {
+            if let Some(message) = birth_parent_refusal(rows, &node, parent) {
                 return Err(refused(message, 1));
             }
         }
@@ -1699,7 +1698,7 @@ pub(crate) fn create_node(
         // its parent edge lands in the SAME write, so no window exists where the
         // node is linked without a receipt. Strictly non-fatal: any failure
         // degrades to the orphan line.
-        let mut working = rows.clone();
+        let mut working = rows.to_vec();
         let rollup_lines: Vec<String>;
         {
             let mut entries = working.clone();
@@ -1738,7 +1737,7 @@ pub(crate) fn create_node(
         // every commit (a plan-less filing's stored status lands as idea), the
         // same recompute commit_rows_via_store ran.
         crate::graph_store::recompute_statuses_with_plan_rungs(&mut working, None);
-        match crate::graph_store::locked_mutate(
+        match crate::graph_store::locked_mutate_snapshot(
             &graph,
             crate::graph_store::MutateInput {
                 entries: working,
@@ -1746,6 +1745,7 @@ pub(crate) fn create_node(
                 base_version,
                 plan_rungs: None,
             },
+            snapshot,
             crate::graph_store::DEFAULT_LOCK_TIMEOUT,
         ) {
             Ok(_) => break (minted, node, rollup_lines, dropped, source_node_id),
