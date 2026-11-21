@@ -18,11 +18,16 @@ pub(super) struct HostsState {
 /// shared primary, then serve. None when this machine names no primary,
 /// so the recipe names the missing key instead.
 fn join_line(config: Option<&serde_json::Value>) -> Option<String> {
-    let url = config
-        .and_then(|c| c.get("store"))
-        .and_then(|s| s.get("remote_url"))
-        .and_then(|v| v.as_str())
-        .filter(|u| !u.trim().is_empty())?;
+    #[derive(serde::Deserialize)]
+    struct JoinCfg {
+        store: Option<StoreCfg>,
+    }
+    #[derive(serde::Deserialize)]
+    struct StoreCfg {
+        remote_url: Option<String>,
+    }
+    let parsed: JoinCfg = serde_json::from_value(config?.clone()).ok()?;
+    let url = parsed.store?.remote_url.filter(|u| !u.trim().is_empty())?;
     Some(format!(
         "fno config set store.remote_url {url} && fno mux serve"
     ))
