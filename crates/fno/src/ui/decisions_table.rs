@@ -75,6 +75,13 @@ impl Table {
     }
 }
 
+/// The audience column holds `customer:solo-founder` whole. A longer persona
+/// plus job ends in an ellipsis rather than a mid-word cut.
+const AUDIENCE_W: usize = 22;
+/// Every column before the description, gaps included: state 10, lane 12,
+/// audience, date 10, who 10, Q 1, node 9, PR 6, and eight single gaps.
+const FIXED_W: usize = 66 + AUDIENCE_W;
+
 fn fit(s: &str, n: usize) -> String {
     let flat: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut out: String = flat.chars().take(n).collect();
@@ -104,11 +111,11 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
         },
         if f.audit_only { "  [audit queue]" } else { "" }
     );
-    // The description column shrinks before the ruling vanishes: 80
-    // fixed columns plus one gap precede it, and a docked host pane is
+    // The description column shrinks before the ruling vanishes: FIXED_W
+    // columns plus one gap precede it, and a docked host pane is
     // narrower than the full view's 98-column floor.
-    let desc_w = 16.min(w.saturating_sub(81));
-    let text_w = w.saturating_sub(81 + desc_w + 1);
+    let desc_w = 16.min(w.saturating_sub(FIXED_W + 1));
+    let text_w = w.saturating_sub(FIXED_W + 1 + desc_w + 1);
     let columns = table_columns(desc_w, text_w);
     let mut out = vec![head, format!("\x1b[1m{columns}\x1b[0m")];
     let body_rows = h.saturating_sub(5);
@@ -126,13 +133,16 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
                         .map(str::trim)
                         .filter(|s| !s.is_empty())
                         .unwrap_or("audience?");
-                    if r.job.is_empty() {
-                        audience_word.to_string()
-                    } else {
-                        format!("{audience_word} {}", r.job.join(","))
-                    }
+                    crate::chrome::fit_ellipsis(
+                        &if r.job.is_empty() {
+                            audience_word.to_string()
+                        } else {
+                            format!("{audience_word} {}", r.job.join(","))
+                        },
+                        AUDIENCE_W,
+                    )
                 },
-                14
+                AUDIENCE_W
             ),
             fit(r.ts.get(..10).unwrap_or(&r.ts), 10),
             fit(&r.decider(), 10),
@@ -193,7 +203,7 @@ fn table_columns(desc_w: usize, text_w: usize) -> String {
         "{} {} {} {} {} {} {} {} {} {}",
         fit("state", 10),
         fit("lane", 12),
-        fit("audience", 14),
+        fit("audience", AUDIENCE_W),
         fit("date", 10),
         fit("who", 10),
         "Q",
@@ -335,6 +345,17 @@ mod tests {
             filter: Filter::default(),
             pick: 0,
         }
+    }
+
+    #[test]
+    fn the_audience_column_holds_a_persona_whole_and_ellipsizes_at_the_edge() {
+        let mut t = table();
+        t.rows[0].audience = Some("customer:solo-founder".into());
+        t.rows[1].audience = Some("customer:solo-founder".into());
+        t.rows[1].job = vec!["solo-founder/see-the-demo".into()];
+        let text = render(&t, 140, 12).join("\n");
+        assert!(text.contains("customer:solo-founder"), "{text}");
+        assert!(text.contains("customer:solo-founder…"), "{text}");
     }
 
     #[test]

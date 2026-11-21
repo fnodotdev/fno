@@ -155,11 +155,26 @@ pub(crate) fn needs_overlay_lines(
                     } else {
                         ""
                     };
-                    lines.push(tail_styled(
-                        &format!("   {} {}", need_glyph(NeedKind::Question), q.title),
-                        stale,
-                        TextStyle::WARN,
-                    ));
+                    // Who the question serves leads the headline, so a long title
+                    // never pushes the persona off the row.
+                    let scope_word = q
+                        .audience
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or("audience?");
+                    lines.push(
+                        TLine::parts(&[
+                            (
+                                &format!("   {} ", need_glyph(NeedKind::Question)),
+                                TextStyle::Item,
+                            ),
+                            (&format!("{scope_word}  "), TextStyle::Meta),
+                            (&q.title, TextStyle::Item),
+                            (stale, TextStyle::WARN),
+                        ])
+                        .pad_to(ANSWER_OVERLAY_W),
+                    );
                 }
                 NeedsOverlayRow::Need(r) => {
                     let tag = match r.kind {
@@ -241,9 +256,4 @@ pub(crate) fn needs_overlay_lines(
     };
     lines.push(styled(TextStyle::Hint, &need_footer_line));
     lines
-}
-
-/// `head` at item level and `tail` at `style`, padded to the overlay width.
-fn tail_styled(head: &str, tail: &str, style: TextStyle) -> TLine {
-    TLine::parts(&[(head, TextStyle::Item), (tail, style)]).pad_to(ANSWER_OVERLAY_W)
 }
