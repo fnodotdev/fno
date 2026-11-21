@@ -91,7 +91,7 @@ mod tests {
             panic!("a well-shaped array parses");
         };
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].ask_count, 3);
+        assert_eq!(rows.first().map(|r| r.ask_count), Some(3));
         let failed = super::parse_rows(b"no requests since 2026-11-14");
         let super::RequestsRead::Failed(reason) = failed else {
             panic!("junk stdout refuses");

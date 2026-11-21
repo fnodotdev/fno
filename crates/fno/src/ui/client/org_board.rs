@@ -727,7 +727,9 @@ pub(crate) fn maybe_kick(view: &mut View, tx: &OrgTx) {
     let fleet_tx = tx.clone();
     tokio::spawn(async move {
         let inputs = super::org_seats::gather(&crate::backlog_view::graph_path(), agents).await;
-        let _ = fleet_tx.send((gen, OrgMsg::Gather(inputs)));
+        if fleet_tx.send((gen, OrgMsg::Gather(inputs))).is_err() {
+            return; // the viewer left: neither fold has anywhere to land
+        }
     });
     // The HQ Requests read: own single-flight and 60s cadence, the fleet
     // kick's shape, feeding the feed page's Requests section.
@@ -743,7 +745,9 @@ pub(crate) fn maybe_kick(view: &mut View, tx: &OrgTx) {
     let req_tx = tx.clone();
     tokio::spawn(async move {
         let rows = crate::requests_model::gather().await;
-        let _ = req_tx.send((gen, OrgMsg::Requests(rows)));
+        if req_tx.send((gen, OrgMsg::Requests(rows))).is_err() {
+            return; // the viewer left: the read has nowhere to land
+        }
     });
 }
 /// The HQ Requests read landed: keep the last good rows on a failure,

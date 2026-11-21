@@ -113,12 +113,14 @@ pub(crate) fn request_groups(rows: &[RequestRow]) -> Vec<RequestGroup> {
                 rows: vec![idx],
             }),
         }
-        grouped[idx] = node.is_some();
+        if let Some(flag) = grouped.get_mut(idx) {
+            *flag = node.is_some();
+        }
     }
     // Nodeless rows: cluster by shared mention spanning two or more rows.
     let mut net: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (idx, row) in rows.iter().enumerate() {
-        if grouped[idx] {
+        if grouped.get(idx).copied().unwrap_or(false) {
             continue;
         }
         let mut text = row.text.clone();
@@ -141,19 +143,27 @@ pub(crate) fn request_groups(rows: &[RequestRow]) -> Vec<RequestGroup> {
         })
         .collect();
     for (name, idxs) in topics {
-        let rows_in_topic: Vec<usize> = idxs.iter().filter(|i| !grouped[**i]).copied().collect();
+        let rows_in_topic: Vec<usize> = idxs
+            .iter()
+            .filter(|i| !grouped.get(**i).copied().unwrap_or(false))
+            .copied()
+            .collect();
         if rows_in_topic.is_empty() {
             continue;
         }
         for i in &rows_in_topic {
-            grouped[*i] = true;
+            if let Some(flag) = grouped.get_mut(*i) {
+                *flag = true;
+            }
         }
         groups.push(RequestGroup {
             name,
             rows: rows_in_topic,
         });
     }
-    let unmentioned: Vec<usize> = (0..rows.len()).filter(|i| !grouped[*i]).collect();
+    let unmentioned: Vec<usize> = (0..rows.len())
+        .filter(|i| !grouped.get(*i).copied().unwrap_or(false))
+        .collect();
     if !unmentioned.is_empty() {
         groups.push(RequestGroup {
             name: "unmentioned".into(),
@@ -435,10 +445,12 @@ mod tests {
         ];
         let groups = super::request_groups(&rows);
         assert_eq!(groups.len(), 2);
-        assert_eq!(groups[0].name, "n1");
-        assert_eq!(groups[0].rows, vec![0]);
-        assert_eq!(groups[1].name, "fno doctor test");
-        assert_eq!(groups[1].rows, vec![1, 2]);
+        let nodes = groups.first().expect("the node group sorts first");
+        assert_eq!(nodes.name, "n1");
+        assert_eq!(nodes.rows, vec![0]);
+        let topics = groups.get(1).expect("the shared-mention group follows");
+        assert_eq!(topics.name, "fno doctor test");
+        assert_eq!(topics.rows, vec![1, 2]);
         assert!(
             groups.iter().all(|g| g.name != "unmentioned"),
             "no row left over"

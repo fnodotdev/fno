@@ -737,7 +737,14 @@ mod tests {
             &[],
         );
         assert!(board.requests_error().is_none());
-        assert_eq!(board.model()["requests"].as_array().map(Vec::len), Some(1));
+        assert_eq!(
+            board
+                .model()
+                .get("requests")
+                .and_then(|v| v.as_array())
+                .map(Vec::len),
+            Some(1)
+        );
         board.record(
             Err("no fleet".into()),
             Err("q".into()),
@@ -746,9 +753,13 @@ mod tests {
             2,
             &[],
         );
-        assert_eq!(board.model()["requests"].as_array().map(Vec::len), Some(1));
+        let m = board.model();
         assert_eq!(
-            board.model()["requests_error"].as_str(),
+            m.get("requests").and_then(|v| v.as_array()).map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            m.get("requests_error").and_then(|v| v.as_str()),
             Some("requests read timed out after 30s")
         );
     }
