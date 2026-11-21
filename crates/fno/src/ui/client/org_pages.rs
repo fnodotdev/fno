@@ -218,7 +218,7 @@ pub(crate) fn feed(
     ];
     out.extend(requests_section(requests, error, grouped, width));
     out.push(blank());
-    out.push(Lb::default().s(" Human requests", TextStyle::Title).done());
+    out.push(Lb::default().s(" Waiting on you", TextStyle::Title).done());
     match fold {
         None => out.push(meta("   questions not read yet")),
         Some(f) if f.items.is_empty() => out.push(meta("   no open question")),
@@ -305,7 +305,7 @@ pub(crate) fn requests_section(
         )));
     }
     out.push(meta(
-        "   ranked by asks x days unaddressed | t groups by topic",
+        "   ranked by asks x days unaddressed \u{b7} t groups by topic",
     ));
     out
 }
@@ -318,26 +318,44 @@ fn request_row_lines(r: &serde_json::Value, width: usize) -> Vec<Line> {
         .and_then(|v| v.as_str())
         .unwrap_or("(empty ask)");
     let ask_count = r.get("ask_count").and_then(|v| v.as_u64()).unwrap_or(1);
-    let node = r.get("node").and_then(|v| v.as_str()).unwrap_or("no node");
-    let status = r.get("node_status").and_then(|v| v.as_str());
-    let node_word = match status {
-        Some(s) => format!("{node} ({s})"),
-        None => node.to_string(),
-    };
-    let state = r.get("state").and_then(|v| v.as_str()).unwrap_or("");
-    let flagged = matches!(state, "no_node" | "stalled" | "regression");
-    let flag = if flagged {
-        format!("[{state}] ")
+    let asked_word = if ask_count == 1 {
+        "asked once".to_string()
     } else {
-        String::new()
+        format!("asked {ask_count} times")
+    };
+    let days = r
+        .get("days_unaddressed")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let open_word = if days <= 0 {
+        "new today".to_string()
+    } else if days == 1 {
+        "open 1 day".to_string()
+    } else {
+        format!("open {days} days")
+    };
+    let node = r.get("node").and_then(|v| v.as_str()).unwrap_or("");
+    let status = r.get("node_status").and_then(|v| v.as_str());
+    let node_word = match (node.is_empty(), status) {
+        (true, _) => "no linked node".to_string(),
+        (false, Some(s)) => format!("{node} {s}"),
+        (false, None) => node.to_string(),
+    };
+    // The state word joins the line only when the row's own fields do not
+    // already say it: no_node reads through "no linked node".
+    let state = r.get("state").and_then(|v| v.as_str()).unwrap_or("");
+    let state_word = match state {
+        "stalled" => "stalled".to_string(),
+        "regression" => "asked again after done".to_string(),
+        _ => String::new(),
     };
     let first = r.get("first_ts").and_then(|v| v.as_str()).unwrap_or("");
     let last = r.get("last_ts").and_then(|v| v.as_str()).unwrap_or("");
-    let dates = if first.is_empty() {
+    let window = if first.is_empty() || first.get(0..10) == last.get(0..10) {
         String::new()
     } else {
         format!(
-            "{} -> {}",
+            "window {} to {}",
             first.get(0..10).unwrap_or(first),
             last.get(0..10).unwrap_or(last)
         )
@@ -346,15 +364,19 @@ fn request_row_lines(r: &serde_json::Value, width: usize) -> Vec<Line> {
         .get("reply_excerpt")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    let meta_word = [format!("asked {ask_count}x"), node_word, dates].join(" | ");
-    let mut head = Lb::default().s(format!("  {flag}"), TextStyle::Meta);
-    head = head.s(
-        fit(text, width.saturating_sub(flag.chars().count() + 4))
-            .trim_end()
-            .to_string(),
-        TextStyle::Item,
-    );
-    let mut out2 = vec![head.done()];
+    let meta_word = [asked_word, open_word, node_word, state_word, window]
+        .into_iter()
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join(" \u{b7} ");
+    let head = Lb::default()
+        .s("  ", TextStyle::Meta)
+        .s(
+            fit(text, width.saturating_sub(4)).trim_end().to_string(),
+            TextStyle::Item,
+        )
+        .done();
+    let mut out2 = vec![head];
     out2.push(meta(format!("      {meta_word}")));
     if !reply.is_empty() {
         out2.push(meta(format!("      reply: {reply}")));

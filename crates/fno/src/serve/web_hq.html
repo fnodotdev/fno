@@ -167,17 +167,18 @@ function requests(model) {
 function reqRow(r) {
   const r0 = el("div", "lk qrow"), t = el("span", "lt");
   r0.dataset.fno = "request_row";
-  t.append(el("b", null, r.text || "(empty ask)"));
-  const flag = ["no_node", "stalled", "regression"].includes(r.state);
-  const flagtxt = (r.state === "regression") ? "REGRESSION" : r.state;
-  const meta = [
-    "asked " + r.ask_count + "x",
-    r.node ? r.node + (r.node_status ? " (" + r.node_status + ")" : "") : "no node",
-    r.first_ts ? r.first_ts.slice(0, 10) + " -> " + r.last_ts.slice(0, 10) : "",
-    flag ? "[" + flagtxt + "]" : "",
-    r.reply_excerpt ? "reply: " + r.reply_excerpt : "",
-  ].filter(Boolean).join(" | ");
-  t.append(el("code", null, meta));
+  const asked = r.ask_count === 1 ? "asked once" : "asked " + r.ask_count + " times";
+  const days = r.days_unaddressed;
+  const open = days == null ? "" : days <= 0 ? "new today" : days === 1 ? "open 1 day" : "open " + days + " days";
+  const nodeWord = r.node ? (r.node + (r.node_status ? " " + r.node_status : "")) : "no linked node";
+  const stateWord = r.state === "stalled" ? "stalled" : (r.state === "regression" ? "asked again after done" : "");
+  const windowWord = (r.first_ts && r.last_ts && r.first_ts.slice(0, 10) !== r.last_ts.slice(0, 10))
+    ? "window " + r.first_ts.slice(0, 10) + " to " + r.last_ts.slice(0, 10) : "";
+  const meta = [asked, open, nodeWord, stateWord, windowWord].filter(Boolean).join(" · ");
+  const head = el("b", null, r.text || "(empty ask)");
+  head.title = meta;
+  t.append(head, el("code", null, meta));
+  if (r.reply_excerpt) t.append(el("code", null, "reply: " + r.reply_excerpt));
   r0.append(t);
   return r0;
 }
