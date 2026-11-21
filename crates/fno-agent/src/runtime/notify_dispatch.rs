@@ -586,7 +586,8 @@ mod tests {
     }
 
     // AC4-EDGE: with the operator's last terminal stamped, the daemon toast
-    // names that app first and never a bare `display notification` alone.
+    // names that app first, walks the dictionary-capable fallbacks behind
+    // it, and still ends at the plain toast when none of them runs.
     #[test]
     fn a_stamped_ghostty_daemon_toast_tells_ghostty_first() {
         let script = toast_script(
@@ -594,17 +595,25 @@ mod tests {
             "done badge",
             "PR 123 green",
         );
-        assert!(
-            script.contains("tell application \"Ghostty\""),
-            "{}",
-            script
-        );
+        let ghostty = script
+            .find("tell application \"Ghostty\"")
+            .expect("Ghostty named");
+        let terminal = script
+            .find("tell application \"Terminal\"")
+            .expect("Terminal walks");
+        let iterm = script
+            .find("tell application \"iTerm\"")
+            .expect("iTerm walks");
+        assert!(ghostty < terminal && terminal < iterm, "{}", script);
         assert_eq!(
-            script.matches("tell application").count(),
-            1,
-            "Ghostty has the dictionary, so it is the only tell target"
+            script.matches("if application").count(),
+            3,
+            "every candidate tell carries its own running guard: {script}"
         );
-        assert!(script.contains("display notification"));
+        assert!(
+            script.contains("if not fired then\ndisplay notification"),
+            "the plain toast follows the walk: {script}"
+        );
     }
 
     #[test]

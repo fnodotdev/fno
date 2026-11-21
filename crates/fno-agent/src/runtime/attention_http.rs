@@ -1255,7 +1255,10 @@ mod tests {
             serde_json::to_string(actions).unwrap()
         );
         assert_eq!(actions.len(), 1, "the Open button fills the free slot");
-        assert_eq!(actions[0]["url"], "https://phone.example/hq?question=q-9");
+        assert_eq!(
+            actions.first().unwrap()["url"],
+            "https://phone.example/hq?question=q-9"
+        );
     }
 
     // A permanent 4xx no longer ends the story: the dropped row for an item

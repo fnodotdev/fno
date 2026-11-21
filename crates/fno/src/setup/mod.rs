@@ -18,6 +18,7 @@ pub mod path_migration;
 mod path_migration_tests;
 #[cfg(feature = "app")]
 pub mod setup_attention_remote;
+#[cfg(feature = "app")]
 pub mod setup_autowire;
 #[cfg(all(test, feature = "app"))]
 #[path = "setup_autowire_tests.rs"]
