@@ -2629,7 +2629,9 @@ mod tests {
             },
         });
         let lines = provenance_lines(&row);
-        assert_eq!(lines.len(), 4, "{lines:?}");
+        // Three lines: the fixture carries no turn, so the render adds no
+        // turn line behind session, harness and transcript.
+        assert_eq!(lines.len(), 3, "{lines:?}");
         assert!(
             lines
                 .iter()
