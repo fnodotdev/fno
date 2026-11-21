@@ -442,6 +442,7 @@ fn card_frame(
         .items_center()
         .gap(px(6.0))
         .child(one_line(title.to_string(), Role::Name, p))
+        .child(div().flex_1())
         .children(count.map(|n| ui::text(n.to_string(), Role::Fact, p)))
         .child(
             div()
@@ -479,14 +480,15 @@ fn card_frame(
 /// One line that ends in an ellipsis at the card's edge. Not `ui::clamp`:
 /// gpui reuses a nowrap text layout's first, untruncated size, so a
 /// `truncate()` here clips mid-glyph. A one-line clamp keeps the wrap
-/// width in the layout key and draws the ellipsis.
+/// width in the layout key and draws the ellipsis. No `flex_1`: a zero
+/// basis measures the text at min-content and wraps after one word, so the
+/// line keeps its natural basis and only shrinks, as the breadcrumb does.
 fn one_line(t: impl Into<gpui::SharedString>, r: Role, p: &Palette) -> Div {
-    div().flex_1().min_w_0().child(
-        ui::role(div(), r, p)
-            .line_clamp(1)
-            .text_ellipsis()
-            .child(t.into()),
-    )
+    ui::role(div(), r, p)
+        .min_w_0()
+        .line_clamp(1)
+        .text_ellipsis()
+        .child(t.into())
 }
 
 /// A line that opens `target` on click.
@@ -582,7 +584,8 @@ fn changes_card(
                         .w_full()
                         .gap(px(6.0))
                         .child(one_line(path.clone(), Role::Meta, p))
-                        .child(ui::text(format!("+{add} -{del}"), Role::Fact, p)),
+                        .child(div().flex_1())
+                        .child(ui::text(format!("+{add} -{del}"), Role::Fact, p).flex_none()),
                 );
             }
             if n > TOP {
