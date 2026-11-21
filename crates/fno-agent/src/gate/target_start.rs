@@ -2641,20 +2641,20 @@ mod start_progress_tests {
             ..Default::default()
         };
         assert!(handover_row_is_ours(&[renamed], "t-w", Some("sid-1")));
-    }
-
-    #[test]
-    fn a_handover_row_joins_by_name_and_own_pid_without_a_session_id() {
-        let named = RegistryEntry {
+        // A worker whose session id does not resolve joins by its own pid.
+        let pinned = RegistryEntry {
             name: "t-w".into(),
             pid: Some(8709),
             ..Default::default()
         };
-        let entries = vec![named];
-        assert!(handover_row_pid_is_ours(&entries, "t-w", Some(8709)));
-        assert!(!handover_row_pid_is_ours(&entries, "t-w", Some(1)));
-        assert!(!handover_row_pid_is_ours(&entries, "t-w", None));
-        assert!(!handover_row_pid_is_ours(&entries, "absent", Some(8709)));
+        assert!(handover_row_pid_is_ours(
+            &[pinned.clone()],
+            "t-w",
+            Some(8709)
+        ));
+        assert!(!handover_row_pid_is_ours(&[pinned.clone()], "t-w", Some(1)));
+        assert!(!handover_row_pid_is_ours(&[pinned.clone()], "t-w", None));
+        assert!(!handover_row_pid_is_ours(&[pinned], "absent", Some(8709)));
     }
 
     #[test]
