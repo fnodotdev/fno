@@ -57,7 +57,9 @@ pub struct AddArgs {
     /// The goal behind the ask (`--why`); the user's words when the ask came
     /// from him. Required.
     pub why: Option<String>,
-    /// Acceptance a merge check can read (`--done-means`). Required.
+    /// Acceptance a merge check can read (`--done-means`). Optional at
+    /// filing; required by the scoping gates (move to ready, blueprint,
+    /// target start).
     pub done_means: Option<String>,
     /// The persona jobs served (`--job <persona>/<job-slug>`, repeatable);
     /// one per named persona when the scope names personas.
@@ -1272,6 +1274,9 @@ fn prompt_value(label: &str, hint: &str) -> Option<String> {
 
 /// Fill the who/why fields the door would refuse on, from one prompted line
 /// each. Only what is missing is asked; a present flag is never overwritten.
+/// --done-means is not asked here: it is staged (D3526) and becomes required
+/// when the node is scoped, so an interactive filer is never prompted into
+/// guessing an acceptance.
 fn prompt_missing_record_fields(args: &mut AddArgs) {
     if args.why.as_deref().map(str::trim).unwrap_or("").is_empty() {
         if let Some(w) = prompt_value(
@@ -1281,26 +1286,12 @@ fn prompt_missing_record_fields(args: &mut AddArgs) {
             args.why = Some(w);
         }
     }
-    if args
-        .done_means
-        .as_deref()
-        .map(str::trim)
-        .unwrap_or("")
-        .is_empty()
-    {
-        if let Some(d) = prompt_value(
-            "done-means",
-            "required: the acceptance a merge check can read",
-        ) {
-            args.done_means = Some(d);
-        }
-    }
     // A --parent create inherits the parent's audience, so it prompts
     // nothing: asking would override the carry with an explicit value.
     if args.audience.is_none() && args.parent.is_none() {
         if let Some(a) = prompt_value(
             "audience",
-            "who this record serves: internal, customers, customer:<persona>, or ask (mint held until the operator answers)",
+            "who this record serves: internal, customers, customer:<persona>, or ask (mint held until the operator answers); the coarse audience files the node, a customer node names its persona when it is scoped",
         ) {
             args.audience = Some(a);
         }
@@ -1349,23 +1340,14 @@ pub(crate) fn create_node(
         ));
     }
     // Who and why have no default on a node: each filing names who it serves
-    // and the goal behind the ask, and a node states what done means. A
-    // carried scope still refuses a missing why or done-means.
+    // and the goal behind the ask. The acceptance is staged (D3526): filing
+    // takes the coarse audience and the why, and --done-means becomes
+    // required when the node is scoped - the move to ready, a blueprint, or
+    // a target start - so a filer who has only seen a symptom never guesses
+    // an acceptance. A carried scope still refuses a missing why.
     if args.why.as_deref().map(str::trim).unwrap_or("").is_empty() {
         return Err(refused(
             "Error: --why is required: the goal behind the ask, quoted from the user's words when the ask came from him.",
-            1,
-        ));
-    }
-    if args
-        .done_means
-        .as_deref()
-        .map(str::trim)
-        .unwrap_or("")
-        .is_empty()
-    {
-        return Err(refused(
-            "Error: --done-means is required: the acceptance a merge check can read.",
             1,
         ));
     }

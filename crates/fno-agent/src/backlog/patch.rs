@@ -765,7 +765,16 @@ fn plan(mut rows: Vec<Value>, req: &PatchRequest) -> Result<Planned, PatchRefusa
             "refused: --status and --leave are different moves; run one per call",
         ));
     }
-    // Normalize the pre-image first: the door's old-vs-new verdicts and
+    // The stored status the node carries INTO this patch, read before the
+    // derived normalization: the scoping gate compares the stored pre-image,
+    // not the derived one a ready-rung node already reads.
+    let idx = resolve_index(&rows, &req.node)?;
+    let stored_status_before = rows[idx]
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    // Normalize the pre-image: the door's old-vs-new verdicts and
     // leave no-op checks key on the DERIVED status, and a row whose stored
     // status drifted (a fixture, or a legacy writer) would else mislead.
     let rungs: BTreeMap<String, String> = rows
@@ -776,7 +785,6 @@ fn plan(mut rows: Vec<Value>, req: &PatchRequest) -> Result<Planned, PatchRefusa
         .collect();
     recompute_statuses_with_plan_rungs(&mut rows, Some(&rungs));
 
-    let idx = resolve_index(&rows, &req.node)?;
     let id = rows
         .get(idx)
         .and_then(RowFacts::id_of)
@@ -862,6 +870,21 @@ fn plan(mut rows: Vec<Value>, req: &PatchRequest) -> Result<Planned, PatchRefusa
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
+
+    // The scoping gate (D3526): a move INTO ready is the move to ready, so
+    // the node must carry its persona and its acceptance by then. The
+    // comparison reads the stored pre-image, not the derived one: a
+    // ready-rung node reads derived ready before this door runs, and an
+    // unscoped node must still refuse its first ready landing. An
+    // already-ready stored row takes ordinary field writes ungated; only the
+    // transition refuses.
+    if new_status == "ready" && stored_status_before != "ready" {
+        if let Some(msg) =
+            crate::backlog::audience::scoping_refusal(&rows[idx], "the move to ready")
+        {
+            return Err(PatchRefusal::refused(format!("refused: {msg}")));
+        }
+    }
 
     if let Some(word) = target {
         if new_status != word {
@@ -1511,5 +1534,63 @@ mod tests {
             }
             Ok(receipt) => panic!("expected contention refusal, got {receipt:?}"),
         }
+    }
+
+    // The scoping gate: the move to ready refuses an unscoped node, naming
+    // the stage and the flag that supplies the missing fact; a scoped node
+    // lands; an already-ready stored row takes a field write ungated.
+    #[test]
+    fn the_move_to_ready_refuses_a_node_without_done_means() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = plan_file(&dir, "ready-plan.md", Some("ready"));
+        let victim = node(
+            "x-s1",
+            json!({
+                "plan_path": plan,
+                "audience": "internal",
+            }),
+        );
+        let (_d, graph) = write_graph(&[victim]);
+        let message = refusal_of(&graph, &req("x-s1", Some("ready"), &[]));
+        assert!(message.contains("done-means"), "{message}");
+        assert!(message.contains("the move to ready"), "{message}");
+        assert!(message.contains("done-means=<text>"), "{message}");
+    }
+
+    #[test]
+    fn the_move_to_ready_refuses_a_coarse_customers_audience_without_persona() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = plan_file(&dir, "ready-plan.md", Some("ready"));
+        let victim = node(
+            "x-s2",
+            json!({
+                "plan_path": plan,
+                "audience": "customers",
+                "done_means": "the merge check reads the acceptance",
+            }),
+        );
+        let (_d, graph) = write_graph(&[victim]);
+        let message = refusal_of(&graph, &req("x-s2", Some("ready"), &[]));
+        assert!(message.contains("customer:<persona>"), "{message}");
+        assert!(message.contains("the move to ready"), "{message}");
+    }
+
+    #[test]
+    fn a_scoped_node_moves_to_ready_and_a_ready_row_writes_ungated() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = plan_file(&dir, "ready-plan.md", Some("ready"));
+        let scoped = node(
+            "x-s3",
+            json!({
+                "plan_path": plan,
+                "audience": "customer:solo-operator",
+                "done_means": "the merge check reads the acceptance",
+            }),
+        );
+        let (_d, graph) = write_graph(&[scoped]);
+        let receipt = apply(&graph, &req("x-s3", Some("ready"), &[])).expect("scoped move lands");
+        assert_eq!(receipt.status.to, "ready");
+        apply(&graph, &req("x-s3", None, &[("details", "a note")]))
+            .expect("an already-ready row takes a field write ungated");
     }
 }

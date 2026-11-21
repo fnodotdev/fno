@@ -1311,6 +1311,24 @@ fn plan_mutation(
         .collect();
     recompute_statuses_with_plan_rungs(&mut rows, Some(&rungs));
 
+    // The scoping gate (D3526): a plan bind that lands ready IS the move to
+    // ready, so the field-operator path gates the same transition the patch
+    // door gates. The pre-image row (`node`) carries the stored status this
+    // call started from; only the transition refuses, an already-ready row
+    // takes ordinary writes ungated.
+    let old_status_ready = node.get("status").and_then(Value::as_str) == Some("ready");
+    let new_status = rows[idx]
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if new_status == "ready" && !old_status_ready {
+        if let Some(msg) =
+            crate::backlog::audience::scoping_refusal(&rows[idx], "the move to ready")
+        {
+            return Err(refused(format!("Error: {msg}"), 1));
+        }
+    }
+
     Ok(MutationPlan::Applied {
         working: rows,
         rungs,
