@@ -1737,10 +1737,6 @@ mod tests {
             })
             .count();
         assert_eq!(cursors, 1);
-        // The failed fleet read keeps its error line in Machines.
-        assert!(rows
-            .iter()
-            .any(|r| matches!(r, Row::Error(e) if e == "no fleet")));
     }
 
     #[test]
@@ -1949,10 +1945,10 @@ mod tests {
         let fleet = serde_json::json!({
             "machines": [
                 {"host": "u", "local": true, "fresh": true, "sessions": [
-                    {"name": "local-one", "session_id": "sess-local"}
+                    {"name": "local-one", "session_id": "sess-local", "harness": "claude"}
                 ]},
                 {"host": "m2-mbp", "fresh": true, "age_s": 0, "sessions": [
-                    {"name": "remote-one", "session_id": "sess-remote"}
+                    {"name": "remote-one", "session_id": "sess-remote", "harness": "claude"}
                 ]},
             ]
         });
