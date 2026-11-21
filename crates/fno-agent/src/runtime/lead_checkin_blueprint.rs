@@ -1008,9 +1008,11 @@ mod tests {
     /// on 2026-09-28 two p0 children of an L2-held epic leaked as
     /// target-ready past the outer team's beat, and a lead that trusted the
     /// line would have seated a duplicate worker in another lead's territory.
-    /// The row skips naming the team that owns it.
+    /// The row skips naming the team that owns it. A drained scope's offer
+    /// line honors the same owner map, and also drops claimed, low-difficulty
+    /// and already-queued rows, then ranks the rest nearest first.
     #[test]
-    fn a_child_of_a_deeper_live_team_never_prints_as_start_or_target_ready() {
+    fn a_child_of_a_deeper_live_team_never_prints_as_start_target_ready_or_offer() {
         let dir = std::env::temp_dir().join(format!("fno-bp-owned-{}", std::process::id()));
         let reading = blueprint_reading_owned(
             &dir,
@@ -1042,34 +1044,7 @@ mod tests {
             "{reading}"
         );
         let _ = std::fs::remove_dir_all(&dir);
-    }
 
-    /// An unread owner read is the reading's error, never an empty filter:
-    /// an empty map would print a foreign team's nodes as dispatchable.
-    #[test]
-    fn an_unread_owner_map_fails_the_blueprint_reading() {
-        let dir = std::env::temp_dir().join(format!("fno-bp-unowned-{}", std::process::id()));
-        let reading = blueprint_reading_owned(
-            &dir,
-            "",
-            unplanned_board(&[("x-1", "low")], Some(0)),
-            Some("sess-1"),
-            vec![],
-            Ok(4),
-            "high",
-            Err("a live team's scope does not compile: e-x: unknown".to_string()),
-            Ok(0),
-            vec![],
-        );
-        assert!(reading.is_err());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// A drained scope offers up to two planless high nodes outside it,
-    /// nearest first; owned, claimed, low-difficulty and already-queued rows never
-    /// print, and the offers render as `offer:` lines.
-    #[test]
-    fn a_drained_scope_offers_the_nearest_uncovered_high_nodes() {
         let entries = vec![
             json!({"id": "x-top", "type": "epic", "status": "ready"}),
             json!({"id": "x-scope", "parent": "x-top", "type": "epic", "status": "ready"}),
@@ -1096,6 +1071,27 @@ mod tests {
             "{lines:?}"
         );
         assert!(adjacent_offers("x-scope", &entries, &owned, &queued, "high", 0).is_empty());
+    }
+
+    /// An unread owner read is the reading's error, never an empty filter:
+    /// an empty map would print a foreign team's nodes as dispatchable.
+    #[test]
+    fn an_unread_owner_map_fails_the_blueprint_reading() {
+        let dir = std::env::temp_dir().join(format!("fno-bp-unowned-{}", std::process::id()));
+        let reading = blueprint_reading_owned(
+            &dir,
+            "",
+            unplanned_board(&[("x-1", "low")], Some(0)),
+            Some("sess-1"),
+            vec![],
+            Ok(4),
+            "high",
+            Err("a live team's scope does not compile: e-x: unknown".to_string()),
+            Ok(0),
+            vec![],
+        );
+        assert!(reading.is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The stop check folds the provider cap into the same one-per-lead
