@@ -1360,11 +1360,11 @@ if echo "$*" | grep -q "checks"; then
   echo '[{{"name":"ci","state":"SUCCESS","bucket":"pass"}}]'
   exit 0
 fi
-if echo "$*" | grep -q "pulls/"; then
+if echo "$*" | grep -q "/comments"; then
   cat "{comments}"
   exit 0
 fi
-if echo "$*" | grep -q "commits"; then
+if echo "$*" | grep -q "/commits"; then
   cat "{commits}"
   exit 0
 fi
@@ -1499,7 +1499,7 @@ const CODEX_P1_NO_REPLY: &str = r#"[
 #[test]
 fn ac2_err_unaddressed_p1_blocks_with_path_line() {
     let tmp = findings_cwd("sess-p1");
-    let mock = findings_mock(CODEX_P1_NO_REPLY, r#"{"commits":[]}"#);
+    let mock = findings_mock(CODEX_P1_NO_REPLY, r#"[]"#);
 
     let (code, d) = fire_findings(tmp.path(), &mock);
 
@@ -1551,7 +1551,7 @@ fn ac2_hp_addressed_via_commit_terminates() {
    "body": "Fixed in deadbeef.",
    "created_at": "2026-06-05T01:20:00Z"}
 ]"#;
-    let commits = r#"{"commits":[{"committedDate":"2026-06-05T01:30:00Z"}]}"#;
+    let commits = r#"[{"commit":{"committer":{"date":"2026-06-05T01:30:00Z"}}}]"#;
     let tmp = findings_cwd("sess-p1fix");
     let mock = findings_mock(comments, commits);
 
