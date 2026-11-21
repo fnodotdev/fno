@@ -1062,10 +1062,12 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
             .px_3()
             .pl(px(WIDTH * 0.08 + 12.0))
             .pb_1()
-            .overflow_hidden()
-            .whitespace_nowrap()
-            .text_ellipsis()
-            .child(ui::text(&text, ui::Role::Fact, &p)),
+            .child(
+                ui::text(text, ui::Role::Fact, &p)
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis(),
+            ),
         Row::Workspace {
             id,
             name,
