@@ -1127,17 +1127,23 @@ fn write_update(
                 repaint_old_parent,
                 details_counts,
             } => {
-                match graph_store::locked_mutate_snapshot(
-                    graph,
-                    MutateInput {
-                        entries: working,
-                        canonical_path: None,
-                        base_version,
-                        plan_rungs: Some(rungs),
-                    },
-                    snapshot,
-                    LOCK_TIMEOUT,
-                ) {
+                // A parent or type change validates against rows the write does
+                // not touch (the cycle and epic-depth checks), so it keeps the
+                // whole-graph version check; every other update publishes over
+                // its snapshot.
+                let reads_other_rows = reparents_or_retypes(&snapshot.rows, &working, &node_id);
+                let input = MutateInput {
+                    entries: working,
+                    canonical_path: None,
+                    base_version,
+                    plan_rungs: Some(rungs),
+                };
+                let published = if reads_other_rows {
+                    graph_store::locked_mutate(graph, input, LOCK_TIMEOUT)
+                } else {
+                    graph_store::locked_mutate_snapshot(graph, input, snapshot, LOCK_TIMEOUT)
+                };
+                match published {
                     Ok(_) => {
                         // The dispatch-brief warning echoes once, after the
                         // write lands and before the receipt - the shape the
@@ -1228,6 +1234,21 @@ fn write_update(
         }
     }
     unreachable!("every loop arm returns")
+}
+
+/// True when the planned row's `parent` or `type` differs from the snapshot's.
+fn reparents_or_retypes(before: &[Value], after: &[Value], node_id: &str) -> bool {
+    let find = |rows: &[Value]| {
+        rows.iter()
+            .find(|r| r.get("id").and_then(Value::as_str) == Some(node_id))
+            .cloned()
+    };
+    let (Some(old), Some(new)) = (find(before), find(after)) else {
+        return true;
+    };
+    ["parent", "type"]
+        .iter()
+        .any(|k| old.get(*k) != new.get(*k))
 }
 
 enum MutationPlan {
