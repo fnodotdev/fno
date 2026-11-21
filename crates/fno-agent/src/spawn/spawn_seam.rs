@@ -84,14 +84,23 @@ pub fn admit_spawn(args: Vec<String>) -> Result<Vec<String>, i32> {
         // ["spawn"] alone: nothing to rewrite.
         return Ok(args);
     };
-    let args = match crate::spawn_bare::boundary_rewrite(tail) {
+    // The + spelling folds before the boundary reads the line, so the
+    // boundary, the parse and the daemon vocabulary answer one grammar
+    // (the composer converts a picked +word to --word the same way).
+    let folded = crate::spawn_bare::plus_fold(tail);
+    let args = match crate::spawn_bare::boundary_rewrite(&folded) {
         crate::spawn_bare::Boundary::Fence(rewritten) => {
             let mut out = Vec::with_capacity(rewritten.len() + 1);
             out.extend(args.first().cloned());
             out.extend(rewritten);
             out
         }
-        crate::spawn_bare::Boundary::Keep => args,
+        crate::spawn_bare::Boundary::Keep => {
+            let mut out = Vec::with_capacity(folded.len() + 1);
+            out.extend(args.first().cloned());
+            out.extend(folded);
+            out
+        }
         crate::spawn_bare::Boundary::Refuse(line) => {
             eprintln!("fno agent spawn: {line}");
             return Err(2);

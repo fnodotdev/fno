@@ -1,9 +1,8 @@
 //! The `fno-agent --help` surface: one usage line per dispatchable command.
 //!
-//! LIVES OUTSIDE THE BIN so the file-budget guard stays honest: the bin grew
-//! past its 5,000-line budget long ago and is shrink-only; this table is the
-//! one piece a new command still has to touch, so it moved to a module named for
-//! the question it answers. Display order == slice order == `--help` order.
+//! LIVES OUTSIDE THE BIN to keep the bin inside its 5,000-line budget: this
+//! table is the one piece a new command still has to touch, so it moved to a
+//! module named for the question it answers. Display order == slice order == `--help` order.
 
 /// Usage line per dispatchable command; the leading token is the command name and the
 /// slice order is the `--help` display order. This MUST cover every routable
@@ -13,7 +12,7 @@
 /// list against that set, so a new command cannot land without a `--help` entry
 ///.
 pub const CLIENT_COMMAND_USAGE: &[&str] = &[
-    "spawn <name> [prompt] [-H <harness>] [--route <provider/model|lane>] [--as pane|thread|headless|cloud] [--machine <host>] [-s <squad>] [-x left|right|up|down] [--cwd <dir>|--fresh|--here] [--force] [--no-wait] [--max <n>] [--] [everything after the prompt is harness argv, never parsed; a spawn-owned flag there refuses with the corrected line; unowned flags before the prompt pass in the --flag=value form only] | --argv -- <cmd...>",
+    "spawn <name> [prompt] [-H <harness>] [--route <provider/model|lane>] [--as pane|thread|headless|cloud] [--machine <host>] [-s <squad>] [-x left|right|up|down] [--cwd <dir>|--fresh|--here] [--force] [--no-wait] [--max <n>] [+flag=<value> harness args folded to their -- spelling like the composer's + picker; a +token with a non-flag body stays prompt text; nothing folds after the fence] [--] [everything after the prompt is harness argv, never parsed; a spawn-owned flag there refuses with the corrected line; unowned flags before the prompt pass in the --flag=value form only] | --argv -- <cmd...>",
     "ask <name> <message> [--cwd <dir>|--fresh|--here] [--answer allow_once|deny]",
     "list [--all] [--status <writing|quiet|parked|orphaned|refused|unknown|signed_out|harness_error>] [--progress <advancing|awaiting-operator|parked|refused|unknown>]",
     "status",
@@ -117,6 +116,20 @@ pub fn command_help(command: &str) -> Option<&'static str> {
 mod tests {
     use super::*;
     use regex::Regex;
+
+    /// the + form the node shipped shows in the one line a user reads
+    #[test]
+    fn the_spawn_usage_line_names_the_plus_form() {
+        let line = command_usage("spawn").expect("spawn has a usage line");
+        assert!(
+            line.contains("+flag=<value>"),
+            "the usage line names the + form: {line}"
+        );
+        assert!(
+            line.contains("nothing folds after the fence"),
+            "the usage line states the byte-exact payload rule: {line}"
+        );
+    }
 
     /// every flag loop-check's parser accepts appears in its help
     /// body. This is the gate that retires the class: --driver was
