@@ -1844,7 +1844,10 @@ mod tests {
                 &req(report_params("claude", sid, json!({}))),
             );
             assert!(
-                response_json(&resp)["stored"].as_bool() == Some(true),
+                response_json(&resp)
+                    .pointer("/stored")
+                    .and_then(Value::as_bool)
+                    == Some(true),
                 "report stored: {}",
                 response_json(&resp)
             );
