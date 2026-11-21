@@ -146,6 +146,9 @@ fn bound_epoch(flag: &str, value: &str) -> Result<f64, String> {
 const OUTAGE_SINCE: &str = "2026-10-07T08:42:47Z";
 const OUTAGE_UNTIL: &str = "2026-10-07T12:52:39Z";
 
+/// The dry-run summary's `rows` sample head: the count stays in `joined`.
+const DRY_ROWS_SAMPLE: usize = 200;
+
 /// Window membership for one row timestamp: rows without a parseable stamp
 /// stay in (the mtime prefilter already bounded them loosely).
 fn ts_in_window(ts: &str, since: f64, until: f64) -> bool {
@@ -332,6 +335,7 @@ fn run_backfill(args: &[String]) -> i32 {
     let mut live = String::new();
     let mut roots: Vec<String> = Vec::new();
     let mut apply = false;
+    let mut all = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -342,6 +346,10 @@ fn run_backfill(args: &[String]) -> i32 {
             "--until" => {
                 until = args.get(i + 1).cloned().unwrap_or_default();
                 i += 2;
+            }
+            "--all" => {
+                all = true;
+                i += 1;
             }
             "--live" => {
                 live = args.get(i + 1).cloned().unwrap_or_default();
@@ -369,27 +377,37 @@ fn run_backfill(args: &[String]) -> i32 {
             }
         }
     }
-    let since = if since.is_empty() {
-        OUTAGE_SINCE.to_string()
+    if all && (!since.is_empty() || !until.is_empty()) {
+        eprintln!("mail-backfill run: --all scans every transcript; drop --since/--until");
+        return 2;
+    }
+    let (since_e, until_e) = if all {
+        // No window: the bounds open wide so the mtime prefilter and the
+        // per-row stamp filter both pass every row unchanged.
+        (f64::NEG_INFINITY, f64::INFINITY)
     } else {
-        since
-    };
-    let until = if until.is_empty() {
-        OUTAGE_UNTIL.to_string()
-    } else {
-        until
-    };
-    let (since_e, until_e) = match bound_epoch("since", &since) {
-        Ok(s) => match bound_epoch("until", &until) {
-            Ok(u) => (s, u),
+        let since = if since.is_empty() {
+            OUTAGE_SINCE.to_string()
+        } else {
+            since
+        };
+        let until = if until.is_empty() {
+            OUTAGE_UNTIL.to_string()
+        } else {
+            until
+        };
+        match bound_epoch("since", &since) {
+            Ok(s) => match bound_epoch("until", &until) {
+                Ok(u) => (s, u),
+                Err(e) => {
+                    eprintln!("mail-backfill run: {e}");
+                    return 2;
+                }
+            },
             Err(e) => {
                 eprintln!("mail-backfill run: {e}");
                 return 2;
             }
-        },
-        Err(e) => {
-            eprintln!("mail-backfill run: {e}");
-            return 2;
         }
     };
     let mut files: Vec<PathBuf> = Vec::new();
@@ -463,9 +481,19 @@ fn run_backfill(args: &[String]) -> i32 {
             }));
         }
     }
+    // An all-history dry run can join thousands of pairs; the summary keeps
+    // the count and `rows` only a sample head, with the cut named.
+    let truncated = rows_out.len().saturating_sub(DRY_ROWS_SAMPLE);
+    rows_out.truncate(DRY_ROWS_SAMPLE);
     println!(
         "{}",
-        json!({"written": written, "joined": pairs.len(), "skipped": skipped, "rows": rows_out})
+        json!({
+            "written": written,
+            "joined": pairs.len(),
+            "skipped": skipped,
+            "rows_truncated": truncated,
+            "rows": rows_out,
+        })
     );
     0
 }
@@ -573,5 +601,49 @@ mod engine_tests {
         );
         assert!(pairs.is_empty());
         assert_eq!(skipped, 1);
+    }
+
+    /// `--all` joins a pair stamped far outside the outage window (no window
+    /// means every row scans), stays dry without `--apply`, and refuses a
+    /// window combined with `--all` instead of silently intersecting.
+    #[test]
+    fn all_mode_joins_whole_history_and_refuses_a_window() {
+        let root = std::env::temp_dir().join(format!("bf-all-{}", std::process::id()));
+        let proj = root.join("proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        let body = "the deploy held because the other lane still owned the merge slot today";
+        let send_line = json!({
+            "type": "assistant",
+            "uuid": "row-u1",
+            "timestamp": "2026-05-01T10:00:00Z",
+            "sessionId": "s-sender",
+            "message": {"content": [{"type": "tool_use", "name": "SendMessage",
+                "input": {"message": body, "summary": "held"}}]},
+        });
+        let block_line = json!({
+            "type": "user",
+            "timestamp": "2026-05-01T10:00:05Z",
+            "sessionId": "s-receiver",
+            "message": {"content": format!(
+                "<cross-session-message from-name=\"s-sender\">\n{body}\n</cross-session-message>")},
+        });
+        std::fs::write(proj.join("sender.jsonl"), format!("{send_line}\n")).unwrap();
+        std::fs::write(proj.join("receiver.jsonl"), format!("{block_line}\n")).unwrap();
+        let root_s = root.to_string_lossy().to_string();
+        let out = run_mail_backfill(&[
+            "run".into(),
+            "--all".into(),
+            "--root".into(),
+            root_s.clone(),
+        ]);
+        assert_eq!(out, 0, "--all dry run joins the pair outside any window");
+        let refused = run_mail_backfill(&[
+            "run".into(),
+            "--all".into(),
+            "--since".into(),
+            "2026-05-01T00:00:00Z".into(),
+        ]);
+        assert_eq!(refused, 2, "--all with a window refuses");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
