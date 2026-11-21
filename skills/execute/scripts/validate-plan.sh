@@ -339,39 +339,49 @@ _resolve_acked_forms() {
     done
 }
 
+# Pick a binary: an explicit executable override, a source-root build, then
+# PATH. A source-root build older than the PATH binary is skipped, so a
+# forgotten `cargo build` cannot shadow a newer install; the skip names both
+# paths on stderr. Args: override, source root, crate dir, binary name.
+_resolve_bin() {
+    local override="$1" source_root="$2" crate="$3" name="$4"
+    local on_path="" profile="" built=""
+    if [[ -n "$override" && -x "$override" ]]; then
+        printf '%s' "$override"
+        return 0
+    fi
+    on_path=$(command -v "$name" 2>/dev/null || true)
+    if [[ -n "$source_root" ]]; then
+        for profile in release debug; do
+            built="$source_root/crates/$crate/target/$profile/$name"
+            [[ -x "$built" ]] || continue
+            if [[ -n "$on_path" && "$on_path" -nt "$built" ]]; then
+                echo "validate-plan: skipping stale build $built (older than $on_path); using $on_path" >&2
+                continue
+            fi
+            printf '%s' "$built"
+            return 0
+        done
+    fi
+    if [[ -n "$on_path" ]]; then
+        printf '%s' "$on_path"
+    fi
+    return 0
+}
+
 # Echo the fno-agent binary the Rust-backed checks shell out to, resolved
 # with the stop hook's order: an explicit executable $FNO_AGENT_BIN, a build
 # under the source root, then PATH. Empty means no binary: callers warn NOT
 # CHECKED rather than pass.
 resolve_agents_bin() {
-    local source_root=""
-    source_root=$(_fno_source_root)
-    if [[ -n "${FNO_AGENT_BIN:-}" && -x "${FNO_AGENT_BIN}" ]]; then
-        printf '%s' "$FNO_AGENT_BIN"
-    elif [[ -n "$source_root" && -x "$source_root/crates/fno-agent/target/release/fno-agent" ]]; then
-        printf '%s' "$source_root/crates/fno-agent/target/release/fno-agent"
-    elif [[ -n "$source_root" && -x "$source_root/crates/fno-agent/target/debug/fno-agent" ]]; then
-        printf '%s' "$source_root/crates/fno-agent/target/debug/fno-agent"
-    elif command -v fno-agent >/dev/null 2>&1; then
-        command -v fno-agent
-    fi
+    _resolve_bin "${FNO_AGENT_BIN:-}" "$(_fno_source_root)" fno-agent fno-agent
 }
 
 # Echo the native fno front binary: an explicit executable $FNO_BIN, a build
 # under the source root, then PATH. The law stage read lives here
 # (`fno inbox decisions stage`); empty means the caller warns NOT CHECKED.
 resolve_front_bin() {
-    local source_root=""
-    source_root=$(_fno_source_root)
-    if [[ -n "${FNO_BIN:-}" && -x "${FNO_BIN}" ]]; then
-        printf '%s' "$FNO_BIN"
-    elif [[ -n "$source_root" && -x "$source_root/crates/fno/target/release/fno" ]]; then
-        printf '%s' "$source_root/crates/fno/target/release/fno"
-    elif [[ -n "$source_root" && -x "$source_root/crates/fno/target/debug/fno" ]]; then
-        printf '%s' "$source_root/crates/fno/target/debug/fno"
-    elif command -v fno >/dev/null 2>&1; then
-        command -v fno
-    fi
+    _resolve_bin "${FNO_BIN:-}" "$(_fno_source_root)" fno fno
 }
 
 _semantic_validate() {
