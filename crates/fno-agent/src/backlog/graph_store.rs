@@ -3111,9 +3111,12 @@ fn prepare_mutate(
     let mut baseline = raw.clone();
     canonicalize_entries(&mut baseline);
     let (changed_ids, version) = crate::backlog::diff_and_version(&baseline, &entries);
-    let touched_ids = planned
-        .as_deref()
-        .map(|planned| crate::backlog::rows_touched(planned, &entries, &changed_ids));
+    // The planned rows meet the same canonical form the entries already have,
+    // or every row the canonicalizer adds a key to would read as touched.
+    let touched_ids = planned.map(|mut planned| {
+        canonicalize_entries(&mut planned);
+        crate::backlog::rows_touched(&planned, &entries, &changed_ids)
+    });
     Ok(PreparedMutate {
         raw,
         entries,
