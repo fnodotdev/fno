@@ -326,6 +326,47 @@ fn repo_slug_from_row_url(url: Option<&str>) -> Option<String> {
     crate::backlog::pr_link::repo_slug_from_url(url)
 }
 
+/// The repo the session node's PR rows record for `pr`: the url slug of the
+/// numbered row naming that number, one distinct slug only. A cross-repo
+/// `additional_prs` row pins its own repo, so the split docs PR reads in
+/// fno-web; a number no row names keeps the ambient origin, so the node's
+/// recorded repo never answers for an unrelated same-number PR. The
+/// node-level pin ([`session_node_pr_target`]) answers the node's newest
+/// PR and is wrong for any other number: applied to
+/// `fno do pr status 485` in the split-node worktree it asked
+/// footnote-sh/fno-web for PR 485 (no such PR there, gh 404) because the
+/// node's only numbered row is its fno-web docs PR.
+pub(crate) fn session_node_pr_repo(cwd: &Path, pr: u64) -> Option<String> {
+    let node_id = session_node_id(cwd)?;
+    let store = crate::backlog::api::Store::new(&crate::graph_get::graph_path_for(cwd));
+    let node = match crate::backlog::api::node(&store, &node_id) {
+        Ok(Some(n)) => n,
+        _ => return None,
+    };
+    pr_repo_from_rows(&numbered_pr_rows(&node), pr)
+}
+
+/// The pure half of [`session_node_pr_repo`]: the url slug of the numbered
+/// row naming `pr`. One distinct located slug answers; none, or two rows
+/// naming one number in two repos, keeps the ambient origin rather than
+/// guess.
+pub(super) fn pr_repo_from_rows(
+    rows: &[(i64, Option<&str>, bool, Option<&str>)],
+    pr: u64,
+) -> Option<String> {
+    let mut slugs: Vec<String> = rows
+        .iter()
+        .filter(|(number, ..)| *number > 0 && *number as u64 == pr)
+        .filter_map(|(.., url)| repo_slug_from_row_url(*url))
+        .collect();
+    slugs.sort();
+    slugs.dedup();
+    match slugs.as_slice() {
+        [one] => Some(one.clone()),
+        _ => None,
+    }
+}
+
 /// The target-session manifest's node id for the checkout at `cwd`: the
 /// space-dir manifest first, then the legacy in-worktree copy;
 /// `graph_node_id` first, the claim key's bare node id second. The same

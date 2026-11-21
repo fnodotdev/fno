@@ -226,3 +226,64 @@ exit 1
         info.ci_conclusion
     );
 }
+
+/// The pin is per-number: among the session node's PR rows, only the row
+/// naming the asked number pins its repo. The split-node shape: a node
+/// whose only numbered row is its cross-repo `additional_prs` docs PR must
+/// not pin a different operand number to that repo - `fno do pr status
+/// 485` from its worktree asked footnote-sh/fno-web for PR 485 (no such
+/// PR there, gh 404) and ready never turned true, so the merge door
+/// stalled. The split docs PR itself still reads in its own repo, from its
+/// url.
+#[test]
+fn the_pr_pin_names_the_repo_of_the_row_the_operand_names() {
+    // The split node's row: no primary PR recorded, one cross-repo extra.
+    let extras_only: Vec<(i64, Option<&str>, bool, Option<&str>)> = vec![(
+        268,
+        Some("docs"),
+        false,
+        Some("https://github.com/footnote-sh/fno-web/pull/268"),
+    )];
+    assert_eq!(
+        pr_read::pr_repo_from_rows(&extras_only, 268).as_deref(),
+        Some("footnote-sh/fno-web"),
+        "the split docs PR reads in its own repo, from its url"
+    );
+    assert_eq!(
+        pr_read::pr_repo_from_rows(&extras_only, 485),
+        None,
+        "a number the node never recorded keeps the ambient origin"
+    );
+    // A split node: primary in this repo, docs PR in another.
+    let split: Vec<(i64, Option<&str>, bool, Option<&str>)> = vec![
+        (
+            485,
+            Some("open"),
+            false,
+            Some("https://github.com/fnodotdev/fno/pull/485"),
+        ),
+        (
+            268,
+            None,
+            false,
+            Some("https://github.com/footnote-sh/fno-web/pull/268"),
+        ),
+    ];
+    assert_eq!(
+        pr_read::pr_repo_from_rows(&split, 485).as_deref(),
+        Some("fnodotdev/fno")
+    );
+    assert_eq!(
+        pr_read::pr_repo_from_rows(&split, 268).as_deref(),
+        Some("footnote-sh/fno-web")
+    );
+    // A bare-number row (no url) never pins.
+    let bare: Vec<(i64, Option<&str>, bool, Option<&str>)> = vec![(7, None, false, None)];
+    assert_eq!(pr_read::pr_repo_from_rows(&bare, 7), None);
+    // One number recorded in two repos: refuse to the ambient origin.
+    let clash: Vec<(i64, Option<&str>, bool, Option<&str>)> = vec![
+        (9, None, false, Some("https://github.com/a/r/pull/9")),
+        (9, None, false, Some("https://github.com/b/r/pull/9")),
+    ];
+    assert_eq!(pr_read::pr_repo_from_rows(&clash, 9), None);
+}

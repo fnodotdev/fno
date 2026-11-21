@@ -283,7 +283,7 @@ fn release_hold(branch: &str, holder: Option<&str>) -> bool {
 /// repo pins the read, the same pin every PR read answers under.
 fn pr_head_ref_and_oid(cwd: &Path, pr: &str) -> Option<(String, String, String)> {
     let gh = std::env::var("FNO_REVIEW_HOLD_GH").unwrap_or_else(|_| "gh".to_string());
-    let repo = crate::loopcheck::pr_read::session_node_pr_target(cwd).1;
+    let repo = crate::loopcheck::pr_read::session_node_pr_repo(cwd, pr.parse().unwrap_or(0));
     let pr_json = crate::loopcheck::gh_read::read_pr_view_in(
         &gh,
         cwd,

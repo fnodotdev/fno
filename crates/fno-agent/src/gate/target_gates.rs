@@ -1212,7 +1212,7 @@ fn request_self_review_pr_form(
     let payload = serde_json::json!({
         "op": "status-pr-info",
         "cwd": cwd.to_string_lossy(),
-        "repo": crate::gate::loopcheck::pr_read::session_node_pr_target(cwd).1,
+        "repo": crate::gate::loopcheck::pr_read::session_node_pr_repo(cwd, pr.max(0) as u64),
         "pr": pr,
     });
     let info = door_json("authorized-merge", &[], &payload);
