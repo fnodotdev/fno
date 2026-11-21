@@ -19,6 +19,7 @@ mod left_pane;
 pub mod link;
 mod mods;
 mod mouse;
+mod mux_modes;
 mod orchestration;
 pub mod palette;
 mod settings;

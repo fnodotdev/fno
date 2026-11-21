@@ -370,12 +370,31 @@ pub enum MuxAction {
     Bell,
     /// A key with no app surface yet: name it in the notice, forward nothing.
     Notice(String),
+    /// prefix+`[` / `]` / v / r: walk, select or rerun the focused pane's
+    /// command blocks over the wire.
+    Block(BlockOp),
+    /// prefix+PgUp: keyboard scroll mode on the focused pane.
+    ScrollMode,
+    /// prefix+`,`: the rename-tab prompt for the active tab.
+    Rename,
+    /// prefix+P: the focused agent's row menu.
+    RowMenu,
+    /// prefix+Z: focus the next pane whose agent waits on the user.
+    NextWaiting,
 }
 
-/// Translate one scanner event. Forward, wire commands, tab ordinals and
-/// detach run app-side; every client-local overlay event has no app surface
-/// yet and becomes a notice naming it, so a prefix chord never leaks into
-/// the pane.
+/// One command-block verb the wire carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockOp {
+    Jump(fno::proto::BlockDir),
+    Select(fno::proto::BlockDir),
+    Rerun,
+}
+
+/// Translate one scanner event. Forward, wire commands, tab ordinals,
+/// detach and the five overlay events run app-side; every other
+/// client-local overlay event has no app surface yet and becomes a notice
+/// naming it, so a prefix chord never leaks into the pane.
 pub fn translate(event: fno::ui::keys::Event) -> MuxAction {
     use fno::ui::keys::Event;
     match event {
@@ -384,6 +403,13 @@ pub fn translate(event: fno::ui::keys::Event) -> MuxAction {
         Event::SelectTabIdx(n) => MuxAction::Tab(n),
         Event::Detach => MuxAction::Quit,
         Event::Bell => MuxAction::Bell,
+        Event::BlockJump(dir) => MuxAction::Block(BlockOp::Jump(dir)),
+        Event::BlockSelect(dir) => MuxAction::Block(BlockOp::Select(dir)),
+        Event::BlockRerun => MuxAction::Block(BlockOp::Rerun),
+        Event::ScrollModeOpen => MuxAction::ScrollMode,
+        Event::OpenRename => MuxAction::Rename,
+        Event::OpenSidelineMenu => MuxAction::RowMenu,
+        Event::FocusNextBlocked => MuxAction::NextWaiting,
         other => MuxAction::Notice(format!("{other:?} has no app action yet")),
     }
 }
@@ -578,5 +604,15 @@ mod tests {
             translate(Event::OpenSelector),
             MuxAction::Notice(_)
         ));
+        // The five overlay events each run an app arm, never a notice.
+        use fno::proto::BlockDir;
+        assert_eq!(
+            translate(Event::BlockJump(BlockDir::Prev)),
+            MuxAction::Block(BlockOp::Jump(BlockDir::Prev))
+        );
+        assert_eq!(translate(Event::ScrollModeOpen), MuxAction::ScrollMode);
+        assert_eq!(translate(Event::OpenRename), MuxAction::Rename);
+        assert_eq!(translate(Event::OpenSidelineMenu), MuxAction::RowMenu);
+        assert_eq!(translate(Event::FocusNextBlocked), MuxAction::NextWaiting);
     }
 }
