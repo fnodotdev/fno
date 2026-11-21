@@ -3955,27 +3955,35 @@ pub(crate) mod scope_tests {
 
         let env = DoorEnv::new();
         crate::paths::pin_test_claims_root(env.0.path());
-        // A recoverable seed row: an explicit supersession target is a
-        // conflict resolution, which carries each record past the door's
-        // no-conflict refusal. The test gates scope widening, not
-        // supersession. The seed commits through the ingest path: a raw
-        // file write is a stray at the routed root, invisible to a store
-        // answer once the first append creates one.
-        crate::event_store::append_envelope(
-            &env.0.path().join("decisions.jsonl"),
-            concat!(
-                "{\"ts\":\"2026-08-29T19:00:00Z\",\"type\":\"operator_decision\",\"source\":\"test\",",
-                "\"data\":{\"decision_id\":\"d-5eed5eed\",\"subject\":\"scope-seed\",",
-                "\"decision\":\"The scope seed.\",\"authority_source\":\"operator\"}}"
-            ),
-            None,
-        )
-        .expect("seeds");
+        // Each expecting-0 record rides its own live same-subject seed: the
+        // auto-supersede path reads it, so the record is a conflict
+        // resolution past the door's no-conflict refusal. A superseded row
+        // is no longer a recoverable target, so one shared seed dies with
+        // the first record that supersedes it. Seeds commit through the
+        // ingest path, and their ts sits after the law-lane cutover but
+        // before the proof cutover, so a wide seed is never withheld as
+        // unproven.
+        let seed = |id: &str, subject: &str, reach: &str| {
+            let line = format!(
+                "{{\"ts\":\"2026-08-29T19:00:00Z\",\"type\":\"operator_decision\",\"source\":\"test\",\
+                 \"data\":{{\"decision_id\":\"{id}\",\"subject\":\"{subject}\",\
+                 \"decision\":\"The {subject} seed.\",\"authority_source\":\"operator\",\
+                 \"reach\":\"{reach}\"}}}}"
+            );
+            crate::event_store::append_envelope(&env.0.path().join("decisions.jsonl"), &line, None)
+                .expect("seeds");
+        };
+        seed("d-1eed0001", "project-one", "project:demo");
+        let mine = crate::claims::machine_id();
+        if !mine.is_empty() {
+            seed("d-2eed0002", "machine-one", &format!("machine:{mine}"));
+        }
+        seed("d-3eed0003", "wide-two", "global");
+        seed("d-4eed0004", "typo-one", "project:demo");
         let operator = Caller::as_authority("operator");
         let record = |text: &str, widen: Option<Widen>| {
             let mut d = door(text, text);
             d.widen = widen;
-            d.supersedes = Some("d-5eed5eed".to_string());
             record_door_write(d, text.to_string(), &operator)
         };
         // No certificate: global refuses and no store holds the row.
@@ -3986,7 +3994,6 @@ pub(crate) mod scope_tests {
         assert_eq!(record("other-one", other), 3, "another user is wide too");
         // A project law and this machine's own scope need no name.
         assert_eq!(record("project-one", None), 0);
-        let mine = crate::claims::machine_id();
         let own = record("machine-one", Some(Widen::Machine(None)));
         assert_eq!(
             own,
