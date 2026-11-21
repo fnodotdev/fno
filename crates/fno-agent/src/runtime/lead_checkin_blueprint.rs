@@ -1117,11 +1117,13 @@ mod tests {
             "{reading}"
         );
         let reading = drained(&[]);
-        assert_eq!(reading.get("offers"), Some(&json!([])), "{reading}");
+        let lines = render_lines(&reading);
         assert!(
-            render_lines(&reading)
-                .iter()
-                .any(|l| l.starts_with("  skip - : no offer:")),
+            lines.iter().all(|l| !l.starts_with("  offer:")),
+            "{reading}"
+        );
+        assert!(
+            lines.iter().any(|l| l.starts_with("  skip - : no offer:")),
             "{reading}"
         );
         let _ = std::fs::remove_dir_all(&dir);
