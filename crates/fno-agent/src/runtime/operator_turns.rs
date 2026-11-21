@@ -137,8 +137,9 @@ pub(crate) fn turn_id(obj: &Value, text: &str, line_no: usize) -> String {
     format!("derived-{}", &hex[..12])
 }
 
-/// One-line excerpt; whitespace runs collapse so a row stays one row.
-fn excerpt(text: &str) -> String {
+/// One-line excerpt; whitespace runs collapse so a row stays one row. The
+/// decide row's turn quote cuts at the same width, so the two renders agree.
+pub(crate) fn excerpt(text: &str) -> String {
     let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if flat.chars().count() <= EXCERPT_CHARS {
         flat
