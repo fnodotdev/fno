@@ -562,6 +562,13 @@ pub(crate) fn r_blueprint(
     } else {
         Vec::new()
     };
+    if drained && offers.is_empty() {
+        skips.push(json!({
+            "id": null,
+            "reason": "no offer: no planless high or L node in intake, triage, ready or next \
+                       outside this scope routes to /blueprint (idea-status nodes need triage first)"
+        }));
+    }
     // Open, planless rows: the unplanned queue and the idea children, read
     // once; the batch lines group the ones that read as one subject.
     let batch = crate::lead_checkin_batch::groups(
@@ -794,6 +801,38 @@ mod tests {
         idea_children: Result<usize, String>,
         seat_leads: Vec<SeatScope>,
     ) -> Result<Value, String> {
+        blueprint_reading_graph(
+            dir,
+            config_toml,
+            board,
+            session_id,
+            holders,
+            slots,
+            floor,
+            other_owned,
+            idea_children,
+            seat_leads,
+            &[],
+            &[],
+        )
+    }
+
+    /// The same call with the scope's idea rows and the graph rows the
+    /// drained offer walk reads.
+    fn blueprint_reading_graph(
+        dir: &std::path::Path,
+        config_toml: &str,
+        board: Value,
+        session_id: Option<&str>,
+        holders: Vec<String>,
+        slots: Result<usize, String>,
+        floor: &str,
+        other_owned: Result<HashMap<String, String>, String>,
+        idea_children: Result<usize, String>,
+        seat_leads: Vec<SeatScope>,
+        idea_rows: &[Value],
+        entries: &[Value],
+    ) -> Result<Value, String> {
         // The FNO_CONFIG pin below is the SOLE config candidate for every
         // concurrent reader, so it must not interleave with another test's
         // config read (the spawn-gate reservation suite reads max_live under
@@ -819,10 +858,10 @@ mod tests {
             floor,
             &other_owned,
             &idea_children,
-            &[],
+            idea_rows,
             &seat_leads,
             "",
-            &[],
+            entries,
         );
         match prior_provider {
             Some(v) => std::env::set_var("FNO_ROUTE_PROVIDER", v),
@@ -1071,6 +1110,45 @@ mod tests {
             "{lines:?}"
         );
         assert!(adjacent_offers("x-scope", &entries, &owned, &queued, "high", 0).is_empty());
+
+        // A scope whose only child is a user-only idea row is still drained:
+        // the skipped row never counts as a candidate, so the offer prints,
+        // and with no offerable node the beat says why instead of going silent.
+        let user_only = json!({"id": "x-uo", "status": "idea", "difficulty": "medium",
+            "parent": "x-scope", "tags": ["user-only"]});
+        let drained = |graph: &[Value]| {
+            blueprint_reading_graph(
+                &dir,
+                "",
+                unplanned_board(&[], Some(0)),
+                Some("sess-1"),
+                vec![],
+                Ok(4),
+                "high",
+                Ok(owned.clone()),
+                Ok(1),
+                vec![],
+                std::slice::from_ref(&user_only),
+                graph,
+            )
+            .unwrap()
+        };
+        let reading = drained(&entries);
+        assert!(
+            render_lines(&reading)
+                .iter()
+                .any(|l| l.starts_with("  offer: /fno:blueprint subagent")),
+            "{reading}"
+        );
+        let reading = drained(&[]);
+        assert_eq!(reading["offers"], json!([]), "{reading}");
+        assert!(
+            render_lines(&reading)
+                .iter()
+                .any(|l| l.starts_with("  skip - : no offer:")),
+            "{reading}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// An unread owner read is the reading's error, never an empty filter:
