@@ -3958,16 +3958,19 @@ pub(crate) mod scope_tests {
         // A recoverable seed row: an explicit supersession target is a
         // conflict resolution, which carries each record past the door's
         // no-conflict refusal. The test gates scope widening, not
-        // supersession.
-        std::fs::write(
-            env.0.path().join("decisions.jsonl"),
+        // supersession. The seed commits through the ingest path: a raw
+        // file write is a stray at the routed root, invisible to a store
+        // answer once the first append creates one.
+        crate::event_store::append_envelope(
+            &env.0.path().join("decisions.jsonl"),
             concat!(
                 "{\"ts\":\"2026-08-29T19:00:00Z\",\"type\":\"operator_decision\",\"source\":\"test\",",
                 "\"data\":{\"decision_id\":\"d-5eed5eed\",\"subject\":\"scope-seed\",",
-                "\"decision\":\"The scope seed.\",\"authority_source\":\"operator\"}}\n"
+                "\"decision\":\"The scope seed.\",\"authority_source\":\"operator\"}}"
             ),
+            None,
         )
-        .expect("writes");
+        .expect("seeds");
         let operator = Caller::as_authority("operator");
         let record = |text: &str, widen: Option<Widen>| {
             let mut d = door(text, text);
@@ -4116,16 +4119,18 @@ pub(crate) mod scope_tests {
 
         // A recoverable seed row: the successful record carries an explicit
         // supersession target, a conflict resolution, past the door's
-        // no-conflict refusal.
-        std::fs::write(
-            env.0.path().join("decisions.jsonl"),
+        // no-conflict refusal. The seed commits through the ingest path for
+        // the same reason the scope test's seed does.
+        crate::event_store::append_envelope(
+            &env.0.path().join("decisions.jsonl"),
             concat!(
                 "{\"ts\":\"2026-08-29T19:00:00Z\",\"type\":\"operator_decision\",\"source\":\"test\",",
                 "\"data\":{\"decision_id\":\"d-e1e1e111\",\"subject\":\"evidence-seed\",",
-                "\"decision\":\"The evidence seed.\",\"authority_source\":\"chat_attested\"}}\n"
+                "\"decision\":\"The evidence seed.\",\"authority_source\":\"chat_attested\"}}"
             ),
+            None,
         )
-        .expect("writes");
+        .expect("seeds");
         let mut d = door("territory-resolver", "advance.py is 200 lines");
         d.reads = vec!["head -5 advance.py".to_string()];
         d.supersedes = Some("d-e1e1e111".to_string());
@@ -4155,16 +4160,17 @@ pub(crate) mod scope_tests {
         assert!(env.index_text().is_empty(), "nothing recorded");
 
         // A store holding another subject's law: still no live law under
-        // this subject.
-        std::fs::write(
-            env.0.path().join("decisions.jsonl"),
+        // this subject. The seed commits through the ingest path.
+        crate::event_store::append_envelope(
+            &env.0.path().join("decisions.jsonl"),
             concat!(
                 "{\"ts\":\"2026-08-29T19:00:00Z\",\"type\":\"operator_decision\",\"source\":\"test\",",
                 "\"data\":{\"decision_id\":\"d-badc0de1\",\"subject\":\"other-subject\",",
-                "\"decision\":\"The other subject's law.\",\"authority_source\":\"operator\"}}\n"
+                "\"decision\":\"The other subject's law.\",\"authority_source\":\"operator\"}}"
             ),
+            None,
         )
-        .expect("writes");
+        .expect("seeds");
         let code = record_door_write(
             door("fresh-subject", "Still nothing live under this subject."),
             "Still nothing live under this subject.".to_string(),
@@ -4174,17 +4180,19 @@ pub(crate) mod scope_tests {
 
         // The admit arm: a live law under the subject records, as an
         // auto-supersession. The seed's reach names the door's project scope
-        // so the scope-equal filter sees it.
-        std::fs::write(
-            env.0.path().join("decisions.jsonl"),
+        // so the scope-equal filter sees it. This seed appends beside the
+        // prior one instead of rewriting the file under its store.
+        crate::event_store::append_envelope(
+            &env.0.path().join("decisions.jsonl"),
             concat!(
                 "{\"ts\":\"2026-08-29T19:00:00Z\",\"type\":\"operator_decision\",\"source\":\"test\",",
                 "\"data\":{\"decision_id\":\"d-cafef00d\",\"subject\":\"fresh-subject\",",
                 "\"decision\":\"The law this ruling replaces.\",\"authority_source\":\"chat_attested\",",
-                "\"reach\":\"project:demo\"}}\n"
+                "\"reach\":\"project:demo\"}}"
             ),
+            None,
         )
-        .expect("writes");
+        .expect("seeds");
         let code = record_door_write(
             door("fresh-subject", "The replacement ruling."),
             "The replacement ruling.".to_string(),
