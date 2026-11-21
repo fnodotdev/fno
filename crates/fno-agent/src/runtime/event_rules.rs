@@ -1196,10 +1196,8 @@ mod tests {
         fn new(promoted: bool) -> Self {
             let dir = tempfile::TempDir::new().unwrap();
             let home_dir = dir.path().join("agents-home");
-            let journal_dir = dir.path().join("journal");
             let cwd = dir.path().join("project");
             std::fs::create_dir_all(&home_dir).unwrap();
-            std::fs::create_dir_all(&journal_dir).unwrap();
             std::fs::create_dir_all(&cwd).unwrap();
             std::env::set_var("FNO_AGENT_HOME", &home_dir);
             let session = crate::identity::canonical_handle(SESSION);
@@ -1225,7 +1223,10 @@ mod tests {
             Rig {
                 _dir: dir,
                 home: crate::paths::AgentsHome::from_env(),
-                journal: journal_dir.join("events.jsonl"),
+                // The idle-pick predicates read default_journals(cwd), whose
+                // agents-home entry resolves here: one file serves the engine
+                // read and the predicate read.
+                journal: home_dir.join("events.jsonl"),
                 cwd,
                 session,
             }
