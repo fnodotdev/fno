@@ -44,11 +44,12 @@ required-features = ["full"]
 # provider_key, rules, glob, store_client, node_row, product_boundary) plus their six
 # light dependencies (serde, serde_json, sha2, chrono, libc, toml; the last
 # three are pins fnh already carries). `full` is everything the `fno` binary
-# needs: the mux, the TUI, the server, the web bridge, and the bootstrap
-# python resolver behind version_json's receipt. fnh pins this crate
-# with default-features = false, so a new dependency must either join the
-# light set or stay behind `full`; an unconditional heavy dep silently
-# re-inflates every fnh build.
+# needs: `app` plus the web bridge, the transcript transfer and the PDF
+# viewer. fnh and fno-app pin this crate with default-features = false, so a
+# new dependency must either join the light set or stay behind a feature
+# (`app` for the shared client surface, `web`, `transfer` or `pdf` for the
+# heavy extras); an unconditional heavy dep silently re-inflates every
+# fnh and fno-app build.
 default = ["full"]
 # `app` is what the desktop app links: the module surface the `fno` binary
 # shares with fno-app (client helpers, proto, config, backlog model), with no
