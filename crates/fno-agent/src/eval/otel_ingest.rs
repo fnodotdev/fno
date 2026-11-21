@@ -636,19 +636,19 @@ fn value_f64(v: &Value) -> Option<f64> {
 }
 
 #[derive(Clone)]
-pub(crate) struct Row {
-    pub(crate) dedupe_key: String,
-    pub(crate) session_id: String,
-    pub(crate) ts: Option<String>,
-    pub(crate) model: Option<String>,
-    pub(crate) cost_usd_micros: Option<i64>,
-    pub(crate) input_tokens: Option<i64>,
-    pub(crate) output_tokens: Option<i64>,
-    pub(crate) cache_read_tokens: Option<i64>,
-    pub(crate) cache_creation_tokens: Option<i64>,
-    pub(crate) skill_name: Option<String>,
-    pub(crate) plugin_name: Option<String>,
-    pub(crate) agent_name: Option<String>,
+pub struct Row {
+    pub dedupe_key: String,
+    pub session_id: String,
+    pub ts: Option<String>,
+    pub model: Option<String>,
+    pub cost_usd_micros: Option<i64>,
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub cache_read_tokens: Option<i64>,
+    pub cache_creation_tokens: Option<i64>,
+    pub skill_name: Option<String>,
+    pub plugin_name: Option<String>,
+    pub agent_name: Option<String>,
 }
 
 fn store_record(conn: &Connection, record: &Value) -> rusqlite::Result<()> {
@@ -725,7 +725,7 @@ pub fn session_cost_usd(db: &Path, session_id: &str) -> Option<f64> {
 /// parsed filter below stays the exact truth. A missing db reads as no
 /// rows (the receiver may never have run); a read error is the typed
 /// rusqlite error, for the tick row to name.
-pub(crate) fn requests_in_window(db: &Path, cutoff_ms: i64) -> Result<Vec<Row>, rusqlite::Error> {
+pub fn requests_in_window(db: &Path, cutoff_ms: i64) -> Result<Vec<Row>, rusqlite::Error> {
     if !db.exists() {
         return Ok(Vec::new());
     }
@@ -1282,63 +1282,5 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-    }
-
-    /// The forward window reads the stored rows: a row outside the window
-    /// and an undated row answer nothing, the in-window rows come back
-    /// oldest first.
-    #[test]
-    fn requests_in_window_filters_by_ts() {
-        let (agents, _td) = home();
-        let db = agents.otel_dir().join("otel.db");
-        let cutoff = crate::event_store::parse_rfc3339_ms("2026-11-20T10:00:00Z").unwrap();
-        let row = |rid: &str, ts: &str| {
-            let mut r = api_request(rid, "sess-fwd", 3_050_000);
-            {
-                let attrs = r
-                    .get_mut("attributes")
-                    .and_then(Value::as_array_mut)
-                    .unwrap();
-                for a in attrs.iter_mut() {
-                    if a.get("key").and_then(Value::as_str) == Some("event.timestamp") {
-                        *a.get_mut("value").unwrap() = json!({"stringValue": ts});
-                    }
-                }
-            }
-            r
-        };
-        ingest(
-            &db,
-            &agents.events_jsonl(),
-            body(json!([
-                row("req-a", "2026-11-20T11:00:00Z"),
-                row("req-b", "2026-11-20T09:59:59.999Z"),
-                row("req-c", "2026-11-19T00:00:00Z"),
-            ]))
-            .as_bytes(),
-        )
-        .unwrap();
-        let mut undated = api_request("req-d", "sess-fwd", 1);
-        *undated.get_mut("attributes").unwrap() = json!([
-            {"key": "event.name", "value": {"stringValue": "api_request"}},
-            {"key": "session.id", "value": {"stringValue": "sess-fwd"}},
-            {"key": "request_id", "value": {"stringValue": "req-d"}}
-        ]);
-        ingest(
-            &db,
-            &agents.events_jsonl(),
-            body(json!([undated])).as_bytes(),
-        )
-        .unwrap();
-        let got = requests_in_window(&db, cutoff).unwrap();
-        let keys: Vec<&str> = got.iter().map(|r| r.dedupe_key.as_str()).collect();
-        assert_eq!(
-            keys,
-            vec!["rid:req-a"],
-            "in-window rows oldest first; out-of-window and undated rows stay home"
-        );
-        // One millisecond under the cutoff admits the boundary row: the
-        // millisecond-formatted string floor compares correctly at .999.
-        assert_eq!(requests_in_window(&db, cutoff - 1).unwrap().len(), 2);
     }
 }
