@@ -139,7 +139,7 @@ parent's scope and the receipt says so. Unsure? Pass `--audience ask`: the row
 stores `audience?`, one question goes to the lead with the node linked, and
 `fno backlog next` holds it until a scope lands. Never guess the audience.
 `fno backlog update <id> audience=<new>` refuses a change with no `why=` on the
-same call and appends the move to the node's `scope_history`.
+same call and appends the move to the node's `audience_history`.
 fno backlog add "title" --audience internal --why "the goal" --done-means "what done reads as" --evidence "hit this while doing something else."
 fno backlog demand                 # the divergence table
 fno backlog demand --json          # the same rows, for a groom pass or a lead
