@@ -364,6 +364,8 @@ pub enum AppView {
     Orchestration,
     /// The mods and layouts feed
     Mods,
+    /// The questions and decisions that wait on the user
+    Inbox,
 }
 
 impl AppView {
@@ -374,6 +376,7 @@ impl AppView {
             AppView::Terminal => "terminal",
             AppView::Orchestration => "orchestration",
             AppView::Mods => "mods",
+            AppView::Inbox => "inbox",
         }
     }
 }
@@ -446,6 +449,12 @@ pub struct AppShotArgs {
     /// View to render (default: the command center board)
     #[arg(long, value_enum)]
     pub mode: Option<AppView>,
+    /// Open the answer sheet on the newest question
+    #[arg(long)]
+    pub sheet: bool,
+    /// Paint with cmd held: rows and tabs show their digit badges
+    #[arg(long)]
+    pub cmd: bool,
     /// Find-bar state the frame paints over the chat view: `bar` opens
     /// the bar with a query typed; `chords` also holds the cmd hint
     #[arg(long, value_parser = ["bar", "chords"])]
