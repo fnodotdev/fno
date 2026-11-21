@@ -616,42 +616,42 @@ pub fn session_cost_usd(db: &Path, session_id: &str) -> Option<f64> {
 
 /// The `api_requests` rows inside the forward window: dated, at or after
 /// `cutoff_ms`, oldest first. Undated rows never forward, because
-/// `timeUnixNano` cannot be honest about them. A missing db reads as no
-/// rows (the receiver may never have run); a real read error names itself,
-/// so the tick row can carry it.
-pub(crate) fn requests_in_window(db: &Path, cutoff_ms: i64) -> Result<Vec<Row>, String> {
+/// `timeUnixNano` cannot be honest about them. The SQL floor carries a
+/// string cutoff (both ts columns are ISO-8601 UTC strings, so a string
+/// compare is correct, the same assumption retention deletes on); the
+/// parsed filter below stays the exact truth. A missing db reads as no
+/// rows (the receiver may never have run); a read error is the typed
+/// rusqlite error, for the tick row to name.
+pub(crate) fn requests_in_window(db: &Path, cutoff_ms: i64) -> Result<Vec<Row>, rusqlite::Error> {
     if !db.exists() {
         return Ok(Vec::new());
     }
-    let conn = Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READONLY)
-        .map_err(|e| format!("{} is unreadable: {e}", db.display()))?;
-    conn.busy_timeout(Duration::from_secs(5))
-        .map_err(|e| e.to_string())?;
-    let mut stmt = conn
-        .prepare(
-            "SELECT dedupe_key, session_id, ts, model, cost_usd_micros, input_tokens, \
-             output_tokens, cache_read_tokens, cache_creation_tokens, skill_name, \
-             plugin_name, agent_name FROM api_requests WHERE ts IS NOT NULL",
-        )
-        .map_err(|e| e.to_string())?;
-    let mapped = stmt
-        .query_map([], |r| {
-            Ok(Row {
-                dedupe_key: r.get(0)?,
-                session_id: r.get(1)?,
-                ts: r.get(2)?,
-                model: r.get(3)?,
-                cost_usd_micros: r.get(4)?,
-                input_tokens: r.get(5)?,
-                output_tokens: r.get(6)?,
-                cache_read_tokens: r.get(7)?,
-                cache_creation_tokens: r.get(8)?,
-                skill_name: r.get(9)?,
-                plugin_name: r.get(10)?,
-                agent_name: r.get(11)?,
-            })
+    let floor = chrono::DateTime::from_timestamp(cutoff_ms.div_euclid(1000), 0)
+        .map(|t| t.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
+        .unwrap_or_default();
+    let conn = Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READONLY)?;
+    conn.busy_timeout(Duration::from_secs(5))?;
+    let mut stmt = conn.prepare(
+        "SELECT dedupe_key, session_id, ts, model, cost_usd_micros, input_tokens, \
+         output_tokens, cache_read_tokens, cache_creation_tokens, skill_name, \
+         plugin_name, agent_name FROM api_requests WHERE ts IS NOT NULL AND ts >= ?1",
+    )?;
+    let mapped = stmt.query_map([&floor], |r| {
+        Ok(Row {
+            dedupe_key: r.get(0)?,
+            session_id: r.get(1)?,
+            ts: r.get(2)?,
+            model: r.get(3)?,
+            cost_usd_micros: r.get(4)?,
+            input_tokens: r.get(5)?,
+            output_tokens: r.get(6)?,
+            cache_read_tokens: r.get(7)?,
+            cache_creation_tokens: r.get(8)?,
+            skill_name: r.get(9)?,
+            plugin_name: r.get(10)?,
+            agent_name: r.get(11)?,
         })
-        .map_err(|e| e.to_string())?;
+    })?;
     let mut pending: Vec<(i64, Row)> = mapped
         .filter_map(|row| row.ok())
         .filter_map(|row| {

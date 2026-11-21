@@ -181,10 +181,10 @@ pub fn resolve(cwd: &Path) -> Resolved {
         .get("log_content")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let forward_requests = table
-        .get("forward_requests")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    let forward_requests =
+        crate::agents_config::config_lookup(cwd, &["telemetry", "otlp", "forward_requests"])
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
     let rest = endpoint
         .split_once("://")
         .map(|(_, r)| r)
@@ -740,10 +740,12 @@ pub(crate) fn run_requests_beat(
             result.status.unwrap_or(0)
         ));
     } else {
+        // The leg prefixes its hold so the shared status_line field names
+        // which source is held when both legs share one state file.
         let body_summary: String = result.body.chars().take(200).collect();
         state.held_error = Some(match result.status {
-            Some(code) => format!("status {code}: {body_summary}"),
-            None => format!("no status: {body_summary}"),
+            Some(code) => format!("api_requests: status {code}: {body_summary}"),
+            None => format!("api_requests: no status: {body_summary}"),
         });
         skip = Some("held");
         detail.push(format!(
