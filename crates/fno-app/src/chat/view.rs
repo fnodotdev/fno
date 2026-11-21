@@ -934,6 +934,24 @@ fn choice_detail(picked: Option<&Choice>, p: Palette) -> Div {
         )
 }
 
+/// A filled field, no outline. The send hint answers the key question the
+/// placeholder no longer carries, and it sends on click too. Per the badge
+/// rule, the hint shows only while cmd is held.
+fn send_button(root: &Root, p: Palette, cx: &mut Context<Root>) -> Stateful<Div> {
+    clickable("chat-send".into(), Action::SendChat, p, cx)
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .flex_none()
+        .when(root.picking, |s| {
+            s.child(ui::kbd("⏎", &p))
+                .child(ui::text("send", Role::Hint, &p))
+                .child(ui::kbd("⇧⏎", &p))
+                .child(ui::text("new line", Role::Hint, &p))
+        })
+}
+
 fn composer(root: &Root, window: &Window, cx: &mut Context<Root>) -> Option<Div> {
     let p = root.palette;
     root.chat.key.as_ref()?;
@@ -983,21 +1001,7 @@ fn composer(root: &Root, window: &Window, cx: &mut Context<Root>) -> Option<Div>
                 .size_full(),
         )
         .child(text);
-    // A filled field, no outline. The send hint answers the key question
-    // the placeholder no longer carries, and it sends on click too. Per the
-    // badge rule, the hint shows only while cmd is held.
-    let send = clickable("chat-send".into(), Action::SendChat, p, cx)
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap_1()
-        .flex_none()
-        .when(root.picking, |s| {
-            s.child(ui::kbd("⏎", &p))
-                .child(ui::text("send", Role::Hint, &p))
-                .child(ui::kbd("⇧⏎", &p))
-                .child(ui::text("new line", Role::Hint, &p))
-        });
+    let send = send_button(root, p, cx);
     let mut bar = div()
         .relative()
         .flex()
