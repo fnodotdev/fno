@@ -317,9 +317,9 @@ fn seed_torn_registry(root: &Path) {
 /// store: the reply path's parent. Its `from` names web, so the reply joins
 /// its thread addressed back to web.
 fn seed_project_thread(root: &Path) -> &'static str {
-    // The capture seeded through the real write_new_thread, which minted an
-    // fmail id; the scrubber folds that shape to fmail-HEX, so the seed mints
-    // the same shape and the receipts normalize identically.
+    // The capture mints the fmail shape directly (the same shape the durable
+    // write mints); the scrubber folds that shape to fmail-HEX, so the
+    // receipts normalize identically.
     const PARENT_ID: &str = "fmail-a1b2c3d4e5f6";
     let row = bus_row(PARENT_ID, "web", "web", "send", None, None);
     seed_bus(root, &[row.clone()]);

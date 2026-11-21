@@ -182,7 +182,6 @@ docs/changelog.md	none	internal	retire	-	0	says last updated 2026-03-31; lists t
 docs/code-index-providers.md	daily-driver	reference	move	reference/code-index-providers.md	5	provider contract for blueprint code indexes
 docs/code-standards.md	contribute	contributor	move	contributing/code-standards.md	0	coding conventions for contributors
 docs/codebase-summary.md	contribute	internal	retire	-	0	hand-kept inventory says 26 skills; skills/ has 27
-docs/comment-prose-reading-list.md	none	internal	keep	-	0	unplaced: ranked function list with no named reader and no generator found
 docs/configuration-guide.md	daily-driver	reference	move	reference/config.md	4	the full config.toml key reference; 76 KB
 docs/contributing/README.md	contribute	entry	keep	-	0	Stage 6 entry: rules, gates, and the slot rule
 docs/design-guidelines.md	contribute	contributor	move	contributing/design-guidelines.md	0	skill and agent design rules for contributors
