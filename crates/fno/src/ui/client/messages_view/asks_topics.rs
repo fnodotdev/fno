@@ -83,6 +83,94 @@ pub(crate) fn topics_of(items: &[Value]) -> Vec<Topic> {
     topics
 }
 
+/// One group of the requests board's by-topic view: the rows that name a
+/// node (one group per linked node), then the nodeless rows that share a
+/// mention, then the rest. The name is the node id or the mention itself.
+#[derive(Debug, PartialEq)]
+pub(crate) struct RequestGroup {
+    pub name: String,
+    /// Indices into the rows slice `request_groups` was given.
+    pub rows: Vec<usize>,
+}
+
+/// Group merged request rows: by linked node first (one group per node, in
+/// first-row order), then the nodeless rows by the things they mention (the
+/// same scanners `topics_of` net runs over text plus reply), spanning at
+/// least two rows; the rest land under `unmentioned`. Deterministic: node
+/// groups keep first-row order, topics sort by name, unmentioned closes.
+pub(crate) fn request_groups(rows: &[Value]) -> Vec<RequestGroup> {
+    let mut groups: Vec<RequestGroup> = Vec::new();
+    let mut grouped = vec![false; rows.len()];
+    // Linked nodes first: the ask's own node is the primary grouping.
+    for (idx, row) in rows.iter().enumerate() {
+        let node = row
+            .get("node")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty());
+        let Some(name) = node else { continue };
+        match groups.iter_mut().find(|g| g.name == name) {
+            Some(g) => g.rows.push(idx),
+            None => groups.push(RequestGroup {
+                name: name.to_string(),
+                rows: vec![idx],
+            }),
+        }
+        grouped[idx] = node.is_some();
+    }
+    // Nodeless rows: cluster by shared mention spanning two or more rows.
+    let mut net: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (idx, row) in rows.iter().enumerate() {
+        if grouped[idx] {
+            continue;
+        }
+        let mut text = row
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        text.push(' ');
+        if let Some(reply) = row.get("reply_excerpt").and_then(Value::as_str) {
+            text.push_str(reply);
+        }
+        for key in mentions(&text) {
+            net.entry(key).or_default().push(idx);
+        }
+    }
+    let topics: Vec<(String, Vec<usize>)> = net
+        .into_iter()
+        .filter(|(_, idxs)| {
+            let mut seen = Vec::new();
+            for i in idxs {
+                if !seen.contains(i) {
+                    seen.push(*i);
+                }
+            }
+            seen.len() >= 2
+        })
+        .collect();
+    for (name, idxs) in topics {
+        let rows_in_topic: Vec<usize> = idxs.iter().filter(|i| !grouped[**i]).copied().collect();
+        if rows_in_topic.is_empty() {
+            continue;
+        }
+        for i in &rows_in_topic {
+            grouped[*i] = true;
+        }
+        groups.push(RequestGroup {
+            name,
+            rows: rows_in_topic,
+        });
+    }
+    let unmentioned: Vec<usize> = (0..rows.len()).filter(|i| !grouped[*i]).collect();
+    if !unmentioned.is_empty() {
+        groups.push(RequestGroup {
+            name: "unmentioned".into(),
+            rows: unmentioned,
+        });
+    }
+    groups
+}
+
 /// Every mention in `text`, left to right, deduplicated per call site by
 /// the caller's ask-index set.
 #[allow(clippy::indexing_slicing)] // the walk bounds-checks every read (j < b.len() guards each index); the lint cannot see the guard
@@ -331,6 +419,34 @@ mod tests {
                 .expect("backtick token")
                 .asks,
             vec![1, 2]
+        );
+    }
+
+    fn row(key: &str, node: Option<&str>, text: &str, reply: &str) -> Value {
+        json!({"key": key, "node": node, "text": text, "reply_excerpt": reply})
+    }
+
+    #[test]
+    fn request_groups_nodes_first_then_shared_mentions() {
+        let rows = vec![
+            row(
+                "node:x-fe8a",
+                Some("x-fe8a"),
+                "ship the board",
+                "shipped as #483",
+            ),
+            row("ask:t1", None, "run `fno doctor test` first", ""),
+            row("ask:t2", None, "`fno doctor test` failed again", ""),
+        ];
+        let groups = super::request_groups(&rows);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].name, "x-fe8a");
+        assert_eq!(groups[0].rows, vec![0]);
+        assert_eq!(groups[1].name, "fno doctor test");
+        assert_eq!(groups[1].rows, vec![1, 2]);
+        assert!(
+            groups.iter().all(|g| g.name != "unmentioned"),
+            "no row left over"
         );
     }
 }

@@ -1249,16 +1249,17 @@ async fn hq_decisions(Query(q): Query<WsQuery>, State(st): State<AppState>) -> R
 
 async fn refresh_hq(st: AppState) {
     let inputs = model_inputs(&st).await;
-    let (fleet, questions) = tokio::join!(
+    let (fleet, questions, requests) = tokio::join!(
         crate::client::org_seats::read_fleet(),
-        crate::needs_overlay::questions_now()
+        crate::needs_overlay::questions_now(),
+        crate::requests_model::gather()
     );
     let measured_at = chrono::Utc::now().timestamp().max(0) as u64;
     let agents = layout_agents(&st.snap).unwrap_or_default();
     st.hq
         .board()
         .await
-        .record(fleet, questions, &inputs, measured_at, &agents);
+        .record(fleet, questions, requests, &inputs, measured_at, &agents);
 }
 
 /// `GET /backlog/model.json`: the whole board as JSON behind the token.
@@ -3037,9 +3038,14 @@ console.log("backlog page helpers: 18 cases ok");
         // A recorded, spent first read: the route spawns no fleet read.
         let fleet = serde_json::json!({"machines": [{"host": "u", "sessions": []}]});
         let none = backlog_model::Inputs::default();
-        hq.board()
-            .await
-            .record(Ok(fleet), Err("x".into()), &none, 1, &[]);
+        hq.board().await.record(
+            Ok(fleet),
+            Err("x".into()),
+            Err("gone".into()),
+            &none,
+            1,
+            &[],
+        );
         hq.first.set(()).unwrap();
         let state = AppState {
             tx,

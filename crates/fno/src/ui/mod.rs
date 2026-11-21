@@ -73,6 +73,8 @@ pub mod ratatui_blit;
 #[cfg(feature = "app")]
 pub mod registry_label;
 #[cfg(feature = "app")]
+pub mod requests_model;
+#[cfg(feature = "app")]
 pub mod sideline_color;
 #[cfg(feature = "app")]
 pub mod splash;

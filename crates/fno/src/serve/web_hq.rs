@@ -57,6 +57,11 @@ pub struct Board {
     next: Vec<Value>,
     /// The last backlog read failed; `next` is the last good list.
     next_error: Option<String>,
+    /// The HQ Requests rows in rank order (the fold's own sort). A failed
+    /// read keeps the last good list and names the reason.
+    requests: Vec<Value>,
+    /// The last requests read failed; `requests` is the last good list.
+    requests_error: Option<String>,
     read_at: Option<Instant>,
 }
 
@@ -103,6 +108,7 @@ impl Board {
         &mut self,
         fleet: Result<Value, String>,
         questions: Result<QuestionsFold, String>,
+        requests: Result<Vec<Value>, String>,
         backlog: &Inputs,
         measured_at: u64,
         agents: &[crate::proto::AgentRow],
@@ -136,6 +142,13 @@ impl Board {
                 (self.prs, self.prs_error) = (open_prs(backlog), None);
                 (self.next, self.next_error) = (next_nodes(backlog), None);
             }
+        }
+        match requests {
+            Ok(rows) => {
+                self.requests = rows;
+                self.requests_error = None;
+            }
+            Err(reason) => self.requests_error = Some(reason),
         }
         self.read_at = Some(now);
     }
@@ -197,6 +210,10 @@ impl Board {
     pub fn next_error(&self) -> Option<&str> {
         self.next_error.as_deref()
     }
+    /// Why the newest requests read failed, or that none has run.
+    pub fn requests_error(&self) -> Option<&str> {
+        self.requests_error.as_deref()
+    }
 
     pub fn model(&self) -> Value {
         let mut waiting = serde_json::Map::new();
@@ -212,6 +229,11 @@ impl Board {
             }
         };
         let fleet = self.fleet();
+        let topics: Vec<Value> =
+            crate::client::messages_view::asks_topics::request_groups(&self.requests)
+                .into_iter()
+                .map(|g| json!({"name": g.name, "rows": g.rows}))
+                .collect();
         let fleet_error = match (&self.failure, &self.good) {
             (Some((reason, at)), _) => {
                 json!({"reason": reason, "failed_age_s": at.elapsed().as_secs()})
@@ -227,6 +249,9 @@ impl Board {
             "seat_error": fleet.and_then(|f| f.seat_error.clone()),
             "fleet_error": fleet_error,
             "machines": self.good.as_ref().map_or_else(|| json!([]), |(_, m, _)| m.clone()),
+            "requests": json!(self.requests),
+            "requests_error": json!(self.requests_error),
+            "request_topics": json!(topics),
             "waiting": waiting,
         })
     }
@@ -667,5 +692,34 @@ mod tests {
         );
         assert_eq!(board.answered().len(), 2);
         assert_eq!(board.questions_error(), Some("needs timed out"));
+    }
+
+    #[test]
+    fn requests_keep_last_good_rows_and_name_the_reason() {
+        let mut board = Board::default();
+        let good = vec![json!({"key": "ask:t1", "rank_score": 9})];
+        board.record(
+            Err("no fleet".into()),
+            Err("q".into()),
+            Ok(good),
+            &Inputs::default(),
+            1,
+            &[],
+        );
+        assert!(board.requests_error().is_none());
+        assert_eq!(board.model()["requests"].as_array().map(Vec::len), Some(1));
+        board.record(
+            Err("no fleet".into()),
+            Err("q".into()),
+            Err("requests read timed out after 30s".into()),
+            &Inputs::default(),
+            2,
+            &[],
+        );
+        assert_eq!(board.model()["requests"].as_array().map(Vec::len), Some(1));
+        assert_eq!(
+            board.model()["requests_error"].as_str(),
+            Some("requests read timed out after 30s")
+        );
     }
 }

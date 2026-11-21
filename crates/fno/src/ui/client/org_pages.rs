@@ -204,12 +204,21 @@ pub(crate) fn seat(m: &Machine, p: &Lead, s: &Seat, width: usize, now: u64) -> V
     out
 }
 
-pub(crate) fn feed(fold: Option<&crate::needs_overlay::QuestionsFold>, width: usize) -> Vec<Line> {
+pub(crate) fn feed(
+    fold: Option<&crate::needs_overlay::QuestionsFold>,
+    requests: Option<&[serde_json::Value]>,
+    error: Option<&str>,
+    grouped: bool,
+    width: usize,
+) -> Vec<Line> {
     let mut out = vec![
         Lb::default().s(" fleet / the user", TextStyle::Meta).done(),
         blank(),
-        Lb::default().s(" Human requests", TextStyle::Title).done(),
+        Lb::default().s(" Your requests", TextStyle::Title).done(),
     ];
+    out.extend(requests_section(requests, error, grouped, width));
+    out.push(blank());
+    out.push(Lb::default().s(" Human requests", TextStyle::Title).done());
     match fold {
         None => out.push(meta("   questions not read yet")),
         Some(f) if f.items.is_empty() => out.push(meta("   no open question")),
@@ -253,6 +262,104 @@ pub(crate) fn feed(fold: Option<&crate::needs_overlay::QuestionsFold>, width: us
         " Viewing is not approval. Rule on the question board.",
     ));
     out
+}
+
+/// The HQ Requests rows above the questions: rank order, or the by-topic
+/// groups, each row with its ask count, dates, node state and flag.
+pub(crate) fn requests_section(
+    requests: Option<&[serde_json::Value]>,
+    error: Option<&str>,
+    grouped: bool,
+    width: usize,
+) -> Vec<Line> {
+    let Some(rows) = requests else {
+        return vec![meta("   requests not read yet")];
+    };
+    let mut out = Vec::new();
+    if rows.is_empty() {
+        out.push(meta(match error {
+            Some(e) => format!("   requests not read: {e}"),
+            None => "   no asks recorded yet".to_string(),
+        }));
+        return out;
+    }
+    if grouped {
+        for g in crate::client::messages_view::asks_topics::request_groups(rows) {
+            let n = g.rows.len();
+            let s = if n == 1 { "" } else { "s" };
+            out.push(kv(&g.name, format!("{n} ask{s}"), TextStyle::Item));
+            for i in &g.rows {
+                if let Some(r) = rows.get(*i) {
+                    out.extend(request_row_lines(r, width));
+                }
+            }
+        }
+    } else {
+        for r in rows {
+            out.extend(request_row_lines(r, width));
+        }
+    }
+    if let Some(e) = error {
+        out.push(meta(format!(
+            "   last read failed: {e}; showing the last good rows"
+        )));
+    }
+    out.push(meta(
+        "   ranked by asks x days unaddressed | t groups by topic",
+    ));
+    out
+}
+
+/// One row: the ask text with its flag, then a dim line with the count,
+/// node state, dates and the reply excerpt.
+fn request_row_lines(r: &serde_json::Value, width: usize) -> Vec<Line> {
+    let text = r
+        .get("text")
+        .and_then(|v| v.as_str())
+        .unwrap_or("(empty ask)");
+    let ask_count = r.get("ask_count").and_then(|v| v.as_u64()).unwrap_or(1);
+    let node = r.get("node").and_then(|v| v.as_str()).unwrap_or("no node");
+    let status = r.get("node_status").and_then(|v| v.as_str());
+    let node_word = match status {
+        Some(s) => format!("{node} ({s})"),
+        None => node.to_string(),
+    };
+    let state = r.get("state").and_then(|v| v.as_str()).unwrap_or("");
+    let flagged = matches!(state, "no_node" | "stalled" | "regression");
+    let flag = if flagged {
+        format!("[{state}] ")
+    } else {
+        String::new()
+    };
+    let first = r.get("first_ts").and_then(|v| v.as_str()).unwrap_or("");
+    let last = r.get("last_ts").and_then(|v| v.as_str()).unwrap_or("");
+    let dates = if first.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "{} -> {}",
+            first.get(0..10).unwrap_or(first),
+            last.get(0..10).unwrap_or(last)
+        )
+    };
+    let reply = r
+        .get("reply_excerpt")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let meta_word = [format!("asked {ask_count}x"), node_word, dates].join(" | ");
+    let mut head = Lb::default().s(format!("  {flag}"), TextStyle::Meta);
+    head = head.s(
+        fit(text, width.saturating_sub(flag.chars().count() + 4))
+            .trim_end()
+            .to_string(),
+        TextStyle::Item,
+    );
+    let mut out2 = vec![head.done()];
+    out2.push(meta(format!("      {meta_word}")));
+    if !reply.is_empty() {
+        out2.push(meta(format!("      reply: {reply}")));
+    }
+    out2
 }
 
 pub(crate) fn system(fleet: &Fleet, width: usize) -> Vec<Line> {

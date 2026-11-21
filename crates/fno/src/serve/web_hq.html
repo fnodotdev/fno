@@ -69,6 +69,7 @@ body[data-density="compact"] .wrap{gap:6px;padding-top:6px}body[data-density="co
       <div class="hint">Hover to fire · click for details · drag to pan · scroll to zoom</div>
       <div class="tip" id="tip"></div>
     </section>
+    <section class="panel" aria-label="Requests"><h2>Requests <button id="req-topics" class="chip" aria-pressed="false">by topic</button></h2><div id="requests"></div></section>
     <section class="panel" aria-label="Waiting on you"><h2>Waiting on you</h2><div id="waiting"></div></section>
   </div>
   <section class="tablewrap" id="view-table" hidden aria-label="Seats">
@@ -143,6 +144,41 @@ function banners(model) {
   if (e && model.machines.length) add("fleet read failed " + ago(e.failed_age_s) + " ago: " + e.reason + "; showing the read from " + ago(model.age_s) + " ago");
   if (model.notice) add(model.notice);
   if (model.seat_error) add(model.seat_error);
+}
+
+let reqTopics = false;
+function requests(model) {
+  const box = document.getElementById("requests");
+  box.replaceChildren();
+  const btn = document.getElementById("req-topics");
+  btn.onclick = () => { reqTopics = !reqTopics; btn.setAttribute("aria-pressed", String(reqTopics)); requests(model); };
+  if (model.requests_error && !(model.requests || []).length) box.append(el("p", "empty", "requests not read: " + model.requests_error));
+  const rows = model.requests || [];
+  if (!reqTopics) {
+    for (const r of rows) box.append(reqRow(r));
+    if (!rows.length && !model.requests_error) box.append(el("p", "empty", "No asks recorded yet"));
+    return;
+  }
+  for (const g of model.request_topics || []) {
+    box.append(el("h3", null, g.name + " (" + g.rows.length + ")"));
+    for (const i of g.rows) { const r = rows[i]; if (r) box.append(reqRow(r)); }
+  }
+}
+function reqRow(r) {
+  const r0 = el("div", "lk qrow"), t = el("span", "lt");
+  r0.dataset.fno = "request_row";
+  t.append(el("b", null, r.text || "(empty ask)"));
+  const flag = ["no_node", "stalled", "regression"].includes(r.state);
+  const flagtxt = (r.state === "regression") ? "REGRESSION" : r.state;
+  const meta = [
+    "asked " + r.ask_count + "x",
+    r.node ? r.node + (r.node_status ? " (" + r.node_status + ")" : "") : "no node",
+    r.first_ts ? r.first_ts.slice(0, 10) + " -> " + r.last_ts.slice(0, 10) : "",
+    flag ? "[" + flagtxt + "]" : "",
+    r.reply_excerpt ? "reply: " + r.reply_excerpt : "",
+  ].filter(Boolean).join(" | ");
+  t.append(el("code", null, meta));
+  return r0;
 }
 
 function waiting(model) {
@@ -826,7 +862,7 @@ async function load() {
   const model = await res.json();
   canAnswer = model.writable === true;
   lastModel = model;
-  header(model); banners(model); waiting(model); machines(model); seats(model);
+  header(model); banners(model); requests(model); waiting(model); machines(model); seats(model);
   // A /hq?question=<id> link opens that card once, after the first read.
   if (wantQuestion) {
     const id = wantQuestion;

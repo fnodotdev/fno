@@ -1584,8 +1584,16 @@ TR_B="$ROOT/transcript-answered.jsonl"
   printf '%s\n' "{\"type\":\"assistant\",\"timestamp\":\"${TS_BASE}:01.000Z\",\"message\":{\"role\":\"assistant\",\"content\":\"landed in #4621; both asks share the mention\"},\"stop_reason\":\"end_turn\"}"
 } > "$TR_B"
 printf '{"transcript": "%s"}\n' "$TR_A" > "$CAPTURE/aaa11111-1111-4aaa-9aaa-aaaaaaaaaaa1.scan.json"
-printf '{"transcript": "%s"}\n' "$TR_B" > "$CAPTURE/bbb22222-2222-4bbb-9bbb-bbbbbbbbbb2.scan.json"
-touch "$TR_A" "$TR_B"
+TR_C="$ROOT/transcript-board-ask.jsonl"
+printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"${TS_BASE}:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"ship the requests board on the hq page and the mux this week\"}}" > "$TR_C"
+TR_D="$ROOT/transcript-board-node.jsonl"
+{
+  printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"${TS_BASE}:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"what blocks ${IDS[0]} on the requests board\"}}"
+  printf '%s\n' "{\"type\":\"assistant\",\"timestamp\":\"${TS_BASE}:01.000Z\",\"message\":{\"role\":\"assistant\",\"content\":\"the fold landed in #483; the board paints this week\"},\"stop_reason\":\"end_turn\"}"
+} > "$TR_D"
+printf '{"transcript": "%s"}\n' "$TR_C" > "$CAPTURE/ccc33333-3333-4ccc-9ccc-ccccccccccc3.scan.json"
+printf '{"transcript": "%s"}\n' "$TR_D" > "$CAPTURE/ddd44444-4444-4ddd-9ddd-ddddddddddd4.scan.json"
+touch "$TR_A" "$TR_B" "$TR_C" "$TR_D"
 
 sleep 6
 
