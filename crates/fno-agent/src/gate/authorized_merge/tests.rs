@@ -2346,6 +2346,37 @@ fn docs_line_missing_holds_merge_and_passes_with_a_docs_line() {
     );
 }
 
+/// A graph-seeding test's hermetic env. The graph anchor ignores cwd and
+/// resolves through FNO_HOME, so an unpinned store would land in the real
+/// home; pin it (and the claims root the bound-node lookup transitively
+/// resolves) for the life of the test, under the shared env lock so
+/// parallel tests cannot race the mutation.
+struct GraphEnvRestore(Option<std::ffi::OsString>, Option<std::ffi::OsString>);
+impl Drop for GraphEnvRestore {
+    fn drop(&mut self) {
+        match self.0.take() {
+            Some(v) => std::env::set_var("FNO_SPACES_DIR", v),
+            None => std::env::remove_var("FNO_SPACES_DIR"),
+        }
+        match self.1.take() {
+            Some(v) => std::env::set_var("FNO_HOME", v),
+            None => std::env::remove_var("FNO_HOME"),
+        }
+    }
+}
+
+fn pin_graph_env(tmp: &Path) -> (std::sync::MutexGuard<'static, ()>, GraphEnvRestore) {
+    let lock = crate::pr_status::cache_env_lock();
+    let spaces = std::env::temp_dir().join(format!("x17ee-spaces-{}", std::process::id()));
+    std::fs::create_dir_all(&spaces).unwrap();
+    crate::paths::pin_test_claims_root(&spaces);
+    let prior_spaces = std::env::var_os("FNO_SPACES_DIR");
+    std::env::set_var("FNO_SPACES_DIR", &spaces);
+    let prior_home = std::env::var_os("FNO_HOME");
+    std::env::set_var("FNO_HOME", tmp);
+    (lock, GraphEnvRestore(prior_spaces, prior_home))
+}
+
 #[test]
 fn a_main_repair_tagged_node_exempts_its_pr_even_when_a_light_row_shadows_it() {
     // The live refusal (2026-11-21): the slice's light projection precedes
@@ -2354,6 +2385,8 @@ fn a_main_repair_tagged_node_exempts_its_pr_even_when_a_light_row_shadows_it() {
     // tags on the node, pr_number set, primary_pr null, and the Fixes line
     // as the last body line.
     let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join(".fno")).unwrap();
+    let (_env_lock, _env) = pin_graph_env(tmp.path());
     crate::graph_store::seed_rows(
         &crate::org_board::scope::graph_json_path(&tmp),
         &[json!({
@@ -2383,6 +2416,8 @@ fn the_main_repair_hold_still_names_the_declared_lane_for_an_untagged_pr() {
     // repair. An untagged PR bound beside a tagged lane still holds, and the
     // sentence names the lane.
     let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join(".fno")).unwrap();
+    let (_env_lock, _env) = pin_graph_env(tmp.path());
     crate::graph_store::seed_rows(
         &crate::org_board::scope::graph_json_path(&tmp),
         &[
