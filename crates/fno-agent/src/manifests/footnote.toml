@@ -7,7 +7,12 @@
 # WHAT WAS READ, in fnh src/tui/view.rs and src/tui/app.rs:
 #
 #   ask band    " allow {title}?  [y] yes  [n] no", drawn only while an ask
-#               is up, in the band directly above the status line.
+#               is up, in the band directly above the status line. fnh also
+#               draws " allow {title}?  [y] yes  [a] Always allow {x}  [n] no"
+#               when an always-allow offer exists, and its redesigned consent
+#               band (fn-f728 src/tui/view.rs consent_band) draws " {title}"
+#               / " Do you want to proceed?" / numbered options
+#               " ❯ {n}. {label}", the ❯ sitting on the SELECTED option.
 #   busy line   "Churning… {n}s  (esc to interrupt)", drawn only while a
 #               turn runs; the ellipsis is U+2026 and the count moves every
 #               second.
@@ -32,10 +37,14 @@ id = "permission_ask"
 state = "blocked"
 priority = 960
 region = "bottom_non_empty_lines(8)"
-# The band pads to the pane width, so the line starts with the band's own
-# space and the y/n grammar ends it. No `$` anchor: the band's trailing
-# padding is width-dependent.
-gate = { line_regex = '^\s*allow .*\?\s+\[y\] yes\s+\[n\] no' }
+# Two band families block; either suffices. The old band pads to the pane
+# width and ends in the y/n grammar (the [a] segment sits between yes and
+# no). The consent band needs BOTH rows in the same bottom-eight-line
+# region: the question line alone is text a model reply can print. The
+# caret marks the selected option (fn-f728 view.rs:907), so the option row
+# is matched by its drawn grammar (space, caret or blank, space, digits,
+# ". "), never by the literal "❯ 1. Yes". No `$` anchor: bands pad.
+gate = { any = [ { line_regex = '^\s*allow .*\?\s+\[y\] yes(?:\s+\[a\] .*?)?\s+\[n\] no' }, { all = [ { line_regex = '^\s*Do you want to proceed\?' }, { line_regex = '^\s*[❯ ] [0-9]+\. ' } ] } ] }
 
 [[rule]]
 id = "working_status"
