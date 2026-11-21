@@ -168,8 +168,8 @@ pub(crate) fn hosted_read(
     match args.as_slice() {
         ["fno", "backlog", "get", id] | ["fno", "backlog", "get", id, "--json"] => rows
             .iter()
-            .filter(ours)
             .find(|r| r.id() == Some(*id))
+            .filter(ours)
             .map(NodeRow::to_value),
         ["fno", "backlog", "list"] | ["fno", "backlog", "list", "--json"] => {
             let found: Vec<Value> = rows.iter().filter(ours).map(NodeRow::to_value).collect();
@@ -304,7 +304,11 @@ pub(crate) fn set_look(
 fn write_doc(dir: &Path, path: &Path, doc: &Doc) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     let body = serde_json::to_vec_pretty(doc).map_err(std::io::Error::other)?;
-    let tmp = path.with_extension(format!("json.tmp-{}", std::process::id()));
+    // One bridge process can run two writes at once, so the pid alone does
+    // not make the temp name unique.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = path.with_extension(format!("json.tmp-{}-{seq}", std::process::id()));
     std::fs::write(&tmp, body)?;
     std::fs::rename(&tmp, path)
 }
