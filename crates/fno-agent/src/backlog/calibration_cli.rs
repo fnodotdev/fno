@@ -419,7 +419,8 @@ fn run_by_lane(
                 c["lead_title"].as_str().unwrap_or_default(),
                 c["nodes"].as_i64().unwrap_or(0),
                 c["merged"].as_i64().unwrap_or(0),
-                c["spend_usd"].as_f64()
+                c["spend_usd"]
+                    .as_f64()
                     .map(|f| format!("{f:.2}"))
                     .unwrap_or_else(|| "n/a".to_string()),
                 if c["spend_measured"].as_bool().unwrap_or(false) {
@@ -429,7 +430,11 @@ fn run_by_lane(
                 },
                 c["holders"]
                     .as_array()
-                    .map(|hs| hs.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", "))
+                    .map(|hs| hs
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", "))
                     .unwrap_or_default(),
             );
         }
