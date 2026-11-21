@@ -2,11 +2,11 @@
 //!
 //! Mail an outage bypassed (sent over the harness's native cross-session
 //! transport while `fno mail send` was down) goes back into the bus log as
-//! durable rows that never re-deliver. The whole engine lives here once and
-//! Python keeps one thin transport (`fno agent mail backfill` resolves the
-//! window and the paths, then runs the command): the transcript scan, the
-//! sender/receiver join, the deterministic archive id (the idempotency
-//! key), the envelope assembly, and the write through the bus-append door.
+//! durable rows that never re-deliver. The whole engine lives here once:
+//! the transcript scan, the sender/receiver join, the deterministic
+//! archive id (the idempotency key), the envelope assembly, and the write
+//! through the bus-append door. `fno mail admin backfill` is the front
+//! door; this module owns every decision the command makes.
 //!
 //! Contract: provenance is the point. A send without a row uuid has no
 //! stable id and is skipped loud, never half-attributed; an id already in
@@ -78,13 +78,17 @@ fn parse_blocks(text: &str) -> Vec<serde_json::Value> {
 }
 
 /// Entry: `run` only. The one public shape is the JSON summary line; an
-/// unknown subcommand refuses loud on stderr with exit 2. The msgid/block/
-/// row plumbing was transport-era and retired in this port: the engine
-/// calls the same bodies directly.
+/// unknown subcommand refuses loud on stderr with exit 2.
 pub fn run_mail_backfill(args: &[String]) -> i32 {
     let sub = args.first().map(String::as_str).unwrap_or("");
     match sub {
-        "run" => run_backfill(&args[1.min(args.len())..]),
+        "run" => match backfill_summary(&args[1.min(args.len())..]) {
+            Ok(summary) => {
+                println!("{summary}");
+                0
+            }
+            Err(code) => code,
+        },
         other => {
             eprintln!("mail-backfill: unknown subcommand {other:?} (expected run)");
             2
@@ -94,8 +98,7 @@ pub fn run_mail_backfill(args: &[String]) -> i32 {
 
 // ---------------------------------------------------------------------------
 // The scan-and-write engine (`run`): the transcript scan, the sender-side
-// join, and the durable write through the bus-append door. Python keeps the
-// CLI transport only.
+// join, and the durable write through the bus-append door.
 // ---------------------------------------------------------------------------
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -328,8 +331,9 @@ fn join(sends: &[SendRow], blocks: &[BlockRow]) -> (Vec<(usize, usize)>, usize) 
 
 /// The whole engine: scan roots, window-filter the sender side, join, and
 /// (with --apply) write each joined pair as an audit-only envelope through
-/// the bus-append door. Prints one JSON summary line.
-fn run_backfill(args: &[String]) -> i32 {
+/// the bus-append door. Returns the JSON summary line; Err carries the exit
+/// code of a refusal (2) or a failed write (1), with the reason on stderr.
+fn backfill_summary(args: &[String]) -> Result<Value, i32> {
     let mut since = String::new();
     let mut until = String::new();
     let mut live = String::new();
@@ -362,7 +366,7 @@ fn run_backfill(args: &[String]) -> i32 {
                     Some(v) if !v.starts_with("--") => roots.push(v.clone()),
                     _ => {
                         eprintln!("mail-backfill run: --root needs a path");
-                        return 2;
+                        return Err(2);
                     }
                 }
                 i += 2;
@@ -373,13 +377,13 @@ fn run_backfill(args: &[String]) -> i32 {
             }
             other => {
                 eprintln!("mail-backfill run: unknown argument {other}");
-                return 2;
+                return Err(2);
             }
         }
     }
     if all && (!since.is_empty() || !until.is_empty()) {
         eprintln!("mail-backfill run: --all scans every transcript; drop --since/--until");
-        return 2;
+        return Err(2);
     }
     let (since_e, until_e) = if all {
         // No window: the bounds open wide so the mtime prefilter and the
@@ -401,12 +405,12 @@ fn run_backfill(args: &[String]) -> i32 {
                 Ok(u) => (s, u),
                 Err(e) => {
                     eprintln!("mail-backfill run: {e}");
-                    return 2;
+                    return Err(2);
                 }
             },
             Err(e) => {
                 eprintln!("mail-backfill run: {e}");
-                return 2;
+                return Err(2);
             }
         }
     };
@@ -477,7 +481,7 @@ fn run_backfill(args: &[String]) -> i32 {
                 Ok(false) => {}
                 Err(e) => {
                     eprintln!("mail-backfill run: {e}");
-                    return 1;
+                    return Err(1);
                 }
             }
         }
@@ -495,17 +499,13 @@ fn run_backfill(args: &[String]) -> i32 {
     // the count and `rows` only a sample head, with the cut named.
     let truncated = rows_out.len().saturating_sub(DRY_ROWS_SAMPLE);
     rows_out.truncate(DRY_ROWS_SAMPLE);
-    println!(
-        "{}",
-        json!({
-            "written": written,
-            "joined": pairs.len(),
-            "skipped": skipped,
-            "rows_truncated": truncated,
-            "rows": rows_out,
-        })
-    );
-    0
+    Ok(json!({
+        "written": written,
+        "joined": pairs.len(),
+        "skipped": skipped,
+        "rows_truncated": truncated,
+        "rows": rows_out,
+    }))
 }
 
 /// Write one joined pair: derive the archive id, skip an id already in the
@@ -640,20 +640,22 @@ mod engine_tests {
         std::fs::write(proj.join("sender.jsonl"), format!("{send_line}\n")).unwrap();
         std::fs::write(proj.join("receiver.jsonl"), format!("{block_line}\n")).unwrap();
         let root_s = root.to_string_lossy().to_string();
-        let out = run_mail_backfill(&[
-            "run".into(),
-            "--all".into(),
-            "--root".into(),
-            root_s.clone(),
-        ]);
-        assert_eq!(out, 0, "--all dry run joins the pair outside any window");
-        let refused = run_mail_backfill(&[
-            "run".into(),
+        let summary = backfill_summary(&["--all".into(), "--root".into(), root_s.clone()])
+            .expect("--all dry run joins the pair outside any window");
+        assert_eq!(summary["joined"], 1, "{summary}");
+        assert_eq!(summary["written"], 0, "{summary}");
+        assert_eq!(summary["rows_truncated"], 0, "{summary}");
+        assert_eq!(
+            summary["rows"].as_array().map(Vec::len),
+            Some(1),
+            "{summary}"
+        );
+        let refused = backfill_summary(&[
             "--all".into(),
             "--since".into(),
             "2026-05-01T00:00:00Z".into(),
         ]);
-        assert_eq!(refused, 2, "--all with a window refuses");
+        assert_eq!(refused.unwrap_err(), 2, "--all with a window refuses");
         let _ = std::fs::remove_dir_all(&root);
     }
 }
