@@ -242,7 +242,9 @@ pub(crate) fn derive_ctx(rows: &[Value]) -> DeriveCtx {
     let owners = crate::paths::AgentsHome::from_env_opt().and_then(|home| {
         let projects =
             crate::org_board::scope::project_map(&std::env::current_dir().unwrap_or_default());
-        crate::territory::owner_read(&home.registry_json(), rows, &projects).ok()
+        crate::territory::owner_read(&home.registry_json(), rows, &projects)
+            .ok()
+            .map(|(map, _live_scopes)| map)
     });
     let titles = crate::paths::AgentsHome::from_env_opt().and_then(|home| {
         crate::team_names::live_titles(&home.team_names_json(), &home.registry_json()).ok()
