@@ -769,7 +769,9 @@ fn plan(mut rows: Vec<Value>, req: &PatchRequest) -> Result<Planned, PatchRefusa
     // derived normalization: the scoping gate compares the stored pre-image,
     // not the derived one a ready-rung node already reads.
     let idx = resolve_index(&rows, &req.node)?;
-    let stored_status_before = crate::backlog::question_intake::str_field(&rows[idx], "status")
+    let stored_status_before = rows
+        .get(idx)
+        .and_then(|row| crate::backlog::question_intake::str_field(row, "status"))
         .unwrap_or("")
         .to_string();
     // Normalize the pre-image: the door's old-vs-new verdicts and
@@ -882,10 +884,10 @@ fn plan(mut rows: Vec<Value>, req: &PatchRequest) -> Result<Planned, PatchRefusa
         && stored_status_before != "ready"
         && container_children_summary(&rows, &id).is_none()
     {
-        if let Some(msg) =
-            crate::backlog::audience::scoping_refusal(&rows[idx], "the move to ready")
-        {
-            return Err(PatchRefusal::refused(format!("refused: {msg}")));
+        if let Some(row) = rows.get(idx) {
+            if let Some(msg) = crate::backlog::audience::scoping_refusal(row, "the move to ready") {
+                return Err(PatchRefusal::refused(format!("refused: {msg}")));
+            }
         }
     }
 

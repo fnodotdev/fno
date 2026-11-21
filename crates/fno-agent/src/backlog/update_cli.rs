@@ -1318,14 +1318,19 @@ fn plan_mutation(
     // takes ordinary writes ungated, and containers stay exempt: their ready
     // comes from the children rollup, never from a scoping fact of their own.
     let old_status_ready =
-        crate::backlog::question_intake::str_field(&node, "status") == Some("ready");
-    let new_status = crate::backlog::question_intake::str_field(&rows[idx], "status").unwrap_or("");
+        RowFacts::of(&node).and_then(|facts| facts.status().as_str()) == Some("ready");
+    let new_status = rows
+        .get(idx)
+        .and_then(RowFacts::of)
+        .and_then(|facts| facts.status().as_str())
+        .unwrap_or("");
     if new_status == "ready"
         && !old_status_ready
         && super::patch::container_children_summary(&rows, &node_id).is_none()
     {
-        if let Some(msg) =
-            crate::backlog::audience::scoping_refusal(&rows[idx], "the move to ready")
+        if let Some(msg) = rows
+            .get(idx)
+            .and_then(|row| crate::backlog::audience::scoping_refusal(row, "the move to ready"))
         {
             return Err(refused(format!("Error: {msg}"), 1));
         }
