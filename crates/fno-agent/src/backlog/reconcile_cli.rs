@@ -3326,7 +3326,9 @@ mod tests {
             })
         };
         let records = scan_merge_drift(&entries, None, None, stub_query);
-        assert_eq!(records.len(), 2);
+        // Only the MERGED PR is drift; the CLOSED-PR control produces no
+        // record at all, which is exactly why the sweep can never close it.
+        assert_eq!(records.len(), 1, "{records:?}");
         let sweep = partition_and_probe(records, &entries, false, false);
         assert_eq!(
             sweep.closeable.len(),
@@ -3334,12 +3336,13 @@ mod tests {
             "closeable should hold only the merged node"
         );
         assert_eq!(
-            sweep.closed_unmerged.len(),
-            1,
-            "closed_unmerged should hold only the closed-PR control"
+            sweep.closeable.first().map(|r| r.node_id.as_str()),
+            Some("x-aaaa001")
         );
-        assert_eq!(sweep.closeable[0].node_id, "x-aaaa001");
-        assert_eq!(sweep.closed_unmerged[0].node_id, "x-bbbb002");
+        assert!(
+            sweep.closed_unmerged.is_empty(),
+            "a CLOSED PR is not drift; the partition stays empty"
+        );
 
         let result = std::cell::RefCell::new(CloseResult {
             actually_closed: Vec::new(),
@@ -3432,8 +3435,10 @@ mod tests {
             let exe = std::env::current_exe().expect("test exe");
             Command::new(exe)
                 .args([
+                    // A substring filter, not --exact: the harness matches
+                    // the full module path, and the bare name is a suffix of
+                    // it, so --exact would run zero tests and exit 0.
                     "a_killed_worker_leaves_its_detached_close_leg_alive",
-                    "--exact",
                     "--nocapture",
                 ])
                 .env("FNO_TEST_LEG_WORKER", "1")

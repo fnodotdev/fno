@@ -297,6 +297,10 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_TEST_FOOTPRINT_PAYLOAD` | rs | Test seam: when set, the spawn gate's footprint probe returns this payload verbatim, so gate tests pin the CPU axis instead of reading the live machine. |
 | `FNO_TEST_FOOTPRINT_PAYLOAD_SEQ` | rs | Test seam: newline-separated footprint probe results consumed once per read; `ERR <message>` simulates probe failure, and the last line sticks so gate tests can verify retries and sample counts. |
 | `FNO_TEST_FULL` | rs | The whole-suite lane mark: the guard reads it typed on the command, and the test-run door stamps it into a whole run's cargo env, so its slot asks queue instead of try-locking. |
+| `FNO_TEST_LEG_DETACHED` | rs | Test seam: the kill-window test's worker child reads it to pick the detached (1) or attached (0) close leg; the detach arm must survive the worker's group kill, the withhold arm must not. |
+| `FNO_TEST_LEG_MARKERS` | rs | Test seam: directory the kill-window test's leg stub writes its started, release, leg-pid and done markers into. |
+| `FNO_TEST_LEG_STUB` | rs | Test seam: path of the stub script the kill-window test's worker child spawns as the close leg through `FNO_BIN`. |
+| `FNO_TEST_LEG_WORKER` | rs | Test seam: presence re-invokes the kill-window test binary as the worker child that spawns the leg, then dies to its own group kill one second in. |
 | `FNO_TEST_HERMETIC` | rs | unclear: crates/fno/src/events/event_hermetic.rs:62 |
 | `FNO_TEST_JOURNAL` | rs | Test seam: the global events journal the worktree overlap record and report ops read and write, so the parity goldens never touch the real state root. |
 | `FNO_TEST_LAUNCHD_SUFFIX` | rs | Test seam: pins the HOME-derived launchd label suffix the derivation returns (`launchd_labels.rs` and its `setup_services.rs` twin), so the parity goldens and receipts stay machine-independent. Production code never sets it. |
