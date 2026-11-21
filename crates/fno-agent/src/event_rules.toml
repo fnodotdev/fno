@@ -9,7 +9,8 @@
 # `lead_or_user_turn` widens the lead gate: any session the user typed
 # into this turn (a witnessed Enter) owes its chat ask to the board too,
 # whether or not it holds a team. A dispatched worker has neither a team
-# nor a witnessed Enter, so the rule still passes it by.
+# nor a witnessed Enter, so the rule still passes it by. The ask test
+# leads the list so a plain status stop never reads the witness journal.
 [[rule]]
 id = "chat_ask_unfiled"
 action = "block"
@@ -19,7 +20,7 @@ instead = "fno inbox outstanding ask --question-file q.md --node <node>"
 default = true
 [rule.when]
 events = ["stop"]
-predicates = ["lead_or_user_turn", "last_message_decision_ask", "not:turn_filed_question"]
+predicates = ["last_message_decision_ask", "lead_or_user_turn", "not:turn_filed_question"]
 
 [[rule]]
 id = "chat_ask_unfiled_worker"
