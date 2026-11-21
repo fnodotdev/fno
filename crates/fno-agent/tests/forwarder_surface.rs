@@ -1,12 +1,13 @@
-//! The api_requests forwarder at its real boundary: the resolved posture,
-//! the read-only window over the otel store, and the beat's delivery rule
+//! The forwarder legs at their real boundary: the resolved posture, the
+//! read-only window over the otel store, and each beat's delivery rule
 //! against an injected poster. These drive eval modules from outside the
 //! G3 scope, which docs/test-audit/scopes.tsv counts in their own scope
 //! (G3 keeps cap 0; this file's path matches no G3 row and lands in G2).
 
 use fno_agent::attention_http::{HttpPost, PostResult};
 use fno_agent::eval::otel_ingest::requests_in_window;
-use fno_agent::eval::otlp_export::{resolve, run_requests_beat, OtlpConfig, Resolved};
+use fno_agent::eval::otlp_export::{resolve, run_beat, run_requests_beat, OtlpConfig, Resolved};
+use fno_agent::feed::FeedRow;
 use fno_agent::paths::AgentsHome;
 use rusqlite::Connection;
 use serde::Deserialize;
@@ -298,6 +299,30 @@ fn a_hold_keeps_rows_pending_and_names_the_leg() {
         held.starts_with("api_requests:"),
         "the hold names its leg: {held}"
     );
+}
+
+/// A held feed beat names its leg in the shared held_error the same way,
+/// so status_line attributes the hold when both legs share one state file.
+#[test]
+fn a_held_feed_beat_names_its_leg() {
+    let (_tmp, home) = home("fwd-feed-hold");
+    let now = cutoff_ms() + 3600 * 1000;
+    let rows = vec![FeedRow {
+        ts: "2026-11-20T11:00:00Z".to_string(),
+        ..Default::default()
+    }];
+    let mut poster = Stub {
+        status: None,
+        bodies: Vec::new(),
+    };
+    let report = run_beat(&cfg(), &home, rows, &mut poster, now);
+    assert_eq!(report.acted, 0);
+    let state = state_json(&home);
+    let held = state
+        .pointer("/held_error")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(held.starts_with("feed:"), "the hold names its leg: {held}");
 }
 
 /// The receipt names its scope and record count, so an operator reading

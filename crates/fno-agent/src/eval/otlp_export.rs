@@ -542,7 +542,7 @@ fn select_pending<'a>(
 /// retries next beat; a permanent 4xx drops the rows (never retried); a 2xx
 /// records delivered. Undated rows never ship: `timeUnixNano` cannot lie
 /// about them. Selection is `select_pending`, shared with `preview`.
-pub(crate) fn run_beat(
+pub fn run_beat(
     cfg: &OtlpConfig,
     home: &crate::paths::AgentsHome,
     rows: Vec<FeedRow>,
@@ -602,10 +602,12 @@ pub(crate) fn run_beat(
             result.status.unwrap_or(0)
         ));
     } else {
+        // The leg prefixes its hold so the shared status_line field names
+        // which source is held when both legs share one state file.
         let body_summary: String = result.body.chars().take(200).collect();
         state.held_error = Some(match result.status {
-            Some(code) => format!("status {code}: {body_summary}"),
-            None => format!("no status: {body_summary}"),
+            Some(code) => format!("feed: status {code}: {body_summary}"),
+            None => format!("feed: no status: {body_summary}"),
         });
         skip = Some("held");
         detail.push(format!("otlp: held {} record(s) for retry", pending.len()));
