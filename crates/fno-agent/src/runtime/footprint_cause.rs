@@ -33,10 +33,11 @@ pub(crate) const SUSTAINED_CPU_CAPACITY_FRACTION: f64 = 0.1;
 /// The roster explains the daemon itself beside the live rows.
 pub(crate) const DAEMON_ALLOWANCE: u64 = 1;
 /// Exit codes. Capacity keeps 3 (readers depend on it); the leak alarm owns
-/// 5 so `echo $?` answers WHICH alarm fired.
+/// 5 so `echo $?` answers WHICH alarm fired; the spawn-rate alarm owns 7.
 pub(crate) const EXIT_CAPACITY_OVER: i32 = 3;
 pub(crate) const EXIT_LEAK: i32 = 5;
 pub(crate) const EXIT_UNAVAILABLE: i32 = 4;
+pub(crate) const EXIT_SPAWN_RATE_ALARM: i32 = 7;
 
 /// argv[0] basenames that are a test runner on their own.
 const TEST_RUNNER_NAMES: &[&str] = &["pytest", "py.test"];
@@ -2139,6 +2140,187 @@ pub fn footprint_command(json_output: bool, cause_only: bool) -> i32 {
     exit_code
 }
 
+// ---------------------------------------------------------------------------
+// Spawn-rate reading (x-302a): the axis the sustained-CPU meter cannot see
+// ---------------------------------------------------------------------------
+
+/// The two-sample window: default, bounds. The reading sleeps between two
+/// process-table reads, so it is a doctor-shaped one-shot, never a gate read.
+pub(crate) const SPAWN_RATE_WINDOW_DEFAULT_S: u64 = 3;
+pub(crate) const SPAWN_RATE_WINDOW_MIN_S: u64 = 1;
+pub(crate) const SPAWN_RATE_WINDOW_MAX_S: u64 = 30;
+/// The machine-wide alarm, in new processes per second. The 2026-11-19 storm
+/// read about 100 new pids a second on a 12-core machine while the CPU meter
+/// stayed under its sustained bar; a healthy idle baseline reads under 10.
+pub(crate) const SPAWN_RATE_ALARM_PER_SEC: f64 = 20.0;
+
+/// One attributed spawner in the spawn-rate reading.
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct SpawnRateParent {
+    pub parent_pid: u32,
+    pub family: String,
+    pub parent: String,
+    pub new_children: u64,
+    pub per_second: f64,
+}
+
+/// The parent label a spawner row shows: the argv0 basename plus the next
+/// three tokens, truncated. Several `bash` parents must stay apart.
+pub(crate) fn spawn_rate_label(command: &str) -> String {
+    let tokens: Vec<&str> = command.split_whitespace().collect();
+    let mut label = basename(tokens.first().copied().unwrap_or("")).to_string();
+    for token in tokens.iter().skip(1).take(3) {
+        label.push(' ');
+        label.push_str(token);
+    }
+    if label.chars().count() > 80 {
+        label = label.chars().take(77).collect::<String>() + "...";
+    }
+    label
+}
+
+/// The family bucket for a parent row, reusing the footprint's own buckets.
+/// `claimed` splits the spare pool: a claimed session is a claude session,
+/// a returned pre-warm is the pool. Pure, so tests never touch the socket.
+pub(crate) fn spawn_rate_family(command: &str, claimed: bool) -> &'static str {
+    let program = basename(command.split_whitespace().next().unwrap_or(""));
+    if is_claude_spare_pool(command) {
+        if claimed {
+            "claude_session"
+        } else {
+            "claude_spare_pool"
+        }
+    } else if program == "claude" {
+        "claude_session"
+    } else if FNO_BINARIES.contains(&program) {
+        "fno_binary"
+    } else {
+        "other"
+    }
+}
+
+/// The window an operator asked for, clamped into the reading's bounds.
+pub(crate) fn spawn_rate_window_clamp(secs: u64) -> u64 {
+    secs.clamp(SPAWN_RATE_WINDOW_MIN_S, SPAWN_RATE_WINDOW_MAX_S)
+}
+
+/// The spawn-rate reading over one window: every pid present only in the
+/// second read is a process born inside the window, attributed to its
+/// parent row in that same read. A new pid parented by this process drops:
+/// on non-macOS the table reader execs `ps`, which must not count itself.
+/// Returns the payload and the alarm verdict (7 when over).
+pub(crate) fn spawn_rate_reading(
+    before: &[ProcRow],
+    after: &[ProcRow],
+    window: Duration,
+    alarm_per_sec: f64,
+) -> (Value, i32) {
+    let before_pids: BTreeSet<u32> = before.iter().map(|r| r.pid).collect();
+    let by_pid: BTreeMap<u32, &ProcRow> = after.iter().map(|r| (r.pid, r)).collect();
+    let me = std::process::id();
+    let window_s = window.as_secs_f64().max(0.001);
+    let mut parents: BTreeMap<u32, u64> = BTreeMap::new();
+    let mut gone: u64 = 0;
+    let mut total: u64 = 0;
+    for row in after {
+        if before_pids.contains(&row.pid) || row.ppid == me {
+            continue;
+        }
+        total += 1;
+        if by_pid.contains_key(&row.ppid) {
+            *parents.entry(row.ppid).or_insert(0) += 1;
+        } else {
+            gone += 1;
+        }
+    }
+    let mut rows: Vec<SpawnRateParent> = parents
+        .into_iter()
+        .map(|(pid, count)| {
+            let command = by_pid.get(&pid).map(|r| r.command.as_str()).unwrap_or("");
+            let claimed = is_claude_spare_pool(command) && spare_claimed(command);
+            SpawnRateParent {
+                parent_pid: pid,
+                family: spawn_rate_family(command, claimed).to_string(),
+                parent: spawn_rate_label(command),
+                new_children: count,
+                per_second: count as f64 / window_s,
+            }
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        b.new_children
+            .cmp(&a.new_children)
+            .then(a.parent_pid.cmp(&b.parent_pid))
+    });
+    let machine_per_second = total as f64 / window_s;
+    let code = if machine_per_second > alarm_per_sec {
+        EXIT_SPAWN_RATE_ALARM
+    } else {
+        0
+    };
+    let payload = json!({
+        "window_seconds": window_s,
+        "new_processes": total,
+        "machine_per_second": machine_per_second,
+        "cores": cpu_capacity_cores(),
+        "per_core_per_second": machine_per_second / cpu_capacity_cores() as f64,
+        "alarm_per_second": alarm_per_sec,
+        "unattributed_gone": gone,
+        "parents": rows,
+        "exit_code": code,
+    });
+    (payload, code)
+}
+
+/// `census --spawn-rate` / `fno doctor footprint --spawn-rate`: the
+/// spawn-rate reading the sustained-CPU meter cannot see. One JSON payload
+/// under `--json`, else the human table.
+pub fn spawn_rate_command(json_output: bool, secs: Option<u64>, alarm: Option<f64>) -> i32 {
+    let clamped = spawn_rate_window_clamp(secs.unwrap_or(SPAWN_RATE_WINDOW_DEFAULT_S));
+    let alarm_per_sec = alarm.unwrap_or(SPAWN_RATE_ALARM_PER_SEC);
+    let (before, _) = crate::census::process_table();
+    std::thread::sleep(Duration::from_secs(clamped));
+    let (after, _) = crate::census::process_table();
+    let (payload, code) =
+        spawn_rate_reading(&before, &after, Duration::from_secs(clamped), alarm_per_sec);
+    if json_output {
+        println!("{}", sorted_json(&payload));
+        return code;
+    }
+    println!(
+        "spawn rate: {:.1} processes/s over {:.1}s ({} new; {:.2}/core; alarm {:.1}/s)",
+        payload["machine_per_second"].as_f64().unwrap_or(0.0),
+        payload["window_seconds"].as_f64().unwrap_or(0.0),
+        payload["new_processes"].as_u64().unwrap_or(0),
+        payload["per_core_per_second"].as_f64().unwrap_or(0.0),
+        payload["alarm_per_second"].as_f64().unwrap_or(0.0),
+    );
+    let rows = payload["parents"].as_array().cloned().unwrap_or_default();
+    if rows.is_empty() {
+        println!("spawners: none");
+    } else {
+        println!("spawners:");
+        for p in &rows {
+            println!(
+                "  pid {} {} {} children ({:.1}/s): {}",
+                p["parent_pid"].as_u64().unwrap_or(0),
+                p["family"].as_str().unwrap_or("?"),
+                p["new_children"].as_u64().unwrap_or(0),
+                p["per_second"].as_f64().unwrap_or(0.0),
+                p["parent"].as_str().unwrap_or("?"),
+            );
+        }
+    }
+    let gone = payload["unattributed_gone"].as_u64().unwrap_or(0);
+    if gone > 0 {
+        println!("unattributed (parent gone mid-window): {gone}");
+    }
+    if code == EXIT_SPAWN_RATE_ALARM {
+        println!("verdict: OVER ALARM (above {alarm_per_sec}/s)");
+    }
+    code
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2366,5 +2548,63 @@ mod tests {
         assert!(is_test_runner("/usr/bin/python3 -m pytest x"));
         assert!(!is_test_runner("tail -f /tmp/pytest-of-user/out"));
         assert!(!is_test_runner("git log --grep pytest"));
+    }
+
+    #[test]
+    fn spawn_rate_attributes_new_pids_to_their_parent_rows() {
+        let before = vec![row(100, 1, 60, 0.0, "claude --bg")];
+        let after = vec![
+            row(100, 1, 63, 0.0, "claude --bg"),
+            row(101, 100, 0, 0.0, "(bash)"),
+            row(102, 100, 0, 0.0, "ps -A -o pid= -o ppid="),
+            row(200, 1, 63, 0.0, "bash"),
+            row(201, 200, 0, 0.0, "(Python)"),
+            row(202, 999, 0, 0.0, "(bash)"),
+        ];
+        let (payload, code) = spawn_rate_reading(&before, &after, Duration::from_secs(3), 20.0);
+        assert_eq!(code, 0);
+        assert_eq!(payload["new_processes"].as_u64(), Some(4));
+        let parents = payload["parents"].as_array().unwrap();
+        let top = &parents[0];
+        assert_eq!(top["parent_pid"].as_u64(), Some(100));
+        assert_eq!(top["new_children"].as_u64(), Some(2));
+        assert_eq!(top["family"].as_str(), Some("claude_session"));
+        assert_eq!(payload["unattributed_gone"].as_u64(), Some(1));
+        assert!((payload["machine_per_second"].as_f64().unwrap() - 4.0 / 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn spawn_rate_family_splits_the_spare_pool_on_the_claim() {
+        let pool = "claude bg-spare --bg-spare /tmp/cc-daemon-501/x/spare/deadbeef.claim.sock";
+        assert_eq!(spawn_rate_family(pool, false), "claude_spare_pool");
+        assert_eq!(spawn_rate_family(pool, true), "claude_session");
+        assert_eq!(spawn_rate_family("claude --bg", true), "claude_session");
+        assert_eq!(
+            spawn_rate_family("fno-agent-daemon --serve", true),
+            "fno_binary"
+        );
+        assert_eq!(spawn_rate_family("bash /tmp/x.sh", false), "other");
+    }
+
+    #[test]
+    fn spawn_rate_alarm_fires_only_over_the_threshold() {
+        let before: Vec<ProcRow> = (0..30).map(|i| row(i, 1, 60, 0.0, "init")).collect();
+        let mut after: Vec<ProcRow> = (0..30).map(|i| row(i, 1, 63, 0.0, "init")).collect();
+        for i in 0..30u32 {
+            after.push(row(1000 + i, 7, 0, 0.0, "(bash)"));
+        }
+        let (_, code1) = spawn_rate_reading(&before, &after, Duration::from_secs(3), 20.0);
+        assert_eq!(code1, 0);
+        let (_, code2) = spawn_rate_reading(&before, &after, Duration::from_secs(1), 20.0);
+        assert_eq!(code2, EXIT_SPAWN_RATE_ALARM);
+    }
+
+    #[test]
+    fn spawn_rate_drops_the_table_readers_own_children() {
+        let me = std::process::id();
+        let after = vec![row(900_000, me, 0, 0.0, "ps -A -o pid=,ppid=")];
+        let (payload, code) = spawn_rate_reading(&[], &after, Duration::from_secs(3), 20.0);
+        assert_eq!(code, 0);
+        assert_eq!(payload["new_processes"].as_u64(), Some(0));
     }
 }
