@@ -770,7 +770,13 @@ pub(crate) fn handle_session_report(
     // id at settle, so the transfer leaves the manifest naming the outgoing
     // session and the successor holds with no levers until this rewrite names it.
     if let Some(arm) = manifest_arm {
-        arm_role_manifest(&arm, &session_id, row_name.as_deref(), emitter);
+        arm_role_manifest(
+            &arm,
+            &home.registry_json(),
+            &session_id,
+            row_name.as_deref(),
+            emitter,
+        );
     }
 
     // The row moved to a new pane: announce it, same kind and nested
@@ -1002,6 +1008,7 @@ fn pane_side_lookup(report_cwd: &str) -> Option<crate::pane_claim::PaneClaim> {
 /// The promoted-row fields a manifest arm needs, copied out before the
 /// registry write lock drops.
 struct ManifestArm {
+    row: String,
     scope: String,
     cwd: String,
     harness: Option<String>,
@@ -1019,6 +1026,7 @@ fn promoted_first_fill(entry: &RegistryEntry, out: &mut Option<ManifestArm>) {
     }
     if let Some(scope) = entry.role_scope.as_deref().filter(|s| !s.is_empty()) {
         *out = Some(ManifestArm {
+            row: entry.name.clone(),
             scope: scope.to_string(),
             cwd: entry.cwd.clone(),
             harness: entry.harness.clone().filter(|h| !h.trim().is_empty()),
@@ -1041,6 +1049,7 @@ fn promoted_first_fill(entry: &RegistryEntry, out: &mut Option<ManifestArm>) {
 /// succession.
 fn arm_role_manifest(
     arm: &ManifestArm,
+    registry: &Path,
     session_id: &str,
     row_name: Option<&str>,
     emitter: &EventEmitter,
@@ -1073,7 +1082,14 @@ fn arm_role_manifest(
     if !path.is_file() {
         // Never armed: write it fresh, carrying the role fields the settle
         // stamp would have used (the rebind below cannot run on a file that
-        // is not there).
+        // is not there). Re-decide against the committed row first: a vacate
+        // that committed while this report ran would otherwise re-arm a
+        // scope whose crown is gone (the vacate's own remove already ran, so
+        // nothing would correct the phantom). An unreadable registry keeps
+        // the write (fail-soft; the guarded writer stays the last word).
+        if !crown_still_stands(registry, &arm.row) {
+            return;
+        }
         let spec = crate::lead_state::ManifestSpec {
             scope: scope.clone(),
             harness_session_id: Some(session_id.to_string()),
@@ -1098,6 +1114,22 @@ fn arm_role_manifest(
     if let Err(e) = crate::lead_state::set_manifest_fields(&space, scope, &fields, None) {
         fail(e);
     }
+}
+
+/// True while the named row still holds a role stamp: the concurrent-vacate
+/// re-check the fresh arm runs against the committed registry just before it
+/// writes. An unreadable registry reads true, so a transient read cannot
+/// strand a crown whose heal already proved its id (fail-soft, like every
+/// arm here).
+fn crown_still_stands(registry: &Path, row_name: &str) -> bool {
+    let Ok(doc) = crate::daemon::load_registry_asserted(registry) else {
+        return true;
+    };
+    doc.entries.iter().any(|e| {
+        e.name == row_name
+            && e.role_level.is_some()
+            && e.role_scope.as_deref().is_some_and(|s| !s.is_empty())
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1889,6 +1921,43 @@ mod tests {
         assert!(
             content.contains("role_grantor: human"),
             "content: {content}"
+        );
+    }
+
+    /// A crown vacated while the report ran arms nothing (the round-1
+    /// finding): the fresh arm re-decides against the committed registry
+    /// before it writes, so a vacated scope never carries a phantom
+    /// manifest naming the healing session.
+    #[test]
+    fn a_fresh_arm_redecides_a_vacated_crown() {
+        let _env = arm_env("[lead]\nenabled = true\n");
+        let (_d, cwd) = arm_cwd();
+        let (_h, home) = temp_home("bg-vacated");
+        // The crown was cleared on the committed row (the vacate wrote) by
+        // the time the arm runs.
+        seed_registry(&home, claude_row());
+        let arm = ManifestArm {
+            row: "w1".to_string(),
+            scope: "root".to_string(),
+            cwd: cwd.display().to_string(),
+            harness: Some("claude".to_string()),
+            role_level: Some(1),
+            role_grantor: Some("human".to_string()),
+            model: None,
+        };
+        let sid = "3228ccad-c078-4e1a-9b2f-3c4d5e6f7a8b";
+        arm_role_manifest(
+            &arm,
+            &home.registry_json(),
+            sid,
+            Some("w1"),
+            &emitter(&home),
+        );
+        let path = crate::lead_state::manifest_path(&crate::paths::space_dir(&cwd), "root")
+            .expect("manifest path");
+        assert!(
+            !path.is_file(),
+            "a vacated crown never gains a phantom manifest"
         );
     }
 
