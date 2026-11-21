@@ -298,6 +298,7 @@ pub mod team_settle;
 pub mod team_spend;
 pub mod team_split;
 pub mod team_widen;
+pub mod terminal_stamp;
 pub mod terminal_stop;
 pub mod territory;
 pub(crate) mod thread_dialog;

@@ -486,6 +486,21 @@
     "title": "ArtifactConfig",
     "type": "object"
    },
+   "WebBlock": {
+    "description": "Web answer settings (nested under 'config.web').\n\n``invites`` rows stay raw tables: the bridge checks each one and names a refusal.",
+    "properties": {
+     "invites": {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "title": "Invites",
+      "type": "array"
+     }
+    },
+    "title": "WebBlock",
+    "type": "object"
+   },
    "AttentionBlock": {
     "description": "``sinks`` rows stay raw tables: the daemon checks each one and names a refusal.",
     "properties": {
@@ -4091,6 +4106,9 @@
    "attention": {
     "$ref": "#/$defs/AttentionBlock"
    },
+   "web": {
+    "$ref": "#/$defs/WebBlock"
+   },
    "research": {
     "$ref": "#/$defs/ResearchBlock"
    },
@@ -5167,6 +5185,17 @@
    "question": "",
    "default_source": "",
    "doc": "Push sinks for open questions: a list of tables with name, type (ntfy or webhook), url, topic, token_env, answer_base_url and body (title-only or full).",
+   "edit": "editor"
+  },
+  {
+   "path": "web.invites",
+   "label": "Web answer invites",
+   "type": "list[dict[str, Any]]",
+   "default": [],
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "",
+   "doc": "Who may answer on the HQ page over a tailnet: a list of tables with email, scope (* or a node id) and role (viewer, commenter, editor, owner).",
    "edit": "editor"
   },
   {
