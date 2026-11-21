@@ -177,15 +177,30 @@ fn plus_flag_body(token: &str) -> Option<&str> {
 pub fn plus_fold(tail: &[String]) -> Vec<String> {
     let mut out = Vec::with_capacity(tail.len());
     let mut fenced = false;
+    // A space-form value flag's next token is its value, never a + spelling
+    // (`--name +model` names the worker "+model"); the same skip
+    // `first_prompt_index` reads the boundary with.
+    let mut skip_value = false;
     for tok in tail {
-        if !fenced {
-            if tok == "--" || tok == "--argv" {
-                fenced = true;
-            } else if let Some(body) = plus_flag_body(tok) {
-                out.push(format!("--{body}"));
-                continue;
-            }
+        if fenced {
+            out.push(tok.clone());
+            continue;
         }
+        if tok == "--" || tok == "--argv" {
+            fenced = true;
+            out.push(tok.clone());
+            continue;
+        }
+        if skip_value {
+            skip_value = false;
+            out.push(tok.clone());
+            continue;
+        }
+        if let Some(body) = plus_flag_body(tok) {
+            out.push(format!("--{body}"));
+            continue;
+        }
+        skip_value = !tok.contains('=') && crate::spawn_admission::is_value_flag(tok);
         out.push(tok.clone());
     }
     out
@@ -1395,6 +1410,28 @@ mod tests {
         assert_eq!(
             plus_fold(&toks(&["--argv", "claude", "+model=opus"])),
             toks(&["--argv", "claude", "+model=opus"])
+        );
+    }
+
+    #[test]
+    fn plus_fold_leaves_a_space_form_value_flag_s_value_untouched() {
+        // The value of `--name +model` is the worker's name, never a flag
+        // spelling; folding it would rename the worker "--model".
+        assert_eq!(
+            plus_fold(&toks(&["--name", "+model", "fix"])),
+            toks(&["--name", "+model", "fix"])
+        );
+        // The equals form carries its value inside the token.
+        assert_eq!(
+            plus_fold(&toks(&["--name=+model", "fix"])),
+            toks(&["--name=+model", "fix"])
+        );
+        // A folded pair reads like its -- spelling: the parse's own arm
+        // consumes the next token, so a bare + after a folded flag folds
+        // too, exactly as `--model --yolo` would parse.
+        assert_eq!(
+            plus_fold(&toks(&["+model", "+yolo", "fix"])),
+            toks(&["--model", "--yolo", "fix"])
         );
     }
 
