@@ -1300,6 +1300,9 @@ mod tests {
         );
         assert!(fires.is_empty(), "no ask, no fire");
         r1_unpromoted_and_cap_legs();
+        nonlead_user_turn_blocks_on_either_or_ask_leg();
+        dispatched_worker_without_user_turn_still_passes_leg();
+        every_harness_stop_payload_shape_reaches_the_rule_leg();
         r2_and_r3_legs();
         stop_stamp_binds_the_question_to_the_asking_session_leg();
     }
@@ -1392,10 +1395,7 @@ mod tests {
     // A non-lead session the user typed into owes its either-or chat ask to
     // the board. The witness is the store the conversation hold arms from;
     // the payload is the four-field Stop shape every harness sends.
-    #[test]
-    fn nonlead_session_the_user_typed_into_blocks_on_either_or_ask() {
-        let lock = crate::claims::test_env_lock();
-        let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+    fn nonlead_user_turn_blocks_on_either_or_ask_leg() {
         let rig = Rig::new(false);
         rig.operator_submit(SESSION, now_ms());
         let fires = eval_stop_in(
@@ -1414,10 +1414,7 @@ mod tests {
     // The ask shape alone widens nothing: a dispatched worker with no
     // witnessed user turn still passes (its queued turn is the dispatch
     // prompt, not the operator talking).
-    #[test]
-    fn dispatched_worker_without_user_turn_still_passes() {
-        let lock = crate::claims::test_env_lock();
-        let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+    fn dispatched_worker_without_user_turn_still_passes_leg() {
         let rig = Rig::new(false);
         let fires = eval_stop_in(
             &rig.cwd,
@@ -1437,10 +1434,7 @@ mod tests {
     // transport entry ends in this same eval_stop call. Each adapter passes
     // its own session-id value grammar; the engine canonicalizes any string,
     // so each leg proves the shape reaches the rule, not the id grammar.
-    #[test]
-    fn every_harness_stop_payload_shape_reaches_the_rule() {
-        let lock = crate::claims::test_env_lock();
-        let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+    fn every_harness_stop_payload_shape_reaches_the_rule_leg() {
         let shapes = [
             ("claude", "claude-stop-payload-session"),
             ("codex", "codex-stop-payload-session"),
