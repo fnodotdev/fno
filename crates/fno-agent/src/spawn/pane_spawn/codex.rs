@@ -285,12 +285,11 @@ fn write_atomic(path: &std::path::Path, text: &str) -> std::io::Result<()> {
 /// pin it: `plain_pane.pane_run_argv`), and provider passthrough appends
 /// before the add-dir strip.
 ///
-/// The git/plan/state-root `--add-dir` grants are computed by the Python leg
-/// and then stripped again (`writable_dirs.py:95-115`,
-/// `strip_remote_add_dirs`): codex >= 0.156.1 refuses `--add-dir` on a
-/// `--remote` argv, so the pane argv carries none - which is why this
-/// builder emits none. The git COMMON dir's surviving half is the refusal
-/// gate above, not a grant.
+/// The git/plan/state-root `--add-dir` grants are computed by the spawn seam
+/// and then stripped again (this file's `strip_remote_add_dirs`): codex >=
+/// 0.156.1 refuses `--add-dir` on a `--remote` argv, so the pane argv carries
+/// none - which is why this builder emits none. The git COMMON dir's
+/// surviving half is the refusal gate above, not a grant.
 pub(crate) fn build_wrapped(ctx: &PaneContext) -> ArmPlan {
     let mut argv =
         crate::harness_capabilities::render_session_argv_raw("codex", "interactive_create", None)
