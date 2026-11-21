@@ -281,10 +281,8 @@ pub fn personas_in_scope(scope: &str) -> Vec<&str> {
 /// names that moment in the refusal. `Some(text)` refuses; the caller adds
 /// its own prefix (`refused:` for the doors, the command name for init).
 pub fn scoping_refusal(entry: &Value, stage: &str) -> Option<String> {
-    let id = entry.get("id").and_then(Value::as_str).unwrap_or("?");
-    let done = entry
-        .get("done_means")
-        .and_then(Value::as_str)
+    let id = crate::backlog::question_intake::str_field(entry, "id").unwrap_or("?");
+    let done = crate::backlog::question_intake::str_field(entry, "done_means")
         .map(str::trim)
         .unwrap_or("");
     if done.is_empty() {

@@ -1317,11 +1317,9 @@ fn plan_mutation(
     // call started from; only the transition refuses, an already-ready row
     // takes ordinary writes ungated, and containers stay exempt: their ready
     // comes from the children rollup, never from a scoping fact of their own.
-    let old_status_ready = node.get("status").and_then(Value::as_str) == Some("ready");
-    let new_status = rows[idx]
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let old_status_ready =
+        crate::backlog::question_intake::str_field(&node, "status") == Some("ready");
+    let new_status = crate::backlog::question_intake::str_field(&rows[idx], "status").unwrap_or("");
     if new_status == "ready"
         && !old_status_ready
         && super::patch::container_children_summary(&rows, &node_id).is_none()

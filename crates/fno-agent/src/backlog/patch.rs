@@ -769,9 +769,7 @@ fn plan(mut rows: Vec<Value>, req: &PatchRequest) -> Result<Planned, PatchRefusa
     // derived normalization: the scoping gate compares the stored pre-image,
     // not the derived one a ready-rung node already reads.
     let idx = resolve_index(&rows, &req.node)?;
-    let stored_status_before = rows[idx]
-        .get("status")
-        .and_then(Value::as_str)
+    let stored_status_before = crate::backlog::question_intake::str_field(&rows[idx], "status")
         .unwrap_or("")
         .to_string();
     // Normalize the pre-image: the door's old-vs-new verdicts and
