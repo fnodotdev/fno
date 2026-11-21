@@ -1585,8 +1585,12 @@ pub fn run(args: &[String]) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    use super::run_leg;
     use super::LegRun;
     use super::Ritual;
+    use std::path::Path;
+    use std::process::Command;
+    use std::time::{Duration, Instant};
 
     /// Every judgment spawn failure names its cause in the receipt, never a
     /// bare "spawn-failed": the front door's diagnostic line for a nonzero

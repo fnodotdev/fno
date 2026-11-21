@@ -3282,7 +3282,7 @@ mod tests {
 
     /// The merge_close floor, on the store: a node reading in_review whose PR
     /// merged is closed by the sweep's own decision - scan, partition, the
-    /// same locked mutate the verb persists through - with no hand reconcile
+    /// same locked mutate the command persists through - with no hand reconcile
     /// and no --pr-number scope: the record the scan built decides.
     #[test]
     fn the_sweep_closes_a_merged_node_and_leaves_a_closed_pr_open() {
