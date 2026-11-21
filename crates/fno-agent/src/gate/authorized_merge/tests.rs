@@ -2388,7 +2388,7 @@ fn a_main_repair_tagged_node_exempts_its_pr_even_when_a_light_row_shadows_it() {
     std::fs::create_dir_all(tmp.path().join(".fno")).unwrap();
     let (_env_lock, _env) = pin_graph_env(tmp.path());
     crate::graph_store::seed_rows(
-        &crate::org_board::scope::graph_json_path(&tmp),
+        &crate::org_board::scope::graph_json_path(tmp.path()),
         &[json!({
             "id": "x-9999",
             "status": "in_progress",
@@ -2419,7 +2419,7 @@ fn the_main_repair_hold_still_names_the_declared_lane_for_an_untagged_pr() {
     std::fs::create_dir_all(tmp.path().join(".fno")).unwrap();
     let (_env_lock, _env) = pin_graph_env(tmp.path());
     crate::graph_store::seed_rows(
-        &crate::org_board::scope::graph_json_path(&tmp),
+        &crate::org_board::scope::graph_json_path(tmp.path()),
         &[
             json!({
                 "id": "x-1111",
