@@ -2672,9 +2672,19 @@ mod tests {
         };
         apply_mutators(&mut rows, 0, &args, None, false, None, None, &pr)
             .unwrap_or_else(|_| panic!("audience=internal must apply"));
-        assert_eq!(rows[0]["audience"], "internal");
-        assert_eq!(rows[0]["audience_history"][0]["from"], "");
-        assert_eq!(rows[0]["audience_history"][0]["to"], "internal");
+        let stored = serde_json::Value::Array(rows);
+        assert_eq!(
+            stored.pointer("/0/audience"),
+            Some(&serde_json::json!("internal"))
+        );
+        assert_eq!(
+            stored.pointer("/0/audience_history/0/from"),
+            Some(&serde_json::json!(""))
+        );
+        assert_eq!(
+            stored.pointer("/0/audience_history/0/to"),
+            Some(&serde_json::json!("internal"))
+        );
     }
 
     #[test]
