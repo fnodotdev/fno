@@ -1181,9 +1181,14 @@ mod tests {
     }
 
     impl crate::attention_http::HttpPost for Stub {
-        fn post(&mut self, _: &str, _: &[(String, String)], body: &str) -> PostResult {
+        fn post(
+            &mut self,
+            _: &str,
+            _: &[(String, String)],
+            body: &str,
+        ) -> crate::attention_http::PostResult {
             self.bodies.push(body.to_string());
-            PostResult {
+            crate::attention_http::PostResult {
                 status: self.status,
                 body: String::new(),
                 error: None,

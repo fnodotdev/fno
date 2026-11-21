@@ -533,6 +533,7 @@ fn value_f64(v: &Value) -> Option<f64> {
         .or_else(|| v.as_f64())
 }
 
+#[derive(Clone)]
 pub(crate) struct Row {
     pub(crate) dedupe_key: String,
     pub(crate) session_id: String,
@@ -1123,7 +1124,7 @@ mod tests {
         let row = |rid: &str, ts: &str| {
             let mut r = api_request(rid, "sess-fwd", 3_050_000);
             {
-                let mut attrs = r["attributes"].as_array_mut().unwrap();
+                let attrs = r["attributes"].as_array_mut().unwrap();
                 for a in attrs.iter_mut() {
                     if a["key"] == "event.timestamp" {
                         a["value"] = json!({"stringValue": ts});
