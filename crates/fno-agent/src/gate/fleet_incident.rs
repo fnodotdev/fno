@@ -1906,7 +1906,10 @@ mod tests {
 
         let (to_wake, left) = plan_wakes(&rows, Some("session:uuuu-2222"));
         assert_eq!(to_wake.len(), 1);
-        assert_eq!(to_wake[0].session, "uuuu-2222");
+        let [scoped] = to_wake.as_slice() else {
+            panic!("the targeted plan holds one row, not: {to_wake:?}");
+        };
+        assert_eq!(scoped.session, "uuuu-2222");
         assert_eq!(left.len(), 1);
         // The machine-wide clear wakes both.
         let (all, none) = plan_wakes(&rows, None);
@@ -1937,7 +1940,10 @@ mod tests {
             1,
             "the machine-held row stays for the wider clear: {rows:?}"
         );
-        assert_eq!(rows[0].session, "uuuu-4444");
+        let [machine_row] = rows.as_slice() else {
+            unreachable!("len 1 asserted above: {rows:?}");
+        };
+        assert_eq!(machine_row.session, "uuuu-4444");
 
         // The machine-wide clear wakes the rest and drops the sidecar.
         let (woken, missed) = wake_parked_with(&home, None, &mut |row| {
