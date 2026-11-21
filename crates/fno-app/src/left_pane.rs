@@ -112,6 +112,8 @@ pub enum Row {
     Error(String),
     /// A section with nothing to show, and why.
     Empty(&'static str),
+    /// An agent's last result, one quiet line under its row.
+    Note(String),
 }
 
 fn header(title: &'static str) -> Row {
@@ -247,6 +249,27 @@ fn agent_item(
     }
 }
 
+/// The row, then its last result when the agent has one.
+fn push_agent(
+    out: &mut Vec<Row>,
+    a: &AgentRow,
+    layout: &Layout,
+    now_secs: u64,
+    streamed: Option<&str>,
+    launched: Option<(&str, &str)>,
+) {
+    out.push(agent_item(a, layout, now_secs, streamed, launched));
+    out.extend(last_result_note(a));
+}
+
+/// An agent's last result as one line: the one-shot's end word, else the
+/// report reason. `None` when it has neither, so a quiet row stays one line.
+fn last_result_note(a: &AgentRow) -> Option<Row> {
+    let text = a.result.as_deref().or(a.reason.as_deref())?;
+    let line = text.lines().next().unwrap_or("").trim();
+    (!line.is_empty()).then(|| Row::Note(line.to_string()))
+}
+
 /// `streamed` is the session the main view streams, when it streams one: its
 /// agent carries the cursor, else the focused pane's agent does. `launched`
 /// is the (name, task) the composer launched most recently: that row carries
@@ -263,7 +286,10 @@ pub fn rows(
     streamed: Option<&str>,
     launched: Option<(&str, &str)>,
 ) -> Vec<Row> {
-    let agents = fno::app_api::client::agent_sort::sideline_order(&layout.agents, now_secs);
+    let mut agents = fno::app_api::client::agent_sort::sideline_order(&layout.agents, now_secs);
+    // A pinned agent leads its group; the sort is stable, so the sideline
+    // order holds inside each half.
+    agents.sort_by_key(|a| !a.pinned);
     let mut workspaces = header("Workspaces");
     if let Row::Header {
         plus,
@@ -341,7 +367,7 @@ fn push_workspaces(
                 out.push(Row::Empty("no agents in this workspace"));
             }
             for a in &squad_agents {
-                out.push(agent_item(a, layout, now_secs, streamed, launched));
+                push_agent(out, a, layout, now_secs, streamed, launched);
             }
             for p in shells {
                 out.push(shell_item(p));
@@ -365,7 +391,7 @@ fn push_workspaces(
         });
         if open {
             for a in &elsewhere {
-                out.push(agent_item(a, layout, now_secs, streamed, launched));
+                push_agent(out, a, layout, now_secs, streamed, launched);
             }
         }
     }
@@ -508,6 +534,7 @@ fn push_grouped(
                 }
             }
             out.push(row);
+            out.extend(last_result_note(a));
         }
         if group_by == GroupBy::Machine {
             push_machine_shells(out, layout, used, title, &local);
@@ -1029,6 +1056,16 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
             .px_3()
             .py_1()
             .child(ui::text(why, ui::Role::Fact, &p)),
+        Row::Note(text) => div()
+            .id(i)
+            .w(px(WIDTH))
+            .px_3()
+            .pl(px(WIDTH * 0.08 + 12.0))
+            .pb_1()
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .text_ellipsis()
+            .child(ui::text(&text, ui::Role::Fact, &p)),
         Row::Workspace {
             id,
             name,
@@ -1523,6 +1560,7 @@ mod tests {
                 Row::Item { label, detail, .. } => format!("item {label} [{detail}]"),
                 Row::Error(e) => format!("error {e}"),
                 Row::Empty(why) => format!("empty {why}"),
+                Row::Note(t) => format!("note {t}"),
             }
         };
         let kinds: Vec<String> = rows.iter().map(kind_of).collect();
@@ -1566,6 +1604,32 @@ mod tests {
         assert_eq!(shell, Some(Action::Send(Command::FocusPane(4))));
         // A squadless agent never paints twice: delta shows once.
         assert_eq!(kinds.iter().filter(|k| k.contains("delta")).count(), 1);
+    }
+
+    #[test]
+    fn a_pinned_agent_leads_its_workspace_and_a_result_rides_one_line_under_its_row() {
+        let first = agent("alpha", 1, None, 7);
+        let mut second = agent("beta", 2, None, 7);
+        second.pinned = true;
+        second.result = Some("shipped\nsecond line".into());
+        let layout = Layout {
+            squads: vec![squad(7, "fno", vec![tab(10, "main", vec![])])],
+            active_squad: 7,
+            agents: vec![first, second],
+            ..Layout::default()
+        };
+        let out = rows(
+            &layout,
+            &Board::default(),
+            100,
+            &no_folds(),
+            GroupBy::Workspaces,
+            None,
+            None,
+        );
+        assert!(matches!(out.get(2), Some(Row::Item { label, .. }) if label == "beta"));
+        assert_eq!(out.get(3), Some(&Row::Note("shipped".into())));
+        assert!(matches!(out.get(4), Some(Row::Item { label, .. }) if label == "alpha"));
     }
 
     #[test]
