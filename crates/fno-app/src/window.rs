@@ -1009,7 +1009,7 @@ impl Root {
     }
 
     /// A session panel click, or ⌥⌘B. Kept out of `act` so every panel
-    /// verb persists the window state in one place.
+    /// action persists the window state in one place.
     pub(super) fn act_panel(&mut self, act: right_pane::PanelAct, cx: &mut Context<Self>) {
         fno::ui_usage::click("app", act.click_id());
         right_pane::act(self, act);
