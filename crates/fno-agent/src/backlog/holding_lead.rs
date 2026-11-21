@@ -6,13 +6,14 @@
 //! stamps `name: "unknown"`, never a guess.
 //!
 //! Two producers, one shape. `stamp_at_close` runs on the close path and
-//! resolves the LIVE record; `derive_for_closed` backfills nodes closed before
-//! the field existed, from the canonical `lead_checkin` journal rows alone
-//! (scope, ts, holder label, `data.holder_session`). The backfill never reads
-//! the live record as a credit: the live holder is the holder NOW, and stamping
-//! it on a node closed under a predecessor would mis-credit by construction.
-//! The stored team title is the one exception: it groups the rollups, and a
-//! group label that follows a rename is a display fact, not a credit.
+//! resolves the LIVE record; the maintain backfill (derive_batch) covers
+//! nodes closed before the field existed, from the canonical `lead_checkin`
+//! journal rows alone (scope, ts, holder label, `data.holder_session`). The
+//! backfill never reads the live record as a credit: the live holder is the
+//! holder NOW, and stamping it on a node closed under a predecessor would
+//! mis-credit by construction. The stored team title is the one exception:
+//! it groups the rollups, and a group label that follows a rename is a
+//! display fact, not a credit.
 //!
 //! A closed epic adds `holders`, every distinct journal holder over
 //! `[created_at, completed_at]`. A failed journal walk answers `holders: null`
@@ -114,11 +115,8 @@ fn holder_from_events(events: &[Value], before: &str) -> Option<(Option<String>,
     let bound = instant(before)?;
     events
         .iter()
-        .filter_map(|e| {
-            let ts = s_at(e, "ts")?;
-            (instant(ts).map(|t| t <= bound)?).then_some(())?;
-            row_holder(e)
-        })
+        .filter(|e| s_at(e, "ts").and_then(instant).is_some_and(|t| t <= bound))
+        .filter_map(row_holder)
         .next()
 }
 
