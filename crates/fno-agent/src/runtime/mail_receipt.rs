@@ -96,13 +96,32 @@ pub(crate) fn durable_leg_story(
 }
 
 pub(crate) fn json_line(msg_id: &str, subject: Option<&str>, to: &str, status: &str) -> String {
-    json!({
+    json_line_with_hold_pass(msg_id, subject, to, status, None)
+}
+
+/// The live-delivery receipt with the hold-pass clause. `hold_pass` is the
+/// gate's `pass` reason read at receipt time (`own`, `control`): the mail
+/// reached a held recipient live, and the sender should know why. Advisory
+/// and additive: the hold may lift between the inject-time gate read and
+/// this one, and existing receipt readers match fields by name, so an
+/// absent field reads exactly as before.
+pub(crate) fn json_line_with_hold_pass(
+    msg_id: &str,
+    subject: Option<&str>,
+    to: &str,
+    status: &str,
+    hold_pass: Option<&str>,
+) -> String {
+    let mut v = json!({
         "msg_id": msg_id,
         "subject": subject,
         "to": to,
         "status": status,
-    })
-    .to_string()
+    });
+    if let Some(p) = hold_pass {
+        v["hold_pass"] = json!(p);
+    }
+    v.to_string()
 }
 
 pub(crate) fn demotion(
