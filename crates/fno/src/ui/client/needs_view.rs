@@ -161,13 +161,16 @@ pub(crate) fn needs_overlay_lines(
                         .map(str::trim)
                         .filter(|s| !s.is_empty())
                         .unwrap_or("audience?");
+                    // The chip leads the row so a long title cannot push it
+                    // off the overlay.
                     lines.push(
                         TLine::parts(&[
                             (
-                                &format!("   {} {}", need_glyph(NeedKind::Question), q.title),
+                                &format!("   {} ", need_glyph(NeedKind::Question)),
                                 TextStyle::Item,
                             ),
-                            (&format!("  \u{b7} {chip}"), TextStyle::Meta),
+                            (&format!("{chip} \u{b7} "), TextStyle::Meta),
+                            (&q.title, TextStyle::Item),
                             (stale, TextStyle::WARN),
                         ])
                         .pad_to(ANSWER_OVERLAY_W),
@@ -274,11 +277,15 @@ mod tests {
             rows: vec![
                 NeedsOverlayRow::Question(question("scoped ask", Some("customer:solo-founder"))),
                 NeedsOverlayRow::Question(question("bare ask", None)),
+                NeedsOverlayRow::Question(question(
+                    "a very long question title that runs well past the overlay width",
+                    Some("customer:vibe-coder"),
+                )),
             ],
             mine_shown: 0,
             mine_total: 0,
-            need_shown: 2,
-            need_total: 2,
+            need_shown: 3,
+            need_total: 3,
         };
         let lines = needs_overlay_lines(&projection, 0, NeedsFooter::AsOf, NeedsFooter::AsOf);
         assert!(lines
@@ -287,5 +294,12 @@ mod tests {
         assert!(lines
             .iter()
             .any(|l| l.contains("bare ask") && l.contains("audience?")));
+        // The chip survives a title longer than the row.
+        assert!(lines.iter().any(|l| {
+            l.chars()
+                .take(ANSWER_OVERLAY_W)
+                .collect::<String>()
+                .contains("customer:vibe-coder")
+        }));
     }
 }
