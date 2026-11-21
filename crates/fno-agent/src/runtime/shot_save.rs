@@ -134,7 +134,7 @@ pub(crate) fn run_shot_save(args: &[String]) -> i32 {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let dir = crate::escalation::vault_dir_with_home(&root, home.as_deref(), "mux");
     let node_tokens: Vec<&str> = node.split('-').collect();
-    let head12 = &head[..head.len().min(12)];
+    let head12 = crate::visual_screen::head12(&head);
     let mut exit = 0;
     for png in rest.iter().filter(|a| !a.starts_with("--")) {
         let src = Path::new(png);

@@ -49,6 +49,16 @@ pub(crate) fn is_head_token(part: &str) -> bool {
     part.len() == 12 && part.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// The head prefix a name or sha matches on: cut at 12 bytes or the string
+/// end, always on a char boundary, so a malformed head value cannot panic.
+pub(crate) fn head12(head: &str) -> &str {
+    let mut end = head.len().min(12);
+    while end > 0 && !head.is_char_boundary(end) {
+        end -= 1;
+    }
+    &head[..end]
+}
+
 /// The head token a shot name carries, if any.
 pub(crate) fn name_head(name: &str) -> Option<&str> {
     name.trim_end_matches(".png")
@@ -93,7 +103,7 @@ pub(crate) fn pair_shots(shots: &[String], head: Option<&str>) -> (Vec<ShotPair>
             pr.push((key, name.clone()));
         }
     }
-    let wanted = head.map(|h| &h[..h.len().min(12)]);
+    let wanted = head.map(head12);
     let mut pairs = Vec::new();
     let mut loose = Vec::new();
     for (key, b) in main {
@@ -362,6 +372,9 @@ pub fn run_critique_prep(args: &[String]) -> i32 {
     }
     let critique = prep(node, &head, &shots, &dir);
     if critique.views.is_empty() && !shots.is_empty() {
+        for left in &critique.left {
+            eprintln!("{left}");
+        }
         report_pair_failure(&shots, node, &head);
         return 1;
     }
@@ -388,7 +401,7 @@ fn report_pair_failure(shots: &[String], node: &str, head: &str) {
     let mut heads: Vec<&str> = shots.iter().filter_map(|s| name_head(s)).collect();
     heads.sort();
     heads.dedup();
-    let mine = &head[..head.len().min(12)];
+    let mine = head12(head);
     if heads.contains(&mine) {
         eprintln!(
             "shots saved at {mine} do not pair: a view needs a before/main side and an after \
@@ -812,6 +825,17 @@ mod tests {
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0].view, "x-1-chat-dark");
         assert!(loose.is_empty());
+    }
+
+    #[test]
+    fn head12_cuts_at_twelve_bytes_never_mid_character() {
+        assert_eq!(head12("313522b78d12abc"), "313522b78d12");
+        assert_eq!(head12("short"), "short");
+        // A mixed-width multibyte head value cuts early instead of slicing
+        // mid-character: any prefix is fine, never a panic.
+        let cut = head12("aéé日aéé日");
+        assert!(cut.len() <= 12);
+        assert!("aéé日aéé日".starts_with(cut));
     }
 
     #[test]
