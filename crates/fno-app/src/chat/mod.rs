@@ -161,6 +161,10 @@ pub struct Chat {
     pub next_request: u64,
     /// The composer's bounds at the last paint, where the IME window opens.
     pub composer: Rc<Cell<Bounds<Pixels>>>,
+    /// The shown session's harness skills, read on a switch.
+    pub skills: Vec<crate::skills::Skill>,
+    /// The popover's selected row and Esc state.
+    pub pick: crate::skills::Pick,
 }
 
 impl Default for Chat {
@@ -179,13 +183,15 @@ impl Default for Chat {
             pending: Vec::new(),
             next_request: 1,
             composer: Rc::new(Cell::new(Bounds::default())),
+            skills: Vec::new(),
+            pick: crate::skills::Pick::default(),
         }
     }
 }
 
 impl Chat {
     /// Show `key`, parking the conversation shown now.
-    pub fn switch(&mut self, key: Option<SessionKey>) {
+    pub fn switch(&mut self, key: Option<SessionKey>, project: &str) {
         let conv = key
             .as_ref()
             .and_then(|k| self.parked.remove(k))
@@ -194,6 +200,10 @@ impl Chat {
         if let Some(old_key) = self.key.take() {
             self.parked.insert(old_key, old);
         }
+        self.skills = key
+            .as_ref()
+            .map(|k| crate::skills::list(&k.harness, project))
+            .unwrap_or_default();
         self.key = key;
         self.stream = None;
         self.closed = None;
@@ -201,6 +211,48 @@ impl Chat {
         self.pending.clear();
         self.opened_at = Instant::now();
         self.list.reset(self.conv.items.len());
+    }
+
+    /// The popover for the draft, grouped by source.
+    pub fn skill_view(&self) -> Option<crate::skills::View> {
+        let harness = &self.key.as_ref()?.harness;
+        crate::skills::view(&self.skills, harness, self.draft.text(), &self.pick)
+    }
+
+    /// Up or down moves the popover's row. False when none shows.
+    pub fn skill_step(&mut self, down: bool) -> bool {
+        let Some(v) = self.skill_view() else {
+            return false;
+        };
+        self.pick.step(self.draft.text(), down, v.rows.len());
+        true
+    }
+
+    /// Esc closes the popover until the draft changes. False when none shows.
+    pub fn skill_close(&mut self) -> bool {
+        if self.skill_view().is_none() {
+            return false;
+        }
+        self.pick.close(self.draft.text());
+        true
+    }
+
+    /// Tab fills the selected row as `<sigil>name `. False when none shows.
+    pub fn complete_skill(&mut self) -> bool {
+        let Some(v) = self.skill_view() else {
+            return false;
+        };
+        let sigil = self
+            .key
+            .as_ref()
+            .and_then(|k| crate::skills::sigil(&k.harness));
+        let (Some(row), Some(sigil)) = (v.rows.get(v.sel), sigil) else {
+            return false;
+        };
+        let text = format!("{sigil}{} ", row.name);
+        self.draft.select_all();
+        self.draft.replace_selection(&text);
+        true
     }
 
     /// Fold a batch. Rows that changed in place are measured again; rows
