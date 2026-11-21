@@ -105,7 +105,7 @@ fn body(root: &Root, state: &HostsState, cx: &mut Context<Root>) -> Div {
         let fresh = if m.fresh {
             "live".to_string()
         } else {
-            format!("seen {}s ago", m.age_s)
+            format!("seen {} ago", ui::age_secs(m.age_s.max(0) as u64))
         };
         let mark = if m.local { " · this machine" } else { "" };
         panel = panel.child(host_row(
@@ -169,16 +169,17 @@ fn host_row(name: &str, meta: &str, p: &Palette, cx: &mut Context<Root>) -> Stat
     .on_click(cx.listener(move |root, _, _, cx| root.pick_host(picked.clone(), cx)))
 }
 
-/// The join line with its copy button.
+/// The join line with its copy button. The line wraps at the panel
+/// width; Copy holds the whole line either way.
 fn join_row(line: &str, p: &Palette, cx: &mut Context<Root>) -> Div {
     let copied = line.to_string();
     div()
         .flex()
         .flex_row()
-        .items_center()
+        .items_start()
         .gap(px(8.0))
         .pt(px(4.0))
-        .child(ui::clamp(line.to_string(), Role::Body, p))
+        .child(ui::role(div().flex_1().min_w_0(), Role::Body, p).child(line.to_string()))
         .child(
             ui::clickable(
                 div()
