@@ -28,7 +28,7 @@ A draft answers most questions. The grill targets only the thin parts. Ask at mo
 
 The mode split follows who started the current turn, not the substrate:
 
-- A turn a person typed grills live in chat. The user-turn shapes are the provenance classifier's (crates/fno-agent/src/runtime/provenance.rs:64). A claude `type:"user"` row without `isMeta` counts. A codex user message counts. A `user_input` record from the operator or mail counts.
+- A turn a person typed grills live in chat. The user-turn shapes are the provenance classifier's (crates/fno-agent/src/runtime/provenance.rs:64). A claude `type:"user"` row without `isMeta` counts. A codex user message counts. A `user_input` record with origin `operator` or from mail counts.
 - A machine wake (beat, mail, loop) never asks in chat. File ONE question page with all the questions and their prefilled answers:
 
 ```bash
