@@ -879,9 +879,14 @@ fn plan(mut rows: Vec<Value>, req: &PatchRequest) -> Result<Planned, PatchRefusa
     // already-ready stored row takes ordinary field writes ungated; only the
     // transition refuses. Containers stay exempt: their ready comes from the
     // children rollup, which no scoping fact of their own feeds, so a
-    // priority or details write on an epic with a ready child must land.
+    // priority or details write on an epic with a ready child must land. A
+    // move headed ELSEWHERE never gates: a park-facts clear can derive ready
+    // as a side effect while the caller asked for idea, and the verdict that
+    // caller needs is the rung mismatch naming plan_path=null, not scoping.
+    let heads_to_ready = target.is_none() || target.as_deref() == Some("ready");
     if new_status == "ready"
         && stored_status_before != "ready"
+        && heads_to_ready
         && container_children_summary(&rows, &id).is_none()
     {
         if let Some(row) = rows.get(idx) {
