@@ -104,6 +104,7 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 /// One native `SendMessage` tool call in a sender transcript.
+#[derive(Clone)]
 struct SendRow {
     uuid: String,
     ts: String,
@@ -114,6 +115,7 @@ struct SendRow {
 }
 
 /// One `<cross-session-message>` block in a receiver transcript.
+#[derive(Clone)]
 struct BlockRow {
     from_name: Option<String>,
     body: String,
@@ -306,23 +308,26 @@ fn backfill_live_path(explicit: Option<&str>) -> PathBuf {
 /// is a resend and keeps the first copy). Heads under 40 chars are too
 /// short to attribute by body alone and stay out. Deterministic, so a
 /// re-scan pairs the same halves.
-fn join(sends: &[SendRow], blocks: &[BlockRow]) -> (Vec<(usize, usize)>, usize) {
-    let mut by_head: std::collections::HashMap<String, Vec<usize>> =
+fn join<'a>(
+    sends: &'a [SendRow],
+    blocks: &'a [BlockRow],
+) -> (Vec<(&'a SendRow, &'a BlockRow)>, usize) {
+    let mut by_head: std::collections::HashMap<String, Vec<&'a BlockRow>> =
         std::collections::HashMap::new();
     let mut seen: std::collections::HashSet<(String, &str)> = std::collections::HashSet::new();
-    for (i, b) in blocks.iter().enumerate() {
+    for b in blocks {
         let head = norm_head(&b.body, 120);
         if seen.insert((head.clone(), b.receiver_transcript.as_str())) {
-            by_head.entry(head).or_default().push(i);
+            by_head.entry(head).or_default().push(b);
         }
     }
     let mut out = Vec::new();
     let mut skipped = 0usize;
-    for (si, s) in sends.iter().enumerate() {
+    for s in sends {
         let head = norm_head(&s.body, 120);
         let attributable = head.chars().count() >= 40;
         match by_head.get(&head).map(Vec::as_slice) {
-            Some([only]) if attributable => out.push((si, *only)),
+            Some([only]) if attributable => out.push((s, *only)),
             _ => skipped += 1,
         }
     }
@@ -439,12 +444,11 @@ fn parse_backfill_run(args: &[String]) -> Result<BackfillRun, i32> {
     })
 }
 
-/// One scan's harvest: every transcript row in window, and the joined
-/// pairs the attribution fold found.
+/// One scan's harvest: the joined send/block pairs the attribution fold
+/// found, and the count it refused. The raw halves die in the scan; only
+/// attributed pairs survive.
 struct Scan {
-    sends: Vec<SendRow>,
-    blocks: Vec<BlockRow>,
-    pairs: Vec<(usize, usize)>,
+    pairs: Vec<(SendRow, BlockRow)>,
     skipped: usize,
 }
 
@@ -487,13 +491,12 @@ fn scan_join(run: &BackfillRun) -> Scan {
             blocks.extend(receiver_blocks_in(&obj, &p));
         }
     }
-    let (pairs, skipped) = join(&sends, &blocks);
-    Scan {
-        sends,
-        blocks,
-        pairs,
-        skipped,
-    }
+    let (joined, skipped) = join(&sends, &blocks);
+    let pairs = joined
+        .into_iter()
+        .map(|(s, b)| (s.clone(), b.clone()))
+        .collect();
+    Scan { pairs, skipped }
 }
 
 /// The whole engine: parse, scan and join, then (with --apply) write each
@@ -517,8 +520,8 @@ pub fn backfill_summary(args: &[String]) -> Result<Value, i32> {
                 existing.insert(id.to_string());
             }
         }
-        for (si, bi) in &scan.pairs {
-            match write_pair(&scan.sends[*si], &scan.blocks[*bi], &existing, &live_path) {
+        for (send, block) in &scan.pairs {
+            match write_pair(send, block, &existing, &live_path) {
                 Ok(true) => written += 1,
                 Ok(false) => {}
                 Err(e) => {
@@ -528,12 +531,12 @@ pub fn backfill_summary(args: &[String]) -> Result<Value, i32> {
             }
         }
     } else {
-        for (si, bi) in &scan.pairs {
+        for (send, block) in &scan.pairs {
             rows_out.push(json!({
-                "ts": scan.sends[*si].ts,
-                "from_session": scan.sends[*si].sender_session,
-                "to_session": scan.blocks[*bi].receiver_session,
-                "body_head": norm_head(&scan.sends[*si].body, 60),
+                "ts": send.ts,
+                "from_session": send.sender_session,
+                "to_session": block.receiver_session,
+                "body_head": norm_head(&send.body, 60),
             }));
         }
     }
