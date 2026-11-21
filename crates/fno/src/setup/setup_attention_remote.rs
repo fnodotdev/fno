@@ -16,24 +16,43 @@ const DEFAULT_SERVER: &str = "https://ntfy.sh";
 /// The default web-bridge port the serve route maps.
 const BRIDGE_PORT: u16 = 8722;
 
+/// The ways the remote step fails: a tailnet read, or a config write.
+#[derive(Debug, thiserror::Error)]
+pub enum RemoteError {
+    #[error("{0}")]
+    Tailscale(String),
+    #[error("{0}")]
+    Config(String),
+}
+
+impl RemoteError {
+    fn message(&self) -> &str {
+        match self {
+            Self::Tailscale(m) | Self::Config(m) => m,
+        }
+    }
+}
+
 /// The tailscale seam: the status read that names this machine's tailnet DNS name and login, and the serve command the route runs. Tests inject both.
 pub trait Tailscale {
-    fn status(&mut self) -> Result<(String, String), String>;
-    fn serve(&mut self, port: u16) -> Result<String, String>;
+    fn status(&mut self) -> Result<(String, String), RemoteError>;
+    fn serve(&mut self, port: u16) -> Result<String, RemoteError>;
 }
 
 /// The real seam: two `tailscale` child processes.
 pub struct CmdTailscale;
 
 impl Tailscale for CmdTailscale {
-    fn status(&mut self) -> Result<(String, String), String> {
+    fn status(&mut self) -> Result<(String, String), RemoteError> {
         let out = std::process::Command::new("tailscale")
             .arg("status")
             .arg("--json")
             .output()
-            .map_err(|e| format!("tailscale: {e}"))?;
+            .map_err(|e| RemoteError::Tailscale(format!("tailscale: {e}")))?;
         if !out.status.success() {
-            return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+            return Err(RemoteError::Tailscale(
+                String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            ));
         }
         let v: Value =
             serde_json::from_slice(&out.stdout).map_err(|e| format!("tailscale: {e}"))?;
@@ -47,22 +66,24 @@ impl Tailscale for CmdTailscale {
             .unwrap_or_default()
             .to_string();
         if dns.is_empty() || login.is_empty() {
-            return Err(String::from(
+            return Err(RemoteError::Tailscale(String::from(
                 "tailscale status --json names no Self.DNSName/LoginName; is this machine on a tailnet?",
-            ));
+            )));
         }
         Ok((dns, login))
     }
 
-    fn serve(&mut self, port: u16) -> Result<String, String> {
+    fn serve(&mut self, port: u16) -> Result<String, RemoteError> {
         let out = std::process::Command::new("tailscale")
             .arg("serve")
             .arg("--bg")
             .arg(format!("http://127.0.0.1:{port}"))
             .output()
-            .map_err(|e| format!("tailscale: {e}"))?;
+            .map_err(|e| RemoteError::Tailscale(format!("tailscale: {e}")))?;
         if !out.status.success() {
-            return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+            return Err(RemoteError::Tailscale(
+                String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            ));
         }
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     }
@@ -98,8 +119,8 @@ pub fn step(
     rows: Vec<Value>,
     invites: Vec<Value>,
     ask: &mut dyn Ask,
-    set_sinks: &dyn Fn(&str) -> Result<PathBuf, String>,
-    set_invites: &dyn Fn(&str) -> Result<PathBuf, String>,
+    set_sinks: &dyn Fn(&str) -> Result<PathBuf, RemoteError>,
+    set_invites: &dyn Fn(&str) -> Result<PathBuf, RemoteError>,
     tailscale: &mut dyn Tailscale,
     home: &Path,
 ) -> Outcome {
@@ -108,7 +129,8 @@ pub fn step(
     let (dns, login) = match tailscale.status() {
         Ok(pair) => pair,
         Err(e) => {
-            out.needs_human.push(format!("attention-remote: {e}"));
+            out.needs_human
+                .push(format!("attention-remote: {}", e.message()));
             return out;
         }
     };
@@ -177,13 +199,16 @@ pub fn step(
         }
         Err(e) => {
             out.needs_human.push(format!(
-                "attention-remote: the serve route needs a human: tailscale serve --bg http://127.0.0.1:{BRIDGE_PORT} ({e})"
+                "attention-remote: the serve route needs a human: tailscale serve --bg http://127.0.0.1:{BRIDGE_PORT} ({})",
+                e.message()
             ));
         }
     }
     if let Err(e) = set_sinks(&Value::Array(next_rows).to_string()) {
-        out.needs_human
-            .push(format!("attention-remote: cannot write the sink row: {e}"));
+        out.needs_human.push(format!(
+            "attention-remote: cannot write the sink row: {}",
+            e.message()
+        ));
     } else {
         out.done.push(format!(
             "attention-remote: subscribe to {url}/{topic} in the ntfy app",
@@ -195,7 +220,8 @@ pub fn step(
     }
     if let Err(e) = set_invites(&Value::Array(next_invites).to_string()) {
         out.needs_human.push(format!(
-            "attention-remote: cannot write the invites row: {e}"
+            "attention-remote: cannot write the invites row: {}",
+            e.message()
         ));
     }
     out

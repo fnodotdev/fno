@@ -2401,8 +2401,14 @@ fn step_attention_remote(exe: &Path, prompting: bool, rep: &mut Report) {
             .push(crate::setup_attention_remote::summary_line(&rows));
         return;
     }
-    let set_sinks = |value: &str| config_set(exe, &[("attention.sinks", value)], false);
-    let set_invites = |value: &str| config_set(exe, &[("web.invites", value)], false);
+    let set_sinks = |value: &str| {
+        config_set(exe, &[("attention.sinks", value)], false)
+            .map_err(crate::setup_attention_remote::RemoteError::Config)
+    };
+    let set_invites = |value: &str| {
+        config_set(exe, &[("web.invites", value)], false)
+            .map_err(crate::setup_attention_remote::RemoteError::Config)
+    };
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default();
