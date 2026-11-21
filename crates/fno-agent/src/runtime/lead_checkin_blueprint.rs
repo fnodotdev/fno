@@ -784,42 +784,14 @@ mod tests {
             Ok(HashMap::new()),
             Ok(0),
             vec![],
+            &[],
+            &[],
         )
     }
 
     /// The same call with the owner map named, for the deeper-team filter,
     /// and the idea-children count named, for the epic-heavy line.
     fn blueprint_reading_owned(
-        dir: &std::path::Path,
-        config_toml: &str,
-        board: Value,
-        session_id: Option<&str>,
-        holders: Vec<String>,
-        slots: Result<usize, String>,
-        floor: &str,
-        other_owned: Result<HashMap<String, String>, String>,
-        idea_children: Result<usize, String>,
-        seat_leads: Vec<SeatScope>,
-    ) -> Result<Value, String> {
-        blueprint_reading_graph(
-            dir,
-            config_toml,
-            board,
-            session_id,
-            holders,
-            slots,
-            floor,
-            other_owned,
-            idea_children,
-            seat_leads,
-            &[],
-            &[],
-        )
-    }
-
-    /// The same call with the scope's idea rows and the graph rows the
-    /// drained offer walk reads.
-    fn blueprint_reading_graph(
         dir: &std::path::Path,
         config_toml: &str,
         board: Value,
@@ -902,6 +874,8 @@ mod tests {
                 scope: "x-eSeat".to_string(),
                 children: vec!["x-seat1".to_string()],
             }],
+            &[],
+            &[],
         )
         .unwrap();
         assert_eq!(
@@ -1070,6 +1044,8 @@ mod tests {
             ])),
             Ok(0),
             vec![],
+            &[],
+            &[],
         )
         .unwrap();
         assert_eq!(reading["target_ready"], json!(["x-mine"]), "{reading}");
@@ -1117,7 +1093,7 @@ mod tests {
         let user_only = json!({"id": "x-uo", "status": "idea", "difficulty": "medium",
             "parent": "x-scope", "tags": ["user-only"]});
         let drained = |graph: &[Value]| {
-            blueprint_reading_graph(
+            blueprint_reading_owned(
                 &dir,
                 "",
                 unplanned_board(&[], Some(0)),
@@ -1167,6 +1143,8 @@ mod tests {
             Err("a live team's scope does not compile: e-x: unknown".to_string()),
             Ok(0),
             vec![],
+            &[],
+            &[],
         );
         assert!(reading.is_err());
         let _ = std::fs::remove_dir_all(&dir);
