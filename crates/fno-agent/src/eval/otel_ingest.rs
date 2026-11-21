@@ -1290,7 +1290,7 @@ mod tests {
     fn requests_in_window_filters_by_ts() {
         let (agents, _td) = home();
         let db = agents.otel_dir().join("otel.db");
-        let cutoff = crate::event_store::parse_rfc3339_ms("2026-11-20T12:00:00Z").unwrap();
+        let cutoff = crate::event_store::parse_rfc3339_ms("2026-11-20T10:00:00Z").unwrap();
         let row = |rid: &str, ts: &str| {
             let mut r = api_request(rid, "sess-fwd", 3_050_000);
             {
@@ -1308,7 +1308,7 @@ mod tests {
             &agents.events_jsonl(),
             body(json!([
                 row("req-a", "2026-11-20T11:00:00Z"),
-                row("req-b", "2026-11-20T09:00:00Z"),
+                row("req-b", "2026-11-20T09:59:59.999Z"),
                 row("req-c", "2026-11-19T00:00:00Z"),
             ]))
             .as_bytes(),
@@ -1328,9 +1328,11 @@ mod tests {
         let keys: Vec<&str> = got.iter().map(|r| r.dedupe_key.as_str()).collect();
         assert_eq!(
             keys,
-            vec!["rid:req-a", "rid:req-b"],
+            vec!["rid:req-a"],
             "in-window rows oldest first; out-of-window and undated rows stay home"
         );
+        // One millisecond under the cutoff admits the boundary row: the
+        // millisecond-formatted string floor compares correctly at .999.
         assert_eq!(requests_in_window(&db, cutoff - 1).unwrap().len(), 2);
     }
 }
