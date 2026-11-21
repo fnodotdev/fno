@@ -740,7 +740,7 @@ mod tests {
         assert_eq!(
             board
                 .model()
-                .get("requests")
+                .pointer("/requests")
                 .and_then(|v| v.as_array())
                 .map(Vec::len),
             Some(1)
@@ -755,11 +755,13 @@ mod tests {
         );
         let m = board.model();
         assert_eq!(
-            m.get("requests").and_then(|v| v.as_array()).map(Vec::len),
+            m.pointer("/requests")
+                .and_then(|v| v.as_array())
+                .map(Vec::len),
             Some(1)
         );
         assert_eq!(
-            m.get("requests_error").and_then(|v| v.as_str()),
+            m.pointer("/requests_error").and_then(|v| v.as_str()),
             Some("requests read timed out after 30s")
         );
     }
