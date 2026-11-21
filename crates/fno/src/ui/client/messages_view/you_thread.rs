@@ -287,35 +287,17 @@ impl MessagesBoard {
                     owners.push(Some(item_index));
                 }
             }
-            if item.gap.is_empty() {
-                continue;
-            }
-            let open = self.you_open.contains(&item.band_key());
-            push_blank(&mut lines, &mut owners);
-            let marker = if open { "v" } else { ">" };
-            let mut band = TLine::meta(cut_chars(
-                &format!("  {marker} {}", band_line(item)),
-                wrap_w,
-            ));
-            band.band = selected;
-            lines.push(band);
-            owners.push(Some(item_index));
-            if open {
-                for g in &item.gap {
-                    let row = match g {
-                        GapView::Mail {
-                            sender, summary, ..
-                        } => format!("    {sender} \u{b7} {summary}"),
-                        GapView::LeadUpdate { text, .. } => {
-                            format!("    lead \u{b7} {}", text.lines().next().unwrap_or(""))
-                        }
-                        GapView::Other => continue,
-                    };
-                    let mut line = TLine::meta(cut_chars(&row, wrap_w));
-                    line.band = selected;
-                    lines.push(line);
-                    owners.push(Some(item_index));
-                }
+            if !item.gap.is_empty() {
+                let open = self.you_open.contains(&item.band_key());
+                push_band(
+                    &mut lines,
+                    &mut owners,
+                    item,
+                    item_index,
+                    open,
+                    selected,
+                    wrap_w,
+                );
             }
         }
         if let Some((prev, prev_right)) = &last {
@@ -347,6 +329,37 @@ impl MessagesBoard {
             self.you_open.insert(key);
         }
         true
+    }
+}
+
+/// One item's band: the closed count line, then one row per entry when open.
+fn push_band(
+    lines: &mut Vec<TLine>,
+    owners: &mut Vec<Option<usize>>,
+    item: &YouItemView,
+    item_index: usize,
+    open: bool,
+    selected: bool,
+    wrap_w: usize,
+) {
+    push_blank(lines, owners);
+    let marker = if open { "v" } else { ">" };
+    let head = format!("  {marker} {}", band_line(item));
+    let rows = item.gap.iter().filter(|_| open).filter_map(|g| match g {
+        GapView::Mail {
+            sender, summary, ..
+        } => Some(format!("    {sender} \u{b7} {summary}")),
+        GapView::LeadUpdate { text, .. } => Some(format!(
+            "    lead \u{b7} {}",
+            text.lines().next().unwrap_or("")
+        )),
+        GapView::Other => None,
+    });
+    for row in std::iter::once(head).chain(rows) {
+        let mut line = TLine::meta(cut_chars(&row, wrap_w));
+        line.band = selected;
+        lines.push(line);
+        owners.push(Some(item_index));
     }
 }
 
