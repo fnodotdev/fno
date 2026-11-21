@@ -226,7 +226,7 @@ Options:
     }
 }
 
-#[cfg(all(test, feature = "full"))]
+#[cfg(all(test, feature = "app"))]
 mod tests {
     use super::*;
 

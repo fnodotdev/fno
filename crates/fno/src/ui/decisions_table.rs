@@ -249,7 +249,7 @@ pub fn run() -> i32 {
         filter: Filter::default(),
         pick: 0,
     };
-    let mut _screen = match crate::observe::Screen::enter() {
+    let mut _screen = match crate::screen::Screen::enter() {
         Ok(s) => Some(s),
         Err(e) => {
             eprintln!("fno inbox decisions --table: {e}");
@@ -301,7 +301,7 @@ pub fn run() -> i32 {
                         t.rows = rows;
                     }
                 }
-                _screen = crate::observe::Screen::enter().ok();
+                _screen = crate::screen::Screen::enter().ok();
             }
             k => t.apply(k),
         }

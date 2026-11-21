@@ -151,6 +151,13 @@ jobs:
         working-directory: crates/fno
         run: cargo check --no-default-features --locked
 
+      # fno-app links fno with the `app` feature alone. Code that reaches
+      # axum, magic-wormhole or hayro outside the `web`, `transfer` and `pdf`
+      # gates breaks that build only.
+      - name: cargo check --no-default-features --features app (fno app build)
+        working-directory: crates/fno
+        run: cargo check --lib --no-default-features --features app --locked
+
       - name: cargo check --all-targets (fno-mail)
         working-directory: crates/fno-mail
         run: cargo check --all-targets --locked

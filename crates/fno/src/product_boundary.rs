@@ -143,7 +143,7 @@ pub(crate) fn find_on_path(name: &str) -> Option<PathBuf> {
 
 /// Resolve the runtime binary the way attach does, then settle a bare PATH
 /// fallback against PATH itself so the observation never reads cwd.
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 fn resolve_runtime_bin() -> PathBuf {
     let resolved = crate::digest_overlay::fno_agent_bin();
     if resolved == Path::new(AGENT_RUNTIME_BIN) {
@@ -153,7 +153,7 @@ fn resolve_runtime_bin() -> PathBuf {
     }
 }
 
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 fn runtime_availability(bin: &Path) -> (Availability, String) {
     if runnable_file(bin) {
         (
@@ -169,12 +169,12 @@ fn runtime_availability(bin: &Path) -> (Availability, String) {
 }
 
 /// Observe the agent runtime. Existence only: no execution, no version probe.
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 pub fn agent_runtime_observation() -> Observation {
     agent_runtime_observation_at(crate::digest_overlay::now_secs())
 }
 
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 pub(crate) fn agent_runtime_observation_at(now: u64) -> Observation {
     let bin = resolve_runtime_bin();
     let (availability, reason) = runtime_availability(&bin);
@@ -188,12 +188,12 @@ pub(crate) fn agent_runtime_observation_at(now: u64) -> Observation {
 }
 
 /// Observe the graph worker through store_client's own resolver.
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 pub fn graph_worker_observation() -> Observation {
     graph_worker_observation_at(crate::digest_overlay::now_secs())
 }
 
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 pub(crate) fn graph_worker_observation_at(now: u64) -> Observation {
     let (availability, reason) = match crate::store_client::worker_binary() {
         Some(p) => (Availability::Available, format!("resolved {}", p.display())),
@@ -211,12 +211,12 @@ pub(crate) fn graph_worker_observation_at(now: u64) -> Observation {
 /// The Python backend is deliberately UNMEASURED: native workspace commands
 /// never invoke it, and probing an interpreter from a read-only diagnostic
 /// would spend exactly the kind of execution this module exists to avoid.
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 pub fn python_cli_observation() -> Observation {
     python_cli_observation_at(crate::digest_overlay::now_secs())
 }
 
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 pub(crate) fn python_cli_observation_at(now: u64) -> Observation {
     Observation {
         component: PYTHON_CLI,
@@ -251,7 +251,7 @@ pub struct DigestObservation {
 /// Pure over (enabled, backend_present) so every order is testable without
 /// config files. Disabled wins over missing: a knob the operator turned off
 /// is not reported as a fault.
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 pub(crate) fn digest_state_for(
     enabled: bool,
     backend_present: bool,
@@ -272,7 +272,7 @@ pub(crate) fn digest_state_for(
 /// Observe the digest from the doctor's cwd, through the digest's own gate
 /// (`digest_overlay::attach_digest_enabled`, default ON) and the same runtime
 /// resolver as above.
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 pub fn digest_observation(cwd: &Path) -> DigestObservation {
     digest_observation_at(
         crate::digest_overlay::attach_digest_enabled(cwd),
@@ -280,7 +280,7 @@ pub fn digest_observation(cwd: &Path) -> DigestObservation {
     )
 }
 
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 pub(crate) fn digest_observation_at(enabled: bool, now: u64) -> DigestObservation {
     let backend_present = runnable_file(&resolve_runtime_bin());
     let (state, why) = digest_state_for(enabled, backend_present);
@@ -294,7 +294,7 @@ pub(crate) fn digest_observation_at(enabled: bool, now: u64) -> DigestObservatio
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(feature = "full")]
+    #[cfg(feature = "app")]
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
@@ -327,7 +327,7 @@ mod tests {
         assert!(delivery.contains(&PYTHON_CLI));
     }
     #[test]
-    #[cfg(feature = "full")]
+    #[cfg(feature = "app")]
     fn runtime_observation_reports_present_and_missing() {
         let bin = std::env::temp_dir().join(format!("fno-pb-test-{}", std::process::id()));
         std::fs::write(&bin, b"").unwrap();
@@ -349,7 +349,7 @@ mod tests {
         std::fs::remove_file(&bin).ok();
     }
     #[test]
-    #[cfg(feature = "full")]
+    #[cfg(feature = "app")]
     fn unavailable_worker_observation_carries_the_classified_error() {
         // When the resolver misses, the observation's reason IS the refusal
         // store_client returns: one classifier, two projections.

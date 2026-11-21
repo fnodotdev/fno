@@ -16,7 +16,7 @@
 
 use crate::keeper_wire::{ErrorKind, KeeperError, KeeperReply, KeeperRequest};
 use crate::keeper_wire::{TAG_REQUEST, TAG_RESPONSE};
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 use crate::node_row::KanbanColumn;
 use crate::node_row::NodeRow;
 use crate::pid::Pid;
@@ -396,7 +396,7 @@ pub fn call(graph: &Path, method: &str, params: Value) -> Reply {
 /// A finite, non-huge rank value (render._rank_band's rule): a poisoned
 /// non-finite or giant-int peer rank is unranked, so it can never corrupt
 /// the --top arithmetic or persist a NaN/inf rank.
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 fn ranked_rank(e: &NodeRow) -> Option<f64> {
     e.rank().filter(|v| v.is_finite() && v.abs() < 1e15)
 }
@@ -412,7 +412,7 @@ fn ranked_rank(e: &NodeRow) -> Option<f64> {
 /// when a concurrent reorder moved the file in between, and this retries the
 /// read-compute-write as one provably fresh step instead of floating a card
 /// below a rank it never saw.
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 pub fn rank_top(graph: &Path, node_id: &str) -> Result<String, StoreClientError> {
     /// The `begin` snapshot: its digest and its rows.
     #[derive(Default, Deserialize)]
@@ -483,7 +483,7 @@ pub fn rank_top(graph: &Path, node_id: &str) -> Result<String, StoreClientError>
     unreachable!("the retry loop returns on every branch")
 }
 
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 fn format_rank(v: f64) -> String {
     if v == v.trunc() {
         format!("{}", v as i64)
@@ -493,7 +493,7 @@ fn format_rank(v: f64) -> String {
 }
 
 /// The kanban column for an entry, claim-blind (see [`rank_top`]).
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 fn backlog_column(e: &NodeRow) -> Option<KanbanColumn> {
     // `kanban_column` needs claim/underway facts the command deliberately does
     // not fetch; false for both is the unclaimed view the float targets.

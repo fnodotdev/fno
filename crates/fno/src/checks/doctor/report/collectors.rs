@@ -951,7 +951,7 @@ fn bridge_marker_report() -> (bool, BridgeDetail) {
             },
         );
     };
-    let Ok(marker) = serde_json::from_value::<crate::web::BridgeMarker>(state.clone()) else {
+    let Ok(marker) = serde_json::from_value::<crate::web_core::BridgeMarker>(state.clone()) else {
         return (
             false,
             BridgeDetail {
@@ -960,7 +960,7 @@ fn bridge_marker_report() -> (bool, BridgeDetail) {
             },
         );
     };
-    if !crate::web::recorded_pid_is_live(&state) {
+    if !crate::web_core::recorded_pid_is_live(&state) {
         return (
             false,
             BridgeDetail {

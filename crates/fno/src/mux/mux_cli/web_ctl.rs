@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use super::{EXIT_OK, EXIT_USAGE};
 use crate::proto;
-use crate::web::recorded_pid_is_live;
+use crate::web_core::recorded_pid_is_live;
 
 pub fn web(op: crate::cli_args::WebOp, args: &[OsString], _env_session: Option<&str>) -> i32 {
     match op {
@@ -96,7 +96,8 @@ fn reap_partition(dir: &std::path::Path) -> (Vec<String>, Vec<String>, Vec<Strin
             unreadable.push(session);
             continue;
         };
-        let Ok(marker) = serde_json::from_value::<crate::web::BridgeMarker>(state.clone()) else {
+        let Ok(marker) = serde_json::from_value::<crate::web_core::BridgeMarker>(state.clone())
+        else {
             unreadable.push(session);
             continue;
         };
