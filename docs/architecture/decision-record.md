@@ -65,6 +65,8 @@ A lead can **challenge** a live decision: `fno inbox outstanding ask --challenge
 
 Every write door also checks for a near live ruling before it records. A near ruling shares six or more topic words with the new decision. Those words are also half of the shorter text, or more. In that case the door refuses until the writer names each near ruling. `--supersedes <id>` retires it, and `--keep <id>` keeps it. The user's own board answer is the ruling, so it is never refused. Near a live ruling it prints that ruling as a warning line and records itself as superseding it. A `--keep <id>` on the answer keeps that ruling instead.
 
+The standing door (`fno inbox decisions set`) records conflict resolutions only. When the subject carries no live law and the call names no `--supersedes`, nothing conflicts, so the door refuses and names the plain channel: `fno inbox decide` records the ruling instead, and `--expiry never` makes one standing. A store that does not exist yet counts as no live law, so the refusal holds on a fresh install; the plain decision door bootstraps the store. A store that exists but reads damaged proves nothing, so the gate skips and the write never blocks on a broken read. A ruling with no subject (a decision row with no topic) still records: the conflict read is per subject, and a subjectless row has none to read.
+
 ## Which field a reader can trust
 
 A row is quoted far more often than it is read in the list, and a quoted row carries no lane column. So provenance has to survive on the row itself. Five fields. `decided_by` is the one fact about who ran the command, and `user_sig` is the one fact about which user key stands behind the row.

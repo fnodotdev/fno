@@ -1936,6 +1936,40 @@ pub(crate) fn door_refuse(message: &str) -> i32 {
     3
 }
 
+/// The no-conflict refusal: the same text whether the index read empty or
+/// the store is absent, because both prove the same fact: nothing live
+/// conflicts with this ruling, and a law only settles a conflict between
+/// rulings. The pointer names the plain decision door.
+fn no_conflict_refusal(subject: &str, missing_store: bool) -> String {
+    let store = if missing_store {
+        " (the decision store does not exist yet)"
+    } else {
+        ""
+    };
+    let supersede_hint = if missing_store {
+        ""
+    } else {
+        " If this ruling retires an existing decision under another spelling, pass --supersedes <id>."
+    };
+    format!(
+        "no live law under the subject {subject:?} conflicts with this ruling{store}, and a law \
+         only settles a conflict between rulings. Record a plain decision instead: \
+         fno inbox decide {subject:?} \"<decision>\" --audience internal --why \"<why>\" \
+         --rationale \"<why>\" (--expiry never makes one standing).{supersede_hint}"
+    )
+}
+
+/// Whether the machine holds no decision store at all: no db twin at the
+/// graph anchor, no JSONL, no journal side-store. Absence proves the
+/// subject carries no live law; a present-but-unreadable store proves
+/// nothing and skips the gate.
+fn decision_store_absent() -> bool {
+    let jsonl = decision_index::default_state_path("decisions.jsonl");
+    !(crate::backlog::database_path(&crate::graph_get::default_graph_path()).exists()
+        || jsonl.exists()
+        || crate::event_store::store_path(&jsonl).exists())
+}
+
 /// The door body, gate by gate in `record_command`'s order. Prints the
 /// decision id on stdout alone; every refusal and hint rides stderr.
 fn run_record_door(args: &[String], stdin_text: &str) -> i32 {
@@ -2174,7 +2208,11 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
                     })
                     .collect();
                 match same.len() {
-                    0 => auto_superseded = None,
+                    // Nothing live under this subject means nothing conflicts,
+                    // and a law only settles a conflict between rulings. The
+                    // plain decision door records it; this door stays
+                    // conflict-only.
+                    0 => return door_refuse(&no_conflict_refusal(door.subject.trim(), false)),
                     1 => {
                         auto_superseded = Some(same[0].clone());
                         supersedes = Some(same[0].clone());
@@ -2190,6 +2228,14 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
                         ));
                     }
                 }
+            }
+            // A store that is ABSENT proves the subject carries no live law
+            // (the plain decision door bootstraps the store), so the refusal
+            // fires on a fresh install too. A store that exists but reads
+            // damaged proves nothing: the gate skips, and a legal write never
+            // blocks on a broken read.
+            Err(_) if decision_store_absent() => {
+                return door_refuse(&no_conflict_refusal(door.subject.trim(), true));
             }
             Err(_) => auto_superseded = None,
         }
@@ -3894,10 +3940,24 @@ pub(crate) mod scope_tests {
 
         let env = DoorEnv::new();
         crate::paths::pin_test_claims_root(env.0.path());
+        // A recoverable seed row: an explicit supersession target is a
+        // conflict resolution, which carries each record past the door's
+        // no-conflict refusal. The test gates scope widening, not
+        // supersession.
+        std::fs::write(
+            env.0.path().join("decisions.jsonl"),
+            concat!(
+                "{\"ts\":\"2026-08-29T19:00:00Z\",\"type\":\"operator_decision\",\"source\":\"test\",",
+                "\"data\":{\"decision_id\":\"d-5eed5eed\",\"subject\":\"scope-seed\",",
+                "\"decision\":\"The scope seed.\",\"authority_source\":\"operator\"}}\n"
+            ),
+        )
+        .expect("writes");
         let operator = Caller::as_authority("operator");
         let record = |text: &str, widen: Option<Widen>| {
             let mut d = door(text, text);
             d.widen = widen;
+            d.supersedes = Some("d-5eed5eed".to_string());
             record_door_write(d, text.to_string(), &operator)
         };
         // No certificate: global refuses and no store holds the row.
@@ -4039,8 +4099,21 @@ pub(crate) mod scope_tests {
         assert_eq!(code, 3, "unmeasured claim refused");
         assert!(env.index_text().is_empty());
 
+        // A recoverable seed row: the successful record carries an explicit
+        // supersession target, a conflict resolution, past the door's
+        // no-conflict refusal.
+        std::fs::write(
+            env.0.path().join("decisions.jsonl"),
+            concat!(
+                "{\"ts\":\"2026-08-29T19:00:00Z\",\"type\":\"operator_decision\",\"source\":\"test\",",
+                "\"data\":{\"decision_id\":\"d-e1e1e111\",\"subject\":\"evidence-seed\",",
+                "\"decision\":\"The evidence seed.\",\"authority_source\":\"operator\"}}\n"
+            ),
+        )
+        .expect("writes");
         let mut d = door("territory-resolver", "advance.py is 200 lines");
         d.reads = vec!["head -5 advance.py".to_string()];
+        d.supersedes = Some("d-e1e1e111".to_string());
         let code = record_door_write(
             d,
             "advance.py is 200 lines".to_string(),
@@ -4050,5 +4123,59 @@ pub(crate) mod scope_tests {
         let index = env.index_text();
         assert!(index.contains("\"reads\":[{"), "{index}");
         assert!(index.contains("head -5 advance.py"), "{index}");
+    }
+
+    #[test]
+    fn a_law_with_no_conflict_refuses_and_a_conflict_records() {
+        let env = DoorEnv::new();
+        crate::paths::pin_test_claims_root(env.0.path());
+        // Missing store: absence proves no live law, so the refusal fires on
+        // a fresh install too. The plain decision door bootstraps the store.
+        let code = record_door_write(
+            door("fresh-subject", "Nothing live conflicts."),
+            "Nothing live conflicts.".to_string(),
+            &Caller::as_authority("operator"),
+        );
+        assert_eq!(code, 3, "a no-conflict law refuses");
+        assert!(env.index_text().is_empty(), "nothing recorded");
+
+        // A store holding another subject's law: still no live law under
+        // this subject.
+        std::fs::write(
+            env.0.path().join("decisions.jsonl"),
+            concat!(
+                "{\"ts\":\"2026-08-29T19:00:00Z\",\"type\":\"operator_decision\",\"source\":\"test\",",
+                "\"data\":{\"decision_id\":\"d-badc0de1\",\"subject\":\"other-subject\",",
+                "\"decision\":\"The other subject's law.\",\"authority_source\":\"operator\"}}\n"
+            ),
+        )
+        .expect("writes");
+        let code = record_door_write(
+            door("fresh-subject", "Still nothing live under this subject."),
+            "Still nothing live under this subject.".to_string(),
+            &Caller::as_authority("operator"),
+        );
+        assert_eq!(code, 3, "another subject's law is still no conflict");
+
+        // The admit arm: a live law under the subject records, as an
+        // auto-supersession. The seed's reach names the door's project scope
+        // so the scope-equal filter sees it.
+        std::fs::write(
+            env.0.path().join("decisions.jsonl"),
+            concat!(
+                "{\"ts\":\"2026-08-29T19:00:00Z\",\"type\":\"operator_decision\",\"source\":\"test\",",
+                "\"data\":{\"decision_id\":\"d-cafef00d\",\"subject\":\"fresh-subject\",",
+                "\"decision\":\"The law this ruling replaces.\",\"authority_source\":\"chat_attested\",",
+                "\"reach\":\"project:demo\"}}\n"
+            ),
+        )
+        .expect("writes");
+        let code = record_door_write(
+            door("fresh-subject", "The replacement ruling."),
+            "The replacement ruling.".to_string(),
+            &Caller::as_authority("operator"),
+        );
+        assert_eq!(code, 0, "a conflict records: {code}");
+        assert!(env.index_text().contains("The replacement ruling."));
     }
 }
