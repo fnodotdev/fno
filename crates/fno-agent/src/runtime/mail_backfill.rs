@@ -410,6 +410,16 @@ fn run_backfill(args: &[String]) -> i32 {
             }
         }
     };
+    if roots.is_empty() {
+        // No --root: scan the Claude projects home, the transcript base
+        // every Claude Code session writes under, so the bare front-door
+        // form finds the user's history.
+        roots.push(
+            crate::claude_drive::claude_projects_dir()
+                .to_string_lossy()
+                .to_string(),
+        );
+    }
     let mut files: Vec<PathBuf> = Vec::new();
     for root in &roots {
         collect_jsonl(Path::new(root), 0, &mut files);
