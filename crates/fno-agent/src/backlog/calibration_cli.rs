@@ -248,14 +248,14 @@ fn run_by_lane(
             return super::get_cli::GRAPH_UNREADABLE_EXIT;
         }
     };
-    let ledger = scorecard::LedgerIndex::load();
+    // One ledger read feeds both the lane index and the pricing hint.
+    let ledger_rows = crate::scoreboard_provider::ledger_rows();
+    let ledger = scorecard::LedgerIndex::build(&ledger_rows);
     // The ledger-level pricing read for the coverage hint: priced entries
     // over all entries with the unpriced split named, plus rate-book
     // presence - the reader-side answer to "why is cost unmeasured".
-    let ledger_pricing = scorecard::priced_coverage(
-        &crate::scoreboard_provider::ledger_rows(),
-        crate::model_price::book_present(),
-    );
+    let ledger_pricing =
+        scorecard::priced_coverage(&ledger_rows, crate::model_price::book_present());
     let cwd = std::env::current_dir().unwrap_or_default();
     let journal = crate::paths::events_path(&cwd);
     // An unreadable friction store stays None down the fold, so the
