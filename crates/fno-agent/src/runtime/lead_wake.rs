@@ -475,22 +475,23 @@ pub(crate) fn run_pass(home: &AgentsHome, config_cwd: &Path) -> Result<Outcome, 
             .and_then(|r| r.get("ts").and_then(Value::as_str))
             .and_then(parse_ts);
         beats.insert(team.scope.clone(), ts);
-        if let Some(row) = beat.as_ref().and_then(|b| b.row.as_ref()) {
-            let parked = row
-                .pointer("/data/held_park")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            if parked {
-                let ids: Vec<String> = row
-                    .pointer("/data/held_park_qs")
-                    .and_then(Value::as_array)
-                    .map(|rows| {
-                        rows.iter()
-                            .filter_map(|v| v.as_str().map(str::to_string))
-                            .take(PARK_IDS_CAP)
-                            .collect()
-                    })
-                    .unwrap_or_default();
+        if let Some(data) = beat
+            .as_ref()
+            .and_then(|b| b.row.as_ref())
+            .and_then(|r| r.pointer("/data"))
+            .and_then(Value::as_object)
+        {
+            // The row's data deserializes once through the check-in's typed
+            // mirror, so the arm reads the stamp through the same shape the
+            // beat wrote it with.
+            let view = crate::runtime::lead_checkin::de::BeatData::snapshot(data);
+            if view.held_park == Some(true) {
+                let ids: Vec<String> = view
+                    .held_park_qs
+                    .unwrap_or_default()
+                    .into_iter()
+                    .take(PARK_IDS_CAP)
+                    .collect();
                 parks.insert(team.scope.clone(), ParkState { ids });
             }
         }

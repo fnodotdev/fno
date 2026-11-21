@@ -48,7 +48,7 @@ mod posture;
 mod peer_blocked;
 
 #[path = "lead_checkin_de.rs"]
-mod de;
+pub(crate) mod de;
 
 #[path = "lead_checkin_prompt_parked.rs"]
 pub(crate) mod prompt_parked;
