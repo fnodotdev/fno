@@ -1016,6 +1016,23 @@ fn lead_cell(initial: Option<String>, glyph: String, color: u32, adv: Pixels, p:
     }
 }
 
+/// An agent's last result: one quiet line under its row, cut with an
+/// ellipsis at the pane edge.
+fn note_row(i: usize, text: String, p: &Palette) -> Stateful<Div> {
+    div()
+        .id(i)
+        .w(px(WIDTH))
+        .px_3()
+        .pl(px(WIDTH * 0.08 + 12.0))
+        .pb_1()
+        .child(
+            ui::text(text, ui::Role::Fact, p)
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis(),
+        )
+}
+
 /// One sidebar row as an element.
 fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> Stateful<Div> {
     let (p, adv) = (grid.p, grid.adv);
@@ -1056,18 +1073,7 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
             .px_3()
             .py_1()
             .child(ui::text(why, ui::Role::Fact, &p)),
-        Row::Note(text) => div()
-            .id(i)
-            .w(px(WIDTH))
-            .px_3()
-            .pl(px(WIDTH * 0.08 + 12.0))
-            .pb_1()
-            .child(
-                ui::text(text, ui::Role::Fact, &p)
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_ellipsis(),
-            ),
+        Row::Note(text) => note_row(i, text, &p),
         Row::Workspace {
             id,
             name,
