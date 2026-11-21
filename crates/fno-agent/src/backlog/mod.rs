@@ -1141,6 +1141,7 @@ pub(crate) fn authoritative_sync_rebased(
         .iter()
         .any(|id| stored.get(*id) != snapshot_rows.get(*id))
     {
+        eprintln!("rebase refused: touched rows moved: stored {stored:?} snapshot {snapshot_rows:?} changed {ids:?}");
         return Ok(None);
     }
     for row in after {
@@ -1156,6 +1157,7 @@ pub(crate) fn authoritative_sync_rebased(
             |found| found.get(0),
         )?;
         if held_elsewhere {
+            eprintln!("rebase refused: slug {slug} held elsewhere");
             return Ok(None);
         }
     }
@@ -1196,6 +1198,7 @@ pub(crate) fn authoritative_sync_rebased(
             |found| found.get(0),
         )?;
         if now > seen {
+            eprintln!("rebase refused: parent {parent} children {seen} -> {now}");
             return Ok(None);
         }
     }
