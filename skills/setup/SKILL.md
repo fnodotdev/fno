@@ -58,7 +58,7 @@ The run writes `<state_dir>/sidecar/wizard-report.json`. It prints the path as `
 
 ## Offer the vision draft
 
-After the report, check the repo this setup serves for the judge's three vision homes (`VISION.md`, `.agents/context/VISION.md`, `docs/vision.md`) and for a set `config.project.vision`. When all are absent, offer the draft: `/fno:vision` detects the gap, drafts VISION.md from the repo's own material, and opens it as a PR the user edits and merges. Start nothing without a yes. A turn the user typed may ask in chat; a machine wake files the question page instead. The full procedure and the mode split: [skills/vision/SKILL.md](../vision/SKILL.md).
+After the report, check the repo this setup serves for the judge's three vision homes and for a set `config.project.vision`. When all are absent, offer the draft. `/fno:vision` detects the gap and drafts VISION.md from the repo's own material. It opens a PR the user edits and merges. Start nothing without a yes. A turn the user typed can ask in chat. A machine wake files the question page instead. The full procedure and the mode split: [skills/vision/SKILL.md](../vision/SKILL.md).
 
 ## Modes
 
