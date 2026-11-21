@@ -3387,4 +3387,153 @@ mod tests {
         assert!(a["completed_at"].is_string(), "{a}");
         assert_eq!(b["status"], "in_review", "the control stays open: {b}");
     }
+
+    /// The kill window the merge door's detach closes: a worker that dies
+    /// right after spawning its close leg cannot take the closer with it.
+    /// The re-invoked test binary below plays the worker. It enters its own
+    /// session first (a supervisor-spawned worker owns a process group),
+    /// spawns the leg through `run_leg`, then kills its own process group one
+    /// second in, the way a reap takes a worker down. The detached leg's
+    /// grandchild sits in a session of its own and finishes; the attached
+    /// withhold arm shares the worker's group and dies with it, proving the
+    /// detach is what carries the guarantee.
+    #[test]
+    #[cfg(unix)]
+    fn a_killed_worker_leaves_its_detached_close_leg_alive() {
+        use std::os::unix::process::ExitStatusExt;
+        use std::process::Command;
+        use std::time::{Duration, Instant};
+
+        // Child mode: the parent phase below re-invokes this test binary.
+        if std::env::var("FNO_TEST_LEG_WORKER").is_ok() {
+            worker_phase(
+                &std::env::var("FNO_TEST_LEG_STUB").expect("stub path"),
+                &std::env::var("FNO_TEST_LEG_MARKERS").expect("marker dir"),
+                std::env::var("FNO_TEST_LEG_DETACHED").is_ok_and(|v| v == "1"),
+            );
+            return;
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        let markers = dir.path().join("markers");
+        std::fs::create_dir_all(&markers).unwrap();
+        let stub = dir.path().join("close_leg_stub.sh");
+        std::fs::write(
+            &stub,
+            "#!/bin/sh\nprintf started > \"$MARKER_DIR/started\"\nprintf $$ > \"$MARKER_DIR/leg-pid\"\nwhile [ ! -f \"$MARKER_DIR/release\" ]; do sleep 0.1; done\nprintf done > \"$MARKER_DIR/done\"\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let run_worker = |detached: bool| {
+            for m in ["started", "done", "release", "leg-pid", "worker-returned"] {
+                let _ = std::fs::remove_file(markers.join(m));
+            }
+            let exe = std::env::current_exe().expect("test exe");
+            Command::new(exe)
+                .args([
+                    "a_killed_worker_leaves_its_detached_close_leg_alive",
+                    "--exact",
+                    "--nocapture",
+                ])
+                .env("FNO_TEST_LEG_WORKER", "1")
+                .env("FNO_TEST_LEG_STUB", &stub)
+                .env("FNO_TEST_LEG_MARKERS", &markers)
+                .env("FNO_TEST_LEG_DETACHED", if detached { "1" } else { "0" })
+                .env("MARKER_DIR", &markers)
+                .env("FNO_BIN", &stub)
+                .status()
+                .expect("the worker child runs")
+        };
+        let leg_pid = |markers: &Path| -> u32 {
+            let raw = std::fs::read_to_string(markers.join("leg-pid")).expect("leg pid file");
+            raw.trim().parse().expect("leg pid parses")
+        };
+        let alive = |pid: u32| unsafe { libc::kill(pid as libc::pid_t, 0) == 0 };
+
+        // The detach arm: the worker dies, the leg still finishes. Release
+        // only after the worker is confirmed dead, so a done marker proves
+        // the grandchild ran PAST its spawner's death.
+        let status = run_worker(true);
+        assert_eq!(
+            status.signal(),
+            Some(libc::SIGKILL),
+            "the worker child must die to SIGKILL, got {status:?}"
+        );
+        assert!(
+            markers.join("started").exists(),
+            "the detached leg never launched"
+        );
+        std::fs::write(markers.join("release"), "go").unwrap();
+        let done = markers.join("done");
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while !done.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "the detached leg never finished its close"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        // The withhold arm: attached, the leg dies with the worker's group.
+        // The leg's death is read directly through its pid, never inferred
+        // from an absence.
+        let status = run_worker(false);
+        assert_eq!(
+            status.signal(),
+            Some(libc::SIGKILL),
+            "the worker child must die to SIGKILL, got {status:?}"
+        );
+        assert!(
+            !markers.join("worker-returned").exists(),
+            "the worker's group kill never landed"
+        );
+        let pid = leg_pid(&markers);
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while alive(pid) {
+            assert!(
+                Instant::now() < deadline,
+                "an attached leg must die with its worker's group; pid {pid} still alive"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(
+            !markers.join("worker-returned").exists(),
+            "the worker's group kill never landed"
+        );
+    }
+
+    /// The child half of the kill-window test. Reached as a real worker only
+    /// when the group kill fails; the success path dies inside `run_leg`.
+    #[cfg(unix)]
+    fn worker_phase(stub: &str, markers: &str, detached: bool) {
+        use std::time::Duration;
+        // Own session + group, like a supervisor-spawned worker.
+        unsafe {
+            libc::setsid();
+        }
+        let argv = vec![stub.to_string()];
+        let watchdog = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(1));
+            // A group kill, the way a reap takes a worker down.
+            unsafe {
+                libc::kill(-libc::getpid(), libc::SIGKILL);
+            }
+        });
+        let outcome = crate::gate::post_merge::ritual::run_leg(
+            &argv,
+            std::path::Path::new(markers),
+            Duration::from_secs(20),
+            detached,
+        );
+        let _ = watchdog.join();
+        // Only a failed group kill reaches this line; name it for the parent.
+        let _ = std::fs::write(
+            Path::new(markers).join("worker-returned"),
+            format!(
+                "run_leg returned: code={} timed_out={} spawn_error={:?}",
+                outcome.code, outcome.timed_out, outcome.spawn_error
+            ),
+        );
+    }
 }
