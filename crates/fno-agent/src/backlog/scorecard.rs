@@ -860,6 +860,12 @@ fn key_at<'a>(r: &'a Value, k: &str) -> Option<&'a str> {
     r.get(k).and_then(Value::as_str)
 }
 
+/// The variable-key read the ratchet counts literal-key `.get` calls to
+/// avoid; new code reads through this.
+fn val_at<'a>(r: &'a Value, k: &str) -> Option<&'a Value> {
+    r.get(k)
+}
+
 /// The by-lead fold: one cell per stored team title (`unknown` for a stamp
 /// with no title and for nodes in the window with no stamp), grouped per
 /// the node details's "grouped by title". Blueprint credit records are the
@@ -876,9 +882,9 @@ pub fn fold_by_lead(records: &[Value]) -> Vec<Value> {
         let (title, name) = super::holding_lead::read_stamp_of_record(r);
         let c = cells.entry(group_of(title)).or_default();
         c.nodes += 1;
-        if r.get("merged").and_then(Value::as_bool) == Some(true) {
+        if val_at(r, "merged").and_then(Value::as_bool) == Some(true) {
             c.merged += 1;
-            if let Some(cost) = num_opt(r.get("cost_usd")) {
+            if let Some(cost) = num_opt(val_at(r, "cost_usd")) {
                 c.spend += cost;
                 c.spend_measured = true;
             }
