@@ -923,8 +923,9 @@ fn emit_pr_opened(cwd: &Path, printed: &str, branch: &str) {
 /// Record the PR a `Docs:` line names on the bound node, best-effort. A
 /// `Docs: none, <reason>` body and a body that names no PR record nothing.
 /// Every miss prints a named warning; the create itself never rolls back.
-/// The slug is canonicalized against the rename aliases so a `Docs:` token
-/// written under the repo's old name still records a live url.
+/// docs_pr_ref canonicalizes the slug against the rename aliases, so a
+/// `Docs:` token written under the repo's old name still records a live
+/// url.
 fn record_docs_pr(cwd: &Path, body_file: &str) {
     let Some(body) = std::fs::read_to_string(body_file).ok() else {
         eprintln!(
@@ -932,7 +933,7 @@ fn record_docs_pr(cwd: &Path, body_file: &str) {
         );
         return;
     };
-    let Some((slug, number)) = crate::docs_gate::docs_pr_ref(&body) else {
+    let Some((slug, number)) = crate::docs_gate::docs_pr_ref(&body, Some(cwd)) else {
         return;
     };
     let node_id = crate::target_orient::read_manifest(cwd).and_then(|m| {
@@ -946,19 +947,11 @@ fn record_docs_pr(cwd: &Path, body_file: &str) {
         );
         return;
     };
-    let canonical = match slug.as_deref() {
-        Some(s) => {
-            let aliases =
-                crate::backlog::pr_link::aliases_with_probe(Some(cwd), None, std::iter::empty());
-            Some(crate::backlog::pr_link::canonical_repo_slug(s, &aliases))
-        }
-        None => None,
-    };
     let origin = crate::pr_list::origin_slug(cwd, None).ok();
-    // A short-form token carries no owner: the alias map fills it when the
-    // repo moved, else the origin's owner does, so the recorded url is one
-    // GitHub can resolve.
-    let qualified = canonical.map(|slug| match slug.split_once('/') {
+    // The slug arrives canonicalized from docs_pr_ref; a token still naming
+    // no owner takes the origin's owner, so the recorded url is one GitHub
+    // can resolve.
+    let qualified = slug.map(|slug| match slug.split_once('/') {
         Some(_) => slug,
         None => match origin.as_deref().and_then(|o| o.split('/').next()) {
             Some(owner) => format!("{owner}/{slug}"),

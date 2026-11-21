@@ -119,11 +119,12 @@ pub fn body_names_doc(body: &str) -> bool {
     }
 }
 
-/// The PR a `Docs:` line names, as the token's verbatim repo slug (or None
-/// for a same-repo PR or `PR <n>`) with its number. None when the line
-/// escapes with a reason, names a `.md`/`.mdx` path, or names no PR.
-/// Canonicalization against the rename aliases is the caller's job.
-pub fn docs_pr_ref(body: &str) -> Option<(Option<String>, i64)> {
+/// The PR a `Docs:` line names, with its number and the repo slug
+/// canonicalized against the rename aliases (None for a same-repo PR or
+/// `PR <n>`). None when the line escapes with a reason, names a
+/// `.md`/`.mdx` path, or names no PR. Without a readable alias store the
+/// verbatim slug stands.
+pub fn docs_pr_ref(body: &str, cwd: Option<&Path>) -> Option<(Option<String>, i64)> {
     let value = docs_value(body)?;
     if value == "none" || value.starts_with("none,") {
         return None;
@@ -137,7 +138,7 @@ pub fn docs_pr_ref(body: &str) -> Option<(Option<String>, i64)> {
         }
         if let Some((prefix, n)) = t.rsplit_once('#') {
             if !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) && n.parse::<i64>().is_ok() {
-                let slug = (!prefix.is_empty()).then(|| prefix.to_string());
+                let slug = canonical_slug((!prefix.is_empty()).then(|| prefix.to_string()), cwd);
                 return Some((slug, n.parse().unwrap_or_default()));
             }
         }
@@ -148,11 +149,19 @@ pub fn docs_pr_ref(body: &str) -> Option<(Option<String>, i64)> {
             let slug = crate::backlog::pr_link::repo_slug_from_url(Some(t));
             let number = crate::backlog::pr_link::pr_number_from_url(Some(t));
             if let (Some(slug), Some(number)) = (slug, number) {
-                return Some((Some(slug), number));
+                return Some((canonical_slug(Some(slug), cwd), number));
             }
         }
     }
     None
+}
+
+/// The slug under the rename aliases, read from the caller's config and
+/// cache rows; a miss keeps the verbatim slug.
+fn canonical_slug(slug: Option<String>, cwd: Option<&Path>) -> Option<String> {
+    let s = slug?;
+    let aliases = crate::backlog::pr_link::aliases_with_probe(cwd, None, std::iter::empty());
+    Some(crate::backlog::pr_link::canonical_repo_slug(&s, &aliases))
 }
 
 /// The missing-doc text: the touched files, the two accepted body forms,
@@ -234,30 +243,50 @@ mod tests {
 
     #[test]
     fn docs_pr_ref_names_the_url_repo_the_hash_ref_and_the_bare_pr() {
-        // AC2-HP: the hash ref, the owner-qualified hash ref, the full url,
-        // the comma annotation and PR <n> all name a PR. AC2-EDGE: the
-        // reasoned none, the bare none, a file path and no line name none.
+        // AC2-HP: the slug canonicalizes against the rename aliases, so a
+        // token written under the repo's old name returns the canonical
+        // repo. The hash ref, the full url, the comma annotation and
+        // PR <n> all name a PR. AC2-EDGE: the reasoned none, the bare none,
+        // a file path and no line name none.
+        let dir = tempfile::tempdir().unwrap();
+        let fno = dir.path().join(".fno");
+        std::fs::create_dir_all(&fno).unwrap();
+        std::fs::write(
+            fno.join("config.toml"),
+            "[repo_aliases]\n\"fnodotdev/fno-web\" = \"footnote-sh/fno-web\"\n",
+        )
+        .unwrap();
+        let cwd = Some(dir.path());
         assert_eq!(
-            docs_pr_ref("Docs: fno-web#45"),
+            docs_pr_ref("Docs: fnodotdev/fno-web#244", cwd),
+            Some((Some("footnote-sh/fno-web".to_string()), 244))
+        );
+        assert_eq!(
+            docs_pr_ref("Docs: https://github.com/fnodotdev/fno-web/pull/9", cwd),
+            Some((Some("footnote-sh/fno-web".to_string()), 9))
+        );
+        // A token under the canonical name passes through, and a slug with
+        // no alias row keeps its verbatim lowercased form.
+        assert_eq!(
+            docs_pr_ref("Docs: fno-web#45", cwd),
             Some((Some("fno-web".to_string()), 45))
         );
         assert_eq!(
-            docs_pr_ref("Docs: fnodotdev/fno-web#244 fno-sh-docs/guides/manage-backlog.next.mdx"),
-            Some((Some("fnodotdev/fno-web".to_string()), 244))
+            docs_pr_ref(
+                "Docs: fnodotdev/fno-web#244 docs/guides/manage-backlog.next.mdx",
+                cwd
+            ),
+            Some((Some("footnote-sh/fno-web".to_string()), 244))
         );
         assert_eq!(
-            docs_pr_ref("Docs: https://github.com/o/fno-web/pull/9"),
-            Some((Some("o/fno-web".to_string()), 9))
-        );
-        assert_eq!(
-            docs_pr_ref("Docs: fno-web#244, merged"),
+            docs_pr_ref("Docs: fno-web#244, merged", cwd),
             Some((Some("fno-web".to_string()), 244))
         );
-        assert_eq!(docs_pr_ref("Docs: PR 45"), Some((None, 45)));
-        assert_eq!(docs_pr_ref("Docs: none, no user surface"), None);
-        assert_eq!(docs_pr_ref("Docs: none\n"), None);
-        assert_eq!(docs_pr_ref("Docs: docs/x.next.mdx"), None);
-        assert_eq!(docs_pr_ref("no Docs line"), None);
+        assert_eq!(docs_pr_ref("Docs: PR 45", cwd), Some((None, 45)));
+        assert_eq!(docs_pr_ref("Docs: none, no user surface", cwd), None);
+        assert_eq!(docs_pr_ref("Docs: none\n", cwd), None);
+        assert_eq!(docs_pr_ref("Docs: docs/x.next.mdx", cwd), None);
+        assert_eq!(docs_pr_ref("no Docs line", cwd), None);
     }
 
     #[test]
