@@ -112,4 +112,4 @@ A harness can also launch its own way. The [native launch table](../../docs/HARN
 
 ## fno-app
 
-fno-app is the desktop app, built from `crates/fno-app` and shipped through the desktop release workflow. Drive it with `fno mux app` (open, show, focus, answer, shot, state, close). Capture shots offscreen and tear the app down on every exit path. `fno-agent visual shot-save <node> <png...>` saves each shot into the vault keyed by the head it shows, `{vault}/mux/<node>-<head12>-<view>-<role>-<theme>.png`, so the next round reads its before pair from the vault instead of regenerating an old head.
+fno-app is the desktop app, built from `crates/fno-app` and shipped through the desktop release workflow. Drive it with `fno mux app` (open, show, focus, answer, shot, state, close). Capture shots offscreen and tear the app down on every exit path. `fno-agent visual shot-save <node> <png...>` saves each shot into the vault keyed by the head it shows. The name is `{vault}/mux/<node>-<head12>-<view>-<role>-<theme>.png`. The next round reads its before pair from the vault instead of regenerating an old head.
