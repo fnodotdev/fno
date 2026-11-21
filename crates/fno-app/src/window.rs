@@ -91,6 +91,10 @@ pub enum Action {
     CloseSheet,
     Copy(String),
     SendChat,
+    /// Move the open question's pick to one row.
+    PickChoice(usize),
+    /// Answer the open question with the picked row.
+    AnswerChoice,
     /// The start view's send: the launch panel's own submit door.
     SubmitLaunch,
     /// Reopen a chat stream that closed.
@@ -121,6 +125,8 @@ fn click_id(action: &Action) -> &'static str {
         Action::CloseSheet => "close_sheet",
         Action::Copy(_) => "copy",
         Action::SendChat => "send_chat",
+        Action::PickChoice(_) => "pick_choice",
+        Action::AnswerChoice => "answer_choice",
         Action::SubmitLaunch => "submit_launch",
         Action::Reconnect => "reconnect",
         Action::Mail(_) => "mail_lead",
@@ -577,6 +583,27 @@ impl Root {
                     record_ui_state(self, cx);
                     cx.quit();
                 }
+                fno::app_control::AppCommand::Answer { option } => {
+                    let open = self
+                        .chat
+                        .conv
+                        .open_question()
+                        .map(|(_, ask)| ask.choices.len());
+                    match open {
+                        Some(n) if (1..=n).contains(option) => {
+                            self.chat.pick = option - 1;
+                            self.answer_choice(cx);
+                        }
+                        Some(n) => self.say(
+                            format!("fno mux app answer: the question has {n} options"),
+                            cx,
+                        ),
+                        None => self.say(
+                            "fno mux app answer: no question waits in this chat".into(),
+                            cx,
+                        ),
+                    }
+                }
                 fno::app_control::AppCommand::View { view } => match view.as_str() {
                     "chat" => self.show(MainView::Chat, cx),
                     "terminal" => self.show(MainView::Terminal, cx),
@@ -849,6 +876,15 @@ impl Root {
                 self.say(format!("copied {n} characters"), cx);
             }
             Action::SendChat => self.submit_chat(cx),
+            Action::PickChoice(i) => {
+                // A second click on the picked row answers with it.
+                if self.chat.pick == i {
+                    self.answer_choice(cx);
+                } else {
+                    self.chat.pick = i;
+                }
+            }
+            Action::AnswerChoice => self.answer_choice(cx),
             Action::SubmitLaunch => self.submit_launch(cx),
             Action::Reconnect => self.open_chat(cx),
             Action::Mail(text) => match &self.poller {
@@ -1172,6 +1208,81 @@ impl Root {
         .detach();
         if !text.is_empty() {
             self.chat.pending.push(text);
+        }
+    }
+
+    /// Answer the open question with the picked row. Where the mux already
+    /// read the harness's own menu off the pane and pinned a keystroke per
+    /// row, the answer goes through `PaneAnswer`, which the server checks
+    /// against the live grid before it types. Claude's question screen has
+    /// no extracted menu, but its rows take their own number as a key, so a
+    /// pick there types that digit into the pane.
+    fn answer_choice(&mut self, cx: &mut Context<Self>) {
+        let Some((_, ask)) = self.chat.conv.open_question() else {
+            return;
+        };
+        let pick = self.chat.pick.min(ask.choices.len().saturating_sub(1));
+        let Some(choice) = ask.choices.get(pick) else {
+            return;
+        };
+        let want = choice.label.trim().to_lowercase();
+        let Some(key) = self.chat.key.clone() else {
+            return;
+        };
+        // The row is addressed by pane id and the server re-checks the pane
+        // before it types, so the pane need not be on screen.
+        let row = self.layout.agents.iter().find(|a| {
+            !a.exited
+                && a.pane_id.is_some()
+                && a.harness_session_id.as_deref() == Some(key.session_id.as_str())
+        });
+        let Some((pane, menu)) = row.and_then(|a| a.pane_id.map(|p| (p, a.answerable.clone())))
+        else {
+            self.say("no pane hosts this session: answer in the pane".into(), cx);
+            return;
+        };
+        let digit = u8::try_from(pick).ok().filter(|p| *p < 9).map(|p| b'1' + p);
+        match (menu, digit) {
+            (Some(menu), _) => {
+                // The pane's menu must be this question's: the row whose
+                // label holds the picked option's text. Any other prompt in
+                // the pane (a permission ask, a stale question) fails closed
+                // instead of taking a keystroke meant for another menu.
+                let Some(option) = menu
+                    .options
+                    .iter()
+                    .find(|o| o.label.to_lowercase().contains(&want))
+                else {
+                    self.say(
+                        "the pane's menu is not this question: answer in the pane".into(),
+                        cx,
+                    );
+                    return;
+                };
+                self.send(ClientMsg::PaneAnswer {
+                    pane,
+                    fingerprint: menu.fingerprint,
+                    region_lines: u16::try_from(menu.region_lines).unwrap_or(u16::MAX),
+                    keystroke: option.keystroke.clone(),
+                });
+            }
+            (None, Some(digit)) if key.harness == "claude" => {
+                let request_id = self.chat.next_request;
+                self.chat.next_request += 1;
+                // The server types only into a pane the client views, so
+                // bring the question's pane into view first.
+                self.send(ClientMsg::Command(Command::FocusPane(pane)));
+                self.send(ClientMsg::PaneInput(proto::pane_input::PaneInputRequest {
+                    request_id,
+                    pane,
+                    expected_identity: key.session_id.clone(),
+                    bytes: vec![digit],
+                }));
+            }
+            _ => self.say(
+                "the pane shows no menu to answer: answer in the pane".into(),
+                cx,
+            ),
         }
     }
 
@@ -1965,6 +2076,20 @@ impl Root {
             return;
         }
         if self.chat.draft.marked().is_some() {
+            return;
+        }
+        // An open question takes the movement keys and Enter in the
+        // composer's place.
+        if let Some((_, ask)) = self.chat.conv.open_question() {
+            let last = ask.choices.len().saturating_sub(1);
+            match key.key {
+                "up" => self.chat.pick = self.chat.pick.saturating_sub(1),
+                "down" => self.chat.pick = (self.chat.pick + 1).min(last),
+                "enter" => self.answer_choice(cx),
+                _ => return,
+            }
+            cx.stop_propagation();
+            cx.notify();
             return;
         }
         let (shift, alt, cmd) = (key.shift, key.alt, key.cmd);

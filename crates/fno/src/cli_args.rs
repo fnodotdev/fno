@@ -182,7 +182,7 @@ pub enum MuxCmd {
         #[command(subcommand)]
         op: WorkspaceOp,
     },
-    /// `mux app open|show|focus|shot|state|close ...`: drive the fno-app
+    /// `mux app open|show|focus|answer|shot|state|close ...`: drive the fno-app
     /// desktop app from scripts and agents. A bare `mux app` refuses with
     /// usage; the full guide prints at `fno whoami guide app`.
     App {
@@ -326,8 +326,14 @@ pub enum AppOp {
     /// the running app; refuses naming the session when none runs
     #[command(disable_help_flag = true)]
     Focus(AppFocusArgs),
+    /// `mux app answer <option> [--server <name>]`: pick option N (1 is
+    /// the first) on the question the focused chat waits on; refuses
+    /// naming the session when none runs
+    #[command(disable_help_flag = true)]
+    Answer(AppAnswerArgs),
     /// `mux app shot --out <path> [--theme dark|light] [--mode <view>]
-    /// [--find bar|chords]`: render one offscreen demo frame and write a
+    /// [--find bar|chords] [--ask rows|overflow]`: render one offscreen
+    /// demo frame and write a
     /// png; never opens a window on any display
     #[command(disable_help_flag = true)]
     Shot(AppShotArgs),
@@ -412,6 +418,16 @@ pub struct AppShowArgs {
     pub common: MuxCommon,
 }
 
+/// `mux app answer`'s flags.
+#[derive(Args, Debug, PartialEq, Eq, Clone)]
+pub struct AppAnswerArgs {
+    /// The option to pick, counted from 1
+    #[arg(value_parser = clap::value_parser!(u32).range(1..))]
+    pub option: u32,
+    #[command(flatten)]
+    pub common: MuxCommon,
+}
+
 /// `mux app focus`'s flags.
 #[derive(Args, Debug, PartialEq, Eq, Clone)]
 pub struct AppFocusArgs {
@@ -443,6 +459,10 @@ pub struct AppShotArgs {
     /// the bar with a query typed; `chords` also holds the cmd hint
     #[arg(long, value_parser = ["bar", "chords"])]
     pub find: Option<String>,
+    /// Seed an open ask-the-user question in the chat: `rows` is the short
+    /// options frame, `overflow` makes the first option wrap
+    #[arg(long, value_parser = ["rows", "overflow"])]
+    pub ask: Option<String>,
 }
 
 /// `mux thread`'s operation set: `reseat` is the one declared operation;
@@ -1423,7 +1443,7 @@ mod tests {
         let r = classify(&os(&["mux", "app"]));
         match r {
             FrontDoor::Usage { message } => {
-                assert!(message.contains("open, show, focus, shot, state or close"));
+                assert!(message.contains("open, show, focus, answer, shot, state or close"));
                 assert!(message.contains("fno whoami guide app"));
             }
             other => panic!("bare app usage expected, got {other:?}"),

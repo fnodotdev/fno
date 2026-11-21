@@ -153,6 +153,8 @@ pub struct Chat {
     pub list: ListState,
     /// The tool call whose sheet is open, by row index.
     pub sheet: Option<usize>,
+    /// The row picked in the open question's strip.
+    pub pick: usize,
     pub draft: composer::Draft,
     /// The composer's last layout, scroll and drag state.
     pub field: Rc<field::FieldState>,
@@ -178,6 +180,7 @@ impl Default for Chat {
             opened_at: Instant::now(),
             list: ListState::new(0, ListAlignment::Bottom, px(800.0)),
             sheet: None,
+            pick: 0,
             draft: composer::Draft::default(),
             field: Rc::new(field::FieldState::default()),
             pending: Vec::new(),
@@ -208,6 +211,7 @@ impl Chat {
         self.stream = None;
         self.closed = None;
         self.sheet = None;
+        self.pick = 0;
         self.pending.clear();
         self.opened_at = Instant::now();
         self.list.reset(self.conv.items.len());
@@ -272,6 +276,9 @@ impl Chat {
                 Msg::Ended => self.closed = Some(Closed::Ended),
                 Msg::Failed(why) => self.closed = Some(Closed::Failed(why)),
             }
+        }
+        if self.conv.open_question().is_none() {
+            self.pick = 0;
         }
         self.drop_recorded_pending(first);
         let after = self.conv.items.len();
