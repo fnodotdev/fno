@@ -17,7 +17,7 @@ use crate::context_window::normalize_model;
 use crate::evals_trend::{round4, wilson_rate};
 use crate::scoreboard_provider::{node_outcome, num_opt, parse_local, pct, percentile, round2};
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 pub(crate) const UNATTRIBUTED: &str = "unattributed";
 pub(crate) const UNRECORDED: &str = "unrecorded";
@@ -434,6 +434,7 @@ pub fn build_records(
             }
             _ => cost_usd,
         };
+        let (lead_title, lead_name) = super::holding_lead::read_stamp(node);
         records.push(json!({
             "id": id,
             "kind": format!("{TARGET_COMMAND}/{}",
@@ -451,6 +452,8 @@ pub fn build_records(
             "ci_red": ci_red,
             "review_findings": review_findings,
             "shared": lanes.len() > 1,
+            "lead_title": lead_title,
+            "lead_name": lead_name,
         }));
 
         if let Some(bp) = blueprint {
@@ -478,6 +481,8 @@ pub fn build_records(
                 "ci_red": ci_red,
                 "review_findings": review_findings,
                 "shared": lanes.len() > 1,
+                "lead_title": lead_title,
+                "lead_name": lead_name,
             }));
         }
     }
@@ -829,6 +834,79 @@ pub fn fold_cells(records: &[Value]) -> Vec<Value> {
             .then_with(|| x["provider"].as_str().cmp(&y["provider"].as_str()))
             .then_with(|| x["model"].as_str().cmp(&y["model"].as_str()))
     });
+    out
+}
+
+/// One by-lead cell. The same fields the by-lane cells fold, minus the
+/// lane axes that do not group by role.
+#[derive(Default)]
+struct LeadAcc {
+    nodes: u64,
+    merged: u64,
+    spend: f64,
+    spend_measured: bool,
+    holders: BTreeSet<String>,
+}
+
+/// A record's grouping key: the stored title, or `unknown` when the stamp
+/// is absent, null, or carries no title.
+fn group_of(title: Option<&str>) -> String {
+    title.unwrap_or(UNKNOWN).to_string()
+}
+
+/// A variable-key read: the ratchet counts literal-key reads, so new
+/// code reads through a helper.
+fn key_at<'a>(r: &'a Value, k: &str) -> Option<&'a str> {
+    r.get(k).and_then(Value::as_str)
+}
+
+/// The variable-key read the ratchet counts literal-key `.get` calls to
+/// avoid; new code reads through this.
+fn val_at<'a>(r: &'a Value, k: &str) -> Option<&'a Value> {
+    r.get(k)
+}
+
+/// The by-lead fold: one cell per stored team title (`unknown` for a stamp
+/// with no title and for nodes in the window with no stamp), grouped per
+/// the node details's "grouped by title". Blueprint credit records are the
+/// same node counted twice, so the fold reads target records only.
+/// `holders` lists the distinct names credited in the group; the spend
+/// sums the measured cost only, and `spend_measured` separates a real 0
+/// from an unread cost.
+pub fn fold_by_lead(records: &[Value]) -> Vec<Value> {
+    let mut cells: BTreeMap<String, LeadAcc> = BTreeMap::new();
+    for r in records {
+        if key_at(r, "credit") == Some("blueprint") {
+            continue;
+        }
+        let (title, name) = super::holding_lead::read_stamp_of_record(r);
+        let c = cells.entry(group_of(title)).or_default();
+        c.nodes += 1;
+        if val_at(r, "merged").and_then(Value::as_bool) == Some(true) {
+            c.merged += 1;
+            if let Some(cost) = num_opt(val_at(r, "cost_usd")) {
+                c.spend += cost;
+                c.spend_measured = true;
+            }
+        }
+        if let Some(n) = name {
+            c.holders.insert(n.to_string());
+        }
+    }
+    let mut out: Vec<Value> = cells
+        .into_iter()
+        .map(|(title, c)| {
+            json!({
+                "lead_title": title,
+                "nodes": c.nodes,
+                "merged": c.merged,
+                "spend_usd": c.spend,
+                "spend_measured": c.spend_measured,
+                "holders": c.holders.into_iter().collect::<Vec<String>>(),
+            })
+        })
+        .collect();
+    out.sort_by(|x, y| x["lead_title"].as_str().cmp(&y["lead_title"].as_str()));
     out
 }
 

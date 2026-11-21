@@ -1,8 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { embody, rarityColor, restore, rollBones } from './companion'
+import { embody, peakStat, rarityColor, restore, rollBones } from './companion'
 import { fleetLine, refill } from './register'
-import { newsFact, summarizeTurn } from './voice'
+import { EVENT_LINES, newsFact, streakLine, summarizeTurn } from './voice'
 
 const OLD_CONFIG = JSON.stringify({
   oauthAccount: { accountUuid: 'u-1' },
@@ -298,6 +298,71 @@ test('an old python wrapper moves to the fast path at 1 s, and an idle buddy hol
     seen.add(JSON.stringify(sprites()))
   }
   expect(seen.size).toBeGreaterThan(1)
+})
+
+test('a failing bash run gets a fail line, the third in a row an escalated line, and the next green run a recovery line', async ($, on) => {
+  const { clock } = boot(on)
+  let modelCalls = 0
+  let lastModelAsk = ''
+  on('model.complete', (_: any, e: any) => {
+    modelCalls += 1
+    lastModelAsk = JSON.stringify(e)
+    return { value: { isAnswered: true, text: 'noted.', usage: null } }
+  })
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '' } }))
+  on('session.messages', () => ({ value: [{ role: 'user', text: 'run the tests', toolUses: [] }] }))
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.prompt.edit(typed)
+  const stat = peakStat(embody(restore(OLD_CONFIG, 0)!))
+  // The band renders `Name: line`, so the finds anchor the spoken line's end.
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const said = (line: string) => new RegExp(esc(line) + '$')
+  const fail = () => $.classic.PostToolUse({ tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_response: { stdout: 'npm ERR! Test failed. 2 failed.', stderr: '' } })
+  const green = () => $.classic.PostToolUse({ tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_response: { stdout: '42 passing', stderr: '' } })
+
+  await fail()
+  let ui = await $.ui.mount(band(8))
+  expect(await ui.find({ type: 'Text', text: said(EVENT_LINES['test-fail'][stat]) })).toBeDefined()
+  await ui.unmount()
+
+  await fail()
+  await fail()
+  ui = await $.ui.mount(band(8))
+  expect(await ui.find({ type: 'Text', text: said(streakLine(3)!) })).toBeDefined()
+  await ui.unmount()
+  // One model line per cooldown: three rapid fails ride one call, which names the streak and the chaotic mood.
+  expect(modelCalls).toBe(1)
+  expect(lastModelAsk).toContain('3 in a row')
+  expect(lastModelAsk).toContain('mood: chaotic')
+
+  await clock.advance(20_000)
+  await green()
+  ui = await $.ui.mount(band(8))
+  expect(await ui.find({ type: 'Text', text: said(EVENT_LINES.recovery[stat]) })).toBeDefined()
+  await ui.unmount()
+  // The streak is over: an ordinary green run stays quiet.
+  await clock.advance(20_000)
+  const before = modelCalls
+  await green()
+  ui = await $.ui.mount(band(8))
+  expect(await ui.find({ type: 'Text', text: said(EVENT_LINES.recovery[stat]) })).toBeUndefined()
+  await ui.unmount()
+  expect(modelCalls).toBe(before)
+})
+
+test("the [buddy] section of config.toml moves the card's numbers", async ($, on) => {
+  boot(on)
+  on('process.run', (_: any, e: any) =>
+    e.argv.join(' ') === 'fno config get buddy'
+      ? { value: { exitCode: 0, stdout: JSON.stringify({ reroll_bank: 5, ships_per_reroll: 4, daily_reroll: false, model: 'opus', model_line_cooldown_s: 30, fleet_interval_s: 60 }), stderr: '' } }
+      : { value: { exitCode: 1, stdout: '', stderr: '' } })
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+
+  const row = await $.command.run({ command: 'buddy', args: '' })
+  expect(JSON.stringify(row)).toContain('/5')
+  // The reroll math follows the section: no daily grant, bank capped at 5, one per 4 ships.
+  expect(refill(undefined, 'd1')).toEqual({ bank: 0, day: 'd1', ships: 0, shipAt: 0 })
+  expect(refill({ bank: 4, day: 'd1', ships: 3, shipAt: 0 }, 'd1', [1, 2])).toEqual({ bank: 5, day: 'd1', ships: 1, shipAt: 2 })
 })
 
 test('the wrapper in the settings decides the folder, and a wrapper saved as the user line is undone', async ($, on) => {

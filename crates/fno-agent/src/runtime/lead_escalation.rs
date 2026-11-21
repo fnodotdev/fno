@@ -288,7 +288,7 @@ fn closing_for(live: Option<bool>, unknown_reason: Option<&str>, rows: bool) -> 
 }
 
 /// the lead verdict rides the question. `stalled`/`degraded`/`unknown` append
-/// the spawn `--succeed` handoff offer; `unreadable` is a failed verdict
+/// the spawn `--hand-off` handoff offer; `unreadable` is a failed verdict
 /// read, and it is named - escalation never goes silent on it. Any other
 /// verdict (a converging lead stops on an actionable-board escalation)
 /// rides truthfully as `Verdict ...`. The handoff scope is the explicit one,

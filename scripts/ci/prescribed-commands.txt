@@ -422,9 +422,6 @@ sweep
 sync-canonical
 task-context-gate
 task-context-prepare
-team-fold
-team-orphans
-term-ledger
 terminals
 territory-rows
 territory-verdict

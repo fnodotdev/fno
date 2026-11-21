@@ -637,6 +637,57 @@ fn unpromoted_section(compiled: &[Option<BTreeSet<String>>], entries: &[Value]) 
     )
 }
 
+/// The closed-work rollup: done nodes grouped by the holding lead's stored
+/// title, read from the stamp the close path and the backfill both write
+/// insert-only. This is the page's answer to "whose work was this when it
+/// closed"; a node with no stamp groups under unknown, never dropped.
+fn lead_rollup(entries: &[Value]) -> String {
+    let mut groups: BTreeMap<String, (u64, BTreeSet<String>)> = BTreeMap::new();
+    let mut closed = 0u64;
+    for e in entries {
+        if s_str(e, "status") != Some("done") {
+            continue;
+        }
+        closed += 1;
+        let (title, name) = crate::backlog::holding_lead::read_stamp(e);
+        let g = groups
+            .entry(title.unwrap_or("unknown").to_string())
+            .or_default();
+        g.0 += 1;
+        if let Some(n) = name {
+            g.1.insert(n.to_string());
+        }
+    }
+    if groups.is_empty() {
+        return String::new();
+    }
+    let rows: String = groups
+        .iter()
+        .map(|(title, (n, names))| {
+            let holders = if names.is_empty() {
+                "unknown".to_string()
+            } else {
+                names.iter().cloned().collect::<Vec<_>>().join(", ")
+            };
+            format!(
+                "<tr><td>{}</td><td class=\"num\">{}</td><td>{}</td></tr>",
+                esc(title),
+                n,
+                esc(&holders)
+            )
+        })
+        .collect();
+    format!(
+        "<h2 class=\"sect\">closed work by lead</h2><article class=\"role\">\
+         <p class=\"holder\">{} closed node{} on the board</p>\
+         <div class=\"tscroll\"><table><caption>Closed work by lead</caption>\
+         <thead><tr><th>lead title</th><th class=\"num\">nodes</th><th>holders</th></tr></thead>\
+         <tbody>{rows}</tbody></table></div></article>",
+        closed,
+        plural(closed as i64, ""),
+    )
+}
+
 /// Unassigned: parent falsy, status actionable, and the id is no node's
 /// parent - work nobody contains and nobody contains the container of.
 fn unassigned_section(entries: &[Value]) -> String {
@@ -1087,6 +1138,7 @@ pub(crate) fn render(
             out.push_str(&unassigned_section(entries));
         }
     }
+    out.push_str(&lead_rollup(entries));
     // Footer: team count always (when the org is a list); the root
     // scope's size only when an L1 team with a resolved fold exists.
     let mut parts: Vec<String> = Vec::new();

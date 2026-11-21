@@ -612,7 +612,6 @@ pub const ROLE_FLAGS: &[&str] = &[
     "--role-scope",
     "--promote",
     "--hand-off",
-    "--succeed",
     "--take-over",
 ];
 
@@ -650,10 +649,7 @@ pub fn insert_role_flag(
                 scopes.push(Value::from(scope));
             }
         }
-        "--hand-off" | "--succeed" => {
-            if flag == "--succeed" {
-                eprintln!("--succeed is now --hand-off; the old spelling answers for one release.");
-            }
+        "--hand-off" => {
             params.insert("hand_off".into(), Value::Bool(true));
         }
         "--take-over" => {
