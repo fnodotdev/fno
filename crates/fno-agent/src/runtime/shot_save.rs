@@ -87,11 +87,11 @@ fn parse_shot_name<'a>(stem: &'a str, node_tokens: &[&str]) -> Result<ParsedShot
         Some(&"dark") | Some(&"light") => parts.pop().unwrap(),
         _ => return Err(NameError::NoTheme(stem.to_string())),
     };
-    let role_at = parts.len().checked_sub(2);
-    let role = match role_at {
-        Some(i) if ROLES.contains(&parts[i]) => parts[i],
+    let role_at = match parts.len().checked_sub(2) {
+        Some(i) if ROLES.contains(&parts[i]) => i,
         _ => return Err(NameError::NoRole(stem.to_string())),
     };
+    let role = parts[role_at];
     let mut view = parts[..role_at].to_vec();
     // A legacy vault name starts with the node's own tokens; the save door
     // re-inserts them, so a leading node run drops off either way.
