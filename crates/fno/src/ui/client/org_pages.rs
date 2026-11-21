@@ -206,7 +206,7 @@ pub(crate) fn seat(m: &Machine, p: &Lead, s: &Seat, width: usize, now: u64) -> V
 
 pub(crate) fn feed(
     fold: Option<&crate::needs_overlay::QuestionsFold>,
-    requests: Option<&[serde_json::Value]>,
+    requests: Option<&[crate::requests_model::RequestRow]>,
     error: Option<&str>,
     grouped: bool,
     width: usize,
@@ -267,7 +267,7 @@ pub(crate) fn feed(
 /// The HQ Requests rows above the questions: rank order, or the by-topic
 /// groups, each row with its ask count, dates, node state and flag.
 pub(crate) fn requests_section(
-    requests: Option<&[serde_json::Value]>,
+    requests: Option<&[crate::requests_model::RequestRow]>,
     error: Option<&str>,
     grouped: bool,
     width: usize,
@@ -312,21 +312,19 @@ pub(crate) fn requests_section(
 
 /// One row: the ask text with its flag, then a dim line with the count,
 /// node state, dates and the reply excerpt.
-fn request_row_lines(r: &serde_json::Value, width: usize) -> Vec<Line> {
-    let text = r
-        .get("text")
-        .and_then(|v| v.as_str())
-        .unwrap_or("(empty ask)");
-    let ask_count = r.get("ask_count").and_then(|v| v.as_u64()).unwrap_or(1);
+fn request_row_lines(r: &crate::requests_model::RequestRow, width: usize) -> Vec<Line> {
+    let text = if r.text.is_empty() {
+        "(empty ask)"
+    } else {
+        r.text.as_str()
+    };
+    let ask_count = r.ask_count.max(1);
     let asked_word = if ask_count == 1 {
         "asked once".to_string()
     } else {
         format!("asked {ask_count} times")
     };
-    let days = r
-        .get("days_unaddressed")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
+    let days = r.days_unaddressed.unwrap_or(0);
     let open_word = if days <= 0 {
         "new today".to_string()
     } else if days == 1 {
@@ -334,8 +332,8 @@ fn request_row_lines(r: &serde_json::Value, width: usize) -> Vec<Line> {
     } else {
         format!("open {days} days")
     };
-    let node = r.get("node").and_then(|v| v.as_str()).unwrap_or("");
-    let status = r.get("node_status").and_then(|v| v.as_str());
+    let node = r.node.as_deref().unwrap_or("");
+    let status = r.node_status.as_deref();
     let node_word = match (node.is_empty(), status) {
         (true, _) => "no linked node".to_string(),
         (false, Some(s)) => format!("{node} {s}"),
@@ -343,14 +341,14 @@ fn request_row_lines(r: &serde_json::Value, width: usize) -> Vec<Line> {
     };
     // The state word joins the line only when the row's own fields do not
     // already say it: no_node reads through "no linked node".
-    let state = r.get("state").and_then(|v| v.as_str()).unwrap_or("");
+    let state = r.state.as_str();
     let state_word = match state {
         "stalled" => "stalled".to_string(),
         "regression" => "asked again after done".to_string(),
         _ => String::new(),
     };
-    let first = r.get("first_ts").and_then(|v| v.as_str()).unwrap_or("");
-    let last = r.get("last_ts").and_then(|v| v.as_str()).unwrap_or("");
+    let first = r.first_ts.as_str();
+    let last = r.last_ts.as_str();
     let window = if first.is_empty() || first.get(0..10) == last.get(0..10) {
         String::new()
     } else {
@@ -360,10 +358,7 @@ fn request_row_lines(r: &serde_json::Value, width: usize) -> Vec<Line> {
             last.get(0..10).unwrap_or(last)
         )
     };
-    let reply = r
-        .get("reply_excerpt")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let reply = r.reply_excerpt.as_str();
     let meta_word = [asked_word, open_word, node_word, state_word, window]
         .into_iter()
         .filter(|w| !w.is_empty())

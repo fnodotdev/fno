@@ -2166,11 +2166,13 @@ fn org_view_shot(
         let requests = runtime.block_on(crate::requests_model::gather());
         if let Some(b) = view.org_board.as_mut() {
             match requests {
-                Ok(rows) => {
+                crate::requests_model::RequestsRead::Rows(rows) => {
                     b.requests = Some(rows);
                     b.requests_error = None;
                 }
-                Err(reason) => b.requests_error = Some(reason),
+                crate::requests_model::RequestsRead::Failed(reason) => {
+                    b.requests_error = Some(reason)
+                }
             }
         }
     }

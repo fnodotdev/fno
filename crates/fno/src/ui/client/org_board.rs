@@ -31,7 +31,7 @@ pub(crate) enum OrgMsg {
     /// A settings Mods read landed off the loop.
     Mods(super::mods::Landed),
     /// The HQ Requests rows read off the loop, rank order.
-    Requests(Result<Vec<serde_json::Value>, String>),
+    Requests(crate::requests_model::RequestsRead),
 }
 
 pub(crate) fn apply(view: &mut View, gen: u64, msg: OrgMsg) {
@@ -115,7 +115,7 @@ pub(crate) struct OrgBoard {
     prompt: Option<Vec<u8>>,
     /// The HQ Requests rows in rank order and the last read's failure; the
     /// feed page paints them. The read runs off the loop in maybe_kick.
-    pub(crate) requests: Option<Vec<serde_json::Value>>,
+    pub(crate) requests: Option<Vec<crate::requests_model::RequestRow>>,
     pub(crate) requests_error: Option<String>,
     /// The off-loop read's single-flight and cadence, plus the feed
     /// page's by-topic toggle (t).
@@ -749,21 +749,17 @@ pub(crate) fn maybe_kick(view: &mut View, tx: &OrgTx) {
 /// The HQ Requests read landed: keep the last good rows on a failure,
 /// naming the reason (AC4-ERR), under the same generation guard as the
 /// fleet fold.
-pub(crate) fn apply_requests(
-    view: &mut View,
-    gen: u64,
-    read: Result<Vec<serde_json::Value>, String>,
-) {
+pub(crate) fn apply_requests(view: &mut View, gen: u64, read: crate::requests_model::RequestsRead) {
     let Some(b) = view.org_board.as_mut().filter(|b| b.gen == gen) else {
         return;
     };
     b.requests_inflight = false;
     match read {
-        Ok(rows) => {
+        crate::requests_model::RequestsRead::Rows(rows) => {
             b.requests = Some(rows);
             b.requests_error = None;
         }
-        Err(reason) => b.requests_error = Some(reason),
+        crate::requests_model::RequestsRead::Failed(reason) => b.requests_error = Some(reason),
     }
 }
 

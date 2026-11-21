@@ -1605,7 +1605,7 @@ printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"2026-11-12T10:30:00.000Z\",\"m
 printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"2026-11-12T14:00:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"$REP_TEXT\"}}" > "$BOARD_B4"
 "$FNO" backlog done "${IDS[11]}" --force --reason "demo fixture done node for the regression row" --note "demo fixture completed node" --skip-stamp >/dev/null
 BOARD_R="$ROOT/transcript-board-regress.jsonl"
-RNOW="$(date -u -v+2M '+%Y-%m-%dT%H:%M:00.000Z')"
+RNOW="$(python3 -c 'import datetime; print((datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(minutes=2)).strftime("%Y-%m-%dT%H:%M:00.000Z"))')"
 printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"$RNOW\",\"message\":{\"role\":\"user\",\"content\":\"did ${IDS[11]} land already\"}}" > "$BOARD_R"
 BOARD_T1="$ROOT/transcript-board-rel1.jsonl"
 BOARD_T2="$ROOT/transcript-board-rel2.jsonl"

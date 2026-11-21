@@ -6,6 +6,7 @@
 //! topics; that is the documented cost of the route (no NER, no graph
 //! lookup lives client-side).
 
+use crate::requests_model::RequestRow;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -98,15 +99,12 @@ pub(crate) struct RequestGroup {
 /// same scanners `topics_of` net runs over text plus reply), spanning at
 /// least two rows; the rest land under `unmentioned`. Deterministic: node
 /// groups keep first-row order, topics sort by name, unmentioned closes.
-pub(crate) fn request_groups(rows: &[Value]) -> Vec<RequestGroup> {
+pub(crate) fn request_groups(rows: &[RequestRow]) -> Vec<RequestGroup> {
     let mut groups: Vec<RequestGroup> = Vec::new();
     let mut grouped = vec![false; rows.len()];
     // Linked nodes first: the ask's own node is the primary grouping.
     for (idx, row) in rows.iter().enumerate() {
-        let node = row
-            .get("node")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty());
+        let node = row.node.as_deref().filter(|s| !s.is_empty());
         let Some(name) = node else { continue };
         match groups.iter_mut().find(|g| g.name == name) {
             Some(g) => g.rows.push(idx),
@@ -123,15 +121,9 @@ pub(crate) fn request_groups(rows: &[Value]) -> Vec<RequestGroup> {
         if grouped[idx] {
             continue;
         }
-        let mut text = row
-            .get("text")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
+        let mut text = row.text.clone();
         text.push(' ');
-        if let Some(reply) = row.get("reply_excerpt").and_then(Value::as_str) {
-            text.push_str(reply);
-        }
+        text.push_str(&row.reply_excerpt);
         for key in mentions(&text) {
             net.entry(key).or_default().push(idx);
         }
@@ -422,8 +414,16 @@ mod tests {
         );
     }
 
-    fn row(key: &str, node: Option<&str>, text: &str, reply: &str) -> Value {
-        json!({"key": key, "node": node, "text": text, "reply_excerpt": reply})
+    fn row(
+        key: &str,
+        node: Option<&str>,
+        text: &str,
+        reply: &str,
+    ) -> crate::requests_model::RequestRow {
+        serde_json::from_value(
+            json!({"key": key, "node": node, "text": text, "reply_excerpt": reply}),
+        )
+        .unwrap()
     }
 
     #[test]

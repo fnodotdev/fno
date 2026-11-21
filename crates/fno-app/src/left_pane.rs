@@ -1646,7 +1646,14 @@ mod tests {
             ..Default::default()
         };
         let none = fno::backlog_model::Inputs::default();
-        board.record(Err("no fleet".into()), Ok(fold), &none, 1, &[]);
+        board.record(
+            Err("no fleet".into()),
+            Ok(fold),
+            fno::requests_model::RequestsRead::Rows(Vec::new()),
+            &none,
+            1,
+            &[],
+        );
         let rows = rows(
             &Layout::default(),
             &board,
@@ -1685,6 +1692,7 @@ mod tests {
         failed.record(
             Err("no fleet".into()),
             Err("needs timed out".into()),
+            fno::requests_model::RequestsRead::Rows(Vec::new()),
             &none,
             1,
             &[],
@@ -1984,7 +1992,14 @@ mod tests {
         });
         let mut board = Board::default();
         let none = fno::backlog_model::Inputs::default();
-        board.record(Ok(fleet), Err("no questions".into()), &none, 1, &[]);
+        board.record(
+            Ok(fleet),
+            Err("no questions".into()),
+            fno::requests_model::RequestsRead::Rows(Vec::new()),
+            &none,
+            1,
+            &[],
+        );
         let rows = rows(
             &layout,
             &board,
