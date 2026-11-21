@@ -2639,8 +2639,7 @@ mod tests {
         );
         let argv: Vec<String> = [
             "x-aaaa1111",
-            "--add-pr",
-            "244",
+            "additional_prs+=244",
             "--add-pr-status",
             "exploded",
         ]
