@@ -42,6 +42,7 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Mutex;
 
 const EXIT_OK: i32 = 0;
 const EXIT_USAGE: i32 = 2;
@@ -445,46 +446,60 @@ fn compute(
         blame_runs_failed: 0,
         diff_failures: 0,
     };
-    for delivery in &deliveries {
-        if delivery.time < since {
-            continue;
-        }
-        let parent = format!("{}^1", delivery.sha);
-        let (surface, changed_lines) = match surface_split(&parsed.repo, &parent, &delivery.sha) {
-            Ok(split) => split,
-            Err(_) => {
-                report.diff_failures += 1;
-                // A failed numstat read is unmeasured, never a fleet score.
-                ("unmeasured", 0)
-            }
-        };
-        let (fix_of_fix, young_lines, removed_lines) = if delivery.kind == "fix" {
-            match fix_of_fix(
-                &parsed.repo,
-                &parent,
-                delivery,
-                &by_sha,
-                parsed.fix_window_days,
-                &mut report.blame_runs_failed,
-            ) {
-                Ok(verdict) => verdict,
-                Err(_) => {
-                    report.diff_failures += 1;
-                    (None, 0, 0)
-                }
-            }
-        } else {
-            (None, 0, 0)
-        };
-        report.rows.push(Row {
-            delivery: delivery.clone(),
-            surface,
-            changed_lines,
-            fix_of_fix,
-            young_lines,
-            removed_lines,
-        });
+    // The per-delivery diff and blame reads dominate the wall clock, so the
+    // fold runs on the same bounded pool as the scorecard join; rows and
+    // failure counters land in delivery order regardless of thread timing.
+    let repo = parsed.repo.as_path();
+    let fix_window_days = parsed.fix_window_days;
+    #[derive(Default)]
+    struct FoldCounters {
+        blame_runs_failed: u64,
+        diff_failures: u64,
     }
+    let (folded, counters) =
+        fold_deliveries_parallel(&deliveries, fold_worker_cap(), |delivery, c| {
+            if delivery.time < since {
+                return None;
+            }
+            let parent = format!("{}^1", delivery.sha);
+            let (surface, changed_lines) = match surface_split(repo, &parent, &delivery.sha) {
+                Ok(split) => split,
+                Err(_) => {
+                    c.diff_failures += 1;
+                    // A failed numstat read is unmeasured, never a fleet score.
+                    ("unmeasured", 0)
+                }
+            };
+            let (verdict, young_lines, removed_lines) = if delivery.kind == "fix" {
+                match fix_of_fix(
+                    repo,
+                    &parent,
+                    delivery,
+                    &by_sha,
+                    fix_window_days,
+                    &mut c.blame_runs_failed,
+                ) {
+                    Ok(outcome) => outcome,
+                    Err(_) => {
+                        c.diff_failures += 1;
+                        (None, 0, 0)
+                    }
+                }
+            } else {
+                (None, 0, 0)
+            };
+            Some(Row {
+                delivery: delivery.clone(),
+                surface,
+                changed_lines,
+                fix_of_fix: verdict,
+                young_lines,
+                removed_lines,
+            })
+        });
+    report.blame_runs_failed = counters.iter().map(|c| c.blame_runs_failed).sum();
+    report.diff_failures = counters.iter().map(|c| c.diff_failures).sum();
+    report.rows = folded.into_iter().flatten().collect();
     Ok(report)
 }
 
@@ -553,6 +568,64 @@ fn walk_deliveries(
     Ok((deliveries, by_sha))
 }
 
+/// The bounded fold width: one worker per core up to eight, so the blame
+/// pool never stampedes the git subprocess layer on a big-core host.
+fn fold_worker_cap() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(8)
+}
+
+/// The one parallel per-delivery fold: maps `deliveries` through `task` on at
+/// most `worker_cap` scoped threads over contiguous chunks and returns the
+/// per-item results in delivery order - `None` where the task skipped an
+/// item. Each worker owns a private `Acc` (the failure counters); the caller
+/// folds the returned accumulators, so every total reads exactly as the
+/// serial loop summed it and the row order never depends on thread timing.
+/// The pool only bounds how many git subprocess chains run at once; each
+/// read stays one subprocess per question.
+fn fold_deliveries_parallel<R, Acc, F>(
+    deliveries: &[Delivery],
+    worker_cap: usize,
+    task: F,
+) -> (Vec<Option<R>>, Vec<Acc>)
+where
+    R: Send,
+    Acc: Send + Default,
+    F: Fn(&Delivery, &mut Acc) -> Option<R> + Sync,
+{
+    let workers = worker_cap.max(1).min(deliveries.len().max(1));
+    let chunk = deliveries.len().div_ceil(workers);
+    let slots: Mutex<Vec<Option<(Vec<Option<R>>, Acc)>>> =
+        Mutex::new((0..workers).map(|_| None).collect());
+    std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(workers);
+        for w in 0..workers {
+            let start = (w * chunk).min(deliveries.len());
+            let end = (start + chunk).min(deliveries.len());
+            let slice = &deliveries[start..end];
+            let slots = &slots;
+            handles.push(scope.spawn(move || {
+                let mut acc = Acc::default();
+                let part: Vec<Option<R>> = slice.iter().map(|d| task(d, &mut acc)).collect();
+                slots.lock().expect("fold slots")[w] = Some((part, acc));
+            }));
+        }
+        for handle in handles {
+            handle.join().expect("fold worker panicked");
+        }
+    });
+    let mut out = Vec::with_capacity(deliveries.len());
+    let mut accs = Vec::with_capacity(workers);
+    for slot in slots.into_inner().expect("fold slots") {
+        let (part, acc) = slot.expect("every fold worker stored its chunk");
+        out.extend(part);
+        accs.push(acc);
+    }
+    (out, accs)
+}
+
 /// Per-PR fix-of-fix verdicts for the scorecard join: the same delivery walk
 /// and blame read the stability report runs, narrowed to the wanted PR
 /// numbers so one scorecard fold blames only its own fix deliveries. `rev`
@@ -573,10 +646,12 @@ pub(crate) fn fix_of_fix_by_pr(
     let map_since = since - Duration::days(fix_window_days.max(1));
     let since_iso = map_since.format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let (deliveries, by_sha) = walk_deliveries(repo, rev, &since_iso, &BTreeMap::new())?;
-    let mut out: BTreeMap<u64, Option<bool>> = BTreeMap::new();
-    for delivery in &deliveries {
+    // The blame reads dominate the scorecard wall clock (823 subprocesses on
+    // a 21-day window), so the wanted fix deliveries fold on the bounded
+    // pool; the map builds in walk order, byte-identical to the serial loop.
+    let folded = fold_deliveries_parallel(&deliveries, fold_worker_cap(), |delivery, _c| {
         if delivery.time < since || !wanted.contains(&delivery.pr) || delivery.kind != "fix" {
-            continue;
+            return None;
         }
         let parent = format!("{}^1", delivery.sha);
         let mut blame_failures = 0;
@@ -591,7 +666,11 @@ pub(crate) fn fix_of_fix_by_pr(
             Ok((verdict, _, _)) => verdict,
             Err(_) => None,
         };
-        out.insert(delivery.pr, verdict);
+        Some((delivery.pr, verdict))
+    });
+    let mut out: BTreeMap<u64, Option<bool>> = BTreeMap::new();
+    for (pr, verdict) in folded.into_iter().flatten() {
+        out.insert(pr, verdict);
     }
     Ok(out)
 }

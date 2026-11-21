@@ -207,3 +207,40 @@ fn merge_title_outranks_the_node_kind() {
     assert_eq!(report.rows[0].delivery.kind, "fix");
     assert_eq!(report.rows[0].delivery.classified_by, "merge-title");
 }
+
+#[test]
+fn parallel_fold_preserves_order_and_sums_counters() {
+    // The fold's concurrency contract: chunked workers never reorder rows,
+    // skips stay in position, and a counted item lands exactly once no
+    // matter which worker held it. 97 items across 8 capped workers also
+    // exercises ragged final chunks.
+    let deliveries: Vec<super::Delivery> = (0..97u64)
+        .map(|i| super::Delivery {
+            pr: i,
+            sha: format!("sha{i:040}"),
+            time: super::DateTime::parse_from_rfc3339("2026-10-01T00:00:00Z")
+                .expect("parse")
+                .with_timezone(&super::Utc),
+            kind: "fix",
+            classified_by: "test",
+            subject: format!("fix(t): s{i}"),
+            title: None,
+        })
+        .collect();
+    let (out, counters) = super::fold_deliveries_parallel(&deliveries, 8, |d, acc: &mut u64| {
+        if d.pr % 2 == 0 {
+            return None;
+        }
+        *acc += 1;
+        Some(d.pr * 7)
+    });
+    assert_eq!(out.len(), 97);
+    for (i, item) in out.iter().enumerate() {
+        if i % 2 == 0 {
+            assert!(item.is_none(), "skip position {i} must stay None");
+        } else {
+            assert_eq!(item.expect("kept"), (i as u64) * 7, "order at {i}");
+        }
+    }
+    assert_eq!(counters.iter().sum::<u64>(), 48, "counted exactly once");
+}
