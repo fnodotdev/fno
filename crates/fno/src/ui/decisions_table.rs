@@ -77,6 +77,7 @@ impl Table {
 
 const AUDIENCE_MIN_W: usize = 14;
 const AUDIENCE_MAX_W: usize = 30;
+const RULING_MIN_W: usize = 24;
 
 /// The audience cell: the chip word, then any persona jobs.
 fn audience_cell(r: &DecisionRow) -> String {
@@ -126,14 +127,19 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
     // fixed columns plus one gap precede it, and a docked host pane is
     // narrower than the full view's 98-column floor.
     // The audience column grows to the longest chip shown, so a chip like
-    // customer:solo-founder is not cut mid-word; the description and ruling
-    // columns give up the width.
+    // customer:solo-founder is not cut mid-word. It stops growing once the
+    // ruling would drop under RULING_MIN_W, so a narrow pane keeps the old
+    // 14-column cell.
     let aud_w = shown
         .iter()
         .map(|r| audience_cell(r).chars().count())
         .max()
         .unwrap_or(0)
-        .clamp(AUDIENCE_MIN_W, AUDIENCE_MAX_W);
+        .clamp(AUDIENCE_MIN_W, AUDIENCE_MAX_W)
+        .min(
+            w.saturating_sub(66 + 1 + 16 + 1 + RULING_MIN_W)
+                .max(AUDIENCE_MIN_W),
+        );
     let fixed = 66 + aud_w;
     let desc_w = 16.min(w.saturating_sub(fixed + 1));
     let text_w = w.saturating_sub(fixed + 1 + desc_w + 1);
@@ -371,5 +377,8 @@ mod tests {
             page.contains("customer:solo-founder"),
             "chip cut in:\n{page}"
         );
+        // A narrow pane keeps the ruling rather than widening the chip.
+        let narrow = render(&t, 110, 12).join("\n");
+        assert!(narrow.contains("ship it"), "ruling lost in:\n{narrow}");
     }
 }
