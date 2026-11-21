@@ -5060,6 +5060,17 @@
    "edit": "toggle"
   },
   {
+   "path": "telemetry.otlp.forward_requests",
+   "label": "Forward masked api_request records",
+   "type": "bool",
+   "default": false,
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "",
+   "doc": "Also forward the masked api_request records from otel.db through the export arm (needs telemetry.otlp.enabled).",
+   "edit": "toggle"
+  },
+  {
    "path": "telemetry.eval_events.enabled",
    "label": "Send eval runs to PostHog",
    "type": "bool",

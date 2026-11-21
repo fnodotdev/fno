@@ -533,19 +533,19 @@ fn value_f64(v: &Value) -> Option<f64> {
         .or_else(|| v.as_f64())
 }
 
-struct Row {
-    dedupe_key: String,
-    session_id: String,
-    ts: Option<String>,
-    model: Option<String>,
-    cost_usd_micros: Option<i64>,
-    input_tokens: Option<i64>,
-    output_tokens: Option<i64>,
-    cache_read_tokens: Option<i64>,
-    cache_creation_tokens: Option<i64>,
-    skill_name: Option<String>,
-    plugin_name: Option<String>,
-    agent_name: Option<String>,
+pub(crate) struct Row {
+    pub(crate) dedupe_key: String,
+    pub(crate) session_id: String,
+    pub(crate) ts: Option<String>,
+    pub(crate) model: Option<String>,
+    pub(crate) cost_usd_micros: Option<i64>,
+    pub(crate) input_tokens: Option<i64>,
+    pub(crate) output_tokens: Option<i64>,
+    pub(crate) cache_read_tokens: Option<i64>,
+    pub(crate) cache_creation_tokens: Option<i64>,
+    pub(crate) skill_name: Option<String>,
+    pub(crate) plugin_name: Option<String>,
+    pub(crate) agent_name: Option<String>,
 }
 
 fn store_record(conn: &Connection, record: &Value) -> rusqlite::Result<()> {
@@ -612,6 +612,56 @@ fn store_record(conn: &Connection, record: &Value) -> rusqlite::Result<()> {
 /// ledger estimate.
 pub fn session_cost_usd(db: &Path, session_id: &str) -> Option<f64> {
     crate::otel_read::session_cost_usd(db, session_id)
+}
+
+/// The `api_requests` rows inside the forward window: dated, at or after
+/// `cutoff_ms`, oldest first. Undated rows never forward, because
+/// `timeUnixNano` cannot be honest about them. A missing db reads as no
+/// rows (the receiver may never have run); a real read error names itself,
+/// so the tick row can carry it.
+pub(crate) fn requests_in_window(db: &Path, cutoff_ms: i64) -> Result<Vec<Row>, String> {
+    if !db.exists() {
+        return Ok(Vec::new());
+    }
+    let conn = Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READONLY)
+        .map_err(|e| format!("{} is unreadable: {e}", db.display()))?;
+    conn.busy_timeout(Duration::from_secs(5))
+        .map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT dedupe_key, session_id, ts, model, cost_usd_micros, input_tokens, \
+             output_tokens, cache_read_tokens, cache_creation_tokens, skill_name, \
+             plugin_name, agent_name FROM api_requests WHERE ts IS NOT NULL",
+        )
+        .map_err(|e| e.to_string())?;
+    let mapped = stmt
+        .query_map([], |r| {
+            Ok(Row {
+                dedupe_key: r.get(0)?,
+                session_id: r.get(1)?,
+                ts: r.get(2)?,
+                model: r.get(3)?,
+                cost_usd_micros: r.get(4)?,
+                input_tokens: r.get(5)?,
+                output_tokens: r.get(6)?,
+                cache_read_tokens: r.get(7)?,
+                cache_creation_tokens: r.get(8)?,
+                skill_name: r.get(9)?,
+                plugin_name: r.get(10)?,
+                agent_name: r.get(11)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    let mut pending: Vec<(i64, Row)> = mapped
+        .filter_map(|row| row.ok())
+        .filter_map(|row| {
+            let ts = row.ts.clone()?;
+            Some((crate::event_store::parse_rfc3339_ms(&ts)?, row))
+        })
+        .filter(|(ms, _)| *ms >= cutoff_ms)
+        .collect();
+    pending.sort_by_key(|(ms, _)| *ms);
+    Ok(pending.into_iter().map(|(_, row)| row).collect())
 }
 
 #[cfg(test)]
@@ -1060,5 +1110,51 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+    }
+
+    /// The forward window reads the stored rows: a row outside the window
+    /// and an undated row answer nothing, the in-window rows come back
+    /// oldest first.
+    #[test]
+    fn requests_in_window_filters_by_ts() {
+        let (agents, _td) = home();
+        let db = agents.otel_dir().join("otel.db");
+        let cutoff = crate::event_store::parse_rfc3339_ms("2026-11-20T12:00:00Z").unwrap();
+        let row = |rid: &str, ts: &str| {
+            let mut r = api_request(rid, "sess-fwd", 3_050_000);
+            {
+                let mut attrs = r["attributes"].as_array_mut().unwrap();
+                for a in attrs.iter_mut() {
+                    if a["key"] == "event.timestamp" {
+                        a["value"] = json!({"stringValue": ts});
+                    }
+                }
+            }
+            r
+        };
+        ingest(
+            &db,
+            body(json!([
+                row("req-a", "2026-11-20T11:00:00Z"),
+                row("req-b", "2026-11-20T09:00:00Z"),
+                row("req-c", "2026-11-19T00:00:00Z"),
+            ]))
+            .as_bytes(),
+        );
+        let mut undated = api_request("req-d", "sess-fwd", 1);
+        undated["attributes"] = json!([
+            {"key": "event.name", "value": {"stringValue": "api_request"}},
+            {"key": "session.id", "value": {"stringValue": "sess-fwd"}},
+            {"key": "request_id", "value": {"stringValue": "req-d"}}
+        ]);
+        ingest(&db, body(json!([undated])).as_bytes());
+        let got = requests_in_window(&db, cutoff).unwrap();
+        let keys: Vec<&str> = got.iter().map(|r| r.dedupe_key.as_str()).collect();
+        assert_eq!(
+            keys,
+            vec!["rid:req-a", "rid:req-b"],
+            "in-window rows oldest first; out-of-window and undated rows stay home"
+        );
+        assert_eq!(requests_in_window(&db, cutoff - 1).unwrap().len(), 2);
     }
 }

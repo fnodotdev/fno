@@ -188,6 +188,8 @@ log_content = false                         # titles and free text stay local
 
 Auth headers come from an env var, never from the config file: `FNO_OTLP_HEADERS`, comma-separated `name=value` pairs. An unset or empty variable refuses the export rather than shipping an unauthenticated payload. The variable name itself is overridable with `headers_env`.
 
+With `forward_requests = true`, the same beat also forwards the masked `api_request` records the receiver stored in otel.db: cost, tokens, model and skill/plugin/agent names per record, under the `fno.api_requests` scope. The key defaults to false, and unset means those records never leave the machine. See [cost accuracy](cost-accuracy.md).
+
 The export is off unless `enabled = true`. Two env kill switches outrank the config: `OTEL_SDK_DISABLED` or `DO_NOT_TRACK` set to `true` or `1` force it off. The daemon reads its own environment at start. Set kill switches and the headers var where the daemon sees them. Restart the daemon after a config change.
 
 One row becomes one log record. Always-on attributes: `fno.kind`, `fno.area`, `session.id`, `event.name`, and the stable `fno.row.id`. The row id is a sha256 over kind, timestamp, node, session, ref, team, holder and name. The title is excluded, so a title edit does not resend the row. Conditional attributes: `fno.node.id`, `fno.harness`, `fno.model`, `fno.effort`, `fno.phase`, `fno.team`, `fno.actor`, `fno.parent.session.id`, `fno.ref`. With `log_content = true` the record also carries free text: `fno.title`, `fno.cwd`, `fno.reason`, `fno.detail`, `fno.url`, `fno.name`, `fno.holder`, `fno.owner`, `fno.lead`.
