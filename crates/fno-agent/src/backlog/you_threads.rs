@@ -542,10 +542,41 @@ pub(crate) struct YouStore {
     cache: YouCache,
     /// Persisted on save; a contended lock runs advance read-only.
     persist: bool,
+    /// The requests reach keeps only what an ask row reads: each reply cut
+    /// to its head and tail, and only the sessions this run advanced, so a
+    /// month of transcripts stays a small file.
+    trim: bool,
+    visited: std::collections::HashSet<String>,
+}
+
+/// A trimmed reply keeps its head, which the 200-char excerpt reads, and
+/// its tail, which tells whether the reply ended on a question.
+const TRIM_HEAD: usize = 600;
+const TRIM_TAIL: usize = 40;
+
+fn trim_reply(text: &mut String) {
+    let n = text.chars().count();
+    if n <= TRIM_HEAD + TRIM_TAIL {
+        return;
+    }
+    let head: String = text.chars().take(TRIM_HEAD).collect();
+    let tail: String = text.chars().skip(n - TRIM_TAIL).collect();
+    *text = format!("{head}\u{2026}{tail}");
 }
 
 impl YouStore {
     pub(crate) fn open(path: PathBuf, persist: bool) -> Self {
+        Self::open_with(path, persist, false)
+    }
+
+    /// The requests reach's own store: trimmed replies, pruned to the
+    /// sessions one run advanced. It keys off the same version, so a reader
+    /// change that clears the live cache clears this one too.
+    pub(crate) fn open_trimmed(path: PathBuf, persist: bool) -> Self {
+        Self::open_with(path, persist, true)
+    }
+
+    fn open_with(path: PathBuf, persist: bool, trim: bool) -> Self {
         let cache = std::fs::read_to_string(&path)
             .ok()
             .and_then(|raw| serde_json::from_str::<YouCache>(&raw).ok())
@@ -558,11 +589,14 @@ impl YouStore {
             path,
             cache,
             persist,
+            trim,
+            visited: Default::default(),
         }
     }
 
     /// One session's You items, oldest first, advancing the cache entry.
     pub(crate) fn advance(&mut self, path: &Path, session: &str, bus: &BusIndex) -> Vec<YouItem> {
+        self.visited.insert(session.to_string());
         let Ok(meta) = std::fs::metadata(path) else {
             return self
                 .cache
@@ -605,6 +639,13 @@ impl YouStore {
         } else {
             full_walk(path, bus, session)
         };
+        let mut out = out;
+        if self.trim {
+            for item in &mut out.items {
+                trim_reply(&mut item.reply_text);
+                trim_reply(&mut item.end_reply);
+            }
+        }
         let mut head_len = size.min(crate::transcript_activity::HEAD_SAMPLE_BYTES);
         let head_sha = crate::transcript_activity::head_sample(path, head_len).unwrap_or_default();
         if head_sha.is_empty() {
@@ -628,9 +669,13 @@ impl YouStore {
 
     /// Atomic save, mode 600. A read-only store (contended lock, no home)
     /// saves nothing.
-    pub(crate) fn save(&self) {
+    pub(crate) fn save(&mut self) {
         if !self.persist {
             return;
+        }
+        if self.trim {
+            let visited = &self.visited;
+            self.cache.entries.retain(|sid, _| visited.contains(sid));
         }
         let Ok(doc) = serde_json::to_vec(&self.cache) else {
             return;
@@ -639,7 +684,10 @@ impl YouStore {
             return;
         };
         let _ = std::fs::create_dir_all(parent);
-        let tmp = parent.join("you-threads.json.tmp");
+        // Named after the cache file: two stores share one directory.
+        let mut tmp = self.path.clone().into_os_string();
+        tmp.push(".tmp");
+        let tmp = PathBuf::from(tmp);
         use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
         let Ok(mut f) = std::fs::OpenOptions::new()
@@ -929,7 +977,10 @@ pub(crate) fn asks_rows(inputs: &YouInputs) -> Vec<Value> {
                                 "turn_id": item.get("turn_id").and_then(Value::as_str).unwrap_or(""),
                                 "ts": item.get("ts").and_then(Value::as_str).unwrap_or(""),
                                 "typed_text": item.get("typed_text").and_then(Value::as_str).unwrap_or(""),
-                                "reply_excerpt": reply_excerpt(item),
+                                "reply_excerpt": reply_excerpt(
+                                    item.get("end_reply").and_then(Value::as_str).unwrap_or(""),
+                                    item.get("reply_text").and_then(Value::as_str).unwrap_or(""),
+                                ),
                                 "state": item.get("state").and_then(Value::as_str).unwrap_or(""),
                             })
                         })
@@ -1032,62 +1083,109 @@ fn since_transcripts(
     out
 }
 
-/// The asks list reached back to `since` (a `YYYY-MM-DD` date) behind
-/// `fno inbox operator list --all --since`. The live view reads a two-day
-/// window through the cache; this reach walks every transcript on disk
-/// touched since the date, uncached, through the same splitter, and keeps
-/// items stamped on or after the date. Rows carry the asks-list fields plus
-/// `project` (the claude project dir, or `codex`) and `transcript`, oldest
-/// first, so an audit can read them in order.
-pub(crate) fn asks_since(
+/// One typed ask reached back by `--since`: the asks-list row fields, plus
+/// whether the reply before it ended on a question (a short typed answer to
+/// that question is a reply, not a request).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub(crate) struct AskTurn {
+    pub session_id: String,
+    pub name: String,
+    pub turn_id: String,
+    pub ts: String,
+    pub typed_text: String,
+    pub reply_excerpt: String,
+    pub state: &'static str,
+    pub project: String,
+    pub transcript: String,
+    #[serde(skip)]
+    pub after_question: bool,
+}
+
+/// The asks reached back to `since` (a `YYYY-MM-DD` date): every transcript
+/// on disk touched since the date, through the same splitter, keeping items
+/// stamped on or after it, oldest first. The walk advances a trimmed store
+/// at `cache_path`, so a warm read re-walks only transcripts that grew; a
+/// contended lock reads through without saving.
+pub(crate) fn ask_turns_since(
     inputs: &YouInputs,
     codex_dir: &Path,
+    cache_path: &Path,
     since: &str,
     since_epoch: u64,
-) -> Vec<Value> {
+) -> Vec<AskTurn> {
     let dot_fno = inputs.home_root.parent().unwrap_or(&inputs.home_root);
     let bus = BusIndex::load(&crate::mail_paths::bus_log_path(dot_fno));
-    let mut rows: Vec<(String, Value)> = Vec::new();
+    let lock = crate::gh_budget::FileLock::try_acquire(&crate::gh_budget::lock_path(cache_path));
+    let persist = lock.is_ok();
+    let mut store = YouStore::open_trimmed(cache_path.to_path_buf(), persist);
+    let mut turns: Vec<AskTurn> = Vec::new();
     for (sid, path, project) in since_transcripts(&inputs.projects_dir, codex_dir, since_epoch) {
         let acked = crate::operator_turns::read_acked_turn_ids(
             &crate::operator_turns::ledger_path(&inputs.capture_dir, &sid),
         )
         .unwrap_or_default();
-        for item in full_walk(&path, &bus, &sid).items {
+        let mut asked = false;
+        for item in store.advance(&path, &sid, &bus) {
+            let after_question = std::mem::replace(&mut asked, ends_on_question(&item));
             if item.ts.as_str() < since {
                 continue;
             }
-            let v = item_json(&item, &acked);
-            let state = item_state(&item, &acked);
-            rows.push((
-                item.ts.clone(),
-                json!({
-                    "session_id": sid,
-                    "name": sid.get(..8).unwrap_or(&sid),
-                    "turn_id": item.turn_id,
-                    "ts": item.ts,
-                    "typed_text": item.typed_text,
-                    "reply_excerpt": reply_excerpt(&v),
-                    "state": state,
-                    "project": project,
-                    "transcript": path.display().to_string(),
-                }),
-            ));
+            turns.push(AskTurn {
+                session_id: sid.clone(),
+                name: sid.get(..8).unwrap_or(&sid).to_string(),
+                state: item_state(&item, &acked),
+                reply_excerpt: reply_excerpt(&item.end_reply, &item.reply_text),
+                turn_id: item.turn_id,
+                ts: item.ts,
+                typed_text: item.typed_text,
+                project: project.clone(),
+                transcript: path.display().to_string(),
+                after_question,
+            });
         }
     }
-    rows.sort_by(|a, b| a.0.cmp(&b.0));
-    rows.into_iter().map(|(_, v)| v).collect()
+    store.save();
+    turns.sort_by(|a, b| a.ts.cmp(&b.ts));
+    turns
+}
+
+/// The reply a person answers next: the end reply when the turn reached
+/// one, else the visible reply, read for a closing question mark.
+fn ends_on_question(item: &YouItem) -> bool {
+    let text = if item.end_reply.trim().is_empty() {
+        &item.reply_text
+    } else {
+        &item.end_reply
+    };
+    text.trim_end().ends_with('?')
+}
+
+/// The asks list reached back to `since` behind `fno inbox user list --all
+/// --since`: [`ask_turns_since`] serialized, oldest first, so an audit reads
+/// them in order. Rows carry the asks-list fields plus `project` (the claude
+/// project dir, or `codex`) and `transcript`.
+pub(crate) fn asks_since(
+    inputs: &YouInputs,
+    codex_dir: &Path,
+    cache_path: &Path,
+    since: &str,
+    since_epoch: u64,
+) -> Vec<Value> {
+    ask_turns_since(inputs, codex_dir, cache_path, since, since_epoch)
+        .iter()
+        .map(|turn| serde_json::to_value(turn).unwrap_or(Value::Null))
+        .collect()
 }
 
 /// One line of the reply an ask got: the end reply when the turn reached
 /// one, else the visible reply; newline runs collapse so a row stays one
 /// row; cut at 200 chars.
-fn reply_excerpt(item: &Value) -> String {
-    let text = item
-        .get("end_reply")
-        .and_then(Value::as_str)
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| item.get("reply_text").and_then(Value::as_str).unwrap_or(""));
+fn reply_excerpt(end_reply: &str, reply_text: &str) -> String {
+    let text = if end_reply.trim().is_empty() {
+        reply_text
+    } else {
+        end_reply
+    };
     let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut out: String = flat.chars().take(200).collect();
     if flat.chars().count() > 200 {
@@ -1632,7 +1730,13 @@ mod tests {
             row("user", "scripted eval turn", "2026-08-20T10:00:00Z") + "\n",
         )
         .unwrap();
-        let since = asks_since(&inputs, &dir.join("codex"), "2026-08-16", 0);
+        let since = asks_since(
+            &inputs,
+            &dir.join("codex"),
+            &dir.join("reach.json"),
+            "2026-08-16",
+            0,
+        );
         let typed: Vec<&str> = since
             .iter()
             .filter_map(|r| r["typed_text"].as_str())
@@ -1642,6 +1746,81 @@ mod tests {
             since.first().and_then(|r| r["project"].as_str()),
             Some("-Users-me-repo")
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The requests reach caches its walk: a second read re-walks only the
+    /// transcript that grew, from its stored offset, and keeps the other
+    /// entry as it was. A cache from an older reader version is discarded.
+    #[test]
+    fn the_reach_cache_rereads_only_a_grown_transcript_and_drops_an_old_version() {
+        let dir = std::env::temp_dir().join(format!("you-threads-reach-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let proj = dir.join("projects").join("-Users-me-repo");
+        std::fs::create_dir_all(&proj).unwrap();
+        let cache = dir.join("intel").join("requests-walk.json");
+        std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
+        // An old-version cache holding a turn no transcript has.
+        std::fs::write(
+            &cache,
+            json!({"version": YOU_CACHE_VERSION - 1, "entries": {"s-a": {
+                "offset": 0, "head_sha": "", "head_len": 0, "open": null,
+                "items": [{"ts": "2026-11-02T00:00:00Z", "typed_text": "a stale ghost ask",
+                           "reply_text": "", "turn_id": "ghost", "end_reply": ""}]}}})
+            .to_string(),
+        )
+        .unwrap();
+        let first = row("user", "ship the requests view", "2026-11-02T10:00:00Z") + "\n";
+        std::fs::write(proj.join("s-a.jsonl"), &first).unwrap();
+        std::fs::write(
+            proj.join("s-b.jsonl"),
+            row("user", "and the mux board", "2026-11-02T11:00:00Z") + "\n",
+        )
+        .unwrap();
+        let registry: Vec<Value> = Vec::new();
+        let inputs = YouInputs {
+            registry: &registry,
+            projects_dir: dir.join("projects"),
+            home_root: dir.join("home"),
+            cache_path: dir.join("you-cache.json"),
+            capture_dir: dir.join("capture"),
+        };
+        let codex = dir.join("codex");
+        let texts = |turns: &[AskTurn]| -> Vec<String> {
+            turns.iter().map(|t| t.typed_text.clone()).collect()
+        };
+        let once = ask_turns_since(&inputs, &codex, &cache, "2026-11-01", 0);
+        assert_eq!(
+            texts(&once),
+            ["ship the requests view", "and the mux board"],
+            "the old-version ghost is dropped"
+        );
+        let offsets = || -> BTreeMap<String, u64> {
+            let doc: YouCache =
+                serde_json::from_str(&std::fs::read_to_string(&cache).unwrap()).unwrap();
+            doc.entries
+                .iter()
+                .map(|(k, e)| (k.clone(), e.offset))
+                .collect()
+        };
+        let before = offsets();
+        std::fs::write(
+            proj.join("s-a.jsonl"),
+            first.clone() + &row("user", "and count the repeats", "2026-11-02T12:00:00Z") + "\n",
+        )
+        .unwrap();
+        let twice = ask_turns_since(&inputs, &codex, &cache, "2026-11-01", 0);
+        assert_eq!(
+            texts(&twice),
+            [
+                "ship the requests view",
+                "and the mux board",
+                "and count the repeats"
+            ]
+        );
+        let after = offsets();
+        assert_eq!(after.get("s-b"), before.get("s-b"), "s-b did not grow");
+        assert!(after.get("s-a") > before.get("s-a"), "s-a advanced");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

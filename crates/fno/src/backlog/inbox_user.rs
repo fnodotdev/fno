@@ -15,6 +15,7 @@ use std::ffi::OsString;
 const NATIVE_USER_COMMANDS: &[(&str, &[&str], &[&str])] = &[
     ("status", &["--json", "-J"], &[]),
     ("list", &["--json", "-J", "--all"], &["--limit", "-L"]),
+    ("requests", &["--json", "-J"], &["--top"]),
 ];
 
 /// Classify `fno inbox user|operator <command> ...`: `Some(argv)` is the argv
@@ -37,7 +38,7 @@ pub fn classify_inbox_user(args: &[OsString]) -> Option<Vec<OsString>> {
     let mut i = 0;
     while i < rest.len() {
         let arg = rest[i].to_str()?;
-        if arg == "--since" && command == "list" {
+        if arg == "--since" && matches!(command, "list" | "requests") {
             // A date, not a count: the runtime parses and refuses it.
             rest.get(i + 1)?;
             i += 2;
@@ -228,6 +229,10 @@ const USER_COMMANDS: &[(&str, &str)] = &[
         "Undispositioned user turns, oldest first; --all lists every session's asks with their answer state: list [--all] [--limit N] [--json].",
     ),
     (
+        "requests",
+        "Your asks across sessions, merged when repeated, with their node and a rank: requests [--since DATE] [--top N] [--json].",
+    ),
+    (
         "ack",
         "Dispose one user turn, naming what it produced: ack TURN --outcome OUTCOME [--why TEXT].",
     ),
@@ -408,6 +413,29 @@ mod tests {
                 classify_inbox_user(&mk(&["inbox", group, "status", "--since", "2026-08-16"]))
                     .is_none()
             );
+            assert_eq!(
+                classify_inbox_user(&mk(&[
+                    "inbox",
+                    group,
+                    "requests",
+                    "--since",
+                    "2026-11-01",
+                    "--top",
+                    "5",
+                    "-J"
+                ])),
+                Some(mk(&[
+                    "operator-turns",
+                    "--render",
+                    "requests",
+                    "--since",
+                    "2026-11-01",
+                    "--top",
+                    "5",
+                    "-J"
+                ]))
+            );
+            assert!(classify_inbox_user(&mk(&["inbox", group, "requests", "--all"])).is_none());
             assert_eq!(
                 classify_inbox_user(&mk(&["inbox", group, "ack", "u-1", "--outcome", "nothing"])),
                 Some(mk(&["ack", "u-1", "--outcome", "nothing"]))
