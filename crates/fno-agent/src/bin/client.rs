@@ -3668,7 +3668,7 @@ const VALUE_FLAGS: &[&str] = &[
 /// boundary calls spawn-owned ([`fno_agent::spawn_bare::spawn_owned`],
 /// the same predicate that refuses it after the prompt) must parse in the
 /// equals form, never ride the harness argv. A scalar owned flag
-/// ([`SCALAR_OWNED_FLAGS`] plus the retiring `--succeed` alias) folds to its
+/// ([`SCALAR_OWNED_FLAGS`]) folds to its
 /// bare form on `=true` and drops on `=false`; any other value refuses.
 ///
 /// The hand-off dry-run incident: `--dry-run=true` reached the unowned-passthrough arm
@@ -3715,10 +3715,7 @@ fn normalize_value_flags(command: &str, rest: &[String]) -> Result<Vec<String>, 
                 // so the parse can never disagree with the refusal that
                 // guards the same flag after the prompt.
                 if command == "spawn" && fno_agent::spawn_bare::spawn_owned(&tok) {
-                    if fno_agent::spawn_bare::SCALAR_OWNED_FLAGS.contains(&flag)
-                        // retired-ok: the fold reads the retiring alias so its equals form parses like the space form; insert_role_flag prints the deprecation notice and --hand-off is the replacement.
-                        || flag == "--succeed"
-                    {
+                    if fno_agent::spawn_bare::SCALAR_OWNED_FLAGS.contains(&flag) {
                         match value.as_str() {
                             "true" => normalized.push(flag.to_string()),
                             "false" => {}
