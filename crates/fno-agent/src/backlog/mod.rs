@@ -1141,7 +1141,6 @@ pub(crate) fn authoritative_sync_rebased(
         .iter()
         .any(|id| stored.get(*id) != snapshot_rows.get(*id))
     {
-        eprintln!("rebase refused: touched rows moved: stored {stored:?} snapshot {snapshot_rows:?} changed {ids:?}");
         return Ok(None);
     }
     for row in after {
@@ -1157,7 +1156,6 @@ pub(crate) fn authoritative_sync_rebased(
             |found| found.get(0),
         )?;
         if held_elsewhere {
-            eprintln!("rebase refused: slug {slug} held elsewhere");
             return Ok(None);
         }
     }
@@ -1198,7 +1196,6 @@ pub(crate) fn authoritative_sync_rebased(
             |found| found.get(0),
         )?;
         if now > seen {
-            eprintln!("rebase refused: parent {parent} children {seen} -> {now}");
             return Ok(None);
         }
     }
@@ -2340,6 +2337,38 @@ fn sorted_value(value: &Value) -> Value {
         Value::Array(rows) => Value::Array(rows.iter().map(sorted_value).collect()),
         _ => value.clone(),
     }
+}
+
+/// The ids among `candidates` whose row in `entries` differs from the row a
+/// writer planned over. The store diff against the raw export also flags rows
+/// that merely lack normalised defaults, and a rebased write must claim only
+/// the rows it actually changed.
+pub(crate) fn rows_touched(
+    planned: &[Value],
+    entries: &[Value],
+    candidates: &[String],
+) -> Vec<String> {
+    let index = |rows: &[Value]| -> std::collections::HashMap<String, usize> {
+        rows.iter()
+            .enumerate()
+            .filter_map(|(at, row)| RowFacts::id_of(row).map(|id| (id.to_string(), at)))
+            .collect()
+    };
+    let planned_at = index(planned);
+    let entries_at = index(entries);
+    candidates
+        .iter()
+        .filter(
+            |id| match (planned_at.get(id.as_str()), entries_at.get(id.as_str())) {
+                (Some(&before), Some(&after)) => match (planned.get(before), entries.get(after)) {
+                    (Some(old), Some(new)) => canonical_row(old) != canonical_row(new),
+                    _ => true,
+                },
+                _ => true,
+            },
+        )
+        .cloned()
+        .collect()
 }
 
 fn canonical_row(row: &Value) -> String {

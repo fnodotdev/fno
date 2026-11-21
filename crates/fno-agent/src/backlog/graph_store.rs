@@ -2912,6 +2912,9 @@ struct PreparedMutate {
     closure_releases: Vec<(String, String)>,
     is_canonical: bool,
     changed_ids: Vec<String>,
+    /// With a snapshot: the changed ids the writer itself touched, the set a
+    /// rebased publish claims. None means every changed id.
+    touched_ids: Option<Vec<String>>,
     version: String,
 }
 
@@ -2936,8 +2939,12 @@ fn prepare_mutate(
     // `commit_prepared` proves `raw` current; a write landing between the
     // two reads surfaces as Conflict and the caller retries, the same
     // surface a stale base_version already produced.
+    let mut planned: Option<Vec<Value>> = None;
     let (row_versions, begin_version, raw) = match snapshot {
-        Some(snapshot) => (snapshot.row_versions, base_version.clone(), snapshot.raw),
+        Some(snapshot) => {
+            planned = Some(snapshot.rows);
+            (snapshot.row_versions, base_version.clone(), snapshot.raw)
+        }
         None => {
             let row_versions = crate::backlog::row_versions(path, None).map_err(StoreError::Db)?;
             let begin_version = crate::backlog::version(path).map_err(StoreError::Db)?;
@@ -3104,6 +3111,9 @@ fn prepare_mutate(
     let mut baseline = raw.clone();
     canonicalize_entries(&mut baseline);
     let (changed_ids, version) = crate::backlog::diff_and_version(&baseline, &entries);
+    let touched_ids = planned
+        .as_deref()
+        .map(|planned| crate::backlog::rows_touched(planned, &entries, &changed_ids));
     Ok(PreparedMutate {
         raw,
         entries,
@@ -3115,6 +3125,7 @@ fn prepare_mutate(
         closure_releases,
         is_canonical,
         changed_ids,
+        touched_ids,
         version,
     })
 }
@@ -3174,7 +3185,10 @@ fn commit_prepared(
                 path,
                 &prepared.baseline,
                 &prepared.entries,
-                &prepared.changed_ids,
+                prepared
+                    .touched_ids
+                    .as_deref()
+                    .unwrap_or(&prepared.changed_ids),
                 &prepared.row_versions,
                 &prepared.version,
             )
