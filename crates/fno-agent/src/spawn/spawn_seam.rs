@@ -532,6 +532,83 @@ pub(crate) fn granted_dirs(cwd: &Path, sealed: bool) -> Vec<String> {
     }
 }
 
+/// The eval sandbox's Claude config root: `<state dir>/evals/claude-config`.
+/// A sealed claude eval worker pins this root, so the harness's own state
+/// writes (transcripts, history, config) land under the fno eval dir instead
+/// of the user's `~/.claude`. `None` when no state dir resolves.
+pub fn evals_claude_config_dir() -> Option<PathBuf> {
+    crate::backlog::settings::state_dir().map(|state| state.join("evals").join("claude-config"))
+}
+
+/// Stage the sandbox so a pinned worker keeps its ambient context while its
+/// state writes land sandbox-side. State files (`.credentials.json` auth,
+/// `.claude.json` onboarding, `settings.json`) copy in fresh on every call,
+/// so a rotation at the source reaches the next spawn. Context entries
+/// (`plugins`, `commands`, `agents`, `skills`, `CLAUDE.md`) symlink through
+/// to the ambient ones: a capability worker reads the installed plugin and
+/// the user's global memory exactly as an unpinned spawn would, and no
+/// eval-time write travels those trees. Each copy lands through a temp-file
+/// rename, so concurrent stages of one run's parallel spawns cannot tear it.
+/// Returns the sandbox root, or `None` when no state dir resolves; a missing
+/// source entry stages nothing for it and never fails the spawn.
+pub fn stage_evals_claude_config() -> Option<PathBuf> {
+    let dir = evals_claude_config_dir()?;
+    let source = ambient_claude_config_root()?;
+    std::fs::create_dir_all(&dir).ok()?;
+    static STAGE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let tag = format!(
+        "{}-{}",
+        std::process::id(),
+        STAGE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    for name in STAGED_STATE_FILES {
+        let from = source.join(name);
+        let Ok(bytes) = std::fs::read(&from) else {
+            continue;
+        };
+        let tmp = dir.join(format!("{name}.stage-{tag}"));
+        if std::fs::write(&tmp, &bytes).is_ok() {
+            let _ = std::fs::rename(&tmp, dir.join(name));
+        } else {
+            let _ = std::fs::remove_file(&tmp);
+        }
+    }
+    for name in MIRRORED_CONTEXT_ENTRIES {
+        let from = source.join(name);
+        if !from.exists() {
+            continue;
+        }
+        let to = dir.join(name);
+        if std::fs::symlink_metadata(&to)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let _ = std::os::unix::fs::symlink(&from, &to);
+    }
+    Some(dir)
+}
+
+/// The state files a pinned worker needs copied to run headless.
+const STAGED_STATE_FILES: [&str; 3] = [".credentials.json", ".claude.json", "settings.json"];
+
+/// The context entries a pinned worker reads through symlinks to the ambient
+/// root, so a capability worker keeps the installed plugin and the user's
+/// global memory. A golden fence changes none of this: it already ran with
+/// the user's memory loaded and its plugins off through the settings gate.
+const MIRRORED_CONTEXT_ENTRIES: [&str; 5] =
+    ["plugins", "commands", "agents", "skills", "CLAUDE.md"];
+
+/// The config root a spawn would otherwise run against: `CLAUDE_CONFIG_DIR`,
+/// else `$HOME/.claude`. `None` when even `$HOME` is unreadable.
+fn ambient_claude_config_root() -> Option<PathBuf> {
+    if let Some(cfg) = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(cfg));
+    }
+    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude"))
+}
+
 /// A `--cwd` naming a repo no project declares pins the worktree policy to
 /// `never` for this spawn and prints the receipt. An operator-set policy wins.
 pub(crate) fn pin_worktree_policy(args: &[String], here: &Path) {
@@ -746,5 +823,63 @@ mod tests {
             None
         );
         std::fs::remove_file(&file).ok();
+    }
+
+    #[test]
+    fn evals_sandbox_resolves_under_the_state_dir() {
+        let state = tempfile::tempdir().expect("tempdir");
+        // SAFETY: single-key env write, restored before the test returns; the
+        // crate's other env-scoped tests hold the same contract.
+        let previous = std::env::var_os("FNO_STATE_DIR");
+        unsafe { std::env::set_var("FNO_STATE_DIR", state.path()) };
+        assert_eq!(
+            evals_claude_config_dir(),
+            Some(state.path().join("evals").join("claude-config"))
+        );
+        match previous {
+            Some(v) => unsafe { std::env::set_var("FNO_STATE_DIR", v) },
+            None => unsafe { std::env::remove_var("FNO_STATE_DIR") },
+        }
+    }
+
+    #[test]
+    fn staging_copies_the_ambient_auth_files_into_the_sandbox() {
+        let state = tempfile::tempdir().expect("tempdir");
+        let ambient = tempfile::tempdir().expect("tempdir");
+        std::fs::write(ambient.path().join(".credentials.json"), br#"{"auth":1}"#).unwrap();
+        std::fs::write(
+            ambient.path().join(".claude.json"),
+            br#"{"onboarded":true}"#,
+        )
+        .unwrap();
+        std::fs::write(ambient.path().join("settings.json"), br#"{"model":"opus"}"#).unwrap();
+        let plugins = ambient.path().join("plugins");
+        std::fs::create_dir_all(&plugins).unwrap();
+        std::fs::write(ambient.path().join("unrelated.txt"), b"skip").unwrap();
+        // SAFETY: same single-key contract as the resolver test above.
+        let state_previous = std::env::var_os("FNO_STATE_DIR");
+        let config_previous = std::env::var_os("CLAUDE_CONFIG_DIR");
+        unsafe {
+            std::env::set_var("FNO_STATE_DIR", state.path());
+            std::env::set_var("CLAUDE_CONFIG_DIR", ambient.path());
+        }
+        let staged = stage_evals_claude_config().expect("staged sandbox");
+        assert_eq!(staged, state.path().join("evals").join("claude-config"));
+        let creds = std::fs::read(staged.join(".credentials.json")).unwrap();
+        assert_eq!(creds, br#"{"auth":1}"#);
+        let onboarding = std::fs::read(staged.join(".claude.json")).unwrap();
+        assert_eq!(onboarding, br#"{"onboarded":true}"#);
+        assert!(!staged.join("unrelated.txt").exists());
+        let link = std::fs::read_link(staged.join("plugins")).expect("plugins symlink");
+        assert_eq!(link, plugins);
+        assert!(staged.join("settings.json").is_file());
+        match state_previous {
+            Some(v) => unsafe { std::env::set_var("FNO_STATE_DIR", v) },
+            None => unsafe { std::env::remove_var("FNO_STATE_DIR") },
+        }
+        match config_previous {
+            Some(v) => unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", v) },
+            None => unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") },
+        }
     }
 }
