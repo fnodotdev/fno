@@ -17,7 +17,7 @@ use super::ui::{self, Role};
 use super::window::{Action, MainView, Root};
 use fno::proto::AgentRow;
 
-/// The panel's one width; x-ab30's drag makes it variable.
+/// The panel's one width, fixed until the pane edges learn to drag.
 pub const WIDTH: f32 = 320.0;
 /// How often an open panel re-reads the focused session's diff.
 const REREAD: Duration = Duration::from_secs(10);
@@ -62,7 +62,7 @@ impl Card {
     }
 }
 
-/// The D6 order, Mail left out until x-ff1f adds it.
+/// The default order. A Mail card joins once the app reads mail.
 const DEFAULT_CARDS: [&str; 5] = [
     "fno.pr",
     "fno.changes",
@@ -389,7 +389,7 @@ fn environment(a: &AgentRow, pane_host: Option<&str>, p: &Palette) -> Div {
 }
 
 /// One card: a header row (title, count, id, fold chevron, close) over its
-/// body. A hairline and the raised fill only, never a colored edge (D3490).
+/// body. A hairline and the raised fill only, never a colored edge.
 #[allow(clippy::too_many_arguments)]
 fn card_frame(
     i: usize,
@@ -462,10 +462,13 @@ fn link_line(
 fn pr_card(a: &AgentRow, p: &Palette, cx: &mut Context<Root>) -> (String, Option<usize>, Div) {
     let binding = a.bindings.iter().rev().find(|b| b.pr.is_some());
     let count = binding.map(|b| b.pr_count as usize).filter(|n| *n > 1);
-    let body = match (
-        a.pr.or(binding.and_then(|b| b.pr)),
-        binding.and_then(|b| b.pr_url.clone()),
-    ) {
+    // The number and its link come from one source, so they never name two
+    // PRs: the newest binding with a PR, else the row's own number unlinked.
+    let shown = match binding {
+        Some(b) => (b.pr, b.pr_url.clone()),
+        None => (a.pr, None),
+    };
+    let body = match shown {
         (Some(n), Some(url)) => {
             div().child(link_line("right-pr".into(), format!("#{n}"), url, p, cx))
         }
