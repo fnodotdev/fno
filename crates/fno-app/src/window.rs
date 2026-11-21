@@ -36,7 +36,7 @@ use super::keys::{self, Key, Modes, Shortcut};
 use super::launch::{self, Launch};
 use super::link::{Event, Layout, Link};
 use super::mouse::{self, Hit};
-use super::mux_modes::{self, MenuAct, MenuKey, ScrollKey};
+use super::mux_modes::{self, MenuAct, MenuKey, Step};
 use super::palette::Palette;
 use super::{find, left_pane, mods, orchestration, settings, sheet, tabs, ui};
 use fno::app_api::web_hq::Board;
@@ -1859,12 +1859,11 @@ impl Root {
         cx.notify();
     }
 
-    /// prefix+`,`: the rename prompt for the active tab, resolved to its
-    /// stable id now so a tab switch mid-edit cannot retarget the send.
+    /// prefix+`,`: the rename prompt for the active tab.
     fn rename_open(&mut self, cx: &mut Context<Self>) {
-        match mux_modes::active_tab(&self.layout) {
-            Some((id, name)) => {
-                self.rename = Some(mux_modes::Rename::new(id, name.as_deref()));
+        match mux_modes::Rename::open(&self.layout) {
+            Some(rename) => {
+                self.rename = Some(rename);
                 cx.notify();
             }
             None => {
@@ -1876,7 +1875,10 @@ impl Root {
 
     /// prefix+P: the row menu of the agent in the focused pane.
     fn row_menu_open(&mut self, cx: &mut Context<Self>) {
-        self.row_menu = Some(mux_modes::row_menu(&self.layout.agents, self.layout.focus));
+        self.row_menu = Some(mux_modes::RowMenu::open(
+            &self.layout.agents,
+            self.layout.focus,
+        ));
         cx.notify();
     }
 
@@ -1918,12 +1920,12 @@ impl Root {
             if key.cmd {
                 return false;
             }
-            let pick = mux_modes::menu_key(key, menu.selected, menu.items.len());
+            let pick = menu.key(key);
             cx.stop_propagation();
             match pick {
                 MenuKey::Move(by) => {
                     if let Some(m) = self.row_menu.as_mut() {
-                        m.selected = mux_modes::step(m.selected, by, m.items.len());
+                        m.step(by);
                     }
                     cx.notify();
                 }
@@ -1932,7 +1934,7 @@ impl Root {
                     self.row_menu = None;
                     cx.notify();
                 }
-                MenuKey::Ignore => {}
+                MenuKey::Swallow => {}
             }
             return true;
         }
@@ -1968,18 +1970,14 @@ impl Root {
             cx.notify();
             return false;
         }
-        let Some(step) = mux_modes::scroll_key(key) else {
-            return false;
-        };
-        cx.stop_propagation();
-        if step == ScrollKey::Leave {
-            self.scroll_mode = None;
-        } else {
-            let rows = self.frames.get(&pane).map_or(24, |f| i32::from(f.rows));
-            if let Some(msg) = mux_modes::scroll_msg(step, pane, rows) {
-                self.send(msg);
-            }
+        let rows = self.frames.get(&pane).map_or(24, |f| i32::from(f.rows));
+        match mux_modes::scroll_step(key, pane, rows) {
+            Step::Pass => return false,
+            Step::Send(msg) => self.send(msg),
+            Step::Leave => self.scroll_mode = None,
+            Step::Swallow => {}
         }
+        cx.stop_propagation();
         cx.notify();
         true
     }
@@ -3571,23 +3569,12 @@ impl Root {
         .when(self.sheet, |d| d.child(sheet::render(self, cx)))
         .when(self.answer.is_some(), |d| d.child(answer::render(self, cx)))
         .when(self.goto.is_some(), |d| d.child(goto::render(self, cx)))
-        .children(
-            self.row_menu
-                .as_ref()
-                .map(|m| mux_modes::menu_view(self, m, cx)),
-        )
-        .children(
-            self.rename
-                .as_ref()
-                .map(|r| mux_modes::rename_bar(r, &self.palette)),
-        )
+        .children(self.row_menu.as_ref().map(|m| m.view(self, cx)))
+        .children(self.rename.as_ref().map(|r| r.bar(&self.palette)))
         .children(
             self.scroll_mode
                 .filter(|p| *p == self.layout.focus && self.main == MainView::Terminal)
-                .map(|p| {
-                    let frame = self.frames.get(&p).map(|f| &**f);
-                    mux_modes::scroll_bar(&self.palette, mux_modes::scroll_readout(frame))
-                }),
+                .map(|_| mux_modes::scroll_bar(&self.palette)),
         )
         .when(self.settings.is_some(), |d| {
             d.child(settings::render(self, cx))

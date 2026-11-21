@@ -181,6 +181,11 @@ pub const SHEET: &[(&str, &[(&str, &str)])] = &[
             ("ctrl-b arrows", "focus panes; ctrl resizes, shift moves"),
             ("ctrl-b x ; c", "close pane, last pane, new tab"),
             ("ctrl-b d", "detach and quit"),
+            ("ctrl-b [ ]", "jump to the previous or next command block"),
+            ("ctrl-b pgup", "scroll mode: j k pgup pgdn g G, q leaves"),
+            ("ctrl-b ,", "rename the tab"),
+            ("ctrl-b P", "row menu for the focused agent"),
+            ("ctrl-b Z", "focus the next agent waiting on you"),
         ],
     ),
     (
