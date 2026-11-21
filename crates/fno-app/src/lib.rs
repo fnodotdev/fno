@@ -11,6 +11,7 @@ mod control;
 mod find;
 mod goto;
 mod grid;
+mod hosts;
 mod hq;
 mod inbox;
 pub mod keys;
@@ -87,6 +88,8 @@ pub struct ShotOptions {
     pub mode: Option<MainView>,
     /// Open the answer sheet on the newest question once the board lands.
     pub sheet: bool,
+    /// Open the connect-a-host step once the board lands. Shot-only.
+    pub hosts: bool,
     /// The empty-pane state: the chat pane shows its start view no matter
     /// what the world's focus carries. The start-view shots set it.
     pub empty_chat: bool,
@@ -266,6 +269,7 @@ pub fn run(opts: Options) -> i32 {
             draft: shot.draft,
             harness: shot.harness,
             settings: shot.settings,
+            hosts: shot.hosts,
         });
     }
     if let Some(home) = std::env::var_os("HOME").and_then(|h| h.into_string().ok()) {

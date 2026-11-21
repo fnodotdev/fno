@@ -66,8 +66,8 @@ pub(super) fn render(p: &Palette) -> Div {
         )
         .child(ui::clamp(name, Role::Name, p))
         // The host button: a drawn monitor, monochrome so it takes both
-        // palettes the way the gear does. One click regroups the list by
-        // machine; the connect flow itself lives in the mux.
+        // palettes the way the gear does. One click opens the
+        // connect-a-host step.
         .child(
             ui::clickable(
                 div()

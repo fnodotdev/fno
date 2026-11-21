@@ -61,6 +61,9 @@ struct Args {
     /// Open the answer sheet on the newest question: the sheet proof.
     #[arg(long = "shot-sheet", hide = true)]
     shot_sheet: bool,
+    /// Open the connect-a-host step: the hosts proof.
+    #[arg(long = "shot-hosts", hide = true)]
+    shot_hosts: bool,
     /// The chat pane keeps its empty start view for the frame, whatever
     /// the world's focus carries. Shot-only.
     #[arg(long = "shot-empty-chat", hide = true)]
@@ -153,6 +156,7 @@ fn main() {
             }),
             hold: args.shot_hold,
             sheet: args.shot_sheet,
+            hosts: args.shot_hosts,
             empty_chat: args.shot_empty_chat,
             cmd: args.shot_cmd,
             draft: args.shot_draft,

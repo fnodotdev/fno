@@ -39,7 +39,7 @@ use super::link::{Event, Layout, Link};
 use super::mouse::{self, Hit};
 use super::mux_modes::{self, MenuAct, MenuKey, Step};
 use super::palette::Palette;
-use super::{find, left_pane, mods, orchestration, right_pane, settings, sheet, tabs, ui};
+use super::{find, hosts, left_pane, mods, orchestration, right_pane, settings, sheet, tabs, ui};
 use fno::app_api::web_hq::Board;
 use fno::proto::chat_event::SessionKey;
 use fno::proto::{self, ClientMsg, Command, Frame, MouseEvent, MouseKind};
@@ -338,6 +338,7 @@ pub struct Root {
     _right: Option<Task<()>>,
     /// The Settings panel (cmd-,): rows, query, page; None while closed.
     pub(super) settings: Option<settings::SettingsState>,
+    pub(super) hosts: Option<hosts::HostsState>,
     /// The font face and size the terminal metrics should carry: the
     /// launch values, then a Settings write. Render moves the real
     /// `metrics` onto it, where the text system can measure.
@@ -482,6 +483,7 @@ impl Root {
             squad_field: None,
             workspace_menu: None,
             workspace_confirm: None,
+            hosts: None,
             light,
             theme_cwd: theme_cwd.clone(),
             session: session.clone(),
@@ -2595,16 +2597,47 @@ impl Root {
         self.open_settings_with(fonts, cx);
     }
 
-    /// The footer's host button: regroup the left list by machine so the
-    /// fleet's hosts sit in view, and back out again on a second click.
-    /// The connect flow itself lives in the mux; this is the app's own
-    /// hosts surface.
+    /// The footer's host button: open the connect-a-host step, or close
+    /// it. The connect work itself runs in the mux; this step picks a
+    /// known host or names the join line a new machine runs.
     fn show_hosts(&mut self, _: &ShowHosts, _: &mut Window, cx: &mut Context<Self>) {
+        if self.hosts.take().is_some() {
+            cx.notify();
+            return;
+        }
+        self.open_hosts(cx);
+    }
+
+    /// The open half, shared with the shot path: every other overlay
+    /// closes, one step shows.
+    pub(super) fn open_hosts(&mut self, cx: &mut Context<Self>) {
         fno::ui_usage::click("app", "hosts_open");
-        self.group_by = match self.group_by {
-            GroupBy::Machine => GroupBy::Workspaces,
-            _ => GroupBy::Machine,
-        };
+        self.sheet = false;
+        self.goto = None;
+        self.settings = None;
+        self.hosts = Some(hosts::HostsState { note: None });
+        cx.notify();
+    }
+
+    pub(super) fn close_hosts(&mut self, cx: &mut Context<Self>) {
+        self.hosts = None;
+        cx.notify();
+    }
+
+    /// A picked fleet host: its seats lead the list, grouped by machine.
+    pub(super) fn pick_host(&mut self, name: String, cx: &mut Context<Self>) {
+        self.hosts = None;
+        self.group_by = GroupBy::Machine;
+        self.say(format!("Picked {name}; the list groups by machine"), cx);
+        cx.notify();
+    }
+
+    /// Copy the join line a new machine runs into the clipboard.
+    pub(super) fn copy_join(&mut self, line: String, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(line));
+        if let Some(st) = self.hosts.as_mut() {
+            st.note = Some("Copied".into());
+        }
         cx.notify();
     }
 
@@ -2875,6 +2908,13 @@ impl Root {
         // through, so the shortcuts keep running under the menu.
         if self.workspace_menu.is_some() && key.key == "escape" {
             self.workspace_menu = None;
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
+        // The connect-a-host step closes on Esc the same way.
+        if self.hosts.is_some() && key.key == "escape" {
+            self.hosts = None;
             cx.stop_propagation();
             cx.notify();
             return;
@@ -3939,6 +3979,7 @@ impl Root {
         .when(self.settings.is_some(), |d| {
             d.child(settings::render(self, cx))
         })
+        .when(self.hosts.is_some(), |d| d.child(hosts::render(self, cx)))
         .when(self.workspace_confirm.is_some(), |d| {
             d.child(left_pane::confirm_sheet(self, cx))
         })
@@ -4172,6 +4213,7 @@ pub(super) fn root_for_shot(
     font_size: f32,
     find: Option<crate::FindShot>,
     settings: Option<crate::SettingsShot>,
+    hosts: bool,
     empty_chat: bool,
     cmd: bool,
     sheet: bool,
@@ -4255,6 +4297,9 @@ pub(super) fn root_for_shot(
                 settings::apply_shot(st, shot);
             }
         });
+    }
+    if hosts {
+        root.update(cx, |root, cx| root.open_hosts(cx));
     }
     // The shot window never activates, and the board poll pauses while
     // the window is inactive; the shot needs every feed settled before
