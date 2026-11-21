@@ -46,12 +46,17 @@ const _: () =
 /// The caller identity a decide run resolves under: `Ambient` reads the
 /// process truth (the ancestry prover); `Forced` injects a handle (`Some`)
 /// or a scrubbed identity (`None`), the seam the tests drive where the law
-/// door injects a caller. A `Forced` handle holds no team.
+/// door injects a caller. A `Forced` handle holds no team. `Seeded` is the
+/// write-path test identity: it carries the full session triple so the
+/// provenance capture runs without the ambient prover, whose census walk
+/// reads whatever host the suite lands on.
 #[derive(Clone, Copy)]
 pub(crate) enum DecideIdentity {
     Ambient,
     #[cfg_attr(not(test), expect(dead_code))]
     Forced(Option<&'static str>),
+    #[cfg(test)]
+    Seeded(&'static str, &'static str),
 }
 
 /// The canonical handle of the agent session this process runs as, `None`
@@ -81,6 +86,10 @@ impl DecideIdentity {
                     .then(|| (session.to_string(), harness.to_string()))
             }
             Self::Forced(_) => None,
+            #[cfg(test)]
+            Self::Seeded(session, harness) => {
+                Some(((*session).to_string(), (*harness).to_string()))
+            }
         }
     }
 
@@ -91,6 +100,8 @@ impl DecideIdentity {
                 .map(|(session, _)| crate::identity::canonical_handle(&session)),
             Self::Forced(None) => None,
             Self::Forced(Some(h)) => Some((*h).to_string()),
+            #[cfg(test)]
+            Self::Seeded(session, _) => Some(crate::identity::canonical_handle(session)),
         }
     }
 
@@ -100,6 +111,8 @@ impl DecideIdentity {
         match self {
             Self::Ambient => ambient_role_covers(handle, subject),
             Self::Forced(_) => false,
+            #[cfg(test)]
+            Self::Seeded(_, _) => false,
         }
     }
 }
@@ -2176,11 +2189,13 @@ mod tests {
         );
     }
 
-    /// The ambient decide row pins the session provenance: the full session
-    /// id, harness, transcript path, and the user turn the row answers (the
-    /// last real user turn the transcript held when the row landed).
+    /// A decide run carrying a full session triple pins the session
+    /// provenance on the row: the full session id, harness, transcript
+    /// path, and the user turn the row answers (the last real user turn
+    /// the transcript held when the row landed). The seeded identity drives
+    /// the capture deterministically; the ambient prover reads the host.
     #[test]
-    fn an_ambient_decide_row_records_the_session_provenance() {
+    fn a_seeded_session_records_the_session_provenance() {
         let env = DoorEnv::new();
         crate::paths::pin_test_claims_root(env.0.path());
         let _env_lock = crate::claims::test_env_lock()
@@ -2206,9 +2221,9 @@ mod tests {
         .expect("writes");
         let _config =
             crate::claims::EnvVarGuard::set("CLAUDE_CONFIG_DIR", config.to_str().unwrap());
-        let _marker = crate::claims::EnvVarGuard::set("CLAUDE_CODE_SESSION_ID", session);
-        let _name = crate::claims::EnvVarGuard::set("FNO_HARNESS_NAME", "claude");
-        let _stamp = crate::claims::EnvVarGuard::set("FNO_HARNESS_SESSION_ID", session);
+        let _env_lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let argv = [
             "x-provnode",
             "Record the ruling",
@@ -2217,7 +2232,13 @@ mod tests {
             "--why",
             "provenance test",
         ];
-        let code = decide_door_write(decide_argv(&argv), DecideIdentity::Ambient);
+        // The seeded identity drives the capture without the ambient
+        // prover: the census walk reads whatever host the suite lands on,
+        // and on the CI runner it blocked the suite for thirteen minutes.
+        let code = decide_door_write(
+            decide_argv(&argv),
+            DecideIdentity::Seeded(session, "claude"),
+        );
         assert_eq!(code, 0);
         let (rows, _) = crate::law_match::all_decision_rows().expect("rows");
         let row = rows
