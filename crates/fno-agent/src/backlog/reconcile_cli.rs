@@ -3279,4 +3279,106 @@ mod tests {
         assert_eq!(entries[0]["pr_number"], 1720);
         assert_eq!(entries[0]["merge_status"], "merged");
     }
+
+    /// The merge_close floor, on the store: a node reading in_review whose PR
+    /// merged is closed by the sweep's own decision - scan, partition, the
+    /// same locked mutate the verb persists through - with no hand reconcile
+    /// and no --pr-number scope: the record the scan built decides.
+    #[test]
+    fn the_sweep_closes_a_merged_node_and_leaves_a_closed_pr_open() {
+        let journal = crate::merge_provenance::TestJournal::opt_in();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("graph.json");
+        let rows = vec![
+            json!({
+                "id": "x-aaaa001", "slug": "sweep-closes-merged",
+                "title": "merged node", "type": "feature", "status": "in_review",
+                "priority": "p2", "domain": "code",
+                "created_at": "2026-11-20T00:00:00Z",
+                "pr_number": 910, "pr_url": "https://github.com/o/r/pull/910",
+            }),
+            json!({
+                "id": "x-bbbb002", "slug": "closed-unmerged-control",
+                "title": "control node", "type": "feature", "status": "in_review",
+                "priority": "p2", "domain": "code",
+                "created_at": "2026-11-20T00:00:00Z",
+                "pr_number": 911, "pr_url": "https://github.com/o/r/pull/911",
+            }),
+        ];
+        graph_store::seed_rows(&path, &rows).expect("seed lands");
+        let entries = read_rows(&path).expect("read back");
+        let state = |pr: i64, state: &str, merged_at: Option<&str>| {
+            crate::backlog::merge_state::PrMergeState {
+                number: pr,
+                state: state.to_string(),
+                url: Some(format!("https://github.com/o/r/pull/{pr}")),
+                merged_at: merged_at.map(str::to_string),
+                merge_sha: None,
+                changed_files: vec![],
+                files_truncated: false,
+                body: None,
+            }
+        };
+        let stub_query = |pr: i64, _repo: Option<&str>, _cwd: Option<&str>, _files: bool| {
+            Ok(match pr {
+                910 => state(910, "MERGED", Some("2026-11-20T00:05:00Z")),
+                _ => state(pr, "CLOSED", None),
+            })
+        };
+        let records = scan_merge_drift(&entries, None, None, stub_query);
+        assert_eq!(records.len(), 2, "{records:?}");
+        let sweep = partition_and_probe(records, &entries, false, false);
+        assert_eq!(sweep.closeable.len(), 1, "{sweep:?}");
+        assert_eq!(sweep.closed_unmerged.len(), 1, "{sweep:?}");
+        assert_eq!(sweep.closeable[0].node_id, "x-aaaa001");
+        assert_eq!(sweep.closed_unmerged[0].node_id, "x-bbbb002");
+
+        let result = std::cell::RefCell::new(CloseResult {
+            actually_closed: Vec::new(),
+            cascade_closed: Vec::new(),
+            contained_closed: Vec::new(),
+            contained_released: Vec::new(),
+            contained_held: Vec::new(),
+            carried_stamped: Vec::new(),
+            reparented: Vec::new(),
+            supersession_unverified: Vec::new(),
+            settlement_receipts: Vec::new(),
+            contained_errors: Vec::new(),
+            held_recheck: Vec::new(),
+        });
+        let mut stderr_log = Vec::new();
+        graph_store::mutate_rows(
+            &path,
+            std::time::Duration::from_secs(60),
+            None,
+            None,
+            |rows| {
+                close_mutator(
+                    rows,
+                    &sweep.closeable,
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    &sweep,
+                    &[],
+                    false,
+                    &Default::default(),
+                    &HashMap::new(),
+                    &result,
+                    &mut stderr_log,
+                );
+                Ok(true)
+            },
+        )
+        .expect("the close persists");
+
+        let rows = read_rows(&path).expect("read back");
+        let a = rows.iter().find(|r| r["id"] == "x-aaaa001").unwrap();
+        let b = rows.iter().find(|r| r["id"] == "x-bbbb002").unwrap();
+        assert_eq!(a["status"], "done", "the merged node closed: {a}");
+        assert_eq!(a["merge_status"], "merged", "{a}");
+        assert!(a["completed_at"].is_string(), "{a}");
+        assert_eq!(b["status"], "in_review", "the control stays open: {b}");
+        assert!(stderr_log.is_empty(), "{stderr_log:?}");
+        drop(journal);
+    }
 }
