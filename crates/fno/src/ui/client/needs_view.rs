@@ -259,3 +259,38 @@ pub(crate) fn needs_overlay_lines(
 fn tail_styled(head: &str, tail: &str, style: TextStyle) -> TLine {
     TLine::parts(&[(head, TextStyle::Item), (tail, style)]).pad_to(ANSWER_OVERLAY_W)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn question(title: &str, audience: Option<&str>) -> crate::needs_overlay::QuestionItem {
+        crate::needs_overlay::QuestionItem {
+            id: title.into(),
+            title: title.into(),
+            audience: audience.map(Into::into),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn question_rows_carry_the_audience_chip() {
+        let projection = NeedsProjection {
+            rows: vec![
+                NeedsOverlayRow::Question(question("scoped ask", Some("customer:solo-founder"))),
+                NeedsOverlayRow::Question(question("bare ask", None)),
+            ],
+            mine_shown: 0,
+            mine_total: 0,
+            need_shown: 2,
+            need_total: 2,
+        };
+        let lines = needs_overlay_lines(&projection, 0, NeedsFooter::AsOf, NeedsFooter::AsOf);
+        assert!(lines
+            .iter()
+            .any(|l| l.contains("scoped ask") && l.contains("customer:solo-founder")));
+        assert!(lines
+            .iter()
+            .any(|l| l.contains("bare ask") && l.contains("audience?")));
+    }
+}
