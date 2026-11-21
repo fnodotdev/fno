@@ -568,6 +568,15 @@ fn write_pair(
 mod engine_tests {
     use super::*;
 
+    /// The dry summary's own shape, typed once for the assertions.
+    #[derive(serde::Deserialize)]
+    struct DrySummary {
+        joined: u64,
+        written: u64,
+        rows_truncated: u64,
+        rows: Vec<serde_json::Value>,
+    }
+
     #[test]
     fn join_attribution_pairs_resends_and_refuses_ambiguity() {
         let mk_send = |body: String| SendRow {
@@ -642,17 +651,12 @@ mod engine_tests {
         let root_s = root.to_string_lossy().to_string();
         let summary = backfill_summary(&["--all".into(), "--root".into(), root_s.clone()])
             .expect("--all dry run joins the pair outside any window");
-        assert_eq!(summary.get("joined").and_then(Value::as_i64), Some(1));
-        assert_eq!(summary.get("written").and_then(Value::as_i64), Some(0));
-        assert_eq!(
-            summary.get("rows_truncated").and_then(Value::as_i64),
-            Some(0)
-        );
-        assert_eq!(
-            summary["rows"].as_array().map(Vec::len),
-            Some(1),
-            "{summary}"
-        );
+        // R1: the summary parses once into a typed shape; no string-key reads.
+        let dry: DrySummary = serde_json::from_value(summary).expect("typed dry summary");
+        assert_eq!(dry.joined, 1);
+        assert_eq!(dry.written, 0);
+        assert_eq!(dry.rows_truncated, 0);
+        assert_eq!(dry.rows.len(), 1);
         let refused = backfill_summary(&[
             "--all".into(),
             "--since".into(),
