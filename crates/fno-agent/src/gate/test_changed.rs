@@ -148,8 +148,10 @@ pub fn changed_snapshot(root: &Path, base: &str, head: &str) -> (Vec<String>, St
     )
 }
 
-/// cli/src/fno/inbox/store.py -> fno.inbox.store; "" for anything else.
-/// A co-located `__init__.py` maps to its package, not `pkg.__init__`.
+/// cli/src/<path>.py -> fno.<dotted.path>; "" for anything else. The cli/src
+/// prefix is the retired Python tree's contract; the function still answers
+/// it for old diffs. A co-located `__init__.py` maps to its package, not
+/// `pkg.__init__`.
 pub fn module_name(rel: &str) -> String {
     let prefix = "cli/src/";
     if !rel.starts_with(prefix) || !rel.ends_with(".py") {
