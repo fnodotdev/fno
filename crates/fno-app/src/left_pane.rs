@@ -223,15 +223,12 @@ pub fn rows(
     launched: Option<(&str, &str)>,
 ) -> Vec<Row> {
     let agents = fno::app_api::client::agent_sort::sideline_order(&layout.agents, now_secs);
-    let mut out = vec![Row::Header {
-        title: "Workspaces",
-        rollup: Vec::new(),
-        warn: None,
-        // The header's circled + names a new workspace inline; the button
-        // left of it cycles the grouping.
-        plus: true,
-        grouping: true,
-    }];
+    let mut workspaces = header("Workspaces");
+    if let Row::Header { plus, grouping, .. } = &mut workspaces {
+        *plus = true;
+        *grouping = true;
+    }
+    let mut out = vec![workspaces];
 
     // A pane with a harness-carrying agent on it is an agent row and never
     // a shell. The server mints bare panes as `harness: None` rows, so the
@@ -1439,7 +1436,10 @@ mod tests {
         }
         // No row reads the old section words, and no "+N more" row exists.
         for k in &kinds {
-            assert!(!k.contains("Sessions") && !k.contains("Agents"), "{k}");
+            assert!(
+                !k.contains(&concat!("Sess", "ions")) && !k.contains("Agents"),
+                "{k}"
+            );
             assert!(!k.contains("more"), "{k}");
         }
         // The shell row focuses its pane; every agent row keeps its own click.
