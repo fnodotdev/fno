@@ -387,6 +387,102 @@ while :; do sleep 0.2; done\n",
     }
 }
 
+/// (x-ce6a) The REAL mail pane lane byte shape resizes no pane either: the
+/// lane types the envelope as LF-terminated lines (C17, never a bracketed
+/// paste) through a plain `pane send --stdin --raw` (`guarded` defaults
+/// false, pane_args.rs), settles the enter delay, writes a separate CR, and
+/// the confirm loop adds one more CR when a busy recipient swallows the
+/// first (`confirm_or_withdraw`). The sibling paste test pins the paste path;
+/// this one pins the bytes a delivery actually sends, across the whole
+/// delivery window including the retry CR and the nudge tick.
+#[test]
+fn multiclient_typed_mail_delivery_resizes_no_pane() {
+    let scratch = Scratch::new("mailtyped");
+    let _server = sh_server(&scratch);
+    let cwd = scratch.dir("w");
+    std::fs::write(
+        cwd.join("winchpaint.sh"),
+        "#!/bin/sh\n\
+tag=$1\n\
+n=0\n\
+paint() {\n\
+  n=$((n+1))\n\
+  printf '%s' \"$n\" > \"cnt.$tag\"\n\
+}\n\
+trap 'paint' WINCH\n\
+paint\n\
+while :; do sleep 0.2; done\n",
+    )
+    .unwrap();
+
+    let mut a = FakeClient::attach(&scratch.sock(), 40, 120, cwd.to_str().unwrap());
+    a.wait_layout(10, "first layout", |l| l.panes.len() == 1);
+    let mut b = FakeClient::attach(&scratch.sock(), 30, 100, cwd.to_str().unwrap());
+    b.wait_layout(10, "b attached", |l| l.area == (30, 100));
+    a.cmd(Command::SplitDir(Dir::Right));
+    let split = a.wait_layout(10, "2 panes", |l| l.panes.len() == 2);
+    let (receiver, neighbour) = (split.panes[0].0, split.panes[1].0);
+    for (pane, tag) in [(receiver, "r"), (neighbour, "n")] {
+        let cmd = format!("sh ./winchpaint.sh {tag}\r");
+        control_pane_send(&scratch.sock(), pane, cmd.as_bytes());
+    }
+    let count = |tag: &str| -> i32 {
+        std::fs::read_to_string(cwd.join(format!("cnt.{tag}")))
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(-1)
+    };
+    let started = std::time::Instant::now();
+    while count("r") < 1 || count("n") < 1 {
+        assert!(
+            started.elapsed() < Duration::from_secs(15),
+            "painters never ran"
+        );
+        a.pump(Duration::from_millis(200));
+    }
+    a.pump(Duration::from_millis(2500));
+    let settled = a.wait_layout(10, "settled", |l| l.panes.len() == 2);
+    b.wait_layout(10, "b settled", |l| l.panes == settled.panes);
+    let baseline = [count("r"), count("n")];
+
+    // C17: the body is typed, not pasted - LF line breaks, no paste markers.
+    let mut body = Vec::new();
+    for line in 0..40 {
+        body.extend_from_slice(
+            format!("line {line:02} of a typed mail body {}\n", "x".repeat(40)).as_bytes(),
+        );
+    }
+    control_pane_send(&scratch.sock(), receiver, &body);
+    // The enter delay (CR_SETTLE_MS), then the submit CR - a separate write.
+    std::thread::sleep(Duration::from_millis(800));
+    control_pane_send(&scratch.sock(), receiver, b"\r");
+    // The confirm loop's swallowed-CR retry fires at half budget.
+    std::thread::sleep(Duration::from_millis(1000));
+    control_pane_send(&scratch.sock(), receiver, b"\r");
+    // Past NUDGE_DELAY (300 ms) plus the 1 s nudge tick, twice: a stray
+    // resize anywhere in the window arms a nudge this window catches.
+    a.pump(Duration::from_millis(2500));
+    b.pump(Duration::from_millis(100));
+
+    for ((pane, tag), before) in [(receiver, "r"), (neighbour, "n")]
+        .into_iter()
+        .zip(baseline)
+    {
+        assert_eq!(
+            count(tag),
+            before,
+            "typed mail delivery sent a SIGWINCH to pane {pane}"
+        );
+    }
+    for (who, c) in [("a", &a), ("b", &b)] {
+        assert_eq!(
+            c.layout.as_ref().map(|l| (l.area, l.panes.clone())),
+            Some((settled.area, settled.panes.clone())),
+            "typed mail delivery changed client {who}'s layout"
+        );
+    }
+}
+
 /// The default `latest` policy: the tab takes the size of the client that
 /// last attached, typed or resized, so a big window is not letterboxed by a
 /// small one it is not using.
