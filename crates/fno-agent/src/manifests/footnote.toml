@@ -9,10 +9,11 @@
 #   ask band    " allow {title}?  [y] yes  [n] no", drawn only while an ask
 #               is up, in the band directly above the status line. fnh also
 #               draws " allow {title}?  [y] yes  [a] Always allow {x}  [n] no"
-#               when an always-allow offer exists, and its redesigned consent
-#               band (fn-f728 src/tui/view.rs consent_band) draws " {title}"
-#               / " Do you want to proceed?" / numbered options
-#               " ❯ {n}. {label}", the ❯ sitting on the SELECTED option.
+#               when an always-allow offer exists. Its redesigned consent
+#               band (fnh src/tui/view.rs consent_band) draws " {title}"
+#               (wrapping), optional change rows, " Do you want to
+#               proceed?", then numbered options " ❯ {n}. {label}", the ❯
+#               on the SELECTED row, with " 2. No" or " 3. No" lowest.
 #   busy line   "Churning… {n}s  (esc to interrupt)", drawn only while a
 #               turn runs; the ellipsis is U+2026 and the count moves every
 #               second.
@@ -39,12 +40,16 @@ priority = 960
 region = "bottom_non_empty_lines(8)"
 # Two band families block; either suffices. The old band pads to the pane
 # width and ends in the y/n grammar (the [a] segment sits between yes and
-# no). The consent band needs BOTH rows in the same bottom-eight-line
-# region: the question line alone is text a model reply can print. The
-# caret marks the selected option (fn-f728 view.rs:907), so the option row
-# is matched by its drawn grammar (space, caret or blank, space, digits,
-# ". "), never by the literal "❯ 1. Yes". No `$` anchor: bands pad.
-gate = { any = [ { line_regex = '^\s*allow .*\?\s+\[y\] yes(?:\s+\[a\] .*?)?\s+\[n\] no' }, { all = [ { line_regex = '^\s*Do you want to proceed\?' }, { line_regex = '^\s*[❯ ] [0-9]+\. ' } ] } ] }
+# no); no `$` anchor there, the trailing padding is width-dependent. The
+# consent band anchors on its LOWEST row, "2. No" or "3. No" in the caret
+# grammar (❯ + space, or blank) and `\s*$` matching the row's padding: it
+# is the only band row that always sits inside bottom_non_empty_lines(8),
+# because wrapped headings, change rows and wrapped always-allow labels
+# can push the question row out of that window. The caret moves with the
+# selection, so no literal caret row is pinned. Detection only: this rule
+# carries no [rule.answer] grammar, so a consent prompt shows as
+# focus-only in the queue.
+gate = { any = [ { line_regex = '^\s*allow .*\?\s+\[y\] yes(?:\s+\[a\] .*?)?\s+\[n\] no' }, { line_regex = '^\s*(❯\s+)?[23]\. No\s*$' } ] }
 
 [[rule]]
 id = "working_status"
