@@ -204,7 +204,7 @@ async function givePersonality($: EngineInterface): Promise<void> {
   const c = buddy
   if (!c) return
   try {
-    const reply = await $.model.complete({ model: 'haiku', prompt: personalityPrompt(c, c.seed), maxTokens: 200, timeoutMs: 20_000 })
+    const reply = await $.model.complete({ model: cfg.model, prompt: personalityPrompt(c, c.seed), maxTokens: 200, timeoutMs: 20_000 })
     const personality = reply.isAnswered ? cleanPersonality(reply.text) : null
     if (!personality || buddy?.seed !== c.seed) return
     const soul: Soul = { seed: c.seed, name: c.name, personality, hatchedAt: c.hatchedAt, ...(c.species ? { species: c.species } : {}) }
@@ -348,7 +348,7 @@ function showTree(ui: any, snap: Shown, now: number, close: any): any {
           marginTop: 1,
           children: [
             Text({ dimColor: true, children: [`${c.name} is here · it'll chime in as you code`] }),
-            Text({ dimColor: true, children: ['each line is one small model call on your plan'] }),
+            Text({ dimColor: true, children: ['a chime-in is one small model call on your plan'] }),
             Text({ dimColor: true, children: ['say its name to get its take · /buddy pet · /buddy off'] }),
             ...(close ? [Box({ marginTop: 1, children: [close] })] : []),
           ],
@@ -636,7 +636,7 @@ async function readFeed($: EngineInterface, now: number): Promise<void> {
   const earned = after.bank > before ? `+1 reroll (${after.bank}/${cfg.reroll_bank})` : ''
   if (line && buddy) {
     const c = buddy
-    const reply = await $.model.complete({ model: 'haiku', system: systemPrompt(c), prompt: newsPrompt(line), maxTokens: 160, timeoutMs: 20_000 }).catch(() => null)
+    const reply = await $.model.complete({ model: cfg.model, system: systemPrompt(c, mood), prompt: newsPrompt(line), maxTokens: 160, timeoutMs: 20_000 }).catch(() => null)
     // Unvoiced, the fact still gets through: a question waiting on the user must not vanish.
     line = (reply?.isAnswered && cleanReaction(reply.text)) || line
   }
@@ -958,7 +958,8 @@ export function register(on: On) {
       line = EVENT_LINES.recovery[peakStat(c)]
     } else {
       failStreak += 1
-      errorTimes = [...errorTimes, now]
+      // Keep only the mood window: a long session never carries old errors it can never count.
+      errorTimes = [...errorTimes.filter(at => now - at < 300_000), now]
       mood = moodFor(errorTimes, now)
       line = streakLine(failStreak) ?? EVENT_LINES[kind][peakStat(c)]
     }
