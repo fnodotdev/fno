@@ -629,7 +629,7 @@ pub(crate) fn requests_in_window(db: &Path, cutoff_ms: i64) -> Result<Vec<Row>, 
     let floor = chrono::DateTime::from_timestamp(cutoff_ms.div_euclid(1000), 0)
         .map(|t| t.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
         .unwrap_or_default();
-    let conn = Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READONLY)?;
+    let conn = Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     conn.busy_timeout(Duration::from_secs(5))?;
     let mut stmt = conn.prepare(
         "SELECT dedupe_key, session_id, ts, model, cost_usd_micros, input_tokens, \
