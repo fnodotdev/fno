@@ -82,7 +82,7 @@ fn parse_blocks(text: &str) -> Vec<serde_json::Value> {
 pub fn run_mail_backfill(args: &[String]) -> i32 {
     let sub = args.first().map(String::as_str).unwrap_or("");
     match sub {
-        "run" => match backfill_summary(&args[1.min(args.len())..]) {
+        "run" => match backfill_summary(args.get(1..).unwrap_or(&[])) {
             Ok(summary) => {
                 println!("{summary}");
                 0
@@ -642,9 +642,12 @@ mod engine_tests {
         let root_s = root.to_string_lossy().to_string();
         let summary = backfill_summary(&["--all".into(), "--root".into(), root_s.clone()])
             .expect("--all dry run joins the pair outside any window");
-        assert_eq!(summary["joined"], 1, "{summary}");
-        assert_eq!(summary["written"], 0, "{summary}");
-        assert_eq!(summary["rows_truncated"], 0, "{summary}");
+        assert_eq!(summary.get("joined").and_then(Value::as_i64), Some(1));
+        assert_eq!(summary.get("written").and_then(Value::as_i64), Some(0));
+        assert_eq!(
+            summary.get("rows_truncated").and_then(Value::as_i64),
+            Some(0)
+        );
         assert_eq!(
             summary["rows"].as_array().map(Vec::len),
             Some(1),
