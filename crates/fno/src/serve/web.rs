@@ -3500,6 +3500,7 @@ console.log("backlog page helpers: 18 cases ok");
 
     // A login's look lands in its own store file with three prior versions;
     // a request that names nobody gets no look and no views.
+    #[allow(clippy::indexing_slicing)]
     #[tokio::test]
     async fn hq_mine_routes_answer_per_login() {
         use crate::web_invites::{Invite, Role};

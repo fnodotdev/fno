@@ -97,7 +97,7 @@ pub(crate) fn store_root() -> PathBuf {
 pub(crate) fn login_key(login: &str) -> String {
     use sha2::Digest as _;
     let digest = sha2::Sha256::digest(login.trim().to_ascii_lowercase().as_bytes());
-    digest[..8].iter().map(|b| format!("{b:02x}")).collect()
+    digest.iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
 
 /// A project name is one safe path component.
@@ -194,17 +194,13 @@ pub(crate) fn mine_json(
         "token" => "none",
         _ => "login",
     };
-    let mut out = json!({
-        "person": kind,
-        "look": Look::default(),
-        "look_project": Value::Null,
-        "projects": [],
-    });
-    let Some(dir) = login_dir(root, person) else {
-        return out;
-    };
-    let mut files: Vec<(String, PathBuf)> = std::fs::read_dir(&dir)
-        .into_iter()
+    let mut look = Look::default();
+    let mut look_project: Option<String> = None;
+    let mut projects = Vec::new();
+    let dir = login_dir(root, person);
+    let mut files: Vec<(String, PathBuf)> = dir
+        .iter()
+        .flat_map(std::fs::read_dir)
         .flatten()
         .flatten()
         .filter_map(|e| {
@@ -219,7 +215,6 @@ pub(crate) fn mine_json(
         .collect();
     files.sort();
     let scope = |id: &str| in_scope(rows, invites, person, id);
-    let mut projects = Vec::new();
     for (project, path) in files {
         let doc = match read_doc(&path) {
             Ok(doc) => doc,
@@ -229,9 +224,9 @@ pub(crate) fn mine_json(
                 continue;
             }
         };
-        if out["look_project"].is_null() {
-            out["look"] = json!(doc.look);
-            out["look_project"] = json!(&project);
+        if look_project.is_none() {
+            look = doc.look;
+            look_project = Some(project.clone());
         }
         let mut refused = Vec::new();
         let views: Vec<View> = doc
@@ -249,8 +244,12 @@ pub(crate) fn mine_json(
             "refused": refused,
         }));
     }
-    out["projects"] = json!(projects);
-    out
+    json!({
+        "person": kind,
+        "look": look,
+        "look_project": look_project,
+        "projects": projects,
+    })
 }
 
 /// A refused look write: the HTTP status and one line the page shows.
@@ -358,6 +357,7 @@ mod tests {
 
     // AC2: the hosted reader answers only its table, only inside the chain,
     // and a refused read keeps the declared rows and is named.
+    #[allow(clippy::indexing_slicing)]
     #[test]
     fn hosted_read_holds_to_the_invite_chain() {
         let rows = rows();
@@ -407,6 +407,7 @@ mod tests {
 
     // AC1: one login's view draws for that login only; a login with no
     // store gets no projects.
+    #[allow(clippy::indexing_slicing)]
     #[test]
     fn mine_json_draws_each_login_its_own_views() {
         let root = temp_root("ac1");
@@ -456,6 +457,7 @@ mod tests {
 
     // AC3 and AC4: four writes keep three prior versions; a look outside the
     // closed set or a broken file changes nothing.
+    #[allow(clippy::indexing_slicing)]
     #[test]
     fn set_look_keeps_three_versions_and_refuses_the_rest() {
         let root = temp_root("ac3");
