@@ -496,11 +496,19 @@ pub fn worker_writable_dirs(cwd: &Path) -> Vec<String> {
         roots.push(plans.clone());
         // The vault slice beside the plans dir: decision_log reads
         // `plans.parent()`, so the ruling file and the backlog docs the
-        // worker must reach live there. Under the default sentinel the
-        // parent is the space dir inside the state-root grant, and the
-        // containment check below adds nothing.
+        // worker must reach live there. Two guards keep the parent from
+        // widening the grant: the plans leaf contract (require_plans_leaf)
+        // and the slice being named for the project (project_name), so a
+        // shallow configured plans dir (`~/plans`, a vault root) never
+        // grants the tree above it. Under the default sentinel the parent
+        // is the space dir inside the state-root grant, and the containment
+        // check adds nothing.
         if let Some(slice) = plans.parent().map(Path::to_path_buf) {
-            if !roots.iter().any(|root| slice.starts_with(root)) {
+            let leaf = plans.file_name().and_then(|n| n.to_str()) == Some("plans");
+            let named = crate::plans_path::project_folder(Some(cwd), false)
+                .ok()
+                .is_some_and(|name| slice.file_name().is_some_and(|n| n == name.as_os_str()));
+            if leaf && named && !roots.iter().any(|root| slice.starts_with(root)) {
                 roots.push(slice);
             }
         }
@@ -739,7 +747,14 @@ mod tests {
         // Scenario A: a vault plans dir grants the slice beside it.
         let plans = base.join("vault/internal/fno/plans");
         std::fs::create_dir_all(&plans).unwrap();
-        std::fs::write(&config, format!("plans_dir = \"{}\"\n", plans.display())).unwrap();
+        std::fs::write(
+            &config,
+            format!(
+                "plans_dir = \"{}\"\n\n[project]\nid = \"fno\"\n",
+                plans.display()
+            ),
+        )
+        .unwrap();
         let _cfg = EnvPin::set("FNO_CONFIG", &config);
         let _state = EnvPin::set("FNO_STATE_DIR", &base.join("state"));
         let dirs = worker_writable_dirs(&proj);
@@ -758,7 +773,14 @@ mod tests {
         // Scenario B: a plans dir inside the state root adds no parent grant.
         let covered = base.join("state/spaces/fno/plans");
         std::fs::create_dir_all(&covered).unwrap();
-        std::fs::write(&config, format!("plans_dir = \"{}\"\n", covered.display())).unwrap();
+        std::fs::write(
+            &config,
+            format!(
+                "plans_dir = \"{}\"\n\n[project]\nid = \"fno\"\n",
+                covered.display()
+            ),
+        )
+        .unwrap();
         let dirs = worker_writable_dirs(&proj);
         let covered_str = covered
             .canonicalize()
@@ -773,6 +795,69 @@ mod tests {
         assert!(
             !dirs.contains(&slice_str),
             "no parent already under a grant joins: {dirs:?}"
+        );
+
+        // Scenario C: a plans dir whose leaf is not `plans` grants no parent.
+        let shallow = base.join("shallow/plans-dir");
+        std::fs::create_dir_all(&shallow).unwrap();
+        std::fs::write(
+            &config,
+            format!(
+                "plans_dir = \"{}\"\n\n[project]\nid = \"fno\"\n",
+                shallow.display()
+            ),
+        )
+        .unwrap();
+        let dirs = worker_writable_dirs(&proj);
+        let shallow_str = shallow
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let shallow_parent = shallow
+            .parent()
+            .unwrap()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            dirs.contains(&shallow_str),
+            "the plans dir itself still rides: {dirs:?}"
+        );
+        assert!(
+            !dirs.contains(&shallow_parent),
+            "no parent of a non-plans-leaf dir joins: {dirs:?}"
+        );
+
+        // Scenario D: a plans leaf under a slice not named for the project
+        // grants no parent.
+        let wide = base.join("wide/plans");
+        std::fs::create_dir_all(&wide).unwrap();
+        std::fs::write(
+            &config,
+            format!(
+                "plans_dir = \"{}\"\n\n[project]\nid = \"fno\"\n",
+                wide.display()
+            ),
+        )
+        .unwrap();
+        let dirs = worker_writable_dirs(&proj);
+        let wide_str = wide.canonicalize().unwrap().to_string_lossy().into_owned();
+        let wide_parent = wide
+            .parent()
+            .unwrap()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            dirs.contains(&wide_str),
+            "the plans dir still rides: {dirs:?}"
+        );
+        assert!(
+            !dirs.contains(&wide_parent),
+            "no parent outside the project-named slice joins: {dirs:?}"
         );
         std::fs::remove_dir_all(&base).ok();
     }

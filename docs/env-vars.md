@@ -333,7 +333,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_VERBOSE` | rs | Set to 1 to print non-fatal notes that are quiet by default: the registry provenance heal and the loop-runtime global mirror failure. |
 | `FNO_VERIFY_GIT_BIN` | rs | unclear: crates/fno-agent/src/gate/verify_evidence.rs:906 |
 | `FNO_WHOAMI_SEAM_CHILD` | rs | Set by the front door on the child it runs for `fno whoami`, so the child takes the plain Python forward instead of the receipt seam (crates/fno/src/cli/whoami_seam.rs). |
-| `FNO_WORKER_ADD_DIRS` | rs | unclear: crates/fno-agent/src/spawn/claude_ask.rs:687 |
+| `FNO_WORKER_ADD_DIRS` | rs | Set by the spawn seam to the worker's writable-dir grants (state root, claims and registry dirs, the plans dir, the guarded vault slice beside it); the argv builders read it into `--add-dir` pairs (`crates/fno-agent/src/spawn/claude_ask.rs state_dirs_from_env`). |
 | `FNO_WORKER_NAME` | rs | The spawned worker's name: the task-grain claim metadata reads it back (crates/fno-agent/src/backlog/task.rs). |
 | `FNO_WORKTREE_POLICY` | rs | Overrides the resolved worktree policy from env, above every config layer; the dispatcher sets it to never for a spawn into an undeclared repo. |
 | `GEMINI_SANDBOX` | rs | unclear: crates/fno-agent/src/spawn/gemini_ask.rs:103 |
