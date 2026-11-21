@@ -77,17 +77,7 @@ pub fn context(layout: &Layout, view: MainView, chat: Option<&str>) -> Vec<Strin
         .into_iter()
         .collect();
     out.extend(VIEWS.iter().find(|v| v.1 == view).map(|v| v.0.to_string()));
-    let agent = match (view, chat) {
-        (MainView::Chat, Some(sid)) => layout
-            .agents
-            .iter()
-            .find(|a| a.harness_session_id.as_deref() == Some(sid)),
-        (MainView::Chat | MainView::Terminal, _) => layout
-            .agents
-            .iter()
-            .find(|a| a.pane_id == Some(layout.focus)),
-        _ => None,
-    };
+    let agent = super::chat::focused_agent(layout, view, chat);
     out.extend(agent.map(|a| a.name.clone()));
     out
 }
