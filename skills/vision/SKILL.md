@@ -41,6 +41,6 @@ The page carries frontmatter `deadline:` (RFC3339) and `why_user:`. Then `## Opt
 
 Commit the draft on a branch in the repo it serves and open a PR. The PR body says the user edits and merges. This skill never merges. No auto-merge ever applies to it. When a node is in play, file one taste-class outstanding ask with the PR link. The user judges the draft itself. In an interactive session, hand the user the link. Say the same thing. The draft waits for their edits, not their approval of a done thing.
 
-## Known Limitations
+## Known Limitations and Deferred Work
 
 - Detection is presence, not quality. A thin or stale vision doc passes unnoticed. See [LIMITATIONS.md](LIMITATIONS.md).
