@@ -17,8 +17,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
-const HEAD_SHA: &str = "deadbeefdeadbeefdeadbeefdeadbeef00000001";
-
 fn make_script(dir: &Path, name: &str, body: &str) -> PathBuf {
     let path = dir.join(name);
     let tmp = dir.join(format!(".{name}.tmp-{}", std::process::id()));
@@ -119,7 +117,6 @@ fn state_root(cwd: &Path) -> PathBuf {
 
 #[derive(Debug, serde::Deserialize)]
 struct Decision {
-    decision: String,
     termination_reason: Option<String>,
     message: String,
 }
