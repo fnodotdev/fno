@@ -646,13 +646,20 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
         return Ok(NameLane::Done);
     }
     if injected {
+        // The pass note re-reads the gate at receipt time: it names why a
+        // held recipient got this mail live (own send, or a `control:`
+        // directive past a hold the user set). Advisory; the hold may have
+        // lifted between the inject-time read and this one.
+        let hold_pass =
+            crate::mail_hold::gate(&recipient, Some(wrapped.as_str()), chrono::Utc::now()).pass;
         println!(
             "{}",
-            crate::mail_receipt::json_line(
+            crate::mail_receipt::json_line_with_hold_pass(
                 &msg_id,
                 args.subject,
                 &recipient,
                 &fno_mail::state::receipt(&lane_state, &format!("{live}{corr}")),
+                hold_pass.as_deref(),
             )
         );
         return Ok(NameLane::Done);
@@ -1327,13 +1334,15 @@ pub(super) fn job_lane_send(
         if let Err(exc) = record_hosted_delivery(&record, Some(&provider), Some(&session_id)) {
             eprintln!("delivery succeeded; outbox record failed; do not retry: {exc}");
         }
+        let hold_pass = crate::mail_hold::gate(&recipient, Some(wrapped), chrono::Utc::now()).pass;
         println!(
             "{}",
-            crate::mail_receipt::json_line(
+            crate::mail_receipt::json_line_with_hold_pass(
                 &msg_id,
                 subject,
                 &recipient,
                 &fno_mail::state::receipt(&state, &holder_tag),
+                hold_pass.as_deref(),
             )
         );
         return Ok(());
