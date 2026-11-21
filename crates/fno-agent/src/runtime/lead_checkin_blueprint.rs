@@ -178,6 +178,23 @@ const OFFER_LINES: usize = 2;
 /// work that no state parks.
 const OFFERABLE_STATUSES: [&str; 4] = ["intake", "triage", "ready", "next"];
 
+/// The graph-row fields the offer walk reads, typed once at the read.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct OfferMeta {
+    tags: Vec<String>,
+    archived_at: Option<Value>,
+}
+
+/// One printed offer: the node, how it sits near the scope, its title.
+#[derive(Serialize, Deserialize, Default)]
+#[serde(default)]
+struct Offer {
+    id: String,
+    near: String,
+    title: String,
+}
+
 /// One offer candidate's sort key: hops to a shared ancestor, audience miss,
 /// domain miss, priority, the shared ancestor, then the node id and title.
 type OfferKey<'a> = (usize, bool, bool, String, String, &'a str, String);
@@ -221,12 +238,11 @@ pub(crate) fn adjacent_offers(
         out
     };
     let audience = |row: &Value| -> Option<String> {
-        row.get("tags")?
-            .as_array()?
-            .iter()
-            .filter_map(Value::as_str)
+        OfferMeta::deserialize(row)
+            .unwrap_or_default()
+            .tags
+            .into_iter()
             .find(|t| t.starts_with("audience:"))
-            .map(str::to_string)
     };
     let mine = chain(scope);
     let me = by_id.get(scope).copied();
@@ -237,9 +253,10 @@ pub(crate) fn adjacent_offers(
         let Some(id) = s_str(row, "id") else { continue };
         let open = s_str(row, "status").is_some_and(|s| OFFERABLE_STATUSES.contains(&s));
         let locked = s_str(row, "locked_by").is_some_and(|l| !l.is_empty());
-        let archived = row
-            .get("archived_at")
-            .is_some_and(|v| !v.is_null() && v != &Value::Bool(false));
+        let archived = OfferMeta::deserialize(row)
+            .unwrap_or_default()
+            .archived_at
+            .is_some_and(|v| !v.is_null() && v != Value::Bool(false));
         if !open
             || locked
             || archived
@@ -283,7 +300,12 @@ pub(crate) fn adjacent_offers(
             } else {
                 format!("shares {via}")
             };
-            json!({"id": id, "near": near, "title": title})
+            serde_json::to_value(Offer {
+                id: id.to_string(),
+                near,
+                title,
+            })
+            .unwrap_or_default()
         })
         .collect()
 }
@@ -608,11 +630,10 @@ pub(crate) fn render_lines(bp: &Value) -> Vec<String> {
         ));
     }
     for offer in ids("offers") {
+        let o = Offer::deserialize(&offer).unwrap_or_default();
         lines.push(format!(
             "  offer: /fno:blueprint subagent {} ({}, outside this scope): {}",
-            dash(offer.get("id")),
-            dash(offer.get("near")),
-            dash(offer.get("title")),
+            o.id, o.near, o.title,
         ));
     }
     for id in ids("target_ready") {
