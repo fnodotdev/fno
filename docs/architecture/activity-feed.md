@@ -188,7 +188,7 @@ log_content = false                         # titles and free text stay local
 
 Auth headers come from an env var, never from the config file: `FNO_OTLP_HEADERS`, comma-separated `name=value` pairs. An unset or empty variable refuses the export rather than shipping an unauthenticated payload. The variable name itself is overridable with `headers_env`.
 
-With `forward_requests = true`, the same beat also forwards the masked `api_request` records the receiver stored in otel.db: cost, tokens, model and skill/plugin/agent names per record, under the `fno.api_requests` scope. The key defaults to false, and unset means those records never leave the machine. See [cost accuracy](cost-accuracy.md).
+With `forward_requests = true`, the same beat also forwards the masked `api_request` records from otel.db. Each record carries cost, tokens, model and skill/plugin/agent names, under the `fno.api_requests` scope. The key defaults to false. Unset means those records never leave the machine. See [cost accuracy](cost-accuracy.md).
 
 The export is off unless `enabled = true`. Two env kill switches outrank the config: `OTEL_SDK_DISABLED` or `DO_NOT_TRACK` set to `true` or `1` force it off. The daemon reads its own environment at start. Set kill switches and the headers var where the daemon sees them. Restart the daemon after a config change.
 
