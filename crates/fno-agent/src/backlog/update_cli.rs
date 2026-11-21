@@ -1127,11 +1127,13 @@ fn write_update(
                 repaint_old_parent,
                 details_counts,
             } => {
-                // A parent or type change validates against rows the write does
-                // not touch (the cycle and epic-depth checks), so it keeps the
-                // whole-graph version check; every other update publishes over
-                // its snapshot.
-                let reads_other_rows = reparents_or_retypes(&snapshot.rows, &working, &node_id);
+                // The first attempt keeps the whole-graph version check, so an
+                // uncontended update lands exactly as it always did. Only a
+                // retry after a conflict publishes over its snapshot, and not
+                // a parent or type change: its cycle and epic-depth checks
+                // read rows the write does not touch.
+                let reads_other_rows =
+                    attempt == 0 || reparents_or_retypes(&snapshot.rows, &working, &node_id);
                 let input = MutateInput {
                     entries: working,
                     canonical_path: None,
