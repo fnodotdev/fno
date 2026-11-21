@@ -1159,6 +1159,46 @@ pub(crate) fn authoritative_sync_rebased(
             return Ok(None);
         }
     }
+    // The epic child cap counts a parent's children, and a sibling filed
+    // meanwhile never touches this write's rows. A parent that gained
+    // children since the snapshot sends the write back to re-plan.
+    let before_by_id: std::collections::HashMap<&str, &Value> = before
+        .iter()
+        .filter_map(|row| RowFacts::id_of(row).map(|id| (id, row)))
+        .collect();
+    let parent_of = |row: &Value| {
+        row.get("parent")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    for row in after {
+        let Some(id) = RowFacts::id_of(row).filter(|id| ids.contains(id)) else {
+            continue;
+        };
+        let Some(parent) = parent_of(row).filter(|parent| !parent.is_empty()) else {
+            continue;
+        };
+        if before_by_id
+            .get(id)
+            .and_then(|old| parent_of(*old))
+            .as_deref()
+            == Some(parent.as_str())
+        {
+            continue;
+        }
+        let seen = before
+            .iter()
+            .filter(|old| parent_of(*old).as_deref() == Some(parent.as_str()))
+            .count() as i64;
+        let now: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM nodes WHERE parent_id = ?1",
+            params![parent],
+            |found| found.get(0),
+        )?;
+        if now > seen {
+            return Ok(None);
+        }
+    }
     let version = format!(
         "sqlite:{:x}",
         Sha256::digest(format!(

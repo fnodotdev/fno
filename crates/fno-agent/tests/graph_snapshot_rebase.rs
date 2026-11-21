@@ -86,3 +86,35 @@ fn a_write_refuses_when_a_row_it_touches_moved() {
     let rows = graph_store::read_rows(&graph).unwrap();
     assert!(rows.iter().all(|row| row["id"] != json!("c-1")));
 }
+
+#[test]
+fn a_write_refuses_when_its_parent_gained_a_child_while_it_planned() {
+    let dir = tempfile::tempdir().unwrap();
+    let graph = seeded(&dir);
+    let (base_version, snapshot) = read_snapshot(&graph).unwrap();
+    let mut entries = snapshot.rows.clone();
+    let mut child = node("c-1");
+    child["parent"] = json!("a-1");
+    entries.push(child);
+    // A sibling lands under the same parent while this write plans.
+    mutate_rows(&graph, DEFAULT_LOCK_TIMEOUT, None, None, |rows| {
+        let mut sibling = node("d-1");
+        sibling["parent"] = json!("a-1");
+        rows.push(sibling);
+        Ok(true)
+    })
+    .unwrap();
+    let err = locked_mutate_snapshot(
+        &graph,
+        MutateInput {
+            entries,
+            canonical_path: None,
+            base_version,
+            plan_rungs: None,
+        },
+        snapshot,
+        DEFAULT_LOCK_TIMEOUT,
+    )
+    .unwrap_err();
+    assert!(matches!(err, StoreError::Conflict), "got {err}");
+}
