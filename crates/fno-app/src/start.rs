@@ -201,8 +201,8 @@ fn card(root: &Root, window: &Window, cx: &mut Context<Root>) -> Stateful<gpui::
     let at = l.composer.clone();
     let base = base_name(l.project());
     let placeholder: SharedString = match l.kind {
-        Kind::Agent if !base.is_empty() => {
-            format!("Describe the work. Enter starts an agent in {base}.").into()
+        Kind::Worker if !base.is_empty() => {
+            format!("Describe the work. Enter starts a worker in {base}.").into()
         }
         // The card carries no epic list: an empty draft starts the lead
         // with no scope, and the modal picks epics.
@@ -277,9 +277,9 @@ fn chips(root: &Root, p: &Palette, cx: &mut Context<Root>) -> gpui::Div {
             chip("start-chip-kind", l.kind.label().to_string(), p).on_click(cx.listener(
                 |root, _, _, cx| {
                     let next = match root.launch.state.kind {
-                        Kind::Agent => Kind::Lead,
+                        Kind::Worker => Kind::Lead,
                         Kind::Lead => Kind::Shell,
-                        Kind::Shell => Kind::Agent,
+                        Kind::Shell => Kind::Worker,
                     };
                     root.launch.state.set_kind(next);
                     cx.notify();

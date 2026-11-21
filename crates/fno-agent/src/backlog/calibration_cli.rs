@@ -248,7 +248,14 @@ fn run_by_lane(
             return super::get_cli::GRAPH_UNREADABLE_EXIT;
         }
     };
-    let ledger = scorecard::LedgerIndex::load();
+    // One ledger read feeds both the lane index and the pricing hint.
+    let ledger_rows = crate::scoreboard_provider::ledger_rows();
+    let ledger = scorecard::LedgerIndex::build(&ledger_rows);
+    // The ledger-level pricing read for the coverage hint: priced entries
+    // over all entries with the unpriced split named, plus rate-book
+    // presence - the reader-side answer to "why is cost unmeasured".
+    let ledger_pricing =
+        scorecard::priced_coverage(&ledger_rows, crate::model_price::book_present());
     let cwd = std::env::current_dir().unwrap_or_default();
     let journal = crate::paths::events_path(&cwd);
     // An unreadable friction store stays None down the fold, so the
@@ -306,6 +313,7 @@ fn run_by_lane(
             super::render::py_json_pretty(&json!({
                 "since_days": since_days,
                 "coverage": cov,
+                "ledger_pricing": ledger_pricing,
                 "cells": cells,
                 "proposals": proposals,
             }))
@@ -333,6 +341,19 @@ fn run_by_lane(
     if dropped > 0 {
         println!("  dropped, session time unparseable: {dropped}");
     }
+    let with_n = ledger_pricing.unpriced_with_sessions;
+    let legacy_n = ledger_pricing.unpriced_legacy;
+    let mut note = String::new();
+    if with_n > 0 || legacy_n > 0 {
+        note = format!("; unpriced: {with_n} with session ids, {legacy_n} legacy no-session");
+    }
+    if !ledger_pricing.book_present {
+        note.push_str("; rate book missing");
+    }
+    println!(
+        "  ledger cost coverage: {}/{} entries priced ({}%){note}",
+        ledger_pricing.priced, ledger_pricing.total, ledger_pricing.pct
+    );
     println!(
         "\n  {:<24}{:<10}{:<14}{:<22}{:>6}{:>7}{:>13}{:>10}{:>10}{:>9}{:>9}{:>7}{:>7}{:>7}{:>6}",
         "kind",

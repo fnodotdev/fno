@@ -17,8 +17,13 @@ Field operators (the argument carries the operator):
     scalar   title, domain, size, model, type, batch, orphan_ok,
              priority, project, cwd, difficulty, dispatch_command,
              locked_by, plan_path, parent, caused_by, pr_number,
-             pr_url, collisions_acknowledged, source_node_id
+             pr_url, collisions_acknowledged, source_node_id,
+             audience, why, done_means, job
              (= only; 'null' clears)
+             audience= validates the persona file. Staged facts: a
+             customer node names customer:<persona>, and done_means
+             is set, by the time the node is scoped - the move to
+             ready, a blueprint, or target start refuse until then.
     integer  fixes_pr  (= only; 0 clears)
     flag     public, reverted, has_brief  (= true|false)
   Modifiers that write no field stay flags: --force, --blocks-everything,

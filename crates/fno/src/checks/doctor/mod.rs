@@ -986,6 +986,9 @@ fn nothing_to_fix_message(
 /// `--cost-check`: cross-check our session cost against the reference tool
 /// for one recent session (doctor.py:978-1016).
 fn cost_check_report() -> i32 {
+    // A pricing door: the stale-gated book fetch fires best-effort so the
+    // cost read prices against live rates; a fresh book costs one stat.
+    crate::model_catalog::refresh_if_stale(&crate::model_catalog::state_dir());
     let skip = |reason: &str| -> i32 {
         echo_stdout(&format!("fno doctor: cost-check skipped ({reason})."));
         0

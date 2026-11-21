@@ -14,7 +14,7 @@ use super::node_ref::{is_wellformed_node_id, ResolutionIndex};
 
 const LABEL: &str = "backlog decisions";
 
-const USAGE: &str = "usage: fno backlog decisions [subject] [--limit N] [--lane user|agent|grant|unattributed] [--state live|retired|expired|superseded|retracted|unscoped|all] [--review-list] [--log] [--output PATH] [--format markdown|json] [--json|-J]";
+const USAGE: &str = "usage: fno backlog decisions [subject] [--limit N] [--lane user|agent|grant|unattributed] [--state live|retired|expired|superseded|retracted|unscoped|all] [--review-list] [--log] [--provenance] [--output PATH] [--format markdown|json] [--json|-J]";
 
 /// The state filter's closed set, the deleted Python command's own ValueError
 /// text. A bad `--state` rides the read-failure exit (1), not usage (2):
@@ -64,6 +64,7 @@ struct Options {
     state: Option<String>,
     review_list: bool,
     log: bool,
+    provenance: bool,
     output: Option<String>,
     format: Option<String>,
     json: bool,
@@ -79,6 +80,7 @@ impl Default for Options {
             state: None,
             review_list: false,
             log: false,
+            provenance: false,
             output: None,
             format: None,
             json: false,
@@ -127,6 +129,12 @@ fn parse_options(argv: &[String]) -> Result<Options, String> {
                     return Err(format!("{flag} takes no value"));
                 }
                 opts.log = true;
+            }
+            "--provenance" => {
+                if inline.is_some() {
+                    return Err(format!("{flag} takes no value"));
+                }
+                opts.provenance = true;
             }
             "--output" => opts.output = Some(value()?),
             "--format" => opts.format = Some(value()?),
@@ -1317,6 +1325,7 @@ pub fn run(argv: &[String]) -> i32 {
         opts.state.as_deref(),
         &near,
         entries.as_deref(),
+        opts.provenance,
     );
     0
 }
@@ -1836,6 +1845,58 @@ fn render_markdown(report: &Value) -> String {
     let joined = lines.join("\n");
     format!("{}\n", joined.trim_end())
 }
+/// The provenance lines one decision row renders under `--provenance`: the
+/// stored session triple, the transcript resolved from the stored session
+/// when the stored path is absent (the way the node provenance read
+/// resolves), and the user turn the row quotes. Empty for a row that
+/// carries no session provenance, so rows written before the field existed
+/// read exactly as they always did.
+fn provenance_lines(row: &Value) -> Vec<String> {
+    let Some(sp) = row.pointer("/session_provenance").filter(|v| v.is_object()) else {
+        return Vec::new();
+    };
+    let mut lines = Vec::new();
+    lines.push(format!("    session:  {}", rows_str(sp, "session_id")));
+    let harness = rows_str(sp, "harness");
+    lines.push(format!(
+        "    harness:  {}",
+        if harness.is_empty() {
+            "(unknown)"
+        } else {
+            harness
+        }
+    ));
+    let stored = rows_str(sp, "transcript");
+    if stored.is_empty() {
+        let session = rows_str(sp, "session_id");
+        let resolved = if session.is_empty() {
+            None
+        } else {
+            match harness {
+                "claude" => crate::claude_drive::find_transcript(session),
+                "codex" => crate::codex_store::codex_rollout_path(None, session),
+                _ => None,
+            }
+        };
+        match resolved {
+            Some(p) => lines.push(format!("    transcript: {}", p.display())),
+            None => lines.push("    transcript: (unresolved - not-found)".to_string()),
+        }
+    } else {
+        lines.push(format!("    transcript: {stored}"));
+    }
+    let turn = rows_str(sp, "turn_id");
+    if !turn.is_empty() {
+        let excerpt = rows_str(sp, "turn_excerpt");
+        if excerpt.is_empty() {
+            lines.push(format!("    turn:     {turn}"));
+        } else {
+            lines.push(format!("    turn:     {turn}  quoted: {excerpt}"));
+        }
+    }
+    lines
+}
+
 fn render_human(
     payload: &Value,
     standing_law: Option<&Value>,
@@ -1845,6 +1906,7 @@ fn render_human(
     state: Option<&str>,
     near: &[(String, usize)],
     entries: Option<&[Value]>,
+    provenance_on: bool,
 ) {
     if let Some(standing) = standing_law {
         let canonical = rows_str(standing, "canonical_subject");
@@ -2041,6 +2103,11 @@ fn render_human(
                 "    relayed: {} (a name this caller supplied, not a stamped one)",
                 python_str(d.get("relayed_by").unwrap_or(&Value::Null)),
             );
+        }
+        if provenance_on {
+            for line in provenance_lines(d) {
+                println!("{line}");
+            }
         }
         if crate::backlog_ready::truthy(d.get("rationale")) {
             println!(
@@ -2500,5 +2567,92 @@ mod tests {
             .map(|r| r["reason"].as_str().unwrap_or("").to_string())
             .collect();
         assert_eq!(reasons, ["body form", "legacy fm form"], "{res}");
+    }
+
+    /// A row carrying session provenance renders the session triple, the
+    /// stored transcript path, and the turn it quotes; a row without the
+    /// field renders nothing, so old rows read as they always did.
+    #[test]
+    fn provenance_lines_render_the_session_triple_and_the_turn() {
+        let row = serde_json::json!({
+            "decision_id": "d-prov0001",
+            "subject": "x-prov",
+            "decision": "Ruling.",
+            "session_provenance": {
+                "session_id": "4d2c3d68-7d5c-4c1e-9a51-2f8e0a9b1c3d",
+                "harness": "claude",
+                "transcript": "/store/-repo/4d2c3d68-7d5c-4c1e-9a51-2f8e0a9b1c3d.jsonl",
+                "turn_id": "u-ruling",
+                "turn_excerpt": "the docs gate reads the #NNN form",
+                "turn_ts": "2026-11-20T10:01:00.000Z",
+            },
+        });
+        let lines = provenance_lines(&row);
+        assert_eq!(
+            lines,
+            vec![
+                "    session:  4d2c3d68-7d5c-4c1e-9a51-2f8e0a9b1c3d".to_string(),
+                "    harness:  claude".to_string(),
+                "    transcript: /store/-repo/4d2c3d68-7d5c-4c1e-9a51-2f8e0a9b1c3d.jsonl"
+                    .to_string(),
+                "    turn:     u-ruling  quoted: the docs gate reads the #NNN form".to_string(),
+            ]
+        );
+        // A row without the field renders nothing (the old-row shape).
+        let bare = serde_json::json!({"decision_id": "d-prov0002", "subject": "x-prov"});
+        assert!(provenance_lines(&bare).is_empty());
+    }
+
+    /// A stored session without a transcript path resolves the transcript
+    /// from the stored session id at read time, the way the node
+    /// provenance read does; a session nothing resolves prints the named
+    /// unknown.
+    #[test]
+    fn a_stored_session_without_a_path_resolves_at_read_time() {
+        let _env_lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let config = tempfile::tempdir().unwrap();
+        let projects = config.path().join("projects").join("-repo");
+        std::fs::create_dir_all(&projects).unwrap();
+        let session = "4d2c3d68-7d5c-4c1e-9a51-2f8e0a9b1c3d";
+        let planted = projects.join(format!("{session}.jsonl"));
+        std::fs::write(&planted, "{}\n").unwrap();
+        let _cfg =
+            crate::claims::EnvVarGuard::set("CLAUDE_CONFIG_DIR", config.path().to_str().unwrap());
+        let row = serde_json::json!({
+            "decision_id": "d-prov0003",
+            "subject": "x-prov",
+            "session_provenance": {
+                "session_id": session,
+                "harness": "claude",
+            },
+        });
+        let lines = provenance_lines(&row);
+        // Three lines: the fixture carries no turn, so the render adds no
+        // turn line behind session, harness and transcript.
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.ends_with(&format!("{session}.jsonl"))),
+            "{lines:?}"
+        );
+        // An unresolvable session names the unknown instead of guessing.
+        let lost = serde_json::json!({
+            "decision_id": "d-prov0004",
+            "subject": "x-prov",
+            "session_provenance": {
+                "session_id": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+                "harness": "claude",
+            },
+        });
+        let lines = provenance_lines(&lost);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("transcript: (unresolved - not-found)")),
+            "{lines:?}"
+        );
     }
 }

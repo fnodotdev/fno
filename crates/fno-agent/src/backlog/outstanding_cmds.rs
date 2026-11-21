@@ -1292,7 +1292,8 @@ fn run_ask(args: &[String]) -> i32 {
     while index < args.len() {
         match args[index].as_str() {
             "-h" | "--help" => {
-                println!("usage: fno inbox outstanding ask [QUESTION] [--question-file <path>|-|template] [--ask <action>] [--option <choice>]... [--blocks <node>]... [--node <id>] [--subject <subject>] [--challenges <decision-id>] [--image <path>]...");
+                println!("usage: fno inbox outstanding ask [QUESTION] [--audience internal|customers|customer:<persona>] [--why s] [--question-file <path>|-|template] [--ask <action>] [--option <choice>]... [--blocks <node>]... [--node <id>] [--subject <subject>] [--challenges <decision-id>] [--image <path>]...");
+                println!("  ask files at one stage: --audience (the record's audience when no --node carries it) and --why are required at the ask itself; there is no later scoping stage.");
                 return 0;
             }
             "--question-file" => match args.get(index + 1) {

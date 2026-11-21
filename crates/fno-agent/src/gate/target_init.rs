@@ -299,6 +299,18 @@ fn run_inner(args: &Args) -> Result<i32, Fail> {
         entries.as_deref(),
     );
 
+    // The scoping gate (D3526): a node-bound init IS a target start, so the
+    // node carries its persona and its acceptance by then. Free-text inputs
+    // resolve no node and skip the gate; the ship gate keeps the Serves
+    // check. Fires before the claim, so nothing was claimed.
+    if let Some(node) = &dispatch_node {
+        if let Some(msg) = crate::backlog::audience::scoping_refusal(node, "target start") {
+            return Err(refuse(&format!(
+                "fno do target init: {msg} Nothing was claimed."
+            )));
+        }
+    }
+
     init_progress("begin: door: binding gates");
     // 8. The binding transport: a DECLARED required binding revalidates
     // natively before the claim. A refused verdict exits 1, a fork exits 3.
