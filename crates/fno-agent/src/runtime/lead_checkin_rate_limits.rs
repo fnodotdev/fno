@@ -22,8 +22,10 @@ pub(crate) fn reading(events_paths: &[PathBuf]) -> Result<Value, String> {
     };
     let mut rows = Vec::new();
     for path in events_paths {
-        let found = crate::event_store::query_events(path, &query)
-            .map_err(|e| format!("{}: {e}", path.display()))?;
+        // Fail soft per journal, the way the usage export reads: a journal
+        // that does not exist yet (fresh install) is an empty read, never a
+        // READER FAILED line on every beat.
+        let found = crate::event_store::query_events(path, &query).unwrap_or_default();
         rows.extend(found);
     }
     // One emitter writes one journal, but the beat can be handed overlapping
