@@ -222,18 +222,32 @@ fn typing_row(
     })
 }
 
+/// The fields of a witness row the arm rule reads, parsed at the boundary
+/// (R1): the resolution of the pane bind and the harness session it bound.
+#[derive(serde::Deserialize, Default)]
+struct SubmitArmFields {
+    #[serde(default)]
+    data: SubmitArmData,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct SubmitArmData {
+    #[serde(default)]
+    resolution: Option<String>,
+    #[serde(default)]
+    harness_session: Option<String>,
+}
+
 /// The session a submit's witness row arms, or None: only a resolved bind
 /// (registry row or portal row, `resolution: "ok"`) carries an address,
 /// and an empty one arms nothing. Pure so the row rule is testable without
 /// a server fixture.
 pub(super) fn arm_session_from_row(event: &serde_json::Value) -> Option<String> {
-    if event["data"]["resolution"].as_str() != Some("ok") {
+    let fields: SubmitArmFields = serde_json::from_value(event.clone()).ok()?;
+    if fields.data.resolution.as_deref() != Some("ok") {
         return None;
     }
-    event["data"]["harness_session"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
+    fields.data.harness_session.filter(|s| !s.is_empty())
 }
 
 /// Fire-and-forget conversation arm for one resolved submit: a detached
@@ -259,7 +273,9 @@ fn spawn_conversation_arm(bin: std::path::PathBuf, harness_session: String) {
             command.process_group(0);
         }
         if let Ok(mut child) = command.spawn() {
-            let _ = child.wait();
+            // Fire-and-forget: the wait only reaps the child so the server
+            // holds no zombie; the exit status names nothing we act on.
+            let _status = child.wait();
         }
     });
 }

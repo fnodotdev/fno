@@ -87,12 +87,14 @@ fn the_arm_door_refuses_an_unknown_session_and_writes_nothing() {
     assert!(stored_hold(tmp.path(), OTHER).is_none());
 }
 
-/// The 2026-11-19 replay (AC1-HP): the quiet-recovery nudge is `control:`
-/// mail, and a live conversation hold now keeps it, so the nudge queues
-/// instead of breaking into the chat. The arm here is the bare door's
-/// default action - the exact call the mux input choke spawns at Enter
-/// since the measured cause (the hook fires minutes late for a queued
-/// prompt).
+/// The composer-interrupt replay (AC1-HP): the quiet-recovery nudge is
+/// `control:` mail, and a live conversation hold now keeps it, so the
+/// nudge queues instead of breaking into the chat. The arm here is the
+/// bare door's default action - the exact call the mux input choke spawns
+/// at Enter since the measured cause (the hook fires minutes late for a
+/// queued prompt).
+///
+/// fixture-date-ok: 2026-11-19 names the incident this test replays; the date is never compared against now
 #[test]
 fn a_control_nudge_queues_under_a_live_conversation_hold() {
     let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
