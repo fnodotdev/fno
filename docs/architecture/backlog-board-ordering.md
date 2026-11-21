@@ -72,6 +72,8 @@ Consequences:
 
 ## The rank model
 
+The computed score sits ahead of created_at. Priority weighs p0 400, p1 300, p2 200, p3 100. Encounters add 25 per distinct voter, capped at 100. Scope impact weighs customer:<persona> 60, customers 50, internal 0, and takes the strongest named audience only. Age without a worker adds 1 per day, capped at 60. `fno backlog next --explain` prints each term. A `--top` pin writes -1, so pins mean above computed order and never undercut one another, and a column move clears the pin.
+
 `Entry.rank: Optional[float] = None` (nullable). Float, not int, so
 `--before`/`--after` insert at a midpoint between two neighbors and never
 renumber siblings. `null` = unranked (rejoins the priority fallback).

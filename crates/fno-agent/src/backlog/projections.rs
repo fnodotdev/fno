@@ -87,7 +87,7 @@ pub(crate) fn kanban_column(
     let priority = match id_of(e).and_then(|id| effective.get(id)) {
         Some(p) => p.clone(),
         None => match live_epic_for(e, by_id, child_progress) {
-            Some(epic) => priority_name(&epic).min(priority_name(e)),
+            Some(epic) => priority_name(epic).min(priority_name(e)),
             None => priority_name(e),
         },
     };
@@ -230,6 +230,13 @@ fn kanban_card(
         "- {marker} **{title}** `{id_text}` · {} · {priority}",
         project_key(e)
     );
+    // The audience chip: who the node serves. Unset reads audience? until
+    // the backfill lands; --audience ask reads the same.
+    let scope_text = crate::backlog::question_intake::str_field(e, "audience")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("audience?");
+    header.push_str(&format!(" · {scope_text}"));
     if board.is_orphan(&eid) {
         header.push_str(" · [orphan]");
     }
@@ -1756,7 +1763,9 @@ const PUBLIC_COLUMNS: [(&str, &str); 4] = [
 ];
 
 /// May this row's title leave the owner's store: not marked `public: false`,
-/// and not an imported request the owner never flipped public.
+/// not an imported request the owner never flipped public, and - when the
+/// row names its audience - never an `internal` one. Unset scope keeps the
+/// opt-out rule, so the backfill changes what publishes, not this filter.
 pub(crate) fn is_publishable(e: &Value) -> bool {
     is_dict(e)
         && e.get("public") != Some(&Value::Bool(false))
@@ -1765,6 +1774,7 @@ pub(crate) fn is_publishable(e: &Value) -> bool {
         // select_public_rows holds the fno-side twin of this rule.
         && (e.get("source_kind").and_then(Value::as_str) != Some("external_request")
             || e.get("public") == Some(&Value::Bool(true)))
+        && crate::backlog::question_intake::str_field(e, "audience") != Some("internal")
 }
 
 fn is_public_in(e: &Value, project: &str) -> bool {
@@ -2172,11 +2182,11 @@ mod tests {
         let md = render_graph_md(&entries, true);
         assert!(md.starts_with("---\nkanban-plugin: board\n---\n\n## In Progress\n\n\n## Now\n"));
         assert!(md.contains(
-            "- [ ] **Blocked thing** `x-1` · fno · p2\n  internal/p.md\n  blocked by: x-2 (The blocker)"
+            "- [ ] **Blocked thing** `x-1` · fno · p2 · audience?\n  internal/p.md\n  blocked by: x-2 (The blocker)"
         ));
-        assert!(md.contains("- [ ] **The blocker** `x-2` · (unscoped) · p1 · [orphan]"));
+        assert!(md.contains("- [ ] **The blocker** `x-2` · (unscoped) · p1 · audience? · [orphan]"));
         assert!(md.contains(
-            "- [x] **Shipped** `x-3` · fno · p2\n  https://github.com/o/r/pull/9\n  #10 - follow-up\n  artifact: `javascript:alert(1)`"
+            "- [x] **Shipped** `x-3` · fno · p2 · audience?\n  https://github.com/o/r/pull/9\n  #10 - follow-up\n  artifact: `javascript:alert(1)`"
         ));
         assert!(md.ends_with("%% kanban:settings\n```\n{\"kanban-plugin\":\"board\"}\n```\n%%\n"));
         let plain = render_graph_md(&entries, false);

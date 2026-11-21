@@ -39,9 +39,6 @@ const ROLLUP_TYPES: &[&str] = &["feature", "task"];
 const CLOSED_STATUSES: &[&str] = &["done", "superseded", "deferred"];
 /// The rungs the autonomous drain must NOT pick up (ladder.UNSELECTABLE_RUNGS).
 const UNSELECTABLE_RUNGS: &[&str] = &["idea", "design"];
-const PRIORITY_WEIGHT: &[(&str, i64)] = &[("p0", 1), ("p1", 2), ("p2", 3), ("p3", 4)];
-const AGE_CAP_DAYS: f64 = 90.0;
-const AGE_DIVISOR: f64 = 100.0;
 /// Default staleness window when config is missing or unparseable
 /// (`_guard_staleness_days`'s fail-open contract).
 const DEFAULT_STALENESS_DAYS: i64 = 21;
@@ -132,6 +129,8 @@ pub struct ReadyOpts {
     /// The selection instant, epoch milliseconds UTC. now()-stamps never
     /// reach the projection; this only drives staleness and encounter age.
     pub now_ms: i64,
+    /// Print each score term beside the pick instead of only the verdict.
+    pub explain: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -388,7 +387,7 @@ pub fn date_filter_from_params(params: &Value, now_ms: i64) -> Result<DateFilter
     parse_date_filter(&args, now_ms)
 }
 
-fn touched_ms(entry: &Value) -> Option<i64> {
+pub(crate) fn touched_ms(entry: &Value) -> Option<i64> {
     entry
         .get("touched_at")
         .and_then(parse_iso_ms)
@@ -1308,6 +1307,12 @@ pub(crate) fn selection_guards(
     if let Some(hold) = dispatch_hold_verdict(entry, by_id) {
         return Some(hold.guard_reason);
     }
+    // An --audience ask filed audience? on purpose: the who is undecided,
+    // so the node holds from dispatch until an audience is set. Unset is
+    // the migration state, not a hold; the explicit ask is.
+    if get_str(entry, "audience").as_deref() == Some("audience?") {
+        return Some("scope-ask".to_string());
+    }
     // A question the operator has not answered outranks every selector
     // signal: the node leaves ready the moment it is named in blocks, so a
     // dispatcher never spends a lane on the same ruling twice.
@@ -1407,7 +1412,7 @@ fn normalize_cwd(raw: &str) -> String {
 /// Detect the active project from candidate `cwd`s
 /// (`_intake.detect_project`): an exact-root node names the project
 /// outright; else the first node under the root does; else None.
-pub(crate) fn detect_project(entries: &[Value], repo_root: &str) -> Option<String> {
+pub(crate) fn detect_project(entries: &[&Value], repo_root: &str) -> Option<String> {
     let norm_root = normalize_cwd(repo_root);
     let root_prefix = format!("{}/", norm_root.trim_end_matches('/'));
     let mut fallback: Option<String> = None;
@@ -1612,28 +1617,39 @@ pub(crate) fn encounter_voters(entry: &Value) -> BTreeSet<String> {
         .unwrap_or_default()
 }
 
-fn importance_score(entry: &Value, effective_priority: &str, now_ms: i64) -> f64 {
-    let voters = encounter_voters(entry);
-    if voters.is_empty() {
-        return 0.0;
-    }
-    let weight = PRIORITY_WEIGHT
-        .iter()
-        .find(|(k, _)| *k == effective_priority)
-        .map(|(_, v)| *v as f64)
-        .unwrap_or(3.0);
-    let weight = if !truthy(entry.get("sessions")) && !truthy(entry.get("pr_number")) {
-        weight * 2.0
-    } else {
-        weight
+fn importance_score(
+    entry: &Value,
+    effective_priority: &str,
+    open_dependents: i64,
+    now_ms: i64,
+) -> f64 {
+    // The approved board score: priority band (p0 400, p1 300, p2 200, p3 100)
+    // plus encounters (25 per distinct voter, cap 100) plus scope impact (the
+    // strongest named audience: customer:<persona> 60, customers 50, internal
+    // 0) plus fan-out (10 per open dependent, cap 50) plus age without a
+    // worker (1/day since created_at, cap 60; the plan's session-end reset
+    // needs a node-level stamp the graph does not carry yet, so the clock
+    // reads created). The design's worked example (p2 customers, four
+    // voters, two dependents, 60 idle days) reads 430.
+    let prio_pts = match effective_priority {
+        "p0" => 400.0,
+        "p1" => 300.0,
+        "p2" => 200.0,
+        "p3" => 100.0,
+        _ => 200.0,
     };
-    let divergence = voters.len() as f64 * weight;
-    let stamp = touched_ms(entry);
-    let Some(stamp) = stamp else {
-        return divergence;
-    };
-    let days = days_between(now_ms, stamp).max(0) as f64;
-    divergence + days.min(AGE_CAP_DAYS) / AGE_DIVISOR
+    let voters = encounter_voters(entry).len() as f64;
+    let encounter_pts = (voters * 25.0).min(100.0);
+    let scope_pts = crate::backlog::question_intake::str_field(entry, "audience")
+        .map(crate::backlog::audience::audience_score_term)
+        .unwrap_or(0) as f64;
+    let fanout_pts = (open_dependents.max(0) as f64 * 10.0).min(50.0);
+    let age_pts = get_str(entry, "created_at")
+        .and_then(parse_iso_str)
+        .map(|stamp| days_between(now_ms, stamp).max(0) as f64)
+        .unwrap_or(0.0)
+        .min(60.0);
+    prio_pts + encounter_pts + scope_pts + fanout_pts + age_pts
 }
 
 // ---------------------------------------------------------------------------
@@ -1674,11 +1690,11 @@ pub(crate) fn epics_with_child_progress(by_id: &BTreeMap<String, Value>) -> BTre
 /// The node's live epic parent, or None (`_intake._live_epic_for`): an
 /// epic-typed parent with a valid priority and status, not explicitly
 /// terminal and not status-terminal without child progress.
-pub(crate) fn live_epic_for(
+pub(crate) fn live_epic_for<'a>(
     node: &Value,
-    by_id: &BTreeMap<String, Value>,
+    by_id: &'a BTreeMap<String, Value>,
     child_progress: &BTreeSet<String>,
-) -> Option<Value> {
+) -> Option<&'a Value> {
     let parent_id = get_str(node, "parent")?;
     let epic = by_id.get(parent_id)?;
     if get_str(epic, "type") != Some("epic") {
@@ -1711,7 +1727,7 @@ pub(crate) fn live_epic_for(
     if explicitly_terminal || status_terminal {
         return None;
     }
-    Some(epic.clone())
+    Some(epic)
 }
 
 pub(crate) fn in_progress_epic_ids(
@@ -1737,7 +1753,7 @@ pub(crate) fn in_progress_epic_ids(
             continue;
         }
         if let Some(epic) = live_epic_for(child, by_id, child_progress) {
-            if let Some(id) = entry_id(&epic) {
+            if let Some(id) = entry_id(epic) {
                 result.insert(id.to_string());
             }
         }
@@ -1754,7 +1770,7 @@ pub(crate) fn make_effective_priority(
         let child_priority = priority_name(e);
         let effective = match live_epic_for(e, by_id, child_progress) {
             Some(epic) => {
-                let epic_priority = priority_name(&epic);
+                let epic_priority = priority_name(epic);
                 if priority_rank(&epic_priority) < priority_rank(&child_priority) {
                     epic_priority
                 } else {
@@ -1763,7 +1779,7 @@ pub(crate) fn make_effective_priority(
             }
             None => child_priority,
         };
-        out.insert(id.clone(), effective);
+        out.insert((*id).to_string(), effective);
     }
     out
 }
@@ -1790,7 +1806,7 @@ pub(crate) fn selection_sort_key(
     let child_orphan = !node_id.is_empty() && orphans.contains(node_id);
     let child_created = get_str(node, "created_at").unwrap_or("").to_string();
     let child_created_clone = child_created.clone();
-    let fanout = -dependents.get(node_id).copied().unwrap_or(0);
+    let open_dependents = dependents.get(node_id).copied().unwrap_or(0);
     let score = {
         let prio = effective_priority
             .get(node_id)
@@ -1798,7 +1814,7 @@ pub(crate) fn selection_sort_key(
             .unwrap_or_else(|| priority_name(node));
         // Degrade like every ordering signal: a malformed encounter never
         // breaks selection.
-        -importance_score(node, &prio, now_ms)
+        -importance_score(node, &prio, open_dependents, now_ms)
     };
     let epic = live_epic_for(node, by_id, child_progress);
     match epic {
@@ -1812,9 +1828,9 @@ pub(crate) fn selection_sort_key(
             } else {
                 1
             };
-            let epic_band = rank_band(&epic);
-            let epic_prio = priority_rank(&priority_name(&epic));
-            let epic_created = get_str(&epic, "created_at").unwrap_or("").to_string();
+            let epic_band = rank_band(epic);
+            let epic_prio = priority_rank(&priority_name(epic));
+            let epic_created = get_str(epic, "created_at").unwrap_or("").to_string();
             vec![
                 Term::Band(epic_band.0, OrdF64(epic_band.1)),
                 Term::I(0),
@@ -1823,7 +1839,6 @@ pub(crate) fn selection_sort_key(
                 Term::S(epic_created),
                 Term::Band(band.0, OrdF64(band.1)),
                 Term::I(child_prio),
-                Term::I(fanout),
                 Term::B(child_orphan),
                 Term::F(OrdF64(score)),
                 Term::S(child_created),
@@ -1834,12 +1849,10 @@ pub(crate) fn selection_sort_key(
             Term::I(1),
             Term::I(0),
             Term::I(child_prio),
-            Term::I(fanout),
             Term::B(child_orphan),
             Term::F(OrdF64(score)),
             Term::S(child_created),
             Term::I(child_prio),
-            Term::I(fanout),
             Term::S(child_created_clone),
         ],
     }
@@ -2032,13 +2045,13 @@ fn drops_for_filter(
     }
 }
 
-struct SelectCtx {
+struct SelectCtx<'a> {
     opts: ReadyOpts,
     repo_root: String,
     staleness_days: i64,
     parent_scope: Option<BTreeSet<String>>,
     container_ids: BTreeSet<String>,
-    by_id: BTreeMap<String, Value>,
+    by_id: &'a BTreeMap<String, Value>,
 }
 
 /// The decision, in one call: admit, narrow through the cascade, rank.
@@ -2075,7 +2088,7 @@ pub fn select(entries: &[Value], opts: &ReadyOpts) -> Result<ReadyReply, NoSuchP
         staleness_days,
         parent_scope,
         container_ids: container_ids(entries),
-        by_id: by_id.clone(),
+        by_id: &by_id,
     };
 
     // Admission: persisted status in the allowed set (ready, plus idea /
@@ -2088,7 +2101,7 @@ pub fn select(entries: &[Value], opts: &ReadyOpts) -> Result<ReadyReply, NoSuchP
     if opts.include_deferred {
         allowed.insert("deferred");
     }
-    let candidates: Vec<Value> = entries
+    let candidates: Vec<&Value> = entries
         .iter()
         .filter(|e| is_dict(e))
         .filter(|e| {
@@ -2098,7 +2111,6 @@ pub fn select(entries: &[Value], opts: &ReadyOpts) -> Result<ReadyReply, NoSuchP
                 || is_cold_dispatchable(e))
                 && !truthy(e.get("completed_at"))
         })
-        .cloned()
         .collect();
 
     // The cascade, in its shipped order, with first-filter attribution.
@@ -2113,7 +2125,7 @@ pub fn select(entries: &[Value], opts: &ReadyOpts) -> Result<ReadyReply, NoSuchP
         FILTER_BATCHED,
         FILTER_SELECTION_GUARD,
     ];
-    let mut survivors: Vec<Value> = candidates;
+    let mut survivors: Vec<&Value> = candidates;
     let mut drops: Vec<Drop> = Vec::new();
     for filter in filter_order {
         // The live-claim filter only exists when claims are held, matching
@@ -2135,9 +2147,9 @@ pub fn select(entries: &[Value], opts: &ReadyOpts) -> Result<ReadyReply, NoSuchP
         };
         let mut kept = Vec::new();
         for e in survivors {
-            match drops_for_filter(filter, &e, &ctx, effective_project.as_deref()) {
+            match drops_for_filter(filter, e, &ctx, effective_project.as_deref()) {
                 Some(reason) => {
-                    if let Some(id) = entry_id(&e) {
+                    if let Some(id) = entry_id(e) {
                         drops.push(Drop {
                             id: id.to_string(),
                             filter: filter.to_string(),
@@ -2150,11 +2162,10 @@ pub fn select(entries: &[Value], opts: &ReadyOpts) -> Result<ReadyReply, NoSuchP
         }
         survivors = kept;
     }
-
     // Epics-first, then flat priority: the key is built from the FULL graph
     // so epic parents resolve even when filtered out of the candidate set.
     let (ordered, _tables) =
-        order_by_selection_key(survivors, entries, &by_id, &opts.claimed, opts.now_ms);
+        order_refs_by_selection_key(&survivors, entries, &ctx.by_id, &opts.claimed, opts.now_ms);
 
     Ok(ReadyReply {
         rows: ordered.iter().map(|e| dispatch_node_summary(e)).collect(),
@@ -2172,24 +2183,25 @@ pub(crate) struct KeyTables {
 
 /// The one selection order: `rows` sorted by [`selection_sort_key`], with the
 /// tables it was built from handed back so the board mode answers from the
-/// same facts instead of rebuilding them.
-pub(crate) fn order_by_selection_key(
-    rows: Vec<Value>,
+/// same facts instead of rebuilding them. The rows come in and go out as
+/// references: the sort keys off the borrowed graph and never clones a row.
+pub(crate) fn order_refs_by_selection_key<'a>(
+    rows: &[&'a Value],
     entries: &[Value],
     by_id: &BTreeMap<String, Value>,
     claimed: &BTreeSet<String>,
     now_ms: i64,
-) -> (Vec<Value>, KeyTables) {
+) -> (Vec<&'a Value>, KeyTables) {
     let child_progress = epics_with_child_progress(by_id);
     let dependents = dependents_fanout(entries);
     let effective_priority = make_effective_priority(by_id, &child_progress);
     let orphans = orphan_ids(entries, by_id);
     let epic_in_progress = in_progress_epic_ids(entries, by_id, &child_progress, claimed);
-    let mut keyed: Vec<(Vec<Term>, Value)> = rows
-        .into_iter()
+    let mut keyed: Vec<(Vec<Term>, &'a Value)> = rows
+        .iter()
         .map(|e| {
             let key = selection_sort_key(
-                &e,
+                e,
                 by_id,
                 &child_progress,
                 &dependents,
@@ -2198,7 +2210,7 @@ pub(crate) fn order_by_selection_key(
                 &epic_in_progress,
                 now_ms,
             );
-            (key, e)
+            (key, *e)
         })
         .collect();
     keyed.sort_by(|a, b| a.0.cmp(&b.0));
@@ -2231,8 +2243,9 @@ pub fn board_facts(entries: &[Value], claimed: &BTreeSet<String>, now_ms: i64) -
         .filter(|e| is_dict(e))
         .filter_map(|e| entry_id(e).map(|id| (id.to_string(), e.clone())))
         .collect();
-    let sortables: Vec<Value> = by_id.values().cloned().collect();
-    let (ordered, tables) = order_by_selection_key(sortables, entries, &by_id, claimed, now_ms);
+    let sortables: Vec<&Value> = by_id.values().collect();
+    let (ordered, tables) =
+        order_refs_by_selection_key(&sortables, entries, &by_id, claimed, now_ms);
     let ids = ordered
         .iter()
         .filter_map(|e| entry_id(e).map(str::to_string))
@@ -2242,7 +2255,7 @@ pub fn board_facts(entries: &[Value], claimed: &BTreeSet<String>, now_ms: i64) -
         .into_iter()
         .filter(|(id, effective)| {
             by_id
-                .get(id)
+                .get(id.as_str())
                 .is_some_and(|e| &priority_name(e) != effective)
         })
         .collect();
@@ -2290,6 +2303,44 @@ pub(crate) fn dependents_fanout(entries: &[Value]) -> BTreeMap<String, i64> {
 
 #[cfg(test)]
 mod tests {
+    // --- the approved board score (the design's worked example) ---
+
+    #[test]
+    fn the_worked_example_reads_430_and_outranks_a_fresh_p1() {
+        // A p2 customers node, four distinct voters, two open dependents,
+        // 60 idle days: 200 + 100 + 50 + 20 + 60 = 430.
+        let entry = serde_json::json!({
+            "id": "ab-1",
+            "priority": "p2",
+            "audience": "customers",
+            "created_at": "2025-11-16T00:00:00Z",
+            "encounters": [
+                {"voter_key": "s-1"},
+                {"voter_key": "s-2"},
+                {"voter_key": "s-3"},
+                {"voter_key": "s-4"},
+                {"voter_key": "outside-1", "voter_kind": "external"}
+            ],
+        });
+        let now = parse_iso_str("2026-01-15T00:00:00Z").expect("the fixed now parses");
+        let score = importance_score(&entry, "p2", 2, now);
+        assert_eq!(score, 430.0, "the worked example: {score}");
+        // The fresh p1 internal node (no voters, no dependents, created
+        // today) reads 300 and loses.
+        let fresh = serde_json::json!({
+            "id": "ab-2",
+            "priority": "p1",
+            "audience": "internal",
+            "created_at": "2026-01-15T00:00:00Z",
+        });
+        let fresh_score = importance_score(&fresh, "p1", 0, now);
+        assert_eq!(fresh_score, 300.0);
+        assert!(score > fresh_score, "430 outranks 300");
+        // Fan-out caps at 50 and the external vote stays out.
+        let capped = importance_score(&entry, "p2", 7, now);
+        assert_eq!(capped, 460.0, "fan-out capped at 50: {capped}");
+    }
+
     // --- the dispatch router (the user-only offer the retro caught) ---
 
     /// A user-only node refuses every dispatch rung, a declared command

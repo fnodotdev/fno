@@ -1613,7 +1613,7 @@ fn route_outside_merge_look(record: &MergeDriftRecord, repo: &str) {
                 &blocker.detail,
             );
         }
-        Some(blocker) if blocker.code == "visual_declined" => {}
+        Some(blocker) if crate::merge_gates::visual_holds_merge(&blocker.code) => {}
         Some(blocker) => eprintln!(
             "look request not routed: PR {pr} gate read {}: {}",
             blocker.code, blocker.detail
@@ -3278,5 +3278,269 @@ mod tests {
         assert_eq!(entries[0]["additional_prs"][0]["number"], 1813);
         assert_eq!(entries[0]["pr_number"], 1720);
         assert_eq!(entries[0]["merge_status"], "merged");
+    }
+
+    /// The merge_close floor, on the store: a node reading in_review whose PR
+    /// merged is closed by the sweep's own decision - scan, partition, the
+    /// same locked mutate the command persists through - with no hand reconcile
+    /// and no --pr-number scope: the record the scan built decides.
+    #[test]
+    fn the_sweep_closes_a_merged_node_and_leaves_a_closed_pr_open() {
+        let _journal = crate::merge_provenance::TestJournal::opt_in();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("graph.json");
+        let rows = vec![
+            json!({
+                "id": "x-aaaa001", "slug": "sweep-closes-merged",
+                "title": "merged node", "type": "feature", "status": "in_review",
+                "priority": "p2", "domain": "code",
+                "created_at": "2026-11-20T00:00:00Z",
+                "pr_number": 910, "pr_url": "https://github.com/o/r/pull/910",
+            }),
+            json!({
+                "id": "x-bbbb002", "slug": "closed-unmerged-control",
+                "title": "control node", "type": "feature", "status": "in_review",
+                "priority": "p2", "domain": "code",
+                "created_at": "2026-11-20T00:00:00Z",
+                "pr_number": 911, "pr_url": "https://github.com/o/r/pull/911",
+            }),
+        ];
+        graph_store::seed_rows(&path, &rows).expect("seed lands");
+        let entries = read_rows(&path).expect("read back");
+        let state = |pr: i64, state: &str, merged_at: Option<&str>| {
+            crate::backlog::merge_state::PrMergeState {
+                number: pr,
+                state: state.to_string(),
+                url: Some(format!("https://github.com/o/r/pull/{pr}")),
+                merged_at: merged_at.map(str::to_string),
+                merge_sha: None,
+                changed_files: vec![],
+                files_truncated: false,
+                body: None,
+            }
+        };
+        let stub_query = |pr: i64, _repo: Option<&str>, _cwd: Option<&str>, _files: bool| {
+            let mut s = match pr {
+                910 => state(910, "MERGED", Some("2026-11-20T00:05:00Z")),
+                _ => state(pr, "CLOSED", None),
+            };
+            // The scan records a merged PR only when its body's closure
+            // line names the node: that naming is the binding evidence.
+            s.body = Some("Fixes x-aaaa001".to_string());
+            Ok(s)
+        };
+        let records = scan_merge_drift(&entries, None, None, stub_query);
+        assert_eq!(records.len(), 2, "{records:?}");
+        let sweep = partition_and_probe(records, &entries, false, false);
+        assert_eq!(
+            sweep.closeable.len(),
+            1,
+            "closeable should hold only the merged node"
+        );
+        assert_eq!(
+            sweep.closeable.first().map(|r| r.node_id.as_str()),
+            Some("x-aaaa001")
+        );
+        assert_eq!(
+            sweep.closed_unmerged.first().map(|r| r.node_id.as_str()),
+            Some("x-bbbb002"),
+            "the CLOSED-PR control lands in closed_unmerged, left in_review"
+        );
+
+        let result = std::cell::RefCell::new(CloseResult {
+            actually_closed: Vec::new(),
+            cascade_closed: Vec::new(),
+            contained_closed: Vec::new(),
+            contained_released: Vec::new(),
+            contained_held: Vec::new(),
+            carried_stamped: Vec::new(),
+            reparented: Vec::new(),
+            supersession_unverified: Vec::new(),
+            settlement_receipts: Vec::new(),
+            contained_errors: Vec::new(),
+            held_recheck: Vec::new(),
+        });
+        let mut stderr_log = Vec::new();
+        graph_store::mutate_rows(
+            &path,
+            std::time::Duration::from_secs(60),
+            None,
+            None,
+            |rows| {
+                close_mutator(
+                    rows,
+                    &sweep.closeable,
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    &sweep,
+                    &[],
+                    false,
+                    &Default::default(),
+                    &HashMap::new(),
+                    &result,
+                    &mut stderr_log,
+                );
+                Ok(true)
+            },
+        )
+        .expect("the close persists");
+
+        let rows = read_rows(&path).expect("read back");
+        let a = rows.iter().find(|r| r["id"] == "x-aaaa001").unwrap();
+        let b = rows.iter().find(|r| r["id"] == "x-bbbb002").unwrap();
+        assert_eq!(a["status"], "done", "the merged node closed: {a}");
+        assert_eq!(a["merge_status"], "merged", "{a}");
+        assert!(a["completed_at"].is_string(), "{a}");
+        assert_eq!(b["status"], "in_review", "the control stays open: {b}");
+    }
+
+    /// The kill window the merge door's detach closes: a worker that dies
+    /// right after spawning its close leg cannot take the closer with it.
+    /// The re-invoked test binary below plays the worker. It enters its own
+    /// session first (a supervisor-spawned worker owns a process group),
+    /// spawns the leg through `run_leg`, then kills its own process group one
+    /// second in, the way a reap takes a worker down. The detached leg's
+    /// grandchild sits in a session of its own and finishes; the attached
+    /// withhold arm shares the worker's group and dies with it, proving the
+    /// detach is what carries the guarantee.
+    #[test]
+    #[cfg(unix)]
+    fn a_killed_worker_leaves_its_detached_close_leg_alive() {
+        use std::os::unix::process::ExitStatusExt;
+        use std::process::Command;
+        use std::time::{Duration, Instant};
+
+        // Child mode: the parent phase below re-invokes this test binary.
+        if std::env::var("FNO_TEST_LEG_WORKER").is_ok() {
+            worker_phase(
+                &std::env::var("FNO_TEST_LEG_STUB").expect("stub path"),
+                &std::env::var("FNO_TEST_LEG_MARKERS").expect("marker dir"),
+                std::env::var("FNO_TEST_LEG_DETACHED").is_ok_and(|v| v == "1"),
+            );
+            return;
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        let markers = dir.path().join("markers");
+        std::fs::create_dir_all(&markers).unwrap();
+        // write_exec_stub, not a bare write: a sibling test's fork can hold
+        // the write fd open and the exec dies with Text file busy.
+        let stub = crate::write_exec_stub(
+            dir.path(),
+            "close_leg_stub.sh",
+            "#!/bin/sh\nprintf started > \"$MARKER_DIR/started\"\nprintf $$ > \"$MARKER_DIR/leg-pid\"\nwhile [ ! -f \"$MARKER_DIR/release\" ]; do sleep 0.1; done\nprintf done > \"$MARKER_DIR/done\"\n",
+        );
+
+        let run_worker = |detached: bool| {
+            for m in ["started", "done", "release", "leg-pid", "worker-returned"] {
+                let _ = std::fs::remove_file(markers.join(m));
+            }
+            let exe = std::env::current_exe().expect("test exe");
+            Command::new(exe)
+                .args([
+                    // A substring filter, not --exact: the harness matches
+                    // the full module path, and the bare name is a suffix of
+                    // it, so --exact would run zero tests and exit 0.
+                    "a_killed_worker_leaves_its_detached_close_leg_alive",
+                    "--nocapture",
+                ])
+                .env("FNO_TEST_LEG_WORKER", "1")
+                .env("FNO_TEST_LEG_STUB", &stub)
+                .env("FNO_TEST_LEG_MARKERS", &markers)
+                .env("FNO_TEST_LEG_DETACHED", if detached { "1" } else { "0" })
+                .env("MARKER_DIR", &markers)
+                .env("FNO_BIN", &stub)
+                .status()
+                .expect("the worker child runs")
+        };
+        let leg_pid = |markers: &Path| -> u32 {
+            let raw = std::fs::read_to_string(markers.join("leg-pid")).expect("leg pid file");
+            raw.trim().parse().expect("leg pid parses")
+        };
+        let alive = |pid: u32| unsafe { libc::kill(pid as libc::pid_t, 0) == 0 };
+
+        // The detach arm: the worker dies, the leg still finishes. Release
+        // only after the worker is confirmed dead, so a done marker proves
+        // the grandchild ran PAST its spawner's death.
+        let status = run_worker(true);
+        assert_eq!(
+            status.signal(),
+            Some(libc::SIGKILL),
+            "the worker child must die to SIGKILL, got {status:?}"
+        );
+        assert!(
+            markers.join("started").exists(),
+            "the detached leg never launched"
+        );
+        std::fs::write(markers.join("release"), "go").unwrap();
+        let done = markers.join("done");
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while !done.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "the detached leg never finished its close"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        // The withhold arm: attached, the leg dies with the worker's group.
+        // The leg's death is read directly through its pid, never inferred
+        // from an absence.
+        let status = run_worker(false);
+        assert_eq!(
+            status.signal(),
+            Some(libc::SIGKILL),
+            "the worker child must die to SIGKILL, got {status:?}"
+        );
+        assert!(
+            !markers.join("worker-returned").exists(),
+            "the worker's group kill never landed"
+        );
+        let pid = leg_pid(&markers);
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while alive(pid) {
+            assert!(
+                Instant::now() < deadline,
+                "an attached leg must die with its worker's group; pid {pid} still alive"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(
+            !markers.join("worker-returned").exists(),
+            "the worker's group kill never landed"
+        );
+    }
+
+    /// The child half of the kill-window test. Reached as a real worker only
+    /// when the group kill fails; the success path dies inside `run_leg`.
+    #[cfg(unix)]
+    fn worker_phase(stub: &str, markers: &str, detached: bool) {
+        use std::time::Duration;
+        // Own session + group, like a supervisor-spawned worker.
+        unsafe {
+            libc::setsid();
+        }
+        let argv = vec![stub.to_string()];
+        let watchdog = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(1));
+            // A group kill, the way a reap takes a worker down.
+            unsafe {
+                libc::kill(-libc::getpid(), libc::SIGKILL);
+            }
+        });
+        let outcome = crate::gate::post_merge::ritual::run_leg(
+            &argv,
+            std::path::Path::new(markers),
+            Duration::from_secs(20),
+            detached,
+        );
+        let _ = watchdog.join();
+        // Only a failed group kill reaches this line; name it for the parent.
+        let _ = std::fs::write(
+            Path::new(markers).join("worker-returned"),
+            format!(
+                "run_leg returned: code={} timed_out={} spawn_error={:?}",
+                outcome.code, outcome.timed_out, outcome.spawn_error
+            ),
+        );
     }
 }

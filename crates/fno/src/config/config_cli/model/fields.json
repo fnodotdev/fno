@@ -298,7 +298,22 @@
      "default": {
       "alert_sound": true,
       "alert_notification": true,
-      "alert_badge": true
+      "alert_badge": true,
+      "font": "SF Mono",
+      "font_size": 13.0
+     }
+    },
+    {
+     "name": "provider_cap",
+     "default": {
+      "enabled": true,
+      "mode": "park",
+      "destinations": [],
+      "min_wait_minutes": 30,
+      "sleep_hours": "",
+      "sleep_timezone": "",
+      "canary_survive_minutes": 15,
+      "quorum": 2
      }
     },
     {
@@ -789,6 +804,13 @@
       },
       "visual_paint_paths": null,
       "visual_shot_workflows": null
+     }
+    },
+    {
+     "name": "main_repair",
+     "default": {
+      "auto_revert": false,
+      "revert_after_minutes": 10
      }
     }
    ]
@@ -1333,6 +1355,51 @@
     {
      "name": "alert_badge",
      "default": true
+    },
+    {
+     "name": "font",
+     "default": "SF Mono"
+    },
+    {
+     "name": "font_size",
+     "default": 13.0
+    }
+   ]
+  },
+  "ProviderCapBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "enabled",
+     "default": true
+    },
+    {
+     "name": "mode",
+     "default": "park"
+    },
+    {
+     "name": "destinations",
+     "default": []
+    },
+    {
+     "name": "min_wait_minutes",
+     "default": 30
+    },
+    {
+     "name": "sleep_hours",
+     "default": ""
+    },
+    {
+     "name": "sleep_timezone",
+     "default": ""
+    },
+    {
+     "name": "canary_survive_minutes",
+     "default": 15
+    },
+    {
+     "name": "quorum",
+     "default": 2
     }
    ]
   },
@@ -1970,6 +2037,15 @@
     }
    ]
   },
+  "ProposeBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "cycle_usd",
+     "default": 10.0
+    }
+   ]
+  },
   "EvalsBlock": {
    "extra": "ignore",
    "fields": [
@@ -1978,6 +2054,12 @@
      "default": {
       "daily_usd": 15.0,
       "lane": "zai-flash"
+     }
+    },
+    {
+     "name": "propose",
+     "default": {
+      "cycle_usd": 10.0
      }
     },
     {
@@ -3372,6 +3454,19 @@
      "default": []
     }
    ]
+  },
+  "MainRepairBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "auto_revert",
+     "default": false
+    },
+    {
+     "name": "revert_after_minutes",
+     "default": 10
+    }
+   ]
   }
  },
  "field_meta": [
@@ -3638,6 +3733,7 @@
   "evals.scratch_window_days",
   "evals.gate.daily_usd",
   "evals.gate.lane",
+  "evals.propose.cycle_usd",
   "recovery.enabled",
   "recovery.idle_threshold_seconds",
   "recovery.max_nudges",
@@ -3754,6 +3850,18 @@
   "merge.visual_shot_workflows",
   "app.alert_sound",
   "app.alert_notification",
-  "app.alert_badge"
+  "app.alert_badge",
+  "app.font",
+  "app.font_size",
+  "provider_cap.enabled",
+  "provider_cap.mode",
+  "provider_cap.destinations",
+  "provider_cap.min_wait_minutes",
+  "provider_cap.sleep_hours",
+  "provider_cap.sleep_timezone",
+  "provider_cap.canary_survive_minutes",
+  "provider_cap.quorum",
+  "main_repair.auto_revert",
+  "main_repair.revert_after_minutes"
  ]
 }

@@ -68,6 +68,7 @@ impl View {
             follow,
             false,
             OverlayAnchor::Center,
+            0,
         );
         // Sit on the column's floor; over the answered row, take the top.
         let floor = (origin.0 + rows).saturating_sub(layout.framed.lines.len());

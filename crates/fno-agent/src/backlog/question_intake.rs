@@ -94,6 +94,17 @@ pub struct IntakeRequest {
     pub node: Option<String>,
     #[serde(default)]
     pub subject: Option<String>,
+    /// Who the question serves (`--audience`): internal, customers or
+    /// customer:<persona>. No default; the asker names the audience.
+    #[serde(default)]
+    pub audience: Option<String>,
+    /// The goal behind the ask (`--why`); the user's words when the ask came
+    /// from him. Required on the interactive door.
+    #[serde(default)]
+    pub why: Option<String>,
+    /// The persona jobs the question names (`--job <persona>/<job-slug>`).
+    #[serde(default)]
+    pub job: Vec<String>,
     #[serde(default)]
     pub session_id: Option<String>,
     /// The asker's harness, stamped beside the session id so the reply
@@ -158,7 +169,7 @@ pub struct IntakeAnswer {
     /// that predates the template arm.
     #[serde(default)]
     pub template: bool,
-    /// `law` | `node_pointer` | `context` | `config` | `decide_yourself` | `dedup` | `write` | `index`.
+    /// `law` | `node_pointer` | `context` | `config` | `decide_yourself` | `dedup` | `resolved` | `write` | `index`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refusal: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -706,7 +717,7 @@ pub fn run_intake(req: &IntakeRequest, home: &AgentsHome) -> IntakeAnswer {
             let mut line = format!(
                 "outstanding: refused: a live decision already rules on '{}' ({}). It reads: \"{}\" \
 Read it: \
-fno inbox decisions {} --lane law --state live. Act on the law; do not ask {who}.",
+fno inbox decisions {} --lane user --state live. Act on the law; do not ask {who}.",
                 hit.subject,
                 hit.ids.join(", "),
                 law_text,
@@ -1035,6 +1046,37 @@ already waits ({}). Answer it or clear it; the asker amends it with a \
         }
     }
 
+    // The pre-file subject re-check: the sweep closes an ask on a resolved
+    // subject hourly; the door reads the same facts here, so the ask never
+    // pings anyone for a subject that already resolved. An amend of an
+    // open row rides through: the row already waits, and the sweep owns
+    // its close. Both refusal rules need a named node, so an ask with no
+    // node pointer skips the facts read entirely.
+    if amend.is_none() && (node.is_some() || !req.blocks.is_empty()) {
+        let ask_data = json!({
+            "node": node,
+            "subject": subject,
+            "question": req.question,
+            "blocks": req.blocks,
+            "rung": req.rung,
+        });
+        let cwd = req
+            .cwd
+            .as_deref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        let facts = crate::question_sweep::read_closed_rung_facts(&cwd, home);
+        if let Some(reason) = crate::needs::ask_subject_resolved(&ask_data, &facts) {
+            answer.lines.push(format!(
+                "outstanding: refused: the subject already resolved ({reason}). Act on the \
+outcome; do not ask {who}. Read the record: fno inbox outstanding list."
+            ));
+            answer.refusal = Some("resolved".to_string());
+            answer.exit_code = 2;
+            return answer;
+        }
+    }
+
     let stored_question: String = if from_file {
         title_of(&req.question, &parsed.title)
     } else if truncated {
@@ -1119,6 +1161,17 @@ already waits ({}). Answer it or clear it; the asker amends it with a \
         if let Some(v) = value.as_deref().filter(|v| !v.is_empty()) {
             data.insert(key.into(), json!(v));
         }
+    }
+    // The who, why and jobs ride the stored row: the board chip, the decide
+    // carry and the answer's receipt all read them back from here.
+    if let Some(v) = req.audience.as_deref().filter(|v| !v.is_empty()) {
+        data.insert("audience".into(), json!(v));
+    }
+    if let Some(v) = req.why.as_deref().filter(|v| !v.is_empty()) {
+        data.insert("why".into(), json!(v));
+    }
+    if !req.job.is_empty() {
+        data.insert("job".into(), json!(req.job));
     }
     crate::identity::stamp_person(&mut data);
     if let Some(n) = node {
@@ -1538,6 +1591,9 @@ mod tests {
             blocks: vec![],
             node: None,
             subject: None,
+            audience: None,
+            why: None,
+            job: Vec::new(),
             session_id: Some("s1".to_string()),
             harness: None,
             cwd: Some("/repo/fno".to_string()),
@@ -1775,7 +1831,7 @@ stops
             subject: Some("junk-law".to_string()),
             decision: Some("a placeholder ruling".to_string()),
             ts: Some("2026-08-29T19:20:10Z".to_string()),
-            lane: Some("law".to_string()),
+            lane: Some("user".to_string()),
             authority_source: Some("operator".to_string()),
         }
     }
@@ -2035,7 +2091,7 @@ stops
             subject: Some("test-subject".to_string()),
             decision: Some("stay strict".to_string()),
             ts: Some("2026-09-01T00:00:00Z".to_string()),
-            lane: Some("law".to_string()),
+            lane: Some("user".to_string()),
             authority_source: None,
         }];
         let answer = run_intake(&r, &home);
@@ -2230,5 +2286,100 @@ stops
             "{:?}",
             answer.lines
         );
+    }
+
+    fn seed_graph(rows: serde_json::Value) {
+        let graph = crate::org_board::graph_json_path(Path::new("."));
+        crate::graph_store::seed_rows(&graph, &[rows]).unwrap();
+    }
+
+    #[test]
+    fn an_ask_whose_node_reads_done_refuses_at_intake() {
+        // The sweep closes an ask when its subject's node reaches a
+        // terminal rung, hourly; the ask door reads the same facts before
+        // filing, so the resolved subject files nothing.
+        let _env = crate::law_match::scope_tests::DoorEnv::new();
+        let root = tmp_root("ask-resolved-node");
+        seed_graph(json!({
+            "id": "x-aaaa",
+            "status": "done",
+            "title": "the lane",
+            "merge_status": "",
+            "additional_prs": []
+        }));
+        let index = root.join("questions.jsonl");
+        let journal = root.join("journal").join("events.jsonl");
+        let mut r = req("is the lane finished?", &root);
+        r.subject = Some("lane state".to_string());
+        r.node = Some("x-aaaa".to_string());
+        r.ask = Some("finish the lane".to_string());
+        r.index_path = Some(index.clone());
+        r.journal_path = Some(journal.clone());
+        let answer = run_intake(&r, &tmp_home("ask-resolved-node"));
+        assert_eq!(answer.exit_code, 2, "{:?}", answer.lines);
+        assert_eq!(answer.refusal.as_deref(), Some("resolved"));
+        assert!(
+            answer
+                .lines
+                .iter()
+                .any(|l| l.contains("already resolved") && l.contains("x-aaaa reads done")),
+            "{:?}",
+            answer.lines
+        );
+        let raw = crate::event_store::journal_text(&journal, &["operator_question"]);
+        assert!(raw.trim().is_empty(), "nothing filed: {raw}");
+    }
+
+    #[test]
+    fn an_ask_whose_subject_pr_merged_refuses_with_the_merge() {
+        let _env = crate::law_match::scope_tests::DoorEnv::new();
+        let root = tmp_root("ask-resolved-pr");
+        seed_graph(json!({
+            "id": "x-bbbb",
+            "status": "in_progress",
+            "title": "the paint",
+            "merge_status": "merged",
+            "pr_number": 3377,
+            "additional_prs": []
+        }));
+        let index = root.join("questions.jsonl");
+        let journal = root.join("journal").join("events.jsonl");
+        let mut r = req("should we repaint the header?", &root);
+        r.subject = Some("paint re-ask PR 3377".to_string());
+        r.node = Some("x-bbbb".to_string());
+        r.ask = Some("finish the paint".to_string());
+        r.index_path = Some(index.clone());
+        r.journal_path = Some(journal.clone());
+        let answer = run_intake(&r, &tmp_home("ask-resolved-pr"));
+        assert_eq!(answer.exit_code, 2, "{:?}", answer.lines);
+        assert!(
+            answer
+                .lines
+                .iter()
+                .any(|l| l.contains("already resolved") && l.contains("PR 3377 merged")),
+            "{:?}",
+            answer.lines
+        );
+    }
+
+    #[test]
+    fn a_live_subject_files_exactly_as_before_the_check() {
+        // No graph row, no resolution: the ask files with the receipt it
+        // always carried (the refuse arm lives in the two tests above).
+        let _env = crate::law_match::scope_tests::DoorEnv::new();
+        let root = tmp_root("ask-live-subject");
+        let index = root.join("questions.jsonl");
+        let journal = root.join("journal").join("events.jsonl");
+        let mut r = req("Approve the lane order?", &root);
+        r.subject = Some("lane order".to_string());
+        r.node = Some("x-cccc".to_string());
+        r.ask = Some("finish the lane".to_string());
+        r.index_path = Some(index.clone());
+        r.journal_path = Some(journal.clone());
+        let answer = run_intake(&r, &tmp_home("ask-live-subject"));
+        assert_eq!(answer.exit_code, 0, "{:?}", answer.lines);
+        assert_ne!(answer.refusal.as_deref(), Some("resolved"));
+        let raw = crate::event_store::journal_text(&journal, &["operator_question"]);
+        assert!(raw.contains("lane order"), "filed: {raw}");
     }
 }

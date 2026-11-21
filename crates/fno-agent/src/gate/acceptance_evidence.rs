@@ -1462,11 +1462,18 @@ mod done_probe_tests {
 
     #[test]
     fn quota_rest_failures_do_not_claim_graphql_exhaustion() {
-        assert!(is_graphql_read("pr_reviews"));
-        assert!(is_graphql_read("pr_reviews_parse"));
+        // pr_reviews and pr_commits ride REST transports now (the coverage
+        // pages, the commits endpoint): their failures classify core.
+        assert!(!is_graphql_read("pr_reviews"));
+        assert!(!is_graphql_read("pr_reviews_parse"));
+        assert!(!is_graphql_read("pr_commits"));
+        assert!(!is_graphql_read("pr_commits_parse"));
         assert!(!is_graphql_read("pr_info_rest"));
         assert!(!is_graphql_read("pr_status_rest"));
         assert!(!is_graphql_read("pr_status_rest_parse"));
+        // The shapes that can still spend the graphql bucket keep the entry.
+        assert!(is_graphql_read("pr_view"));
+        assert!(is_graphql_read("pr_checks"));
     }
 }
 

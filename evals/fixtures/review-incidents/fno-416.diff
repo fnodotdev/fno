@@ -1,0 +1,522 @@
+diff --git a/crates/fno/config.example.toml b/crates/fno/config.example.toml
+index bc24b5dd17..2d8462ef7a 100644
+--- a/crates/fno/config.example.toml
++++ b/crates/fno/config.example.toml
+@@ -858,6 +858,24 @@ alert_notification = true
+ # The Dock badge showing the count of blocked agents in fno-app (default on).
+ alert_badge = true
+ 
++[provider_cap]
++# Arm the provider cap actor: a lane that hits its usage cap alerts its leads, and its members park until the reset (default on). Off still measures and saves the snapshot, and moves nothing.
++enabled = true
++# What a capped lane does with its members: park (default; alert the leads, move nothing, resume after the reset) | triage (a member on a p0 or p1 node, or with an open PR, moves to destinations; the rest park) | ask (nothing moves until an operator answers; inside sleep_hours it moves without a question) | auto (every member moves without a question).
++mode = "park"
++# Route lanes a moving member tries in order when no fallback grid is set. Empty by default: moving work spends another paid lane, so only an operator names one.
++destinations = []
++# A reset closer than this many minutes is waited out and never moved (default 30).
++min_wait_minutes = 30
++# Window as HH:MM-HH:MM, read in sleep_timezone. In ask mode a cap inside the window moves members without a question. Empty (default) means never asleep.
++sleep_hours = ""
++# IANA zone for sleep_hours, for example America/Los_Angeles. Empty (default) reads the machine's local zone.
++sleep_timezone = ""
++# Minutes a canary session must live after the reset before the return ladder resumes the parked members (default 15).
++canary_survive_minutes = 15
++# Members on one lane with a fresh capped tail needed to open it (default 2). One member suffices when its 429 names a reset still ahead, or when the account's runtime-state quota lock is set.
++quorum = 2
++
+ [dev]
+ # Maintainer pin: a checkout root the Rust bootstrap re-provisions from (uv tool install <path>/cli) when its tool venv is wiped. Unset = the frozen 0.4.8 wheel self-provision (legacy end-user default).
+ source = ""
+diff --git a/crates/fno/config_schema.json b/crates/fno/config_schema.json
+index 5ce3855b1e..f8553ff88a 100644
+--- a/crates/fno/config_schema.json
++++ b/crates/fno/config_schema.json
+@@ -40,6 +40,65 @@
+     "title": "AppBlock",
+     "type": "object"
+    },
++   "ProviderCapBlock": {
++    "description": "Provider usage-cap actor settings (nested under 'config.provider_cap').\n\nA provider's usage cap arms this actor, independent of recovery.watchdog. It alone decides whether a cap may move sessions. A malformed value reads as its default.\n\nKnobs:\n  enabled                - arm the actor (default on).\n  mode                   - park (default), triage, ask or auto.\n  destinations           - route lanes a moving member tries, in order.\n  min_wait_minutes       - a reset closer than this is waited out.\n  sleep_hours            - HH:MM-HH:MM window in which ask mode moves without a question.\n  sleep_timezone         - IANA zone for sleep_hours (empty = local).\n  canary_survive_minutes - minutes a canary lives before parked members resume.\n  quorum                 - members on one lane needed to open a cap.",
++    "properties": {
++     "enabled": {
++      "default": true,
++      "title": "Enabled",
++      "type": "boolean"
++     },
++     "mode": {
++      "default": "park",
++      "enum": [
++       "park",
++       "triage",
++       "ask",
++       "auto"
++      ],
++      "title": "Mode",
++      "type": "string"
++     },
++     "destinations": {
++      "default": [],
++      "items": {
++       "type": "string"
++      },
++      "title": "Destinations",
++      "type": "array"
++     },
++     "min_wait_minutes": {
++      "default": 30,
++      "minimum": 0,
++      "title": "Min Wait Minutes",
++      "type": "integer"
++     },
++     "sleep_hours": {
++      "default": "",
++      "title": "Sleep Hours",
++      "type": "string"
++     },
++     "sleep_timezone": {
++      "default": "",
++      "title": "Sleep Timezone",
++      "type": "string"
++     },
++     "canary_survive_minutes": {
++      "default": 15,
++      "minimum": 0,
++      "title": "Canary Survive Minutes",
++      "type": "integer"
++     },
++     "quorum": {
++      "default": 2,
++      "minimum": 1,
++      "title": "Quorum",
++      "type": "integer"
++     }
++    },
++    "title": "ProviderCapBlock",
++    "type": "object"
++   },
+    "AccountsBlock": {
+     "description": "Account rotation and provider configuration (nested under 'config.accounts').",
+     "properties": {
+@@ -4030,6 +4089,9 @@
+    "app": {
+     "$ref": "#/$defs/AppBlock"
+    },
++   "provider_cap": {
++    "$ref": "#/$defs/ProviderCapBlock"
++   },
+    "process_admission": {
+     "$ref": "#/$defs/ProcessAdmissionBlock"
+    },
+@@ -7800,6 +7862,112 @@
+    "doc": "The Dock badge showing the count of blocked agents in fno-app (default on).",
+    "edit": "toggle"
+   },
++  {
++   "path": "provider_cap.enabled",
++   "label": "Arm the provider cap actor",
++   "type": "bool",
++   "default": true,
++   "wizard": "never",
++   "question": "",
++   "default_source": "default",
++   "doc": "Arm the provider cap actor: a lane that hits its usage cap alerts its leads, and its members park until the reset (default on). Off still measures and saves the snapshot, and moves nothing.",
++   "edit": "toggle"
++  },
++  {
++   "path": "provider_cap.mode",
++   "label": "Cap response",
++   "type": "typing.Literal['park', 'triage', 'ask', 'auto']",
++   "default": "park",
++   "wizard": "never",
++   "question": "",
++   "default_source": "default",
++   "doc": "What a capped lane does with its members: park (default; alert the leads, move nothing, resume after the reset) | triage (a member on a p0 or p1 node, or with an open PR, moves to destinations; the rest park) | ask (nothing moves until an operator answers; inside sleep_hours it moves without a question) | auto (every member moves without a question).",
++   "edit": "cycle",
++   "choices": [
++    {
++     "value": "park",
++     "doc": "default; alert the leads, move nothing"
++    },
++    {
++     "value": "triage",
++     "doc": "p0, p1 and open-PR members move; the rest park"
++    },
++    {
++     "value": "ask",
++     "doc": "nothing moves until an operator answers"
++    },
++    {
++     "value": "auto",
++     "doc": "every member moves without a question"
++    }
++   ]
++  },
++  {
++   "path": "provider_cap.destinations",
++   "label": "Cap destination lanes",
++   "type": "list[str]",
++   "default": [],
++   "wizard": "never",
++   "question": "",
++   "default_source": "default",
++   "doc": "Route lanes a moving member tries in order when no fallback grid is set. Empty by default: moving work spends another paid lane, so only an operator names one.",
++   "edit": "editor"
++  },
++  {
++   "path": "provider_cap.min_wait_minutes",
++   "label": "Shortest reset to move for",
++   "type": "int",
++   "default": 30,
++   "wizard": "never",
++   "question": "",
++   "default_source": "default",
++   "doc": "A reset closer than this many minutes is waited out and never moved (default 30).",
++   "edit": "editor"
++  },
++  {
++   "path": "provider_cap.sleep_hours",
++   "label": "Sleep hours",
++   "type": "str",
++   "default": "",
++   "wizard": "never",
++   "question": "",
++   "default_source": "default",
++   "doc": "Window as HH:MM-HH:MM, read in sleep_timezone. In ask mode a cap inside the window moves members without a question. Empty (default) means never asleep.",
++   "edit": "editor"
++  },
++  {
++   "path": "provider_cap.sleep_timezone",
++   "label": "Sleep hours timezone",
++   "type": "str",
++   "default": "",
++   "wizard": "never",
++   "question": "",
++   "default_source": "default",
++   "doc": "IANA zone for sleep_hours, for example America/Los_Angeles. Empty (default) reads the machine's local zone.",
++   "edit": "editor"
++  },
++  {
++   "path": "provider_cap.canary_survive_minutes",
++   "label": "Canary survival minutes",
++   "type": "int",
++   "default": 15,
++   "wizard": "never",
++   "question": "",
++   "default_source": "default",
++   "doc": "Minutes a canary session must live after the reset before the return ladder resumes the parked members (default 15).",
++   "edit": "editor"
++  },
++  {
++   "path": "provider_cap.quorum",
++   "label": "Members needed to open a cap",
++   "type": "int",
++   "default": 2,
++   "wizard": "never",
++   "question": "",
++   "default_source": "default",
++   "doc": "Members on one lane with a fresh capped tail needed to open it (default 2). One member suffices when its 429 names a reset still ahead, or when the account's runtime-state quota lock is set.",
++   "edit": "editor"
++  },
+   {
+    "path": "mux.attach_digest",
+    "label": "Show catch-up on attach",
+diff --git a/crates/fno/src/config/config_cli/model/fields.json b/crates/fno/src/config/config_cli/model/fields.json
+index cc63c23b68..663624b7e5 100644
+--- a/crates/fno/src/config/config_cli/model/fields.json
++++ b/crates/fno/src/config/config_cli/model/fields.json
+@@ -301,6 +301,19 @@
+       "alert_badge": true
+      }
+     },
++    {
++     "name": "provider_cap",
++     "default": {
++      "enabled": true,
++      "mode": "park",
++      "destinations": [],
++      "min_wait_minutes": 30,
++      "sleep_hours": "",
++      "sleep_timezone": "",
++      "canary_survive_minutes": 15,
++      "quorum": 2
++     }
++    },
+     {
+      "name": "agents",
+      "default": {
+@@ -1336,6 +1349,43 @@
+     }
+    ]
+   },
++  "ProviderCapBlock": {
++   "extra": "ignore",
++   "fields": [
++    {
++     "name": "enabled",
++     "default": true
++    },
++    {
++     "name": "mode",
++     "default": "park"
++    },
++    {
++     "name": "destinations",
++     "default": []
++    },
++    {
++     "name": "min_wait_minutes",
++     "default": 30
++    },
++    {
++     "name": "sleep_hours",
++     "default": ""
++    },
++    {
++     "name": "sleep_timezone",
++     "default": ""
++    },
++    {
++     "name": "canary_survive_minutes",
++     "default": 15
++    },
++    {
++     "name": "quorum",
++     "default": 2
++    }
++   ]
++  },
+   "ContextBlock": {
+    "extra": "ignore",
+    "fields": [
+@@ -3754,6 +3804,14 @@
+   "merge.visual_shot_workflows",
+   "app.alert_sound",
+   "app.alert_notification",
+-  "app.alert_badge"
++  "app.alert_badge",
++  "provider_cap.enabled",
++  "provider_cap.mode",
++  "provider_cap.destinations",
++  "provider_cap.min_wait_minutes",
++  "provider_cap.sleep_hours",
++  "provider_cap.sleep_timezone",
++  "provider_cap.canary_survive_minutes",
++  "provider_cap.quorum"
+  ]
+ }
+\ No newline at end of file
+diff --git a/crates/fno/src/config/config_schema.rs b/crates/fno/src/config/config_schema.rs
+index 38478fae5d..d07503c89b 100644
+--- a/crates/fno/src/config/config_schema.rs
++++ b/crates/fno/src/config/config_schema.rs
+@@ -621,7 +621,7 @@ mod setting_spec_tests {
+     #[test]
+     fn every_leaf_declares_an_edit_mode_and_choices_where_they_edit() {
+         let specs = setting_specs();
+-        assert_eq!(specs.len(), 381);
++        assert_eq!(specs.len(), 389);
+         for spec in &specs {
+             // The Config tab paints this label; a leaf with none would fall
+             // back to its key title-cased, the shape the user turned down.
+diff --git a/crates/fno/src/ui/client_tests/settings_tests.rs b/crates/fno/src/ui/client_tests/settings_tests.rs
+index b77f7d2999..ba9f4e5fe9 100644
+--- a/crates/fno/src/ui/client_tests/settings_tests.rs
++++ b/crates/fno/src/ui/client_tests/settings_tests.rs
+@@ -305,7 +305,7 @@ async fn config_tab_lists_the_schema_and_filters() {
+         .count();
+     // One row per schema leaf, except the eighteen `paths.*` leaves fold
+     // into one Paths group row.
+-    assert_eq!(entries, 364);
++    assert_eq!(entries, 372);
+     // The fold: one Paths row carries the count and the override state in
+     // its dim column, and the path roots no longer crowd the top level.
+     assert!(
+diff --git a/crates/fno/tests/golden/config_schema/json_schema.stdout b/crates/fno/tests/golden/config_schema/json_schema.stdout
+index 52f5077180..3f33f36ea7 100644
+--- a/crates/fno/tests/golden/config_schema/json_schema.stdout
++++ b/crates/fno/tests/golden/config_schema/json_schema.stdout
+@@ -2445,6 +2445,65 @@
+       "title": "ProviderBudget",
+       "type": "object"
+     },
++    "ProviderCapBlock": {
++      "description": "Provider usage-cap actor settings (nested under 'config.provider_cap').\n\nA provider's usage cap arms this actor, independent of recovery.watchdog. It alone decides whether a cap may move sessions. A malformed value reads as its default.\n\nKnobs:\n  enabled                - arm the actor (default on).\n  mode                   - park (default), triage, ask or auto.\n  destinations           - route lanes a moving member tries, in order.\n  min_wait_minutes       - a reset closer than this is waited out.\n  sleep_hours            - HH:MM-HH:MM window in which ask mode moves without a question.\n  sleep_timezone         - IANA zone for sleep_hours (empty = local).\n  canary_survive_minutes - minutes a canary lives before parked members resume.\n  quorum                 - members on one lane needed to open a cap.",
++      "properties": {
++        "canary_survive_minutes": {
++          "default": 15,
++          "minimum": 0,
++          "title": "Canary Survive Minutes",
++          "type": "integer"
++        },
++        "destinations": {
++          "default": [],
++          "items": {
++            "type": "string"
++          },
++          "title": "Destinations",
++          "type": "array"
++        },
++        "enabled": {
++          "default": true,
++          "title": "Enabled",
++          "type": "boolean"
++        },
++        "min_wait_minutes": {
++          "default": 30,
++          "minimum": 0,
++          "title": "Min Wait Minutes",
++          "type": "integer"
++        },
++        "mode": {
++          "default": "park",
++          "enum": [
++            "park",
++            "triage",
++            "ask",
++            "auto"
++          ],
++          "title": "Mode",
++          "type": "string"
++        },
++        "quorum": {
++          "default": 2,
++          "minimum": 1,
++          "title": "Quorum",
++          "type": "integer"
++        },
++        "sleep_hours": {
++          "default": "",
++          "title": "Sleep Hours",
++          "type": "string"
++        },
++        "sleep_timezone": {
++          "default": "",
++          "title": "Sleep Timezone",
++          "type": "string"
++        }
++      },
++      "title": "ProviderCapBlock",
++      "type": "object"
++    },
+     "QuestionsBlock": {
+       "description": "Question judge settings (nested under ``config.questions``).",
+       "properties": {
+@@ -4069,6 +4128,9 @@
+     "project": {
+       "$ref": "#/$defs/ProjectBlock"
+     },
++    "provider_cap": {
++      "$ref": "#/$defs/ProviderCapBlock"
++    },
+     "questions": {
+       "$ref": "#/$defs/QuestionsBlock"
+     },
+diff --git a/crates/fno/tests/golden/config_schema/markdown.stdout b/crates/fno/tests/golden/config_schema/markdown.stdout
+index daf5a36518..e9aebc0b5b 100644
+--- a/crates/fno/tests/golden/config_schema/markdown.stdout
++++ b/crates/fno/tests/golden/config_schema/markdown.stdout
+@@ -327,6 +327,14 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
+ | `app.alert_sound` | bool | `true` | advanced | The attention sound fno-app plays when an agent turns blocked or done (default on). |
+ | `app.alert_notification` | bool | `true` | advanced | The macOS notification fno-app posts when an agent turns blocked or done outside the window (default on). |
+ | `app.alert_badge` | bool | `true` | advanced | The Dock badge showing the count of blocked agents in fno-app (default on). |
++| `provider_cap.enabled` | bool | `true` | never | Arm the provider cap actor: a lane that hits its usage cap alerts its leads, and its members park until the reset (default on). Off still measures and saves the snapshot, and moves nothing. |
++| `provider_cap.mode` | typing.Literal['park', 'triage', 'ask', 'auto'] | `park` | never | What a capped lane does with its members: park (default; alert the leads, move nothing, resume after the reset) \| triage (a member on a p0 or p1 node, or with an open PR, moves to destinations; the rest park) \| ask (nothing moves until an operator answers; inside sleep_hours it moves without a question) \| auto (every member moves without a question). |
++| `provider_cap.destinations` | list[str] | `[]` | never | Route lanes a moving member tries in order when no fallback grid is set. Empty by default: moving work spends another paid lane, so only an operator names one. |
++| `provider_cap.min_wait_minutes` | int | `30` | never | A reset closer than this many minutes is waited out and never moved (default 30). |
++| `provider_cap.sleep_hours` | str | `` | never | Window as HH:MM-HH:MM, read in sleep_timezone. In ask mode a cap inside the window moves members without a question. Empty (default) means never asleep. |
++| `provider_cap.sleep_timezone` | str | `` | never | IANA zone for sleep_hours, for example America/Los_Angeles. Empty (default) reads the machine's local zone. |
++| `provider_cap.canary_survive_minutes` | int | `15` | never | Minutes a canary session must live after the reset before the return ladder resumes the parked members (default 15). |
++| `provider_cap.quorum` | int | `2` | never | Members on one lane with a fresh capped tail needed to open it (default 2). One member suffices when its 429 names a reset still ahead, or when the account's runtime-state quota lock is set. |
+ | `mux.attach_digest` | bool | `true` | advanced | Show a 'while you were gone' catch-up digest overlay on attach after an absence (default on). |
+ | `mux.attach_digest_threshold_min` | int | `10` | advanced | Minutes since last detach before the catch-up digest overlay shows (default 10). |
+ | `mux.scrollback_lines` | int | `10000` | advanced | History lines each mux pane keeps (default 10000). Each line costs every column of the pane, about 2 MB per 1k lines at 80 columns, so 48 panes at 100k lines hold several GB. Latched at mux server birth; `fno mux kill-server` re-reads. |
+diff --git a/crates/fno/tests/golden/config_schema/toml.stdout b/crates/fno/tests/golden/config_schema/toml.stdout
+index 701c1cf729..1b0fe00e69 100644
+--- a/crates/fno/tests/golden/config_schema/toml.stdout
++++ b/crates/fno/tests/golden/config_schema/toml.stdout
+@@ -858,6 +858,24 @@ alert_notification = true
+ # The Dock badge showing the count of blocked agents in fno-app (default on).
+ alert_badge = true
+ 
++[provider_cap]
++# Arm the provider cap actor: a lane that hits its usage cap alerts its leads, and its members park until the reset (default on). Off still measures and saves the snapshot, and moves nothing.
++enabled = true
++# What a capped lane does with its members: park (default; alert the leads, move nothing, resume after the reset) | triage (a member on a p0 or p1 node, or with an open PR, moves to destinations; the rest park) | ask (nothing moves until an operator answers; inside sleep_hours it moves without a question) | auto (every member moves without a question).
++mode = "park"
++# Route lanes a moving member tries in order when no fallback grid is set. Empty by default: moving work spends another paid lane, so only an operator names one.
++destinations = []
++# A reset closer than this many minutes is waited out and never moved (default 30).
++min_wait_minutes = 30
++# Window as HH:MM-HH:MM, read in sleep_timezone. In ask mode a cap inside the window moves members without a question. Empty (default) means never asleep.
++sleep_hours = ""
++# IANA zone for sleep_hours, for example America/Los_Angeles. Empty (default) reads the machine's local zone.
++sleep_timezone = ""
++# Minutes a canary session must live after the reset before the return ladder resumes the parked members (default 15).
++canary_survive_minutes = 15
++# Members on one lane with a fresh capped tail needed to open it (default 2). One member suffices when its 429 names a reset still ahead, or when the account's runtime-state quota lock is set.
++quorum = 2
++
+ [dev]
+ # Maintainer pin: a checkout root the Rust bootstrap re-provisions from (uv tool install <path>/cli) when its tool venv is wiped. Unset = the frozen 0.4.8 wheel self-provision (legacy end-user default).
+ source = ""
+diff --git a/docs/config.example.toml b/docs/config.example.toml
+index bc24b5dd17..2d8462ef7a 100644
+--- a/docs/config.example.toml
++++ b/docs/config.example.toml
+@@ -858,6 +858,24 @@ alert_notification = true
+ # The Dock badge showing the count of blocked agents in fno-app (default on).
+ alert_badge = true
+ 
++[provider_cap]
++# Arm the provider cap actor: a lane that hits its usage cap alerts its leads, and its members park until the reset (default on). Off still measures and saves the snapshot, and moves nothing.
++enabled = true
++# What a capped lane does with its members: park (default; alert the leads, move nothing, resume after the reset) | triage (a member on a p0 or p1 node, or with an open PR, moves to destinations; the rest park) | ask (nothing moves until an operator answers; inside sleep_hours it moves without a question) | auto (every member moves without a question).
++mode = "park"
++# Route lanes a moving member tries in order when no fallback grid is set. Empty by default: moving work spends another paid lane, so only an operator names one.
++destinations = []
++# A reset closer than this many minutes is waited out and never moved (default 30).
++min_wait_minutes = 30
++# Window as HH:MM-HH:MM, read in sleep_timezone. In ask mode a cap inside the window moves members without a question. Empty (default) means never asleep.
++sleep_hours = ""
++# IANA zone for sleep_hours, for example America/Los_Angeles. Empty (default) reads the machine's local zone.
++sleep_timezone = ""
++# Minutes a canary session must live after the reset before the return ladder resumes the parked members (default 15).
++canary_survive_minutes = 15
++# Members on one lane with a fresh capped tail needed to open it (default 2). One member suffices when its 429 names a reset still ahead, or when the account's runtime-state quota lock is set.
++quorum = 2
++
+ [dev]
+ # Maintainer pin: a checkout root the Rust bootstrap re-provisions from (uv tool install <path>/cli) when its tool venv is wiped. Unset = the frozen 0.4.8 wheel self-provision (legacy end-user default).
+ source = ""
+diff --git a/docs/configuration-guide.md b/docs/configuration-guide.md
+index 7c45b7f44d..4fb7e16957 100644
+--- a/docs/configuration-guide.md
++++ b/docs/configuration-guide.md
+@@ -327,6 +327,14 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
+ | `app.alert_sound` | bool | `true` | advanced | The attention sound fno-app plays when an agent turns blocked or done (default on). |
+ | `app.alert_notification` | bool | `true` | advanced | The macOS notification fno-app posts when an agent turns blocked or done outside the window (default on). |
+ | `app.alert_badge` | bool | `true` | advanced | The Dock badge showing the count of blocked agents in fno-app (default on). |
++| `provider_cap.enabled` | bool | `true` | never | Arm the provider cap actor: a lane that hits its usage cap alerts its leads, and its members park until the reset (default on). Off still measures and saves the snapshot, and moves nothing. |
++| `provider_cap.mode` | typing.Literal['park', 'triage', 'ask', 'auto'] | `park` | never | What a capped lane does with its members: park (default; alert the leads, move nothing, resume after the reset) \| triage (a member on a p0 or p1 node, or with an open PR, moves to destinations; the rest park) \| ask (nothing moves until an operator answers; inside sleep_hours it moves without a question) \| auto (every member moves without a question). |
++| `provider_cap.destinations` | list[str] | `[]` | never | Route lanes a moving member tries in order when no fallback grid is set. Empty by default: moving work spends another paid lane, so only an operator names one. |
++| `provider_cap.min_wait_minutes` | int | `30` | never | A reset closer than this many minutes is waited out and never moved (default 30). |
++| `provider_cap.sleep_hours` | str | `` | never | Window as HH:MM-HH:MM, read in sleep_timezone. In ask mode a cap inside the window moves members without a question. Empty (default) means never asleep. |
++| `provider_cap.sleep_timezone` | str | `` | never | IANA zone for sleep_hours, for example America/Los_Angeles. Empty (default) reads the machine's local zone. |
++| `provider_cap.canary_survive_minutes` | int | `15` | never | Minutes a canary session must live after the reset before the return ladder resumes the parked members (default 15). |
++| `provider_cap.quorum` | int | `2` | never | Members on one lane with a fresh capped tail needed to open it (default 2). One member suffices when its 429 names a reset still ahead, or when the account's runtime-state quota lock is set. |
+ | `mux.attach_digest` | bool | `true` | advanced | Show a 'while you were gone' catch-up digest overlay on attach after an absence (default on). |
+ | `mux.attach_digest_threshold_min` | int | `10` | advanced | Minutes since last detach before the catch-up digest overlay shows (default 10). |
+ | `mux.scrollback_lines` | int | `10000` | advanced | History lines each mux pane keeps (default 10000). Each line costs every column of the pane, about 2 MB per 1k lines at 80 columns, so 48 panes at 100k lines hold several GB. Latched at mux server birth; `fno mux kill-server` re-reads. |
+diff --git a/docs/fleet-faq.md b/docs/fleet-faq.md
+index 129f46cc32..3e15eb1d05 100644
+--- a/docs/fleet-faq.md
++++ b/docs/fleet-faq.md
+@@ -86,7 +86,7 @@ When the old worker holds context you must otherwise pay to rebuild, prefer resu
+ 
+ The provider-cap actor brings them back, not the watchdog and not a clock. Watch the lane with `fno agent admit provider-cap status`. When the quota lock's `rate_limited_until` passes and no member's 429 is newer, the lane reads `returning`. The actor resumes one canary and holds a survive window of `canary_survive_minutes` (default 15). Then it trickles the rest one per tick. In `ask` mode outside sleep hours it announces first and holds a 10-minute veto. `fno agent admit provider-cap decide <lane> --answer wait` holds them for as long as the answer stands. A canary that hits a new 429 reopens the lane for the leave ladder instead.
+ 
+-What happens while the lane is open depends on `[provider_cap] mode`. The default is `park`. When the lane opens, each owning lead gets one mail. The spawn gate refuses new work on the lane until the named reset, and `fno agent top` shows the lane as `PARKED until <reset>`. Nothing moves to another paid lane. After the reset, the parked workers resume on their own lane.
++What happens while the lane is open depends on `[provider_cap] mode`. The default is `park`. When the lane opens, each owning lead gets one mail. The spawn gate refuses new work on the lane until the named reset, and `fno agent fleet top` shows the lane as `PARKED until <reset>`. Nothing moves to another paid lane. After the reset, the parked workers resume on their own lane.
+ 
+ To move important work instead, set `mode = "triage"` and name the lanes in `destinations`, for example `["codex-luna", "claude-sonnet-5-5"]`. A worker on a p0 or p1 node, or with an open PR, then moves with a handoff doc. It goes to the first lane that accepts the spawn. The rest still park. Set `mode = "ask"` to move nothing until you answer, or `enabled = false` to turn the actor off.
+ 

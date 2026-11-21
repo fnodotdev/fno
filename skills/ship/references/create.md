@@ -248,9 +248,9 @@ For each item line under that heading, in order:
      # portable either - plain "${a[@]}" errors under bash set -u, while the
      # guarded "${a[@]+...}" form passes one EMPTY argument under zsh.
      if [ -n "$NODE_ID" ]; then
-       RECEIPT=$(fno backlog idea "<item title>" -t task -p p2 --description "deferred from PR: <pr title> (<branch>)" --parent "$NODE_ID")
+       RECEIPT=$(fno backlog idea "<item title>" -t task -p p2 --audience <who it serves> --why "<the goal>" --done-means "<what done reads as>" --description "deferred from PR: <pr title> (<branch>)" --parent "$NODE_ID")
      else
-       RECEIPT=$(fno backlog idea "<item title>" -t task -p p2 --description "deferred from PR: <pr title> (<branch>)")
+       RECEIPT=$(fno backlog idea "<item title>" -t task -p p2 --audience <who it serves> --why "<the goal>" --done-means "<what done reads as>" --description "deferred from PR: <pr title> (<branch>)")
      fi
      ```
    - a genuine **nice-to-have / future feature**: the same command with `-p p3` (and drop `-t task`).

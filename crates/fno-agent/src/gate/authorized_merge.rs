@@ -158,9 +158,8 @@ pub enum Outcome {
         /// and reporting it as one made every worktree-first merge read
         /// partial.
         cleanup_failure: Option<String>,
-        /// Named on the receipt when a head-scoped operator grant cleared the
-        /// per-run no-merge layer (`merge_grant::HeadGrant::Granted` was the
-        /// only door through `authority_refusal`).
+        /// Named on the receipt when a head-scoped user grant cleared the
+        /// per-run no-merge layer.
         merge_grant: Option<String>,
         warnings: Vec<Warning>,
     },
@@ -673,8 +672,8 @@ pub struct Authorized {
     pub head: String,
     pub strategy: String,
     pub warnings: Vec<Warning>,
-    /// Named when a head-scoped operator grant cleared the per-run no-merge
-    /// layer of `authority_refusal`. Reaches the effect receipt verbatim.
+    /// Named when a head-scoped user grant cleared the per-run no-merge layer
+    /// of `authority_refusal`. Reaches the effect receipt verbatim.
     pub merge_grant: Option<String>,
 }
 
@@ -1118,10 +1117,10 @@ fn decide_with_warnings<P: Probes>(
         return Err(red_checks_outcome(request));
     }
     let strategy = probes.strategy(cwd);
-    // Reaching here with `approved == Some(false)` means the only door through
-    // `authority_refusal` was a Granted head grant, so the receipt names it.
-    // The grant is the user's voice whichever door recorded it: an operator
-    // row, or a chat_attested row carrying the user's own words.
+    // Reaching here with `approved == Some(false)` means a head-scoped user
+    // grant cleared the per-run refusal, so the receipt names it. The grant
+    // is the user's voice whichever door recorded it: operator, chat, or the
+    // Visual Log reader.
     let merge_grant = (request.approved == Some(false)).then(|| {
         format!(
             "user head grant {}",
@@ -1151,7 +1150,7 @@ fn decide_with_warnings<P: Probes>(
     }
     if let Some(blocker) =
         crate::merge_gates::visual_approval_blocker(probes, cwd, facts.number, &head)
-            .filter(|b| b.code == "visual_declined")
+            .filter(|b| crate::merge_gates::visual_holds_merge(&b.code))
     {
         return Err(Outcome::Held {
             reason: blocker.detail,
@@ -1535,11 +1534,14 @@ fn process_warnings<P: Probes>(
     if let Some(warning) = carry_warning {
         warnings.push(warning);
     }
-    // A user decline is authority and holds its named head. A missing look is
-    // a process condition: it warns and never holds; after the merge the
+    // A user decline is authority and holds its named head; an open look ask
+    // holds until the user answers it. A missing look with no ask is a
+    // process condition: it warns and never holds; after the merge the
     // warning routes to the lead as a look request.
     let (visual_warning, visual_hold) = match visual {
-        Some(blocker) if blocker.code == "visual_declined" => (None, Some(blocker)),
+        Some(blocker) if crate::merge_gates::visual_holds_merge(&blocker.code) => {
+            (None, Some(blocker))
+        }
         other => (other, None),
     };
     for evidence in [
@@ -1749,15 +1751,11 @@ fn decision_warnings<P: Probes>(
 }
 
 /// The authority fold, in the order init folds it. A per-run refusal outranks
-/// every grant - EXCEPT the head-scoped user grant, one of two sanctioned
-/// remedies for a per-run no-merge: an operator row recorded out-of-band by
-/// a person at a terminal through `fno backlog decide --authority operator`
-/// (never by a session - `decide/__init__.py:297` refuses operator authority
-/// from agent sessions), or the user's own chat approval recorded at the
-/// head subject through the law door, whose `chat_attested` row carries the
-/// user's words (`merge_grant::chat_grant_command`). The grant clears only
-/// the per-run layer; the live-config refusal still runs, and
-/// a push to a new head invalidates the grant by subject construction.
+/// every grant - EXCEPT a head-scoped user grant: an operator row recorded by
+/// a person at a terminal, the user's own chat approval through the law door,
+/// or a Visual Log approval row written by the trusted reader. Each grant
+/// clears only the per-run layer; the live-config refusal still runs, and a
+/// push to a new head invalidates the grant by subject construction.
 fn authority_refusal<P: Probes>(
     probes: &P,
     cwd: &Path,
@@ -1835,40 +1833,54 @@ fn authority_refusal<P: Probes>(
         match crate::merge_grant::head_grant_status(stdout.as_deref()) {
             crate::merge_grant::HeadGrant::Granted => {}
             other => {
-                let (state_word, detail) = match &other {
-                    crate::merge_grant::HeadGrant::Absent => (
-                        "absent",
-                        "no row carrying the user's ruling records a grant at this head"
-                            .to_string(),
-                    ),
-                    crate::merge_grant::HeadGrant::Conflict => (
-                        "conflicting",
-                        "rows carrying the user's ruling at this head disagree or carry no \
-                         decision"
-                            .to_string(),
-                    ),
-                    crate::merge_grant::HeadGrant::Unreadable(d) => ("unreadable", d.clone()),
-                    crate::merge_grant::HeadGrant::Granted => unreachable!("matched above"),
-                };
-                return Some((
-                    "per_run_no_merge",
-                    format!(
-                        "per-run no-merge (manifest auto_merge_approved is not true; \
-                         auto_merge_source: {source}); the user head grant reads \
-                         {state_word} ({detail}); sanctioned overrides: {} (a person at a \
-                         terminal), or the user's own chat approval recorded at this head: {}",
-                        crate::merge_grant::attended_grant_command(
-                            &slug,
-                            facts.number as i64,
-                            &facts.head_sha
-                        ),
-                        crate::merge_grant::chat_grant_command(
-                            &slug,
-                            facts.number as i64,
-                            &facts.head_sha
+                let visual_tap_grant = pr_bound_entry(cwd, facts.number)
+                    .and_then(|entry| RowFacts::id_of(&entry).map(str::to_owned))
+                    .is_some_and(|node| {
+                        crate::merge_gates::visual_tap_clears_pr(
+                            probes,
+                            cwd,
+                            facts.number,
+                            &facts.head_sha,
+                            &node,
                         )
-                    ),
-                ));
+                    });
+                if !visual_tap_grant {
+                    let (state_word, detail) = match &other {
+                        crate::merge_grant::HeadGrant::Absent => (
+                            "absent",
+                            "no row carrying the user's ruling records a grant at this head"
+                                .to_string(),
+                        ),
+                        crate::merge_grant::HeadGrant::Conflict => (
+                            "conflicting",
+                            "rows carrying the user's ruling at this head disagree or carry no \
+                         decision"
+                                .to_string(),
+                        ),
+                        crate::merge_grant::HeadGrant::Unreadable(d) => ("unreadable", d.clone()),
+                        crate::merge_grant::HeadGrant::Granted => unreachable!("matched above"),
+                    };
+                    return Some((
+                        "per_run_no_merge",
+                        format!(
+                            "per-run no-merge (manifest auto_merge_approved is not true; \
+                             auto_merge_source: {source}); the user head grant reads \
+                             {state_word} ({detail}); sanctioned overrides: {} (a person at a \
+                             terminal), the user's own chat approval recorded at this head: {}, or a \
+                             matching Visual Log approval on the bound node",
+                            crate::merge_grant::attended_grant_command(
+                                &slug,
+                                facts.number as i64,
+                                &facts.head_sha
+                            ),
+                            crate::merge_grant::chat_grant_command(
+                                &slug,
+                                facts.number as i64,
+                                &facts.head_sha
+                            )
+                        ),
+                    ));
+                }
             }
         }
     }
@@ -2097,11 +2109,16 @@ fn effect<P: Probes>(probes: &P, request: &Request, authorized: &Authorized) -> 
         },
         Ok(_) => {
             // gh refuses before merging when the branch is checked out in
-            // another worktree, which is every worktree-first run. Recover
-            // through the REST endpoint, carrying the same pin: `sha` is that
-            // endpoint's `--match-head-commit`, so the retry cannot quietly
-            // land a head the decision never saw.
-            if request.effect == Effect::Merge && checkout_refused(&output) {
+            // another worktree, which is every worktree-first run. And when
+            // the refusal names the graphql channel - a drained bucket, or
+            // fno's own hold on it - rather than the merge itself, the REST
+            // merge endpoint is untouched and serves the write. Both retries
+            // carry the same pin: `sha` is that endpoint's
+            // `--match-head-commit`, so the retry cannot quietly land a head
+            // the decision never saw.
+            if request.effect == Effect::Merge
+                && (checkout_refused(&output) || graphql_channel_refused(&output))
+            {
                 let api = vec![
                     "api".to_string(),
                     "--method".to_string(),
@@ -2114,9 +2131,14 @@ fn effect<P: Probes>(probes: &P, request: &Request, authorized: &Authorized) -> 
                 ];
                 if let Ok((true, _)) = probes.run_gh(cwd, &api) {
                     // The recovery WORKED, so it carries no cleanup failure.
+                    let note = if checkout_refused(&output) {
+                        "merged server-side (worktree fallback)"
+                    } else {
+                        "merged server-side (rest fallback)"
+                    };
                     return Outcome::Merged {
                         head: authorized.head.clone(),
-                        note: Some("merged server-side (worktree fallback)".to_string()),
+                        note: Some(note.to_string()),
                         cleanup_failure: None,
                         merge_grant: authorized.merge_grant.clone(),
                         warnings: authorized.warnings.clone(),
@@ -2143,6 +2165,19 @@ fn effect<P: Probes>(probes: &P, request: &Request, authorized: &Authorized) -> 
 fn checkout_refused(output: &str) -> bool {
     let lower = output.to_lowercase();
     lower.contains("is already used by worktree") || lower.contains("already checked out")
+}
+
+/// The merge write rides GitHub's GraphQL mutation, so two refusals name the
+/// channel, not the merge: fno's own budget hold on a drained graphql bucket
+/// ("gh budget: ... held locally ... this command did not reach GitHub",
+/// gh_budget's refusal_line), and GitHub's primary graphql exhaustion ("API
+/// rate limit exceeded"). Both leave the REST merge endpoint (core bucket)
+/// untouched, so the retry routes there - the law that a tight channel routes
+/// to another instead of refusing. "secondary rate limit" stays out: that
+/// limiter is token-wide and the REST retry would trip it too.
+fn graphql_channel_refused(output: &str) -> bool {
+    output.contains("gh budget: GitHub rate limit held locally")
+        || output.to_lowercase().contains("api rate limit exceeded")
 }
 
 /// The fno gh proxy prefixes its own stderr lines with `fno config:`,
@@ -3381,7 +3416,8 @@ fn node_binding_entries(graph_path: &Path, facts: &PrFacts) -> Option<Vec<Value>
 /// [`node_binding_probe`], so a unit test needs no filesystem. The three
 /// keys are the board classifier's own (`org_board::prs::pr_binding_keys`).
 fn node_binding_from_entries(root: &Path, entries: &[Value], facts: &PrFacts) -> ProbeOutcome {
-    if detect_project(entries, &root.to_string_lossy()).is_none() {
+    let entry_refs: Vec<&Value> = entries.iter().collect();
+    if detect_project(&entry_refs, &root.to_string_lossy()).is_none() {
         return ProbeOutcome::Clear;
     }
     let Some(body) = facts.body.as_deref() else {

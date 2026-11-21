@@ -3317,7 +3317,7 @@ fn view_picker(command: &str, json: bool, url: bool) -> i32 {
     match run_focus_picker(pane_rows) {
         Some((session, pane)) => {
             if url {
-                crate::web::print_pane_url(command, &session, pane)
+                crate::web_core::print_pane_url(command, &session, pane)
             } else {
                 focus_pane(command, &session, pane, true, json)
             }
@@ -3433,7 +3433,7 @@ fn location_lookup(
             // URL on stdout, never the client move - the same precedence the
             // agent-matched path of `view` gives the flag.
             if url {
-                return crate::web::print_pane_url(command, &session, pane);
+                return crate::web_core::print_pane_url(command, &session, pane);
             }
             // JSON stdout carries exactly ONE document: this receipt. The
             // focus action still runs, but its own receipt is suppressed for
@@ -3567,7 +3567,7 @@ pub fn view(args: &[OsString], env_session: Option<&str>) -> i32 {
         return EXIT_NOT_PANE_HOSTED;
     };
     if url {
-        return crate::web::print_pane_url(command, &host_session, pane);
+        return crate::web_core::print_pane_url(command, &host_session, pane);
     }
     let session = resolve_session(session_flag.as_deref(), Some(&host_session));
     focus_pane(command, &session, pane, true, json)

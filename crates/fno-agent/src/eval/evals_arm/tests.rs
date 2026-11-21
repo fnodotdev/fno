@@ -194,7 +194,7 @@ fn graded_failure_files_one_node_and_an_open_node_holds_the_next() {
         serde_json::json!({
             "task_id": task, "pass": false, "reason": "exit 1",
             "obs": {
-                "fixture_prepared": ran, "worker_required": false,
+                "fixture_prepared": ran, "worker_required": ran, "worker_started": ran,
                 "grader_ran": ran, "grader_passed": false,
             },
         })

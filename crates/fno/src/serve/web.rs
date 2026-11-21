@@ -42,20 +42,13 @@ use crate::proto::{self, ClientMsg, ObserverHello, ServerMsg, BUILD_VERSION, PRO
 
 /// The served page, vendored inline (no CDN) so the strict CSP holds offline.
 pub(crate) const PAGE: &str = include_str!("web_page.html");
-/// The backlog board page, vendored like PAGE. It draws the read model
-/// ([`crate::backlog_model`]) through `/backlog/model.json` and
-/// `/backlog/node.json` and computes nothing the model already answered.
-pub(crate) const BACKLOG_PAGE: &str = include_str!("web_backlog.html");
+pub(crate) use crate::web_core::{
+    house, recorded_pid_is_live, tcp_answers, web_state_path, BACKLOG_PAGE,
+};
+#[cfg(test)]
+pub(crate) use crate::web_core::{print_pane_url, LiveBridge};
 pub(crate) const HQ_PAGE: &str = include_str!("web_hq.html");
 const TRACE_PAGE: &str = include_str!("web_trace.html");
-/// The house stylesheet the backlog and command pages share. The CSP allows
-/// inline style only, so [`house`] writes it into each page's `<style>`.
-pub(crate) const HOUSE_CSS: &str = include_str!("web_house.css");
-
-/// `page` with its `/* fno-house */` marker replaced by [`HOUSE_CSS`].
-pub(crate) fn house(page: &str) -> String {
-    page.replacen("/* fno-house */", HOUSE_CSS, 1)
-}
 /// The browser drives nothing, so anything it sends is dropped - but cap it so
 /// a hostile client cannot OOM the bridge with one giant frame.
 const INBOUND_WS_CAP: usize = 64 * 1024;
@@ -222,91 +215,6 @@ fn rundown_html_path() -> (PathBuf, bool) {
 /// the `started` token is what lets it refuse a recycled pid instead of
 /// signalling a stranger.
 struct WebStateFile(PathBuf);
-
-/// Path of the bridge's live-state marker beside a session socket. The one
-/// construction for writer and readers, so the file name cannot drift.
-fn web_state_path(socket: &Path) -> Option<PathBuf> {
-    let session = socket
-        .file_stem()
-        .and_then(|s| s.to_str())
-        // socket_path() names the file <session>.sock; the stem is the name.
-        .unwrap_or(proto::DEFAULT_SESSION);
-    socket
-        .parent()
-        .map(|p| p.join(format!("web-{session}.json")))
-}
-
-/// The state-file path from a session name; the one lookup for readers
-/// outside this module (`--stop` resolves the socket itself).
-pub(crate) fn web_state_path_for_session(session: &str) -> Option<PathBuf> {
-    web_state_path(&proto::socket_path(session).ok()?)
-}
-
-/// A session's live web bridge, as its state file records it.
-pub(crate) struct LiveBridge {
-    /// `http://<host>:<port>`, the host this machine reaches it at.
-    pub(crate) base: String,
-    pub(crate) token: String,
-    /// True when the bridge listens on loopback only.
-    pub(crate) loopback: bool,
-}
-
-/// Read a session's web-bridge state file. The file's existence alone
-/// proves nothing, and neither does an answering port: the recorded pid
-/// must still be live and the port must answer. `Err` is the start hint.
-pub(crate) fn live_bridge(session: &str) -> Result<LiveBridge, String> {
-    let hint = format!(
-        "no web bridge for session {session}; start one with: fno mux serve --web --session {session}"
-    );
-    let state: serde_json::Value = web_state_path_for_session(session)
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .ok_or_else(|| hint.clone())?;
-    let bind = state
-        .get("bind")
-        .and_then(|v| v.as_str())
-        .unwrap_or("127.0.0.1");
-    let port = state
-        .get("port")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| hint.clone())?;
-    // A wide bind is reachable locally too; the URL says where THIS machine
-    // finds it, mirroring the bind-time print's host hint.
-    let wide = bind == "0.0.0.0" || bind == "::";
-    let host = if wide { "127.0.0.1" } else { bind };
-    // A bare TCP answer is not ownership - a dead bridge's port can be taken
-    // by a stranger - so the record's pid must still be live, the same
-    // identity --stop and --status already enforce.
-    if !recorded_pid_is_live(&state) || !tcp_answers(host, port as u16) {
-        return Err(hint);
-    }
-    // Bracket a literal IPv6 host; a bare ::1 in a URL truncates at the colon.
-    let url_host = if host.contains(':') {
-        format!("[{host}]")
-    } else {
-        host.to_string()
-    };
-    Ok(LiveBridge {
-        base: format!("http://{url_host}:{port}"),
-        token: state["token"].as_str().unwrap_or_default().to_string(),
-        loopback: !wide && (host.starts_with("127.") || host == "::1" || host == "localhost"),
-    })
-}
-
-/// Print the pasteable per-pane URL. Exit codes follow the mux commands'
-/// (0 printed, 1 no usable bridge).
-pub(crate) fn print_pane_url(command: &str, session: &str, pane: u64) -> i32 {
-    match live_bridge(session) {
-        Ok(b) => {
-            println!("{}/?t={}&pane={pane}", b.base, b.token);
-            0
-        }
-        Err(hint) => {
-            eprintln!("{command}: {hint}");
-            1
-        }
-    }
-}
 
 impl WebStateFile {
     fn write(socket: &Path, bind: &str, port: u16, token: &str) -> Option<Self> {
@@ -475,51 +383,6 @@ fn launching_session_id() -> Option<String> {
     ]
     .iter()
     .find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
-}
-
-/// A state-file record whose pid is alive under its recorded start token.
-/// Dead, zombie, or a reused pid all read as not-live, so a corpse file never
-/// passes as a bridge. The one liveness read for every state-file consumer
-/// (`--url`, `--stop`, `--status`, and the corpse sweep).
-pub(crate) fn recorded_pid_is_live(v: &serde_json::Value) -> bool {
-    let Some(pid) = v
-        .get("pid")
-        .and_then(|p| p.as_u64())
-        .and_then(|p| Pid::try_from(p).ok())
-    else {
-        return false;
-    };
-    let recorded = v.get("started").and_then(|s| s.as_u64());
-    !proto::pid_confirmed_dead(pid.as_raw())
-        && !proto::pid_is_zombie(pid.as_raw())
-        && recorded.is_none_or(|r| pid.start_time().is_some_and(|now| now == r))
-}
-
-/// The bridge marker's typed read (`web-<session>.json`, written by
-/// `WebStateFile`): each reader deserializes it once at its boundary,
-/// beside the raw Value the pid-liveness check consumes.
-#[derive(Debug, serde::Deserialize)]
-pub(crate) struct BridgeMarker {
-    #[serde(default = "default_bridge_bind")]
-    pub(crate) bind: String,
-    pub(crate) port: u16,
-    pub(crate) pid: Option<u32>,
-}
-
-fn default_bridge_bind() -> String {
-    "127.0.0.1".to_string()
-}
-
-/// Does something answer TCP on host:port right now?
-fn tcp_answers(host: &str, port: u16) -> bool {
-    use std::net::ToSocketAddrs;
-    (host, port)
-        .to_socket_addrs()
-        .ok()
-        .and_then(|mut it| it.next())
-        .is_some_and(|addr| {
-            std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok()
-        })
 }
 
 /// True when a bridge was built from a different, known crates/ rev than the
@@ -836,6 +699,8 @@ fn router(state: AppState) -> Router {
         .route("/hq/model.json", get(hq_model))
         .route("/hq/decisions.json", get(hq_decisions))
         .route("/hq/answer/{id}", post(hq_answer))
+        .route("/hq/mine.json", get(hq_mine))
+        .route("/hq/mine/look", post(hq_mine_look))
         .route("/command", get(command_redirect))
         .route("/command/model.json", get(command_model_redirect))
         .route("/command/answer/{id}", post(command_answer_redirect))
@@ -1253,6 +1118,108 @@ async fn hq_model(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Respo
     // A read-only bridge shows the question drawer with no answer controls.
     model["writable"] = serde_json::json!(st.writable);
     json_response(&model)
+}
+
+/// The caller's name from the invite decision, or the refusal as a response.
+fn mine_person(headers: &HeaderMap, st: &AppState) -> Result<String, Response> {
+    crate::web_invites::decide(
+        &caller_of(headers, st.writable),
+        st.invites.as_deref().map(Vec::as_slice),
+        None,
+        crate::web_invites::Role::Viewer,
+    )
+    .map_err(|r| {
+        plain_status(
+            StatusCode::from_u16(r.code).unwrap_or(StatusCode::FORBIDDEN),
+            &r.text,
+        )
+    })
+}
+
+/// `GET /hq/mine.json`: the caller's own views, filled inside their invite.
+async fn hq_mine(
+    Query(q): Query<WsQuery>,
+    State(st): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if !token_ok(q.t.as_deref(), &st.token) {
+        return unauthorized();
+    }
+    let person = match mine_person(&headers, &st) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    let root = crate::web_mine::store_root();
+    let rows = if crate::web_mine::has_store(&root, &person) {
+        Some(model_inputs(&st).await)
+    } else {
+        None
+    };
+    let invites = st.invites.clone();
+    let out = tokio::task::spawn_blocking(move || {
+        let rows = rows.as_ref().map_or(&[][..], |i| i.rows.as_slice());
+        crate::web_mine::mine_json(&root, rows, invites.as_deref().map(Vec::as_slice), &person)
+    })
+    .await;
+    match out {
+        Ok(v) => json_response(&v),
+        Err(_) => plain_status(StatusCode::INTERNAL_SERVER_ERROR, "the Mine read failed"),
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LookBody {
+    project: String,
+    look: crate::web_mine::Look,
+}
+
+/// `POST /hq/mine/look`: store the caller's look for one project.
+async fn hq_mine_look(
+    Query(q): Query<WsQuery>,
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if !token_ok(q.t.as_deref(), &st.token) {
+        return unauthorized();
+    }
+    if let Err(msg) = crate::web_answer::same_origin(&headers) {
+        return plain_status(StatusCode::FORBIDDEN, msg);
+    }
+    let person = match mine_person(&headers, &st) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    let body: LookBody = match serde_json::from_slice(&body) {
+        Ok(b) => b,
+        Err(e) => {
+            return plain_status(
+                StatusCode::BAD_REQUEST,
+                &format!(
+                    "the body is {{\"project\", \"look\"}} with {}: {e}",
+                    crate::web_mine::LOOK_VALUES
+                ),
+            )
+        }
+    };
+    let out = tokio::task::spawn_blocking(move || {
+        crate::web_mine::set_look(
+            &crate::web_mine::store_root(),
+            &person,
+            &body.project,
+            body.look,
+        )
+    })
+    .await;
+    match out {
+        Ok(Ok(look)) => json_response(&serde_json::json!({ "look": look })),
+        Ok(Err(crate::web_mine::Refused(code, text))) => plain_status(
+            StatusCode::from_u16(code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            &text,
+        ),
+        Err(_) => plain_status(StatusCode::INTERNAL_SERVER_ERROR, "the look write failed"),
+    }
 }
 
 /// `GET /hq/decisions.json`: every recorded decision plus the ids the
@@ -3529,6 +3496,69 @@ console.log("backlog page helpers: 18 cases ok");
         let reply = raw_request(addr, head, b"").await;
         assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
         server.abort();
+    }
+
+    // A login's look lands in its own store file with three prior versions;
+    // a request that names nobody gets no look and no views.
+    #[allow(clippy::indexing_slicing)]
+    #[tokio::test]
+    async fn hq_mine_routes_answer_per_login() {
+        use crate::web_invites::{Invite, Role};
+        let login = "mine-route@example.com";
+        let dir = crate::web_mine::store_root().join(crate::web_mine::login_key(login));
+        let _ = std::fs::remove_dir_all(&dir);
+        let list = vec![Invite {
+            email: login.into(),
+            scope: "*".into(),
+            role: Role::Viewer,
+        }];
+        let post = |addr: std::net::SocketAddr, login: &str, body: String| {
+            let head = format!(
+                "POST /hq/mine/look?t=right HTTP/1.1\r\nHost: machine.tail1.ts.net\r\nTailscale-User-Login: {login}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            async move { raw_request(addr, &head, body.as_bytes()).await }
+        };
+        let (addr, server) = serve_state(answer_state(true, Some(list))).await;
+        for theme in ["light", "dark", "auto", "dark"] {
+            let body = format!(
+                r#"{{"project":"fno","look":{{"theme":"{theme}","density":"compact","accent":"blue"}}}}"#
+            );
+            let reply = post(addr, login, body).await;
+            assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        }
+        let doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("fno.json")).unwrap()).unwrap();
+        assert_eq!(doc["look"]["theme"], "dark");
+        assert_eq!(doc["history"].as_array().unwrap().len(), 3);
+        let reply = post(
+            addr,
+            login,
+            r#"{"project":"fno","look":{"accent":"url(https://x)"}}"#.into(),
+        )
+        .await;
+        assert!(reply.starts_with("HTTP/1.1 400"), "{reply}");
+        assert!(reply.contains("accent ink|blue|green|violet"), "{reply}");
+        server.abort();
+
+        let (addr, server) = serve_state(answer_state(true, None)).await;
+        let reply = post(
+            addr,
+            "eve@example.com",
+            r#"{"project":"fno","look":{}}"#.into(),
+        )
+        .await;
+        assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
+        assert!(
+            reply.contains("no login on this request: personal look needs an invite"),
+            "{reply}"
+        );
+        let head = "GET /hq/mine.json?t=right HTTP/1.1\r\nHost: machine.tail1.ts.net\r\nTailscale-User-Login: eve@example.com\r\nConnection: close\r\n\r\n";
+        let reply = raw_request(addr, head, b"").await;
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        assert!(reply.contains(r#""projects":[]"#), "{reply}");
+        server.abort();
+        let _ = std::fs::remove_dir_all(&dir);
     }
     // AC6's page half: the act controls exist only on a writing bridge.
     #[tokio::test]

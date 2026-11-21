@@ -31,9 +31,9 @@ The app never reads that version to judge compatibility. It reads the wire versi
 | Flag | Default | What it does |
 |---|---|---|
 | `--session <name>` | `FNO_SERVER`, then `default` | The mux session to attach to. |
-| `--font <family>` | `SF Mono` | The terminal font family. |
-| `--font-size <pt>` | `13` | The terminal font size. |
-| `--mode <view>` | `chat` | The view the window opens on: `chat`, `terminal`, `orchestration` or `mods`. |
+| `--font <family>` | `app.font`, then `SF Mono` | The terminal font family; overrides what the Settings page wrote. |
+| `--font-size <pt>` | `app.font_size`, then `13` | The terminal font size; overrides the Settings row. |
+| `--mode <view>` | `mux.launch_screen`, then the saved view, then `chat` | The view the window opens on: `chat`, `terminal`, `orchestration` or `mods`. |
 | `--probe` | off | Attach with no window, print two lines, and exit. |
 | `--chat <pin>` | none | Show one session's chat instead of the focused agent's. The pin is `<harness>:<id|newest>` (`claude`, `codex` or `opencode`), a bare session id (the transcript that carries it names the harness), or `newest` (claude: the newest transcript in the current project, ranked by session start; codex: the newest in its sessions tree). With `--probe`, count its events instead of attaching. |
 
@@ -43,7 +43,7 @@ The app never reads that version to judge compatibility. It reads the wire versi
 
 ## The window
 
-The left pane has four sections, one line per row. Agents come in the order the TUI sideline uses. The pane shows the first 10, and a "+N more" row shows the rest. When the window is too short for every section, the pane scrolls. Each agent row shows a state glyph, its name and its facts in fixed columns. The columns are the model, the cost, the context percent, the token count, the session age, and the node and PR. How long ago it last acted sits at the right edge. The columns line up down the list, and a column no agent fills takes no room. When the pane is too narrow for every column, whole columns drop from the right, so a fact shows whole or not at all. The app reads the facts through the same formatters as the mux card. The Agents header counts the agents per state, so a blocked agent below the fold still shows. Only the agent you are on is marked, by a full-width band with no bar or outline. A click focuses the agent's pane, or opens a paneless agent in portal 0. Sessions are the mux squads. A click switches to one. Questions are the open questions that wait on you, newest first. Machines are the fleet's hosts with their seat counts. A section whose read failed shows the error above its last good rows. While the window is active, the fleet and the questions refresh every 60 seconds. They also refresh at once after an answer, and on your return to the window. The backlog behind seat titles refreshes every 5 minutes.
+The left pane has three sections, one line per row. Workspaces are the mux squads. Each workspace shows its header row, then its agents, then its shell panes. A click on the header switches to the workspace. The agents come in the order the TUI sideline uses, and a workspace with no agents and no shells says so. The caret on a header folds or opens that workspace, the fold persists across launches, and nothing folds on its own. An agent that runs outside every workspace lands in a trailing Elsewhere group. A folded workspace still shows a blocked agent, because its header counts the agents per state. Each agent row leads with its harness mark, with a small state glyph on the mark's corner. Then come its name and its facts in fixed columns. The columns are the model, the context percent, the token count, the session age, and the node and PR. Rows show no cost. How long ago it last acted sits at the right edge. The columns line up down the list, and a column no agent fills takes no room. If the pane is too narrow for every column, whole columns drop from the right. A fact shows whole or not at all. If no column fits beside the name, the name cuts. The app reads the facts through the same formatters as the mux card. A click focuses the agent's pane, or opens a paneless agent in portal 0. A shell row shows the pane label and its working directory, and a click focuses the pane. The circled plus on the Workspaces header opens an inline field that names a new workspace. The circled plus on a workspace header opens New worker (the composer starts in that workspace) or New shell. A right-click on a workspace header opens New Tab, Rename Workspace, Move Up, Move Down and Close. Close asks first and names the pane count. The group button on the Workspaces header cycles the view between workspaces, agent state (Needs input, Working, Done) and machine. One row counts the open questions that wait on you. A click opens HQ, where the list itself lives. Machines are the fleet's hosts with their seat counts. A section whose read failed shows the error above its last good rows. While the window is active, the fleet and the questions refresh every 60 seconds. They also refresh at once after an answer, and on your return to the window. The backlog behind seat titles refreshes every 5 minutes.
 
 The title bar has a fixed height that no `--font-size` changes. On the left it names where you are: the session, the view and, in Chat and Terminal, the focused agent. In Terminal, the session's tabs follow. A tab without a chosen name shows its pane's title, and a click selects it. On the right, Chat, HQ, Mods and Terminal switch the main view, each with its cmd key. The chrome uses SF Mono for rows, ids and numbers. Chat turns and mod descriptions use the system font.
 
@@ -73,9 +73,13 @@ Release the mouse on a button, a row or an option to act on it. Release somewher
 
 ## Keys
 
-Views have no key: click Chat, HQ, Mods or Terminal in the bar. Cmd-K or Help > Go to… opens the go-to palette. It finds an agent, session, node, question or view by name, and Enter goes there. Cmd-/ or Help > Keyboard Shortcuts opens the key sheet. It lists every key the app reads. Esc, `q`, cmd-/ or a click outside closes it. The app has no prefix key.
+Views have no key: click Chat, HQ, Mods or Terminal in the bar. Cmd-K or Help > Go to… opens the go-to palette. It finds an agent, workspace, node, question or view by name, and Enter goes there. Cmd-/ or Help > Keyboard Shortcuts opens the key sheet. It lists every key the app reads. Esc, `q`, cmd-/ or a click outside closes it.
 
-In the terminal view, keys go to the focused pane as a terminal sends them. Ctrl-b goes to the pane too, so the mux prefix works as in the TUI. The app keeps these cmd shortcuts for itself:
+In the terminal view the mux prefix works as in the TUI. Ctrl-b, or whatever `mux.prefix` in your fno config names, starts a mux action. The next key resolves it. Ctrl-b 1-9 picks a tab. Ctrl-b ctrl-b sends one ctrl-b to the pane. Ctrl-b arrows focus panes, ctrl resizes, and shift moves a pane. Ctrl-b x closes a pane, the semicolon chord returns to the last pane, and ctrl-b c opens a tab. Ctrl-b d detaches and quits the app. An unbound key after the prefix beeps, names the key in a notice, and sends nothing. The key sheet lists the prefix under its own section.
+
+The prefix belongs to the mux. A Claude Code ctrl-b pressed in a focused pane therefore never reaches the pane's program, the same as inside the terminal TUI. To hand ctrl-b back to the pane, set `mux.prefix` in your fno config, for example `ctrl+a`, and restart the app. Ctrl-a is the shell's line-start key, so a shell pane loses that chord to the prefix. An alt prefix does not fire in the app: option composes a text character first.
+
+In the terminal view, other keys go to the focused pane as a terminal sends them. The app keeps these cmd shortcuts for itself:
 
 | Shortcut | Action |
 |---|---|
@@ -90,11 +94,28 @@ In the terminal view, keys go to the focused pane as a terminal sends them. Ctrl
 | cmd-1 to cmd-9 | In the terminal view, the session's first nine tabs. In other views, the first nine agent rows. Hold cmd to see the numbers. |
 | cmd-k | Open or close the go-to palette |
 | cmd-/ | Open or close the key sheet |
+| cmd-, | Open or close Settings |
 | cmd-q | Detach and quit |
 
 Cmd-f opens the find bar over the focused view. Typing edits the query. Enter searches in the terminal. The chat scan runs live. Up steps toward the older match. Down steps toward the newer match. The chords ⌘G and ⇧⌘G step to the newer and older match, as in other Mac find bars. Esc closes the bar and clears the highlight. The terminal search reaches the pane's whole server-side scrollback, so a co-viewer sees the jump and the highlight. The counter reads `3/12`, or `no matches`. In the chat the scan runs in the app: matches tint in place and the view follows the current match.
 
 Typed text goes through the macOS input system, so dead keys, option-compose and IME input work. Option on a letter types the composed character, as in Terminal.app. Option on an arrow or backspace still sends the meta form.
+
+## Settings
+
+Cmd-comma or fno > Settings… opens Settings: one panel over the window, in the key sheet's look. It has five sections: Look, Alerts, Machines, Keys and Updates. Esc or a click outside closes it, and a cmd key closes it and runs.
+
+Type to filter: a query matches a row's label, its dotted config key and its section name. The search runs across every section at once. Enter on a boolean flips it. Enter on a short choice steps it to the next value. A row ending in `›` opens a choice page: one numbered line per option, the check on the current value, Enter confirms, Esc cancels. A row you cannot change here dims with the reason under it, and Enter on it writes nothing.
+
+Look holds the theme pin, the terminal font, the font size and the first view. The theme row's page offers Follow macOS plus the built-in themes. Confirming repaints the window at once, the way the appearance observer does. The font page lists the installed monospaced families your Mac has. Font and size apply to the panes live. The chrome (the title bar, lists and labels) stays SF Mono at 12pt. The first-view row writes `mux.launch_screen`, the key the mux reads too. Its three values: last view (the default, the window reopens where you left it), agents and hq.
+
+When an agent turns blocked or done outside the window, the app fires three signals. Alerts holds their switches: the sound, the macOS notification and the Dock badge. They are the `app.alert_*` keys, separate from the daemon's `mux.notify_*` knobs, which govern the TUI.
+
+Machines lists the fleet's hosts read-only: add or connect a host from the mux. Keys restates the key sheet read-only: keys are fixed. Updates shows the app's version. Updates arrive with the release.
+
+Rows write through the same door `fno config set` runs, into the per-user global file, because a Finder-launched app has no project to pin to. A key a project-local file decides already dims with its path. The global write cannot beat it. A refused write shows the CLI's first line under the row and keeps the old value.
+
+The flags still win: `--font`, `--font-size` and `--mode` override the config rows for that launch. Without a flag, the launch ladder is the config value, then the saved view, then the default.
 
 ## Mouse
 

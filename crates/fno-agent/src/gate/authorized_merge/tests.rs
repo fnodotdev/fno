@@ -735,13 +735,12 @@ fn a_head_grant_clears_the_per_run_no_merge_and_the_receipt_names_it() {
     };
     let outcome = run(&fake, &req);
     assert_eq!(outcome.word(), "merged", "{}", outcome.detail());
-    let receipt = outcome.to_json();
-    assert_eq!(
-        receipt["merge_grant"],
-        json!("user head grant abc123"),
-        "{}",
-        receipt
-    );
+    match &outcome {
+        Outcome::Merged { merge_grant, .. } => {
+            assert_eq!(merge_grant.as_deref(), Some("user head grant abc123"))
+        }
+        other => panic!("expected a merged receipt, got {other:?}"),
+    }
     assert!(fake
         .fno_calls
         .borrow()
@@ -761,6 +760,93 @@ fn a_head_grant_clears_the_per_run_no_merge_and_the_receipt_names_it() {
         .detail()
         .contains("repository identity is unreadable"));
     assert!(missing_repo.fno_calls.borrow().is_empty());
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join(".fno")).unwrap();
+    let spaces = tempfile::tempdir().unwrap();
+    let _env_lock = crate::pr_status::cache_env_lock();
+    crate::paths::pin_test_claims_root(spaces.path());
+    struct RestoreEnv(Option<std::ffi::OsString>, Option<std::ffi::OsString>);
+    impl Drop for RestoreEnv {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(value) => std::env::set_var("FNO_SPACES_DIR", value),
+                None => std::env::remove_var("FNO_SPACES_DIR"),
+            }
+            match self.1.take() {
+                Some(value) => std::env::set_var("FNO_HOME", value),
+                None => std::env::remove_var("FNO_HOME"),
+            }
+        }
+    }
+    let _env = RestoreEnv(
+        std::env::var_os("FNO_SPACES_DIR"),
+        std::env::var_os("FNO_HOME"),
+    );
+    std::env::set_var("FNO_SPACES_DIR", spaces.path());
+    std::env::set_var("FNO_HOME", tmp.path());
+    crate::graph_store::seed_rows(
+        &crate::org_board::scope::graph_json_path(tmp.path()),
+        &[json!({
+            "id": "x-visual",
+            "status": "in_review",
+            "pr_number": 7,
+            "pr_url": "https://github.com/o/r/pull/7"
+        })],
+    )
+    .unwrap();
+
+    let head = "a".repeat(40);
+    let mut fake = clean();
+    fake.facts = Some(PrFacts {
+        head_sha: head.clone(),
+        body: Some("Docs: fno-web#1\n".to_string()),
+        ..open_facts()
+    });
+    fake.covered_head = Some(head.clone());
+    fake.decisions_stdout = Some(
+        json!({
+            "decisions": [{
+                "subject": "x-visual",
+                "authority_source": "role",
+                "lifecycle": "unscoped",
+                "decision": format!("visual approval PR 7 at {head}: approved"),
+                "rationale": "User tapped Approve on the Visual Log (viewer u_test)"
+            }]
+        })
+        .to_string()
+        .into_bytes(),
+    );
+    assert!(!crate::merge_gates::visual_tap_clears_pr(
+        &fake,
+        tmp.path(),
+        7,
+        &"b".repeat(40),
+        "x-visual"
+    ));
+    let req = Request {
+        cwd: tmp.path().to_path_buf(),
+        approved: Some(false),
+        covered_head: Some(head.clone()),
+        ..request(Effect::Merge)
+    };
+
+    let visual_outcome = run(&fake, &req);
+    assert_eq!(
+        visual_outcome.word(),
+        "merged",
+        "{}",
+        visual_outcome.detail()
+    );
+    let expected_grant = format!(
+        "user head grant {}",
+        head.chars().take(8).collect::<String>()
+    );
+    match visual_outcome {
+        Outcome::Merged { merge_grant, .. } => {
+            assert_eq!(merge_grant.as_deref(), Some(expected_grant.as_str()))
+        }
+        other => panic!("expected a merged receipt, got {other:?}"),
+    }
 }
 
 #[test]
@@ -1178,6 +1264,62 @@ fn a_gh_proxy_admit_banner_ahead_of_a_real_refusal_reads_the_refusal_not_the_ban
         "{detail}"
     );
     assert!(!detail.contains("draft guard unavailable"), "{detail}");
+    // The same failed-merge fixture also routes the channel refusals: two
+    // shapes name the graphql channel, not the merge - GitHub's primary
+    // exhaustion and fno's own budget hold. Both retry through the REST PUT
+    // with the same head pin (a tight channel routes to another instead of
+    // refusing). The withhold row: a secondary rate limit is token-wide, so
+    // the REST retry would trip it too - it holds and fires no retry.
+    let fake = Fake {
+        gh_ok: false,
+        gh_output: "gh: GraphQL: API rate limit exceeded for user ID 1".to_string(),
+        gh_recovery_ok: Some(true),
+        ..clean()
+    };
+    let outcome = effect(&fake, &request(Effect::Merge), &authorized);
+    let Outcome::Merged { note, .. } = outcome else {
+        unreachable!()
+    };
+    assert_eq!(note.as_deref(), Some("merged server-side (rest fallback)"));
+    let calls = fake.gh_calls.borrow();
+    let put = calls
+        .iter()
+        .find(|c| c.first().map(String::as_str) == Some("api"))
+        .expect("the REST retry fires");
+    assert!(put.contains(&"--method".to_string()) && put.contains(&"PUT".to_string()));
+    assert!(put.iter().any(|a| a.contains("pulls/7/merge")));
+    assert!(put.contains(&"sha=abc123".to_string()));
+    drop(calls);
+    let fake = Fake {
+        gh_ok: false,
+        gh_output: "gh budget: GitHub rate limit held locally (user token: backoff 900s left); \
+                    this command did not reach GitHub and no other channel serves it (App token: \
+                    none for this call). Retry after 900s. Ledger: fno-agent fleet-incident \
+                    gh-budget status"
+            .to_string(),
+        gh_recovery_ok: Some(true),
+        ..clean()
+    };
+    let outcome = effect(&fake, &request(Effect::Merge), &authorized);
+    let Outcome::Merged { note, .. } = outcome else {
+        unreachable!()
+    };
+    assert_eq!(note.as_deref(), Some("merged server-side (rest fallback)"));
+    // The withhold: a secondary limit holds and fires no api retry.
+    let fake = Fake {
+        gh_ok: false,
+        gh_output: "gh: You have exceeded a secondary rate limit".to_string(),
+        ..clean()
+    };
+    let outcome = effect(&fake, &request(Effect::Merge), &authorized);
+    assert_eq!(outcome.word(), "held", "{outcome:?}");
+    assert!(
+        fake.gh_calls
+            .borrow()
+            .iter()
+            .all(|c| c.first().map(String::as_str) != Some("api")),
+        "a secondary limit fires no REST retry"
+    );
 }
 
 #[test]
@@ -1727,12 +1869,49 @@ fn a_paint_pr_merges_on_a_missing_look_and_holds_on_a_declined_page() {
     );
     drop(requests);
     fake.facts = None;
+    // A look ask names the PR in its title and stays open: the user was
+    // asked and has not answered, so the merge holds instead of warning.
     std::fs::write(
         &page,
         "---\nquestion_id: q-xc129\nstatus: open\ntitle: May PR 7 merge?\n---\nbody\n",
     )
     .unwrap();
-    assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_some());
+    // A question with no shots is no look ask: it warns like a missing look.
+    let no_shots = crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).unwrap();
+    assert_eq!(no_shots.code, "visual_approval");
+    std::fs::write(
+        &page,
+        "---\nquestion_id: q-xc129\nstatus: open\ntitle: May PR 7 merge?\n\
+         aliases:\n- May PR 7 merge?\n- D3505\n---\n## Screens\n\n![[q-xc129-1.png]]\n",
+    )
+    .unwrap();
+    let pending = crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).unwrap();
+    assert_eq!(pending.code, "visual_look_pending");
+    assert!(pending.detail.contains("D3505"), "{}", pending.detail);
+    fake.facts = Some(PrFacts {
+        head_sha: head.clone(),
+        body: Some("Docs: fno-web#1\n".to_string()),
+        ..open_facts()
+    });
+    fake.look_requests.borrow_mut().clear();
+    let at_head = Request {
+        cwd: tmp.clone(),
+        covered_head: Some(head.clone()),
+        ..request(Effect::Merge)
+    };
+    let waits = run(&fake, &at_head);
+    assert_eq!(waits.word(), "held", "{waits:?}");
+    assert!(waits.detail().contains("is open and unanswered"));
+    assert!(fake.look_requests.borrow().is_empty());
+    // A sibling PR named only in an open page's body prose is no ask.
+    std::fs::write(
+        &page,
+        "---\nquestion_id: q-xc129\nstatus: open\ntitle: May PR 8 merge?\n---\n## Screens\n\nships before PR 7\n",
+    )
+    .unwrap();
+    let warns = crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).unwrap();
+    assert_eq!(warns.code, "visual_approval");
+    fake.facts = None;
     // An answer that rejects, or picks no option, keeps the hold.
     for answer in [
         "2. Hold for changes",

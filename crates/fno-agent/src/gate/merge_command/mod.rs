@@ -224,7 +224,7 @@ fn run_hold_check_operand(args: &[String]) -> i32 {
     if flow.exit_code == 0 {
         if let Some((blocker, repo)) = visual_hold(pr, &cwd) {
             let why = format!("{}: {}", blocker.code, blocker.detail);
-            if blocker.code == "visual_declined" {
+            if crate::merge_gates::visual_holds_merge(&blocker.code) {
                 hold_refusal(&mut flow, pr, &cwd, &repo, &why);
             } else {
                 flow.lines.push((true, format!("warn: {why}\n")));
@@ -654,7 +654,7 @@ fn close_merged_nodes(flow: &mut FlowResult, pr: i64, repo: &Path) {
         flow.lines.push((
             true,
             format!(
-                "pr-merge: node close did not finish (exit {}); run `fno backlog reconcile --pr-number {pr}`\n",
+                "pr-merge: node close did not finish (exit {}); run `fno backlog reconcile --pr-number {pr}`, or let the daemon's merge_close arm close the node within 15 minutes\n",
                 run.code
             ),
         ));

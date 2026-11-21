@@ -29,6 +29,10 @@ pub fn run(args: &[String]) -> i32 {
     let rest = &args[1..];
     match sub.as_str() {
         "trend" => crate::evals_trend::run_evals_trend(&trend_argv(rest, "trend")),
+        "report" if rest.iter().any(|a| a == "--decay" || a == "--weekly") => {
+            crate::evals_weekly::command(rest)
+        }
+        "report" if rest.iter().any(|a| a == "--learnings") => crate::evals_ledger::command(rest),
         "report" => crate::evals_trend::run_evals_trend(&trend_argv(rest, "report")),
         "macro" => crate::evals_macro::run_evals_macro(&macro_argv(rest)),
         "grade" => crate::evals::research_grade::run(rest),
@@ -882,7 +886,7 @@ fn py_compact(v: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn a_void_split_refuses_only_a_run_that_picked_a_cohort() {
+    fn the_verdict_mapping_keeps_the_refusal_texts_and_refuses_only_a_picked_cohort() {
         use super::CohortVerdict;
         let void = super::cohort_verdict(
             &serde_json::json!({"ok": true, "bank_unchanged": false}),
@@ -900,15 +904,6 @@ mod tests {
             &CohortVerdict::Fresh("validated".into()),
             true
         ));
-    }
-
-    #[test]
-    fn the_verdict_mapping_keeps_the_refusal_texts_verbatim() {
-        use super::CohortVerdict;
-        let void = super::cohort_verdict(
-            &serde_json::json!({"ok": true, "bank_unchanged": false}),
-            Some(0),
-        );
         let CohortVerdict::Void(text) = void else {
             panic!("expected Void")
         };
@@ -927,11 +922,7 @@ mod tests {
             fresh(serde_json::json!(null)),
             CohortVerdict::Fresh(_)
         ));
-        let refused = super::cohort_verdict(
-            &serde_json::json!({"error": "unknown cohort id: nope"}),
-            Some(0),
-        );
-        let CohortVerdict::Invalid(text) = refused else {
+        let CohortVerdict::Invalid(text) = invalid else {
             panic!("expected Invalid")
         };
         assert!(text.contains("cohort split refused: unknown cohort id"));

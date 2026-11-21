@@ -3,12 +3,12 @@
 //! and hosts the chat view and the orchestration board.
 
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui::{
     actions, canvas, div, font, point, prelude::*, px, rgb, rgba, size, AnyView, App, Application,
@@ -23,6 +23,8 @@ use serde::{Deserialize, Serialize};
 
 use super::alerts;
 use super::alerts::Signal;
+use super::answer;
+use super::app_state::GroupBy;
 use super::chat::{
     self,
     composer::{Attachment, Draft},
@@ -35,14 +37,15 @@ use super::keys::{self, Key, Modes, Shortcut};
 use super::launch::{self, Launch};
 use super::link::{Event, Layout, Link};
 use super::mouse::{self, Hit};
+use super::mux_modes::{self, MenuAct, MenuKey, Step};
 use super::palette::Palette;
-use super::{find, left_pane, mods, orchestration, sheet, tabs, ui};
+use super::{find, left_pane, mods, orchestration, settings, sheet, tabs, ui};
 use fno::app_api::web_hq::Board;
 use fno::proto::chat_event::SessionKey;
 use fno::proto::{self, ClientMsg, Command, Frame, MouseEvent, MouseKind};
 use fno::tree::Rect;
 
-actions!(fno_app, [KeyboardShortcuts, GoTo]);
+actions!(fno_app, [KeyboardShortcuts, GoTo, OpenSettings]);
 
 /// What fills the main area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, Serialize, Deserialize)]
@@ -55,9 +58,12 @@ pub enum MainView {
     Orchestration,
     /// The mods and layouts from `fno config plugins ls`.
     Mods,
+    /// The navigation for questions and decisions: Open and Answered.
+    Inbox,
 }
 
-/// What a click in the left pane, the strip or the board does.
+/// What a click or a key in the left pane, the strip, the board or the
+/// sheets does.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     Send(Command),
@@ -66,9 +72,47 @@ pub enum Action {
         id: String,
         option: u32,
     },
+    /// Open the answer sheet on one question.
+    OpenAnswer(String),
+    /// Close the answer sheet without answering.
+    CloseAnswer,
+    /// Record the sheet's picked choice; Answer sends it.
+    PickAnswer(u32),
+    /// The sheet's Answer button and Enter: the typed words win over the
+    /// picked choice.
+    SubmitAnswer,
     Show(MainView),
-    /// Show every agent in the left pane, or only the first few.
-    ToggleAgents,
+    /// Open the inline field that names a new workspace.
+    NewWorkspace,
+    /// Open one workspace's context menu (a right-click on its header).
+    OpenWorkspaceMenu(u64),
+    /// Open the header +'s two-item menu: a new worker or a new shell.
+    OpenAddMenu(u64),
+    /// Cycle the Workspaces section's grouping: workspaces, state, machine.
+    CycleGrouping,
+    /// Close the open context menu without acting.
+    CloseWorkspaceMenu,
+    /// Select a workspace, then open a shell tab in it.
+    NewTabIn(u64),
+    /// Open the inline field seeded with the workspace's current name.
+    RenameWorkspace(u64),
+    /// Reorder one workspace by delta, as the sideline order does.
+    MoveWorkspace(u64, i32),
+    /// Open the close-workspace confirm for one workspace.
+    RemoveWorkspace(u64),
+    /// The confirm's own Close button: the command fires, the sheet goes.
+    ConfirmCloseWorkspace(u64),
+    /// The confirm's Keep button: nothing is sent.
+    KeepWorkspace,
+    /// Open the launch composer with the workspace's cwd preset.
+    NewWorker(u64),
+    /// A new shell tab under the + menu's workspace.
+    NewShell(u64),
+    /// Fold or open one workspace: the id resolves to the persisted fold
+    /// key (its canonical cwd, else its name) at act time.
+    ToggleWorkspace(u64),
+    /// Fold or open the trailing Elsewhere group.
+    ToggleElsewhere,
     /// Open or close the key sheet, as ⌘/ and the palette's command row do.
     ToggleKeySheet,
     /// Open or close one chat thinking row.
@@ -78,6 +122,10 @@ pub enum Action {
     CloseSheet,
     Copy(String),
     SendChat,
+    /// Move the open question's pick to one row.
+    PickChoice(usize),
+    /// Answer the open question with the picked row.
+    AnswerChoice,
     /// The start view's send: the launch panel's own submit door.
     SubmitLaunch,
     /// Reopen a chat stream that closed.
@@ -96,14 +144,34 @@ fn click_id(action: &Action) -> &'static str {
         Action::Send(_) => "send_command",
         Action::Notice(_) => "notice",
         Action::Answer { .. } => "answer",
+        Action::OpenAnswer(_) => "open_answer",
+        Action::CloseAnswer => "close_answer",
+        Action::PickAnswer(_) => "pick_answer",
+        Action::SubmitAnswer => "submit_answer",
         Action::Show(_) => "show_view",
-        Action::ToggleAgents => "toggle_agents",
+        Action::NewWorkspace => "new_workspace",
+        Action::ToggleWorkspace(_) => "toggle_workspace",
+        Action::ToggleElsewhere => "toggle_elsewhere",
+        Action::OpenWorkspaceMenu(_) => "open_workspace_menu",
+        Action::OpenAddMenu(_) => "open_add_menu",
+        Action::CycleGrouping => "cycle_grouping",
+        Action::CloseWorkspaceMenu => "close_workspace_menu",
+        Action::NewTabIn(_) => "new_tab_in",
+        Action::RenameWorkspace(_) => "rename_workspace",
+        Action::MoveWorkspace(_, _) => "move_workspace",
+        Action::RemoveWorkspace(_) => "remove_workspace",
+        Action::ConfirmCloseWorkspace(_) => "confirm_close_workspace",
+        Action::KeepWorkspace => "keep_workspace",
+        Action::NewWorker(_) => "new_worker",
+        Action::NewShell(_) => "new_shell",
         Action::ToggleKeySheet => "toggle_key_sheet",
         Action::ToggleChat(_) => "toggle_chat",
         Action::OpenSheet(_) => "open_sheet",
         Action::CloseSheet => "close_sheet",
         Action::Copy(_) => "copy",
         Action::SendChat => "send_chat",
+        Action::PickChoice(_) => "pick_choice",
+        Action::AnswerChoice => "answer_choice",
         Action::SubmitLaunch => "submit_launch",
         Action::Reconnect => "reconnect",
         Action::Mail(_) => "mail_lead",
@@ -117,6 +185,9 @@ fn click_id(action: &Action) -> &'static str {
 pub enum AnswerState {
     Sending(u32),
     Done(u32),
+    /// A typed answer in flight or recorded; the door took the words.
+    SendingWords,
+    DoneWords,
     Refused(String),
 }
 
@@ -131,9 +202,36 @@ pub enum MailState {
 
 /// How long a notice stays in the corner.
 const NOTICE_FOR: Duration = Duration::from_secs(4);
+/// How long a question arrival toast stays top-right.
+const QUESTION_TOAST_FOR: Duration = Duration::from_secs(8);
+/// The terminal client's quiet windows, mirrored: 40ms releases a held Esc
+/// candidate, 400ms keeps a typed tab number together before it resolves
+/// on its own.
+const CHORD_FLUSH_MS: u64 = 40;
+const DIGIT_FLUSH_MS: u64 = 400;
 
 /// The most wheel lines one event sends, so a fling cannot flood the socket.
 const WHEEL_CAP: i32 = 10;
+
+/// The close-workspace confirm's facts: the wording the TUI uses, plus
+/// the count it names.
+pub(super) struct WorkspaceConfirm {
+    pub squad: u64,
+    pub name: String,
+    pub panes: usize,
+    /// The last workspace: closing it ends the session.
+    pub last: bool,
+}
+
+/// The inline workspace-name field's own state: the draft the input
+/// handler routes into, the field's layout state, and the workspace being
+/// renamed when the field edits one (`None` names a new workspace).
+pub(super) struct SquadField {
+    pub draft: Draft,
+    pub field: Rc<chat::field::FieldState>,
+    /// The workspace being renamed; `None` when the field names a new one.
+    pub squad: Option<u64>,
+}
 
 pub struct Root {
     pub(super) main: MainView,
@@ -142,6 +240,9 @@ pub struct Root {
     frames: HashMap<u64, Arc<Frame>>,
     panes: HashMap<u64, Entity<PaneView>>,
     modes: Modes,
+    /// The mux's own key scanner: claims the prefix (Ctrl+B by default)
+    /// before any pane input, the same layer the terminal client claims it.
+    scanner: fno::ui::keys::Scanner,
     notice: Option<String>,
     /// The notice reports a failure: it paints in the error color.
     notice_failed: bool,
@@ -179,7 +280,19 @@ pub struct Root {
     /// The composer's draft and its send state.
     pub(super) board_draft: Draft,
     pub(super) mail: Option<MailState>,
-    pub(super) agents_open: bool,
+    /// The persisted fold keys (workspace cwds, or names when the cwd is
+    /// empty); absence means open.
+    pub(super) folds: HashSet<String>,
+    /// The Workspaces section's grouping.
+    pub(super) group_by: GroupBy,
+    /// The inline workspace-name field: it names a new workspace, or
+    /// renames the workspace it carries.
+    pub(super) squad_field: Option<SquadField>,
+    /// The workspace whose menu shows, by squad id, with the menu's kind:
+    /// `true` is the header +'s add menu, `false` the context menu.
+    pub(super) workspace_menu: Option<(u64, bool)>,
+    /// The close-workspace confirm: the wording facts the sheet reads.
+    pub(super) workspace_confirm: Option<WorkspaceConfirm>,
     pub(super) chat: Chat,
     /// `--chat <id>`: the session chat mode shows, whatever has focus.
     pub(super) pinned: Option<SessionKey>,
@@ -187,13 +300,45 @@ pub struct Root {
     pub(super) picking: bool,
     /// The key sheet (cmd-/) covers the window.
     pub(super) sheet: bool,
+    /// The answer sheet: the one question it holds, the choice the user
+    /// picked, and the typed draft. Esc and Later close; Answer submits the
+    /// typed words, else the pick.
+    pub(super) answer: Option<answer::Sheet>,
+    /// The arrival toast: the question it names and the timer generation,
+    /// so only the newest toast's expiry clears it.
+    question_toast: Option<(String, u64)>,
+    question_toast_gen: u64,
+    /// Every question id any board read has listed. Arrival = an id the set
+    /// has not met; the first read seeds it silently, unless the shot flag
+    /// below is set, so an app open never toasts a backlog.
+    seen_questions: HashSet<String>,
+    /// A good question read has seeded `seen_questions`.
+    questions_seeded: bool,
+    /// The shot window toasts on its first read: the capture wants the
+    /// arrival toast in frame.
+    toast_on_first_read: bool,
+    /// The shot window opens the answer sheet on the newest question when
+    /// the first board read lands: the sheet proof.
+    sheet_on_first_read: bool,
     /// The go-to palette (cmd-k) covers the window.
     pub(super) goto: Option<goto::GoTo>,
     /// The find bar (cmd-f) over the focused pane or the chat.
     pub(super) find: Option<find::Find>,
+    /// Keyboard scroll mode (prefix+PgUp): the pane it holds, until q or Esc.
+    pub(super) scroll_mode: Option<u64>,
+    /// The rename-tab prompt (prefix+,).
+    pub(super) rename: Option<mux_modes::Rename>,
+    /// The focused agent's row menu (prefix+P).
+    pub(super) row_menu: Option<mux_modes::RowMenu>,
     /// The launch composer: retained state, open flag, id mint, and the
     /// row the last launch named. Esc closes and keeps the draft.
     pub(super) launch: launch::Panel,
+    /// The Settings panel (cmd-,): rows, query, page; None while closed.
+    pub(super) settings: Option<settings::SettingsState>,
+    /// The font face and size the terminal metrics should carry: the
+    /// launch values, then a Settings write. Render moves the real
+    /// `metrics` onto it, where the text system can measure.
+    pub(super) font_want: (String, f32),
     /// The mux session this window attached to; panes open on it.
     pub(super) session: String,
     pub(super) ext: mods::Page,
@@ -211,6 +356,7 @@ pub struct Root {
     _activation: Option<Subscription>,
     _appearance: Option<Subscription>,
     _notice: Option<Task<()>>,
+    _question_toast: Option<Task<()>>,
     _alerts: Option<Task<()>>,
     _alerts_tick: Option<Task<()>>,
     /// The attention signals: the lattice diff, the switch cache, the badge.
@@ -258,20 +404,14 @@ impl Root {
         session: String,
         main: MainView,
         pinned: Option<SessionKey>,
-        agents_open: bool,
+        folds: HashSet<String>,
+        group_by: GroupBy,
         metrics: Metrics,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         Self::new_with_link(
-            session,
-            main,
-            pinned,
-            agents_open,
-            metrics,
-            None,
-            window,
-            cx,
+            session, main, pinned, folds, group_by, metrics, None, window, cx,
         )
     }
 
@@ -282,7 +422,8 @@ impl Root {
         session: String,
         main: MainView,
         pinned: Option<SessionKey>,
-        agents_open: bool,
+        folds: HashSet<String>,
+        group_by: GroupBy,
         metrics: Metrics,
         prewarmed: Option<super::link::WarmedLink>,
         window: &mut Window,
@@ -291,8 +432,19 @@ impl Root {
         Self::write_pid_file(&session);
         let sent_size = grid_size(window.viewport_size(), metrics.cell);
         let light = super::palette::appearance_is_light(window.appearance());
+        let font_want = (
+            metrics.font.family.to_string(),
+            f32::from(metrics.font_size),
+        );
         let theme_cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());
         let (palette, theme_warning) = super::palette::for_appearance(light, &theme_cwd);
+        // The key layer (config.mux.prefix, [mux.keys]), installed before the
+        // scanner reads its first keystroke - the same loader the terminal
+        // client uses. A refused rebind surfaces as the startup notice rather
+        // than silently running the shipped default.
+        let (keymap, key_warnings) = fno::ui::digest_overlay::keymap(&theme_cwd);
+        fno::ui::keys::install(keymap);
+        let key_warning = key_warnings.first().map(|w| w.0.clone());
         let mut root = Root {
             main,
             link: None,
@@ -300,7 +452,8 @@ impl Root {
             frames: HashMap::new(),
             panes: HashMap::new(),
             modes: Modes::default(),
-            notice: theme_warning,
+            scanner: fno::ui::keys::Scanner::default(),
+            notice: key_warning.or(theme_warning),
             notice_failed: false,
             notice_gen: 0,
             shot: false,
@@ -320,7 +473,11 @@ impl Root {
             answers: HashMap::new(),
             board_draft: Default::default(),
             mail: None,
-            agents_open,
+            folds,
+            group_by,
+            squad_field: None,
+            workspace_menu: None,
+            workspace_confirm: None,
             light,
             theme_cwd: theme_cwd.clone(),
             session: session.clone(),
@@ -331,9 +488,21 @@ impl Root {
             pinned,
             picking: false,
             sheet: false,
+            answer: None,
+            question_toast: None,
+            question_toast_gen: 0,
+            seen_questions: HashSet::new(),
+            questions_seeded: false,
+            toast_on_first_read: false,
+            sheet_on_first_read: false,
             goto: None,
             find: None,
+            scroll_mode: None,
+            rename: None,
+            row_menu: None,
             launch: launch::Panel::default(),
+            settings: None,
+            font_want,
             preedit: None,
             _reader: None,
             _chat: None,
@@ -343,6 +512,7 @@ impl Root {
             _activation: None,
             _appearance: None,
             _notice: None,
+            _question_toast: None,
             _alerts: None,
             _alerts_tick: None,
             alerts: alerts::Alerts::new(),
@@ -498,11 +668,33 @@ impl Root {
                     record_ui_state(self, cx);
                     cx.quit();
                 }
+                fno::app_control::AppCommand::Answer { option } => {
+                    let open = self
+                        .chat
+                        .conv
+                        .open_question()
+                        .map(|(_, ask)| ask.choices.len());
+                    match open {
+                        Some(n) if (1..=n).contains(option) => {
+                            self.chat.pick = option - 1;
+                            self.answer_choice(cx);
+                        }
+                        Some(n) => self.say(
+                            format!("fno mux app answer: the question has {n} options"),
+                            cx,
+                        ),
+                        None => self.say(
+                            "fno mux app answer: no question waits in this chat".into(),
+                            cx,
+                        ),
+                    }
+                }
                 fno::app_control::AppCommand::View { view } => match view.as_str() {
                     "chat" => self.show(MainView::Chat, cx),
                     "terminal" => self.show(MainView::Terminal, cx),
                     "orchestration" => self.show(MainView::Orchestration, cx),
                     "mods" => self.show(MainView::Mods, cx),
+                    "inbox" => self.show(MainView::Inbox, cx),
                     other => {
                         self.notice = Some(format!("fno mux app: unknown view {other:?}"));
                         self.notice_failed = true;
@@ -525,7 +717,8 @@ impl Root {
                         &self.layout,
                         &self.board,
                         now,
-                        self.agents_open,
+                        &self.folds,
+                        self.group_by,
                         streamed,
                         launched,
                     )
@@ -616,6 +809,94 @@ impl Root {
         }));
     }
 
+    /// Raise the arrival toast for one question. The element reads the
+    /// board live at paint, so a question the board drops hides the toast
+    /// even before the timer does. The shot holds it: the capture wants
+    /// the surface in frame, not a timed one.
+    fn say_question(&mut self, id: String, cx: &mut Context<Self>) {
+        self.question_toast_gen += 1;
+        let gen = self.question_toast_gen;
+        self.question_toast = Some((id, gen));
+        cx.notify();
+        if self.shot {
+            return;
+        }
+        self._question_toast = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(QUESTION_TOAST_FOR).await;
+            let _ = this.update(cx, |root, cx| {
+                if root.question_toast.as_ref().is_some_and(|(_, g)| *g == gen) {
+                    root.question_toast = None;
+                    cx.notify();
+                }
+            });
+        }));
+    }
+
+    /// The arrival toast: a raised card top-right, the diamond, who
+    /// asked, a preview of the question, and the Answer door. It reads
+    /// the board live, so a dropped question hides it at once.
+    /// The Inbox lists the question itself, so it never toasts there.
+    fn question_toast_card(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        self.question_toast
+            .as_ref()
+            .filter(|_| self.main != MainView::Inbox)
+            .and_then(|(id, _)| self.board.questions().iter().find(|q| q.item.id == *id))
+            .map(|q| {
+                let item = &q.item;
+                let ask = item
+                    .asker
+                    .as_ref()
+                    .map(|a| a.handle.as_str())
+                    .unwrap_or("an agent");
+                let open = Action::OpenAnswer(item.id.clone());
+                div()
+                    .absolute()
+                    .top(px(ui::TITLE_H + 24.0))
+                    .right(px(12.0))
+                    .w(px(420.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .px_3()
+                    .py_2()
+                    .rounded(px(6.0))
+                    .border_1()
+                    .border_color(rgb(self.palette.border))
+                    .bg(rgb(self.palette.raised))
+                    .font_family(ui::MONO)
+                    .text_size(px(ui::BODY))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(6.0))
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_color(rgb(self.palette.warn))
+                                    .child("◆"),
+                            )
+                            .child(
+                                ui::role(div().flex_1().min_w_0(), ui::Role::Name, &self.palette)
+                                    .child(format!("New question from {ask}")),
+                            )
+                            .child(
+                                ui::button(
+                                    "toast-answer",
+                                    "Answer",
+                                    ui::Button::Primary,
+                                    &self.palette,
+                                )
+                                .on_click(
+                                    cx.listener(move |root, _, _, cx| root.act(open.clone(), cx)),
+                                ),
+                            ),
+                    )
+                    .child(ui::cut(&item.title, 52))
+            })
+    }
+
     pub(super) fn act(&mut self, action: Action, cx: &mut Context<Self>) {
         fno::ui_usage::click("app", click_id(&action));
         match action {
@@ -629,19 +910,48 @@ impl Root {
             }
             Action::Notice(text) => self.say(text, cx),
             Action::Answer { id, option } => match &self.poller {
-                // A row already sent or answered takes no second click.
-                Some(_) if self.answers.contains_key(&id) => {}
+                // A row already sent or answered takes no second click; a
+                // refused one takes a retry.
+                Some(_) if answer::in_flight_or_done(self.answers.get(&id)) => {}
                 Some(poller) => {
-                    poller.answer(id.clone(), option);
-                    self.answers.insert(id, AnswerState::Sending(option));
+                    if poller.answer(id.clone(), fno::needs_overlay::AnswerPick::Option(option)) {
+                        self.answers.insert(id, AnswerState::Sending(option));
+                    } else {
+                        self.say("the board poll stopped: cannot answer".into(), cx);
+                    }
                 }
                 None => self.say("no board poll: cannot answer".into(), cx),
             },
-            Action::Show(view) => self.show(view, cx),
-            Action::ToggleAgents => {
-                self.agents_open = !self.agents_open;
-                record_ui_state(self, cx);
+            Action::OpenAnswer(id) => {
+                // The sheet answers what the toast announced.
+                if self.question_toast.as_ref().is_some_and(|(t, _)| *t == id) {
+                    self.question_toast = None;
+                }
+                self.answer = Some(answer::Sheet::new(id));
             }
+            Action::CloseAnswer => self.answer = None,
+            Action::PickAnswer(n) => {
+                if let Some(s) = self.answer.as_mut() {
+                    s.pick = Some(n);
+                }
+            }
+            Action::SubmitAnswer => answer::submit(self, cx),
+            Action::Show(view) => self.show(view, cx),
+            Action::NewWorkspace
+            | Action::ToggleWorkspace(_)
+            | Action::ToggleElsewhere
+            | Action::OpenWorkspaceMenu(_)
+            | Action::OpenAddMenu(_)
+            | Action::CycleGrouping
+            | Action::CloseWorkspaceMenu
+            | Action::NewTabIn(_)
+            | Action::NewShell(_)
+            | Action::RenameWorkspace(_)
+            | Action::MoveWorkspace(_, _)
+            | Action::RemoveWorkspace(_)
+            | Action::ConfirmCloseWorkspace(_)
+            | Action::KeepWorkspace
+            | Action::NewWorker(_) => self.act_workspace(action, cx),
             Action::ToggleKeySheet => {
                 self.sheet = !self.sheet;
                 if self.sheet {
@@ -663,6 +973,15 @@ impl Root {
                 self.say(format!("copied {n} characters"), cx);
             }
             Action::SendChat => self.submit_chat(cx),
+            Action::PickChoice(i) => {
+                // A second click on the picked row answers with it.
+                if self.chat.pick == i {
+                    self.answer_choice(cx);
+                } else {
+                    self.chat.pick = i;
+                }
+            }
+            Action::AnswerChoice => self.answer_choice(cx),
             Action::SubmitLaunch => self.submit_launch(cx),
             Action::Reconnect => self.open_chat(cx),
             Action::Mail(text) => match &self.poller {
@@ -679,6 +998,118 @@ impl Root {
             Action::OpenLaunch(kind) => self.open_launch(kind, cx),
         }
         cx.notify();
+    }
+
+    /// The workspace actions: the menus, the fold, the rename field and the
+    /// close confirm.
+    fn act_workspace(&mut self, action: Action, cx: &mut Context<Self>) {
+        match action {
+            Action::NewWorkspace => {
+                self.squad_field = Some(SquadField {
+                    draft: Draft::default(),
+                    field: Rc::new(chat::field::FieldState::default()),
+                    squad: None,
+                });
+            }
+            Action::ToggleWorkspace(id) => {
+                let key = self
+                    .layout
+                    .squads
+                    .iter()
+                    .find(|s| s.id == id)
+                    .map(super::left_pane::fold_key);
+                if let Some(key) = key {
+                    if !self.folds.remove(&key) {
+                        self.folds.insert(key);
+                    }
+                    record_ui_state(self, cx);
+                }
+            }
+            Action::ToggleElsewhere => {
+                let key = super::left_pane::ELSEWHERE_KEY.to_string();
+                if !self.folds.remove(&key) {
+                    self.folds.insert(key);
+                }
+                record_ui_state(self, cx);
+            }
+            Action::OpenWorkspaceMenu(id) => {
+                // One menu at a time; a second right-click moves it.
+                self.workspace_menu = Some((id, false));
+            }
+            Action::OpenAddMenu(id) => self.workspace_menu = Some((id, true)),
+            Action::CycleGrouping => {
+                self.group_by = match self.group_by {
+                    GroupBy::Workspaces => GroupBy::State,
+                    GroupBy::State => GroupBy::Machine,
+                    GroupBy::Machine => GroupBy::Workspaces,
+                };
+                record_ui_state(self, cx);
+            }
+            Action::CloseWorkspaceMenu => self.workspace_menu = None,
+            Action::NewTabIn(id) => {
+                self.workspace_menu = None;
+                self.send(ClientMsg::Command(Command::SelectSquad(id)));
+                self.send(ClientMsg::Command(Command::NewTab));
+            }
+            Action::NewShell(id) => self.act(Action::NewTabIn(id), cx),
+            Action::RenameWorkspace(id) => {
+                self.workspace_menu = None;
+                let name = self
+                    .layout
+                    .squads
+                    .iter()
+                    .find(|s| s.id == id)
+                    .map(|s| s.name.clone())
+                    .unwrap_or_default();
+                let mut draft = Draft::default();
+                draft.replace_selection(&name);
+                self.squad_field = Some(SquadField {
+                    draft,
+                    field: Rc::new(chat::field::FieldState::default()),
+                    squad: Some(id),
+                });
+            }
+            Action::MoveWorkspace(id, delta) => {
+                self.workspace_menu = None;
+                self.send(ClientMsg::Command(Command::MoveSquad { squad: id, delta }));
+            }
+            Action::RemoveWorkspace(id) => self.ask_close_workspace(id, cx),
+            Action::ConfirmCloseWorkspace(id) => {
+                self.workspace_confirm = None;
+                self.send(ClientMsg::Command(Command::RemoveSquad(id)));
+            }
+            Action::KeepWorkspace => self.workspace_confirm = None,
+            Action::NewWorker(id) => {
+                self.workspace_menu = None;
+                let cwd = self
+                    .layout
+                    .squads
+                    .iter()
+                    .find(|s| s.id == id)
+                    .map(|s| s.canonical_cwd.clone())
+                    .unwrap_or_default();
+                self.open_launch(Some(crate::launch::Kind::Worker), cx);
+                self.launch.state.preset_project(&cwd);
+            }
+            _ => {}
+        }
+    }
+
+    /// The Close menu item: ask first, naming the pane count.
+    fn ask_close_workspace(&mut self, id: u64, cx: &mut Context<Self>) {
+        self.workspace_menu = None;
+        let last = self.layout.squads.len() == 1;
+        match self.layout.squads.iter().find(|s| s.id == id) {
+            Some(s) => {
+                self.workspace_confirm = Some(WorkspaceConfirm {
+                    squad: s.id,
+                    name: s.name.clone(),
+                    panes: s.panes,
+                    last,
+                });
+            }
+            None => self.say(format!("no workspace {id} here"), cx),
+        }
     }
 
     /// Open the composer over whatever view shows. A fresh open re-reads
@@ -821,6 +1252,20 @@ impl Root {
         record_ui_state(self, cx);
     }
 
+    /// The project path a session runs in, for its project skills: the
+    /// launch panel's known project whose basename is the row's cwd.
+    fn chat_project(&self, key: Option<&SessionKey>) -> String {
+        let base = key.and_then(|k| {
+            self.layout
+                .agents
+                .iter()
+                .find(|a| a.harness_session_id.as_deref() == Some(k.session_id.as_str()))
+                .and_then(|a| a.cwd_base.clone())
+        });
+        base.and_then(|b| self.launch.state.project_for_base(&b))
+            .unwrap_or_default()
+    }
+
     /// In chat mode, stream the focused pane's agent session. A new focus
     /// parks the shown conversation and resumes the new one where it left.
     fn sync_chat(&mut self, cx: &mut Context<Self>) {
@@ -833,7 +1278,8 @@ impl Root {
         if self.main != MainView::Chat || key == self.chat.key {
             return;
         }
-        self.chat.switch(key);
+        let project = self.chat_project(key.as_ref());
+        self.chat.switch(key, &project);
         self.open_chat(cx);
         // The shown conversation changed: chat find re-scans the new rows.
         self.find_rescan(cx);
@@ -974,6 +1420,81 @@ impl Root {
         }
     }
 
+    /// Answer the open question with the picked row. Where the mux already
+    /// read the harness's own menu off the pane and pinned a keystroke per
+    /// row, the answer goes through `PaneAnswer`, which the server checks
+    /// against the live grid before it types. Claude's question screen has
+    /// no extracted menu, but its rows take their own number as a key, so a
+    /// pick there types that digit into the pane.
+    fn answer_choice(&mut self, cx: &mut Context<Self>) {
+        let Some((_, ask)) = self.chat.conv.open_question() else {
+            return;
+        };
+        let pick = self.chat.pick.min(ask.choices.len().saturating_sub(1));
+        let Some(choice) = ask.choices.get(pick) else {
+            return;
+        };
+        let want = choice.label.trim().to_lowercase();
+        let Some(key) = self.chat.key.clone() else {
+            return;
+        };
+        // The row is addressed by pane id and the server re-checks the pane
+        // before it types, so the pane need not be on screen.
+        let row = self.layout.agents.iter().find(|a| {
+            !a.exited
+                && a.pane_id.is_some()
+                && a.harness_session_id.as_deref() == Some(key.session_id.as_str())
+        });
+        let Some((pane, menu)) = row.and_then(|a| a.pane_id.map(|p| (p, a.answerable.clone())))
+        else {
+            self.say("no pane hosts this session: answer in the pane".into(), cx);
+            return;
+        };
+        let digit = u8::try_from(pick).ok().filter(|p| *p < 9).map(|p| b'1' + p);
+        match (menu, digit) {
+            (Some(menu), _) => {
+                // The pane's menu must be this question's: the row whose
+                // label holds the picked option's text. Any other prompt in
+                // the pane (a permission ask, a stale question) fails closed
+                // instead of taking a keystroke meant for another menu.
+                let Some(option) = menu
+                    .options
+                    .iter()
+                    .find(|o| o.label.to_lowercase().contains(&want))
+                else {
+                    self.say(
+                        "the pane's menu is not this question: answer in the pane".into(),
+                        cx,
+                    );
+                    return;
+                };
+                self.send(ClientMsg::PaneAnswer {
+                    pane,
+                    fingerprint: menu.fingerprint,
+                    region_lines: u16::try_from(menu.region_lines).unwrap_or(u16::MAX),
+                    keystroke: option.keystroke.clone(),
+                });
+            }
+            (None, Some(digit)) if key.harness == "claude" => {
+                let request_id = self.chat.next_request;
+                self.chat.next_request += 1;
+                // The server types only into a pane the client views, so
+                // bring the question's pane into view first.
+                self.send(ClientMsg::Command(Command::FocusPane(pane)));
+                self.send(ClientMsg::PaneInput(proto::pane_input::PaneInputRequest {
+                    request_id,
+                    pane,
+                    expected_identity: key.session_id.clone(),
+                    bytes: vec![digit],
+                }));
+            }
+            _ => self.say(
+                "the pane shows no menu to answer: answer in the pane".into(),
+                cx,
+            ),
+        }
+    }
+
     /// One clipboard paste: text routes by view; a clipboard image with no
     /// text attaches to the chat draft, and the send re-puts it and types
     /// the harness's image-paste keystroke (submit_chat).
@@ -1040,6 +1561,42 @@ impl Root {
     fn on_hq(&mut self, reply: Reply, cx: &mut Context<Self>) {
         match reply {
             Reply::Board(board) => {
+                // Arrival: an id the seen set has not met. The first read
+                // seeds the set silently - an app open never toasts a
+                // backlog - unless the shot wants the toast in frame.
+                let first_read = !self.questions_seeded;
+                let ids: Vec<String> = board
+                    .questions()
+                    .iter()
+                    .map(|q| q.item.id.clone())
+                    .collect();
+                let arrivals: Vec<String> = ids
+                    .iter()
+                    .filter(|i| !self.seen_questions.contains(*i))
+                    .cloned()
+                    .collect();
+                self.seen_questions.extend(ids);
+                // A good read seeds the set, even an empty one, so the first
+                // question after an empty open still toasts.
+                if board.read_yet() && board.questions_error().is_none() {
+                    self.questions_seeded = true;
+                }
+                if board.questions_error().is_none() && (!first_read || self.toast_on_first_read) {
+                    // Newest first, so the first hit is the newest arrival.
+                    let newest = board
+                        .questions_newest_first()
+                        .into_iter()
+                        .find_map(|q| arrivals.contains(&q.item.id).then(|| q.item.id.clone()));
+                    if let Some(id) = newest {
+                        self.say_question(id, cx);
+                    }
+                }
+                if first_read && self.sheet_on_first_read {
+                    if let Some(q) = board.questions_newest_first().first() {
+                        self.question_toast = None;
+                        self.answer = Some(answer::Sheet::new(q.item.id.clone()));
+                    }
+                }
                 self.board = *board;
                 // A question the read no longer lists needs no answer state;
                 // a refusal stays so the row keeps its reason.
@@ -1052,8 +1609,17 @@ impl Root {
                 self.answers.retain(|id, _| open.contains(&id.as_str()));
             }
             Reply::Answered { id, receipt } => {
-                if let Some(AnswerState::Sending(option)) = self.answers.get(&id).cloned() {
-                    self.answers.insert(id, AnswerState::Done(option));
+                match self.answers.get(&id).cloned() {
+                    Some(AnswerState::Sending(option)) => {
+                        self.answers.insert(id.clone(), AnswerState::Done(option));
+                    }
+                    Some(AnswerState::SendingWords) => {
+                        self.answers.insert(id.clone(), AnswerState::DoneWords);
+                    }
+                    _ => {}
+                }
+                if self.answer.as_ref().is_some_and(|s| s.id == id) {
+                    self.answer = None;
                 }
                 self.say(receipt, cx);
             }
@@ -1140,7 +1706,8 @@ impl Root {
             if let Some(key) = launch::stream_key(&self.layout.agents, &name) {
                 self.launch.show = None;
                 self.pinned = Some(key.clone());
-                self.chat.switch(Some(key));
+                let project = self.chat_project(Some(&key));
+                self.chat.switch(Some(key), &project);
                 self.open_chat(cx);
             }
         }
@@ -1344,7 +1911,7 @@ impl Root {
         let mut send = None;
         let mut rescan = false;
         let mut escape = false;
-        let mut reveal = None;
+        let reveal = None;
         let mut step = None;
         {
             let Some(f) = &mut self.find else { return };
@@ -1474,6 +2041,146 @@ impl Root {
         }
     }
 
+    /// A command-block action on the focused pane. The server answers a pane
+    /// with no blocks, or one still busy on a rerun, with its own notice.
+    fn block_op(&mut self, op: keys::BlockOp) {
+        let pane = self.layout.focus;
+        self.send(match op {
+            keys::BlockOp::Jump(dir) => ClientMsg::BlockJump { pane, dir },
+            keys::BlockOp::Select(dir) => ClientMsg::BlockSelect { pane, dir },
+            keys::BlockOp::Rerun => ClientMsg::BlockRerun { pane },
+        });
+    }
+
+    /// prefix+PgUp: hold the keyboard for the focused pane's shared scroll.
+    fn scroll_open(&mut self, cx: &mut Context<Self>) {
+        self.scroll_mode = Some(self.layout.focus);
+        cx.notify();
+    }
+
+    /// prefix+`,`: the rename prompt for the active tab.
+    fn rename_open(&mut self, cx: &mut Context<Self>) {
+        match mux_modes::Rename::open(&self.layout) {
+            Some(rename) => {
+                self.rename = Some(rename);
+                cx.notify();
+            }
+            None => {
+                alerts::beep();
+                self.say("no active tab to rename".into(), cx);
+            }
+        }
+    }
+
+    /// prefix+P: the row menu of the agent in the focused pane.
+    fn row_menu_open(&mut self, cx: &mut Context<Self>) {
+        self.row_menu = Some(mux_modes::RowMenu::open(
+            &self.layout.agents,
+            self.layout.focus,
+        ));
+        cx.notify();
+    }
+
+    /// Run one row-menu item and close the menu.
+    pub(super) fn row_menu_run(&mut self, at: usize, cx: &mut Context<Self>) {
+        let item = self
+            .row_menu
+            .take()
+            .and_then(|m| m.items.into_iter().nth(at))
+            .map(|(_, act)| act);
+        match item {
+            Some(MenuAct::Run(action)) => self.act(action, cx),
+            Some(MenuAct::Rename) => self.rename_open(cx),
+            None => {}
+        }
+        cx.notify();
+    }
+
+    /// prefix+Z: focus the next pane whose agent waits on the user, wrapping
+    /// after the last. Nothing waiting beeps and says so.
+    fn focus_next_waiting(&mut self, cx: &mut Context<Self>) {
+        let now = fno::app_api::digest_overlay::now_secs();
+        match mux_modes::next_waiting(&self.layout.agents, self.layout.focus, now) {
+            Some((pane, name, at, of)) => {
+                self.send(ClientMsg::Command(Command::FocusPane(pane)));
+                self.say(format!("{name} ({at} of {of} waiting)"), cx);
+            }
+            None => {
+                alerts::beep();
+                self.say("no agent is waiting on you".into(), cx);
+            }
+        }
+    }
+
+    /// True when the row menu, the rename prompt or scroll mode consumed the
+    /// key. Cmd keys fall through to their shortcuts.
+    fn mux_modes_take(&mut self, key: &Key, cx: &mut Context<Self>) -> bool {
+        if let Some(menu) = self.row_menu.as_ref() {
+            if key.cmd {
+                return false;
+            }
+            let pick = menu.key(key);
+            cx.stop_propagation();
+            match pick {
+                MenuKey::Move(by) => {
+                    if let Some(m) = self.row_menu.as_mut() {
+                        m.step(by);
+                    }
+                    cx.notify();
+                }
+                MenuKey::Run(at) => self.row_menu_run(at, cx),
+                MenuKey::Close => {
+                    self.row_menu = None;
+                    cx.notify();
+                }
+                MenuKey::Swallow => {}
+            }
+            return true;
+        }
+        if let Some(r) = self.rename.as_mut() {
+            if key.cmd {
+                return false;
+            }
+            cx.stop_propagation();
+            let text = match (key.key_char, key.key) {
+                (None, "space") => Some(" "),
+                (text, _) => text.filter(|_| !key.ctrl),
+            };
+            match r.field.edit(key.key, text) {
+                ui::Edit::Typed => cx.notify(),
+                ui::Edit::Close => {
+                    self.rename = None;
+                    cx.notify();
+                }
+                ui::Edit::Submit => {
+                    let cmd = r.command();
+                    self.rename = None;
+                    self.send(ClientMsg::Command(cmd));
+                    cx.notify();
+                }
+            }
+            return true;
+        }
+        let Some(pane) = self.scroll_mode else {
+            return false;
+        };
+        if self.main != MainView::Terminal || pane != self.layout.focus {
+            self.scroll_mode = None;
+            cx.notify();
+            return false;
+        }
+        let rows = self.frames.get(&pane).map_or(24, |f| i32::from(f.rows));
+        match mux_modes::scroll_step(key, pane, rows) {
+            Step::Pass => return false,
+            Step::Send(msg) => self.send(msg),
+            Step::Leave => self.scroll_mode = None,
+            Step::Swallow => {}
+        }
+        cx.stop_propagation();
+        cx.notify();
+        true
+    }
+
     /// Scan the conversation for the query, keeping the current match by its
     /// (item, block, range start) so a streaming row appends without moving
     /// the highlight; a replaced row falls back to the newest match.
@@ -1567,12 +2274,15 @@ impl Root {
             "enter" if !shift => {
                 cx.stop_propagation();
                 let empty = self.launch.state.draft.text().trim().is_empty();
-                let agent = self.launch.state.kind == crate::launch::Kind::Agent;
-                if !(agent && empty) {
+                let worker = self.launch.state.kind == crate::launch::Kind::Worker;
+                if !(worker && empty) {
                     self.submit_launch(cx);
                 }
             }
             "enter" => self.launch.state.draft.replace_selection("\n"),
+            "tab" if self.launch.state.complete_skill() => {}
+            "escape" if self.launch.state.skill_close() => {}
+            "up" | "down" if self.launch.state.skill_step(key.key == "down") => {}
             "backspace" => self.launch.state.draft.backspace(),
             "delete" => self.launch.state.draft.delete(),
             "left" if cmd => self.launch.state.draft.home(shift),
@@ -1717,6 +2427,20 @@ impl Root {
         if self.chat.draft.marked().is_some() {
             return;
         }
+        // An open question takes the movement keys and Enter in the
+        // composer's place.
+        if let Some((_, ask)) = self.chat.conv.open_question() {
+            let last = ask.choices.len().saturating_sub(1);
+            match key.key {
+                "up" => self.chat.pick = self.chat.pick.saturating_sub(1),
+                "down" => self.chat.pick = (self.chat.pick + 1).min(last),
+                "enter" => self.answer_choice(cx),
+                _ => return,
+            }
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
         let (shift, alt, cmd) = (key.shift, key.alt, key.cmd);
         let vertical = matches!(key.key, "up" | "down");
         if !vertical {
@@ -1725,6 +2449,9 @@ impl Root {
         match key.key {
             "enter" if !shift => self.submit_chat(cx),
             "enter" => self.chat.draft.replace_selection("\n"),
+            "tab" if self.chat.complete_skill() => {}
+            "escape" if self.chat.skill_close() => {}
+            "up" | "down" if self.chat.skill_step(key.key == "down") => {}
             "backspace" => self.chat.draft.backspace(),
             "delete" => self.chat.draft.delete(),
             "left" if cmd => self.chat.draft.home(shift),
@@ -1805,6 +2532,153 @@ impl Root {
         cx.notify();
     }
 
+    /// A Settings font write moved `font_want`: re-measure the cell here,
+    /// where the text system can measure, and hand every pane the new
+    /// metrics - the grid resize follows on the next paint.
+    fn apply_font_want(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.font_want
+            == (
+                self.metrics.font.family.to_string(),
+                f32::from(self.metrics.font_size),
+            )
+        {
+            return;
+        }
+        let (family, want) = self.font_want.clone();
+        let font = font(family);
+        let size_px = px(want);
+        let text = window.text_system();
+        let id = text.resolve_font(&font);
+        let width = text
+            .advance(id, size_px, 'm')
+            .map(|s| s.width)
+            .unwrap_or(size_px * 0.6);
+        let scale = window.scale_factor();
+        let snap = |v: Pixels| px((f32::from(v) * scale).round() / scale);
+        let metrics = Metrics {
+            font,
+            font_size: size_px,
+            cell: size(snap(width), snap(size_px * 1.25)),
+        };
+        self.metrics = metrics.clone();
+        for view in self.panes.values() {
+            view.update(cx, |v, _| v.metrics = metrics.clone());
+        }
+        cx.notify();
+    }
+
+    /// ⌘,: toggle the Settings panel. Opening it closes the key sheet and
+    /// the palette.
+    fn toggle_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings.take().is_some() {
+            cx.notify();
+            return;
+        }
+        let fonts = settings::mono_fonts(window);
+        self.open_settings_with(fonts, cx);
+    }
+
+    /// The open half: rows from the live config, fleet and the given
+    /// faces. The shot path calls it with pre-measured faces.
+    pub(super) fn open_settings_with(&mut self, fonts: Vec<String>, cx: &mut Context<Self>) {
+        fno::ui_usage::click("app", "settings_open");
+        self.sheet = false;
+        self.goto = None;
+        let config = crate::global_config_raw();
+        let machines = self
+            .board
+            .fleet()
+            .map(|f| f.machines.clone())
+            .unwrap_or_default();
+        let rows = settings::build_rows(config.as_ref(), &self.theme_cwd, &machines, &fonts);
+        self.settings = Some(settings::SettingsState {
+            query: ui::LineField::new(64),
+            selected: 0,
+            page: None,
+            note: None,
+            rows,
+            fonts,
+            scroll: gpui::ScrollHandle::new(),
+            follow: std::cell::Cell::new(false),
+        });
+        cx.notify();
+    }
+    /// The panel's click-outside close (settings.rs's backdrop listener).
+    pub(super) fn close_settings(&mut self, cx: &mut Context<Self>) {
+        self.settings = None;
+        cx.notify();
+    }
+
+    /// One resolved settings write: spawn the bounded CLI door on a
+    /// background task. The apply half runs on the result.
+    fn spawn_settings_write(
+        &mut self,
+        set: bool,
+        id: String,
+        value: String,
+        cx: &mut Context<Self>,
+    ) {
+        // Detached: a second Enter must not drop the write still in flight.
+        cx.spawn(async move |this, cx| {
+            let id2 = id.clone();
+            let v2 = value.clone();
+            let out = cx
+                .background_executor()
+                .spawn(async move {
+                    settings::bounded_write(set, &id, if set { Some(&value) } else { None })
+                })
+                .await;
+            this.update(cx, |root, cx| root.on_settings_write(out, id2, v2, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    /// Rebuild the panel's rows from the live file and fleet, and set the
+    /// refusal line under them (None clears it).
+    fn rebuild_settings_rows(&mut self, note: Option<String>) {
+        let machines = self
+            .board
+            .fleet()
+            .map(|f| f.machines.clone())
+            .unwrap_or_default();
+        if let Some(st) = self.settings.as_mut() {
+            let config = crate::global_config_raw();
+            st.note = note;
+            st.rows = settings::build_rows(config.as_ref(), &self.theme_cwd, &machines, &st.fonts);
+        }
+    }
+
+    /// A settings write landed: repaint the rows from the fresh global
+    /// file and run the apply half - the theme restyles, the font keys
+    /// move `font_want`, and render re-measures the panes there.
+    fn on_settings_write(
+        &mut self,
+        out: Result<(), settings::Refusal>,
+        id: String,
+        value: String,
+        cx: &mut Context<Self>,
+    ) {
+        match out {
+            Ok(()) => {
+                self.rebuild_settings_rows(None);
+                if id == "mux.theme" {
+                    self.restyle(cx);
+                }
+                if id == "app.font" {
+                    self.font_want.0 = value.clone();
+                }
+                if id == "app.font_size" {
+                    if let Ok(f) = value.parse::<f32>() {
+                        self.font_want.1 = f;
+                    }
+                }
+            }
+            Err(settings::Refusal(line)) => self.rebuild_settings_rows(Some(line)),
+        }
+        cx.notify();
+    }
+
     /// Badges show while cmd alone is down, as in the Claude desktop app.
     fn on_modifiers(&mut self, ev: &ModifiersChangedEvent, _: &mut Window, cx: &mut Context<Self>) {
         let m = &ev.modifiers;
@@ -1831,6 +2705,60 @@ impl Root {
             }
             launch::KeyOut::Ignored => return false,
         }
+        true
+    }
+
+    /// The workspace-name field's keys. Enter commits and never inserts a
+    /// newline (the launch panel's own shape): a new workspace sends
+    /// NewSquad, a rename sends RenameSquad. Esc cancels; a blank or
+    /// whitespace name is sent as-is, because the server's notice is the
+    /// honest answer (nothing created, or the name reverts to its derived
+    /// label).
+    fn squad_field_key(&mut self, key: &Key, cx: &mut Context<Self>) -> bool {
+        let Some(f) = self.squad_field.as_mut() else {
+            return false;
+        };
+        if key.cmd || key.ctrl {
+            return false;
+        }
+        match key.key {
+            "enter" if !key.shift => {
+                let name = f.draft.text().trim().to_string();
+                let squad = f.squad;
+                self.squad_field = None;
+                match squad {
+                    Some(id) => {
+                        // A name-keyed workspace's fold entry moves to the
+                        // new name, so a folded workspace stays folded; a
+                        // cwd-keyed one keeps its key.
+                        let moved = self
+                            .layout
+                            .squads
+                            .iter()
+                            .find(|s| s.id == id)
+                            .and_then(|s| super::left_pane::rename_fold_move(s, &name));
+                        if let Some((old, new)) = moved {
+                            if self.folds.remove(&old) {
+                                self.folds.insert(new);
+                                record_ui_state(self, cx);
+                            }
+                        }
+                        self.send(ClientMsg::Command(Command::RenameSquad { squad: id, name }))
+                    }
+                    None => self.send(ClientMsg::Command(Command::NewSquad { name, origin: None })),
+                }
+            }
+            "escape" => self.squad_field = None,
+            "backspace" => f.draft.backspace(),
+            "delete" => f.draft.delete(),
+            "left" => f.draft.left(key.shift),
+            "right" => f.draft.right(key.shift),
+            "home" => f.draft.home(key.shift),
+            "end" => f.draft.end(key.shift),
+            _ => return false,
+        }
+        cx.stop_propagation();
+        cx.notify();
         true
     }
 
@@ -1867,6 +2795,37 @@ impl Root {
             cx.stop_propagation();
             return;
         }
+        // The Settings panel takes every key while it shows; a cmd key
+        // closes it and runs as today (the key sheet's grammar).
+        if self.settings.is_some() {
+            if key.cmd {
+                self.settings = None;
+                cx.notify();
+            } else {
+                let ev = self
+                    .settings
+                    .as_mut()
+                    .and_then(|st| settings::key(st, &key));
+                cx.stop_propagation();
+                match ev {
+                    Some(settings::Event::Close) => {
+                        self.settings = None;
+                        cx.notify();
+                    }
+                    Some(settings::Event::Set { id, value }) => {
+                        if let Some(st) = self.settings.as_mut() {
+                            settings::apply_local(&mut st.rows, &id, &value);
+                        }
+                        self.spawn_settings_write(true, id, value, cx)
+                    }
+                    Some(settings::Event::Unset { id }) => {
+                        self.spawn_settings_write(false, id, String::new(), cx)
+                    }
+                    None => {}
+                }
+                return;
+            }
+        }
         // After chord: with the key sheet open, esc closes the sheet first.
         if key.key == "escape" && self.seam_escape(cx) {
             return;
@@ -1874,6 +2833,30 @@ impl Root {
         // The composer is modal: its keys never reach the pane behind it,
         // and its text keys still compose through the input handler.
         if self.launch_key(&key, cx) {
+            return;
+        }
+        // The workspace-name field is modal the same way: Enter names the
+        // workspace, Esc cancels, the editing keys edit its draft. A cmd or
+        // ctrl key falls through to the shortcuts.
+        if self.squad_field_key(&key, cx) {
+            return;
+        }
+        // The workspace menu closes on Esc; a key that is not Esc falls
+        // through, so the shortcuts keep running under the menu.
+        if self.workspace_menu.is_some() && key.key == "escape" {
+            self.workspace_menu = None;
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
+        // The answer sheet is modal the same way: esc closes, enter
+        // submits, the editing keys and text land in its draft. A cmd or
+        // ctrl key falls through, so the shortcuts keep running under it.
+        if answer::key(self, &key, cx) {
+            cx.stop_propagation();
+            return;
+        }
+        if self.mux_modes_take(&key, cx) {
             return;
         }
         if let Some(action) = keys::shortcut(&key) {
@@ -1905,10 +2888,115 @@ impl Root {
         }
         if let Some(bytes) = keys::encode(&key, self.modes) {
             cx.stop_propagation();
-            if self.notice.take().is_some() {
-                cx.notify();
+            self.mux_key(bytes, window, cx);
+        }
+    }
+
+    /// One encoded keystroke through the mux scanner: the prefix claims its
+    /// chords before any pane input, exactly like the terminal client's
+    /// scan loop. A pending prefix announces itself once; a held chord
+    /// candidate or tab number arms the quiet-window flush.
+    fn mux_key(&mut self, bytes: Vec<u8>, window: &mut Window, cx: &mut Context<Self>) {
+        let was_pending = self.scanner.prefix_pending();
+        for event in self.scanner.scan(&bytes, Instant::now()) {
+            self.mux_event(event, &bytes, window, cx);
+        }
+        if self.scanner.prefix_pending() && !was_pending {
+            self.say(
+                "prefix pending: the next key runs a mux action (cmd-/ shows the sheet)".into(),
+                cx,
+            );
+        }
+        if self.scanner.chord_pending() || self.scanner.digits_pending() {
+            let ms = if self.scanner.chord_pending() {
+                CHORD_FLUSH_MS
+            } else {
+                DIGIT_FLUSH_MS
+            };
+            self.arm_quiet_flush(ms, cx);
+        }
+    }
+
+    /// Dispatch one resolved mux event; the same map the terminal client's
+    /// dispatch runs, through [`keys::translate`].
+    fn mux_event(
+        &mut self,
+        event: fno::ui::keys::Event,
+        key: &[u8],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match keys::translate(event) {
+            keys::MuxAction::Input(bytes) => self.pane_input(bytes, cx),
+            keys::MuxAction::Command(c) => self.send(ClientMsg::Command(c)),
+            keys::MuxAction::Tab(n) => self.mux_tab(n, cx),
+            keys::MuxAction::Quit => {
+                self.send(ClientMsg::Detach);
+                record_ui_state(self, cx);
+                persist_window_state(window, cx);
+                cx.quit();
             }
-            self.send(ClientMsg::Input(bytes));
+            keys::MuxAction::Notice(text) => self.say(text, cx),
+            keys::MuxAction::Block(op) => self.block_op(op),
+            keys::MuxAction::ScrollMode => self.scroll_open(cx),
+            keys::MuxAction::Rename => self.rename_open(cx),
+            keys::MuxAction::RowMenu => self.row_menu_open(cx),
+            keys::MuxAction::NextWaiting => self.focus_next_waiting(cx),
+            keys::MuxAction::Bell => {
+                alerts::beep();
+                let name = String::from_utf8_lossy(key).escape_debug().to_string();
+                self.say(format!("prefix {name}: no mux action is bound"), cx);
+            }
+        }
+    }
+
+    /// Bytes that reached no mux arm: pane input, and the notice a typing
+    /// keystroke always dismissed before, exactly as the pre-prefix path did.
+    fn pane_input(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
+        if self.notice.take().is_some() {
+            cx.notify();
+        }
+        self.send(ClientMsg::Input(bytes));
+    }
+
+    /// A 1-based tab ordinal resolved against the active workspace's strip,
+    /// the same rows the cmd-digit pick walks; a miss answers with a notice,
+    /// never a silent dead key.
+    fn mux_tab(&mut self, n: usize, cx: &mut Context<Self>) {
+        let at = n.saturating_sub(1);
+        match super::tabs::strip(&self.layout).into_iter().nth(at) {
+            Some(tab) => self.act(tab.action, cx),
+            None => self.say(format!("no tab {n} in this workspace"), cx),
+        }
+    }
+
+    /// Arm the quiet window: a held chord candidate or tab number releases
+    /// to the pane when no keystroke lands. Each pending keystroke re-arms;
+    /// a flush that finds nothing held is a no-op, so stacked arms are
+    /// harmless.
+    fn arm_quiet_flush(&mut self, ms: u64, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(ms))
+                .await;
+            // A window closed mid-timer has nothing left to flush.
+            this.update(cx, |root, cx| root.flush_quiet(cx)).ok();
+        })
+        .detach();
+    }
+
+    /// Release whatever the quiet window ends. A flush releases only
+    /// Forward chunks (a lone Esc) and held tab numbers, per the scanner's
+    /// flush contract, so the other arms cannot fire here and no Window
+    /// handle is needed.
+    fn flush_quiet(&mut self, cx: &mut Context<Self>) {
+        let events = [self.scanner.flush_chord(), self.scanner.flush_digits()];
+        for event in events.into_iter().flatten() {
+            match keys::translate(event) {
+                keys::MuxAction::Input(bytes) => self.pane_input(bytes, cx),
+                keys::MuxAction::Tab(n) => self.mux_tab(n, cx),
+                _ => {}
+            }
         }
     }
 
@@ -1946,7 +3034,14 @@ impl Root {
             }
             Shortcut::Command(c) => self.send(ClientMsg::Command(c)),
             Shortcut::Cut => {
-                if crate::start::visible(self) && self.launch.state.draft.has_selection() {
+                if let Some(f) = self.squad_field.as_mut() {
+                    if f.draft.has_selection() {
+                        let text = f.draft.selected_text().to_string();
+                        cx.write_to_clipboard(ClipboardItem::new_string(text));
+                        f.draft.replace_selection("");
+                        cx.notify();
+                    }
+                } else if crate::start::visible(self) && self.launch.state.draft.has_selection() {
                     let text = self.launch.state.draft.selected_text().to_string();
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
                     self.launch.state.draft.replace_selection("");
@@ -1960,7 +3055,10 @@ impl Root {
                 }
             }
             Shortcut::SelectAll => {
-                if crate::start::visible(self) {
+                if let Some(f) = self.squad_field.as_mut() {
+                    f.draft.select_all();
+                    cx.notify();
+                } else if crate::start::visible(self) {
                     self.launch.state.draft.select_all();
                     self.launch.state.field.reveal.set(true);
                     cx.notify();
@@ -1977,7 +3075,7 @@ impl Root {
                 cx.quit();
             }
             // While the composer is open, cmd-1/2/3 switch its kind
-            // (agent, lead, shell) instead of picking a tab or a row.
+            // (worker, lead, shell) instead of picking a tab or a row.
             Shortcut::Pick(n) => {
                 if self.launch.open {
                     if let Some(kind) = launch::Kind::from_index(n) {
@@ -1989,18 +3087,33 @@ impl Root {
                 }
                 self.pick(n, cx);
             }
-            Shortcut::NewAgent => self.act(Action::OpenLaunch(None), cx),
+            Shortcut::NewAgent => {
+                self.squad_field = None;
+                self.act(Action::OpenLaunch(None), cx);
+            }
             Shortcut::Find => self.find_open(cx),
             Shortcut::FindStep { older } => self.find_step(older, cx),
         }
     }
 
-    /// The paste shortcut: into the open find bar first, then the mods
-    /// sheet, the chat draft, the board composer, or the focused pane.
+    /// The paste shortcut: into the open answer sheet's draft, the open
+    /// find bar, then the mods sheet, the chat draft, the board composer,
+    /// or the focused pane.
     fn paste(&mut self, cx: &mut Context<Self>) {
         let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) else {
             return;
         };
+        // The open answer sheet takes the paste into its draft.
+        if let Some(s) = self.answer.as_mut() {
+            s.draft.replace_selection(&text);
+            cx.notify();
+            return;
+        }
+        if let Some(f) = self.squad_field.as_mut() {
+            f.draft.replace_selection(&text);
+            cx.notify();
+            return;
+        }
         // The open bar takes the paste into its query, ahead of the draft
         // and the pane.
         if self.find.is_some() {
@@ -2333,6 +3446,12 @@ impl EntityInputHandler for Root {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<String> {
+        if let Some(f) = self.squad_field.as_ref() {
+            let d = &f.draft;
+            let r = d.range_from_utf16(&range);
+            *adjusted = Some(d.range_to_utf16(&r));
+            return Some(d.text()[r].to_string());
+        }
         if self.launch.open {
             let d = &self.launch.state.draft;
             let r = d.range_from_utf16(&range);
@@ -2356,6 +3475,14 @@ impl EntityInputHandler for Root {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
+        if let Some(f) = self.squad_field.as_ref() {
+            let d = &f.draft;
+            let range = d.range_to_utf16(&d.selection());
+            return Some(UTF16Selection {
+                range,
+                reversed: d.caret() < d.selection().end,
+            });
+        }
         if self.launch.open || crate::start::visible(self) {
             let d = &self.launch.state.draft;
             let range = d.range_to_utf16(&d.selection());
@@ -2384,6 +3511,10 @@ impl EntityInputHandler for Root {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Range<usize>> {
+        if let Some(f) = self.squad_field.as_ref() {
+            let d = &f.draft;
+            return d.marked().map(|m| d.range_to_utf16(&m));
+        }
         if self.launch.open || crate::start::visible(self) {
             let d = &self.launch.state.draft;
             return d.marked().map(|m| d.range_to_utf16(&m));
@@ -2396,6 +3527,11 @@ impl EntityInputHandler for Root {
     }
 
     fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(f) = self.squad_field.as_mut() {
+            f.draft.unmark();
+            cx.notify();
+            return;
+        }
         if self.launch.open || crate::start::visible(self) {
             self.launch.state.draft.unmark();
             cx.notify();
@@ -2418,6 +3554,11 @@ impl EntityInputHandler for Root {
     ) {
         // The palette's query owns the keyboard while it shows.
         if self.goto.is_some() {
+            return;
+        }
+        if let Some(f) = self.squad_field.as_mut() {
+            f.draft.replace_utf16(range, text, false, None);
+            cx.notify();
             return;
         }
         if self.launch.open || crate::start::visible(self) {
@@ -2455,6 +3596,12 @@ impl EntityInputHandler for Root {
     ) {
         // The palette's query owns the keyboard while it shows.
         if self.goto.is_some() {
+            return;
+        }
+        if let Some(f) = self.squad_field.as_mut() {
+            f.draft
+                .replace_utf16(range, new_text, true, new_selected_range);
+            cx.notify();
             return;
         }
         if self.launch.open {
@@ -2610,6 +3757,13 @@ impl InputHandler for TermInput {
     }
 }
 
+/// A board-style view in the mono face at body size.
+fn mono_view(view: impl IntoElement + Styled) -> gpui::AnyElement {
+    view.font_family(ui::MONO)
+        .text_size(px(ui::BODY))
+        .into_any_element()
+}
+
 impl Render for Root {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let size_now = grid_size(window.viewport_size(), self.metrics.cell);
@@ -2621,18 +3775,15 @@ impl Render for Root {
             });
         }
         self.adv = ui::advance(window, ui::BODY);
+        self.apply_font_want(window, cx);
         self.width = window.viewport_size().width;
+
         let main = match self.main {
             MainView::Chat => self.chat_view(window, cx).into_any_element(),
             MainView::Terminal => self.terminal(cx).into_any_element(),
-            MainView::Orchestration => orchestration::render(self, cx)
-                .font_family(ui::MONO)
-                .text_size(px(ui::BODY))
-                .into_any_element(),
-            MainView::Mods => mods::render(self, cx)
-                .font_family(ui::MONO)
-                .text_size(px(ui::BODY))
-                .into_any_element(),
+            MainView::Orchestration => mono_view(orchestration::render(self, cx)),
+            MainView::Mods => mono_view(mods::render(self, cx)),
+            MainView::Inbox => mono_view(crate::inbox::render(self, cx)),
         };
         // The bar floats over the target view's top right; find_gc keeps the
         // target and the view in step, so a live bar always sits over its
@@ -2650,7 +3801,7 @@ impl Render for Root {
             _ => main,
         };
         let now = fno::app_api::digest_overlay::now_secs();
-        let left = left_pane::render(self, now, self.adv, cx).text_size(px(ui::BODY));
+        let left = left_pane::render(self, now, self.adv, window, cx).text_size(px(ui::BODY));
         let strip = tabs::render(self, cx)
             .font_family(ui::MONO)
             .text_size(px(ui::BODY));
@@ -2684,12 +3835,14 @@ impl Render for Root {
                 .text_size(px(ui::BODY))
                 .child(text)
         });
-        div()
+        let qtoast = self.question_toast_card(cx);
+        let page = div()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
             .on_modifiers_changed(cx.listener(Self::on_modifiers))
             .on_action(cx.listener(Self::toggle_sheet))
             .on_action(cx.listener(Self::toggle_goto))
+            .on_action(cx.listener(Self::toggle_settings))
             // A click on a row, a tab or a view name lands on no focusable
             // element and would leave the window with no key focus.
             .on_any_mouse_down(cx.listener(|root, _, window, _| window.focus(&root.focus)))
@@ -2713,13 +3866,41 @@ impl Render for Root {
                     .flex_col()
                     .child(strip)
                     .child(main)
-                    .children(toast),
-            )
-            .when(self.launch.open, |d| {
-                d.child(launch::render(self, window, cx))
-            })
-            .when(self.sheet, |d| d.child(sheet::render(self, cx)))
-            .when(self.goto.is_some(), |d| d.child(goto::render(self, cx)))
+                    .children(toast)
+                    .children(qtoast),
+            );
+        self.overlays(page, window, cx)
+    }
+}
+
+impl Root {
+    /// The overlays over the window, in draw order: the launch composer,
+    /// the key sheet, the go-to palette, the Settings panel.
+    fn overlays(
+        &mut self,
+        page: gpui::Div,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        page.when(self.launch.open, |d| {
+            d.child(launch::render(self, window, cx))
+        })
+        .when(self.sheet, |d| d.child(sheet::render(self, cx)))
+        .when(self.answer.is_some(), |d| d.child(answer::render(self, cx)))
+        .when(self.goto.is_some(), |d| d.child(goto::render(self, cx)))
+        .children(self.row_menu.as_ref().map(|m| m.view(self, cx)))
+        .children(self.rename.as_ref().map(|r| r.bar(&self.palette)))
+        .children(
+            self.scroll_mode
+                .filter(|p| *p == self.layout.focus && self.main == MainView::Terminal)
+                .map(|_| mux_modes::scroll_bar(&self.palette)),
+        )
+        .when(self.settings.is_some(), |d| {
+            d.child(settings::render(self, cx))
+        })
+        .when(self.workspace_confirm.is_some(), |d| {
+            d.child(left_pane::confirm_sheet(self, cx))
+        })
     }
 }
 
@@ -2728,7 +3909,8 @@ impl Render for Root {
 /// button, write it beside the window's live frame to the state file.
 struct UiState {
     view: MainView,
-    agents_open: bool,
+    folds: HashSet<String>,
+    group_by: GroupBy,
     chat_key: Option<SessionKey>,
     path: Option<PathBuf>,
 }
@@ -2746,7 +3928,8 @@ fn record_ui_state(root: &Root, cx: &mut App) {
     }
     let ui = cx.global_mut::<UiState>();
     ui.view = root.main;
-    ui.agents_open = root.agents_open;
+    ui.folds = root.folds.clone();
+    ui.group_by = root.group_by;
     ui.chat_key = root.chat.key.clone();
 }
 
@@ -2775,7 +3958,8 @@ fn persist_window_state(window: &Window, cx: &mut App) {
             h: f32::from(bounds.size.height),
         },
         pinned: ui.chat_key.clone(),
-        agents_open: ui.agents_open,
+        folds: ui.folds.clone(),
+        group_by: ui.group_by,
     };
     if let Err(e) = super::app_state::save(path, &state) {
         eprintln!("fno-app: window state save failed: {e}");
@@ -2830,11 +4014,12 @@ pub fn run(
     Application::new().run(move |cx: &mut App| {
         cx.bind_keys([KeyBinding::new(keys::SHEET_KEY, KeyboardShortcuts, None)]);
         cx.bind_keys([KeyBinding::new(keys::GOTO_KEY, GoTo, None)]);
+        cx.bind_keys([KeyBinding::new(keys::SETTINGS_KEY, OpenSettings, None)]);
         // The first menu is the app menu; Help lists the keys.
         cx.set_menus(vec![
             Menu {
                 name: "fno".into(),
-                items: Vec::new(),
+                items: vec![MenuItem::action("Settings…", OpenSettings)],
             },
             Menu {
                 name: "Help".into(),
@@ -2847,7 +4032,11 @@ pub fn run(
         let window_bounds = initial_window_bounds(restored.as_ref(), cx);
         // The fold a quit left behind seeds the left pane; the exit paths
         // read the rest from the UiState global.
-        let agents_open = restored.as_ref().map(|s| s.agents_open).unwrap_or(false);
+        let folds = restored
+            .as_ref()
+            .map(|s| s.folds.clone())
+            .unwrap_or_default();
+        let group_by = restored.as_ref().map(|s| s.group_by).unwrap_or_default();
         // Where the exit paths write; a HOME-less environment saves nothing.
         let state_path = super::app_state::state_path();
         let opened = cx.open_window(
@@ -2885,7 +4074,8 @@ pub fn run(
                         session,
                         main,
                         pinned.clone(),
-                        agents_open,
+                        folds.clone(),
+                        group_by,
                         metrics,
                         window,
                         cx,
@@ -2894,7 +4084,8 @@ pub fn run(
                     // keep it current while the window lives.
                     cx.set_global(UiState {
                         view: main,
-                        agents_open,
+                        folds,
+                        group_by,
                         chat_key: pinned,
                         path: state_path,
                     });
@@ -2930,8 +4121,12 @@ pub(super) fn root_for_shot(
     family: String,
     font_size: f32,
     find: Option<crate::FindShot>,
+    settings: Option<crate::SettingsShot>,
     empty_chat: bool,
     cmd: bool,
+    sheet: bool,
+    draft: Option<String>,
+    harness: Option<String>,
     window: &mut Window,
     cx: &mut App,
 ) -> gpui::Entity<Root> {
@@ -2955,7 +4150,8 @@ pub(super) fn root_for_shot(
             session.to_string(),
             mode,
             pinned,
-            false,
+            HashSet::new(),
+            GroupBy::Workspaces,
             metrics,
             Some(warmed),
             window,
@@ -2964,12 +4160,25 @@ pub(super) fn root_for_shot(
     });
     root.update(cx, |root, _| {
         root.shot = true;
+        root.toast_on_first_read = true;
+        root.sheet_on_first_read = sheet;
         if empty_chat {
             root.shot_empty_chat = true;
-            root.chat.switch(None);
+            root.chat.switch(None, "");
         }
         if cmd {
             root.picking = true;
+        }
+        if let Some(h) = harness {
+            root.launch.state.set_harness_for_shot(h);
+        }
+        if let Some(text) = draft {
+            if root.shot_empty_chat {
+                root.launch.state.refresh_skills();
+                root.launch.state.draft.replace_selection(&text);
+            } else {
+                root.chat.draft.replace_selection(&text);
+            }
         }
     });
     if let Some(find) = find {
@@ -2980,6 +4189,20 @@ pub(super) fn root_for_shot(
             root.find_key(find::FindKey::Edit("the".to_owned()), cx);
             if find == crate::FindShot::Chords {
                 root.picking = true;
+            }
+        });
+    }
+    if let Some(shot) = settings {
+        let fonts = settings::mono_fonts(window);
+        // The demo world pins its theme in a project file; the panel's
+        // rows read the global file alone, so the Theme row stays editable.
+        root.update(cx, |root, cx| {
+            root.theme_cwd = PathBuf::from("/");
+            root.open_settings_with(fonts, cx)
+        });
+        root.update(cx, |root, _| {
+            if let Some(st) = root.settings.as_mut() {
+                settings::apply_shot(st, shot);
             }
         });
     }

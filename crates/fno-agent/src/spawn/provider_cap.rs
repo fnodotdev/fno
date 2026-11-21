@@ -109,7 +109,7 @@ impl CapSnapshot {
     }
 
     pub fn open_lanes(&self) -> Vec<&CapLane> {
-        self.lanes.iter().filter(|l| l.state == "open").collect()
+        self.lanes.iter().filter(|l| l.state == "capped").collect()
     }
 }
 
@@ -127,6 +127,23 @@ fn registry_rows(registry_path: &std::path::Path) -> Result<Vec<Value>, String> 
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default())
+}
+
+/// The zone a vendor writes its naive reset stamps in, when no account record
+/// names one. z.ai's request id carries its local clock: a 1308 logged at
+/// 07:56:01Z carried id `20261120155601...`, so its stamps are UTC+8.
+fn built_in_reset_zone(provider: &str) -> Option<&'static str> {
+    (provider == "zai").then_some("Asia/Shanghai")
+}
+
+/// The id a claude row's transcript is asked for and looked up by. The bridge
+/// request and the member lookup must read this one answer: a spawned
+/// worker's full id lives in `harness_session_id`, so a request that skipped
+/// it left every live row reading transcript-not-found.
+fn transcript_id(row: &Value) -> Option<&str> {
+    s_field(row, "harness_session_id")
+        .or_else(|| s_field(row, "session_id"))
+        .or_else(|| s_field(row, "short_id"))
 }
 
 fn s_field<'a>(row: &'a Value, key: &str) -> Option<&'a str> {
@@ -715,9 +732,7 @@ pub fn snapshot_with(
             if s_field(row, "harness").unwrap_or("").as_harness() == Harness::Codex {
                 return None;
             }
-            s_field(row, "session_id")
-                .or_else(|| s_field(row, "short_id"))
-                .map(String::from)
+            transcript_id(row).map(String::from)
         })
         .collect();
     let (claude_paths, bridge_error) = match (scan.claude_paths)(&bridge_ids) {
@@ -764,9 +779,7 @@ pub fn snapshot_with(
         // The compaction stamp keeps the sessions-dir key (a stamp is written
         // by the PreCompact hook with the full uuid); the transcript
         // location comes from the bridge keyed by the row's own id.
-        let bridge_key = session_id
-            .clone()
-            .or_else(|| s_field(row, "short_id").map(String::from));
+        let bridge_key = transcript_id(row).map(String::from);
         // A codex row never resolves in the claude projects dir (its registry
         // row carries session_id = short_id = null), so its rollout resolves
         // from log_path, else from the codex sessions store by thread id.
@@ -854,7 +867,8 @@ pub fn snapshot_with(
             .get(&account)
             .cloned()
             .or_else(|| scan.record_zones.get(&account).cloned())
-            .or_else(|| scan.record_zones.get(&provider).cloned());
+            .or_else(|| scan.record_zones.get(&provider).cloned())
+            .or_else(|| built_in_reset_zone(&provider).map(String::from));
         let reset_raw = health_reset_at(&scan.runtime_state, &account).or_else(|| {
             // No health lock: the newest stamp among the capped members is
             // the lane's reset, naive stamps resolved in the lane's zone.
@@ -891,9 +905,9 @@ pub fn snapshot_with(
         {
             "returning"
         } else if capped_n >= cfg.quorum as usize || (capped_n >= 1 && reset_epoch.is_some()) {
-            "open"
+            "capped"
         } else {
-            "closed"
+            "clear"
         };
         let missing = if lane_tz.is_some() {
             Vec::new()
@@ -1026,10 +1040,10 @@ pub struct QuotaState {
 pub fn quota_details_from_snapshot(snapshot: &CapSnapshot) -> BTreeMap<String, QuotaState> {
     fn rank(state: &str) -> u8 {
         match state {
-            "open" => 4,
+            "capped" => 4,
             "returning" => 3,
             "unmeasured" => 2,
-            "closed" => 1,
+            "clear" => 1,
             _ => 0,
         }
     }
@@ -1220,6 +1234,9 @@ pub fn leave_decision(
         }
         None => {}
     }
+    if cfg.mode == "park" {
+        return LeaveDecision::Wait("park-mode".to_string());
+    }
     let Some(reset) = lane.reset_epoch else {
         // An unmeasured window never auto-moves; it asks (or holds an ask).
         return LeaveDecision::Ask;
@@ -1227,7 +1244,7 @@ pub fn leave_decision(
     if reset - now_epoch < (cfg.min_wait_minutes as i64) * 60 {
         return LeaveDecision::Wait("short-reset".to_string());
     }
-    if cfg.mode == "auto" || in_sleep_window(cfg, now_epoch) {
+    if matches!(cfg.mode.as_str(), "auto" | "triage") || in_sleep_window(cfg, now_epoch) {
         return LeaveDecision::Act(acting_members);
     }
     LeaveDecision::Ask
@@ -1357,6 +1374,17 @@ fn write_return_state(home: &AgentsHome, lane: &str, state: &Value) {
 /// them in any journal for this lane. Matched by name, because a respawn can
 /// change the row's session id.
 fn moved_members(home: &AgentsHome, lane: &str) -> Vec<String> {
+    members_with_steps(home, lane, &["spawn-confirmed"])
+}
+
+/// Members whose migration began on this lane: the leave ladder never starts
+/// a second one, so a successor that spawned but did not confirm is never
+/// joined by a twin on the next tick.
+fn migration_started(home: &AgentsHome, lane: &str) -> Vec<String> {
+    members_with_steps(home, lane, &["handoff-doc", "spawn", "spawn-confirmed"])
+}
+
+fn members_with_steps(home: &AgentsHome, lane: &str, steps: &[&str]) -> Vec<String> {
     let token = lane_file_token(lane);
     let prefix = format!("{token}-");
     let mut out = Vec::new();
@@ -1368,18 +1396,20 @@ fn moved_members(home: &AgentsHome, lane: &str) -> Vec<String> {
         if !(name.starts_with(&prefix) && name.ends_with(".jsonl")) {
             continue;
         }
-        // Committed rows, not journal bytes: the ladder's own steps are
-        // store-committed, so the moved-set reads them back from the store.
-        let Ok(rows) =
-            crate::event_store::query_events(&e.path(), &crate::event_store::EventQuery::default())
-        else {
+        // `journal` appends plain JSON lines, so they are read back as lines:
+        // the event-store query answered none of them, and every migrated
+        // member read as never moved.
+        let Ok(body) = std::fs::read_to_string(e.path()) else {
             continue;
         };
-        for r in rows {
-            let Ok(v) = serde_json::from_str::<Value>(&r.line) else {
+        for line in body.lines() {
+            let Ok(v) = serde_json::from_str::<Value>(line) else {
                 continue;
             };
-            if v.get("step").and_then(Value::as_str) == Some("spawn-confirmed") {
+            if v.get("step")
+                .and_then(Value::as_str)
+                .is_some_and(|s| steps.contains(&s))
+            {
                 if let Some(m) = v.get("member").and_then(Value::as_str) {
                     out.push(m.to_string());
                 }
@@ -1506,6 +1536,8 @@ pub fn run_return_lane(
         // Step 2: fresh epoch. Retire the leave question and decision: they
         // answered the reset that passed.
         close_leave_question(home, lane, now_epoch);
+        // An absent marker is the common case: the lane never alerted.
+        std::fs::remove_file(alert_marker(home, &lane.lane)).ok();
         let mut candidates = return_candidates(home, lane);
         if candidates.is_empty() {
             journal(
@@ -1678,7 +1710,9 @@ fn return_tick_survived(
         .filter(|c| !resumed.contains(&c.name))
         .collect();
     // Step 6: announce once in ask mode outside sleep hours.
-    if state.get("announced_at").is_none() && cfg.mode != "auto" && !in_sleep_window(cfg, now_epoch)
+    if state.get("announced_at").is_none()
+        && !matches!(cfg.mode.as_str(), "park" | "auto" | "triage")
+        && !in_sleep_window(cfg, now_epoch)
     {
         let n = remaining.len();
         let veto_at = now_epoch + RETURN_VETO_S;
@@ -1791,6 +1825,61 @@ pub struct LeaveDeps {
     pub resume: Box<dyn Fn(&CapMember) -> Result<(), String>>,
     /// Announce the return, with the veto instruction in the body.
     pub announce: Box<dyn Fn(&str) -> Result<(), String>>,
+    /// Under triage, whether a stranded member moves: its node is p0 or p1,
+    /// or it has an open PR. The rest park for the reset.
+    pub moves_on_cap: Box<dyn Fn(&CapMember) -> bool>,
+    /// Tell the lane members' leads that the lane opened. True when it left.
+    pub alert: Box<dyn Fn(&CapLane, &str) -> bool>,
+}
+
+/// The move destinations when no fallback grid is configured: the route
+/// lanes `[provider_cap] destinations` names, in order. Each lane template
+/// carries its own harness, model and effort.
+fn configured_destinations(cfg: &ProviderCapConfig) -> Vec<(String, Vec<String>)> {
+    cfg.destinations
+        .iter()
+        .map(|route| (route.clone(), vec!["--route".to_string(), route.clone()]))
+        .collect()
+}
+
+fn alert_marker(home: &AgentsHome, lane: &str) -> PathBuf {
+    lanes_dir(home).join(format!("{}.alerted", lane_file_token(lane)))
+}
+
+/// One alert per strand: the marker names the reset it announced, and the
+/// return ladder drops it when the lane comes back.
+fn alert_once(home: &AgentsHome, lane: &CapLane, plan: &str, now_epoch: i64, deps: &LeaveDeps) {
+    let key = lane
+        .reset_epoch
+        .map_or_else(|| "unknown".to_string(), |r| r.to_string());
+    let path = alert_marker(home, &lane.lane);
+    if std::fs::read_to_string(&path).is_ok_and(|k| k.trim() == key) {
+        return;
+    }
+    let when = lane
+        .reset_epoch
+        .map_or_else(|| "an unknown time".to_string(), epoch_to_rfc3339);
+    let capped: Vec<&str> = lane
+        .members
+        .iter()
+        .filter(|m| m.capped)
+        .map(|m| m.name.as_str())
+        .collect();
+    let body = format!(
+        "control: provider lane {} hit its usage limit; it resets at {when}. {plan} Capped: {}.",
+        lane.lane,
+        capped.join(", ")
+    );
+    if (deps.alert)(lane, &body) {
+        let _ = std::fs::create_dir_all(lanes_dir(home));
+        // An unwritten marker re-alerts next tick; the journal says why.
+        let step = match std::fs::write(&path, &key) {
+            Ok(()) => json!({"step": "alerted", "reset": lane.reset_epoch}),
+            Err(e) => json!({"step": "alerted", "reset": lane.reset_epoch,
+                             "marker": format!("unwritten: {e}")}),
+        };
+        journal(home, &lane.lane, now_epoch, &step);
+    }
 }
 
 /// Run the leave ladder for one open lane and journal every step.
@@ -1804,6 +1893,23 @@ pub fn run_leave_lane(
     deps: &LeaveDeps,
 ) -> String {
     let decision = leave_decision(lane, now_epoch, answer, cfg);
+    let triage = cfg.mode == "triage" && answer.is_none();
+    let plan = match &decision {
+        LeaveDecision::Act(_) if triage => format!(
+            "Workers on p0/p1 nodes or with an open PR move off the lane; the rest park and resume on {} after the reset.",
+            lane.provider
+        ),
+        LeaveDecision::Act(_) => "Its workers move off the lane.".to_string(),
+        LeaveDecision::Ask => {
+            "Nothing moves until an operator answers fno agent admit provider-cap decide."
+                .to_string()
+        }
+        LeaveDecision::Wait(reason) => format!(
+            "Nothing moves ({reason}); the workers park and resume on {} after the reset.",
+            lane.provider
+        ),
+    };
+    alert_once(home, lane, &plan, now_epoch, deps);
     match decision {
         LeaveDecision::Wait(reason) => {
             journal(
@@ -1835,9 +1941,20 @@ pub fn run_leave_lane(
             "ask".to_string()
         }
         LeaveDecision::Act(names) => {
+            let started = migration_started(home, &lane.lane);
+            let acting: Vec<&CapMember> = lane
+                .members
+                .iter()
+                .filter(|m| names.contains(&m.name) && !started.contains(&m.name))
+                .filter(|m| !triage || (deps.moves_on_cap)(m))
+                .collect();
+            if acting.is_empty() {
+                return "parked".to_string();
+            }
             // Trap 3: refresh before reading destination headroom.
             (deps.refresh_usage)();
             let dests = match destinations(scan, "default", &[lane.lane.clone()]) {
+                Ok(d) if d.is_empty() => configured_destinations(cfg),
                 Ok(d) => d,
                 Err(reason) => {
                     journal(
@@ -1860,11 +1977,6 @@ pub fn run_leave_lane(
                 );
                 return "wait: no-healthy-destination".to_string();
             }
-            let acting: Vec<&CapMember> = lane
-                .members
-                .iter()
-                .filter(|m| names.contains(&m.name))
-                .collect();
             for member in acting {
                 migrate_one(home, lane, member, &dests, now_epoch, deps);
             }
@@ -1884,106 +1996,99 @@ fn migrate_one(
     now_epoch: i64,
     deps: &LeaveDeps,
 ) {
-    let (dest, flags) = match dests.first() {
-        Some((d, f)) => (d.clone(), f.clone()),
-        None => {
+    if dests.is_empty() {
+        journal(
+            home,
+            &lane.lane,
+            now_epoch,
+            &json!({
+                "step": "unknown", "member": member.name,
+                "reason": "no-destination",
+            }),
+        );
+        return;
+    }
+    // Destinations in order: a spawn the lane refuses (its harness is
+    // unavailable) falls through to the next one.
+    for (dest, flags) in dests {
+        let path = match write_handoff_doc(home, lane, member, dest, now_epoch) {
+            Ok(path) => path,
+            Err(reason) => {
+                journal(
+                    home,
+                    &lane.lane,
+                    now_epoch,
+                    &json!({
+                        "step": "unknown", "member": member.name,
+                        "reason": format!("handoff-doc-failed: {reason}"),
+                    }),
+                );
+                return;
+            }
+        };
+        journal(
+            home,
+            &lane.lane,
+            now_epoch,
+            &json!({
+                "step": "handoff-doc", "member": member.name, "path": path.to_string_lossy(),
+                "destination": dest,
+            }),
+        );
+        let new_sid = match (deps.spawn)(member, flags, &path) {
+            Ok(new_sid) => new_sid,
+            Err(reason) => {
+                journal(
+                    home,
+                    &lane.lane,
+                    now_epoch,
+                    &json!({
+                        "step": "unknown", "member": member.name, "destination": dest,
+                        "reason": format!("spawn-failed: {reason}"),
+                    }),
+                );
+                continue;
+            }
+        };
+        journal(
+            home,
+            &lane.lane,
+            now_epoch,
+            &json!({
+                "step": "spawn", "member": member.name,
+                "successor": new_sid, "destination": dest,
+            }),
+        );
+        if !(deps.confirm)(&new_sid) {
             journal(
                 home,
                 &lane.lane,
                 now_epoch,
                 &json!({
                     "step": "unknown", "member": member.name,
-                    "reason": "no-destination",
+                    "reason": "successor-unconfirmed",
                 }),
             );
             return;
         }
-    };
-    let handoff_path = write_handoff_doc(home, lane, member, &dest, now_epoch);
-    match handoff_path {
-        Ok(path) => {
-            journal(
-                home,
-                &lane.lane,
-                now_epoch,
-                &json!({
-                    "step": "handoff-doc", "member": member.name, "path": path.to_string_lossy(),
-                }),
-            );
-            // The destination's spawn flags ride the grid's answer, so the
-            // successor lands on the destination exactly as a spawn would.
-            match (deps.spawn)(member, &flags, &path) {
-                Ok(new_sid) => {
-                    journal(
-                        home,
-                        &lane.lane,
-                        now_epoch,
-                        &json!({
-                            "step": "spawn", "member": member.name,
-                            "successor": new_sid,
-                        }),
-                    );
-                    if (deps.confirm)(&new_sid) {
-                        journal(
-                            home,
-                            &lane.lane,
-                            now_epoch,
-                            &json!({
-                                "step": "spawn-confirmed", "member": member.name,
-                                "successor": new_sid,
-                            }),
-                        );
-                        match (deps.stop)(member) {
-                            Ok(()) => journal(
-                                home,
-                                &lane.lane,
-                                now_epoch,
-                                &json!({
-                                    "step": "stopped", "member": member.name,
-                                }),
-                            ),
-                            Err(reason) => journal(
-                                home,
-                                &lane.lane,
-                                now_epoch,
-                                &json!({
-                                    "step": "unknown", "member": member.name,
-                                    "reason": format!("stop-failed: {reason}"),
-                                }),
-                            ),
-                        }
-                    } else {
-                        journal(
-                            home,
-                            &lane.lane,
-                            now_epoch,
-                            &json!({
-                                "step": "unknown", "member": member.name,
-                                "reason": "successor-unconfirmed",
-                            }),
-                        );
-                    }
-                }
-                Err(reason) => journal(
-                    home,
-                    &lane.lane,
-                    now_epoch,
-                    &json!({
-                        "step": "unknown", "member": member.name,
-                        "reason": format!("spawn-failed: {reason}"),
-                    }),
-                ),
-            }
-        }
-        Err(reason) => journal(
+        journal(
             home,
             &lane.lane,
             now_epoch,
             &json!({
-                "step": "unknown", "member": member.name,
-                "reason": format!("handoff-doc-failed: {reason}"),
+                "step": "spawn-confirmed", "member": member.name,
+                "successor": new_sid,
             }),
-        ),
+        );
+        let step = match (deps.stop)(member) {
+            Ok(()) => json!({"step": "stopped", "member": member.name}),
+            Err(reason) => json!({
+                "step": "unknown", "member": member.name,
+                "reason": format!("stop-failed: {reason}"),
+            }),
+        };
+        journal(home, &lane.lane, now_epoch, &step);
+        return;
     }
 }
 
@@ -2223,8 +2328,72 @@ mod tests {
         let glm: Vec<_> = snap.lanes.iter().filter(|l| l.provider == "zai").collect();
         assert_eq!(glm.len(), 1, "one lane, not one per row");
         assert_eq!(glm[0].members.len(), 3);
-        assert_eq!(glm[0].state, "open");
+        assert_eq!(glm[0].state, "capped");
         assert_eq!(glm[0].reset_epoch, Some(9_999_999_999));
+    }
+
+    /// The live registry keeps a spawned worker's full id in
+    /// `harness_session_id`, with `session_id` absent or the short id. The
+    /// bridge must be asked for the same id the member looks itself up by, or
+    /// every row reads transcript-not-found and a 1308 never opens the lane.
+    #[test]
+    fn a_row_keyed_only_by_harness_session_id_reads_its_capped_tail() {
+        let root = std::env::temp_dir().join(format!("pc-hsid-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let home_dir = root.join("home");
+        let projects = root.join("projects").join("-wt");
+        let full_a = "55555555-5555-5555-5555-555555555555";
+        let full_b = "66666666-6666-6666-6666-666666666666";
+        let model = r#"{"kind":"observed","model":"glm-5.3-flash[1m]"}"#;
+        let registry = format!(
+            r#"[{{"name":"w-a","harness_session_id":"{full_a}","harness":"claude","observed_model":{model}}},{{"name":"w-b","session_id":"66666666","short_id":"66666666","harness_session_id":"{full_b}","harness":"claude","observed_model":{model}}}]"#
+        );
+        write(
+            &home_dir.join("registry.json"),
+            format!(r#"{{"schema_version":25,"agents":{registry}}}"#).as_str(),
+        );
+        for sid in [full_a, full_b] {
+            write(
+                &projects.join(format!("{sid}.jsonl")),
+                &format!("{OK_LINE}\n{FOUR29_LINE}\n"),
+            );
+        }
+        let snap = snapshot_with(
+            &scan(
+                home_dir.join("registry.json"),
+                projects.parent().unwrap().to_path_buf(),
+                root.join("runtime-state.json"),
+                home_dir,
+            ),
+            1_000_000_000,
+            &cfg(2),
+        )
+        .unwrap();
+        let glm: Vec<_> = snap.lanes.iter().filter(|l| l.provider == "zai").collect();
+        assert_eq!(glm.len(), 1);
+        let lane = glm.first().expect("one zai lane");
+        for m in &lane.members {
+            assert_eq!(
+                m.cap_unknown, None,
+                "{} must resolve its transcript",
+                m.name
+            );
+            assert!(m.capped, "{} must read its 429 tail", m.name);
+        }
+        assert_eq!(lane.state, "capped");
+    }
+
+    /// A 1308 names its reset in z.ai's own clock. The lane parks until that
+    /// time with no account record, read from the line logged 2026-11-20.
+    #[test]
+    fn a_zai_1308_reset_resolves_in_the_built_in_zone() {
+        let text = "API Error: Request rejected (429) · [1308][Usage limit reached for 5 hour. Your limit will reset at 2026-11-20 17:46:14][20261120155601b92077bbfa834c3e]";
+        assert_eq!(
+            reset_epoch_from_excerpt(text, built_in_reset_zone("zai"), 1_795_161_361),
+            Some(1_795_167_974),
+            "17:46:14 at UTC+8 is 09:46:14Z"
+        );
+        assert_eq!(built_in_reset_zone("anthropic"), None);
     }
 
     /// A bridge that fails (the resolver errors) reads a NAMED unknown on
@@ -2290,7 +2459,7 @@ mod tests {
         persist_snapshot(
             &home,
             &CapSnapshot {
-                lanes: vec![lane("main", "closed"), lane("backup", "unmeasured")],
+                lanes: vec![lane("main", "clear"), lane("backup", "unmeasured")],
                 measured_at: epoch_to_rfc3339(100),
                 measured_at_epoch: 100,
                 resolver_unavailable: None,
@@ -2335,7 +2504,7 @@ mod tests {
             .iter()
             .find(|l| l.lane == "openai:default")
             .expect("openai:default lane");
-        assert_eq!(lane.state, "closed");
+        assert_eq!(lane.state, "clear");
         let _ = std::fs::remove_dir_all(&root);
 
         let now = 1_789_400_000i64;
@@ -2447,7 +2616,7 @@ mod tests {
             .iter()
             .find(|l| l.lane == "zai:default")
             .expect("zai:default lane");
-        assert_eq!(lane.state, "open");
+        assert_eq!(lane.state, "capped");
         assert_eq!(lane.reset_epoch, Some(1_789_468_862));
         assert!(
             lane.missing_reset_timezone.is_empty(),
@@ -2460,7 +2629,7 @@ mod tests {
     /// while compacting: the bridge-resolved transcript's stem names the full
     /// uuid, so the compaction stamp is probed by the right key.
     #[test]
-    fn ac2_arm_config_defaults_off_and_reads_overrides() {
+    fn ac2_arm_config_defaults_to_park_and_reads_overrides() {
         // FNO_CONFIG, when set, is the ONLY config candidate; hold the env
         // lock so a sibling fixture (probe tests set it) cannot own the
         // window while this test reads config discovery.
@@ -2471,16 +2640,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join(".fno")).unwrap();
         let defaults = provider_cap_config(&root);
-        assert!(!defaults.enabled);
-        assert_eq!(defaults.mode, "ask");
+        assert!(defaults.enabled);
+        assert_eq!(defaults.mode, "park");
+        assert!(defaults.destinations.is_empty(), "no paid lane by default");
         assert_eq!(defaults.quorum, 2);
         std::fs::write(
             root.join(".fno/config.toml"),
-            "[provider_cap]\nenabled = true\nmode = \"auto\"\nmin_wait_minutes = 45\nquorum = 1\n",
+            "[provider_cap]\nenabled = false\nmode = \"auto\"\nmin_wait_minutes = 45\nquorum = 1\n",
         )
         .unwrap();
         let armed = provider_cap_config(&provider_cap_config_test_cwd(&root));
-        assert!(armed.enabled);
+        assert!(!armed.enabled);
         assert_eq!(armed.mode, "auto");
         assert_eq!(armed.min_wait_minutes, 45);
         assert_eq!(armed.quorum, 1);
@@ -2546,6 +2716,14 @@ mod tests {
                     Ok(())
                 }
             }),
+            moves_on_cap: Box::new(|m: &CapMember| m.node.as_deref() != Some("park")),
+            alert: Box::new({
+                let calls = calls.clone();
+                move |lane: &CapLane, _body: &str| {
+                    calls.borrow_mut().push(format!("alert:{}", lane.lane));
+                    true
+                }
+            }),
         }
     }
 
@@ -2557,7 +2735,7 @@ mod tests {
             reset_epoch: reset,
             reset_passed_epoch: None,
             missing_reset_timezone: vec![],
-            state: "open".into(),
+            state: "capped".into(),
             members: vec![CapMember {
                 name: "w-1".into(),
                 session_id: Some("99999999-9999-9999-9999-999999999999".into()),
@@ -2631,6 +2809,7 @@ mod tests {
         let lane = lane_fixture(Some(now_epoch_secs() + 600), None);
         let cfg = ProviderCapConfig {
             min_wait_minutes: 30,
+            mode: "triage".into(),
             ..Default::default()
         };
         let calls = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
@@ -2648,6 +2827,7 @@ mod tests {
         let lane = lane_fixture(Some(now_epoch_secs() + 3 * 3600), None);
         let cfg = ProviderCapConfig {
             sleep_hours: String::new(),
+            mode: "ask".into(),
             ..Default::default()
         };
         let calls = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
@@ -2677,6 +2857,7 @@ mod tests {
             // (2026-09-26 23:59 UTC). The test wants "asleep now", always.
             sleep_hours: "00:00-24:00".into(),
             sleep_timezone: String::new(),
+            mode: "ask".into(),
             ..Default::default()
         };
         let calls = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
@@ -2696,6 +2877,71 @@ mod tests {
             confirmed_pos < stopped_pos,
             "spawn-confirmed before stopped"
         );
+    }
+
+    /// Triage on a measured strand: important work moves to the configured
+    /// destinations, the rest parks, the leads hear once, and a later tick
+    /// never starts a second migration. The shipped default only parks.
+    #[test]
+    fn triage_moves_important_work_and_the_default_only_parks() {
+        let home =
+            AgentsHome::at(std::env::temp_dir().join(format!("pc3t-{}", std::process::id())));
+        let _ = std::fs::remove_dir_all(home.root());
+        let mut lane = lane_fixture(Some(now_epoch_secs() + 3 * 3600), None);
+        let mut parked = lane.members.first().cloned().expect("fixture member");
+        parked.name = "w-2".into();
+        parked.node = Some("park".into());
+        lane.members.push(parked);
+        let cfg = ProviderCapConfig {
+            mode: "triage".into(),
+            destinations: vec!["codex-luna".into(), "claude-sonnet-5-5".into()],
+            ..Default::default()
+        };
+        let calls = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let deps = rec_deps(calls.clone(), true);
+        let (_fixture, grid_scan) = scan_fixture();
+        let scan = CapScan {
+            settings_candidates: vec![],
+            ..grid_scan
+        };
+        let now = now_epoch_secs();
+        assert_eq!(
+            run_leave_lane(&home, &scan, &lane, None, &cfg, now, &deps),
+            "acted"
+        );
+        assert_eq!(
+            run_leave_lane(&home, &scan, &lane, None, &cfg, now, &deps),
+            "parked"
+        );
+        let calls = calls.borrow();
+        let count = |p: &str| calls.iter().filter(|c| c.as_str() == p).count();
+        assert_eq!(count("spawn:w-1"), 1, "{calls:?}");
+        assert_eq!(count("spawn:w-2"), 0, "{calls:?}");
+        assert_eq!(count("alert:zai:zai-main"), 1, "{calls:?}");
+        let ids: Vec<String> = configured_destinations(&cfg)
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(ids, ["codex-luna", "claude-sonnet-5-5"], "config order");
+        // The shipped default moves nothing to another paid lane.
+        let calls = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let deps = rec_deps(calls.clone(), true);
+        let park_home =
+            AgentsHome::at(std::env::temp_dir().join(format!("pc3p-{}", std::process::id())));
+        let _ = std::fs::remove_dir_all(park_home.root());
+        let out = run_leave_lane(
+            &park_home,
+            &scan,
+            &lane,
+            None,
+            &ProviderCapConfig::default(),
+            now,
+            &deps,
+        );
+        assert_eq!(out, "wait: park-mode");
+        let calls = calls.borrow();
+        assert!(calls.iter().all(|c| !c.starts_with("spawn:")), "{calls:?}");
+        assert!(calls.iter().any(|c| c == "alert:zai:zai-main"), "{calls:?}");
     }
 
     fn read_journal(home: &AgentsHome) -> Vec<String> {

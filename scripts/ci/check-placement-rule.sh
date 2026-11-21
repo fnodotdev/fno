@@ -225,11 +225,12 @@
 #      tempdir .claude/skills fixture root so the absent/unverifiable
 #      boundary is hermetic. Read-only against real roots; nothing
 #      accumulates there.
-#      crates/fno-app/src/launch.rs `skill_names` feeds the composer's
-#      skill autocomplete with the same two roots dispatch_resolve globs
-#      (~/.claude/skills and the picked project's .claude/skills).
-#      Read-only `is_dir`/`is_file` probes of Claude Code's own skill
-#      dirs; footnote stores nothing there.
+#      crates/fno-app/src/skills.rs feeds the composers' skill autocomplete
+#      with the roots dispatch_resolve globs (~/.claude/skills and the
+#      picked project's .claude/skills) plus the installed plugins named in
+#      ~/.claude/plugins/installed_plugins.json, minus the ones
+#      ~/.claude/settings.json turns off. Read-only probes of Claude Code's
+#      own skill dirs and config; footnote stores nothing there.
 #      crates/fno/src/install/uninstall.rs reads Claude Code's plugin registry and
 #      removes the hook entry cli_hooks.rs merged into its settings.json:
 #      the reverse of that write, in Claude Code's own config. It stores
@@ -424,7 +425,7 @@ crates/fno-agent/src/runtime/orphans.rs
 crates/fno-agent/src/spawn/plugin_install.rs
 crates/fno/src/install/uninstall.rs
 crates/fno/src/setup/cli_hooks.rs
-crates/fno-app/src/launch.rs
+crates/fno-app/src/skills.rs
 # setup_run.rs names the Claude Code user settings file in an approval description.
 crates/fno/src/setup/setup_run.rs
 # cli_hooks_tests.rs uses synthetic roots to check settings-path selection.

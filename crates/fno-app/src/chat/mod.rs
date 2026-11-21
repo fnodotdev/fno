@@ -153,6 +153,8 @@ pub struct Chat {
     pub list: ListState,
     /// The tool call whose sheet is open, by row index.
     pub sheet: Option<usize>,
+    /// The row picked in the open question's strip.
+    pub pick: usize,
     pub draft: composer::Draft,
     /// The composer's last layout, scroll and drag state.
     pub field: Rc<field::FieldState>,
@@ -161,6 +163,10 @@ pub struct Chat {
     pub next_request: u64,
     /// The composer's bounds at the last paint, where the IME window opens.
     pub composer: Rc<Cell<Bounds<Pixels>>>,
+    /// The shown session's harness skills, read on a switch.
+    pub skills: Vec<crate::skills::Skill>,
+    /// The popover's selected row and Esc state.
+    pub skill_pick: crate::skills::Pick,
 }
 
 impl Default for Chat {
@@ -174,18 +180,21 @@ impl Default for Chat {
             opened_at: Instant::now(),
             list: ListState::new(0, ListAlignment::Bottom, px(800.0)),
             sheet: None,
+            pick: 0,
             draft: composer::Draft::default(),
             field: Rc::new(field::FieldState::default()),
             pending: Vec::new(),
             next_request: 1,
             composer: Rc::new(Cell::new(Bounds::default())),
+            skills: Vec::new(),
+            skill_pick: crate::skills::Pick::default(),
         }
     }
 }
 
 impl Chat {
     /// Show `key`, parking the conversation shown now.
-    pub fn switch(&mut self, key: Option<SessionKey>) {
+    pub fn switch(&mut self, key: Option<SessionKey>, project: &str) {
         let conv = key
             .as_ref()
             .and_then(|k| self.parked.remove(k))
@@ -194,13 +203,60 @@ impl Chat {
         if let Some(old_key) = self.key.take() {
             self.parked.insert(old_key, old);
         }
+        self.skills = key
+            .as_ref()
+            .map(|k| crate::skills::list(&k.harness, project))
+            .unwrap_or_default();
         self.key = key;
         self.stream = None;
         self.closed = None;
         self.sheet = None;
+        self.pick = 0;
         self.pending.clear();
         self.opened_at = Instant::now();
         self.list.reset(self.conv.items.len());
+    }
+
+    /// The popover for the draft, grouped by source.
+    pub fn skill_view(&self) -> Option<crate::skills::View> {
+        let harness = &self.key.as_ref()?.harness;
+        crate::skills::view(&self.skills, harness, self.draft.text(), &self.skill_pick)
+    }
+
+    /// Up or down moves the popover's row. False when none shows.
+    pub fn skill_step(&mut self, down: bool) -> bool {
+        let Some(v) = self.skill_view() else {
+            return false;
+        };
+        self.skill_pick.step(self.draft.text(), down, v.rows.len());
+        true
+    }
+
+    /// Esc closes the popover until the draft changes. False when none shows.
+    pub fn skill_close(&mut self) -> bool {
+        if self.skill_view().is_none() {
+            return false;
+        }
+        self.skill_pick.close(self.draft.text());
+        true
+    }
+
+    /// Tab fills the selected row as `<sigil>name `. False when none shows.
+    pub fn complete_skill(&mut self) -> bool {
+        let Some(v) = self.skill_view() else {
+            return false;
+        };
+        let sigil = self
+            .key
+            .as_ref()
+            .and_then(|k| crate::skills::sigil(&k.harness));
+        let (Some(row), Some(sigil)) = (v.rows.get(v.sel), sigil) else {
+            return false;
+        };
+        let text = format!("{sigil}{} ", row.name);
+        self.draft.select_all();
+        self.draft.replace_selection(&text);
+        true
     }
 
     /// Fold a batch. Rows that changed in place are measured again; rows
@@ -220,6 +276,9 @@ impl Chat {
                 Msg::Ended => self.closed = Some(Closed::Ended),
                 Msg::Failed(why) => self.closed = Some(Closed::Failed(why)),
             }
+        }
+        if self.conv.open_question().is_none() {
+            self.pick = 0;
         }
         self.drop_recorded_pending(first);
         let after = self.conv.items.len();

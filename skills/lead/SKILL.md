@@ -142,6 +142,10 @@ Breaker detail and incident claims: [cli-commands.md](references/cli-commands.md
 
 A quiet window is not a halt. When the user asks you not to interrupt them, run `/fno:dnd` (codex: `$fno:dnd`). It holds only your inbound mail, and leaves fleet work running.
 
+## Hand-off orders between leads
+
+An order that hands a territory, node or thread to another lead rides the control lane: start the body's first line with `control:`. For example: `fno agent mail send <peer> "control: take <node>: <one sentence>"`. The prefix passes a hold the receiver's user set. It waits out a live conversation instead of breaking into it, so the order lands without interrupting a chat the user is in. A `control:` body rides the 60-word control budget per pair. Keep the order short, and put the detail on the node or in a follow-up mail.
+
 ## StepDown
 
 At handoff or before `fno agent hq done`, the succession files parts 1 and 2 for you. The [succession steps](references/once.md#stepdown-the-succession-steps) run for you. The retro grades parts 3 to 5 itself and writes `PENDING-NODES-from-<session8>-retro.md`. Your part is the filing: turn each `- [ ]` line in that file into a node with `fno backlog idea`, then tick the box. A part still marked `status: pending` means the grade failed, so write that part from `part1-metrics.md` and `part2-timeline.md`. With `--once`, `fno agent hq done` is the last act of pass step 5 or of the org's wave boundary.

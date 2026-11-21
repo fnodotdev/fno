@@ -419,7 +419,7 @@ jobs:
       # an apt fallback once hung long enough to time out a cargo shard.
       - name: Install tesseract when the image-leak gate needs it
         if: ${{ !cancelled() }}
-        timeout-minutes: 2
+        timeout-minutes: 5
         run: command -v tesseract >/dev/null 2>&1 || sudo apt-get install -y tesseract-ocr
 
       - name: Screenshot leak scan on changed images

@@ -9,12 +9,13 @@ struct Args {
     /// The mux session to attach to (default: FNO_SERVER, then `default`).
     #[arg(long)]
     session: Option<String>,
-    /// The terminal font family.
-    #[arg(long, default_value = "SF Mono")]
-    font: String,
-    /// The terminal font size in points.
-    #[arg(long, default_value_t = 13.0)]
-    font_size: f32,
+    /// The terminal font family. Overrides `app.font` in the global
+    /// config, which the Settings page writes.
+    #[arg(long)]
+    font: Option<String>,
+    /// The terminal font size in points. Overrides `app.font_size`.
+    #[arg(long)]
+    font_size: Option<f32>,
     /// Attach with no window, print `attached session=<s> panes=<n> frames=<m>`
     /// and `agents=<n> questions=<m> seats=<k>`, and exit.
     #[arg(long)]
@@ -52,10 +53,18 @@ struct Args {
     /// posted mouse event before the capture.
     #[arg(long = "shot-tap", value_name = "X,Y")]
     shot_tap: Option<String>,
+    /// Settings-panel state --shot paints: `panel` opens the panel,
+    /// `filter` types `alert` through the real field, `page` opens the
+    /// Theme choice page through real Enter.
+    #[arg(long = "shot-settings", value_enum)]
+    shot_settings: Option<ShotSettings>,
     /// Hold the composited shot window up for a foreign capturer
     /// instead of capturing. Diagnostic.
     #[arg(long = "shot-hold", hide = true)]
     shot_hold: bool,
+    /// Open the answer sheet on the newest question: the sheet proof.
+    #[arg(long = "shot-sheet", hide = true)]
+    shot_sheet: bool,
     /// The chat pane keeps its empty start view for the frame, whatever
     /// the world's focus carries. Shot-only.
     #[arg(long = "shot-empty-chat", hide = true)]
@@ -64,6 +73,13 @@ struct Args {
     /// Shot-only.
     #[arg(long = "shot-cmd", hide = true)]
     shot_cmd: bool,
+    /// Text typed into the start composer (or the chat composer when the
+    /// pane has a session) before the frame. Shot-only.
+    #[arg(long = "shot-draft", hide = true)]
+    shot_draft: Option<String>,
+    /// Harness the start composer shows picked. Shot-only.
+    #[arg(long = "shot-harness", hide = true)]
+    shot_harness: Option<String>,
 }
 
 /// The --shot-mode values. The kebab spellings mirror MainView.
@@ -77,6 +93,8 @@ enum ShotView {
     Orchestration,
     /// The mods and layouts feed
     Mods,
+    /// The inbox
+    Inbox,
 }
 
 impl ShotView {
@@ -86,6 +104,7 @@ impl ShotView {
             ShotView::Terminal => fno_app::MainView::Terminal,
             ShotView::Orchestration => fno_app::MainView::Orchestration,
             ShotView::Mods => fno_app::MainView::Mods,
+            ShotView::Inbox => fno_app::MainView::Inbox,
         }
     }
 }
@@ -105,6 +124,17 @@ fn parse_point(s: &str) -> Option<(f64, f64)> {
     Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
 }
 
+/// The --shot-settings values.
+#[derive(clap::ValueEnum, Clone)]
+enum ShotSettings {
+    /// The open panel.
+    Panel,
+    /// The panel with `alert` typed.
+    Filter,
+    /// The Theme choice page open.
+    Page,
+}
+
 fn main() {
     let args = Args::parse();
     let shot = if args.shot {
@@ -115,8 +145,10 @@ fn main() {
         Some(fno_app::ShotOptions {
             session: args.session.clone(),
             chat: args.chat.clone(),
-            font: args.font.clone(),
-            font_size: args.font_size,
+            // A shot pins its own face: the shot path reads no config, so
+            // the flag (or the default) decides and a run is repeatable.
+            font: args.font.clone().unwrap_or_else(|| "SF Mono".to_string()),
+            font_size: args.font_size.unwrap_or(13.0),
             out: std::path::PathBuf::from(out),
             theme: args.shot_theme,
             mode: args.shot_mode.map(ShotView::into_main),
@@ -125,9 +157,17 @@ fn main() {
                 ShotFind::Chords => fno_app::FindShot::Chords,
             }),
             tap: args.shot_tap.as_deref().and_then(parse_point),
+            settings: args.shot_settings.map(|s| match s {
+                ShotSettings::Panel => fno_app::SettingsShot::Panel,
+                ShotSettings::Filter => fno_app::SettingsShot::Filter,
+                ShotSettings::Page => fno_app::SettingsShot::Page,
+            }),
             hold: args.shot_hold,
+            sheet: args.shot_sheet,
             empty_chat: args.shot_empty_chat,
             cmd: args.shot_cmd,
+            draft: args.shot_draft,
+            harness: args.shot_harness,
         })
     } else {
         None

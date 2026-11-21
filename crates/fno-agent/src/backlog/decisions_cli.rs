@@ -14,7 +14,7 @@ use super::node_ref::{is_wellformed_node_id, ResolutionIndex};
 
 const LABEL: &str = "backlog decisions";
 
-const USAGE: &str = "usage: fno backlog decisions [subject] [--limit N] [--lane law|coord|grant|unattributed] [--state live|retired|expired|superseded|retracted|unscoped|all] [--review-list] [--log] [--output PATH] [--format markdown|json] [--json|-J]";
+const USAGE: &str = "usage: fno backlog decisions [subject] [--limit N] [--lane user|agent|grant|unattributed] [--state live|retired|expired|superseded|retracted|unscoped|all] [--review-list] [--log] [--provenance] [--output PATH] [--format markdown|json] [--json|-J]";
 
 /// The state filter's closed set, the deleted Python command's own ValueError
 /// text. A bad `--state` rides the read-failure exit (1), not usage (2):
@@ -64,6 +64,7 @@ struct Options {
     state: Option<String>,
     review_list: bool,
     log: bool,
+    provenance: bool,
     output: Option<String>,
     format: Option<String>,
     json: bool,
@@ -79,6 +80,7 @@ impl Default for Options {
             state: None,
             review_list: false,
             log: false,
+            provenance: false,
             output: None,
             format: None,
             json: false,
@@ -128,6 +130,12 @@ fn parse_options(argv: &[String]) -> Result<Options, String> {
                 }
                 opts.log = true;
             }
+            "--provenance" => {
+                if inline.is_some() {
+                    return Err(format!("{flag} takes no value"));
+                }
+                opts.provenance = true;
+            }
             "--output" => opts.output = Some(value()?),
             "--format" => opts.format = Some(value()?),
             "--json" | "-J" => {
@@ -176,6 +184,14 @@ pub(crate) enum CoreError {
     /// The ValueError family: the message rides the same exit-1 text,
     /// because the Python command caught ValueError and OSError into one arm.
     ValueError(String),
+}
+
+impl std::fmt::Display for CoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CoreError::Read(s) | CoreError::ValueError(s) => f.write_str(s),
+        }
+    }
 }
 
 pub(crate) struct ListOut {
@@ -228,7 +244,7 @@ fn read_entries_soft_at(graph: &Path) -> Option<Vec<Value>> {
 /// handed in, so a test seam scopes the whole answer.
 fn soft_entries_at(graph: &Path, subject: &str, lane: Option<&str>) -> Option<Vec<Value>> {
     let subject = subject.trim();
-    if lane.is_some_and(|l| l != "coord") && is_wellformed_node_id(subject) {
+    if lane.is_some_and(|l| l != "coord" && l != "agent") && is_wellformed_node_id(subject) {
         if let Ok(Some(row)) = crate::graph_store::read_one(graph, subject) {
             return Some(vec![row]);
         }
@@ -237,7 +253,7 @@ fn soft_entries_at(graph: &Path, subject: &str, lane: Option<&str>) -> Option<Ve
     // node spelling: the resolution tiers cannot answer it, so the full
     // graph read below resolves nothing the exact match does not (measured:
     // the full read was most of the subject-query cost).
-    if lane.is_some_and(|l| l != "coord") && subject.contains(':') {
+    if lane.is_some_and(|l| l != "coord" && l != "agent") && subject.contains(':') {
         return None;
     }
     read_entries_soft_at(graph)
@@ -583,8 +599,18 @@ fn list_core(
             crate::decision_index::PROOF_CUTOVER
         );
     }
+    let unread = fill_graph_entries(entries, &rows, lane);
     Ok(list_core_over(
-        rows, damaged, entries, subject, lane, state, scope_all,
+        &rows,
+        damaged,
+        GraphEntries {
+            graph: entries.as_deref(),
+            unread: unread.as_deref(),
+        },
+        subject,
+        lane,
+        state,
+        scope_all,
     ))
 }
 
@@ -601,15 +627,84 @@ pub(crate) fn live_rows_over(
     entries: &mut Option<Vec<Value>>,
     subject: &str,
 ) -> Vec<Value> {
-    list_core_over(rows, 0, entries, Some(subject), None, Some("live"), false).rows
+    let unread = fill_graph_entries(entries, &rows, None);
+    list_core_over(
+        &rows,
+        0,
+        GraphEntries {
+            graph: entries.as_deref(),
+            unread: unread.as_deref(),
+        },
+        Some(subject),
+        None,
+        Some("live"),
+        false,
+    )
+    .rows
+}
+
+/// The graph side of one listing call: the entries the derivation renders
+/// against and the reason the graph was needed but could not be read (the
+/// input that marks a coord row unknown). Borrowed, so a cached caller
+/// hands over Arc'd rows with no clone.
+#[derive(Default, Clone, Copy)]
+pub(crate) struct GraphEntries<'a> {
+    pub(crate) graph: Option<&'a [Value]>,
+    pub(crate) unread: Option<&'a str>,
+}
+
+/// A store row that renders as a decision: no envelope type, or the
+/// operator_decision type. The derivation and the read-need predicate
+/// share it, so the two stay one definition.
+pub(crate) fn is_decision_row(r: &Value) -> bool {
+    match r.get("_event_type") {
+        None | Some(Value::Null) => true,
+        Some(t) => t.as_str() == Some("operator_decision"),
+    }
+}
+
+/// Do any of the decision rows read the graph for expiry: a stated
+/// non-date expiry_ref, or an unstated expiry that defaults to the
+/// subject (coord lane or a question row). The lane filter bounds it: a
+/// lane that keeps such rows out never pays for the read.
+pub(crate) fn any_row_reads_graph(rows: &[Value], lane: Option<&str>) -> bool {
+    rows.iter().filter(|r| is_decision_row(r)).any(|r| {
+        let lane_ok = lane.map_or(true, |l| l == decision_lane(r));
+        let stated = r.get("expiry_ref").filter(|e| e.is_object());
+        let timed = stated.is_some_and(|e| matches!(rows_str(e, "kind"), "date" | "never"));
+        lane_ok
+            && !timed
+            && (stated.is_some() || crate::decision_index::expiry_defaults_to_subject(r))
+    })
+}
+
+/// Fill the caller's graph entries when the listing needs them and the
+/// caller has none: one read, stored for the caller's reuse. The returned
+/// Some carries the unread reason (the coord-row degrade's input).
+pub(crate) fn fill_graph_entries(
+    entries: &mut Option<Vec<Value>>,
+    rows: &[Value],
+    lane: Option<&str>,
+) -> Option<String> {
+    if entries.is_some() || !any_row_reads_graph(rows, lane) {
+        return None;
+    }
+    match read_graph_entries() {
+        Ok(rows) => {
+            *entries = Some(rows);
+            None
+        }
+        Err(e) => Some(format!("the graph could not be read ({e})")),
+    }
 }
 
 /// The pure listing over injected store rows: flatten, derive, filter,
-/// sort, scope.
+/// sort, scope. The graph rows come in borrowed (the caller's cache or
+/// read); the body reads and never owns them.
 pub(crate) fn list_core_over(
-    rows: Vec<Value>,
+    rows: &[Value],
     damaged: usize,
-    entries: &mut Option<Vec<Value>>,
+    entries: GraphEntries<'_>,
     subject: Option<&str>,
     lane: Option<&str>,
     state: Option<&str>,
@@ -639,13 +734,7 @@ pub(crate) fn list_core_over(
             }
         }
     }
-    let decisions: Vec<&Value> = all_rows
-        .iter()
-        .filter(|r| match r.get("_event_type") {
-            None | Some(Value::Null) => true,
-            Some(t) => t.as_str() == Some("operator_decision"),
-        })
-        .collect();
+    let decisions: Vec<&Value> = all_rows.iter().filter(|r| is_decision_row(r)).collect();
     let mut superseded_by: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
     let mut superseded_rank: std::collections::HashMap<String, (String, String)> =
@@ -668,26 +757,9 @@ pub(crate) fn list_core_over(
         }
     }
 
-    let mut graph_unread: Option<String> = None;
-    // The graph serves expiry alone: only a row whose expiry names a node or
-    // a PR reads it, and only when the lane filter lets that row into the
-    // answer. A lane that filters such rows out never pays for the read.
-    let reads_graph = |r: &&Value| {
-        let lane_ok = lane.map_or(true, |l| l == decision_lane(r));
-        let stated = r.get("expiry_ref").filter(|e| e.is_object());
-        let timed = stated.is_some_and(|e| matches!(rows_str(e, "kind"), "date" | "never"));
-        lane_ok
-            && !timed
-            && (stated.is_some() || crate::decision_index::expiry_defaults_to_subject(r))
-    };
-    if entries.is_none() && decisions.iter().any(reads_graph) {
-        match read_graph_entries() {
-            Ok(rows) => *entries = Some(rows),
-            Err(e) => graph_unread = Some(format!("the graph could not be read ({e})")),
-        }
-    }
     let scratch: Vec<Value> = Vec::new();
-    let ent: &[Value] = entries.as_deref().unwrap_or(&scratch);
+    let ent: &[Value] = entries.graph.unwrap_or(&scratch);
+    let graph_unread = entries.unread;
 
     let index = ResolutionIndex::new(ent);
     let expiry_index = ExpiryIndex::new(ent);
@@ -740,7 +812,7 @@ pub(crate) fn list_core_over(
             row["lifecycle_reason"] = json!("graduated to enforced artifact");
             row["lifecycle_evidence"] = retirement;
             "retired".to_string()
-        } else if lane_derived == "coord"
+        } else if lane_derived == "agent"
             || crate::decision_index::expiry_defaults_to_subject(&row)
             || row.get("expiry_ref").is_some_and(Value::is_object)
         {
@@ -764,7 +836,7 @@ pub(crate) fn list_core_over(
                     }
                     expiry_lc
                 }
-                (_, None) if lane_derived == "coord" || lane_derived == "unattributed" => {
+                (_, None) if lane_derived == "agent" || lane_derived == "unattributed" => {
                     "unscoped".to_string()
                 }
                 (_, None) => {
@@ -845,7 +917,7 @@ pub(crate) fn list_core_over(
 /// damaged index refuses to guess.
 fn current_law_core(subject: &str, entries: &mut Option<Vec<Value>>) -> Result<Value, CoreError> {
     let canonical = subject.trim().to_string();
-    let out = list_core(Some(&canonical), Some("law"), Some("live"), entries, false)?;
+    let out = list_core(Some(&canonical), Some("user"), Some("live"), entries, false)?;
     current_law_verdict(&out, &canonical)
 }
 
@@ -1020,7 +1092,7 @@ pub fn run(argv: &[String]) -> i32 {
     if argv.first().map(String::as_str) == Some("share") {
         return run_share(argv.get(1..).unwrap_or(&[]));
     }
-    let opts = match parse_options(argv) {
+    let mut opts = match parse_options(argv) {
         Ok(o) => o,
         Err(m) if m == "__help__" => {
             println!("{USAGE}");
@@ -1055,10 +1127,20 @@ pub fn run(argv: &[String]) -> i32 {
         return crate::decision_log::run_log();
     }
 
+    // The old spellings are aliases for one release: normalize before any
+    // filter runs, so --lane law reads the same rows --lane user does.
     if let Some(lane) = opts.lane.as_deref() {
-        if !matches!(lane, "law" | "coord" | "grant" | "unattributed") {
-            eprintln!("{LABEL}: --lane must be law, coord, grant, or unattributed");
-            return 2;
+        let canonical = match lane {
+            "user" | "agent" | "grant" | "unattributed" => lane,
+            "law" => "user",
+            "coord" => "agent",
+            _ => {
+                eprintln!("{LABEL}: --lane must be user, agent, grant, or unattributed (law and coord are accepted aliases for one release)");
+                return 2;
+            }
+        };
+        if lane != canonical {
+            opts.lane = Some(canonical.to_string());
         }
     }
 
@@ -1087,7 +1169,7 @@ pub fn run(argv: &[String]) -> i32 {
     // Standing law rides only the plain law-lane live read; it re-derives
     // through the same pipeline, so the two answers cannot disagree.
     let standing_law = if subject.is_some()
-        && opts.lane.as_deref() == Some("law")
+        && matches!(opts.lane.as_deref(), Some("user") | Some("law"))
         && opts.state.as_deref() == Some("live")
     {
         match current_law_core(subject.as_deref().unwrap(), &mut entries) {
@@ -1243,6 +1325,7 @@ pub fn run(argv: &[String]) -> i32 {
         opts.state.as_deref(),
         &near,
         entries.as_deref(),
+        opts.provenance,
     );
     0
 }
@@ -1253,7 +1336,7 @@ pub fn run(argv: &[String]) -> i32 {
 fn run_share(args: &[String]) -> i32 {
     let json = args.iter().any(|a| a == "--json" || a == "-J");
     let mut entries: Option<Vec<Value>> = None;
-    let out = match list_core(None, Some("law"), Some("all"), &mut entries, false) {
+    let out = match list_core(None, Some("user"), Some("all"), &mut entries, false) {
         Ok(out) => out,
         Err(CoreError::Read(reason)) | Err(CoreError::ValueError(reason)) => {
             eprintln!("{LABEL}: cannot read the decision index: {reason}");
@@ -1743,7 +1826,8 @@ fn render_markdown(report: &Value) -> String {
             .and_then(Value::as_array)
             .unwrap_or(&empty)
         {
-            let scope = match row.get("scope").and_then(Value::as_str) {
+            let scope = match crate::backlog::audience::stored_audience(row).and_then(Value::as_str)
+            {
                 Some(s) if !s.is_empty() => s.to_string(),
                 _ => "project:fno".to_string(),
             };
@@ -1761,6 +1845,58 @@ fn render_markdown(report: &Value) -> String {
     let joined = lines.join("\n");
     format!("{}\n", joined.trim_end())
 }
+/// The provenance lines one decision row renders under `--provenance`: the
+/// stored session triple, the transcript resolved from the stored session
+/// when the stored path is absent (the way the node provenance read
+/// resolves), and the user turn the row quotes. Empty for a row that
+/// carries no session provenance, so rows written before the field existed
+/// read exactly as they always did.
+fn provenance_lines(row: &Value) -> Vec<String> {
+    let Some(sp) = row.pointer("/session_provenance").filter(|v| v.is_object()) else {
+        return Vec::new();
+    };
+    let mut lines = Vec::new();
+    lines.push(format!("    session:  {}", rows_str(sp, "session_id")));
+    let harness = rows_str(sp, "harness");
+    lines.push(format!(
+        "    harness:  {}",
+        if harness.is_empty() {
+            "(unknown)"
+        } else {
+            harness
+        }
+    ));
+    let stored = rows_str(sp, "transcript");
+    if stored.is_empty() {
+        let session = rows_str(sp, "session_id");
+        let resolved = if session.is_empty() {
+            None
+        } else {
+            match harness {
+                "claude" => crate::claude_drive::find_transcript(session),
+                "codex" => crate::codex_store::codex_rollout_path(None, session),
+                _ => None,
+            }
+        };
+        match resolved {
+            Some(p) => lines.push(format!("    transcript: {}", p.display())),
+            None => lines.push("    transcript: (unresolved - not-found)".to_string()),
+        }
+    } else {
+        lines.push(format!("    transcript: {stored}"));
+    }
+    let turn = rows_str(sp, "turn_id");
+    if !turn.is_empty() {
+        let excerpt = rows_str(sp, "turn_excerpt");
+        if excerpt.is_empty() {
+            lines.push(format!("    turn:     {turn}"));
+        } else {
+            lines.push(format!("    turn:     {turn}  quoted: {excerpt}"));
+        }
+    }
+    lines
+}
+
 fn render_human(
     payload: &Value,
     standing_law: Option<&Value>,
@@ -1770,6 +1906,7 @@ fn render_human(
     state: Option<&str>,
     near: &[(String, usize)],
     entries: Option<&[Value]>,
+    provenance_on: bool,
 ) {
     if let Some(standing) = standing_law {
         let canonical = rows_str(standing, "canonical_subject");
@@ -1922,10 +2059,10 @@ fn render_human(
             String::new()
         };
         let lane_derived = rows_str(d, "lane");
-        let lane_marker = if lane_derived == "law" {
-            "LAW"
-        } else {
-            lane_derived
+        let lane_marker = match lane_derived {
+            "user" | "law" => "USER",
+            "agent" | "coord" => "AGENT",
+            other => other,
         };
         let lifecycle = if rows_str(d, "lifecycle").is_empty() {
             "LIVE".to_string()
@@ -1966,6 +2103,11 @@ fn render_human(
                 "    relayed: {} (a name this caller supplied, not a stamped one)",
                 python_str(d.get("relayed_by").unwrap_or(&Value::Null)),
             );
+        }
+        if provenance_on {
+            for line in provenance_lines(d) {
+                println!("{line}");
+            }
         }
         if crate::backlog_ready::truthy(d.get("rationale")) {
             println!(
@@ -2082,7 +2224,7 @@ fn render_filtered_empty(
         .join(", ");
     let filters: Vec<&str> = [lane, state].into_iter().flatten().collect();
     let filter_label = filters.join(" ");
-    let hint = if lane == Some("law") && counts.get("unattributed").copied().unwrap_or(0) > 0 {
+    let hint = if lane == Some("user") && counts.get("unattributed").copied().unwrap_or(0) > 0 {
         " The unattributed ones are pre-cutover, recorded before authority was \
          an earned value."
     } else {
@@ -2227,8 +2369,19 @@ mod tests {
     fn derivation_covers_every_lane_and_retirement() {
         let rows = seed_fixture();
         // Some(empty): the derivation never reads the ambient machine graph.
-        let mut entries: Option<Vec<Value>> = Some(Vec::new());
-        let out = list_core_over(rows, 0, &mut entries, None, None, None, true);
+        let entries: Option<Vec<Value>> = Some(Vec::new());
+        let out = list_core_over(
+            &rows,
+            0,
+            GraphEntries {
+                graph: entries.as_deref(),
+                unread: None,
+            },
+            None,
+            None,
+            None,
+            true,
+        );
         // newest first, duplicate id folded
         assert_eq!(
             rows_ids(&out),
@@ -2242,9 +2395,9 @@ mod tests {
                 "d-cccc0003",
             ]
         );
-        assert_eq!(lane_of(&out, "d-aaaa0001"), "law");
+        assert_eq!(lane_of(&out, "d-aaaa0001"), "user");
         assert_eq!(lifecycle_of(&out, "d-aaaa0001"), "live");
-        assert_eq!(lane_of(&out, "d-bbbb0002"), "coord");
+        assert_eq!(lane_of(&out, "d-bbbb0002"), "agent");
         // The fixture passes Some(empty) entries so the run never consults
         // the ambient machine graph: the coord row resolves to nothing and
         // reads unscoped. The UNKNOWN degrade has its own env-guarded test.
@@ -2293,7 +2446,19 @@ mod tests {
         std::env::set_var("FNO_STATE_DIR", dir.path());
         let rows = seed_fixture();
         let mut entries: Option<Vec<Value>> = None;
-        let out = list_core_over(rows, 0, &mut entries, None, None, None, true);
+        let unread = fill_graph_entries(&mut entries, &rows, None);
+        let out = list_core_over(
+            &rows,
+            0,
+            GraphEntries {
+                graph: entries.as_deref(),
+                unread: unread.as_deref(),
+            },
+            None,
+            None,
+            None,
+            true,
+        );
         match saved_home {
             Some(v) => std::env::set_var("FNO_HOME", v),
             None => std::env::remove_var("FNO_HOME"),
@@ -2308,7 +2473,7 @@ mod tests {
 
     #[test]
     fn current_law_reads_conflict_and_none() {
-        let mut entries: Option<Vec<Value>> = None;
+        let entries: Option<Vec<Value>> = None;
         let text = [
             envelope(
                 "d-aaaa0001",
@@ -2329,11 +2494,14 @@ mod tests {
         let (rows, damaged) = rows_from_jsonl(&text);
         assert_eq!(damaged, 0);
         let out = list_core_over(
-            rows,
+            &rows,
             0,
-            &mut entries,
+            GraphEntries {
+                graph: entries.as_deref(),
+                unread: None,
+            },
             Some("topic-a"),
-            Some("law"),
+            Some("user"),
             Some("live"),
             true,
         );
@@ -2354,11 +2522,14 @@ mod tests {
             "",
         ));
         let out = list_core_over(
-            rows,
+            &rows,
             0,
-            &mut entries,
+            GraphEntries {
+                graph: entries.as_deref(),
+                unread: None,
+            },
             Some("topic-a"),
-            Some("law"),
+            Some("user"),
             Some("live"),
             true,
         );
@@ -2396,5 +2567,92 @@ mod tests {
             .map(|r| r["reason"].as_str().unwrap_or("").to_string())
             .collect();
         assert_eq!(reasons, ["body form", "legacy fm form"], "{res}");
+    }
+
+    /// A row carrying session provenance renders the session triple, the
+    /// stored transcript path, and the turn it quotes; a row without the
+    /// field renders nothing, so old rows read as they always did.
+    #[test]
+    fn provenance_lines_render_the_session_triple_and_the_turn() {
+        let row = serde_json::json!({
+            "decision_id": "d-prov0001",
+            "subject": "x-prov",
+            "decision": "Ruling.",
+            "session_provenance": {
+                "session_id": "4d2c3d68-7d5c-4c1e-9a51-2f8e0a9b1c3d",
+                "harness": "claude",
+                "transcript": "/store/-repo/4d2c3d68-7d5c-4c1e-9a51-2f8e0a9b1c3d.jsonl",
+                "turn_id": "u-ruling",
+                "turn_excerpt": "the docs gate reads the #NNN form",
+                "turn_ts": "2026-11-20T10:01:00.000Z",
+            },
+        });
+        let lines = provenance_lines(&row);
+        assert_eq!(
+            lines,
+            vec![
+                "    session:  4d2c3d68-7d5c-4c1e-9a51-2f8e0a9b1c3d".to_string(),
+                "    harness:  claude".to_string(),
+                "    transcript: /store/-repo/4d2c3d68-7d5c-4c1e-9a51-2f8e0a9b1c3d.jsonl"
+                    .to_string(),
+                "    turn:     u-ruling  quoted: the docs gate reads the #NNN form".to_string(),
+            ]
+        );
+        // A row without the field renders nothing (the old-row shape).
+        let bare = serde_json::json!({"decision_id": "d-prov0002", "subject": "x-prov"});
+        assert!(provenance_lines(&bare).is_empty());
+    }
+
+    /// A stored session without a transcript path resolves the transcript
+    /// from the stored session id at read time, the way the node
+    /// provenance read does; a session nothing resolves prints the named
+    /// unknown.
+    #[test]
+    fn a_stored_session_without_a_path_resolves_at_read_time() {
+        let _env_lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let config = tempfile::tempdir().unwrap();
+        let projects = config.path().join("projects").join("-repo");
+        std::fs::create_dir_all(&projects).unwrap();
+        let session = "4d2c3d68-7d5c-4c1e-9a51-2f8e0a9b1c3d";
+        let planted = projects.join(format!("{session}.jsonl"));
+        std::fs::write(&planted, "{}\n").unwrap();
+        let _cfg =
+            crate::claims::EnvVarGuard::set("CLAUDE_CONFIG_DIR", config.path().to_str().unwrap());
+        let row = serde_json::json!({
+            "decision_id": "d-prov0003",
+            "subject": "x-prov",
+            "session_provenance": {
+                "session_id": session,
+                "harness": "claude",
+            },
+        });
+        let lines = provenance_lines(&row);
+        // Three lines: the fixture carries no turn, so the render adds no
+        // turn line behind session, harness and transcript.
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.ends_with(&format!("{session}.jsonl"))),
+            "{lines:?}"
+        );
+        // An unresolvable session names the unknown instead of guessing.
+        let lost = serde_json::json!({
+            "decision_id": "d-prov0004",
+            "subject": "x-prov",
+            "session_provenance": {
+                "session_id": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+                "harness": "claude",
+            },
+        });
+        let lines = provenance_lines(&lost);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("transcript: (unresolved - not-found)")),
+            "{lines:?}"
+        );
     }
 }

@@ -213,7 +213,12 @@ shared_smoke() {
   local repo="$BASE/work/repo"
   mkdir -p "$repo"
   git -C "$repo" init -q
-  run_capture "$bin_dir/fno" backlog idea "channel smoke" --difficulty low --json
+  run_capture "$bin_dir/fno" backlog idea "channel smoke" --audience internal --why "smoke probe needs a node" --done-means "probe node exists" --difficulty low --json
+  if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "No such option"; then
+    # A build predating the required who/why flags: the channel's contract
+    # is the round trip, not the doors; the flags ride the release.
+    run_capture "$bin_dir/fno" backlog idea "channel smoke" --difficulty low --json
+  fi
   if [ "$RC" -ne 0 ]; then
     miss "backlog-idea" "rc=$RC out: $(printf '%s' "$OUT" | tail -2)"
     return 1

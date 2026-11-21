@@ -148,6 +148,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_HARNESS_SESSION_ID` | rs | The normalized full harness session id; native context hooks use it when the provider-specific id is absent. |
 | `FNO_HEALTH_HISTORY` | rs | crates/fno-agent/src/backlog/triage_health.rs (history_path) |
 | `FNO_HOME` | rs | Relocates fno's config-free sidecars (plugin-root pointer, push-stamps, corrections log, decision index) and the Rust defaults when no config sets state_dir. Does not move state_dir or the backlog; a store write under FNO_HOME that targets the default store ($HOME/.fno) is refused. Sandbox with FNO_CONFIG (docs/path-config.md). |
+| `FNO_CUSTOMERS_DIR` | rs | Overrides the persona store folder root that `customer:<persona>` scopes read; the per-project subfolder and `<slug>.md` naming stay fixed (crates/fno-agent/src/paths.rs::persona_customers_dir). Tests set it; the store stays machine-private (docs/state-root-inventory.md names no top-level row by the closed-folder-set rule). |
 | `FNO_HOOK_CONTEXT` | rs | Set to 1 on every hook command; an fno call that carries it never joins its session to fno. Spawned children have it cleared. |
 | `FNO_HOOK_HARNESS` | rs | The wire the agy and pi guard host runs a claude PreToolUse hook for. When it names another harness, `hook gate` runs only the block guards, and a refusal never asks. |
 | `FNO_IDLE_EXIT_GRACE_MS` | rs | unclear: crates/fno/src/mux/server.rs:14324 |
@@ -296,6 +297,10 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_TEST_FOOTPRINT_PAYLOAD` | rs | Test seam: when set, the spawn gate's footprint probe returns this payload verbatim, so gate tests pin the CPU axis instead of reading the live machine. |
 | `FNO_TEST_FOOTPRINT_PAYLOAD_SEQ` | rs | Test seam: newline-separated footprint probe results consumed once per read; `ERR <message>` simulates probe failure, and the last line sticks so gate tests can verify retries and sample counts. |
 | `FNO_TEST_FULL` | rs | The whole-suite lane mark: the guard reads it typed on the command, and the test-run door stamps it into a whole run's cargo env, so its slot asks queue instead of try-locking. |
+| `FNO_TEST_LEG_DETACHED` | rs | Test seam: the kill-window test's worker child reads it to pick the detached (1) or attached (0) close leg; the detach arm must survive the worker's group kill, the withhold arm must not. |
+| `FNO_TEST_LEG_MARKERS` | rs | Test seam: directory the kill-window test's leg stub writes its started, release, leg-pid and done markers into. |
+| `FNO_TEST_LEG_STUB` | rs | Test seam: path of the stub script the kill-window test's worker child spawns as the close leg through `FNO_BIN`. |
+| `FNO_TEST_LEG_WORKER` | rs | Test seam: presence re-invokes the kill-window test binary as the worker child that spawns the leg, then dies to its own group kill one second in. |
 | `FNO_TEST_HERMETIC` | rs | unclear: crates/fno/src/events/event_hermetic.rs:62 |
 | `FNO_TEST_JOURNAL` | rs | Test seam: the global events journal the worktree overlap record and report ops read and write, so the parity goldens never touch the real state root. |
 | `FNO_TEST_LAUNCHD_SUFFIX` | rs | Test seam: pins the HOME-derived launchd label suffix the derivation returns (`launchd_labels.rs` and its `setup_services.rs` twin), so the parity goldens and receipts stay machine-independent. Production code never sets it. |
@@ -394,6 +399,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `UV_CACHE_DIR` | rs | Authoritative uv cache directory: the cache root a bounded codex worker is granted as a writable root; set but missing grants nothing (no fallback, uv reads exactly this variable). |
 | `UV_PROJECT_ENVIRONMENT` | rs | The venv path an `uv sync` would write; the spawn-door venv guard holds a worktree whose value resolves into the canonical checkout, so a worktree install cannot rewrite the canonical cli venv's scripts. |
 | `UV_TOOL_DIR` | rs | Overrides the dir uv installs tools into; the update census reads it to locate a uv-managed install without exec'ing uv. |
+| `VISUAL` | rs | The editor the persona overlay's e edit prefers over `EDITOR`, run in a mux pane beside the page. `vi` when both are unset. |
 | `WORKTREE_STATUS_REGISTRY` | rs | Path of the worktree status registry file; tests pin it. Read in crates/fno-agent/src/runtime/worktree/status.rs. |
 | `XDG_BIN_HOME` | rs | Where Astral's installer put uv; `fno uninstall` removes a fno-installed uv and uvx there, else from ~/.local/bin. |
 | `XDG_CACHE_HOME` | rs | Non-macOS cache class base; the cache home default resolves to `/fno` when set, else `~/.cache/fno` (paths_cli.rs). |

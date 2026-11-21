@@ -23,6 +23,17 @@ use std::time::Duration;
 const PROBE_EVERY: Duration = Duration::from_secs(2);
 /// The stacked layout below this width, side-by-side cells at or above it.
 const WIDE_CELLS_AT: usize = 90;
+/// The average column share a side-by-side kanban needs before a card
+/// carries its title and not only its id.
+const KANBAN_MIN_SHARE: usize = 18;
+
+/// A kanban pane whose columns cannot each hold a readable card paints
+/// the list shape instead: the drill split can hand the board a pane
+/// past `WIDE_CELLS_AT` while six columns divide it into id-only
+/// slivers (`ab-2 (ab-` with no title).
+pub(crate) fn kanban_falls_back_to_list(column_count: usize, w: usize) -> bool {
+    w >= WIDE_CELLS_AT && w / column_count.max(1) < KANBAN_MIN_SHARE
+}
 
 /// The kick result channel: one message per kicked task. The channel
 /// tuple's generation guards the fold; the variants carry only payloads.
@@ -857,7 +868,32 @@ fn push_stats_line(b: &BoardView, lines: &mut Vec<TLine>, board: &Board, w: usiz
     line.push_str(&format!(" · Done {done}"));
     line.push_str(" │ ");
     line.push_str(&flow_line(&board.stats.flow));
-    lines.push(TLine::meta(crate::chrome::clip(&line, w)));
+    lines.push(TLine::meta(clip_segments(&line, w)));
+}
+
+/// Clip at a ` · ` segment boundary: whole segments survive, never a
+/// mid-word cut (`this week · c`). Only a first segment wider than the
+/// pane falls back to the hard clip.
+pub(crate) fn clip_segments(line: &str, w: usize) -> String {
+    if line.chars().count() <= w {
+        return line.to_string();
+    }
+    let mut acc = String::new();
+    for seg in line.split(" \u{b7} ") {
+        let grown = acc.chars().count() + seg.chars().count() + if acc.is_empty() { 0 } else { 3 };
+        if grown > w {
+            break;
+        }
+        if !acc.is_empty() {
+            acc.push_str(" \u{b7} ");
+        }
+        acc.push_str(seg);
+    }
+    if acc.is_empty() {
+        crate::chrome::clip(line, w)
+    } else {
+        acc
+    }
 }
 
 /// The uncapped Done total, summed from the lanes' own cells.
@@ -968,9 +1004,18 @@ pub(crate) fn filter_bar_lines(b: &BoardView, board: &Board, w: usize) -> Vec<TL
     let mut lines: Vec<TLine> = Vec::new();
     let mut line = TLine::plain(String::new());
     let mut used = 0usize;
+    // The bar's first row reserves the esc chip's five columns at the
+    // right edge: cells that run under the chip read cut (`Priority: an
+    // esc`), so the row wraps a cell early.
+    let chip_w = 5usize;
     for (label, value) in cells.iter() {
         let cell_w = label.chars().count() + 2 + value.chars().count();
-        if used > 0 && used + 3 + cell_w > w {
+        let budget = if lines.is_empty() {
+            w.saturating_sub(chip_w)
+        } else {
+            w
+        };
+        if used > 0 && used + 3 + cell_w > budget {
             lines.push(line.trunc(w));
             line = TLine::plain(String::new());
             line.push_line(TLine::of(&[
@@ -1090,10 +1135,19 @@ fn card_line(b: &BoardView, li: usize, col_name: &str, ri: usize, w: usize) -> T
     else {
         return TLine::plain(String::new());
     };
+    let customer = card
+        .audience
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|a| a.starts_with("customer"));
     let glyph = if card.claimed {
         "\u{25cf}"
     } else if card.blocked {
         "\u{2298}"
+    } else if customer {
+        // A customer-facing card carries its own glyph, so the marker
+        // survives the narrow card widths that truncate the chip text.
+        "\u{25c6}"
     } else {
         " "
     };
@@ -1111,6 +1165,10 @@ fn card_line(b: &BoardView, li: usize, col_name: &str, ri: usize, w: usize) -> T
         TSeg {
             text: format!(" {}", card.title),
             role: TextStyle::Item,
+        },
+        TSeg {
+            text: format!(" \u{b7} {}", card.audience_chip()),
+            role: TextStyle::Meta,
         },
     ]);
     line.band = sel;
@@ -1339,8 +1397,48 @@ impl View {
                 self.input_owner() == super::region_focus::RegionOwner::Board,
                 self.edge_sizes.get(super::edge_drag::Edge::BacklogSeam),
                 &self.theme,
+                super::persona_overlay::strip_hint(self).as_deref(),
+                false,
             );
         }
+    }
+
+    /// The board's full-screen surface, painted into one pane rect: the
+    /// host a persona drill surface owns after a split, so the sibling
+    /// panes beside it keep their own rects. The transient popups (review,
+    /// keys, facet, column picker) keep the full screen: they are modals
+    /// by the drill's own rule, and none of them is the host.
+    pub(super) fn draw_board_rect(
+        &self,
+        cells: &mut [Cell],
+        rows: usize,
+        cols: usize,
+        rect: (usize, usize, usize, usize),
+        detail_off: bool,
+    ) {
+        let Some(b) = &self.backlog_board else {
+            return;
+        };
+        if b.review.is_some()
+            || b.keys_overlay
+            || facet_popup(b).is_some()
+            || colpick_popup(b).is_some()
+        {
+            self.draw_board(cells, rows, cols);
+            return;
+        }
+        backlog_panes::paint(
+            b,
+            cells,
+            rows,
+            cols,
+            rect,
+            self.input_owner() == super::region_focus::RegionOwner::Board,
+            self.edge_sizes.get(super::edge_drag::Edge::BacklogSeam),
+            &self.theme,
+            super::persona_overlay::strip_hint(self).as_deref(),
+            detail_off,
+        );
     }
 
     /// The sidebar menu's open action: a fresh board view at the next

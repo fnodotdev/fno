@@ -20,8 +20,9 @@ use tokio::net::UnixStream;
 use tokio::sync::{mpsc, watch};
 
 use crate::mux_cli::{self, Resolution};
-use crate::observe::{default_name, spawn_keys, Screen};
+use crate::observe::{default_name, spawn_keys};
 use crate::proto::{self, ClientMsg, Frame, LinkHello, MouseEvent, ServerMsg};
+use crate::screen::Screen;
 use crate::{band_remap, frame_ansi, mouse, share};
 
 /// The far door's exits, the contract `fno-agent attach --dial` reads. Ssh

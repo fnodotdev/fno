@@ -450,7 +450,12 @@ fn gather_inputs(graph: &Path) -> Result<crate::backlog_model::Inputs, String> {
         .enable_all()
         .build()
         .map_err(|e| format!("cannot start the async runtime: {e}"))?;
-    Ok(runtime.block_on(crate::backlog_model::gather(&graph, agents)))
+    // The list prints cards, never the scoreboard, so it skips the flow read.
+    Ok(runtime.block_on(crate::backlog_model::gather_with(
+        &graph,
+        agents,
+        crate::backlog_model::FlowRead::Skip,
+    )))
 }
 
 #[cfg(test)]
@@ -501,6 +506,10 @@ mod tests {
             claimed: false,
             lead: None,
             live: false,
+            audience: None,
+            job: vec![],
+            why: None,
+            done_means: None,
             created_at: None,
             completed_at: None,
             updated_at: None,

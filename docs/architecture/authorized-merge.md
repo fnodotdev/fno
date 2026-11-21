@@ -60,7 +60,7 @@ After a main merge, every open PR with older CI is stale. A stale PR can prove i
 
 `fno do pr status` uses the same preview decision. Its CI verdict remains separate from `ready`: pending or unknown CI never becomes a false green. The warning list is present beside both allowed and blocked outcomes. These process demotions need no setting.
 
-The raw merge hook and operator hold-check use the native dispatch-hold reader. Missing looks, review coverage and registered reviews warn without disarming GitHub's queue. An explicit user decline still vetoes and disarms only its named head. The raw hook retains its separate merge-consent and lineage checks. It no longer requires a completed external-review artifact as a permission factor.
+The raw merge hook and operator hold-check use the native dispatch-hold reader. Missing looks, review coverage and registered reviews warn without disarming GitHub's queue. An explicit user decline still vetoes and disarms only its named head. An open look question with screens that names the PR in its title holds the merge until the user answers it. The raw hook retains its separate merge-consent and lineage checks. It no longer requires a completed external-review artifact as a permission factor.
 
 ## The head-scoped user merge grant
 
@@ -178,9 +178,9 @@ auto_revert = true
 revert_after_minutes = 10   # default 10
 ```
 
-Each minute the arm reads main's verdict through the gate's own cached reading. If a red head stays red past the window, is a `Merge pull request #N` commit, and has a green first parent, it is the culprit. The hold stops further merges once main reads red, so the red head is usually that merge. The arm then files a node tagged `main-repair`. It opens a PR that reverts the merge (`git revert -m 1`) and names that node. It asks the author of PR N to re-land the change with the fix. The revert needs one CI run. A fix forward can wait behind a flaky test and a CI queue: on 2026-10-26 main stayed red about 3 hours that way.
+Each minute the arm reads main's verdict through the gate's own cached reading. If a red head stays red past the window, the arm walks main's first-parent chain. It follows parents while the workflow reads red and stops at the first green ancestor. The oldest `Merge pull request #N` merge in that red stretch is the culprit, so two merges that land before main's red settles name the older one. The arm then files a node tagged `main-repair`. It opens a PR that reverts that merge (`git revert -m 1`) and names that node. It asks the author of PR N to re-land the change with the fix. The revert needs one CI run. A fix forward can wait behind a flaky test and a CI queue: on 2026-10-26 main stayed red about 3 hours that way.
 
-The arm refuses to guess. If the parent run is red, cancelled or missing, or the head is not a PR merge, it journals `ambiguous` and opens nothing. A red whose failing checks all sit on heal's flake ledger journals `flaky`. Every outcome is one `main_revert_check` row per red head, so a daemon restart never opens a second revert. The arm never merges the revert. The owner merges it through this gate.
+The arm refuses to guess. A walk that ends on a red-unproven verdict journals `ambiguous` and opens nothing. That verdict is a cancelled, pending or missing run, or a stretch deeper than one commits page. The same refusal covers a red stretch with no PR merge at all. A red whose failing checks all sit on heal's flake ledger journals `flaky`. Every outcome is one `main_revert_check` row per red head, so a daemon restart never opens a second revert. An opened revert for one culprit PR also stops a later red head over the same culprit from opening a second one: that head journals one final `deduped` row and closes. The arm never merges the revert. The owner merges it through this gate.
 
 ### A check for every merge
 

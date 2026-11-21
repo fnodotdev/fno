@@ -58,7 +58,7 @@ Options:
                        (deferred) or a precondition (backfill).
   -p, --priority TEXT  Priority hint p0-p3 the harvested node should inherit;
                        default p3 at triage.
-  --scope TEXT         The role scope this carve-out discharges (e.g. an epic
+  --scope TEXT         The lead scope this carve-out discharges (e.g. an epic
                        id). The lead orphan check reads this field.
   --severity TEXT      critical|high|medium|low, routed to priority p0..p3 at
                        harvest. A carveout filed to satisfy the fidelity gate
@@ -93,7 +93,7 @@ Options:
   -k, --kind TEXT         Reclassify: deferred | oos-bug | backfill.
   --need TEXT             Replacement dependency text.
   -p, --priority TEXT     Replacement priority hint (p0-p3).
-  --scope TEXT            Replacement role scope.";
+  --scope TEXT            Replacement scope.";
 
 const RESOLVE_USAGE: &str = "Usage: fno backlog carveout resolve ID... [OPTIONS]
 

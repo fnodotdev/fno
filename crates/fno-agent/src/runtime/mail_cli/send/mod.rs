@@ -1092,7 +1092,7 @@ pub(crate) fn release_budget_by_id(msg_id: &str) -> usize {
 }
 
 // ---------------------------------------------------------------------------
-// Durable write (inbox/store.py write_new_thread + bus append)
+// Durable write: one bus append + the chats record seam
 // ---------------------------------------------------------------------------
 
 /// `fmail-` + 12 hex.
@@ -1111,9 +1111,9 @@ fn utc_now_iso() -> String {
     now_iso()
 }
 
-/// The wire envelope row Python `_append_to_bus` wrote through the bus door:
-/// required keys first, optional tags in the house order, body last. The
-/// order is `mail::envelope::Envelope`'s field order.
+/// The wire envelope row the bus door appends: required keys first, optional
+/// tags in the house order, body last. The order is
+/// `mail::envelope::Envelope`'s field order.
 #[allow(clippy::too_many_arguments)]
 fn bus_envelope_row(
     msg_id: &str,
@@ -1151,11 +1151,10 @@ fn bus_envelope_row(
     env.into_value()
 }
 
-/// Python `_append_to_bus` + `write_new_thread`: the durable-first bus append
-/// plus the best-effort markdown render. Returns the thread file path.
-/// The durable write: one bus row, the system of record. The chats store
-/// records it and every reader reads the store, so no file is rendered.
-/// `thread` is the parent's thread for a reply, else the row's own id.
+/// The durable-first bus append: one bus row, the system of record. The
+/// chats store records it and every reader reads the store, so no file is
+/// rendered. `thread` is the parent's thread for a reply, else the row's
+/// own id.
 #[allow(clippy::too_many_arguments)]
 /// `pub(crate)`: the reply leaf writes through the same choke point.
 pub(crate) fn write_durable_thread(

@@ -191,12 +191,13 @@ impl PrefsCache {
     }
 
     fn get(&mut self) -> Prefs {
-        let path = fno::config_cli::global_settings_path();
+        // The mtime watch follows the file the read follows, pins included.
+        let path =
+            crate::global_config_path().unwrap_or_else(fno::config_cli::global_settings_path);
         let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
         if mtime != self.mtime {
             self.mtime = mtime;
-            let raw = fno::config_cli::parse_config_file(&path)
-                .map(|parsed| fno::config_cli::unwrap_config_dict(&parsed));
+            let raw = crate::global_config_raw();
             self.prefs = prefs_from(raw.as_ref());
         }
         self.prefs
@@ -321,7 +322,7 @@ impl Alerts {
 }
 
 #[cfg(target_os = "macos")]
-pub use mac::{install_click, notify, play, set_badge};
+pub use mac::{beep, install_click, notify, play, set_badge};
 
 #[cfg(not(target_os = "macos"))]
 pub fn install_click(_wants_auth: bool) -> Option<tokio::sync::mpsc::UnboundedReceiver<u64>> {
@@ -331,6 +332,8 @@ pub fn install_click(_wants_auth: bool) -> Option<tokio::sync::mpsc::UnboundedRe
 pub fn notify(_title: &str, _body: &str, _pane_id: Option<u64>) {}
 #[cfg(not(target_os = "macos"))]
 pub fn play(_kind: Kind) {}
+#[cfg(not(target_os = "macos"))]
+pub fn beep() {}
 #[cfg(not(target_os = "macos"))]
 pub fn set_badge(_count: u32) {}
 
@@ -400,7 +403,7 @@ mod mac {
                     let tx = &*(*tx as *const UnboundedSender<u64>);
                     // A closed window loop has nowhere to put the click;
                     // dropping it is the correct handling.
-                    drop(tx.send(pane as u64));
+                    tx.send(pane as u64).ok();
                 }
             }
             // The runtime frees the response only after the handler
@@ -538,6 +541,16 @@ mod mac {
                 let _: () = msg_send![sound, play];
             }
         }
+    }
+
+    /// The system alert sound, the user's chosen beep.
+    pub fn beep() {
+        #[link(name = "AppKit", kind = "framework")]
+        extern "C" {
+            fn NSBeep();
+        }
+        // SAFETY: NSBeep takes no arguments and is callable from any thread.
+        unsafe { NSBeep() }
     }
 
     pub fn set_badge(count: u32) {

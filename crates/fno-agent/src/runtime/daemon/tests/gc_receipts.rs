@@ -2,7 +2,7 @@
 //! families. Shared helpers (`tmp_home`, `ask_row`, `rentry`, `civil`, ...)
 //! stay in the parent tests module and resolve through the glob.
 use super::*;
-use crate::daemon::claude_stop::stop_claude_pid_confirmed;
+use crate::daemon::claude_stop::{no_transport_row_gone, stop_claude_pid_confirmed};
 
 use crate::gc_sweep::{self, GcSummary, GraphRead};
 use crate::quiet_retire::no_live_worker;
@@ -806,14 +806,10 @@ fn idle_exit_fires_on_terminal_rows_with_no_live_worker() {
         no_live_worker(&home),
         "terminal rows with dead pids and no sockets must not pin the daemon"
     );
-    std::fs::remove_dir_all(home.root()).ok();
-}
-
-#[test]
-fn idle_exit_held_by_an_unreadable_registry() {
     // The fail-safe side: an unreadable registry is an absence with two
     // explanations, and the daemon must stay resident rather than exit on
     // a transient read failure (the old code exited: unwrap_or(true)).
+    std::fs::remove_dir_all(home.root()).ok();
     let home = short_home("idle-unreadable");
     home.ensure_root().unwrap();
     crate::registry_store::seed_raw(&home.registry_json(), "not json at all{");
@@ -846,6 +842,12 @@ async fn stop_claude_pid_kills_a_real_child_and_spares_a_recycled_pid() {
     assert!(
         !stop_claude_pid_confirmed(&entry).await,
         "no pid -> nothing to stop"
+    );
+    // The already-exited arm reads only pid evidence here.
+    entry.harness_session_id = None;
+    assert!(
+        !no_transport_row_gone(&entry),
+        "no pid and no session -> no proof of death"
     );
     let child = std::process::Command::new("sleep")
         .arg("60")
@@ -899,6 +901,10 @@ async fn stop_claude_pid_kills_a_real_child_and_spares_a_recycled_pid() {
     assert!(is_alive(), "an unrelated incarnation must not be signalled");
     entry.pid_start_time = Some(start);
     assert!(
+        !no_transport_row_gone(&entry),
+        "an owned live pid is not gone"
+    );
+    assert!(
         stop_claude_pid_confirmed(&entry).await,
         "owned live pid -> stopped"
     );
@@ -909,6 +915,10 @@ async fn stop_claude_pid_kills_a_real_child_and_spares_a_recycled_pid() {
     assert!(
         !stop_claude_pid_confirmed(&entry).await,
         "a dead pid is not newly stopped"
+    );
+    assert!(
+        no_transport_row_gone(&entry),
+        "a reaped pid reads gone, so stop answers already exited"
     );
 }
 

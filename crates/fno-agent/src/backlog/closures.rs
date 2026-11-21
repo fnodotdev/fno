@@ -5,7 +5,7 @@
 //! inside the store's mutator and under the lock.
 
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use super::merge_evidence::node_pr_refs;
 use super::supersession::normalize_surface;
@@ -24,9 +24,15 @@ pub(crate) fn strandable_epic_ids(entries: &[Value]) -> BTreeSet<String> {
             children_by_parent.entry(pid).or_default().push(e);
         }
     }
+    let mut by_id: HashMap<&str, &Value> = HashMap::new();
+    for e in entries {
+        if let Some(id) = text_at(e, "id") {
+            by_id.entry(id).or_insert(e);
+        }
+    }
     let mut out = BTreeSet::new();
     for (pid, kids) in children_by_parent {
-        let Some(parent) = entries.iter().find(|e| text_at(e, "id") == Some(pid)) else {
+        let Some(&parent) = by_id.get(pid) else {
             continue;
         };
         if parent
@@ -62,6 +68,7 @@ pub(crate) fn sweep_close_done_epics(
         if ready.is_empty() {
             break;
         }
+        let closed_before = closed.len();
         for pid in ready {
             let Some(index) = entries
                 .iter()
@@ -89,6 +96,11 @@ pub(crate) fn sweep_close_done_epics(
                     .insert("completion_note".into(), json!(note));
             }
             closed.push(pid);
+        }
+        // A pass that closed nothing (every ready epic held) cannot change
+        // the next pass's answer; looping on would rescan the graph 64 times.
+        if closed.len() == closed_before {
+            break;
         }
     }
     closed

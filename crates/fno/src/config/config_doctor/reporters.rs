@@ -5,6 +5,7 @@
 
 use super::{agents_call, obj, py_repr_str, py_str, Settings};
 use serde_json::{json, Map, Value};
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
@@ -532,6 +533,9 @@ pub fn deprecated_active_backlog_mission(out: &mut String) {
 /// The commands fno dispatches, and therefore the slots an operator fills.
 const SLOT_COMMANDS: [&str; 5] = ["think", "blueprint", "target", "review", "role"];
 
+/// The bands a grid readout probes, in display order.
+const GRID_DIFFICULTIES: [&str; 3] = ["low", "medium", "high"];
+
 /// Say when band routing routes nothing, and why. Silent once any command's
 /// slot would take a lane.
 pub fn band_routing(out: &mut String) {
@@ -613,6 +617,10 @@ pub fn band_routing(out: &mut String) {
             super::truthy(&settings.get("model_routing.roles")),
         )
     };
+    if declared > 0 && !row_names.is_empty() && print_grid_readout(out, &commands, &settings, roles)
+    {
+        return;
+    }
     row_names.sort();
     let built_in = if row_names.is_empty() {
         "none".to_string()
@@ -630,6 +638,152 @@ pub fn band_routing(out: &mut String) {
         );
     }
     out.push('\n');
+}
+
+/// The grid branch of the band routing readout: collect the declared rows,
+/// probe the walk once per command and difficulty, and print the readout.
+/// True when the readout printed and the inactive line must not.
+fn print_grid_readout(
+    out: &mut String,
+    commands: &[String],
+    settings: &Settings,
+    roles: bool,
+) -> bool {
+    let mut declared_rows: Vec<String> = Vec::new();
+    if let Some(rows) = settings.get("routing.models").as_array() {
+        for row in rows {
+            let parsed: DeclaredModelRow = match serde_json::from_value(row.clone()) {
+                Ok(parsed) => parsed,
+                Err(_) => continue,
+            };
+            let name = parsed.name.unwrap_or_default().trim().to_string();
+            if !name.is_empty() && !declared_rows.contains(&name) {
+                declared_rows.push(name);
+            }
+        }
+    }
+    if declared_rows.is_empty() {
+        return false;
+    }
+    let mut probed: Vec<Result<Option<String>, ()>> = Vec::new();
+    for command in commands {
+        for difficulty in GRID_DIFFICULTIES {
+            probed.push(grid_pick(command, difficulty));
+        }
+    }
+    let Some(lines) = grid_readout(commands, &probed, &declared_rows) else {
+        return false;
+    };
+    out.push_str(&lines);
+    if roles {
+        out.push_str(
+            "\n      Note: model_routing.roles is set, but it routes by ROLE, not by band.",
+        );
+        out.push('\n');
+    }
+    true
+}
+
+/// One modeless `route-slot` probe: the row the grid walk lands on for this
+/// command and difficulty. Modeless, not the `states` readout this module
+/// already makes: states summarizes a lane-less verdict to ``no lanes; grid
+/// over N rows`` and drops the pick. Ok(None) means the walk placed nothing;
+/// Err means the fno-agent round trip failed and the readout degrades to the
+/// inactive line. The pick rides the recorded capacity reading, never a live
+/// probe: the grid answers before the refresh gate runs.
+fn grid_pick(command: &str, difficulty: &str) -> Result<Option<String>, ()> {
+    let payload = json!({
+        "rung_base": format!("agents.profiles.{command}"),
+        "node": {"difficulty": difficulty, "priority": "p2"},
+        "substrate": null,
+        "permission_mode": null,
+        "constrain_harness": null,
+        "explicit_lane": false,
+        "gate_bypassed": false,
+        "model_occupied": false,
+        "work_command": command,
+    });
+    let answer: RouteSlotAnswer =
+        serde_json::from_value(agents_call(&["route-slot"], Some(&payload)).map_err(|_| ())?)
+            .map_err(|_| ())?;
+    let lane = answer
+        .candidate
+        .and_then(|c| c.lane)
+        .map(|l| l.trim().to_string())
+        .unwrap_or_default();
+    if answer.status.as_deref() == Some("pick") && !lane.is_empty() {
+        Ok(Some(lane))
+    } else {
+        Ok(None)
+    }
+}
+
+/// The modeless route-slot answer, typed once at the readout's boundary;
+/// only the fields the readout consumes (R1: no field walks past this line).
+#[derive(serde::Deserialize)]
+struct RouteSlotAnswer {
+    status: Option<String>,
+    candidate: Option<RouteSlotCandidate>,
+}
+
+#[derive(serde::Deserialize)]
+struct RouteSlotCandidate {
+    lane: Option<String>,
+}
+
+/// One `[[routing.models]]` row, read for its name alone; a row whose name
+/// is not a string is a config fault the typed read drops, never a phantom
+/// row name in the readout.
+#[derive(serde::Deserialize)]
+struct DeclaredModelRow {
+    name: Option<String>,
+}
+
+/// The grid readout's text: one line per command naming the pick per
+/// difficulty, then the declared rows no probe picked. `probed` holds one
+/// entry per command x difficulty in order; any Err or a length mismatch
+/// degrades the whole readout (the caller prints the inactive line), because
+/// a half answer is the lie this line exists to retire.
+pub(crate) fn grid_readout(
+    commands: &[String],
+    probed: &[Result<Option<String>, ()>],
+    declared_rows: &[String],
+) -> Option<String> {
+    if probed.len() != commands.len() * GRID_DIFFICULTIES.len() {
+        return None;
+    }
+    let mut picked: BTreeSet<String> = BTreeSet::new();
+    let mut lines = String::new();
+    for (command, chunk) in commands.iter().zip(probed.chunks(GRID_DIFFICULTIES.len())) {
+        let mut parts: Vec<String> = Vec::new();
+        for (difficulty, result) in GRID_DIFFICULTIES.iter().zip(chunk.iter()) {
+            match result {
+                Err(()) => return None,
+                Ok(Some(lane)) => {
+                    picked.insert(lane.clone());
+                    parts.push(format!("{difficulty}->{lane}"));
+                }
+                Ok(None) => parts.push(format!("{difficulty}->none")),
+            }
+        }
+        lines.push_str(&format!(
+            "band routing: grid (no profile lanes) {command} {}\n",
+            parts.join(" ")
+        ));
+    }
+    let unpicked: Vec<String> = declared_rows
+        .iter()
+        .filter(|r| !picked.contains(*r))
+        .cloned()
+        .collect();
+    if !unpicked.is_empty() {
+        lines.push_str(&format!(
+            "band routing: grid unreachable (declared, never picked at low, medium or high) {}\n",
+            unpicked.join(", ")
+        ));
+        lines.push_str("      A declared row wins only by sorting ahead: cost_per_mtok_in or a snapshot percentile ranks it first; rows without either are ranked by weakest clearing band, then name (docs/architecture/role-based-model-routing.md)\n");
+    }
+    Some(lines)
 }
 
 /// One block as pydantic's `model_dump()` would print it: every schema field

@@ -15,6 +15,8 @@
 //! the `decisions` array alone.
 
 use serde_json::{json, Value};
+
+use super::decisions_cli::CoreError;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::SystemTime;
@@ -108,7 +110,7 @@ fn parse_query(args: &[String]) -> Option<Query<'_>> {
 /// because a WAL-mode store writes there first: the db file's own
 /// mtime and size can hold still across an append, and the authority
 /// recheck a long decide owes must see a decision that lands mid-process.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 struct StoreKey {
     graph: PathBuf,
     db_meta: Option<(SystemTime, u64)>,
@@ -150,8 +152,11 @@ fn store_key(graph: &Path, jsonl: &Path) -> StoreKey {
 
 struct CachedStore {
     key: StoreKey,
-    rows: Arc<Vec<Value>>,
+    // The decisions rows and the graph entries share the entry: either side
+    // can fill first under a fresh key, and a key change rebuilds both.
+    rows: Option<Arc<Vec<Value>>>,
     damaged: usize,
+    graph: Option<Arc<Vec<Value>>>,
 }
 
 fn cached_store() -> &'static Mutex<Option<CachedStore>> {
@@ -178,21 +183,78 @@ fn store_rows() -> StoreRead {
     };
     if let Some(hit) = guard.as_ref() {
         if hit.key == key {
-            return StoreRead::Rows(hit.rows.clone(), hit.damaged);
+            if let Some(rows) = &hit.rows {
+                return StoreRead::Rows(rows.clone(), hit.damaged);
+            }
         }
     }
     match crate::decision_index::read_store_rows(&graph, &jsonl) {
         Ok((rows, damaged)) => {
             let rows = Arc::new(rows);
-            *guard = Some(CachedStore {
-                key,
-                rows: rows.clone(),
-                damaged,
-            });
+            match guard.as_mut() {
+                // Same key, graph already cached: keep the graph slot.
+                Some(entry) if entry.key == key => {
+                    entry.rows = Some(rows.clone());
+                    entry.damaged = damaged;
+                }
+                _ => {
+                    *guard = Some(CachedStore {
+                        key,
+                        rows: Some(rows.clone()),
+                        damaged,
+                        graph: None,
+                    });
+                }
+            }
             StoreRead::Rows(rows, damaged)
         }
         Err(reason) => StoreRead::Unreadable(reason),
     }
+}
+
+/// The machine graph rows for expiry and resolution, cached under the
+/// same StoreKey the decisions rows cache under: one store version costs
+/// one graph read per process, so the merge gate's per-PR law listing
+/// stops re-reading the whole graph on every call.
+pub(crate) fn cached_graph_entries() -> Result<Arc<Vec<Value>>, CoreError> {
+    let graph = crate::graph_get::default_graph_path();
+    let jsonl = crate::decision_index::default_state_path("decisions.jsonl");
+    graph_from_cache(store_key(&graph, &jsonl), || {
+        super::decisions_cli::read_graph_entries().map_err(super::decisions_cli::CoreError::Read)
+    })
+}
+
+/// The cache half of `cached_graph_entries`, keyed and reader taken
+/// explicitly: the seam the hit and rebuild tests drive without a real
+/// graph store.
+fn graph_from_cache(
+    key: StoreKey,
+    read: impl FnOnce() -> Result<Vec<Value>, CoreError>,
+) -> Result<Arc<Vec<Value>>, CoreError> {
+    let Ok(mut guard) = cached_store().lock() else {
+        return Err(CoreError::Read("the store cache lock poisoned".to_string()));
+    };
+    if let Some(entry) = guard.as_ref() {
+        if entry.key == key {
+            if let Some(rows) = &entry.graph {
+                return Ok(rows.clone());
+            }
+        }
+    }
+    let rows = Arc::new(read()?);
+    match guard.as_mut() {
+        // Same key, rows already cached: keep the rows slot.
+        Some(entry) if entry.key == key => entry.graph = Some(rows.clone()),
+        _ => {
+            *guard = Some(CachedStore {
+                key,
+                rows: None,
+                damaged: 0,
+                graph: Some(rows.clone()),
+            });
+        }
+    }
+    Ok(rows)
 }
 
 /// The graph entries a subject query needs. A scheme-shaped subject
@@ -237,11 +299,29 @@ fn render(query: &Query) -> Answer {
 /// The pure render over given rows: the store seam tests inject against,
 /// and the shape the CLI stdout carries for the fields the gate reads.
 fn render_rows(rows: &[Value], damaged: usize, query: &Query) -> Answer {
-    let mut entries = entries_for(query.subject, query.lane);
+    let soft = entries_for(query.subject, query.lane);
+    // The law listing (no subject) needs the graph when any row reads it:
+    // the cached read answers with no store clone and one graph read per
+    // store version, instead of one per render.
+    let cached_read =
+        if soft.is_none() && super::decisions_cli::any_row_reads_graph(rows, query.lane) {
+            Some(cached_graph_entries())
+        } else {
+            None
+        };
+    let (graph_rows, unread) = match cached_read {
+        Some(Ok(rows)) => (Some(rows), None),
+        Some(Err(e)) => (None, Some(e.to_string())),
+        None => (None, None),
+    };
+    let ent = super::decisions_cli::GraphEntries {
+        graph: soft.as_deref().or(graph_rows.as_deref().map(|v| &v[..])),
+        unread: unread.as_deref(),
+    };
     let listing = super::decisions_cli::list_core_over(
-        rows.to_vec(),
+        rows,
         damaged,
-        &mut entries,
+        ent,
         query.subject,
         query.lane,
         query.state,
@@ -258,7 +338,7 @@ fn render_rows(rows: &[Value], damaged: usize, query: &Query) -> Answer {
     // return within one process lifetime.
     let near = query
         .subject
-        .map(|subject| super::decisions_cli::near_miss_subjects(subject, rows, entries.as_deref()))
+        .map(|subject| super::decisions_cli::near_miss_subjects(subject, rows, ent.graph))
         .unwrap_or_default();
     let payload = json!({
         "subject": listing.label,
@@ -445,11 +525,10 @@ mod tests {
             decisions: Vec<Value>,
         }
         let rendered: RenderedDecisions = serde_json::from_slice(&cached).unwrap();
-        let mut no_entries: Option<Vec<Value>> = None;
         let full = crate::backlog::decisions_cli::list_core_over(
-            rows.clone(),
+            &rows,
             0,
-            &mut no_entries,
+            crate::backlog::decisions_cli::GraphEntries::default(),
             Some("pr-hold:o/r#7"),
             Some("law"),
             Some("live"),
@@ -459,5 +538,35 @@ mod tests {
             rendered.decisions, full.rows,
             "the cached render answers the same rows the full read derives"
         );
+    }
+
+    #[test]
+    fn graph_slot_serves_repeated_reads_and_rebuilds_on_a_key_change() {
+        // The graph slot answers every ask under one key from one read, and
+        // a key change rebuilds: the merge gate's per-PR law listing costs
+        // one graph read per store version, not one per PR.
+        let lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let count = std::cell::Cell::new(0usize);
+        let read = || {
+            count.set(count.get() + 1);
+            Ok(vec![json!({"subject": "fixture"})])
+        };
+        let key = store_key(
+            Path::new("/graph-cache-fixture/graph.db"),
+            Path::new("/graph-cache-fixture/decisions.jsonl"),
+        );
+        let _first = graph_from_cache(key.clone(), read).unwrap();
+        assert_eq!(count.get(), 1, "the first ask reads");
+        let _second = graph_from_cache(key.clone(), read).unwrap();
+        assert_eq!(count.get(), 1, "a same-key ask answers from the slot");
+        let other = store_key(
+            Path::new("/graph-cache-fixture/other/graph.db"),
+            Path::new("/graph-cache-fixture/other/decisions.jsonl"),
+        );
+        let _third = graph_from_cache(other, read).unwrap();
+        assert_eq!(count.get(), 2, "a key change rebuilds");
+        drop(lock);
     }
 }

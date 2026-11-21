@@ -1022,10 +1022,12 @@ fn revive_keeper(home: &AgentsHome, entry: &RegistryEntry) -> ReceiptRow {
     }
     // The manual door reserves before anything launches; the reservation is
     // what revive_with's failure releases read against.
-    if let Some(code) = crate::resume_gate::gate_and_reserve(home, name, sid) {
+    if let Some(code) = crate::resume_gate::gate_and_reserve(home, name, sid, harness) {
+        crate::resume_gate::settle_reserved(code);
         return ReceiptRow::new(name, "failed", format!("resume gate refused (exit {code})"));
     }
     let code = crate::keeper_revival::revive(home, name, harness, sid, &entry.cwd, &argv, None);
+    crate::resume_gate::settle_reserved(code);
     match code {
         0 => ReceiptRow::new(name, "revived", argv.join(" ")),
         code => ReceiptRow::new(

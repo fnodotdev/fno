@@ -208,6 +208,8 @@ pub(crate) async fn click_session(
 pub(crate) enum Sel {
     Link(String),
     Session(usize),
+    /// The audience field line: Enter opens the persona overlay.
+    Audience,
 }
 
 /// What `y` (and `Y` for the command) copy from the detail: the selected
@@ -230,6 +232,8 @@ pub(crate) fn copy_target(
             }
         }
         Some(Sel::Link(id)) => (!command).then(|| id.clone()),
+        // y on the audience row copies the chip text; Y answers the notice.
+        Some(Sel::Audience) => (!command).then(|| nv.card.audience_chip()),
         None => (!command).then(|| node_id.to_string()),
     }
 }
@@ -259,10 +263,12 @@ pub(crate) struct NodeDetailOverlay {
     pub(crate) scroll: usize,
 }
 
-/// The selectable rows in render order: the link groups, then the
-/// session rows. `sel` indexes THIS list.
+/// The selectable rows in render order: the audience row first (Enter
+/// opens the persona overlay), then the link groups, then the session
+/// rows. `sel` indexes THIS list.
 pub(crate) fn sel_list(view: &crate::backlog_model::NodeView) -> Vec<Sel> {
     let mut v: Vec<Sel> = Vec::new();
+    v.push(Sel::Audience);
     for l in view.parent.iter() {
         v.push(Sel::Link(l.id.clone()));
     }
@@ -372,6 +378,24 @@ pub(crate) fn pane_lines(
     lines.push(field(
         "kind",
         view.kind.clone().unwrap_or_else(|| "none".into()),
+    ));
+    // The audience row is selectable: the cursor lands here first and
+    // Enter opens the persona overlay (sel_list holds it at index 0).
+    if k == sel {
+        follow = Some(lines.len());
+    }
+    k += 1;
+    lines.push(field("audience", view.card.audience_chip()));
+    lines.push(field(
+        "why",
+        view.card.why.clone().unwrap_or_else(|| "none".into()),
+    ));
+    lines.push(field(
+        "done-means",
+        view.card
+            .done_means
+            .clone()
+            .unwrap_or_else(|| "none".into()),
     ));
     lines.push(field(
         "column",
@@ -872,6 +896,14 @@ async fn activate(
         return Ok(());
     };
     match sel {
+        Sel::Audience => {
+            // Enter on the audience row: open the persona overlay when the
+            // audience names a persona; otherwise keep the detail up.
+            view.persona = super::persona_overlay::open_from_card(&nv.card);
+            if view.persona.is_none() {
+                view.set_notice("this audience names no persona file".into());
+            }
+        }
         Sel::Link(id) => {
             let hold = crate::backlog_model::node(inputs, id).map(|_| id.clone());
             if let Some(id) = hold {

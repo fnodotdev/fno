@@ -97,7 +97,7 @@ impl Default for InstallArgs {
         InstallArgs {
             bin: None,
             port: 8722,
-            attention_port: crate::attention_api::DEFAULT_ATTENTION_PORT,
+            attention_port: crate::web_core::DEFAULT_ATTENTION_PORT,
             json: false,
         }
     }
@@ -566,7 +566,7 @@ mod tests {
             InstallArgs {
                 bin: None,
                 port: 9000,
-                attention_port: crate::attention_api::DEFAULT_ATTENTION_PORT,
+                attention_port: crate::web_core::DEFAULT_ATTENTION_PORT,
                 json: true,
             }
         );

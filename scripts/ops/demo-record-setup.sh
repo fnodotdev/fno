@@ -67,7 +67,7 @@ cd "$CLONE"
 # bug with a before and after a viewer can read in two seconds. The other
 # three fill the board and stay untouched.
 node() { # node <priority> <title> : file one node, print its id
-  fno backlog idea "$2" -p "$1" --difficulty low | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])'
+  fno backlog idea "$2" -p "$1" --audience internal --why "demo recording seeds its board" --done-means "demo node exists" --difficulty low | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])'
 }
 TARGET="$(node p1 "tally: strip punctuation, so end. and end count as one word")"
 node p2 "tally: read stdin when the path is -" >/dev/null

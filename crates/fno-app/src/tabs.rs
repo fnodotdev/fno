@@ -56,11 +56,12 @@ pub fn strip(layout: &Layout) -> Vec<Tab> {
 
 /// The views and their names, in the order the bar shows them. Views have
 /// no key; ⌘/ lists the keys.
-pub(super) const VIEWS: [(&str, MainView); 4] = [
+pub(super) const VIEWS: [(&str, MainView); 5] = [
     ("Chat", MainView::Chat),
     ("HQ", MainView::Orchestration),
     ("Mods", MainView::Mods),
     ("Terminal", MainView::Terminal),
+    ("Inbox", MainView::Inbox),
 ];
 
 /// Where the window is: the session, the view and the agent the view

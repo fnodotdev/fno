@@ -16,7 +16,7 @@
 
 use crate::keeper_wire::{ErrorKind, KeeperError, KeeperReply, KeeperRequest};
 use crate::keeper_wire::{TAG_REQUEST, TAG_RESPONSE};
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 use crate::node_row::KanbanColumn;
 use crate::node_row::NodeRow;
 use crate::pid::Pid;
@@ -396,7 +396,7 @@ pub fn call(graph: &Path, method: &str, params: Value) -> Reply {
 /// A finite, non-huge rank value (render._rank_band's rule): a poisoned
 /// non-finite or giant-int peer rank is unranked, so it can never corrupt
 /// the --top arithmetic or persist a NaN/inf rank.
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 fn ranked_rank(e: &NodeRow) -> Option<f64> {
     e.rank().filter(|v| v.is_finite() && v.abs() < 1e15)
 }
@@ -412,7 +412,7 @@ fn ranked_rank(e: &NodeRow) -> Option<f64> {
 /// when a concurrent reorder moved the file in between, and this retries the
 /// read-compute-write as one provably fresh step instead of floating a card
 /// below a rank it never saw.
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 pub fn rank_top(graph: &Path, node_id: &str) -> Result<String, StoreClientError> {
     /// The `begin` snapshot: its digest and its rows.
     #[derive(Default, Deserialize)]
@@ -483,7 +483,7 @@ pub fn rank_top(graph: &Path, node_id: &str) -> Result<String, StoreClientError>
     unreachable!("the retry loop returns on every branch")
 }
 
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 fn format_rank(v: f64) -> String {
     if v == v.trunc() {
         format!("{}", v as i64)
@@ -493,7 +493,7 @@ fn format_rank(v: f64) -> String {
 }
 
 /// The kanban column for an entry, claim-blind (see [`rank_top`]).
-#[cfg(feature = "full")]
+#[cfg(feature = "app")]
 fn backlog_column(e: &NodeRow) -> Option<KanbanColumn> {
     // `kanban_column` needs claim/underway facts the command deliberately does
     // not fetch; false for both is the unclaimed view the float targets.
@@ -551,7 +551,17 @@ struct ApiReply {
     ids: Value,
     underway: Value,
     effective_priority: Value,
+    board: BoardWire,
     flow: Option<Value>,
+}
+
+/// The `board` object a rows reply carries when the caller asked for it.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct BoardWire {
+    ids: Value,
+    underway: Value,
+    effective_priority: Value,
 }
 
 impl ApiReply {
@@ -672,6 +682,24 @@ pub struct BoardFacts {
     pub effective_priority: HashMap<String, String>,
 }
 
+/// The board facts from the three reply fields that carry them, `None` when
+/// `ids` is no array (a keeper that predates the board mode).
+fn facts_of(ids: &Value, underway: &Value, effective_priority: &Value) -> Option<BoardFacts> {
+    if !ids.is_array() {
+        return None;
+    }
+    let effective_priority = effective_priority.as_object().map(|o| {
+        o.iter()
+            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+            .collect()
+    });
+    Some(BoardFacts {
+        ids: strings(ids).collect(),
+        underway: strings(underway).collect(),
+        effective_priority: effective_priority.unwrap_or_default(),
+    })
+}
+
 /// The keeper's whole-graph order and column facts: the `ready` op in
 /// board mode. A reply with no `ids` array names the deploy skew, so a
 /// keeper that predates the board mode is an error line, never a silently
@@ -686,21 +714,36 @@ pub fn board_facts(
         params["entries"] = json!(e);
     }
     let reply = ApiReply::of(call(graph, "ready", params)?);
-    if !reply.ids.is_array() {
-        return Err(StoreClientError::Protocol(
+    facts_of(&reply.ids, &reply.underway, &reply.effective_priority).ok_or_else(|| {
+        StoreClientError::Protocol(
             "the store keeper predates the board mode; run fno doctor update".into(),
-        ));
-    }
-    let effective_priority = reply.effective_priority.as_object().map(|o| {
-        o.iter()
-            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-            .collect()
-    });
-    Ok(BoardFacts {
-        ids: strings(&reply.ids).collect(),
-        underway: strings(&reply.underway).collect(),
-        effective_priority: effective_priority.unwrap_or_default(),
+        )
     })
+}
+
+/// Every row plus the board facts over those same rows, in one store call:
+/// the keeper loads the graph once instead of once per answer. The facts are
+/// `None` when the keeper predates the `board_claimed` option, and the caller
+/// then asks [`board_facts`] the old way.
+pub fn rows_with_board(
+    graph: &Path,
+    claimed: &[String],
+) -> Result<(Vec<NodeRow>, Option<BoardFacts>), StoreClientError> {
+    let reply = ApiReply::of(call(
+        graph,
+        "api",
+        json!({"op": "rows", "board_claimed": claimed}),
+    )?);
+    let board = facts_of(
+        &reply.board.ids,
+        &reply.board.underway,
+        &reply.board.effective_priority,
+    );
+    let rows = match reply.rows {
+        Value::Array(rows) => crate::node_row::rows_from_values(rows),
+        _ => Vec::new(),
+    };
+    Ok((rows, board))
 }
 
 /// The one delivery classifier's `flow` aggregate over the graph rows and

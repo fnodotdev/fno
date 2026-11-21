@@ -42,6 +42,10 @@ impl Row {
         self.raw.get("tree_hash").and_then(Value::as_str)
     }
 
+    pub(crate) fn ts(&self) -> Option<DateTime<Utc>> {
+        self.ts
+    }
+
     pub(crate) fn lane_status(&self) -> Option<&str> {
         self.raw.get("lane_status").and_then(Value::as_str)
     }

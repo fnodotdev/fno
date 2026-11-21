@@ -2064,7 +2064,8 @@ pub fn run_queued(tail: &[String]) -> i32 {
             .ok()
             .map(|p| p.to_string_lossy().into_owned())
         {
-            if let Some(detected) = crate::backlog_ready::detect_project(&rows, &root) {
+            let row_refs: Vec<&Value> = rows.iter().collect();
+            if let Some(detected) = crate::backlog_ready::detect_project(&row_refs, &root) {
                 project = Some(detected);
             }
         }
