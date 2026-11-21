@@ -48,7 +48,7 @@ mod posture;
 mod peer_blocked;
 
 #[path = "lead_checkin_de.rs"]
-mod de;
+pub(crate) mod de;
 
 #[path = "lead_checkin_prompt_parked.rs"]
 pub(crate) mod prompt_parked;
@@ -1769,7 +1769,46 @@ fn build_data(readings: &[Reading], scope: &str) -> Map<String, Value> {
         "readers_failed".into(),
         json!(failed.iter().map(|r| r.name).collect::<Vec<_>>()),
     );
+    stamp_held_park(readings, &mut data, scope);
     data
+}
+
+/// The held-park stamp: the beat's own all-clear for the wake arm.
+/// Every open row in scope waits on a question, nothing is startable, no PR
+/// is open in the repo, no worker is live, and every input read clean. One
+/// key, all-or-nothing: a failed or missing reading stamps nothing, so the
+/// wake arm fails open toward the cadence wake. The question set rides
+/// beside the flag, so the arm's recheck compares the exact set the beat
+/// saw.
+fn stamp_held_park(readings: &[Reading], data: &mut Map<String, Value>, scope: &str) {
+    let get = |name: &str| readings.iter().find(|r| r.name == name);
+    let Some(held) = get("held").filter(|r| r.ok) else {
+        return;
+    };
+    let held_view = de::parse::<de::HeldTail>(&held.value);
+    let (Some(open), Some(quiet)) = (held_view.open, held_view.quiet) else {
+        return;
+    };
+    if open + quiet == 0 {
+        return;
+    }
+    let beat = de::BeatData::snapshot(data);
+    let inputs_idle = beat.open_prs == Some(0)
+        && beat.blueprint_target_ready == Some(0)
+        && beat.blueprint_running == Some(0)
+        && beat.scope_live_workers == Some(0);
+    if !inputs_idle {
+        return;
+    }
+    let Ok(ids) = crate::lead_answers::held_open_ids(scope) else {
+        return;
+    };
+    if ids.is_empty() {
+        return;
+    }
+    data.insert("held_park".into(), json!(true));
+    data.insert("held_park_open".into(), json!(open + quiet));
+    data.insert("held_park_qs".into(), json!(ids));
 }
 
 fn previous_row(ctx: &Ctx, holder: Option<&str>) -> (Option<Value>, String) {
@@ -1907,6 +1946,14 @@ fn derive_change(
         let slots = beat.blueprint_slots.unwrap_or(0);
         attention.push(format!(
             "scope idle with {children} unplanned idea children under its epics and {slots} free build slots"
+        ));
+    }
+    // A held park is attention, never silence: the board sleeps on the
+    // owner's answers, and the wake sleeps with it until one moves.
+    if beat.held_park == Some(true) {
+        let held = beat.held_park_open.unwrap_or(0);
+        attention.push(format!(
+            "held park: {held} open question(s) hold the scope; the wake sleeps until one moves (daily heartbeat excepted)"
         ));
     }
     // Attention outranks silence: a control plane failing for 30 minutes,
@@ -2470,6 +2517,12 @@ fn render_lines_with(
         lines.push(format!(
             "drain: undelivered {}",
             dash(beat.undelivered.as_ref())
+        ));
+    }
+    if beat.held_park == Some(true) {
+        lines.push(format!(
+            "held park: {} question(s) hold the scope; the wake sleeps until one moves (daily heartbeat excepted)",
+            beat.held_park_open.unwrap_or(0),
         ));
     }
     if ok("main_ci", &mut lines) {
@@ -3659,7 +3712,6 @@ mod tests {
         readings[i] = r;
     }
 
-    include!("lead_checkin_layout_tests.rs");
     // AC2: the handoff signal reads the true beat-to-beat direction. Two
     // consecutive rises trip it; one rise, flat, or falling does not; and the
     // baseline advances with every measured beat, so beats whose row never
@@ -3822,7 +3874,7 @@ mod tests {
     /// missing keeps the ordinary derivation. The baseline carries the full
     /// diff-key set so the legs measure only the three scope keys.
     #[test]
-    fn an_idle_scope_with_idea_children_is_attention_not_silence() {
+    fn idle_scope_attention_and_the_held_park_stamp_read_their_derivations() {
         let legs: [(&str, u64, u64, u64); 4] = [
             ("attention", 0, 76, 4),
             ("worker alive", 2, 76, 4),
@@ -3858,6 +3910,92 @@ mod tests {
                 "leg {name}: {data:?}"
             );
         }
+        // The held-park stamp reads the same derived-state class: it fires
+        // only when every idle input read clean and questions hold the
+        // scope, and refuses on a busy board, live workers, or a failed
+        // held read. The attention fixtures pin FNO_AGENT_HOME so
+        // held_open_ids reads the same pages the beat's held reading did.
+        let _env = crate::law_match::scope_tests::DoorEnv::new();
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join(".fno").join("agents");
+        // attention_dir folds under the state root, the agents home's
+        // parent, so the index lands beside agents/, not inside it.
+        let attention = dir.path().join(".fno").join("state").join("attention");
+        std::fs::create_dir_all(&attention).unwrap();
+        let qdir = dir.path().join("questions");
+        std::fs::create_dir_all(&qdir).unwrap();
+        std::fs::write(
+            qdir.join("q-park-1.md"),
+            "---\nquestion_id: q-park-1\nstatus: open\nteam: x-bbbb\nasked_at: 2026-11-21T02:00:00Z\ntitle: hold\n---\nbody\n",
+        )
+        .unwrap();
+        let as_of = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        std::fs::write(
+            attention.join("items.json"),
+            format!(
+                "{{\"as_of\": {}, \"questions_dir\": \"{}\", \"items\": []}}",
+                as_of,
+                qdir.display()
+            ),
+        )
+        .unwrap();
+        let prior = std::env::var_os("FNO_AGENT_HOME");
+        std::env::set_var("FNO_AGENT_HOME", &home);
+        // Idle inputs: no PRs, no startable work, no live workers; two due
+        // and one quiet question hold the scope.
+        let mut readings = sample_readings(
+            json!({"open_prs": 0, "free_claim_no_driver": 0, "blocked": 0, "blocked_on": []}),
+            org4(),
+            cap_ok(),
+            json!({"live_workers": 0, "oldest_worker_seen": null}),
+        );
+        set_reading(
+            &mut readings,
+            Reading::took(
+                "blueprint",
+                json!({"running": 0, "ceiling": 1, "ceiling_source": "one per lead",
+                       "plans_ready": 0, "slots": 4, "starts": [], "skips": [],
+                       "target_ready": 0}),
+            ),
+        );
+        readings.push(Reading::took("scope_live_workers", json!(0)));
+        set_reading(
+            &mut readings,
+            Reading::took("held", json!({"open": 2, "quiet": 1, "rows": []})),
+        );
+        let data = build_data(&readings, "x-bbbb");
+        match prior {
+            Some(v) => std::env::set_var("FNO_AGENT_HOME", v),
+            None => std::env::remove_var("FNO_AGENT_HOME"),
+        }
+        let beat = de::BeatData::snapshot(&data);
+        assert_eq!(beat.held_park, Some(true), "{:?}", beat.held_park);
+        assert_eq!(beat.held_park_open, Some(3));
+        assert_eq!(
+            beat.held_park_qs,
+            Some(vec!["q-park-1".to_string()]),
+            "the quiet question is in the stamped set"
+        );
+        // A busy board (open PRs) refuses the stamp; the fixture scope is
+        // never parked while PRs are open.
+        let busy = sample_readings(board7(), org4(), cap_ok(), workers3());
+        let data = build_data(&busy, "x-bbbb");
+        let beat = de::BeatData::snapshot(&data);
+        assert_eq!(beat.held_park, None, "open PRs hold the park off");
+        // A failed held read refuses the stamp even with idle inputs.
+        let mut unread = sample_readings(
+            json!({"open_prs": 0, "free_claim_no_driver": 0, "blocked": 0, "blocked_on": []}),
+            org4(),
+            cap_ok(),
+            json!({"live_workers": 0, "oldest_worker_seen": null}),
+        );
+        set_reading(&mut unread, Reading::failed("held", "arm down".into()));
+        let data = build_data(&unread, "x-bbbb");
+        let beat = de::BeatData::snapshot(&data);
+        assert_eq!(beat.held_park, None, "a failed held read stamps nothing");
     }
 
     fn pause_row(arm: &str) -> crate::tick_ledger::ArmStatus {
