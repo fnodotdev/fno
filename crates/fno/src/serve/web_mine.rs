@@ -122,11 +122,11 @@ pub(crate) fn has_store(root: &Path, person: &str) -> bool {
 
 /// A missing file is an empty doc. A file that does not parse is an error
 /// naming the serde reason, and nothing reads past it.
-fn read_doc(path: &Path) -> Result<Doc, String> {
+fn read_doc(path: &Path) -> std::io::Result<Doc> {
     match std::fs::read_to_string(path) {
-        Ok(text) => serde_json::from_str(&text).map_err(|e| e.to_string()),
+        Ok(text) => Ok(serde_json::from_str(&text)?),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Doc::default()),
-        Err(e) => Err(e.to_string()),
+        Err(e) => Err(e),
     }
 }
 
@@ -225,7 +225,7 @@ pub(crate) fn mine_json(
             Ok(doc) => doc,
             Err(e) => {
                 projects
-                    .push(json!({ "project": project, "views": [], "refused": [], "broken": e }));
+                    .push(json!({ "project": project, "views": [], "refused": [], "broken": e.to_string() }));
                 continue;
             }
         };
