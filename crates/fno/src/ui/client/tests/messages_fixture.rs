@@ -1181,3 +1181,162 @@ async fn messages_wheel_scrolls_pointer_column() {
     assert_eq!(cursors, [0, 0, 0]);
     crate::view_store::clear_test_path();
 }
+
+/// The lead's You thread folds worker mail into one band per gap, pins the
+/// newest open ask, keeps a band open across a refresh, and paints the
+/// since-you-left card only when something is newer than the read mark.
+#[tokio::test]
+async fn you_thread_band_pin_and_card() {
+    use super::super::LayoutView;
+    use serde_json::json;
+    let mut view = View::new(
+        (24, 100),
+        "main".into(),
+        LayoutView {
+            squads: Vec::new(),
+            active_squad: 0,
+            panes: Vec::new(),
+            focus: 0,
+            area: (0, 0),
+            agents: Vec::new(),
+            focus_node: None,
+        },
+    );
+    check_fixture(&mut view);
+    let prefs = tempfile::tempdir().unwrap();
+    crate::view_store::set_test_path(prefs.path());
+    let mut items: Vec<serde_json::Value> = (0..40)
+        .map(|i| {
+            json!({"ts": format!("2026-11-21T08:{i:02}:00Z"), "turn_id": format!("t-{i}"),
+                "typed_text": format!("older ask {i}"), "reply_text": format!("done {i}"),
+                "state": "answered", "asks_you": false})
+        })
+        .collect();
+    let senders = [
+        "atticus", "atticus", "t-board", "atticus", "quill", "t-board", "atticus", "t-board",
+        "vellum", "atticus", "t-board", "quill",
+    ];
+    let gap: Vec<serde_json::Value> = senders
+        .iter()
+        .enumerate()
+        .map(|(k, s)| {
+            json!({"kind": "mail", "ts": format!("2026-11-21T08:59:{:02}Z", 10 + k),
+                "sender": s, "msg_id": format!("fmail-00000000000{k:x}"), "summary": format!("note {k}")})
+        })
+        .collect();
+    items.push(json!({"ts": "2026-11-21T08:59:00Z", "turn_id": "t-40",
+        "typed_text": "watch the fleet", "reply_text": "", "state": "acked", "asks_you": false,
+        "gap": gap}));
+    items.push(json!({"ts": "2026-11-21T09:00:30Z", "turn_id": "t-41",
+        "typed_text": "is the gate green yet?", "reply_text": "", "state": "pending",
+        "asks_you": false}));
+    let projection = |items: &[serde_json::Value]| {
+        json!({
+            "participants": [], "threads": [], "system": {}, "channels": [],
+            "announcements": [], "unreadable": 0,
+            "you": [{"session_id": "lead", "name": "gavin",
+                "last_ts": items.last().map(|i| i["ts"].clone()), "items": items}],
+        })
+    };
+    let b = view.messages_board.as_mut().expect("open");
+    b.snapshot.apply(projection(&items));
+    b.mark_read("you:lead", "2026-11-21T08:30:00Z");
+    let lead = b
+        .tree_rows()
+        .iter()
+        .position(|r| matches!(r, TreeRow::Agent { key, .. } if key == "lead"))
+        .expect("lead row");
+    b.cursors[0] = lead;
+    b.col = Col::Tree;
+    super::keys(&mut view, b"\r", &mut tokio::io::sink())
+        .await
+        .unwrap();
+    let b = view.messages_board.as_mut().unwrap();
+    b.cursors[1] = 0;
+    b.col = Col::Chats;
+    super::keys(&mut view, b"\r", &mut tokio::io::sink())
+        .await
+        .unwrap();
+    // The open writes the newest stamp shown as the mark.
+    assert_eq!(
+        crate::view_store::load_messages_read_marks()
+            .get("you:lead")
+            .map(String::as_str),
+        Some("2026-11-21T09:00:30Z")
+    );
+    let texts = |b: &MessagesBoard| -> Vec<String> {
+        b.thread_lines(80).0.into_iter().map(|l| l.text).collect()
+    };
+    let b = view.messages_board.as_mut().unwrap();
+    b.cursors[2] = 0;
+    let lines = texts(b);
+    // AC3-PIN: under the title, the newest open ask and its state.
+    assert_eq!(
+        lines[1], "Open: is the gate green yet? \u{b7} working",
+        "{lines:?}"
+    );
+    // AC3-HP: one closed band, the typed turns directly around it.
+    let band = lines
+        .iter()
+        .position(|t| t.trim_start().starts_with("> 12 messages from workers"))
+        .expect("band line");
+    assert_eq!(
+        lines[band].trim(),
+        "> 12 messages from workers: atticus 5, t-board 4, +2 more"
+    );
+    let above = lines[..band].iter().rev().find(|t| !t.trim().is_empty());
+    let below = lines[band + 1..].iter().find(|t| !t.trim().is_empty());
+    assert_eq!(
+        above.map(|t| t.trim()),
+        Some("watch the fleet"),
+        "{lines:?}"
+    );
+    assert_eq!(below.map(|t| t.trim()), Some("Me"), "{lines:?}");
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|t| t.contains("messages from workers"))
+            .count(),
+        1
+    );
+    // The card counts what is newer than the mark the open replaced.
+    assert!(
+        lines
+            .iter()
+            .any(|t| t.starts_with("Since you last looked: 12 worker messages from 4 senders")),
+        "{lines:?}"
+    );
+    // AC3-EDGE: Enter opens the band; a refresh that adds an item keeps it.
+    b.cursors[2] = 40;
+    b.col = Col::Thread;
+    super::keys(&mut view, b"\r", &mut tokio::io::sink())
+        .await
+        .unwrap();
+    items.push(json!({"ts": "2026-11-21T09:02:00Z", "turn_id": "t-42",
+        "typed_text": "and the docs?", "reply_text": "", "state": "pending"}));
+    let b = view.messages_board.as_mut().unwrap();
+    b.snapshot.apply(projection(&items));
+    let lines = texts(b);
+    assert!(
+        lines.iter().any(|t| t.trim() == "atticus \u{b7} note 0"),
+        "{lines:?}"
+    );
+    assert!(lines
+        .iter()
+        .any(|t| t.trim_start().starts_with("v 12 messages")));
+    // AC3-ERR: a mark newer than every item and entry paints no card.
+    b.mark_read("you:lead", "2026-11-21T10:00:00Z");
+    b.col = Col::Chats;
+    b.cursors[1] = 0;
+    super::keys(&mut view, b"\r", &mut tokio::io::sink())
+        .await
+        .unwrap();
+    let b = view.messages_board.as_ref().unwrap();
+    assert_eq!(b.sel_thread.as_deref(), Some("you:lead"));
+    let lines = texts(b);
+    assert!(
+        !lines.iter().any(|t| t.starts_with("Since you last looked")),
+        "{lines:?}"
+    );
+    crate::view_store::clear_test_path();
+}
