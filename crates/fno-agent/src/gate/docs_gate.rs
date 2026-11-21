@@ -148,7 +148,6 @@ pub fn docs_pr_ref(body: &str) -> Option<(Option<String>, i64)> {
     None
 }
 
-
 /// The missing-doc text: the touched files, the two accepted body forms,
 /// and the two skills that write and check the doc. Create prints it as a
 /// notice and proceeds; the merge doors print it as a warning.

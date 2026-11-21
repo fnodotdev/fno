@@ -625,11 +625,112 @@ fn do_merge(
     // head those guards read. The second pass is the price of that window,
     // not an oversight: do not fold it into one pass.
     let receipt = authorized_merge(pr, repo, &ask, false, timeout_s);
-    emit_authorized_outcome(flow, pr, &receipt, &strategy)
+    let code = emit_authorized_outcome(flow, pr, &receipt, &strategy);
+    if receipt.get("outcome").and_then(Value::as_str) == Some("merged") {
+        record_folded_pr(flow, pr, repo);
+    }
+    code
+}
+
+/// Record a PR merged into the node's PR branch on that node, best-effort.
+/// A merged PR whose base is not the default branch stacks on the open PR
+/// whose head is that base branch; the bind read names the node that
+/// carries it. The record never rolls the merge back: every miss names
+/// itself on the flow, and the merge receipt stays authoritative.
+fn record_folded_pr(flow: &mut FlowResult, pr: i64, repo: &Path) {
+    let run = crate::stacked_base_stamp::runner("git", "gh");
+    let slug = match crate::pr_list::origin_slug(repo, None) {
+        Ok(slug) => slug,
+        Err(_) => {
+            flow.lines.push((
+                true,
+                "pr-merge: fold not recorded: the origin slug is unreadable\n".to_string(),
+            ));
+            return;
+        }
+    };
+    let facts = run(&["gh", "api", &format!("repos/{slug}/pulls/{pr}")], repo)
+        .filter(|r| r.ok)
+        .and_then(|r| serde_json::from_str::<Value>(&r.stdout).ok())
+        .unwrap_or(Value::Null);
+    let base = facts
+        .get("baseRefName")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    if base.is_empty() {
+        flow.lines.push((
+            true,
+            format!("pr-merge: fold not recorded: PR #{pr}'s base ref is unreadable\n"),
+        ));
+        return;
+    }
+    let default = crate::gate_probes::default_branch_cached(repo, &slug, run);
+    let owner = slug.split('/').next().unwrap_or_default();
+    let head = format!("{}:{}", owner, crate::claims::encode_key(&base));
+    let endpoint = format!("repos/{slug}/pulls?state=open&head={head}");
+    let stacked = run(&["gh", "api", &endpoint], repo)
+        .filter(|r| r.ok)
+        .and_then(|r| serde_json::from_str::<Value>(&r.stdout).ok())
+        .unwrap_or(Value::Null);
+    let bound_pr = stacked
+        .as_array()
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.pointer("/number").and_then(Value::as_u64));
+    let bound_pr = match fold_target(&base, default.as_deref(), bound_pr) {
+        Ok(bound_pr) => bound_pr,
+        Err(reason) => {
+            flow.lines
+                .push((true, format!("pr-merge: fold not recorded: {reason}\n")));
+            return;
+        }
+    };
+    let bound = crate::authorized_merge::pr_bound_entry(repo, bound_pr);
+    let Some(node_id) = bound
+        .as_ref()
+        .and_then(|row| row.get("id").and_then(Value::as_str))
+    else {
+        flow.lines.push((
+            true,
+            format!("pr-merge: fold not recorded: PR #{bound_pr} binds no node\n"),
+        ));
+        return;
+    };
+    let store = crate::backlog::api::Store::new(&crate::backlog::settings::graph_path());
+    match crate::backlog::api::pull_request_record(
+        &store,
+        node_id,
+        pr,
+        Some(&format!("https://github.com/{slug}/pull/{pr}")),
+        Some("folded"),
+        Some("merged"),
+    ) {
+        Ok(payload) if payload.success => {}
+        Ok(_) => {}
+        Err(err) => flow
+            .lines
+            .push((true, format!("pr-merge: fold not recorded: {}\n", err.0))),
+    }
+}
+
+/// The stacked PR a fold record binds to, or the reason none happens: an
+/// unreadable base, the default branch (no stack), or no open PR heading
+/// the base branch.
+fn fold_target(
+    base: &str,
+    default: Option<&str>,
+    stacked_first: Option<u64>,
+) -> Result<u64, String> {
+    if base.is_empty() {
+        return Err("the base ref is unreadable".to_string());
+    }
+    if base == default.unwrap_or_default() {
+        return Err(format!("{base} is the default branch"));
+    }
+    stacked_first.ok_or_else(|| format!("no open PR heads {base}"))
 }
 
 /// Close the nodes a merged PR's closure line names, in this process, so a
-/// node never waits on the watcher tick or the arm beat. The leg is detached
 /// (own session): a killed worker cannot take the closer with it. A failed
 /// or timed-out leg is named on stderr with the manual command; the arm and
 /// the watcher still sweep it later, so this never changes the merge exit.
@@ -1291,6 +1392,33 @@ fn acquire_merge_lock(cwd: &Path, pr: i64) -> LockOutcome {
         None => "merge serialized: another merge holds the lock; retry".to_string(),
     };
     LockOutcome::Held(reason)
+}
+
+#[cfg(test)]
+mod fold_target_tests {
+    use super::fold_target;
+
+    #[test]
+    fn fold_target_names_the_stacked_pr_or_the_reason_there_is_none() {
+        // AC4: a merged PR whose base is another PR's branch binds that PR;
+        // the default branch, a bare base, or a branchless stack binds none.
+        assert_eq!(
+            fold_target("feature/x-297c", Some("main"), Some(351)),
+            Ok(351)
+        );
+        assert_eq!(
+            fold_target("main", Some("main"), Some(351)),
+            Err("main is the default branch".to_string())
+        );
+        assert_eq!(
+            fold_target("feature/absent", Some("main"), None),
+            Err("no open PR heads feature/absent".to_string())
+        );
+        assert_eq!(
+            fold_target("", Some("main"), Some(351)),
+            Err("the base ref is unreadable".to_string())
+        );
+    }
 }
 
 #[cfg(test)]
