@@ -877,8 +877,13 @@ fn plan(mut rows: Vec<Value>, req: &PatchRequest) -> Result<Planned, PatchRefusa
     // ready-rung node reads derived ready before this door runs, and an
     // unscoped node must still refuse its first ready landing. An
     // already-ready stored row takes ordinary field writes ungated; only the
-    // transition refuses.
-    if new_status == "ready" && stored_status_before != "ready" {
+    // transition refuses. Containers stay exempt: their ready comes from the
+    // children rollup, which no scoping fact of their own feeds, so a
+    // priority or details write on an epic with a ready child must land.
+    if new_status == "ready"
+        && stored_status_before != "ready"
+        && container_children_summary(&rows, &id).is_none()
+    {
         if let Some(msg) =
             crate::backlog::audience::scoping_refusal(&rows[idx], "the move to ready")
         {
@@ -913,7 +918,7 @@ fn plan(mut rows: Vec<Value>, req: &PatchRequest) -> Result<Planned, PatchRefusa
 
 /// A short "N done, N ready" summary of `id`'s children, or `None` when
 /// `id` has no children (the leaf-node refusal case is unaffected).
-fn container_children_summary(rows: &[Value], id: &str) -> Option<String> {
+pub(crate) fn container_children_summary(rows: &[Value], id: &str) -> Option<String> {
     let mut counts: std::collections::BTreeMap<&str, usize> = Default::default();
     let mut n = 0usize;
     for row in rows {
@@ -1554,7 +1559,29 @@ mod tests {
         let message = refusal_of(&graph, &req("x-s1", Some("ready"), &[]));
         assert!(message.contains("done-means"), "{message}");
         assert!(message.contains("the move to ready"), "{message}");
-        assert!(message.contains("done-means=<text>"), "{message}");
+        assert!(message.contains("done_means=<text>"), "{message}");
+    }
+
+    // A container rolls up to ready from its children, so an ordinary field
+    // write on an epic with a ready child lands ungated.
+    #[test]
+    fn a_container_with_a_ready_child_takes_a_field_write_ungated() {
+        let epic = node("x-e1", json!({ "audience": "internal" }));
+        let dir = tempfile::tempdir().unwrap();
+        let plan = plan_file(&dir, "ready-plan.md", Some("ready"));
+        let child = node(
+            "x-c1",
+            json!({
+                "plan_path": plan,
+                "parent": "x-e1",
+                "audience": "internal",
+                "done_means": "the merge check reads the acceptance",
+            }),
+        );
+        let (_d, graph) = write_graph(&[epic, child]);
+        let receipt = apply(&graph, &req("x-e1", None, &[("priority", "p1")]))
+            .expect("an epic with a ready child takes a field write ungated");
+        assert_eq!(receipt.status.to, "ready");
     }
 
     #[test]

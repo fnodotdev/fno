@@ -1315,13 +1315,17 @@ fn plan_mutation(
     // ready, so the field-operator path gates the same transition the patch
     // door gates. The pre-image row (`node`) carries the stored status this
     // call started from; only the transition refuses, an already-ready row
-    // takes ordinary writes ungated.
+    // takes ordinary writes ungated, and containers stay exempt: their ready
+    // comes from the children rollup, never from a scoping fact of their own.
     let old_status_ready = node.get("status").and_then(Value::as_str) == Some("ready");
     let new_status = rows[idx]
         .get("status")
         .and_then(Value::as_str)
         .unwrap_or("");
-    if new_status == "ready" && !old_status_ready {
+    if new_status == "ready"
+        && !old_status_ready
+        && super::patch::container_children_summary(&rows, &node_id).is_none()
+    {
         if let Some(msg) =
             crate::backlog::audience::scoping_refusal(&rows[idx], "the move to ready")
         {

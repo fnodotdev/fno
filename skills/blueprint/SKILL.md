@@ -289,8 +289,8 @@ Then read what already moves on the same files. Run `fno backlog collisions prs 
    is where they land. For a plan bound to an existing node, the
    move-to-ready door refuses the bind until both are set and names the
    flag. For intake-minted nodes, set them at intake time:
-   `fno backlog update "$NODE_ID" --set done-means="<acceptance a merge
-   check can read>"` (and `--set audience=customer:<persona>` when the plan
+   `fno backlog update "$NODE_ID" done_means="<acceptance a merge
+   check can read>"` (and `audience=customer:<persona>` when the plan
    serves customers). Target start refuses the node without them.
 
    The user-facing `no-adopt` modifier (and `--no-adopt` flag) keep their

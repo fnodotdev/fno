@@ -108,7 +108,7 @@ translate positional words into the equivalent flag:
      customer node names its `customer:<persona>` and every node carries
      `done-means` before the move to ready (the blueprint and a target
      start refuse the same way), so set them with
-     `fno backlog update <id> --set done-means=...` when the flip is
+     `fno backlog update <id> done_means=...` when the flip is
      part of the pass.
 
    If `candidates` is empty AND `ideas` is empty, print "no pending

@@ -137,7 +137,7 @@ the user's words when the ask came from him). The facts stage: the coarse
 audience and the why file the node, and `--done-means` (the acceptance a merge
 check can read) plus a customer node's `customer:<persona>` become required
 when the node is scoped - the move to ready, a blueprint, or target start all
-refuse until both are set (`fno backlog update <id> --set done-means=...`).
+refuse until both are set (`fno backlog update <id> done_means=...`).
 At filing an agent has seen a symptom, not who it hurts, so nothing forces a
 guessed persona or acceptance onto the board score. A `--parent` create carries the
 parent's scope and the receipt says so. Unsure? Pass `--audience ask`: the row

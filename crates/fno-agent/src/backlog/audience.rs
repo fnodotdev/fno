@@ -290,7 +290,7 @@ pub fn scoping_refusal(entry: &Value, stage: &str) -> Option<String> {
     if done.is_empty() {
         return Some(format!(
             "{id} is not scoped: --done-means is required by {stage}: the acceptance a merge \
-             check can read. Supply it with: fno backlog update {id} --set done-means=<text>"
+             check can read. Supply it with: fno backlog update {id} done_means=<text>"
         ));
     }
     let audience = stored_audience(entry)
@@ -300,7 +300,7 @@ pub fn scoping_refusal(entry: &Value, stage: &str) -> Option<String> {
     if audience.is_empty() || audience == "audience?" {
         return Some(format!(
             "{id} is not scoped: --audience is required by {stage}: the record names who it \
-             serves. Supply it with: fno backlog update {id} --set audience=internal|customers|customer:<persona>"
+             serves. Supply it with: fno backlog update {id} audience=internal|customers|customer:<persona>"
         ));
     }
     let names_coarse_customers = audience.split(',').map(str::trim).any(|t| t == "customers");
@@ -308,7 +308,7 @@ pub fn scoping_refusal(entry: &Value, stage: &str) -> Option<String> {
         return Some(format!(
             "{id} is not scoped: --audience customers needs its persona by {stage}: the persona \
              file must exist and the jobs it serves get named. Supply it with: fno backlog update \
-             {id} --set audience=customer:<persona>"
+             {id} audience=customer:<persona>"
         ));
     }
     None
@@ -452,7 +452,7 @@ mod tests {
         let msg = scoping_refusal(&no_done, stage).unwrap();
         assert!(msg.contains("done-means"), "{msg}");
         assert!(msg.contains(stage), "{msg}");
-        assert!(msg.contains("done-means=<text>"), "{msg}");
+        assert!(msg.contains("done_means=<text>"), "{msg}");
 
         let no_audience = serde_json::json!({ "id": "x-a2", "done_means": "green" });
         let msg = scoping_refusal(&no_audience, stage).unwrap();
