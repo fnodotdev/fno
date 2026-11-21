@@ -236,15 +236,24 @@ impl<'a> ResolutionIndex<'a> {
         self.resolve_tiers_with(query, true)
     }
 
-    /// `resolve_id` for a subject a row stored long ago: no number tier.
-    /// Display numbers are reassigned as nodes come and go, so a stored
-    /// `x-4279` whose node is gone stays dead and never attaches to the node
-    /// that now holds that number. Write doors store the hash form already.
-    pub fn resolve_stored_id(&self, stored: &str) -> Option<String> {
-        self.resolve_tiers_with(stored, false)
-            .or_else(|| self.resolve_tiers_with(stored.trim().to_lowercase().as_str(), false))
-            .and_then(|e| e.get("id").and_then(Value::as_str))
-            .map(str::to_string)
+    /// `resolve_twice` for a subject a row recorded at `recorded_at`. A hit
+    /// through the number tier alone must name a node that existed by then:
+    /// an all-digit hash id (`x-4279`) whose node is gone would otherwise
+    /// attach to the later node that took that display number. Either
+    /// timestamp unreadable keeps the plain answer.
+    pub fn resolve_stored_id(&self, stored: &str, recorded_at: Option<&str>) -> Option<String> {
+        let stored = stored.trim();
+        let hit = self
+            .resolve_tiers_with(stored, true)
+            .or_else(|| self.resolve_tiers_with(stored.to_lowercase().as_str(), true))?;
+        let exact = self.resolve_tiers_with(stored, false).is_some()
+            || self
+                .resolve_tiers_with(stored.to_lowercase().as_str(), false)
+                .is_some();
+        if !exact && created_after(hit, recorded_at) {
+            return None;
+        }
+        hit.get("id").and_then(Value::as_str).map(str::to_string)
     }
 
     fn resolve_tiers_with(&self, query: &str, number_tier: bool) -> Option<&'a Value> {
@@ -296,6 +305,20 @@ impl<'a> ResolutionIndex<'a> {
     pub fn resolve_twice(&self, stripped: &str) -> Option<String> {
         self.resolve_id(stripped)
             .or_else(|| self.resolve_id(stripped.to_lowercase().as_str()))
+    }
+}
+
+/// Whether a node was created after `at`. An unreadable stamp on either side
+/// answers false: the caller keeps the plain resolution.
+fn created_after(node: &Value, at: Option<&str>) -> bool {
+    let parse = |s: &str| chrono::DateTime::parse_from_rfc3339(s).ok();
+    let created = node
+        .get("created_at")
+        .and_then(Value::as_str)
+        .and_then(parse);
+    match (created, at.and_then(parse)) {
+        (Some(created), Some(at)) => created > at,
+        _ => false,
     }
 }
 
@@ -688,6 +711,15 @@ pub fn release_contained(entries: &mut [Value], node_id: &str) -> Result<(), Str
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_node_created_after_the_ruling_is_never_its_subject() {
+        let node = json!({"id": "x-3d69", "created_at": "2026-10-12T16:10:19+00:00"});
+        assert!(created_after(&node, Some("2026-08-25T00:00:00Z")));
+        assert!(!created_after(&node, Some("2026-11-01T00:00:00Z")));
+        assert!(!created_after(&node, None));
+        assert!(!created_after(&node, Some("not a time")));
+    }
 
     #[test]
     fn resolvers_refuse_a_flag_shaped_token_before_the_graph() {
