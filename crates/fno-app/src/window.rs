@@ -1842,7 +1842,7 @@ impl Root {
         }
     }
 
-    /// A command-block verb on the focused pane. The server answers a pane
+    /// A command-block action on the focused pane. The server answers a pane
     /// with no blocks, or one still busy on a rerun, with its own notice.
     fn block_op(&mut self, op: keys::BlockOp) {
         let pane = self.layout.focus;

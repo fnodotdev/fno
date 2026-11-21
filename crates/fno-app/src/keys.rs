@@ -388,7 +388,7 @@ pub enum MuxAction {
     NextWaiting,
 }
 
-/// One command-block verb the wire carries.
+/// One command-block action the wire carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockOp {
     Jump(fno::proto::BlockDir),
