@@ -115,8 +115,10 @@ pub(crate) fn run_shot_save(args: &[String]) -> i32 {
         eprintln!("usage: fno-agent visual shot-save <node> <png...> [--head=<sha>]");
         return 2;
     }
-    let node = &args[1];
-    let rest = &args[2..];
+    let Some(node) = args.get(1) else {
+        return 2;
+    };
+    let rest = args.get(2..).unwrap_or(&[]);
     let head = match resolve_head(rest) {
         Ok(h) => h,
         Err(code) => {
@@ -203,7 +205,7 @@ mod tests {
         assert_eq!(short.view, "chat");
         assert_eq!(short.role, "after");
         assert_eq!(short.theme, "dark");
-        let vault = parse_shot_name("x-bed8-chat-before-dark", &["x", "bed8"])
+        let vault = parse_shot_name("zz-cafe-chat-before-dark", &["zz", "cafe"])
             .expect("the vault shape parses");
         assert_eq!(vault.view, "chat");
         assert_eq!(vault.role, "before");
