@@ -219,12 +219,12 @@ pub(super) struct PrInfo {
     pub(super) range_tiling: RangeTiling,
 }
 
-/// The node's numbered PR rows: (number, merge_status, history-marked, url).
-/// The one collection every store-side PR row rule reads, so the live/terminal
-/// and reopen-age rules cannot drift between them.
+/// The node's numbered PR rows: (number, merge_status, history-marked, url,
+/// note). The one collection every store-side PR row rule reads, so the
+/// live/terminal and reopen-age rules cannot drift between them.
 fn numbered_pr_rows(
     node: &crate::backlog::model::Node,
-) -> Vec<(i64, Option<&str>, bool, Option<&str>)> {
+) -> Vec<(i64, Option<&str>, bool, Option<&str>, Option<&str>)> {
     node.primary_pr
         .iter()
         .chain(node.additional_prs.iter().flatten())
@@ -235,6 +235,7 @@ fn numbered_pr_rows(
                     pr.merge_status.as_deref(),
                     pr.extras.get("history").and_then(Value::as_bool) == Some(true),
                     pr.url.as_deref(),
+                    pr.note.as_deref(),
                 )
             })
         })
@@ -277,6 +278,9 @@ fn terminal_stamp(status: &Option<&str>) -> bool {
 /// whose PR lives in another repo (the 2026-11-11 cutover moved workers to
 /// fnodotdev/fno while their worktrees still originated fno-workshop) must
 /// never have the gate read the ambient origin's same-number PR instead.
+/// A docs-note row (the twin `record_docs_pr` files from a PR body's
+/// `Docs:` line) is never the target: the gate's head check compares
+/// against this checkout's HEAD, which a docs repo's commit cannot share.
 /// None on every fail-open shape the selector documents.
 pub(super) fn manifest_node_pr_target(
     cwd: &Path,
@@ -289,6 +293,17 @@ pub(super) fn manifest_node_pr_target(
         _ => return None,
     };
     let mut rows = numbered_pr_rows(&node);
+    // The docs twin sinks first, whatever its number or stamp: the note
+    // `record_docs_pr` stamps on the PR a `Docs:` line names marks an
+    // ANCILLARY PR in the docs repo, whose head lives in another commit
+    // graph and can never equal this checkout's HEAD. A twin that won the
+    // selection rendered block_reason's push demand against a PR this
+    // session does not owe - including the shape where the twin is the ONLY
+    // numbered row (the code PR exists but is unrecorded), which then
+    // fail-opens to the ambient origin's branch-resolved read: the session's
+    // own repo. A first-class docs session's row carries no such note, so
+    // its pin is untouched.
+    rows.retain(|(_, _, _, _, note)| !note.is_some_and(|n| n.trim().eq_ignore_ascii_case("docs")));
     // Newest first, then a stable pass that lifts non-terminal rows above
     // stamped ones. The stamps ride the writers' own spelling, which is
     // lowercase today but GitHub-adjacent prose elsewhere, so the compare is
@@ -300,14 +315,14 @@ pub(super) fn manifest_node_pr_target(
     let terminal = terminal_stamp;
     let max_terminal = rows
         .iter()
-        .filter(|(_, status, _, _)| terminal(status))
-        .map(|(number, _, _, _)| *number)
+        .filter(|(_, status, ..)| terminal(status))
+        .map(|(number, ..)| *number)
         .max();
     rows.sort_by(|a, b| b.0.cmp(&a.0));
     // Key 0 = live, 1 = settled (stamped, or age-gated history), 2 = an
     // explicitly marked history row. A marked row sinks below even the
     // stamped rows: state, not number order, decides for it.
-    rows.sort_by_key(|(number, status, history, _)| {
+    rows.sort_by_key(|(number, status, history, ..)| {
         if *history {
             2
         } else if terminal(status) || max_terminal.is_some_and(|bound| *number <= bound) {
@@ -317,7 +332,7 @@ pub(super) fn manifest_node_pr_target(
         }
     });
     rows.first()
-        .map(|(number, _, _, url)| (number.to_string(), repo_slug_from_row_url(*url)))
+        .map(|(number, .., url, _)| (number.to_string(), repo_slug_from_row_url(*url)))
 }
 
 /// The PR row url's `owner/repo`, the slug every PR read must pin. A bare
@@ -410,18 +425,18 @@ pub(super) fn node_done_terminal(cwd: &Path, node_id: Option<&str>) -> Option<Do
     let terminal = terminal_stamp;
     let max_terminal = rows
         .iter()
-        .filter(|(_, status, _, _)| terminal(status))
-        .map(|(number, _, _, _)| *number)
+        .filter(|(_, status, ..)| terminal(status))
+        .map(|(number, ..)| *number)
         .max();
-    let has_live = rows.iter().any(|(number, status, history, _)| {
+    let has_live = rows.iter().any(|(number, status, history, ..)| {
         !history && !terminal(status) && !max_terminal.is_some_and(|bound| *number <= bound)
     });
     if has_live {
         return None;
     }
     rows.iter()
-        .filter(|(_, status, _, _)| status.is_some_and(|s| s.eq_ignore_ascii_case("merged")))
-        .map(|(number, _, _, _)| *number)
+        .filter(|(_, status, ..)| status.is_some_and(|s| s.eq_ignore_ascii_case("merged")))
+        .map(|(number, ..)| *number)
         .max()
         .map(DoneNodeTerminal::Merged)
 }

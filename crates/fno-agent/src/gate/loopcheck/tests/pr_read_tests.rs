@@ -226,3 +226,65 @@ exit 1
         info.ci_conclusion
     );
 }
+
+/// The gate's live-PR selection never hands it a docs twin: the note
+/// `record_docs_pr` stamps marks a PR in the docs repo, whose head lives in
+/// another commit graph and can never equal this checkout's HEAD, so a twin
+/// that won the selection rendered block_reason's push demand against a PR
+/// the session does not owe. A twin as the ONLY numbered row leaves no
+/// target at all, and the gate fail-opens to the ambient origin's
+/// branch-resolved read, which answers in the session's own repo.
+#[test]
+fn docs_note_rows_never_become_the_live_pr_target() {
+    let _guard = crate::claims::test_env_lock();
+    let dir = tempfile::tempdir().unwrap();
+    std::env::set_var("FNO_STATE_DIR", dir.path());
+    let graph = crate::runtime::state_layout::graph_anchor(dir.path());
+    let row = |id: &str, prs: serde_json::Value| {
+        crate::backlog::model::Node::from_json(&serde_json::json!({
+            "id": id, "slug": id, "title": id, "type": "feature",
+            "status": "in_progress", "priority": "p2", "domain": "code",
+            "created_at": "2026-11-21T00:00:00+00:00",
+            "additional_prs": prs,
+        }))
+        .unwrap()
+        .to_json()
+    };
+    let twin = serde_json::json!({
+        "number": 300,
+        "url": "https://github.com/footnote-sh/fno-web/pull/300",
+        "note": "docs"
+    });
+    let code = serde_json::json!({
+        "number": 100,
+        "url": "https://github.com/fnodotdev/fno/pull/100"
+    });
+    let entries = vec![
+        row("ab-docs-only", serde_json::json!([twin.clone()])),
+        row("ab-both", serde_json::json!([twin, code.clone()])),
+        row("ab-code-only", serde_json::json!([code])),
+    ];
+    crate::graph_store::seed_rows(&graph, &entries).unwrap();
+
+    // The incident shape: the twin is the only numbered row (the code PR
+    // exists but is unrecorded). No target: the gate reads the ambient
+    // origin's branch-resolved PR instead.
+    assert_eq!(
+        pr_read::manifest_node_pr_target(dir.path(), Some("ab-docs-only")),
+        None
+    );
+
+    // A twin beside a live code row loses to it, even on the larger number.
+    assert_eq!(
+        pr_read::manifest_node_pr_target(dir.path(), Some("ab-both")),
+        Some(("100".to_string(), Some("fnodotdev/fno".to_string())))
+    );
+
+    // A plain row keeps the pin exactly as before.
+    assert_eq!(
+        pr_read::manifest_node_pr_target(dir.path(), Some("ab-code-only")),
+        Some(("100".to_string(), Some("fnodotdev/fno".to_string())))
+    );
+
+    std::env::remove_var("FNO_STATE_DIR");
+}
