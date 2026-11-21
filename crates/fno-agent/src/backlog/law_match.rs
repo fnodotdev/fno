@@ -3979,7 +3979,7 @@ pub(crate) mod scope_tests {
             seed("d-2eed0002", "machine-one", &format!("machine:{mine}"));
         }
         seed("d-3eed0003", "wide-two", "global");
-        seed("d-4eed0004", "typo-one", "project:demo");
+        seed("d-4eed0004", "typo-one", "user:nobody-zz9");
         let operator = Caller::as_authority("operator");
         let record = |text: &str, widen: Option<Widen>| {
             let mut d = door(text, text);
