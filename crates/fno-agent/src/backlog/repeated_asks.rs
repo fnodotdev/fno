@@ -288,7 +288,9 @@ fn clock_regex() -> &'static Regex {
     CLOCK.get_or_init(|| Regex::new(r"\b\d{1,2}:\d{2}z?\b").expect("clock regex is valid"))
 }
 
-fn tokens(text: &str) -> HashSet<String> {
+/// The ask's word set. The pattern reads lowercase only, so a caller with
+/// mixed-case text lowercases first.
+pub(crate) fn tokens(text: &str) -> HashSet<String> {
     static TOKEN: OnceLock<Regex> = OnceLock::new();
     let regex =
         TOKEN.get_or_init(|| Regex::new(r"[a-z0-9][a-z0-9_.'-]*").expect("token regex is valid"));
@@ -299,10 +301,14 @@ fn tokens(text: &str) -> HashSet<String> {
 }
 
 pub(crate) fn same_ask(a: &str, b: &str) -> bool {
-    let a = tokens(a);
-    let b = tokens(b);
-    let union = a.union(&b).count();
-    a.intersection(&b).count() as f64 / union.max(1) as f64 >= SAME_ASK
+    same_tokens(&tokens(a), &tokens(b))
+}
+
+/// [`same_ask`] over word sets already tokenized, for a caller that scores
+/// every pair of a long list.
+pub(crate) fn same_tokens(a: &HashSet<String>, b: &HashSet<String>) -> bool {
+    let union = a.union(b).count();
+    a.intersection(b).count() as f64 / union.max(1) as f64 >= SAME_ASK
 }
 
 fn fold(replies: &[String]) -> Value {

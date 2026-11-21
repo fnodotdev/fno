@@ -162,7 +162,7 @@ Embeddings beat BM25 by 0.083 recall@3, under the 0.15 bar the plan set for ship
 
 ## Overrides
 
-`event_rules.<id> = true|false` in fno config (project or global) flips any row, read with `config_value_deep`. With no override the row takes its `default`. `chat_ask_unfiled_worker` ships `default = false`. It is the same chat-ask block for untitled sessions. A config turns it on.
+`event_rules.<id> = true|false` in fno config (project or global) flips any row, read with `config_value_deep`. With no override the row takes its `default`. `chat_ask_unfiled_worker` ships `default = false`. It is the same chat-ask block for untitled sessions. A config turns it on. `lead_idle_pick_unanswered` ships `default = true` for promoted sessions. It blocks a stop that leaves the beat's pick untaken over zero live scope workers. A spawn-gate refusal row for the pick's node lets the stop pass.
 
 ## Per-harness job
 

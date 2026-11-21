@@ -14,6 +14,7 @@ use super::birth::resolve_transcript_detail;
 use super::done_rich::read_external;
 use super::node_ref::resolve_tiers;
 use super::render::py_json_pretty;
+use super::row_render::{pr_entries_json, render_pr_lines};
 use super::settings;
 use super::workflows::{active_backend_name, text_at};
 use crate::graph_store;
@@ -95,17 +96,10 @@ fn spawn_edge(node: &Value) -> Option<Value> {
 }
 
 fn pr_block(row: &Value) -> Value {
-    json!({"number": row.get("pr_number"), "url": row.get("pr_url")})
-}
-
-fn render_pr_line(pr: &Value) -> String {
-    let url = pr["url"].as_str().filter(|u| !u.is_empty());
-    match (pr["number"].as_i64(), url) {
-        (None, None) => "  pr: (none)".to_string(),
-        (None, Some(url)) => format!("  pr: {url}"),
-        (Some(n), None) => format!("  pr: #{n}"),
-        (Some(n), Some(url)) => format!("  pr: #{n} {url}"),
-    }
+    json!({
+        "number": crate::backlog::row_facts::int_field(row, "pr_number"),
+        "url": crate::backlog::row_facts::str_field(row, "pr_url"),
+    })
 }
 
 /// `harness_session_id` to registry status. None when the registry cannot be
@@ -611,6 +605,7 @@ fn run_external(id: &str, spawned: bool, json_out: bool) -> i32 {
             "title": node.get("title"),
             "edges": [edge_json("node_birth", birth.as_ref()), edge_json("spawn", spawn.as_ref())],
             "pr": pr_block(&sc),
+            "additional_prs": pr_entries_json(&sc),
             "sessions": sessions,
             "lifecycle": null,
             "source_node_id": sc.get("source_node_id"),
@@ -641,7 +636,9 @@ fn run_external(id: &str, spawned: bool, json_out: bool) -> i32 {
         "  spawn: {}",
         text_at(&sc, "spawned_by_session").unwrap_or("(none)")
     );
-    println!("{}", render_pr_line(&pr_block(&sc)));
+    for line in render_pr_lines(&sc) {
+        println!("{line}");
+    }
     println!("  sessions: {} row(s)", sessions.len());
     for (d, nid) in &walk {
         println!(
@@ -739,6 +736,7 @@ pub fn run(tail: &[String]) -> i32 {
             "title": node.get("title"),
             "edges": [edge_json("node_birth", birth.as_ref()), edge_json("spawn", spawn.as_ref())],
             "pr": pr_block(node),
+            "additional_prs": pr_entries_json(node),
             "sessions": sessions,
             "lifecycle": roster,
             "source_node_id": origin,
@@ -777,7 +775,7 @@ pub fn run(tail: &[String]) -> i32 {
         lines.push(format!("    plan: {plan}"));
     }
     fmt_edge(&mut lines, "spawn", spawn.as_ref());
-    lines.push(render_pr_line(&pr_block(node)));
+    lines.extend(render_pr_lines(node));
     lines.push(if related.is_empty() {
         "  related: (none)".to_string()
     } else {

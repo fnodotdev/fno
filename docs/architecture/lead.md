@@ -51,9 +51,9 @@ After a compaction, Claude re-injects each skill body as the session first read 
 
 Exit is blocked while actionable rows exist. The stop hook reads board truth. A clean board, or a board waiting only on the user, CI or a worker, exits `NoWork`. The next heartbeat or mail wakes it, and the daemon's settle mail is mail. `NoProgress` after three unshrinking fires escalates automatically and the session parks. The operator's answer wakes it through the wake arm. A lead never fights the hook.
 
-## The dispatch exception and its journal row
+## Dispatch and its journal row
 
-A lead does not dispatch. The single exception is a provably dead dispatching arm: a red row in `fno agent session status`. That spawn is journaled `lead_dispatch_exception`, naming the arm and the node, BEFORE it fires. A spawn without that row is a defect. The journal row is emitted with:
+A titled lead starts work: it runs every startable line its check-in prints, in check-in order, and the spawned workers carry the beat's scope. A spawn outside the check-in list is the one exception, and it needs a provably dead dispatching arm: a red row in `fno agent session status`. That spawn is journaled `lead_dispatch_exception`, naming the arm and the node, BEFORE it fires. A spawn without that row is a defect. The journal row is emitted with:
 
 `fno doctor event emit -t lead_dispatch_exception -s loop -d '{"scope":"<scope>","arm":"<arm>","node":"<id>"}'`
 

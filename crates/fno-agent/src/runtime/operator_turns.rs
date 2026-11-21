@@ -137,8 +137,9 @@ pub(crate) fn turn_id(obj: &Value, text: &str, line_no: usize) -> String {
     format!("derived-{}", &hex[..12])
 }
 
-/// One-line excerpt; whitespace runs collapse so a row stays one row.
-fn excerpt(text: &str) -> String {
+/// One-line excerpt; whitespace runs collapse so a row stays one row. The
+/// decide row's turn quote cuts at the same width, so the two renders agree.
+pub(crate) fn excerpt(text: &str) -> String {
     let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if flat.chars().count() <= EXCERPT_CHARS {
         flat
@@ -803,14 +804,14 @@ fn render_list(payload: &QueuePayload, json_out: bool, limit: Option<usize>, now
 /// queue payload; `--render` prints the `fno inbox user` answer the front
 /// door execs this for.
 pub fn run(args: &[String]) -> i32 {
-    const USAGE: &str = "usage: compaction operator-turns [--session <id>] [--transcript <path>] [--capture-dir <dir>] [--render status|list [--json] [--limit <n>] [--all [--since <YYYY-MM-DD>]]]";
+    const USAGE: &str = "usage: compaction operator-turns [--session <id>] [--transcript <path>] [--capture-dir <dir>] [--render status|list [--json] [--limit <n>] [--all [--since <YYYY-MM-DD>]]] [--render requests [--json] [--since <YYYY-MM-DD>] [--top <n>]]";
     let mut json_out = false;
     let mut all = false;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--session" | "--transcript" | "--capture-dir" | "--render" | "--limit" | "-L"
-            | "--since" => {
+            | "--since" | "--top" => {
                 it.next();
             }
             "--json" | "-J" => json_out = true,
@@ -823,9 +824,17 @@ pub fn run(args: &[String]) -> i32 {
     }
     let flag = |name: &str| crate::compaction::flag_value(args, name);
     let render = flag("--render");
-    if render
-        .as_deref()
-        .is_some_and(|mode| mode != "status" && mode != "list")
+    if render.as_deref() == Some("requests") {
+        if all || flag("--limit").or_else(|| flag("-L")).is_some() {
+            eprintln!("{USAGE}");
+            return 2;
+        }
+        return run_requests(json_out, flag("--since"), flag("--top"));
+    }
+    if flag("--top").is_some()
+        || render
+            .as_deref()
+            .is_some_and(|mode| mode != "status" && mode != "list")
     {
         eprintln!("{USAGE}");
         return 2;
@@ -932,6 +941,47 @@ pub fn run(args: &[String]) -> i32 {
     0
 }
 
+/// Codex rollouts live under `$CODEX_HOME/sessions`.
+pub(crate) fn codex_sessions_dir() -> PathBuf {
+    std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".codex")))
+        .unwrap_or_else(|| PathBuf::from(".codex"))
+        .join("sessions")
+}
+
+/// The `--since` reach's own trimmed walk cache, beside the live You cache.
+pub(crate) fn reach_cache_path(home: &crate::paths::AgentsHome) -> PathBuf {
+    home.root().join("intel").join("requests-walk.json")
+}
+
+pub(crate) fn date_epoch(date: chrono::NaiveDate) -> u64 {
+    date.and_hms_opt(0, 0, 0)
+        .map(|t| t.and_utc().timestamp().max(0) as u64)
+        .unwrap_or(0)
+}
+
+/// The You walk's inputs for a cross-session read: the capture dir from the
+/// pin or the cwd, the registry, the claude projects dir. `None` when no
+/// capture dir resolves.
+pub(crate) fn all_asks_inputs<'a>(
+    home: &crate::paths::AgentsHome,
+    registry: &'a [Value],
+) -> Option<crate::you_threads::YouInputs<'a>> {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let capture_dir = std::env::var_os("FNO_OPERATOR_CAPTURE_DIR")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| capture_dir(&cwd))?;
+    Some(crate::you_threads::YouInputs {
+        registry,
+        projects_dir: crate::claude_drive::claude_projects_dir(),
+        home_root: home.root().to_path_buf(),
+        cache_path: home.root().join("intel").join("you-threads.json"),
+        capture_dir,
+    })
+}
+
 /// `fno inbox user list --all`: the cross-session asks view. The capture
 /// dir enumerates every scanned session (both harnesses), the You walk
 /// pairs each typed turn with its reply, and the ack ledger decides the
@@ -942,38 +992,21 @@ fn run_all_asks(
     since: Option<(String, chrono::NaiveDate)>,
 ) -> i32 {
     let home = crate::paths::AgentsHome::from_env();
-    let cwd = std::env::current_dir().unwrap_or_default();
-    let Some(capture_dir) = std::env::var_os("FNO_OPERATOR_CAPTURE_DIR")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| capture_dir(&cwd))
-    else {
+    let registry = crate::mail_threads::registry_rows();
+    let Some(inputs) = all_asks_inputs(&home, &registry) else {
         eprintln!("error: no operator capture directory could be resolved");
         return 1;
-    };
-    let registry = crate::mail_threads::registry_rows();
-    let inputs = crate::you_threads::YouInputs {
-        registry: &registry,
-        projects_dir: crate::claude_drive::claude_projects_dir(),
-        home_root: home.root().to_path_buf(),
-        cache_path: home.root().join("intel").join("you-threads.json"),
-        capture_dir,
     };
     let mut rows = match since {
         // `--since` reaches past the two-day window over every transcript on
         // disk; codex rollouts live under `$CODEX_HOME/sessions`.
-        Some((raw, date)) => {
-            let codex = std::env::var_os("CODEX_HOME")
-                .map(PathBuf::from)
-                .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".codex")))
-                .unwrap_or_else(|| PathBuf::from(".codex"))
-                .join("sessions");
-            let epoch = date
-                .and_hms_opt(0, 0, 0)
-                .map(|t| t.and_utc().timestamp().max(0) as u64)
-                .unwrap_or(0);
-            crate::you_threads::asks_since(&inputs, &codex, &raw, epoch)
-        }
+        Some((raw, date)) => crate::you_threads::asks_since(
+            &inputs,
+            &codex_sessions_dir(),
+            &reach_cache_path(&home),
+            &raw,
+            date_epoch(date),
+        ),
         None => crate::you_threads::asks_rows(&inputs),
     };
     if let Some(n) = limit {
@@ -1008,6 +1041,73 @@ fn run_all_asks(
             row.get("turn_id").and_then(Value::as_str).unwrap_or("")
         );
     }
+    0
+}
+
+/// `fno inbox user requests`: each ask across sessions once, merged when
+/// repeated, highest rank first. `--since` defaults to the last
+/// `WINDOW_DAYS` days. JSON prints the rows on stdout and the skip counts as
+/// one JSON line on stderr.
+fn run_requests(json_out: bool, since: Option<String>, top: Option<String>) -> i32 {
+    let date = match since {
+        None => (chrono::Utc::now()
+            - chrono::Duration::days(crate::backlog::requests_fold::WINDOW_DAYS))
+        .date_naive(),
+        Some(raw) => match chrono::NaiveDate::parse_from_str(&raw, "%Y-%m-%d") {
+            Ok(date) => date,
+            Err(_) => {
+                eprintln!("--since takes a date as YYYY-MM-DD, got {raw:?}");
+                return 2;
+            }
+        },
+    };
+    let top = match top.map(|raw| raw.parse::<usize>()) {
+        None => None,
+        Some(Ok(n)) if n >= 1 => Some(n),
+        Some(_) => {
+            eprintln!("--top takes a positive count");
+            return 2;
+        }
+    };
+    let home = crate::paths::AgentsHome::from_env();
+    let since = date.format("%Y-%m-%d").to_string();
+    let mut fold = match crate::backlog::requests_fold::load(&home, &since, date_epoch(date)) {
+        Ok(fold) => fold,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+    if let Some(n) = top {
+        fold.rows.truncate(n);
+    }
+    if json_out {
+        eprintln!(
+            "{}",
+            json!({"skipped": serde_json::to_value(&fold.skipped).unwrap_or(Value::Null)})
+        );
+        println!("{}", python_json(&fold.rows));
+        return 0;
+    }
+    if fold.rows.is_empty() {
+        println!("no requests since {since}: type an ask in a session and it lands here");
+        return 0;
+    }
+    for row in &fold.rows {
+        let node = match (&row.node, &row.node_status) {
+            (Some(id), Some(status)) => format!("{id} ({status})"),
+            (Some(id), None) => format!("{id} (not in the graph)"),
+            (None, _) => "no node".to_string(),
+        };
+        println!(
+            "{}\t{}\tasked {}x\t{node}\t{}",
+            row.rank_score, row.state, row.ask_count, row.text
+        );
+    }
+    eprintln!(
+        "skipped short replies: {}; node pairs kept apart: {}",
+        fold.skipped.reply, fold.skipped.cross_node
+    );
     0
 }
 
@@ -1482,5 +1582,21 @@ mod tests {
             !index.contains("user_ask_answered"),
             "the refusal writes no answered row: {index}"
         );
+    }
+
+    /// AC3-ERR: a bad `--since` date or `--top` count refuses with exit 2
+    /// before any read.
+    #[test]
+    fn requests_refuses_a_bad_date_or_count_before_reading() {
+        let args = |rest: &[&str]| -> Vec<String> {
+            ["--render", "requests", "--json"]
+                .iter()
+                .chain(rest)
+                .map(|s| s.to_string())
+                .collect()
+        };
+        assert_eq!(run(&args(&["--since", "2026-13-01"])), 2);
+        assert_eq!(run(&args(&["--top", "0"])), 2);
+        assert_eq!(run(&args(&["--all"])), 2);
     }
 }

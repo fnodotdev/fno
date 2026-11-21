@@ -479,7 +479,6 @@ fn export_train(
 /// `_lane_evidence`). The store is only read. A transcript that cannot be
 /// found or read leaves `lane_status` at `unverified` with a reason and
 /// `usage` at null, never zero (AC10-EDGE).
-use crate::claude_drive::claude_projects_dir;
 use std::path::{Path, PathBuf};
 
 struct Observed {
@@ -1035,12 +1034,18 @@ pub fn observe(payload: &Value) -> Value {
         .unwrap_or_default();
     let observed = match requested_harness.as_str() {
         "claude" => {
-            let root = payload
+            let roots = payload
                 .get("projects_root")
                 .and_then(Value::as_str)
-                .map(PathBuf::from)
-                .unwrap_or_else(claude_projects_dir);
-            observe_records("claude", &root, workdir, started, now)
+                .map(|r| vec![PathBuf::from(r)])
+                .unwrap_or_else(crate::claude_drive::claude_projects_dirs);
+            // A roots list longer than one means the projects_root override
+            // was absent, so the attempt may have written under the ambient
+            // root (pre-pin transcripts) or the evals sandbox (current). The
+            // first root that yields a record answers.
+            roots
+                .iter()
+                .find_map(|root| observe_records("claude", root, workdir, started, now))
         }
         "opencode" => {
             let dbs: Vec<PathBuf> = payload

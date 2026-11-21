@@ -41,6 +41,7 @@ A session with no role over the scope does not lead. It runs no check-in, spawns
 - `fno agent hq init --scope <scope> --harness-session-id <full session id>`. Read the full id with `printenv CLAUDE_CODE_SESSION_ID` on claude, or `printenv CODEX_THREAD_ID` on codex. The stop hook matches the manifest id to the transcript name. So the 8-character handle from `fno agent registry whoami --json` does not work. Read its settled-findings section before the first check-in, and never re-derive it.
 - Read the canon doc, rebind a changed session id, register with `/fno:fno-me`, and check `fno doctor`: [the setup steps](references/once.md#on-titling-the-setup-steps).
 - Pick the SOUL style. Run `fno agent hq chart style list`. Record the fit with `fno agent hq chart style <style>`. Then read the printed SOUL.md. It sets stance and taste only. The rules in this file and AGENTS.md win.
+- At the first beat, check the scope repo root for the judge's three vision homes and a set `config.project.vision`. When all are absent, print one start line naming `/fno:vision` and the repo, then offer the draft. A lead woken by a machine files the /fno:vision question page instead of asking in chat. The draft runs as this lead's blueprint-tier subagent. The full procedure and the mode split: [skills/vision/SKILL.md](../vision/SKILL.md).
 - Declare the shape now: `fno agent hq chart shape pass` for a one-wave pass, and `fno agent hq chart shape team` THE MOMENT the lead spawns its first worker. This is the field the Stop nudge reads; an undeclared org is nagged at every stop.
 - Declare the term now: `fno agent hq chart term <span:Nh|compactions:N>` (e.g. `fno agent hq chart term span:96h`). An undeclared term still reads a 96h default. This is optional, but name it in the opening check-in line either way. When the Stop hook reports the term reached, hand off with `fno agent spawn --promote <scope> --hand-off`. To extend instead, write the reason on the declaration: `fno agent hq chart term <spec> --reason "..."`. A bare re-declaration without `--reason` is refused - the extension IS the receipt. The handoff command runs the whole succession itself. It announces the handoff, verifies the successor on its first beat, and files the retro at that verify. Do none of those by hand.
 
@@ -99,7 +100,7 @@ Apply the first matching lever to each row, in this order:
 2. Run `fno backlog encounter <node> --evidence "what it cost"` to vote the node up. When evidence contradicts the filed priority, use `fno backlog update <node> priority=p1`. `p0` needs `--blocks-everything` and means the fleet is down.
 3. If no role covers a row, start a new small epic. Do not grow a running epic. A vote or priority does not dispatch. See [A finding starts a new epic](references/check-in.md#a-finding-starts-a-new-epic).
 4. If the row is the problem, run `fno backlog undefer` or `supersede`.
-5. Keep a worker on the top unplanned node. Run the `start`, `target-ready` or `plan-ready` command, without `--name`.
+5. Keep a worker on the top unplanned node. Run the `seat-lead`, `start`, `target-ready` or `plan-ready` command, without `--name`.
 
 Your job between beats is to start work. Run the `pick:` line and every startable line, in check-in order, and nothing the check-in omits. Fold a `batch:` group with `fno backlog contain` first. Decide reversible in-scope questions yourself. Detail: [between beats](references/check-in.md#between-beats).
 
@@ -121,9 +122,9 @@ A titled lead answers the open questions in its scope, and escalates only what t
 
 A titled lead is not the superuser: the `operator` authority is refused on an agent session, and a decision stays superuser tier. Its channels: `fno backlog note <node> <text>` for a row, a [merge hold](references/cli-commands.md#merge-holds) for a merge condition, and `fno inbox decisions set` for a user's durable rule. Read a ruling back with `fno backlog decisions <subject>`.
 
-## The one dispatch exception
+## Dispatch: the check-in list is the work order
 
-The tenured lead does not dispatch. A `--once` pass dispatches only through its kickoff and its org, as [the one-wave pass](references/once.md) says. The single exception: `fno agent session status` shows the dispatching arm red, and the spawn is journaled `lead_dispatch_exception` naming the arm and the node BEFORE the spawn fires. A spawn without that row is a defect. Journal it with:
+A titled lead starts work. Law D1527 routes every dispatch by difficulty. The check-in is the work order: run the `pick:` line and every `seat-lead`, `start`, `target-ready` and `plan-ready` line it prints, in check-in order. The Stop row `lead_idle_pick_unanswered` blocks a stop that leaves a beat's pick untaken with zero live scope workers. A spawn the gate refused lets the stop pass, and the refusal row is the evidence. A `--once` pass still dispatches only through its kickoff and its org, as [the one-wave pass](references/once.md) says. The single exception: `fno agent session status` shows the dispatching arm red, and the spawn is journaled `lead_dispatch_exception` naming the arm and the node BEFORE the spawn fires. A spawn without that row is a defect. Journal it with:
 
 `fno doctor event emit -t lead_dispatch_exception -s loop -d '{"scope":"<scope>","arm":"<arm>","node":"<id>"}'`
 
@@ -141,6 +142,10 @@ Three halts have three scopes. Run `fno agent audit incident stop --reason "<why
 Breaker detail and incident claims: [cli-commands.md](references/cli-commands.md#fleet-breaker-detail).
 
 A quiet window is not a halt. When the user asks you not to interrupt them, run `/fno:dnd` (codex: `$fno:dnd`). It holds only your inbound mail, and leaves fleet work running.
+
+## Hand-off orders between leads
+
+An order that hands a territory, node or thread to another lead rides the control lane: start the body's first line with `control:`. For example: `fno agent mail send <peer> "control: take <node>: <one sentence>"`. The prefix passes a hold the receiver's user set. It waits out a live conversation instead of breaking into it, so the order lands without interrupting a chat the user is in. A `control:` body rides the 60-word control budget per pair. Keep the order short, and put the detail on the node or in a follow-up mail.
 
 ## StepDown
 

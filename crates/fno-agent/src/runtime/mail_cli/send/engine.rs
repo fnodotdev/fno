@@ -420,7 +420,9 @@ pub(super) fn lane_heal(session_id: &str) -> (String, Option<String>, Option<Val
 
 /// Python `wake_and_deliver`: revive via the native resume door with the
 /// wrapped body as the waking message. The reason tokens are the door's own.
-pub(super) fn wake_and_deliver(
+/// The fleet-incident clear rides this same door to wake the loops its
+/// `loops` hold parked (gate/fleet_incident.rs `deliver_resume`).
+pub(crate) fn wake_and_deliver(
     session_uuid: &str,
     wrapped: &str,
     cwd: Option<&str>,

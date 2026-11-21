@@ -242,7 +242,7 @@ fn watching_ignored_unaddressed_findings_are_audible() {
   {"id":102,"in_reply_to_id":null,"user":{"login":"chatgpt-codex-connector[bot]"},"body":"![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat) Third","path":"src/three.rs","line":33,"created_at":"2026-06-05T01:12:00Z"},
   {"id":103,"in_reply_to_id":null,"user":{"login":"chatgpt-codex-connector[bot]"},"body":"![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat) Fourth","path":"src/four.rs","line":44,"created_at":"2026-06-05T01:13:00Z"}
 ]"#;
-    let mock = findings_mock(comments, r#"{"commits":[]}"#);
+    let mock = findings_mock(comments, r#"[]"#);
     let manifest_path = cwd.join("target-state.md");
     let transcript_path = cwd.join("transcript.jsonl");
 

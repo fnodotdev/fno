@@ -198,6 +198,13 @@ fn cache_path(state: &Path) -> PathBuf {
     state.join("cache").join("models-dev.json")
 }
 
+/// Whether the models.dev rate book is on disk: the coverage hint names it
+/// missing rather than reading every model as unpriced-by-mystery. One
+/// stat, no fetch.
+pub(crate) fn book_present() -> bool {
+    std::fs::metadata(cache_path(&state_dir())).is_ok()
+}
+
 /// The parsed book for `state`, re-read only when the cache file moves.
 /// ponytail: process-global keyed by (path, mtime); a daemon restart re-reads
 /// the catalog once.

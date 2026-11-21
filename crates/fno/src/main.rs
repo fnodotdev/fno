@@ -2245,11 +2245,18 @@ fn run_config_whoami_role(role: Role) -> ControlFlow<(), Role> {
         }
         Role::AgentsHistory(rest) => fno::cli_usage::exit(fno::agents_history::run(&rest)),
         Role::Whoami(rest) => fno::cli_usage::exit(fno::whoami_seam::run(&rest)),
-        Role::WhoamiCost(rest) => fno::cli_usage::exit(fno_agent_exec(
-            "fno whoami cost",
-            &["context-run", "--session-cost"],
-            &rest,
-        )),
+        Role::WhoamiCost(rest) => {
+            // The pricing door: the book feeds the session-cost leg this arm
+            // execs into, so the stale-gated fetch fires best-effort first.
+            // A fresh book costs one stat; a failed fetch leaves the ladder
+            // to its fallbacks.
+            fno::config::model_catalog::refresh_if_stale(&fno::config::model_catalog::state_dir());
+            fno::cli_usage::exit(fno_agent_exec(
+                "fno whoami cost",
+                &["context-run", "--session-cost"],
+                &rest,
+            ))
+        }
         Role::WhoamiLedger(rest) => fno::cli_usage::exit(fno::agents_history::run(&rest)),
         other => ControlFlow::Continue(other),
     }
