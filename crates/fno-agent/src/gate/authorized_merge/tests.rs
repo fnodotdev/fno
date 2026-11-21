@@ -2345,3 +2345,73 @@ fn docs_line_missing_holds_merge_and_passes_with_a_docs_line() {
         "{unknown:?}"
     );
 }
+
+#[test]
+fn a_main_repair_tagged_node_exempts_its_pr_even_when_a_light_row_shadows_it() {
+    // The live refusal (2026-11-21): the slice's light projection precedes
+    // the full carrier rows, so the tag check read the tag-less twin and
+    // refused the very lane it named. The store shape is the incident's:
+    // tags on the node, pr_number set, primary_pr null, and the Fixes line
+    // as the last body line.
+    let tmp = tempfile::tempdir().unwrap();
+    crate::graph_store::seed_rows(
+        &crate::org_board::scope::graph_json_path(&tmp),
+        &[json!({
+            "id": "x-9999",
+            "status": "in_progress",
+            "project": "fno",
+            "tags": [MAIN_REPAIR_TAG],
+            "pr_number": 497,
+            "pr_url": "https://github.com/o/r/pull/497",
+            "primary_pr": null
+        })],
+    )
+    .unwrap();
+    let facts = PrFacts {
+        number: 497,
+        head_ref: "fix/pr-read-e0308".to_string(),
+        url: "https://github.com/o/r/pull/497".to_string(),
+        body: Some("Fixes x-9999\n".to_string()),
+        ..open_facts()
+    };
+    assert_eq!(main_repair_hold_probe(tmp.path(), &facts), None);
+}
+
+#[test]
+fn the_main_repair_hold_still_names_the_declared_lane_for_an_untagged_pr() {
+    // The withhold arm: the exemption is for the PR whose own node is the
+    // repair. An untagged PR bound beside a tagged lane still holds, and the
+    // sentence names the lane.
+    let tmp = tempfile::tempdir().unwrap();
+    crate::graph_store::seed_rows(
+        &crate::org_board::scope::graph_json_path(&tmp),
+        &[
+            json!({
+                "id": "x-1111",
+                "status": "in_progress",
+                "project": "fno",
+                "pr_number": 7,
+                "pr_url": "https://github.com/o/r/pull/7"
+            }),
+            json!({
+                "id": "x-8888",
+                "status": "in_progress",
+                "project": "fno",
+                "tags": [MAIN_REPAIR_TAG]
+            }),
+        ],
+    )
+    .unwrap();
+    let facts = PrFacts {
+        number: 7,
+        head_ref: "feature/x-1111".to_string(),
+        url: "https://github.com/o/r/pull/7".to_string(),
+        body: Some("Fixes x-1111\n".to_string()),
+        ..open_facts()
+    };
+    let hold = main_repair_hold_probe(tmp.path(), &facts);
+    assert!(
+        hold.as_deref().is_some_and(|h| h.contains("x-8888")),
+        "{hold:?}"
+    );
+}
