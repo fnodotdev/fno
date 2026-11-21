@@ -892,7 +892,7 @@ struct PricingRow {
 pub(crate) struct LedgerPricing {
     pub priced: u64,
     pub total: u64,
-    pub pct: u64,
+    pub pct: i64,
     pub unpriced_with_sessions: u64,
     pub unpriced_legacy: u64,
     pub book_present: bool,

@@ -1135,8 +1135,9 @@ fn backfill_tasks_json(dry_run: bool) -> i32 {
         let sessions = view.sessions;
         let branch = view.branch;
         let title = view.title.unwrap_or_else(|| "Untitled".to_string());
-        if let BackfillEntry::Keep(cost) = backfill_entry_decision(view.cost_usd, view.tokens_total)
-        {
+        let existing_cost = view.cost_usd;
+        let existing_tokens = view.tokens_total;
+        if let BackfillEntry::Keep(cost) = backfill_entry_decision(existing_cost, existing_tokens) {
             println!("  KEEP: {title} - priced ${cost:.2}");
             continue;
         }
