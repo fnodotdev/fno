@@ -72,6 +72,16 @@ ALLOW_FILES+='|^crates/fno/tests/golden/config_set/unset_retired\.(out|state\.js
 # a google-10000 split tier) whose entries collide as substrings (feverblossom,
 # beaverkill, deverbative). The lists are data, not prose teaching the word.
 ALLOW_FILES+='|^crates/fno-agent/src/backlog/style_(words|protect)\.txt$'
+# The verb-glyph feature keeps the lead-ruled field name: AgentRow.verb is
+# wire v134 and the registry schema's v46 field, and the generated wire
+# schema, its TypeScript bindings and registry_schema.toml are allowed
+# above. The sources that read, stamp, project, serve and paint that field
+# spell it, so they ride the same allow.
+ALLOW_FILES+='|^crates/fno-proto/src/lib\.rs$'
+ALLOW_FILES+='|^crates/fno-agent/src/(spawn/spawn_edge|runtime/state|runtime/liveness_sweep|runtime/daemon/list_rows|runtime/daemon_tests)\.rs$'
+ALLOW_FILES+='|^crates/fno-agent/src/runtime/state/tests/mod\.rs$'
+ALLOW_FILES+='|^crates/fno/src/(ui/agents_view|ui/client/(card_line|sideline|glyph_legend)|ui/client/tests/(sideline_card_tests|glyph_tests)|mux/server/row_set)\.rs$'
+ALLOW_FILES+='|^schemas/agents-list-row\.json$'
 
 scan() {
     # stdin: path:line:text rows (git grep -n). stdout: the refused rows.

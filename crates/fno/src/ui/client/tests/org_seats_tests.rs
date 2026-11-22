@@ -222,7 +222,7 @@ fn seat_page_and_table_paint_the_published_use() {
     );
     assert!(
         text.iter()
-            .any(|t| t.contains("input") && t.contains("1.5M tok")),
+            .any(|t| t.contains("input") && t.contains("1.5M tk")),
         "input paints: {joined}"
     );
     assert!(

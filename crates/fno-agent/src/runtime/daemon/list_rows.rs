@@ -490,6 +490,9 @@ where
                     "spawned_by_session": e.spawned_by_session,
                     // The served CHILD/PEER word; null before the first stamp.
                     "lineage_kind": e.lineage_kind,
+                    // The dispatch verb the sideline paints as a glyph; null on a
+                    // name the grammar cannot parse.
+                    "verb": e.verb,
                     // How this session came to exist: "operator" for one a human
                     // started by hand, "spawn" for a footnote-created worker, null
                     // for a row nothing stamped. Emitted on BOTH serializers because

@@ -363,7 +363,7 @@ fn card_frame_paints_identity_then_model_and_metrics_on_distinct_lines() {
     assert!(text.contains("one message"), "{text:?}");
     assert!(text.contains("26%"), "{text:?}");
     assert!(
-        text.contains("▁▁▁▁▃▅█▁ · 26% · 3c · 12.3k tok · one message"),
+        text.contains("▁▁▁▁▃▅█▁ · 26% · 3c · 12.3k tk · one message"),
         "the compact metrics line matches its display contract: {text:?}"
     );
     assert!(text.contains("3c") && text.contains("~$0.42"), "{text:?}");

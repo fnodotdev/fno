@@ -1984,7 +1984,7 @@ mod tests {
         // cost slot is empty by design, so it takes no column.
         let model = rich.model.as_deref().unwrap().chars().count();
         let wide = columns(&rows, 200);
-        assert_eq!(wide, [(0, model), (2, 3), (3, 9), (4, 5)]);
+        assert_eq!(wide, [(0, model), (2, 3), (3, 8), (4, 5)]);
         let tight = columns(&rows, model + COL_GAP + 3 + COL_GAP + 8);
         assert_eq!(tight, [(0, model), (2, 3)]);
     }
