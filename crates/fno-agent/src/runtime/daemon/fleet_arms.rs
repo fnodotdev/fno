@@ -49,6 +49,9 @@ pub(super) struct FleetArms {
     lead_eval: crate::lead_eval::Arm,
     fleet_beacon: crate::fleet_beacon::Arm,
     arm_watch: crate::arm_watch::Arm,
+    // Fires due scheduled-spawn rows through the spawn front door; its
+    // pending signal holds the daemon's idle exit while a row waits.
+    schedule_fire: crate::schedule_fire::Arm,
     provider_cap: crate::provider_cap_commands::Arm,
     usage_refresh: crate::usage_refresh::Arm,
     slot_cutover: crate::slot_cutover::Arm,
@@ -167,6 +170,7 @@ impl FleetArms {
             lead_eval: crate::lead_eval::Arm::default(),
             fleet_beacon: crate::fleet_beacon::Arm::default(),
             arm_watch: crate::arm_watch::Arm::new(opts.agents_config_cwd.clone()),
+            schedule_fire: crate::schedule_fire::Arm::default(),
             provider_cap: crate::provider_cap_commands::Arm::new(opts.agents_config_cwd.clone()),
             usage_refresh: crate::usage_refresh::Arm::new(opts.agents_config_cwd.clone()),
             slot_cutover: crate::slot_cutover::Arm::new(opts.agents_config_cwd.clone()),
@@ -400,6 +404,7 @@ impl FleetArms {
         crate::lead_eval::maybe_tick(&self.lead_eval, ctx.home.clone());
         crate::fleet_beacon::maybe_tick(&self.fleet_beacon, ctx.home.clone());
         crate::arm_watch::maybe_tick(&self.arm_watch, ctx.home.clone());
+        crate::schedule_fire::maybe_tick(&self.schedule_fire, ctx.home.clone());
         crate::provider_cap_commands::maybe_tick(&self.provider_cap, ctx.home.clone());
         // Every account's usage re-measured inside the cache TTL.
         crate::usage_refresh::maybe_tick(&self.usage_refresh);

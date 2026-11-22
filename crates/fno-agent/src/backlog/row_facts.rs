@@ -20,6 +20,7 @@ pub mod key {
     pub const SLUG: &str = "slug";
     pub const TITLE: &str = "title";
     pub const STATUS: &str = "status";
+    pub const PRIORITY: &str = "priority";
     pub const PARENT: &str = "parent";
     pub const BLOCKED_BY: &str = "blocked_by";
     pub const COMPLETED_AT: &str = "completed_at";
@@ -153,6 +154,7 @@ row_slots! {
     slug => SLUG,
     title => TITLE,
     status => STATUS,
+    priority => PRIORITY,
     parent => PARENT,
     blocked_by => BLOCKED_BY,
     completed_at => COMPLETED_AT,
