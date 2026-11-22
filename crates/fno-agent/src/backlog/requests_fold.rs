@@ -777,7 +777,7 @@ mod tests {
         forgotten_ask.reply_excerpt = "looking into it".into();
         let mut repeat = turn("s2", "t3", "2026-11-18T00:00:00Z", "x-dddd is still blank");
         repeat.reply_excerpt = "on it now".into();
-        let mut lost_ask = turn(
+        let lost_ask = turn(
             "s3",
             "t4",
             "2026-11-15T00:00:00Z",
