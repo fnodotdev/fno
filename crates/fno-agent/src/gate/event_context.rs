@@ -120,6 +120,9 @@ const DIFF_STAT_ONLY: [&str; 7] = [
 /// `git show` or `gh pr diff` with no stat-only flag.
 fn segment_reads_diff(segment: &str) -> bool {
     let words: Vec<&str> = segment.split_whitespace().collect();
+    if !matches!(words.first(), Some(&"git" | &"gh")) {
+        return false;
+    }
     let reads = words
         .windows(2)
         .any(|w| w == ["git", "diff"] || w == ["git", "show"])
@@ -148,7 +151,15 @@ fn diff_read(agent: &str, path: Option<&Path>) -> Value {
         };
         let blocks = record["message"]["content"].as_array();
         for block in blocks.into_iter().flatten() {
-            if block["type"] != "tool_use" || block["name"] != "Bash" {
+            if block["type"] != "tool_use" {
+                continue;
+            }
+            // A finder subagent reads the diff in its own transcript.
+            if matches!(block["name"].as_str(), Some("Agent" | "Task")) {
+                last_read = Some(index);
+                continue;
+            }
+            if block["name"] != "Bash" {
                 continue;
             }
             let command = block["input"]["command"].as_str().unwrap_or("");
@@ -402,6 +413,8 @@ mod tests {
             "stale"
         );
         assert_eq!(kind(&["gh pr diff 512 --name-only"]), "none");
+        assert_eq!(kind(&["git commit -m \"git diff\""]), "none");
+        assert_eq!(kind(&["echo git diff"]), "none");
         assert_eq!(
             diff_read("codex", Some(&path)),
             json!({"kind":"unobserved"})
