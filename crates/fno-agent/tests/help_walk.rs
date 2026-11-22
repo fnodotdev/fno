@@ -33,9 +33,10 @@ fn fno_agent_answers_help_on_every_routable_command() {
                     .expect("usage row starts with the command")
             }),
     );
-    let mut seen = std::collections::BTreeSet::new();
-    for command in rows {
-        assert!(seen.insert(command), "{command} listed twice");
+    // One command word may carry several usage rows (rename's label and
+    // --from-journal forms); the walk probes each word once.
+    let commands: std::collections::BTreeSet<&str> = rows.into_iter().collect();
+    for command in &commands {
         let out = run(bin, &[command, "--help"]);
         assert_eq!(
             out.status.code(),
