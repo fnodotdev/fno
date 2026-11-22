@@ -176,17 +176,27 @@ fn stage(dir: &Path, id: &str, bank: &str, fixture: &str) -> std::io::Result<()>
     std::fs::create_dir_all(&fix_dir)?;
     let bank_path = bank_dir.join(format!("{id}.yaml"));
     let fix_path = fix_dir.join(format!("{id}.yaml"));
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&bank_path)?;
-    f.write_all(bank.as_bytes())?;
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&fix_path)?;
-    f.write_all(fixture.as_bytes())?;
-    Ok(())
+    let staged = (|| -> std::io::Result<()> {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&bank_path)?;
+        f.write_all(bank.as_bytes())?;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&fix_path)?;
+        f.write_all(fixture.as_bytes())?;
+        Ok(())
+    })();
+    if staged.is_err() {
+        // A half-staged golden would refuse every later pass as already
+        // staged while its twin never lands: drop both halves so the draft
+        // can stage fresh.
+        let _ = std::fs::remove_file(&bank_path);
+        let _ = std::fs::remove_file(&fix_path);
+    }
+    staged
 }
 
 /// The staged batch: (file name, kept-at) pairs, oldest keep first.

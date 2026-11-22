@@ -173,6 +173,15 @@ pub fn ship(
         });
         let _ = run(root, "git", &["worktree", "remove", "--force", &tree_s]);
         shipped?;
+        // The PR may have merged while the push was in flight: the commit
+        // then sits on a closed PR's branch and the next batch cut would
+        // delete it. Refuse, so the caller's staged files stay for the next
+        // pass to re-ship onto a fresh batch PR.
+        if existing_pr(root, branch)?.is_none() {
+            return Err(BankPrError(format!(
+                "the PR on {branch} closed during the push; the batch stays staged"
+            )));
+        }
         append_body_ids(root, branch, edits)?;
         return Ok(url);
     }
