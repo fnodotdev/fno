@@ -42,13 +42,18 @@ pub struct Ready {
 
 #[derive(Deserialize)]
 struct Release {
-    tag_name: String,
     #[serde(default)]
     body: Option<String>,
     #[serde(default)]
     draft: bool,
     #[serde(default)]
     prerelease: bool,
+}
+
+#[derive(Deserialize)]
+struct TagRef {
+    #[serde(rename = "ref")]
+    git_ref: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -65,22 +70,6 @@ fn version_key(v: &str) -> Option<(u64, u64, u64)> {
         parts.next()?.parse().ok()?,
     );
     parts.next().is_none().then_some(key)
-}
-
-/// The newest stable `fno-app-v*` release past `running`: its version and
-/// its notes.
-fn newest(releases: Vec<Release>, running: &str) -> Option<(String, String)> {
-    let have = version_key(running)?;
-    releases
-        .into_iter()
-        .filter(|r| !r.draft && !r.prerelease)
-        .filter_map(|r| {
-            let version = r.tag_name.strip_prefix(TAG_PREFIX)?.to_string();
-            let key = version_key(&version)?;
-            (key > have).then(|| (key, version, r.body.unwrap_or_default()))
-        })
-        .max_by_key(|(key, _, _)| *key)
-        .map(|(_, version, notes)| (version, notes))
 }
 
 fn repo_slug() -> &'static str {
@@ -158,11 +147,46 @@ fn prune(root: &Path, keep: Option<&str>) {
         return;
     };
     for e in entries.flatten() {
-        let keeps = keep.is_some_and(|k| e.file_name() == k);
+        let name = e.file_name().to_string_lossy().into_owned();
+        let keeps = keep.is_some_and(|k| name == k || name.starts_with(&format!("{k}.")));
         if e.path().is_dir() && !keeps {
             let _ = std::fs::remove_dir_all(e.path());
         }
     }
+}
+
+/// The newest stable `fno-app-v*` release past `running`. The ref listing
+/// is filtered by the tag prefix on the server, so releases of the other
+/// products in this repository never crowd it out of the page.
+fn newest_stable(running: &str) -> Result<Option<(String, String)>, String> {
+    let api = format!("https://api.github.com/repos/{}", repo_slug());
+    let refs = curl(&format!("{api}/git/matching-refs/tags/{TAG_PREFIX}"), None)?;
+    let refs: Vec<TagRef> =
+        serde_json::from_slice(&refs).map_err(|e| format!("tag listing: {e}"))?;
+    let have = version_key(running).ok_or("the running version is not x.y.z")?;
+    let mut newer: Vec<((u64, u64, u64), String)> = refs
+        .iter()
+        .filter_map(|r| {
+            let v = r
+                .git_ref
+                .strip_prefix("refs/tags/")?
+                .strip_prefix(TAG_PREFIX)?;
+            let key = version_key(v)?;
+            (key > have).then(|| (key, v.to_string()))
+        })
+        .collect();
+    newer.sort_by(|a, b| b.0.cmp(&a.0));
+    for (_, version) in newer.into_iter().take(5) {
+        let body = curl(&format!("{api}/releases/tags/{TAG_PREFIX}{version}"), None);
+        let Ok(body) = body else { continue };
+        let Ok(release) = serde_json::from_slice::<Release>(&body) else {
+            continue;
+        };
+        if !release.draft && !release.prerelease {
+            return Ok(Some((version, release.body.unwrap_or_default())));
+        }
+    }
+    Ok(None)
 }
 
 /// Read the feed and, when a newer release exists, stage and prove it.
@@ -170,16 +194,7 @@ fn prune(root: &Path, keep: Option<&str>) {
 pub fn check(running: &str) -> Result<Option<Ready>, String> {
     let bundle = running_bundle().ok_or("not running from an app bundle")?;
     let root = update_dir().ok_or("no home directory")?;
-    let feed = curl(
-        &format!(
-            "https://api.github.com/repos/{}/releases?per_page=100",
-            repo_slug()
-        ),
-        None,
-    )?;
-    let releases: Vec<Release> =
-        serde_json::from_slice(&feed).map_err(|e| format!("release feed: {e}"))?;
-    let Some((version, notes)) = newest(releases, running) else {
+    let Some((version, notes)) = newest_stable(running)? else {
         prune(&root, None);
         return Ok(None);
     };
@@ -193,7 +208,7 @@ pub fn check(running: &str) -> Result<Option<Ready>, String> {
             staged,
         }));
     }
-    let work = root.join(format!("{version}.partial"));
+    let work = root.join(format!("{version}.{}.partial", std::process::id()));
     let _ = std::fs::remove_dir_all(&work);
     std::fs::create_dir_all(&work).map_err(|e| format!("{}: {e}", work.display()))?;
     let proven = stage(&bundle, &version, &work);
@@ -201,7 +216,13 @@ pub fn check(running: &str) -> Result<Option<Ready>, String> {
         let _ = std::fs::remove_dir_all(&work);
         return Err(e);
     }
-    std::fs::rename(&work, &dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    if let Err(e) = std::fs::rename(&work, &dir) {
+        // Another instance staged the same version first: its copy stands.
+        let _ = std::fs::remove_dir_all(&work);
+        if !staged.is_dir() {
+            return Err(format!("{}: {e}", dir.display()));
+        }
+    }
     Ok(Some(Ready {
         version,
         notes,
@@ -255,9 +276,24 @@ fn stage(bundle: &Path, version: &str, work: &Path) -> Result<(), String> {
         .arg("--version")
         .output()
         .map_err(|e| format!("the staged app did not run: {e}"))?;
-    if !String::from_utf8_lossy(&said.stdout).contains(version) {
+    if String::from_utf8_lossy(&said.stdout).trim() != format!("fno-app {version}") {
         return Err(format!("the staged app does not name version {version}"));
     }
+    Ok(())
+}
+
+/// Refuse before quitting when the swap cannot work: a translocated
+/// bundle is read-only, and a folder the user cannot write to blocks the
+/// rename. The relaunch script cannot report either.
+fn swappable(bundle: &Path) -> Result<(), String> {
+    if bundle.to_string_lossy().contains("/AppTranslocation/") {
+        return Err("the app runs from a quarantined copy: move fno-app.app to Applications, then reopen it".to_string());
+    }
+    let dir = bundle.parent().ok_or("the app bundle has no folder")?;
+    let probe = dir.join(format!(".fno-app-update-{}", std::process::id()));
+    std::fs::write(&probe, b"")
+        .map_err(|e| format!("cannot replace the app in {}: {e}", dir.display()))?;
+    let _ = std::fs::remove_file(&probe);
     Ok(())
 }
 
@@ -266,6 +302,7 @@ fn stage(bundle: &Path, version: &str, work: &Path) -> Result<(), String> {
 pub fn install_and_relaunch(ready: &Ready) -> Result<(), String> {
     let bundle = running_bundle().ok_or("not running from an app bundle")?;
     let root = update_dir().ok_or("no home directory")?;
+    swappable(&bundle)?;
     let pending = Pending {
         version: ready.version.clone(),
         notes: ready.notes.clone(),
@@ -304,34 +341,9 @@ pub fn take_pending_notes(running: &str) -> Option<(String, String)> {
 mod tests {
     use super::*;
 
-    fn release(tag: &str, prerelease: bool) -> Release {
-        Release {
-            tag_name: tag.to_string(),
-            body: Some(format!("notes for {tag}")),
-            draft: false,
-            prerelease,
-        }
-    }
-
     #[test]
-    fn newest_takes_the_highest_stable_app_release_past_the_running_one() {
-        let feed = vec![
-            release("v9.9.9", false),
-            release("fno-app-v0.0.9", false),
-            release("fno-app-v0.0.10", false),
-            release("fno-app-v0.1.0", true),
-            release("fno-app-v0.0.1", false),
-        ];
-        assert_eq!(
-            newest(feed, "0.0.2"),
-            Some((
-                "0.0.10".to_string(),
-                "notes for fno-app-v0.0.10".to_string()
-            ))
-        );
-        assert_eq!(
-            newest(vec![release("fno-app-v0.0.2", false)], "0.0.2"),
-            None
-        );
+    fn versions_order_numerically_and_reject_suffixes() {
+        assert!(version_key("0.0.10") > version_key("0.0.9"));
+        assert_eq!(version_key("0.0.2-rc1"), None);
     }
 }

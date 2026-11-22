@@ -326,6 +326,8 @@ pub struct Root {
     /// The update card: a staged build waiting for Restart, or the notes of
     /// the build this launch just installed (shown once).
     update_card: Option<UpdateCard>,
+    /// A staged build found while the notes card was up; Dismiss offers it.
+    held_update: Option<super::update::Ready>,
     /// Every question id any board read has listed. Arrival = an id the set
     /// has not met; the first read seeds it silently, unless the shot flag
     /// below is set, so an app open never toasts a backlog.
@@ -511,6 +513,7 @@ impl Root {
             question_toast: None,
             question_toast_gen: 0,
             update_card: None,
+            held_update: None,
             seen_questions: HashSet::new(),
             questions_seeded: false,
             toast_on_first_read: false,
@@ -841,27 +844,26 @@ impl Root {
                 .background_executor()
                 .spawn(async { super::update::check(super::update::RUNNING) })
                 .await;
-            if let Ok(Some(ready)) = read {
-                // The notes card of the build just installed is on screen:
-                // wait for its Dismiss, then offer the staged build.
-                let shown = this.update(cx, |root, cx| {
-                    let busy = matches!(root.update_card, Some(UpdateCard::Installed { .. }));
-                    if !busy {
-                        root.update_card = Some(UpdateCard::Ready(ready));
+            match read {
+                Ok(Some(ready)) => {
+                    let _ = this.update(cx, |root, cx| {
+                        match root.update_card {
+                            // The notes card of the build just installed is
+                            // up: hold the staged build for its Dismiss.
+                            Some(UpdateCard::Installed { .. }) => root.held_update = Some(ready),
+                            _ => root.update_card = Some(UpdateCard::Ready(ready)),
+                        }
                         cx.notify();
-                    }
-                    !busy
-                });
-                if shown.unwrap_or(true) {
-                    break;
+                    });
                 }
+                Ok(None) => {}
+                Err(e) => eprintln!("fno-app: update check: {e}"),
             }
             cx.background_executor().timer(super::update::RECHECK).await;
         }));
     }
 
-    /// The update card: a raised card top-right, below the question toast's
-    /// slot. A staged build offers Restart; a fresh install shows its notes
+    /// The update card: a raised card bottom-left. A staged build offers Restart; a fresh install shows its notes
     /// once and drops on Dismiss.
     fn update_card_view(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
         let card = self.update_card.as_ref()?;
@@ -884,7 +886,7 @@ impl Root {
             ),
             UpdateCard::Installed { version, notes } => (
                 format!("Updated to fno-app {version}"),
-                ui::cut(notes.trim(), 600),
+                ui::cut(notes.trim(), 400),
                 vec![ui::button(
                     "update-dismiss",
                     "Dismiss",
@@ -1038,7 +1040,9 @@ impl Root {
                 self.answer = Some(answer::Sheet::new(id));
             }
             Action::CloseAnswer => self.answer = None,
-            Action::DismissUpdate => self.update_card = None,
+            Action::DismissUpdate => {
+                self.update_card = self.held_update.take().map(UpdateCard::Ready);
+            }
             Action::RestartForUpdate => {
                 if let Some(UpdateCard::Ready(ready)) = self.update_card.clone() {
                     match super::update::install_and_relaunch(&ready) {
