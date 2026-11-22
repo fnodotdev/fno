@@ -853,13 +853,26 @@ mod tests {
         assert!(rerunnable(80, &named));
         assert!(!rerunnable(70, &named));
         assert!(rerunnable(70, &HashSet::new()));
+        // The wait-row precedence: both rows name run 70, and the tier only
+        // cancels live runs, so its own cancel took the run away and the
+        // wait's row is the later, no-op claim. A run only the wait row
+        // names stays off the ledger. A look row owns its rerun
+        // unconditionally: even with the keeper's cancel beside it, the
+        // look arm restores its own on release.
+        let ours: HashSet<u64> = [70u64].into();
+        let wait_named: HashSet<u64> = [70u64].into();
+        let full_named: HashSet<u64> = [70u64, 90u64].into();
+        assert!(stays_on_ledger(70, &full_named, &wait_named, &ours));
+        assert!(!stays_on_ledger(90, &full_named, &wait_named, &ours));
+        let look_only: HashSet<u64> = [90u64].into();
+        assert!(!stays_on_ledger(90, &look_only, &HashSet::new(), &ours));
+        assert!(!stays_on_ledger(70, &look_only, &HashSet::new(), &ours));
         // Each rerun post names who cancelled the run: the journal's own
         // cancel reads tier, any other reads unattributed.
         let posts = vec![json!({"pr": 3, "runs": [
             json!({"run": 70, "ok": true}),
             json!({"run": 80, "ok": true}),
         ]})];
-        let ours: HashSet<u64> = [70u64].into();
         let stamped = attribute_reruns(posts, &ours);
         let post = stamped.first().expect("one post");
         let marks: Vec<&str> = post
@@ -870,32 +883,6 @@ mod tests {
             .filter_map(|run| run.pointer("/cancelled_by").and_then(Value::as_str))
             .collect();
         assert_eq!(marks, ["tier", "unattributed"]);
-    }
-
-    #[test]
-    fn a_cancel_the_journal_made_itself_stays_rerunnable_beside_a_wait_row() {
-        // Both rows name run 70: the tier only cancels live runs, so its own
-        // cancel took the run away and the wait's row is the later, no-op
-        // claim on a run already going down. The keeper reruns its own when
-        // the slot frees. A run only the wait row names stays off the
-        // ledger, and an unnamed run stays on it.
-        let named: HashSet<u64> = [70u64, 90u64].into();
-        let wait_named: HashSet<u64> = [70u64].into();
-        let ours: HashSet<u64> = [70u64].into();
-        assert!(stays_on_ledger(70, &named, &wait_named, &ours));
-        assert!(!stays_on_ledger(90, &named, &wait_named, &ours));
-        assert!(stays_on_ledger(80, &named, &wait_named, &ours));
-        // A look row owns its rerun unconditionally: even with the keeper's
-        // cancel beside it, the look arm restores its own on release.
-        let look_only_named: HashSet<u64> = [90u64].into();
-        assert!(!stays_on_ledger(
-            90,
-            &look_only_named,
-            &HashSet::new(),
-            &ours
-        ));
-        let both_named: HashSet<u64> = [70u64].into();
-        assert!(!stays_on_ledger(70, &both_named, &HashSet::new(), &ours));
     }
 
     #[test]
