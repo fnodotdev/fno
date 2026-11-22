@@ -64,9 +64,13 @@ re-send is how you double-deliver. Check first, then act:
 
 ```bash
 fno agent session peek <short-id>     # did the turn actually land? is it alive?
-fno agent session resume <short-id>   # wakes it (claude) or resumes it (other harnesses), then re-send
+fno agent session resume <short-id>   # wakes it (claude) or resumes it (other harnesses)
 fno agent session attach <short-id>   # drive it yourself (claude)
+fno agent mail admin withdraw <id>    # retract the queued copy FIRST
+fno agent mail send <short-id> '<body>'  # then re-send
 ```
+
+A withdraw that refuses because the copy was already claimed means it landed: stop there.
 
 Address a peer by its full session id: the `from_session=` value on the `<fno_mail>` envelope, or the id `fno agent session list` shows. The head-8 short form is a display handle. Under UUIDv7 it is a ~66-second clock bucket. Two workers started in the same minute share one, so a send or reply addressed to the short form can refuse as ambiguous. `resume` / `attach` accept the id that names the session in the registry, and `send` can reach a live session that never registered. If a handle mails but will not resume, `fno agent session list` / `top` will show whether it has a row.
 
