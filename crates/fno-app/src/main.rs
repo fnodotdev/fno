@@ -132,6 +132,8 @@ fn parse_point(s: &str) -> Option<(f64, f64)> {
 enum ShotUi {
     /// The first agent's row menu, opened as a right-click opens it.
     RowMenu,
+    /// The same menu for an agent that carries a node.
+    RowMenuNode,
     /// The first tab's in-place rename field.
     TabRename,
     /// The back-to-live pill, as a scrolled-back pane shows it.
@@ -173,6 +175,7 @@ fn main() {
             tap: args.shot_tap.as_deref().and_then(parse_point),
             ui: args.shot_ui.map(|u| match u {
                 ShotUi::RowMenu => fno_app::UiShot::RowMenu,
+                ShotUi::RowMenuNode => fno_app::UiShot::RowMenuNode,
                 ShotUi::TabRename => fno_app::UiShot::TabRename,
                 ShotUi::Scrolled => fno_app::UiShot::Scrolled,
             }),

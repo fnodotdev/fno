@@ -592,35 +592,6 @@ fn seed_transcript(root: &Path, ask: Option<&str>) -> bool {
     }
 }
 
-/// Give the adopted demo agent a node, so its row menu offers Copy node id.
-/// The registry row is found by its session id wherever the file keeps it.
-fn tag_demo_node(root: &Path, node: &str) -> bool {
-    fn tag(v: &mut serde_json::Value, node: &str) -> bool {
-        match v {
-            serde_json::Value::Object(map) => {
-                if map.values().any(|x| x.as_str() == Some(DEMO_CHAT_SESSION)) {
-                    map.insert("node".into(), node.into());
-                    return true;
-                }
-                map.values_mut().any(|x| tag(x, node))
-            }
-            serde_json::Value::Array(items) => items.iter_mut().any(|x| tag(x, node)),
-            _ => false,
-        }
-    }
-    let path = root.join(".fno/agents/registry.json");
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return false;
-    };
-    let Ok(mut doc) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return false;
-    };
-    tag(&mut doc, node)
-        && serde_json::to_string(&doc)
-            .ok()
-            .is_some_and(|out| std::fs::write(&path, out).is_ok())
-}
-
 /// `mux app shot`: one offscreen demo frame as a png, from a world this
 /// door builds, seeds, shoots and tears down. The world never touches
 /// the caller's own state: its own HOME, mux dir, agents home and graph
@@ -697,10 +668,6 @@ fn shot(args: &crate::cli_args::AppShotArgs) -> i32 {
     if !(transcript && fleet && question) {
         return 1;
     }
-    if args.ui.as_deref() == Some("row-menu-node") && !tag_demo_node(&world.root, &first_node) {
-        eprintln!("fno mux app shot: the demo agent's registry row could not take a node");
-        return 1;
-    }
     let mut cmd = world_cmd(&world.root, &bin);
     cmd.arg("--shot")
         .arg("--shot-out")
@@ -731,8 +698,7 @@ fn shot(args: &crate::cli_args::AppShotArgs) -> i32 {
         cmd.arg("--shot-tap").arg(tap);
     }
     if let Some(ui) = args.ui.as_deref() {
-        // The node variant differs in the seed only: the app opens the same menu.
-        cmd.arg("--shot-ui").arg(ui.trim_end_matches("-node"));
+        cmd.arg("--shot-ui").arg(ui);
     }
     match cmd.status() {
         Ok(s) => s.code().unwrap_or(1),

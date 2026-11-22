@@ -111,6 +111,7 @@ pub struct ShotOptions {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum UiShot {
     RowMenu,
+    RowMenuNode,
     TabRename,
     Scrolled,
 }

@@ -2092,7 +2092,7 @@ impl Root {
     /// `--shot-ui`: open one overlay the way its click opens it.
     pub(super) fn shot_ui(&mut self, ui: crate::UiShot, window: &Window, cx: &mut Context<Self>) {
         match ui {
-            crate::UiShot::RowMenu => {
+            crate::UiShot::RowMenu | crate::UiShot::RowMenuNode => {
                 // The row with a session id offers the full menu.
                 let name = self
                     .layout
@@ -2102,6 +2102,13 @@ impl Root {
                     .or_else(|| self.layout.agents.first())
                     .map(|a| a.name.clone());
                 if let Some(name) = name {
+                    // The node variant binds one first, so the menu shows the
+                    // row a worker with a node gets.
+                    if ui == crate::UiShot::RowMenuNode {
+                        if let Some(a) = self.layout.agents.iter_mut().find(|a| a.name == name) {
+                            a.node = Some("x-1a2b".into());
+                        }
+                    }
                     let at = gpui::point(gpui::px(150.0), gpui::px(150.0));
                     self.agent_menu_open(&name, at, window, cx);
                 }
