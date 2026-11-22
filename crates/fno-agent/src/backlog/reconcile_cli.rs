@@ -384,9 +384,9 @@ fn once_at(args: &Args, graph_path: &Path) -> i32 {
         promise_gate_leg(&sweep.closeable, &entries, args.json_out, &mut stderr_log);
     // The epic-children hold partitions the gated set: a merge bound to an
     // epic never closes it while a membership child stays open past this
-    // pass; the epic close sweep alone closes such an epic (the x-e346
-    // false close). Children whose own records close in this same pass do
-    // not hold - the shared-PR parent must still close and stamp.
+    // pass; the epic close sweep alone closes such an epic. Children whose
+    // own records close in this same pass do not hold - the shared-PR
+    // parent must still close and stamp.
     sweep.closeable = epic_children_gate(&gated, &entries, &mut promise_held);
 
     // The rollup close paths (epic self-heal + parent cascade) hold on the
@@ -3319,34 +3319,34 @@ mod tests {
     }
     #[test]
     fn an_epics_own_merge_record_holds_while_a_child_is_open() {
-        // The x-e346 shape: the epic's own multi-wave plan PR merged wave 1
-        // while four of its five children were still open. Neither the
-        // pre-lock gate nor the locked recheck may close the epic, and no
-        // child may move off it; once every child closes, the same record
-        // closes the epic.
+        // The epic-hold shape: the epic's own multi-wave plan PR merged
+        // wave 1 while four of its five children were still open. Neither
+        // the pre-lock gate nor the locked recheck may close the epic, and
+        // no child may move off it; once every child closes, the same
+        // record closes the epic.
         let epic = json!({
-            "id": "x-e346", "status": "in_progress",
-            "plan_path": "/plans/20261120-worker-model-x-e346.md",
+            "id": "x-aaaa", "status": "in_progress",
+            "plan_path": "/plans/20261120-worker-model-by-difficulty.md",
         });
         let kid = |id: &str, done: bool| {
             if done {
-                json!({"id": id, "status": "done", "parent": "x-e346",
+                json!({"id": id, "status": "done", "parent": "x-aaaa",
                        "completed_at": "2026-11-20T00:00:00Z"})
             } else {
-                json!({"id": id, "status": "ready", "parent": "x-e346"})
+                json!({"id": id, "status": "ready", "parent": "x-aaaa"})
             }
         };
         let mut entries = vec![
             epic,
-            kid("x-9935", true),
-            kid("x-328b", false),
-            kid("x-c09e", false),
-            kid("x-d71b", false),
-            kid("x-eb17", false),
+            kid("x-bbbb", true),
+            kid("x-cccc", false),
+            kid("x-dddd", false),
+            kid("x-eeee", false),
+            kid("x-ffff", false),
         ];
         let record = MergeDriftRecord {
-            node_id: "x-e346".into(),
-            plan_path: Some("/plans/20261120-worker-model-x-e346.md".into()),
+            node_id: "x-aaaa".into(),
+            plan_path: Some("/plans/20261120-worker-model-by-difficulty.md".into()),
             pr_number: 450,
             pr_url: Some("https://github.com/o/r/pull/450".into()),
             pr_state: "MERGED".into(),
@@ -3366,10 +3366,10 @@ mod tests {
         let gated = epic_children_gate(&[record.clone()], &entries, &mut held);
         assert!(gated.is_empty(), "{gated:?}");
         assert_eq!(held.len(), 1, "{held:?}");
-        assert_eq!(held[0].0, "x-e346");
+        assert_eq!(held[0].0, "x-aaaa");
         assert_eq!(held[0].2, "epic_children_open");
         assert!(held[0].1.contains("4 open child(ren)"), "{}", held[0].1);
-        assert!(held[0].1.contains("x-328b"), "{}", held[0].1);
+        assert!(held[0].1.contains("x-cccc"), "{}", held[0].1);
         // Locked recheck: the record reaches the mutator anyway (a race
         // between the scan and the lock) and must not close the epic or
         // move a child off it.
@@ -3419,7 +3419,7 @@ mod tests {
         assert_eq!(result.held_recheck[0].2, "epic_children_open");
         assert!(entries[0]["completed_at"].is_null());
         for entry in entries.iter().skip(1) {
-            assert_eq!(entry["parent"], "x-e346", "{entry}");
+            assert_eq!(entry["parent"], "x-aaaa", "{entry}");
         }
         // Admit arm: every child closed, so the same record closes the epic.
         for entry in entries.iter_mut().skip(1) {
@@ -3460,9 +3460,9 @@ mod tests {
     }
     #[test]
     fn a_shared_pr_child_does_not_hold_its_parent_in_the_gate() {
-        // The x-b12d shape through the epic gate: the child's own record is
-        // in the same gated set, so it closes this pass and must not hold
-        // the parent that shares its PR.
+        // The shared-PR shape through the epic gate: the child's own record
+        // is in the same gated set, so it closes this pass and must not
+        // hold the parent that shares its PR.
         let entries = vec![
             json!({"id": "ab-par001", "status": "in_progress", "pr_number": 7}),
             json!({"id": "ab-chil001", "status": "in_progress", "parent": "ab-par001",
