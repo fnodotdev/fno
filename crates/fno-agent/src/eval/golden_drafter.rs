@@ -390,5 +390,5 @@ pub(crate) fn daily(dir: &Path) {
 }
 
 #[cfg(test)]
-#[path = "golden_drafter_tests.rs"]
+#[path = "../golden_drafter_tests.rs"]
 mod golden_drafter_tests;
