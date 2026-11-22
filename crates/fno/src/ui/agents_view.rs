@@ -2246,11 +2246,13 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(str::to_string);
-        let verb = row
-            .get("verb")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(str::to_string);
+        // A typed read (R1): indexing answers Null on an absent key, and a
+        // non-string stamp deserializes to None the same tolerant way, so
+        // the read never invents a verb from a malformed row.
+        let verb = serde_json::from_value::<Option<String>>(row["verb"].clone())
+            .ok()
+            .flatten()
+            .filter(|s| !s.is_empty());
         let lineage_reason = row
             .get("lineage_reason")
             .and_then(|v| v.as_str())
