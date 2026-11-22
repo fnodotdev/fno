@@ -2983,7 +2983,9 @@ impl Root {
         if key.cmd {
             self.settings = None;
             cx.notify();
-            return true;
+            // The cmd key falls through to the shortcut, as the inline
+            // form did: closing the panel does not take the key.
+            return false;
         }
         let ev = self.settings.as_mut().and_then(|st| settings::key(st, key));
         cx.stop_propagation();
