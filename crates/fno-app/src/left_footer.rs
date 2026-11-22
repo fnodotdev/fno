@@ -22,6 +22,49 @@ pub fn draw_computer(yes: bool) {
     COMPUTER.store(yes, Ordering::Relaxed);
 }
 
+/// The footer's gear, drawn at the marks' 12px: a ring, a hub, and
+/// eight teeth, so the paint box matches the globe and the computer
+/// instead of a glyph's ink.
+fn gear_mark(p: &Palette) -> Div {
+    let tooth = |x: f32, y: f32| {
+        div()
+            .absolute()
+            .left(px(x))
+            .top(px(y))
+            .size(px(2.0))
+            .bg(rgb(p.muted))
+    };
+    let mut gear = div()
+        .relative()
+        .flex_none()
+        .size(px(12.0))
+        .child(
+            div()
+                .absolute()
+                .left(px(2.5))
+                .top(px(2.5))
+                .size(px(7.0))
+                .border_1()
+                .border_color(rgb(p.muted))
+                .rounded_full(),
+        )
+        .child(tooth(5.0, 0.0))
+        .child(tooth(5.0, 10.0))
+        .child(tooth(0.0, 5.0))
+        .child(tooth(10.0, 5.0));
+    for (x, y) in [(2.5, 2.5), (7.5, 2.5), (2.5, 7.5), (7.5, 7.5)] {
+        gear = gear.child(tooth(x, y));
+    }
+    gear.child(
+        div()
+            .absolute()
+            .left(px(5.0))
+            .top(px(5.0))
+            .size(px(2.0))
+            .bg(rgb(p.muted)),
+    )
+}
+
 /// The footer's host mark at the gear's 12px: the TUI line globe, a
 /// circle with its equator and meridian, or the computer. One line
 /// weight, monochrome, so it takes both palettes the way the gear does.
@@ -108,7 +151,6 @@ pub(super) fn render(p: &Palette) -> Div {
         .unwrap_or('Y')
         .to_uppercase()
         .to_string();
-    let pp = *p;
     div()
         .flex_none()
         .h(px(ui::ROW_H + 8.0))
@@ -146,14 +188,16 @@ pub(super) fn render(p: &Palette) -> Div {
             .child(host_mark(p)),
         )
         .child(
-            div()
-                .id("left-footer-settings")
-                .flex_none()
-                .cursor_pointer()
-                .text_color(rgb(p.muted))
-                .hover(move |s| s.text_color(rgb(pp.fg)))
-                .child("⚙")
-                .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenSettings), cx)),
+            ui::clickable(
+                div()
+                    .id("left-footer-settings")
+                    .flex_none()
+                    .p(px(3.0))
+                    .rounded(px(4.0)),
+                p,
+            )
+            .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenSettings), cx))
+            .child(gear_mark(p)),
         )
 }
 
