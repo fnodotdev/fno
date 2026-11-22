@@ -628,8 +628,10 @@ impl Root {
                 .await;
             let live = this
                 .update(cx, |root, cx| {
-                    root.usage = usage;
-                    cx.notify();
+                    if let Some(usage) = usage {
+                        root.usage = usage;
+                        cx.notify();
+                    }
                 })
                 .is_ok();
             if !live {

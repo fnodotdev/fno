@@ -56,17 +56,41 @@ pub fn parse_usage(json: &str) -> Vec<ProviderUse> {
     out
 }
 
-/// Read the cached usage. Fail-open: any spawn or parse failure is no rows.
-pub fn read_usage() -> Vec<ProviderUse> {
-    let out = Command::new("fno")
+/// The `fno` to run: the installer's link first, because an app launched
+/// from the Dock carries a minimal PATH.
+fn fno_bin() -> std::path::PathBuf {
+    std::env::var_os("HOME")
+        .map(|h| std::path::Path::new(&h).join(".local/bin/fno"))
+        .filter(|p| p.exists())
+        .unwrap_or_else(|| "fno".into())
+}
+
+/// Read the cached usage within ten seconds. `None` is a failed or timed
+/// out read, so the caller keeps the last good reading.
+pub fn read_usage() -> Option<Vec<ProviderUse>> {
+    use std::io::Read;
+    let mut child = Command::new(fno_bin())
         .args(["config", "accounts", "usage", "--json"])
         .stdin(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .output();
-    match out {
-        Ok(o) if o.status.success() => parse_usage(&String::from_utf8_lossy(&o.stdout)),
-        _ => Vec::new(),
-    }
+        .spawn()
+        .ok()?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let status = loop {
+        match child.try_wait().ok()? {
+            Some(s) => break s,
+            None if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(100)),
+        }
+    };
+    let mut text = String::new();
+    child.stdout.take()?.read_to_string(&mut text).ok()?;
+    status.success().then(|| parse_usage(&text))
 }
 
 /// Time left to a reset, in the two largest units that matter.
