@@ -414,6 +414,7 @@ impl Launch {
             placement: None,
             portal: None,
             split: None,
+            open_as: None,
             node: None,
             message,
             extra_flags: Vec::new(),

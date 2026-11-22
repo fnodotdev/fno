@@ -641,6 +641,7 @@ pub(crate) enum CoreMsg {
         id: u64,
         update: crate::proto::AgentLaunchUpdate,
         retry: u8,
+        agents: Option<Vec<RegistryAgent>>,
     },
     /// (v29) The off-loop peek task's transcript, routed back so the
     /// `PeekBody` is sent from the core loop (which owns `clients`) to the
@@ -10358,7 +10359,15 @@ impl Core {
             }
             CoreMsg::Observe(id, hello) => self.observe(id, hello),
             CoreMsg::Link(id, hello) => self.link(id, hello),
-            CoreMsg::AgentLaunchUpdate { id, update, retry } => {
+            CoreMsg::AgentLaunchUpdate {
+                id,
+                update,
+                retry,
+                agents,
+            } => {
+                if let Some(rows) = agents {
+                    self.agents = rows;
+                }
                 self.agent_launch_update(id, update, retry);
                 Flow::Continue
             }

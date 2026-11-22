@@ -21,6 +21,7 @@ use crate::proto::agent_launch::{AgentLaunchRequest, AgentLaunchUpdate, LaunchSt
 mod bang;
 pub(crate) mod card;
 pub(crate) mod grammar;
+mod refusal;
 pub(crate) mod sets;
 pub(crate) mod will_run;
 
@@ -673,6 +674,7 @@ impl LaunchDraft {
             placement: placement.map(str::to_string),
             portal,
             split: split.map(str::to_string),
+            open_as: None,
             // A board prefill's binding rides only while the message's
             // second whitespace word (trailing sentence punctuation
             // trimmed, the same charset as node_seed's) is still that id.
@@ -2117,6 +2119,16 @@ pub(crate) async fn launcher_keys(
                     l.will_edit = None;
                 }
             }
+            LKey::Esc
+                if view
+                    .launcher
+                    .as_ref()
+                    .is_some_and(|l| l.show_detail && matches!(l.phase, Phase::Refused { .. })) =>
+            {
+                if let Some(l) = view.launcher.as_mut() {
+                    l.show_detail = false;
+                }
+            }
             LKey::Esc => {
                 // While an attempt is pending the first Esc is the explicit
                 // cancel: an Unknown resolves back to editing, a Starting
@@ -2258,7 +2270,16 @@ pub(crate) async fn launcher_keys(
             LKey::CtrlO => {
                 // The raw refusal text toggles only when there is one to
                 // show; a refused/unknown footer carries it, editing does not.
-                if let Some(l) = view.launcher.as_mut() {
+                let logged = view.launcher.as_ref().is_some_and(|l| {
+                    l.show_detail
+                        && matches!(&l.phase, Phase::Refused { reason, .. }
+                            if refusal::report(reason).is_some())
+                });
+                if logged {
+                    refusal::open_log(view, sock_w)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                } else if let Some(l) = view.launcher.as_mut() {
                     if matches!(l.phase, Phase::Refused { .. } | Phase::Unknown { .. }) {
                         l.show_detail = !l.show_detail;
                     }
@@ -4561,6 +4582,9 @@ impl Launcher {
     /// machine-shaped; the head names the limit, the detail keeps the
     /// evidence and the remedy the gate printed.
     fn detail_text(&self, reason: &str) -> String {
+        if let Some((head, lines)) = refusal::report(reason) {
+            return refusal::footer(head, &lines, self.show_detail);
+        }
         if self.show_detail {
             return reason.to_string();
         }

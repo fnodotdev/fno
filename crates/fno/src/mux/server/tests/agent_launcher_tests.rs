@@ -20,6 +20,7 @@ fn launch_req(id: u64, cwd: &str, harness: &str) -> crate::proto::AgentLaunchReq
         placement: None,
         portal: None,
         split: None,
+        open_as: None,
         node: None,
         message: String::new(),
         extra_flags: Vec::new(),

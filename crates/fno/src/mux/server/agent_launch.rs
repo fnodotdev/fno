@@ -12,11 +12,11 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Duration;
 
 use crate::dispatch_launch::{
-    decode_launch_outcome, launch_spawn_argv, run_fno_captured, run_fno_captured_with_stdin_full,
-    LaunchOutcome,
+    decode_launch_outcome, launch_spawn_argv, refusal_report, run_fno_captured,
+    run_fno_captured_with_stdin_full, LaunchOutcome,
 };
 use crate::proto::agent_launch::{AgentLaunchRequest, AgentLaunchUpdate, LaunchState};
-use crate::proto::ServerMsg;
+use crate::proto::{PanePlacement, PaneTarget, ServerMsg, TabSel};
 
 /// Node dispatch's off-loop body (extracted verbatim from `server.rs`,
 /// move). Selection + spawn crosses subprocesses and a mux socket
@@ -101,20 +101,35 @@ pub(crate) struct LaunchDesk {
     pending: HashSet<(u64, u64)>,
     /// The client's portal placement, retained until a thread or remote
     /// pane launch returns its receipt.
-    placements: HashMap<(u64, u64), ComposerPlacement>,
+    placements: HashMap<(u64, u64), PanePlacement>,
     /// Terminal updates, insertion-ordered for eviction.
     finished: HashMap<(u64, u64), AgentLaunchUpdate>,
     order: VecDeque<(u64, u64)>,
 }
 
-/// The composer launch's portal placement, taken from the desk on the
-/// Launched receipt: an explicit index, or `new` (the server picks), plus
-/// the tab selector and split direction the popup named.
-#[derive(Debug, Clone)]
-pub(crate) struct ComposerPlacement {
-    portal: Option<u8>,
-    tab: Option<String>,
-    split: Option<String>,
+/// Where a launch's portal opens, held on the desk until the receipt. An
+/// explicit index stays. Without one the server picks at the open. A typed
+/// placement is the card's snapshot at Enter. An older client's three words
+/// read through the CLI's own tab grammar.
+fn requested_placement(req: &AgentLaunchRequest) -> PanePlacement {
+    if let Some(open_as) = &req.open_as {
+        return open_as.clone();
+    }
+    PanePlacement {
+        portal: req.portal,
+        portal_new: req.portal.is_none(),
+        tab: req
+            .placement
+            .as_deref()
+            .and_then(|word| crate::mux_cli::parse_tab_sel(word).ok()),
+        split: req.split.as_deref().map(|dir| match dir {
+            "left" => crate::tree::Dir::Left,
+            "up" => crate::tree::Dir::Up,
+            "down" => crate::tree::Dir::Down,
+            _ => crate::tree::Dir::Right,
+        }),
+        ..Default::default()
+    }
 }
 
 /// Finished attempts remembered for replay. Small: a popup session rarely
@@ -138,7 +153,7 @@ impl LaunchDesk {
         })
     }
 
-    fn mark_started(&mut self, client: u64, request_id: u64, placement: Option<ComposerPlacement>) {
+    fn mark_started(&mut self, client: u64, request_id: u64, placement: Option<PanePlacement>) {
         let key = (client, request_id);
         self.pending.insert(key);
         if let Some(placement) = placement {
@@ -148,7 +163,7 @@ impl LaunchDesk {
 
     /// Take a launch's portal placement off the desk: consumed exactly
     /// once, on the Launched receipt.
-    fn take_placement(&mut self, client: u64, request_id: u64) -> Option<ComposerPlacement> {
+    fn take_placement(&mut self, client: u64, request_id: u64) -> Option<PanePlacement> {
         self.placements.remove(&(client, request_id))
     }
 
@@ -499,11 +514,7 @@ impl super::Core {
             req.request_id,
             // Remote pane ids belong to the other mux; open a local portal
             // for those receipts as well as for threads.
-            (req.substrate != "pane" || req.host.is_some()).then(|| ComposerPlacement {
-                portal: req.portal,
-                tab: req.placement.clone(),
-                split: req.split.clone(),
-            }),
+            (req.substrate != "pane" || req.host.is_some()).then(|| requested_placement(&req)),
         );
         self.send_launch_update(
             id,
@@ -534,6 +545,7 @@ impl super::Core {
                                 },
                             },
                             retry: 0,
+                            agents: None,
                         })
                         .await;
                     return;
@@ -590,16 +602,27 @@ impl super::Core {
                             pane: if req.host.is_some() { None } else { pane },
                             seed_delivered,
                         },
-                        LaunchOutcome::Refused(reason) => LaunchState::Refused { reason },
+                        // The decoder keeps one line for notices. The card
+                        // gets the code and every captured line.
+                        LaunchOutcome::Refused(_) => LaunchState::Refused {
+                            reason: refusal_report(code, &out, &err),
+                        },
                         LaunchOutcome::Unknown(reason) => LaunchState::Unknown { reason },
                     }
                 }
+            };
+            // The reach needs the newborn's row, and the reader's next tick
+            // can be behind the receipt.
+            let agents = match &state {
+                LaunchState::Launched { .. } => super::read_guard_agents().await,
+                _ => None,
             };
             let _ = core_tx
                 .send(super::CoreMsg::AgentLaunchUpdate {
                     id,
                     update: AgentLaunchUpdate { request_id, state },
                     retry: 0,
+                    agents,
                 })
                 .await;
         });
@@ -644,6 +667,7 @@ impl super::Core {
                     id,
                     update,
                     retry: retry + 1,
+                    agents: None,
                 })
                 .await;
         });
@@ -661,11 +685,11 @@ impl super::Core {
         }
     }
 
-    /// The composer's own portal: the same attached-client reach the
-    /// sideline Enter gesture runs, carrying the request's tab or split
-    /// and the explicit index or a server-picked new one. The requesting
-    /// client's view lands on it.
-    fn open_composer_portal(&mut self, client_id: u64, name: &str, placement: ComposerPlacement) {
+    /// The one opener of a launch: the attached client's own reach, run on
+    /// the receipt with the placement the card took at Enter. A pane, tab or
+    /// workspace that closed meanwhile opens a new tab and says so, because
+    /// the worker is already live. The requesting client's view lands on it.
+    fn open_composer_portal(&mut self, client_id: u64, name: &str, mut placement: PanePlacement) {
         let Some(view) = self.client_view(client_id) else {
             self.notice(
                 client_id,
@@ -674,26 +698,8 @@ impl super::Core {
             return;
         };
         let vp = self.tab_rect(view.1);
-        let split = placement.split.as_deref().map(|d| match d {
-            "left" => crate::tree::Dir::Left,
-            "up" => crate::tree::Dir::Up,
-            "down" => crate::tree::Dir::Down,
-            _ => crate::tree::Dir::Right,
-        });
-        let tab = placement.tab.as_deref().map(|t| {
-            if t == "new" {
-                crate::proto::TabSel::New
-            } else {
-                crate::proto::TabSel::Name(t.to_string())
-            }
-        });
-        let mut eff = crate::proto::PanePlacement {
-            split,
-            tab,
-            ..Default::default()
-        };
         let (portal_idx, explicit) = match placement.portal {
-            Some(n) => (n, true),
+            Some(idx) => (idx, true),
             None => match self.next_free_portal() {
                 Some(idx) => (idx, false),
                 None => {
@@ -707,19 +713,50 @@ impl super::Core {
                 }
             },
         };
-        eff.portal = explicit.then_some(portal_idx);
-        let remote = name
-            .rsplit_once('@')
-            .map(|(key, host)| crate::proto::RemoteRow {
-                key: key.into(),
-                host: host.into(),
-                name: name.into(),
-            });
+        placement.portal_new = false;
+        placement.portal = explicit.then_some(portal_idx);
+        if let Some(closed) = self.closed_since_enter(&mut placement) {
+            self.notice(
+                client_id,
+                format!("the {closed} picked at Enter closed; {name} opens in a new tab"),
+            );
+        }
+        let remote = crate::proto::RemoteRow::from_address(name);
         let key = match remote.as_ref() {
             Some(remote) => super::portal_reach::ReachKey::Remote(remote),
             None => super::portal_reach::ReachKey::Row(name),
         };
-        self.reach_portal(client_id, view, vp, portal_idx, key, &eff, explicit);
+        self.reach_portal(client_id, view, vp, portal_idx, key, &placement, explicit);
+    }
+
+    /// Point a placement whose target is gone at a new tab, and name what went.
+    fn closed_since_enter(&self, placement: &mut PanePlacement) -> Option<&'static str> {
+        let squad_gone = matches!(placement.target, PaneTarget::SquadId(id)
+            if self.session.squad(id).is_none());
+        let pane_gone = placement
+            .at
+            .is_some_and(|pane| self.session.find_pane(pane).is_none());
+        let tab_gone = match (&placement.target, &placement.tab) {
+            (PaneTarget::SquadId(sid), Some(TabSel::Id(tid))) => self
+                .session
+                .squad(*sid)
+                .is_some_and(|sq| !sq.tabs.iter().any(|tab| tab.id == *tid)),
+            _ => false,
+        };
+        let closed = if squad_gone {
+            placement.target = PaneTarget::CurrentRoute;
+            "workspace"
+        } else if pane_gone {
+            "pane"
+        } else if tab_gone {
+            "tab"
+        } else {
+            return None;
+        };
+        placement.at = None;
+        placement.split = None;
+        placement.tab = Some(TabSel::New);
+        Some(closed)
     }
 }
 
@@ -744,6 +781,7 @@ mod tests {
             placement: None,
             portal: None,
             split: None,
+            open_as: None,
             node: None,
             message: String::new(),
             extra_flags: Vec::new(),

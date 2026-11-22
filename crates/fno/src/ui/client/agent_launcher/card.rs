@@ -566,7 +566,8 @@ impl Launcher {
         let footer = self.footer();
         if !footer.is_empty() {
             let alert = matches!(self.phase, Phase::Refused { .. } | Phase::Unknown { .. });
-            for line in wrap_words(&footer, w.saturating_sub(2).max(1)) {
+            let room = w.saturating_sub(2).max(1);
+            for line in footer.lines().flat_map(|row| wrap_words(row, room)) {
                 out.push(CardLine {
                     alert,
                     ..CardLine::plain(format!("  {line}"), !alert)

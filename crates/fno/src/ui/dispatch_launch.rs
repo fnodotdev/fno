@@ -201,9 +201,10 @@ pub(crate) fn launch_spawn_argv(fno: &str, req: &AgentLaunchRequest, session: &s
             argv.extend([flag.to_string(), value.clone()]);
         }
     }
-    // A remote thread's placement belongs to this mux's portal, not the
-    // target mux. Remote panes keep their target-host placement.
-    if req.host.is_none() || req.substrate == "pane" {
+    // A thread's placement belongs to this mux: the server opens the one
+    // portal on the receipt, so the child carries no geometry, here or on
+    // another machine. A pane keeps its target-host placement.
+    if req.substrate == "pane" {
         if let Some(t) = &req.placement {
             argv.extend(["--tab".to_string(), t.clone()]);
         }
@@ -239,6 +240,12 @@ pub(crate) const COMPOSER_FLAGS: &[&str] = &[
     "--tab",
     "--portal",
     "--split",
+    "-x",
+    "--from",
+    "--at",
+    "--workspace",
+    "--squad",
+    "-s",
     "--node",
     "--mux-session",
     "--no-wait",
@@ -432,6 +439,37 @@ pub(crate) fn refusal_detail(stderr: &str, stdout: &str) -> String {
         .last()
         .unwrap_or_else(|| crate::server::first_line_or(stdout, ""));
     cut_160(&detail)
+}
+
+/// The stderr lines a refusal keeps, and the width of each.
+const REFUSAL_LINES: usize = 200;
+const REFUSAL_LINE_CHARS: usize = 1000;
+
+/// A refused launch in full: `exit <code>`, then each captured line of the
+/// door's answer, bounded from the top because the verdict prints last.
+pub(crate) fn refusal_report(code: i32, stdout: &str, stderr: &str) -> String {
+    let said = if stderr.trim().is_empty() {
+        stdout
+    } else {
+        stderr
+    };
+    let lines: Vec<String> = said
+        .lines()
+        .map(|line| {
+            line.chars()
+                .filter(|c| !c.is_control())
+                .take(REFUSAL_LINE_CHARS)
+                .collect::<String>()
+        })
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    let mut report = vec![format!("exit {code}")];
+    let cut = lines.len().saturating_sub(REFUSAL_LINES);
+    if cut > 0 {
+        report.push(format!("({cut} earlier lines not kept)"));
+    }
+    report.extend(lines.into_iter().skip(cut));
+    report.join("\n")
 }
 
 fn cut_160(s: &str) -> String {
@@ -719,6 +757,11 @@ mod tests {
     /// renders the real error, never a note.
     #[test]
     fn refusal_detail_takes_the_verdict_line_and_skips_notes() {
+        assert_eq!(
+            refusal_report(78, "", "note: one\n\nrefused: two\n"),
+            "exit 78\nnote: one\nrefused: two",
+            "the card keeps the code and every line"
+        );
         // Verdict line wins over every note and every refusal sentence.
         let gate_stderr = "spawn-gate note: ram readings: available 35.9GB (floor 2.0GB), \
              swap 85.5% (cap 90%), swap-in not sampled (under cap)\n\
@@ -876,6 +919,7 @@ mod tests {
             placement: Some("name:work".into()),
             portal: None,
             split: None,
+            open_as: None,
             node: None,
             message: "line one\nline \"two\" $ ` \u{1f600}".into(),
             extra_flags: Vec::new(),
@@ -945,6 +989,7 @@ mod tests {
             placement: None,
             portal: None,
             split: None,
+            open_as: None,
             node: None,
             message: String::new(),
             extra_flags: vec!["--agent".into(), "abc".into(), "--name".into(), "x".into()],
@@ -973,9 +1018,9 @@ mod tests {
                 "-",
             ]
         );
-        // Empty substrate omits the flag so the door's default decides.
-        // Explicit placement rides anyway: the flag is the ask, any
-        // substrate, and the spawn CLI opens the portal after the receipt.
+        // Empty substrate omits the flag so the door's default decides. A
+        // thread's placement stays off the child: the server opens the one
+        // portal after the receipt.
         let thread = AgentLaunchRequest {
             request_id: 2,
             revision: 1,
@@ -992,6 +1037,7 @@ mod tests {
             placement: None,
             portal: Some(1),
             split: Some("right".into()),
+            open_as: None,
             node: None,
             message: String::new(),
             extra_flags: Vec::new(),
@@ -1010,10 +1056,6 @@ mod tests {
                 "--harness",
                 "claude",
                 "--no-wait",
-                "--portal",
-                "1",
-                "--split",
-                "right",
                 "--prompt-file",
                 "-",
             ]
@@ -1036,6 +1078,7 @@ mod tests {
             placement: Some("3".into()),
             portal: None,
             split: Some("down".into()),
+            open_as: None,
             node: None,
             message: String::new(),
             extra_flags: Vec::new(),
@@ -1084,6 +1127,7 @@ mod tests {
             placement: None,
             portal: None,
             split: None,
+            open_as: None,
             node: None,
             message: String::new(),
             extra_flags: Vec::new(),
@@ -1116,6 +1160,7 @@ mod tests {
             placement: None,
             portal: None,
             split: None,
+            open_as: None,
             node: None,
             message: String::new(),
             extra_flags: Vec::new(),
@@ -1147,8 +1192,7 @@ mod tests {
                 "local placement stays on this mux: {argv:?}"
             );
         }
-        // Thread new tab: the explicit ask rides the argv like any
-        // substrate; the spawn CLI opens the portal after the receipt.
+        // Thread new tab: the same, so one launch has one opener.
         let new_tab = AgentLaunchRequest {
             request_id: 4,
             revision: 1,
@@ -1165,6 +1209,7 @@ mod tests {
             placement: Some("new".into()),
             portal: Some(2),
             split: None,
+            open_as: None,
             node: None,
             message: String::new(),
             extra_flags: Vec::new(),
@@ -1183,10 +1228,6 @@ mod tests {
                 "--harness",
                 "claude",
                 "--no-wait",
-                "--tab",
-                "new",
-                "--portal",
-                "2",
                 "--prompt-file",
                 "-",
             ]
@@ -1214,6 +1255,7 @@ mod tests {
             placement: None,
             portal: None,
             split: None,
+            open_as: None,
             node: Some("x-1".into()),
             message: String::new(),
             extra_flags: Vec::new(),
