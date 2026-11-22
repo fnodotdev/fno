@@ -669,8 +669,8 @@ fn fmt_row(e: &Value) -> String {
 /// The PAST cell: the scope's predecessors, oldest first, as names. The
 /// session ids ride the JSON (`past_leads`), not the fixed-width table.
 fn past_cell(e: &Value) -> String {
-    e.get("past_leads")
-        .and_then(Value::as_array)
+    e["past_leads"]
+        .as_array()
         .map(|list| {
             list.iter()
                 .filter_map(|entry| entry["name"].as_str())

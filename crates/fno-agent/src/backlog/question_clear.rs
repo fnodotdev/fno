@@ -1376,11 +1376,8 @@ fn rung_succeeded(
     closed_by: Option<&str>,
     home: Option<&crate::paths::AgentsHome>,
 ) -> Option<SucceededRung> {
-    let rung_holder = rung.get("holder_session").and_then(Value::as_str)?;
-    let scope = rung
-        .get("scope")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())?;
+    let rung_holder = rung["holder_session"].as_str()?;
+    let scope = rung["scope"].as_str().filter(|s| !s.is_empty())?;
     let closed_by = closed_by.filter(|s| !s.is_empty())?;
     let home = home
         .cloned()
@@ -1404,11 +1401,7 @@ fn rung_succeeded(
         return None;
     }
     Some(SucceededRung {
-        predecessor_name: rung
-            .get("holder_name")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
+        predecessor_name: rung["holder_name"].as_str().unwrap_or("").to_string(),
         predecessor_session: rung_holder.to_string(),
         scope: canon,
     })
