@@ -2448,15 +2448,17 @@ fn answer_thread_prompt(home: &AgentsHome, name: &str, answer: &str) -> Option<A
             ))
         }
     };
-    let key = match contract.permission_response_keys("claude", answer, "permission_prompt") {
-        Ok(mut k) if !k.is_empty() => k.remove(0),
-        _ => {
-            return Some(AskOutcome::err(
-                format!("ask --answer: claude refuses action {answer:?}"),
-                2,
-            ))
-        }
-    };
+    // The contract names which actions claude takes. Its pinned digits are
+    // not typed: the number comes from the menu on screen.
+    if contract
+        .permission_response_keys("claude", answer, "permission_prompt")
+        .is_err()
+    {
+        return Some(AskOutcome::err(
+            format!("ask --answer: claude refuses action {answer:?}"),
+            2,
+        ));
+    }
     let registry = load_registry(&home.registry_json()).ok()?;
     let entry = registry.find_name_session_or_short_id(name)?;
     if entry.harness_kind() != Harness::Claude {
@@ -2499,26 +2501,44 @@ fn answer_thread_prompt(home: &AgentsHome, name: &str, answer: &str) -> Option<A
         ));
     }
     let daemon_dir = crate::claude_roster::daemon_dir();
-    if let Ok(screen) = crate::thread_dialog::read_thread(&daemon_dir, &short) {
-        if let crate::thread_dialog::Dialog::Grant(missing) =
-            crate::thread_dialog::classify(&screen)
-        {
+    let screen = match crate::thread_dialog::read_thread(&daemon_dir, &short) {
+        Ok(s) => s,
+        Err(e) => {
             return Some(AskOutcome::err(
                 format!(
-                    "ask --answer: {} ({})",
-                    crate::thread_dialog::grant_remedy(&missing),
+                    "ask --answer: the dialog of {} is unreadable, so no key was typed: {e}",
                     py_repr(name)
                 ),
-                3,
-            ));
+                12,
+            ))
         }
+    };
+    if let crate::thread_dialog::Dialog::Grant(missing) = crate::thread_dialog::classify(&screen) {
+        return Some(AskOutcome::err(
+            format!(
+                "ask --answer: {} ({})",
+                crate::thread_dialog::grant_remedy(&missing),
+                py_repr(name)
+            ),
+            3,
+        ));
     }
-    match crate::mail_inject::answer_permission_via_control_sock_in(
-        &daemon_dir,
-        &short,
-        &key,
-        crate::mail_inject::default_enter_delay_ms(crate::mail_inject::MailInjectHarness::Claude),
-    ) {
+    let key = match crate::thread_dialog::parse_menu(&screen)
+        .ok_or_else(|| "no numbered menu is showing".to_string())
+        .and_then(|m| m.key_for(answer))
+    {
+        Ok(k) => k,
+        Err(why) => {
+            return Some(AskOutcome::err(
+                format!(
+                    "ask --answer: refused, no key was typed to {}: {why}",
+                    py_repr(name)
+                ),
+                2,
+            ))
+        }
+    };
+    match crate::mail_inject::answer_permission_via_control_sock_in(&daemon_dir, &short, &key) {
         Ok(()) => {
             emit_event(
                 &home.events_jsonl(),

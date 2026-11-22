@@ -48,6 +48,126 @@ pub(crate) fn classify(screen: &str) -> Dialog {
     }
 }
 
+/// One numbered picker as the screen shows it: the lines above the first
+/// option (the command or safety check being asked about) and the options.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Menu {
+    pub context: Vec<String>,
+    pub options: Vec<(u8, String)>,
+}
+
+fn numbered_line(line: &str) -> Option<(u8, String)> {
+    let t = line.trim_start_matches(|c: char| !c.is_ascii_alphanumeric());
+    let digits: String = t.chars().take_while(char::is_ascii_digit).collect();
+    let rest = t.get(digits.len()..)?;
+    let label = rest
+        .strip_prefix(". ")
+        .or_else(|| rest.strip_prefix(") "))?;
+    Some((digits.parse().ok()?, label.trim().to_string()))
+}
+
+/// The bottom-most run of options numbered 1, 2, 3 ... in order. Older
+/// numbered text higher on the screen is not this menu.
+pub(crate) fn parse_menu(screen: &str) -> Option<Menu> {
+    let lines: Vec<&str> = screen.lines().collect();
+    let mut found: Option<(usize, Vec<(u8, String)>)> = None;
+    let mut i = 0;
+    while i < lines.len() {
+        if lines.get(i).and_then(|l| numbered_line(l)).map(|(n, _)| n) != Some(1) {
+            i += 1;
+            continue;
+        }
+        let mut options = Vec::new();
+        let mut j = i;
+        while let Some((n, label)) = lines.get(j).and_then(|l| numbered_line(l)) {
+            if usize::from(n) != options.len() + 1 {
+                break;
+            }
+            options.push((n, label));
+            j += 1;
+        }
+        if options.len() >= 2 {
+            found = Some((i, options));
+        }
+        i = j.max(i + 1);
+    }
+    let (start, options) = found?;
+    let context = lines
+        .get(start.saturating_sub(8)..start)
+        .unwrap_or_default()
+        .iter()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    Some(Menu { context, options })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Choice {
+    Once,
+    Always,
+    Deny,
+}
+
+fn choice_of(label: &str) -> Option<Choice> {
+    let l = label.to_ascii_lowercase();
+    let first = l.split(|c: char| !c.is_ascii_alphabetic()).next()?;
+    match first {
+        "no" => Some(Choice::Deny),
+        "yes"
+            if ["don't ask again", "do not ask again", "always", "allow all"]
+                .iter()
+                .any(|w| l.contains(w)) =>
+        {
+            Some(Choice::Always)
+        }
+        "yes" => Some(Choice::Once),
+        _ => None,
+    }
+}
+
+impl Menu {
+    /// The key for `action` (`allow_once`, `allow_always`, `deny`) on THIS
+    /// menu, or the reason none applies. A menu with no option of that kind,
+    /// or two of them, is refused: a fixed digit would press another option.
+    pub(crate) fn key_for(&self, action: &str) -> Result<String, String> {
+        let want = match action {
+            "allow_once" => Choice::Once,
+            "allow_always" => Choice::Always,
+            "deny" => Choice::Deny,
+            other => return Err(format!("unknown action {other:?}")),
+        };
+        let mut hits = self
+            .options
+            .iter()
+            .filter(|(_, label)| choice_of(label) == Some(want));
+        match (hits.next(), hits.next()) {
+            (Some((n, _)), None) => Ok(n.to_string()),
+            (None, _) => Err(format!(
+                "the showing menu has no {action} option ({})",
+                self.numbered()
+            )),
+            _ => Err(format!(
+                "the showing menu has more than one {action} option ({})",
+                self.numbered()
+            )),
+        }
+    }
+
+    pub(crate) fn numbered(&self) -> String {
+        self.options
+            .iter()
+            .map(|(n, l)| format!("{n}. {l}"))
+            .collect::<Vec<_>>()
+            .join(" | ")
+    }
+
+    /// The asked-about text above the options, on one line.
+    pub(crate) fn asked(&self) -> String {
+        self.context.join(" / ")
+    }
+}
+
 /// The remedy a grant dialog needs, in one sentence.
 pub(crate) fn grant_remedy(missing: &[&str]) -> String {
     format!(
@@ -94,5 +214,43 @@ mod tests {
     #[test]
     fn plain_text_is_unknown() {
         assert_eq!(classify("working on it..."), Dialog::Unknown);
+    }
+
+    const TWO: &str =
+        "Bash command\n  rm -rf build\n\nDo you want to proceed?\n ❯ 1. Yes\n   2. No";
+    const THREE: &str = "Bash command\n  git push\n\nDo you want to proceed?\n ❯ 1. Yes\n   2. Yes, and don't ask again for git push commands\n   3. No, and tell Claude what to do differently (esc)";
+
+    #[test]
+    fn a_two_option_menu_maps_deny_to_its_own_number_and_refuses_always() {
+        let m = parse_menu(TWO).unwrap();
+        assert_eq!(m.key_for("allow_once").unwrap(), "1");
+        assert_eq!(m.key_for("deny").unwrap(), "2");
+        assert!(m
+            .key_for("allow_always")
+            .unwrap_err()
+            .contains("no allow_always"));
+        assert!(m.asked().contains("rm -rf build"));
+    }
+
+    #[test]
+    fn a_three_option_menu_maps_each_action_to_its_number() {
+        let m = parse_menu(THREE).unwrap();
+        assert_eq!(m.key_for("allow_once").unwrap(), "1");
+        assert_eq!(m.key_for("allow_always").unwrap(), "2");
+        assert_eq!(m.key_for("deny").unwrap(), "3");
+    }
+
+    #[test]
+    fn the_bottom_menu_wins_over_older_numbered_text() {
+        let s = format!("1. old\n2. older\n{TWO}");
+        assert_eq!(parse_menu(&s).unwrap().options.len(), 2);
+        assert!(parse_menu("working on it...").is_none());
+    }
+
+    #[test]
+    fn an_unrecognised_menu_is_refused_not_guessed() {
+        let m = parse_menu("Pick\n 1. Retry\n 2. Skip").unwrap();
+        assert!(m.key_for("deny").is_err());
+        assert!(m.key_for("allow_once").is_err());
     }
 }

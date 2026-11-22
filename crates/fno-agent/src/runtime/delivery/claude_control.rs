@@ -95,22 +95,21 @@ pub fn deliver_via_control_sock_in(
 
 /// Type one permission-response key over the attach transport: the wire form
 /// of `claude attach` + pressing the picker key. Post-attach the
-/// `control.sock` is a raw keystroke pipe, so the key plus a separate CR
-/// answers a showing prompt without a TTY. No transcript confirm: the picker
-/// closes on the key and prints nothing a message confirm could grep for.
+/// `control.sock` is a raw keystroke pipe. A digit selects its option and
+/// closes the picker by itself, so no CR follows: a CR sent after the menu
+/// closed would confirm whatever prompt came next. No transcript confirm: the
+/// picker closes on the key and prints nothing a message confirm could grep for.
 pub fn answer_permission_via_control_sock_in(
     daemon_dir: &Path,
     session: &str,
     key: &str,
-    enter_delay_ms: u64,
 ) -> Result<(), &'static str> {
     if key.is_empty() || key.chars().any(|c| c.is_control()) {
         return Err("unsafe-text");
     }
-    let mut transport = attach_worker(daemon_dir, session)?;
-    transport.send_line(key).map_err(|_| "io-error")?;
-    std::thread::sleep(Duration::from_millis(enter_delay_ms));
-    transport.send_line("\r").map_err(|_| "io-error")
+    attach_worker(daemon_dir, session)?
+        .send_line(key)
+        .map_err(|_| "io-error")
 }
 
 /// Press Esc in a claude session: the key that interrupts a running turn.

@@ -39,6 +39,8 @@ pub(crate) struct Waiting {
     told: Vec<String>,
     /// Grants a macOS grant screen names as missing; no key answers it.
     pub grants: Vec<&'static str>,
+    /// The numbered menu the screen shows, so the line names what an answer presses.
+    pub menu: Option<crate::thread_dialog::Menu>,
 }
 
 impl Waiting {
@@ -50,6 +52,8 @@ impl Waiting {
                 crate::thread_dialog::classify(&screen)
             {
                 self.grants = missing;
+            } else {
+                self.menu = crate::thread_dialog::parse_menu(&screen);
             }
         }
     }
@@ -74,8 +78,12 @@ impl Waiting {
                 self.short_id
             );
         }
+        let shown = match &self.menu {
+            Some(m) => format!(" asks: {} | options: {}", m.asked(), m.numbered()),
+            None => String::new(),
+        };
         format!(
-            "WAITING ON APPROVAL: {} (claude thread {}) {} for {}m - answer with: fno agent ask {} --answer allow_once (TTY form: claude attach {})",
+            "WAITING ON APPROVAL: {} (claude thread {}) {} for {}m{shown} - answer with: fno agent ask {} --answer allow_once|allow_always|deny, which presses the number of the matching option and refuses when none matches (TTY form: claude attach {})",
             self.name,
             self.short_id,
             self.waiting_for,
@@ -143,6 +151,7 @@ pub(crate) fn observe(
             notified: seen.notified,
             told: seen.told,
             grants: Vec::new(),
+            menu: None,
         });
     }
     if snapshot.is_known() && snapshot.warning_text().is_empty() {
