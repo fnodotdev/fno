@@ -468,8 +468,9 @@ pub struct AppShotArgs {
     #[arg(long, value_parser = ["rows", "overflow"])]
     pub ask: Option<String>,
     /// Open one overlay through its real code path before the capture:
-    /// the row menu, the in-tab rename field, or the scrolled-back pill
-    #[arg(long, value_parser = ["row-menu", "tab-rename", "scrolled"])]
+    /// the row menu (`row-menu-node` first binds the demo agent to a node),
+    /// the in-tab rename field, or the scrolled-back pill
+    #[arg(long, value_parser = ["row-menu", "row-menu-node", "tab-rename", "scrolled"])]
     pub ui: Option<String>,
 }
 

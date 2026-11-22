@@ -649,6 +649,26 @@ mod tests {
     }
 
     #[test]
+    fn copy_node_id_shows_only_for_a_row_that_has_a_node() {
+        let row = |node: Option<&str>| -> AgentRow {
+            serde_json::from_value(serde_json::json!({
+                "squad": null, "name": "w", "pane_id": 4, "badge": null,
+                "reason": null, "exited": false, "harness_session_id": "s1",
+                "node": node,
+            }))
+            .unwrap()
+        };
+        let has = |a: &AgentRow| {
+            RowMenu::of(Some(a))
+                .items
+                .iter()
+                .any(|(l, _, _)| *l == "Copy node id")
+        };
+        assert!(has(&row(Some("x-1a2b"))));
+        assert!(!has(&row(None)));
+    }
+
+    #[test]
     fn a_bare_pane_menu_keeps_the_tab_rows_and_digits_pick_a_row() {
         let mut menu = RowMenu::open(&[], 3);
         let labels: Vec<&str> = menu.items.iter().map(|(l, _, _)| *l).collect();
