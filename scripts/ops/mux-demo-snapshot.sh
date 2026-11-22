@@ -1584,11 +1584,14 @@ TR_B="$ROOT/transcript-answered.jsonl"
   printf '%s\n' "{\"type\":\"assistant\",\"timestamp\":\"${TS_BASE}:01.000Z\",\"message\":{\"role\":\"assistant\",\"content\":\"landed in #4621; both asks share the mention\"},\"stop_reason\":\"end_turn\"}"
 } > "$TR_B"
 printf '{"transcript": "%s"}\n' "$TR_A" > "$CAPTURE/aaa11111-1111-4aaa-9aaa-aaaaaaaaaaa1.scan.json"
-# The board's fixture asks: five rows so the leaderboard reads as a board -
-# one linked ask typed in four sessions (the rank leader), one re-ask of a
-# done node (regression), one bare ask, and a pair sharing a PR mention for
-# the by-topic toggle. The repeats carry their own date: the open-days the
-# row shows is now minus the newest ask.
+# The board's fixture asks: seven rows so the leaderboard reads as a board,
+# one of each judged outcome - one linked ask typed in four sessions
+# (the rank leader, acknowledged but forgotten), one re-ask of a done node
+# (regression), one solved ask on a second done node, one lost bare ask,
+# one bare ask with a reply, and a pair sharing a PR mention for the
+# by-topic toggle (one ask pasted under a markdown heading). The repeats
+# carry their own date: the open-days the row shows is now minus the
+# newest ask.
 BOARD_A="$ROOT/transcript-board-ask.jsonl"
 printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"${TS_BASE}:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"ship the requests board on the hq page and the mux this week\"}}" > "$BOARD_A"
 BOARD_B1="$ROOT/transcript-board-rep1.jsonl"
@@ -1604,16 +1607,21 @@ printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"2026-11-12T09:00:00.000Z\",\"m
 printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"2026-11-12T10:30:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"$REP_TEXT\"}}" > "$BOARD_B3"
 printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"2026-11-12T14:00:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"$REP_TEXT\"}}" > "$BOARD_B4"
 "$FNO" backlog done "${IDS[11]}" --force --reason "demo fixture done node for the regression row" --note "demo fixture completed node" --skip-stamp >/dev/null
+"$FNO" backlog done "${IDS[10]}" --force --reason "demo fixture solved node for the outcome rows" --note "demo fixture completed node" --skip-stamp >/dev/null
 BOARD_R="$ROOT/transcript-board-regress.jsonl"
 RNOW="$(python3 -c 'import datetime; print((datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(minutes=2)).strftime("%Y-%m-%dT%H:%M:00.000Z"))')"
 printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"$RNOW\",\"message\":{\"role\":\"user\",\"content\":\"did ${IDS[11]} land already\"}}" > "$BOARD_R"
 BOARD_T1="$ROOT/transcript-board-rel1.jsonl"
 BOARD_T2="$ROOT/transcript-board-rel2.jsonl"
-printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"${TS_BASE}:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"merge #483 and cut the release notes today\"}}" > "$BOARD_T1"
+printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"${TS_BASE}:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"## merge #483 and cut the release notes today\"}}" > "$BOARD_T1"
 printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"${TS_BASE}:30.000Z\",\"message\":{\"role\":\"user\",\"content\":\"the release notes for #483 are still missing\"}}" > "$BOARD_T2"
 printf '{"transcript": "%s"}\n' "$TR_B" > "$CAPTURE/bbb22222-2222-4bbb-9bbb-bbbbbbbbbb2.scan.json"
-BOARD_SIDS=(ccc33333-3333-4ccc-9ccc-ccccccccccc3 1111aaaa-1111-4aaa-9aaa-aaaaaaaaaaa1 2222bbbb-2222-4bbb-9bbb-bbbbbbbbbb2 3333cccc-3333-4ccc-9ccc-ccccccccccc3 4444dddd-4444-4ddd-9ddd-ddddddddddd4 eeee5555-5555-4eee-9eee-eeeeeeeeeee5 ffff6666-6666-4fff-9fff-fffffffffff6 abab7777-7777-4aba-9aba-abababababa7)
-BOARD_FILES=("$BOARD_A" "$BOARD_B1" "$BOARD_B2" "$BOARD_B3" "$BOARD_B4" "$BOARD_R" "$BOARD_T1" "$BOARD_T2")
+BOARD_SOLVED="$ROOT/transcript-board-solved.jsonl"
+printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"2026-11-15T09:00:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"close out the ${IDS[10]} doc gaps\"}}" > "$BOARD_SOLVED"
+BOARD_LOST="$ROOT/transcript-board-loss.jsonl"
+printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"2026-11-15T10:00:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"write the onboarding guide for new machines\"}}" > "$BOARD_LOST"
+BOARD_SIDS=(ccc33333-3333-4ccc-9ccc-ccccccccccc3 1111aaaa-1111-4aaa-9aaa-aaaaaaaaaaa1 2222bbbb-2222-4bbb-9bbb-bbbbbbbbbb2 3333cccc-3333-4ccc-9ccc-ccccccccccc3 4444dddd-4444-4ddd-9ddd-ddddddddddd4 eeee5555-5555-4eee-9eee-eeeeeeeeeee5 ffff6666-6666-4fff-9fff-fffffffffff6 abab7777-7777-4aba-9aba-abababababa7 cccc8888-8888-4ccc-9ccc-ccccccccccc8 dddd9999-9999-4ddd-9ddd-dddddddddd9)
+BOARD_FILES=("$BOARD_A" "$BOARD_B1" "$BOARD_B2" "$BOARD_B3" "$BOARD_B4" "$BOARD_R" "$BOARD_T1" "$BOARD_T2" "$BOARD_SOLVED" "$BOARD_LOST")
 # The windowed requests fold (ask_turns_since) enumerates transcripts under
 # FNO_CLAUDE_PROJECTS_DIR, not the capture-dir scan files (those feed only
 # the unwindowed asks walk), so every board ask lands in both places.
