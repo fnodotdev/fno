@@ -729,6 +729,13 @@ impl super::Core {
                 format!("the {change}; {name} opens in a new tab"),
             );
         }
+        // An older client's split of a closed index lands in the active tab.
+        if placement.portal.is_some_and(|idx| self.portal_seated(idx)) {
+            if let Err(refusal) = self.split_open_portal(&mut placement) {
+                self.notice(client_id, format!("{name} launched, not shown: {refusal}"));
+                return;
+            }
+        }
         let (portal_idx, explicit) = match placement.portal {
             Some(idx) => (idx, true),
             None => match self.next_free_portal() {

@@ -26,9 +26,9 @@ its cell with --from <portal N|worker name|current>";
 /// command's `placement` field. A `--split DIR` halves, in this order: the
 /// cell `--from` or `--at` names, the focused pane of the `--tab` named, the
 /// caller's own pane (FNO_PANE). With none of them it is refused with both
-/// flags named. They steer a FRESH open; a portal that already has a live
-/// seat keeps its geometry (the server says so) - same contract the server
-/// holds for the TUI.
+/// flags named. They steer a FRESH open. A split beside an open `--portal N`
+/// halves N and opens a new portal, so N keeps showing. With no split, a
+/// portal that already has a live seat keeps its geometry (the server says so).
 ///
 /// The hidden `--check` asks the server whether the reach would land and
 /// changes nothing. A placement refusal exits 2. A server that cannot answer
@@ -143,11 +143,16 @@ pub fn thread(args: &[OsString], env_session: Option<&str>) -> i32 {
     ) {
         Ok(Some(pane)) => placement.at = Some(pane),
         Ok(None) => {}
+        // An open portal N is its own anchor, and only the server knows.
+        Err(_) if portal.is_some() => {}
         Err(_) => {
             eprintln!("fno mux thread: {THREAD_SPLIT_HELP}");
             return EXIT_USAGE;
         }
     }
+    // A typed index rides the placement too. An absent one reads as portal 0
+    // on the wire, and that default never asks for a split of portal 0.
+    placement.portal = portal;
     let check = parsed.check;
     let name = parsed
         .name

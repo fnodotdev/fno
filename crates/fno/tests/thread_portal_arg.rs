@@ -45,6 +45,11 @@ fn thread_portal_takes_an_index_or_new() {
         "a named tab is a split's anchor, with no calling pane"
     );
     assert_eq!(
+        run(&["--portal", "2", "--split", "down", "row"]),
+        EXIT_NO_SERVER,
+        "only the server knows whether portal 2 is open to split"
+    );
+    assert_eq!(
         run(&["--tab", "new", "--split", "down", "row"]),
         EXIT_USAGE,
         "a new tab and a split contradict"

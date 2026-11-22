@@ -1403,6 +1403,15 @@ impl Core {
             });
             return;
         }
+        let mut placement = placement;
+        if let Err(refusal) = self.split_open_portal(&mut placement) {
+            // A caller that gave up waiting needs no answer.
+            drop(reply.send(ServerMsg::Err {
+                code: err_code::BAD_REQUEST,
+                msg: refusal.to_string(),
+            }));
+            return;
+        }
         // `--portal new` resolves to the next free index HERE, before
         // any park, so the parked replay lands where the reply says. Same
         // allocator the TUI's new-portal gesture uses. The one-park guard
@@ -1448,7 +1457,6 @@ impl Core {
         // the reach's addressing in exactly one field, the way every pre-v66
         // caller already sent it. `portal` is the resolved index by
         // here, so a `new` reach names the index the server picked.
-        let mut placement = placement;
         let view = placement.view;
         if !view {
             placement.portal = Some(portal);

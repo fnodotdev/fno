@@ -157,7 +157,9 @@ fno mux thread w2 --portal new --split right --from portal 0
 
 `--portal new` opens the next free index. If N is not open, `--portal N` opens it. If N is open, the reach tunes it. A `--split DIR` finds its cell in this order. The cell `--from` names is first. The focused pane of the `--tab` tab is second. The caller's own pane is last. A split with none of these refuses and names `--tab` and `--from`. A `--from` cell with no tab brings its own tab and workspace. `--from` takes `portal 0`, a worker name, or `current`. When the command runs inside a pane, it resolves `current` itself. Split right from portal 0, then down from portal 0, then down from portal 1: that is the 2x2.
 
-If the named portal already shows a live viewer, the reach tunes it. The portal keeps its geometry. The server says which flags it did not use, as in `portal 2 was open: it now shows w2; --split was not used`.
+A `--split` beside an open `--portal N` halves N and opens a new portal. The agent in N keeps showing. N is then the cell of the split, so it needs no `--tab` and no `--from`. A `--tab` that does not hold N refuses and names N's tab.
+
+With no `--split`, a reach to an open portal tunes it. The portal keeps its geometry. The server says which flags it did not use, as in `portal 2 was open: it now shows w2; --tab was not used`.
 
 ### What the spawn refuses
 
@@ -169,6 +171,8 @@ Every refusal below exits 2 before the worker starts, and each message names the
 | `--tab new` with `--split` | drop one of the two |
 | `--split` with no tab, no `--from` and no calling pane | names `--tab` and `--from` |
 | a `--from` cell outside the named tab | the cell is not in the target tab, and the flag to change |
+| `--split` with an open `--portal N` and another `--tab` | the tab that holds N |
+| `--split` with an open `--portal N` and another `--from` | drop `--from`, or pass `--portal new` |
 | `--portal` with `--once` | a one-shot hosts no session to show |
 | `--portal` with `--bounded-placement` | a portal takes no placement lease |
 | `--at` on a thread | name the cell with `--from` |

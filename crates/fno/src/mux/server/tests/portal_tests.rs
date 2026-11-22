@@ -3622,6 +3622,63 @@ fn a_launch_receipt_opens_one_portal_where_enter_put_it() {
 }
 
 #[test]
+fn portal_split_decided_table() {
+    use crate::proto::TabSel;
+
+    set_attach_program(&["/bin/cat"]);
+    let (mut core, client_id, _first, _rx) = thread_core();
+    core.agents = vec![
+        bg_row("target-a", "/tmp/seen", Some("deadbee1")),
+        bg_row("target-b", "/tmp/seen", Some("deadbee2")),
+    ];
+    core.command(client_id, thread_reach_cmd("deadbee1"));
+    let (seat, tab) = core.portals.get(&0).map(|p| (p.seat, p.tab)).expect("open");
+    // (case, the index, the tab, the anchor or the refusal)
+    let cases = [
+        ("no tab", 0, None, Ok(seat)),
+        ("its own tab", 0, Some(TabSel::Id(tab)), Ok(seat)),
+        ("another tab", 0, Some(TabSel::Id(1)), Err("is in tab 2")),
+        ("closed, no anchor", 7, None, Err("is not open")),
+    ];
+    for (case, idx, named, want) in cases {
+        let mut placement = PanePlacement {
+            portal: Some(idx),
+            split: Some(Dir::Down),
+            tab: named,
+            ..Default::default()
+        };
+        match (core.split_open_portal(&mut placement), want) {
+            (Ok(()), Ok(anchor)) => {
+                assert_eq!(placement.at, Some(anchor), "{case}");
+                assert!(placement.portal_new && placement.portal.is_none(), "{case}");
+            }
+            (Err(refusal), Err(text)) => {
+                assert!(refusal.to_string().contains(text), "{case}: {refusal}");
+            }
+            (got, _) => panic!("{case}: {got:?}"),
+        }
+    }
+    let mut placement = PanePlacement {
+        portal: Some(0),
+        split: Some(Dir::Down),
+        ..Default::default()
+    };
+    core.split_open_portal(&mut placement).expect("it splits");
+    placement.portal_new = false;
+    placement.portal = Some(1);
+    core.command(
+        client_id,
+        Command::AttachAgent {
+            id: "deadbee2".into(),
+            placement,
+        },
+    );
+    let kept = core.portals.get(&0).map(|p| (p.seat, p.row_key.as_str()));
+    assert_eq!(kept, Some((seat, "deadbee1")), "N keeps showing");
+    assert_eq!(core.portals.get(&1).map(|p| p.tab), Some(tab), "below N");
+}
+
+#[test]
 fn thread_check_answers_by_the_reach_rule_and_changes_nothing() {
     use crate::proto::{TabSel, ThreadOrigin};
     let (mut core, _client_id, first, _rx) = thread_core();

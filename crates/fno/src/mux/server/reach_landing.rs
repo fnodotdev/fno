@@ -37,6 +37,12 @@ pub(super) enum LandingRefusal {
         "anchor pane {0} is not in the target tab; change --tab, or name a cell in it with --from"
     )]
     AnchorOutsideTab(u64),
+    #[error("a --split needs an anchor: portal {0} is not open, so name --tab N or --from <cell>")]
+    SplitNeedsAnchor(u8),
+    #[error("portal {portal} is in tab {tab}; pass --tab {tab}, or drop --tab")]
+    PortalTab { portal: u8, tab: usize },
+    #[error("portal {0} is open, so --split halves it; drop --from, or pass --portal new")]
+    PortalCell(u8),
 }
 
 /// The flags a reach named that a portal with a live seat does not use, worded
@@ -144,6 +150,8 @@ impl Core {
             #[cfg(feature = "web")]
             crate::mux_link::pane_argv(remote).map_err(LandingRefusal::Link)?;
         }
+        let mut placement = placement.clone();
+        self.split_open_portal(&mut placement)?;
         if placement.portal_new {
             if self.next_free_portal().is_none() {
                 return Err(LandingRefusal::NoFreePortal);
@@ -152,8 +160,54 @@ impl Core {
             // An open portal retunes in place and reads no geometry.
             return Ok(());
         }
-        let anchor = self.named_anchor(placement)?;
-        self.fresh_landing(owner, placement, anchor).map(|_| ())
+        let anchor = self.named_anchor(&placement)?;
+        self.fresh_landing(owner, &placement, anchor).map(|_| ())
+    }
+
+    /// A split beside a typed index N. When N is open its seat is the cell
+    /// the split halves, and the worker gets a new portal: N keeps showing.
+    /// An `at` gives way, because it is often the caller's own pane.
+    pub(super) fn split_open_portal(
+        &self,
+        placement: &mut PanePlacement,
+    ) -> Result<(), LandingRefusal> {
+        let (Some(idx), Some(_), false) = (placement.portal, placement.split, placement.portal_new)
+        else {
+            return Ok(());
+        };
+        let seat = self.portals.get(&idx).map(|portal| portal.seat);
+        let Some(seat) = seat.filter(|_| self.portal_seated(idx)) else {
+            let anchored =
+                placement.at.is_some() || placement.from.is_some() || placement.tab.is_some();
+            return if anchored {
+                Ok(())
+            } else {
+                Err(LandingRefusal::SplitNeedsAnchor(idx))
+            };
+        };
+        if placement.from.is_some() {
+            let from = PanePlacement {
+                at: None,
+                ..placement.clone()
+            };
+            if self.named_anchor(&from)? != Some(seat) {
+                return Err(LandingRefusal::PortalCell(idx));
+            }
+        }
+        let found = self.session.find_pane(seat);
+        if let (Some((sid, ti)), Some(tab)) = (found, placement.tab.as_ref()) {
+            if self.resolve_tab_index(sid, tab).ok() != Some(ti) {
+                return Err(LandingRefusal::PortalTab {
+                    portal: idx,
+                    tab: ti + 1,
+                });
+            }
+        }
+        placement.portal = None;
+        placement.portal_new = true;
+        placement.from = None;
+        placement.at = Some(seat);
+        Ok(())
     }
 
     /// The cell a placement names: `at`, else the resolved `from`.
