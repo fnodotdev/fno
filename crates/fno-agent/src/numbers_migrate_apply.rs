@@ -1329,12 +1329,6 @@ mod tests {
         assert!(moved.exists());
     }
 
-    /// The child of the two-project test: the real command twice, each run
-    /// against the seeded store its env names, never a live one. The parent
-    /// hands over project-a's env and cwd; the second run moves to the
-    /// sibling project the way an operator would.
-    #[test]
-    #[ignore = "spawned with a seeded FNO_HOME by the two-project vault test"]
     /// Every numbers row and live decision id in the seeded store, stamped,
     /// so an extra key reads its own origin and timing.
     fn dump_store(tag: &str) {
@@ -1376,6 +1370,12 @@ mod tests {
         eprintln!("child[{tag}]: decisions {ids:?}");
     }
 
+    /// The child of the two-project test: the real command twice, each run
+    /// against the seeded store its env names, never a live one. The parent
+    /// hands over project-a's env and cwd; the second run moves to the
+    /// sibling project the way an operator would.
+    #[test]
+    #[ignore = "spawned with a seeded FNO_HOME by the two-project vault test"]
     fn migrate_ids_two_project_apply_child() {
         dump_store("pre-a");
         let code = super::super::run(&["--apply".to_string()]);
