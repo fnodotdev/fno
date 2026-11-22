@@ -30,7 +30,7 @@ pub const RECHECK: Duration = Duration::from_secs(6 * 60 * 60);
 /// Waits for the old process to exit, swaps the bundle (the old one comes
 /// back if the swap fails), and opens whichever bundle is in place.
 /// `$1` is the running bundle, `$2` the staged one, `$3` the old pid.
-const RELAUNCH: &str = r#"while kill -0 "$3" 2>/dev/null; do sleep 0.2; done; if mv "$1" "$1.old"; then if mv "$2" "$1"; then rm -rf "$1.old"; else mv "$1.old" "$1"; fi; fi; open "$1""#;
+const RELAUNCH: &str = r#"while kill -0 "$3" 2>/dev/null; do sleep 0.2; done; rm -rf "$1.old"; if mv "$1" "$1.old"; then if mv "$2" "$1"; then rm -rf "$1.old"; else mv "$1.old" "$1"; fi; fi; open "$1""#;
 
 /// Why an update step failed: one line, ready to show.
 #[derive(Debug, thiserror::Error)]
@@ -139,7 +139,7 @@ fn sha256_of(path: &Path) -> Result<String, UpdateError> {
         .split_whitespace()
         .next()
         .map(str::to_string)
-        .ok_or_else(|| "shasum printed no digest".to_string())
+        .ok_or_else(|| UpdateError::from("shasum printed no digest"))
 }
 
 /// The bundle's Team ID; None for an ad hoc or unsigned bundle.
@@ -163,7 +163,7 @@ fn prune(root: &Path, keep: Option<&str>) {
     for e in entries.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
         let keeps = keep.is_some_and(|k| name == k || name.starts_with(&format!("{k}.")));
-        if e.path().is_dir() && !keeps {
+        if e.path().is_dir() && !keeps && !name.ends_with(".partial") {
             let _ = std::fs::remove_dir_all(e.path());
         }
     }
@@ -201,6 +201,11 @@ fn newest_stable(running: &str) -> Result<Option<(String, String)>, UpdateError>
         }
     }
     Ok(None)
+}
+
+/// Whether this process runs from an app bundle: a dev run never updates.
+pub fn bundled() -> bool {
+    running_bundle().is_some()
 }
 
 /// Read the feed and, when a newer release exists, stage and prove it.

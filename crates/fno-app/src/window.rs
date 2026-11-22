@@ -837,6 +837,9 @@ impl Root {
     /// is staged. A failed read waits for the next round, and a build that
     /// already names the running version never shows a card.
     pub(super) fn start_update(&mut self, cx: &mut Context<Self>) {
+        if !super::update::bundled() {
+            return;
+        }
         self.update_card = super::update::take_pending_notes(super::update::RUNNING)
             .map(|(version, notes)| UpdateCard::Installed { version, notes });
         self._update = Some(cx.spawn(async move |this, cx| loop {
