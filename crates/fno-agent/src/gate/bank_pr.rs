@@ -170,6 +170,8 @@ pub fn ship(
                 "git",
                 &["push", "origin", &format!("HEAD:refs/heads/{branch}")],
             )
+            .map(|_| ())
+            .map_err(BankPrError)
         });
         let _ = run(root, "git", &["worktree", "remove", "--force", &tree_s]);
         shipped?;
@@ -205,11 +207,15 @@ pub fn ship(
         "pr", "create", "--base", "main", "--head", branch, "--title", title, "--body", body,
     ];
     let url = commit_edits(&tree, edits, title)
-        .and_then(|_| run(&tree, "git", &["push", "-u", "origin", branch]))
-        .and_then(|_| run(&tree, "gh", &create));
+        .and_then(|_| {
+            run(&tree, "git", &["push", "-u", "origin", branch])
+                .map(|_| ())
+                .map_err(BankPrError)
+        })
+        .and_then(|_| run(&tree, "gh", &create).map_err(BankPrError));
     let _ = run(root, "git", &["worktree", "remove", "--force", &tree_s]);
     let _ = run(root, "git", &["branch", "-D", branch]);
-    url.map_err(BankPrError)
+    url
 }
 
 /// Append the ids of `edits` the PR body does not name yet, so a retry
