@@ -22,7 +22,7 @@ Each app release ships `fno-app-macos.tar.gz` on its own `fno-app-v<version>` re
 
 ## Updates
 
-The app checks the `fno-app-v*` release feed at launch and every 6 hours after, until it stages a build. It downloads the newest stable release in the background and proves it before it offers it. The sha256 file must match, `codesign --verify --deep --strict` must pass, the Team ID must equal the running app's (when the running app has one), and the new binary must name the release version. A build that fails any proof is dropped, and the app tries again at the next check.
+The app checks the `fno-app-v*` release feed at launch and every 6 hours after, until it stages a build. It downloads the newest stable release in the background and proves it before it offers it. Four proofs must pass. The sha256 file must match. `codesign --verify --deep --strict` must pass. The Team ID must equal the running app's Team ID. The new binary must name the release version. An ad-hoc signed running app has no Team ID, so that proof is skipped. A build that fails any proof is dropped, and the app tries again at the next check.
 
 When a build is ready, a card appears at the bottom left: `fno-app <version> is ready`, with Restart and Later. Restart quits the app, swaps the staged bundle in place of the running one, and opens it. If the swap fails, the old bundle stays in place and opens again. Later hides the card until the next launch.
 
