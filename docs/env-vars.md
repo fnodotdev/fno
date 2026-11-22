@@ -32,7 +32,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `CLAUDE_PLUGIN_ROOT` | rs | The plugin stage root the doctor's hook probes read. |
 | `CLAUDE_SESSION_ID` | rs | unclear: crates/fno-agent/src/runtime/claims.rs:3690 |
 | `CLI` | rs | unclear: crates/fno-agent/src/spawn/loop_dispatch.rs:198 |
-| `CODEX_COMPANION_SESSION_ID` | rs | The Codex session id used as the owner-session fallback when a lazy mux server starts from an agent shell. |
+| `CODEX_COMPANION_SESSION_ID` | rs | The Claude session id, exported by the openai-codex Claude plugin's SessionStart hook. Last fallback for the lazy mux server's owner stamp (crates/fno/src/ui/client/server_spawn.rs `resolve_owner_session`), after FNO_OWNER_SESSION and the client's own ambient harness session. |
 | `CODEX_HOME` | rs | unclear: crates/fno-agent/src/spawn/accounts/store.rs:299 |
 | `CODEX_PLUGIN_ROOT` | rs | A Codex plugin stage root. The Visual Log reader probe's script ladder reads it beside `CLAUDE_PLUGIN_ROOT` (crates/fno-agent/src/runtime/visual_log_reader.rs). |
 | `CODEX_SESSION_ID` | rs | unclear: crates/fno-agent/src/runtime/hook/lead_guard.rs:654 |
@@ -213,7 +213,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_ORPHANS_SKIP_PROBE` | rs | unclear: crates/fno-agent/src/runtime/orphans.rs:706 |
 | `FNO_OWNER_BIRTH` | rs | The owner process start token paired with FNO_OWNER_PID; protects sandbox process cleanup from PID reuse. |
 | `FNO_OWNER_PID` | rs | The owner process for an owner-bound sandbox server and its descendants; shared fleet launches leave it unset. |
-| `FNO_OWNER_SESSION` | rs | The harness session id that owns a sandbox server and descendants; required with FNO_OWNER_PID and FNO_OWNER_BIRTH. |
+| `FNO_OWNER_SESSION` | rs | The harness session id that owns a sandbox server and descendants; required with FNO_OWNER_PID and FNO_OWNER_BIRTH. Read first as the explicit sandbox marker; unset, the attaching client's own ambient session resolves and CODEX_COMPANION_SESSION_ID is the last fallback (crates/fno/src/ui/client/server_spawn.rs `resolve_owner_session`). |
 | `FNO_PANE` | rs | The pane id every inline (`pty.rs`) and keeper-hosted (`pane_keeper.rs`) pane exports. Read by `crates/fno-agent/src/runtime/pane_claim.rs` to bind a foreground SessionStart report's registry row to this pane, proven by an ancestry walk so a process that merely inherited it (a long-lived server born once inside a pane) is refused. |
 | `FNO_PANE_EPOCH` | rs | The pane's restart epoch; with `FNO_PANE` and `FNO_SERVER` it names the turn-pin file whose first writer reports the leg's session state (session_state.rs). |
 | `FNO_PANE_STATS_EMIT` | rs | unclear: crates/fno/src/mux/server.rs:10563 |
