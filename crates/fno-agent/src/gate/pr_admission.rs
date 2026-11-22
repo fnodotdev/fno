@@ -108,6 +108,32 @@ pub fn is_hold_text(decision: &str) -> bool {
     !rest.chars().next().is_some_and(char::is_alphanumeric)
 }
 
+/// Whether the subject names one per-PR hold (`pr-hold:<slug>#<n>`): the
+/// subject form the decide door's text gate keys on and `after_record`
+/// acts on.
+pub fn is_hold_subject(subject: &str) -> bool {
+    let Some(rest) = subject
+        .trim()
+        .strip_prefix(HOLD_SUBJECT)
+        .and_then(|r| r.strip_prefix(':'))
+    else {
+        return false;
+    };
+    let Some((slug, pr)) = rest.split_once('#') else {
+        return false;
+    };
+    !slug.is_empty() && pr.parse::<u64>().is_ok()
+}
+
+/// True when a decision text releases a per-PR hold: the bare word, or the
+/// word followed by a rationale. This is the wording `after_record_with`
+/// acts on, so the decide door's text gate and the effects path read one
+/// definition and a release that records is a release that works.
+pub fn is_release_text(decision: &str) -> bool {
+    let release = decision.trim();
+    release == "release" || release.starts_with("release:") || release.starts_with("release ")
+}
+
 /// The lifecycle states that still hold. `expired` means the PR merged
 /// (nothing left to protect); superseded, retracted and retired are dead
 /// rows. `unscoped` means the store cannot prove the PR's closure, and
@@ -498,8 +524,7 @@ pub(crate) fn after_record_with(
     if authority != Some("operator") && authority != Some("role") {
         return None;
     }
-    let release = decision.trim();
-    if release == "release" || release.starts_with("release:") || release.starts_with("release ") {
+    if is_release_text(decision) {
         return Some(release_effects(gh, slug, pr));
     }
     None
@@ -700,6 +725,30 @@ mod tests {
             "author_association": association,
             "user": {"login": "someone"},
         })
+    }
+
+    #[test]
+    fn the_hold_subject_form_names_only_real_hold_subjects() {
+        assert!(is_hold_subject("pr-hold:o/r#8"));
+        assert!(is_hold_subject("  pr-hold:o/r#8"));
+        assert!(!is_hold_subject("pr-hold"));
+        assert!(!is_hold_subject("pr-hold:o/r"));
+        assert!(!is_hold_subject("pr-hold:o/r#not-a-number"));
+        assert!(!is_hold_subject("pr-hold:#8"));
+        assert!(!is_hold_subject("merge-freeze:o/r#8"));
+    }
+
+    #[test]
+    fn the_release_wording_is_the_wording_the_effects_path_acts_on() {
+        assert!(is_release_text("release"));
+        assert!(is_release_text(" release "));
+        assert!(is_release_text(
+            "release: the docs gate reads the #NNN form"
+        ));
+        assert!(is_release_text("release with two clean review rounds"));
+        assert!(!is_release_text("released"));
+        assert!(!is_release_text("do not merge this pull request"));
+        assert!(!is_release_text("keep it held"));
     }
 
     #[test]

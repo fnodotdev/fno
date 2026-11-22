@@ -215,6 +215,10 @@ pub(crate) struct DecideDoor {
     reads: Vec<String>,
     origin: Option<String>,
     expiry: Option<String>,
+    /// The session reach the row stamps (`--reach`); derived from the
+    /// caller's project when the flag is absent and the subject binds no
+    /// wider scope.
+    reach: Option<String>,
     /// Who the ruling serves (`--audience`; `--scope` is a one-release alias): `internal`, `customers` or `customer:<persona>`.
     audience: Option<String>,
     /// The goal behind the ask (`--why`); the user's words when the ask came
@@ -226,7 +230,7 @@ pub(crate) struct DecideDoor {
     keep: Vec<String>,
 }
 
-const DECIDE_USAGE: &str = "usage: fno inbox decide <subject> <decision> [--question-id q] [--rationale s] [--option s]... [--supersedes d-x] [--answers-ask s] [--class c] [--overturns s-or-d] --audience internal|customers|customer:<persona> --why s [--job p/s] [--expiry node|pr|date:<when>|never] [--keep d-x]... [--decided-by name] [--authority operator|role|agent|beastmode] [--graduation k] [--graduation-ref r] [--read cmd]... [--origin o]  -- a ruling records in one step: audience and why are required when it lands, and a customer ruling names its persona there too.";
+const DECIDE_USAGE: &str = "usage: fno inbox decide <subject> <decision> [--question-id q] [--rationale s] [--option s]... [--supersedes d-x] [--answers-ask s] [--class c] [--overturns s-or-d] --audience internal|customers|customer:<persona> --why s [--job p/s] [--expiry node|pr|date:<when>|never] [--reach global|project:<slug>|machine:<id>|user:<name>] [--keep d-x]... [--decided-by name] [--authority operator|role|agent|beastmode] [--graduation k] [--graduation-ref r] [--read cmd]... [--origin o]  -- a ruling records in one step: audience and why are required when it lands, and a customer ruling names its persona there too.";
 
 pub(crate) fn parse_decide_door(args: &[String]) -> Result<DecideDoor, String> {
     let mut door = DecideDoor {
@@ -246,6 +250,7 @@ pub(crate) fn parse_decide_door(args: &[String]) -> Result<DecideDoor, String> {
         reads: Vec::new(),
         origin: None,
         expiry: None,
+        reach: None,
         audience: None,
         why: None,
         job: Vec::new(),
@@ -300,6 +305,16 @@ The alias will be removed in a future release."
             "--class" => door.class = Some(take(&mut i)?),
             "--overturns" => door.overturns = Some(take(&mut i)?),
             "--expiry" => door.expiry = Some(take(&mut i)?),
+            "--reach" => {
+                let v = take(&mut i)?;
+                if !crate::decision_index::is_reach_value(&v) {
+                    return Err(format!(
+                        "--reach '{v}' is not a session reach (global, project:<slug>, \
+machine:<id>, user:<name>)\n{DECIDE_USAGE}"
+                    ));
+                }
+                door.reach = Some(v);
+            }
             "--scope" | "--audience" => door.audience = Some(take(&mut i)?),
             "--why" => door.why = Some(take(&mut i)?),
             "--job" => door.job.push(take(&mut i)?),
@@ -838,6 +853,13 @@ for a lead ruling inside its own scope; omit the flag to resolve it from this se
             return decide_role_refusal(&provenance.decided_by);
         }
     }
+    // A pr-hold ruling's text is the hold phrase or a release; anything
+    // else records a row the merge gate silently ignores. Refuse here,
+    // before anything is written, and name both live forms.
+    if let Some(message) = hold_text_gate(&subject, &decision) {
+        eprintln!("decide: refused. {message}");
+        return 3;
+    }
     // The evidence gate: a measured claim carries the read that produced it.
     // Exempt when the RESOLVED authority is operator (an attended terminal;
     // the waiver command inherits this).
@@ -1094,6 +1116,15 @@ decision index. Run `fno backlog decide-reindex` before retrying."
         }
     }
     crate::backlog::decision_subject::stamp(&mut data, &subject);
+    if let Some(r) = decide_reach(
+        &subject,
+        door.reach.as_deref(),
+        crate::law_match::resolve_project(None, &crate::law_match::settings_sources())
+            .ok()
+            .map(|slug| format!("project:{slug}")),
+    ) {
+        data["reach"] = json!(r);
+    }
     if let Some(r) = &expiry_ref {
         data["expiry_ref"] = json!(r);
     }
@@ -1334,6 +1365,7 @@ Do NOT re-run decide; that records it twice.",
             }
         }
     };
+    eprintln!("{}", reach_receipt_line(&data));
     match &node_id {
         Some(node) => {
             eprintln!(
@@ -1438,6 +1470,68 @@ this refusal. Append agent findings without replacing node details with \
 `fno backlog note <node> <text>`."
     );
     3
+}
+
+/// The pr-hold text gate. None when the text records: the hold phrase
+/// (a rationale may follow) or a release, the two forms the merge gate's
+/// effects path acts on. Some names both forms when the text would land as
+/// a row no gate reads, which is how a hold worded its own way went live
+/// while the merge path read the PR as mergeable.
+fn hold_text_gate(subject: &str, decision: &str) -> Option<String> {
+    if !crate::pr_admission::is_hold_subject(subject) {
+        return None;
+    }
+    if crate::pr_admission::is_hold_text(decision) || crate::pr_admission::is_release_text(decision)
+    {
+        return None;
+    }
+    Some(format!(
+        "a pr-hold ruling's text is the hold phrase '{}' (a rationale may \
+follow) or a release ('release' or 'release: reason'); any other wording \
+records a row a merge gate silently ignores. Nothing was recorded.",
+        crate::pr_admission::HOLD_DECISION
+    ))
+}
+
+/// The reach a ruling stamps. A per-PR door subject binds by repo and
+/// number, whatever the recorder's cwd, so it pins `global` and an
+/// explicit flag never narrows it: a hold stamped to the caller's project
+/// would stop binding outside that project. A fleet subject binds every
+/// project. An explicit `--reach` wins over derivation everywhere else,
+/// and a project that resolves nowhere stamps nothing, so the row reads
+/// exactly as unstamped rows always did.
+fn decide_reach(subject: &str, flag: Option<&str>, derived: Option<String>) -> Option<String> {
+    if crate::decision_index::is_pr_door_subject(subject) {
+        return Some("global".to_string());
+    }
+    if let Some(v) = flag {
+        return Some(v.to_string());
+    }
+    if crate::decision_index::is_fleet_subject(subject) {
+        return Some("global".to_string());
+    }
+    derived
+}
+
+/// The one reach line the recorded receipt prints: the row's scope and
+/// whether session rules load it. The lane mapping mirrors
+/// `decision_lane` on the authority alone because the row under
+/// construction carries no `ts`; every row this door mints sits past the
+/// lane cutover, so operator and chat_attested are the user lanes here.
+pub(crate) fn reach_receipt_line(row: &Value) -> String {
+    let scope = crate::decision_index::row_scope(row);
+    let authority = crate::decision_index::authority_of(row);
+    let load = match authority {
+        "operator" | "chat_attested" => "session rules load this row".to_string(),
+        "agent" | "role" => {
+            "session rules do not load this row (agent lane; gates may still read it)".to_string()
+        }
+        "beastmode" => {
+            "session rules do not load this row (grant lane; gates may still read it)".to_string()
+        }
+        _ => "session rules do not load this row (unattributed lane)".to_string(),
+    };
+    format!("decide: reach {scope}; {load}.")
 }
 
 /// The role-lane refusal: no live team of the caller covers the subject.
@@ -1627,10 +1721,26 @@ fn resolve_session_transcript(session: &str, harness: &str) -> Option<std::path:
 /// The write-site fold: capture the caller's session provenance and stamp it
 /// onto the row's data. A named helper so the write test pins the insertion
 /// directly, without driving the whole door and its store machinery.
+///
+/// The `turn_excerpt` quote survives only on the user lanes (operator,
+/// chat_attested): those rows answer a user turn, so the quote is the
+/// user's words behind the ruling. A role or agent row answers a dispatch
+/// or the lead's own ruling, and the newest user turn is usually
+/// unrelated; quoting it read as the user speaking. The turn pointer and
+/// timestamp stay on every row: which turn was last is factual provenance.
 fn apply_session_provenance(data: &mut Value, id: DecideIdentity) {
-    let Some(sp) = capture_session_provenance(id) else {
+    let Some(mut sp) = capture_session_provenance(id) else {
         return;
     };
+    let user_lane = matches!(
+        crate::decision_index::authority_of(data),
+        "operator" | "chat_attested"
+    );
+    if !user_lane {
+        if let Some(map) = sp.as_object_mut() {
+            map.remove("turn_excerpt");
+        }
+    }
     if let Some(map) = data.as_object_mut() {
         map.insert("session_provenance".into(), sp);
     }
@@ -1867,6 +1977,162 @@ mod tests {
             2
         );
         assert!(all_decision_rows().is_err(), "no store was ever created");
+    }
+
+    #[test]
+    fn the_hold_text_gate_admits_only_the_phrase_and_a_release() {
+        // Admit arm: the phrase, with or without a rationale.
+        for text in [
+            "do not merge this pull request",
+            "do not merge this pull request: docs gate first",
+            "do not merge this pull request. The docs gate reads the #NNN form.",
+        ] {
+            assert!(
+                hold_text_gate("pr-hold:o/r#8", text).is_ok(),
+                "the phrase records: {text}"
+            );
+        }
+        // Admit arm: the release forms the effects path acts on.
+        for text in [
+            "release",
+            "release: docs gate green",
+            "release with two rounds",
+        ] {
+            assert!(
+                hold_text_gate("pr-hold:o/r#8", text).is_ok(),
+                "a release records: {text}"
+            );
+        }
+        // Pass-through arm: subjects outside the hold door gate nothing.
+        assert!(hold_text_gate("release:fno-version", "anything goes").is_ok());
+        // Refuse arm: near spellings and prose, each naming the phrase.
+        for text in [
+            "do not merge this docs pull request",
+            "hold",
+            "keep it held",
+            "released",
+        ] {
+            let refusal =
+                hold_text_gate("pr-hold:o/r#8", text).expect("a dead hold wording refuses");
+            assert!(
+                refusal.contains("do not merge this pull request"),
+                "the refusal names the phrase: {refusal}"
+            );
+            assert!(refusal.contains("Nothing was recorded"), "{refusal}");
+        }
+    }
+
+    #[test]
+    fn a_pr_hold_ruling_refuses_text_that_is_neither_the_phrase_nor_a_release() {
+        let env = DoorEnv::new();
+        crate::paths::pin_test_claims_root(env.0.path());
+        let before = all_decision_rows().map(|r| r.0.len()).unwrap_or(0);
+        let code = decide_door_write(
+            decide_argv(&[
+                "pr-hold:fixture/repo#1",
+                "do not merge this docs pull request",
+                "--authority",
+                "agent",
+                "--why",
+                "hold gate fixture",
+            ]),
+            DecideIdentity::Forced(Some("cl-hold1")),
+        );
+        assert_eq!(code, 3);
+        let after = all_decision_rows().map(|r| r.0.len()).unwrap_or(0);
+        assert_eq!(after, before, "nothing recorded on a refused hold text");
+    }
+
+    #[test]
+    fn the_reach_stamp_pins_door_subjects_and_follows_the_flag_or_the_derivation() {
+        // A hold binds by repo and number, whatever the recorder's cwd.
+        assert_eq!(
+            decide_reach("pr-hold:o/r#8", None, Some("project:fno".to_string())),
+            Some("global".to_string())
+        );
+        // An explicit flag never un-pins a door subject.
+        assert_eq!(
+            decide_reach("merge-freeze:o/r#8@abc", Some("project:x"), None),
+            Some("global".to_string())
+        );
+        // Fleet subjects bind every project; the stamp makes the reader's
+        // default explicit.
+        assert_eq!(
+            decide_reach("model-tier", None, None),
+            Some("global".to_string())
+        );
+        // Elsewhere the flag wins over derivation, and a project that
+        // resolves nowhere stamps nothing.
+        assert_eq!(
+            decide_reach(
+                "release:fno",
+                Some("project:fnh"),
+                Some("project:fno".to_string())
+            ),
+            Some("project:fnh".to_string())
+        );
+        assert_eq!(
+            decide_reach("release:fno", None, Some("project:fnh".to_string())),
+            Some("project:fnh".to_string())
+        );
+        assert_eq!(decide_reach("release:fno", None, None), None);
+    }
+
+    #[test]
+    fn a_reach_flag_stamps_the_row_the_caller_names() {
+        let env = DoorEnv::new();
+        crate::paths::pin_test_claims_root(env.0.path());
+        let code = decide_door_write(
+            decide_argv(&[
+                "reach-topic",
+                "The ruling text",
+                "--authority",
+                "agent",
+                "--why",
+                "reach fixture",
+                "--reach",
+                "global",
+            ]),
+            DecideIdentity::Forced(Some("cl-reach1")),
+        );
+        assert_eq!(code, 0);
+        let (rows, _) = all_decision_rows().expect("reads");
+        let row = rows
+            .iter()
+            .find(|r| decision_row_str(r, "subject") == "reach-topic")
+            .expect("the row landed");
+        assert_eq!(crate::decision_index::row_scope(row), "global");
+    }
+
+    #[test]
+    fn a_reach_flag_that_is_not_a_reach_refuses_at_parse_time() {
+        let argv: Vec<String> = ["--reach", "banana"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(parse_decide_door(&argv).is_err());
+        let argv: Vec<String> = ["--reach", "project:fnh"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(parse_decide_door(&argv).is_ok());
+    }
+
+    #[test]
+    fn the_receipt_line_states_reach_and_whether_sessions_load_the_row() {
+        let role_row = json!({"authority_source": "role", "reach": "project:fno"});
+        let line = reach_receipt_line(&role_row);
+        assert!(line.contains("reach project:fno"), "{line}");
+        assert!(
+            line.contains("session rules do not load this row"),
+            "{line}"
+        );
+        assert!(line.contains("agent lane"), "{line}");
+        let operator_row = json!({"authority_source": "operator", "reach": "global"});
+        let line = reach_receipt_line(&operator_row);
+        assert!(line.contains("reach global"), "{line}");
+        assert!(line.contains("session rules load this row"), "{line}");
+        assert!(!line.contains("do not load"), "{line}");
     }
 
     #[test]
@@ -2256,9 +2522,11 @@ mod tests {
     /// path, and the user turn the row answers (the last real user turn
     /// the transcript held when the row landed). The seeded identity drives
     /// the capture deterministically; the write fold stamps the row's data
-    /// map directly, so the pin exercises no door or store machinery.
+    /// map directly, so the pin exercises no door or store machinery. The
+    /// quote follows the user lanes: an operator row quotes the turn, a
+    /// role row keeps the pointer without the quote.
     #[test]
-    fn a_seeded_session_records_the_session_provenance() {
+    fn the_session_provenance_quote_follows_the_user_lane() {
         let _env_lock = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -2282,14 +2550,17 @@ mod tests {
         .expect("writes");
         let _config =
             crate::claims::EnvVarGuard::set("CLAUDE_CONFIG_DIR", config.path().to_str().unwrap());
-        let mut data = json!({
+        let mut operator_data = json!({
             "decision_id": "d-prov0001",
             "subject": "x-provnode",
             "decided_by": "4d2c3d68",
-            "authority_source": "agent",
+            "authority_source": "operator",
         });
-        apply_session_provenance(&mut data, DecideIdentity::Seeded(session, "claude"));
-        let sp = data
+        apply_session_provenance(
+            &mut operator_data,
+            DecideIdentity::Seeded(session, "claude"),
+        );
+        let sp = operator_data
             .pointer("/session_provenance")
             .expect("the row carries session provenance");
         assert_eq!(sp["session_id"], json!(session));
@@ -2302,6 +2573,25 @@ mod tests {
             json!("the docs gate reads the #NNN form")
         );
         assert_eq!(sp["turn_ts"], json!("2026-11-20T10:01:00.000Z"));
+        // The role lane keeps the pointer and drops the quote: the newest
+        // user turn is usually unrelated to a lead's own ruling.
+        let mut role_data = json!({
+            "decision_id": "d-prov0002",
+            "subject": "x-provnode",
+            "decided_by": "4d2c3d68",
+            "authority_source": "role",
+        });
+        apply_session_provenance(&mut role_data, DecideIdentity::Seeded(session, "claude"));
+        let sp = role_data
+            .pointer("/session_provenance")
+            .expect("the row carries session provenance");
+        assert_eq!(sp["turn_id"], json!("u-ruling"));
+        assert_eq!(sp["turn_ts"], json!("2026-11-20T10:01:00.000Z"));
+        assert!(
+            sp.as_object()
+                .is_none_or(|m| !m.contains_key("turn_excerpt")),
+            "a role row quotes no user turn: {sp}"
+        );
     }
 
     /// An injected identity (the test seam, and any caller with no session)
