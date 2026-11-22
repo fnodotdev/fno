@@ -1385,6 +1385,18 @@ pub struct GateInput {
     pub background_job: bool,
 }
 
+/// The spawn's node from its params, trimmed. An absent or blank key answers
+/// None: the overlay writes `""` when no node is bound, and a blank node in
+/// the open-PR branch scan would match every hyphenated head.
+pub(crate) fn gate_node_from_params(params: &Value) -> Option<String> {
+    params
+        .get("node")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|node| !node.is_empty())
+        .map(str::to_string)
+}
+
 pub type NodeOccupancy = Result<BTreeMap<String, Vec<String>>, String>;
 
 const REVIEW_SESSION_REMEDY: &str = "run the review in the session that did the work: \
@@ -3159,6 +3171,32 @@ pub fn qos_demote_bg_worker(config_cwd: &Path, job_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gate_node_from_params_reads_a_set_node_and_drops_a_blank_one() {
+        assert_eq!(gate_node_from_params(&serde_json::json!({})), None);
+        assert_eq!(
+            gate_node_from_params(&serde_json::json!({"node": ""})),
+            None
+        );
+        assert_eq!(
+            gate_node_from_params(&serde_json::json!({"node": "  "})),
+            None
+        );
+        assert_eq!(
+            gate_node_from_params(&serde_json::json!({"node": 5})),
+            None,
+            "a non-string node is not a node"
+        );
+        assert_eq!(
+            gate_node_from_params(&serde_json::json!({"node": "x-a87c"})),
+            Some("x-a87c".to_string())
+        );
+        assert_eq!(
+            gate_node_from_params(&serde_json::json!({"node": " x-7604 "})),
+            Some("x-7604".to_string())
+        );
+    }
 
     #[test]
     fn a_spawn_preflight_names_a_missing_cwd_over_the_binary() {
