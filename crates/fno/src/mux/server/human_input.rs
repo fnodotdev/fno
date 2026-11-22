@@ -1107,7 +1107,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The app-chat replay (x-44d6): a draft hint arms the pane, a live
+    /// The app-chat replay: a draft hint arms the pane, a live
     /// mail send refuses at the guard (queues durable, types nothing), and
     /// the app's own Enter - riding PaneInput, whose Ok arm clears the
     /// latch - releases it.
