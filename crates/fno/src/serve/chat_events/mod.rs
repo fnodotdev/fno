@@ -76,7 +76,7 @@ pub(crate) struct PastedTurn {
 #[derive(Debug, PartialEq)]
 pub(crate) struct PastedImage {
     pub(crate) number: u64,
-    /// `None` for an image the harness kept only as a URL.
+    /// `None` for an image the harness kept only as a URL or a path.
     pub(crate) base64: Option<String>,
 }
 
@@ -126,7 +126,8 @@ pub(crate) fn pasted_turns(
                     number: turn.images.len() as u64 + 1,
                     base64: match image {
                         ImageRef::Inline { data, .. } => data,
-                        ImageRef::Url { .. } => None,
+                        // A transcript never picks a file for the mux to read.
+                        ImageRef::Url { .. } | ImageRef::Path { .. } => None,
                     },
                 }),
                 ContentPart::File { .. } => {}
