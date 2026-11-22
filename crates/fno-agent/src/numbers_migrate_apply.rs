@@ -740,6 +740,27 @@ fn mint_fresh(graph_db: &Path, keys: &[String]) -> Result<(), MigrateError> {
     }
 }
 
+/// The hex-to-number pairs a previous apply wrote into `fno_id_map`. A run
+/// whose own map comes up empty still needs them: the first apply retires
+/// every hex this machine holds, so a second project's apply would otherwise
+/// return before its vault step and leave that project's pages on their
+/// hashes for good.
+fn stored_map(db: &Path) -> Result<BTreeMap<String, String>, MigrateError> {
+    let conn = Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let present: bool = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'fno_id_map')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !present {
+        return Ok(BTreeMap::new());
+    }
+    let mut stmt = conn.prepare("SELECT hex, label FROM fno_id_map")?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    rows.collect::<Result<BTreeMap<_, _>, _>>()
+        .map_err(MigrateError::from)
+}
+
 /// `--apply [--json]`.
 pub(crate) fn apply(json_out: bool) -> i32 {
     let graph = crate::graph_get::default_graph_path();
@@ -774,6 +795,21 @@ pub(crate) fn apply(json_out: bool) -> i32 {
     if map.refuses() || !map.fresh.is_empty() {
         eprintln!("migrate ids: the map refuses; run --dry-run for the keys it cannot carry");
         return 1;
+    }
+    // The pairs a previous apply stored join the map, so this run also
+    // rewrites what still cites a retired hex: a second project's apply
+    // carries nothing fresh, and the stores the map already covered read
+    // back unchanged.
+    match stored_map(&graph_db) {
+        Ok(stored) => {
+            for (hex, label) in stored {
+                map.mapped.entry(hex).or_insert(label);
+            }
+        }
+        Err(error) => {
+            eprintln!("migrate ids: {error}");
+            return 1;
+        }
     }
     if map.mapped.is_empty() {
         println!("migrate ids: no hex key is left to retire");
@@ -1288,5 +1324,112 @@ mod tests {
             "written after apply"
         );
         assert!(moved.exists());
+    }
+
+    /// The child of the two-project test: the real command twice, each run
+    /// against the seeded store its env names, never a live one. The parent
+    /// hands over project-a's env and cwd; the second run moves to the
+    /// sibling project the way an operator would.
+    #[test]
+    #[ignore = "spawned with a seeded FNO_HOME by the two-project vault test"]
+    fn migrate_ids_two_project_apply_child() {
+        assert_eq!(super::super::run(&["--apply".to_string()]), 0);
+        // The backup dir stamps at second resolution; keep the two applies
+        // in distinct dirs.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let sibling = std::env::current_dir()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("project-b");
+        std::env::set_var("FNO_CONFIG", sibling.join(".fno/config.toml"));
+        std::env::set_current_dir(&sibling).unwrap();
+        assert_eq!(super::super::run(&["--apply".to_string()]), 0);
+    }
+
+    #[test]
+    fn a_second_apply_from_another_project_rewrites_that_projects_vault() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("fno-home");
+        let (proj_a, proj_b) = (root.path().join("project-a"), root.path().join("project-b"));
+        let (vault_a, vault_b) = (root.path().join("vault-a"), root.path().join("vault-b"));
+        for (proj, vault) in [(&proj_a, &vault_a), (&proj_b, &vault_b)] {
+            std::fs::create_dir_all(proj.join(".fno")).unwrap();
+            std::fs::create_dir_all(vault).unwrap();
+            std::fs::write(
+                proj.join(".fno/config.toml"),
+                format!(
+                    "[obsidian]\nenabled = true\nvault = \"{}\"\n",
+                    vault.display()
+                ),
+            )
+            .unwrap();
+        }
+        let conn = super::super::super::open_write_at(&home.join("db").join("graph.db")).unwrap();
+        for key in ["d-0000feed", "q-0000beef"] {
+            mint_local(&conn, key, "local", "h").unwrap();
+        }
+        drop(conn);
+        let keyed_page = "ruled by q-0000beef@mac2, see d-0000feed\n";
+        std::fs::write(vault_a.join("q-0000beef.md"), keyed_page).unwrap();
+        std::fs::write(vault_a.join("ruling.md"), "d-0000feed holds it\n").unwrap();
+        std::fs::write(vault_b.join("q-0000beef.md"), keyed_page).unwrap();
+        std::fs::write(vault_b.join("notes.md"), "see d-0000feed for the ruling\n").unwrap();
+
+        // The child carries its own FNO_HOME, HOME and FNO_CONFIG, so no
+        // ambient store is ever a candidate.
+        let exe = std::env::current_exe().unwrap();
+        let status = std::process::Command::new(&exe)
+            .args([
+                "--exact",
+                "migrate_ids_two_project_apply_child",
+                "--ignored",
+            ])
+            .env("FNO_HOME", &home)
+            .env("HOME", root.path())
+            .env("FNO_CONFIG", proj_a.join(".fno/config.toml"))
+            .env_remove("FNO_STATE_DIR")
+            .current_dir(&proj_a)
+            .status()
+            .unwrap();
+        assert!(status.success(), "the two-project child failed");
+
+        let db = home.join("db").join("graph.db");
+        let stored = stored_map(&db).unwrap();
+        assert_eq!(stored.len(), 2, "{stored:?}");
+        for (vault, plain) in [(&vault_a, "ruling.md"), (&vault_b, "notes.md")] {
+            let d_label = &stored["d-0000feed"];
+            let q_label = &stored["q-0000beef"];
+            let moved = vault.join(format!("{q_label}.md"));
+            let page = std::fs::read_to_string(&moved).unwrap();
+            assert!(page.contains(d_label) && page.contains(q_label), "{page:?}");
+            assert!(!page.contains("d-0000feed") && !page.contains("q-0000beef"));
+            assert!(!vault.join("q-0000beef.md").exists());
+            let other = std::fs::read_to_string(vault.join(plain)).unwrap();
+            assert!(other.contains(d_label), "{other:?}");
+            assert!(!other.contains("d-0000feed"));
+        }
+
+        // The second run's undo log: one file entry per changed page.
+        let backups = home.join("db").join("backups");
+        let mut dirs: Vec<std::path::PathBuf> = std::fs::read_dir(&backups)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .collect();
+        dirs.sort();
+        assert_eq!(dirs.len(), 2, "one backup dir per apply: {dirs:?}");
+        let undo = std::fs::read_to_string(dirs[1].join("undo.jsonl")).unwrap();
+        let entries: Vec<Value> = undo
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(entries.len(), 2, "two pages changed: {undo:?}");
+        for entry in &entries {
+            assert_eq!(entry["op"].as_str(), Some("file"), "{entry:?}");
+            let to = PathBuf::from(entry["to"].as_str().unwrap());
+            assert!(to.starts_with(&vault_b), "{to:?}");
+            assert!(to.is_file(), "{to:?}");
+        }
     }
 }
