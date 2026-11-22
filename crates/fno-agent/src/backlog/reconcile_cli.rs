@@ -3413,9 +3413,17 @@ mod tests {
             &mut stderr_log,
         );
         let result = result.into_inner();
-        assert!(result.actually_closed.is_empty(), "{result:?}");
-        assert!(result.reparented.is_empty(), "{result:?}");
-        assert_eq!(result.held_recheck.len(), 1, "{result:?}");
+        assert!(
+            result.actually_closed.is_empty(),
+            "the hold path closed a node: {}",
+            result.actually_closed.len()
+        );
+        assert!(
+            result.reparented.is_empty(),
+            "the hold path moved a child: {:?}",
+            result.reparented
+        );
+        assert_eq!(result.held_recheck.len(), 1, "{:?}", result.held_recheck);
         assert_eq!(result.held_recheck[0].2, "epic_children_open");
         assert!(entries[0]["completed_at"].is_null());
         for entry in entries.iter().skip(1) {
@@ -3453,8 +3461,13 @@ mod tests {
             &mut stderr_log,
         );
         let result = result.into_inner();
-        assert_eq!(result.actually_closed.len(), 1, "{result:?}");
-        assert!(result.held_recheck.is_empty(), "{result:?}");
+        assert_eq!(
+            result.actually_closed.len(),
+            1,
+            "closed {} node(s) once the children were done",
+            result.actually_closed.len()
+        );
+        assert!(result.held_recheck.is_empty(), "{:?}", result.held_recheck);
         assert!(!entries[0]["completed_at"].is_null());
         assert_eq!(entries[0]["merge_status"], "merged");
     }
