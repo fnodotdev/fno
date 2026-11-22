@@ -1265,7 +1265,8 @@ async fn refresh_hq(st: AppState) {
     st.hq
         .board()
         .await
-        .record(fleet, questions, requests, &inputs, measured_at, &agents);
+        .record(fleet, questions, &inputs, measured_at, &agents);
+    st.hq.board().await.record_requests(requests);
 }
 
 /// `GET /backlog/model.json`: the whole board as JSON behind the token.
@@ -3044,14 +3045,12 @@ console.log("backlog page helpers: 18 cases ok");
         // A recorded, spent first read: the route spawns no fleet read.
         let fleet = serde_json::json!({"machines": [{"host": "u", "sessions": []}]});
         let none = backlog_model::Inputs::default();
-        hq.board().await.record(
-            Ok(fleet),
-            Err("x".into()),
-            crate::requests_model::RequestsRead::Failed("gone".into()),
-            &none,
-            1,
-            &[],
-        );
+        hq.board()
+            .await
+            .record(Ok(fleet), Err("x".into()), &none, 1, &[]);
+        hq.board()
+            .await
+            .record_requests(crate::requests_model::RequestsRead::Failed("gone".into()));
         hq.first.set(()).unwrap();
         let state = AppState {
             tx,
@@ -3120,14 +3119,12 @@ console.log("backlog page helpers: 18 cases ok");
         let hq = Arc::new(crate::web_hq::HqCache::default());
         let fleet = serde_json::json!({"machines": [{"host": "u", "sessions": []}]});
         let none = backlog_model::Inputs::default();
-        hq.board().await.record(
-            Ok(fleet),
-            Err("x".into()),
-            crate::requests_model::RequestsRead::Rows(Vec::new()),
-            &none,
-            1,
-            &[],
-        );
+        hq.board()
+            .await
+            .record(Ok(fleet), Err("x".into()), &none, 1, &[]);
+        hq.board()
+            .await
+            .record_requests(crate::requests_model::RequestsRead::Rows(Vec::new()));
         hq.first.set(()).unwrap();
         let state = AppState {
             tx,

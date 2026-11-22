@@ -108,7 +108,6 @@ impl Board {
         &mut self,
         fleet: Result<Value, String>,
         questions: Result<QuestionsFold, String>,
-        requests: crate::requests_model::RequestsRead,
         backlog: &Inputs,
         measured_at: u64,
         agents: &[crate::proto::AgentRow],
@@ -143,6 +142,13 @@ impl Board {
                 (self.next, self.next_error) = (next_nodes(backlog), None);
             }
         }
+        self.read_at = Some(now);
+    }
+
+    /// Store the requests fold of one refresh. A failed requests read keeps
+    /// the last good rows, matching the fleet and question reads. Called
+    /// after record() so main's callers keep the five-argument shape.
+    pub fn record_requests(&mut self, requests: crate::requests_model::RequestsRead) {
         match requests {
             crate::requests_model::RequestsRead::Rows(rows) => {
                 self.requests = rows;
@@ -152,7 +158,6 @@ impl Board {
                 self.requests_error = Some(reason)
             }
         }
-        self.read_at = Some(now);
     }
 
     /// The last good fleet fold, if any read has succeeded.
@@ -508,14 +513,11 @@ mod tests {
             rows: crate::node_row::rows_from_values(rows),
             ..Inputs::default()
         };
-        cache.board().await.record(
-            fleet,
-            qs,
-            crate::requests_model::RequestsRead::Rows(Vec::new()),
-            &backlog,
-            at,
-            agents,
-        );
+        cache.board().await.record(fleet, qs, &backlog, at, agents);
+        cache
+            .board()
+            .await
+            .record_requests(crate::requests_model::RequestsRead::Rows(Vec::new()));
         cache.model().await
     }
 
@@ -592,14 +594,14 @@ mod tests {
             rows_error: Some("graph locked".into()),
             ..Inputs::default()
         };
-        cache.board().await.record(
-            fail("x"),
-            Err("x".into()),
-            crate::requests_model::RequestsRead::Rows(Vec::new()),
-            &locked,
-            300,
-            &[],
-        );
+        cache
+            .board()
+            .await
+            .record(fail("x"), Err("x".into()), &locked, 300, &[]);
+        cache
+            .board()
+            .await
+            .record_requests(crate::requests_model::RequestsRead::Rows(Vec::new()));
         let m = cache.model().await;
         assert_eq!(m["waiting"]["prs"].as_array().map(Vec::len), Some(2));
         assert_eq!(m["waiting"]["prs_error"], "graph locked");
@@ -623,14 +625,14 @@ mod tests {
                 .collect(),
             ..Inputs::default()
         };
-        cache.board().await.record(
-            Ok(two_machines()),
-            Ok(questions(&[None])),
-            crate::requests_model::RequestsRead::Rows(Vec::new()),
-            &backlog,
-            1,
-            &[],
-        );
+        cache
+            .board()
+            .await
+            .record(Ok(two_machines()), Ok(questions(&[None])), &backlog, 1, &[]);
+        cache
+            .board()
+            .await
+            .record_requests(crate::requests_model::RequestsRead::Rows(Vec::new()));
         let m = cache.model().await;
         assert_eq!(
             m.pointer("/waiting/next"),
@@ -650,26 +652,26 @@ mod tests {
             rows: crate::node_row::rows_from_values(rows),
             ..Inputs::default()
         };
-        cache.board().await.record(
-            Ok(two_machines()),
-            Ok(questions(&[])),
-            crate::requests_model::RequestsRead::Rows(Vec::new()),
-            &good,
-            1,
-            &[],
-        );
+        cache
+            .board()
+            .await
+            .record(Ok(two_machines()), Ok(questions(&[])), &good, 1, &[]);
+        cache
+            .board()
+            .await
+            .record_requests(crate::requests_model::RequestsRead::Rows(Vec::new()));
         let locked = Inputs {
             rows_error: Some("graph locked".into()),
             ..Inputs::default()
         };
-        cache.board().await.record(
-            Err("x".into()),
-            Err("x".into()),
-            crate::requests_model::RequestsRead::Rows(Vec::new()),
-            &locked,
-            2,
-            &[],
-        );
+        cache
+            .board()
+            .await
+            .record(Err("x".into()), Err("x".into()), &locked, 2, &[]);
+        cache
+            .board()
+            .await
+            .record_requests(crate::requests_model::RequestsRead::Rows(Vec::new()));
         let board = cache.board().await;
         assert_eq!(board.next_error(), Some("graph locked"));
         let ids: Vec<&str> = board
@@ -700,11 +702,11 @@ mod tests {
                 item("q-old", "2026-11-17T09:00:00Z"),
                 item("q-new", "2026-11-19T09:00:00Z"),
             ])),
-            crate::requests_model::RequestsRead::Rows(Vec::new()),
             &Inputs::default(),
             1,
             &[],
         );
+        board.record_requests(crate::requests_model::RequestsRead::Rows(Vec::new()));
         let ids: Vec<&str> = board.answered().iter().map(|a| a.id.as_str()).collect();
         assert_eq!(ids, ["q-new", "q-old"]);
         // A failed question read keeps the last good answered list beside the
@@ -712,11 +714,11 @@ mod tests {
         board.record(
             Err("no fleet".into()),
             Err("needs timed out".into()),
-            crate::requests_model::RequestsRead::Rows(Vec::new()),
             &Inputs::default(),
             2,
             &[],
         );
+        board.record_requests(crate::requests_model::RequestsRead::Rows(Vec::new()));
         assert_eq!(board.answered().len(), 2);
         assert_eq!(board.questions_error(), Some("needs timed out"));
     }
@@ -731,11 +733,11 @@ mod tests {
         board.record(
             Err("no fleet".into()),
             Err("q".into()),
-            crate::requests_model::RequestsRead::Rows(good),
             &Inputs::default(),
             1,
             &[],
         );
+        board.record_requests(crate::requests_model::RequestsRead::Rows(good));
         assert!(board.requests_error().is_none());
         assert_eq!(
             board
@@ -748,11 +750,13 @@ mod tests {
         board.record(
             Err("no fleet".into()),
             Err("q".into()),
-            crate::requests_model::RequestsRead::Failed("requests read timed out after 30s".into()),
             &Inputs::default(),
             2,
             &[],
         );
+        board.record_requests(crate::requests_model::RequestsRead::Failed(
+            "requests read timed out after 30s".into(),
+        ));
         let m = board.model();
         assert_eq!(
             m.pointer("/requests")
