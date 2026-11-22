@@ -39,8 +39,8 @@ pub(crate) struct Waiting {
     told: Vec<String>,
     /// Grants a macOS grant screen names as missing; no key answers it.
     pub grants: Vec<&'static str>,
-    /// The numbered menu the screen shows, so the line names what an answer presses.
-    pub menu: Option<crate::thread_dialog::Menu>,
+    /// The permission menu the screen shows, so the line names what is asked.
+    pub menu: Option<crate::manifest::AnswerablePrompt>,
 }
 
 impl Waiting {
@@ -53,7 +53,7 @@ impl Waiting {
             {
                 self.grants = missing;
             } else {
-                self.menu = crate::thread_dialog::parse_menu(&screen);
+                self.menu = crate::thread_dialog::read_menu(&screen);
             }
         }
     }
@@ -79,16 +79,19 @@ impl Waiting {
             );
         }
         let shown = match &self.menu {
-            Some(m) => format!(" asks: {} | options: {}", m.asked(), m.numbered()),
+            Some(m) => format!(
+                " asks {} with options {}",
+                crate::thread_dialog::asked_line(m).unwrap_or_else(|| "'(no command line)'".into()),
+                crate::thread_dialog::numbered(m)
+            ),
             None => String::new(),
         };
         format!(
-            "WAITING ON APPROVAL: {} (claude thread {}) {} for {}m{shown} - answer with: fno agent ask {} --answer allow_once|allow_always|deny, which presses the number of the matching option and refuses when none matches (TTY form: claude attach {})",
+            "WAITING ON APPROVAL: {} (claude thread {}) {} for {}m{shown} - a person answers at: claude attach {}",
             self.name,
             self.short_id,
             self.waiting_for,
             self.minutes(now),
-            self.short_id,
             self.short_id
         )
     }
