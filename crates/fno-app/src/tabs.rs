@@ -7,12 +7,14 @@
 use gpui::{div, prelude::*, px, rgb, Context, Div, ElementId, Stateful};
 
 use super::link::Layout;
+use super::mux_modes;
 use super::ui::{self, Role};
 use super::window::{Action, MainView, Root};
 use fno::proto::{Command, TabMeta};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tab {
+    pub id: u64,
     pub label: String,
     pub active: bool,
     pub action: Action,
@@ -47,6 +49,7 @@ pub fn strip(layout: &Layout) -> Vec<Tab> {
         .iter()
         .enumerate()
         .map(|(i, t)| Tab {
+            id: t.id,
             label: label(t, i, layout.focus),
             active: i == squad.active_tab,
             action: Action::Send(Command::SelectTab(t.id)),
@@ -105,6 +108,29 @@ fn tab(
 ) -> Stateful<Div> {
     let p = root.palette;
     let action = t.action;
+    let tab_id = t.id;
+    // The rename field replaces the tab's own cell, so its text keeps the
+    // tab's size and sits on the raised fill at primary contrast.
+    if let Some(r) = root
+        .rename
+        .as_ref()
+        .filter(|r| r.inline && r.tab() == tab_id)
+    {
+        return div().id(id).h_full().px_1().flex().items_center().child(
+            div()
+                .flex()
+                .items_center()
+                .px_2()
+                .py(px(1.0))
+                .rounded(px(4.0))
+                .border_1()
+                .border_color(rgb(p.accent))
+                .bg(rgb(p.raised))
+                .text_color(rgb(p.fg))
+                .whitespace_nowrap()
+                .child(format!("{}▏", r.field.text())),
+        );
+    }
     div()
         .id(id)
         .relative()
@@ -117,7 +143,13 @@ fn tab(
         .cursor_pointer()
         .text_color(rgb(if t.active { p.fg } else { p.muted }))
         .hover(move |s| s.text_color(rgb(p.fg)))
-        .on_click(cx.listener(move |root, _, _, cx| root.act(action.clone(), cx)))
+        .on_click(cx.listener(move |root, ev: &gpui::ClickEvent, _, cx| {
+            if ev.click_count() >= 2 {
+                root.rename_tab(tab_id, cx);
+            } else {
+                root.act(action.clone(), cx);
+            }
+        }))
         .child(
             div()
                 .flex()
@@ -194,6 +226,10 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
     for (i, v) in VIEWS.into_iter().enumerate() {
         modes = modes.child(mode(i, v, root, cx));
     }
+    let waiting = mux_modes::waiting_count(
+        &root.layout.agents,
+        fno::app_api::digest_overlay::now_secs(),
+    );
     div()
         .flex()
         .flex_row()
@@ -207,7 +243,30 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
         .child(here)
         .child(tabs)
         .child(div().flex_1())
+        .when(waiting > 0, |bar| {
+            bar.child(waiting_pill(waiting, root, cx))
+        })
         .child(modes)
+}
+
+/// The next-waiting pill: shown only while an agent waits on the user. A
+/// click walks to the next waiting agent, the way prefix+Z does.
+fn waiting_pill(n: usize, root: &Root, cx: &mut Context<Root>) -> Stateful<Div> {
+    let p = root.palette;
+    div()
+        .id("next-waiting")
+        .flex_none()
+        .px_2()
+        .py(px(1.0))
+        .rounded(px(10.0))
+        .border_1()
+        .border_color(rgb(p.warn))
+        .text_color(rgb(p.warn))
+        .whitespace_nowrap()
+        .cursor_pointer()
+        .hover(move |s| s.bg(rgb(p.hover)))
+        .on_click(cx.listener(|root, _, _, cx| root.focus_next_waiting(cx)))
+        .child(format!("{n} waiting ▸"))
 }
 
 #[cfg(test)]

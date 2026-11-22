@@ -50,6 +50,45 @@ pub(super) fn scroll_step(k: &Key, pane: u64, rows: i32) -> Step {
     }
 }
 
+/// Keyboard history scroll with no mode held. Shift-pgup and shift-pgdn
+/// page, and cmd-up and cmd-down jump to the oldest line and back to live.
+/// A bare pgup, pgdn or End scrolls only while the pane already shows
+/// history, so a full-screen program keeps those keys on the live screen.
+pub(super) fn history_step(k: &Key, pane: u64, rows: i32, scrolled: bool) -> Option<ClientMsg> {
+    if k.ctrl || k.alt {
+        return None;
+    }
+    let rows = rows.max(1);
+    let by = |delta| Some(ClientMsg::PaneScroll { pane, delta });
+    let edge = |top| Some(ClientMsg::PaneScrollEdge { pane, top });
+    match (k.cmd, k.shift, k.key) {
+        (true, false, "up") => edge(true),
+        (true, false, "down") => edge(false),
+        (false, true, "pageup") => by(rows),
+        (false, true, "pagedown") => by(-rows),
+        (false, false, "pageup") if scrolled => by(rows),
+        (false, false, "pagedown") if scrolled => by(-rows),
+        (false, false, "end") if scrolled => edge(false),
+        _ => None,
+    }
+}
+
+/// The pill that sits over a pane showing history: a click, End or cmd-down
+/// goes back to the live screen.
+pub(super) fn back_to_live(p: &Palette, cx: &mut gpui::Context<Root>) -> gpui::Stateful<Div> {
+    float(p)
+        .id("back-to-live")
+        .absolute()
+        .bottom(px(8.0))
+        .right(px(12.0))
+        .text_color(rgb(p.fg))
+        .cursor_pointer()
+        .hover(move |s| s.bg(rgb(p.hover)))
+        .on_click(cx.listener(|root, _, _, cx| root.back_to_live(cx)))
+        .child("↓ Back to live")
+        .child(ui::kbd(format!("End or {}↓", ui::cmd_key()), p))
+}
+
 /// The shared look of the floating one-line bars.
 fn float(p: &Palette) -> Div {
     div()
@@ -82,6 +121,9 @@ pub(super) fn scroll_bar(p: &Palette) -> Div {
 pub(super) struct Rename {
     tab: u64,
     pub field: LineField,
+    /// A double-click on a tab opens the field in the tab itself; the chord
+    /// keeps the floating bar.
+    pub inline: bool,
 }
 
 impl Rename {
@@ -89,11 +131,27 @@ impl Rename {
     pub(super) fn open(layout: &Layout) -> Option<Self> {
         let squad = layout.squads.iter().find(|s| s.id == layout.active_squad)?;
         let tab = squad.tabs.get(squad.active_tab)?;
+        Some(Self::seeded(tab, false))
+    }
+
+    /// The prompt for one tab by id, as a double-click names it.
+    pub(super) fn open_tab(layout: &Layout, id: u64) -> Option<Self> {
+        let squad = layout.squads.iter().find(|s| s.id == layout.active_squad)?;
+        let tab = squad.tabs.iter().find(|t| t.id == id)?;
+        Some(Self::seeded(tab, true))
+    }
+
+    fn seeded(tab: &fno::proto::TabMeta, inline: bool) -> Self {
         let seed = if tab.named { tab.name.as_str() } else { "" };
-        Some(Rename {
+        Rename {
             tab: tab.id,
             field: LineField::seeded(seed, MAX_TAB_NAME),
-        })
+            inline,
+        }
+    }
+
+    pub(super) fn tab(&self) -> u64 {
+        self.tab
     }
 
     /// A blank name is valid: the server reverts the tab to its derived label.
@@ -265,6 +323,15 @@ pub(super) fn next_waiting(
     Some((*pane, (*name).to_string(), at + 1, waiting.len()))
 }
 
+/// How many agents wait on the user, as the title bar's pill counts them.
+pub(super) fn waiting_count(agents: &[AgentRow], now: u64) -> usize {
+    sideline_order(agents, now)
+        .into_iter()
+        .filter(|a| agent_lattice_state(a) == LatticeState::Blocked)
+        .filter(|a| a.pane_id.is_some())
+        .count()
+}
+
 /// The index after `focus`, wrapping; the first when focus is not listed.
 fn cycle_after(panes: &[u64], focus: u64) -> Option<usize> {
     let at = panes.iter().position(|p| *p == focus);
@@ -316,6 +383,41 @@ mod tests {
     }
 
     #[test]
+    fn history_keys_scroll_without_a_mode_and_bare_keys_wait_for_history() {
+        let k = |name, shift, cmd| Key {
+            shift,
+            cmd,
+            ..key(name)
+        };
+        let delta = |m: Option<ClientMsg>| match m {
+            Some(ClientMsg::PaneScroll { delta, .. }) => Some(delta),
+            _ => None,
+        };
+        assert_eq!(
+            delta(history_step(&k("pageup", true, false), 7, 30, false)),
+            Some(30)
+        );
+        assert_eq!(
+            delta(history_step(&k("pagedown", true, false), 7, 30, false)),
+            Some(-30)
+        );
+        assert!(history_step(&k("pageup", false, false), 7, 30, false).is_none());
+        assert_eq!(
+            delta(history_step(&k("pageup", false, false), 7, 30, true)),
+            Some(30)
+        );
+        assert!(matches!(
+            history_step(&k("up", false, true), 7, 30, false),
+            Some(ClientMsg::PaneScrollEdge { top: true, .. })
+        ));
+        assert!(matches!(
+            history_step(&k("end", false, false), 7, 30, true),
+            Some(ClientMsg::PaneScrollEdge { top: false, .. })
+        ));
+        assert!(history_step(&k("end", false, false), 7, 30, false).is_none());
+    }
+
+    #[test]
     fn a_bare_pane_menu_keeps_the_tab_rows_and_digits_pick_a_row() {
         let mut menu = RowMenu::open(&[], 3);
         let labels: Vec<&str> = menu.items.iter().map(|(l, _)| *l).collect();
@@ -333,6 +435,7 @@ mod tests {
         let mut r = Rename {
             tab: 4,
             field: LineField::seeded("api", MAX_TAB_NAME),
+            inline: false,
         };
         r.field.edit("x", Some("x"));
         assert_eq!(

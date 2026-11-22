@@ -899,6 +899,10 @@ impl Root {
 
     pub(super) fn act(&mut self, action: Action, cx: &mut Context<Self>) {
         fno::ui_usage::click("app", click_id(&action));
+        // Any other click ends an in-tab rename without sending it.
+        if self.rename.as_ref().is_some_and(|r| r.inline) {
+            self.rename = None;
+        }
         match action {
             Action::Send(cmd) => {
                 // A click on the board shows what it picked; chat and the
@@ -2052,10 +2056,35 @@ impl Root {
         });
     }
 
+    /// The focused pane back to its live screen.
+    pub(super) fn back_to_live(&mut self, cx: &mut Context<Self>) {
+        let pane = self.layout.focus;
+        self.send(ClientMsg::PaneScrollEdge { pane, top: false });
+        cx.notify();
+    }
+
+    /// Whether the focused pane shows history, from its newest frame.
+    fn focus_scrolled(&self) -> bool {
+        self.frames
+            .get(&self.layout.focus)
+            .is_some_and(|f| f.scroll_offset > 0)
+    }
+
     /// prefix+PgUp: hold the keyboard for the focused pane's shared scroll.
     fn scroll_open(&mut self, cx: &mut Context<Self>) {
         self.scroll_mode = Some(self.layout.focus);
         cx.notify();
+    }
+
+    /// A double-click on a tab: its name becomes a field in the tab itself.
+    pub(super) fn rename_tab(&mut self, tab: u64, cx: &mut Context<Self>) {
+        match mux_modes::Rename::open_tab(&self.layout, tab) {
+            Some(rename) => {
+                self.rename = Some(rename);
+                cx.notify();
+            }
+            None => self.say("that tab is gone".into(), cx),
+        }
     }
 
     /// prefix+`,`: the rename prompt for the active tab.
@@ -2098,7 +2127,7 @@ impl Root {
 
     /// prefix+Z: focus the next pane whose agent waits on the user, wrapping
     /// after the last. Nothing waiting beeps and says so.
-    fn focus_next_waiting(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn focus_next_waiting(&mut self, cx: &mut Context<Self>) {
         let now = fno::app_api::digest_overlay::now_secs();
         match mux_modes::next_waiting(&self.layout.agents, self.layout.focus, now) {
             Some((pane, name, at, of)) => {
@@ -2886,6 +2915,13 @@ impl Root {
         if self.main != MainView::Terminal || keys::is_text(&key) {
             return;
         }
+        let pane = self.layout.focus;
+        let rows = self.frames.get(&pane).map_or(24, |f| i32::from(f.rows));
+        if let Some(msg) = mux_modes::history_step(&key, pane, rows, self.focus_scrolled()) {
+            cx.stop_propagation();
+            self.send(msg);
+            return;
+        }
         if let Some(bytes) = keys::encode(&key, self.modes) {
             cx.stop_propagation();
             self.mux_key(bytes, window, cx);
@@ -3176,8 +3212,12 @@ impl Root {
         });
     }
 
-    fn on_down(&mut self, ev: &MouseDownEvent, window: &mut Window, _cx: &mut Context<Self>) {
+    fn on_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus);
+        if self.rename.as_ref().is_some_and(|r| r.inline) {
+            self.rename = None;
+            cx.notify();
+        }
         let (x, y) = self.local(ev.position);
         // A drag whose release never reached the window is closed first, so
         // the server never keeps a half-made selection.
@@ -3889,11 +3929,20 @@ impl Root {
         .when(self.answer.is_some(), |d| d.child(answer::render(self, cx)))
         .when(self.goto.is_some(), |d| d.child(goto::render(self, cx)))
         .children(self.row_menu.as_ref().map(|m| m.view(self, cx)))
-        .children(self.rename.as_ref().map(|r| r.bar(&self.palette)))
+        .children(
+            self.rename
+                .as_ref()
+                .filter(|r| !r.inline)
+                .map(|r| r.bar(&self.palette)),
+        )
         .children(
             self.scroll_mode
                 .filter(|p| *p == self.layout.focus && self.main == MainView::Terminal)
                 .map(|_| mux_modes::scroll_bar(&self.palette)),
+        )
+        .when(
+            self.scroll_mode.is_none() && self.main == MainView::Terminal && self.focus_scrolled(),
+            |d| d.child(mux_modes::back_to_live(&self.palette, cx)),
         )
         .when(self.settings.is_some(), |d| {
             d.child(settings::render(self, cx))
