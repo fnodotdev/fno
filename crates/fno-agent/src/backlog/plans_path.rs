@@ -119,9 +119,10 @@ fn require_plans_leaf(dir: &Path) -> Result<(), String> {
 /// resolves at all, the hook's rule that a guard which cannot name the
 /// destination must not block the wrong one.
 pub(crate) fn plan_write_refusal(anchor: &Path, target: &Path) -> Option<String> {
+    let primary = plans_content_dir(anchor);
     let mut dirs = Vec::new();
-    if let Some(dir) = plans_content_dir(anchor) {
-        dirs.push(dir);
+    if let Some(dir) = &primary {
+        dirs.push(dir.clone());
     }
     dirs.extend(super::plans_dirs::plans_dirs(anchor));
     if dirs.is_empty() {
@@ -134,7 +135,7 @@ pub(crate) fn plan_write_refusal(anchor: &Path, target: &Path) -> Option<String>
     {
         return None;
     }
-    let home = plans_content_dir(anchor)
+    let home = primary
         .map(|d| d.display().to_string())
         .unwrap_or_else(|| "a configured plans dir".to_string());
     Some(format!(
