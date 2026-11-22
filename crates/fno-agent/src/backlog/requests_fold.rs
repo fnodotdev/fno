@@ -395,9 +395,27 @@ fn judge(
         ),
         "linked" => ("open", format!("node {id} {status} holds the ask")),
         "no_node" => {
-            let answered = turns.iter().rev().find(|t| !t.reply_excerpt.is_empty());
+            // The reply a repeat forgot is one that came before the newest
+            // ask: a reply on the newest turn itself is still fresh, not
+            // forgotten evidence, so it reads open.
+            let answered = turns
+                .split_last()
+                .and_then(|(_newest, earlier)| {
+                    earlier
+                        .iter()
+                        .rev()
+                        .find(|t| !t.reply_excerpt.is_empty())
+                        .map(|t| (t, true))
+                })
+                .or_else(|| {
+                    turns
+                        .iter()
+                        .rev()
+                        .find(|t| !t.reply_excerpt.is_empty())
+                        .map(|t| (t, false))
+                });
             match answered {
-                Some(t) if ask_count > 1 => (
+                Some((t, true)) if ask_count > 1 => (
                     "forgotten",
                     format!(
                         "reply {} in {}, asked again {}",
@@ -406,7 +424,7 @@ fn judge(
                         newest.map(|t| date(&t.ts)).unwrap_or_else(|| "?".into()),
                     ),
                 ),
-                Some(t) => ("open", format!("reply {} in {}", date(&t.ts), t.session_id)),
+                Some((t, _)) => ("open", format!("reply {} in {}", date(&t.ts), t.session_id)),
                 None => (
                     "lost",
                     format!(
@@ -795,6 +813,38 @@ mod tests {
         assert_eq!(
             (forgotten.state, forgotten.outcome),
             ("stalled", "forgotten")
+        );
+        // x-dddd is stalled, so its outcome names the node, not a reply;
+        // the no_node pairing below pins which reply a repeat forgets.
+        let paired = fold(
+            &[
+                {
+                    let mut a = turn("s5", "t5", "2026-11-10T00:00:00Z", "add the quota screen");
+                    a.reply_excerpt = "drafted the screen".into();
+                    a
+                },
+                {
+                    let mut b = turn(
+                        "s6",
+                        "t6",
+                        "2026-11-17T00:00:00Z",
+                        "where is the quota screen",
+                    );
+                    b.reply_excerpt = "rebuilt it today".into();
+                    b
+                },
+            ],
+            &HashMap::new(),
+            &[],
+            now(),
+        );
+        let row = paired.rows.first().unwrap();
+        assert_eq!(row.outcome, "forgotten", "{}", row.outcome_why);
+        assert!(
+            row.outcome_why.contains("reply 2026-11-10")
+                && row.outcome_why.contains("asked again 2026-11-17"),
+            "{}",
+            row.outcome_why
         );
         let lost = by_key
             .values()
