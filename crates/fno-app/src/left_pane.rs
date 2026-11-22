@@ -1033,6 +1033,41 @@ fn note_row(i: usize, text: String, p: &Palette) -> Stateful<Div> {
         )
 }
 
+/// A section header: the title, its state counts, the open-question count,
+/// and the Workspaces header's two buttons.
+#[allow(clippy::too_many_arguments)]
+fn header_row(
+    i: usize,
+    title: &'static str,
+    rollup: &[(LatticeState, usize)],
+    warn: Option<usize>,
+    plus: bool,
+    grouping: Option<GroupBy>,
+    p: &Palette,
+    cx: &mut Context<Root>,
+) -> Stateful<Div> {
+    div().id(i).px_3().child(
+        ui::section(title, p).justify_between().child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(8.0))
+                .children(rollup_counts(rollup, p))
+                .children(warn.map(|n| {
+                    ui::role(div(), ui::Role::Fact, p)
+                        .flex()
+                        .flex_row()
+                        .gap(px(3.0))
+                        .child(div().text_color(rgb(p.warn)).child("◆"))
+                        .child(n.to_string())
+                }))
+                .children(grouping.map(|mode| grouping_button(mode, p, cx)))
+                .when(plus, |right| right.child(workspaces_header_plus(p, cx))),
+        ),
+    )
+}
+
 /// One sidebar row as an element.
 fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> Stateful<Div> {
     let (p, adv) = (grid.p, grid.adv);
@@ -1043,26 +1078,7 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
             warn,
             plus,
             grouping,
-        } => div().id(i).px_3().child(
-            ui::section(title, &p).justify_between().child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(8.0))
-                    .children(rollup_counts(&rollup, &p))
-                    .children(warn.map(|n| {
-                        ui::role(div(), ui::Role::Fact, &p)
-                            .flex()
-                            .flex_row()
-                            .gap(px(3.0))
-                            .child(div().text_color(rgb(p.warn)).child("◆"))
-                            .child(n.to_string())
-                    }))
-                    .children(grouping.map(|mode| grouping_button(mode, &p, cx)))
-                    .when(plus, |right| right.child(workspaces_header_plus(&p, cx))),
-            ),
-        ),
+        } => header_row(i, title, &rollup, warn, plus, grouping, &p, cx),
         Row::Error(e) => div()
             .id(i)
             .px_3()
