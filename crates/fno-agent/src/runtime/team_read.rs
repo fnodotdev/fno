@@ -17,7 +17,7 @@ use crate::client_commands::py_repr_str;
 use crate::state::RegistryEntry;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const TERMINAL_ROW: [&str; 4] = ["exited", "orphaned", "failed", "permanent_dead"];
 const TERMINAL_PLAN: [&str; 2] = ["done", "superseded"];
@@ -372,6 +372,8 @@ pub fn gather_team_at(cwd: Option<&std::path::Path>) -> Value {
         .flat_map(|row| split_scope(row.role_scope.as_deref()))
         .collect();
     let by_id = graph_index_at(cwd, &epic_ids);
+    let past_by_scope =
+        past_leads_by_scope(&crate::paths::AgentsHome::from_env().team_names_json());
     let mut roles: Vec<Value> = Vec::new();
     let mut held: Vec<String> = Vec::new();
     for row in &live {
@@ -399,6 +401,10 @@ pub fn gather_team_at(cwd: Option<&std::path::Path>) -> Value {
         entry.insert("agree".into(), json!(agree));
         entry.insert("reason".into(), json!(reason));
         entry.extend(manifest_limb(scope, row));
+        let past = scope
+            .and_then(|s| past_by_scope.get(crate::territory::canonical_scope(s).as_str()))
+            .map(|list| filter_current_holder(list, &row.name));
+        entry.insert("past_leads".into(), past.unwrap_or_default());
         roles.push(Value::Object(entry));
         if let Some(s) = scope.filter(|s| !s.trim().is_empty()) {
             held.push(s.to_string());
@@ -426,6 +432,50 @@ pub fn gather_team_at(cwd: Option<&std::path::Path>) -> Value {
         },
         "roles": roles,
     })
+}
+
+/// Per-scope past leads from the fleet name history: every `bound` row
+/// except the current holder's own, oldest first, the session id beside
+/// each term. An unreadable history degrades to an empty map - the view
+/// already answers unknowns separately, and a team whose ledger cannot be
+/// read still charts its live team.
+fn past_leads_by_scope(store: &Path) -> HashMap<String, Vec<Value>> {
+    let mut out: HashMap<String, Vec<Value>> = HashMap::new();
+    let Ok(entries) = crate::team_names::history_all(store) else {
+        return out;
+    };
+    let mut seen: std::collections::BTreeSet<(String, String)> = Default::default();
+    for e in entries {
+        if e.kind != "bound" {
+            continue;
+        }
+        let key = (e.name.clone(), e.ts.clone());
+        if !seen.insert(key) {
+            continue;
+        }
+        out.entry(e.scope.clone()).or_default().push(json!({
+            "name": e.name,
+            "session": e.session.clone().unwrap_or_default(),
+            "ts": e.ts,
+        }));
+    }
+    for list in out.values_mut() {
+        list.sort_by(|a, b| a["ts"].as_str().cmp(&b["ts"].as_str()));
+    }
+    out
+}
+
+/// Drop the current holder's own bound row: the ledger records every bind,
+/// so the holder's own entry is itself, not a predecessor.
+fn filter_current_holder(list: &[Value], holder_name: &str) -> Vec<Value> {
+    list.iter()
+        .filter(|e| {
+            !e["name"]
+                .as_str()
+                .is_some_and(|n| n.eq_ignore_ascii_case(holder_name))
+        })
+        .cloned()
+        .collect()
 }
 
 /// The scope fold over `payload`, read in this process.
@@ -604,15 +654,30 @@ fn fmt_row(e: &Value) -> String {
         String::new()
     };
     format!(
-        "{:<16} {:<5} {:<20} {:<16} {:<14} {:<4} {:<8}{reason}",
+        "{:<16} {:<5} {:<20} {:<16} {:<14} {:<20} {:<4} {:<8}{reason}",
         py_str(e.get("scope")),
         py_str(e.get("level")),
         py_str(e.get("holder")),
         py_str(e.get("grantor")),
         py_str(e.get("status")),
+        past_cell(e),
         agree,
         py_str(e.get("role_source")),
     )
+}
+
+/// The PAST cell: the scope's predecessors, oldest first, as names. The
+/// session ids ride the JSON (`past_leads`), not the fixed-width table.
+fn past_cell(e: &Value) -> String {
+    e.get("past_leads")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(|entry| entry["name"].as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default()
 }
 
 /// Python `json.dumps(v, indent=2, sort_keys=True)`.
@@ -721,8 +786,8 @@ pub fn render_team_with(
         return "team: no live roles".to_string();
     }
     let mut lines = vec![format!(
-        "{:<16} {:<5} {:<20} {:<16} {:<14} AGREE SOURCE",
-        "SCOPE", "LEVEL", "HOLDER", "GRANTOR", "STATUS"
+        "{:<16} {:<5} {:<20} {:<16} {:<14} {:<20} AGREE SOURCE",
+        "SCOPE", "LEVEL", "HOLDER", "GRANTOR", "STATUS", "PAST"
     )];
     lines.extend(roles.iter().map(fmt_row));
     for c in team["conflicts"].as_array().into_iter().flatten() {
@@ -790,6 +855,55 @@ mod tests {
             agreement(Some(2), Some("x-a"), Some(&by_id)).1.unwrap(),
             "'x-a' status is 'done' (terminal)"
         );
+    }
+
+    #[test]
+    fn past_leads_lists_bound_terms_oldest_first_with_sessions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("team_names.json");
+        let entry = |name: &str,
+                     kind: &str,
+                     ts: &str,
+                     session: Option<&str>|
+         -> crate::team_names::NameHistoryEntry {
+            crate::team_names::NameHistoryEntry {
+                name: name.to_string(),
+                scope: "epic-x".to_string(),
+                session: session.map(str::to_string),
+                kind: kind.to_string(),
+                ts: ts.to_string(),
+                host: None,
+            }
+        };
+        for (name, kind, ts, sid) in [
+            ("rowan", "bound", "2026-09-01T00:00:00Z", Some("sid-rowan")),
+            // A drawn-but-unbound name never led.
+            ("wren", "drawn", "2026-09-02T00:00:00Z", Some("sid-wren")),
+            (
+                "lenore",
+                "bound",
+                "2026-09-03T00:00:00Z",
+                Some("sid-lenore"),
+            ),
+        ] {
+            crate::team_names::history_append(&store, entry(name, kind, ts, sid)).unwrap();
+        }
+        let map = past_leads_by_scope(&store);
+        let past = &map["epic-x"];
+        assert_eq!(
+            past.len(),
+            2,
+            "a drawn-but-unbound name never led: {past:?}"
+        );
+        assert_eq!(past[0]["name"], json!("rowan"));
+        assert_eq!(past[0]["session"], json!("sid-rowan"));
+        assert_eq!(past[1]["name"], json!("lenore"));
+        // The table cell renders the names oldest-first.
+        assert_eq!(past_cell(&json!({"past_leads": past})), "rowan, lenore");
+        // The current holder's own bound row drops out.
+        let past = filter_current_holder(past, "Lenore");
+        assert_eq!(past.len(), 1);
+        assert_eq!(past[0]["name"], json!("rowan"));
     }
 
     #[test]
