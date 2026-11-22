@@ -471,6 +471,11 @@ fn spelled(words: &[&str]) -> String {
 pub fn menu(path: &[&str], node: &Node) -> String {
     let shown: Vec<&Node> = node.children.iter().filter(|c| !c.retired).collect();
     let width = shown.iter().map(|c| c.name.len()).max().unwrap_or(0);
+    let footer = if shown.len() == node.children.len() {
+        "Nothing is hidden: this list is the whole group."
+    } else {
+        "Retired spellings still answer for one release; they are not listed."
+    };
     let mut text = format!("{} - {}\n\n", spelled(path), node.about);
     for child in shown {
         let mark = if child.children.is_empty() {
@@ -480,11 +485,6 @@ pub fn menu(path: &[&str], node: &Node) -> String {
         };
         text.push_str(&format!("  {:width$}  {}{mark}\n", child.name, child.about));
     }
-    let footer = if shown.len() == node.children.len() {
-        "Nothing is hidden: this list is the whole group."
-    } else {
-        "Retired spellings still answer for one release; they are not listed."
-    };
     text.push_str(&format!(
         "\n{} <command> --help shows one command. {footer}\n",
         spelled(path)

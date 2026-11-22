@@ -638,7 +638,7 @@ impl WebOp {
 
 /// The root declaration set: the leading attach pair plus the subcommands.
 #[derive(Parser, Debug)]
-#[command(name = "fno", disable_help_flag = true, disable_version_flag = true)]
+#[command(name = "fno", disable_version_flag = true)]
 pub struct FnoRoot {
     /// Attach to (or spawn) the named server; a value containing `/` names an explicit socket path (internal role)
     #[arg(long, value_name = "NAME", conflicts_with = "session")]
@@ -771,11 +771,49 @@ pub struct ServerArgs {
 /// usage, exit 2. The mapping reads the raw `ArgMatches` (not the derive's
 /// typed layer) on purpose: the typed layer misroutes subcommand capture
 /// once the enum also carries a non-subcommand arm.
+/// A help request that rides the root's own flags (`--server x --help`):
+/// every word is a root flag, a flag value or the help request itself, and
+/// the help flag is present. `Some(all)` when the argv asks the root menu.
+fn root_flag_help(args: &[OsString]) -> Option<bool> {
+    let mut all = false;
+    let mut help = false;
+    let mut words = args
+        .iter()
+        .map(|a| a.to_str())
+        .collect::<Option<Vec<_>>>()?;
+    let mut at = 0;
+    while at < words.len() {
+        match words[at] {
+            "--server" | "--session" => at += 2,
+            "--help" | "-h" => {
+                help = true;
+                at += 1;
+            }
+            "--all" | "-A" => {
+                all = true;
+                at += 1;
+            }
+            w if w.starts_with("--server=") || w.starts_with("--session=") => at += 1,
+            w if w == "-J" || w == "--json" => at += 1,
+            _ => return None,
+        }
+    }
+    help.then_some(all)
+}
+
 pub fn classify(args: &[OsString]) -> FrontDoor {
     match args.first().and_then(|a| a.to_str()) {
         Some("--help" | "-h") => {
             return FrontDoor::RootHelp {
                 all: args.iter().skip(1).any(|a| a == "--all" || a == "-A"),
+            }
+        }
+        Some(first) if first.starts_with('-') => {
+            // Root flags before a help request (`fno --server x --help`) ask
+            // the root menu too: the root carries no clap help flag, because
+            // a derive disable there propagates into every subcommand.
+            if let Some(all) = root_flag_help(args) {
+                return FrontDoor::RootHelp { all };
             }
         }
         Some("--version" | "-V") if args.len() == 1 => return FrontDoor::RootVersion,
@@ -860,21 +898,18 @@ fn unclaimed(args: &[OsString]) -> FrontDoor {
 /// pane and thread groups' after_help injected. classify, the inventory
 /// and completion all read this one command, so the surfaces cannot drift.
 ///
-/// The derive marks the root's help disable as a clap GLOBAL setting, and
-/// clap ORs a parent's global settings into every subcommand at build
-/// time, so a child-level override cannot clear it. front_command clears
-/// the global and holds a LOCAL disable instead: the curated `fno --help`
-/// menu keeps the spelling, the typed tree answers `--help` everywhere
+/// The root carries no help flag: its derive disable would be a clap
+/// GLOBAL setting, and clap ORs a parent's global settings into every
+/// subcommand at build time, drowning any child-level override. The
+/// curated `fno --help` menu owns the root spelling through the
+/// intercept in classify; the typed tree answers `--help` everywhere
 /// else (stdout, exit 0), and the tail carriers' own disables keep a
 /// pane payload's `--help`.
 pub fn front_command() -> clap::Command {
-    FnoRoot::command()
-        .unset_global_setting(clap::AppSettings::DisableHelpFlag)
-        .setting(clap::AppSettings::DisableHelpFlag)
-        .mut_subcommand("mux", |mux| {
-            mux.mut_subcommand("pane", |pane| pane.after_help(pane_group_help()))
-                .mut_subcommand("thread", |thread| thread.after_help(thread_group_help()))
-        })
+    FnoRoot::command().mut_subcommand("mux", |mux| {
+        mux.mut_subcommand("pane", |pane| pane.after_help(pane_group_help()))
+            .mut_subcommand("thread", |thread| thread.after_help(thread_group_help()))
+    })
 }
 
 /// The pane command words, kept in sync with [`PaneOp`] by the tree test.
@@ -1480,7 +1515,6 @@ mod tests {
         // decision (AC6-HP). The help-walk integration test skips this same
         // list, so the two cannot drift without one of them failing.
         let expected: std::collections::BTreeSet<&str> = [
-            "(root)",
             "uninstall",
             "mux serve",
             "mux where",
