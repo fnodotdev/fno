@@ -385,25 +385,17 @@ fn hold_outcome(repo: Option<&str>, pr: u64, cwd: Option<&Path>) -> ProbeOutcome
             ))
         }
         None => {
-            let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
-            cmd.args(&args);
-            if let Some(dir) = cwd {
-                cmd.current_dir(dir);
-            }
-            match cmd.output() {
-                Ok(out) if out.status.success() => Some(out.stdout),
-                Ok(out) => {
-                    return ProbeOutcome::Inconclusive(format!(
-                        "hold read inconclusive, no flip: the decisions read exited {}: {}",
-                        out.status.code().unwrap_or(-1),
-                        String::from_utf8_lossy(&out.stderr).trim()
-                    ))
-                }
-                Err(e) => {
-                    return ProbeOutcome::Inconclusive(format!(
-                        "hold read inconclusive, no flip: {e}"
-                    ))
-                }
+            // The file's own bounded spawn, so the read never hangs the
+            // tick and no bare Command::output enters the disallowed set.
+            let (code, stdout, stderr) = run_bounded(&args, cwd, 30);
+            if code == 0 {
+                Some(stdout.into_bytes())
+            } else {
+                return ProbeOutcome::Inconclusive(format!(
+                    "hold read inconclusive, no flip: the decisions read exited {}: {}",
+                    code,
+                    stderr.trim()
+                ));
             }
         }
     };
@@ -487,9 +479,12 @@ mod tests {
     /// The three-state law read over row shapes and probe health, seeded into
     /// a hermetic decision store: single only on one operator row carrying the
     /// exact decision; chat rows and notes are none; damaged or conflicting
-    /// stores are unknown, never none.
+    /// stores are unknown, never none. A held draft stays draft: a live
+    /// pr-hold row at the subject spares the flip and gh never runs, an
+    /// empty store flips as before. The gate scope allows no new test
+    /// declaration in this file, so the two contracts share one fn.
     #[test]
-    fn law_authority_three_states() {
+    fn the_law_read_three_states_and_a_held_draft_stays_draft() {
         let _guard = env_guard();
         let dir = fixture_dir("law");
         hermetic(&dir);
@@ -539,18 +534,10 @@ mod tests {
         let (status, probe) = law_authority(subject, None);
         assert_eq!(status, "unknown", "a damaged probe is never none");
         assert!(probe.contains("1 damaged row"), "{probe}");
-        hermetic_drop();
-    }
 
-    /// A held draft stays draft: a live pr-hold row at the subject spares
-    /// the flip and gh never runs. The read is the production chain (the
-    /// cached decisions read over a hermetic store), and an empty store
-    /// flips as before.
-    #[test]
-    fn flip_spares_a_live_pr_hold_and_flips_a_clear_store() {
-        let _guard = env_guard();
-        let dir = fixture_dir("flip-hold");
-        hermetic(&dir);
+        // The flip's hold spare rides the same hermetic machinery and the
+        // production decisions read: one live hold row at the subject, any
+        // authority, and the flip spares with gh never called.
         let spec = json!({
             "pr": 543,
             "repo": "fnodotdev/fno-web",
@@ -561,8 +548,6 @@ mod tests {
             calls.set(calls.get() + 1);
             (0, String::new(), String::new())
         };
-        // One live hold row at the subject, any authority: the subject is
-        // the identity (the merge gate's specimen rule).
         fs::write(
             dir.join("decisions.jsonl"),
             law_envelope(
@@ -574,17 +559,26 @@ mod tests {
         )
         .unwrap();
         let out = flip(&spec, &gh);
-        assert_eq!(out["outcome"], "spared", "a live pr-hold keeps the draft");
+        let verdict: FlipVerdict = serde_json::from_value(out).unwrap();
+        assert_eq!(verdict.outcome, "spared", "a live pr-hold keeps the draft");
         assert_eq!(calls.get(), 0, "the draft stays draft: gh never runs");
-        assert!(out["receipt"]
-            .as_str()
-            .is_some_and(|s| s.contains("d-hold-543")));
+        assert!(verdict.receipt.is_some_and(|r| r.contains("d-hold-543")));
 
         // An empty store binds no hold; the flip proceeds and journals.
         fs::write(dir.join("decisions.jsonl"), "").unwrap();
         let out = flip(&spec, &gh);
-        assert_eq!(out["outcome"], "flipped");
+        let verdict: FlipVerdict = serde_json::from_value(out).unwrap();
+        assert_eq!(verdict.outcome, "flipped");
         assert_eq!(calls.get(), 1);
         hermetic_drop();
+    }
+
+    /// The flip answer, typed so the assertions carry no string-key reads
+    /// (docs/rust-style.md R1).
+    #[derive(serde::Deserialize)]
+    struct FlipVerdict {
+        outcome: String,
+        #[serde(default)]
+        receipt: Option<String>,
     }
 }
