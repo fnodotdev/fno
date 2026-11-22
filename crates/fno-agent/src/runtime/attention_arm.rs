@@ -2134,6 +2134,7 @@ fn mint_answer_law_row(
             "attested_by": attested_by,
         }),
         closed_by: None,
+        closed_via_succession: None,
         caller: None,
         home: Some(home.clone()),
         journal_path: crate::paths::events_path(&cwd),

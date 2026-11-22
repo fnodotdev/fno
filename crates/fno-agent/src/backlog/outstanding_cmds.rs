@@ -471,6 +471,7 @@ pub(crate) fn run_clear_cmd(args: &[String]) -> i32 {
         cap: crate::question_intake::QUESTION_CAP,
         provenance,
         closed_by: crate::outstanding::session_id(&cwd),
+        closed_via_succession: None,
         caller: None,
         home: Some(home.clone()),
         journal_path: crate::paths::events_path(&cwd),
