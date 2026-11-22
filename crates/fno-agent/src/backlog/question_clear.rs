@@ -2962,7 +2962,7 @@ pub(crate) fn close_with_recorded_answer(
         return Ok(AnsweredClose::Peer(host.to_string()));
     }
     let (close, close_line) =
-        close_event_for(journal_path, qid, Some(answer), None, closed_by, cap);
+        close_event_for(journal_path, qid, Some(answer), None, closed_by, cap, None);
     append_close(journal_path, &close_line, qid)?;
     crate::provider_cap::append_questions_row(index_path, &close)?;
     Ok(AnsweredClose::Closed)

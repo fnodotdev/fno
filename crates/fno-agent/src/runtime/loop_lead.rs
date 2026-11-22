@@ -1140,9 +1140,9 @@ mod tests {
         );
         // An unrelated scope still recovers: raw overlap answers, not a blanket
         // refusal.
-        assert_eq!(
-            live_team_holder_in_with_projects(&registry, "gamma", &projects),
-            None
+        assert!(
+            live_team_holder_in_with_projects(&registry, "gamma", &projects).is_none(),
+            "an unrelated scope still recovers"
         );
         fs::remove_dir_all(&dir).ok();
     }

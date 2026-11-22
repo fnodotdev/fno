@@ -404,7 +404,7 @@ pub fn gather_team_at(cwd: Option<&std::path::Path>) -> Value {
         let past = scope
             .and_then(|s| past_by_scope.get(crate::territory::canonical_scope(s).as_str()))
             .map(|list| filter_current_holder(list, &row.name));
-        entry.insert("past_leads".into(), past.unwrap_or_default());
+        entry.insert("past_leads".into(), past.unwrap_or_default().into());
         roles.push(Value::Object(entry));
         if let Some(s) = scope.filter(|s| !s.trim().is_empty()) {
             held.push(s.to_string());
