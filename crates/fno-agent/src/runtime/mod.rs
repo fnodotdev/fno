@@ -138,6 +138,8 @@ pub mod lead_termination;
 pub mod lead_verdict_inputs;
 pub mod lead_wake;
 pub mod lead_wake_triggers;
+#[path = "lead_wake_triggers_tests.rs"]
+pub(crate) mod lead_wake_triggers_tests;
 pub mod lease_heartbeat;
 pub mod ledger_axes;
 pub(crate) mod ledger_register;

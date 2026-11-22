@@ -300,7 +300,13 @@ fn resume_resting_goal(
     lead_session: &str,
     roots: &BTreeMap<String, String>,
 ) -> Option<String> {
-    let root = roots.get(&plan.lead.holder).filter(|r| !r.is_empty())?;
+    let root = plan
+        .lead
+        .holder_session
+        .as_deref()
+        .and_then(|sid| roots.get(sid))
+        .or_else(|| roots.get(&plan.lead.holder))
+        .filter(|r| !r.is_empty())?;
     let manifest_path = crate::paths::space_dir(Path::new(root))
         .join("leads")
         .join(format!("{}.md", plan.lead.scope));
@@ -547,7 +553,11 @@ pub(crate) fn run_pass(home: &AgentsHome, config_cwd: &Path) -> Result<Outcome, 
                             .as_deref()
                             .and_then(|s| scope_members(s).next());
                         let root = journal_root(&e, member, &workspace_roots);
-                        (e.name, root)
+                        // Keyed on the session id (law d-e952ed19); a row
+                        // with no id keeps the name key, the legacy shape.
+                        let sid = crate::territory::row_session_id(&e).to_string();
+                        let key = if sid.is_empty() { e.name.clone() } else { sid };
+                        (key, root)
                     })
                     .collect()
             })

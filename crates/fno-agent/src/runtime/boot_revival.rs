@@ -680,7 +680,9 @@ fn respawn_line(home: &AgentsHome, worker: &RegistryEntry) -> String {
         .as_deref()
         .filter(|s| !s.is_empty())
     {
-        Some(_) => format!("fno agent session resume {}", worker.name),
+        // The id is the key (law d-e952ed19); the name in the line is
+        // display, and `fno agent session resume` resolves it.
+        Some(sid) => format!("fno agent session resume {sid}"),
         None => "no session id on the row; see fno-agent reentry-plan".to_string(),
     }
 }

@@ -361,7 +361,8 @@ fn signed_out_mode(
             ),
             None,
         );
-        let respawn = super::apply::run_fno_bounded(&["agent", "resume", &row.name], &row.cwd, 120);
+        let respawn =
+            super::apply::run_fno_bounded(&["agent", "resume", &row.row_id], &row.cwd, 120);
         let reconciled = super::apply::run_fno_bounded(&["agent", "reconcile"], &row.cwd, 120);
         // The ask's landing is the door's business - and which door answered
         // depends on the installed binary's age - so the outcome records what
