@@ -86,7 +86,7 @@ Each turn runs under `fno-agent-worker --opencode-turn <spec>` (`crates/fno-agen
 
 Each ask goes through one ladder, `crates/fno-agent/src/runtime/thread_permission.rs`. fnod gets one choice question (`routine`, `unsure`, `irreversible`). A sure `routine` answer allows the call once. An unsure, untrained, slow or absent fnod refuses the call with a note, which the model reads as the tool's refusal. A sure irreversible act, or one the user's own `ask` rule raised, is filed as an outstanding ask and held. fnod down never allows. No corpus head is trained on the question yet, so today every ask goes to the model. Each answer journals one `thread_permission_answered` event.
 
-A held ask waits on the serve itself. `fno agent ask <name> --answer allow_once|deny` replies to the oldest pending ask of the row's session. With no ask pending, it exits 2. After `agents.thread_permission.hold_minutes` (default 30) the driver refuses the call with a note naming the question id. The serve never times an ask out on its own: an unanswered ask stayed pending for 742 seconds in the measurement.
+A held ask waits on the serve itself. A person replies to the oldest pending ask of the row's session: `fno agent ask <name> --answer allow_once|deny`. With no ask pending, it exits 2. After `agents.thread_permission.hold_minutes` (default 30) the driver refuses the call with a note naming the question id. The serve never times an ask out on its own: an unanswered ask stayed pending for 742 seconds in the measurement.
 
 The V1 frames, measured on opencode 1.18.33 on 2026-11-11:
 

@@ -515,7 +515,7 @@ pub fn maybe_run_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i3
     if entry.harness_name() != "footnote" {
         return None;
     }
-    if let Some(code) = thread::maybe_ask_host(entry, params) {
+    if let Some(code) = thread::maybe_ask_host(home, entry, params) {
         return Some(code);
     }
     // A pane row binds the TUI's session id as `harness_session_id` and keeps
