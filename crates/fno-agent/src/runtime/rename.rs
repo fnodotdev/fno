@@ -467,6 +467,9 @@ pub(crate) fn deliver_command_to_session(
 /// skip names its cause, so a rename that cannot reach the harness says so
 /// instead of leaving the old title in place without a word.
 fn title_push_gap(row: &RegistryEntry, new_name: &str) -> Option<String> {
+    if row.harness_title.as_deref() == Some(new_name) {
+        return None;
+    }
     let harness = row.harness.as_deref().filter(|h| !h.is_empty());
     let has_session = row
         .harness_session_id
@@ -477,15 +480,15 @@ fn title_push_gap(row: &RegistryEntry, new_name: &str) -> Option<String> {
             "title push skipped: the row names no harness or no harness session".to_string(),
         );
     };
-    if row.harness_title.as_deref() == Some(new_name) {
-        return None;
-    }
     let native = TITLE_PUSH_HARNESSES.contains(&harness)
         && title_rename_command(harness, new_name, None).is_some();
     if !native {
         return Some(format!(
             "title push skipped: {harness} has no native rename; its session title stays as it was"
         ));
+    }
+    if TITLE_PUSH_STATUSES.contains(&row.status) {
+        return None;
     }
     Some(format!(
         "title push skipped: row is {:?}, not quiet-capable; the harness title stays stale until the row is idle",
