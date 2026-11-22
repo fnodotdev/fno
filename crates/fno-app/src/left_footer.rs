@@ -22,47 +22,23 @@ pub fn draw_computer(yes: bool) {
     COMPUTER.store(yes, Ordering::Relaxed);
 }
 
-/// The footer's gear, drawn at the marks' 12px: a ring, a hub, and
-/// eight teeth, so the paint box matches the globe and the computer
-/// instead of a glyph's ink.
+/// The footer's gear: the real gear glyph in the marks' 12px box, at a
+/// larger font so its ink paints 24x24 like the globe and the computer.
 fn gear_mark(p: &Palette) -> Div {
-    let tooth = |x: f32, y: f32| {
-        div()
-            .absolute()
-            .left(px(x))
-            .top(px(y))
-            .size(px(2.0))
-            .bg(rgb(p.muted))
-    };
-    let mut gear = div()
-        .relative()
+    div()
         .flex_none()
         .size(px(12.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .overflow_hidden()
         .child(
             div()
-                .absolute()
-                .left(px(2.5))
-                .top(px(2.5))
-                .size(px(7.0))
-                .border_1()
-                .border_color(rgb(p.muted))
-                .rounded_full(),
+                .text_color(rgb(p.muted))
+                .text_size(px(20.0))
+                .line_height(px(12.0))
+                .child("⚙"),
         )
-        .child(tooth(5.0, 0.0))
-        .child(tooth(5.0, 10.0))
-        .child(tooth(0.0, 5.0))
-        .child(tooth(10.0, 5.0));
-    for (x, y) in [(2.5, 2.5), (7.5, 2.5), (2.5, 7.5), (7.5, 7.5)] {
-        gear = gear.child(tooth(x, y));
-    }
-    gear.child(
-        div()
-            .absolute()
-            .left(px(5.0))
-            .top(px(5.0))
-            .size(px(2.0))
-            .bg(rgb(p.muted)),
-    )
 }
 
 /// The footer's host mark at the gear's 12px: the TUI line globe, a
