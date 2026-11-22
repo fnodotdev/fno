@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     actions, canvas, div, font, point, prelude::*, px, rgb, rgba, size, AnyView, App, Application,
-    Bounds, ClipboardEntry, ClipboardItem, Context, ElementInputHandler, Entity,
+    Bounds, ClipboardEntry, ClipboardItem, Context, Div, ElementInputHandler, Entity,
     EntityInputHandler, FocusHandle, Global, InputHandler, KeyBinding, KeyDownEvent, Menu,
     MenuItem, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     Pixels, Point, ScrollWheelEvent, Size, Subscription, Task, TitlebarOptions, UTF16Selection,
@@ -450,7 +450,59 @@ impl Root {
         let (keymap, key_warnings) = fno::ui::digest_overlay::keymap(&theme_cwd);
         fno::ui::keys::install(keymap);
         let key_warning = key_warnings.first().map(|w| w.0.clone());
-        let mut root = Root {
+        let mut root = Self::new_root(
+            main,
+            pinned,
+            folds,
+            group_by,
+            metrics,
+            palette,
+            key_warning.or(theme_warning),
+            light,
+            theme_cwd,
+            session.clone(),
+            font_want,
+            sent_size,
+            window,
+            cx,
+        );
+        wire_window(&mut root, window, cx);
+        Self::attach_link(&mut root, &session, sent_size, prewarmed, cx);
+        root.wire_alerts(cx);
+        root.start_board_poll(cx);
+        root.start_plugins(cx);
+        root._right = Some(right_pane::start(cx));
+        super::left_footer::prime();
+        // The control channel: the drain loop applies rows through the
+        // same paths clicks ride (focus, view switch, quit).
+        crate::control::spawn_poll(session.clone(), cx);
+        // `--mode mods` opens on the view without a switch, so read here.
+        if root.main == MainView::Mods {
+            root.ext.read();
+        }
+        root
+    }
+
+    /// The window's fresh state: every field at its launch value, built
+    /// away from `new_with_link` so the constructor stays readable.
+    #[allow(clippy::too_many_arguments)]
+    fn new_root(
+        main: MainView,
+        pinned: Option<SessionKey>,
+        folds: HashSet<String>,
+        group_by: GroupBy,
+        metrics: Metrics,
+        palette: super::palette::Palette,
+        notice: Option<String>,
+        light: bool,
+        theme_cwd: PathBuf,
+        session: String,
+        font_want: (String, f32),
+        sent_size: Pixels,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> Root {
+        Root {
             main,
             link: None,
             layout: Layout::default(),
@@ -458,7 +510,7 @@ impl Root {
             panes: HashMap::new(),
             modes: Modes::default(),
             scanner: fno::ui::keys::Scanner::default(),
-            notice: key_warning.or(theme_warning),
+            notice,
             notice_failed: false,
             notice_gen: 0,
             shot: false,
@@ -485,8 +537,8 @@ impl Root {
             workspace_confirm: None,
             hosts: None,
             light,
-            theme_cwd: theme_cwd.clone(),
-            session: session.clone(),
+            theme_cwd,
+            session,
             ext: mods::Page::default(),
             adv: px(ui::BODY * 0.6),
             width: px(1360.0),
@@ -528,22 +580,7 @@ impl Root {
             // app; the activation observer only reports changes, so the
             // first read happens here.
             window_active: window.is_window_active(),
-        };
-        wire_window(&mut root, window, cx);
-        Self::attach_link(&mut root, &session, sent_size, prewarmed, cx);
-        root.wire_alerts(cx);
-        root.start_board_poll(cx);
-        root.start_plugins(cx);
-        root._right = Some(right_pane::start(cx));
-        super::left_footer::prime();
-        // The control channel: the drain loop applies rows through the
-        // same paths clicks ride (focus, view switch, quit).
-        crate::control::spawn_poll(session.clone(), cx);
-        // `--mode mods` opens on the view without a switch, so read here.
-        if root.main == MainView::Mods {
-            root.ext.read();
         }
-        root
     }
 
     /// The drive surface finds the live app through this pid file (the
@@ -2872,34 +2909,8 @@ impl Root {
         }
         // The Settings panel takes every key while it shows; a cmd key
         // closes it and runs as today (the key sheet's grammar).
-        if self.settings.is_some() {
-            if key.cmd {
-                self.settings = None;
-                cx.notify();
-            } else {
-                let ev = self
-                    .settings
-                    .as_mut()
-                    .and_then(|st| settings::key(st, &key));
-                cx.stop_propagation();
-                match ev {
-                    Some(settings::Event::Close) => {
-                        self.settings = None;
-                        cx.notify();
-                    }
-                    Some(settings::Event::Set { id, value }) => {
-                        if let Some(st) = self.settings.as_mut() {
-                            settings::apply_local(&mut st.rows, &id, &value);
-                        }
-                        self.spawn_settings_write(true, id, value, cx)
-                    }
-                    Some(settings::Event::Unset { id }) => {
-                        self.spawn_settings_write(false, id, String::new(), cx)
-                    }
-                    None => {}
-                }
-                return;
-            }
+        if self.settings_key(&key, cx) {
+            return;
         }
         // After chord: with the key sheet open, esc closes the sheet first.
         if key.key == "escape" && self.seam_escape(cx) {
@@ -2948,16 +2959,7 @@ impl Root {
         if self.find_takes(&key, cx) {
             return;
         }
-        if self.main == MainView::Chat {
-            self.chat_key(&key, window, cx);
-            return;
-        }
-        if self.main == MainView::Orchestration {
-            orchestration::key(self, &key, cx);
-            return;
-        }
-        if self.main == MainView::Mods && mods::key(self, &key, cx) {
-            cx.stop_propagation();
+        if self.view_key(&key, window, cx) {
             return;
         }
         // The board takes no typing, and text keys reach the pane through the
@@ -2969,6 +2971,57 @@ impl Root {
             cx.stop_propagation();
             self.mux_key(bytes, window, cx);
         }
+    }
+
+    /// The Settings panel's keys while it shows: escape and the panel's
+    /// rows take theirs, a cmd key closes the panel and falls through.
+    /// True when the key was taken.
+    fn settings_key(&mut self, key: &Key, cx: &mut Context<Self>) -> bool {
+        if self.settings.is_none() {
+            return false;
+        }
+        if key.cmd {
+            self.settings = None;
+            cx.notify();
+            return true;
+        }
+        let ev = self.settings.as_mut().and_then(|st| settings::key(st, key));
+        cx.stop_propagation();
+        match ev {
+            Some(settings::Event::Close) => {
+                self.settings = None;
+                cx.notify();
+            }
+            Some(settings::Event::Set { id, value }) => {
+                if let Some(st) = self.settings.as_mut() {
+                    settings::apply_local(&mut st.rows, &id, &value);
+                }
+                self.spawn_settings_write(true, id, value, cx)
+            }
+            Some(settings::Event::Unset { id }) => {
+                self.spawn_settings_write(false, id, String::new(), cx)
+            }
+            None => {}
+        }
+        true
+    }
+
+    /// The focused view's typing: chat, the board room, mods. True when
+    /// the view took the key.
+    fn view_key(&mut self, key: &Key, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.main == MainView::Chat {
+            self.chat_key(key, window, cx);
+            return true;
+        }
+        if self.main == MainView::Orchestration {
+            orchestration::key(self, key, cx);
+            return true;
+        }
+        if self.main == MainView::Mods && mods::key(self, key, cx) {
+            cx.stop_propagation();
+            return true;
+        }
+        false
     }
 
     /// One encoded keystroke through the mux scanner: the prefix claims its
@@ -3891,36 +3944,7 @@ impl Render for Root {
         let strip = tabs::render(self, cx)
             .font_family(ui::MONO)
             .text_size(px(ui::BODY));
-        // A closed link and a failed notice use the error color; a notice
-        // is muted and expires. Neither takes a row: the toast floats over the corner.
-        // In chat mode a closed stream's bar already carries the exit
-        // reason, so the corner toast would repeat it - unless a sheet
-        // covers that bar, where the toast is the only visible signal.
-        let bar_shows_reason =
-            self.main == MainView::Chat && self.chat.closed.is_some() && self.chat.sheet.is_none();
-        let (status, status_color) = match (&self.closed, &self.notice) {
-            (Some(c), _) if !bar_shows_reason => (Some(c.clone()), self.palette.error),
-            (_, n) if bar_shows_reason && !self.notice_failed => (n.clone(), self.palette.muted),
-            (_, n) if self.notice_failed => (n.clone(), self.palette.error),
-            (_, n) => (n.clone(), self.palette.muted),
-        };
-        let toast = status.map(|text| {
-            div()
-                .absolute()
-                .right(px(12.0))
-                // Stacked above the chat status row (the empty-state line sits
-                // in the bottom 40px); a corner pin cut that line off.
-                .bottom(px(44.0))
-                .max_w(px(520.0))
-                .px_3()
-                .py_1()
-                .rounded(px(4.0))
-                .bg(rgb(self.palette.raised))
-                .text_color(rgb(status_color))
-                .font_family(ui::MONO)
-                .text_size(px(ui::BODY))
-                .child(text)
-        });
+        let toast = self.corner_toast();
         let qtoast = self.question_toast_card(cx);
         let page = div()
             .track_focus(&self.focus)
@@ -3991,6 +4015,40 @@ impl Root {
         .when(self.hosts.is_some(), |d| d.child(hosts::render(self, cx)))
         .when(self.workspace_confirm.is_some(), |d| {
             d.child(left_pane::confirm_sheet(self, cx))
+        })
+    }
+
+    /// The corner toast. A closed link and a failed notice use the error
+    /// color; a notice is muted and expires. Neither takes a row: the
+    /// toast floats over the corner. In chat mode a closed stream's bar
+    /// already carries the exit reason, so the corner toast would repeat
+    /// it - unless a sheet covers that bar, where the toast is the only
+    /// visible signal.
+    fn corner_toast(&self) -> Option<Div> {
+        let bar_shows_reason =
+            self.main == MainView::Chat && self.chat.closed.is_some() && self.chat.sheet.is_none();
+        let (status, status_color) = match (&self.closed, &self.notice) {
+            (Some(c), _) if !bar_shows_reason => (Some(c.clone()), self.palette.error),
+            (_, n) if bar_shows_reason && !self.notice_failed => (n.clone(), self.palette.muted),
+            (_, n) if self.notice_failed => (n.clone(), self.palette.error),
+            (_, n) => (n.clone(), self.palette.muted),
+        };
+        status.map(|text| {
+            div()
+                .absolute()
+                .right(px(12.0))
+                // Stacked above the chat status row (the empty-state line sits
+                // in the bottom 40px); a corner pin cut that line off.
+                .bottom(px(44.0))
+                .max_w(px(520.0))
+                .px_3()
+                .py_1()
+                .rounded(px(4.0))
+                .bg(rgb(self.palette.raised))
+                .text_color(rgb(status_color))
+                .font_family(ui::MONO)
+                .text_size(px(ui::BODY))
+                .child(text)
         })
     }
 }
