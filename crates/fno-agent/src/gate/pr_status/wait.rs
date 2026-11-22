@@ -572,7 +572,7 @@ fn red_is_stale(latest: &[Value], runs: &[Value]) -> bool {
 fn hold_only_red(latest: &[Value]) -> bool {
     let failed: Vec<crate::pr_status::de::RowTail> = latest
         .iter()
-        .map(|row| crate::lenient_de::parse(row))
+        .map(crate::lenient_de::parse::<crate::pr_status::de::RowTail>)
         .filter(|row| row.bucket.as_deref() == Some("fail"))
         .collect();
     !failed.is_empty()
