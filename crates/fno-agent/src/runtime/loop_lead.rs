@@ -1132,6 +1132,8 @@ mod tests {
             "the legacy fallback wakes by name"
         );
         // The registry row WITH an id is named by the id, never the name.
+        // The id row replaces the earlier fixture in the same registry.json
+        // the walk asserts already read: the read path keys on that name.
         let id_row = serde_json::json!({
             "name": "wren",
             "cwd": "/tmp",
@@ -1142,10 +1144,13 @@ mod tests {
             "role_grantor": "human",
             "harness_session_id": "cccccccc-3333-4ccc-8ccc-cccccccccccc",
         });
-        let registry_id = dir.join("registry-id.json");
+        let registry_id = dir.join("registry.json");
         crate::registry_store::seed_raw(
             &registry_id,
-            serde_json::json!({"schema_version": 11, "agents": [id_row]}).to_string(),
+            serde_json::json!(
+                {"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": [id_row]}
+            )
+            .to_string(),
         );
         let holder = live_team_holder_in(&registry_id, "epic-z", &dir).expect("live id holder");
         assert_eq!(holder.session, "cccccccc-3333-4ccc-8ccc-cccccccccccc");
