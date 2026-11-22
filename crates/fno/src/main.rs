@@ -1427,7 +1427,7 @@ fn tsv_help(args: &[OsString]) -> Option<String> {
         [word, ..]
             if matches!(
                 *word,
-                "mux" | "version" | "uninstall" | "agent" | "agents" | "mail" | "help"
+                "mux" | "version" | "uninstall" | "agent" | "agents" | "mail" | "help" | "backlog"
             ) =>
         {
             None
@@ -3450,7 +3450,7 @@ mod tests {
         // which renders after_help with the pane reference texts.
         assert!(matches!(
             decide_role(&os(&["mux", "pane", "-h"]), false),
-            Role::MuxUsage(_)
+            Role::TreeHelp(_)
         ));
     }
 
