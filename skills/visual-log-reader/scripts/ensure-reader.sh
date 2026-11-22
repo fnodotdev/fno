@@ -109,6 +109,11 @@ if grep -q "absent" <<< "$OUT"; then
     echo "spawned visual-log-reader; re-check in a few minutes for the first beat"
     exit 0
 fi
+if grep -q "registry unreadable" <<< "$OUT"; then
+    echo "$OUT"
+    echo "cannot verify the reader from an unreadable registry; nothing spawned; read the error with: fno agent session list"
+    exit 1
+fi
 echo "$OUT"
 echo "stale readers resume, they do not respawn (a second reader double-records approvals)"
 exit 1

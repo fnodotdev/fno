@@ -129,6 +129,37 @@ else
     echo "ok: fresh spawn mode called fno only for the check"
 fi
 
+# spawn mode on an unreadable registry must refuse with the read error,
+# never name the stale repair, and never spawn.
+: > "$STUB_LOG"
+rc=0
+SPAWN_UNREADABLE_OUT="$(env PATH="$STUB_BIN:$PATH" FNO_STUB_LOG="$STUB_LOG" \
+    bash "$SCRIPT" spawn --status-file "$TRUNCATED_FIXTURE")" || rc=$?
+if [[ "$rc" != 1 ]]; then
+    echo "FAIL: unreadable spawn mode exited $rc, want 1"
+    fail_count=$((fail_count + 1))
+else
+    echo "ok: unreadable spawn mode exits 1"
+fi
+if ! grep -q "registry unreadable" <<< "$SPAWN_UNREADABLE_OUT"; then
+    echo "FAIL: unreadable spawn mode lost the read error: $SPAWN_UNREADABLE_OUT"
+    fail_count=$((fail_count + 1))
+else
+    echo "ok: unreadable spawn mode carries the read error"
+fi
+if grep -q "stale readers resume" <<< "$SPAWN_UNREADABLE_OUT"; then
+    echo "FAIL: unreadable spawn mode names the stale repair"
+    fail_count=$((fail_count + 1))
+else
+    echo "ok: unreadable spawn mode never names the stale repair"
+fi
+if [[ -s "$STUB_LOG" ]]; then
+    echo "FAIL: unreadable spawn mode still called fno with: $(cat "$STUB_LOG")"
+    fail_count=$((fail_count + 1))
+else
+    echo "ok: unreadable spawn mode spawned nothing"
+fi
+
 if [[ "$fail_count" -gt 0 ]]; then
     echo "FAIL: $fail_count assertion(s) failed"
     exit 1
