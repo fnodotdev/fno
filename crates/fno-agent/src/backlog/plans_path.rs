@@ -888,13 +888,10 @@ mod tests {
             !fx.root().join("internal").exists(),
             "the refusal fires before any path is created"
         );
-    }
 
-    #[test]
-    fn plan_write_refusal_admits_inside_and_refuses_outside() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let fx = Fixture::new("writerefusal");
-        let _env = EnvGuard::new(&fx.pins());
+        // The mutate doors' write guard holds the same contract one level
+        // out: admit inside the configured dir, refuse outside naming the
+        // fix, fail open when no dir resolves at all.
         fs::write(fx.config(), "plans_dir = \"plans\"\n").unwrap();
         let inside = fx.root().join("plans").join("doc.md");
         assert_eq!(plan_write_refusal(&fx.root(), &inside), None);
@@ -905,7 +902,6 @@ mod tests {
             "{refused}"
         );
         assert!(refused.contains("fno do plan path"), "{refused}");
-        // Fail-open: an unresolvable chain names no destination, so nothing blocks.
         fs::write(fx.config(), "plans_dir = \"internal/{vault}\"\n").unwrap();
         assert_eq!(plan_write_refusal(&fx.root(), &outside), None);
     }

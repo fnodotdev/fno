@@ -1003,7 +1003,7 @@ mod tests {
     }
 
     #[test]
-    fn draft_appends_after_open_questions_and_keeps_design() {
+    fn draft_appends_inside_the_plans_dir_and_a_loose_doc_refuses() {
         let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         let (dir, pins) = location_fixture();
         let _env = EnvGuard::new(&pins);
@@ -1035,6 +1035,31 @@ mod tests {
         assert_eq!(
             draft(path.to_str().unwrap(), "auto", false, true, dir.path()).0,
             1
+        );
+
+        // The location contract at the door: a doc outside the plans dir
+        // refuses with the fix named, and nothing is written. no_emit=false,
+        // because the preview path returns before the write-path guard.
+        let loose = dir.path().join("loose.md");
+        std::fs::write(&loose, DESIGN).unwrap();
+        let (code, msg) = draft(
+            loose.to_str().unwrap(),
+            "greenfield",
+            false,
+            false,
+            dir.path(),
+        );
+        assert_eq!(code, 1);
+        assert!(
+            msg.contains("refusing plan write outside the plans dir"),
+            "{msg}"
+        );
+        assert!(msg.contains("fno do plan path"), "{msg}");
+        assert!(
+            !std::fs::read_to_string(&loose)
+                .unwrap()
+                .contains("## Execution Strategy"),
+            "nothing was written to the refused target"
         );
     }
 
@@ -1076,35 +1101,6 @@ mod tests {
             )
             .0,
             1
-        );
-    }
-
-    #[test]
-    fn draft_refuses_a_doc_outside_the_plans_dir() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let (dir, pins) = location_fixture();
-        let _env = EnvGuard::new(&pins);
-        let loose = dir.path().join("loose.md");
-        std::fs::write(&loose, DESIGN).unwrap();
-        // no_emit=false: the preview path returns before the write-path guard.
-        let (code, msg) = draft(
-            loose.to_str().unwrap(),
-            "greenfield",
-            false,
-            false,
-            dir.path(),
-        );
-        assert_eq!(code, 1);
-        assert!(
-            msg.contains("refusing plan write outside the plans dir"),
-            "{msg}"
-        );
-        assert!(msg.contains("fno do plan path"), "{msg}");
-        assert!(
-            !std::fs::read_to_string(&loose)
-                .unwrap()
-                .contains("## Execution Strategy"),
-            "nothing was written to the refused target"
         );
     }
 }
