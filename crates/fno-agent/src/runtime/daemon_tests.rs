@@ -1115,7 +1115,7 @@ fn list_row_key_set_matches_shared_contract() {
         // (x-7955) AC9-HP: the recorded lane rides verbatim, so a reader
         // can tell a paneless pane row from a thread row.
         e.substrate = Some("thread".into());
-        e.verb = Some("t".into());
+        e.command_code = Some("t".into());
     })
     .unwrap();
     let ctx = test_ctx(home.clone(), PathBuf::from("fno-agent-worker"));

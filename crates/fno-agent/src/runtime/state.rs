@@ -1342,15 +1342,15 @@ pub struct RegistryEntry {
     /// readers that cannot call fno-agent can still render the edge.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lineage_kind: Option<String>,
-    /// The row's dispatch verb (schema v46): the command code the name
+    /// The row's dispatch command code (schema v46): the code the name
     /// grammar parses off the row's own name (`t`, `bp`, `r`, `th`, `f`),
-    /// stamped by `spawn_edge::stamp_verbs` beside `lineage_kind`. The
-    /// sideline renders the verb from this field instead of parsing the
-    /// name, which is what lets a worker name eventually drop the `t-`
+    /// stamped by `spawn_edge::stamp_command_codes` beside `lineage_kind`.
+    /// The sideline renders the mark from this field instead of parsing
+    /// the name, which is what lets a worker name eventually drop the `t-`
     /// prefix: readers that render never re-derive it, and a name the
-    /// grammar cannot parse (a bare pane, a shell) carries no verb at all.
+    /// grammar cannot parse (a bare pane, a shell) carries no code at all.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub verb: Option<String>,
+    pub command_code: Option<String>,
     /// Why a mint with no parent session could not name one (schema v33):
     /// a daemon mint reads the parent edge from the spawn REQUEST, so an
     /// edge-less request stamps its reason instead of a silent null, and an
@@ -3385,7 +3385,7 @@ pub(crate) fn account_for_removed_rows(
         &serde_json::json!({
             "writer": "rust",
             "pid": std::process::id(),
-            "verb": invocation_command(),
+            "command_code": invocation_command(),
             "lost": lost,
         }),
     );

@@ -48,7 +48,7 @@
     "liveness_origin_basis",
     "requested_model",
     "model_substituted",
-    "verb"
+    "command_code"
   ],
   "projection_omissions": [],
   "stored": {
@@ -77,7 +77,7 @@
     "liveness_origin_basis": "See `liveness_origin` above; the two travel together.",
     "requested_model": "The spawn REQUEST verbatim as typed (any [1m] suffix included), stored on the row at birth beside the observed axes. Null when the mint never saw a request - absence means unknown, never a default. Unlike `observed_model` this never changes after birth. (x-2019)",
     "model_substituted": "Computed at emission by model_substitution(requested_model, observed_model): the object {requested, observed} when the families disagree, null on match or unknown. An unanswered probe is never a match, so a row whose check has not answered yet reads null, not clean. (x-2019)",
-    "verb": "The row's dispatch verb, the command code the name grammar parses off the row's name (t, bp, r, th, f), stamped on the registry row by the liveness sweep beside lineage_kind. The sideline renders the verb glyph from this served fact instead of parsing the name string. Null on a name the grammar cannot parse (a bare pane, a shell).",
+    "command_code": "The row's dispatch command code, the code the name grammar parses off the row's name (t, bp, r, th, f), stamped on the registry row by the liveness sweep beside lineage_kind. The sideline renders the glyph from this served fact instead of parsing the name string. Null on a name the grammar cannot parse (a bare pane, a shell).",
     "live_status_basis": "Why `live_status` reads the way it does. The Python list surface runs the claude live-status probe and words a supersession (`contradicted-by-<falsifier>`); the daemon projection does not run that probe, so it emits `not-probed` - 'this lane did not ask', not 'measured, nothing found'. A lane that did not ask says so: a field with a basis shows the basis, never blank."
   },
   "rust_only": {

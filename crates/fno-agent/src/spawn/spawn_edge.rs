@@ -147,19 +147,20 @@ pub(crate) fn stamp_lineage_kinds(r: &mut crate::state::Registry) {
     }
 }
 
-/// Stamp the row's dispatch verb (the name grammar's command code) beside
-/// [`stamp_lineage_kinds`], for the same readers: the sideline renders the
-/// verb from this served fact instead of re-parsing the name, which is what
-/// lets a worker name drop its verb prefix without blindfolding a renderer.
-/// A name the grammar cannot parse (a bare pane, a shell) stamps no verb,
-/// and a rename re-derives it on the next sweep. Same writer rule as the
-/// lineage kind: the sweep writes it, nothing else does.
-pub(crate) fn stamp_verbs(r: &mut crate::state::Registry) {
+/// Stamp the row's dispatch command code (the name grammar's own parse)
+/// beside [`stamp_lineage_kinds`], for the same readers: the sideline
+/// renders the mark from this served fact instead of re-parsing the name,
+/// which is what lets a worker name drop its command prefix without
+/// blindfolding a renderer. A name the grammar cannot parse (a bare pane,
+/// a shell) stamps no code, and a rename re-derives it on the next sweep.
+/// Same writer rule as the lineage kind: the sweep writes it, nothing
+/// else does.
+pub(crate) fn stamp_command_codes(r: &mut crate::state::Registry) {
     for row in r.entries.iter_mut() {
-        let verb =
+        let command_code =
             crate::naming::parse_dispatch_agent_name(Some(row.name.as_str())).map(|p| p.command);
-        if row.verb != verb {
-            row.verb = verb;
+        if row.command_code != command_code {
+            row.command_code = command_code;
         }
     }
 }
@@ -232,9 +233,9 @@ mod tests {
     }
 
     #[test]
-    fn stamp_verbs_reads_the_grammar_and_skips_unparseable_names() {
-        // The verb is the grammar's command code, stamped beside the lineage
-        // kind. A bare pane or a shell parses to no verb and stays
+    fn stamp_command_codes_reads_the_grammar_and_skips_unparseable_names() {
+        // The code is the grammar's own parse, stamped beside the lineage
+        // kind. A bare pane or a shell parses to no code and stays
         // unstamped, and a rename re-derives on the next sweep.
         let mut r = crate::state::Registry::default();
         r.entries = vec![
@@ -245,10 +246,14 @@ mod tests {
             row("shell", "s-5", None),
             row("j-x-cccc-2", "s-6", None),
         ];
-        stamp_verbs(&mut r);
-        let verbs: Vec<Option<&str>> = r.entries.iter().map(|e| e.verb.as_deref()).collect();
+        stamp_command_codes(&mut r);
+        let codes: Vec<Option<&str>> = r
+            .entries
+            .iter()
+            .map(|e| e.command_code.as_deref())
+            .collect();
         assert_eq!(
-            verbs,
+            codes,
             vec![Some("t"), Some("bp"), Some("t"), Some("th"), None, None]
         );
     }

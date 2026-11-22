@@ -31,21 +31,21 @@ fn keys_modal_legend_lists_severity_glyphs_in_header_order() {
             other => panic!("legend rows are inert entries, got {other:?}"),
         }
     }
-    // The verb-mark section follows the severity block: its rows go back
-    // through `verb_mark`, the one table the rows call, so the legend
+    // The command-mark section follows the severity block: its rows go
+    // back through `command_mark`, the one table the rows call, so the legend
     // cannot spell a mark the screen never paints.
     assert!(matches!(
         rows.get(start + 1 + SEVERITY_ORDER.len()),
-        Some(PopupRow::Header(h)) if h == "verb marks"
+        Some(PopupRow::Header(h)) if h == "command marks"
     ));
-    let verb_start = start + 2 + SEVERITY_ORDER.len();
-    let verb_rows: Vec<&PopupRow> = rows
+    let marks_start = start + 2 + SEVERITY_ORDER.len();
+    let mark_rows: Vec<&PopupRow> = rows
         .iter()
-        .skip(verb_start)
+        .skip(marks_start)
         .take_while(|r| matches!(r, PopupRow::Entry { .. }))
         .collect();
-    assert_eq!(verb_rows.len(), 2, "target and blueprint carry rows");
-    for row in verb_rows {
+    assert_eq!(mark_rows.len(), 2, "target and blueprint carry rows");
+    for row in mark_rows {
         match row {
             PopupRow::Entry {
                 glyph,
@@ -55,11 +55,11 @@ fn keys_modal_legend_lists_severity_glyphs_in_header_order() {
             } => {
                 assert!(
                     glyph == "⌖" || glyph == "⌕",
-                    "unexpected verb glyph {glyph:?}"
+                    "unexpected command glyph {glyph:?}"
                 );
                 assert!(label.contains("/fno:target") || label.contains("/fno:blueprint"));
             }
-            other => panic!("verb legend rows are inert entries, got {other:?}"),
+            other => panic!("mark legend rows are inert entries, got {other:?}"),
         }
     }
 }

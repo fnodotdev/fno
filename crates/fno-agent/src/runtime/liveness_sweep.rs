@@ -1102,11 +1102,11 @@ pub(crate) fn apply_reconcile_changes(
     crate::row_truth::apply_title_changes(r, entries, titles);
     // Stamp the derived CHILD/PEER word while the lock is held, so sideline
     // readers that cannot link fno-agent read the edge kind as a served
-    // fact instead of re-deriving it. Stamp the verb beside it in the same
-    // lock window, so a row's verb lands with its edge kind and no reader
+    // fact instead of re-deriving it. Stamp the code beside it in the same
+    // lock window, so a row's code lands with its edge kind and no reader
     // ever sees one without the other.
     crate::spawn_edge::stamp_lineage_kinds(r);
-    crate::spawn_edge::stamp_verbs(r);
+    crate::spawn_edge::stamp_command_codes(r);
     applied
 }
 
