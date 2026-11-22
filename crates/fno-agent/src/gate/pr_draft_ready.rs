@@ -564,11 +564,15 @@ mod tests {
         assert_eq!(calls.get(), 0, "the draft stays draft: gh never runs");
         assert!(verdict.receipt.is_some_and(|r| r.contains("d-hold-543")));
 
-        // An empty store binds no hold; the flip proceeds and journals.
-        fs::write(dir.join("decisions.jsonl"), "").unwrap();
+        // An empty store binds no hold; the flip proceeds and journals. A
+        // fresh fixture dir gives the store cache a brand-new key, so the
+        // clear read can never serve the seeded rows above.
+        let clear = fixture_dir("flip-clear");
+        hermetic(&clear);
+        fs::write(clear.join("decisions.jsonl"), "").unwrap();
         let out = flip(&spec, &gh);
         let verdict: FlipVerdict = serde_json::from_value(out).unwrap();
-        assert_eq!(verdict.outcome, "flipped");
+        assert_eq!(verdict.outcome, "flipped", "receipt: {:?}", verdict.receipt);
         assert_eq!(calls.get(), 1);
         hermetic_drop();
     }
