@@ -244,7 +244,12 @@ fn widened_path(path: &str, home: &str) -> String {
     dirs.join(":")
 }
 
-/// Run the app (or the headless probe) and return the process exit code.
+/// The footer draws the computer mark instead of the globe: the icon
+/// variant shot door.
+pub fn set_computer_icon() {
+    left_footer::draw_computer(true);
+}
+
 /// Run the app (or the headless probe) and return the process exit code.
 pub fn run(opts: Options) -> i32 {
     if let Some(shot) = opts.shot {

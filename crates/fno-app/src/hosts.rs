@@ -1,4 +1,4 @@
-//! The connect-a-host step: the left footer's monitor button opens it.
+//! The connect-a-host step: the left footer's host button opens it.
 //! The fleet's hosts pick through, and the join line a new machine runs.
 //! The connect work itself runs in the mux; this step is the app's own
 //! door to it.

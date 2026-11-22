@@ -3,6 +3,7 @@
 //! it, so it never scrolls away. No machine chip: Machines stay in the
 //! list.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
 use gpui::{div, prelude::*, px, rgb, Div};
@@ -12,6 +13,71 @@ use super::ui::{self, Role};
 use super::window::{OpenSettings, ShowHosts};
 
 static NAME: OnceLock<Option<String>> = OnceLock::new();
+
+static COMPUTER: AtomicBool = AtomicBool::new(false);
+
+/// Shot door: draw the computer mark instead of the globe, so the
+/// variant shots come from the same binary. The default stays the globe.
+pub fn draw_computer(yes: bool) {
+    COMPUTER.store(yes, Ordering::Relaxed);
+}
+
+/// The footer's host mark at the gear's 12px: the TUI line globe, a
+/// circle with its equator and meridian, or the computer. One line
+/// weight, monochrome, so it takes both palettes the way the gear does.
+fn host_mark(p: &Palette) -> Div {
+    if COMPUTER.load(Ordering::Relaxed) {
+        return div()
+            .flex_none()
+            .size(px(12.0))
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(1.0))
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(12.0))
+                    .h(px(10.0))
+                    .border_1()
+                    .border_color(rgb(p.muted))
+                    .rounded(px(2.0)),
+            )
+            .child(div().flex_none().w(px(6.0)).h(px(1.0)).bg(rgb(p.muted)));
+    }
+    div()
+        .relative()
+        .flex_none()
+        .size(px(12.0))
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .border_1()
+                .border_color(rgb(p.muted))
+                .rounded_full(),
+        )
+        .child(
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .top(px(5.5))
+                .h(px(1.0))
+                .bg(rgb(p.muted)),
+        )
+        .child(
+            div()
+                .absolute()
+                .left(px(3.0))
+                .right(px(3.0))
+                .top_0()
+                .bottom_0()
+                .border_1()
+                .border_color(rgb(p.muted))
+                .rounded_full(),
+        )
+}
 
 /// Read the macOS full user name once, off the UI thread, at launch.
 pub fn prime() {
@@ -65,33 +131,19 @@ pub(super) fn render(p: &Palette) -> Div {
                 .child(ui::text(initial, Role::Label, p)),
         )
         .child(ui::clamp(name, Role::Name, p))
-        // The host button: a drawn monitor, monochrome so it takes both
-        // palettes the way the gear does. One click opens the
-        // connect-a-host step.
+        // The host button: the mark sits at the gear's 12px. One click
+        // opens the connect-a-host step.
         .child(
             ui::clickable(
                 div()
                     .id("left-footer-hosts")
                     .flex_none()
                     .p(px(3.0))
-                    .rounded(px(4.0))
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .gap(px(1.0)),
+                    .rounded(px(4.0)),
                 p,
             )
             .on_click(|_, window, cx| window.dispatch_action(Box::new(ShowHosts), cx))
-            .child(
-                div()
-                    .flex_none()
-                    .w(px(12.0))
-                    .h(px(9.0))
-                    .border_1()
-                    .border_color(rgb(p.muted))
-                    .rounded(px(2.0)),
-            )
-            .child(div().flex_none().w(px(6.0)).h(px(1.0)).bg(rgb(p.muted))),
+            .child(host_mark(p)),
         )
         .child(
             div()

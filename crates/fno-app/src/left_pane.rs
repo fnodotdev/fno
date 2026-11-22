@@ -790,13 +790,13 @@ fn grouping_button(mode: GroupBy, p: &Palette, cx: &mut Context<Root>) -> Div {
     )
 }
 
-/// The Workspaces header's right side: the circled + names a new workspace
+/// The Workspaces header's right side: the plus names a new workspace
 /// inline, under the header.
 fn workspaces_header_plus(p: &Palette, cx: &mut Context<Root>) -> Div {
     div().child(
         ui::clickable(div().id("workspaces-plus").px_1(), p)
             .on_click(cx.listener(|root, _, _, cx| root.act(Action::NewWorkspace, cx)))
-            .child(div().text_color(rgb(p.faint)).child("⊕".to_string())),
+            .child(div().text_color(rgb(p.faint)).child("+".to_string())),
     )
 }
 
@@ -836,7 +836,7 @@ fn header_marks(
                 cx.stop_propagation();
                 root.act(Action::OpenAddMenu(squad), cx);
             }))
-            .child(div().text_color(rgb(p.faint)).child("⊕".to_string())),
+            .child(div().text_color(rgb(p.faint)).child("+".to_string())),
         );
     }
     match fold {
