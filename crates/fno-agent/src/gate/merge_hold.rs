@@ -966,7 +966,9 @@ fn release_evidence_refusal(
     graph: &Path,
     decisions_jsonl: &Path,
 ) -> Option<Value> {
-    let qids = named_question_ids(hold_text);
+    let mut qids = named_question_ids(hold_text);
+    // A number can cite a decision ("per D12") or be plain words ("Q3").
+    qids.retain(|id| crate::numbers::mint::names_question(graph, id));
     if !set_by.eq_ignore_ascii_case("user") && qids.is_empty() {
         return None;
     }

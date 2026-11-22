@@ -4,7 +4,7 @@
 //! on any key the map cannot carry. `--apply` and `--rollback` live in
 //! [`apply`].
 
-use super::{answer_links, beat, canonical, current_store, db_path, open_read_at};
+use super::{answer_links, beat, canonical, current_store, db_path, number_held, open_read_at};
 use rusqlite::{params, Connection};
 use serde::Deserialize;
 use serde_json::json;
@@ -201,7 +201,13 @@ pub fn run(args: &[String]) -> i32 {
     if !check {
         // One beat first, so a key filed since the last beat has its number.
         if let Ok(cwd) = std::env::current_dir() {
-            if let Err(error) = beat(&cwd) {
+            // Only an apply lands what waits in the outbox.
+            let numbering = if args.iter().any(|a| a == "--apply") {
+                beat
+            } else {
+                number_held
+            };
+            if let Err(error) = numbering(&cwd) {
                 eprintln!("migrate ids: the numbering beat failed ({error}); mapping what is held");
             }
         }

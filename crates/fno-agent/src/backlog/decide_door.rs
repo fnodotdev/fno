@@ -904,7 +904,14 @@ for a lead ruling inside its own scope; omit the flag to resolve it from this se
         } else if crate::numbers::is_label_key(t) {
             // The supersession gate compares keys, and an older row's key is
             // still its hash. A number no decision holds links nothing.
-            door.supersedes = crate::numbers::resolve('d', t).filter(|id| !id.starts_with("q-"));
+            door.supersedes = crate::numbers::resolve('d', t).filter(|id| {
+                !id.starts_with("q-")
+                    && (!crate::numbers::is_label_key(id)
+                        || all_decision_rows().map_or(true, |(rows, _)| {
+                            rows.iter()
+                                .any(|r| decision_row_str(r, "decision_id") == *id)
+                        }))
+            });
         }
     }
     // Supersession: an unknown target refuses before any write (a transposed

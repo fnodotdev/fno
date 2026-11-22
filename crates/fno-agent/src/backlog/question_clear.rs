@@ -1648,7 +1648,8 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                         .unwrap_or_default()
                         .to_string();
                     let written = if id.is_empty() {
-                        queue_answer(req, event.clone())
+                        let after = queued_retraction(req, question_event, &text);
+                        queue_answer(req, event.clone(), after)
                     } else {
                         api::decision_record(&Store::new(&req.graph), event.clone()).map(drop)
                     };
@@ -1777,7 +1778,11 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                 .or_else(|| retraction_fallback(question_event))
                 .filter(|_| operator_can_grant(req))
             {
-                if retraction_answer_grants(question_event, &text, stamped) {
+                if queued {
+                    answer.lines.push(format!(
+                        "outstanding: the answer at {subject} retracts nothing until the primary numbers it"
+                    ));
+                } else if retraction_answer_grants(question_event, &text, stamped) {
                     // The validate gate decides, first pass or resumed
                     // repair alike: a live target writes now, an already
                     // retired target receipts its refusal, and a partial
@@ -2033,14 +2038,18 @@ pub(crate) fn append_decision_mirror(
 
 /// Hold an answer the primary could not number. The question still closes
 /// now; the drain writes the decision.
-fn queue_answer(req: &ClearRequest, event: Value) -> Result<(), api::ApiError> {
+fn queue_answer(
+    req: &ClearRequest,
+    event: Value,
+    after: crate::numbers::mint::After,
+) -> Result<(), api::ApiError> {
     let queued = crate::numbers::mint::Queued::Decision {
         event,
         journal: req.journal_path.clone(),
         index: req.decisions_path.clone(),
         graph: req.graph.clone(),
         sign: false,
-        after: crate::numbers::mint::After::Nothing,
+        after,
     };
     crate::numbers::mint::queue(&queued).map_err(|e| api::ApiError(e.to_string()))
 }
@@ -2055,7 +2064,10 @@ pub(crate) fn record_decision_row(req: &ClearRequest, event: Value) -> Result<St
         .unwrap_or_default()
         .to_string();
     if id.is_empty() {
-        return queue_answer(req, event).map(|()| id).map_err(|e| e.0);
+        let after = crate::numbers::mint::After::Nothing;
+        return queue_answer(req, event, after)
+            .map(|()| id)
+            .map_err(|e| e.0);
     }
     api::decision_record(&Store::new(&req.graph), event).map_err(|e| e.0)?;
     append_decision_mirror(&req.journal_path, &line, &id)?;
@@ -2567,6 +2579,36 @@ fn validate_live_law_target(target_id: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// The retraction a queued answer owes once it has its number.
+fn queued_retraction(
+    req: &ClearRequest,
+    question_event: &Value,
+    text: &str,
+) -> crate::numbers::mint::After {
+    let stamped = retraction_subject(question_event).is_some();
+    retraction_subject(question_event)
+        .or_else(|| retraction_fallback(question_event))
+        .filter(|_| operator_can_grant(req))
+        .filter(|_| retraction_answer_grants(question_event, text, stamped))
+        .map_or(crate::numbers::mint::After::Nothing, |(subject, target)| {
+            crate::numbers::mint::After::Retract { subject, target }
+        })
+}
+
+/// The drain's half of [`queued_retraction`]: the same gate and write, now
+/// that the answer is recorded. The migration can have renamed the target.
+pub(crate) fn after_retraction(qid: &str, subject: &str, target: &str, reason: &str) {
+    let target = crate::numbers::resolve('d', target).unwrap_or_else(|| target.to_string());
+    let mut answer = ClearAnswer::new();
+    match validate_live_law_target(&target) {
+        Err(error) => answer.lines.push(format!("outstanding: {error}")),
+        Ok(()) => perform_retraction(&mut answer, qid, subject, &target, reason),
+    }
+    for line in &answer.lines {
+        eprintln!("{line}");
+    }
 }
 
 /// The board answer's retraction: write through the shared writer, receipt

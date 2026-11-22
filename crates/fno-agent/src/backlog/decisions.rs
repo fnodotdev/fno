@@ -182,6 +182,30 @@ pub fn retract(connection: &Connection, event: &Value) -> Result<(), String> {
     record(connection, event)
 }
 
+/// An answer's key is its question's number, so two answers can race to one
+/// key. `insert_event` keeps the first in silence. A replay of that same
+/// ruling still passes here.
+fn refuse_taken_key(connection: &Connection, event: &Value) -> Result<(), String> {
+    let Some(data) = event.pointer("/data").map(Value::to_string) else {
+        return Ok(());
+    };
+    let taken: Option<String> = connection
+        .query_row(
+            "SELECT event_id FROM decisions
+             WHERE event_id = json_extract(?1, '$.decision_id') AND json_valid(data)
+               AND json_extract(data, '$.decision') <> json_extract(?1, '$.decision')",
+            params![data],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    taken.map_or(Ok(()), |id| {
+        Err(format!(
+            "{id} already holds another ruling. Run the command again to take a new number"
+        ))
+    })
+}
+
 /// Record an event and its subject join under one immediate transaction. The
 /// API mutation counter moves only after the event and join have landed.
 pub fn record_connected(
@@ -192,6 +216,7 @@ pub fn record_connected(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
+    refuse_taken_key(&transaction, event)?;
     let event_id = insert_event(&transaction, event)?;
     attach_subject(&transaction, event, &event_id)?;
     super::stamp_version(&transaction, &format!("decision:{event_id}"))?;

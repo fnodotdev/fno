@@ -37,6 +37,27 @@ fn a_number_is_the_key_and_an_answer_takes_its_questions_number_once() {
         // `event_id` is UNIQUE, so a second answer needs a number of its own.
         assert_ne!(answer(qid), label, "a second answer would be dropped");
     }
+    assert!(
+        names_question(&graph, "D2"),
+        "an answered question still reads as one"
+    );
+    let ruling = mint_key_at(&db, None, "h").unwrap().unwrap();
+    let event = json!({"type": "operator_decision", "source": "test",
+        "data": {"decision_id": ruling, "decision": "no"}});
+    crate::backlog::decisions::insert_event(&conn, &event).unwrap();
+    assert!(
+        !names_question(&graph, &ruling),
+        "a cited decision names no question"
+    );
+    assert!(
+        !names_question(&graph, "Q3"),
+        "plain words name no question"
+    );
+
+    let store = crate::backlog::api::Store::new(&graph);
+    let racing = json!({"type": "operator_decision", "source": "test",
+        "data": {"decision_id": "D2", "question_id": "D2", "decision": "no"}});
+    assert!(crate::backlog::api::decision_record(&store, racing).is_err());
 }
 
 #[test]

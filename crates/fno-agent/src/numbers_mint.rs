@@ -31,6 +31,8 @@ pub(crate) enum MintError {
     Store(String),
     #[error("no number minted: the primary {host} refused: {detail}")]
     Primary { host: String, detail: String },
+    #[error("an earlier copy of this record is taking its number now. Run the command again after the next beat")]
+    Numbering,
 }
 
 impl From<rusqlite::Error> for MintError {
@@ -152,7 +154,7 @@ pub(crate) fn answer_key_at(
         label = own_number(&conn, question, store)?;
     }
     if let Some(label) = label {
-        if !decision_holds(&conn, &label, question)? {
+        if !decision_holds(&conn, &label, question)? && !outbox::numbered(&conn, &label)? {
             return Ok(Some(label));
         }
     }
@@ -168,6 +170,31 @@ fn own_number(conn: &Connection, key: &str, store: &str) -> Result<Option<String
             |row| row.get(0),
         )
         .optional()?)
+}
+
+/// Whether `id`, read from free text, names a question. A number does when
+/// it was minted as a key and no decision other than that question's answer
+/// holds it. A store that cannot answer reads as a question, so a guard on
+/// this fails closed.
+pub(crate) fn names_question(graph: &Path, id: &str) -> bool {
+    if !is_label_key(id) {
+        return true;
+    }
+    let Ok(conn) = crate::backlog::open(graph) else {
+        return true;
+    };
+    conn.execute_batch(DDL)
+        .and_then(|()| {
+            conn.query_row(
+                "SELECT EXISTS (SELECT 1 FROM fno_numbers WHERE key = ?1) \
+                 AND NOT EXISTS (SELECT 1 FROM decisions WHERE event_id = ?1 \
+                 AND json_valid(data) \
+                 AND COALESCE(json_extract(data, '$.question_id'), '') <> ?1)",
+                params![id],
+                |row| row.get(0),
+            )
+        })
+        .unwrap_or(true)
 }
 
 /// Whether a decision already holds the number or answers the question.

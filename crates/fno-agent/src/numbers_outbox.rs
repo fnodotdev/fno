@@ -26,6 +26,7 @@ pub(crate) enum After {
     Nothing,
     Law { sweep: Vec<String> },
     Decide { question: Option<String> },
+    Retract { subject: String, target: String },
 }
 
 /// One record with every field but its id.
@@ -104,11 +105,11 @@ fn store_error(error: impl std::fmt::Display) -> MintError {
 }
 
 /// Hold `record` until a beat can number it. The newest copy wins until
-/// then; a numbered row is already being written and stays as it is.
+/// then. A numbered row is already being written, so a newer copy refuses.
 pub(crate) fn enqueue(db: &Path, record: &Queued) -> Result<(), MintError> {
     let conn = open_write_at(db).map_err(MintError::Store)?;
     conn.execute_batch(DDL)?;
-    conn.execute(
+    let held = conn.execute(
         "INSERT INTO fno_number_outbox (same, record, created_at) \
          VALUES (?1, ?2, strftime('%s','now')) \
          ON CONFLICT(same) DO UPDATE SET record = excluded.record WHERE label IS NULL",
@@ -117,6 +118,9 @@ pub(crate) fn enqueue(db: &Path, record: &Queued) -> Result<(), MintError> {
             serde_json::to_string(record).map_err(store_error)?
         ],
     )?;
+    if held == 0 {
+        return Err(MintError::Numbering);
+    }
     Ok(())
 }
 
@@ -261,8 +265,13 @@ pub(crate) fn drain_at(db: &Path, remote: Option<&Remote>, host: &str) -> Result
             continue;
         };
         if saved.is_none() {
-            let Some(label) = number_for(&conn, db, &queued, remote, host)? else {
-                return Ok(landed);
+            let label = match number_for(&conn, db, &queued, remote, host) {
+                Ok(Some(label)) => label,
+                Ok(None) => return Ok(landed),
+                Err(error) => {
+                    eprintln!("numbers outbox: row {seq} has no number yet ({error})");
+                    continue;
+                }
             };
             conn.execute(
                 "UPDATE fno_number_outbox SET label = ?2 WHERE seq = ?1 AND label IS NULL",
@@ -309,19 +318,18 @@ fn number_for(
     let Some(question) = question else {
         return reserve(conn, remote, host);
     };
-    let Some(label) = answer_key_at(db, &question, remote, host)? else {
-        return Ok(None);
-    };
-    // An earlier answer still in the outbox holds the number already.
-    let held: bool = conn.query_row(
+    answer_key_at(db, &question, remote, host)
+}
+
+/// Whether a waiting record already took `label`. Such an answer holds the
+/// number before its decision row exists.
+pub(super) fn numbered(conn: &Connection, label: &str) -> Result<bool, MintError> {
+    conn.execute_batch(DDL)?;
+    Ok(conn.query_row(
         "SELECT EXISTS (SELECT 1 FROM fno_number_outbox WHERE label = ?1)",
         params![label],
         |row| row.get(0),
-    )?;
-    if held {
-        return reserve(conn, remote, host);
-    }
-    Ok(Some(label))
+    )?)
 }
 
 fn write(conn: &Connection, queued: &mut Queued, label: &str) -> Result<(), FileError> {
@@ -377,6 +385,10 @@ fn follow_up(queued: &Queued, label: &str) {
     let decision = data.decision.as_deref().unwrap_or_default();
     match after {
         After::Nothing => {}
+        After::Retract { subject, target } => {
+            let question = data.question_id.as_deref().unwrap_or_default();
+            crate::question_clear::after_retraction(question, subject, target, decision)
+        }
         After::Law { sweep } => crate::law_match::after_law(label, subject, decision, sweep),
         After::Decide { question } => crate::decide_door::after_decide(
             journal,

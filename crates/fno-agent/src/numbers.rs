@@ -1047,6 +1047,12 @@ fn beat(cwd: &Path) -> Result<usize, String> {
     if let Err(error) = mint::drain() {
         eprintln!("numbers-arm: the outbox waits ({error})");
     }
+    number_held(cwd)
+}
+
+/// The beat without the drain: it numbers what is recorded and records
+/// nothing, so a dry run can use it.
+fn number_held(cwd: &Path) -> Result<usize, String> {
     let remote = crate::store_remote::configured()?;
     let decisions = crate::decision_index::default_store_live()?;
     let home = crate::paths::AgentsHome::from_env();
