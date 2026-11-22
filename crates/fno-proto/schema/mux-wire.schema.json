@@ -2049,6 +2049,29 @@
         },
         {
           "additionalProperties": false,
+          "description": "(v132) The desktop app's chat composer reports a live draft on the\npane its session shows in. The draft rides app-local state and only\nreaches the pane at send (a paste, then Enter), so while the user\ntypes, the pane composer sits empty and no pane keystroke witness\nexists: a live mail inject would land a turn over text the user is\nstill composing. Each composer edit re-opens the pane's USER draft\narm (the latch pane keystrokes open) and the coalesced\n`operator_typing` witness row, so a live inject refuses and queues\ndurable until the draft submits or expires. Same read-only gate as\n[`ClientMsg::Input`].",
+          "properties": {
+            "DraftHint": {
+              "properties": {
+                "pane": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "pane"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "DraftHint"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "(v116) A passive client names itself and the pane it watches, right\nafter `Attach`. Ignored from a non-passive client. The tag lasts as\nlong as the connection.",
           "properties": {
             "Observe": {
@@ -7546,7 +7569,7 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "min_compat_proto": 58,
-  "proto_version": 131,
+  "proto_version": 132,
   "roots": {
     "ClientMsg": {
       "$ref": "#/$defs/ClientMsg"
