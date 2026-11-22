@@ -559,6 +559,7 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
                             None,
                             &mut reasons,
                             "unknown",
+                            args.steer,
                         );
                         lane_state = state;
                         injected = lane_state.reached();
@@ -573,8 +574,11 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
             _ => {
                 // No live registry row (the hit resolved off transcripts,
                 // roster, daemon or graph alone): keep the direct session-id
-                // inject by harness, this arm's off-registry shape.
-                let lane_harness = resolved.agent.clone();
+                // inject for claude and codex only. The keeper lane needs a
+                // row's keeper socket, which a rowless hit by definition
+                // lacks, and a paneless keeper attempt refuses - so any
+                // other harness here has no live rung and demotes, exactly
+                // as this arm did before the shared ladder landed.
                 if provider.as_deref().map(Harness::parse) == Some(Harness::Claude) {
                     let mut reasons = Vec::new();
                     lane_state = mail_inject_claude(
@@ -592,18 +596,6 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
                     let mut reasons = Vec::new();
                     lane_state =
                         mail_inject_codex(&resolved.session_id, &wrapped, Some(&mut reasons), None);
-                    injected = lane_state.reached();
-                    if !injected && !reasons.is_empty() {
-                        live_reason = Some(reasons.join(";"));
-                    }
-                } else {
-                    let mut reasons = Vec::new();
-                    lane_state = mail_inject_keeper(
-                        &resolved.session_id,
-                        &wrapped,
-                        &lane_harness,
-                        Some(&mut reasons),
-                    );
                     injected = lane_state.reached();
                     if !injected && !reasons.is_empty() {
                         live_reason = Some(reasons.join(";"));

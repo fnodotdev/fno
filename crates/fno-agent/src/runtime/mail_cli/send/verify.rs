@@ -384,21 +384,25 @@ pub(super) fn report_landing(
 
 /// The live-drain verdict gate: an unconfirmed inject holds for the turn
 /// boundary (the documented semantic - it may land past the confirm window),
-/// a hard refusal (`no-pane-ref` among them) and a missing reason are a
-/// failed send. This is the arm that masked the four 2026-11-22 lead replies.
+/// and a hard refusal (`no-pane-ref` among them) is a failed send. A missing
+/// reason is unknown, not a refusal: unknown holds, because every caller
+/// that reaches the gate with None recorded no live miss at all.
 pub(super) fn live_drain_holds(failed_reason: Option<&str>) -> bool {
-    failed_reason.is_some_and(|r| crate::mail_receipt::is_live_lane_failure(Some(r)))
+    match failed_reason {
+        None => true,
+        Some(r) => crate::mail_receipt::is_live_lane_failure(Some(r)),
+    }
 }
 
 #[cfg(test)]
 mod live_drain_tests {
     /// The no-pane-ref arm: a hard refusal is a failed send, never a held
-    /// turn. An unconfirmed inject holds; a missing reason does not.
+    /// turn. An unconfirmed inject and a missing reason hold.
     #[test]
-    fn the_live_drain_gate_holds_only_unconfirmed_injects() {
+    fn the_live_drain_gate_holds_unconfirmed_and_unknown_not_refusals() {
         assert!(!super::live_drain_holds(Some("no-pane-ref")));
         assert!(!super::live_drain_holds(Some("stage-failed")));
-        assert!(!super::live_drain_holds(None));
+        assert!(super::live_drain_holds(None));
         assert!(super::live_drain_holds(Some("not-confirmed;waited-3s")));
         assert!(super::live_drain_holds(Some("mux-send-failed-2")));
     }

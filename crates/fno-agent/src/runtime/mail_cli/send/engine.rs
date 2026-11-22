@@ -795,6 +795,7 @@ pub(super) fn deliver_live(
         sender_entry,
         reason_out,
         family1_state,
+        true,
     )
     .0
 }
@@ -871,7 +872,9 @@ fn pane_raw_send(row: &Value, turn: &TurnText) -> bool {
 }
 
 /// `deliver_live` plus the fallback receipt status (empty when the chosen
-/// lane answered alone).
+/// lane answered alone). `steer` carries the caller's absorb posture to the
+/// claude switchboard lane: true types one line the recipient absorbs
+/// mid-turn, false keeps the multi-line form the harness queue parks.
 pub(super) fn deliver_live_lane(
     row: &Value,
     turn: &TurnText,
@@ -879,6 +882,7 @@ pub(super) fn deliver_live_lane(
     sender_entry: Option<&Value>,
     reason_out: &mut Vec<String>,
     _family1_state: &str,
+    steer: bool,
 ) -> (DeliveryState, String) {
     // Bus-only bounds EVERY live transport below, this fn's first gate.
     let policy = crate::mail_hold::gate(
@@ -894,6 +898,7 @@ pub(super) fn deliver_live_lane(
         row,
         from_name,
         sender_entry,
+        steer,
     };
     let target = live_target(row);
     // The order is `mail::lane::LADDER`'s; the match gives each kind its adapter.
@@ -926,6 +931,8 @@ struct LiveCtx<'a> {
     row: &'a Value,
     from_name: &'a str,
     sender_entry: Option<&'a Value>,
+    /// The caller's absorb posture; only the claude switchboard lane reads it.
+    steer: bool,
 }
 
 /// The registry row flattened to the shape `mail::lane` selects on.
@@ -1100,9 +1107,15 @@ impl Lane for ClaudeSwitchboardLane<'_> {
 
     /// The control.sock rung parks a turn on any new line, and every row
     /// this lane serves has no pane (the pane lane runs first), so the
-    /// paneless law's one line rules (d-5641722b).
+    /// paneless law's one line rules (d-5641722b). The caller's steer=false
+    /// opts into the parked multi-line form the harness queue holds until a
+    /// turn boundary - the name lane's own posture before the law.
     fn newline_rule(&self) -> NewlineRule {
-        NewlineRule::OneLine
+        if self.0.steer {
+            NewlineRule::OneLine
+        } else {
+            NewlineRule::Verbatim
+        }
     }
 
     fn deliver(&self, turn: &TurnText, t: &Target, reason_out: &mut Vec<String>) -> DeliveryState {
@@ -1111,6 +1124,7 @@ impl Lane for ClaudeSwitchboardLane<'_> {
             row,
             from_name,
             sender_entry,
+            ..
         } = self.0;
         // The switchboard fast lane: the daemon probes B's worker socket, so a
         // claude peer that is NOT a live stream thread answers delivered=false and
@@ -1775,6 +1789,7 @@ pub(super) fn dispatch_send_locked(
                 sender_row.as_ref(),
                 &mut live_reasons,
                 &family1_state,
+                true,
             );
             if !fallback.is_empty() {
                 fallback_receipt = Some(fallback);
