@@ -2372,7 +2372,10 @@ mod tests {
         std::fs::write(root.join("flight/a"), "legacy").unwrap();
         std::fs::write(root.join("state/flight/a"), "new").unwrap();
         let out = migrate_reverse(&root, &["flight".to_string()], true).unwrap();
-        assert!(matches!(out.entries[0].status, Status::Refused(_)));
+        assert!(matches!(
+            out.entries.first().map(|e| &e.status),
+            Some(Status::Refused(_))
+        ));
         assert_eq!(std::fs::read(root.join("state/flight/a")).unwrap(), b"new");
         clean(&root);
     }
@@ -2543,7 +2546,6 @@ mod tests {
             crate::lead_ops::drain_cache_file(cwd).unwrap(),
             crate::plans_dirs::cache_path(cwd).unwrap(),
             crate::accounts::benchmarks::snapshot_path(cwd).unwrap(),
-            crate::model_price::cache_path(&m.root),
             crate::correction_fold::write_path(&m.root),
             place_new(&m.root, "graph.html"),
             place_dir(&m.root, "context-cache").unwrap().join("c.json"),

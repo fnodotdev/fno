@@ -84,6 +84,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_BUS_LOCK_TIMEOUT_SECS` | rs | Overrides the bus-append door's sidecar-lock wait; test escape hatch for the contended-lock refusal. |
 | `FNO_BUS_MAX_BYTES` | rs | Size cap the bus-append door rotates the live log at; malformed degrades to 5 MB. |
 | `FNO_BUS_RETAIN` | rs | Rotated bus segments the append door keeps; malformed degrades to 5. |
+| `FNO_CACHE_HOME` | rs | The cache class home pin for the default state root: it wins over config `paths.cache_dir` and the platform cache folder. The PreToolUse read skips the config key and takes this pin, then the platform folder. |
 | `FNO_CALLER_KIND` | rs | The surface that shelled this fno-agent command; `mux` stamps `caller_kind` on its events. |
 | `FNO_CARGO_CLASS` | rs | The lane an agent cargo asks for at the cargo admission doors: `repair` for a red PR or a main repair, `prepush` for the compile a push waits on. Unset is the normal lane. Both lanes queue ahead of normal, and a normal try-lock never takes a slot they wait for. |
 | `FNO_CARGO_FREE_BYTES` | rs | Overrides the free-space read the `cargo_build_dirs` cap lane defends against; test escape hatch. |

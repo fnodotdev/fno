@@ -194,10 +194,6 @@ pub(crate) fn state_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".fno"))
 }
 
-pub(crate) fn cache_path(state: &Path) -> PathBuf {
-    crate::state_layout::home_of(state, "cache/models-dev.json")
-}
-
 fn book_path(state: &Path) -> PathBuf {
     crate::state_layout_home::read_home(state, "cache/models-dev.json")
 }
