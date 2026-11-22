@@ -570,16 +570,17 @@ fn red_is_stale(latest: &[Value], runs: &[Value]) -> bool {
 /// Whether every failed row is the ci-required aggregate itself: the row is
 /// keyed by its workflow file, not the job display name.
 fn hold_only_red(latest: &[Value]) -> bool {
-    let failed: Vec<&Value> = latest
+    let failed: Vec<crate::pr_status_de::RowTail> = latest
         .iter()
-        .filter(|row| row.pointer("/bucket").and_then(Value::as_str) == Some("fail"))
+        .map(|row| crate::lenient_de::parse(row))
+        .filter(|row| row.bucket.as_deref() == Some("fail"))
         .collect();
     !failed.is_empty()
         && failed.iter().all(|row| {
-            row.pointer("/workflow")
-                .and_then(Value::as_str)
-                .map(|w| w.ends_with("/ci-required.yml"))
-                .unwrap_or(false)
+            row.workflow
+                .as_deref()
+                .unwrap_or("")
+                .ends_with("/ci-required.yml")
         })
 }
 
@@ -598,18 +599,9 @@ fn pr_hold_label_live(gh_bin: &str, cwd: &Path, pr: u64) -> bool {
         Ok(raw) => raw,
         Err(_) => return false,
     };
-    let parsed: Value = match serde_json::from_str(&raw) {
-        Ok(v) => v,
-        Err(_) => return false,
-    };
-    parsed
-        .as_array()
-        .map(|labels| {
-            labels
-                .iter()
-                .any(|l| l.pointer("/name").and_then(Value::as_str) == Some("pr-hold"))
-        })
-        .unwrap_or(false)
+    let labels: Vec<crate::pr_status_de::LabelTail> =
+        serde_json::from_str(&raw).unwrap_or_default();
+    labels.iter().any(|l| l.name.as_deref() == Some("pr-hold"))
 }
 
 /// Cancel the Actions runs still testing a red `head`, one line per run;
