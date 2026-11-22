@@ -728,30 +728,6 @@ mod tests {
     }
 
     #[test]
-    fn the_hold_subject_form_names_only_real_hold_subjects() {
-        assert!(is_hold_subject("pr-hold:o/r#8"));
-        assert!(is_hold_subject("  pr-hold:o/r#8"));
-        assert!(!is_hold_subject("pr-hold"));
-        assert!(!is_hold_subject("pr-hold:o/r"));
-        assert!(!is_hold_subject("pr-hold:o/r#not-a-number"));
-        assert!(!is_hold_subject("pr-hold:#8"));
-        assert!(!is_hold_subject("merge-freeze:o/r#8"));
-    }
-
-    #[test]
-    fn the_release_wording_is_the_wording_the_effects_path_acts_on() {
-        assert!(is_release_text("release"));
-        assert!(is_release_text(" release "));
-        assert!(is_release_text(
-            "release: the docs gate reads the #NNN form"
-        ));
-        assert!(is_release_text("release with two clean review rounds"));
-        assert!(!is_release_text("released"));
-        assert!(!is_release_text("do not merge this pull request"));
-        assert!(!is_release_text("keep it held"));
-    }
-
-    #[test]
     fn the_outside_predicate_tables_fork_association_cache_and_fails_closed() {
         let base = "fnodotdev/fno";
         let unread = |_: &str, _: &str| -> Permission {

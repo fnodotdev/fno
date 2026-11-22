@@ -232,8 +232,24 @@ pub(crate) struct DecideDoor {
 
 const DECIDE_USAGE: &str = "usage: fno inbox decide <subject> <decision> [--question-id q] [--rationale s] [--option s]... [--supersedes d-x] [--answers-ask s] [--class c] [--overturns s-or-d] --audience internal|customers|customer:<persona> --why s [--job p/s] [--expiry node|pr|date:<when>|never] [--reach global|project:<slug>|machine:<id>|user:<name>] [--keep d-x]... [--decided-by name] [--authority operator|role|agent|beastmode] [--graduation k] [--graduation-ref r] [--read cmd]... [--origin o]  -- a ruling records in one step: audience and why are required when it lands, and a customer ruling names its persona there too.";
 
-pub(crate) fn parse_decide_door(args: &[String]) -> Result<DecideDoor, String> {
-    let mut door = DecideDoor {
+/// The `--reach` value validated at parse: None when the value is not a
+/// session reach the scope readers answer.
+fn parse_reach_flag(v: &str) -> Option<String> {
+    crate::decision_index::is_reach_value(v).then(|| v.to_string())
+}
+
+/// The parse refusal for a value that is not a session reach.
+fn reach_refusal(v: &str) -> String {
+    format!(
+        "--reach '{v}' is not a session reach (global, project:<slug>, \
+machine:<id>, user:<name>)\n{DECIDE_USAGE}"
+    )
+}
+
+/// A parse-empty door: every field unset, so the parse loop assigns one
+/// flag at a time against a known shape.
+fn empty_door() -> DecideDoor {
+    DecideDoor {
         subject: None,
         decision: None,
         question_id: None,
@@ -255,7 +271,11 @@ pub(crate) fn parse_decide_door(args: &[String]) -> Result<DecideDoor, String> {
         why: None,
         job: Vec::new(),
         keep: Vec::new(),
-    };
+    }
+}
+
+pub(crate) fn parse_decide_door(args: &[String]) -> Result<DecideDoor, String> {
+    let mut door = empty_door();
     let mut positional = 0usize;
     let mut i = 0usize;
     while i < args.len() {
@@ -307,13 +327,7 @@ The alias will be removed in a future release."
             "--expiry" => door.expiry = Some(take(&mut i)?),
             "--reach" => {
                 let v = take(&mut i)?;
-                if !crate::decision_index::is_reach_value(&v) {
-                    return Err(format!(
-                        "--reach '{v}' is not a session reach (global, project:<slug>, \
-machine:<id>, user:<name>)\n{DECIDE_USAGE}"
-                    ));
-                }
-                door.reach = Some(v);
+                door.reach = Some(parse_reach_flag(&v).ok_or_else(|| reach_refusal(&v))?);
             }
             "--scope" | "--audience" => door.audience = Some(take(&mut i)?),
             "--why" => door.why = Some(take(&mut i)?),
@@ -1139,7 +1153,9 @@ decision index. Run `fno backlog decide-reindex` before retrying."
             .ok()
             .map(|slug| format!("project:{slug}")),
     ) {
-        data["reach"] = json!(r);
+        if let Some(map) = data.as_object_mut() {
+            map.insert("reach".into(), json!(r));
+        }
     }
     if let Some(r) = &expiry_ref {
         data["expiry_ref"] = json!(r);
@@ -2004,7 +2020,7 @@ mod tests {
             "do not merge this pull request. The docs gate reads the #NNN form.",
         ] {
             assert!(
-                hold_text_gate("pr-hold:o/r#8", text).is_ok(),
+                hold_text_gate("pr-hold:o/r#8", text).is_none(),
                 "the phrase records: {text}"
             );
         }
@@ -2015,12 +2031,37 @@ mod tests {
             "release with two rounds",
         ] {
             assert!(
-                hold_text_gate("pr-hold:o/r#8", text).is_ok(),
+                hold_text_gate("pr-hold:o/r#8", text).is_none(),
                 "a release records: {text}"
             );
         }
         // Pass-through arm: subjects outside the hold door gate nothing.
-        assert!(hold_text_gate("release:fno-version", "anything goes").is_ok());
+        assert!(hold_text_gate("release:fno-version", "anything goes").is_none());
+        // Subject and release wording tables, folded from the gate crate:
+        // the door admits exactly the subjects the effects path parses and
+        // the releases it acts on.
+        assert!(crate::pr_admission::is_hold_subject("pr-hold:o/r#8"));
+        assert!(crate::pr_admission::is_hold_subject("  pr-hold:o/r#8"));
+        assert!(!crate::pr_admission::is_hold_subject("pr-hold"));
+        assert!(!crate::pr_admission::is_hold_subject("pr-hold:o/r"));
+        assert!(!crate::pr_admission::is_hold_subject(
+            "pr-hold:o/r#not-a-number"
+        ));
+        assert!(!crate::pr_admission::is_hold_subject("pr-hold:#8"));
+        assert!(!crate::pr_admission::is_hold_subject("merge-freeze:o/r#8"));
+        assert!(crate::pr_admission::is_release_text("release"));
+        assert!(crate::pr_admission::is_release_text(" release "));
+        assert!(crate::pr_admission::is_release_text(
+            "release: the docs gate reads the #NNN form"
+        ));
+        assert!(crate::pr_admission::is_release_text(
+            "release with two clean review rounds"
+        ));
+        assert!(!crate::pr_admission::is_release_text("released"));
+        assert!(!crate::pr_admission::is_release_text(
+            "do not merge this pull request"
+        ));
+        assert!(!crate::pr_admission::is_release_text("keep it held"));
         // Refuse arm: near spellings and prose, each naming the phrase.
         for text in [
             "do not merge this docs pull request",
@@ -2096,6 +2137,19 @@ mod tests {
 
     #[test]
     fn a_reach_flag_stamps_the_row_the_caller_names() {
+        // The flag validates at parse: a non-reach refuses before any write.
+        let argv: Vec<String> = ["--reach", "banana"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(parse_decide_door(&argv).is_err());
+        let argv: Vec<String> = ["--reach", "project:fnh"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let door = parse_decide_door(&argv).expect("a reach value parses");
+        assert_eq!(door.reach.as_deref(), Some("project:fnh"));
+        // The stamped row states its reach in the recorded receipt.
         let env = DoorEnv::new();
         crate::paths::pin_test_claims_root(env.0.path());
         let code = decide_door_write(
@@ -2118,6 +2172,22 @@ mod tests {
             .find(|r| decision_row_str(r, "subject") == "reach-topic")
             .expect("the row landed");
         assert_eq!(crate::decision_index::row_scope(row), "project:fnh");
+        // The receipt line, on the recorded row and on both lanes.
+        let line = reach_receipt_line(row);
+        assert!(line.contains("reach project:fnh"), "{line}");
+        assert!(
+            line.contains("session rules do not load this row"),
+            "{line}"
+        );
+        let role_row = json!({"authority_source": "role", "reach": "project:fno"});
+        let line = reach_receipt_line(&role_row);
+        assert!(line.contains("reach project:fno"), "{line}");
+        assert!(line.contains("agent lane"), "{line}");
+        let operator_row = json!({"authority_source": "operator", "reach": "global"});
+        let line = reach_receipt_line(&operator_row);
+        assert!(line.contains("reach global"), "{line}");
+        assert!(line.contains("session rules load this row"), "{line}");
+        assert!(!line.contains("do not load"), "{line}");
     }
 
     #[test]
@@ -2147,37 +2217,6 @@ mod tests {
                 "nothing recorded on a refused wide reach"
             );
         }
-    }
-
-    #[test]
-    fn a_reach_flag_that_is_not_a_reach_refuses_at_parse_time() {
-        let argv: Vec<String> = ["--reach", "banana"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        assert!(parse_decide_door(&argv).is_err());
-        let argv: Vec<String> = ["--reach", "project:fnh"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        assert!(parse_decide_door(&argv).is_ok());
-    }
-
-    #[test]
-    fn the_receipt_line_states_reach_and_whether_sessions_load_the_row() {
-        let role_row = json!({"authority_source": "role", "reach": "project:fno"});
-        let line = reach_receipt_line(&role_row);
-        assert!(line.contains("reach project:fno"), "{line}");
-        assert!(
-            line.contains("session rules do not load this row"),
-            "{line}"
-        );
-        assert!(line.contains("agent lane"), "{line}");
-        let operator_row = json!({"authority_source": "operator", "reach": "global"});
-        let line = reach_receipt_line(&operator_row);
-        assert!(line.contains("reach global"), "{line}");
-        assert!(line.contains("session rules load this row"), "{line}");
-        assert!(!line.contains("do not load"), "{line}");
     }
 
     #[test]
