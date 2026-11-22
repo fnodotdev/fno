@@ -808,6 +808,7 @@ pub fn classify(args: &[OsString]) -> FrontDoor {
                 all: args.iter().skip(1).any(|a| a == "--all" || a == "-A"),
             }
         }
+        Some("--version" | "-V") if args.len() == 1 => return FrontDoor::RootVersion,
         Some(first) if first.starts_with('-') => {
             // Root flags before a help request (`fno --server x --help`) ask
             // the root menu too: the root carries no clap help flag, because
@@ -816,7 +817,6 @@ pub fn classify(args: &[OsString]) -> FrontDoor {
                 return FrontDoor::RootHelp { all };
             }
         }
-        Some("--version" | "-V") if args.len() == 1 => return FrontDoor::RootVersion,
         _ => {}
     }
     match front_command()
