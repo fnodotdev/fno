@@ -478,6 +478,38 @@ impl Core {
             self.witness_submit(focus);
         }
     }
+
+    /// The desktop app's live draft on `pane` (a [`ClientMsg::DraftHint`]):
+    /// the same latch a keystroke opens, and the same coalesced C11
+    /// witness, with no bytes to write. The app's composer holds the text
+    /// locally until its send, so this hint is the only proof the pane's
+    /// session has unsent operator words pending; the submit clears the
+    /// latch the send's own Enter opens. The burst map is shared with real
+    /// typing on purpose: a hint inside a live keystroke burst adds no
+    /// second witness row.
+    pub(super) fn draft_hint(&mut self, id: u64, pane: u64) {
+        self.draft_hint_at(id, pane, Instant::now());
+    }
+
+    /// `draft_hint` with the clock supplied: the hold verdict is one
+    /// comparison on the caller's instant, so the tests drive it instead
+    /// of sleeping out a real hold window on a loaded machine.
+    pub(super) fn draft_hint_at(&mut self, id: u64, pane: u64, now: Instant) {
+        // A hint arms only a pane its sender actually views: the same rule
+        // the app's PaneInput write passes, so a stray or hostile pane id
+        // cannot hold mail off a pane nobody is drafting into.
+        let visible = self
+            .client_view(id)
+            .and_then(|view| self.viewed_tab(view))
+            .is_some_and(|tab| crate::tree::leaves(&tab.root).contains(&pane));
+        if !visible {
+            return;
+        }
+        self.composer.note_user_input(pane, now, false);
+        if touch_coalesce(&mut self.touch_last_emit, pane, now) {
+            self.witness_typing(pane);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1030,6 +1062,201 @@ mod tests {
         assert_eq!(
             data["harness_session"], "dddddddd-1112-2222-3333-444455556666",
             "the thread's harness_session joins the portal seat"
+        );
+
+        std::env::remove_var("FNO_AGENT_HOME");
+        drop(guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The app-chat replay (x-44d6): a draft hint arms the pane, a live
+    /// mail send refuses at the guard (queues durable, types nothing), and
+    /// the app's own Enter - riding PaneInput, whose Ok arm clears the
+    /// latch - releases it.
+    #[test]
+    fn a_draft_hint_holds_mail_until_the_app_enter_releases_it() {
+        // The hint witnesses like a keystroke burst, so the journal write
+        // needs the same env isolation even though the test asserts no row.
+        let guard = crate::pane_send_audit::FNO_AGENT_HOME_GUARD
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let dir = std::env::temp_dir().join(format!(
+            "fno-hint-hold-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::env::set_var("FNO_AGENT_HOME", &dir);
+
+        let mut core = witness_test_core(7);
+        core.clients.push(crate::server::Client {
+            id: 1,
+            reliable_tx: tokio::sync::mpsc::channel(1).0,
+            dirty: Default::default(),
+            notify: Arc::new(tokio::sync::Notify::new()),
+            synced_modes: Default::default(),
+            view: (1, 1),
+            visible: Default::default(),
+            dims: (24, 80),
+            passive: false,
+            last_press: None,
+        });
+        let t0 = Instant::now();
+        core.draft_hint_at(1, 7, t0);
+        assert!(
+            core.composer.user_hold(7, t0 + Duration::from_secs(14)),
+            "the draft hint arms the pane's USER hold"
+        );
+        let refused = core.pane_send_gated(7, b"queued mail\r", true, None, Ok(Vec::new()), true);
+        assert!(
+            matches!(
+                refused,
+                crate::proto::ServerMsg::Err {
+                    code: crate::proto::err_code::TARGET_NOT_IDLE,
+                    ..
+                }
+            ),
+            "a live send into the draft queues durable instead of typing: {refused:?}"
+        );
+        // pane_input's Ok arm on the app's paste+Enter chunk.
+        let enter_at = t0 + Duration::from_millis(500);
+        core.composer.note_user_input(7, enter_at, true);
+        assert!(
+            !core.composer.user_hold(7, enter_at),
+            "the app's own Enter ends the draft"
+        );
+        let after = core.pane_send_gated(7, b"queued mail\r", true, None, Ok(Vec::new()), true);
+        assert!(
+            !matches!(
+                after,
+                crate::proto::ServerMsg::Err {
+                    code: crate::proto::err_code::TARGET_NOT_IDLE,
+                    ..
+                }
+            ),
+            "the released pane no longer refuses at the guard: {after:?}"
+        );
+
+        std::env::remove_var("FNO_AGENT_HOME");
+        drop(guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_draft_hint_arms_only_a_pane_its_client_views() {
+        let guard = crate::pane_send_audit::FNO_AGENT_HOME_GUARD
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let dir = std::env::temp_dir().join(format!(
+            "fno-hint-visibility-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::env::set_var("FNO_AGENT_HOME", &dir);
+
+        use crate::tree::{Node, Tab};
+        let mut core = super::super::tests::empty_core();
+        core.session.add_squad(
+            1,
+            vec!["/fixture".into()],
+            None,
+            Tab {
+                name: None,
+                id: 1,
+                root: Node::Branch {
+                    axis: crate::tree::Axis::Horizontal,
+                    children: vec![(0.5, Node::Leaf(7)), (0.5, Node::Leaf(8))],
+                },
+                focus: 7,
+            },
+        );
+        core.clients.push(crate::server::Client {
+            id: 1,
+            reliable_tx: tokio::sync::mpsc::channel(1).0,
+            dirty: Default::default(),
+            notify: Arc::new(tokio::sync::Notify::new()),
+            synced_modes: Default::default(),
+            view: (1, 1),
+            visible: Default::default(),
+            dims: (24, 80),
+            passive: false,
+            last_press: None,
+        });
+        let t0 = Instant::now();
+        core.draft_hint_at(1, 7, t0);
+        assert!(
+            core.composer.user_hold(7, t0),
+            "a pane the client views arms on its hint"
+        );
+        core.draft_hint_at(1, 99, t0);
+        assert!(
+            !core.composer.user_hold(99, t0),
+            "a pane outside the client's view does not arm"
+        );
+        core.draft_hint_at(42, 8, t0);
+        assert!(
+            !core.composer.user_hold(8, t0),
+            "an unknown client arms nothing"
+        );
+
+        std::env::remove_var("FNO_AGENT_HOME");
+        drop(guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The hint's C11 witness rides the same 5s burst map as keystrokes:
+    /// one `operator_typing` row per window, never one per keystroke.
+    #[test]
+    fn a_draft_hint_writes_one_coalesced_typing_row_per_window() {
+        let guard = crate::pane_send_audit::FNO_AGENT_HOME_GUARD
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let dir = std::env::temp_dir().join(format!(
+            "fno-hint-witness-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::env::set_var("FNO_AGENT_HOME", &dir);
+
+        let mut core = witness_test_core(7);
+        core.clients.push(crate::server::Client {
+            id: 1,
+            reliable_tx: tokio::sync::mpsc::channel(1).0,
+            dirty: Default::default(),
+            notify: Arc::new(tokio::sync::Notify::new()),
+            synced_modes: Default::default(),
+            view: (1, 1),
+            visible: Default::default(),
+            dims: (24, 80),
+            passive: false,
+            last_press: None,
+        });
+        let t0 = Instant::now();
+        core.draft_hint_at(1, 7, t0);
+        core.draft_hint_at(1, 7, t0 + Duration::from_secs(1));
+        let rows = journal_rows(&dir, "operator_typing");
+        assert_eq!(
+            rows.len(),
+            1,
+            "hints inside one burst window coalesce to one row"
+        );
+        assert_eq!(rows[0]["data"]["pane"], 7);
+        core.draft_hint_at(1, 7, t0 + Duration::from_secs(6));
+        assert_eq!(
+            journal_rows(&dir, "operator_typing").len(),
+            2,
+            "a hint in a fresh window re-witnesses"
         );
 
         std::env::remove_var("FNO_AGENT_HOME");

@@ -513,6 +513,12 @@ pub(crate) enum CoreMsg {
         rows: u16,
         cols: u16,
     },
+    /// (v132) The desktop app's live chat-draft report; see
+    /// [`ClientMsg::DraftHint`].
+    DraftHint {
+        id: u64,
+        pane: u64,
+    },
     Command {
         id: u64,
         cmd: Command,
@@ -10329,6 +10335,10 @@ impl Core {
             | CoreMsg::Command { id, .. }
             | CoreMsg::Mouse { id, .. }
             | CoreMsg::BlockNav { id, .. }
+            // DraftHint opens the pane's draft latch, exactly the shared
+            // guard state a keystroke moves; a read-only observer must
+            // never hold deliveries off a pane.
+            | CoreMsg::DraftHint { id, .. }
             // Search and PaneScroll/PaneScrollEdge move the shared scroll for
             // every co-viewer, the same shared-state mutation as BlockNav; a
             // read-only observer must never move anyone's viewport.
@@ -10428,6 +10438,10 @@ impl Core {
                 Flow::Continue
             }
             CoreMsg::PaneInset { id, rows, cols } => self.set_pane_inset(id, rows, cols),
+            CoreMsg::DraftHint { id, pane } => {
+                self.draft_hint(id, pane);
+                Flow::Continue
+            }
             CoreMsg::Command { id, cmd } => self.command(id, cmd),
             CoreMsg::Mouse { id, pane, event } => {
                 self.mouse(id, pane, event);
