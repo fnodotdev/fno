@@ -672,7 +672,19 @@ function looksNodeId(s) {
   if (i < 1) return false;
   const head = s.slice(0, i), tail = s.slice(i + 1);
   if (!/^[a-z][a-z0-9]{0,7}$/.test(head)) return false;
-  return /^[0-9a-f]{4,8}$/.test(tail);
+  if (/^[0-9a-f]{4,8}$/.test(tail)) return true;
+  // A sequential board reads its own prefix's digit tails; hex boards
+  // keep refusing them (idFacts below carries the mode).
+  return idSeq.seq && head === idSeq.prefix && /^[1-9][0-9]{0,6}$/.test(tail);
+}
+// The board's id mode: sequential boards mint <prefix>-<n> ids, and the
+// grammar reads them only there. Snapshot boards carry the facts inline;
+// served boards read them from the same model fetch that brings the
+// search keys. Hex is the default on any absence.
+const idSeq = { seq: false, prefix: "" };
+function setIdSeq(sequential, prefix) {
+  idSeq.seq = sequential === true;
+  idSeq.prefix = String(prefix || "").replace(/-$/, "");
 }
 function isUuid(s) {
   const parts = s.split("-");
@@ -1006,6 +1018,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
   // The grammar's key table: embedded in a snapshot, fetched once (keys=1)
   // from the model route when served.
   let searchKeys = null;
+  if (SNAPSHOT) setIdSeq(snap.id_sequential, snap.id_prefix);
   if (SNAPSHOT) searchKeys = snap.search_keys || null;
   if (!SNAPSHOT && !searchKeys) {
     const p = new URLSearchParams();
@@ -1018,6 +1031,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
       })
       .then((j) => {
         if (!j || !j.search_keys) throw new Error("the answer has no search keys");
+        setIdSeq(j.id_sequential, j.id_prefix);
         searchKeys = j.search_keys;
         reparse();
         drawSearchError();
