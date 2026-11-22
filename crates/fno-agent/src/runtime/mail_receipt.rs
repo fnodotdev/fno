@@ -227,6 +227,18 @@ pub(crate) fn held_for_turn(msg_id: &str, target: &str) -> String {
     )
 }
 
+/// The honest verdict for a `live-drain` owner whose live leg refused
+/// outright: nothing was injected, nothing wakes this recipient, and the
+/// durable copy sits unclaimed. The held line above reads "queued"; this one
+/// must not - an unconfirmed inject may land past the confirm window, a
+/// refusal never will. Names the recovery ladder including the resend.
+pub(crate) fn failed_live_leg(msg_id: &str, target: &str, reason: Option<&str>) -> String {
+    let why = reason.unwrap_or("no reason recorded");
+    format!(
+        "{msg_id} FAILED on the live leg ({why}) - nothing was injected and nothing will wake this recipient; the durable copy sits unclaimed\n  recover, in this order:\n    fno agent peek {target}          # confirm nothing landed\n    fno agent attach {target}        # drive it yourself (claude)\n    fno agent mail withdraw {msg_id} # retract the durable copy FIRST\n    fno agent mail send {target} '<body>'  # then re-send"
+    )
+}
+
 const PROJECT_ARM: &str = concat!(
     "mail: project inbox ",
     "{TARGET}",
@@ -476,6 +488,20 @@ mod tests {
         assert!(text.contains("fno mux pane send <pane> --raw --submit"));
         assert!(text.contains("fno agent attach t-worker"));
         assert!(text.contains("fno agent peek t-worker --grep fmail-1"));
+    }
+
+    /// The failed-live-leg arm is the anti-held-line: FAILED with the
+    /// reason, the withdraw command, and the resend door, never a
+    /// verify-later hint over a failure.
+    #[test]
+    fn failed_live_leg_names_the_reason_the_withdraw_and_the_resend() {
+        let text = failed_live_leg("fmail-2", "t-worker", Some("no-pane-ref"));
+        assert!(text.contains("FAILED on the live leg (no-pane-ref)"));
+        assert!(text.contains("fno agent mail withdraw fmail-2"));
+        assert!(text.contains("fno agent mail send t-worker '<body>'"));
+        assert!(text.contains("fno agent peek t-worker"));
+        let bare = failed_live_leg("fmail-3", "t-worker", None);
+        assert!(bare.contains("no reason recorded"));
     }
 
     #[test]

@@ -629,22 +629,6 @@ pub(super) fn resolve_pane_entry(
     None
 }
 
-// Keeper-thread row check (cli.py _row_hosts_keeper_thread twin)
-
-pub(super) fn row_hosts_keeper_thread(session_id: &str) -> bool {
-    let registry = AgentsHome::shared_registry_json();
-    let Ok(rows) = crate::client_commands::load_registry_entries(&registry) else {
-        return false;
-    };
-    for row in rows.iter() {
-        if opt_str_field(row, "harness_session_id").as_deref() == Some(session_id) {
-            let sock = opt_str_field(row, "messaging_socket_path").unwrap_or_default();
-            return sock.contains("mux/threads/");
-        }
-    }
-    false
-}
-
 // Reachability verdict off the shared probe (dispatch.py recipient_live twin)
 
 pub(super) fn family1_probe_reachable(handle: &str) -> bool {
