@@ -64,7 +64,6 @@ pub(crate) enum FireDecision {
     Fire,
     Retry,
     Missed,
-    Skipped(&'static str),
 }
 
 /// Fire, retry, missed, or skip, from the row and the instant alone.
@@ -270,7 +269,7 @@ fn run_pass(home: &AgentsHome, pending: &AtomicBool) {
             .as_deref()
             .is_some_and(|n| node_status_word(n).is_some())
         {
-            sched::set_state(
+            let _ = sched::set_state(
                 home,
                 &row.id,
                 sched::RowState::Skipped,
@@ -283,13 +282,11 @@ fn run_pass(home: &AgentsHome, pending: &AtomicBool) {
             FireDecision::Fire => fire_row(home, &row, now),
             FireDecision::Retry => {}
             FireDecision::Missed => {
-                sched::set_state(home, &row.id, sched::RowState::Missed, None);
+                // A lost state write is read by the next pass; the journal
+                // row below is the durable record either way.
+                let _ = sched::set_state(home, &row.id, sched::RowState::Missed, None);
                 journal(home, KIND_MISSED, &row, Some("past grace"));
                 mail_scheduler(&row, "past its grace window");
-            }
-            FireDecision::Skipped(reason) => {
-                sched::set_state(home, &row.id, sched::RowState::Skipped, Some(reason));
-                journal(home, KIND_SKIPPED, &row, Some(reason));
             }
         }
     }
@@ -350,7 +347,7 @@ fn fire_row(home: &AgentsHome, row: &sched::ScheduledSpawn, now: DateTime<Utc>) 
     };
     let fired = matches!(&output, Ok(out) if out.code == 0);
     if fired {
-        sched::set_state(home, &row.id, sched::RowState::Fired, None);
+        let _ = sched::set_state(home, &row.id, sched::RowState::Fired, None);
         journal(home, KIND_FIRED, row, Some(reading.as_str()));
         if let sched::Trigger::Every { interval_secs } = &row.trigger {
             let next = row.fire_at_utc.unwrap_or(now) + chrono::Duration::seconds(*interval_secs);
@@ -359,10 +356,10 @@ fn fire_row(home: &AgentsHome, row: &sched::ScheduledSpawn, now: DateTime<Utc>) 
             }
         }
     } else {
-        sched::record_attempt(home, &row.id, Some(reading.as_str()), now);
+        let _ = sched::record_attempt(home, &row.id, Some(reading.as_str()), now);
         // The retry consumed the grace: close the row missed now.
         if matches!(decide(row, now), FireDecision::Missed) {
-            sched::set_state(
+            let _ = sched::set_state(
                 home,
                 &row.id,
                 sched::RowState::Missed,
