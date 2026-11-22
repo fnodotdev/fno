@@ -33,6 +33,9 @@ pub enum FrontDoor {
     /// text is either clap's rendered help (an explicit help request on a
     /// group) or one command-qualified refusal line naming the bad token.
     Usage { message: String },
+    /// An explicit `--help`/`-h` the typed tree resolved: the rendered help
+    /// prints on stdout, exit 0.
+    Help { message: String },
     /// `fno --help` / `fno -h`: the root menu, read from command-names.tsv.
     /// `all` adds the retired names with their new spellings.
     RootHelp { all: bool },
@@ -316,36 +319,29 @@ pub enum WorkspaceOp {
 pub enum AppOp {
     /// `mux app open [--mode <view>] [--focus <agent>] [--server <name>]`:
     /// launch fno-app attached to the session and print its pid
-    #[command(disable_help_flag = true)]
     Open(AppOpenArgs),
     /// `mux app show <view> [--server <name>]`: point the running app at a
     /// view, or open it there when none runs
-    #[command(disable_help_flag = true)]
     Show(AppShowArgs),
     /// `mux app focus <agent> [--server <name>]`: focus one agent row in
     /// the running app; refuses naming the session when none runs
-    #[command(disable_help_flag = true)]
     Focus(AppFocusArgs),
     /// `mux app answer <option> [--server <name>]`: pick option N (1 is
     /// the first) on the question the focused chat waits on; refuses
     /// naming the session when none runs
-    #[command(disable_help_flag = true)]
     Answer(AppAnswerArgs),
     /// `mux app shot --out <path> [--theme dark|light] [--mode <view>]
     /// [--find bar|chords] [--ask rows|overflow]`: render one offscreen
     /// demo frame and write a
     /// png; never opens a window on any display
-    #[command(disable_help_flag = true)]
     Shot(AppShotArgs),
     /// `mux app state [--json]`: read the app's saved window state
-    #[command(disable_help_flag = true)]
     State {
         #[command(flatten)]
         json: JsonOnly,
     },
     /// `mux app close [--server <name>]`: ask the running app to quit;
     /// exits 0 when none runs
-    #[command(disable_help_flag = true)]
     Close {
         #[command(flatten)]
         common: MuxCommon,
@@ -386,7 +382,7 @@ impl AppView {
 #[derive(Debug, PartialEq, Eq, Subcommand)]
 pub enum DiagOp {
     /// `mux diag stats [--json]`: the mux counters (hidden, read-only)
-    #[command(disable_help_flag = true, hide = true)]
+    #[command(hide = true)]
     Stats {
         #[command(flatten)]
         json: JsonOnly,
@@ -799,23 +795,6 @@ pub fn classify(args: &[OsString]) -> FrontDoor {
             if !native_first(args) {
                 return unclaimed(args);
             }
-            // `fno mux thread -h`/`--help` is the addressing door's one
-            // self-teaching surface. The thread group keeps its help flag OFF
-            // (its tail is a row key, and clap refuses a hyphen spelling
-            // before the external arm can read it as one), so the help
-            // request arrives here as a parse error: render the group's help
-            // instead of reciting the refusal.
-            if path_words(args).as_slice() == ["mux", "thread"]
-                && args.len() == 3
-                && args[2]
-                    .to_str()
-                    .map(|v| v == "-h" || v == "--help")
-                    .unwrap_or(false)
-            {
-                return FrontDoor::Usage {
-                    message: render_path_help(&["mux", "thread"]),
-                };
-            }
             // `fno mux app` with no operation word: clap's missing-subcommand
             // error names none of the commands, and the group's guide lives
             // behind the `fno whoami guide app` topic, so this refusal is
@@ -833,24 +812,26 @@ pub fn classify(args: &[OsString]) -> FrontDoor {
                     message: crate::mux::app_cli::bare_usage(),
                 };
             }
-            // `fno mux -h` (or any explicit help request on a mux group)
-            // renders clap's help for that group: the banner's replacement.
-            let message = if args.first().and_then(|a| a.to_str()) == Some("mux")
-                && e.kind() == clap::error::ErrorKind::DisplayHelp
-            {
-                e.render().to_string()
-            } else {
-                // One command-qualified line naming the bad token; the
-                // deepest declared path becomes the prefix.
-                let prefix = format!(
-                    "fno{}",
-                    path_words(args)
-                        .iter()
-                        .fold(String::new(), |a, w| format!("{a} {w}"))
-                );
-                refusal_line(&prefix, &e)
-            };
-            FrontDoor::Usage { message }
+            // An explicit help request the tree resolved (mux groups and
+            // leaves, version): the rendered help answers on stdout, exit 0.
+            // The mux thread group keeps its flag off, so its `-h` arrives as
+            // a parse error and its arm above keeps the authored body.
+            if e.kind() == clap::error::ErrorKind::DisplayHelp {
+                return FrontDoor::Help {
+                    message: e.render().to_string(),
+                };
+            }
+            // One command-qualified line naming the bad token; the
+            // deepest declared path becomes the prefix.
+            let prefix = format!(
+                "fno{}",
+                path_words(args)
+                    .iter()
+                    .fold(String::new(), |a, w| format!("{a} {w}"))
+            );
+            FrontDoor::Usage {
+                message: refusal_line(&prefix, &e),
+            }
         }
     }
 }
@@ -879,11 +860,20 @@ fn unclaimed(args: &[OsString]) -> FrontDoor {
 /// pane group's after_help injected (the four pane help texts clap renders
 /// on `fno mux pane -h`). classify, the inventory and completion all read
 /// this one command, so the surfaces cannot drift.
+///
+/// The root keeps its help flag off: the curated `fno --help` menu owns that
+/// spelling. The mux subtree and `version` re-enable it, so a help request on
+/// a mux group or leaf renders the tree's own help with exit 0; the tail
+/// carriers keep their explicit `disable_help_flag` (a `--help` after a
+/// selector is the pane payload's, never the family's).
 pub fn front_command() -> clap::Command {
-    FnoRoot::command().mut_subcommand("mux", |mux| {
-        mux.mut_subcommand("pane", |pane| pane.after_help(pane_group_help()))
-            .mut_subcommand("thread", |thread| thread.after_help(thread_group_help()))
-    })
+    FnoRoot::command()
+        .mut_subcommand("mux", |mux| {
+            mux.disable_help_flag(false)
+                .mut_subcommand("pane", |pane| pane.after_help(pane_group_help()))
+                .mut_subcommand("thread", |thread| thread.after_help(thread_group_help()))
+        })
+        .mut_subcommand("version", |version| version.disable_help_flag(false))
 }
 
 /// The pane command words, kept in sync with [`PaneOp`] by the tree test.
@@ -908,9 +898,9 @@ pub fn pane_group_help() -> String {
 }
 
 /// The thread group's self-teaching help: the addressing contract the two
-/// portal documents quote. classify routes `fno mux thread -h`/`--help` here
-/// (the group keeps its help flag off, so the spelling arrives as a parse
-/// error); `render_path_help(["mux", "thread"])` reads it.
+/// portal documents quote. It rides the group's clap help as `after_help`
+/// (the group re-enabled its help flag), and
+/// `render_path_help(["mux", "thread"])` reads it.
 pub fn thread_group_help() -> String {
     "\
 The addressing door onto a live thread row. An explicit placement flag creates a portal from any command, human or agent: `--portal new`, or `--portal N` when N is not open, and a `--split DIR` halves the caller's own pane unless `--from portal N|worker|current` names another cell. No flag tunes: the reach focuses the row's open portal, and with none open the door's own portal 0 opens for it. A default never creates: a bare `fno agent spawn` is a paneless thread. The key matches one live row exactly, not by the prefix or substring tiers `fno mux view` uses; zero matches, or several rows answering the same key, refuse and spawn no worker.
@@ -1452,6 +1442,33 @@ mod tests {
             }
             other => panic!("bare app usage expected, got {other:?}"),
         }
+    }
+    #[test]
+    fn mux_tree_resolves_an_explicit_help_request_as_help() {
+        // The mux subtree and `version` re-enabled their help flag (AC6-HP):
+        // an explicit request resolves as Help, which prints clap's rendered
+        // help on stdout and exits 0. The root keeps its flag off (the
+        // curated `fno --help` menu owns the spelling).
+        for args in [
+            &["mux", "--help"][..],
+            &["mux", "-h"][..],
+            &["mux", "pane", "--help"],
+            &["mux", "app", "--help"],
+            &["mux", "app", "open", "--help"],
+            &["mux", "diag", "stats", "--help"],
+            &["mux", "thread", "--help"],
+            &["version", "--help"],
+        ] {
+            match classify(&os(args)) {
+                FrontDoor::Help { message } => assert!(!message.trim().is_empty(), "{args:?}"),
+                other => panic!("{args:?}: expected Help, got {other:?}"),
+            }
+        }
+        // The root itself keeps the curated menu: RootHelp, not clap's tree.
+        assert!(matches!(
+            classify(&os(&["--help"])),
+            FrontDoor::RootHelp { .. }
+        ));
     }
     #[test]
     fn typed_families_resolve_with_re_sliced_tails() {

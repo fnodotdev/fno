@@ -536,6 +536,9 @@ enum Role {
     RootVersion,
     /// A group menu (`fno config`, `fno do --help`, ...), already rendered.
     GroupHelp(String),
+    /// A help request the typed tree resolved (`fno mux pane --help`):
+    /// clap's rendered help, stdout, exit 0.
+    TreeHelp(String),
     /// `fno do delivery evaluate ...`: the tail rides to
     /// `fno-agent delivery-evaluate`, which owns the flags and defaults.
     DoDelivery(Vec<OsString>),
@@ -1759,6 +1762,7 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     match cli_args::classify(args) {
         FrontDoor::RootHelp { all } => Role::RootHelp(all),
         FrontDoor::RootVersion => Role::RootVersion,
+        FrontDoor::Help { message } => Role::TreeHelp(message),
         FrontDoor::Usage { message } => {
             // A removed command is refused BY NAME, before the catch-all
             // refusal turns it into an anonymous message (same order the
@@ -1891,12 +1895,13 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
                     .map(|v| v == "-h" || v == "--help")
                     .unwrap_or(false) =>
             {
-                Role::MuxUsage(cli_args::render_path_help(&["mux", "view"]))
+                Role::TreeHelp(cli_args::render_path_help(&["mux", "view"]))
             }
             cli_args::MuxCmd::View(t) => Role::MuxView(t.tail),
-            // Thread help routes in classify's error branch: clap refuses the
-            // hyphen spelling before the external arm can carry it, so
-            // ThreadOp::Name never sees `-h`/`--help`.
+            // An explicit help request on the thread group resolves in the
+            // typed tree now (the group re-enabled its help flag); only the
+            // reseat tail keeps its flag off, so a selector tail never
+            // swallows `-h`.
             cli_args::MuxCmd::Thread { op } => match op {
                 cli_args::ThreadOp::Reseat(t) => Role::MuxThreadReseat(t.tail),
                 cli_args::ThreadOp::Name(words) => Role::MuxThread(words),
@@ -2092,6 +2097,10 @@ fn run_root_role(role: Role, args: &[OsString]) -> ControlFlow<(), Role> {
     match role {
         Role::RootHelp(all) => {
             print!("{}", fno::group_help::root(all));
+            fno::cli_usage::exit(0);
+        }
+        Role::TreeHelp(message) => {
+            print!("{message}");
             fno::cli_usage::exit(0);
         }
         Role::RootVersion => {
@@ -3196,18 +3205,19 @@ mod tests {
     #[test]
     fn proto_role_mux_thread_help_routes_to_one_body_and_never_swallows_a_key() {
         // AC2-HP: both spellings render the SAME self-teaching body, which
-        // carries the addressing contract the docs quote. AC2-EDGE lives in
+        // carries the addressing contract the docs quote, now as a help
+        // answer (stdout, exit 0) rather than a refusal. AC2-EDGE lives in
         // the characterization test beside it: a bare name, a full Codex
         // session UUID and reseat keep their roles rather than routing here.
         let long = match decide_role(&os(&["mux", "thread", "--help"]), false) {
-            Role::MuxUsage(body) => body,
-            other => panic!("--help is usage, got {other:?}"),
+            Role::TreeHelp(body) => body,
+            other => panic!("--help is a help answer, got {other:?}"),
         };
         assert_eq!(
             long,
             match decide_role(&os(&["mux", "thread", "-h"]), false) {
-                Role::MuxUsage(body) => body,
-                other => panic!("-h is usage, got {other:?}"),
+                Role::TreeHelp(body) => body,
+                other => panic!("-h is a help answer, got {other:?}"),
             },
             "both spellings render one body"
         );
