@@ -857,23 +857,24 @@ fn unclaimed(args: &[OsString]) -> FrontDoor {
 }
 
 /// The front-door command, assembled once: the derive-built tree with the
-/// pane group's after_help injected (the four pane help texts clap renders
-/// on `fno mux pane -h`). classify, the inventory and completion all read
-/// this one command, so the surfaces cannot drift.
+/// pane and thread groups' after_help injected. classify, the inventory
+/// and completion all read this one command, so the surfaces cannot drift.
 ///
-/// The root keeps its help flag off: the curated `fno --help` menu owns that
-/// spelling. The mux subtree and `version` re-enable it, so a help request on
-/// a mux group or leaf renders the tree's own help with exit 0; the tail
-/// carriers keep their explicit `disable_help_flag` (a `--help` after a
-/// selector is the pane payload's, never the family's).
+/// The derive marks the root's help disable as a clap GLOBAL setting, and
+/// clap ORs a parent's global settings into every subcommand at build
+/// time, so a child-level override cannot clear it. front_command clears
+/// the global and holds a LOCAL disable instead: the curated `fno --help`
+/// menu keeps the spelling, the typed tree answers `--help` everywhere
+/// else (stdout, exit 0), and the tail carriers' own disables keep a
+/// pane payload's `--help`.
 pub fn front_command() -> clap::Command {
     FnoRoot::command()
+        .unset_global_setting(clap::AppSettings::DisableHelpFlag)
+        .setting(clap::AppSettings::DisableHelpFlag)
         .mut_subcommand("mux", |mux| {
-            mux.disable_help_flag(false)
-                .mut_subcommand("pane", |pane| pane.after_help(pane_group_help()))
+            mux.mut_subcommand("pane", |pane| pane.after_help(pane_group_help()))
                 .mut_subcommand("thread", |thread| thread.after_help(thread_group_help()))
         })
-        .mut_subcommand("version", |version| version.disable_help_flag(false))
 }
 
 /// The pane command words, kept in sync with [`PaneOp`] by the tree test.

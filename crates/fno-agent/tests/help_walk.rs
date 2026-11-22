@@ -1,7 +1,7 @@
-//! The help walk (x-9cb4, PR F): `fno-agent --help` and one `--help` per
-//! help-displayed routable command exit 0. Binary-direct machine doors are
-//! not help-listed; they join through the carveout (x-292e), which also
-//! widens this walk to the full committed leaf inventory.
+//! The help walk: `fno-agent --help` and one `--help` per help-displayed
+//! routable command exit 0. Binary-direct machine doors are not
+//! help-listed; the follow-up node widens this walk to the full committed
+//! leaf inventory.
 
 use std::process::Command;
 

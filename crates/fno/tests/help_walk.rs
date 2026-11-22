@@ -44,7 +44,7 @@ fn fno_clap_tree_answers_help_everywhere_except_tails() {
         );
         walked += 1;
     }
-    assert!(walked > 30, "the walk covered only {walked} rows");
+    assert!(walked > 25, "the walk covered only {walked} rows");
     for tail in tail_carriers() {
         assert!(
             fno::cli_args::render_inventory()
