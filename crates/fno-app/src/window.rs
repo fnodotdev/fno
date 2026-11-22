@@ -2082,6 +2082,18 @@ impl Root {
                 .is_some_and(|f| f.scroll_offset > 0)
     }
 
+    /// Keyboard history scroll with no mode held: true when the key scrolled.
+    fn history_key(&mut self, key: &Key, cx: &mut Context<Self>) -> bool {
+        let pane = self.layout.focus;
+        let rows = self.frames.get(&pane).map_or(24, |f| i32::from(f.rows));
+        let Some(msg) = mux_modes::history_step(key, pane, rows, self.focus_scrolled()) else {
+            return false;
+        };
+        cx.stop_propagation();
+        self.send(msg);
+        true
+    }
+
     /// `--shot-ui`: open one overlay the way its click opens it.
     pub(super) fn shot_ui(&mut self, ui: crate::UiShot, window: &Window, cx: &mut Context<Self>) {
         match ui {
@@ -2219,7 +2231,15 @@ impl Root {
         cx.spawn(async move |this, cx| {
             let out = cx
                 .background_executor()
-                .spawn(async move { std::process::Command::new(bin).args(&argv).output() })
+                .spawn(async move {
+                    std::process::Command::new(bin)
+                        .args(&argv)
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::piped())
+                        .spawn()
+                        .and_then(|child| child.wait_with_output())
+                })
                 .await;
             let text = match out {
                 Ok(o) if o.status.success() => done,
@@ -2232,7 +2252,7 @@ impl Root {
                 }
                 Err(e) => format!("did not start: {e}"),
             };
-            let _ = this.update(cx, |root, cx| root.say(text, cx));
+            this.update(cx, |root, cx| root.say(text, cx)).ok();
         })
         .detach();
     }
@@ -3033,11 +3053,7 @@ impl Root {
         if self.main != MainView::Terminal || keys::is_text(&key) {
             return;
         }
-        let pane = self.layout.focus;
-        let rows = self.frames.get(&pane).map_or(24, |f| i32::from(f.rows));
-        if let Some(msg) = mux_modes::history_step(&key, pane, rows, self.focus_scrolled()) {
-            cx.stop_propagation();
-            self.send(msg);
+        if self.history_key(&key, cx) {
             return;
         }
         if let Some(bytes) = keys::encode(&key, self.modes) {

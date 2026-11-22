@@ -527,8 +527,9 @@ pub(super) fn peek_view(
                         .child(SharedString::from(format!("peek: {name}"))),
                 )
                 .children(
-                    lines[tail..]
+                    lines
                         .iter()
+                        .skip(tail)
                         .map(|l| div().child(SharedString::from(l.clone()))),
                 )
                 .child(ui::kbd("esc or a click closes", &p)),

@@ -1085,14 +1085,7 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
                 }
                 None => plain_cells(item, &label, &detail, mark, &p, adv),
             };
-            if let Some(name) = agent_name {
-                item = item.on_mouse_down(
-                    MouseButton::Right,
-                    cx.listener(move |root, ev: &gpui::MouseDownEvent, window, cx| {
-                        root.agent_menu_open(&name, ev.position, window, cx)
-                    }),
-                );
-            }
+            item = agent_menu_on_right_click(item, agent_name, cx);
             if let Some(action) = action {
                 // On click: a press that leaves the row before release
                 // does nothing. A click is the user's own pick, so the
@@ -1106,6 +1099,21 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
             item
         }
     }
+}
+
+/// A right-click on an agent row opens that agent's menu at the pointer.
+fn agent_menu_on_right_click(
+    item: Stateful<Div>,
+    name: Option<String>,
+    cx: &mut Context<Root>,
+) -> Stateful<Div> {
+    let Some(name) = name else { return item };
+    item.on_mouse_down(
+        MouseButton::Right,
+        cx.listener(move |root, ev: &gpui::MouseDownEvent, window, cx| {
+            root.agent_menu_open(&name, ev.position, window, cx)
+        }),
+    )
 }
 
 /// One menu item row: the label, and the action a click sends.
