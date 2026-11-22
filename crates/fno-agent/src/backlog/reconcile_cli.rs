@@ -35,8 +35,8 @@ use super::supersession::{
 };
 use crate::backlog::pr_link::{repo_slug_from_url, resolve_current_repo_slug};
 use crate::backlog::workflows::{
-    apply_completion_fields, cascade_close_parents, reopen_outranks_merge, reparent_live_children,
-    rollup_from_ledger, stamp_and_graduate_plan, text_at,
+    apply_completion_fields, cascade_close_parents, live_child_ids, reopen_outranks_merge,
+    reparent_live_children, rollup_from_ledger, stamp_and_graduate_plan, text_at,
 };
 use crate::backlog_ready::node_is_open;
 use crate::graph_store::{self, read_rows, settle_blocked_by_edges};
@@ -382,7 +382,12 @@ fn once_at(args: &Args, graph_path: &Path) -> i32 {
     // The promise gate + reopen guard partition the closeable set.
     let (gated, mut promise_held, promise_warnings, reopen_expired) =
         promise_gate_leg(&sweep.closeable, &entries, args.json_out, &mut stderr_log);
-    sweep.closeable = gated;
+    // The epic-children hold partitions the gated set: a merge bound to an
+    // epic never closes it while a membership child stays open past this
+    // pass; the epic close sweep alone closes such an epic (the x-e346
+    // false close). Children whose own records close in this same pass do
+    // not hold - the shared-PR parent must still close and stamp.
+    sweep.closeable = epic_children_gate(&gated, &entries, &mut promise_held);
 
     // The rollup close paths (epic self-heal + parent cascade) hold on the
     // same plan promise, judged pre-lock (gh I/O stays outside the store
@@ -1265,6 +1270,46 @@ fn promise_gate_leg(
     (gated, held, warnings, reopen_expired)
 }
 
+/// The epic-children hold over the gated set: a record whose node still has
+/// live membership children that this pass does not close is held open -
+/// only the epic close sweep closes such an epic. Children whose own
+/// records are in the gated set close in this same pass, so they do not
+/// hold (the shared-PR parent keeps closing and stamping). One pass over
+/// the whole gated set first, so the answer never depends on record order.
+fn epic_children_gate(
+    gated: &[MergeDriftRecord],
+    entries: &[Value],
+    held: &mut Vec<HeldRow>,
+) -> Vec<MergeDriftRecord> {
+    let closing: BTreeSet<&str> = gated.iter().map(|r| r.node_id.as_str()).collect();
+    let mut kept = Vec::new();
+    for record in gated {
+        let live_kids: Vec<String> = live_child_ids(entries, &record.node_id)
+            .into_iter()
+            .filter(|k| !closing.contains(k.as_str()))
+            .collect();
+        if live_kids.is_empty() {
+            kept.push(record.clone());
+        } else {
+            held.push((
+                record.node_id.clone(),
+                epic_children_reason(&live_kids, record.pr_number),
+                "epic_children_open".into(),
+            ));
+        }
+    }
+    kept
+}
+
+/// The epic-children hold reason: the open children, then the rule.
+fn epic_children_reason(live_kids: &[String], pr_number: i64) -> String {
+    format!(
+        "PR #{pr_number} merged, {} open child(ren) remain ({}): a merge bound to an epic never closes it while a child is open; the epic close sweep closes it once they are done",
+        live_kids.len(),
+        live_kids.join(", "),
+    )
+}
+
 /// The held-open roll, split by WHY the node stayed open.
 fn summarize_promise_held(held: &[HeldRow], dry_run: bool) -> String {
     let command = if dry_run { "Holding" } else { "Held" };
@@ -1275,6 +1320,10 @@ fn summarize_promise_held(held: &[HeldRow], dry_run: bool) -> String {
             "ship count unconfirmed, retryable read failure",
         ),
         ("reopen_held", "deliberate reopen postdates the merge"),
+        (
+            "epic_children_open",
+            "merged wave PR, epic children still open",
+        ),
     ];
     let mut order: Vec<&str> = headlines.iter().map(|(k, _)| *k).collect();
     for outcome in held.iter().map(|(_, _, o)| o.as_str()) {
@@ -1639,6 +1688,8 @@ fn close_mutator(
     result: &std::cell::RefCell<CloseResult>,
     stderr_log: &mut Vec<String>,
 ) {
+    // The gated set this pass closes, for the locked epic recheck below.
+    let closing: BTreeSet<&str> = closeable.iter().map(|r| r.node_id.as_str()).collect();
     for record in closeable {
         let Some(index) = entries
             .iter()
@@ -1672,6 +1723,21 @@ fn close_mutator(
                 record.node_id.clone(),
                 reopen_held_reason(&entries[index], record.pr_number),
                 "reopen_held".into(),
+            ));
+            continue;
+        }
+        // Locked recheck of the epic-children hold: a child landing between
+        // the scan and this transaction would re-close here. Children this
+        // pass closes do not hold (see epic_children_gate).
+        let live_kids: Vec<String> = live_child_ids(entries, &record.node_id)
+            .into_iter()
+            .filter(|k| !closing.contains(k.as_str()))
+            .collect();
+        if !live_kids.is_empty() {
+            result.borrow_mut().held_recheck.push((
+                record.node_id.clone(),
+                epic_children_reason(&live_kids, record.pr_number),
+                "epic_children_open".into(),
             ));
             continue;
         }
@@ -3250,6 +3316,183 @@ mod tests {
         // the parent's own record's leftover duty.
         assert_eq!(entries[0]["merge_status"], "merged");
         assert_eq!(entries[1]["merge_status"], "merged");
+    }
+    #[test]
+    fn an_epics_own_merge_record_holds_while_a_child_is_open() {
+        // The x-e346 shape: the epic's own multi-wave plan PR merged wave 1
+        // while four of its five children were still open. Neither the
+        // pre-lock gate nor the locked recheck may close the epic, and no
+        // child may move off it; once every child closes, the same record
+        // closes the epic.
+        let epic = json!({
+            "id": "x-e346", "status": "in_progress",
+            "plan_path": "/plans/20261120-worker-model-x-e346.md",
+        });
+        let kid = |id: &str, done: bool| {
+            if done {
+                json!({"id": id, "status": "done", "parent": "x-e346",
+                       "completed_at": "2026-11-20T00:00:00Z"})
+            } else {
+                json!({"id": id, "status": "ready", "parent": "x-e346"})
+            }
+        };
+        let mut entries = vec![
+            epic,
+            kid("x-9935", true),
+            kid("x-328b", false),
+            kid("x-c09e", false),
+            kid("x-d71b", false),
+            kid("x-eb17", false),
+        ];
+        let record = MergeDriftRecord {
+            node_id: "x-e346".into(),
+            plan_path: Some("/plans/20261120-worker-model-x-e346.md".into()),
+            pr_number: 450,
+            pr_url: Some("https://github.com/o/r/pull/450".into()),
+            pr_state: "MERGED".into(),
+            merged_at: Some("2026-11-21T04:02:00Z".into()),
+            error: None,
+            session_id: None,
+            cwd: None,
+            merge_sha: None,
+            changed_files: vec![],
+            files_truncated: false,
+            closure_claims: vec![],
+            error_kind: None,
+            remedy: None,
+        };
+        // Pre-lock: the gate holds the epic and names the open children.
+        let mut held: Vec<HeldRow> = Vec::new();
+        let gated = epic_children_gate(&[record.clone()], &entries, &mut held);
+        assert!(gated.is_empty(), "{gated:?}");
+        assert_eq!(held.len(), 1, "{held:?}");
+        assert_eq!(held[0].0, "x-e346");
+        assert_eq!(held[0].2, "epic_children_open");
+        assert!(held[0].1.contains("4 open child(ren)"), "{}", held[0].1);
+        assert!(held[0].1.contains("x-328b"), "{}", held[0].1);
+        // Locked recheck: the record reaches the mutator anyway (a race
+        // between the scan and the lock) and must not close the epic or
+        // move a child off it.
+        let closeable = vec![record.clone()];
+        let sweep = Sweep {
+            closeable: Vec::new(),
+            closed_unmerged: Vec::new(),
+            failures: Vec::new(),
+            strandable_epics: Vec::new(),
+            strandable_contained: Vec::new(),
+            strandable_orphans: Vec::new(),
+            owed_evidence: Vec::new(),
+            owed_failures: Vec::new(),
+            settlement: json!({}),
+        };
+        let result = std::cell::RefCell::new(CloseResult {
+            actually_closed: Vec::new(),
+            cascade_closed: Vec::new(),
+            contained_closed: Vec::new(),
+            contained_released: Vec::new(),
+            contained_held: Vec::new(),
+            carried_stamped: Vec::new(),
+            reparented: Vec::new(),
+            supersession_unverified: Vec::new(),
+            settlement_receipts: Vec::new(),
+            contained_errors: Vec::new(),
+            held_recheck: Vec::new(),
+        });
+        let mut stderr_log = Vec::new();
+        close_mutator(
+            &mut entries,
+            &closeable,
+            &HashMap::new(),
+            &HashMap::new(),
+            &sweep,
+            &[],
+            false,
+            &Default::default(),
+            &HashMap::new(),
+            &result,
+            &mut stderr_log,
+        );
+        let result = result.into_inner();
+        assert!(result.actually_closed.is_empty(), "{result:?}");
+        assert!(result.reparented.is_empty(), "{result:?}");
+        assert_eq!(result.held_recheck.len(), 1, "{result:?}");
+        assert_eq!(result.held_recheck[0].2, "epic_children_open");
+        assert!(entries[0]["completed_at"].is_null());
+        for entry in entries.iter().skip(1) {
+            assert_eq!(entry["parent"], "x-e346", "{entry}");
+        }
+        // Admit arm: every child closed, so the same record closes the epic.
+        for entry in entries.iter_mut().skip(1) {
+            entry["status"] = json!("done");
+            entry["completed_at"] = json!("2026-11-21T00:00:00Z");
+        }
+        let result = std::cell::RefCell::new(CloseResult {
+            actually_closed: Vec::new(),
+            cascade_closed: Vec::new(),
+            contained_closed: Vec::new(),
+            contained_released: Vec::new(),
+            contained_held: Vec::new(),
+            carried_stamped: Vec::new(),
+            reparented: Vec::new(),
+            supersession_unverified: Vec::new(),
+            settlement_receipts: Vec::new(),
+            contained_errors: Vec::new(),
+            held_recheck: Vec::new(),
+        });
+        close_mutator(
+            &mut entries,
+            &closeable,
+            &HashMap::new(),
+            &HashMap::new(),
+            &sweep,
+            &[],
+            false,
+            &Default::default(),
+            &HashMap::new(),
+            &result,
+            &mut stderr_log,
+        );
+        let result = result.into_inner();
+        assert_eq!(result.actually_closed.len(), 1, "{result:?}");
+        assert!(result.held_recheck.is_empty(), "{result:?}");
+        assert!(!entries[0]["completed_at"].is_null());
+        assert_eq!(entries[0]["merge_status"], "merged");
+    }
+    #[test]
+    fn a_shared_pr_child_does_not_hold_its_parent_in_the_gate() {
+        // The x-b12d shape through the epic gate: the child's own record is
+        // in the same gated set, so it closes this pass and must not hold
+        // the parent that shares its PR.
+        let entries = vec![
+            json!({"id": "ab-par001", "status": "in_progress", "pr_number": 7}),
+            json!({"id": "ab-chil001", "status": "in_progress", "parent": "ab-par001",
+                   "pr_number": 7}),
+        ];
+        let record = |nid: &str| MergeDriftRecord {
+            node_id: nid.into(),
+            plan_path: None,
+            pr_number: 7,
+            pr_url: Some("https://github.com/o/r/pull/7".into()),
+            pr_state: "MERGED".into(),
+            merged_at: Some("2026-10-04T00:00:00Z".into()),
+            error: None,
+            session_id: None,
+            cwd: None,
+            merge_sha: None,
+            changed_files: vec![],
+            files_truncated: false,
+            closure_claims: vec![],
+            error_kind: None,
+            remedy: None,
+        };
+        let mut held: Vec<HeldRow> = Vec::new();
+        let gated = epic_children_gate(
+            &[record("ab-chil001"), record("ab-par001")],
+            &entries,
+            &mut held,
+        );
+        assert_eq!(gated.len(), 2, "{gated:?}");
+        assert!(held.is_empty(), "{held:?}");
     }
     #[test]
     fn a_followup_heal_persists_for_a_done_node_in_the_dry_run() {
