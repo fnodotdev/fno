@@ -727,8 +727,16 @@ jobs:
         # and the test path never decrypts attacker-chosen ciphertext, so the
         # side channel has no oracle here. No fixed upgrade exists; drop the
         # ignore when rsa 0.10 ships.
-        run: cargo audit --ignore RUSTSEC-2023-0071
+        # RUSTSEC-2024-0449 (unsafe-libyaml unmaintained): unsafe-libyaml is
+        # serde_yaml_ng's parser, and serde_yaml_ng is the maintained fork
+        # the claims substrate chose on purpose (Cargo.toml, the native
+        # claims-substrate note). The advisory names no vulnerability; the
+        # crate is unmaintained with no fixed upgrade. Drop the ignore when
+        # serde_yaml_ng swaps parsers.
+        run: cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0449
 
       - name: cargo audit (fno)
         working-directory: crates/fno
-        run: cargo audit
+        # Same RUSTSEC-2024-0449 ignore: the fno lockfile carries the same
+        # serde_yaml_ng tree.
+        run: cargo audit --ignore RUSTSEC-2024-0449
