@@ -1471,6 +1471,91 @@ mod tests {
         ));
     }
     #[test]
+    fn only_tail_carriers_keep_their_help_flag_off() {
+        // Every command whose help flag stays off carries a passthrough
+        // payload tail (or owns the spelling itself, like the root's curated
+        // menu and uninstall's help field). A new leaf lands with its help
+        // flag on by default; adding to this list is the named, reviewed
+        // decision (AC6-HP). The help-walk integration test skips this same
+        // list, so the two cannot drift without one of them failing.
+        let expected: std::collections::BTreeSet<&str> = [
+            "(root)",
+            "uninstall",
+            "mux serve",
+            "mux where",
+            "mux view",
+            "mux retire-session",
+            "mux thread reseat",
+            "mux web reap",
+            "mux web install-agent",
+            "mux web uninstall-agent",
+            "mux block pipe",
+            "mux block annotate",
+            "mux tab ls",
+            "mux tab create",
+            "mux tab rename",
+            "mux tab join",
+            "mux tab move",
+            "mux tab close",
+            "mux layout get",
+            "mux layout apply",
+            "mux layout graft",
+            "mux workspace prune",
+            "mux workspace restore",
+            "mux workspace origin",
+            "mux diag rows",
+            "mux pane ls",
+            "mux pane read",
+            "mux pane run",
+            "mux pane send",
+            "mux pane wait",
+            "mux pane kill",
+            "mux pane claim",
+            "mux pane release",
+            "mux pane split",
+            "mux pane break",
+            "mux pane focus",
+            "mux pane keeper list",
+        ]
+        .into_iter()
+        .collect();
+        let cmd = front_command();
+        let mut got: Vec<String> = Vec::new();
+        got.push(if cmd.is_disable_help_flag_set() {
+            "(root)".to_string()
+        } else {
+            String::new()
+        });
+        walk_disabled(&cmd, "", &mut got);
+        got.retain(|p| !p.is_empty());
+        got.sort();
+        got.dedup();
+        let expected_strings: Vec<String> = expected.iter().map(|e| e.to_string()).collect();
+        assert_eq!(
+            got, expected_strings,
+            "help-off set must stay exactly the tail carriers"
+        );
+    }
+
+    fn walk_disabled(cmd: &clap::Command, prefix: &str, out: &mut Vec<String>) {
+        let name = cmd.get_name().to_string();
+        let path = if prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{prefix} {name}")
+        };
+        if cmd.is_disable_help_flag_set() {
+            out.push(path.clone());
+        }
+        for sub in cmd.get_subcommands() {
+            if sub.get_name() == "help" {
+                continue;
+            }
+            walk_disabled(sub, &path, out);
+        }
+    }
+
+    #[test]
     fn typed_families_resolve_with_re_sliced_tails() {
         // The carry families ride their typed op enums; the payload tail is
         // re-sliced from the ORIGINAL argv, so a leading `--` survives
