@@ -363,7 +363,7 @@ fn rundown_out_arg() -> Option<OsString> {
         return None;
     }
     Some(OsString::from(
-        crate::state_layout::place(&root, "rundown.html")
+        crate::state_layout::place_new(&root, "rundown.html")
             .display()
             .to_string(),
     ))

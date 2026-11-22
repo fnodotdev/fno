@@ -1,7 +1,7 @@
 //! The correction fold and its daemon arm. Off-loop, one in flight, reading
 //! every harness's transcripts through the provenance sources and appending
 //! `agent_corrected` rows to the global event store through its idempotent
-//! append. Cursors in `<state>/cache/corrections/` carry each file's byte
+//! append. Cursors in the cache class under `corrections/` carry each file's byte
 //! offset, a head sample and the session state a tail read cannot rebuild, so
 //! a tick reads only appended bytes and a replaced file never double counts.
 //!
@@ -1531,11 +1531,17 @@ pub(crate) fn cache_path(state_dir: &Path) -> PathBuf {
     crate::state_layout::place_in(state_dir, "corrections", "cursors.json")
 }
 
+/// The cursor file the pass rewrites: the cache home, seeded from a legacy
+/// copy. [`cache_path`] is the read side.
+pub(crate) fn write_path(state_dir: &Path) -> PathBuf {
+    crate::state_layout::adopt(state_dir, "corrections", "cursors.json")
+}
+
 fn run_pass(home: &AgentsHome) -> Option<FoldReceipt> {
     let journal = global_journal(home)?;
     let fno_dir = home.root().parent()?.to_path_buf();
     let inputs = FoldInputs {
-        cache: cache_path(&fno_dir),
+        cache: write_path(&fno_dir),
         journal,
         sources: all_sources(),
         bus: BusIndex::load(&crate::mail_paths::bus_log_path(&fno_dir)),

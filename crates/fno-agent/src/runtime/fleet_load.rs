@@ -403,7 +403,7 @@ pub(crate) struct Inputs {
 /// The engine: events + the incremental fold, assembled into the report.
 pub(crate) fn analyze(inputs: &Inputs) -> FleetReport {
     let pass = read_events(&inputs.home);
-    let cache = crate::state_layout::place_in(&inputs.state_dir, "fleet", "activity.json");
+    let cache = crate::state_layout::adopt(&inputs.state_dir, "fleet", "activity.json");
     let (activity, receipt) = crate::transcript_activity::fold(
         &cache,
         &inputs.roots,

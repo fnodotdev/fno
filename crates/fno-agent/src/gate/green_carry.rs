@@ -34,29 +34,32 @@ fn green_rows(cwd: &Path, prefix: &str) -> Vec<(String, Value)> {
     else {
         return Vec::new();
     };
-    let mut rows: Vec<(std::time::SystemTime, String, Value)> = std::fs::read_dir(&dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|entry| {
-            let file = entry.file_name();
-            let file = file.to_string_lossy().into_owned();
-            // strip_* over byte-slicing: a foreign file in the memo dir must
-            // cost a skipped row, never a char-boundary panic in the merge
-            // door.
-            let Some(head) = file
-                .strip_prefix(prefix)
-                .and_then(|f| f.strip_suffix(".json"))
-                .map(str::to_string)
-            else {
-                return None;
-            };
-            let row =
-                serde_json::from_str::<Value>(&std::fs::read_to_string(entry.path()).ok()?).ok()?;
-            let modified = entry.metadata().ok()?.modified().ok()?;
-            Some((modified, head, row))
-        })
-        .collect();
+    let mut rows: Vec<(std::time::SystemTime, String, Value)> =
+        crate::state_layout_home::cache_read_dirs(&dir)
+            .into_iter()
+            .filter_map(|dir| std::fs::read_dir(dir).ok())
+            .flatten()
+            .flatten()
+            .filter_map(|entry| {
+                let file = entry.file_name();
+                let file = file.to_string_lossy().into_owned();
+                // strip_* over byte-slicing: a foreign file in the memo dir must
+                // cost a skipped row, never a char-boundary panic in the merge
+                // door.
+                let Some(head) = file
+                    .strip_prefix(prefix)
+                    .and_then(|f| f.strip_suffix(".json"))
+                    .map(str::to_string)
+                else {
+                    return None;
+                };
+                let row =
+                    serde_json::from_str::<Value>(&std::fs::read_to_string(entry.path()).ok()?)
+                        .ok()?;
+                let modified = entry.metadata().ok()?.modified().ok()?;
+                Some((modified, head, row))
+            })
+            .collect();
     rows.sort_by(|a, b| b.0.cmp(&a.0));
     rows.into_iter().map(|(_, head, row)| (head, row)).collect()
 }

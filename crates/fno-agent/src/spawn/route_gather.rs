@@ -268,13 +268,13 @@ fn account_record_vendors(cwd: &Path) -> Value {
     Value::Object(out)
 }
 
-/// The snapshot at `<state_dir>/cache/benchmarks.json` (the root spelling
-/// still reads while it exists; `accounts::benchmarks` writes only `cache/`),
+/// The snapshot in the cache class (both legacy spellings inside the root
+/// still read while they exist; `accounts::benchmarks` writes only the home),
 /// or None when absent, unreadable, or missing
 /// `fetched_at`/`source` (invalid is ignored, never a dead gather).
 pub(crate) fn load_snapshot(cwd: &Path) -> Option<Value> {
     let root = crate::agents_config::state_dir(cwd)?;
-    let new = root.join("cache").join("benchmarks.json");
+    let new = crate::state_layout_home::read_home(&root, "cache/benchmarks.json");
     let legacy = root.join("benchmarks.json");
     let path = if new.exists() || !legacy.exists() {
         new

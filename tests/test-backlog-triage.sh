@@ -21,7 +21,8 @@ trap 'rm -rf "$TMP"' EXIT
 export HOME="$TMP/home"
 mkdir -p "$HOME/.fno"
 GRAPH_JSON="$HOME/.fno/graph.json"
-GRAPH_MD="$HOME/.fno/pages/graph.md"
+export FNO_CACHE_HOME="$TMP/cache-home"
+GRAPH_MD="$FNO_CACHE_HOME/pages/graph.md"
 printf '{"entries": []}\n' | python3 "$REPO_ROOT/tests/py/fixtures/graph_seed.py" "$GRAPH_JSON"
 
 PASS=0
