@@ -87,6 +87,7 @@ mod input_echo;
 mod keeper_adopt;
 pub(crate) mod lifecycle_target;
 mod mouse_route;
+mod mutating_sender;
 mod pane_anchors;
 mod pane_scroll;
 mod search_nav;
@@ -10325,43 +10326,11 @@ impl Core {
 
     fn handle_msg(&mut self, msg: CoreMsg) -> Flow {
         // Read-only enforcement at the server: drop any PTY/tree-mutating
-        // message from an observer (passive) client, whatever sends it. The web
-        // bridge holds no write half so it never sends these; this makes the
-        // guarantee hold for ANY (0,0) attacher, not by the bridge's discipline
-        // alone. Resize is already neutralized (its dims are ignored for a passive
-        // client); Detach/Gone/Query/etc. pass. A link client passes for its own pane.
-        let mutating_sender = match &msg {
-            CoreMsg::Input { id, .. }
-            | CoreMsg::Command { id, .. }
-            | CoreMsg::Mouse { id, .. }
-            | CoreMsg::BlockNav { id, .. }
-            // DraftHint opens the pane's draft latch, exactly the shared
-            // guard state a keystroke moves; a read-only observer must
-            // never hold deliveries off a pane.
-            | CoreMsg::DraftHint { id, .. }
-            // Search and PaneScroll/PaneScrollEdge move the shared scroll for
-            // every co-viewer, the same shared-state mutation as BlockNav; a
-            // read-only observer must never move anyone's viewport.
-            | CoreMsg::Search { id, .. }
-            | CoreMsg::PaneScroll { id, .. }
-            | CoreMsg::PaneScrollEdge { id, .. }
-            // AnchorJump moves the shared scroll + selection exactly like
-            // Search does; same read-only gate.
-            | CoreMsg::AnchorJump { id, .. }
-            // PaneAnswer injects a keystroke into a pane PTY; a
-            // read-only observer must never reach it (same class as Input).
-            | CoreMsg::PaneAnswer { id, .. }
-            // DispatchNext spawns a real worker pane; a passive
-            // web-bridge observer must never start work (Invariant).
-            // DispatchResult is NOT gated here - it originates from the trusted
-            // off-loop task, not a client. AgentLaunch (v83) spawns a real
-            // worker the same way, so it gates identically.
-            | CoreMsg::DispatchNext { id, .. }
-            | CoreMsg::AgentLaunch { id, .. } => Some(*id),
-            CoreMsg::PaneInput(request) => Some(request.id),
-            _ => None,
-        };
-        if mutating_sender.is_some_and(|id| self.is_passive(id) && !self.links.may_send(id, &msg)) {
+        // message from an observer (passive) client, whatever sends it.
+        // The gate lives in `mutating_sender`, so a new gated message
+        // lands there, never in this over-budget file.
+        let mutating = mutating_sender::mutating_sender(&msg);
+        if mutating.is_some_and(|id| self.is_passive(id) && !self.links.may_send(id, &msg)) {
             return Flow::Continue;
         }
         // The window-size policy follows the client that last acted. The peek
@@ -10372,7 +10341,7 @@ impl Core {
                 cmd: Command::PeekAgent { .. },
                 ..
             } => None,
-            _ => mutating_sender.filter(|id| self.clients.iter().any(|c| c.id == *id)),
+            _ => mutating.filter(|id| self.clients.iter().any(|c| c.id == *id)),
         };
         if let Some(id) = acting {
             // Re-tile only when the new owner changes the sender's tab size:
