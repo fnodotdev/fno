@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# The generated state-dir stub (STATE_DIR etc.), so the fallback-writer log
-# path never hardcodes $HOME/.fno. REPO_ROOT is preset from this file's own
+# The generated state-dir stub (STATE_DIR etc.), so no state path here
+# hardcodes $HOME/.fno. REPO_ROOT is preset from this file's own
 # location so the stub's git rev-parse subshell never runs on the hot path.
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 # shellcheck source=scripts/lib/paths.sh
@@ -195,12 +195,9 @@ name_fallback_writer() {
     if ! ( set -o noclobber; : >"$marker" ) 2>/dev/null; then
         return 0
     fi
-    local logs="$STATE_DIR/logs"
-    # The default root's logs live in the state home; another root keeps its own.
-    if [[ "$STATE_DIR" == "$HOME/.fno" ]]; then
-        logs="$(fno_state_home)/logs"
-    fi
-    local log="$logs/cargo-fallback-writers.log"
+    # The stub above always names the default root, whose logs are the state home's.
+    local log
+    log="$(fno_state_home)/logs/cargo-fallback-writers.log"
     {
         mkdir -p "$(dirname "$log")"
         local cargo_argv parent_pid parent_argv
