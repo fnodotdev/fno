@@ -6,7 +6,7 @@ Before: 2,750 Rust declarations at base, measured with the census commands at RE
 
 ## The finding: the G4 keep-rule floor
 
-The G4 surface is at its keep-rule floor. The first pass cut 3,014 to 2,409 (605 declarations, 20.1 percent) and stopped at its AC5-EDGE. That rule blocks further folding without deleting sole guards of fail-closed paths. Post-audit work folded more families (client_tests.rs and server_tests.rs fold plans were staged and the mechanical families absorbed). This second pass applied the newer d-e016ab8e rules that postdate the first pass. Three measured sweeps found the floor:
+The G4 surface is at its keep-rule floor. The first pass cut 3,014 to 2,409 (605 declarations, 20.1 percent) and stopped at its AC5-EDGE. That rule blocks further folding without deleting sole guards of fail-closed paths. Post-audit work folded more families (client_tests.rs and server_tests.rs fold plans were staged and the mechanical families absorbed). This second pass applied the newer D2147 rules that postdate the first pass. Three measured sweeps found the floor:
 
 - Whole-body hash over all 2,733 test fns: zero duplicate bodies after the four rename twins came out.
 - Near-body hash over each fn's first 500 normalized chars: zero collision groups.
@@ -28,7 +28,7 @@ Eleven cuts, all measured:
 
 The pass re-baselined the census at aa9a1f7e4d and ranked owners by declarations. Audits read the ranked owners in full: mux_cli.rs, main.rs, client_tests.rs, server_tests.rs, portal_tests.rs, agents_view.rs and sideline_card_tests.rs. The client_tests read covered the per-gesture families (index plus x7683, selector_x, nav_goto, rename, move, answer and peek arms). The server_tests read covered open_here, diff_pane, resume, template, recruit and persist.
 
-The keep-rule readings that produced no cut: the main.rs classifier rows are user-facing byte pins. The parity and e2e binaries in crates/fno/tests/ are the strongest boundary for their surfaces (characterization goldens whose oracle legs are dead). The README rule keeps user-facing bytes and generated freshness. org_fold_live stays a deliberate live probe whose CI entry still compiles it. The doctor verdict fold kept every row, so it counts as zero toward any coverage claim under d-e016ab8e rule 1.
+The keep-rule readings that produced no cut: the main.rs classifier rows are user-facing byte pins. The parity and e2e binaries in crates/fno/tests/ are the strongest boundary for their surfaces (characterization goldens whose oracle legs are dead). The README rule keeps user-facing bytes and generated freshness. org_fold_live stays a deliberate live probe whose CI entry still compiles it. The doctor verdict fold kept every row, so it counts as zero toward any coverage claim under D2147 rule 1.
 
 Local collection and test runs stayed blocked by the fleet hold. The compile gate ran once over the crate (see Verification). CI owns the collected-case count.
 
