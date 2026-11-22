@@ -580,7 +580,16 @@ fn resolve_in_zone(
         }
     };
     if resolved <= now {
-        Ok(resolved + chrono::Duration::hours(24))
+        // Tomorrow's wall clock, re-resolved: across a DST-change night
+        // the named wall time stays the named wall time.
+        let tomorrow = today.succ_opt().ok_or_else(|| WhenParseError::Malformed {
+            input: whole.to_string(),
+            reason: "no tomorrow".into(),
+        })?;
+        match tz.from_local_datetime(&tomorrow.and_time(time)) {
+            LocalResult::Single(dt) => Ok(dt.with_timezone(&Utc)),
+            _ => Ok(resolved + chrono::Duration::hours(24)),
+        }
     } else {
         Ok(resolved)
     }
@@ -731,6 +740,13 @@ fn scan_spawn_argv(args: &[String]) -> (ScheduleRequest, usize, Option<String>) 
                 .next()
                 .unwrap_or("")
                 .trim_start_matches('-');
+            // The inline spelling normalizes to the absorb keys; the cancel
+            // flag spells its key differently in space form.
+            let key = if key == "cancel-scheduled" {
+                "cancel"
+            } else {
+                key
+            };
             req.absorb(ScheduleToken::Value(key, inline.to_string()));
             i += 1;
             continue;
@@ -975,6 +991,11 @@ fn run_front_door(
             .and_then(|(_, v)| v.clone())
     };
     let node = owned("--node");
+    // The recorded cwd honors an explicit --cwd so an --on poll runs where
+    // the spawn would have; the default stays the scheduler's cwd.
+    let cwd = owned("--cwd")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     let scheduler = owned("--spawned-by").or_else(|| crate::claims::ambient_parent_edge().0);
     let trigger = if let Some(command) = command {
         Trigger::On { command }
@@ -994,7 +1015,7 @@ fn run_front_door(
         force,
         node,
         argv: strip_schedule_flags(args),
-        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        cwd,
         scheduler_session: scheduler.unwrap_or_default(),
         state: RowState::Pending,
         last_gate_reading: None,
@@ -1207,10 +1228,10 @@ mod tests {
             trigger: Trigger::At,
             grace_secs: DEFAULT_GRACE_SECS,
             force: true,
-            node: Some("x-1d77".into()),
+            node: Some("demo-node".into()),
             argv: vec![
                 "w1".into(),
-                "/fno:target x-1d77".into(),
+                "/fno:target demo-node".into(),
                 "--at".into(),
                 "3".into(),
             ],
@@ -1259,7 +1280,7 @@ mod tests {
             "20:00Z",
             "--force",
             "w1",
-            "/fno:target x-1d77",
+            "/fno:target demo-node",
             "--argv",
             "--",
             "claude",
@@ -1285,7 +1306,7 @@ mod tests {
 
     #[test]
     fn a_plain_spawn_carries_no_schedule_request() {
-        let args: Vec<String> = ["w1", "/fno:target x-1d77", "--at", "3"]
+        let args: Vec<String> = ["w1", "/fno:target demo-node", "--at", "3"]
             .iter()
             .map(|s| s.to_string())
             .collect();

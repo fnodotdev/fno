@@ -206,16 +206,9 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
 }
 
 fn run_pass(home: &AgentsHome, pending: &AtomicBool) {
-    pending.store(
-        sched::pending(home)
-            .map(|rows| !rows.is_empty())
-            .unwrap_or(false),
-        Ordering::SeqCst,
-    );
     let now = Utc::now();
-    let Ok(rows) = sched::pending(home) else {
-        return;
-    };
+    let rows = sched::pending(home).unwrap_or_default();
+    pending.store(!rows.is_empty(), Ordering::SeqCst);
     if !schedule_enabled(None) {
         // AC5-ERR: a due row under a disabled gate journals skipped with
         // reason disabled and fires nothing; the rows stay pending so
@@ -236,12 +229,17 @@ fn run_pass(home: &AgentsHome, pending: &AtomicBool) {
     // Rows due in one minute fire in node priority order (AC3-HP): the
     // live graph read decides, p2 for an absent node, then fire time,
     // then id.
-    due_rows.sort_by(|a, b| {
-        let a_key = (node_priority(a), a.fire_at_utc, a.id.clone());
-        let b_key = (node_priority(b), b.fire_at_utc, b.id.clone());
-        a_key.cmp(&b_key)
-    });
-    for row in due_rows {
+    let mut keyed: Vec<(
+        u8,
+        Option<chrono::DateTime<Utc>>,
+        String,
+        sched::ScheduledSpawn,
+    )> = due_rows
+        .into_iter()
+        .map(|row| (node_priority(&row), row.fire_at_utc, row.id.clone(), row))
+        .collect();
+    keyed.sort_by(|a, b| a[..3].cmp(&b[..3]));
+    for (_prio, _fire, _id, row) in keyed {
         // The gate never refuses a done, superseded or deferred node
         // (premise P6), so the fire path reads the status itself.
         if row
@@ -304,7 +302,9 @@ fn fire_row(home: &AgentsHome, row: &sched::ScheduledSpawn, now: DateTime<Utc>) 
         program: std::ffi::OsStr::new(program),
         args,
         stdin: None,
-        cwd: None,
+        // The re-entry runs in the row's cwd: a daemon fires rows for any
+        // project, and the daemon's own cwd is never the row's.
+        cwd: Some(row.cwd.as_path()),
         env: &[],
         timeout_s: FIRE_TIMEOUT,
     });
