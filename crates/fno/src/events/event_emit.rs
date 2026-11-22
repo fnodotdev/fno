@@ -266,14 +266,19 @@ fn push(
 }
 
 /// A clean `code-review` pass needs a receipt from `fno do review read`: the
-/// same session served the round's whole diff at this head. The rest of the
-/// emit's data (round, flags, counts, execution context) relaxes nothing.
+/// same session served the round's whole diff at this head, and the emit's own
+/// `head_sha` and `branch` must match that receipt. The rest of the emit's data
+/// (round, flags, counts, execution context) relaxes nothing.
 fn missing_receipt(data: &Map<String, Value>, session: &str) -> Option<String> {
     let text = |key| data.get(key).and_then(Value::as_str).unwrap_or_default();
     if text("reviewer") != "code-review" || text("verdict") != "pass" {
         return None;
     }
-    crate::backlog::review_read::emit_refusal(session)
+    let claim = crate::backlog::review_read::Claim {
+        head: text("head_sha"),
+        branch: text("branch"),
+    };
+    crate::backlog::review_read::emit_refusal(session, &claim)
 }
 
 pub(super) fn run(args: &[OsString], json_mode: bool) -> i32 {

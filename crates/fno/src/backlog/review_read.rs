@@ -23,6 +23,7 @@ use std::time::Duration;
 pub(crate) struct Receipt {
     pub session: String,
     pub head: String,
+    pub branch: String,
     pub base: String,
     pub files: Vec<String>,
     pub diff_sha256: String,
@@ -32,7 +33,14 @@ pub(crate) struct Receipt {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Scope {
     pub head: String,
+    pub branch: String,
     pub base: String,
+}
+
+/// The head and branch an emit names in its own data.
+pub(crate) struct Claim<'a> {
+    pub head: &'a str,
+    pub branch: &'a str,
 }
 
 #[derive(Debug)]
@@ -144,7 +152,7 @@ pub(crate) fn scope() -> Result<Scope, ScopeError> {
     let merge_base =
         git_text(&["merge-base", &head, &default]).ok_or(ScopeError::Git("the merge base"))?;
     let base = prior_base(&branch, &head)?.unwrap_or(merge_base);
-    Ok(Scope { head, base })
+    Ok(Scope { head, branch, base })
 }
 
 pub(crate) fn serve(scope: &Scope) -> Option<Served> {
@@ -163,12 +171,19 @@ pub(crate) fn check(
     session: &str,
     scope: &Scope,
     fresh_sha: Option<&str>,
+    claim: &Claim<'_>,
 ) -> Option<String> {
     let why = match (fresh_sha, receipt) {
         (None, _) => "git gave no answer for the scoped diff, so no receipt can be checked",
         (Some(_), None) => "this session has no receipt for this head",
         (Some(_), Some(r)) if r.session != session => "the receipt belongs to another session",
         (Some(_), Some(r)) if r.head != scope.head => "the receipt is for an older head",
+        (Some(_), Some(r)) if claim.head != r.head => {
+            "the emit's head_sha is missing or is not the receipt's head"
+        }
+        (Some(_), Some(r)) if claim.branch != r.branch => {
+            "the emit's branch is missing or is not the receipt's branch"
+        }
         (Some(_), Some(r)) if r.base != scope.base => "the scope moved since the receipt",
         (Some(sha), Some(r)) if r.diff_sha256 != sha => "the diff changed since the receipt",
         _ => return None,
@@ -177,7 +192,7 @@ pub(crate) fn check(
 }
 
 /// The emit's check: refusal text, or none when the receipt holds.
-pub(crate) fn emit_refusal(session: &str) -> Option<String> {
+pub(crate) fn emit_refusal(session: &str, claim: &Claim<'_>) -> Option<String> {
     let scope = match scope() {
         Ok(scope) => scope,
         Err(error) => {
@@ -188,7 +203,7 @@ pub(crate) fn emit_refusal(session: &str) -> Option<String> {
     let receipt = receipts_dir()
         .and_then(|dir| std::fs::read_to_string(dir.join(receipt_file(&scope.head, session))).ok())
         .and_then(|text| serde_json::from_str::<Receipt>(&text).ok());
-    check(receipt.as_ref(), session, &scope, fresh.as_deref())
+    check(receipt.as_ref(), session, &scope, fresh.as_deref(), claim)
 }
 
 fn attester_session() -> Option<String> {
@@ -269,6 +284,7 @@ pub fn run(args: &[OsString]) -> i32 {
     let receipt = Receipt {
         session,
         head: scope.head,
+        branch: scope.branch,
         base: scope.base,
         files: served.files,
         diff_sha256: served.sha,
@@ -294,6 +310,7 @@ mod tests {
     fn scope() -> Scope {
         Scope {
             head: "h2".into(),
+            branch: "feature/x".into(),
             base: "b".into(),
         }
     }
@@ -302,19 +319,25 @@ mod tests {
         Receipt {
             session: "s1".into(),
             head: "h2".into(),
+            branch: "feature/x".into(),
             base: "b".into(),
             files: vec!["a.rs".into()],
             diff_sha256: "sha".into(),
         }
     }
 
+    const CLAIM: Claim<'static> = Claim {
+        head: "h2",
+        branch: "feature/x",
+    };
+
     fn refusal(r: Option<Receipt>, session: &str, scope: &Scope, fresh: Option<&str>) -> String {
-        check(r.as_ref(), session, scope, fresh).unwrap_or_default()
+        check(r.as_ref(), session, scope, fresh, &CLAIM).unwrap_or_default()
     }
 
     #[test]
     fn a_matching_receipt_passes() {
-        assert!(check(Some(&receipt()), "s1", &scope(), Some("sha")).is_none());
+        assert!(check(Some(&receipt()), "s1", &scope(), Some("sha"), &CLAIM).is_none());
     }
 
     #[test]
@@ -345,6 +368,22 @@ mod tests {
     fn no_git_answer_is_refused_even_with_a_receipt() {
         let why = refusal(Some(receipt()), "s1", &scope(), None);
         assert!(why.contains("no answer"));
+    }
+
+    #[test]
+    fn an_emit_naming_another_head_or_branch_is_refused() {
+        let other_head = Claim {
+            head: "h9",
+            branch: "feature/x",
+        };
+        let why = check(Some(&receipt()), "s1", &scope(), Some("sha"), &other_head);
+        assert!(why.unwrap_or_default().contains("head_sha"));
+        let no_branch = Claim {
+            head: "h2",
+            branch: "",
+        };
+        let why = check(Some(&receipt()), "s1", &scope(), Some("sha"), &no_branch);
+        assert!(why.unwrap_or_default().contains("branch"));
     }
 
     #[test]
