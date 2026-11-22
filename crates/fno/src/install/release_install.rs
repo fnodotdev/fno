@@ -657,7 +657,7 @@ pub(crate) fn adopt_release(unpacked: &Path) -> i32 {
                 bin.display()
             ),
         }
-    } else if let Err(e) = link_path_extras(bin) {
+    } else if let Err(e) = link_path_extras(&bin) {
         let _ = std::fs::remove_file(marker_path());
         return failed("link", &e);
     }
