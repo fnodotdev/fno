@@ -949,6 +949,11 @@ impl Root {
     /// The update card: a raised card bottom-left. A staged build offers Restart; a fresh install shows its notes
     /// once and drops on Dismiss.
     fn update_card_view(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        // The first-run offer owns the main pane: the card stays set and
+        // returns when the mux attaches.
+        if self.offer.is_some() {
+            return None;
+        }
         let card = self.update_card.as_ref()?;
         let (head, body, buttons) = match card {
             UpdateCard::Ready(r) => (
