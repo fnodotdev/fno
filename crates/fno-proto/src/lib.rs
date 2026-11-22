@@ -433,15 +433,19 @@ fn default_true() -> bool {
 /// oldest held submission; floor stays 58.
 /// v131: `ClientMsg::PaneInset`, the cells a client keeps empty inside every
 /// pane; floor stays 58.
-/// v132: `ControlCommand::ThreadPane.origin` and
+/// v132: `ClientMsg::DraftHint`, the desktop app's live chat-draft report;
+/// floor stays 58.
+/// v133: `AgentRow` adds the four token classes behind `session_tokens`
+/// (serde default); floor stays 58.
+/// v134: `ControlCommand::ThreadPane.origin` and
 /// `AgentLaunchRequest.open_as` (serde default), the pre-birth placement
 /// check and the composer's typed placement. `ClientMsg::ShellRun` and
 /// `ServerMsg::ShellRun` carry the composer's one-shot run; floor stays 58.
-pub const PROTO_VERSION: u32 = 132;
+pub const PROTO_VERSION: u32 = 134;
 
 /// The first server that answers a thread placement check and reads a typed
 /// launch placement.
-pub const LAUNCH_PLACEMENT_PROTO: u32 = 132;
+pub const LAUNCH_PLACEMENT_PROTO: u32 = 134;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -865,7 +869,7 @@ pub enum ControlCommand {
         /// refused outright, exactly as it always was.
         #[serde(default)]
         placement: PanePlacement,
-        /// (v132) The caller, for the pre-birth check and for a worker on
+        /// (v134) The caller, for the pre-birth check and for a worker on
         /// another machine. Additive, so the floor does not move.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         origin: Option<ThreadOrigin>,
@@ -1325,6 +1329,19 @@ pub struct AgentRow {
     /// fabricated zero. `#[serde(default)]` keeps a v102 reader wire-tolerant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compaction_count: Option<u64>,
+    /// (v133) The raw token classes behind `session_tokens`: input, output,
+    /// cache read and cache write, summed over every model the session's
+    /// transcript recorded. `None` before the first measurement; never a
+    /// fabricated zero. `#[serde(default)]` keeps a v104 reader
+    /// wire-tolerant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_cache_read_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_cache_write_tokens: Option<u64>,
     /// (v105) The last 8 tool-activity intervals for this row, oldest
     /// first: `(calls, failed)` pairs the server core samples from the
     /// registry row's cumulative counts on a 5s gate. The client only
@@ -2986,6 +3003,7 @@ mod tests {
             ClientMsg::Input(b"echo hello\r".to_vec()),
             ClientMsg::Resize { rows: 50, cols: 90 },
             ClientMsg::PaneInset { rows: 1, cols: 1 },
+            ClientMsg::DraftHint { pane: 7 },
             ClientMsg::Detach,
             ClientMsg::Observe(ObserverHello {
                 name: "teacher".into(),
@@ -3416,6 +3434,10 @@ mod tests {
         assert_eq!(row.session_cost_cents, None);
         assert_eq!(row.session_tokens, None);
         assert_eq!(row.compaction_count, None);
+        assert_eq!(row.session_input_tokens, None);
+        assert_eq!(row.session_output_tokens, None);
+        assert_eq!(row.session_cache_read_tokens, None);
+        assert_eq!(row.session_cache_write_tokens, None);
         assert_eq!(row.started_at, None);
         assert_eq!(row.mail_unread, None);
         assert_eq!(row.node, None);
@@ -3431,6 +3453,10 @@ mod tests {
             "session_cost_cents",
             "session_tokens",
             "compaction_count",
+            "session_input_tokens",
+            "session_output_tokens",
+            "session_cache_read_tokens",
+            "session_cache_write_tokens",
             "started_at",
             "mail_unread",
             "node",
@@ -3447,12 +3473,18 @@ mod tests {
         let filled_json = r#"{"squad":null,"name":"z","pane_id":null,
                       "badge":null,"reason":null,"exited":false,
                       "harness":"claude","model":"glm-5.3-flash[1m]","route":"zai",
-                      "compaction_count":3}"#;
+                      "compaction_count":3,
+                      "session_input_tokens":100,"session_output_tokens":40,
+                      "session_cache_read_tokens":9000,"session_cache_write_tokens":500}"#;
         let filled: AgentRow = serde_json::from_str(filled_json).unwrap();
         assert_eq!(filled.harness.as_deref(), Some("claude"));
         assert_eq!(filled.model.as_deref(), Some("glm-5.3-flash[1m]"));
         assert_eq!(filled.route.as_deref(), Some("zai"));
         assert_eq!(filled.compaction_count, Some(3));
+        assert_eq!(filled.session_input_tokens, Some(100));
+        assert_eq!(filled.session_output_tokens, Some(40));
+        assert_eq!(filled.session_cache_read_tokens, Some(9000));
+        assert_eq!(filled.session_cache_write_tokens, Some(500));
         let mut filled = filled;
         filled.context_used_pct = Some(26);
         filled.context_tokens = Some((258687, 1000000));
@@ -3469,7 +3501,7 @@ mod tests {
         // re-assert the same literal, which caught nothing a single pin does
         // not and turned every bump into a three-file edit; they now assert
         // only their own wire shapes.
-        assert_eq!(PROTO_VERSION, 132);
+        assert_eq!(PROTO_VERSION, 134);
         // v64 added `PanePlacement.portal` and `AgentRow.portal`.
         // Both are additive `#[serde(default)]` fields, so the floor does NOT
         // move with them - a v63 client still attaches. Pinned beside the

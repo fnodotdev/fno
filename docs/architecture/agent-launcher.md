@@ -32,7 +32,7 @@ Tokens paint values, never axis names: `Local`, `footnote`, `main`, `auto`, `cla
 
 A bare `!` then Enter opens a plain login shell as a new tab of the card's workspace, in its folder. A `!cmd` with a pick runs the command in that pane, then leaves the same shell. There Ctrl-C ends the line and leaves the shell. Each opens pick works except a portal, so shell mode hides the portal rows.
 
-A `!` line with no pick runs in the card, on its own pty, one at a time. While it runs the keys are the command's, esc included. Ctrl+o and the mux prefix chords are not. Ctrl+o moves that same process to a tab and folds the card. A detach moves it to a tab too. A moved run waits for Enter at its end. At its end the card shows the exit code and takes the next line. A failure keeps the line. Ctrl+o then opens the full log in a tab. A remote host or a server older than v132 keeps the pane.
+A `!` line with no pick runs in the card, on its own pty, one at a time. While it runs the keys are the command's, esc included. Ctrl+o and the mux prefix chords are not. Ctrl+o moves that same process to a tab and folds the card. A detach moves it to a tab too. A moved run waits for Enter at its end. At its end the card shows the exit code and takes the next line. A failure keeps the line. Ctrl+o then opens the full log in a tab. A remote host or a server older than v134 keeps the pane.
 
 ## Open as
 
@@ -42,7 +42,7 @@ The opens list holds the last portal, a new tab and four directions. It also hol
 
 The card holds a tab by its id. At Enter it reads the layout again. A tab or portal that closed refuses in the card and keeps the draft. After the worker starts, a target that closed or moved opens a new tab and says so. A picked open portal keeps its geometry and shows the new worker. An edited `--portal 2 --split down` opens a new portal below portal 2, which keeps showing.
 
-A saved set keeps a direction, a new tab or the pane entry. It never keeps a tab or portal number, and saves no pick for those. A server older than v132 takes only the default and the pane entry, so the card asks you to reconnect for the others.
+A saved set keeps a direction, a new tab or the pane entry. It never keeps a tab or portal number, and saves no pick for those. A server older than v134 takes only the default and the pane entry, so the card asks you to reconnect for the others.
 
 ## Saved sets
 

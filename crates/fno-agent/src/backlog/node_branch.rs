@@ -16,6 +16,13 @@ use std::time::Duration;
 /// pattern needs lookaheads (`(?=$|[/-])`) that the regex crate does not
 /// support, including the compact legacy `x` form.
 pub(crate) fn node_ids(head_ref: &str) -> Vec<String> {
+    node_ids_under(head_ref, super::node_ref::sequential_prefix().as_deref())
+}
+
+/// `node_ids` under an explicit mode: `Some("t")` reads `t-12` as an id,
+/// `None` is hex. The seam the tests drive, so the scan answers both modes
+/// regardless of the machine's own config.
+fn node_ids_under(head_ref: &str, seq_prefix: Option<&str>) -> Vec<String> {
     let b = head_ref.as_bytes();
     let mut ids: Vec<String> = Vec::new();
     // Non-overlapping left-to-right scan, exactly like Python's finditer: a
@@ -42,8 +49,9 @@ pub(crate) fn node_ids(head_ref: &str) -> Vec<String> {
             j += 1;
             alnum += 1;
         }
-        let mut matched: Option<(usize, usize)> = None; // (hex_start, hex_end)
-        if j < b.len() && b[j] == b'-' && j - i - 1 <= 7 {
+        let mut matched: Option<(usize, usize)> = None; // (id_start, id_end)
+        let dashed = j < b.len() && matches!(b.get(j), Some(&b'-')) && j - i - 1 <= 7;
+        if dashed {
             // Dashed: prefix ran 1-8 chars, then '-' then 4-8 hex.
             let hex_start = j + 1;
             let mut k = hex_start;
@@ -56,6 +64,31 @@ pub(crate) fn node_ids(head_ref: &str) -> Vec<String> {
             let hex_len = k - hex_start;
             if (4..=8).contains(&hex_len) && (k == b.len() || b[k] == b'-' || b[k] == b'/') {
                 matched = Some((hex_start, k));
+            }
+        }
+        // Sequential mode: the configured prefix + digits (`t-12`), the same
+        // grammar node_ref gates the well-formed id with. The boundary rules
+        // are the hex arm's: the digit run is capped at the grammar's seven,
+        // so `t-1234567` trailed by an eighth digit never reads as an id,
+        // and the tail must end at a delimiter or the string end.
+        if matched.is_none() && dashed {
+            if let Some(seq) = seq_prefix {
+                let num_start = j + 1;
+                let mut k = num_start;
+                while k < b.len()
+                    && k - num_start < 7
+                    && matches!(b.get(k), Some(&c) if c.is_ascii_digit())
+                {
+                    k += 1;
+                }
+                let num_len = k - num_start;
+                if (1..=7).contains(&num_len)
+                    && b.get(num_start) != Some(&b'0')
+                    && (k == b.len() || matches!(b.get(k), Some(&b'-') | Some(&b'/')))
+                    && &head_ref[i..j] == seq
+                {
+                    matched = Some((num_start, k));
+                }
             }
         }
         if matched.is_none() {
@@ -292,6 +325,50 @@ mod tests {
         assert_eq!(node_ids("feature/xbbbb"), vec!["xbbbb".to_string()]);
         assert_eq!(node_ids("xbbbb-fix"), vec!["xbbbb".to_string()]);
         assert!(node_ids("main").is_empty());
+    }
+
+    #[test]
+    fn sequential_ids_read_in_sequential_mode_only() {
+        // Hex mode: a digit tail is prose, whatever its prefix.
+        assert_eq!(
+            node_ids_under("feature/t-12-mini", None),
+            Vec::<String>::new()
+        );
+        assert_eq!(node_ids_under("x-15", None), Vec::<String>::new());
+        // Sequential mode reads the configured prefix's digit tails.
+        assert_eq!(
+            node_ids_under("feature/t-12-mini", Some("t")),
+            vec!["t-12".to_string()]
+        );
+        assert_eq!(node_ids_under("t-1", Some("t")), vec!["t-1".to_string()]);
+        // Hex ids stay ids in a sequential project: renamed rows keep them.
+        assert_eq!(
+            node_ids_under("feature/x-aaaa-t-12", Some("t")),
+            vec!["x-aaaa".to_string(), "t-12".to_string()]
+        );
+        // Shape refusals: a leading zero, an over-long digit run, another
+        // prefix's token, and a word the digit tail never completes.
+        assert_eq!(
+            node_ids_under("feature/t-07-mini", Some("t")),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            node_ids_under("feature/t-123456789", Some("t")),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            node_ids_under("feature/u-9-mini", Some("t")),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            node_ids_under("feature/wave-1", Some("t")),
+            Vec::<String>::new()
+        );
+        // The mint contract holds: id plus slug words, exactly one id.
+        assert_eq!(
+            node_ids_under("feature/t-12-rust-node", Some("t")),
+            vec!["t-12".to_string()]
+        );
     }
 
     // -- the kind map -----------------------------------------------------------

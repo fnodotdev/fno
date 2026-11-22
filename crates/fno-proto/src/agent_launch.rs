@@ -65,7 +65,7 @@ pub struct AgentLaunchRequest {
     /// focused pane (`--split <dir>`: left/right/up/down).
     #[serde(default)]
     pub split: Option<String>,
-    /// (v132) Where a thread opens, snapshotted at Enter: the card's
+    /// (v134) Where a thread opens, snapshotted at Enter: the card's
     /// workspace, tab id, anchor pane, split, and the portal or `portal_new`.
     /// It wins over the three word fields above, which older clients send.
     #[serde(default)]

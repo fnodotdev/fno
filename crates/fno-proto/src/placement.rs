@@ -174,7 +174,7 @@ pub struct PanePlacement {
     pub from: Option<String>,
 }
 
-/// (v132) Who asks a thread reach. It resolves the workspace of a worker that
+/// (v134) Who asks a thread reach. It resolves the workspace of a worker that
 /// has no row in this registry: one that is not born yet, or one that runs on
 /// another machine.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -187,7 +187,7 @@ pub struct ThreadOrigin {
     #[serde(default)]
     pub parent: Option<String>,
     /// Answer whether the reach would land, and change nothing. A caller
-    /// sends this only to a server of v132 or later: an older one drops the
+    /// sends this only to a server of v134 or later: an older one drops the
     /// field and would act on the request.
     #[serde(default)]
     pub check: bool,

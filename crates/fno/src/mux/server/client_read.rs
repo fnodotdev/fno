@@ -32,6 +32,11 @@ pub(super) async fn client_reader(mut r: OwnedReadHalf, core_tx: mpsc::Sender<Co
                     break;
                 }
             }
+            Ok(ClientMsg::DraftHint { pane }) => {
+                if core_tx.send(CoreMsg::DraftHint { id, pane }).await.is_err() {
+                    break;
+                }
+            }
             Ok(ClientMsg::Resize { rows, cols }) => {
                 if core_tx
                     .send(CoreMsg::Resize { id, rows, cols })

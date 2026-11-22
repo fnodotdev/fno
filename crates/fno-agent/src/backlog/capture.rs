@@ -16,6 +16,7 @@ use regex::Regex;
 use serde_json::{json, Map, Value};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 const MAX_WHY_LEN: usize = 120;
 const SOFT_CEILING: usize = 100;
@@ -32,16 +33,60 @@ const PRIORITY_SUFFIX_RE: &str = r"\s*\((p[0-3])\)\s*$";
 /// Mechanical scan trigger language (the deterministic half; the LLM judges).
 const SCAN_RE: &str = r"(?i)deferred|skipped|won't fix now|wont fix now|follow-up|followup|\bp2\b|\bp3\b|ship.{0,3}later|\bTODO\b";
 
-/// Managed shortcode line. The wheel carried a negative lookahead so the
-/// liberal node arm never steals a MALFORMED sibling (e.g. a 7-hex cv-);
-/// this crate pins regex 1.x, which rejects lookarounds, so the guard is the
-/// post-match cv shape check in `managed_shortcode_match`.
-const MANAGED_SHORTCODE_RE: &str = r#"^- \[([ x\-])\]\s+(fu-[a-z0-9][a-z0-9-]*|cv-[0-9a-f]{8}|[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8})\s+(?:\u{2014}|-)\s+(.*?)\s*$"#;
+/// The managed-shortcode pattern under the board's id mode: the hex node
+/// arm, plus the sequential arm (`t-[1-9][0-9]{0,6}`) when the board
+/// config says so. One build per process - the tidy path parses whole
+/// documents line by line, and the mode read is a config walk.
+fn managed_shortcode_pattern() -> &'static str {
+    static PATTERN: OnceLock<String> = OnceLock::new();
+    PATTERN
+        .get_or_init(|| managed_shortcode_pattern_for(seq_arm().as_deref()))
+        .as_str()
+}
+
+/// The board's sequential arm as a regex fragment, or the hex-only arm
+/// when the config reads hex. The seam between the config read and the
+/// pure pattern builders.
+fn seq_arm() -> Option<String> {
+    super::node_ref::sequential_id_pattern()
+}
+
+/// The pure pattern builders, `seq` = `Some("t")` in sequential mode.
+fn managed_shortcode_pattern_for(seq: Option<&str>) -> String {
+    let node_arm = match seq {
+        Some(p) => format!(
+            r"[a-z][a-z0-9]{{0,7}}-?[0-9a-f]{{4,8}}|{}",
+            super::node_ref::sequential_id_pattern_for(p)
+        ),
+        None => r"[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}".to_string(),
+    };
+    format!(
+        r#"^- \[([ x\-])\]\s+(fu-[a-z0-9][a-z0-9-]*|cv-[0-9a-f]{{8}}|{node_arm})\s+(?:\u{{2014}}|-)\s+(.*?)\s*$"#
+    )
+}
 const CHECKBOX_LINE_RE: &str = r#"^- \[([ x\-])\]\s+(.*?)\s*$"#;
 const ANY_PRIORITY_RE: &str = r"\((p[0-3])\)";
 const SECTION_HEADING_RE: &str = r"^#{2,6}\s+(.*\S)\s*$";
 const POST_MERGE_MARKER_RE: &str = r"^<!--\s*(post-merge:\S+?)\s*-->\s*$";
-const NODE_ID_RE: &str = r"->\s*([a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8})";
+/// The node-link pattern under the board's id mode: the `-> <id>` capture
+/// beside the managed shortcode, same sequential arm.
+fn node_link_pattern() -> &'static str {
+    static PATTERN: OnceLock<String> = OnceLock::new();
+    PATTERN
+        .get_or_init(|| node_link_pattern_for(seq_arm().as_deref()))
+        .as_str()
+}
+
+/// The pure builder, `seq` = `Some("t")` in sequential mode.
+fn node_link_pattern_for(seq: Option<&str>) -> String {
+    match seq {
+        Some(p) => format!(
+            r"->\s*([a-z][a-z0-9]{{0,7}}-?[0-9a-f]{{4,8}}|{})",
+            super::node_ref::sequential_id_pattern_for(p)
+        ),
+        None => r"->\s*([a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8})".to_string(),
+    }
+}
 const MEMORY_SLUG_RE: &str = r"^\s*\[\[.*\]\]\s*$";
 const JC_DATE_RE: &str = r"\u{1F4C5}\s*(\d{4}-\d{2}-\d{2})";
 const WHERE_SUBLINE_RE: &str = r"^\s+where:\s*(.*\S)\s*$";
@@ -207,7 +252,16 @@ fn split_priority_lenient(rest: &str) -> (String, Option<String>) {
 /// pins regex 1.x, which rejects lookarounds, so the same rejection is the
 /// explicit cv shape check here.
 fn managed_shortcode_match(line: &str) -> Option<(String, String, String)> {
-    let re = compile(MANAGED_SHORTCODE_RE);
+    let re = compile(managed_shortcode_pattern());
+    managed_shortcode_match_with(line, &re)
+}
+
+/// The cv guard beside the match: the wheel's negative lookahead that kept
+/// the liberal node arm from stealing a MALFORMED sibling (a 7-hex cv-).
+/// This crate pins regex 1.x, which rejects lookarounds, so the rejection
+/// is the explicit post-match shape check, over whatever regex the caller
+/// compiled - the production pattern or a test's injected one.
+fn managed_shortcode_match_with(line: &str, re: &Regex) -> Option<(String, String, String)> {
     let m = re.captures(line)?;
     let token = m[2].to_string();
     if token.starts_with("cv-") {
@@ -941,7 +995,7 @@ fn promote_item(
             return Err(CaptureError::validation(format!("unknown fu-id: {fu_id}")));
         };
         if &m[1] == "x" {
-            let node_re = compile(NODE_ID_RE);
+            let node_re = compile(node_link_pattern());
             let node_id = node_re.captures(&m[0]).map(|nm| nm[1].to_string());
             return Ok(json!({
                 "id": fu_id,
@@ -1227,8 +1281,8 @@ fn process_body(
     body: &[String],
     complete_ids: &std::collections::BTreeSet<String>,
 ) -> (Vec<String>, Vec<String>, usize, Vec<Vec<String>>) {
-    let managed_re = compile(MANAGED_SHORTCODE_RE);
-    let node_re = compile(NODE_ID_RE);
+    let managed_re = compile(managed_shortcode_pattern());
+    let node_re = compile(node_link_pattern());
     let mut kept: Vec<String> = Vec::new();
     let mut moved: Vec<String> = Vec::new();
     let mut ejected = 0usize;
@@ -2268,5 +2322,41 @@ mod capture_tests {
         let archive =
             std::fs::read_to_string(dir.path().join("inbox-archive.md")).expect("archive file");
         assert!(archive.contains(&fu_id));
+    }
+
+    #[test]
+    fn the_shortcode_reads_a_sequential_id_only_under_its_arm() {
+        let line = "- [ ] t-15 - rust node-id readers accept prefix-digits";
+        // Hex mode: the digit tail stays prose.
+        let hex: Regex = Regex::new(&managed_shortcode_pattern_for(None)).unwrap();
+        assert!(managed_shortcode_match_with(line, &hex).is_none());
+        // Sequential mode: the token binds as a node item.
+        let seq: Regex = Regex::new(&managed_shortcode_pattern_for(Some("t"))).unwrap();
+        let got = managed_shortcode_match_with(line, &seq).expect("t-15 reads in seq mode");
+        assert_eq!(got.1, "t-15");
+        // Shape refusals ride the same arm: another prefix's token and a
+        // leading zero stay prose in sequential mode too.
+        let other = managed_shortcode_match_with("- [ ] u-9 - other prefix stays prose", &seq);
+        assert!(other.is_none());
+        let zero = managed_shortcode_match_with("- [ ] t-07 - a zero lead stays prose", &seq);
+        assert!(zero.is_none());
+    }
+
+    #[test]
+    fn the_node_link_reads_a_sequential_id_only_under_its_arm() {
+        let seq: Regex = Regex::new(&node_link_pattern_for(Some("t"))).expect("compiles");
+        let hex: Regex = Regex::new(&node_link_pattern_for(None)).expect("compiles");
+        let line = "promoted -> t-15 rust node-id readers";
+        assert_eq!(
+            seq.captures(line).map(|m| m[1].to_string()),
+            Some("t-15".to_string())
+        );
+        assert!(hex.captures(line).is_none());
+        // A hex id beside it still reads, and wins by leftmost-first.
+        let mixed = "promoted -> x-ffff t-15";
+        assert_eq!(
+            seq.captures(mixed).map(|m| m[1].to_string()),
+            Some("x-ffff".to_string())
+        );
     }
 }

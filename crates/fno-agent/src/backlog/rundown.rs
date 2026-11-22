@@ -1219,7 +1219,7 @@ pub(crate) fn write_atomic(path: &Path, body: &str) -> Result<(), String> {
 /// root, not --graph's parent (the anchor lives at <state>/db/graph.json).
 fn default_page() -> PathBuf {
     let root = crate::backlog::settings::state_dir().unwrap_or_else(|| PathBuf::from(".fno"));
-    crate::state_layout::place(&root, "term.html")
+    crate::state_layout::place_new(&root, "term.html")
 }
 
 /// `fno agent hq ledger [--out PATH]`, riding `lead-rundown --ledger`: the

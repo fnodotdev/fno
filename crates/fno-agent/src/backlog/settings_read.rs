@@ -35,6 +35,7 @@ pub fn run_settings_read(args: &[String]) -> i32 {
     let payload = serde_json::json!({
         "prefix": super::settings::node_id_prefix(),
         "hex_width": super::settings::node_id_hex_width(),
+        "sequential": super::settings::node_id_sequential(),
         "candidates": super::settings::candidates(),
         "projects": projects,
         "project": project,

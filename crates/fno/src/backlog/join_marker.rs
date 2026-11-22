@@ -18,6 +18,7 @@ const MARKERS: &[(&str, &str)] = &[
     ("CODEX_SESSION_ID", "codex"),
     ("GEMINI_SESSION_ID", "gemini"),
     ("OPENCODE_SESSION_ID", "opencode"),
+    ("PI_SESSION_ID", "pi"),
 ];
 
 const JOIN_BOUND: Duration = Duration::from_secs(2);
@@ -110,6 +111,9 @@ mod tests {
         let split = env_of(&[("CODEX_THREAD_ID", "a"), ("CODEX_SESSION_ID", "b")]);
         assert_eq!(join_candidate(&split), None);
         assert_eq!(join_candidate(&env_of(&[])), None);
+        // The marker table mirrors claims.rs HARNESS_SESSION_MARKERS, pi included.
+        let pi = env_of(&[("PI_SESSION_ID", "pi-1")]);
+        assert_eq!(join_candidate(&pi), Some(("pi", "pi-1".to_string())));
         let walk = env_of(&[("CLAUDE_CODE_SESSION_ID", "../x")]);
         assert_eq!(join_candidate(&walk), None);
     }

@@ -160,6 +160,9 @@ fn pin_env(dir: &Path, case: &Case) -> Vec<(String, String)> {
             dir.join("state").display().to_string(),
         ),
         ("CARGO_HOME".into(), dir.join("cargo").display().to_string()),
+        // The rendered log paths follow the state home under the case's HOME.
+        ("FNO_STATE_HOME".into(), String::new()),
+        ("XDG_STATE_HOME".into(), String::new()),
         (
             "FNO_TEST_PR_WATCH_LAUNCH_AGENTS_DIR".into(),
             dir.join("home")

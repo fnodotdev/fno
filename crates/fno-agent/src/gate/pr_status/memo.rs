@@ -32,7 +32,8 @@ fn memo_path(cwd: &Path, kind: &str, name: &str) -> Option<PathBuf> {
 /// The stored value, or None. A missing or corrupt memo is a miss, never an
 /// error: the network read is the truth.
 pub(crate) fn read(cwd: &Path, kind: &str, name: &str) -> Option<Value> {
-    let text = std::fs::read_to_string(memo_path(cwd, kind, name)?).ok()?;
+    let path = crate::state_layout_home::cache_read(&memo_path(cwd, kind, name)?);
+    let text = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&text).ok()
 }
 
@@ -44,8 +45,9 @@ pub(crate) fn any_true(cwd: &Path, kind: &str, prefix: &str) -> bool {
     let Some(dir) = path.parent() else {
         return false;
     };
-    std::fs::read_dir(dir)
+    crate::state_layout_home::cache_read_dirs(dir)
         .into_iter()
+        .filter_map(|dir| std::fs::read_dir(dir).ok())
         .flatten()
         .flatten()
         .any(|entry| {

@@ -50,7 +50,7 @@ const OWNED: &[&str] = &[
 pub(crate) async fn capture(harness: &str) -> Option<Vec<FlagRow>> {
     let version = run_capture(harness, &["--version"]).await?;
     let cache = cache_path(harness, &version);
-    if let Some(rows) = read_cache(&cache) {
+    if let Some(rows) = read_cache(&cache).or_else(|| read_cache(&pre_move(&cache)?)) {
         return Some(rows);
     }
     let text = run_capture(harness, &["--help"]).await?;
@@ -131,13 +131,24 @@ fn cache_path(harness: &str, version: &str) -> PathBuf {
 }
 
 fn base_dir() -> PathBuf {
-    if let Some(v) = std::env::var_os("FNO_AGENT_HOME") {
-        return PathBuf::from(v).join("cache").join("harness-flags");
-    }
-    let base = std::env::var_os("HOME")
+    let default = std::env::var_os("HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    base.join(".fno").join("cache").join("harness-flags")
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".fno");
+    if let Some(agents) = std::env::var_os("FNO_AGENT_HOME").map(PathBuf::from) {
+        // The daemon pins the default agents home; only another one isolates.
+        if agents != default.join("agents") {
+            return agents.join("cache").join("harness-flags");
+        }
+    }
+    crate::state_layout::home_of(&default, "cache/harness-flags")
+}
+
+/// The same file under the default root, where it sat before the move.
+fn pre_move(cache: &std::path::Path) -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    let dir = home.join(".fno").join("cache").join("harness-flags");
+    Some(dir.join(cache.file_name()?))
 }
 
 fn read_cache(path: &PathBuf) -> Option<Vec<FlagRow>> {

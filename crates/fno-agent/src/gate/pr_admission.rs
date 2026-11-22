@@ -176,8 +176,8 @@ pub fn held(decisions_stdout: Option<&[u8]>) -> Result<Option<String>, String> {
 }
 
 /// The per-PR origin-facts cache directory: `pr_status_cache_dir` with its
-/// last segment swapped for `pr-origin`, so `<state>/cache/pr-origin`.
-fn pr_origin_cache_dir(cwd: &Path) -> Option<PathBuf> {
+/// last segment swapped for `pr-origin`, so it follows the cache class home.
+pub(crate) fn pr_origin_cache_dir(cwd: &Path) -> Option<PathBuf> {
     let mut dir = crate::agents_config::pr_status_cache_dir(cwd)?;
     dir.set_file_name("pr-origin");
     Some(dir)
@@ -232,7 +232,7 @@ fn pulls_of_facts(facts: &OriginFacts) -> Value {
 const ORIGIN_TTL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
 fn read_cached(dir: &Path, slug: &str, pr: u64) -> Option<OriginFacts> {
-    let path = cache_path(dir, slug, pr)?;
+    let path = crate::state_layout_home::cache_read(&cache_path(dir, slug, pr)?);
     let age = std::fs::metadata(&path)
         .ok()?
         .modified()
@@ -519,12 +519,60 @@ fn gh_step(gh: GhRun<'_>, args: &[&str], done: String) -> String {
     }
 }
 
+/// Whether the PR carried an autoMergeRequest when the hold landed:
+/// `Some(the answer)` from one gh read, `None` when the read failed. The
+/// answer gates the receipt line, never the disarm: `--disable-auto` still
+/// runs unarmed, so an auto-merge armed inside the read's blind second dies.
+fn armed_auto_merge(gh: GhRun<'_>, slug: &str, pr: u64) -> Option<bool> {
+    let n = pr.to_string();
+    let (_ok, out) = gh(&[
+        "pr",
+        "view",
+        &n,
+        "--repo",
+        slug,
+        "--json",
+        "autoMergeRequest",
+    ])
+    .ok()
+    .filter(|(ok, _)| *ok)?;
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct AutoMergeView {
+        #[serde(default)]
+        auto_merge_request: Option<Value>,
+    }
+    // The gh channel concatenates stderr after stdout, so a warning on a
+    // successful view would break a whole-string parse; the payload is the
+    // span between the outermost braces, warnings ride after it.
+    let text = out.trim();
+    let Some(start) = text.find('{') else {
+        return None;
+    };
+    let Some(end) = text.rfind('}') else {
+        return None;
+    };
+    if end < start {
+        return None;
+    }
+    let view: AutoMergeView = serde_json::from_str(&text[start..=end]).ok()?;
+    Some(view.auto_merge_request.is_some())
+}
+
 fn hold_effects(gh: GhRun<'_>, slug: &str, pr: u64) -> String {
     let n = pr.to_string();
+    // The armed claim prints only when the read saw an autoMergeRequest.
+    // On 485, 522, 535 and 543 nothing was armed (the repo does not allow
+    // auto-merge) and the old unconditional line lied.
+    let armed = armed_auto_merge(gh, slug, pr);
+    let disarm_done = match armed {
+        Some(true) => format!("pr-hold: disabled an armed auto-merge on {slug}#{pr}"),
+        _ => String::new(),
+    };
     let mut lines = vec![gh_step(
         gh,
         &["pr", "merge", &n, "--repo", slug, "--disable-auto"],
-        format!("pr-hold: disabled an armed auto-merge on {slug}#{pr}"),
+        disarm_done,
     )];
     // The label may not exist in the repo yet; --force makes this idempotent.
     lines.push(gh_step(
@@ -542,6 +590,7 @@ fn hold_effects(gh: GhRun<'_>, slug: &str, pr: u64) -> String {
         &["pr", "edit", &n, "--repo", slug, "--add-label", HOLD_LABEL],
         format!("pr-hold: labeled {slug}#{pr} {HOLD_LABEL}"),
     ));
+    lines.retain(|line| !line.is_empty());
     lines.join("; ")
 }
 
@@ -936,12 +985,36 @@ mod tests {
         );
 
         // Recording a hold row at any authority disarms, drafts and
-        // labels: four gh calls (the label is created first). A release
+        // labels: five gh calls (the autoMergeRequest read, then the
+        // disarm; the label is created first among the effects). A release
         // needs operator or role; any other decision or subject runs no
         // gh call.
         let seen = std::cell::RefCell::new(0usize);
         let gh = |args: &[&str]| -> Result<(bool, String), String> {
             *seen.borrow_mut() += 1;
+            // The autoMergeRequest read answers armed for #7 (a real
+            // auto-merge to disarm), unarmed for #12, and fails for #13;
+            // every other pr view (the release path's headRefOid) refuses.
+            if args.contains(&"view") && args.contains(&"autoMergeRequest") {
+                if args.contains(&"13") {
+                    return Ok((false, "gh down".to_string()));
+                }
+                if args.contains(&"14") {
+                    // Armed, with a gh warning riding the combined output.
+                    return Ok((
+                        true,
+                        "{\"autoMergeRequest\": {\"mergeMethod\": \"SQUASH\"}}\nwarning: slow\n"
+                            .to_string(),
+                    ));
+                }
+                if args.contains(&"12") {
+                    return Ok((true, r#"{"autoMergeRequest": null}"#.to_string()));
+                }
+                return Ok((
+                    true,
+                    r#"{"autoMergeRequest": {"mergeMethod": "SQUASH"}}"#.to_string(),
+                ));
+            }
             if args
                 .first()
                 .is_some_and(|a| *a == "pr" && args.contains(&"view"))
@@ -956,7 +1029,7 @@ mod tests {
             HOLD_DECISION,
             Some("operator"),
         );
-        assert_eq!(*seen.borrow(), 4);
+        assert_eq!(*seen.borrow(), 5);
         assert!(
             out.is_some_and(|s| s.contains("disabled an armed auto-merge")
                 && s.contains("converted fnodotdev/fno#7 to draft")
@@ -971,12 +1044,35 @@ mod tests {
             "do not merge this pull request: waits on the user's look",
             Some("role"),
         );
-        assert_eq!(*seen.borrow(), 4);
+        assert_eq!(*seen.borrow(), 5);
         assert!(out.is_some_and(|s| s.contains("converted fnodotdev/fno#8 to draft")));
         *seen.borrow_mut() = 0;
         let out = after_record_with(&gh, "pr-hold:o/r#8", HOLD_DECISION, Some("agent"));
-        assert_eq!(*seen.borrow(), 4);
+        assert_eq!(*seen.borrow(), 5);
         assert!(out.is_some_and(|s| s.contains("converted o/r#8 to draft")));
+        // The armed claim stays honest in the other two arms: an unarmed
+        // PR (nothing was ever armed) keeps the disarm call but prints no
+        // auto-merge line, and a read that cannot answer stays silent.
+        // Both still disarm, draft and label, five calls each.
+        *seen.borrow_mut() = 0;
+        let out = after_record_with(&gh, "pr-hold:o/r#12", HOLD_DECISION, Some("operator"));
+        assert_eq!(*seen.borrow(), 5);
+        assert!(out
+            .is_some_and(|s| s.contains("converted o/r#12 to draft") && !s.contains("auto-merge")));
+        *seen.borrow_mut() = 0;
+        let out = after_record_with(&gh, "pr-hold:o/r#13", HOLD_DECISION, Some("operator"));
+        assert_eq!(*seen.borrow(), 5);
+        assert!(out
+            .is_some_and(|s| s.contains("converted o/r#13 to draft") && !s.contains("auto-merge")));
+        // A gh warning appended to a successful read must not hide an armed
+        // auto-merge: the payload is the brace span, warnings ride after it.
+        *seen.borrow_mut() = 0;
+        let out = after_record_with(&gh, "pr-hold:o/r#14", HOLD_DECISION, Some("operator"));
+        assert_eq!(*seen.borrow(), 5);
+        assert!(
+            out.is_some_and(|s| s.contains("disabled an armed auto-merge")
+                && s.contains("converted o/r#14 to draft"))
+        );
         *seen.borrow_mut() = 0;
         // A release restores ready, drops the label; the head view is the
         // third call and its stub failure skips the ci-required rerun. A

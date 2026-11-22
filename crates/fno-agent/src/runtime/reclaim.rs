@@ -865,7 +865,7 @@ fn vacuum_graph(graph: &Path, apply: bool, wait: Duration) -> Result<(u64, Strin
 fn state_layout_lane(home: &AgentsHome, apply: bool) -> Lane {
     let receipt = crate::state_layout::migrate(&reclaim_state_root(home), apply);
     let mut lane = Lane::new("state_layout", Vec::new());
-    lane.note = receipt.summary();
+    lane.note = receipt.note();
     lane
 }
 
@@ -1226,17 +1226,15 @@ fn aged_files(root: &Path, max_age_secs: u64, cap_bytes: Option<u64>) -> Vec<Pat
     files.into_iter().map(|(p, _, _)| p).collect()
 }
 
-/// Cache-class roots the file lanes sweep: the class cache home first, the
-/// legacy state-root spelling when the class pass has not moved the folder
-/// yet (both can exist mid-migration; both sweep).
+/// Cache-class roots the file lanes sweep: this root's cache folder, plus
+/// the legacy state-root spelling when the class pass has not moved the
+/// folder yet (both can exist mid-migration; both sweep). A root that is not
+/// the default sweeps only itself.
 pub(crate) fn cache_class_roots(name: &str) -> Vec<PathBuf> {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let home = crate::paths_cli::cache_home(&cwd);
-    let legacy = crate::paths::AgentsHome::from_env()
-        .root()
-        .parent()
-        .map(|state| state.join("cache").join(name))
-        .unwrap_or_else(|| home.join(name));
+    let agents = crate::paths::AgentsHome::from_env();
+    let state = agents.root().parent().unwrap_or_else(|| agents.root());
+    let home = crate::state_layout::cache_dir(state);
+    let legacy = state.join("cache").join(name);
     let home_spelling = home.join(name);
     if legacy == home_spelling {
         return vec![home_spelling];
