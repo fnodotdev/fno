@@ -1669,11 +1669,6 @@ mod tests {
 /// tokens ride through in `rest`, order kept, so each command's own grammar
 /// still refuses its unknowns.
 #[derive(Parser, Debug, Default, PartialEq, Eq, Clone)]
-#[command(
-    no_binary_name = true,
-    disable_help_flag = true,
-    disable_version_flag = true
-)]
 pub struct MuxCommon {
     /// Server (socket session) this command addresses
     #[arg(long, value_name = "NAME")]
@@ -1722,7 +1717,10 @@ impl MuxCommon {
             rest.push(tok.to_string());
             i += 1;
         }
-        let cmd = <Self as clap::CommandFactory>::command();
+        let cmd = <Self as clap::CommandFactory>::command()
+            .no_binary_name(true)
+            .disable_help_flag(true)
+            .disable_version_flag(true);
         let matches = cmd
             .try_get_matches_from(pairs)
             .map_err(|e| refusal_line("fno mux", &e))?;
