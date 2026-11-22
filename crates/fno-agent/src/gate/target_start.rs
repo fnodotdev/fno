@@ -954,9 +954,13 @@ pub(crate) fn claim_names_current_session(holder: &str, rec: &crate::claims::Cla
             return true;
         }
         // The resolver can name a sibling session's transcript from the
-        // canonical checkout, so the harness-stamped id gets the same join
-        // against the window's recorded session.
-        if handover_session_id_matches(rec, env_sid.as_deref()) {
+        // canonical checkout, so the harness-stamped id gets its own join
+        // against the window's recorded session. The env id is the one
+        // marker a child inherits from its spawner, so the join refuses the
+        // minter shapes (session_id equal to dispatched_by_session, or no
+        // recorded session at all) and only adopts a window that names a
+        // beneficiary distinct from its minter.
+        if handover_beneficiary_session_matches(rec, env_sid.as_deref()) {
             return true;
         }
         // A launch window that outlived its launcher: the pid probe proves
@@ -997,6 +1001,37 @@ fn handover_session_id_matches(rec: &crate::claims::ClaimRecord, own_sid: Option
     let (Some(recorded), Some(own)) = (recorded, own_sid) else {
         return false;
     };
+    crate::claims::same_session_id(recorded, own)
+}
+
+/// The env-stamped id against a window that names a beneficiary of its own.
+/// `CLAUDE_CODE_SESSION_ID` is inheritable: a child carries its spawner's
+/// copy, and a dispatcher-minted window holds the minter in `session_id`
+/// with the same minter published as `dispatched_by_session` metadata
+/// (claim_commands.rs `holder_session_fields`). A window whose recorded
+/// session is the minter itself, or that carries no recorded session and
+/// only minter metadata, is exactly the shape an inherited id matches, so
+/// both refuse; only a recorded session distinct from the minter can adopt.
+fn handover_beneficiary_session_matches(
+    rec: &crate::claims::ClaimRecord,
+    env_sid: Option<&str>,
+) -> bool {
+    let recorded = rec
+        .session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let minter = rec
+        .dispatched_by_session()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let own = env_sid.map(str::trim).filter(|s| !s.is_empty());
+    let (Some(recorded), Some(own)) = (recorded, own) else {
+        return false;
+    };
+    if matches!(minter, Some(m) if crate::claims::same_session_id(recorded, m)) {
+        return false;
+    }
     crate::claims::same_session_id(recorded, own)
 }
 
@@ -2754,6 +2789,79 @@ mod adopt_rung_tests {
             "CLAUDE_CODE_SESSION_ID",
             "0c1d2e3f-aaaa-bbbb-cccc-000000000002",
         );
+        assert!(!claim_names_current_session(&rec.holder, &rec));
+        std::env::remove_var("CLAUDE_CODE_SESSION_ID");
+    }
+
+    #[test]
+    fn the_env_id_join_refuses_both_minter_shapes() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let minter = "f11a2b3c-aaaa-bbbb-cccc-000000000001";
+        let beneficiary = "f11a2b3c-aaaa-bbbb-cccc-000000000002";
+        let stray = "f11a2b3c-aaaa-bbbb-cccc-000000000003";
+        let with_metadata = |sid: Option<&str>, minter_sid: Option<&str>| {
+            let mut rec = record("spawn-handover:t-no-such-worker");
+            rec.session_id = sid.map(str::to_string);
+            if let Some(m) = minter_sid {
+                rec.metadata
+                    .insert("dispatched_by_session".into(), serde_json::json!(m));
+            }
+            rec
+        };
+        // Shape one: the window still holds its minter in session_id, with
+        // the same minter published as dispatched_by_session.
+        let minted = with_metadata(Some(minter), Some(minter));
+        assert!(!handover_beneficiary_session_matches(&minted, Some(minter)));
+        assert!(!handover_beneficiary_session_matches(&minted, Some(stray)));
+        // Shape two: no recorded session, only the minter metadata.
+        let demoted = with_metadata(None, Some(minter));
+        assert!(!handover_beneficiary_session_matches(
+            &demoted,
+            Some(minter)
+        ));
+        // A window naming a beneficiary distinct from its minter adopts on
+        // the env id, freshly stamped or after the takeover rebind, and
+        // refuses every other id.
+        let stamped = with_metadata(Some(beneficiary), None);
+        assert!(handover_beneficiary_session_matches(
+            &stamped,
+            Some(beneficiary)
+        ));
+        assert!(!handover_beneficiary_session_matches(
+            &stamped,
+            Some(minter)
+        ));
+        let rebound = with_metadata(Some(beneficiary), Some(minter));
+        assert!(handover_beneficiary_session_matches(
+            &rebound,
+            Some(beneficiary)
+        ));
+        assert!(!handover_beneficiary_session_matches(
+            &rebound,
+            Some(minter)
+        ));
+        assert!(!handover_beneficiary_session_matches(&rebound, None));
+        assert!(!handover_beneficiary_session_matches(&rebound, Some("  ")));
+    }
+
+    #[test]
+    fn a_minter_window_stays_refused_from_the_whole_rung_chain() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for var in [
+            "FNO_NODE_CLAIM_HOLDER",
+            "FNO_WORKER_NAME",
+            "TARGET_SESSION_ID",
+        ] {
+            std::env::remove_var(var);
+        }
+        let minter = "a19c2d3e-aaaa-bbbb-cccc-000000000001";
+        let stray = "a19c2d3e-aaaa-bbbb-cccc-000000000002";
+        let mut rec = record("spawn-handover:t-no-such-worker");
+        rec.pid_unavailable = true;
+        rec.session_id = Some(minter.into());
+        rec.metadata
+            .insert("dispatched_by_session".into(), serde_json::json!(minter));
+        std::env::set_var("CLAUDE_CODE_SESSION_ID", stray);
         assert!(!claim_names_current_session(&rec.holder, &rec));
         std::env::remove_var("CLAUDE_CODE_SESSION_ID");
     }
