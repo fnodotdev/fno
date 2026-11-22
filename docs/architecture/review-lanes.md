@@ -431,7 +431,13 @@ The harness pins one body where it once held two in parity.
 
 ## Diff-read evidence at emit
 
-`fno doctor event emit -t review_attestation` refuses a clean `code-review` pass unless the attesting Claude session's own transcript proves the lane read the change at this head. The proof is `git diff` or `gh pr diff` output, taken from the tool result and never from the command text, that names every changed file and arrived after the session's last commit, merge, rebase, cherry-pick, am or revert. A failed command, empty output, output sent to a file, a size-only flag such as `--stat`, and `git show` give no proof. A successful subagent call whose brief names the diff also counts, which covers the `--fresh` reviewer. The caller's `execution_context` word earns no exemption. A non-Claude harness and an unreadable transcript read as unobserved and pass. The check stops the accidental skip. It cannot stop a session that fakes its own transcript.
+`fno doctor event emit -t review_attestation` refuses a clean `code-review` pass unless the attesting Claude session's own transcript proves the lane read the change at this head.
+
+The proof is diff output from `git diff` or `gh pr diff`. It comes from the tool result, never from the command text. It must name every changed file. It must arrive after the session's last commit, merge, rebase, cherry-pick, am or revert. A later round needs only a read of what changed since the prior head.
+
+These give no proof: a failed command, empty output, output sent to a file, a size-only flag such as `--stat`, and `git show`. A successful subagent call whose brief names the diff counts, which covers the `--fresh` reviewer.
+
+The caller's `execution_context` word earns no exemption. A non-Claude harness and an unreadable transcript read as unobserved and pass. The check stops the accidental skip. It cannot stop a session that fakes its own transcript.
 
 ## Attestation origin: whose process rendered the verdict
 
