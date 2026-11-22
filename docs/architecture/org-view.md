@@ -8,7 +8,7 @@ The explorer fills the left 34 columns. It lists the fleet, then each machine, t
 
 The right pane follows the selection. On the fleet, a machine or a lead it shows one of five tabs over that scope:
 
-- Table: one row per seat, grouped by lead, with its runtime, model, state, age, use and last turn. The use column carries the session's priced cost; the totals line sums the scope's published use.
+- Table: one row per seat, grouped by lead, with its runtime, model, state, age, use and last turn. The use column carries the session's priced cost, and the totals line sums the scope's published use.
 - Recent: the seats with a published last turn, newest first.
 - Overview: the machines with their beat age, the scope's shape and state counts, then its leads or seats.
 - Graph: one column per lead, one box per seat with its name and model. A lead over six seats wraps into a `↳` column.
