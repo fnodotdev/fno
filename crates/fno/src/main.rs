@@ -1411,6 +1411,36 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
     }
 }
 
+/// The command-names row for this argv, when the tail is exactly one
+/// --help/-h and no richer owner answers the spelling. The row's note is
+/// the usage line.
+fn tsv_help(args: &[OsString]) -> Option<String> {
+    let last = args.last()?.to_str()?;
+    if last != "--help" && last != "-h" {
+        return None;
+    }
+    let path: Vec<&str> = args[..args.len() - 1]
+        .iter()
+        .map(|a| a.to_str())
+        .collect::<Option<_>>()?;
+    match path.as_slice() {
+        [word, ..]
+            if matches!(
+                word,
+                "mux" | "version" | "uninstall" | "agent" | "agents" | "mail" | "help"
+            ) =>
+        {
+            None
+        }
+        [] => None,
+        words => {
+            let note = fno::command_names::note_for(words)?;
+            let row = words.join(" ");
+            Some(format!("usage: fno {row} - {note}\n"))
+        }
+    }
+}
+
 fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     #[cfg(not(test))]
     fno::doctor_cost::default_report(args);
@@ -1418,6 +1448,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     // The group menus no other classifier claims answer first.
     if let Some(menu) = fno::group_help::classify(args) {
         return Role::GroupHelp(menu);
+    }
+    if let Some(line) = tsv_help(args) {
+        return Role::TreeHelp(line);
     }
     if let [group, family, leaf, rest @ ..] = args {
         if group == "do" && family == "delivery" && leaf == "evaluate" {

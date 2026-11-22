@@ -54,3 +54,63 @@ fn fno_clap_tree_answers_help_everywhere_except_tails() {
         );
     }
 }
+
+/// The agents table's non-retired leaves, walked in-process and probed
+/// through the real binary: the user path for every command the menu lists.
+#[test]
+fn fno_agents_table_leaves_answer_help() {
+    let bin = env!("CARGO_BIN_EXE_fno");
+    for (path, node) in fno::cli::agents_menu::walk(&fno::cli::agents_menu::ROOT) {
+        if node.retired {
+            continue;
+        }
+        let words: Vec<&str> = std::iter::once("agent")
+            .chain(path.iter().copied())
+            .collect();
+        let out = Command::new(bin)
+            .args(words)
+            .arg("--help")
+            .output()
+            .expect("spawn fno");
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "fno agent {} --help must exit 0; stderr: {}",
+            path.join(" "),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+/// Every live command-names row answers --help: the generic arm prints the
+/// row's note and exits 0, so a help request never reaches a door that
+/// would run real work on it.
+#[test]
+fn fno_tsv_rows_answer_help() {
+    let bin = env!("CARGO_BIN_EXE_fno");
+    let rows: Vec<Vec<&str>> = include_str!("../command-names.tsv")
+        .lines()
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter(|l| l.split('\t').nth(1) == Some("live"))
+        .map(|l| l.split('\t').next().expect("tsv row").split(' ').collect())
+        .collect();
+    assert!(
+        rows.len() >= 20,
+        "the tsv walk covered only {} rows",
+        rows.len()
+    );
+    for path in &rows {
+        let out = Command::new(bin)
+            .args(path)
+            .arg("--help")
+            .output()
+            .expect("spawn fno");
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "fno {} --help must exit 0; stderr: {}",
+            path.join(" "),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
