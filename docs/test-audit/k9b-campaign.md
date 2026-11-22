@@ -1,8 +1,6 @@
 # K9b campaign ledger - the never-folded Rust files
 
-The next bounded packet in the Rust-suite cut (kestrel-successor msg-566190,
-keep rule D1631). Base origin/main post-K9: 2,433 declarations
-crate-wide. Eight files that no earlier campaign touched.
+The next bounded packet in the Rust-suite cut (kestrel-successor msg-566190, keep rule D1631). Base origin/main post-K9: 2,433 declarations crate-wide. Eight files that no earlier campaign touched.
 
 ## Method
 

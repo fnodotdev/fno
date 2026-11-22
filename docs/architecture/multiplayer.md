@@ -183,7 +183,7 @@ The beat rides the mail cadence key, `agents.remote.pull_interval_secs`. A close
 
 Decisions and questions are one record with one number. A question is a decision not yet made, and answering it keeps its number. A record reads `D142`. The number is the record's stored key. A record from before that keeps its hash as the key until `fno doctor migrate ids --apply` runs. The reader sees the number alone in both cases. A typed number names its id on any machine that holds the row. The code is `crates/fno-agent/src/numbers.rs`, and the table is `fno_numbers`.
 
-New rows take the next number in the one D sequence when they are created. Old Q numbers keep resolving beside the D numbers, and every door accepts both letters. An answer decision takes the number of its question as its id, so an answer never splits one record into two labels. A second answer to one question is a record of its own and takes a new number.
+A new row takes the next number in the one D sequence at its creation. Old Q numbers keep resolving beside the D numbers, and every door accepts both letters. An answer decision takes the number of its question as its id, so an answer never splits one record into two labels. A second answer to one question is a record of its own and takes a new number.
 
 The store mints the number. With `store.remote_url` set, the primary mints every number, so two machines read one number for one question. A machine with a primary never mints locally. Its local table only caches the primary's rows. With no primary, the machine counts in its own graph.db under the store name `local`. A number never comes from `decisions.seq`: that rowid is per machine, and two machines can write the same value.
 
