@@ -410,7 +410,8 @@ pub fn pending(home: &AgentsHome) -> Result<Vec<ScheduledSpawn>, ScheduleError> 
 pub fn due(home: &AgentsHome, now: DateTime<Utc>) -> Result<Vec<ScheduledSpawn>, ScheduleError> {
     Ok(pending(home)?
         .into_iter()
-        .filter(|row| row.fire_at_utc.is_some_and(|t| t <= now)))
+        .filter(|row| row.fire_at_utc.is_some_and(|t| t <= now))
+        .collect())
 }
 
 /// Reads one row by id, for `--cancel-scheduled` and the fire arm.
