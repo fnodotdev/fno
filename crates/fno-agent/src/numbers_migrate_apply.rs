@@ -1329,63 +1329,6 @@ mod tests {
         assert!(moved.exists());
     }
 
-    /// Every numbers row and live decision id in the seeded store, stamped,
-    /// so an extra key reads its own origin and timing.
-    fn dump_store(tag: &str) {
-        let home = std::env::var_os("FNO_HOME").unwrap();
-        let db = std::path::Path::new(&home).join("db").join("graph.db");
-        let Ok(conn) = Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-        else {
-            eprintln!("child[{tag}]: no store at {}", db.display());
-            return;
-        };
-        let rows: Vec<String> = conn
-            .prepare(
-                "SELECT store || ' ' || kind || ' ' || num || ' ' || key || ' ' \
-                     || host || ' @' || created_at FROM fno_numbers",
-            )
-            .and_then(|mut s| {
-                s.query_map([], |r| r.get::<_, String>(0))?
-                    .collect::<Result<Vec<_>, _>>()
-            })
-            .unwrap_or_default();
-        for row in rows {
-            eprintln!("child[{tag}]: fno_numbers {row}");
-        }
-        let nodes: Vec<String> = conn
-            .prepare("SELECT id FROM nodes LIMIT 10")
-            .and_then(|mut s| {
-                s.query_map([], |r| r.get::<_, String>(0))?
-                    .collect::<Result<Vec<_>, _>>()
-            })
-            .unwrap_or_default();
-        eprintln!("child[{tag}]: nodes {nodes:?}");
-        let ids: Vec<String> = conn
-            .prepare("SELECT event_id FROM decisions LIMIT 10")
-            .and_then(|mut s| {
-                s.query_map([], |r| r.get::<_, String>(0))?
-                    .collect::<Result<Vec<_>, _>>()
-            })
-            .unwrap_or_default();
-        eprintln!("child[{tag}]: decisions {ids:?}");
-        let cwd = std::env::current_dir().unwrap_or_default();
-        let home_dot = std::env::var_os("HOME")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_default()
-            .join(".fno");
-        for path in [
-            crate::paths::space_dir(&cwd).join("events.jsonl"),
-            home_dot.join("events.jsonl"),
-            home_dot.join("questions.jsonl"),
-            crate::escalation::questions_dir(&cwd),
-            crate::escalation::dir(&cwd),
-            crate::org_board::scope::operator_lane_path(&cwd),
-        ] {
-            let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-            eprintln!("child[{tag}]: input {} exists={bytes}", path.display());
-        }
-    }
-
     /// The child of the two-project test: the real command twice, each run
     /// against the seeded store its env names, never a live one. The parent
     /// hands over project-a's env and cwd; the second run moves to the
@@ -1393,19 +1336,6 @@ mod tests {
     #[test]
     #[ignore = "spawned with a seeded FNO_HOME by the two-project vault test"]
     fn migrate_ids_two_project_apply_child() {
-        dump_store("pre-a");
-        if let Ok(index) = crate::decision_index::default_store_live() {
-            let ids: Vec<String> = index
-                .rows
-                .iter()
-                .filter_map(|r| r["decision_id"].as_str().map(str::to_string))
-                .collect();
-            eprintln!("child[pre-a]: decision index {ids:?}");
-        }
-        let cwd = std::env::current_dir().unwrap();
-        let (items, unreadable, _) = crate::attention_arm::read_items(&cwd);
-        let extra: Vec<String> = items.iter().map(|i| i.id.clone()).collect();
-        eprintln!("child[pre-a]: attention items {extra:?} unreadable {unreadable:?}");
         let code = super::super::run(&["--apply".to_string()]);
         eprintln!("child: apply from project-a exited {code}");
         assert_eq!(code, 0);
@@ -1421,7 +1351,6 @@ mod tests {
         std::env::set_current_dir(&sibling).unwrap();
         let code = super::super::run(&["--apply".to_string()]);
         eprintln!("child: apply from project-b exited {code}");
-        dump_store("post-b");
         assert_eq!(code, 0);
     }
 
@@ -1457,13 +1386,16 @@ mod tests {
         std::fs::write(vault_b.join("q-0000beef.md"), keyed_page).unwrap();
         std::fs::write(vault_b.join("notes.md"), "see d-0000feed for the ruling\n").unwrap();
 
-        // The child carries its own FNO_HOME, HOME, FNO_CONFIG, spaces dir
-        // and events journal, so no ambient or shared-sandbox store is ever
-        // a candidate: the beat reads question journals under the spaces
-        // root, which the hermetic lane otherwise shares across every test
-        // process on the runner. The filter names the full test path:
-        // --exact matches nothing on a bare function name, and a child that
-        // ran nothing still exits 0.
+        // The child carries its own FNO_HOME, HOME, FNO_CONFIG, spaces dir,
+        // events journal and agents home, so no ambient or shared-sandbox
+        // store is ever a candidate. FNO_AGENT_HOME is the load-bearing pin:
+        // the attention projection the beat sweeps reads the question
+        // journals beside the agents home's parent dir, and the CI job
+        // exports FNO_AGENT_HOME into a per-runner sandbox whose journals
+        // concurrent fixture tests append to. HOME pins the fallback the
+        // same way. The filter names the full test path: --exact matches
+        // nothing on a bare function name, and a child that ran nothing
+        // still exits 0.
         let exe = std::env::current_exe().unwrap();
         let mut cmd = std::process::Command::new(&exe);
         cmd.args([
@@ -1473,6 +1405,7 @@ mod tests {
         ])
         .env("FNO_HOME", &home)
         .env("HOME", root.path())
+        .env("FNO_AGENT_HOME", root.path().join("agent-home"))
         .env("FNO_CONFIG", proj_a.join(".fno/config.toml"))
         .env("FNO_SPACES_DIR", root.path().join("spaces"))
         .env("FNO_EVENTS_PATH", root.path().join("events.jsonl"))
