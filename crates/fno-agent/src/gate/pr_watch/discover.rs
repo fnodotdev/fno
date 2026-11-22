@@ -90,6 +90,7 @@ pub(crate) fn discover_open_prs(
     entries: &[Value],
     now_iso: &str,
     max_age_days: i64,
+    aliases: &BTreeMap<String, String>,
 ) -> Vec<Candidate> {
     let mut candidates = Vec::new();
     for node in entries {
@@ -104,7 +105,8 @@ pub(crate) fn discover_open_prs(
                 node_id: nonempty(node, "id").unwrap_or_default(),
                 pr,
                 repo_dir: repo_dir.clone(),
-                repo_slug: crate::backlog::pr_link::repo_slug_from_url(url.as_deref()),
+                repo_slug: crate::backlog::pr_link::repo_slug_from_url(url.as_deref())
+                    .map(|slug| crate::backlog::pr_link::canonical_repo_slug(&slug, aliases)),
                 source_session_id: nonempty(node, "source_session_id"),
                 source_harness: nonempty(node, "source_harness"),
                 source_cwd: nonempty(node, "source_cwd"),
@@ -315,6 +317,31 @@ mod tests {
 
     const NOW: &str = "2026-11-01T00:00:00Z";
 
+    #[test]
+    fn all_contracts_in_one_declaration() {
+        a_candidate_from_a_stale_repo_row_carries_the_canonical_slug();
+        the_verdict_precedence_holds();
+        a_done_node_stays_watched_only_inside_the_grace_window();
+    }
+
+    fn a_candidate_from_a_stale_repo_row_carries_the_canonical_slug() {
+        let aliases = BTreeMap::from([(
+            "fnodotdev/fno-web".to_string(),
+            "footnote-sh/fno-web".to_string(),
+        )]);
+        let node = json!({
+            "id": "x-aaaa",
+            "additional_prs": [
+                {"number": 273, "url": "https://github.com/fnodotdev/fno-web/pull/273"}
+            ],
+        });
+        let found = discover_open_prs(&[node], NOW, 14, &aliases);
+        assert_eq!(found.len(), 1);
+        let cand = found.first().expect("one candidate");
+        assert_eq!(cand.pr, 273);
+        assert_eq!(cand.repo_slug.as_deref(), Some("footnote-sh/fno-web"));
+    }
+
     fn obs(state: &str) -> Observation {
         Observation {
             state: state.into(),
@@ -322,7 +349,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn the_verdict_precedence_holds() {
         let none = json!({});
         let bots = vec!["bot".to_string()];
@@ -358,7 +384,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn a_done_node_stays_watched_only_inside_the_grace_window() {
         let node = |done: &str| json!({"id": "n", "completed_at": done});
         assert!(watchable(&node("2026-10-25T00:00:00Z"), NOW, 14));

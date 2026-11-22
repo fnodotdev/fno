@@ -150,6 +150,9 @@ pub fn classify(args: &[OsString]) -> Option<Launch> {
 /// the three lifecycle leaves carry the leaf word the bash script reads.
 fn worktree_leaf(tail: &[String]) -> Option<Launch> {
     match tail.first().map(String::as_str) {
+        // A help request falls through to the richer owner (the door's own
+        // menu one level up), never refuses as an unknown leaf.
+        Some("--help" | "-h") => None,
         Some("policy") => agents_launch("worktree-policy", &tail[1..]),
         Some("ensure") => agents_launch("worktree-ensure", &tail[1..]),
         Some("stranded") => agents_launch("worktree-stranded", &tail[1..]),
@@ -171,6 +174,9 @@ fn worktree_leaf(tail: &[String]) -> Option<Launch> {
 /// above; these are the workspace CLI's remaining commands).
 fn workspace_leaf(tail: &[String]) -> Option<Launch> {
     match tail.first().map(String::as_str) {
+        // A help request falls through to the richer owner: the agents menu
+        // renders the workspace group's menu, exit 0.
+        Some("--help" | "-h") => None,
         Some("reap") => {
             let mut argv = vec!["reap".to_string(), "--state-files-only".to_string()];
             argv.extend(tail[1..].iter().cloned());

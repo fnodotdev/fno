@@ -1654,13 +1654,14 @@ const BUILTIN_INSTALL_REPO_ALIASES: [(&str, &str); 3] = [
 /// The PR-history aliases: where a PR url recorded under a former repo name
 /// lives after the cutover. Old numbers must bind to the archive repo, never
 /// to a new-repo PR that reuses the number. One answerer per question: the
-/// install map above and this table disagree on purpose. The docs row is a
-/// transfer (numbers preserved), not a cutover: docs PR urls recorded as
-/// `fnodotdev/fno-web` live at `footnote-sh/fno-web` with the same number.
+/// install map above and this table disagree on purpose.
 const BUILTIN_HISTORY_REPO_ALIASES: [(&str, &str); 4] = [
     ("bllshttng/fno", "fnodotdev/fno-workshop"),
     ("bllshttng/footnote", "fnodotdev/fno-workshop"),
     ("bllshttng/fnh", "fno-sh/footnote"),
+    // The docs companion changed org and the old name 404s with no
+    // redirect, so no rename probe can learn the move; the PR numbers
+    // continue on the same repo.
     ("fnodotdev/fno-web", "footnote-sh/fno-web"),
 ];
 
@@ -1676,7 +1677,8 @@ pub(crate) fn builtin_repo_aliases() -> std::collections::BTreeMap<String, Strin
 /// `[repo_aliases]`: rename map `old = "new"` between `owner/repo` slugs.
 /// The built-ins carry this project's own moves for PR history
 /// (`bllshttng/fno|footnote` to the archive repo, `bllshttng/fnh` to
-/// `fno-sh/footnote`); a config row overrides them, and a cached gh-facts
+/// `fno-sh/footnote`, `fnodotdev/fno-web` to `footnote-sh/fno-web`); a
+/// config row overrides them, and a cached gh-facts
 /// rename row never does (both insert with `or_insert` after the built-ins
 /// in `repo_alias_map`, so a machine-set row always decides). Keys and
 /// values are lowercased; a malformed leaf (non-string value, empty side)
@@ -2870,13 +2872,14 @@ mod tests {
         std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", &empty_global);
 
         // No config names the key anywhere: the built-ins answer. The history
-        // aliases point at the archive repo, so a stored PR url from before
-        // the cutover never binds to a new-repo PR that reuses the number.
+        // aliases answer a stored PR url from before each cutover, so it
+        // never binds to a new-repo PR that reuses the number.
         let map = repo_aliases(&root);
         for (old, new) in [
             ("bllshttng/fno", "fnodotdev/fno-workshop"),
             ("bllshttng/footnote", "fnodotdev/fno-workshop"),
             ("bllshttng/fnh", "fno-sh/footnote"),
+            ("fnodotdev/fno-web", "footnote-sh/fno-web"),
         ] {
             assert_eq!(
                 map.get(old).map(String::as_str),

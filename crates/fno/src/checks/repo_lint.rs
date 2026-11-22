@@ -551,6 +551,21 @@ pub mod plan_filenames {
         scan_dir(&plans_dir, &prefixes)
     }
 
+    /// The frontmatter-claims pattern under an explicit mode: the hex id
+    /// grammar, plus the sequential arm when the board config says so.
+    /// Pure so tests drive both modes; `scan_dir` feeds it the door facts.
+    pub(super) fn claims_pattern(sequential: bool, prefix: &str) -> String {
+        let hex_arm = r"[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}";
+        if sequential {
+            format!(
+                "^(?:{hex_arm}|{})",
+                crate::backlog::id_mode::sequential_pattern_for(prefix)
+            )
+        } else {
+            format!("^{hex_arm}$")
+        }
+    }
+
     /// The filename-prefix allowlist: the configured node prefix plus the
     /// legacy `ab`, exactly the set the Python leg passed as
     /// `{LEGACY_PREFIX, node_id_prefix()}`.
@@ -569,11 +584,16 @@ pub mod plan_filenames {
             );
             std::process::exit(1);
         }
-        let wellformed =
-            regex::Regex::new(r"^[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}$").expect("static regex");
+        let mode = crate::backlog::id_mode::facts();
+        let claims_pattern = claims_pattern(mode.sequential, &mode.prefix);
+        let wellformed = regex::Regex::new(&claims_pattern).expect("claims regex compiles");
         let filename_node =
             regex::Regex::new(r"-(?P<prefix>[a-z][a-z0-9]{0,7})-(?P<hex>[0-9a-f]{4,8})\.md$")
                 .expect("static regex");
+        let filename_seq = mode.sequential.then(|| {
+            regex::Regex::new(r"-(?P<prefix>[a-z][a-z0-9]{0,7})-(?P<num>[1-9][0-9]{0,6})\.md$")
+                .expect("static regex")
+        });
         let mut mismatches: Vec<Mismatch> = Vec::new();
         let mut plans: Vec<PathBuf> = Vec::new();
         let mut stack = vec![plans_dir.to_path_buf()];
@@ -599,14 +619,23 @@ pub mod plan_filenames {
                 .to_string_lossy()
                 .into_owned();
             let base = base.split('#').next().unwrap_or(&base).to_string();
-            let Some(caps) = filename_node.captures(&base) else {
+            let hex_caps = filename_node.captures(&base);
+            let seq_caps = filename_seq.as_ref().and_then(|re| re.captures(&base));
+            let Some(caps) = hex_caps.or(seq_caps) else {
                 continue;
             };
             let prefix = caps["prefix"].to_string();
+            let num = caps.name("num");
+            // A digit tail reads only under the configured prefix; the
+            // legacy `ab` allowlist entry never mints sequential ids.
+            if num.is_some() && prefix != mode.prefix {
+                continue;
+            }
             if !prefixes.contains(&prefix) {
                 continue;
             }
-            let filename_node_id = format!("{}-{}", prefix, &caps["hex"]);
+            let tail = num.map_or_else(|| caps["hex"].to_string(), |m| m.as_str().to_string());
+            let filename_node_id = format!("{}-{}", prefix, tail);
             let body = match std::fs::read_to_string(&path) {
                 Ok(body) => body,
                 Err(_) => continue,
