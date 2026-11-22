@@ -949,11 +949,18 @@ fn config_bash_arm(
 /// targets (or the apply_patch header paths). Paths come back as written.
 pub(crate) fn write_targets(file_path: &str, command: &str) -> Vec<String> {
     let mut out = Vec::new();
+    write_targets_into(file_path, command, &mut out);
+    out
+}
+
+/// The same extraction into a caller-owned list, so invoked-script contents
+/// can join the scanned surface without re-deriving the file_path target.
+fn write_targets_into(file_path: &str, command: &str, out: &mut Vec<String>) {
     if !file_path.is_empty() {
         out.push(file_path.to_string());
     }
     if command.is_empty() {
-        return out;
+        return;
     }
     if command.contains("*** Begin Patch") {
         for line in command.lines() {
@@ -1075,10 +1082,182 @@ fn bash_write_targets(cmd: &str, out: &mut Vec<String>) {
             push(caps.get(*grp));
         }
     }
+    bash_idiom_targets(cmd, &mut push);
+}
+
+/// Interpreter write calls: each family pairs a write verb with its path
+/// operand, so a mention or a read never produces a target and the judge
+/// downstream stays the only arbiter. Literals only; compilation waits on a
+/// cheap hint scan.
+fn bash_idiom_targets(cmd: &str, push: &mut impl FnMut(Option<regex::Match<'_>>)) {
+    const HINTS: [&str; 12] = [
+        "open(",
+        ".write_text(",
+        ".write_bytes(",
+        "writeFile",
+        "appendFile",
+        "copyFileSync",
+        "createWriteStream",
+        "File.write",
+        "IO.write",
+        "shutil.",
+        "os.rename",
+        "os.replace",
+    ];
+    if !HINTS.iter().any(|h| cmd.contains(h)) {
+        return;
+    }
+    // A quoted literal with an optional single-letter language prefix; the
+    // prefix sits outside the capture so the quotes still strip.
+    let tok = r#"((?:[A-Za-z])?"[^"]*"|(?:[A-Za-z])?'[^']*'|[^[:space:];|&<>"']+)"#;
+    let mode = r#"['"](?:[wax][a-zA-Z0-9+]*|r\+[a-zA-Z0-9+]*)['"]"#;
+    let families: Vec<String> = vec![
+        // open(path, ... mode) for the write and append modes, and the 3-arg
+        // form perl and awk use: open(fh, '>', path).
+        format!(r#"open[[:space:]]*\([[:space:]]*{tok}[[:space:]]*,[^)]*{mode}"#),
+        format!(
+            r#"open[[:space:]]*\([^,()]+,[[:space:]]*['"]>[>]?['"][[:space:]]*,[[:space:]]*{tok}"#
+        ),
+        // Path('p').write_text(..) / .write_bytes(..)
+        format!(r#"{tok}[[:space:]]*\)[[:space:]]*\.(?:write_text|write_bytes)[[:space:]]*\("#),
+        // (fs.)writeFile(Sync) / appendFile(Sync) / copyFileSync /
+        // createWriteStream with the path as the first argument.
+        format!(
+            r#"(?:^|[[:space:]_.])(?:fs\.)?(?:writeFile(?:Sync)?|appendFile(?:Sync)?|copyFileSync|createWriteStream)[[:space:]]*\([[:space:]]*{tok}"#
+        ),
+        // File.write / IO.write with the path as the first argument.
+        format!(
+            r#"(?:^|[[:space:]_])(?:File|IO)\.(?:write|binwrite|atomic_write)[[:space:]]*\([[:space:]]*{tok}"#
+        ),
+        // shutil and os movers with the destination as the second argument.
+        format!(
+            r#"(?:shutil\.(?:copy|copyfile|copy2|move)|os\.(?:rename|replace|renames))[[:space:]]*\([^,()]*,[[:space:]]*{tok}"#
+        ),
+    ];
+    for pattern in &families {
+        if let Ok(re) = regex::Regex::new(pattern) {
+            for caps in re.captures_iter(cmd) {
+                push(caps.get(1));
+            }
+        }
+    }
+}
+
+/// The contents of regular repo files the command invokes as scripts: an
+/// existing file named directly after an interpreter (python3 tools/gen.py,
+/// node x.js, bash hooks/x.sh). Relative tokens resolve against the payload
+/// cwd, the same resolution the targets use. Reads cap at 256 KiB, name repo
+/// files only, and the contents never print or log: they feed the same
+/// extraction as the command text.
+fn invoked_script_contents(cmd: &str, payload_cwd: &str) -> Vec<String> {
+    const INTERPRETERS: [&str; 13] = [
+        "python3", "python", "python2", "node", "nodejs", "deno", "bun", "ruby", "perl", "bash",
+        "sh", "zsh", "source",
+    ];
+    const SANCTIONED_REGEN_SUFFIXES: [&str; 2] = [
+        "scripts/regen-generated-copies.py",
+        "scripts/generate-skill-bundles.sh",
+    ];
+    const CAP: u64 = 256 * 1024;
+    let mut out = Vec::new();
+    let mut prev = String::new();
+    let mut root: Option<String> = None;
+    for raw in cmd
+        .split(|c: char| c.is_whitespace() || matches!(c, ';' | '|' | '&' | '(' | ')' | '<' | '>'))
+    {
+        let tok = raw.trim_matches(|c| c == '"' || c == '\'' || c == '`');
+        if tok.is_empty() || tok.starts_with('-') || tok.contains('$') || tok.contains('`') {
+            // A flag or an unresolvable token is never a script name, and it
+            // never stands in for the interpreter its successor pairs against
+            // (`python3 -u x.py`).
+            continue;
+        }
+        let names_script =
+            INTERPRETERS.contains(&prev.as_str()) && (tok.contains('/') || tok.contains('.'));
+        prev = tok.to_string();
+        if !names_script {
+            continue;
+        }
+        let abs = if tok.starts_with('/') {
+            PathBuf::from(tok)
+        } else {
+            if payload_cwd.is_empty() {
+                continue;
+            }
+            PathBuf::from(format!("{}/{}", payload_cwd.trim_end_matches('/'), tok))
+        };
+        let abs = physicalize(&abs);
+        if !abs.is_file() {
+            continue;
+        }
+        let abs_str = abs.to_string_lossy().into_owned();
+        if SANCTIONED_REGEN_SUFFIXES
+            .iter()
+            .any(|s| abs_str.ends_with(s))
+        {
+            continue;
+        }
+        // Repo files only: the candidate sits under the payload's git
+        // toplevel, resolved once per call.
+        if root.is_none() {
+            root = git_root_of(&abs);
+        }
+        let Some(root) = &root else { continue };
+        let Some(rel) = abs_str.strip_prefix(&format!("{root}/")) else {
+            continue;
+        };
+        if rel.is_empty() {
+            continue;
+        }
+        let Ok(file) = std::fs::File::open(&abs) else {
+            continue;
+        };
+        use std::io::Read as _;
+        let mut buf = Vec::new();
+        if file.take(CAP).read_to_end(&mut buf).is_err() {
+            continue;
+        }
+        out.push(String::from_utf8_lossy(&buf).into_owned());
+    }
+    out
+}
+
+/// The git toplevel of the nearest existing ancestor of `path`, the same
+/// resolution generated_target applies to a write target.
+fn git_root_of(path: &Path) -> Option<String> {
+    let mut dir = path
+        .parent()
+        .map(|d| d.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("/"));
+    while !dir.is_dir() {
+        match dir.parent() {
+            Some(parent) if parent != dir => dir = parent.to_path_buf(),
+            _ => break,
+        }
+    }
+    let out = std::process::Command::new("git")
+        .args(["-C", &dir.to_string_lossy(), "rev-parse", "--show-toplevel"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let root = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if root.is_empty() {
+        None
+    } else {
+        Some(root)
+    }
 }
 
 fn generated_section(p: &Payload, _cwd: &Path) -> Sec {
-    let targets = write_targets(&p.file_path, &p.command);
+    let mut targets = write_targets(&p.file_path, &p.command);
+    // A script's own file I/O never presents a shell write operator; the
+    // contents of script files the command invokes join the scanned surface
+    // and their destinations feed the same judge.
+    for content in invoked_script_contents(&p.command, &p.cwd) {
+        write_targets_into("", &content, &mut targets);
+    }
     trace_gen(&format!("targets={targets:?}"));
     if targets.is_empty() {
         return Sec::Allow;
@@ -1552,5 +1731,136 @@ mod tests {
         let reason = generated_target(&path, "", "").expect("installed stage edits refuse");
         assert!(reason.contains("installed plugin copy"), "{reason}");
         assert!(reason.contains("hooks/stop.sh"), "{reason}");
+    }
+
+    fn repo_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .expect("crates/fno-agent sits two levels under the repo root")
+            .to_path_buf()
+    }
+
+    fn generated_judge(root: &Path) -> impl Fn(&str) -> Sec + '_ {
+        let root_s = root.to_string_lossy().into_owned();
+        move |cmd: &str| {
+            let p = Payload {
+                raw: String::new(),
+                tool: "Bash".to_string(),
+                file_path: String::new(),
+                command: cmd.to_string(),
+                cwd: root_s.clone(),
+                session_id: String::new(),
+                fp_norm: norm(""),
+                cmd_norm: norm(cmd),
+            };
+            generated_section(&p, root)
+        }
+    }
+
+    fn synthetic_repo() -> PathBuf {
+        static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "fno-gwg-repo-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("docs")).unwrap();
+        std::fs::write(
+            dir.join("generated-artifacts.tsv"),
+            "docs/gen.md\tdocs/gen.src\tmake gen\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("docs/gen.md"), "original\n").unwrap();
+        let _ = std::process::Command::new("git")
+            .args(["-C", dir.to_string_lossy().as_ref(), "init", "-q"])
+            .status();
+        dir
+    }
+
+    #[test]
+    fn interpreter_write_calls_refuse_and_reads_and_regens_pass() {
+        let root = repo_root();
+        let judge = generated_judge(&root);
+        // Refuse arms: interpreter write calls pair the verb with the path
+        // operand, inline and through a heredoc body.
+        for cmd in [
+            "python3 -c \"open('docs/configuration-guide.md','w').write('x')\"",
+            "python3 -c \"from pathlib import Path; Path('docs/configuration-guide.md').write_text('x')\"",
+            "node -e \"require('fs').writeFileSync('docs/configuration-guide.md','x')\"",
+            "python3 - <<'EOF'\nopen('docs/configuration-guide.md','w').write('x')\nEOF",
+        ] {
+            match judge(cmd) {
+                Sec::Block(reason) => {
+                    assert!(
+                        reason.contains("crates/fno/config_schema.json"),
+                        "{cmd}: {reason}"
+                    );
+                    assert!(
+                        reason.contains("fno config schema --markdown --write"),
+                        "{cmd}: {reason}"
+                    );
+                }
+                other => panic!("must refuse: {cmd} -> {other:?}"),
+            }
+        }
+        // Admit arms: a read, a bare mention, the row regen, and a regen that
+        // redirects into its own target.
+        for cmd in [
+            "python3 -c \"print(open('docs/configuration-guide.md').read())\"",
+            "echo docs/configuration-guide.md",
+            "rg generated docs/configuration-guide.md",
+            "fno config schema --markdown --write",
+            "cargo run --manifest-path crates/fno-agent/Cargo.toml --bin fno-agent -- loops table --markdown > docs/loops.md",
+        ] {
+            assert!(matches!(judge(cmd), Sec::Allow), "must allow: {cmd}");
+        }
+    }
+
+    #[test]
+    fn invoked_script_contents_join_the_scan_and_chained_regens_refuse() {
+        let repo = synthetic_repo();
+        let judge = generated_judge(&repo);
+        // A repo script whose body writes the copy through open() is judged
+        // on its contents.
+        let tools = repo.join("tools");
+        std::fs::create_dir_all(&tools).unwrap();
+        let script = tools.join("gen.py");
+        std::fs::write(&script, "open('docs/gen.md','w').write('x')\n").unwrap();
+        match judge("python3 tools/gen.py") {
+            Sec::Block(reason) => {
+                assert!(reason.contains("docs/gen.src"), "{reason}");
+                assert!(reason.contains("make gen"), "{reason}");
+            }
+            other => panic!("script contents must refuse: {other:?}"),
+        }
+        // A read by an inline script and a bare mention stay allowed.
+        assert!(matches!(
+            judge("python3 -c \"print(open('docs/gen.md').read())\""),
+            Sec::Allow
+        ));
+        assert!(matches!(judge("echo docs/gen.md"), Sec::Allow));
+        // The row regen passes; the same regen chained behind a write does
+        // not: runs_the_regen stays whole-command equality.
+        assert!(matches!(judge("make gen"), Sec::Allow));
+        match judge("make gen; echo x > docs/gen.md") {
+            Sec::Block(reason) => assert!(reason.contains("make gen"), "{reason}"),
+            other => panic!("a chained regen must refuse: {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&repo);
+        // The sanctioned no-build helper is skipped, since writing every row
+        // is its purpose.
+        let root = repo_root();
+        let real = generated_judge(&root);
+        assert!(matches!(
+            real("python3 scripts/regen-generated-copies.py"),
+            Sec::Allow
+        ));
+        // The bundle regen stays lawful.
+        assert!(matches!(
+            real("bash scripts/generate-skill-bundles.sh"),
+            Sec::Allow
+        ));
     }
 }
