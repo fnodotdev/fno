@@ -534,6 +534,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn all_contracts_in_one_declaration() {
+        an_aliased_recorded_repo_reads_the_new_location();
+        fresh_read_refuses_a_state_outside_the_three_values();
+        files_pagination_stops_on_the_short_page_and_fails_the_cap();
+    }
+
     fn an_aliased_recorded_repo_reads_the_new_location() {
         // The done_means probe: a PR url recorded under the dead
         // fnodotdev/fno-web name resolves through repo_aliases before the
@@ -553,7 +559,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn fresh_read_refuses_a_state_outside_the_three_values() {
         let err = fresh_read(
             7,
@@ -569,7 +574,6 @@ mod tests {
         assert!(msg.contains("malformed state"), "{msg}");
     }
 
-    #[test]
     fn files_pagination_stops_on_the_short_page_and_fails_the_cap() {
         let full_page: Value = (0..FILES_PAGE_SIZE)
             .map(|i| json!({"filename": format!("f{i}.rs")}))

@@ -318,6 +318,12 @@ mod tests {
     const NOW: &str = "2026-11-01T00:00:00Z";
 
     #[test]
+    fn all_contracts_in_one_declaration() {
+        a_candidate_from_a_stale_repo_row_carries_the_canonical_slug();
+        the_verdict_precedence_holds();
+        a_done_node_stays_watched_only_inside_the_grace_window();
+    }
+
     fn a_candidate_from_a_stale_repo_row_carries_the_canonical_slug() {
         let aliases = BTreeMap::from([(
             "fnodotdev/fno-web".to_string(),
@@ -343,7 +349,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn the_verdict_precedence_holds() {
         let none = json!({});
         let bots = vec!["bot".to_string()];
@@ -379,7 +384,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn a_done_node_stays_watched_only_inside_the_grace_window() {
         let node = |done: &str| json!({"id": "n", "completed_at": done});
         assert!(watchable(&node("2026-10-25T00:00:00Z"), NOW, 14));
