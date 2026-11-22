@@ -50,7 +50,7 @@ fn node_ids_under(head_ref: &str, seq_prefix: Option<&str>) -> Vec<String> {
             alnum += 1;
         }
         let mut matched: Option<(usize, usize)> = None; // (id_start, id_end)
-        let dashed = j < b.len() && b[j] == b'-' && j - i - 1 <= 7;
+        let dashed = j < b.len() && matches!(b.get(j), Some(&b'-')) && j - i - 1 <= 7;
         if dashed {
             // Dashed: prefix ran 1-8 chars, then '-' then 4-8 hex.
             let hex_start = j + 1;
@@ -75,13 +75,16 @@ fn node_ids_under(head_ref: &str, seq_prefix: Option<&str>) -> Vec<String> {
             if let Some(seq) = seq_prefix {
                 let num_start = j + 1;
                 let mut k = num_start;
-                while k < b.len() && k - num_start < 7 && b[k].is_ascii_digit() {
+                while k < b.len()
+                    && k - num_start < 7
+                    && matches!(b.get(k), Some(&c) if c.is_ascii_digit())
+                {
                     k += 1;
                 }
                 let num_len = k - num_start;
                 if (1..=7).contains(&num_len)
-                    && b[num_start] != b'0'
-                    && (k == b.len() || b[k] == b'-' || b[k] == b'/')
+                    && b.get(num_start) != Some(&b'0')
+                    && (k == b.len() || matches!(b.get(k), Some(&b'-') | Some(&b'/')))
                     && &head_ref[i..j] == seq
                 {
                     matched = Some((num_start, k));

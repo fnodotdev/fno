@@ -16,7 +16,10 @@ pub(crate) struct IdMode {
 
 /// The facts through the sibling settings door (`state path settings-read`),
 /// read once per process. An old sibling that predates the receipt's
-/// `sequential` field answers hex - the `Default` derive covers it.
+/// `sequential` field answers hex - the `Default` derive covers it. The
+/// contract build (no `app` feature) carries no door, so it reads hex
+/// outright: the fail-open default.
+#[cfg(feature = "app")]
 pub(crate) fn facts() -> &'static IdMode {
     static FACTS: std::sync::OnceLock<IdMode> = std::sync::OnceLock::new();
     FACTS.get_or_init(|| {
@@ -33,6 +36,17 @@ pub(crate) fn facts() -> &'static IdMode {
             prefix: read.prefix.trim_end_matches('-').to_string(),
         }
     })
+}
+
+/// The contract build's facts: hex, the documented default. `search_query`
+/// is not feature-gated, so its shape check needs this to compile against.
+#[cfg(not(feature = "app"))]
+pub(crate) fn facts() -> &'static IdMode {
+    static HEX: IdMode = IdMode {
+        sequential: false,
+        prefix: String::new(),
+    };
+    &HEX
 }
 
 /// The settings receipt fields the shape checks share, with hex defaults
@@ -59,12 +73,10 @@ pub(crate) fn sequential_tail_matches(mode: &IdMode, prefix: &str, tail: &str) -
 
 /// The sequential arm as a regex fragment (`t-[1-9][0-9]{0,6}`) for a
 /// prefix. Pure; the twin builder is `node_ref::sequential_id_pattern_for`
-/// in fno-agent.
+/// in fno-agent. No escaping: a configured prefix is validated
+/// `[a-z][a-z0-9]{0,7}`, never a regex metacharacter.
 pub(crate) fn sequential_pattern_for(prefix: &str) -> String {
-    format!(
-        "{}-[1-9][0-9]{{0,6}}",
-        regex::escape(prefix.trim_end_matches('-'))
-    )
+    format!("{}-[1-9][0-9]{{0,6}}", prefix.trim_end_matches('-'))
 }
 
 #[cfg(test)]

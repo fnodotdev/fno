@@ -805,16 +805,18 @@ fn plan_filename_node_id_in(
     });
     static PLAN_NODE_SEQ_RE: OnceLock<Regex> = OnceLock::new();
     let plan_node_seq_re = PLAN_NODE_SEQ_RE.get_or_init(|| {
-        Regex::new(r"-(?P<prefix>[a-z][a-z0-9]{0,7})-(?P<num>[1-9][0-9]{0,6})\.md$").unwrap()
+        Regex::new(r"-(?P<prefix>[a-z][a-z0-9]{0,7})-(?P<num>[1-9][0-9]{0,6})\.md$")
+            .expect("static regex")
     });
     let base = path.split('#').next().unwrap_or(path);
     let name = Path::new(base).file_name()?.to_string_lossy();
     let hex_caps = plan_node_re.captures(&name);
-    let seq_allowed = seq_prefix.is_some() && plan_node_seq_re.captures(&name).is_some();
-    if seq_allowed {
-        let seq_caps = plan_node_seq_re.captures(&name).unwrap();
+    // The sequential reader runs once: prefix gate, allowlist gate, then
+    // the id - one captures pass, no unwrap on the match.
+    let seq_caps = plan_node_seq_re.captures(&name);
+    if let (Some(seq), Some(seq_caps)) = (seq_prefix, seq_caps) {
         let prefix = seq_caps["prefix"].to_string();
-        if seq_prefix == Some(prefix.as_str())
+        if seq == prefix
             && (prefixes.is_empty() || prefixes.iter().any(|p| p.trim_end_matches('-') == prefix))
         {
             return Some(format!("{}-{}", prefix, &seq_caps["num"]));
