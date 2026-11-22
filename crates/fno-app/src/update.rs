@@ -104,7 +104,11 @@ fn running_bundle() -> Option<PathBuf> {
 fn curl(url: &str, out: Option<&Path>) -> Result<Vec<u8>, String> {
     let mut cmd = Command::new("curl");
     cmd.args(["-fsSL", "--max-time", "300"]);
-    cmd.args(["-H", "Accept: application/vnd.github+json"]);
+    // Only the API wants the header: a release download redirects to a
+    // storage host that refuses it.
+    if url.starts_with("https://api.github.com/") {
+        cmd.args(["-H", "Accept: application/vnd.github+json"]);
+    }
     if let Some(path) = out {
         cmd.arg("-o").arg(path);
     }
@@ -168,7 +172,7 @@ pub fn check(running: &str) -> Result<Option<Ready>, String> {
     let root = update_dir().ok_or("no home directory")?;
     let feed = curl(
         &format!(
-            "https://api.github.com/repos/{}/releases?per_page=30",
+            "https://api.github.com/repos/{}/releases?per_page=100",
             repo_slug()
         ),
         None,

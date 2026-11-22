@@ -842,13 +842,19 @@ impl Root {
                 .spawn(async { super::update::check(super::update::RUNNING) })
                 .await;
             if let Ok(Some(ready)) = read {
-                let _ = this.update(cx, |root, cx| {
-                    if !matches!(root.update_card, Some(UpdateCard::Installed { .. })) {
+                // The notes card of the build just installed is on screen:
+                // wait for its Dismiss, then offer the staged build.
+                let shown = this.update(cx, |root, cx| {
+                    let busy = matches!(root.update_card, Some(UpdateCard::Installed { .. }));
+                    if !busy {
                         root.update_card = Some(UpdateCard::Ready(ready));
+                        cx.notify();
                     }
-                    cx.notify();
+                    !busy
                 });
-                break;
+                if shown.unwrap_or(true) {
+                    break;
+                }
             }
             cx.background_executor().timer(super::update::RECHECK).await;
         }));
