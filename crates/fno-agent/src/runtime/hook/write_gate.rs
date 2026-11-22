@@ -1360,22 +1360,39 @@ fn git_root_of(path: &Path) -> Option<String> {
 /// 294 reads, 294 parses, up to 294 python spawns. Now each runs at most
 /// once per distinct root.
 struct RepoCache {
-    tsv_rows: Option<Vec<(String, String, String)>>,
+    tsv_rows: Option<Vec<(String, String, String, String)>>,
     bundle_ready: bool,
     bundle_rows: Option<Vec<String>>,
 }
 
 /// The generated-artifacts.tsv rows as (glob, source, regen). Comment and
 /// malformed rows skip, exactly as the per-target arm skipped them.
-fn parse_tsv_rows(rows: &str) -> Vec<(String, String, String)> {
+/// The generated-artifacts.tsv rows as (glob, literal prefix, source, regen).
+/// The prefix is the glob's leading literal run, empty when the glob opens
+/// with a wildcard; a row whose prefix a target lacks cannot match, so the
+/// judge skips it before the glob walk. Comment and malformed rows skip,
+/// exactly as the per-target arm skipped them.
+fn parse_tsv_rows(rows: &str) -> Vec<(String, String, String, String)> {
     let mut parsed = Vec::new();
     for line in rows.lines() {
         let fields: Vec<&str> = line.split('\t').collect();
-        if fields.len() < 3 || fields[0].is_empty() || fields[0].starts_with('#') {
+        let Some(glob) = fields.first() else {
+            continue;
+        };
+        if fields.len() < 3 || glob.is_empty() || glob.starts_with('#') {
             continue;
         }
         let (source, regen) = (fields[1], fields[2]);
-        parsed.push((fields[0].to_string(), source.to_string(), regen.to_string()));
+        let prefix: String = glob
+            .chars()
+            .take_while(|c| !matches!(c, '*' | '?' | '[' | '\\'))
+            .collect();
+        parsed.push((
+            glob.to_string(),
+            prefix,
+            source.to_string(),
+            regen.to_string(),
+        ));
     }
     parsed
 }
@@ -1421,6 +1438,17 @@ fn physicalize_cached(
     abs: &Path,
     real_dirs: &mut std::collections::HashMap<PathBuf, PathBuf>,
 ) -> PathBuf {
+    // A cached canonical parent answers a non-directory target with the same
+    // path the walk lands on: parent.exists-in-cache means the walk would
+    // have stopped there and joined the bare name. Existing-directory targets
+    // keep the full walk so a symlinked dir resolves exactly as before.
+    if !abs.is_dir() {
+        if let (Some(parent), Some(name)) = (abs.parent(), abs.file_name()) {
+            if let Some(real) = real_dirs.get(parent) {
+                return real.join(name);
+            }
+        }
+    }
     let mut tail = PathBuf::new();
     let mut dir = abs.to_path_buf();
     loop {
@@ -1474,7 +1502,9 @@ fn generated_section(p: &Payload, _cwd: &Path) -> Sec {
     }
     targets.sort_unstable();
     targets.dedup();
-    trace_gen(&format!("targets={targets:?}"));
+    if std::env::var_os("FNO_GUARD_TRACE").is_some() {
+        trace_gen(&format!("targets={targets:?}"));
+    }
     if targets.is_empty() {
         return Sec::Allow;
     }
@@ -1534,12 +1564,16 @@ fn generated_target(
     let Some(root) = git_root_of(&abs) else {
         return None;
     };
-    let prefix = format!("{root}/");
-    if !abs_str.starts_with(&prefix) {
+    let Some(rest) = abs_str
+        .strip_prefix(root.as_str())
+        .and_then(|r| r.strip_prefix('/'))
+    else {
         return None;
+    };
+    let rel = rest;
+    if std::env::var_os("FNO_GUARD_TRACE").is_some() {
+        trace_gen(&format!("root={root} rel={rel}"));
     }
-    let rel = abs_str[prefix.len()..].to_string();
-    trace_gen(&format!("root={root} rel={rel}"));
     let repo = cache
         .repos
         .entry(root.clone())
@@ -1601,10 +1635,15 @@ fn installed_copy_reason(abs_str: &str) -> Option<String> {
 fn manifest_row_reason(
     rel: &str,
     command: &str,
-    rows: Option<&[(String, String, String)]>,
+    rows: Option<&[(String, String, String, String)]>,
 ) -> Option<Option<String>> {
     let rows = rows?;
-    for (glob, source, regen) in rows {
+    for (glob, prefix, source, regen) in rows {
+        // A literal leading run the target lacks rules the row out before
+        // the glob walk; a match would have to start with it.
+        if !prefix.is_empty() && !rel.starts_with(prefix.as_str()) {
+            continue;
+        }
         if bash_glob_match(glob, rel) {
             if runs_the_regen(command, regen) {
                 return Some(None);
