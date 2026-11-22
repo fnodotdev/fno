@@ -176,6 +176,22 @@ pub const HANDLE_SCHEME: &str = "fno-handle:";
 /// opener through the pane-sourced door.
 pub const FILE_SCHEME: &str = "fno-file:";
 
+/// A resolved `[Image #N]`: the number, then the image's [`FILE_SCHEME`] URI.
+/// Only the server's resolver builds one. No gate on pane bytes accepts it.
+const PASTED_SCHEME: &str = "fno-image:";
+
+/// Build the URI that opens a pasted image under its placeholder's number.
+pub(crate) fn pasted_uri(path: &Path, number: u64) -> String {
+    format!("{PASTED_SCHEME}{number}:{}", file_uri(path, None))
+}
+
+/// Parse a [`pasted_uri`] into its path and number.
+pub(crate) fn pasted_uri_parts(uri: &str) -> Option<(PathBuf, u64)> {
+    let (number, file) = uri.strip_prefix(PASTED_SCHEME)?.split_once(':')?;
+    let (path, _) = file_uri_parts(file)?;
+    Some((path, number.parse().ok()?))
+}
+
 /// Parse an exact [`FILE_SCHEME`] URI into its canonical path and optional
 /// line. Strict, because it is the trust gate on pane-sourced bytes: the path
 /// must be absolute and free of control characters, and only an image path

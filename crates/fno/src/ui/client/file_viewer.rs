@@ -95,6 +95,15 @@ pub(crate) struct Loaded {
     line: Option<u32>,
     shape: ViewerShape,
     body: Body,
+    title: Option<String>,
+}
+
+impl Loaded {
+    /// Show `title` in place of the file's name.
+    pub(super) fn titled(mut self, title: Option<String>) -> Self {
+        self.title = title;
+        self
+    }
 }
 
 /// Read `path` for the viewer. Blocking: call it off the UI loop.
@@ -105,6 +114,7 @@ pub(crate) fn load(path: PathBuf, line: Option<u32>, shape: ViewerShape) -> Load
         line,
         shape,
         body,
+        title: None,
     }
 }
 
@@ -334,6 +344,8 @@ impl ViewerState {
 
 struct FileViewer {
     path: PathBuf,
+    /// What the frame names when the file's own name means nothing to a reader.
+    title: Option<String>,
     shape: ViewerShape,
     body: Body,
     /// The first source line in the window.
@@ -482,7 +494,10 @@ fn chrome_for(v: &FileViewer, w: usize, panel: bool) -> chrome::Chrome {
     // The widest the chrome may be: the frame's borders and the scroll column
     // come off the width, so the block never outgrows the width it was given.
     let room = w.saturating_sub(chrome::Chrome::FRAME_COLS + 1);
-    let name = v.path.file_name().and_then(|n| n.to_str());
+    let name = v
+        .title
+        .as_deref()
+        .or_else(|| v.path.file_name().and_then(|n| n.to_str()));
     let cut = matches!(
         &v.body,
         Body::Text {
@@ -829,6 +844,7 @@ pub(super) async fn open(
     };
     view.viewer.open = Some(FileViewer {
         path: loaded.path,
+        title: loaded.title,
         shape: loaded.shape,
         body: loaded.body,
         scroll: 0,
@@ -1104,6 +1120,7 @@ mod tests {
                 lines,
                 truncated: false,
             },
+            title: None,
         }
     }
 
@@ -1247,7 +1264,8 @@ mod tests {
     #[tokio::test]
     async fn an_image_body_paints_half_blocks_and_names_its_size() {
         let mut l = file(1);
-        l.path = PathBuf::from("/work/shot.png");
+        l.path = PathBuf::from("/work/0a1b2c.png");
+        l.title = Some("Image #1".to_string());
         // A white top quarter: the first cell row's halves differ, so
         // half-blocks draw `▀` there.
         let img = image::RgbaImage::from_fn(40, 40, |_, y| {
@@ -1264,7 +1282,12 @@ mod tests {
         assert!(frame.cells.iter().any(|c| c.c == '▀'), "half-blocks paint");
         assert!(!frame.cells.contains(&image_layer::HOLE));
         assert!(image_layer::take().is_none(), "half-blocks stage no layer");
-        assert!(crate::vt::frame_text(&frame).contains("40x40 px"));
+        let text = crate::vt::frame_text(&frame);
+        assert!(text.contains("40x40 px"));
+        assert!(
+            text.contains("Image #1") && !text.contains("0a1b2c"),
+            "{text}"
+        );
     }
 
     #[tokio::test]

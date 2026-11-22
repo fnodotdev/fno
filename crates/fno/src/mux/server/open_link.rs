@@ -114,6 +114,10 @@ impl Core {
             return;
         };
         let (tx, notify) = (client.reliable_tx.clone(), client.notify.clone());
+        let pasted = match &source {
+            ImageSource::Pasted(paste) => Some(paste.number),
+            ImageSource::File(_) => None,
+        };
         tokio::spawn(async move {
             let found = tokio::task::spawn_blocking(move || {
                 image_refs::resolve(&source, session.as_ref(), &Stores::host())
@@ -121,7 +125,10 @@ impl Core {
             .await;
             let msg = match found {
                 Ok(Ok(path)) => ServerMsg::OpenLink {
-                    url: crate::link::file_uri(&path, None),
+                    url: match pasted {
+                        Some(number) => crate::link::pasted_uri(&path, number),
+                        None => crate::link::file_uri(&path, None),
+                    },
                 },
                 Ok(Err(error)) => ServerMsg::Notice {
                     text: error.to_string(),
