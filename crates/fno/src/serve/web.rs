@@ -841,8 +841,11 @@ fn scope_hq_model(
     scope: &ReadScope,
     rows: &[crate::node_row::NodeRow],
 ) -> serde_json::Value {
-    model["machines"] = serde_json::json!([]);
-    let Some(waiting) = model.get_mut("waiting") else {
+    let Some(obj) = model.as_object_mut() else {
+        return model;
+    };
+    obj.insert("machines".to_string(), serde_json::json!([]));
+    let Some(waiting) = obj.get_mut("waiting") else {
         return model;
     };
     for key in ["questions", "prs", "next"] {
@@ -3921,6 +3924,12 @@ console.log("backlog page helpers: 18 cases ok");
 
     #[tokio::test]
     async fn scoped_invites_read_a_filtered_hq_board() {
+        // The one section the filter's contract names (R1: one typed parse).
+        #[derive(serde::Deserialize)]
+        struct HqBody {
+            #[serde(default)]
+            machines: serde_json::Value,
+        }
         let list = vec![
             invite("ann@example.com", "x-hq1"),
             invite("pat@example.com", "*"),
@@ -3961,8 +3970,12 @@ console.log("backlog page helpers: 18 cases ok");
         let reply = get(addr, "pat@example.com").await;
         assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
         let body = reply.split("\r\n\r\n").nth(1).unwrap_or_default();
-        let model: serde_json::Value = serde_json::from_str(body).unwrap();
-        assert_eq!(model["machines"].as_array().map(Vec::len), Some(2));
+        let hq: HqBody = serde_json::from_str(body).unwrap();
+        assert_eq!(
+            hq.machines.as_array().map(Vec::len),
+            Some(2),
+            "star invite reads the fleet grid"
+        );
         assert!(
             reply.contains("\"x-oth\""),
             "star invite reads whole: {reply}"
@@ -3970,8 +3983,12 @@ console.log("backlog page helpers: 18 cases ok");
         let reply = get(addr, "ann@example.com").await;
         assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
         let body = reply.split("\r\n\r\n").nth(1).unwrap_or_default();
-        let model: serde_json::Value = serde_json::from_str(body).unwrap();
-        assert_eq!(model["machines"], serde_json::json!([]));
+        let hq: HqBody = serde_json::from_str(body).unwrap();
+        assert_eq!(
+            hq.machines,
+            serde_json::json!([]),
+            "the fleet grid drops whole"
+        );
         assert!(reply.contains("\"x-hq1\""), "{reply}");
         assert!(!reply.contains("\"x-oth\""), "{reply}");
         server.abort();
