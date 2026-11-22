@@ -420,13 +420,21 @@ fn project_env_file_cannot_steer_fno() {
     .unwrap();
 
     let env_file = env_out.path().join("env");
-    let run = std::process::Command::new(bash_path())
+    let hook_child = std::process::Command::new(bash_path())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .env("CLAUDE_ENV_FILE", &env_file)
         .arg(&hook)
         .current_dir(ws.path())
-        .output()
-        .unwrap();
-    assert!(run.status.success(), "the hook runs clean");
+        .spawn()
+        .expect("spawn the hook");
+    let run = hook_child.wait_with_output().expect("reap the hook");
+    assert!(
+        run.status.success(),
+        "the hook runs clean: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
 
     let emitted = std::fs::read_to_string(&env_file).unwrap();
     let last = emitted.lines().last().unwrap();
@@ -442,17 +450,27 @@ fn project_env_file_cannot_steer_fno() {
     }
     for sh in &shells {
         let label = sh.display().to_string();
-        let parsed = std::process::Command::new(sh)
+        let parse_child = std::process::Command::new(sh)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
             .arg("-n")
             .arg(&env_file)
-            .output()
-            .unwrap();
+            .spawn()
+            .expect("spawn the parse check");
+        let parsed = parse_child
+            .wait_with_output()
+            .expect("reap the parse check");
         assert!(
             parsed.status.success(),
-            "the emitted file parses under {label}"
+            "the emitted file parses under {label}: {}",
+            String::from_utf8_lossy(&parsed.stderr)
         );
 
-        let sourced = std::process::Command::new(sh)
+        let source_child = std::process::Command::new(sh)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
             .arg("-c")
             .arg(
                 "EVIL_VAL() { echo kept; }; . \"$1\"; \
@@ -463,9 +481,16 @@ fn project_env_file_cannot_steer_fno() {
             .arg(&env_file)
             .current_dir(ws.path())
             .env("HOME", home.path())
-            .output()
-            .unwrap();
-        assert!(sourced.status.success(), "sourcing exits 0 under {label}");
+            .spawn()
+            .expect("spawn the sourcing child");
+        let sourced = source_child
+            .wait_with_output()
+            .expect("reap the sourcing child");
+        assert!(
+            sourced.status.success(),
+            "sourcing exits 0 under {label}: {}",
+            String::from_utf8_lossy(&sourced.stderr)
+        );
         let out = String::from_utf8_lossy(&sourced.stdout).to_string();
 
         let markers: Vec<std::path::PathBuf> = std::fs::read_dir(ws.path())
