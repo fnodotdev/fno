@@ -548,6 +548,15 @@ async fn a_board_act_passes_nobody_new() {
     ] {
         assert_eq!(bridge.act(&who).await, status, "{who}");
     }
+    // write_guard passes a proxy that rewrote Host, so the route reads the
+    // scope itself and says so.
+    let reply = bridge
+        .reply("POST", "/backlog/act?t=right", &via_loopback(BEN), ACT)
+        .await;
+    assert!(
+        reply.contains("board acts run from the local machine"),
+        "{reply}"
+    );
     put(&global, &row(BEN, "x-1", "owner"));
     assert_eq!(bridge.act(&via_loopback(ANN)).await, "403", "revoked");
 }
