@@ -425,6 +425,7 @@ pub(crate) fn table(rows: &[Row], sel: &str, width: usize, now: u64) -> Vec<Line
                     .s(format!("{} ", fit(runtime, W[2] - 1)), TextStyle::Meta)
                     .s(format!("{} ", fit(&model(r.s), W[3] - 1)), TextStyle::Meta)
                     .s(fit(r.s.status, W[4]), status_role(r.s.status))
+                    .s(format!("{} ", fit(&age, W[5] - 1)), TextStyle::Item)
                     .s(format!("{} ", fit(&use_cell, W[6] - 1)), TextStyle::Item)
                     .s(fit(&last, now_w), TextStyle::Meta)
                     .whole(&key)
