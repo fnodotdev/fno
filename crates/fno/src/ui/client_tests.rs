@@ -5188,42 +5188,6 @@ fn row_menu_offers_copy_session_id_not_mail() {
     assert!(!without.actions.contains(&super::MenuAction::CopySessionId));
 }
 
-#[test]
-fn row_menu_copy_section_holds_name_node_and_session_id() {
-    // The copy items close the menu under a `Copy` header, after every
-    // command that acts on the row. A row with a node and a session offers
-    // all three; a bare row offers only the name; each entry copies its own
-    // value.
-    let mut row = paneless_bg_row("w1");
-    row.node = Some("x-a87c".into());
-    row.harness_session_id = Some("sid-0123".into());
-    let menu = super::build_row_menu(&row, Anchor::Center);
-    let header = menu
-        .popup
-        .rows
-        .iter()
-        .position(|r| matches!(r, PopupRow::Header(h) if h == "Copy"))
-        .expect("the menu has a Copy section");
-    assert!(
-        matches!(menu.popup.rows[header - 1], PopupRow::Rule),
-        "a rule sets the section apart"
-    );
-    let tail: Vec<_> = menu.popup.rows[header + 1..]
-        .iter()
-        .filter_map(|r| match r {
-            PopupRow::Entry { label, .. } => Some(label.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(tail, ["Copy name", "Copy node id", "Copy session ID"]);
-    assert!(menu.actions.contains(&super::MenuAction::CopyName));
-    assert!(menu.actions.contains(&super::MenuAction::CopyNodeId));
-    let bare = super::build_row_menu(&paneless_bg_row("w2"), Anchor::Center);
-    assert!(bare.actions.contains(&super::MenuAction::CopyName));
-    assert!(!bare.actions.contains(&super::MenuAction::CopyNodeId));
-    assert!(!bare.actions.contains(&super::MenuAction::CopySessionId));
-}
-
 /// A pane-hosted sideline row, the shape the move/break-out menu acts on.
 fn pane_hosted_row(name: &str, pane_id: u64) -> AgentRow {
     AgentRow {

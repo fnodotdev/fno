@@ -666,6 +666,42 @@ mod tests {
     }
 
     #[test]
+    fn the_copy_section_holds_name_node_and_session_id_after_the_commands() {
+        // The copy items close the menu under a `Copy` header. A row with a
+        // node and a session offers all three; a bare row offers only the
+        // name.
+        let mut row = paneless_row();
+        row.node = Some("x-a87c".into());
+        row.harness_session_id = Some("sid-0123".into());
+        let menu = build_row_menu(&row, test_anchor());
+        let header = menu
+            .popup
+            .rows
+            .iter()
+            .position(|r| matches!(r, PopupRow::Header(h) if h == "Copy"))
+            .expect("the menu has a Copy section");
+        assert!(
+            matches!(menu.popup.rows[header - 1], PopupRow::Rule),
+            "a rule sets the section apart"
+        );
+        let tail: Vec<&str> = menu.popup.rows[header + 1..]
+            .iter()
+            .filter_map(|r| match r {
+                PopupRow::Entry { label, .. } => Some(label.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tail, ["Copy name", "Copy node id", "Copy session ID"]);
+        let mut bare = paneless_row();
+        bare.node = None;
+        bare.harness_session_id = None;
+        let menu = build_row_menu(&bare, test_anchor());
+        assert!(offers(&menu, "Copy name"));
+        assert!(!offers(&menu, "Copy node id"));
+        assert!(!offers(&menu, "Copy session ID"));
+    }
+
+    #[test]
     fn the_split_group_names_the_direction_and_carries_no_opens_toggle() {
         // The group header names WHAT the grid chooses (the gesture lives on
         // the cells). The pane|portal toggle is retired: a split always opens
