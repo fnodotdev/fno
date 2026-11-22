@@ -874,6 +874,16 @@ pub fn row_scope(row: &Value) -> &str {
     }
 }
 
+/// The reach the row carries: the `reach` stamp, else a legacy `scope`
+/// stamp that names a reach. None for a row recorded without a stamp, so
+/// a reader can tell a stamped reach from the unstamped fallback.
+pub fn reach_stamp(row: &Value) -> Option<&str> {
+    let stamps: ScopeStamps = serde::Deserialize::deserialize(row).unwrap_or_default();
+    stamps
+        .reach
+        .or_else(|| stamps.scope.filter(|v| is_reach_value(v)))
+}
+
 /// The session-scope test: `global` always governs; a
 /// `project:<slug>` row governs only the matching slug; a `machine:<id>` or
 /// `user:<name>` (legacy `person:<name>`) row governs only the session that resolves that identity.
