@@ -1859,7 +1859,7 @@ mod tests {
         assert_eq!(rich.cost.as_deref(), Some("~$44.97"));
         assert_eq!(rich.created.as_deref(), Some("2h"));
         assert_eq!(rich.context.as_deref(), Some("41%"));
-        assert_eq!(rich.tokens.as_deref(), Some("12.3k tok"));
+        assert_eq!(rich.tokens.as_deref(), Some("12.3k tk"));
         assert!(rich.activity.is_some());
         // The columns are the widest value per slot, and a tight budget
         // drops whole slots from the right: model and context stay. The

@@ -511,7 +511,8 @@ impl Launcher {
                 if self.shell {
                     format!("shell command in {}", self.draft.cwd())
                 } else {
-                    "prompt \u{b7} +flag \u{b7} :value \u{b7} ! shell".to_string()
+                    "prompt \u{b7} +flag \u{b7} :value \u{b7} @node \u{b7} ! shell \u{b7} ? help"
+                        .to_string()
                 }
             } else {
                 match (&ghost, k == last_chunk) {

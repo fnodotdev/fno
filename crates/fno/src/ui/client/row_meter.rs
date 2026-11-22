@@ -64,7 +64,9 @@ pub(super) fn cost_cell(cents: u64) -> String {
     }
 }
 
-/// A compact token count: `1.4B`, `367M`, `12.3k`, never a grouped digit run.
+/// A compact token count: three significant digits plus `tk` (`1.23k tk`,
+/// `12.3k tk`, `1.23M tk`), trailing zeros dropped (`1B tk`, `40k tk`),
+/// never a grouped digit run. The one formatter both meters read.
 pub(super) fn token_cell(tokens: u64) -> String {
     let (div, suffix) = if tokens >= 1_000_000_000 {
         (1_000_000_000.0, "B")
@@ -73,14 +75,18 @@ pub(super) fn token_cell(tokens: u64) -> String {
     } else if tokens >= 1_000 {
         (1_000.0, "k")
     } else {
-        return format!("{tokens} tok");
+        return format!("{tokens} tk");
     };
     let v = tokens as f64 / div;
-    if (v * 10.0).round() % 10.0 == 0.0 {
-        format!("{v:.0}{suffix} tok")
+    let text = if v >= 100.0 {
+        format!("{v:.0}")
+    } else if v >= 10.0 {
+        format!("{v:.1}")
     } else {
-        format!("{v:.1}{suffix} tok")
-    }
+        format!("{v:.2}")
+    };
+    let text = text.trim_end_matches('0').trim_end_matches('.');
+    format!("{text}{suffix} tk")
 }
 
 /// The name column's width at a panel text width: the fixed cells and a
@@ -146,11 +152,14 @@ mod tests {
         assert_eq!(cost_cell(13_400), "~$134");
         assert_eq!(cost_cell(120_000), "~$1.2k");
         assert_eq!(cost_cell(0), "~$0");
-        assert_eq!(token_cell(12_345), "12.3k tok");
-        assert_eq!(token_cell(999), "999 tok");
-        assert_eq!(token_cell(367_000_000), "367M tok");
-        assert_eq!(token_cell(1_416_159_173), "1.4B tok");
-        assert_eq!(token_cell(1_000_000_000), "1B tok");
+        assert_eq!(token_cell(1_234), "1.23k tk");
+        assert_eq!(token_cell(12_345), "12.3k tk");
+        assert_eq!(token_cell(1_234_567), "1.23M tk");
+        assert_eq!(token_cell(999), "999 tk");
+        assert_eq!(token_cell(367_000_000), "367M tk");
+        assert_eq!(token_cell(1_416_159_173), "1.42B tk");
+        assert_eq!(token_cell(1_000_000_000), "1B tk");
+        assert_eq!(token_cell(40_000), "40k tk");
         assert_eq!(skeleton_cell(3, None), "░░░");
         assert_eq!(skeleton_cell(2, Some(0)), "░░");
         assert_eq!(skeleton_cell(2, Some(250)), "▒▒");

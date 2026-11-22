@@ -974,7 +974,7 @@ fn group_by_axes_build_labelled_bands_with_rollups() {
     assert_eq!(labels, vec!["claude", "(no harness)"], "harness bands");
     assert_eq!(
         crate::client::agent_group::band_spend(&v, "claude").as_deref(),
-        Some("~$2.50 · 3M tok"),
+        Some("~$2.50 · 3M tk"),
         "the band sums its rows' spend"
     );
     assert_eq!(

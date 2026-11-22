@@ -394,7 +394,7 @@ fn card_frame_paints_identity_then_model_and_metrics_on_distinct_lines() {
         matches!(cells[0], card_line::MetricCell::Hidden),
         "activity stays blank until two intervals land, it never fakes a line"
     );
-    assert!(matches!(&cells[3], card_line::MetricCell::Value(v) if v == "999 tok"));
+    assert!(matches!(&cells[3], card_line::MetricCell::Value(v) if v == "999 tk"));
     // Cost left the metrics line (it rides line 2, served-only): a promoted
     // lead's session_cost_cents never reach this line at all.
     // A codex row keeps the populated-paint contract off its unreportable
@@ -412,7 +412,7 @@ fn card_frame_paints_identity_then_model_and_metrics_on_distinct_lines() {
         "codex never reports context or compactions"
     );
     assert!(hidden(&cells[0]));
-    assert!(matches!(&cells[3], card_line::MetricCell::Value(v) if v == "500 tok"));
+    assert!(matches!(&cells[3], card_line::MetricCell::Value(v) if v == "500 tk"));
 }
 
 #[test]
