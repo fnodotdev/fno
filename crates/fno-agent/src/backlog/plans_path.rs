@@ -110,6 +110,42 @@ fn require_plans_leaf(dir: &Path) -> Result<(), String> {
     ))
 }
 
+/// The mutate doors' write contract (`plan-cli mutate` draft/finalize): the
+/// target must sit inside the anchor's chain-resolved plans dir or any
+/// registered project's (the same accepted set the plan-location hook
+/// judges, so a blueprint session anchored outside a project still writes
+/// that project's plans). Both sides resolve loose first: the vault
+/// `internal` symlink must not read as outside. Fail-open when no dir
+/// resolves at all, the hook's rule that a guard which cannot name the
+/// destination must not block the wrong one.
+pub(crate) fn plan_write_refusal(anchor: &Path, target: &Path) -> Option<String> {
+    let mut dirs = Vec::new();
+    if let Some(dir) = plans_content_dir(anchor) {
+        dirs.push(dir);
+    }
+    dirs.extend(super::plans_dirs::plans_dirs(anchor));
+    if dirs.is_empty() {
+        return None;
+    }
+    let resolved = resolve_loose(target);
+    if dirs
+        .iter()
+        .any(|dir| resolved.starts_with(resolve_loose(dir)))
+    {
+        return None;
+    }
+    let home = plans_content_dir(anchor)
+        .map(|d| d.display().to_string())
+        .unwrap_or_else(|| "a configured plans dir".to_string());
+    Some(format!(
+        "refusing plan write outside the plans dir: {} is not under {home} \
+         (or any registered project's). Resolve the save path with \
+         `fno do plan path --slug <slug>` from the project root, or set \
+         plans_dir (config.toml) / plansDirectory (.claude/settings.json).",
+        target.display()
+    ))
+}
+
 /// A pinned render time: epoch seconds, the wire form `--now` carries so a
 /// recompute from a durable timestamp mints the same name on a later day.
 /// Rendered in UTC: the durable stamp it recomputes (a node's `created_at`)
@@ -851,5 +887,25 @@ mod tests {
             !fx.root().join("internal").exists(),
             "the refusal fires before any path is created"
         );
+    }
+
+    #[test]
+    fn plan_write_refusal_admits_inside_and_refuses_outside() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let fx = Fixture::new("writerefusal");
+        let _env = EnvGuard::new(&fx.pins());
+        fs::write(fx.config(), "plans_dir = \"plans\"\n").unwrap();
+        let inside = fx.root().join("plans").join("doc.md");
+        assert_eq!(plan_write_refusal(&fx.root(), &inside), None);
+        let outside = fx.root().join("docs").join("doc.md");
+        let refused = plan_write_refusal(&fx.root(), &outside).unwrap();
+        assert!(
+            refused.contains("refusing plan write outside the plans dir"),
+            "{refused}"
+        );
+        assert!(refused.contains("fno do plan path"), "{refused}");
+        // Fail-open: an unresolvable chain names no destination, so nothing blocks.
+        fs::write(fx.config(), "plans_dir = \"internal/{vault}\"\n").unwrap();
+        assert_eq!(plan_write_refusal(&fx.root(), &outside), None);
     }
 }
