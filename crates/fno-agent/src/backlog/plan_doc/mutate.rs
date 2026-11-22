@@ -788,6 +788,9 @@ pub(crate) fn draft(arg: &str, mode: &str, rewrite: bool, no_emit: bool, root: &
     if no_emit {
         return (0, proposed);
     }
+    if let Some(refused) = crate::plans_path::plan_write_refusal(root, &resolved) {
+        return (1, refused);
+    }
     if let Err(refused) = write(&resolved, &proposed) {
         return refused;
     }
@@ -805,7 +808,7 @@ pub(crate) fn draft(arg: &str, mode: &str, rewrite: bool, no_emit: bool, root: &
 /// Promote an enriched draft from design to ready with the compiled-v1
 /// stamp. An unstamped ready doc finalizes to itself (the historical
 /// permissive read); a stamped one must still satisfy its contract.
-pub(crate) fn finalize(arg: &str, no_emit: bool) -> Outcome {
+pub(crate) fn finalize(arg: &str, no_emit: bool, root: &Path) -> Outcome {
     let resolved = match expand(arg).canonicalize() {
         Ok(p) => p,
         Err(e) => return (3, format!("Cannot read {arg}: {e}")),
@@ -869,6 +872,9 @@ pub(crate) fn finalize(arg: &str, no_emit: bool) -> Outcome {
     if no_emit {
         return (0, proposed);
     }
+    if let Some(refused) = crate::plans_path::plan_write_refusal(root, &resolved) {
+        return (1, refused);
+    }
     if let Err(refused) = write(&resolved, &proposed) {
         return refused;
     }
@@ -924,7 +930,7 @@ pub fn run(rest: &[String]) -> i32 {
     };
     let root = crate::paths_cli::repo_root().unwrap_or_else(|| PathBuf::from("."));
     let (code, result) = if finalize_it {
-        finalize(&doc, no_emit)
+        finalize(&doc, no_emit, &root)
     } else {
         draft(&doc, &mode, rewrite, no_emit, &root)
     };
@@ -943,13 +949,65 @@ pub fn run(rest: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::claims::test_env_lock;
 
     const DESIGN: &str = "---\nstatus: design\ncreated: 2026-08-01\nnode: x-aaaa\n---\n\n# T\n\n## User Stories\n\n- **US1:** first story\n- US2: second story\n| US3 | table story |\n\n## Open Questions\n\nnone\n\n## References\n\nr\n";
 
-    #[test]
-    fn draft_appends_after_open_questions_and_keeps_design() {
+    fn location_fixture() -> (tempfile::TempDir, Vec<(&'static str, String)>) {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("p.md");
+        std::fs::create_dir_all(dir.path().join("plans")).unwrap();
+        std::fs::write(dir.path().join("config.toml"), "plans_dir = \"plans\"\n").unwrap();
+        let pins = vec![
+            (
+                "FNO_CONFIG",
+                dir.path().join("config.toml").display().to_string(),
+            ),
+            (
+                "FNO_STATE_DIR",
+                dir.path().join("state").display().to_string(),
+            ),
+            (
+                "FNO_SPACES_DIR",
+                dir.path().join("spaces").display().to_string(),
+            ),
+        ];
+        (dir, pins)
+    }
+
+    struct EnvGuard {
+        saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    }
+
+    impl EnvGuard {
+        fn new(pins: &[(&'static str, String)]) -> Self {
+            let saved = pins
+                .iter()
+                .map(|(k, _)| (*k, std::env::var_os(k)))
+                .collect();
+            for (k, v) in pins {
+                std::env::set_var(k, v);
+            }
+            EnvGuard { saved }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (k, v) in &self.saved {
+                match v {
+                    Some(old) => std::env::set_var(k, old),
+                    None => std::env::remove_var(k),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn draft_appends_inside_the_plans_dir_and_a_loose_doc_refuses() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let (dir, pins) = location_fixture();
+        let _env = EnvGuard::new(&pins);
+        let path = dir.path().join("plans").join("p.md");
         std::fs::write(&path, DESIGN).unwrap();
         let (code, out) = draft(
             path.to_str().unwrap(),
@@ -978,12 +1036,39 @@ mod tests {
             draft(path.to_str().unwrap(), "auto", false, true, dir.path()).0,
             1
         );
+
+        // The location contract at the door: a doc outside the plans dir
+        // refuses with the fix named, and nothing is written. no_emit=false,
+        // because the preview path returns before the write-path guard.
+        let loose = dir.path().join("loose.md");
+        std::fs::write(&loose, DESIGN).unwrap();
+        let (code, msg) = draft(
+            loose.to_str().unwrap(),
+            "greenfield",
+            false,
+            false,
+            dir.path(),
+        );
+        assert_eq!(code, 1);
+        assert!(
+            msg.contains("refusing plan write outside the plans dir"),
+            "{msg}"
+        );
+        assert!(msg.contains("fno do plan path"), "{msg}");
+        assert!(
+            !std::fs::read_to_string(&loose)
+                .unwrap()
+                .contains("## Execution Strategy"),
+            "nothing was written to the refused target"
+        );
     }
 
     #[test]
     fn claim_derived_in_progress_drafts_but_a_drafted_one_refuses() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("p.md");
+        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let (dir, pins) = location_fixture();
+        let _env = EnvGuard::new(&pins);
+        let path = dir.path().join("plans").join("p.md");
         std::fs::write(
             &path,
             DESIGN.replace("status: design", "status: in_progress"),

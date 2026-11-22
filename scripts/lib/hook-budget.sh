@@ -205,7 +205,7 @@ hook_run_optional() {
 # a copy served past two thirds of its life arms a detached refresher for
 # the NEXT boundary; the synchronous run also writes the cache. Atomic mv,
 # so two racing refreshers cannot tear a read. Cache files live under
-# ${FNO_HOOK_CACHE_DIR:-$HOME/.fno/cache/hook-budget}; KEY is per session or
+# FNO_HOOK_CACHE_DIR, else <cache home>/hook-budget; KEY is per session or
 # per transcript, supplied by the caller. An empty FINGERPRINT means the
 # input has no observable state and age alone decides freshness.
 hook_cache_serve() {
@@ -220,7 +220,9 @@ hook_cache_serve() {
     # path, so no `fno config get` fork (D1839). Mirrors class-home.sh.
     local dir="${FNO_HOOK_CACHE_DIR:-}"
     if [[ -z "$dir" ]]; then
-        if [[ "$(uname -s)" == "Darwin" ]]; then
+        if [[ -n "${FNO_CACHE_HOME:-}" ]]; then
+            dir="${FNO_CACHE_HOME/#\~/$HOME}/hook-budget"
+        elif [[ "$(uname -s)" == "Darwin" ]]; then
             dir="$HOME/Library/Caches/fno/hook-budget"
         else
             dir="${XDG_CACHE_HOME:-$HOME/.cache}/fno/hook-budget"

@@ -433,9 +433,11 @@ fn default_true() -> bool {
 /// oldest held submission; floor stays 58.
 /// v131: `ClientMsg::PaneInset`, the cells a client keeps empty inside every
 /// pane; floor stays 58.
-/// v132: `AgentRow` adds the four token classes behind `session_tokens`
+/// v132: `ClientMsg::DraftHint`, the desktop app's live chat-draft report;
+/// floor stays 58.
+/// v133: `AgentRow` adds the four token classes behind `session_tokens`
 /// (serde default); floor stays 58.
-pub const PROTO_VERSION: u32 = 132;
+pub const PROTO_VERSION: u32 = 133;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -2986,6 +2988,7 @@ mod tests {
             ClientMsg::Input(b"echo hello\r".to_vec()),
             ClientMsg::Resize { rows: 50, cols: 90 },
             ClientMsg::PaneInset { rows: 1, cols: 1 },
+            ClientMsg::DraftHint { pane: 7 },
             ClientMsg::Detach,
             ClientMsg::Observe(ObserverHello {
                 name: "teacher".into(),
@@ -3483,7 +3486,7 @@ mod tests {
         // re-assert the same literal, which caught nothing a single pin does
         // not and turned every bump into a three-file edit; they now assert
         // only their own wire shapes.
-        assert_eq!(PROTO_VERSION, 132);
+        assert_eq!(PROTO_VERSION, 133);
         // v64 added `PanePlacement.portal` and `AgentRow.portal`.
         // Both are additive `#[serde(default)]` fields, so the floor does NOT
         // move with them - a v63 client still attaches. Pinned beside the

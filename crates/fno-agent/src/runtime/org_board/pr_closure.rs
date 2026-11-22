@@ -162,8 +162,8 @@ pub(crate) fn retarget_with(
     resolve: &dyn Fn(&str) -> Option<String>,
 ) -> Option<Retarget> {
     let id_re = regex::Regex::new(&format!("^{NODE_ID_BODY}$")).expect("static regex");
-    let approval_re =
-        regex::Regex::new(r"^((fmail|msg)-[0-9a-f]{6,}|d-[0-9a-f]{8})$").expect("static regex");
+    let approval_re = regex::Regex::new(r"^((fmail|msg)-[0-9a-f]{6,}|d-[0-9a-f]{8}|D[0-9]{1,7})$")
+        .expect("static regex");
     let mut last: Option<Retarget> = None;
     for line in body.lines() {
         let Some(rest) = retarget_line_rest(line) else {

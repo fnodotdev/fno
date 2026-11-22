@@ -196,7 +196,10 @@ pub(crate) use runtime::{
     opencode_permission, prompt_wait, reap_evidence, resume_reroute, resume_route, retired_lead,
     served_liveness, session_receipt, shot_save, thread_dialog, thread_permission,
 };
-use runtime::{agent_lock, boot_revival, codex_thread_entry, repo_identity, state_layout_merge};
+use runtime::{
+    agent_lock, boot_revival, codex_thread_entry, repo_identity, state_layout_class,
+    state_layout_home, state_layout_merge, state_layout_move, state_layout_undo,
+};
 pub use spawn::reader_route;
 pub use spawn::{
     accounts, agents_config, agy_ask, agy_launch, ask_project, capability_leaves, capacity,
@@ -973,7 +976,9 @@ mod tests {
         // restores in tests (claims, operator_turns); the bin test target
         // cannot see a cfg(test) lib fn (client_tests); and the plan writer's
         // production mode-preserve on its atomic plan-file replace
-        // (plan_doc/codec).
+        // (plan_doc/codec); the state-root mover's staging dir, private
+        // from its create (state_layout_move); and that copy's test,
+        // which only chmods data files (state_layout).
         const ALLOWED: &[(&str, usize)] = &[
             ("gate/install_verify.rs", 1),
             ("paths.rs", 1),
@@ -986,6 +991,8 @@ mod tests {
             ("runtime/mcp/sidecar.rs", 1),
             ("runtime/daemon/sandbox_host.rs", 1),
             ("runtime/hook/save_session.rs", 1),
+            ("runtime/state_layout_move.rs", 1),
+            ("runtime/state_layout.rs", 1),
         ];
         let allowed_counts: std::collections::HashMap<&str, usize> =
             ALLOWED.iter().copied().collect();

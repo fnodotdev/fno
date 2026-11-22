@@ -620,7 +620,7 @@ fn which(name: &str) -> Option<String> {
 fn render_plist(fno_binary: &str, install_path: &str, hour: i64, workdir: Option<&str>) -> String {
     let home = home();
     let home_s = home.display().to_string();
-    let logs = home.join(".fno").join("logs");
+    let logs = crate::state_layout::logs_dir(&home.join(".fno"));
     let esc = refresh::xml_escape;
     PLIST
         .replace("{label}", &esc(&label()))
@@ -677,7 +677,10 @@ fn install_agent(
         .map(String::from)
         .unwrap_or_else(|| refresh::default_agent_path(&fno_binary));
     let state = settings::state_dir().unwrap_or_else(|| home().join(".fno"));
-    let _ = std::fs::create_dir_all(state.join("logs"));
+    let logs = crate::state_layout::logs_dir(&home().join(".fno"));
+    if let Err(e) = std::fs::create_dir_all(&logs) {
+        eprintln!("groom install: could not create {} ({e})", logs.display());
+    }
     // Captured at install time: the scheduled run has no cwd of its own. A
     // refresh passes the installed value so it is not re-resolved against
     // whatever directory the update ran from.

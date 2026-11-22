@@ -133,12 +133,15 @@ pub struct Outstanding {
     /// Open escalation notes by slug: the rows `fno-agent needs` counts
     /// beside the questions, so both boards report one open count.
     pub escalations: Vec<String>,
+    /// Asks waiting in the outbox for a number, by title. No id answers them.
+    pub queued: Vec<String>,
 }
 
 impl Outstanding {
     pub fn empty(&self) -> bool {
         self.carveout_total == 0
             && self.questions.is_empty()
+            && self.queued.is_empty()
             && self.captures.is_empty()
             && self.lane.is_empty()
             && self.verdicts.is_empty()
@@ -207,6 +210,9 @@ impl Outstanding {
                 "open_total".into(),
                 json!(self.questions.len() + self.escalations.len()),
             );
+        }
+        if let Some(map) = out.as_object_mut().filter(|_| !self.queued.is_empty()) {
+            map.insert("queued".into(), json!(self.queued));
         }
         out
     }
@@ -800,6 +806,10 @@ pub fn collect(src: &Sources, verdicts: Result<Vec<Value>, String>) -> Result<Ou
         verdicts: verdict_rows,
         verdicts_error,
         escalations: escalation_slugs(&src.root, &questions),
+        queued: crate::numbers::mint::queued_questions(&crate::backlog::database_path(&src.graph))
+            .into_iter()
+            .map(|waiting| waiting.title)
+            .collect(),
         questions,
     })
 }
@@ -959,6 +969,18 @@ pub fn render(o: &Outstanding, ctx: &RenderCtx) -> String {
 
     if !o.questions.is_empty() {
         render_questions(o, ctx, &mut lines);
+    }
+
+    if !o.queued.is_empty() {
+        lines.push(format!(
+            "{} {}.",
+            plural(o.queued.len() as u64, "question"),
+            crate::numbers::mint::QUEUED
+        ));
+        for title in o.queued.iter().take(RENDER_CAP) {
+            lines.push(format!("  {}", one_line(title, 100).0));
+        }
+        lines.push(String::new());
     }
 
     if !o.verdicts.is_empty() {

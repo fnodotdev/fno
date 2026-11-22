@@ -101,7 +101,9 @@ fi
 if [[ "$ERROR" == "authentication_failed" && -n "$SESSION_ID" ]]; then
     CACHE_DIR="${FNO_HOOK_CACHE_DIR:-}"
     if [[ -z "$CACHE_DIR" ]]; then
-        if [[ "$(uname -s)" == "Darwin" ]]; then
+        if [[ -n "${FNO_CACHE_HOME:-}" ]]; then
+            CACHE_DIR="${FNO_CACHE_HOME/#\~/$HOME}/hook-budget"
+        elif [[ "$(uname -s)" == "Darwin" ]]; then
             CACHE_DIR="$HOME/Library/Caches/fno/hook-budget"
         else
             CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/fno/hook-budget"

@@ -95,6 +95,12 @@ id_hex_width = 8       # hex chars in a minted id, 4-8. `fno config setup` write
 
 Unknown keys are ignored for forward compatibility, so a typo'd section or leaf sets nothing. `fno config doctor` names every unknown key it finds and the file that holds it. Glob characters (`*`, `?`, `[`) and paths longer than 4096 bytes are rejected at load time.
 
+## Question and decision numbers
+
+The graph database also holds `fno_numbers` and `fno_number_outbox`. A question or a decision takes its number as its id from `fno_numbers` on the store that counts. With `store.remote_url` set, that store is the primary. With no primary, it is this machine's graph.db.
+
+`fno_number_outbox` holds what waited for an unreachable primary. The daemon beat empties it. A machine with no primary counts alone, so join the primary before you share numbers between machines.
+
 ## Environment variables
 
 | Variable | Effect |
@@ -108,9 +114,42 @@ Unknown keys are ignored for forward compatibility, so a typo'd section or leaf 
 | `FNO_REPO_ROOT` | Overrides `git rev-parse --show-toplevel` for tests and CI environments where git is unavailable. Scopes **project/config resolution only**, not events-schema resolution (the schema is compiled into `fno-agent`; see [architecture/schema-config-resolution.md](architecture/schema-config-resolution.md)). Do NOT export it from inside another repo: pinning it to the footnote checkout silently repoints `fno config get` at the wrong project. |
 | `FNO_SKIP_MIGRATION` | Set to `1` to skip the automatic startup migration check. Useful in CI. |
 
+## Cache and logs homes
+
+Only the default root (`~/.fno`) uses the machine's cache home and state home. Another state root keeps `<root>/cache` and `<root>/logs`. This keeps a test root or a project root away from your shared homes.
+
+A writer always writes the home. A reader also reads the old path inside the root until the mover drains it. The mover waits until a cache entry is quiet for 6 hours. It leaves a link at `~/.fno/logs`, so an older launchd plist still writes to the right folder.
+
+## Move and reverse
+
+The daemon runs the mover at start. You can run it yourself.
+
+| Command | Effect |
+|---------|--------|
+| `fno-agent state migrate` | Dry run. It prints the moves and writes nothing. |
+| `fno-agent state migrate --apply` | Move what is ready. |
+| `fno-agent state migrate --reverse <stamp>` | Dry run of a reverse. |
+| `fno-agent state migrate --reverse <stamp> --apply` | Put back the moves of that stamp and hold those names. |
+| `fno-agent state migrate <name> --apply` | Clear the hold on a name, then run a full pass. |
+
+Each run that changes a file gets a stamp under `~/.fno/backups/state-root-migration/`. Its `manifest.json` lists every step. A reverse reads that list from the last step to the first. It refuses to overwrite a file, and it names both paths. It also refuses a published SQLite store, because you must roll a store back by hand.
+
+A reverse writes `~/.fno/state/layout-hold.json` before its first move. Each later pass prints `held` for those names and leaves them in place.
+
+On the default root, two settings stop the mover before any move, a reverse included. One is a template in `paths.cache_dir` or `paths.state_dir_local` with no env pin for that class. The other is an `FNO_CONFIG` that names a YAML file. The receipt names the key. Write the path out, or use a TOML file.
+
+To go back to an older fno, do these steps in this order:
+
+1. Stop the daemon.
+2. List the stamps that hold a `manifest.json`. Do this before the first reverse.
+3. Reverse only the stamps on that list with the new binary, newest first. A reverse writes a stamp of its own. Do not reverse that one.
+4. Install the older binary.
+
+The older binary cannot read a manifest, so it cannot do step 3. It also ignores holds. Its own mover can move those entries again.
+
 ## Template variables
 
-Path values in `state_dir`, `plans_dir`, and any `paths.*` field may contain template variables:
+Path values in `state_dir`, `plans_dir`, and the `paths.*` fields can contain template variables. The exceptions are `paths.cache_dir` and `paths.state_dir_local`, where the [mover](#move-and-reverse) refuses a template:
 
 | Variable | Expands to | Requires |
 |----------|-----------|---------|

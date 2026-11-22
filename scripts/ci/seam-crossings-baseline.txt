@@ -168,4 +168,6 @@ resolver	crates/fno/src/install/doctor_update.rs	fn component_verdict(
 resolver	crates/fno/src/mux/mux_cli/pane_prepare.rs	pub(super) fn prepare_pane_bytes(
 resolver	crates/fno/src/mux/server.rs	pub(crate) fn fno_bin() -> PathBuf {
 resolver	crates/fno/src/serve/mail_door.rs	fn fno_bin() -> PathBuf {
+resolver	crates/fno/src/setup/state_layout.rs	fn default_cache_home(user: &Path) -> PathBuf {
+resolver	crates/fno/src/setup/state_layout.rs	fn default_state_home(user: &Path) -> PathBuf {
 resolver	crates/fno/src/ui/client_tests/theme_import_tests.rs	async fn settings_modal_body_paints_no_inverse_under_a_named_theme() {

@@ -81,6 +81,7 @@ fn the_json_contract_keeps_every_key_in_order_and_names_each_root() {
         }],
         verdicts_error: None,
         escalations: Vec::new(),
+        queued: Vec::new(),
     };
     let expected = concat!(
         r#"{"roots":{"carveouts":{"scope":"project","root":"/r"},"questions":{"scope":"machine","store":"/q"},"#,

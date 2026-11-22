@@ -24,7 +24,8 @@ pub(crate) fn rows_root(cwd: &Path) -> Option<PathBuf> {
         .filter(|v| !v.is_empty());
     match env {
         Some(dir) => Some(PathBuf::from(dir)),
-        None => crate::agents_config::state_dir(cwd).map(|root| root.join("cache/gh-facts")),
+        None => crate::agents_config::state_dir(cwd)
+            .map(|root| crate::state_layout::home_of(&root, "cache/gh-facts")),
     }
 }
 
@@ -52,7 +53,7 @@ pub(crate) fn read_row(
     let Some(path) = row_path(root, kind, slug, pr) else {
         return miss;
     };
-    let Some(row) = fs::read_to_string(path)
+    let Some(row) = fs::read_to_string(crate::state_layout_home::cache_read(&path))
         .ok()
         .and_then(|text| serde_json::from_str::<Value>(&text).ok())
         .filter(|row| row.is_object())

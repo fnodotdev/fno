@@ -194,15 +194,15 @@ pub(crate) fn state_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".fno"))
 }
 
-fn cache_path(state: &Path) -> PathBuf {
-    state.join("cache").join("models-dev.json")
+fn book_path(state: &Path) -> PathBuf {
+    crate::state_layout_home::read_home(state, "cache/models-dev.json")
 }
 
 /// Whether the models.dev rate book is on disk: the coverage hint names it
 /// missing rather than reading every model as unpriced-by-mystery. One
 /// stat, no fetch.
 pub(crate) fn book_present() -> bool {
-    std::fs::metadata(cache_path(&state_dir())).is_ok()
+    std::fs::metadata(book_path(&state_dir())).is_ok()
 }
 
 /// The parsed book for `state`, re-read only when the cache file moves.
@@ -210,7 +210,7 @@ pub(crate) fn book_present() -> bool {
 /// the catalog once.
 pub(crate) fn price_book(state: &Path) -> Option<Arc<PriceBook>> {
     static BOOK: OnceLock<Mutex<Option<(PathBuf, SystemTime, Arc<PriceBook>)>>> = OnceLock::new();
-    let path = cache_path(state);
+    let path = book_path(state);
     let mtime = std::fs::metadata(&path).ok()?.modified().ok()?;
     let cell = BOOK.get_or_init(|| Mutex::new(None));
     let mut seen = cell.lock().ok()?;

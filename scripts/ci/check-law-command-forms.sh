@@ -32,7 +32,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     [[ -n "$form" && -n "$laws" && -n "$targets" && -z "$extra" ]] ||
         fail "$REGISTRY:$line_no: malformed row, want <form>|<law ids>|<paths or exempt reason>"
     for law in $laws; do
-        [[ "$law" =~ ^d-[0-9a-f]{8}$ ]] ||
+        [[ "$law" =~ ^(d-[0-9a-f]{8}|D[0-9]{1,7})$ ]] ||
             fail "$REGISTRY:$line_no: malformed law id '$law'"
     done
     if [[ "$targets" == exempt:* ]]; then

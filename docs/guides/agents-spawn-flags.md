@@ -30,6 +30,10 @@ Every placement flag needs `--as pane`. Without it the spawn refuses and names t
 
 `--agent` names an agent definition the launched session runs under. claude takes `fno:<name>` on every lane and also resolves a bare name. opencode takes it on the pane lane only. An unknown name exits 1 before launch. The launched main thread gets the agent body but not its `skills:` list, so footnote's agents carry no `skills:` list. An agent that needs a skill loads it from its body with the Skill tool. codex, agy and gemini refuse the flag, and the codex refusal names the `.codex/agents/<role>.toml` role and the `spawn_agent` `agent_type` that replaces it.
 
+## Harness args
+
+Everything after the prompt is harness argv, never parsed. A spawn-owned flag there refuses and prints the corrected line. Before the prompt, an unowned flag passes only in the `--flag=value` form. The space form refuses and names the legal positions. The `+flag` spelling is the short form. `+flag` and `+flag=value` fold to their `--` spelling before the boundary reads the line. `fno agent spawn --name w claude fix the bug +model=opus` rides `--model=opus` as harness argv with no `--` typing. A token that is not flag-shaped never folds: `+1`, a lone `+`, and a quoted phrase stay prompt text. The payload after `--` or `--argv` stays byte-exact, with nothing folding there. When the fold is not enough, `--harness-arg <value>` pushes a token verbatim.
+
 ## Credentials
 
 `--account` pins ONE worker to a registered claude account. The daemon-wide active `~/.claude` slot stays untouched. An account with its own config_dir sets `CLAUDE_CONFIG_DIR`, which bills right. A managed account that IS the active occupant rides the shared slot. Any other managed account is refused, with a pointer to config-dir registration: the setup-token env lane bills the wrong account. claude only, fail-closed.

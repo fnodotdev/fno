@@ -31,7 +31,7 @@ SKILL_DIR="$(cat ~/.fno/install/plugin-root 2>/dev/null)/skills/visual-log-reade
 bash "$SKILL_DIR/scripts/ensure-reader.sh" check
 ```
 
-Exit 0 means present and fresh (last activity inside 20 minutes). Exit 1 means absent or stale, and the output names the repair: the spawn line for an absent reader, `fno agent session resume visual-log-reader` for a stale one. `ensure-reader.sh spawn` runs the same check first and fires the spawn only on an absent row. A stale reader resumes, it never respawns. In a source checkout the script lives at `skills/visual-log-reader/scripts/ensure-reader.sh`.
+Exit 0 means present and fresh (last activity inside 20 minutes). Exit 1 means absent, stale, or an unreadable registry, and the output names the repair. The spawn line covers an absent reader. `fno agent session resume visual-log-reader` covers a stale one. The unreadable case prints the jq error and names `fno agent session list`. `ensure-reader.sh spawn` runs the same check first and fires the spawn only on an absent row. A stale reader resumes, it never respawns. In a source checkout the script lives at `skills/visual-log-reader/scripts/ensure-reader.sh`.
 
 ## The beat, every 15 minutes
 
