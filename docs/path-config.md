@@ -130,6 +130,8 @@ Each run that changes a file gets a stamp under `~/.fno/backups/state-root-migra
 
 A reverse writes `~/.fno/state/layout-hold.json` before its first move. Each later pass prints `held` for those names and leaves them in place.
 
+On the default root, two settings stop the mover before any move, a reverse included. One is a template in `paths.cache_dir` or `paths.state_dir_local` with no env pin for that class. The other is an `FNO_CONFIG` that names a YAML file. The receipt names the key. Write the path out, or use a TOML file.
+
 To go back to an older fno, do these steps in this order:
 
 1. Stop the daemon.
@@ -141,7 +143,7 @@ The older binary cannot read a manifest, so it cannot do step 3. It also ignores
 
 ## Template variables
 
-Path values in `state_dir`, `plans_dir`, and any `paths.*` field may contain template variables:
+Path values in `state_dir`, `plans_dir`, and the `paths.*` fields can contain template variables. The exceptions are `paths.cache_dir` and `paths.state_dir_local`, where the [mover](#move-and-reverse) refuses a template:
 
 | Variable | Expands to | Requires |
 |----------|-----------|---------|

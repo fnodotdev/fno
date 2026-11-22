@@ -510,10 +510,7 @@ fn glob_check(field: &str, raw: &str) -> Result<(), String> {
 fn live_lookup(cwd: &Path, keys: &[&str]) -> Option<Result<toml::Value, ()>> {
     if let Some(explicit) = std::env::var_os("FNO_CONFIG").filter(|v| !v.is_empty()) {
         let path = PathBuf::from(&explicit);
-        if matches!(
-            path.extension().and_then(|e| e.to_str()),
-            Some("yaml" | "yml")
-        ) {
+        if is_yaml(&path) {
             let content = std::fs::read_to_string(&path).ok()?;
             let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(&content).ok()?;
             // A legacy settings.yaml wraps every key in a `config:` block;
@@ -543,6 +540,35 @@ fn live_lookup(cwd: &Path, keys: &[&str]) -> Option<Result<toml::Value, ()>> {
         }
     }
     crate::agents_config::config_lookup(cwd, keys).map(Ok)
+}
+
+fn is_yaml(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|e| e.to_str()),
+        Some("yaml" | "yml")
+    )
+}
+
+/// The setting that gives the two crates two answers for a class home: the
+/// front door's copy reads no YAML pin and fills no template. A `${VAR}` is
+/// no template, so variables expand before the look.
+pub(crate) fn unroutable_class_setting(cwd: &Path) -> Option<(&'static str, &'static str)> {
+    if std::env::var_os("FNO_CONFIG").is_some_and(|v| is_yaml(Path::new(&v))) {
+        return Some(("FNO_CONFIG", "names a YAML file, so use a TOML file"));
+    }
+    [
+        ("FNO_CACHE_HOME", "cache_dir", "paths.cache_dir"),
+        ("FNO_STATE_HOME", "state_dir_local", "paths.state_dir_local"),
+    ]
+    .into_iter()
+    .find(|&(env_key, config_key, _)| {
+        std::env::var_os(env_key)
+            .filter(|v| !v.is_empty())
+            .is_none()
+            && cfg_str(cwd, &["paths", config_key])
+                .is_some_and(|raw| has_template(&expandvars(&raw)))
+    })
+    .map(|(_, _, key)| (key, "holds a template, so write the path out"))
 }
 
 pub(crate) fn cfg_str(cwd: &Path, keys: &[&str]) -> Option<String> {
