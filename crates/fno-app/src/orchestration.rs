@@ -591,11 +591,11 @@ mod tests {
         b.record(
             Ok(json!({ "machines": [] })),
             Ok(fno::needs_overlay::QuestionsFold::default()),
-            fno::requests_model::RequestsRead::Rows(Vec::new()),
             &Inputs::default(),
             1,
             &[],
         );
+        b.record_requests(fno::requests_model::RequestsRead::Rows(Vec::new()));
         b
     }
 
@@ -614,11 +614,11 @@ mod tests {
         b.record(
             Ok(json!({ "machines": [] })),
             Ok(fno::needs_overlay::QuestionsFold::default()),
-            fno::requests_model::RequestsRead::Rows(Vec::new()),
             &inputs,
             1,
             &[],
         );
+        b.record_requests(fno::requests_model::RequestsRead::Rows(Vec::new()));
         assert!(!quiet_board(&b));
     }
 
@@ -628,11 +628,11 @@ mod tests {
         b.record(
             Err("org unreachable".into()),
             Ok(fno::needs_overlay::QuestionsFold::default()),
-            fno::requests_model::RequestsRead::Rows(Vec::new()),
             &Inputs::default(),
             1,
             &[],
         );
+        b.record_requests(fno::requests_model::RequestsRead::Rows(Vec::new()));
         assert!(!quiet_board(&b));
     }
 

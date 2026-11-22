@@ -69,7 +69,8 @@ pub async fn read(
         gather,
     );
     let measured_at = chrono::Utc::now().timestamp().max(0) as u64;
-    board.record(fleet, questions, requests, &backlog, measured_at, agents);
+    board.record(fleet, questions, &backlog, measured_at, agents);
+    board.record_requests(requests);
     backlog
 }
 
