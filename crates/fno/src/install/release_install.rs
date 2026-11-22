@@ -592,10 +592,11 @@ fn link_extras(bin: &Path, dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// The receipt-upgrade path's extras link: resolve the PATH dir the way the
-/// fresh-install branch does and link the carried extras there, so an
-/// upgrade over an older install gains fno-app beside its receipt links.
-fn adopt_link_extras(bin: &Path) -> Result<(), String> {
+/// Link the carried extras into the PATH dir (FNO_INSTALL_DIR, else
+/// ~/.local/bin): every upgrade path calls this after its swap so an older
+/// install gains fno-app beside its existing links. No HOME resolves: Ok,
+/// nothing linked.
+pub(crate) fn link_path_extras(bin: &Path) -> Result<(), String> {
     let dir = std::env::var_os("FNO_INSTALL_DIR")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/bin")));
@@ -656,7 +657,7 @@ pub(crate) fn adopt_release(unpacked: &Path) -> i32 {
                 bin.display()
             ),
         }
-    } else if let Err(e) = adopt_link_extras(bin) {
+    } else if let Err(e) = link_path_extras(bin) {
         let _ = std::fs::remove_file(marker_path());
         return failed("link", &e);
     }
