@@ -3349,10 +3349,10 @@ mod tests {
             ),
             Role::MuxThread(os(&["3f9d3c55-1c2b-4e8a-9a3f-7b2c5d6e8f90"]))
         );
-        // view: -h is usage; a selector rides verbatim.
+        // view: a bare -h rides to the family's help line; a selector rides verbatim.
         assert!(matches!(
             decide_role(&os(&["mux", "view", "-h"]), false),
-            Role::MuxUsage(_)
+            Role::TreeHelp(_)
         ));
         assert_eq!(
             decide_role(&os(&["mux", "view", "x919", "--url", "--json"]), false),
