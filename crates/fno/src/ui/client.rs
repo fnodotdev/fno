@@ -420,31 +420,6 @@ fn run_inner(session: &str) -> Result<i32, String> {
     runtime.block_on(attach_handshake::attach_once_more(&path))
 }
 
-/// Spawn a detached server at `path` and wait for its socket to accept: the
-/// desktop app's "start the mux" door. A server already there is not
-/// replaced; the bind is the lock, so a lost race still ends connected.
-pub(crate) fn start_server_at(path: &Path) -> Result<(), String> {
-    proto::ensure_mux_dir().map_err(|e| format!("cannot prepare the mux dir: {e}"))?;
-    if proto::connect_unix_timeout(path, ATTACH_CONNECT_TIMEOUT).is_ok() {
-        return Ok(());
-    }
-    spawn_server(path, false)?;
-    let deadline = Instant::now() + SPAWN_CONNECT_TIMEOUT;
-    loop {
-        match proto::connect_unix_timeout(path, ATTACH_CONNECT_TIMEOUT) {
-            Ok(_) => return Ok(()),
-            Err(e) if Instant::now() >= deadline => {
-                return Err(format!(
-                    "server did not come up at {} ({e}); check {}",
-                    path.display(),
-                    log_path(path).display()
-                ));
-            }
-            Err(_) => std::thread::sleep(Duration::from_millis(100)),
-        }
-    }
-}
-
 /// Connect to a live server, or spawn one and connect. AC3-ERR: a dead
 /// server's stale socket gets a one-line notice and a fresh server - never a
 /// hang on a dead socket (the spawned server's bind unlinks it). Shared with
@@ -8905,7 +8880,7 @@ fn exit_with_notice(notice: String) -> i32 {
 mod compositor;
 
 #[path = "client/server_spawn.rs"]
-mod server_spawn;
+pub(crate) mod server_spawn;
 use self::server_spawn::spawn_server;
 
 use compositor::Compositor;

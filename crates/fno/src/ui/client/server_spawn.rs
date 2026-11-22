@@ -65,6 +65,34 @@ pub(super) fn spawn_server(path: &Path, attaching: bool) -> Result<(), String> {
         .map_err(|e| format!("cannot spawn the mux server: {e}"))
 }
 
+/// Spawn a detached server at `path` and wait for its socket to accept: the
+/// desktop app's "start the mux" door. A server already there is not
+/// replaced; the bind is the lock, so a lost race still ends connected.
+pub(crate) fn start_server_at(path: &Path) -> Result<(), String> {
+    use super::{log_path, ATTACH_CONNECT_TIMEOUT, SPAWN_CONNECT_TIMEOUT};
+    use crate::proto;
+    use std::time::{Duration, Instant};
+    proto::ensure_mux_dir().map_err(|e| format!("cannot prepare the mux dir: {e}"))?;
+    if proto::connect_unix_timeout(path, ATTACH_CONNECT_TIMEOUT).is_ok() {
+        return Ok(());
+    }
+    spawn_server(path, false)?;
+    let deadline = Instant::now() + SPAWN_CONNECT_TIMEOUT;
+    loop {
+        match proto::connect_unix_timeout(path, ATTACH_CONNECT_TIMEOUT) {
+            Ok(_) => return Ok(()),
+            Err(e) if Instant::now() >= deadline => {
+                return Err(format!(
+                    "server did not come up at {} ({e}); check {}",
+                    path.display(),
+                    log_path(path).display()
+                ));
+            }
+            Err(_) => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
+}
+
 /// A Codex companion session is the explicit sandbox marker for an owner-bound
 /// mux server. A caller may pass an outer script's pid; otherwise an attaching
 /// client owns the detached server for the duration of its attach.

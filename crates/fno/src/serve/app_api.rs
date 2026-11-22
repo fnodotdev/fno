@@ -51,7 +51,7 @@ pub mod splash {
 /// accepts, or the reason it did not.
 pub fn start_server(session: &str) -> Result<(), String> {
     let path = crate::proto::socket_path(session)?;
-    crate::client::start_server_at(&path)
+    crate::client::server_spawn::start_server_at(&path)
 }
 
 pub mod digest_overlay {
