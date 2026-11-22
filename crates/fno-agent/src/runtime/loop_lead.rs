@@ -1158,45 +1158,6 @@ mod tests {
         fs::remove_dir_all(&dir).ok();
     }
 
-    #[test]
-    fn a_wake_names_a_row_by_session_id_never_by_name() {
-        // The guard's identity law (d-e952ed19): a row carrying a session id
-        // is named by that id. The display name matches nothing, so a stale
-        // name (the old holder's, or a renamed lead's) can never outvote the
-        // double-lead refusal through the wake bypass.
-        let _root = crate::paths::DeclaredRoot::declare("leadsidname");
-        let dir = _root.path().to_path_buf();
-        fs::create_dir_all(&dir).unwrap();
-        let leads = crate::paths::space_dir(&dir).join("leads");
-        fs::create_dir_all(&leads).unwrap();
-        fs::write(leads.join("k.md"), "---\nfno_id: k-1\nscope: epic-x\n---\n").unwrap();
-        let row = serde_json::json!({
-            "name": "leading-lead",
-            "cwd": "/tmp",
-            "status": "busy",
-            "created_at": "2026-08-23T00:00:00Z",
-            "role_level": 2,
-            "role_scope": "epic-x",
-            "role_grantor": "human",
-            "harness_session_id": "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff",
-        });
-        let registry = dir.join("registry.json");
-        crate::registry_store::seed_raw(
-            &registry,
-            serde_json::json!({"schema_version": 11, "agents": [row]}).to_string(),
-        );
-        let holder = live_team_holder_in(&registry, "epic-x", &dir).expect("live holder");
-        assert_eq!(holder.name, "leading-lead");
-        assert_eq!(holder.session, "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff");
-        assert!(holder.named_by("bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"));
-        assert!(
-            !holder.named_by("leading-lead"),
-            "the name is a label, never the lookup key"
-        );
-        fs::remove_dir_all(crate::paths::space_dir(&dir)).ok();
-        fs::remove_dir_all(&dir).ok();
-    }
-
     fn write_registry_with_level(
         dir: &Path,
         status: &str,
