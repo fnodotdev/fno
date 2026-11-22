@@ -40,7 +40,7 @@ const SCAN_RE: &str = r"(?i)deferred|skipped|won't fix now|wont fix now|follow-u
 fn managed_shortcode_pattern() -> &'static str {
     static PATTERN: OnceLock<String> = OnceLock::new();
     PATTERN
-        .get_or_init(|| managed_shortcode_pattern_for(seq_arm()))
+        .get_or_init(|| managed_shortcode_pattern_for(seq_arm().as_deref()))
         .as_str()
 }
 
