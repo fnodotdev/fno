@@ -61,7 +61,7 @@ fn managed_shortcode_pattern_for(seq: Option<&str>) -> String {
         None => r"[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}".to_string(),
     };
     format!(
-        r#"^- \[([ x\-])\]\s+(fu-[a-z0-9][a-z0-9-]*|cv-[0-9a-f]{{8}}|{node_arm})\s+(?:\u{2014}|-)\s+(.*?)\s*$"#
+        r#"^- \[([ x\-])\]\s+(fu-[a-z0-9][a-z0-9-]*|cv-[0-9a-f]{{8}}|{node_arm})\s+(?:\u{{2014}}|-)\s+(.*?)\s*$"#
     )
 }
 const CHECKBOX_LINE_RE: &str = r#"^- \[([ x\-])\]\s+(.*?)\s*$"#;
