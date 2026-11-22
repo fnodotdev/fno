@@ -209,21 +209,16 @@ fn repair_docs_twin_run(args: &Args) -> i32 {
         eprintln!("docs-twin repair: the graph write failed: {err}");
         return 5;
     }
-    match outcome.into_inner().expect("the mutation always sets it") {
-        DocsTwinRepair {
-            action: "repaired",
-            detail,
-        } => {
-            eprintln!("docs-twin repair: {}", detail.unwrap_or_default());
-            0
-        }
-        DocsTwinRepair {
-            action: "refused",
-            detail,
-        } => {
-            eprintln!("docs-twin repair REFUSED: {}", detail.unwrap_or_default());
-            4
-        }
+    let result = outcome.into_inner().expect("the mutation always sets it");
+    if result.action == "repaired" {
+        eprintln!("docs-twin repair: {}", result.detail.unwrap_or_default());
+        0
+    } else {
+        eprintln!(
+            "docs-twin repair REFUSED: {}",
+            result.detail.unwrap_or_default()
+        );
+        4
     }
 }
 
@@ -1158,13 +1153,29 @@ fn partition_and_probe(
                 None
             };
             match super::merge_state::query_pr_merge_state(pr, repo.as_deref(), cwd, true) {
-                Err(e) => owed_failures.push(json!({
-                    "successor": successor_id,
-                    "pr_number": pr.to_string(),
-                    "error": e.message,
-                    "kind": e.kind,
-                    "remedy": e.remedy_for(pr, repo.as_deref()),
-                })),
+                Err(e) => {
+                    // The incident's hint: remedy_for's not_found arm tells
+                    // the reader to repair pr_url by hand, which is how a
+                    // docs twin once won the primary slot. When the stored
+                    // primary IS the twin, the remedy names the sanctioned
+                    // repair instead of the update door.
+                    let remedy = if super::merge_evidence::primary_is_docs_twin(successor) {
+                        format!(
+                            "the stored primary is the docs twin; run `fno \
+                             backlog reconcile --node {successor_id} \
+                             --repair-docs-twin` to demote it"
+                        )
+                    } else {
+                        e.remedy_for(pr, repo.as_deref())
+                    };
+                    owed_failures.push(json!({
+                        "successor": successor_id,
+                        "pr_number": pr.to_string(),
+                        "error": e.message,
+                        "kind": e.kind,
+                        "remedy": remedy,
+                    }))
+                }
                 Ok(state) if state.state == "MERGED" => owed_evidence.push((
                     successor_id,
                     json!({
