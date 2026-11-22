@@ -954,12 +954,12 @@ pub(crate) fn claim_names_current_session(holder: &str, rec: &crate::claims::Cla
             return true;
         }
         // The resolver can name a sibling session's transcript from the
-        // canonical checkout, so the harness-stamped id gets its own join.
-        // The env id is the one marker a child inherits from its spawner,
-        // and a fresh window stores no minter metadata, so the recorded
-        // session counts as the beneficiary stamp only when the named
-        // worker's registry row carries the same id.
-        if handover_beneficiary_session_matches(&entries, worker, rec, env_sid.as_deref()) {
+        // canonical checkout, and a fresh window stores no minter metadata,
+        // so the harness-stamped id joins the launch record the id names:
+        // the launcher writes it before the child exists, and only the
+        // child itself claims it, so a spawner's own id never answers
+        // there for this worker's name.
+        if handover_launch_record_names_session(&home.root(), worker, rec, env_sid.as_deref()) {
             return true;
         }
         // A launch window that outlived its launcher: the pid probe proves
@@ -1003,17 +1003,15 @@ fn handover_session_id_matches(rec: &crate::claims::ClaimRecord, own_sid: Option
     crate::claims::same_session_id(recorded, own)
 }
 
-/// The env-stamped id against a window whose recorded session the named
-/// worker's registry row vouches for. `CLAUDE_CODE_SESSION_ID` is
-/// inheritable (a child carries its spawner's copy) and a fresh window
-/// stores no minter metadata, so `session_id` alone cannot prove who the
-/// window names. The daemon writes the worker's row from the pinned child
-/// id (keeper_spawn.rs `harness_session_id`), so the recorded session
-/// counts as the beneficiary stamp only when a row answering to the
-/// worker carries the same id: a window still holding its minter's
-/// session fails that join, and an inherited minter id with it.
-fn handover_beneficiary_session_matches(
-    entries: &[RegistryEntry],
+/// The env-stamped id against the launch record the id names. The env id
+/// is inheritable (a child carries its spawner's copy) and a fresh window
+/// stores no minter metadata, so the window's recorded session counts as
+/// the beneficiary stamp only when the launch record claims the same id
+/// for a child answering to the worker's name: the launcher writes the
+/// record before the child exists, and the child session claims it, so a
+/// spawner's own id reads `launcher_session` there, never `child_session`.
+fn handover_launch_record_names_session(
+    root: &Path,
     worker: &str,
     rec: &crate::claims::ClaimRecord,
     env_sid: Option<&str>,
@@ -1027,8 +1025,15 @@ fn handover_beneficiary_session_matches(
     let (Some(recorded), Some(own)) = (recorded, own) else {
         return false;
     };
-    crate::claims::same_session_id(recorded, own)
-        && handover_row_is_ours(entries, worker, Some(recorded))
+    if !crate::claims::same_session_id(recorded, own) {
+        return false;
+    }
+    crate::spawn::launch_record::claimed_edge(root, own).is_some_and(|r| {
+        r.child_session
+            .as_deref()
+            .is_some_and(|c| crate::claims::same_session_id(c, own))
+            && r.launch.name.as_deref() == Some(worker)
+    })
 }
 
 /// True when the registry rows carry a row answering to `worker` whose session
@@ -2789,65 +2794,83 @@ mod adopt_rung_tests {
         std::env::remove_var("CLAUDE_CODE_SESSION_ID");
     }
 
+    fn seed_claimed_record(root: &Path, child: &str, worker: &str) {
+        let record = crate::spawn::launch_record::Record {
+            launch: crate::spawn::launch_record::Launch {
+                harness: "claude".into(),
+                name: Some(worker.into()),
+                node: None,
+                slot: None,
+                provider: None,
+                resume: None,
+                cwd: "/tmp/seed".into(),
+            },
+            node_basis: None,
+            launcher_session: "lead-lead".into(),
+            launcher_harness: None,
+            launcher_cwd: None,
+            launched_at_ms: 0,
+            command: String::new(),
+            launch_short_id: None,
+            child_session: Some(child.into()),
+            claimed_at_ms: Some(0),
+        };
+        let dir = root.join("launches").join("claimed");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(format!("{child}.json")),
+            serde_json::to_string(&record).unwrap(),
+        )
+        .unwrap();
+    }
+
     #[test]
-    fn the_env_id_join_adopts_only_when_the_row_vouches() {
+    fn the_env_id_join_names_a_claimed_launch_record() {
         let minter = "f11a2b3c-aaaa-bbbb-cccc-000000000001";
         let beneficiary = "f11a2b3c-aaaa-bbbb-cccc-000000000002";
         let worker = "t-no-such-worker";
-        let worker_row = RegistryEntry {
-            name: worker.into(),
-            harness_session_id: Some(beneficiary.into()),
-            ..Default::default()
-        };
-        let minter_row = RegistryEntry {
-            name: "lead-m".into(),
-            harness_session_id: Some(minter.into()),
-            ..Default::default()
-        };
-        // The real mint path pins the child id: session_id is the
-        // beneficiary and no metadata is stored. The vouching row adopts.
+        let home = tempfile::tempdir().unwrap();
+        seed_claimed_record(home.path(), beneficiary, worker);
         let mut minted = record("spawn-handover:t-no-such-worker");
         minted.session_id = Some(beneficiary.into());
-        assert!(handover_beneficiary_session_matches(
-            &[worker_row.clone()],
+        // The window's recorded session equals the env id and the record
+        // the id names answers the worker: adopt.
+        assert!(handover_launch_record_names_session(
+            home.path(),
             worker,
             &minted,
             Some(beneficiary)
         ));
-        // An inherited minter id never matches the recorded beneficiary.
-        assert!(!handover_beneficiary_session_matches(
-            &[worker_row.clone()],
+        // An inherited minter id names no record at all.
+        assert!(!handover_launch_record_names_session(
+            home.path(),
             worker,
             &minted,
             Some(minter)
         ));
-        // A window still holding its minter's session fails the row vouch:
-        // no row answering to the worker carries the minter's id, so an
-        // inherited minter id cannot adopt it.
+        // The env id must equal the window's recorded session.
         let mut ambient = record("spawn-handover:t-no-such-worker");
         ambient.session_id = Some(minter.into());
-        assert!(!handover_beneficiary_session_matches(
-            &[worker_row.clone(), minter_row],
+        assert!(!handover_launch_record_names_session(
+            home.path(),
+            worker,
+            &ambient,
+            Some(beneficiary)
+        ));
+        // A record naming a DIFFERENT worker refuses: the spawner's own
+        // historical record never answers for this worker's name.
+        seed_claimed_record(home.path(), minter, "lead-m");
+        assert!(!handover_launch_record_names_session(
+            home.path(),
             worker,
             &ambient,
             Some(minter)
         ));
-        // Without the vouching row there is no adopt at all.
-        assert!(!handover_beneficiary_session_matches(
-            &[],
-            worker,
-            &minted,
-            Some(beneficiary)
-        ));
-        // The label arms of the row join answer for a store adopt.
-        let adopted_row = RegistryEntry {
-            name: "43763bf2".into(),
-            harness_title: Some(worker.into()),
-            harness_session_id: Some(beneficiary.into()),
-            ..Default::default()
-        };
-        assert!(handover_beneficiary_session_matches(
-            &[adopted_row],
+        // A record whose child_session disagrees with the id refuses.
+        let home2 = tempfile::tempdir().unwrap();
+        seed_claimed_record(home2.path(), minter, worker);
+        assert!(!handover_launch_record_names_session(
+            home2.path(),
             worker,
             &minted,
             Some(beneficiary)
@@ -2867,7 +2890,8 @@ mod adopt_rung_tests {
         let minter = "a19c2d3e-aaaa-bbbb-cccc-000000000001";
         let beneficiary = "a19c2d3e-aaaa-bbbb-cccc-000000000002";
         // The real mint path pins the child id into session_id and stores
-        // no metadata. The child inherits the spawner's env id.
+        // no metadata. The child inherits the spawner's env id, which
+        // names no launch record for this worker.
         let mut rec = record("spawn-handover:t-no-such-worker");
         rec.pid_unavailable = true;
         rec.session_id = Some(beneficiary.into());
@@ -2877,27 +2901,37 @@ mod adopt_rung_tests {
     }
 
     #[test]
-    fn the_named_worker_adopts_on_that_fresh_mint_record() {
+    fn the_no_row_worker_adopts_through_its_launch_record() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         for var in [
             "FNO_NODE_CLAIM_HOLDER",
             "FNO_WORKER_NAME",
             "TARGET_SESSION_ID",
+            "FNO_AGENT_HOME",
         ] {
             std::env::remove_var(var);
         }
         let beneficiary = "b28d3e4f-aaaa-bbbb-cccc-000000000002";
+        let sibling = "b28d3e4f-aaaa-bbbb-cccc-000000000003";
         let worker = "t-no-such-worker";
+        // The refused fleet state: no registry row for the worker (the
+        // spawn-watch lane writes none), the window holds the pinned id,
+        // and own resolution mis-names a sibling. The env id and its
+        // launch record are the only proof left.
+        let home = tempfile::tempdir().unwrap();
+        std::env::set_var("FNO_AGENT_HOME", home.path());
+        seed_claimed_record(home.path(), beneficiary, worker);
         let mut rec = record("spawn-handover:t-no-such-worker");
         rec.pid_unavailable = true;
         rec.session_id = Some(beneficiary.into());
-        // The real worker's env carries its dispatch name, so the adopt
-        // holds whichever way own resolution reads the bare marker.
-        std::env::set_var("FNO_WORKER_NAME", worker);
+        // Two disagreeing family markers resolve to nothing, so the
+        // own-id rung cannot adopt and the record join is the survivor.
         std::env::set_var("CLAUDE_CODE_SESSION_ID", beneficiary);
+        std::env::set_var("CODEX_THREAD_ID", sibling);
         assert!(claim_names_current_session(&rec.holder, &rec));
-        std::env::remove_var("FNO_WORKER_NAME");
         std::env::remove_var("CLAUDE_CODE_SESSION_ID");
+        std::env::remove_var("CODEX_THREAD_ID");
+        std::env::remove_var("FNO_AGENT_HOME");
     }
 
     #[test]
