@@ -490,20 +490,15 @@ mod tests {
         assert!(text.contains("fno mux pane send <pane> --raw --submit"));
         assert!(text.contains("fno agent attach t-worker"));
         assert!(text.contains("fno agent peek t-worker --grep fmail-1"));
-    }
-
-    /// The failed-live-leg arm is the anti-held-line: FAILED with the
-    /// reason, the withdraw command, and the resend door, never a
-    /// verify-later hint over a failure.
-    #[test]
-    fn failed_live_leg_names_the_reason_the_withdraw_and_the_resend() {
-        let text = failed_live_leg("fmail-2", "t-worker", Some("no-pane-ref"));
-        assert!(text.contains("FAILED on the live leg (no-pane-ref)"));
-        assert!(text.contains("fno agent mail withdraw fmail-2"));
-        assert!(text.contains("fno agent mail send t-worker '<body>'"));
-        assert!(text.contains("fno agent peek t-worker"));
-        let bare = failed_live_leg("fmail-3", "t-worker", None);
-        assert!(bare.contains("no reason recorded"));
+        // The failed-live-leg arm is the anti-held-line: FAILED with the
+        // reason, the withdraw command, and the resend door, never a
+        // verify-later hint over a failure.
+        let failed = failed_live_leg("fmail-2", "t-worker", Some("no-pane-ref"));
+        assert!(failed.contains("FAILED on the live leg (no-pane-ref)"));
+        assert!(failed.contains("fno agent mail withdraw fmail-2"));
+        assert!(failed.contains("fno agent mail send t-worker '<body>'"));
+        assert!(failed.contains("fno agent peek t-worker"));
+        assert!(failed_live_leg("fmail-3", "t-worker", None).contains("no reason recorded"));
     }
 
     #[test]

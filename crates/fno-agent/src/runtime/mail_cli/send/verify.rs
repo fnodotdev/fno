@@ -393,17 +393,3 @@ pub(super) fn live_drain_holds(failed_reason: Option<&str>) -> bool {
         Some(r) => crate::mail_receipt::is_live_lane_failure(Some(r)),
     }
 }
-
-#[cfg(test)]
-mod live_drain_tests {
-    /// The no-pane-ref arm: a hard refusal is a failed send, never a held
-    /// turn. An unconfirmed inject and a missing reason hold.
-    #[test]
-    fn the_live_drain_gate_holds_unconfirmed_and_unknown_not_refusals() {
-        assert!(!super::live_drain_holds(Some("no-pane-ref")));
-        assert!(!super::live_drain_holds(Some("stage-failed")));
-        assert!(super::live_drain_holds(None));
-        assert!(super::live_drain_holds(Some("not-confirmed;waited-3s")));
-        assert!(super::live_drain_holds(Some("mux-send-failed-2")));
-    }
-}

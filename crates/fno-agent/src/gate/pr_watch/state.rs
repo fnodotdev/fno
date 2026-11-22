@@ -443,6 +443,41 @@ mod tests {
         assert_eq!(reason("junk").as_deref(), Some("invalid-key"));
         assert_eq!(reason("a/b#1").as_deref(), Some("invalid-entry"));
     }
+
+    #[test]
+    fn an_aliased_key_moves_onto_its_canonical_twin() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.json");
+        std::fs::write(
+            &path,
+            json!({
+                "fnodotdev/fno-web#5": {
+                    "merge_dispatched": true, "retries": 2, "last_seen_state": "OPEN"
+                },
+                "footnote-sh/fno-web#5": {"retries": 1, "last_seen_state": "OPEN"},
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut store = Store::load(path);
+        let aliases = BTreeMap::from([(
+            "fnodotdev/fno-web".to_string(),
+            "footnote-sh/fno-web".to_string(),
+        )]);
+        let n = store.normalize_keys(&aliases);
+        let row = store.get("footnote-sh/fno-web#5").unwrap();
+        assert_eq!(row["merge_dispatched"], json!(true));
+        assert_eq!(row["retries"], json!(2), "the twins' facts merge");
+        assert!(store.get("fnodotdev/fno-web#5").is_none());
+        assert!(
+            n.normalized
+                .iter()
+                .any(|r| r["from"] == json!("fnodotdev/fno-web#5")),
+            "the rename is reported: {:?}",
+            n.normalized
+        );
+    }
+
     #[test]
     fn persist_merges_a_concurrent_writer_instead_of_clobbering_it() {
         let dir = tempfile::tempdir().unwrap();
