@@ -1426,7 +1426,7 @@ fn tsv_help(args: &[OsString]) -> Option<String> {
     match path.as_slice() {
         [word, ..]
             if matches!(
-                word,
+                *word,
                 "mux" | "version" | "uninstall" | "agent" | "agents" | "mail" | "help"
             ) =>
         {
