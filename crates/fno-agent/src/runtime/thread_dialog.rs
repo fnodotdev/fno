@@ -54,6 +54,8 @@ pub(crate) fn classify(screen: &str) -> Dialog {
 /// `StillShowing` follow a typed key; every other variant typed nothing.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub(crate) enum Refusal {
+    #[error("{}", grant_remedy(.0))]
+    Grant(Vec<&'static str>),
     #[error("no permission menu is showing: the bottom of the screen holds no \"Do you want to proceed?\" question over numbered options")]
     NoMenu,
     #[error("unknown action {0:?}")]
@@ -75,10 +77,11 @@ pub(crate) enum Refusal {
 }
 
 impl Refusal {
-    /// The exit code `ask --answer` reports: 2 for a refusal on a clean
-    /// read, 12 for a wire, read or confirm failure.
+    /// The exit code `ask --answer` reports: 3 for a grant screen, 2 for a
+    /// refusal on a clean read, 12 for a wire, read or confirm failure.
     pub(crate) fn exit_code(&self) -> i32 {
         match self {
+            Refusal::Grant(_) => 3,
             Refusal::NoMenu
             | Refusal::UnknownAction(_)
             | Refusal::NoOption { .. }
@@ -230,6 +233,9 @@ pub(crate) fn answer_prompt(
     action: &str,
 ) -> Result<String, Refusal> {
     let screen = read_thread(daemon_dir, short).map_err(Refusal::Unreadable)?;
+    if let Dialog::Grant(missing) = classify(&screen) {
+        return Err(Refusal::Grant(missing));
+    }
     let menu = read_menu(&screen).ok_or(Refusal::NoMenu)?;
     let key = key_for(&menu, action)?;
     crate::mail_inject::type_key_if_screen_unchanged(daemon_dir, short, &key, |now| {
@@ -240,6 +246,9 @@ pub(crate) fn answer_prompt(
         crate::mail_inject::TypeRefusal::Wire(w) => Refusal::Wire(w),
     })?;
     std::thread::sleep(std::time::Duration::from_millis(800));
+    // The same fingerprint means the same prompt. A worker that re-asks the
+    // identical command right after the key reads as still showing: the
+    // answer is then reported unconfirmed, never as answered.
     match read_thread(daemon_dir, short) {
         Err(e) => Err(Refusal::Unconfirmed(e)),
         Ok(after) => match read_menu(&after) {
@@ -468,6 +477,18 @@ mod tests {
             answer_prompt(empty.path(), "a1b2c3d4", "deny").unwrap_err(),
             Refusal::Unreadable(_)
         ));
+    }
+
+    #[test]
+    fn a_grant_screen_is_refused_with_its_remedy_and_types_nothing() {
+        let t = fake::serve(
+            "a1b2c3d4",
+            &["Grant Accessibility in System Settings.\n 1. Yes\n 2. No"],
+        );
+        let err = answer_prompt(t.dir.path(), "a1b2c3d4", "allow_once").unwrap_err();
+        assert_eq!(err, Refusal::Grant(vec!["Accessibility"]));
+        assert_eq!(err.exit_code(), 3);
+        assert!(t.typed().is_empty());
     }
 
     #[test]

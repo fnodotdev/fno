@@ -2520,20 +2520,6 @@ fn answer_shown_prompt(
     answer: &str,
     daemon_dir: &Path,
 ) -> AskOutcome {
-    if let Ok(screen) = crate::thread_dialog::read_thread(daemon_dir, short) {
-        if let crate::thread_dialog::Dialog::Grant(missing) =
-            crate::thread_dialog::classify(&screen)
-        {
-            return AskOutcome::err(
-                format!(
-                    "ask --answer: {} ({})",
-                    crate::thread_dialog::grant_remedy(&missing),
-                    py_repr(name)
-                ),
-                3,
-            );
-        }
-    }
     match crate::thread_dialog::answer_prompt(daemon_dir, short, answer) {
         Ok(key) => {
             emit_event(
