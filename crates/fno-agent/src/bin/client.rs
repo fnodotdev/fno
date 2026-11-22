@@ -152,6 +152,16 @@ fn main() {
     run_evals_and_watch_doors(&args);
     // A spawn is admitted in process (spawn_seam) before run() parses it.
     let mut spawn_timing = fno_agent::spawn_seam::SpawnTiming::for_spawn(&args);
+    // The schedule arm answers before admission: a trigger flag or an
+    // action like --list-scheduled carries its own grammar, and the strict
+    // admission would demand a spawn name no such request carries.
+    if args.first().map(String::as_str) == Some("spawn") {
+        let home = AgentsHome::from_env();
+        let rest = args.get(1..).unwrap_or(&[]);
+        if let Some(code) = fno_agent::spawn::spawn_schedule::front_door(&home, rest) {
+            fno_agent::usage_events::exit_cli(code);
+        }
+    }
     let args = match fno_agent::spawn_seam::admit_spawn(args) {
         Ok(args) => args,
         Err(code) => fno_agent::usage_events::exit_cli(code),
@@ -513,16 +523,6 @@ async fn run_daemon_command(
     args: &[String],
     mut spawn_timing: Option<fno_agent::spawn_seam::SpawnTiming>,
 ) -> i32 {
-    // The schedule arm answers before the strict parse: a trigger flag or
-    // an action like --list-scheduled carries its own grammar, and the
-    // strict parse would demand a spawn name no such request carries.
-    if command == "spawn" {
-        let home = AgentsHome::from_env();
-        let rest = args.get(1..).unwrap_or(&[]);
-        if let Some(code) = fno_agent::spawn::spawn_schedule::front_door(&home, rest) {
-            return code;
-        }
-    }
     let flags = RenderFlags::read(args);
     let (method, mut params) = match build_request(command, &args[1..]) {
         Ok(v) => v,
