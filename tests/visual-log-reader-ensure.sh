@@ -44,6 +44,9 @@ fixture "$FLOAT_AGE_FIXTURE" '{"agents": [{"name": "visual-log-reader", "last_ac
 EMPTY_FIXTURE="$TMP/empty.json"
 : > "$EMPTY_FIXTURE"
 
+TRUNCATED_FIXTURE="$TMP/truncated.json"
+fixture "$TRUNCATED_FIXTURE" '{"agents": [{"name": "visual-log-reader", "last_activity_age_s": 42'
+
 fail_count=0
 expect() {
     # expect <desc> <want_exit> <want_output_pattern> <cmd...>
@@ -80,6 +83,10 @@ expect "float age floors to an integer and reads fresh" 0 "" \
     bash "$SCRIPT" check --status-file "$FLOAT_AGE_FIXTURE"
 expect "a failed registry read never reads fresh" 1 "unreadable" \
     bash "$SCRIPT" check --status-file "$EMPTY_FIXTURE"
+expect "a truncated registry exits 1 with jq's error kept in the verdict" 1 "registry unreadable" \
+    bash "$SCRIPT" check --status-file "$TRUNCATED_FIXTURE"
+expect "a truncated registry verdict names the jq parse error" 1 "parse error" \
+    bash "$SCRIPT" check --status-file "$TRUNCATED_FIXTURE"
 expect "freshness bound is overridable" 1 "" \
     bash "$SCRIPT" check --status-file "$FRESH_FIXTURE" --fresh-seconds 60
 

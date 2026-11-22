@@ -59,12 +59,20 @@ do_check() {
     local age_read
     # Count first, then read: binding syntax (`as $r`) skips its body when
     # the row is absent, and an empty read would compare as 0 and read fresh.
-    age_read="$(printf '%s' "$BLOB" | jq -r --arg n "$READER_NAME" \
+    # The read's failure must land in a verdict, never abort the probe: under
+    # set -e a failed assignment kills do_check with jq's exit code and an
+    # empty stdout, and the caller renders an empty detail. On success stderr
+    # is empty, so merging it into the read keeps a clean verdict; on failure
+    # the merged stream is jq's error, kept verbatim in the verdict line.
+    if ! age_read="$(printf '%s' "$BLOB" | jq -r --arg n "$READER_NAME" \
         'if ([.agents[]? | select(.name == $n)] | length) == 0 then "absent"
          else (.agents[] | select(.name == $n) | .last_activity_age_s
               | if type == "number" then (floor | tostring) else "unknown" end)
-         end' | head -1)"
-    # A failed registry read leaves this empty, and the registry's served
+         end' 2>&1 | head -1)"; then
+        echo "registry unreadable: ${age_read:-no detail from jq}; check with: fno agent session list"
+        return 1
+    fi
+    # An empty registry body leaves this empty, and the registry's served
     # age is f64 (a float kills bash arithmetic). A non-numeric read other
     # than "absent" lands in the unknown branch: an unreadable state never
     # reads fresh.
