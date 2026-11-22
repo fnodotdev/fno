@@ -112,6 +112,7 @@ use pane_spawn::{SpawnOrder, KEEPER_ROAD};
 pub(crate) mod placement_fit;
 mod portal_journal;
 mod portal_reach;
+mod reach_landing;
 mod reflow;
 mod restore_route_gate;
 mod resume_argv;
@@ -903,6 +904,7 @@ pub(crate) enum CoreMsg {
         name: String,
         portal: u8,
         placement: PanePlacement,
+        origin: Option<crate::proto::ThreadOrigin>,
         agents: Option<Vec<RegistryAgent>>,
         reply: ControlReply,
     },
@@ -11008,10 +11010,11 @@ impl Core {
                 name,
                 portal,
                 placement,
+                origin,
                 agents,
                 reply,
             } => {
-                self.portal_ctl(&name, portal, placement, agents, reply);
+                self.thread_door(&name, portal, placement, origin, agents, reply);
                 Flow::Continue
             }
             CoreMsg::ReseatPane {
@@ -11816,6 +11819,7 @@ async fn handle_control(
             name,
             portal,
             placement,
+            origin,
         } => {
             let agents = read_guard_agents().await;
             core_tx
@@ -11825,6 +11829,7 @@ async fn handle_control(
                     // pre-v64 caller landed.
                     portal: portal.unwrap_or(0),
                     placement,
+                    origin,
                     agents,
                     reply: reply_tx,
                 })

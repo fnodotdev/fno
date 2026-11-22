@@ -1632,6 +1632,15 @@ pub struct ThreadArgs {
     /// The named cell a split halves: `portal N`, a worker name, or `current`
     #[arg(long)]
     pub from: Option<String>,
+    /// Answer whether the placement would land, and change nothing
+    #[arg(long, hide = true)]
+    pub check: bool,
+    /// The folder the thread runs in, for a thread with no row here
+    #[arg(long, hide = true, value_name = "PATH")]
+    pub cwd: Option<String>,
+    /// The session that spawns the thread
+    #[arg(long, hide = true, value_name = "ID")]
+    pub parent: Option<String>,
     /// The agent name or attach id
     pub name: Option<String>,
 }

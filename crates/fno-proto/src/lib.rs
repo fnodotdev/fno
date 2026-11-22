@@ -433,7 +433,14 @@ fn default_true() -> bool {
 /// oldest held submission; floor stays 58.
 /// v131: `ClientMsg::PaneInset`, the cells a client keeps empty inside every
 /// pane; floor stays 58.
-pub const PROTO_VERSION: u32 = 131;
+/// v132: `ControlCommand::ThreadPane.origin` and
+/// `AgentLaunchRequest.open_as` (serde default), the pre-birth placement
+/// check and the composer's typed placement; floor stays 58.
+pub const PROTO_VERSION: u32 = 132;
+
+/// The first server that answers a thread placement check and reads a typed
+/// launch placement.
+pub const LAUNCH_PLACEMENT_PROTO: u32 = 132;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -582,7 +589,9 @@ pub enum MouseButton {
 }
 
 mod placement;
-pub use placement::{PanePlacement, PaneTarget, PlacementFallback, ResolvedPlacement, TabSel};
+pub use placement::{
+    PanePlacement, PaneTarget, PlacementFallback, ResolvedPlacement, TabSel, ThreadOrigin,
+};
 
 /// (v60) One member's line of a workspace-restore report. `outcome`
 /// is `resumed` | `focused` | `refused` | `planned`; `reason` is set exactly
@@ -854,6 +863,10 @@ pub enum ControlCommand {
         /// refused outright, exactly as it always was.
         #[serde(default)]
         placement: PanePlacement,
+        /// (v132) The caller, for the pre-birth check and for a worker on
+        /// another machine. Additive, so the floor does not move.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin: Option<ThreadOrigin>,
     },
     /// Move the ONE existing viewer of a live pane-hosted worker INTO a portal
     /// seat, keeping its PTY (re-seat, never re-attach): the pane becomes a
@@ -3454,7 +3467,7 @@ mod tests {
         // re-assert the same literal, which caught nothing a single pin does
         // not and turned every bump into a three-file edit; they now assert
         // only their own wire shapes.
-        assert_eq!(PROTO_VERSION, 131);
+        assert_eq!(PROTO_VERSION, 132);
         // v64 added `PanePlacement.portal` and `AgentRow.portal`.
         // Both are additive `#[serde(default)]` fields, so the floor does NOT
         // move with them - a v63 client still attaches. Pinned beside the

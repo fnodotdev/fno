@@ -1659,7 +1659,7 @@ fn portal_placement_rows() {
     assert!(
         notices
             .iter()
-            .any(|t| t.contains("a portal takes no split")),
+            .any(|t| t.contains("--split, --tab were not used")),
         "the geometry refusal is visible: {notices:?}"
     );
 
@@ -3545,6 +3545,73 @@ mod serve_setup {
         move || {
             serve_attach::set_pinned_state("http://127.0.0.1:1", Some(4096), Some(4043), "t");
             serve_attach::clear_pinned_health();
+        }
+    }
+}
+
+#[test]
+fn thread_check_answers_by_the_reach_rule_and_changes_nothing() {
+    use crate::proto::{TabSel, ThreadOrigin};
+    let (mut core, _client_id, first, _rx) = thread_core();
+    let second = core.spawn_pane(24, 40, "/tmp/seen").expect("pane 2");
+    core.session.squads[0].tabs.push(Tab {
+        name: None,
+        id: 2,
+        root: Node::Leaf(second),
+        focus: second,
+    });
+    core.session.squads[0].active_tab = 1;
+    let origin = ThreadOrigin {
+        cwd: "/tmp/seen".into(),
+        parent: None,
+        check: true,
+    };
+    let first_tab = || Some(TabSel::Id(1));
+    let cases = [
+        ("a named tab", None, first_tab(), Ok(first_tab())),
+        ("an anchor pins its tab", Some(first), None, Ok(first_tab())),
+        (
+            "no such tab",
+            None,
+            Some(TabSel::Id(9999)),
+            Err("has 2 tabs"),
+        ),
+        (
+            "an anchor outside the tab",
+            Some(first),
+            Some(TabSel::Id(2)),
+            Err("not in the target tab"),
+        ),
+        (
+            "a vanished anchor",
+            Some(9999),
+            None,
+            Err("no longer exists"),
+        ),
+    ];
+    for (case, at, tab, want) in cases {
+        let placement = PanePlacement {
+            portal_new: true,
+            split: Some(Dir::Down),
+            at,
+            tab,
+            ..Default::default()
+        };
+        let reach = core.fresh_landing(1, &placement, at);
+        let before = (core.panes.len(), core.portals.len());
+        let (tx, mut rx) = oneshot::channel();
+        core.thread_door("new", 0, placement, Some(origin.clone()), None, tx);
+        assert_eq!((core.panes.len(), core.portals.len()), before, "{case}");
+        let answer = rx.try_recv().expect("a check answers at once");
+        match (want, reach, answer) {
+            (Ok(tab), Ok((_, landing)), ServerMsg::Notice { .. }) => {
+                assert_eq!(landing.tab, tab, "{case}");
+            }
+            (Err(text), Err(refusal), ServerMsg::Err { msg, .. }) => {
+                assert_eq!(refusal.to_string(), msg, "{case}");
+                assert!(msg.contains(text), "{case}: {msg}");
+            }
+            (_, reach, answer) => panic!("{case}: reach {reach:?}, check {answer:?}"),
         }
     }
 }
