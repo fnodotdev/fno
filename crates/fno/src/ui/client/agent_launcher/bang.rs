@@ -97,6 +97,12 @@ pub(super) fn journal_ran(session: &str, cwd: &str, shell: &str, line: &str, pan
     emit(&pane_send_audit_events_path(), &row);
 }
 
+/// Journal a card run that never started.
+pub(super) fn journal_refused(session: &str, cwd: &str, line: &str, reason: &str) {
+    let row = refused_row(session, cwd, line, reason, "refused");
+    emit(&pane_send_audit_events_path(), &row);
+}
+
 /// Run the drafted line: in the card with no pick, else in a new pane
 /// through the session's control socket, journaling to the standard events
 /// path.

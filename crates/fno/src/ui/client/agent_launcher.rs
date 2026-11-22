@@ -1449,6 +1449,10 @@ async fn submit(
     view: &mut View,
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<(), String> {
+    // A `!` line never becomes an agent's prompt, whichever gesture starts it.
+    if view.launcher.as_ref().is_some_and(|l| l.shell) {
+        return bang::run(view, sock_w).await;
+    }
     let Some(l) = view.launcher.as_mut() else {
         return Ok(());
     };
@@ -4725,6 +4729,9 @@ impl Launcher {
         }
         if matches!(self.phase, Phase::Refused { .. }) {
             return "^o detail \u{b7} esc close".to_string();
+        }
+        if self.run.as_ref().is_some_and(shell_box::ShellBox::live) {
+            return "keys go to the command \u{b7} ^o move to a tab".to_string();
         }
         // Shell mode runs instead of launching: the bar names its own keys.
         if self.shell {

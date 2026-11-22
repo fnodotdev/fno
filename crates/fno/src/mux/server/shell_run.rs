@@ -159,6 +159,7 @@ impl Core {
                     } else {
                         // The card left while the command started.
                         core.shell_runs_client_gone(client);
+                        core.push_layout(true);
                     }
                 }
                 Err(e) => {
@@ -206,6 +207,23 @@ impl Core {
             .collect();
         for pane in held {
             self.shell_run_to_tab(pane);
+        }
+    }
+
+    /// A workspace that closed took the card along: its runs move to a tab,
+    /// so none keeps running out of sight.
+    pub(super) fn shell_runs_rehome(&mut self) {
+        let stray: Vec<(u64, u64, u64)> = self
+            .shell_runs
+            .by_pane
+            .iter()
+            .filter(|(_, run)| self.session.squad(run.squad).is_none())
+            .filter_map(|(pane, run)| Some((*pane, run.client?, run.id)))
+            .collect();
+        for (pane, client, id) in stray {
+            if self.shell_run_to_tab(pane).is_some() {
+                self.shell_run_tell(client, id, ShellRunState::Moved);
+            }
         }
     }
 

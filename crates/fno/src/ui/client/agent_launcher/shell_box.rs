@@ -221,6 +221,13 @@ fn cards(view: &mut View) -> impl Iterator<Item = &mut Launcher> {
 /// Fold one update into the card that started the run.
 pub(crate) fn apply(view: &mut View, update: ShellRunUpdate) {
     let session = view.session.clone();
+    // The moved run has the keys in its tab, so its open card folds.
+    let folds = update.state == ShellRunState::Moved
+        && view
+            .launcher
+            .as_ref()
+            .and_then(|l| l.run.as_ref())
+            .is_some_and(|r| r.run == update.run);
     let Some(l) = cards(view).find(|l| l.run.as_ref().is_some_and(|r| r.run == update.run)) else {
         return;
     };
@@ -243,12 +250,18 @@ pub(crate) fn apply(view: &mut View, update: ShellRunUpdate) {
             clear = exit == Some(0);
             run.state = State::Done { exit, output };
         }
-        ShellRunState::Refused { reason } => run.state = State::Refused { reason },
+        ShellRunState::Refused { reason } => {
+            bang::journal_refused(&session, &run.cwd, &run.line, &reason);
+            run.state = State::Refused { reason };
+        }
     }
     if clear {
         l.draft.message.clear();
         l.draft.cursor_chars = 0;
         l.draft.bump();
+    }
+    if folds {
+        super::close(view);
     }
 }
 

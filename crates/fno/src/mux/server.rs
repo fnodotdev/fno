@@ -7481,6 +7481,7 @@ impl Core {
         if reemit {
             self.mark_topology_dirty();
         }
+        self.shell_runs_rehome();
         // Geometry pass: each distinct viewed tab, once, at its view-scoped
         // smallest-client clamp (Locked 1/5). The applied area is cached so
         // the tab keeps it when its last viewer leaves.

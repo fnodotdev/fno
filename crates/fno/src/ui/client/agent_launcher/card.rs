@@ -109,7 +109,7 @@ pub(crate) struct CardLine {
 }
 
 impl CardLine {
-    fn plain(text: String, dim: bool) -> Self {
+    pub(super) fn plain(text: String, dim: bool) -> Self {
         Self {
             text,
             dim,

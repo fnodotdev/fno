@@ -205,6 +205,11 @@ impl Places {
         }
     }
 
+    /// Whether the pick is the portal a launch with no pick takes.
+    pub(super) fn is_default(&self, placement: Placement) -> bool {
+        matches!(placement, Placement::Portal(idx) if self.last == Some(idx))
+    }
+
     /// The typed placement of a thread launch, or `None` for the pane entry.
     pub(super) fn open_as(
         &self,

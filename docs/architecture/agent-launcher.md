@@ -32,7 +32,7 @@ Tokens paint values, never axis names: `Local`, `footnote`, `main`, `auto`, `cla
 
 A bare `!` then Enter opens a plain login shell as a new tab of the card's workspace, in its folder. A `!cmd` with a pick runs the command in that pane, then leaves the same shell. There Ctrl-C ends the line and leaves the shell. Each opens pick works except a portal, so shell mode hides the portal rows.
 
-A `!` line with no pick runs in the card, on its own pty, one at a time. While it runs every key but ctrl+o is the command's, esc included. Ctrl+o moves that same process to a tab. A detach moves it to a tab too. A moved run waits for Enter at its end. At its end the card shows the exit code and takes the next line. A failure keeps the line. Ctrl+o then opens the full log in a tab. A remote host or a server older than v132 keeps the pane.
+A `!` line with no pick runs in the card, on its own pty, one at a time. While it runs the keys are the command's, esc included. Ctrl+o and the mux prefix chords are not. Ctrl+o moves that same process to a tab and folds the card. A detach moves it to a tab too. A moved run waits for Enter at its end. At its end the card shows the exit code and takes the next line. A failure keeps the line. Ctrl+o then opens the full log in a tab. A remote host or a server older than v132 keeps the pane.
 
 ## Open as
 

@@ -208,7 +208,14 @@ pub(crate) fn apply(
             }
         }
     }
-    d.placement = l.places.from_flags(&placed).map_err(|e| e.to_string())?;
+    let placement = l.places.from_flags(&placed).map_err(|e| e.to_string())?;
+    // The line spells no pick as the portal it takes now. That is still no pick.
+    let unpicked = l.draft.placement == Placement::LastPortal && l.places.is_default(placement);
+    d.placement = if unpicked {
+        Placement::LastPortal
+    } else {
+        placement
+    };
     d.bump();
     l.draft = d;
     Ok(())
