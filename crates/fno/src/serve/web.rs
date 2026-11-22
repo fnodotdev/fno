@@ -854,17 +854,28 @@ fn scope_hq_model(
         };
         items.retain(|item| {
             // prs and questions key the node `node`; next rows key it `id`.
-            let node = item
-                .get("node")
-                .or_else(|| item.get("id"))
-                .and_then(serde_json::Value::as_str);
+            // One typed parse per item (R1): the compiler checks the keys.
+            let node = serde_json::from_value::<ScopedItemNode>(item.clone())
+                .ok()
+                .and_then(|keys| keys.node.or(keys.id));
             match node {
-                Some(n) => scope.covers(&crate::web_answer::chain_of(rows, Some(n))),
+                Some(n) => scope.covers(&crate::web_answer::chain_of(rows, Some(&n))),
                 None => false,
             }
         });
     }
     model
+}
+
+/// The node key one hq waiting item carries. Both fields are optional: a
+/// next row names `id`, a pr or question row names `node`, and an item
+/// naming neither drops out.
+#[derive(serde::Deserialize)]
+struct ScopedItemNode {
+    #[serde(default)]
+    node: Option<String>,
+    #[serde(default)]
+    id: Option<String>,
 }
 
 /// Keep only the rows a scoped viewer's invites cover, decided against the
