@@ -1158,13 +1158,27 @@ async fn trace(Query(q): Query<TraceQuery>, State(st): State<AppState>) -> Respo
 }
 
 /// `GET /trace/model.json`: the fold for `node`, read per request.
-async fn trace_model(Query(q): Query<TraceQuery>, State(st): State<AppState>) -> Response {
+async fn trace_model(
+    Query(q): Query<TraceQuery>,
+    State(st): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
     if !token_ok(q.t.as_deref(), &st.token) {
         return unauthorized();
     }
     let node = q.node.as_deref().unwrap_or("");
     if !crate::web_trace::valid_node(node) {
         return plain_status(StatusCode::BAD_REQUEST, "node must be a node id");
+    }
+    let scope = read_scope(&headers, &st);
+    if scope.is_scoped() {
+        let inputs = model_inputs(&st).await;
+        if let Some(reply) = scope_refusal(
+            &scope,
+            &crate::web_answer::chain_of(&inputs.rows, Some(node)),
+        ) {
+            return reply;
+        }
     }
     match crate::web_trace::read_trace(node).await {
         Ok(body) => (
@@ -1191,8 +1205,20 @@ fn html_response(body: String) -> Response {
         .into_response()
 }
 
-async fn team(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Response {
+async fn team(
+    Query(q): Query<WsQuery>,
+    State(st): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
     let authorized = token_ok(q.t.as_deref(), &st.token);
+    // The chart is org-wide: refuse a scoped viewer before any marker write,
+    // so their visit never triggers a render they cannot read.
+    if authorized && read_scope(&headers, &st).is_scoped() {
+        return plain_status(
+            StatusCode::FORBIDDEN,
+            "scoped invites read a node-scoped fold; the rundown chart is machine-wide",
+        );
+    }
     let modified = std::fs::metadata(&st.rundown_html)
         .and_then(|m| m.modified())
         .ok();
@@ -1433,6 +1459,9 @@ async fn backlog_model(
     if wants_questions {
         let mut fresh = (*model_inputs(&st).await).clone();
         backlog_model::read_search_sources(&mut fresh, true);
+        if scope.is_scoped() {
+            filter_scoped_rows(&mut fresh, &scope);
+        }
         let mut board = backlog_model::board(&fresh, &q);
         if raw.iter().any(|(k, v)| k == "keys" && v == "1") {
             board.search_keys = Some(crate::search_query::keys_json());
@@ -1440,7 +1469,15 @@ async fn backlog_model(
         return json_response(&board);
     }
     let inputs = model_inputs(&st).await;
-    let mut board = backlog_model::board(&inputs, &q);
+    // Only a scoped viewer pays the clone; the shared cache stays whole.
+    let scoped_rows = if scope.is_scoped() {
+        let mut owned = (*inputs).clone();
+        filter_scoped_rows(&mut owned, &scope);
+        Some(owned)
+    } else {
+        None
+    };
+    let mut board = backlog_model::board(scoped_rows.as_ref().unwrap_or(&inputs), &q);
     if raw.iter().any(|(k, v)| k == "keys" && v == "1") {
         board.search_keys = Some(crate::search_query::keys_json());
     }
@@ -1451,6 +1488,7 @@ async fn backlog_model(
 async fn backlog_node(
     Query(raw): Query<HashMap<String, String>>,
     State(st): State<AppState>,
+    headers: HeaderMap,
 ) -> Response {
     if !token_ok(raw.get("t").map(String::as_str), &st.token) {
         return unauthorized();
@@ -1458,7 +1496,14 @@ async fn backlog_node(
     let Some(id) = raw.get("id").filter(|s| !s.is_empty()) else {
         return plain_status(StatusCode::BAD_REQUEST, "id is required");
     };
+    let scope = read_scope(&headers, &st);
     let inputs = model_inputs(&st).await;
+    if let Some(reply) = scope_refusal(
+        &scope,
+        &crate::web_answer::chain_of(&inputs.rows, Some(id.as_str())),
+    ) {
+        return reply;
+    }
     node_response(&inputs, id)
 }
 
@@ -2120,6 +2165,7 @@ async fn ws_handler(
     ws: WebSocketUpgrade,
     Query(q): Query<WsQuery>,
     State(st): State<AppState>,
+    headers: HeaderMap,
 ) -> Response {
     let ok =
         q.t.as_deref()
@@ -2137,6 +2183,20 @@ async fn ws_handler(
                 .send(Message::Close(Some(CloseFrame {
                     code: close_code::POLICY,
                     reason: "invalid token".into(),
+                })))
+                .await;
+        });
+    }
+    // Bridge frames have no node mapping, so no filtered stream exists: a
+    // scoped viewer gets the reason instead, through the same
+    // upgrade-then-close shape the token path uses (a browser cannot read
+    // the HTTP status of a failed handshake).
+    if read_scope(&headers, &st).is_scoped() {
+        return ws.on_upgrade(|mut socket| async move {
+            let _ = socket
+                .send(Message::Close(Some(CloseFrame {
+                    code: close_code::POLICY,
+                    reason: "scoped invites read a node-scoped fold; the live bridge feed is machine-wide".into(),
                 })))
                 .await;
         });
@@ -3692,6 +3752,238 @@ console.log("backlog page helpers: 18 cases ok");
         let head = "GET /hq?t=right HTTP/1.1\r\nHost: machine.tail1.ts.net\r\nTailscale-User-Login: eve@example.com\r\nConnection: close\r\n\r\n";
         let reply = raw_request(addr, head, b"").await;
         assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        server.abort();
+    }
+
+    // The read-side route table for a scoped viewer: board reads carry only
+    // the invited chain, a foreign node refuses with the reason, and the
+    // machine-wide surfaces name why they refuse.
+    fn invite(email: &str, scope: &str) -> crate::web_invites::Invite {
+        crate::web_invites::Invite {
+            email: email.into(),
+            scope: scope.into(),
+            role: crate::web_invites::Role::Viewer,
+        }
+    }
+
+    // Pin the read model the routes serve, so no test reads the real graph.
+    async fn seed_model(
+        st: &mut AppState,
+        rows: Vec<serde_json::Value>,
+    ) -> std::sync::Arc<backlog_model::Inputs> {
+        let inputs = std::sync::Arc::new(backlog_model::fixture(rows));
+        *st.model.lock().await = Some(CachedModel {
+            version: None,
+            at: std::time::Instant::now(),
+            inputs: std::sync::Arc::clone(&inputs),
+        });
+        inputs
+    }
+
+    #[tokio::test]
+    async fn scoped_invites_read_a_filtered_backlog_board() {
+        let list = vec![
+            invite("ann@example.com", "x-b1"),
+            invite("pat@example.com", "*"),
+        ];
+        let mut st = answer_state(true, Some(list));
+        seed_model(
+            &mut st,
+            vec![
+                serde_json::json!({"id": "x-b1", "status": "ready", "type": "epic"}),
+                serde_json::json!({"id": "x-kid", "status": "ready", "parent": "x-b1"}),
+                serde_json::json!({"id": "x-oth", "status": "ready"}),
+            ],
+        )
+        .await;
+        let (addr, server) = serve_state(st).await;
+        let get = |addr: std::net::SocketAddr, login: &str| {
+            let head = format!(
+                "GET /backlog/model.json?t=right HTTP/1.1\r\nHost: machine.tail1.ts.net\r\nTailscale-User-Login: {login}\r\nConnection: close\r\n\r\n"
+            );
+            async move { raw_request(addr, &head, b"").await }
+        };
+        let reply = get(addr, "ann@example.com").await;
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        assert!(
+            reply.contains("\"x-b1\"") && reply.contains("\"x-kid\""),
+            "{reply}"
+        );
+        assert!(!reply.contains("\"x-oth\""), "{reply}");
+        let reply = get(addr, "pat@example.com").await;
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        assert!(
+            reply.contains("\"x-oth\""),
+            "the star invite reads whole: {reply}"
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn scoped_invites_refuse_a_node_outside_their_invite() {
+        let list = vec![invite("ann@example.com", "x-b1")];
+        let mut st = answer_state(true, Some(list));
+        seed_model(
+            &mut st,
+            vec![
+                serde_json::json!({"id": "x-b1", "status": "ready", "type": "epic"}),
+                serde_json::json!({"id": "x-kid", "status": "ready", "parent": "x-b1"}),
+                serde_json::json!({"id": "x-oth", "status": "ready"}),
+            ],
+        )
+        .await;
+        let (addr, server) = serve_state(st).await;
+        let get = |addr: std::net::SocketAddr, path: &str| {
+            let head = format!(
+                "GET {path} HTTP/1.1\r\nHost: machine.tail1.ts.net\r\nTailscale-User-Login: ann@example.com\r\nConnection: close\r\n\r\n"
+            );
+            async move { raw_request(addr, &head, b"").await }
+        };
+        let reply = get(addr, "/backlog/node.json?t=right&id=x-oth").await;
+        assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
+        assert!(
+            reply.contains("this invite does not cover that node"),
+            "{reply}"
+        );
+        let reply = get(addr, "/backlog/node.json?t=right&id=x-kid").await;
+        assert!(
+            reply.starts_with("HTTP/1.1 200"),
+            "descendant serves: {reply}"
+        );
+        assert!(reply.contains("\"x-kid\""), "{reply}");
+        // An in-scope trace serves through the shell-out, so only the
+        // refusal runs here.
+        let reply = get(addr, "/trace/model.json?t=right&node=x-oth").await;
+        assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
+        assert!(
+            reply.contains("this invite does not cover that node"),
+            "{reply}"
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn scoped_invites_refuse_the_machine_wide_reads() {
+        let list = vec![
+            invite("ann@example.com", "x-b1"),
+            invite("pat@example.com", "*"),
+        ];
+        // A fresh page file: the serve never starts a republish render, and
+        // the star-invite control reads it back verbatim.
+        let rundown = std::env::temp_dir().join("fno-web-answer-lead.html");
+        std::fs::write(&rundown, "<html>the org chart</html>").unwrap();
+        let st = answer_state(true, Some(list));
+        let (addr, server) = serve_state(st).await;
+        let get = |addr: std::net::SocketAddr, path: &str, login: &str| {
+            let head = format!(
+                "GET {path} HTTP/1.1\r\nHost: machine.tail1.ts.net\r\nTailscale-User-Login: {login}\r\nConnection: close\r\n\r\n"
+            );
+            async move { raw_request(addr, &head, b"").await }
+        };
+        let reply = get(addr, "/rundown?t=right", "ann@example.com").await;
+        assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
+        assert!(
+            reply.contains("the rundown chart is machine-wide"),
+            "{reply}"
+        );
+        let reply = get(addr, "/hq/decisions.json?t=right", "ann@example.com").await;
+        assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
+        assert!(
+            reply.contains("the decision log is machine-wide"),
+            "{reply}"
+        );
+        let reply = get(addr, "/rundown?t=right", "pat@example.com").await;
+        assert!(reply.starts_with("HTTP/1.1 200"), "star invite: {reply}");
+        assert!(reply.contains("the org chart"), "{reply}");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn scoped_invites_read_a_filtered_hq_board() {
+        let list = vec![
+            invite("ann@example.com", "x-hq1"),
+            invite("pat@example.com", "*"),
+        ];
+        let mut st = answer_state(true, Some(list));
+        let inputs = seed_model(
+            &mut st,
+            vec![
+                serde_json::json!({"id": "x-hq1", "status": "in_review", "pr_number": 42}),
+                serde_json::json!({"id": "x-oth", "status": "in_review", "pr_number": 43}),
+            ],
+        )
+        .await;
+        // Seed the cache and stamp read_at, so claim_refresh never starts a
+        // real fleet read inside the test.
+        st.hq.first.set(()).unwrap();
+        st.hq.board().await.record(
+            Ok(serde_json::json!({"machines": [
+                {"host": "u", "local": true, "fresh": true, "sessions": [
+                    {"name": "kara", "session_id": "976b7b64", "harness": "claude", "role": "lead"}
+                ]},
+                {"host": "mac2", "fresh": false, "age_s": 900, "sessions": [
+                    {"name": "t-two", "harness": "codex"}
+                ]}
+            ]})),
+            Err("the test seeds no questions".into()),
+            &inputs,
+            0,
+            &[],
+        );
+        let (addr, server) = serve_state(st).await;
+        let get = |addr: std::net::SocketAddr, login: &str| {
+            let head = format!(
+                "GET /hq/model.json?t=right HTTP/1.1\r\nHost: machine.tail1.ts.net\r\nTailscale-User-Login: {login}\r\nConnection: close\r\n\r\n"
+            );
+            async move { raw_request(addr, &head, b"").await }
+        };
+        let reply = get(addr, "pat@example.com").await;
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        let body = reply.split("\r\n\r\n").nth(1).unwrap_or_default();
+        let model: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(model["machines"].as_array().map(Vec::len), Some(2));
+        assert!(
+            reply.contains("\"x-oth\""),
+            "star invite reads whole: {reply}"
+        );
+        let reply = get(addr, "ann@example.com").await;
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        let body = reply.split("\r\n\r\n").nth(1).unwrap_or_default();
+        let model: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(model["machines"], serde_json::json!([]));
+        assert!(reply.contains("\"x-hq1\""), "{reply}");
+        assert!(!reply.contains("\"x-oth\""), "{reply}");
+        server.abort();
+    }
+
+    // Frames have no node mapping, so the bridge feed closes the upgraded
+    // socket with the 1008 policy code and the reason in the close text.
+    #[allow(clippy::indexing_slicing)]
+    #[tokio::test]
+    async fn scoped_invites_get_a_policy_close_on_the_bridge_feed() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let list = vec![invite("ann@example.com", "x-b1")];
+        let (addr, server) = serve_state(answer_state(true, Some(list))).await;
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let head = "GET /ws?t=right HTTP/1.1\r\nHost: machine.tail1.ts.net\r\nTailscale-User-Login: ann@example.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+        stream.write_all(head.as_bytes()).await.unwrap();
+        let mut buf = Vec::new();
+        stream.read_to_end(&mut buf).await.unwrap();
+        let text = String::from_utf8_lossy(&buf);
+        assert!(text.starts_with("HTTP/1.1 101"), "{text}");
+        let frame_at = text.find("\r\n\r\n").map_or(buf.len(), |i| i + 4);
+        let frame = &buf[frame_at..];
+        assert_eq!(
+            frame.first().copied(),
+            Some(0x88),
+            "a close frame ends the feed: {text}"
+        );
+        assert!(frame.len() >= 4, "{text:?}");
+        let len = frame[1] as usize;
+        let code = u16::from_be_bytes([frame[2], frame[3]]);
+        assert_eq!(code, 1008, "policy close: {text:?}");
+        let reason = std::str::from_utf8(&frame[4..2 + len]).unwrap_or("");
+        assert!(reason.contains("machine-wide"), "{reason}");
         server.abort();
     }
 
