@@ -84,6 +84,20 @@ fn refused_row(
     })
 }
 
+/// What a refused pane run journals, and what the composer shows: one
+/// sentence naming the limit and the way out (the footer's shortener). The
+/// Debug wrapper never paints: an `Ok(other)` names the surprise instead of
+/// Debug-printing it.
+fn refusal_texts(reply: &Result<ServerMsg, ControlError>) -> (String, String) {
+    match reply {
+        Ok(other) => (
+            format!("{other:?}"),
+            "the pane never started: unexpected server reply".to_string(),
+        ),
+        Err(e) => (e.to_string(), e.to_string()),
+    }
+}
+
 /// Best-effort: record a failed append without painting over the client.
 fn emit(events: &Path, row: &serde_json::Value) {
     if append_agents_event(events, row).is_err() {
@@ -219,24 +233,8 @@ pub(super) async fn run_with(
             l.phase = Phase::Unknown { request_id, reason };
         }
         _ => {
-            // The composer shows one sentence naming the limit and the way
-            // out (the footer's shortener); the raw text stays in the
-            // journal row. The Debug wrapper never paints: an `Ok(other)`
-            // names the surprise instead of Debug-printing it.
-            let reason = match &reply {
-                Ok(other) => {
-                    emit(
-                        events,
-                        &refused_row(&session, &cwd, &line, &format!("{other:?}"), "refused"),
-                    );
-                    "the pane never started: unexpected server reply".to_string()
-                }
-                Err(e) => {
-                    let raw = e.to_string();
-                    emit(events, &refused_row(&session, &cwd, &line, &raw, "refused"));
-                    raw
-                }
-            };
+            let (raw, reason) = refusal_texts(&reply);
+            emit(events, &refused_row(&session, &cwd, &line, &raw, "refused"));
             l.phase = Phase::Refused { request_id, reason };
         }
     }
