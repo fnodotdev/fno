@@ -3274,8 +3274,8 @@ fn row_menu_rows() {
     assert!(!actions.contains(&MenuAction::OpenHere));
     assert!(!actions.contains(&MenuAction::NewTab));
 
-    // AC7-HP shape: resume appears on an EXITED row only, mail on LIVE
-    // rows only, both above the rule that fronts the destructive tail.
+    // AC7-HP shape: resume appears on an EXITED row only, above the rule
+    // that fronts the destructive tail. No row state offers Mail.
     let mk = |name: &str, pane_id: Option<u64>, exited: bool| {
         let mut r = pane_hosted_row(name, pane_id.unwrap_or(0));
         r.pane_id = pane_id;
@@ -3284,9 +3284,9 @@ fn row_menu_rows() {
     };
     let dead = super::build_row_menu(&mk("d", None, true), Anchor::Center);
     assert!(dead.actions.contains(&super::MenuAction::Resume));
-    assert!(!dead.actions.contains(&super::MenuAction::Mail));
+    assert!(!menu_labels(&dead).iter().any(|l| l == "Mail"));
     let live = super::build_row_menu(&mk("p", Some(9), false), Anchor::Center);
-    assert!(live.actions.contains(&super::MenuAction::Mail));
+    assert!(!menu_labels(&live).iter().any(|l| l == "Mail"));
     assert!(!live.actions.contains(&super::MenuAction::Resume));
     // Resume sits above the common rule; Stop/Diff ordering untouched.
     let labels = menu_labels(&dead);
@@ -3999,15 +3999,17 @@ fn entry_hint(v: &View, label: &str) -> Option<String> {
 
 #[tokio::test]
 async fn row_menu_commands_show_their_menu_keys() {
-    // AC9-HP: Stop, Peek, Mail, Open Here and Diff each show the
+    // AC9-HP: Stop, Peek, Copy session ID, Open Here and Diff each show the
     // menu-scope key that runs them - the glyph read live from
     // keys::menu_key_for, never a literal.
-    let mut v = view_with_agents(vec![paneless_bg_row("w1")]);
+    let mut row = paneless_bg_row("w1");
+    row.harness_session_id = Some("sid-0123".into());
+    let mut v = view_with_agents(vec![row]);
     assert!(v.open_row_menu(1, Anchor::Center));
     for (label, id) in [
         ("Open Here", "open-here"),
         ("Peek", "peek-row"),
-        ("Mail", "mail-row"),
+        ("Copy session ID", "copy-session-id"),
         ("Stop", "stop-row"),
         ("Diff", "diff-row"),
     ] {
@@ -4077,16 +4079,6 @@ async fn row_menu_keys_run_the_same_execute_path_as_enter() {
             .iter()
             .any(|c| matches!(c, Command::PeekAgent { .. })),
         "the peek key opened the peek"
-    );
-
-    // m opens the SAME composer peek `m` opens.
-    assert!(v.open_row_menu(1, Anchor::Center));
-    let m = crate::keys::menu_byte_for("mail-row").unwrap();
-    let mut buf: Vec<u8> = Vec::new();
-    row_menu_keys(&mut v, &[m], &mut buf).await.unwrap();
-    assert!(
-        v.peek_input.as_ref().is_some_and(|(name, _)| name == "w1"),
-        "the mail key armed the peek composer"
     );
 }
 
@@ -5183,23 +5175,17 @@ async fn row_menu_resume_sends_respawn_and_refuses_a_live_row() {
     assert!(v2.notice.is_some());
 }
 
-#[tokio::test]
-async fn row_menu_mail_opens_the_same_peek_composer() {
-    // AC7-HP: mail routes into the EXISTING peek overlay + free-text
-    // composer that peek `m` opens - no second input surface is grown.
-    let mut v = unified_rows_view();
-    let idx = agent_row_at(&v, |a| a.name == "bg-claude");
-    assert!(v.open_row_menu(idx, Anchor::Center));
-    let mut buf: Vec<u8> = Vec::new();
-    menu_select(&mut v, super::MenuAction::Mail).await;
-    row_menu_execute_selected(&mut v, &mut buf).await.unwrap();
-    // fetch_peek writes its request; the composer is the client-side state.
-    assert!(v.peek.is_some(), "peek opened");
-    assert_eq!(
-        v.peek_input,
-        Some(("bg-claude".into(), String::new())),
-        "the SAME peek m composer is armed"
-    );
+#[test]
+fn row_menu_offers_copy_session_id_not_mail() {
+    // A row with a session id offers Copy session ID; a row without one does
+    // not. No row offers Mail.
+    let mut with_sid = paneless_bg_row("w1");
+    with_sid.harness_session_id = Some("sid-0123".into());
+    let menu = super::build_row_menu(&with_sid, Anchor::Center);
+    assert!(menu.actions.contains(&super::MenuAction::CopySessionId));
+    assert!(!menu_labels(&menu).iter().any(|l| l == "Mail"));
+    let without = super::build_row_menu(&paneless_bg_row("w2"), Anchor::Center);
+    assert!(!without.actions.contains(&super::MenuAction::CopySessionId));
 }
 
 /// A pane-hosted sideline row, the shape the move/break-out menu acts on.

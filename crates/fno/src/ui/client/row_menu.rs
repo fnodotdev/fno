@@ -150,10 +150,9 @@ pub(super) enum MenuAction {
     Reattach,
     /// A workspace section's Add folder: opens the picker of live-row folders.
     AddFolder,
-    /// (6.2) Mail this agent - opens the SAME peek overlay and its
-    /// free-text composer (`peek_input`) that peek `m` opens, never a second
-    /// input surface.
-    Mail,
+    /// Copy the row's full harness session id to the clipboard. Built only
+    /// for a row that carries one.
+    CopySessionId,
     /// Rename a sideline row's registry LABEL - opens the shared rename
     /// overlay on `RenameTarget::Agent`. Built only for a non-external,
     /// unambiguous agent row.
@@ -204,7 +203,7 @@ impl MenuAction {
             // dispatched byte both resolve through the same menu-scope id.
             MenuAction::Stop => Some("stop-row"),
             MenuAction::Peek => Some("peek-row"),
-            MenuAction::Mail => Some("mail-row"),
+            MenuAction::CopySessionId => Some("copy-session-id"),
             MenuAction::RenameAgent => Some("rename-agent"),
             MenuAction::Diff => Some("diff-row"),
             MenuAction::OpenHere => Some("open-here"),
@@ -299,7 +298,6 @@ pub(super) fn build_row_menu(agent: &AgentRow, anchor: Anchor) -> RowMenu {
             &[MenuAction::PortalAt(None)],
         );
         add(entry("◉", "Peek"), &[MenuAction::Peek]);
-        add(entry("✉", "Mail"), &[MenuAction::Mail]);
         return RowMenu {
             popup: Popup::new(rows, anchor),
             target: MenuTarget::Agent(AgentIdent::of(agent)),
@@ -320,7 +318,6 @@ pub(super) fn build_row_menu(agent: &AgentRow, anchor: Anchor) -> RowMenu {
         add(entry("→", "Focus"), &[MenuAction::Focus]);
         add(entry("◫", "Open in portal..."), &[MenuAction::PortalPicker]);
         add(entry("◉", "Peek"), &[MenuAction::Peek]);
-        add(entry("✉", "Mail"), &[MenuAction::Mail]);
         add(PopupRow::Rule, &[]);
         add(
             PopupRow::FullWidth("▭ New Tab".into()),
@@ -384,13 +381,11 @@ pub(super) fn build_row_menu(agent: &AgentRow, anchor: Anchor) -> RowMenu {
         );
         add(PopupRow::Rule, &[]);
         add(entry("◉", "Peek"), &[MenuAction::Peek]);
-        add(entry("✉", "Mail"), &[MenuAction::Mail]);
         add(entry("■", "Stop"), &[MenuAction::Stop]);
         add(entry("✕", "Remove"), &[MenuAction::Remove]);
     } else {
         // A live row that is neither pane-hosted nor attachable here.
         add(entry("◉", "Peek"), &[MenuAction::Peek]);
-        add(entry("✉", "Mail"), &[MenuAction::Mail]);
         add(entry("◫", "Open in portal..."), &[MenuAction::PortalPicker]);
         if agent.no_pane_reason == Some(AgentNoPaneReason::LivePaneless) {
             add(entry("↩", "Reattach"), &[MenuAction::Reattach]);
@@ -404,8 +399,10 @@ pub(super) fn build_row_menu(agent: &AgentRow, anchor: Anchor) -> RowMenu {
     // Bound in menu scope now, so its hint is the live key.
     add(PopupRow::Rule, &[]);
     add(entry("±", "Diff"), &[MenuAction::Diff]);
-    // A pin is a session fact, so only a row with a session id offers it.
+    // The id and the pin are session facts, so only a row with a session id
+    // offers them.
     if agent.harness_session_id.is_some() {
+        add(entry("⧉", "Copy session ID"), &[MenuAction::CopySessionId]);
         let (glyph, label) = if agent.pinned {
             (super::sideline::PIN_OUTLINE, "Unpin")
         } else {
@@ -1270,6 +1267,10 @@ pub(super) async fn execute_row_menu_action(
             view.open_rename_seeded(RenameTarget::Agent(a.name.clone()), a.name.clone());
         }
         MenuAction::TogglePin => super::agent_sort::pin_agent(view, &a),
+        MenuAction::CopySessionId => match a.harness_session_id.clone() {
+            Some(sid) => super::feed_detail::copy_value(view, sid),
+            None => view.set_notice("this row has no session id yet".into()),
+        },
         MenuAction::ReleaseHold => {
             // The by-session release command (mail_hold.rs `--release`): the
             // lift answers in microseconds; the held-mail delivery leg runs
@@ -1369,7 +1370,7 @@ pub(super) async fn execute_row_menu_action(
                 }
             });
         }
-        MenuAction::Peek | MenuAction::Mail => {
+        MenuAction::Peek => {
             let idx = view
                 .display_rows()
                 .iter()
@@ -1377,13 +1378,6 @@ pub(super) async fn execute_row_menu_action(
             match idx {
                 Some(idx) => {
                     fetch_peek(view, idx, a.name.clone(), sock_w).await?;
-                    // (6.2) Mail arms the SAME free-text composer peek
-                    // `m` opens - one input surface, two doors.
-                    if matches!(action, MenuAction::Mail) {
-                        view.peek_input =
-                            Some((a.name.clone(), super::composer_draft::load(&a.name)));
-                        view.peek_input_esc.clear();
-                    }
                 }
                 None => view.set_notice("agent is no longer here".into()),
             }
