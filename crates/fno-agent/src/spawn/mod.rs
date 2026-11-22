@@ -130,6 +130,7 @@ pub mod spawn_promote;
 pub mod spawn_remote;
 pub mod spawn_role;
 pub mod spawn_route;
+pub mod spawn_schedule;
 pub mod spawn_seam;
 pub mod spawn_transaction;
 pub mod spawn_watch;
