@@ -161,6 +161,14 @@ impl Core {
         }
     }
 
+    /// Whether `client_id`'s current view holds `pane`: the rule both the
+    /// app's PaneInput write and its DraftHint pass before they touch a pane.
+    pub(super) fn pane_visible_to(&self, client_id: u64, pane: u64) -> bool {
+        self.client_view(client_id)
+            .and_then(|view| self.viewed_tab(view))
+            .is_some_and(|tab| crate::tree::leaves(&tab.root).contains(&pane))
+    }
+
     fn pane_input(
         &mut self,
         client_id: u64,
@@ -169,11 +177,7 @@ impl Core {
         bytes: &[u8],
         agents: Result<Vec<RegistryAgent>, &'static str>,
     ) -> Result<(), String> {
-        let visible = self
-            .client_view(client_id)
-            .and_then(|view| self.viewed_tab(view))
-            .is_some_and(|tab| crate::tree::leaves(&tab.root).contains(&pane));
-        if !visible {
+        if !self.pane_visible_to(client_id, pane) {
             return Err("pane is no longer in the current view".into());
         }
         if let Some(&holder) = self.claims.get(&pane) {

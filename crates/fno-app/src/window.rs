@@ -2286,6 +2286,23 @@ impl Root {
     /// The caret moved or the text changed: repaint and scroll the caret in.
     fn chat_moved(&mut self, cx: &mut Context<Self>) {
         self.chat.field.reveal.set(true);
+        // The draft lives here, not in the pane, until submit_chat pastes
+        // it: while text sits unsent, the hint opens the pane's USER draft
+        // arm (v132) so a live mail inject queues instead of landing
+        // mid-draft. It carries no text. A draft cleared without Enter
+        // releases the way the pane lane does: the arm rides out its hold
+        // window.
+        if !self.chat.draft.text().trim().is_empty() {
+            let hint = self
+                .chat
+                .key
+                .as_ref()
+                .and_then(|key| chat::target_pane(self, key))
+                .map(|(pane, _)| ClientMsg::DraftHint { pane });
+            if let Some(msg) = hint {
+                self.send(msg);
+            }
+        }
         cx.notify();
     }
 
