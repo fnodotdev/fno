@@ -303,11 +303,12 @@ fn ours(passes: &[Value]) -> HashSet<u64> {
 
 /// The runs another row names as cancelled at this slug: a look hold owns
 /// its rerun, and a wait cancel answered a red the head already carries.
-/// The rerun ledger reads this beside the journal's own cancels: a run
-/// both name stays on the ledger, because the tier only cancels live runs
-/// (`plan.cancel` folds `in_flight` heads), so where both rows name one
-/// run the foreign claim is the later, no-op claim on a run already going
-/// down.
+/// The rerun ledger reads this beside the journal's own cancels: a run a
+/// `ci_wait_cancel` row AND the journal's own cancel both name stays on
+/// the ledger (`wait_named_cancels`), because the tier only cancels live
+/// runs, so where both name one run the wait's claim is the later, no-op
+/// claim on a run already going down. A run a look row names keeps the
+/// look's ownership either way.
 pub(crate) fn named_cancels(
     path: &Path,
     slug: &str,
@@ -333,26 +334,53 @@ pub(crate) fn named_cancels(
     Ok(named)
 }
 
+/// The runs a `ci_wait_cancel` row names with `ok true`: the slice of
+/// `named_cancels` a keeper cancel outranks. A look row owns its rerun
+/// unconditionally - the look arm restores its own on release - so only
+/// wait rows take the precedence. The tier only cancels live runs
+/// (`plan.cancel` folds `in_flight` heads), so where a keeper cancel and
+/// a wait row name one run, the wait's claim is the later no-op on a run
+/// already going down.
+fn wait_named_cancels(path: &Path, slug: &str, since_ms: i64) -> Result<HashSet<u64>, String> {
+    let mut named = HashSet::new();
+    for row in rows_of(path, "ci_wait_cancel", slug, since_ms)? {
+        for post in row
+            .pointer("/data/runs")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+        {
+            if post.get("ok").and_then(Value::as_bool) == Some(true) {
+                if let Some(run) = post.get("run").and_then(Value::as_u64) {
+                    named.insert(run);
+                }
+            }
+        }
+    }
+    Ok(named)
+}
+
 /// Whether a cancelled run stays on the rerun ledger: any run no hold row
 /// names, wherever the cancel was made. The runs API names no cancel actor,
 /// so a cancel outside this journal's own rows is a keeper on another
 /// machine or a hand cancel, and it reruns at the head's tier turn. A wait
 /// cancel answered a red the head already carries, so a rerun would burn a
-/// slot on a known red - except a run this journal's own cancel took away:
-/// the tier only cancels live runs, so where both rows name one run the
-/// wait's cancel is the later claim on a run already going down, and the
-/// keeper reruns its own when the slot frees. A look hold reruns its own
-/// when the look clears.
+/// slot on a known red - except a run this journal's own cancel took away
+/// (`wait_named_cancels`). A look hold reruns its own when the look clears.
 fn rerunnable(run: u64, named: &HashSet<u64>) -> bool {
     !named.contains(&run)
 }
 
-/// The rerun-ledger gate: a run the journal's own cancel took away stays
-/// on the ledger even when a foreign row also names it (the tier only
-/// cancels live runs, so the foreign claim is the later one), and a run
-/// only a foreign row names stays off it.
-fn stays_on_ledger(run: u64, named: &HashSet<u64>, ours: &HashSet<u64>) -> bool {
-    rerunnable(run, named) || ours.contains(&run)
+/// The rerun-ledger gate. A run the journal's own cancel took away stays
+/// on the ledger when the wait row also names it; a run only a foreign row
+/// names stays off it.
+fn stays_on_ledger(
+    run: u64,
+    named: &HashSet<u64>,
+    wait_named: &HashSet<u64>,
+    ours: &HashSet<u64>,
+) -> bool {
+    rerunnable(run, named) || (wait_named.contains(&run) && ours.contains(&run))
 }
 
 /// The PR a push of `branch` must wait for, and the refusal sentence. A
@@ -697,9 +725,10 @@ fn pass_repo(root: &Path, slug: &str, path: &Path) -> Result<(), String> {
     let passes = rows_of(path, PASS_EVENT, slug, now - DAY_MS)?;
     let ours = ours(&passes);
     let named = named_cancels(path, slug, now - DAY_MS)?;
+    let wait_named = wait_named_cancels(path, slug, now - DAY_MS)?;
     for (_, head) in &mut ranked {
         head.cancelled
-            .retain(|run| stays_on_ledger(*run, &named, &ours));
+            .retain(|run| stays_on_ledger(*run, &named, &wait_named, &ours));
     }
     // Each merge-queue-gate run in flight holds one slot.
     let slots = SIZE.saturating_sub(gates);
@@ -872,12 +901,22 @@ mod tests {
         // the slot frees. A run only the wait row names stays off the
         // ledger, and an unnamed run stays on it.
         let named: HashSet<u64> = [70u64, 90u64].into();
+        let wait_named: HashSet<u64> = [70u64].into();
         let ours: HashSet<u64> = [70u64].into();
-        assert!(stays_on_ledger(70, &named, &ours));
-        assert!(!stays_on_ledger(90, &named, &ours));
-        assert!(stays_on_ledger(80, &named, &ours));
-        // A look hold's row without a keeper cancel still owns its rerun.
-        assert!(!stays_on_ledger(90, &named, &HashSet::new()));
+        assert!(stays_on_ledger(70, &named, &wait_named, &ours));
+        assert!(!stays_on_ledger(90, &named, &wait_named, &ours));
+        assert!(stays_on_ledger(80, &named, &wait_named, &ours));
+        // A look row owns its rerun unconditionally: even with the keeper's
+        // cancel beside it, the look arm restores its own on release.
+        let look_only_named: HashSet<u64> = [90u64].into();
+        assert!(!stays_on_ledger(
+            90,
+            &look_only_named,
+            &HashSet::new(),
+            &ours
+        ));
+        let both_named: HashSet<u64> = [70u64].into();
+        assert!(!stays_on_ledger(70, &both_named, &HashSet::new(), &ours));
     }
 
     #[test]
