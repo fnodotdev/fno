@@ -981,13 +981,20 @@ fn write_targets_into(file_path: &str, command: &str, out: &mut Vec<String>) {
         // A patch BODY is file content, not shell: extracting write forms from
         // it would block a legitimate patch whose added text merely mentions a
         // redirect. Only a real Bash command goes through the shell grammar.
-        return out;
+        return;
     }
-    bash_write_targets(command, &mut out);
-    out
+    bash_write_targets(command, out);
 }
 
 fn bash_write_targets(cmd: &str, out: &mut Vec<String>) {
+    bash_operator_targets(cmd, out);
+    bash_idiom_targets(cmd, false, out);
+}
+
+/// The shell write-operator families over one command text: redirects on the
+/// raw text, the positional forms on a copy with redirect clauses stripped.
+/// Shared by the command scan and shell-script contents.
+fn bash_operator_targets(cmd: &str, out: &mut Vec<String>) {
     if cmd.is_empty() {
         return;
     }
@@ -1082,16 +1089,31 @@ fn bash_write_targets(cmd: &str, out: &mut Vec<String>) {
             push(caps.get(*grp));
         }
     }
-    bash_idiom_targets(cmd, &mut push);
+}
+
+/// The contents of one invoked script join the scanned surface: shell runners
+/// feed only the operator families, code interpreters arm only the write-call
+/// idioms, known from the invocation itself. A script body never takes the
+/// apply-patch branch.
+fn content_targets_into(content: &str, shell: bool, out: &mut Vec<String>) {
+    if shell {
+        bash_operator_targets(content, out);
+    } else {
+        bash_idiom_targets(content, true, out);
+    }
 }
 
 /// Interpreter write calls: each family pairs a write verb with its path
 /// operand, so a mention or a read never produces a target and the judge
-/// downstream stays the only arbiter. The families only arm when the command
-/// runs an interpreter, so command text that merely carries a write-call
-/// literal (a search pattern, an echoed example) extracts nothing. Literals
-/// only; compilation waits on a cheap hint scan.
-fn bash_idiom_targets(cmd: &str, push: &mut impl FnMut(Option<regex::Match<'_>>)) {
+/// downstream stays the only arbiter. Over a command the families only arm
+/// when the command runs a code interpreter, so text that merely carries a
+/// write-call literal (a search pattern, an echoed example) extracts nothing;
+/// script contents arrive pre-armed, their interpreter named by the command
+/// that invoked them. Literals only; compilation waits on a cheap hint scan.
+fn bash_idiom_targets(cmd: &str, pre_armed: bool, out: &mut Vec<String>) {
+    if cmd.is_empty() {
+        return;
+    }
     const HINTS: [&str; 12] = [
         "open(",
         ".write_text(",
@@ -1109,21 +1131,25 @@ fn bash_idiom_targets(cmd: &str, push: &mut impl FnMut(Option<regex::Match<'_>>)
     if !HINTS.iter().any(|h| cmd.contains(h)) {
         return;
     }
-    // Interpreter context, token-bounded the way shell_surface bounds its own
-    // runner list: a bare substring would read every command carrying `sh`
-    // inside another word, and a shell runner arms nothing on its own - shell
-    // writes present their operators to the families above.
-    let interpreter = regex::Regex::new(
-        r"(^|[[:space:];|&(])(python3|python2|python|nodejs|node|deno|bun|ruby|perl)([[:space:]]|$)",
-    )
-    .map(|re| re.is_match(cmd))
-    .unwrap_or(false);
-    if !interpreter {
-        return;
+    if !pre_armed {
+        // Interpreter context, token-bounded the way shell_surface bounds its
+        // own runner list: a bare substring would read every command carrying
+        // `sh` inside another word, and a shell runner arms nothing on its
+        // own - shell writes present their operators to the families above.
+        let interpreter = regex::Regex::new(
+            r"(^|[[:space:];|&(])(python3|python2|python|nodejs|node|deno|bun|ruby|perl)([[:space:]]|$)",
+        )
+        .map(|re| re.is_match(cmd))
+        .unwrap_or(false);
+        if !interpreter {
+            return;
+        }
     }
     // A quoted literal with an optional single-letter language prefix; the
-    // prefix sits outside the capture so the quotes still strip.
-    let tok = r#"((?:[A-Za-z])?"[^"]*"|(?:[A-Za-z])?'[^']*'|[^[:space:];|&<>"']+)"#;
+    // prefix sits outside the capture group, so a quoted capture strips to
+    // the bare path. The quoted alternative lands in group 1, the unquoted
+    // token in group 2.
+    let tok = r#"(?:(?:[A-Za-z])?("[^"]*"|'[^']*')|([^[:space:];|&<>"']+))"#;
     let mode = r#"['"](?:[wax][a-zA-Z0-9+]*|r\+[a-zA-Z0-9+]*)['"]"#;
     let families: Vec<String> = vec![
         // open(path, ... mode) for the write and append modes, and the 3-arg
@@ -1151,7 +1177,20 @@ fn bash_idiom_targets(cmd: &str, push: &mut impl FnMut(Option<regex::Match<'_>>)
     for pattern in &families {
         if let Ok(re) = regex::Regex::new(pattern) {
             for caps in re.captures_iter(cmd) {
-                push(caps.get(1));
+                let Some(m) = caps.get(1).or_else(|| caps.get(2)) else {
+                    continue;
+                };
+                let mut frag = m.as_str().to_string();
+                let n = frag.len();
+                if n >= 2
+                    && ((frag.starts_with('"') && frag.ends_with('"'))
+                        || (frag.starts_with('\'') && frag.ends_with('\'')))
+                {
+                    frag = frag[1..n - 1].to_string();
+                }
+                if !frag.is_empty() {
+                    out.push(frag);
+                }
             }
         }
     }
@@ -1160,22 +1199,27 @@ fn bash_idiom_targets(cmd: &str, push: &mut impl FnMut(Option<regex::Match<'_>>)
 /// The contents of regular repo files the command invokes as scripts: an
 /// existing file named directly after an interpreter (python3 tools/gen.py,
 /// node x.js, bash hooks/x.sh). Relative tokens resolve against the payload
-/// cwd, the same resolution the targets use. Reads cap at 256 KiB, name repo
-/// files only, and the contents never print or log: they feed the same
-/// extraction as the command text.
-fn invoked_script_contents(cmd: &str, payload_cwd: &str) -> Vec<String> {
+/// cwd, the same resolution the targets use. The toplevel arrives resolved
+/// once per call; reads cap at 256 KiB, name repo files only, and the
+/// contents never print or log: they feed the same extraction as the command
+/// text. Each entry carries whether its interpreter is a shell runner.
+fn invoked_script_contents(
+    cmd: &str,
+    payload_cwd: &str,
+    root: Option<&str>,
+) -> Vec<(String, bool)> {
     const INTERPRETERS: [&str; 13] = [
         "python3", "python", "python2", "node", "nodejs", "deno", "bun", "ruby", "perl", "bash",
         "sh", "zsh", "source",
     ];
-    const SANCTIONED_REGEN_SUFFIXES: [&str; 2] = [
+    const SHELL_RUNNERS: [&str; 5] = ["bash", "sh", "zsh", "dash", "source"];
+    const SANCTIONED_REGEN_SCRIPTS: [&str; 2] = [
         "scripts/regen-generated-copies.py",
         "scripts/generate-skill-bundles.sh",
     ];
     const CAP: u64 = 256 * 1024;
     let mut out = Vec::new();
     let mut prev = String::new();
-    let mut root: Option<String> = None;
     for raw in cmd
         .split(|c: char| c.is_whitespace() || matches!(c, ';' | '|' | '&' | '(' | ')' | '<' | '>'))
     {
@@ -1188,10 +1232,14 @@ fn invoked_script_contents(cmd: &str, payload_cwd: &str) -> Vec<String> {
         }
         let names_script =
             INTERPRETERS.contains(&prev.as_str()) && (tok.contains('/') || tok.contains('.'));
+        let interpreter = prev.clone();
         prev = tok.to_string();
         if !names_script {
             continue;
         }
+        let Some(root) = root else {
+            continue;
+        };
         let abs = if tok.starts_with('/') {
             PathBuf::from(tok)
         } else {
@@ -1204,23 +1252,13 @@ fn invoked_script_contents(cmd: &str, payload_cwd: &str) -> Vec<String> {
         if !abs.is_file() {
             continue;
         }
-        let abs_str = abs.to_string_lossy().into_owned();
-        if SANCTIONED_REGEN_SUFFIXES
-            .iter()
-            .any(|s| abs_str.ends_with(s))
-        {
-            continue;
-        }
-        // Repo files only: the candidate sits under the payload's git
-        // toplevel, resolved once per call.
-        if root.is_none() {
-            root = git_root_of(&abs);
-        }
-        let Some(root) = &root else { continue };
-        let Some(rel) = abs_str.strip_prefix(&format!("{root}/")) else {
+        let Some(rel) = abs
+            .strip_prefix(root)
+            .map(|p| p.to_string_lossy().into_owned())
+        else {
             continue;
         };
-        if rel.is_empty() {
+        if rel.is_empty() || SANCTIONED_REGEN_SCRIPTS.contains(&rel.as_str()) {
             continue;
         }
         let Ok(file) = std::fs::File::open(&abs) else {
@@ -1231,7 +1269,8 @@ fn invoked_script_contents(cmd: &str, payload_cwd: &str) -> Vec<String> {
         if file.take(CAP).read_to_end(&mut buf).is_err() {
             continue;
         }
-        out.push(String::from_utf8_lossy(&buf).into_owned());
+        let shell = SHELL_RUNNERS.contains(&interpreter.as_str());
+        out.push((String::from_utf8_lossy(&buf).into_owned(), shell));
     }
     out
 }
@@ -1267,21 +1306,81 @@ fn git_root_of(path: &Path) -> Option<String> {
 fn generated_section(p: &Payload, _cwd: &Path) -> Sec {
     let mut targets = write_targets(&p.file_path, &p.command);
     // A script's own file I/O never presents a shell write operator; the
-    // contents of script files the command invokes join the scanned surface
-    // and their destinations feed the same judge.
-    for content in invoked_script_contents(&p.command, &p.cwd) {
-        write_targets_into("", &content, &mut targets);
+    // contents of script files the command invokes join the scanned surface,
+    // their interpreter known from the invocation: shell runners feed the
+    // operator families, code interpreters arm the write-call idioms. The
+    // toplevel resolves once for every judge in this call.
+    let cwd_path = PathBuf::from(p.cwd.as_str());
+    let root = git_root_of(&cwd_path);
+    for (content, shell) in invoked_script_contents(&p.command, &p.cwd, root.as_deref()) {
+        content_targets_into(&content, shell, &mut targets);
     }
+    targets.sort_unstable();
+    targets.dedup();
     trace_gen(&format!("targets={targets:?}"));
     if targets.is_empty() {
         return Sec::Allow;
     }
     for t in &targets {
-        if let Some(reason) = generated_target(t, &p.cwd, &p.command) {
+        if !generated_row_can_match(t, root.as_deref()) {
+            continue;
+        }
+        if let Some(reason) = generated_target(t, &p.cwd, &p.command, root.as_deref().unwrap_or(""))
+        {
             return Sec::Block(reason);
         }
     }
     Sec::Allow
+}
+
+/// Whether any manifest row could match `target`: the fixed prefix and tail
+/// of each glob bound the row's reach, bundle and install-prefix surfaces
+/// carry their own rows, and everything else skips the judge. `root` is the
+/// payload's toplevel, resolved once per call.
+fn generated_row_can_match(target: &str, root: Option<&str>) -> bool {
+    if target.starts_with("skills/") || target.starts_with("agents/") {
+        return true;
+    }
+    if target.contains("/plugin-stage/") || target.contains("/plugins/cache/") {
+        return true;
+    }
+    let Some(root) = root else {
+        return false;
+    };
+    let manifest = Path::new(root).join("generated-artifacts.tsv");
+    if !manifest.is_file() {
+        return false;
+    }
+    let Ok(rows) = std::fs::read_to_string(&manifest) else {
+        return false;
+    };
+    let rel = target.strip_prefix(&format!("{root}/")).unwrap_or(target);
+    rows.lines().any(|row| {
+        let Some(glob) = row.split('\t').next() else {
+            return false;
+        };
+        if glob.is_empty() || glob.starts_with('#') {
+            return false;
+        }
+        // The reach of one glob: its fixed leading run and fixed trailing
+        // run. A target that matches neither bound can never match the row.
+        let prefix: String = glob
+            .chars()
+            .take_while(|c| !matches!(c, '*' | '?' | '['))
+            .collect();
+        if !prefix.is_empty() && rel.starts_with(prefix.as_str()) {
+            return true;
+        }
+        let tail: String = glob
+            .chars()
+            .rev()
+            .take_while(|c| !matches!(c, '*' | '?' | ']'))
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
+        !tail.is_empty() && rel.ends_with(tail.as_str())
+    })
 }
 
 /// A row whose regen redirects into its own target reads as a write. Only the
@@ -1296,7 +1395,7 @@ fn trace_gen(msg: &str) {
     }
 }
 
-fn generated_target(t: &str, payload_cwd: &str, command: &str) -> Option<String> {
+fn generated_target(t: &str, payload_cwd: &str, command: &str, root: &str) -> Option<String> {
     let abs = if t.starts_with('/') {
         PathBuf::from(t)
     } else {
@@ -1334,38 +1433,10 @@ fn generated_target(t: &str, payload_cwd: &str, command: &str) -> Option<String>
         }
     }
 
-    // Repo manifests live at the git toplevel the target sits in. The target
-    // is usually a file that does not exist yet, so walk up to the nearest
-    // existing ancestor before asking git, exactly as the shell guard did.
-    let mut dir = abs
-        .parent()
-        .map(|d| d.to_path_buf())
-        .unwrap_or_else(|| PathBuf::from("/"));
-    while !dir.is_dir() {
-        match dir.parent() {
-            Some(parent) if parent != dir => dir = parent.to_path_buf(),
-            _ => break,
-        }
-    }
-    let out = match std::process::Command::new("git")
-        .args(["-C", &dir.to_string_lossy(), "rev-parse", "--show-toplevel"])
-        .output()
-    {
-        Ok(o) => o,
-        Err(e) => {
-            trace_gen(&format!("git spawn failed for {}: {e}", dir.display()));
-            return None;
-        }
-    };
-    if !out.status.success() {
-        trace_gen(&format!(
-            "git rev-parse failed in {}: {}",
-            dir.display(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-        return None;
-    }
-    let root = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    // Repo manifests live at the git toplevel the target sits in, resolved
+    // once per call upstream. An empty root fails open, the same posture a
+    // failed spawn had; the target usually does not exist yet, so the walk
+    // over its ancestors is the caller's job and already done.
     if root.is_empty() {
         return None;
     }
@@ -1742,7 +1813,7 @@ mod tests {
             .join("fno-state/install/plugin-stage/fno/hooks/stop.sh")
             .to_string_lossy()
             .into_owned();
-        let reason = generated_target(&path, "", "").expect("installed stage edits refuse");
+        let reason = generated_target(&path, "", "", "").expect("installed stage edits refuse");
         assert!(reason.contains("installed plugin copy"), "{reason}");
         assert!(reason.contains("hooks/stop.sh"), "{reason}");
     }
@@ -1803,6 +1874,7 @@ mod tests {
             "python3 -c \"open('docs/configuration-guide.md','w').write('x')\"",
             "python3 -c \"from pathlib import Path; Path('docs/configuration-guide.md').write_text('x')\"",
             "node -e \"require('fs').writeFileSync('docs/configuration-guide.md','x')\"",
+            "python3 -c \"open(f'docs/configuration-guide.md','w').write('x')\"",
             "python3 - <<'EOF'\nopen('docs/configuration-guide.md','w').write('x')\nEOF",
         ] {
             match judge(cmd) {
@@ -1816,7 +1888,7 @@ mod tests {
                         "{cmd}: {reason}"
                     );
                 }
-                other => panic!("must refuse: {cmd} -> {other:?}"),
+                other => panic!("must refuse: {cmd}"),
             }
         }
         // Admit arms: a read, a bare mention, command text that merely carries
@@ -1850,7 +1922,7 @@ mod tests {
                 assert!(reason.contains("docs/gen.src"), "{reason}");
                 assert!(reason.contains("make gen"), "{reason}");
             }
-            other => panic!("script contents must refuse: {other:?}"),
+            other => panic!("script contents must refuse: {cmd}"),
         }
         // A read by an inline script and a bare mention stay allowed.
         assert!(matches!(
@@ -1863,7 +1935,7 @@ mod tests {
         assert!(matches!(judge("make gen"), Sec::Allow));
         match judge("make gen; echo x > docs/gen.md") {
             Sec::Block(reason) => assert!(reason.contains("make gen"), "{reason}"),
-            other => panic!("a chained regen must refuse: {other:?}"),
+            other => panic!("a chained regen must refuse: {cmd}"),
         }
         let _ = std::fs::remove_dir_all(&repo);
         // The sanctioned no-build helper is skipped, since writing every row
