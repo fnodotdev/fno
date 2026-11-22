@@ -265,36 +265,86 @@ fn push(
     }
 }
 
+fn same_file(a: &str, b: &str) -> bool {
+    a == b || a.ends_with(&format!("/{b}")) || b.ends_with(&format!("/{a}"))
+}
+
+/// The files the reviewed range changed, or none when git cannot say.
+fn changed_files(data: &Map<String, Value>) -> Option<Vec<String>> {
+    let sha = |key: &str| {
+        data.get(key)
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
+    };
+    let range = format!(
+        "{}..{}",
+        sha("reviewed_base_sha")?,
+        sha("reviewed_head_sha")?
+    );
+    let out = Command::new("git")
+        .args(["diff", "--name-only", &range])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    Some(text.lines().map(str::to_string).collect())
+}
+
 /// A clean `code-review` pass needs proof from the attester's own transcript
-/// that the lane read the change at this head: diff output covering every
-/// changed file after its last head-moving command, or a successful review
-/// subagent call. The caller's `execution_context` word earns no exemption.
-fn unread_diff_refusal(data: &Map<String, Value>, diff_read: &Value) -> Option<String> {
+/// that the lane read the change at this head: every changed file covered by
+/// diff output or a successful read inside the review window, or a successful
+/// review subagent call. The caller's `execution_context` word earns no
+/// exemption. A later round needs only some covered file.
+fn unread_diff_refusal(
+    data: &Map<String, Value>,
+    diff_read: &Value,
+    changed: Option<&[String]>,
+) -> Option<String> {
     let text = |key| data.get(key).and_then(Value::as_str).unwrap_or_default();
     if text("reviewer") != "code-review" || text("verdict") != "pass" {
         return None;
     }
-    // A later round reads only what changed since the prior head, and an
-    // empty diff leaves nothing to read.
+    let total = data["reviewed_file_count"].as_u64().unwrap_or(0);
+    if total == 0 || diff_read["kind"] != "observed" || diff_read["agent"] == true {
+        return None;
+    }
+    let covered: Vec<&str> = diff_read["covered"]
+        .as_array()
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
     let later_round =
         data["review_round"].as_u64().unwrap_or(1) > 1 || data["verify_fixes"] == true;
-    let needed = match data["reviewed_file_count"].as_u64().unwrap_or(0) {
-        0 => return None,
-        _ if later_round => 1,
-        n => n,
-    };
-    let read = diff_read["files"].as_u64().unwrap_or(0);
-    let why = match diff_read["kind"].as_str().unwrap_or("unobserved") {
-        "none" => "this session's transcript shows no diff output".to_string(),
-        "stale" => {
-            "this session's last diff output came before its last commit or merge".to_string()
+    let why = if covered.is_empty() {
+        "this session's transcript shows no diff output and no file read in its review window"
+            .to_string()
+    } else if later_round {
+        return None;
+    } else {
+        let missing: Vec<&String> = changed
+            .unwrap_or_default()
+            .iter()
+            .filter(|f| !covered.iter().any(|c| same_file(c, f)))
+            .collect();
+        let short = changed.is_none() && (covered.len() as u64) < total;
+        if missing.is_empty() && !short {
+            return None;
         }
-        "read" if diff_read["agent"] != true && read < needed => {
-            format!("this session read the diff of {read} of {needed} changed files")
-        }
-        _ => return None,
+        let names: Vec<&str> = missing.iter().take(5).map(|f| f.as_str()).collect();
+        let read = if changed.is_some() {
+            total.saturating_sub(missing.len() as u64)
+        } else {
+            covered.len() as u64
+        };
+        format!(
+            "this session read only {read} of {total} changed files{}",
+            if names.is_empty() {
+                String::new()
+            } else {
+                format!(" (not read: {})", names.join(", "))
+            }
+        )
     };
-    Some(format!("a clean code-review pass needs the lane to read the whole diff at this head, and {why} (a --stat or --name-only probe, a failed command, or output sent to a file does not count). Run `git diff origin/main...HEAD` in plain form, review it, then emit."))
+    Some(format!("a clean code-review pass needs the lane to read every changed file at this head, and {why}. A --stat probe, a failed command or output sent to a file and never read does not count. Run `git diff origin/main...HEAD` in plain form, review it, then emit."))
 }
 
 #[cfg(test)]
@@ -302,29 +352,40 @@ mod refusal_tests {
     use super::*;
 
     fn refusal(extra: Value, diff_read: Value) -> Option<String> {
-        let mut data = json!({"reviewer":"code-review","verdict":"pass","reviewed_file_count":3});
+        let mut data = json!({"reviewer":"code-review","verdict":"pass","reviewed_file_count":6});
         data.as_object_mut()
             .unwrap()
             .extend(extra.as_object().unwrap().clone());
-        unread_diff_refusal(data.as_object().unwrap(), &diff_read)
+        let changed: Vec<String> = ["a.rs", "b.rs", "c.rs", "d.rs", "e.rs", "f.rs"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        unread_diff_refusal(data.as_object().unwrap(), &diff_read, Some(&changed))
+    }
+
+    fn seen(paths: &[&str]) -> Value {
+        json!({"kind":"observed","covered":paths,"agent":false})
     }
 
     #[test]
-    fn a_caller_typed_fork_buys_no_exemption_and_partial_reads_refuse() {
-        let fork = json!({"execution_context":"fork"});
-        assert!(refusal(fork.clone(), json!({"kind":"none"})).is_some());
-        assert!(refusal(fork, json!({"kind":"read","files":1,"agent":false})).is_some());
-        assert!(refusal(json!({}), json!({"kind":"read","files":3,"agent":false})).is_none());
-        assert!(refusal(json!({}), json!({"kind":"read","files":0,"agent":true})).is_none());
+    fn one_region_of_one_of_six_files_is_refused_and_a_typed_fork_buys_nothing() {
+        let all = ["a.rs", "/wt/b.rs", "c.rs", "d.rs", "e.rs", "f.rs"];
+        assert!(refusal(json!({}), seen(&["/wt/a.rs"])).is_some());
+        assert!(refusal(json!({"execution_context":"fork"}), seen(&["/wt/a.rs"])).is_some());
+        assert!(refusal(json!({}), seen(&[])).is_some());
+        assert!(refusal(json!({}), seen(&all)).is_none());
+    }
+
+    #[test]
+    fn later_rounds_unobserved_agents_and_empty_diffs_pass() {
+        let round2 = json!({"review_round":2});
+        assert!(refusal(round2.clone(), seen(&["a.rs"])).is_none());
+        assert!(refusal(round2, seen(&[])).is_some());
+        let agent = json!({"kind":"observed","covered":[],"agent":true});
+        assert!(refusal(json!({}), agent).is_none());
         assert!(refusal(json!({}), json!({"kind":"unobserved"})).is_none());
-        assert!(refusal(json!({"verdict":"fail"}), json!({"kind":"none"})).is_none());
-        assert!(refusal(
-            json!({"review_round":2}),
-            json!({"kind":"read","files":1,"agent":false})
-        )
-        .is_none());
-        assert!(refusal(json!({"review_round":2}), json!({"kind":"none"})).is_some());
-        assert!(refusal(json!({"reviewed_file_count":0}), json!({"kind":"none"})).is_none());
+        assert!(refusal(json!({"verdict":"fail"}), seen(&[])).is_none());
+        assert!(refusal(json!({"reviewed_file_count":0}), seen(&[])).is_none());
     }
 }
 
@@ -406,7 +467,8 @@ pub(super) fn run(args: &[OsString], json_mode: bool) -> i32 {
             eprintln!("error: attester_session_id supplied as '{supplied}' but this process resolves to '{resolved}'. Drop the field; the emitter stamps it. No event emitted.");
             return 1;
         }
-        if let Some(refusal) = unread_diff_refusal(&data, &ctx["diff_read"]) {
+        let changed = changed_files(&data);
+        if let Some(refusal) = unread_diff_refusal(&data, &ctx["diff_read"], changed.as_deref()) {
             eprintln!("error: {refusal} No event emitted.");
             return 1;
         }
