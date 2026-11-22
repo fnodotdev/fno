@@ -14,9 +14,11 @@
 use crate::harness::Harness;
 use serde_json::{json, Value};
 
-/// The NOT LANDED exit: the local send wrote its durable copy for a recipient that is not live, and could not confirm the live inject. The copy exists,
-/// so the receiver's mail owns the body and a retry would duplicate it -
-/// the daemon's pull arm reads this exit as delivered for that reason.
+/// The NOT LANDED exit: the local send wrote its durable copy but did not
+/// confirm a live inject - either the recipient is not live, or its live leg
+/// refused outright (the failed-live-leg arm). The copy exists, so the
+/// receiver's mail owns the body and a retry would duplicate it - the
+/// daemon's pull arm reads this exit as delivered for that reason.
 pub(crate) const NOT_LANDED_EXIT: i32 = 14;
 
 /// The live-lane failure reasons: the recipient WAS live and reachable but

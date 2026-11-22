@@ -562,9 +562,6 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
                         );
                         lane_state = state;
                         injected = lane_state.reached();
-                        if injected {
-                            to_harness = Some(resolved.agent.clone());
-                        }
                         if !injected && !reasons.is_empty() {
                             live_reason = Some(reasons.join(";"));
                         }
