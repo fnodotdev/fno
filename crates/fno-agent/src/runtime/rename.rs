@@ -473,7 +473,9 @@ fn title_push_gap(row: &RegistryEntry, new_name: &str) -> Option<String> {
         .as_deref()
         .is_some_and(|s| !s.is_empty());
     let Some(harness) = harness.filter(|_| has_session) else {
-        return Some("title push skipped: the row has no harness session".to_string());
+        return Some(
+            "title push skipped: the row names no harness or no harness session".to_string(),
+        );
     };
     if row.harness_title.as_deref() == Some(new_name) {
         return None;
@@ -626,7 +628,7 @@ mod tests {
         bare.harness_session_id = None;
         assert!(title_push_gap(&bare, "wren")
             .unwrap()
-            .contains("no harness session"));
+            .contains("no harness"));
     }
 
     #[test]
