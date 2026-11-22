@@ -606,12 +606,19 @@ mod tests {
         req.provenance = json!({"decided_by": "01a0cbdd", "authority_source": "role"});
         req.closed_by = Some("00000000-0000-4000-8000-000000000002".to_string());
         let mut ask = ask_from("q-succ", "49a80492", "which lane?");
-        ask["data"]["rung"] = json!({
-            "level": "lead",
-            "holder_session": "00000000-0000-4000-8000-000000000001",
-            "holder_name": "rowan",
-            "scope": "epic-x",
-        });
+        let data = ask
+            .pointer_mut("/data")
+            .and_then(Value::as_object_mut)
+            .expect("ask carries data");
+        data.insert(
+            "rung".into(),
+            json!({
+                "level": "lead",
+                "holder_session": "00000000-0000-4000-8000-000000000001",
+                "holder_name": "rowan",
+                "scope": "epic-x",
+            }),
+        );
         seed_question(&req, &ask);
         let row = json!({
             "name": "lenore",
@@ -639,13 +646,14 @@ mod tests {
         assert_eq!(result.exit_code, 0, "{:?}", result.lines);
         let closes = rows(&req.journal_path, &["operator_question_closed"]);
         assert_eq!(closes.len(), 1);
+        let close = closes.first().expect("one close row");
         assert_eq!(
-            closes[0]["data"]["closed_via_succession"]["predecessor_name"],
-            json!("rowan")
+            close.pointer("/data/closed_via_succession/predecessor_name"),
+            Some(&json!("rowan"))
         );
         assert_eq!(
-            closes[0]["data"]["closed_via_succession"]["predecessor_session"],
-            json!("00000000-0000-4000-8000-000000000001")
+            close.pointer("/data/closed_via_succession/predecessor_session"),
+            Some(&json!("00000000-0000-4000-8000-000000000001"))
         );
     }
 
@@ -660,12 +668,19 @@ mod tests {
         req.provenance = json!({"decided_by": "01a0cbdd", "authority_source": "role"});
         req.closed_by = Some("00000000-0000-4000-8000-000000000002".to_string());
         let mut ask = ask_from("q-nosucc", "49a80492", "which lane?");
-        ask["data"]["rung"] = json!({
-            "level": "lead",
-            "holder_session": "00000000-0000-4000-8000-000000000001",
-            "holder_name": "rowan",
-            "scope": "epic-x",
-        });
+        let data = ask
+            .pointer_mut("/data")
+            .and_then(Value::as_object_mut)
+            .expect("ask carries data");
+        data.insert(
+            "rung".into(),
+            json!({
+                "level": "lead",
+                "holder_session": "00000000-0000-4000-8000-000000000001",
+                "holder_name": "rowan",
+                "scope": "epic-x",
+            }),
+        );
         seed_question(&req, &ask);
         let row = json!({
             "name": "lenore",
@@ -691,7 +706,14 @@ mod tests {
         );
         let result = run_clear(&req);
         assert_eq!(result.exit_code, 3, "{:?}", result.lines);
-        assert!(result.lines[0].contains("refused"), "{:?}", result.lines);
+        assert!(
+            result
+                .lines
+                .first()
+                .is_some_and(|line| line.contains("refused")),
+            "{:?}",
+            result.lines
+        );
         let closes = rows(&req.journal_path, &["operator_question_closed"]);
         assert!(closes.is_empty(), "nothing closed: {:?}", closes);
     }
@@ -1627,7 +1649,7 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             // the rung's original holder answers too: the current
             // holder of the rung's scope, closing a rung that names a
             // recorded predecessor term.
-            let rung = &question_event["data"]["rung"];
+            let rung = question_event.pointer("/data/rung").unwrap_or(&Value::Null);
             let holds_rung = !lead_withdraw
                 && match crate::question_ladder::holder(&question_event["data"]) {
                     Some(holder) if req.closed_by.as_deref() == Some(holder) => true,
@@ -2889,11 +2911,16 @@ fn close_event_for(
         data["closed_by"] = json!(closed_by);
     }
     if let Some(succession) = succession {
-        data["closed_via_succession"] = json!({
-            "predecessor_name": succession.predecessor_name,
-            "predecessor_session": succession.predecessor_session,
-            "scope": succession.scope,
-        });
+        if let Some(map) = data.as_object_mut() {
+            map.insert(
+                "closed_via_succession".into(),
+                json!({
+                    "predecessor_name": succession.predecessor_name,
+                    "predecessor_session": succession.predecessor_session,
+                    "scope": succession.scope,
+                }),
+            );
+        }
     }
     let event = json!({
         "ts": chrono::Utc::now().to_rfc3339(),

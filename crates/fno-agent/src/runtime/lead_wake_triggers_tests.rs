@@ -69,7 +69,7 @@ fn two_sessions_sharing_one_name_wake_by_session_id() {
         selection.drops
     );
     assert_eq!(selection.ok.len(), 1, "one live holder");
-    let target = &selection.ok[0];
+    let target = selection.ok.first().expect("one live holder");
     assert_eq!(target.holder, "wren");
     assert_eq!(
         target.holder_session,
@@ -90,7 +90,7 @@ fn two_sessions_sharing_one_name_wake_by_session_id() {
         .position(|a| a == "--wake-holder")
         .expect("--wake-holder present");
     assert_eq!(
-        argv[holder_at + 1],
+        argv.get(holder_at + 1).expect("wake holder value present"),
         "bbbbbbbb-2222-4bbb-8bbb-bbbbbbbbbbbb",
         "the wake address is the session id, never the shared name"
     );
@@ -109,7 +109,7 @@ fn a_row_with_no_session_id_still_wakes_by_name() {
     let rows = rows(&[row("briar", None, "busy", Some("epic-x"), &cwd_str)]);
     let selection = select_targets(&rows);
     assert!(selection.drops.is_empty(), "{:?}", selection.drops);
-    let target: &Target = &selection.ok[0];
+    let target: &Target = selection.ok.first().expect("one live holder");
     assert_eq!(target.holder_session, "");
     assert_eq!(target.handle(), "briar");
     std::fs::remove_dir_all(crate::paths::space_dir(&cwd)).ok();

@@ -889,21 +889,28 @@ mod tests {
             crate::team_names::history_append(&store, entry(name, kind, ts, sid)).unwrap();
         }
         let map = past_leads_by_scope(&store);
-        let past = &map["epic-x"];
+        let past = map
+            .iter()
+            .find(|(scope, _)| scope == "epic-x")
+            .map(|(_, list)| list)
+            .expect("epic-x carries past leads");
         assert_eq!(
             past.len(),
             2,
             "a drawn-but-unbound name never led: {past:?}"
         );
-        assert_eq!(past[0]["name"], json!("rowan"));
-        assert_eq!(past[0]["session"], json!("sid-rowan"));
-        assert_eq!(past[1]["name"], json!("lenore"));
+        let rowan = past.first().expect("rowan bound first");
+        assert_eq!(rowan.pointer("/name"), Some(&json!("rowan")));
+        assert_eq!(rowan.pointer("/session"), Some(&json!("sid-rowan")));
+        let lenore = past.get(1).expect("lenore bound second");
+        assert_eq!(lenore.pointer("/name"), Some(&json!("lenore")));
         // The table cell renders the names oldest-first.
         assert_eq!(past_cell(&json!({"past_leads": past})), "rowan, lenore");
         // The current holder's own bound row drops out.
         let past = filter_current_holder(past, "Lenore");
         assert_eq!(past.len(), 1);
-        assert_eq!(past[0]["name"], json!("rowan"));
+        let rowan = past.first().expect("rowan remains");
+        assert_eq!(rowan.pointer("/name"), Some(&json!("rowan")));
     }
 
     #[test]
