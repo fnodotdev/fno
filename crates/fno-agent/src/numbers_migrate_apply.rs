@@ -1373,6 +1373,9 @@ mod tests {
             mint_local(&conn, key, "local", "h").unwrap();
         }
         drop(conn);
+        // The backlog schema comes up with the store, so the decision index
+        // the command reads finds its tables.
+        drop(crate::backlog::open(&home.join("graph.json")).unwrap());
         let keyed_page = "ruled by q-0000beef@mac2, see d-0000feed\n";
         std::fs::write(vault_a.join("q-0000beef.md"), keyed_page).unwrap();
         std::fs::write(vault_a.join("ruling.md"), "d-0000feed holds it\n").unwrap();
@@ -1380,12 +1383,14 @@ mod tests {
         std::fs::write(vault_b.join("notes.md"), "see d-0000feed for the ruling\n").unwrap();
 
         // The child carries its own FNO_HOME, HOME and FNO_CONFIG, so no
-        // ambient store is ever a candidate.
+        // ambient store is ever a candidate. The filter names the full test
+        // path: --exact matches nothing on a bare function name, and a child
+        // that ran nothing still exits 0.
         let exe = std::env::current_exe().unwrap();
-        let status = std::process::Command::new(&exe)
+        let out = std::process::Command::new(&exe)
             .args([
                 "--exact",
-                "migrate_ids_two_project_apply_child",
+                "numbers::migrate::apply::tests::migrate_ids_two_project_apply_child",
                 "--ignored",
             ])
             .env("FNO_HOME", &home)
@@ -1393,9 +1398,18 @@ mod tests {
             .env("FNO_CONFIG", proj_a.join(".fno/config.toml"))
             .env_remove("FNO_STATE_DIR")
             .current_dir(&proj_a)
-            .status()
+            .output()
             .unwrap();
-        assert!(status.success(), "the two-project child failed");
+        assert!(
+            out.status.success(),
+            "the two-project child failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&out.stdout).contains("1 passed"),
+            "the child matched no test: {}",
+            String::from_utf8_lossy(&out.stdout)
+        );
 
         let db = home.join("db").join("graph.db");
         let stored = stored_map(&db).unwrap();
