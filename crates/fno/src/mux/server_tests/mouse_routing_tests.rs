@@ -156,7 +156,7 @@ fn alt_click_over_link_in_mouse_pane_opens_and_plain_click_forwards() {
     // A plain click pair forwards to the app and opens nothing.
     core.mouse(cid, p1, click(false));
     assert!(
-        core.link_click_claims.is_empty(),
+        core.click_claims.is_empty(),
         "an unmodified press never claims"
     );
     core.mouse(cid, p1, release(false));
@@ -176,14 +176,13 @@ fn alt_click_over_link_in_mouse_pane_opens_and_plain_click_forwards() {
 
     // An alt click pair claims on press and opens on release.
     core.mouse(cid, p1, click(true));
-    assert_eq!(
-        core.link_click_claims.get(&p1),
-        Some(&(0, 0, cid)),
+    assert!(
+        core.click_claims.contains_key(&p1),
         "an alt press over a link cell claims the pair"
     );
     core.mouse(cid, p1, release(true));
     assert!(
-        core.link_click_claims.is_empty(),
+        core.click_claims.is_empty(),
         "the release consumes the claim"
     );
     let alt_urls: Vec<String> = {
@@ -203,10 +202,10 @@ fn alt_click_over_link_in_mouse_pane_opens_and_plain_click_forwards() {
 
     // Reaping the pane drops a pending pair (the release can never come).
     core.mouse(cid, p1, click(true));
-    assert_eq!(core.link_click_claims.len(), 1);
+    assert_eq!(core.click_claims.len(), 1);
     core.reap_pane(p1);
     assert!(
-        core.link_click_claims.is_empty(),
+        core.click_claims.is_empty(),
         "a dead pane's claim is purged"
     );
 }

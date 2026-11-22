@@ -158,6 +158,10 @@ mod tests {
             ),
             ("fno-file:relative/path.md", Route::Web),
             ("fno-file:/has space.md", Route::Web),
+            (
+                "fno-file:/tmp/Screen Shot.png",
+                Route::File(PathBuf::from("/tmp/Screen Shot.png"), None),
+            ),
             ("fno-file:", Route::Web),
             ("https://example.com/a", Route::Web),
         ] {

@@ -94,6 +94,69 @@ impl Core {
         ))
     }
 
+    /// The harness session a pane shows, for its pasted-image placeholders.
+    /// Only fno's own records answer, never pane text or a title: the portal
+    /// row, else the one live row bound to the pane. `None` when unsure.
+    pub(super) fn pane_session(&self, pane: u64) -> Option<super::pasted_images::PaneSession> {
+        let row = match crate::thread_viewer::row_for_pane(&self.portals, pane, &self.agents) {
+            Some(row) => {
+                if self.portal_seat_refusal_live(pane, &self.agents).is_some() {
+                    return None;
+                }
+                row
+            }
+            None => self.live_bound_row(pane)?,
+        };
+        let harness = Harness::parse(row.harness.as_deref()?);
+        if !matches!(
+            harness,
+            Harness::Claude | Harness::Codex | Harness::Opencode
+        ) {
+            return None;
+        }
+        let id = row
+            .harness_session_id
+            .as_deref()
+            .or(row.claude_session_uuid.as_deref())
+            .or(row.session_id.as_deref())?;
+        Some(super::pasted_images::PaneSession {
+            harness,
+            id: id.to_string(),
+        })
+    }
+
+    fn live_bound_row(&self, pane: u64) -> Option<&RegistryAgent> {
+        let at = super::agent_rows_join::bind_agent_to_pane(
+            &self.agents,
+            &self.session_name,
+            pane,
+            &self.attached,
+            &|a| self.worker_pane_for_agent(a),
+        )?;
+        let row = self.agents.get(at).filter(|row| !row.exited)?;
+        let Some(bound) = &row.mux else {
+            return Some(row);
+        };
+        // Pane ids recycle: a second live claim, or another pid, is not proof.
+        let claims = self
+            .agents
+            .iter()
+            .filter(|a| !a.exited && a.mux.as_ref() == Some(bound))
+            .count();
+        let child = self.panes.get(&pane).and_then(|e| e.pty.child_pid());
+        let stale = matches!((row.pid, child), (Some(was), Some(now)) if was != u64::from(now));
+        (claims == 1 && !stale).then_some(row)
+    }
+
+    /// Whether the pane is a portal onto another machine's row, whose seat is
+    /// named `key@host`.
+    pub(super) fn is_remote_portal(&self, pane: u64) -> bool {
+        self.panes
+            .get(&pane)
+            .and_then(|entry| entry.name.as_deref())
+            .is_some_and(|name| name.contains('@'))
+    }
+
     /// The live-argv half: the pane's current child, read at gate time.
     fn portal_seat_refusal_live(&self, pane: u64, agents: &[RegistryAgent]) -> Option<String> {
         let argv = self

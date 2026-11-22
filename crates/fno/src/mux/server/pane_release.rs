@@ -30,6 +30,10 @@ impl Core {
     }
 
     fn drop_pane_entry(&mut self, pid: u64, kill: bool) {
+        // Read the session before the mappings that name it are dropped.
+        if let Some(session) = self.pane_session(pid) {
+            pasted_images::forget(&session);
+        }
         if let Some(entry) = self.panes.remove(&pid) {
             if let Ok(mut children) = self.pane_children.lock() {
                 if let Some(child_pid) = entry.pty.child_pid() {
@@ -66,8 +70,7 @@ impl Core {
         // gone, so no jump can ever land there again (v127).
         self.anchors.remove(&pid);
         // A claimed click pair on the dead pane can never see its release.
-        self.fno_token_claims.remove(&pid);
-        self.link_click_claims.remove(&pid);
+        self.click_claims.remove(&pid);
         self.pane_stats.write().unwrap().remove(&pid);
         // Drop any attach mapping onto the dead pane so a re-attach
         // spawns fresh rather than focusing a corpse (the lazy `panes` check in

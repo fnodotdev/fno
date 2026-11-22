@@ -40,6 +40,7 @@ pub(super) async fn serve(
     );
 
     spawn_registry_reader(core_tx.clone(), client_count_rx.clone());
+    tokio::task::spawn_blocking(pasted_images::sweep_dead_sessions);
 
     crate::board_reader::spawn(core_tx.clone(), client_count_rx.clone());
 
@@ -187,8 +188,7 @@ fn new_core(
         wheel_passthrough_rate: crate::digest_overlay::wheel_passthrough_rate(
             &std::env::current_dir().unwrap_or_default(),
         ),
-        fno_token_claims: HashMap::new(),
-        link_click_claims: HashMap::new(),
+        click_claims: HashMap::new(),
         touch_emit_failures: Arc::new(AtomicU64::new(0)),
         started_at: crate::server_stats::stamp_now(),
         client_count: client_count_tx,
