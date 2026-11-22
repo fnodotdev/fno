@@ -265,127 +265,242 @@ fn push(
     }
 }
 
+fn text_of(data: &Map<String, Value>, key: &str) -> String {
+    data.get(key)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn json_text<'a>(v: &'a Value, key: &str) -> &'a str {
+    v.get(key).and_then(Value::as_str).unwrap_or_default()
+}
+
 fn same_file(a: &str, b: &str) -> bool {
     a == b || a.ends_with(&format!("/{b}")) || b.ends_with(&format!("/{a}"))
 }
 
-/// The files the reviewed range changed, or none when git cannot say.
-fn changed_files(data: &Map<String, Value>) -> Option<Vec<String>> {
-    let sha = |key: &str| {
-        data.get(key)
-            .and_then(Value::as_str)
-            .filter(|v| !v.is_empty())
+/// Edit lines since a read that its evidence still carries across.
+const CARRY_LINES: u64 = 100;
+
+fn git_out(args: &[&str]) -> Option<String> {
+    let out = Command::new("git").args(args).output().ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// The files this round must have read, from git and the attestation
+/// journal, never from the emit's own data: everything changed since the
+/// prior attested head when that head is an ancestor, else everything the
+/// branch changed against its base. None when git cannot say.
+fn files_in_scope(branch: &str) -> Option<Vec<String>> {
+    let head = git_out(&["rev-parse", "HEAD"])?.trim().to_string();
+    let prior = std::env::current_exe().ok().and_then(|exe| {
+        let out = Command::new(exe)
+            .args([
+                "do",
+                "review",
+                "prior-head",
+                "--branch",
+                branch,
+                "--head",
+                &head,
+            ])
+            .output()
+            .ok()?;
+        let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (out.status.success() && !sha.is_empty()).then_some(sha)
+    });
+    let from = match prior {
+        Some(sha) if git_out(&["merge-base", "--is-ancestor", &sha, &head]).is_some() => sha,
+        _ => {
+            let default = git_out(&["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+                .map(|s| s.trim().to_string())
+                .unwrap_or_else(|| "origin/main".to_string());
+            git_out(&["merge-base", &head, &default])?
+                .trim()
+                .to_string()
+        }
     };
-    let range = format!(
-        "{}..{}",
-        sha("reviewed_base_sha")?,
-        sha("reviewed_head_sha")?
-    );
-    let out = Command::new("git")
-        .args(["diff", "--name-only", &range])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    Some(text.lines().map(str::to_string).collect())
+    let names = git_out(&["diff", "--name-only", &format!("{from}..{head}")])?;
+    Some(names.lines().map(str::to_string).collect())
+}
+
+/// Is evidence taken at `at` still fresh for `file`? It is when no commit
+/// or working-tree change touched the file since, or when everything changed
+/// since totals under the carry budget (a small fix commit).
+fn evidence_fresh(file: &str, at: &str) -> bool {
+    if at.is_empty() {
+        return true;
+    }
+    let since = format!("--since={at}");
+    let touched = git_out(&["log", &since, "--no-merges", "--format=%H", "--", file])
+        .is_some_and(|o| !o.trim().is_empty())
+        || git_out(&["diff", "HEAD", "--numstat", "--", file])
+            .is_some_and(|o| !o.trim().is_empty());
+    if !touched {
+        return true;
+    }
+    let sum = |text: Option<String>| -> u64 {
+        text.unwrap_or_default()
+            .lines()
+            .filter_map(|l| {
+                let mut f = l.split_whitespace();
+                Some(f.next()?.parse::<u64>().ok()? + f.next()?.parse::<u64>().ok()?)
+            })
+            .sum()
+    };
+    let committed = sum(git_out(&[
+        "log",
+        &since,
+        "--no-merges",
+        "--numstat",
+        "--format=",
+    ]));
+    let dirty = sum(git_out(&["diff", "HEAD", "--numstat"]));
+    committed + dirty < CARRY_LINES
 }
 
 /// A clean `code-review` pass needs proof from the attester's own transcript
-/// that the lane read the change at this head: every changed file covered by
-/// diff output or a successful read inside the review window, or a successful
-/// review subagent call. The caller's `execution_context` word earns no
-/// exemption. A later round needs only some covered file.
+/// that the lane read the change at this head: every file in scope covered
+/// by diff output or a successful read after the review Skill call and
+/// still fresh against git, or a successful review subagent call. Nothing
+/// the caller types (round, flags, counts, execution context) relaxes it.
+/// With no file list to match against, only an empty transcript refuses.
 fn unread_diff_refusal(
     data: &Map<String, Value>,
     diff_read: &Value,
-    changed: Option<&[String]>,
+    scope: Option<&[String]>,
+    fresh: &dyn Fn(&str, &str) -> bool,
 ) -> Option<String> {
     let text = |key| data.get(key).and_then(Value::as_str).unwrap_or_default();
     if text("reviewer") != "code-review" || text("verdict") != "pass" {
         return None;
     }
-    let total = data["reviewed_file_count"].as_u64().unwrap_or(0);
-    if total == 0 || diff_read["kind"] != "observed" || diff_read["agent"] == true {
+    let flag = |key: &str| diff_read.get(key).and_then(Value::as_bool);
+    if json_text(diff_read, "kind") != "observed" || flag("agent") == Some(true) {
         return None;
     }
-    let covered: Vec<&str> = diff_read["covered"]
-        .as_array()
-        .map(|a| a.iter().filter_map(Value::as_str).collect())
+    if flag("window") == Some(false) {
+        return Some("a clean code-review pass needs a review Skill call in this session, and this session's transcript has none, so nothing it read counts as a review. Run the review lane, read the diff in plain form (`git diff origin/main...HEAD`), then emit.".to_string());
+    }
+    let covered: Vec<(&str, &str)> = diff_read
+        .get("covered")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|e| Some((e.get("path")?.as_str()?, json_text(e, "at"))))
+                .collect()
+        })
         .unwrap_or_default();
-    let later_round =
-        data["review_round"].as_u64().unwrap_or(1) > 1 || data["verify_fixes"] == true;
-    let why = if covered.is_empty() {
-        "this session's transcript shows no diff output and no file read in its review window"
-            .to_string()
-    } else if later_round {
-        return None;
-    } else {
-        let missing: Vec<&String> = changed
-            .unwrap_or_default()
-            .iter()
-            .filter(|f| !covered.iter().any(|c| same_file(c, f)))
-            .collect();
-        let short = changed.is_none() && (covered.len() as u64) < total;
-        if missing.is_empty() && !short {
-            return None;
+    let why = match scope {
+        _ if covered.is_empty() => {
+            "this session's transcript shows no diff output and no file read after its review Skill call".to_string()
         }
-        let names: Vec<&str> = missing.iter().take(5).map(|f| f.as_str()).collect();
-        let read = if changed.is_some() {
-            total.saturating_sub(missing.len() as u64)
-        } else {
-            covered.len() as u64
-        };
-        format!(
-            "this session read only {read} of {total} changed files{}",
-            if names.is_empty() {
-                String::new()
-            } else {
-                format!(" (not read: {})", names.join(", "))
+        None => return None,
+        Some(files) => {
+            let missing: Vec<&str> = files
+                .iter()
+                .filter(|f| {
+                    !covered
+                        .iter()
+                        .any(|(p, at)| same_file(p, f) && fresh(f, at))
+                })
+                .map(String::as_str)
+                .collect();
+            if missing.is_empty() {
+                return None;
             }
-        )
+            let read = files.len() - missing.len();
+            let names: Vec<&str> = missing.iter().take(5).copied().collect();
+            format!(
+                "this session read only {read} of {} files in scope (not read, or changed since it read them: {})",
+                files.len(),
+                names.join(", ")
+            )
+        }
     };
-    Some(format!("a clean code-review pass needs the lane to read every changed file at this head, and {why}. A --stat probe, a failed command or output sent to a file and never read does not count. Run `git diff origin/main...HEAD` in plain form, review it, then emit."))
+    Some(format!("a clean code-review pass needs the lane to read every file in this round's scope at this head, and {why}. A --stat probe, a failed command, a diff saved and never read, and a read before the review Skill call do not count. Run `git diff origin/main...HEAD` in plain form, review it, then emit."))
 }
 
 #[cfg(test)]
 mod refusal_tests {
     use super::*;
 
-    fn refusal(extra: Value, diff_read: Value) -> Option<String> {
-        let mut data = json!({"reviewer":"code-review","verdict":"pass","reviewed_file_count":6});
+    const FILES: [&str; 6] = ["a.rs", "b.rs", "c.rs", "d.rs", "e.rs", "f.rs"];
+
+    fn refusal(extra: Value, diff_read: Value, fresh: bool) -> Option<String> {
+        let mut data = json!({"reviewer":"code-review","verdict":"pass"});
         data.as_object_mut()
             .unwrap()
             .extend(extra.as_object().unwrap().clone());
-        let changed: Vec<String> = ["a.rs", "b.rs", "c.rs", "d.rs", "e.rs", "f.rs"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        unread_diff_refusal(data.as_object().unwrap(), &diff_read, Some(&changed))
+        let scope: Vec<String> = FILES.iter().map(|s| s.to_string()).collect();
+        unread_diff_refusal(
+            data.as_object().unwrap(),
+            &diff_read,
+            Some(&scope),
+            &move |_, _| fresh,
+        )
     }
 
     fn seen(paths: &[&str]) -> Value {
-        json!({"kind":"observed","covered":paths,"agent":false})
+        let covered: Vec<Value> = paths
+            .iter()
+            .map(|p| json!({"path": p, "at": "t"}))
+            .collect();
+        json!({"kind":"observed","window":true,"covered":covered,"agent":false})
     }
 
     #[test]
-    fn one_region_of_one_of_six_files_is_refused_and_a_typed_fork_buys_nothing() {
+    fn one_region_of_one_of_six_files_is_refused_whatever_the_caller_types() {
         let all = ["a.rs", "/wt/b.rs", "c.rs", "d.rs", "e.rs", "f.rs"];
-        assert!(refusal(json!({}), seen(&["/wt/a.rs"])).is_some());
-        assert!(refusal(json!({"execution_context":"fork"}), seen(&["/wt/a.rs"])).is_some());
-        assert!(refusal(json!({}), seen(&[])).is_some());
-        assert!(refusal(json!({}), seen(&all)).is_none());
+        assert!(refusal(json!({}), seen(&["/wt/a.rs"]), true).is_some());
+        let typed = json!({"execution_context":"fork","review_round":2,"verify_fixes":true,"reviewed_file_count":0});
+        assert!(refusal(typed, seen(&["/wt/a.rs"]), true).is_some());
+        assert!(refusal(json!({}), seen(&[]), true).is_some());
+        assert!(refusal(json!({}), seen(&all), true).is_none());
     }
 
     #[test]
-    fn later_rounds_unobserved_agents_and_empty_diffs_pass() {
-        let round2 = json!({"review_round":2});
-        assert!(refusal(round2.clone(), seen(&["a.rs"])).is_none());
-        assert!(refusal(round2, seen(&[])).is_some());
-        let agent = json!({"kind":"observed","covered":[],"agent":true});
-        assert!(refusal(json!({}), agent).is_none());
-        assert!(refusal(json!({}), json!({"kind":"unobserved"})).is_none());
-        assert!(refusal(json!({"verdict":"fail"}), seen(&[])).is_none());
-        assert!(refusal(json!({"reviewed_file_count":0}), seen(&[])).is_none());
+    fn unrelated_paths_and_stale_evidence_cover_nothing() {
+        let unrelated = seen(&[
+            "skills/review/references/single-lane.md",
+            "/tmp/findings.json",
+        ]);
+        assert!(refusal(json!({}), unrelated, true).is_some());
+        let all = seen(&FILES);
+        assert!(refusal(json!({}), all, false).is_some());
+    }
+
+    #[test]
+    fn no_review_skill_call_means_no_window_and_a_refusal() {
+        let no_window = json!({"kind":"observed","window":false,"covered":[],"agent":false});
+        assert!(refusal(json!({}), no_window, true).is_some());
+    }
+
+    #[test]
+    fn with_no_file_list_only_an_empty_transcript_refuses() {
+        let data = json!({"reviewer":"code-review","verdict":"pass"});
+        let data = data.as_object().unwrap();
+        let unrelated = seen(&["x.rs", "y.rs"]);
+        assert!(unread_diff_refusal(data, &unrelated, None, &|_, _| true).is_none());
+        assert!(unread_diff_refusal(data, &seen(&[]), None, &|_, _| true).is_some());
+    }
+
+    #[test]
+    fn agents_unobserved_harnesses_fails_and_empty_scopes_pass() {
+        let agent = json!({"kind":"observed","window":true,"covered":[],"agent":true});
+        assert!(refusal(json!({}), agent, true).is_none());
+        assert!(refusal(json!({}), json!({"kind":"unobserved"}), true).is_none());
+        assert!(refusal(json!({"verdict":"fail"}), seen(&[]), true).is_none());
+        let data = json!({"reviewer":"code-review","verdict":"pass"});
+        let empty: Vec<String> = Vec::new();
+        let read = seen(&["z.rs"]);
+        assert!(
+            unread_diff_refusal(data.as_object().unwrap(), &read, Some(&empty), &|_, _| true)
+                .is_none()
+        );
     }
 }
 
@@ -467,8 +582,11 @@ pub(super) fn run(args: &[OsString], json_mode: bool) -> i32 {
             eprintln!("error: attester_session_id supplied as '{supplied}' but this process resolves to '{resolved}'. Drop the field; the emitter stamps it. No event emitted.");
             return 1;
         }
-        let changed = changed_files(&data);
-        if let Some(refusal) = unread_diff_refusal(&data, &ctx["diff_read"], changed.as_deref()) {
+        let branch = text_of(&data, "branch");
+        let scope = files_in_scope(&branch);
+        if let Some(refusal) =
+            unread_diff_refusal(&data, &ctx["diff_read"], scope.as_deref(), &evidence_fresh)
+        {
             eprintln!("error: {refusal} No event emitted.");
             return 1;
         }

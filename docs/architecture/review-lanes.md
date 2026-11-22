@@ -431,15 +431,19 @@ The harness pins one body where it once held two in parity.
 
 ## Diff-read evidence at emit
 
-`fno doctor event emit -t review_attestation` refuses a clean `code-review` pass unless the attesting Claude session's own transcript proves the lane read every changed file at this head.
+`fno doctor event emit -t review_attestation` refuses a clean `code-review` pass unless the attesting Claude session's own transcript proves the lane read every file in this round's scope.
 
-Evidence comes from tool results that succeeded, never from command text. Diff output counts, because its `diff --git` or `+++ b/` header lines name the files. So does a `Read` of a file, and a `sed`, `cat`, `head` or `tail` of one. A successful subagent call whose brief names the diff covers the `--fresh` reviewer.
+The scope comes from git and the attestation journal, never from the emit's data. A first round covers every file the branch changed against its base. When the prior attested head is an ancestor, a later round covers every file changed since that head.
 
-Evidence counts only inside the review window, which starts at the session's last review Skill call. It also needs to come after the last edit to its file. Edits since the evidence that total under 100 lines carry it, as a small fix commit does. A commit, merge or rebase voids nothing. A later round needs evidence of some file, not all.
+Evidence comes from tool results that succeeded, never from command text. Diff output counts, because its `diff --git` or `+++ b/` header lines name the files. This holds for a diff piped through `head`, and for a saved diff read back with `Read` or `sed`. A `Read` of a file counts, and so does a `sed`, `cat`, `head` or `tail` that only reads. A successful subagent call whose brief names the diff covers the `--fresh` reviewer.
 
-A `--stat` probe, a failed command, empty output, and a diff saved to a file and never read give no proof. Reading one region of one of six changed files is refused.
+Evidence counts only after the session's last review Skill call. A session with no such call has no review window, so nothing it read counts.
 
-The caller's `execution_context` word earns no exemption. A non-Claude harness and an unreadable transcript read as unobserved and pass. The check stops the accidental skip. It cannot stop a session that fakes its own transcript.
+Evidence stays fresh while git shows no commit or working-tree change to that file since it was read. It also stays fresh while everything changed since totals under 100 lines, as a small fix commit does. A merge of main alone voids nothing.
+
+A `--stat` probe, a failed command, empty output, a diff saved and never read, `sed -i` and a `>` redirect give no proof. Reading one region of one of six changed files is refused. The round, flags, counts and execution context in the emit's data relax nothing.
+
+A non-Claude harness and an unreadable transcript read as unobserved and pass. The check stops the accidental skip. It cannot stop a session that fakes its own transcript.
 
 ## Attestation origin: whose process rendered the verdict
 

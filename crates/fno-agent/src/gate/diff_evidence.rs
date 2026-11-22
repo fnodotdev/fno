@@ -4,26 +4,30 @@
 //! itself, and only from tool results that succeeded:
 //!
 //! - diff output (`diff --git` or `+++ b/` header lines in any result, so a
-//!   diff piped through `head`, saved and read back, or printed by `git show`
-//!   names the files it covers),
-//! - a `Read` call, or a `sed`/`cat`/`head`/`tail` call, on a file,
+//!   diff piped through `head`, or saved and read back, names its files),
+//! - a `Read` call, or a `sed`/`cat`/`head`/`tail` call that only reads, on
+//!   a file,
 //! - a review subagent call whose brief names the diff.
 //!
-//! Evidence counts inside the review window (from the last review Skill call)
-//! and after the last edit to its file. An edit does not void evidence when
-//! the edits since it total under 100 lines, which is the interdiff a fix
-//! commit may carry. A commit, a merge or a rebase voids nothing.
+//! Evidence counts only after the session's last review Skill call. A session
+//! with no such call has no review window and no evidence. The emit decides
+//! whether each file's evidence is still fresh against the git tree.
 
 use crate::harness::{AsHarness, Harness};
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
-
-/// Edit lines after a read that an earlier read still carries across.
-const CARRY_LINES: usize = 100;
 
 /// Shell readers whose file arguments count as read.
 const READERS: [&str; 6] = ["sed", "cat", "head", "tail", "nl", "bat"];
+
+/// One piece of evidence: the record index, the file, the transcript time.
+type Evidence = (usize, String, String);
+
+/// The string at a JSON pointer, or "".
+fn text_at<'a>(v: &'a Value, pointer: &str) -> &'a str {
+    v.pointer(pointer).and_then(Value::as_str).unwrap_or("")
+}
 
 fn segments(command: &str) -> impl Iterator<Item = Vec<&str>> {
     command
@@ -32,20 +36,16 @@ fn segments(command: &str) -> impl Iterator<Item = Vec<&str>> {
         .filter(|w| !w.is_empty())
 }
 
-fn same_file(a: &str, b: &str) -> bool {
-    a == b || a.ends_with(&format!("/{b}")) || b.ends_with(&format!("/{a}"))
-}
-
 /// The text of one tool result, or none when it failed or printed nothing.
 fn ok_text(block: &Value) -> Option<String> {
-    if block["is_error"].as_bool().unwrap_or(false) {
+    if block.get("is_error").and_then(Value::as_bool) == Some(true) {
         return None;
     }
-    let text = match &block["content"] {
+    let text = match block.get("content")? {
         Value::String(s) => s.clone(),
         Value::Array(items) => items
             .iter()
-            .filter_map(|i| i["text"].as_str())
+            .filter_map(|i| i.get("text").and_then(Value::as_str))
             .collect::<Vec<_>>()
             .join("\n"),
         _ => String::new(),
@@ -76,47 +76,108 @@ fn header_paths(text: &str) -> Vec<String> {
     out
 }
 
-/// File arguments of one shell reader segment.
+/// File arguments of one shell reader segment. A segment that writes
+/// (`sed -i`, a `>` redirect) reads nothing.
 fn reader_paths(words: &[&str]) -> Vec<String> {
     if !words.first().is_some_and(|w| READERS.contains(w)) {
         return Vec::new();
     }
-    words[1..]
+    let writes = words
         .iter()
+        .any(|w| w.starts_with('>') || w.starts_with("-i") || *w == "--in-place");
+    if writes {
+        return Vec::new();
+    }
+    words
+        .iter()
+        .skip(1)
         .map(|w| w.trim_matches(['\'', '"']))
         .filter(|w| !w.starts_with('-') && (w.contains('/') || w.contains('.')))
         .map(str::to_string)
         .collect()
 }
 
-struct Edit {
-    index: usize,
-    path: String,
-    lines: usize,
+fn blocks(record: &Value) -> Vec<Value> {
+    record
+        .pointer("/message/content")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
 }
 
-fn edit_of(index: usize, block: &Value) -> Option<Edit> {
-    let input = &block["input"];
-    let path = input["file_path"]
-        .as_str()
-        .or_else(|| input["notebook_path"].as_str())?
-        .to_string();
-    let count = |v: &Value| v.as_str().map_or(0, |s| s.lines().count());
-    let lines = match block["name"].as_str()? {
-        "Edit" => count(&input["old_string"]).max(count(&input["new_string"])),
-        "Write" => count(&input["content"]),
-        "MultiEdit" => input["edits"].as_array().map_or(0, |edits| {
-            edits.iter().map(|e| count(&e["new_string"])).sum::<usize>()
-        }),
-        "NotebookEdit" => count(&input["new_source"]),
-        _ => return None,
-    };
-    Some(Edit { index, path, lines })
+/// Successful tool results keyed by tool_use id.
+fn results_by_id(records: &[Value]) -> HashMap<String, Value> {
+    let mut results = HashMap::new();
+    for block in records.iter().flat_map(blocks) {
+        if text_at(&block, "/type") == "tool_result" {
+            results.insert(text_at(&block, "/tool_use_id").to_string(), block);
+        }
+    }
+    results
 }
 
-/// `{"kind": observed|unobserved, "covered": [paths], "agent": bool}`.
-/// `covered` lists every file the session read inside the review window and
-/// after its last edit (or within the carry budget of it).
+/// The files one tool call read, judged by its own successful result.
+fn files_read(block: &Value, result: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    match text_at(block, "/name") {
+        "Read" => {
+            found.push(text_at(block, "/input/file_path").to_string());
+            found.extend(header_paths(result));
+        }
+        "Bash" => {
+            found.extend(header_paths(result));
+            for words in segments(text_at(block, "/input/command")) {
+                found.extend(reader_paths(&words));
+            }
+        }
+        _ => {}
+    }
+    found.retain(|p| !p.is_empty());
+    found
+}
+
+/// What the session did: the window start, its evidence, its agent calls.
+fn collect(records: &[Value]) -> (Option<usize>, Vec<Evidence>, Vec<usize>) {
+    let results = results_by_id(records);
+    let (mut window, mut evidence, mut agents) = (None, Vec::new(), Vec::new());
+    for (index, record) in records.iter().enumerate() {
+        let at = text_at(record, "/timestamp");
+        for block in blocks(record) {
+            if text_at(&block, "/type") != "tool_use" {
+                continue;
+            }
+            let result = results.get(text_at(&block, "/id")).and_then(ok_text);
+            match text_at(&block, "/name") {
+                "Skill"
+                    if text_at(&block, "/input/skill")
+                        .to_lowercase()
+                        .contains("review") =>
+                {
+                    window = Some(index);
+                }
+                "Agent" | "Task" => {
+                    let brief = format!(
+                        "{} {}",
+                        text_at(&block, "/input/prompt"),
+                        text_at(&block, "/input/description")
+                    );
+                    if brief.to_lowercase().contains("diff") && result.is_some() {
+                        agents.push(index);
+                    }
+                }
+                _ => {
+                    let files = result.map(|r| files_read(&block, &r)).unwrap_or_default();
+                    evidence.extend(files.into_iter().map(|p| (index, p, at.to_string())));
+                }
+            }
+        }
+    }
+    (window, evidence, agents)
+}
+
+/// `{"kind": observed|unobserved, "window": bool, "agent": bool,
+/// "covered": [{"path", "at"}]}`. `at` is the transcript time of the latest
+/// evidence for that path.
 pub(super) fn scan(agent: &str, path: Option<&Path>) -> Value {
     let unobserved = json!({"kind":"unobserved"});
     if agent.as_harness() != Harness::Claude {
@@ -129,80 +190,23 @@ pub(super) fn scan(agent: &str, path: Option<&Path>) -> Value {
         .lines()
         .filter_map(|l| serde_json::from_str(l).ok())
         .collect();
-    let blocks = |record: &Value| record["message"]["content"].as_array().cloned();
-    let mut results: HashMap<String, Value> = HashMap::new();
-    for record in &records {
-        for block in blocks(record).into_iter().flatten() {
-            if block["type"] == "tool_result" {
-                if let Some(id) = block["tool_use_id"].as_str() {
-                    results.insert(id.to_string(), block.clone());
-                }
-            }
-        }
-    }
-    let mut window = 0;
-    let mut edits: Vec<Edit> = Vec::new();
-    let mut evidence: Vec<(usize, String)> = Vec::new();
-    let mut agent_calls: Vec<usize> = Vec::new();
-    for (index, record) in records.iter().enumerate() {
-        for block in blocks(record).into_iter().flatten() {
-            if block["type"] != "tool_use" {
-                continue;
-            }
-            let id = block["id"].as_str().unwrap_or("");
-            let result = results.get(id).and_then(ok_text);
-            let name = block["name"].as_str().unwrap_or("");
-            if let Some(edit) = edit_of(index, &block) {
-                edits.push(edit);
-                continue;
-            }
-            match name {
-                "Skill" => {
-                    let skill = block["input"]["skill"].as_str().unwrap_or("");
-                    if skill.to_lowercase().contains("review") {
-                        window = index;
-                    }
-                }
-                "Read" => {
-                    if let (Some(path), Some(_)) = (block["input"]["file_path"].as_str(), &result) {
-                        evidence.push((index, path.to_string()));
-                    }
-                }
-                "Bash" => {
-                    let Some(out) = &result else { continue };
-                    evidence.extend(header_paths(out).into_iter().map(|p| (index, p)));
-                    let command = block["input"]["command"].as_str().unwrap_or("");
-                    for words in segments(command) {
-                        evidence.extend(reader_paths(&words).into_iter().map(|p| (index, p)));
-                    }
-                }
-                "Agent" | "Task" => {
-                    let brief = format!(
-                        "{} {}",
-                        block["input"]["prompt"], block["input"]["description"]
-                    );
-                    if brief.to_lowercase().contains("diff") && result.is_some() {
-                        agent_calls.push(index);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    let valid = |index: usize, path: &str| {
-        let later: Vec<&Edit> = edits.iter().filter(|e| e.index > index).collect();
-        !later.iter().any(|e| same_file(&e.path, path))
-            || later.iter().map(|e| e.lines).sum::<usize>() < CARRY_LINES
+    let (window, evidence, agents) = collect(&records);
+    let Some(start) = window else {
+        return json!({"kind":"observed","window":false,"agent":false,"covered":[]});
     };
-    let mut covered = Vec::new();
-    let mut seen = HashSet::new();
-    for (index, path) in &evidence {
-        if *index >= window && valid(*index, path) && seen.insert(path.clone()) {
-            covered.push(path.clone());
+    let mut latest: Vec<(String, String)> = Vec::new();
+    for (_, file, at) in evidence.into_iter().filter(|e| e.0 >= start) {
+        match latest.iter_mut().find(|e| e.0 == file) {
+            Some(slot) => slot.1 = at,
+            None => latest.push((file, at)),
         }
     }
-    let agent_seen = agent_calls.iter().any(|i| *i >= window);
-    json!({"kind":"observed","covered":covered,"agent":agent_seen})
+    let covered: Vec<Value> = latest
+        .into_iter()
+        .map(|(file, at)| json!({"path": file, "at": at}))
+        .collect();
+    let agent_seen = agents.iter().any(|i| *i >= start);
+    json!({"kind":"observed","window":true,"agent":agent_seen,"covered":covered})
 }
 
 #[cfg(test)]
@@ -226,16 +230,6 @@ mod tests {
         ("Skill", json!({"skill": "fno:review"}), "loaded", true)
     }
 
-    fn edit(path: &'static str, lines: usize) -> Step {
-        let body = "x\n".repeat(lines);
-        (
-            "Write",
-            json!({"file_path": path, "content": body}),
-            "ok",
-            true,
-        )
-    }
-
     fn scan_steps(steps: &[Step]) -> Value {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("session.jsonl");
@@ -252,13 +246,25 @@ mod tests {
         scan("claude", Some(&path))
     }
 
-    fn covered(steps: &[Step]) -> Vec<String> {
-        scan_steps(steps)["covered"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_str().unwrap().to_string())
+    fn paths_of(scanned: &Value) -> Vec<String> {
+        let all = scanned.get("covered").and_then(Value::as_array).unwrap();
+        all.iter()
+            .map(|v| text_at(v, "/path").to_string())
             .collect()
+    }
+
+    /// Paths covered after a review Skill call opens the window.
+    fn covered(steps: &[Step]) -> Vec<String> {
+        let mut all = vec![skill()];
+        all.extend(steps.iter().cloned());
+        paths_of(&scan_steps(&all))
+    }
+
+    fn agent_seen(prompt: &'static str, ok: bool) -> Option<bool> {
+        let call = ("Agent", json!({"prompt": prompt}), "findings", ok);
+        scan_steps(&[skill(), call])
+            .get("agent")
+            .and_then(Value::as_bool)
     }
 
     #[test]
@@ -283,6 +289,10 @@ mod tests {
         let filtered = "git diff origin/main...HEAD -- w.rs | rg '^[+-]'";
         let out = "--- a/w.rs\n+++ b/w.rs\n+use x;";
         assert_eq!(covered(&[bash(filtered, out)]), ["w.rs"]);
+    }
+
+    #[test]
+    fn a_saved_diff_read_back_with_read_or_a_shell_reader_covers_its_files() {
         let saved = bash("git diff origin/main...HEAD > /tmp/review-diff.txt", "ok");
         let gutter: Step = (
             "Read",
@@ -290,11 +300,13 @@ mod tests {
             "     1→diff --git a/q.rs b/q.rs\n     2→+x",
             true,
         );
-        assert!(covered(&[saved, gutter]).contains(&"q.rs".to_string()));
+        assert!(covered(&[saved.clone(), gutter]).contains(&"q.rs".to_string()));
+        let sed = bash("sed -n '1,40p' /tmp/review-diff.txt", "+++ b/z.rs\n+x");
+        assert!(covered(&[saved, sed]).contains(&"z.rs".to_string()));
     }
 
     #[test]
-    fn a_read_or_a_shell_reader_covers_the_file_it_names() {
+    fn a_read_or_a_reading_shell_command_covers_the_file_it_names() {
         let sed = bash("sed -n '1195,1235p' crates/a/src/lib.rs", "fn f() {}");
         assert_eq!(covered(&[sed]), ["crates/a/src/lib.rs"]);
         assert_eq!(
@@ -305,51 +317,26 @@ mod tests {
     }
 
     #[test]
-    fn only_evidence_inside_the_review_window_counts() {
-        let steps = [read("/wt/a.rs"), skill(), read("/wt/b.rs")];
-        assert_eq!(covered(&steps), ["/wt/b.rs"]);
+    fn a_writing_shell_command_reads_nothing() {
+        assert!(covered(&[bash("sed -i 's/a/b/' crates/a/src/lib.rs", "x")]).is_empty());
+        assert!(covered(&[bash("cat > crates/a/src/lib.rs", "x")]).is_empty());
+        assert!(covered(&[bash("cat in.txt >> crates/a/src/lib.rs", "x")]).is_empty());
     }
 
     #[test]
-    fn an_edit_voids_earlier_evidence_only_past_the_carry_budget() {
-        assert!(covered(&[read("/wt/a.rs"), edit("/wt/a.rs", 150)]).is_empty());
-        assert_eq!(
-            covered(&[read("/wt/a.rs"), edit("/wt/a.rs", 5)]),
-            ["/wt/a.rs"]
-        );
-        assert_eq!(
-            covered(&[read("/wt/a.rs"), edit("/wt/b.rs", 150)]),
-            ["/wt/a.rs"]
-        );
-    }
-
-    #[test]
-    fn a_commit_or_a_merge_voids_nothing() {
-        let steps = [
-            bash("git diff origin/main...HEAD", DIFF3),
-            bash("git -C /wt commit -m fix", "ok"),
-            bash("git merge origin/main", "ok"),
-        ];
-        assert_eq!(covered(&steps).len(), 3);
+    fn evidence_before_the_review_skill_call_or_with_no_skill_call_does_not_count() {
+        let early = scan_steps(&[read("/wt/a.rs"), skill(), read("/wt/b.rs")]);
+        assert_eq!(paths_of(&early), ["/wt/b.rs"]);
+        let none = scan_steps(&[read("/wt/a.rs")]);
+        assert_eq!(none.get("window").and_then(Value::as_bool), Some(false));
+        assert!(paths_of(&none).is_empty());
     }
 
     #[test]
     fn only_a_successful_diff_briefed_agent_call_counts() {
-        let call = |prompt: &'static str, ok: bool| -> Step {
-            ("Agent", json!({"prompt": prompt}), "findings", ok)
-        };
-        assert_eq!(
-            scan_steps(&[call("list the open TODOs", true)])["agent"],
-            false
-        );
-        assert_eq!(
-            scan_steps(&[call("review the diff", false)])["agent"],
-            false
-        );
-        assert_eq!(
-            scan_steps(&[call("review the diff for bugs", true)])["agent"],
-            true
-        );
+        assert_eq!(agent_seen("list the open TODOs", true), Some(false));
+        assert_eq!(agent_seen("review the diff", false), Some(false));
+        assert_eq!(agent_seen("review the diff for bugs", true), Some(true));
     }
 
     #[test]
