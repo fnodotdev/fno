@@ -106,6 +106,16 @@ impl Default for InstallArgs {
 /// `mux web install-agent [flags]`: render, write, bootstrap.
 pub fn install(args: &InstallArgs) -> i32 {
     let agents_dir = launch_agents_dir();
+    if cfg!(target_os = "macos") {
+        // launchd creates no missing parent for the paths the plist names.
+        let logs = crate::state_layout::home_of(&home().join(".fno"), "logs");
+        if let Err(e) = std::fs::create_dir_all(&logs) {
+            eprintln!(
+                "fno mux web install-agent: could not create {} ({e})",
+                logs.display()
+            );
+        }
+    }
     let receipt = install_agent(
         &agents_dir,
         args.bin.as_deref(),
@@ -276,14 +286,6 @@ fn install_agent(
                 label: None,
             };
         }
-    }
-    // launchd creates no missing parent for the paths the plist names.
-    let logs = crate::state_layout::home_of(&home().join(".fno"), "logs");
-    if let Err(e) = std::fs::create_dir_all(&logs) {
-        eprintln!(
-            "fno mux web install-agent: could not create {} ({e})",
-            logs.display()
-        );
     }
     match write_if_changed(&plist_path, &rendered) {
         Ok(false) => {
