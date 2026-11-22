@@ -2882,9 +2882,8 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
         });
         // These outcomes left the rust bins uninstalled: the leg named its
         // reason on stderr, and the update must not pass as healthy on top
-        // of it. "fresh" proved the bins current and
-        // "installed-newest-published" installed something; these three
-        // installed nothing.
+        // of it. "fresh" proved the bins current; these three installed
+        // nothing.
         if matches!(
             rust_outcome.as_deref(),
             Some("waiting-ci") | Some("skipped-no-origin") | Some("skipped-no-cargo")
@@ -2892,6 +2891,23 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
             failed.push(format!(
                 "rust bins installed nothing ({})",
                 rust_outcome.as_deref().unwrap_or_default()
+            ));
+        }
+        // These three leave the bins at a rev other than the source's. An
+        // "installed <source rev>" row and mail would name a build the
+        // binaries do not carry, so the update fails and names the rev the
+        // client reports.
+        if let Some(o @ ("installed-newest-published" | "newest-published-current" | "partial")) =
+            rust_outcome.as_deref()
+        {
+            let carried = cargo_installed_bin()
+                .map(|b| crate::install::downgrade_guard::probe_rev(&b))
+                .unwrap_or_else(|| "unknown".into());
+            failed.push(format!(
+                "rust bins trail the source ({o}): fno-agent carries {}, source is {}",
+                carried.get(..12).unwrap_or(&carried),
+                rev.as_deref()
+                    .map_or("unknown", |r| r.get(..12).unwrap_or(r))
             ));
         }
         let built_fields: Vec<(&str, String)> = {
@@ -2973,7 +2989,11 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
         journal_call("installed", &installed_fields, front_door.as_deref());
         0
     } else {
-        let mut fields: Vec<(&str, String)> = vec![("rc", "1".to_string())];
+        let mut fields: Vec<(&str, String)> = vec![
+            ("rc", "1".to_string()),
+            ("reason", failed.join("; ")),
+            ("stage", "install".to_string()),
+        ];
         if let Some(r) = &rev {
             fields.push(("new_rev", r.clone()));
         }
