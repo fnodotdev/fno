@@ -39,16 +39,15 @@ impl From<rusqlite::Error> for MintError {
     }
 }
 
-/// `Ok(None)` for an outage, the error for anything else.
-fn at_primary<T>(remote: &Remote, outcome: Result<T, String>) -> Result<Option<T>, MintError> {
-    match outcome {
-        Ok(value) => Ok(Some(value)),
-        Err(error) if crate::store_remote::is_unreachable(&error) => Ok(None),
-        Err(detail) => Err(MintError::Primary {
-            host: remote.host().to_string(),
-            detail,
-        }),
+/// An outage is `Ok`, so the caller queues. Anything else is the error.
+fn outage(remote: &Remote, detail: String) -> Result<(), MintError> {
+    if crate::store_remote::is_unreachable(&detail) {
+        return Ok(());
     }
+    Err(MintError::Primary {
+        host: remote.host().to_string(),
+        detail,
+    })
 }
 
 fn authority() -> Result<(Option<Remote>, String), MintError> {
@@ -90,8 +89,9 @@ fn reserve(
             ],
         )
     });
-    let Some(reply) = at_primary(remote, reserved)? else {
-        return Ok(None);
+    let reply = match reserved {
+        Ok(reply) => reply,
+        Err(detail) => return outage(remote, detail).map(|()| None),
     };
     let key = reply
         .rows
@@ -144,8 +144,8 @@ pub(crate) fn answer_key_at(
                     }
                     pull(remote, &conn)
                 });
-                if at_primary(remote, numbered)?.is_none() {
-                    return Ok(None);
+                if let Err(detail) = numbered {
+                    return outage(remote, detail).map(|()| None);
                 }
             }
         }
