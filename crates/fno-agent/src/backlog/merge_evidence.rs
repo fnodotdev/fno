@@ -198,9 +198,7 @@ impl PrReadError {
 /// that won the primary slot is not a companion and stays in: the primary
 /// is the broken state the docs-twin repair fixes, never a leniency case.
 pub(crate) fn blocking_pr_refs(node: &Value) -> Vec<(i64, Option<String>)> {
-    node_pr_rows(node, |extra| {
-        note_is_docs(extra.get("note").and_then(Value::as_str))
-    })
+    node_pr_rows(node, note_is_docs)
 }
 
 /// The `(pr_number, pr_url)` pairs for a node, primary first, de-duplicated
@@ -211,9 +209,14 @@ pub(crate) fn node_pr_refs(node: &Value) -> Vec<(i64, Option<String>)> {
 
 /// The shared walk under `node_pr_refs` and `blocking_pr_refs`: primary
 /// pair, then additional rows, dropping history-marked rows and any row
-/// `skip_row` refuses. One walk, so the two readers can never drift on
-/// dedup or history handling.
-fn node_pr_rows(node: &Value, skip_row: impl Fn(&Value) -> bool) -> Vec<(i64, Option<String>)> {
+/// whose note `skip_row` refuses. The row's note reaches the predicate
+/// through the RowFacts view, so this module adds no literal-key read.
+/// One walk, so the two readers can never drift on dedup or history
+/// handling.
+fn node_pr_rows(
+    node: &Value,
+    skip_row: impl Fn(Option<&str>) -> bool,
+) -> Vec<(i64, Option<String>)> {
     let mut refs: Vec<(i64, Option<String>)> = Vec::new();
     let mut seen: Vec<i64> = Vec::new();
     if let Some(primary) = node.get("pr_number").and_then(Value::as_i64) {
@@ -231,7 +234,8 @@ fn node_pr_rows(node: &Value, skip_row: impl Fn(&Value) -> bool) -> Vec<(i64, Op
         if extra.get("history").and_then(Value::as_bool) == Some(true) {
             continue;
         }
-        if skip_row(extra) {
+        let note = super::row_facts::RowFacts::of(extra).and_then(|f| f.note().as_str());
+        if skip_row(note) {
             continue;
         }
         let Some(num) = extra.get("number").and_then(Value::as_i64) else {
@@ -264,34 +268,40 @@ pub(crate) fn note_is_docs(note: Option<&str>) -> bool {
     note.is_some_and(|n| n.trim().eq_ignore_ascii_case("docs"))
 }
 
-/// Is the node's primary slot the docs twin itself? The proof is number
-/// AND repo match against an additional docs-noted row: a code PR and a
-/// docs PR can share a number across repos, so the number alone would let
-/// the repair demote a code primary.
-pub(crate) fn primary_is_docs_twin(node: &Value) -> bool {
-    let Some(primary) = node.get("pr_number").and_then(Value::as_i64) else {
-        return false;
-    };
-    let Some(primary_url) = url_string(node.get("pr_url")) else {
-        return false;
-    };
-    let primary_slug = repo_slug_from_url(Some(&primary_url));
-    node.get("additional_prs")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
+/// The node's primary slot, when it is provably the docs twin: the twin's
+/// number AND repo must match an additional docs-noted row, under the
+/// rename aliases. The alias step is load-bearing: the incident row held
+/// the primary at the transferred repo's live name while the twin row
+/// still carried the recorded pre-transfer name, and a code PR and a docs
+/// PR can share a number across repos, so raw slug or number equality
+/// alone proves nothing.
+pub(crate) fn primary_docs_twin_number(node: &Value) -> Option<i64> {
+    let facts = super::row_facts::RowFacts::of(node)?;
+    let primary = facts.pr_number().as_i64()?;
+    let primary_url = facts.pr_url().as_str()?;
+    let aliases = crate::backlog::pr_link::repo_alias_map(None);
+    facts
+        .additional_prs()
+        .as_array()?
+        .iter()
         .any(|extra| {
-            if !note_is_docs(extra.get("note").and_then(Value::as_str)) {
+            let Some(row) = super::row_facts::RowFacts::of(extra) else {
+                return false;
+            };
+            if !note_is_docs(row.note().as_str()) {
                 return false;
             }
-            if extra.get("number").and_then(Value::as_i64) != Some(primary) {
+            if row.number().as_i64() != Some(primary) {
                 return false;
             }
-            match (url_string(extra.get("url")), &primary_slug) {
-                (Some(url), Some(slug)) => repo_slug_from_url(Some(&url)).as_deref() == Some(slug),
-                (url, _) => url.as_deref() == Some(primary_url.as_str()),
+            match row.url().as_str() {
+                Some(twin_url) => {
+                    crate::backlog::pr_link::same_repo_slug(primary_url, twin_url, &aliases)
+                }
+                None => false,
             }
         })
+        .then_some(primary)
 }
 
 /// Fill each url-less ref with the repo-derived url, so every gate read

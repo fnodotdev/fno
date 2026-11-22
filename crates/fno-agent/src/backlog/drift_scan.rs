@@ -1449,7 +1449,7 @@ fn primary_closed(
         Ok(state) => state.state == "CLOSED",
         Err(e) => {
             let nid = node.get("id").and_then(Value::as_str).unwrap_or("?");
-            if super::merge_evidence::primary_is_docs_twin(node) {
+            if super::merge_evidence::primary_docs_twin_number(node).is_some() {
                 // The twin won the primary slot (the state the 404 hint
                 // once produced): a bare "unreadable" advisory is what
                 // once invited a session to re-point the primary at the

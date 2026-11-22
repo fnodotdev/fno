@@ -201,8 +201,11 @@ fn repair_docs_twin_run(args: &Args) -> i32 {
         None,
         |working| {
             let result = repair_docs_twin_primary(working, &node_id);
+            // A refusal publishes no write: Ok(false) leaves the working
+            // set unpersisted, so a refused repair moves nothing.
+            let publish = result.action == "repaired";
             *outcome.borrow_mut() = Some(result);
-            Ok(true)
+            Ok(publish)
         },
     );
     if let Err(err) = published {
@@ -1159,15 +1162,16 @@ fn partition_and_probe(
                     // docs twin once won the primary slot. When the stored
                     // primary IS the twin, the remedy names the sanctioned
                     // repair instead of the update door.
-                    let remedy = if super::merge_evidence::primary_is_docs_twin(successor) {
-                        format!(
-                            "the stored primary is the docs twin; run `fno \
+                    let remedy =
+                        if super::merge_evidence::primary_docs_twin_number(&successor).is_some() {
+                            format!(
+                                "the stored primary is the docs twin; run `fno \
                              backlog reconcile --node {successor_id} \
                              --repair-docs-twin` to demote it"
-                        )
-                    } else {
-                        e.remedy_for(pr, repo.as_deref())
-                    };
+                            )
+                        } else {
+                            e.remedy_for(pr, repo.as_deref())
+                        };
                     owed_failures.push(json!({
                         "successor": successor_id,
                         "pr_number": pr.to_string(),

@@ -55,6 +55,9 @@ pub mod key {
     pub const ENDED_AT: &str = "ended_at";
     /// Key inside one `additional_prs[]` item.
     pub const NUMBER: &str = "number";
+    /// Keys inside one `additional_prs[]` item.
+    pub const URL: &str = "url";
+    pub const NOTE: &str = "note";
     /// Key inside the `supersession` object.
     pub const VERIFIED_AT: &str = "verified_at";
 }
@@ -179,6 +182,9 @@ row_slots! {
     vision_path => VISION_PATH,
     pr_url => PR_URL,
     merge_status => MERGE_STATUS,
+    number => NUMBER,
+    url => URL,
+    note => NOTE,
 }
 
 impl<'a> RowFacts<'a> {
