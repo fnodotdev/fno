@@ -86,7 +86,7 @@ pub(super) fn back_to_live(p: &Palette, cx: &mut gpui::Context<Root>) -> gpui::S
         .hover(move |s| s.bg(rgb(p.hover)))
         .on_click(cx.listener(|root, _, _, cx| root.back_to_live(cx)))
         .child("↓ Back to live")
-        .child(ui::kbd(format!("End or {}↓", ui::cmd_key()), p))
+        .child(ui::kbd(format!("End or {}↓", ui::cmd_key()), p).text_color(rgb(p.muted)))
 }
 
 /// The shared look of the floating one-line bars.
@@ -100,7 +100,7 @@ fn float(p: &Palette) -> Div {
         .py(px(3.0))
         .rounded(px(4.0))
         .border_1()
-        .border_color(rgb(p.border))
+        .border_color(rgb(p.faint))
         .bg(rgb(p.raised))
         .font_family(ui::MONO)
         .text_size(px(ui::BODY))
@@ -205,7 +205,10 @@ impl Rename {
                             .text_color(rgb(p.fg))
                             .child(SharedString::from(format!("{}▏", self.field.text()))),
                     )
-                    .child(ui::kbd("enter sets · blank resets · esc cancels", p)),
+                    .child(
+                        ui::kbd("enter sets · blank resets · esc cancels", p)
+                            .text_color(rgb(p.muted)),
+                    ),
             )
     }
 }
@@ -526,7 +529,7 @@ pub(super) fn peek_view(
                 .p_3()
                 .rounded(px(6.0))
                 .border_1()
-                .border_color(rgb(p.border))
+                .border_color(rgb(p.faint))
                 .bg(rgb(p.panel))
                 .font_family(ui::MONO)
                 .text_size(px(ui::BODY))
@@ -543,7 +546,7 @@ pub(super) fn peek_view(
                         .skip(tail)
                         .map(|l| div().child(SharedString::from(l.clone()))),
                 )
-                .child(ui::kbd("esc or a click closes", &p)),
+                .child(ui::kbd("esc or a click closes", &p).text_color(rgb(p.muted))),
         )
 }
 

@@ -924,7 +924,7 @@ impl Root {
                     .py_2()
                     .rounded(px(6.0))
                     .border_1()
-                    .border_color(rgb(self.palette.border))
+                    .border_color(rgb(self.palette.faint))
                     .bg(rgb(self.palette.raised))
                     .font_family(ui::MONO)
                     .text_size(px(ui::BODY))
