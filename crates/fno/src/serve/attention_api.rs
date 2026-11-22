@@ -657,16 +657,14 @@ async fn answer(
 
 /// Bind 127.0.0.1 and serve; loopback is not configurable (the contract
 /// binds localhost; remote reach is the user's own tunnel).
-pub async fn serve(port: u16) -> Result<(), String> {
+pub async fn serve(port: u16, startup: PathBuf) -> Result<(), String> {
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(|e| format!("cannot bind {addr}: {e}"))?;
     println!("fno attention api: http://{addr}/v1/attention/items (sink token required)");
     let file = TrustedFile::from_env();
-    // An unreadable cwd has no project file to report.
-    let cwd = std::env::current_dir().unwrap_or_default();
-    let project = crate::digest_overlay::project_config_files(&cwd);
+    let project = crate::digest_overlay::project_config_files(&startup);
     for note in file.notes(TrustedKey::AttentionSinks, &project) {
         eprintln!("fno attention api: {note}");
     }

@@ -39,6 +39,7 @@ use tokio::net::{TcpListener, UnixStream};
 use tokio::sync::{broadcast, oneshot};
 
 use crate::proto::{self, ClientMsg, ObserverHello, ServerMsg, BUILD_VERSION, PROTO_VERSION};
+use crate::trusted_config::TrustedFile;
 use crate::web_invites::{Grants, InviteSource};
 
 /// The served page, vendored inline (no CDN) so the strict CSP holds offline.
@@ -571,6 +572,9 @@ pub fn serve(args: WebArgs) -> i32 {
     if args.stop {
         return stop_web(&args.session, &socket);
     }
+    // Taken before anything can change the cwd. The invite hold and the sink
+    // notice compare this folder. An unreadable one has no project file.
+    let startup = std::env::current_dir().unwrap_or_default();
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
@@ -578,10 +582,10 @@ pub fn serve(args: WebArgs) -> i32 {
             return 1;
         }
     };
-    runtime.block_on(run(args, socket))
+    runtime.block_on(run(args, socket, startup))
 }
 
-async fn run(args: WebArgs, socket: PathBuf) -> i32 {
+async fn run(args: WebArgs, socket: PathBuf, startup: PathBuf) -> i32 {
     let token: Arc<str> = match mint_token() {
         Some(t) => t.into(),
         None => {
@@ -670,7 +674,7 @@ async fn run(args: WebArgs, socket: PathBuf) -> i32 {
         rundown_republish,
         hq: Default::default(),
         writable,
-        invites: Arc::new(InviteSource::for_bridge()),
+        invites: InviteSource::for_bridge(TrustedFile::from_env(), &startup).into(),
         click_journal: crate::cli_usage::agents_journal(),
         model: Default::default(),
         shutdown: shutdown_rx,
@@ -682,7 +686,7 @@ async fn run(args: WebArgs, socket: PathBuf) -> i32 {
     if args.attention_api {
         let port = args.attention_port;
         tokio::spawn(async move {
-            if let Err(e) = crate::attention_api::serve(port).await {
+            if let Err(e) = crate::attention_api::serve(port, startup).await {
                 eprintln!("fno mux serve --web: attention api: {e}");
             }
         });

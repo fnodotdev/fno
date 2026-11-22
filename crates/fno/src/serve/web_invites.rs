@@ -9,7 +9,7 @@
 //! The decision here is pure, so every refusal is a table test with no listener.
 
 use crate::trusted_config::{Rows, TrustedFile, TrustedKey};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -85,12 +85,11 @@ pub(crate) struct InviteSource {
 }
 
 impl InviteSource {
-    /// The source for the bridge this process serves. Prints what it found.
-    pub(crate) fn for_bridge() -> Self {
-        // An unreadable cwd has no project file to compare.
-        let cwd = std::env::current_dir().unwrap_or_default();
-        let project = crate::digest_overlay::project_config_files(&cwd);
-        let (source, notices) = Self::at_bind(TrustedFile::from_env(), &project);
+    /// The source for a bridge started in `startup`. Prints what it found. It
+    /// never reads the cwd, so a bridge that changes folder keeps its hold.
+    pub(crate) fn for_bridge(file: TrustedFile, startup: &Path) -> Self {
+        let project = crate::digest_overlay::project_config_files(startup);
+        let (source, notices) = Self::at_bind(file, &project);
         for notice in notices {
             eprintln!("fno mux serve --web: {notice}");
         }

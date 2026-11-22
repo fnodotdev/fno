@@ -3,7 +3,6 @@
 
 use super::tests::{answer_state, raw_request, seed_model, serve_state};
 use super::*;
-use crate::trusted_config::TrustedFile;
 use crate::web_invites::Invite;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -107,6 +106,10 @@ impl Bridge {
             1,
             &[],
         );
+        Self::serving(st, notices).await
+    }
+
+    async fn serving(st: AppState, notices: Vec<String>) -> Self {
         let tx = st.tx.clone();
         let (addr, server) = serve_state(st).await;
         Self {
@@ -200,6 +203,7 @@ async fn invite_source_request_table() {
     trusted_rows_grant_and_a_folder_does_not().await;
     an_unusable_trusted_file_admits_nobody().await;
     a_project_list_holds_or_changes_nothing().await;
+    the_startup_folder_decides_the_hold().await;
     the_layer_gates_every_caller_shape().await;
 }
 
@@ -337,6 +341,40 @@ async fn a_project_list_holds_or_changes_nothing() {
     );
 }
 
+/// The test's cwd is not the startup folder, as after a bridge changes folder.
+/// A source that read the cwd would find no project rows and admit the login.
+async fn the_startup_folder_decides_the_hold() {
+    let dir = tempfile::tempdir().unwrap();
+    let startup = dir.path().join("checkout");
+    std::fs::create_dir_all(startup.join(".git")).unwrap();
+    std::fs::create_dir_all(startup.join(".fno")).unwrap();
+    put(&startup.join(".fno/config.toml"), &row(ANN, "x-1", "owner"));
+    let global = dir.path().join("config.toml");
+    put(&global, &row(BEN, "*", "owner"));
+    let source = {
+        // The project root follows FNO_REPO_ROOT, which other tests set.
+        let _env = crate::digest_overlay::ENVIRONMENT_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let saved = std::env::var_os("FNO_REPO_ROOT");
+        std::env::remove_var("FNO_REPO_ROOT");
+        let source = InviteSource::for_bridge(TrustedFile::Global(global), &startup);
+        if let Some(root) = saved {
+            std::env::set_var("FNO_REPO_ROOT", root);
+        }
+        source
+    };
+    let mut st = answer_state(true, None);
+    st.invites = Arc::new(source);
+    let bridge = Bridge::serving(st, Vec::new()).await;
+    assert_eq!(
+        bridge.hq(&via(BEN)).await,
+        "403",
+        "the startup folder holds"
+    );
+    assert_eq!(bridge.hq(LOCAL).await, "200", "the local user still reads");
+}
+
 async fn the_layer_gates_every_caller_shape() {
     let dir = tempfile::tempdir().unwrap();
     let global = dir.path().join("config.toml");
@@ -406,14 +444,7 @@ async fn ui_click_consent_table() {
     for (writable, invites, path, who, status) in cases {
         let mut st = answer_state(writable, invites);
         st.click_journal = Some(journal.clone());
-        let tx = st.tx.clone();
-        let (addr, server) = serve_state(st).await;
-        let bridge = Bridge {
-            addr,
-            tx,
-            server,
-            notices: Vec::new(),
-        };
+        let bridge = Bridge::serving(st, Vec::new()).await;
         let body = r#"{"screen":"web_hq","control":"tab_row"}"#;
         let got = bridge.status("POST", path, &who, body).await;
         assert_eq!(got, status, "{path} {who} writable={writable}");
