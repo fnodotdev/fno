@@ -148,7 +148,13 @@ pub(crate) fn run(graph: &Path, apply: bool, json_out: bool) -> i32 {
     for owner in owners {
         let row = rows.iter().find(|r| r.id.as_ref() == Some(owner));
         let pr = row.and_then(Row::pr);
-        let slug = super::pr_link::repo_slug_from_url(row.and_then(|r| r.pr_url.as_deref()));
+        let slug =
+            super::pr_link::repo_slug_from_url(row.and_then(|r| r.pr_url.as_deref())).map(|s| {
+                super::pr_link::canonical_repo_slug(
+                    &s,
+                    &super::pr_link::repo_alias_map(Some(cwd.as_path())),
+                )
+            });
         match (pr, slug) {
             (Some(pr), Some(slug)) => match names_in_pr(&cwd, &slug, pr) {
                 Some(names) => {
