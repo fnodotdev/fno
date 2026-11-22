@@ -8,13 +8,13 @@ The explorer fills the left 34 columns. It lists the fleet, then each machine, t
 
 The right pane follows the selection. On the fleet, a machine or a lead it shows one of five tabs over that scope:
 
-- Table: one row per seat, grouped by lead, with its runtime, model, state, age and last turn.
+- Table: one row per seat, grouped by lead, with its runtime, model, state, age, use and last turn. The use column carries the session's priced cost; the totals line sums the scope's published use.
 - Recent: the seats with a published last turn, newest first.
 - Overview: the machines with their beat age, the scope's shape and state counts, then its leads or seats.
 - Graph: one column per lead, one box per seat with its name and model. A lead over six seats wraps into a `↳` column.
 - Health: each machine's verdict, then three signals: no status, parked over two hours, and silent over two hours.
 
-A seat shows its page instead: context, current activity, the node it works, its last turn and its seat facts. The facts include its lead and project. Feed lists the open questions to the user. System lists each machine's state, beat, cap, memory and CPU.
+A seat shows its page instead: context, current activity, token use, the node it works, its last turn and its seat facts. The facts include its lead and project. Feed lists the open questions to the user. System lists each machine's state, beat, cap, memory and CPU.
 
 Below 80 columns the explorer paints alone, and the bottom bar names `F` for full screen.
 
