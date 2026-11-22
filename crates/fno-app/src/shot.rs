@@ -43,15 +43,7 @@ pub fn run(opts: ShotOptions) -> i32 {
         eprintln!("fno-app --shot: {e}");
         return 2;
     }
-    // The no-server frame must not meet a real server, so an unnamed one
-    // attaches to a session no mux was ever started for.
-    let session = opts.session.clone().unwrap_or_else(|| {
-        if opts.first_run == Some(crate::FirstRunShot::NoServer) {
-            format!("shot-no-server-{}", std::process::id())
-        } else {
-            "default".to_string()
-        }
-    });
+    let session = shot_session(&opts);
     let mode = opts.mode.unwrap_or(MainView::Orchestration);
     let find = opts.find;
     let out = opts.out.clone();
@@ -69,17 +61,11 @@ pub fn run(opts: ShotOptions) -> i32 {
     // open and only re-draws when the window server composites the
     // window (the display link gates on occlusion), so the first frame
     // is the shot.
-    // The no-server frame has no world to wait for: it attaches to a
-    // socket nobody listens on, so the offer is what paints.
-    let warmed = if first_run == Some(crate::FirstRunShot::NoServer) {
-        None
-    } else {
-        match prewarm(&session, &opts) {
-            Ok(w) => Some(w),
-            Err(e) => {
-                eprintln!("fno-app --shot: the world did not populate: {e}");
-                return 1;
-            }
+    let warmed = match prewarm(&session, &opts) {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("fno-app --shot: the world did not populate: {e}");
+            return 1;
         }
     };
     gpui::Application::new().run(move |cx: &mut App| {
@@ -227,15 +213,33 @@ fn theme_pin(theme: &str) -> std::io::Result<()> {
     std::env::set_current_dir(&pin_dir)
 }
 
+/// The session the frame attaches to. The no-server frame must not meet a
+/// real server, so an unnamed one attaches to a session no mux was ever
+/// started for.
+fn shot_session(opts: &ShotOptions) -> String {
+    opts.session.clone().unwrap_or_else(|| {
+        if opts.first_run == Some(crate::FirstRunShot::NoServer) {
+            format!("shot-no-server-{}", std::process::id())
+        } else {
+            "default".to_string()
+        }
+    })
+}
+
 /// The pre-warm: connect the link and drain events until the world's
 /// first `Layout` arrives or the budget runs out. Returns the live link,
 /// every event drained before the layout, and the receiver so the root
 /// adopts the stream mid-flight.
+/// The warmed link, or `None` for the no-server frame: it has no world to
+/// wait for and attaches to a socket nobody listens on, so the offer paints.
 fn prewarm(
     session: &str,
-    _opts: &ShotOptions,
-) -> Result<crate::link::WarmedLink, crate::link::LinkError> {
-    crate::link::connect_warmed(session, PREWARM)
+    opts: &ShotOptions,
+) -> Result<Option<crate::link::WarmedLink>, crate::link::LinkError> {
+    if opts.first_run == Some(crate::FirstRunShot::NoServer) {
+        return Ok(None);
+    }
+    crate::link::connect_warmed(session, PREWARM).map(Some)
 }
 
 // The window-server reads the proof needs. CGWindowListCopyWindowInfo

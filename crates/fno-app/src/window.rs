@@ -3838,7 +3838,11 @@ impl Render for Root {
                 .flex_col()
                 .flex_1()
                 .min_h_0()
-                .child(crate::first_run::offer_card(self, self.offer.unwrap(), cx))
+                .child(crate::first_run::offer_card(
+                    self,
+                    self.offer.unwrap_or(crate::first_run::Offer::Ask),
+                    cx,
+                ))
                 .into_any_element(),
             MainView::Chat => self.chat_view(window, cx).into_any_element(),
             MainView::Terminal => self.terminal(cx).into_any_element(),

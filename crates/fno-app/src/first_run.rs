@@ -52,13 +52,10 @@ pub(crate) fn mark(p: &Palette, t: Option<f64>) -> gpui::Div {
         // stamp grows.
         row.resize(width, false);
         let mut line = div().flex().flex_row().h(px(CELL * 2.0));
-        let mut at = 0;
-        while at < row.len() {
-            let ink = row[at];
-            let run = row[at..].iter().take_while(|c| **c == ink).count();
-            let cell = div().w(px(CELL * run as f32)).h_full();
+        for run in row.chunk_by(|a, b| a == b) {
+            let ink = run.first().copied().unwrap_or(false);
+            let cell = div().w(px(CELL * run.len() as f32)).h_full();
             line = line.child(if ink { cell.bg(rgb(p.fg)) } else { cell });
-            at += run;
         }
         out = out.child(line);
     }
