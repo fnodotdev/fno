@@ -433,7 +433,7 @@ The harness pins one body where it once held two in parity.
 
 `fno do review read` serves the whole diff a review round must read and records a receipt. `fno doctor event emit -t review_attestation` refuses a clean `code-review` pass without one.
 
-The scope comes from git and the attestation journals, never from flags or the emit's data. A first round covers everything the branch changed against its merge base. A later round starts at the newest attested head that also has a receipt, when that head is an ancestor. Otherwise it starts at the merge base.
+The scope comes from git and the attestation journals, never from flags or the emit's data. A first round covers everything the branch changed against its merge base. When the newest attested head also has a receipt and is an ancestor, a later round starts there. Otherwise it starts at the merge base.
 
 The receipt names the session, the head, the base, the changed files and the sha256 of the scoped diff. The emit needs a receipt from the same session at the same head, and the sha256 must match a fresh computation. A different session, an older head, a changed diff or a git failure refuses the pass. The round, flags, counts and execution context in the emit's data relax nothing.
 
