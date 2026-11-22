@@ -1412,7 +1412,7 @@ fn primary_closed(
         Ok(state) => state.state == "CLOSED",
         Err(e) => {
             let nid = node.get("id").and_then(Value::as_str).unwrap_or("?");
-            if super::merge_evidence::docs_noted_pr_numbers(node).contains(&number) {
+            if super::merge_evidence::primary_is_docs_twin(node) {
                 // The twin won the primary slot (the state the 404 hint
                 // once produced): a bare "unreadable" advisory is what
                 // once invited a session to re-point the primary at the
@@ -1420,7 +1420,7 @@ fn primary_closed(
                 // repair instead.
                 advisories.push(format!(
                     "open-binding rebind: {nid}'s primary PR #{number} is \
-                     the docs twin; run `fno backlog reconcile {nid} \
+                     the docs twin; run `fno backlog reconcile --node {nid} \
                      --repair-docs-twin` to demote it"
                 ));
             } else {

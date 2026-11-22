@@ -41,7 +41,7 @@ use crate::backlog::workflows::{
 use crate::backlog_ready::node_is_open;
 use crate::graph_store::{self, read_rows, settle_blocked_by_edges};
 
-const USAGE: &str = "usage: fno-agent backlog reconcile [--dry-run|-N] [--node ID] [--json|-J] [--pr-number N] [--repo owner/repo] [--audit-contained [--apply]]";
+const USAGE: &str = "usage: fno-agent backlog reconcile [--dry-run|-N] [--node ID] [--repair-docs-twin] [--json|-J] [--pr-number N] [--repo owner/repo] [--audit-contained [--apply]]";
 
 /// The door owns the help now: the Python parser that rendered the option
 /// surface is deleted with its command. The epilog's reopen pointer survives
@@ -187,6 +187,10 @@ fn repair_docs_twin_run(args: &Args) -> i32 {
         eprintln!("--repair-docs-twin needs --node ID\n{USAGE}");
         return 2;
     };
+    if args.dry_run {
+        eprintln!("--repair-docs-twin runs its own graph write; drop --dry-run\n{USAGE}");
+        return 2;
+    }
     let graph_path = super::settings::graph_path();
     let node_id = node.to_string();
     let outcome: std::cell::RefCell<Option<DocsTwinRepair>> = std::cell::RefCell::new(None);

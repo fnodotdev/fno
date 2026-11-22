@@ -6,7 +6,7 @@
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::merge_evidence::{blocking_pr_refs, docs_noted_pr_numbers, node_pr_refs};
+use super::merge_evidence::{blocking_pr_refs, node_pr_refs, primary_is_docs_twin};
 use super::node_ref::find_node_index;
 use super::pr_link::repo_slug_from_url;
 use crate::backlog_ready::node_is_open;
@@ -75,7 +75,7 @@ pub(crate) fn bind_pr_rows(
             return PrRowBindResult::refused(format!("unknown node: {nid}"));
         };
         if let Some(our) = &our_repo {
-            let docs_twin = docs_noted_pr_numbers(&entries[index]);
+            let primary_number = entries[index].get("pr_number").and_then(Value::as_i64);
             for (number, url) in blocking_pr_refs(&entries[index]) {
                 let Some(existing_repo) = repo_slug_from_url(url.as_deref()) else {
                     return PrRowBindResult::refused(format!(
@@ -85,14 +85,14 @@ pub(crate) fn bind_pr_rows(
                     ));
                 };
                 if !crate::backlog::pr_link::same_repo_slug(&existing_repo, our, aliases) {
-                    if docs_twin.contains(&number) {
+                    if primary_number == Some(number) && primary_is_docs_twin(&entries[index]) {
                         // The twin won the primary slot (the state the 404
                         // hint once produced): the shape is broken, and the
                         // sanctioned repair demotes it. The refusal names
                         // that door instead of a bare cross-repo claim.
                         return PrRowBindResult::refused(format!(
                             "{nid} carries docs PR #{number} in its primary \
-                             slot; run `fno backlog reconcile {nid} \
+                             slot; run `fno backlog reconcile --node {nid} \
                              --repair-docs-twin` to demote it - refusing a \
                              docs-twin primary"
                         ));
@@ -291,7 +291,7 @@ pub(crate) fn repair_docs_twin_primary(entries: &mut [Value], node_id: &str) -> 
     let Some(primary) = node.get("pr_number").and_then(Value::as_i64) else {
         return refused(format!("{node_id} carries no primary PR to repair"));
     };
-    if !docs_noted_pr_numbers(node).contains(&primary) {
+    if !primary_is_docs_twin(node) {
         return refused(format!(
             "{node_id}'s primary PR #{primary} is not a docs twin: no \
              additional_prs row names it with note docs"
@@ -558,6 +558,19 @@ mod tests {
                     "pr_url": "https://github.com/fnodotdev/fno-web/pull/288",
                 }),
                 "no additional_prs row names it with note docs",
+            ),
+            (
+                // A code PR and a docs PR can share a number across repos:
+                // the number alone is no proof, the url names the repo too.
+                json!({
+                    "id": "x-aaaa",
+                    "pr_number": 288,
+                    "pr_url": "https://github.com/fnodotdev/fno/pull/288",
+                    "additional_prs": [
+                        {"number": 288, "url": "https://github.com/footnote-sh/fno-web/pull/288", "note": "docs"},
+                    ],
+                }),
+                "not a docs twin",
             ),
         ];
         for (row, why) in cases {

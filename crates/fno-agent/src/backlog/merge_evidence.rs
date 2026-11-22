@@ -264,17 +264,34 @@ pub(crate) fn note_is_docs(note: Option<&str>) -> bool {
     note.is_some_and(|n| n.trim().eq_ignore_ascii_case("docs"))
 }
 
-/// The additional_prs numbers whose note marks a docs PR. A docs ref is an
-/// ancillary companion the docs step recorded beside the delivery PR, never
-/// a claim about the delivery PR itself.
-pub(crate) fn docs_noted_pr_numbers(node: &Value) -> Vec<i64> {
+/// Is the node's primary slot the docs twin itself? The proof is number
+/// AND repo match against an additional docs-noted row: a code PR and a
+/// docs PR can share a number across repos, so the number alone would let
+/// the repair demote a code primary.
+pub(crate) fn primary_is_docs_twin(node: &Value) -> bool {
+    let Some(primary) = node.get("pr_number").and_then(Value::as_i64) else {
+        return false;
+    };
+    let Some(primary_url) = url_string(node.get("pr_url")) else {
+        return false;
+    };
+    let primary_slug = repo_slug_from_url(Some(&primary_url));
     node.get("additional_prs")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter(|extra| note_is_docs(extra.get("note").and_then(Value::as_str)))
-        .filter_map(|extra| extra.get("number").and_then(Value::as_i64))
-        .collect()
+        .any(|extra| {
+            if !note_is_docs(extra.get("note").and_then(Value::as_str)) {
+                return false;
+            }
+            if extra.get("number").and_then(Value::as_i64) != Some(primary) {
+                return false;
+            }
+            match (url_string(extra.get("url")), &primary_slug) {
+                (Some(url), Some(slug)) => repo_slug_from_url(Some(&url)).as_deref() == Some(slug),
+                (url, _) => url.as_deref() == Some(primary_url.as_str()),
+            }
+        })
 }
 
 /// Fill each url-less ref with the repo-derived url, so every gate read
