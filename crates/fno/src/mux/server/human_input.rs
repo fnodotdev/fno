@@ -498,11 +498,7 @@ impl Core {
         // A hint arms only a pane its sender actually views: the same rule
         // the app's PaneInput write passes, so a stray or hostile pane id
         // cannot hold mail off a pane nobody is drafting into.
-        let visible = self
-            .client_view(id)
-            .and_then(|view| self.viewed_tab(view))
-            .is_some_and(|tab| crate::tree::leaves(&tab.root).contains(&pane));
-        if !visible {
+        if !self.pane_visible_to(id, pane) {
             return;
         }
         self.composer.note_user_input(pane, now, false);
