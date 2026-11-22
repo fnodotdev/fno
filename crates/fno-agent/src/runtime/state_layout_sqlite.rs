@@ -622,6 +622,63 @@ fn run_protocol(root: &Path, row: &Row, legacy: &Path, new: &Path, stamp: &str) 
     Status::Moved
 }
 
+/// The journal files at the root, and the held ones already as entries.
+fn journal_family(
+    root: &Path,
+    live: &Path,
+    holds: &Holds,
+) -> (Vec<PathBuf>, Vec<(String, Status)>) {
+    let mut family: Vec<PathBuf> = Vec::new();
+    if live.exists() {
+        family.push(live.to_path_buf());
+    }
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Some(rest) = name.strip_prefix("events.jsonl.") else {
+                continue;
+            };
+            if rest == "ephemeral" || (!rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+            {
+                family.push(entry.path());
+            }
+        }
+    }
+    let mut held = Vec::new();
+    family.retain(|path| {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        if !holds.holds(&name) {
+            return true;
+        }
+        held.push((name.into_owned(), Status::Held));
+        false
+    });
+    (family, held)
+}
+
+/// Whether an earlier pass already retired the root journal.
+fn retired_before(live: &Path) -> bool {
+    let prior = crate::event_store::query_events(
+        live,
+        &crate::event_store::EventQuery {
+            types: vec!["legacy_journal_retired".to_string()],
+            ..Default::default()
+        },
+    )
+    .unwrap_or_default();
+    prior.iter().any(|row| {
+        serde_json::from_str::<serde_json::Value>(&row.line)
+            .ok()
+            .and_then(|v| {
+                v.get("data")
+                    .and_then(|d| d.get("journal"))
+                    .and_then(|j| j.as_str())
+                    .map(str::to_string)
+            })
+            .is_some_and(|j| j == "events.jsonl")
+    })
+}
+
 fn migrating_path(new: &Path) -> PathBuf {
     let name = new.file_name().and_then(|n| n.to_str()).unwrap_or("store");
     new.with_file_name(format!("{name}.migrating"))
@@ -730,32 +787,8 @@ pub(crate) fn journal_retire(
     apply: bool,
     holds: &Holds,
 ) -> Vec<(String, Status)> {
-    let mut out: Vec<(String, Status)> = Vec::new();
     let live = root.join("events.jsonl");
-    let mut family: Vec<PathBuf> = Vec::new();
-    if live.exists() {
-        family.push(live.clone());
-    }
-    if let Ok(entries) = std::fs::read_dir(root) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let Some(rest) = name.strip_prefix("events.jsonl.") else {
-                continue;
-            };
-            if rest == "ephemeral" || (!rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
-            {
-                family.push(entry.path());
-            }
-        }
-    }
-    family.retain(|path| {
-        let name = path.file_name().unwrap_or_default().to_string_lossy();
-        let held = holds.holds(&name);
-        if held {
-            out.push((name.into_owned(), Status::Held));
-        }
-        !held
-    });
+    let (family, mut out) = journal_family(root, &live, holds);
     if family.is_empty() {
         return out;
     }
@@ -827,25 +860,7 @@ pub(crate) fn journal_retire(
     // legacy_journal signal. `repeat` is true when an earlier pass already
     // retired this journal.
     if parked.len() == names.len() {
-        let prior = crate::event_store::query_events(
-            &live,
-            &crate::event_store::EventQuery {
-                types: vec!["legacy_journal_retired".to_string()],
-                ..Default::default()
-            },
-        )
-        .unwrap_or_default();
-        let repeat = prior.iter().any(|row| {
-            serde_json::from_str::<serde_json::Value>(&row.line)
-                .ok()
-                .and_then(|v| {
-                    v.get("data")
-                        .and_then(|d| d.get("journal"))
-                        .and_then(|j| j.as_str())
-                        .map(str::to_string)
-                })
-                .is_some_and(|j| j == "events.jsonl")
-        });
+        let repeat = retired_before(&live);
         let mut fields = serde_json::Map::new();
         fields.insert("journal".into(), serde_json::Value::from("events.jsonl"));
         fields.insert("files".into(), serde_json::Value::from(parked.len()));

@@ -49,6 +49,8 @@ run_sync() {
 # Cache home, env-then-platform only (hook hot path: no fno fork, D1839).
 if [[ -n "${FNO_CONTEXT_CACHE_DIR:-}" ]]; then
     CACHE_DIR="$FNO_CONTEXT_CACHE_DIR"
+elif [[ -n "${FNO_CACHE_HOME:-}" ]]; then
+    CACHE_DIR="${FNO_CACHE_HOME/#\~/${HOME:-/tmp}}/context"
 elif [[ "$(uname -s)" == "Darwin" ]]; then
     CACHE_DIR="${HOME:-/tmp}/Library/Caches/fno/context"
 else

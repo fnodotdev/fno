@@ -124,7 +124,7 @@ The daemon runs the mover at start. You can run it yourself.
 | `fno-agent state migrate --apply` | Move what is ready. |
 | `fno-agent state migrate --reverse <stamp>` | Dry run of a reverse. |
 | `fno-agent state migrate --reverse <stamp> --apply` | Put back the moves of that stamp and hold those names. |
-| `fno-agent state migrate <name> --apply` | Clear the hold on a name and move it again. |
+| `fno-agent state migrate <name> --apply` | Clear the hold on a name, then run a full pass. |
 
 Each run that changes a file gets a stamp under `~/.fno/backups/state-root-migration/`. Its `manifest.json` lists every step. A reverse reads that list from the last step to the first. It refuses to overwrite a file, and it names both paths. It also refuses a published SQLite store, because you must roll a store back by hand.
 
@@ -132,10 +132,12 @@ A reverse writes `~/.fno/state/layout-hold.json` before its first move. Each lat
 
 To go back to an older fno, do these steps in this order:
 
-1. Reverse the stamps with the new binary, newest first.
-2. Install the older binary.
+1. Stop the daemon.
+2. List the stamps that hold a `manifest.json`. Do this before the first reverse.
+3. Reverse only the stamps on that list with the new binary, newest first. A reverse writes a stamp of its own. Do not reverse that one.
+4. Install the older binary.
 
-The older binary cannot read a manifest, so it cannot do step 1.
+The older binary cannot read a manifest, so it cannot do step 3. It also ignores holds. Its own mover can move those entries again.
 
 ## Template variables
 

@@ -492,7 +492,8 @@ impl Receipt {
             if named.is_empty() {
                 continue;
             }
-            let shown = named[..named.len().min(SHOWN)].join(", ");
+            let shown: Vec<&str> = named.iter().take(SHOWN).map(String::as_str).collect();
+            let shown = shown.join(", ");
             note.push_str(&format!("; {word}: {shown}"));
             if named.len() > SHOWN {
                 note.push_str(&format!(", and {} more", named.len() - SHOWN));
