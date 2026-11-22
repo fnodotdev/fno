@@ -1419,10 +1419,10 @@ fn tsv_help(args: &[OsString]) -> Option<String> {
     if last != "--help" && last != "-h" {
         return None;
     }
-    let path: Vec<&str> = args[..args.len() - 1]
-        .iter()
-        .map(|a| a.to_str())
-        .collect::<Option<_>>()?;
+    let Some((_, head)) = args.split_last() else {
+        return None;
+    };
+    let path: Vec<&str> = head.iter().map(|a| a.to_str()).collect::<Option<_>>()?;
     match path.as_slice() {
         [word, ..]
             if matches!(

@@ -781,20 +781,20 @@ fn root_flag_help(args: &[OsString]) -> Option<bool> {
         .iter()
         .map(|a| a.to_str())
         .collect::<Option<Vec<_>>>()?;
-    let mut at = 0;
-    while at < words.len() {
-        match words[at] {
-            "--server" | "--session" => at += 2,
+    let mut it = words.iter();
+    while let Some(&w) = it.next() {
+        match w {
+            "--server" | "--session" => {
+                it.next();
+            }
             "--help" | "-h" => {
                 help = true;
-                at += 1;
             }
             "--all" | "-A" => {
                 all = true;
-                at += 1;
             }
-            w if w.starts_with("--server=") || w.starts_with("--session=") => at += 1,
-            w if w == "-J" || w == "--json" => at += 1,
+            w if w.starts_with("--server=") || w.starts_with("--session=") => {}
+            "-J" | "--json" => {}
             _ => return None,
         }
     }
