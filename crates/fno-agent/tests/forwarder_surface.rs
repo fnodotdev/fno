@@ -3,6 +3,8 @@
 //! against an injected poster. These drive eval modules from outside the
 //! G3 scope, which docs/test-audit/scopes.tsv counts in their own scope
 //! (G3 keeps cap 0; this file's path matches no G3 row and lands in G2).
+//! The project env hook boundary lives here too: folder data may not run
+//! code or steer fno.
 
 use fno_agent::attention_http::{HttpPost, PostResult};
 use fno_agent::eval::otel_ingest::requests_in_window;
@@ -347,4 +349,214 @@ fn receipts_carry_the_scope_field() {
         Some("api_requests")
     );
     assert_eq!(line.pointer("/records").and_then(Value::as_i64), Some(1));
+}
+
+fn bash_path() -> std::path::PathBuf {
+    std::env::var_os("FNO_TEST_BASH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("/bin/bash"))
+}
+
+fn zsh_path() -> Option<std::path::PathBuf> {
+    if let Some(p) = std::env::var_os("FNO_TEST_ZSH") {
+        return Some(std::path::PathBuf::from(p));
+    }
+    ["/bin/zsh", "/usr/bin/zsh"]
+        .iter()
+        .map(std::path::PathBuf::from)
+        .find(|p| p.exists())
+}
+
+/// A project env file is untrusted folder data at the hook boundary:
+/// keys must be plain shell names, reserved controls drop, values
+/// round-trip exactly through the emission form, a forged name list
+/// never survives, and FNO_PROJECT_ENV_KEYS lands last. Integer shell
+/// variables (HISTCMD, OPTIND, RANDOM, SRANDOM) evaluate on assignment,
+/// so the emission must unset the name first; tilde and a leading
+/// equals stay literal; no emission deletes a function. Failure: the
+/// hook writes raw keys or an evaluating form, so sourcing the emitted
+/// file runs folder data, steers a reserved control, or loses a value.
+/// Each arm runs under bash and, where present, under zsh. The emitted
+/// file must also parse: the pre-fix replacement turned a quoted value
+/// into a syntax error under bash 3.2.
+#[test]
+fn project_env_file_cannot_steer_fno() {
+    let hook =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../hooks/worktree-env-reload.sh");
+    let ws = tempfile::tempdir().unwrap();
+    let env_out = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+
+    std::fs::write(
+        ws.path().join(".env"),
+        concat!(
+            "# a comment\n",
+            "APP_TOKEN=plain-value\n",
+            "QUOTED=\"has spaces and 'a quote'\"\n",
+            "EVIL_VAL=a'; touch fno-hook-marker; echo 'b\n",
+            "DASH-KEY=1\n",
+            "X$(touch fno-hook-marker)=plain\n",
+            "HISTCMD=x$(touch fno-hook-marker)y\n",
+            "OPTIND=x$(touch fno-hook-marker)y\n",
+            "RANDOM=x$(touch fno-hook-marker)y\n",
+            "SRANDOM=x$(touch fno-hook-marker)y\n",
+            "TILDE_VAL=~/steered\n",
+            "EQ_VAL==touch fno-hook-marker\n",
+            "ZZ_LAST=ok\n",
+            "FNO_CONFIG=/steered/config\n",
+            "CLAUDE_ENV_FILE=steered\n",
+            "PATH=/steered/bin\n",
+            "DO_NOT_TRACK=steered\n",
+            "PROMPT_COMMAND=steered\n",
+            "FPATH=/steered/fpath\n",
+            "NODE_OPTIONS=--steered\n",
+            "PYTHONSTARTUP=/steered.py\n",
+            "ANTHROPIC_BASE_URL=https://steered\n",
+            "GH_HOST=steered\n",
+            "HTTPS_PROXY=steered\n",
+            "FNO_PROJECT_ENV_KEYS=FORGED\n",
+        ),
+    )
+    .unwrap();
+
+    let env_file = env_out.path().join("env");
+    let run = std::process::Command::new(bash_path())
+        .env("CLAUDE_ENV_FILE", &env_file)
+        .arg(&hook)
+        .current_dir(ws.path())
+        .output()
+        .unwrap();
+    assert!(run.status.success(), "the hook runs clean");
+
+    let emitted = std::fs::read_to_string(&env_file).unwrap();
+    let last = emitted.lines().last().unwrap();
+    assert_eq!(
+        last,
+        "export FNO_PROJECT_ENV_KEYS=\"APP_TOKEN EQ_VAL EVIL_VAL HISTCMD OPTIND QUOTED RANDOM SRANDOM TILDE_VAL ZZ_LAST\"",
+        "the sorted allowed names land last: {last}"
+    );
+
+    let mut shells = vec![bash_path()];
+    if let Some(zsh) = zsh_path() {
+        shells.push(zsh);
+    }
+    for sh in &shells {
+        let label = sh.display().to_string();
+        let parsed = std::process::Command::new(sh)
+            .arg("-n")
+            .arg(&env_file)
+            .output()
+            .unwrap();
+        assert!(
+            parsed.status.success(),
+            "the emitted file parses under {label}"
+        );
+
+        let sourced = std::process::Command::new(sh)
+            .arg("-c")
+            .arg(
+                "EVIL_VAL() { echo kept; }; . \"$1\"; \
+                 printf '%s\\n' \"V=$EVIL_VAL\"; \
+                 printf '%s\\n' \"F=$(EVIL_VAL 2>/dev/null || echo gone)\"; env",
+            )
+            .arg("_")
+            .arg(&env_file)
+            .current_dir(ws.path())
+            .env("HOME", home.path())
+            .output()
+            .unwrap();
+        assert!(sourced.status.success(), "sourcing exits 0 under {label}");
+        let out = String::from_utf8_lossy(&sourced.stdout).to_string();
+
+        let markers: Vec<std::path::PathBuf> = std::fs::read_dir(ws.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with("fno-hook-marker"))
+            })
+            .collect();
+        assert!(
+            markers.is_empty(),
+            "no hostile key or value ran under {label}: {markers:?}"
+        );
+        for denied in [
+            "FNO_CONFIG=/steered/config",
+            "CLAUDE_ENV_FILE=steered",
+            "PATH=/steered/bin",
+            "DO_NOT_TRACK=steered",
+            "PROMPT_COMMAND=steered",
+            "FPATH=/steered/fpath",
+            "NODE_OPTIONS=--steered",
+            "PYTHONSTARTUP=/steered.py",
+            "ANTHROPIC_BASE_URL=https://steered",
+            "GH_HOST=steered",
+            "HTTPS_PROXY=steered",
+            "FNO_PROJECT_ENV_KEYS=FORGED",
+        ] {
+            assert!(
+                !out.contains(denied),
+                "a reserved control survived under {label}: {denied}"
+            );
+        }
+
+        assert!(
+            out.starts_with("V=a'; touch fno-hook-marker; echo 'b\nF=kept\n"),
+            "the hostile value stays literal and the function survives under {label}"
+        );
+
+        let value = |name: &str| -> String {
+            let prefix = format!("{name}=");
+            let line = out
+                .lines()
+                .find(|l| l.starts_with(&prefix))
+                .unwrap_or_else(|| panic!("{name} missing from the sourced env under {label}"));
+            line[prefix.len()..].to_string()
+        };
+        assert_eq!(value("APP_TOKEN"), "plain-value");
+        assert_eq!(value("QUOTED"), "has spaces and 'a quote'");
+        assert_eq!(
+            value("ZZ_LAST"),
+            "ok",
+            "the last fixture row loads in every shell under {label}"
+        );
+        let is_bash = sh
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.starts_with("bash"))
+            .unwrap_or(false);
+        let present = |name: &str| -> Option<String> {
+            let prefix = format!("{name}=");
+            out.lines()
+                .find(|l| l.starts_with(&prefix))
+                .map(|l| l[prefix.len()..].to_string())
+        };
+        for name in ["HISTCMD", "OPTIND", "RANDOM", "SRANDOM"] {
+            match (is_bash, present(name)) {
+                (true, got) => assert_eq!(
+                    got.as_deref(),
+                    Some("x$(touch fno-hook-marker)y"),
+                    "an integer-name value stays literal under {label}"
+                ),
+                // zsh refuses some specials at the trial, so the name may
+                // stay unset; if it loads, it must be the literal.
+                (false, Some(got)) => assert_eq!(
+                    got, "x$(touch fno-hook-marker)y",
+                    "an integer-name value stays literal under {label}"
+                ),
+                (false, None) => {}
+            }
+        }
+        assert_eq!(
+            value("TILDE_VAL"),
+            "~/steered",
+            "tilde stays literal under {label}"
+        );
+        assert_eq!(
+            value("EQ_VAL"),
+            "=touch fno-hook-marker",
+            "a leading equals stays literal under {label}"
+        );
+    }
 }
