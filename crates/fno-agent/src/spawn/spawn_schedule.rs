@@ -376,14 +376,15 @@ pub fn list(home: &AgentsHome) -> Result<Vec<ScheduledSpawn>, ScheduleError> {
     let Some(connection) = read_only(home)? else {
         return Ok(Vec::new());
     };
+    let database = database_path(home)?;
     let mut statement = connection
         .prepare(&format!("{SELECT_COLUMNS} ORDER BY created_at_utc"))
-        .map_err(|e| store_err(&database_path(home)?, e))?;
+        .map_err(|e| store_err(&database, e))?;
     let rows = statement
         .query_map([], row_map)
-        .map_err(|e| store_err(&database_path(home)?, e))?;
+        .map_err(|e| store_err(&database, e))?;
     rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| store_err(&database_path(home)?, e))
+        .map_err(|e| store_err(&database, e))
 }
 
 /// Rows still waiting to fire.
@@ -391,16 +392,17 @@ pub fn pending(home: &AgentsHome) -> Result<Vec<ScheduledSpawn>, ScheduleError> 
     let Some(connection) = read_only(home)? else {
         return Ok(Vec::new());
     };
+    let database = database_path(home)?;
     let mut statement = connection
         .prepare(&format!(
             "{SELECT_COLUMNS} WHERE state = 'pending' ORDER BY fire_at_utc, id"
         ))
-        .map_err(|e| store_err(&database_path(home)?, e))?;
+        .map_err(|e| store_err(&database, e))?;
     let rows = statement
         .query_map([], row_map)
-        .map_err(|e| store_err(&database_path(home)?, e))?;
+        .map_err(|e| store_err(&database, e))?;
     rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| store_err(&database_path(home)?, e))
+        .map_err(|e| store_err(&database, e))
 }
 
 /// Pending rows whose fire time has passed. `--on` rows never appear here;
@@ -418,15 +420,16 @@ pub fn get(home: &AgentsHome, id: &str) -> Result<ScheduledSpawn, ScheduleError>
         // the fire arm need to hear, not a store error.
         return Err(ScheduleError::UnknownId { id: id.to_string() });
     };
-    connection
+    let database = database_path(home)?;
+    let found = connection
         .query_row(
             &format!("{SELECT_COLUMNS} WHERE id = ?1"),
             params![id],
             row_map,
         )
         .optional()
-        .map_err(|e| store_err(&database_path(home)?, e))?
-        .ok_or_else(|| ScheduleError::UnknownId { id: id.to_string() })
+        .map_err(|e| store_err(&database, e))?;
+    found.ok_or_else(|| ScheduleError::UnknownId { id: id.to_string() })
 }
 
 /// Moves one row to a terminal state, recording the gate reading that
@@ -586,7 +589,7 @@ fn resolve_in_zone(
                 .find_map(|mins| {
                     let candidate = naive + chrono::Duration::minutes(mins);
                     match tz.from_local_datetime(&candidate) {
-                        LocalResult::Single(dt) => Some(candidate),
+                        LocalResult::Single(_) => Some(candidate),
                         _ => None,
                     }
                 })
@@ -930,7 +933,7 @@ fn run_front_door(
     }
 
     // Trigger arm.
-    let triggers = [&req.when.is_some(), req.every.is_some(), req.on.is_some()]
+    let triggers = [req.when.is_some(), req.every.is_some(), req.on.is_some()]
         .into_iter()
         .filter(|b| *b)
         .count();
@@ -1010,7 +1013,7 @@ fn run_front_door(
             .take(name_index)
             .zip(args.iter().skip(1))
             .find(|(a, _)| a.as_str() == needle)
-            .and_then(|(_, v)| v.clone())
+            .map(|(_, v)| v.clone())
     };
     let node = owned("--node");
     // The recorded cwd honors an explicit --cwd so an --on poll runs where
@@ -1271,10 +1274,10 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0], row);
 
-        let due = due(&home, now_utc()).unwrap();
-        assert!(due.is_empty());
-        let due = due(&home, now_utc() + chrono::Duration::hours(3)).unwrap();
-        assert_eq!(due.len(), 1);
+        let due_rows = due(&home, now_utc()).unwrap();
+        assert!(due_rows.is_empty());
+        let due_rows = due(&home, now_utc() + chrono::Duration::hours(3)).unwrap();
+        assert_eq!(due_rows.len(), 1);
 
         record_attempt(&home, &row.id, Some("seat cap full"), now_utc()).unwrap();
         let after = get(&home, &row.id).unwrap();

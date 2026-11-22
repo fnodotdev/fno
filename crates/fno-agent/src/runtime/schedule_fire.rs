@@ -104,11 +104,21 @@ fn word_static(word: &str) -> &'static str {
 }
 
 fn node_priority(row: &sched::ScheduledSpawn) -> u8 {
-    row.node
-        .as_deref()
-        .and_then(crate::spawn::spawn_compose::graph_row_for)
-        .and_then(|row| crate::backlog::row_facts::RowFacts::of(&row))
-        .and_then(|facts| facts.priority().as_str())
+    // Plain body on purpose: a RowFacts view borrows the graph row it
+    // reads, so threading it through and_then closures would return a
+    // borrow of each closure's own parameter. Only the rank escapes.
+    let Some(node) = row.node.as_deref() else {
+        return 2;
+    };
+    let Some(graph_row) = crate::spawn::spawn_compose::graph_row_for(node) else {
+        return 2;
+    };
+    let Some(facts) = crate::backlog::row_facts::RowFacts::of(&graph_row) else {
+        return 2;
+    };
+    facts
+        .priority()
+        .as_str()
         .and_then(priority_rank)
         .unwrap_or(2)
 }
@@ -234,7 +244,7 @@ fn run_pass(home: &AgentsHome, pending: &AtomicBool) {
     {
         poll_on_row(home, row, now);
     }
-    let mut due_rows: Vec<sched::ScheduledSpawn> =
+    let due_rows: Vec<sched::ScheduledSpawn> =
         rows.into_iter().filter(|r| is_due(r, now)).collect();
     // Rows due in one minute fire in node priority order (AC3-HP): the
     // live graph read decides, p2 for an absent node, then fire time,
@@ -359,7 +369,7 @@ fn fire_row(home: &AgentsHome, row: &sched::ScheduledSpawn, now: DateTime<Utc>) 
                 Some(reading.as_str()),
             );
             journal(home, KIND_MISSED, row, Some(reading.as_str()));
-            mail_scheduler(row, Some(reading.as_str()));
+            mail_scheduler(row, reading.as_str());
         }
     }
 }
@@ -423,6 +433,7 @@ fn journal(home: &AgentsHome, kind: &str, row: &sched::ScheduledSpawn, detail: O
 mod tests {
     use super::*;
     use crate::spawn::spawn_schedule::{RowState, Trigger};
+    use chrono::TimeZone;
 
     fn now_utc() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 11, 22, 12, 0, 0).unwrap()
