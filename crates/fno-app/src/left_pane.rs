@@ -1981,11 +1981,14 @@ mod tests {
         assert!(rich.activity.is_some());
         // The columns are the widest value per slot, and a tight budget
         // drops whole slots from the right: model and context stay. The
-        // cost slot is empty by design, so it takes no column.
+        // cost slot is empty by design, so it takes no column. The tight
+        // budget stops one short of the painted token column, so the drop
+        // fires however wide the format paints.
         let model = rich.model.as_deref().unwrap().chars().count();
+        let tokens = rich.tokens.as_deref().unwrap().chars().count();
         let wide = columns(&rows, 200);
         assert_eq!(wide, [(0, model), (2, 3), (3, 8), (4, 5)]);
-        let tight = columns(&rows, model + COL_GAP + 3 + COL_GAP + 8);
+        let tight = columns(&rows, model + COL_GAP + 3 + COL_GAP + tokens - 1);
         assert_eq!(tight, [(0, model), (2, 3)]);
     }
 
