@@ -262,7 +262,14 @@ fn row_config_dir(entry: &Value, cwd: &Path) -> PathBuf {
         &crate::accounts::env::Sources::system(),
     )
     .ok()
-    .and_then(|o| o.env.get("CLAUDE_CONFIG_DIR").map(PathBuf::from))
+    .and_then(|o| {
+        o.env
+            .get("CLAUDE_CONFIG_DIR")
+            // A clear marker is no dir: the managed account rides the shared
+            // slot, and PathBuf::from("") would refuse every resume.
+            .filter(|dir| !dir.is_empty())
+            .map(PathBuf::from)
+    })
     .unwrap_or_else(shared_config_dir)
 }
 
