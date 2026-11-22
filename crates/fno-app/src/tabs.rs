@@ -120,6 +120,7 @@ fn tab(
             div()
                 .flex()
                 .items_center()
+                .min_w(px(120.0))
                 .px_2()
                 .py(px(1.0))
                 .rounded(px(4.0))

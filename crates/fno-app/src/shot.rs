@@ -351,6 +351,10 @@ async fn settle_then_tap(
         cx.background_executor()
             .timer(Duration::from_millis(300))
             .await;
+        handle.update(cx, |root, _, _| root.shot_ui_after(ui)).ok();
+        cx.background_executor()
+            .timer(Duration::from_millis(400))
+            .await;
         handle.update(cx, |_, window, _| window.refresh()).ok();
     }
     // The tap: one real click inside the shot window before the

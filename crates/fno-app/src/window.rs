@@ -330,8 +330,6 @@ pub struct Root {
     pub(super) rename: Option<mux_modes::Rename>,
     /// The focused agent's row menu (prefix+P).
     pub(super) row_menu: Option<mux_modes::RowMenu>,
-    /// The shot paints the back-to-live pill with no scrolled frame behind it.
-    shot_scrolled: bool,
     /// The Peek reply on screen: the agent and its recent transcript.
     pub(super) peek: Option<(String, Vec<String>)>,
     /// The launch composer: retained state, open flag, id mint, and the
@@ -504,7 +502,6 @@ impl Root {
             scroll_mode: None,
             rename: None,
             row_menu: None,
-            shot_scrolled: false,
             peek: None,
             launch: launch::Panel::default(),
             settings: None,
@@ -2075,11 +2072,9 @@ impl Root {
 
     /// Whether the focused pane shows history, from its newest frame.
     fn focus_scrolled(&self) -> bool {
-        self.shot_scrolled
-            || self
-                .frames
-                .get(&self.layout.focus)
-                .is_some_and(|f| f.scroll_offset > 0)
+        self.frames
+            .get(&self.layout.focus)
+            .is_some_and(|f| f.scroll_offset > 0)
     }
 
     /// Keyboard history scroll with no mode held: true when the key scrolled.
@@ -2098,7 +2093,14 @@ impl Root {
     pub(super) fn shot_ui(&mut self, ui: crate::UiShot, window: &Window, cx: &mut Context<Self>) {
         match ui {
             crate::UiShot::RowMenu => {
-                let name = self.layout.agents.first().map(|a| a.name.clone());
+                // The row with a session id offers the full menu.
+                let name = self
+                    .layout
+                    .agents
+                    .iter()
+                    .find(|a| a.harness_session_id.is_some())
+                    .or_else(|| self.layout.agents.first())
+                    .map(|a| a.name.clone());
                 if let Some(name) = name {
                     let at = gpui::point(gpui::px(150.0), gpui::px(150.0));
                     self.agent_menu_open(&name, at, window, cx);
@@ -2114,12 +2116,24 @@ impl Root {
                     .map(|t| t.id);
                 if let Some(tab) = tab {
                     self.rename_tab(tab, cx);
+                    // A named tab mid-edit: the field holds the name being typed.
+                    if let Some(r) = self.rename.as_mut() {
+                        r.field =
+                            crate::ui::LineField::seeded("api-server", fno::proto::MAX_TAB_NAME);
+                    }
                 }
             }
-            crate::UiShot::Scrolled => {
-                self.shot_scrolled = true;
-                cx.notify();
-            }
+            // The shell prints enough lines to fill its history; the second
+            // phase scrolls the pane back through a real frame.
+            crate::UiShot::Scrolled => self.pane_input(b"seq 1 120\r".to_vec(), cx),
+        }
+    }
+
+    /// `--shot-ui`, after the first phase had time to land.
+    pub(super) fn shot_ui_after(&mut self, ui: crate::UiShot) {
+        if ui == crate::UiShot::Scrolled {
+            let pane = self.layout.focus;
+            self.send(ClientMsg::PaneScroll { pane, delta: 30 });
         }
     }
 
