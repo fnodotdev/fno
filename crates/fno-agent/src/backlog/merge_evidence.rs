@@ -280,6 +280,9 @@ pub(crate) fn primary_docs_twin_number(node: &Value) -> Option<i64> {
     let primary = facts.pr_number().as_i64()?;
     let primary_url = facts.pr_url().as_str()?;
     let aliases = crate::backlog::pr_link::repo_alias_map(None);
+    // same_repo_slug compares owner/repo slugs, not urls: resolve both
+    // sides first, and an unparseable url proves nothing.
+    let primary_slug = repo_slug_from_url(Some(primary_url))?;
     facts
         .additional_prs()
         .as_array()?
@@ -294,12 +297,13 @@ pub(crate) fn primary_docs_twin_number(node: &Value) -> Option<i64> {
             if row.number().as_i64() != Some(primary) {
                 return false;
             }
-            match row.url().as_str() {
-                Some(twin_url) => {
-                    crate::backlog::pr_link::same_repo_slug(primary_url, twin_url, &aliases)
-                }
-                None => false,
-            }
+            let Some(twin_url) = row.url().as_str() else {
+                return false;
+            };
+            let Some(twin_slug) = repo_slug_from_url(Some(twin_url)) else {
+                return false;
+            };
+            crate::backlog::pr_link::same_repo_slug(&primary_slug, &twin_slug, &aliases)
         })
         .then_some(primary)
 }
