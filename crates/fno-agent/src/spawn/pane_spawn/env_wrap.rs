@@ -114,15 +114,24 @@ pub fn mesh_env_pairs(
             .unwrap_or_else(|| "50".to_string());
         pairs.push(format!("CLAUDE_CODE_STOP_HOOK_BLOCK_CAP={cap}"));
     }
-    // The caller's route/account overlay, appended after the claude extras
-    // the way Python's composed block appends after them (mux_spawn.py:1242):
-    // env(1) is left-to-right last-wins, so the overlay wins over anything an
-    // inherited assignment would say.
-    pairs.extend(overlay.iter().map(|(k, v)| format!("{k}={v}")));
     let mut unset: Vec<String> = AMBIENT_IDENTITY_ENV
         .iter()
         .flat_map(|name| ["-u".to_string(), name.to_string()])
         .collect();
+    // The caller's route/account overlay, appended after the claude extras
+    // the way Python's composed block appends after them (mux_spawn.py:1242):
+    // env(1) is left-to-right last-wins, so the overlay wins over anything an
+    // inherited assignment would say. An empty value is the overlay saying
+    // "clear this variable" (the accounts::pick::env_lines convention): it
+    // rides the unset list, because `KEY=` would SET an empty var, and claude
+    // reads any SET CLAUDE_CONFIG_DIR as the hashed keychain slot.
+    for (key, value) in overlay {
+        if value.is_empty() {
+            unset.extend(["-u".to_string(), key.clone()]);
+        } else {
+            pairs.push(format!("{key}={value}"));
+        }
+    }
     unset.extend([
         "-u".to_string(),
         crate::spawn_route::ROUTE_PROVIDER_ENV.to_string(),
@@ -277,6 +286,32 @@ mod tests {
                 "-u {key} must ride every pane wrapper, got {unset:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_clear_marker_rides_the_unset_list_not_a_pair() {
+        let overlay = vec![("CLAUDE_CONFIG_DIR".to_string(), String::new())];
+        let (unset, pairs) = mesh_env_pairs("w", "claude", None, &[], &overlay);
+        assert!(
+            unset
+                .windows(2)
+                .any(|w| w[0] == "-u" && w[1] == "CLAUDE_CONFIG_DIR"),
+            "the clear marker must unset, got {unset:?}"
+        );
+        assert!(
+            !pairs.iter().any(|p| p.starts_with("CLAUDE_CONFIG_DIR=")),
+            "an empty value must never become KEY=, got {pairs:?}"
+        );
+        // The admit arm: a valued overlay pair still rides as an assignment.
+        let overlay = vec![("CLAUDE_CONFIG_DIR".to_string(), "/tmp/own".to_string())];
+        let (unset, pairs) = mesh_env_pairs("w", "claude", None, &[], &overlay);
+        assert!(
+            !unset
+                .windows(2)
+                .any(|w| w[0] == "-u" && w[1] == "CLAUDE_CONFIG_DIR"),
+            "a valued pair must not unset, got {unset:?}"
+        );
+        assert!(pairs.contains(&"CLAUDE_CONFIG_DIR=/tmp/own".to_string()));
     }
 }
 
