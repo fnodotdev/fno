@@ -570,7 +570,7 @@ fn red_is_stale(latest: &[Value], runs: &[Value]) -> bool {
 /// Whether every failed row is the ci-required aggregate itself: the row is
 /// keyed by its workflow file, not the job display name.
 fn hold_only_red(latest: &[Value]) -> bool {
-    let failed: Vec<crate::pr_status_de::RowTail> = latest
+    let failed: Vec<crate::pr_status::de::RowTail> = latest
         .iter()
         .map(|row| crate::lenient_de::parse(row))
         .filter(|row| row.bucket.as_deref() == Some("fail"))
@@ -599,7 +599,7 @@ fn pr_hold_label_live(gh_bin: &str, cwd: &Path, pr: u64) -> bool {
         Ok(raw) => raw,
         Err(_) => return false,
     };
-    let labels: Vec<crate::pr_status_de::LabelTail> =
+    let labels: Vec<crate::pr_status::de::LabelTail> =
         serde_json::from_str(&raw).unwrap_or_default();
     labels.iter().any(|l| l.name.as_deref() == Some("pr-hold"))
 }
@@ -1051,7 +1051,6 @@ exit 1
     /// record the rest of the fleet reads.
     #[test]
     fn a_cancel_journals_its_cause_and_a_hold_only_red_cancels_nothing() {
-        let dir = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let _lock = crate::claims::test_env_lock()
             .lock()
