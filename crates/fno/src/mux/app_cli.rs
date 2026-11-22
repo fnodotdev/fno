@@ -380,6 +380,12 @@ fn seed_world(root: &Path, front: &Path) -> Option<String> {
             prio,
             "--difficulty",
             "medium",
+            "--audience",
+            "internal",
+            "--why",
+            "the shot world seeds its board",
+            "--done-means",
+            "the demo node exists",
         ])
         .env("FNO_DEMO_ID_SEED", format!("node-{}", i + 1))
         .stdout(std::process::Stdio::piped())
