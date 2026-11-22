@@ -62,6 +62,8 @@ struct Bridge {
     tx: broadcast::Sender<String>,
     server: tokio::task::JoinHandle<()>,
     notices: Vec<String>,
+    /// Held as the real bridge holds it: a dropped sender ends every feed.
+    _shutdown: tokio::sync::watch::Sender<bool>,
 }
 
 impl Drop for Bridge {
@@ -109,7 +111,9 @@ impl Bridge {
         Self::serving(st, notices).await
     }
 
-    async fn serving(st: AppState, notices: Vec<String>) -> Self {
+    async fn serving(mut st: AppState, notices: Vec<String>) -> Self {
+        let (shutdown_tx, shutdown) = tokio::sync::watch::channel(false);
+        st.shutdown = shutdown;
         let tx = st.tx.clone();
         let (addr, server) = serve_state(st).await;
         Self {
@@ -117,6 +121,7 @@ impl Bridge {
             tx,
             server,
             notices,
+            _shutdown: shutdown_tx,
         }
     }
 
