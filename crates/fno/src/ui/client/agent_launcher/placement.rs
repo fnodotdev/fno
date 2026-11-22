@@ -453,6 +453,45 @@ pub(super) fn shift_pick(view: &mut View, dir: Dir) -> bool {
     true
 }
 
+/// The Open as states a snapshot can show.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Shot {
+    List,
+    TabStep,
+    Placed,
+    Shell,
+}
+
+/// Snapshot seam: put the open card in one Open as state, by the same calls
+/// the keys make.
+pub(crate) fn for_snapshot(view: &mut View, shot: Shot) {
+    sync(view);
+    let Some(l) = view.launcher.as_mut() else {
+        return;
+    };
+    let first = l.places.tabs.first().map(|tab| (tab.id, 1));
+    let anchor = Anchor::At { row: 0, col: 0 };
+    l.focus = Focus::Opens;
+    match (shot, first) {
+        (Shot::TabStep, Some((id, ordinal))) => open_directions(l, id, ordinal, anchor),
+        (Shot::Placed, Some((id, ordinal))) => {
+            let dir = Dir::Down;
+            l.draft.placement = Placement::Tab { id, ordinal, dir };
+            l.focus = Focus::Message;
+        }
+        (Shot::Placed, None) => l.focus = Focus::Message,
+        _ => {
+            if shot == Shot::Shell {
+                l.shell = true;
+                l.draft.message = "make check".to_string();
+                l.draft.cursor_chars = l.draft.message.chars().count();
+            }
+            let catalog = &view.launcher_catalog;
+            open_picker_at(l, catalog, &view.backlog, Some((0, 0)), Focus::Opens);
+        }
+    }
+}
+
 impl LKey {
     /// A shift+arrow is a plain arrow everywhere but the Open as list.
     pub(crate) fn plain(self) -> Self {

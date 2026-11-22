@@ -86,6 +86,8 @@ pub enum ViewKind {
     ComposerRefused,
     /// The open card after n presses of Tab from the prompt.
     ComposerChip(usize),
+    /// The card in one of the Open as states.
+    ComposerOpens(super::agent_launcher::placement::Shot),
     /// The open card with the model chip's list unfolded.
     ComposerPicker,
     /// The rest card with `+op` typed: the completion list under the prompt.
@@ -383,6 +385,22 @@ const VIEW_TABLE: &[(&str, ViewKind)] = &[
     ("composer-rest", ViewKind::ComposerChip(0)),
     ("composer-unfolded", ViewKind::ComposerChip(1)),
     ("composer-complete", ViewKind::ComposerComplete),
+    (
+        "composer-open-as",
+        ViewKind::ComposerOpens(super::agent_launcher::placement::Shot::List),
+    ),
+    (
+        "composer-open-as-tab",
+        ViewKind::ComposerOpens(super::agent_launcher::placement::Shot::TabStep),
+    ),
+    (
+        "composer-placed",
+        ViewKind::ComposerOpens(super::agent_launcher::placement::Shot::Placed),
+    ),
+    (
+        "composer-shell-placement",
+        ViewKind::ComposerOpens(super::agent_launcher::placement::Shot::Shell),
+    ),
     ("bell", ViewKind::Bell),
     ("bell-wide", ViewKind::BellWide),
     ("bell-full", ViewKind::BellFull),
@@ -590,7 +608,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
             "--view" => {
                 let v = value()?;
                 view = Some(parse_view(&v).ok_or_else(|| {
-                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, new-workspace, workspace-menu, composer, composer-ghost, composer-refused, composer-tab-N, composer-picker, composer-mode, composer-approval, split-menu, settings, settings-config, settings-config-filter, settings-config-toggle, settings-config-cycle, settings-config-page, settings-config-detail, settings-config-error, settings-config-paths, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, org-remote, org-peek, org-spawn, org-keys, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, messages-asks, messages-asks-topics, law-book, backlog-list, backlog-search, backlog-kanban, backlog-graph, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail, connections-use or connections")
+                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, new-workspace, workspace-menu, composer, composer-ghost, composer-refused, composer-tab-N, composer-picker, composer-mode, composer-approval, composer-open-as, composer-open-as-tab, composer-placed, composer-shell-placement, split-menu, settings, settings-config, settings-config-filter, settings-config-toggle, settings-config-cycle, settings-config-page, settings-config-detail, settings-config-error, settings-config-paths, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, org-remote, org-peek, org-spawn, org-keys, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, messages-asks, messages-asks-topics, law-book, backlog-list, backlog-search, backlog-kanban, backlog-graph, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail, connections-use or connections")
                 })?)
             }
             tok @ ("--server" | "--session") => {
@@ -2617,6 +2635,7 @@ pr_number (scripts/ops/mux-demo-snapshot.sh seeds one)",
             | ViewKind::ComposerGhost
             | ViewKind::ComposerRefused
             | ViewKind::ComposerChip(_)
+            | ViewKind::ComposerOpens(_)
             | ViewKind::ComposerPicker
             | ViewKind::ComposerComplete
             | ViewKind::ComposerMode
@@ -2700,13 +2719,18 @@ fn composer_shot(view: &mut View, kind: Option<&ViewKind>) {
         if matches!(kind, Some(ViewKind::ComposerRefused)) {
             l.phase = super::agent_launcher::Phase::Refused {
                 request_id: 1,
-                reason: "the spawn gate is closed for this harness".to_string(),
+                reason: "exit 78\nnote: route checked\nthe spawn gate is closed for this harness\nrun it again when a slot frees".to_string(),
             };
+            l.show_detail = true;
         }
     }
     match kind {
         Some(ViewKind::ComposerChip(n)) => {
             super::agent_launcher::focus_chip_for_snapshot(view, *n, 0);
+        }
+        Some(ViewKind::ComposerOpens(shot)) => {
+            super::agent_launcher::focus_chip_for_snapshot(view, 0, 0);
+            super::agent_launcher::placement::for_snapshot(view, *shot);
         }
         Some(ViewKind::ComposerPicker) => {
             super::agent_launcher::focus_chip_for_snapshot(view, 3, 1);
@@ -3002,7 +3026,7 @@ mod tests {
         let e = parse_extra(&["--view", "nonesuch"]).expect_err("unknown view names the options");
         assert!(
                     e.contains(
-                        "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, new-workspace, workspace-menu, composer, composer-ghost, composer-refused, composer-tab-N, composer-picker, composer-mode, composer-approval, split-menu, settings, settings-config, settings-config-filter, settings-config-toggle, settings-config-cycle, settings-config-page, settings-config-detail, settings-config-error, settings-config-paths, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, org-remote, org-peek, org-spawn, org-keys, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, messages-asks, messages-asks-topics, law-book, backlog-list, backlog-search, backlog-kanban, backlog-graph, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail, connections-use or connections"
+                        "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, new-workspace, workspace-menu, composer, composer-ghost, composer-refused, composer-tab-N, composer-picker, composer-mode, composer-approval, composer-open-as, composer-open-as-tab, composer-placed, composer-shell-placement, split-menu, settings, settings-config, settings-config-filter, settings-config-toggle, settings-config-cycle, settings-config-page, settings-config-detail, settings-config-error, settings-config-paths, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, org-remote, org-peek, org-spawn, org-keys, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, messages-asks, messages-asks-topics, law-book, backlog-list, backlog-search, backlog-kanban, backlog-graph, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail, connections-use or connections"
                     ),
                     "{e}"
                 );
