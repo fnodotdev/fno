@@ -431,11 +431,13 @@ The harness pins one body where it once held two in parity.
 
 ## Diff-read evidence at emit
 
-`fno doctor event emit -t review_attestation` refuses a clean `code-review` pass unless the attesting Claude session's own transcript proves the lane read the change at this head.
+`fno doctor event emit -t review_attestation` refuses a clean `code-review` pass unless the attesting Claude session's own transcript proves the lane read every changed file at this head.
 
-The proof is diff output from `git diff` or `gh pr diff`. It comes from the tool result, never from the command text. It must name every changed file. It must arrive after the session's last commit, merge, rebase, cherry-pick, am or revert. A later round needs only a read of what changed since the prior head.
+Evidence comes from tool results that succeeded, never from command text. Diff output counts, because its `diff --git` or `+++ b/` header lines name the files. So does a `Read` of a file, and a `sed`, `cat`, `head` or `tail` of one. A successful subagent call whose brief names the diff covers the `--fresh` reviewer.
 
-These give no proof: a failed command, empty output, output sent to a file, a size-only flag such as `--stat`, and `git show`. A successful subagent call whose brief names the diff counts, which covers the `--fresh` reviewer.
+Evidence counts only inside the review window, which starts at the session's last review Skill call. It also needs to come after the last edit to its file. Edits since the evidence that total under 100 lines carry it, as a small fix commit does. A commit, merge or rebase voids nothing. A later round needs evidence of some file, not all.
+
+A `--stat` probe, a failed command, empty output, and a diff saved to a file and never read give no proof. Reading one region of one of six changed files is refused.
 
 The caller's `execution_context` word earns no exemption. A non-Claude harness and an unreadable transcript read as unobserved and pass. The check stops the accidental skip. It cannot stop a session that fakes its own transcript.
 
