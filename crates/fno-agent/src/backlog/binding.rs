@@ -6,7 +6,7 @@
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::merge_evidence::node_pr_refs;
+use super::merge_evidence::{blocking_pr_refs, docs_noted_pr_numbers, node_pr_refs};
 use super::node_ref::find_node_index;
 use super::pr_link::repo_slug_from_url;
 use crate::backlog_ready::node_is_open;
@@ -75,7 +75,8 @@ pub(crate) fn bind_pr_rows(
             return PrRowBindResult::refused(format!("unknown node: {nid}"));
         };
         if let Some(our) = &our_repo {
-            for (number, url) in node_pr_refs(&entries[index]) {
+            let docs_twin = docs_noted_pr_numbers(&entries[index]);
+            for (number, url) in blocking_pr_refs(&entries[index]) {
                 let Some(existing_repo) = repo_slug_from_url(url.as_deref()) else {
                     return PrRowBindResult::refused(format!(
                         "{nid} already carries a PR #{number} ref with no \
@@ -84,6 +85,18 @@ pub(crate) fn bind_pr_rows(
                     ));
                 };
                 if !crate::backlog::pr_link::same_repo_slug(&existing_repo, our, aliases) {
+                    if docs_twin.contains(&number) {
+                        // The twin won the primary slot (the state the 404
+                        // hint once produced): the shape is broken, and the
+                        // sanctioned repair demotes it. The refusal names
+                        // that door instead of a bare cross-repo claim.
+                        return PrRowBindResult::refused(format!(
+                            "{nid} carries docs PR #{number} in its primary \
+                             slot; run `fno backlog reconcile {nid} \
+                             --repair-docs-twin` to demote it - refusing a \
+                             docs-twin primary"
+                        ));
+                    }
                     return PrRowBindResult::refused(format!(
                         "{nid} already carries a {existing_repo} PR ref; \
                          this PR is {our} - refusing a cross-repo claim"
@@ -371,5 +384,94 @@ mod tests {
         assert!(result.bound_ids().is_empty());
         assert!(entries[0].get("additional_prs").is_none(), "no write");
         assert_eq!(entries[0]["pr_number"], 1720);
+    }
+
+    #[test]
+    fn a_docs_noted_foreign_ref_does_not_block_the_bind() {
+        // The twin the docs step recorded (note "Docs", case-insensitive on
+        // purpose) is an ancillary companion, never a claim about the
+        // delivery PR: the bind proceeds and the row survives untouched.
+        let mut entries = vec![node(json!({
+            "id": "x-aaaa",
+            "additional_prs": [
+                {"number": 9, "url": "https://github.com/other/repo/pull/9", "note": "Docs"},
+            ],
+        }))];
+        let claimed = vec!["x-aaaa".to_string()];
+        let result = bind_pr_rows(
+            &mut entries,
+            &claimed,
+            7,
+            Some("https://github.com/o/r/pull/7"),
+            Some("o/r"),
+            false,
+            false,
+            &BTreeMap::new(),
+        );
+        assert_eq!(result.outcome, "bound", "{:?}", result.refusal);
+        assert_eq!(result.bindings[0].action, "filled_primary");
+        assert_eq!(entries[0]["pr_number"], 7);
+        let twin = &entries[0]["additional_prs"][0];
+        assert_eq!(twin["number"], 9);
+        assert_eq!(twin["note"], "Docs");
+    }
+
+    #[test]
+    fn a_folded_or_unnoted_foreign_ref_still_refuses() {
+        for note in [Some("folded"), None] {
+            let mut extra = json!({"number": 9, "url": "https://github.com/other/repo/pull/9"});
+            if let Some(note) = note {
+                extra["note"] = json!(note);
+            }
+            let mut entries = vec![node(json!({"id": "x-aaaa", "additional_prs": [extra]}))];
+            let claimed = vec!["x-aaaa".to_string()];
+            let result = bind_pr_rows(
+                &mut entries,
+                &claimed,
+                7,
+                Some("https://github.com/o/r/pull/7"),
+                Some("o/r"),
+                false,
+                false,
+                &BTreeMap::new(),
+            );
+            assert_eq!(result.outcome, "refused", "note {note:?} must refuse");
+            assert_eq!(
+                result.refusal.as_deref(),
+                Some("x-aaaa already carries a other/repo PR ref; this PR is o/r - refusing a cross-repo claim")
+            );
+            assert!(entries[0].get("pr_number").is_none(), "no partial binding");
+        }
+    }
+
+    #[test]
+    fn a_docs_twin_in_the_primary_slot_refuses_and_names_the_repair() {
+        // The 404-hint state: the twin won the primary. The binder cannot
+        // prove the primary is docs from shape alone, so it refuses and
+        // names the sanctioned repair instead of binding over it.
+        let mut entries = vec![node(json!({
+            "id": "x-aaaa",
+            "pr_number": 288,
+            "pr_url": "https://github.com/fnodotdev/fno-web/pull/288",
+            "additional_prs": [
+                {"number": 288, "url": "https://github.com/fnodotdev/fno-web/pull/288", "note": "docs"},
+            ],
+        }))];
+        let claimed = vec!["x-aaaa".to_string()];
+        let result = bind_pr_rows(
+            &mut entries,
+            &claimed,
+            548,
+            Some("https://github.com/fnodotdev/fno/pull/548"),
+            Some("fnodotdev/fno"),
+            false,
+            false,
+            &BTreeMap::new(),
+        );
+        assert_eq!(result.outcome, "refused");
+        let refusal = result.refusal.as_deref().unwrap_or("");
+        assert!(refusal.contains("--repair-docs-twin"), "{refusal}");
+        assert!(refusal.contains("docs-twin primary"), "{refusal}");
+        assert_eq!(entries[0]["pr_number"], 288, "no partial binding");
     }
 }
