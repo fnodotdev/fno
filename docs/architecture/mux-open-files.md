@@ -27,7 +27,7 @@ A click on an image reference is the mux's, also in a pane whose app owns the mo
 
 `crates/fno/src/mux/server/pasted_images.rs` resolves a placeholder. The session comes from fno's own records and never from pane text. The row's text picks one turn in that session. If no turn or two turns match, nothing opens. For Claude's newest use of a number, the stored file answers. It also answers before the message is sent. For an older use, the transcript answers. Codex and OpenCode images open after the message is sent. A transcript image is kept at `mux/images/<session>/<hash>.<ext>` in the state root. The mux never reads the clipboard.
 
-These do not link yet: a bare name outside the pane cwd, an image the agent read without printing a name, a Codex turn in a compressed rollout, and any path in a portal onto another machine. A custom `CLAUDE_CODE_TMPDIR` is found only when the mux server has the same value. Panes show no thumbnail. Images that a program prints as escape bytes do not draw.
+A bare name outside the pane cwd does not link. An image the agent read without printing a name has nothing to link. A Codex turn in a compressed rollout does not resolve. A portal onto another machine links no image. If Claude uses a custom `CLAUDE_CODE_TMPDIR`, the mux server needs the same value to find its store. Panes show no thumbnail. Images that a program prints as escape bytes do not draw.
 
 A path becomes an internal `fno-file:` URI (`FILE_SCHEME`, `crates/fno/src/ui/link.rs`) that carries the canonical absolute path. `file_uri_parts` parses it strictly: absolute, with no control characters. Only an image path can hold a space. The server sends only a URI that passes `is_openable` or `is_file_uri` (`crates/fno/src/mux/server/open_link.rs`). `OPENABLE_SCHEMES` stays at `http://` and `https://`, so a pane can never make the platform opener run a scheme fno did not build.
 
@@ -100,7 +100,7 @@ A `.md` file renders in the viewer through `md_lines` (`crates/fno/src/ui/client
 - `obsidian` covers files under the vault root. For such a file the router builds an `obsidian://open` URI. It uses the existing builder `obsidian_open_uri` (`crates/fno/src/ui/link.rs:690`) and the root that `resolve_vault_root` gives (`crates/fno/src/ui/link.rs:681`). Move the vault-relative step out of `plan_link` (`crates/fno/src/ui/link.rs:625`) into one shared function. Then `plan_link` and the router call the same code. The URI opens through `open_fno_uri` (`crates/fno/src/ui/link.rs:719`). A file outside the vault, or `obsidian.enabled = false` (`ObsidianCfg`, `crates/fno/src/ui/digest_overlay.rs:1202`), falls back to `system`.
 - `system` calls `open_fno_path` (`crates/fno/src/ui/link.rs:739`), the behavior today.
 
-A click never hands the platform opener a file that can run code: an app bundle, an installer, a script type or an executable file (`can_run_code` in `crates/fno/src/ui/open_router.rs`). The notice names the file.
+A click never hands the platform opener a file that can run code (`can_run_code` in `crates/fno/src/ui/open_router.rs`). That covers app bundles, installers, script types and executable files. The notice names the file.
 
 The router is the one function that `Route::File` calls in `open_link::start`. It is pure: it takes the path, the line and the config and returns a target. Tests assert the target, and only the caller spawns. The client reads both keys with `config_str` (`crates/fno/src/ui/digest_overlay.rs:962`) and latches them at client start, like `mux.card_graph`.
 
