@@ -12,7 +12,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use super::binding::bind_pr_rows;
+use super::binding::{bind_pr_rows, repair_docs_twin_primary, DocsTwinRepair};
 use super::closures::{
     cascade_close_contained, strandable_contained_ids, strandable_epic_ids, strandable_orphan_ids,
     sweep_close_done_epics, sweep_close_stranded_contained, sweep_reparent_stranded_orphans,
@@ -41,7 +41,7 @@ use crate::backlog::workflows::{
 use crate::backlog_ready::node_is_open;
 use crate::graph_store::{self, read_rows, settle_blocked_by_edges};
 
-const USAGE: &str = "usage: fno-agent backlog reconcile [--dry-run|-N] [--node ID] [--json|-J] [--pr-number N] [--repo owner/repo] [--audit-contained [--apply]]";
+const USAGE: &str = "usage: fno-agent backlog reconcile [--dry-run|-N] [--node ID] [--repair-docs-twin] [--json|-J] [--pr-number N] [--repo owner/repo] [--audit-contained [--apply]]";
 
 /// The door owns the help now: the Python parser that rendered the option
 /// surface is deleted with its command. The epilog's reopen pointer survives
@@ -72,6 +72,11 @@ invocation.
 Options:
   --dry-run, -N    Report candidates only; mutate nothing (graph stays byte-identical).
   --node ID        Restrict the scan to a single node id (ab-XXXXXXXX).
+  --repair-docs-twin
+                   Demote a docs twin squatting in the node's primary PR slot
+                   back to its additional_prs row with note docs. Needs --node.
+                   Refuses every non-docs primary, and a twin-less docs primary
+                   (nothing proves the primary was docs).
   --json, -J       Emit structured JSON instead of a human summary.
   --pr-number N    Bind every node named in this merged PR's exact closure line (Fixes, or the retired Backlog-Closure: spelling) to the PR (filling an absent primary or appending to additional_prs) BEFORE the drift scan below runs, so a PR naming several nodes closes all of them in this one invocation rather than only the one node stamped at creation. All-or-nothing: an unknown, malformed, or cross-repo claim binds nothing.
   --repo OWNER/REPO  owner/repo scoping --pr-number's gh query and cross-repo claim check. Resolved from the checkout's origin remote when omitted.
@@ -93,6 +98,7 @@ struct Args {
     repo: Option<String>,
     audit_contained: bool,
     apply: bool,
+    repair_docs_twin: bool,
 }
 
 fn parse_args(tail: &[String]) -> Option<Args> {
@@ -104,6 +110,7 @@ fn parse_args(tail: &[String]) -> Option<Args> {
         repo: None,
         audit_contained: false,
         apply: false,
+        repair_docs_twin: false,
     };
     let mut index = 0;
     while index < tail.len() {
@@ -112,6 +119,7 @@ fn parse_args(tail: &[String]) -> Option<Args> {
             "--json" | "-J" => a.json_out = true,
             "--audit-contained" => a.audit_contained = true,
             "--apply" => a.apply = true,
+            "--repair-docs-twin" => a.repair_docs_twin = true,
             "--node" => {
                 index += 1;
                 a.node = tail.get(index)?.to_string().into();
@@ -152,6 +160,9 @@ pub(crate) fn run(tail: &[String]) -> i32 {
         let graph = super::settings::graph_path();
         return super::contained_audit::run(&graph, args.apply, args.json_out);
     }
+    if args.repair_docs_twin {
+        return repair_docs_twin_run(&args);
+    }
     let repo_resolved = match args.repo.clone() {
         Some(repo) => Some(repo),
         None if args.pr_number.is_some() => {
@@ -165,6 +176,53 @@ pub(crate) fn run(tail: &[String]) -> i32 {
 fn once(args: &Args) -> i32 {
     let graph_path = super::settings::graph_path();
     once_at(args, &graph_path)
+}
+
+/// The docs-twin repair: a focused action, never a sweep. It needs a node
+/// scope and demotes the twin primary under the graph lock, so the refusal
+/// or the receipt is one mutation wide, all-or-nothing like every bind.
+/// Exit 0 repaired, 4 refused, 2 usage.
+fn repair_docs_twin_run(args: &Args) -> i32 {
+    let Some(node) = args.node.as_deref() else {
+        eprintln!("--repair-docs-twin needs --node ID\n{USAGE}");
+        return 2;
+    };
+    if args.dry_run {
+        eprintln!("--repair-docs-twin runs its own graph write; drop --dry-run\n{USAGE}");
+        return 2;
+    }
+    let graph_path = super::settings::graph_path();
+    let node_id = node.to_string();
+    let outcome: std::cell::RefCell<Option<DocsTwinRepair>> = std::cell::RefCell::new(None);
+    let published = graph_store::mutate_rows(
+        &graph_path,
+        std::time::Duration::from_secs(30),
+        None,
+        None,
+        |working| {
+            let result = repair_docs_twin_primary(working, &node_id);
+            // A refusal publishes no write: Ok(false) leaves the working
+            // set unpersisted, so a refused repair moves nothing.
+            let publish = result.action == "repaired";
+            *outcome.borrow_mut() = Some(result);
+            Ok(publish)
+        },
+    );
+    if let Err(err) = published {
+        eprintln!("docs-twin repair: the graph write failed: {err}");
+        return 5;
+    }
+    let result = outcome.into_inner().expect("the mutation always sets it");
+    if result.action == "repaired" {
+        eprintln!("docs-twin repair: {}", result.detail.unwrap_or_default());
+        0
+    } else {
+        eprintln!(
+            "docs-twin repair REFUSED: {}",
+            result.detail.unwrap_or_default()
+        );
+        4
+    }
 }
 
 /// The reconcile gate: the mutual-exclusion refusal (a bad invocation is
@@ -1098,13 +1156,30 @@ fn partition_and_probe(
                 None
             };
             match super::merge_state::query_pr_merge_state(pr, repo.as_deref(), cwd, true) {
-                Err(e) => owed_failures.push(json!({
-                    "successor": successor_id,
-                    "pr_number": pr.to_string(),
-                    "error": e.message,
-                    "kind": e.kind,
-                    "remedy": e.remedy_for(pr, repo.as_deref()),
-                })),
+                Err(e) => {
+                    // The incident's hint: remedy_for's not_found arm tells
+                    // the reader to repair pr_url by hand, which is how a
+                    // docs twin once won the primary slot. When the stored
+                    // primary IS the twin, the remedy names the sanctioned
+                    // repair instead of the update door.
+                    let remedy =
+                        if super::merge_evidence::primary_docs_twin_number(&successor).is_some() {
+                            format!(
+                                "the stored primary is the docs twin; run `fno \
+                             backlog reconcile --node {successor_id} \
+                             --repair-docs-twin` to demote it"
+                            )
+                        } else {
+                            e.remedy_for(pr, repo.as_deref())
+                        };
+                    owed_failures.push(json!({
+                        "successor": successor_id,
+                        "pr_number": pr.to_string(),
+                        "error": e.message,
+                        "kind": e.kind,
+                        "remedy": remedy,
+                    }))
+                }
                 Ok(state) if state.state == "MERGED" => owed_evidence.push((
                     successor_id,
                     json!({
