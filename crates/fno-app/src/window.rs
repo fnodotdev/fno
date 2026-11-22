@@ -866,6 +866,26 @@ impl Root {
         }));
     }
 
+    /// The update card's two buttons. Later and Dismiss offer a build held
+    /// behind the notes card; Restart swaps in the staged one and quits.
+    fn update_act(&mut self, action: &Action, cx: &mut Context<Self>) {
+        if *action == Action::DismissUpdate {
+            self.update_card = self.held_update.take().map(UpdateCard::Ready);
+            return;
+        }
+        let Some(UpdateCard::Ready(ready)) = self.update_card.clone() else {
+            return;
+        };
+        match super::update::install_and_relaunch(&ready) {
+            Ok(()) => {
+                self.send(ClientMsg::Detach);
+                record_ui_state(self, cx);
+                cx.quit();
+            }
+            Err(e) => self.say_as(format!("update: {e}"), true, cx),
+        }
+    }
+
     /// The update card: a raised card bottom-left. A staged build offers Restart; a fresh install shows its notes
     /// once and drops on Dismiss.
     fn update_card_view(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
@@ -1043,21 +1063,7 @@ impl Root {
                 self.answer = Some(answer::Sheet::new(id));
             }
             Action::CloseAnswer => self.answer = None,
-            Action::DismissUpdate => {
-                self.update_card = self.held_update.take().map(UpdateCard::Ready);
-            }
-            Action::RestartForUpdate => {
-                if let Some(UpdateCard::Ready(ready)) = self.update_card.clone() {
-                    match super::update::install_and_relaunch(&ready) {
-                        Ok(()) => {
-                            self.send(ClientMsg::Detach);
-                            record_ui_state(self, cx);
-                            cx.quit();
-                        }
-                        Err(e) => self.say_as(format!("update: {e}"), true, cx),
-                    }
-                }
-            }
+            Action::DismissUpdate | Action::RestartForUpdate => self.update_act(&action, cx),
             Action::PickAnswer(n) => {
                 if let Some(s) = self.answer.as_mut() {
                     s.pick = Some(n);

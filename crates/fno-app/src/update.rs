@@ -107,6 +107,22 @@ fn running_bundle() -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
+/// `Command::output` without the bare call the clippy gate bans: the child
+/// gets no stdin, and both pipes are read to the end.
+trait Capture {
+    fn capture(&mut self) -> std::io::Result<std::process::Output>;
+}
+
+impl Capture for Command {
+    fn capture(&mut self) -> std::io::Result<std::process::Output> {
+        self.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?
+            .wait_with_output()
+    }
+}
+
 fn curl(url: &str, out: Option<&Path>) -> Result<Vec<u8>, UpdateError> {
     let mut cmd = Command::new("curl");
     cmd.args(["-fsSL", "--max-time", "300"]);
@@ -121,7 +137,7 @@ fn curl(url: &str, out: Option<&Path>) -> Result<Vec<u8>, UpdateError> {
     let o = cmd
         .arg(url)
         .stdin(Stdio::null())
-        .output()
+        .capture()
         .map_err(|e| format!("curl did not run: {e}"))?;
     if !o.status.success() {
         return Err(format!("curl exited {} for {url}", o.status.code().unwrap_or(-1)).into());
@@ -133,7 +149,7 @@ fn sha256_of(path: &Path) -> Result<String, UpdateError> {
     let o = Command::new("shasum")
         .args(["-a", "256"])
         .arg(path)
-        .output()
+        .capture()
         .map_err(|e| format!("shasum did not run: {e}"))?;
     String::from_utf8_lossy(&o.stdout)
         .split_whitespace()
@@ -147,7 +163,7 @@ fn team_id(app: &Path) -> Option<String> {
     let o = Command::new("codesign")
         .args(["-dv", "--verbose=2"])
         .arg(app)
-        .output()
+        .capture()
         .ok()?;
     let text = String::from_utf8_lossy(&o.stderr);
     text.lines()
@@ -164,7 +180,7 @@ fn prune(root: &Path, keep: Option<&str>) {
         let name = e.file_name().to_string_lossy().into_owned();
         let keeps = keep.is_some_and(|k| name == k || name.starts_with(&format!("{k}.")));
         if e.path().is_dir() && !keeps && !name.ends_with(".partial") {
-            let _ = std::fs::remove_dir_all(e.path());
+            std::fs::remove_dir_all(e.path()).ok();
         }
     }
 }
@@ -228,16 +244,16 @@ pub fn check(running: &str) -> Result<Option<Ready>, UpdateError> {
         }));
     }
     let work = root.join(format!("{version}.{}.partial", std::process::id()));
-    let _ = std::fs::remove_dir_all(&work);
+    std::fs::remove_dir_all(&work).ok();
     std::fs::create_dir_all(&work).map_err(|e| format!("{}: {e}", work.display()))?;
     let proven = stage(&bundle, &version, &work);
     if let Err(e) = proven {
-        let _ = std::fs::remove_dir_all(&work);
+        std::fs::remove_dir_all(&work).ok();
         return Err(e);
     }
     if let Err(e) = std::fs::rename(&work, &dir) {
         // Another instance staged the same version first: its copy stands.
-        let _ = std::fs::remove_dir_all(&work);
+        std::fs::remove_dir_all(&work).ok();
         if !staged.is_dir() {
             return Err(format!("{}: {e}", dir.display()).into());
         }
@@ -293,7 +309,7 @@ fn stage(bundle: &Path, version: &str, work: &Path) -> Result<(), UpdateError> {
     }
     let said = Command::new(app.join("Contents/MacOS/fno-app"))
         .arg("--version")
-        .output()
+        .capture()
         .map_err(|e| format!("the staged app did not run: {e}"))?;
     if String::from_utf8_lossy(&said.stdout).trim() != format!("fno-app {version}") {
         return Err(format!("the staged app does not name version {version}").into());
@@ -312,7 +328,7 @@ fn swappable(bundle: &Path) -> Result<(), UpdateError> {
     let probe = dir.join(format!(".fno-app-update-{}", std::process::id()));
     std::fs::write(&probe, b"")
         .map_err(|e| format!("cannot replace the app in {}: {e}", dir.display()))?;
-    let _ = std::fs::remove_file(&probe);
+    std::fs::remove_file(&probe).ok();
     Ok(())
 }
 
@@ -352,7 +368,7 @@ pub fn take_pending_notes(running: &str) -> Option<(String, String)> {
     if theirs > mine {
         return None;
     }
-    let _ = std::fs::remove_file(&path);
+    std::fs::remove_file(&path).ok();
     (theirs == mine).then_some((pending.version, pending.notes))
 }
 
