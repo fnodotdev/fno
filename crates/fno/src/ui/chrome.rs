@@ -1660,10 +1660,12 @@ mod tests {
         for name in ["", "catppuccin", "tokyo-night", "gruvbox"] {
             let t = crate::theme::Theme::from_name(name).0;
             // No palette slot reads on both grounds, so the keys take the default fg.
-            let footer = &framed.lines[framed.lines.len() - 2];
-            for (line, word) in [(&framed.lines[0], "esc"), (footer, "j/k")] {
-                let byte = line.text.find(word).expect("the key is painted");
-                let role = line.roles[line.text[..byte].chars().count()];
+            let top = framed.lines.first().expect("a top border");
+            let footer = framed.lines.iter().nth_back(1).expect("a footer row");
+            for (line, word) in [(top, "esc"), (footer, "j/k")] {
+                let (before, _) = line.text.split_once(word).expect("the key is painted");
+                let at = before.chars().count();
+                let role = line.roles.get(at).copied().expect("the key has a role");
                 assert_eq!(
                     cell_style(role, &t).0,
                     crate::proto::Color::Default,
