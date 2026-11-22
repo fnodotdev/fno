@@ -1250,7 +1250,7 @@ dependencies = [
 
 [[package]]
 name = "fno-proto"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "rio-vt",
  "serde",

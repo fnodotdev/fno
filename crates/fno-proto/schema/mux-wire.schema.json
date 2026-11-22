@@ -701,6 +701,13 @@
             "integer",
             "null"
           ]
+        },
+        "verb": {
+          "description": "(v134) The row's dispatch verb, the command code the name grammar\nparses off the row's name (`t`, `bp`, `r`, `th`, `f`), stamped on the\nregistry row by the liveness sweep. The sideline renders the verb\nglyph from this served fact instead of parsing the name string.\n`None` on a name the grammar cannot parse (a bare pane, a shell).\nAdditive: `#[serde(default)]` keeps a v133 reader wire-tolerant.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -7602,7 +7609,7 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "min_compat_proto": 58,
-  "proto_version": 133,
+  "proto_version": 134,
   "roots": {
     "ClientMsg": {
       "$ref": "#/$defs/ClientMsg"
