@@ -525,7 +525,7 @@ fn gh_step(gh: GhRun<'_>, args: &[&str], done: String) -> String {
 /// runs unarmed, so an auto-merge armed inside the read's blind second dies.
 fn armed_auto_merge(gh: GhRun<'_>, slug: &str, pr: u64) -> Option<bool> {
     let n = pr.to_string();
-    let (ok, out) = gh(&[
+    let (_ok, out) = gh(&[
         "pr",
         "view",
         &n,
@@ -1057,20 +1057,22 @@ mod tests {
         *seen.borrow_mut() = 0;
         let out = after_record_with(&gh, "pr-hold:o/r#12", HOLD_DECISION, Some("operator"));
         assert_eq!(*seen.borrow(), 5);
-        assert!(out.is_some_and(|s| s.contains("converted o/r#12 to draft")));
-        assert!(!out.is_some_and(|s| s.contains("auto-merge")));
+        assert!(out
+            .is_some_and(|s| s.contains("converted o/r#12 to draft") && !s.contains("auto-merge")));
         *seen.borrow_mut() = 0;
         let out = after_record_with(&gh, "pr-hold:o/r#13", HOLD_DECISION, Some("operator"));
         assert_eq!(*seen.borrow(), 5);
-        assert!(out.is_some_and(|s| s.contains("converted o/r#13 to draft")));
-        assert!(!out.is_some_and(|s| s.contains("auto-merge")));
+        assert!(out
+            .is_some_and(|s| s.contains("converted o/r#13 to draft") && !s.contains("auto-merge")));
         // A gh warning appended to a successful read must not hide an armed
         // auto-merge: the payload is the brace span, warnings ride after it.
         *seen.borrow_mut() = 0;
         let out = after_record_with(&gh, "pr-hold:o/r#14", HOLD_DECISION, Some("operator"));
         assert_eq!(*seen.borrow(), 5);
-        assert!(out.is_some_and(|s| s.contains("disabled an armed auto-merge")));
-        assert!(out.is_some_and(|s| s.contains("converted o/r#14 to draft")));
+        assert!(
+            out.is_some_and(|s| s.contains("disabled an armed auto-merge")
+                && s.contains("converted o/r#14 to draft"))
+        );
         *seen.borrow_mut() = 0;
         // A release restores ready, drops the label; the head view is the
         // third call and its stub failure skips the ci-required rerun. A
