@@ -482,8 +482,8 @@ pub(super) fn shown_name(a: &AgentRow) -> &str {
 /// the snapshot grid), and distinct in shape from every lattice glyph. A
 /// verb outside the pair falls back to its own first letter, and no verb
 /// paints nothing: never a fabricated mark.
-pub(crate) const TARGET_MARK: char = '\u{25c9}'; // ◉ bullseye, the target mark
-pub(crate) const BLUEPRINT_MARK: char = '\u{25c7}'; // ◇ white diamond, the blueprint mark
+pub(crate) const TARGET_MARK: char = '\u{2316}'; // ⌖ position indicator
+pub(crate) const BLUEPRINT_MARK: char = '\u{2315}'; // ⌕ magnifier
 
 /// The mark for one dispatch verb code.
 pub(crate) fn verb_mark(verb: &str) -> char {
