@@ -6,7 +6,7 @@
 //! already neutralized (its dims are ignored for a passive client);
 //! Detach/Gone/Query/etc. pass. A link client passes for its own pane.
 
-use super::{CoreMsg, PaneInputRequest};
+use super::CoreMsg;
 
 /// The client whose message mutates PTY or shared state, `None` when the
 /// message carries no client mutation (or no client at all).
