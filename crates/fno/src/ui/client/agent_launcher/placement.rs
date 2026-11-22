@@ -455,7 +455,7 @@ pub(super) fn shift_pick(view: &mut View, dir: Dir) -> bool {
 
 /// The Open as states a snapshot can show.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Shot {
+pub enum Shot {
     List,
     TabStep,
     Placed,
@@ -543,12 +543,15 @@ mod tests {
             assert_eq!(placed.portal_new, portal.is_none(), "the server picks");
             let mut flags = Flags::default();
             for pair in places.flags(pick).chunks(2) {
-                let slot = match pair[0].as_str() {
+                let [flag, value] = pair else {
+                    panic!("a flag with no value: {pair:?}");
+                };
+                let slot = match flag.as_str() {
                     "--tab" => &mut flags.tab,
                     "--split" => &mut flags.split,
                     _ => &mut flags.portal,
                 };
-                *slot = Some(pair[1].clone());
+                *slot = Some(value.clone());
             }
             assert_eq!(places.from_flags(&flags), Ok(pick), "the line reads back");
         }

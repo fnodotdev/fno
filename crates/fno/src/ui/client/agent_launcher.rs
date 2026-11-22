@@ -1816,7 +1816,11 @@ fn arrow_key(seq: &[u8]) -> Option<LKey> {
             });
         }
     }
-    if ok && seq[0] == b'[' && seq[1..seq.len() - 1].ends_with(b";2") {
+    if ok
+        && seq
+            .split_last()
+            .is_some_and(|(_, head)| head.starts_with(b"[") && head.ends_with(b";2"))
+    {
         return Some(LKey::Shift(match arrow {
             LKey::Left => crate::tree::Dir::Left,
             LKey::Right => crate::tree::Dir::Right,

@@ -27,12 +27,13 @@ pub(super) fn report(reason: &str) -> Option<(&str, Vec<&str>)> {
 pub(super) fn footer(head: &str, lines: &[&str], all: bool) -> String {
     let mut out = vec![head.to_string()];
     if all {
-        out.extend(lines.iter().map(|line| line.to_string()));
+        // The sideline clips a long report, so the keys come before it.
         out.push("(^o log in a tab, esc folds)".to_string());
+        out.extend(lines.iter().map(|line| line.to_string()));
         return out.join("\n");
     }
-    let shown = &lines[lines.len().saturating_sub(TAIL)..];
-    out.extend(shown.iter().map(|line| line.to_string()));
+    let folded = lines.len().saturating_sub(TAIL);
+    out.extend(lines.iter().skip(folded).map(|line| line.to_string()));
     out.push(format!("(^o all {} lines)", lines.len()));
     out.join("\n")
 }
@@ -51,13 +52,23 @@ pub(super) enum LogError {
 }
 
 /// The pager's argv. LESSSECURE takes away the shell, editor and log
-/// commands, and -L takes away the input preprocessor.
+/// commands unless LESSSECURE_ALLOW gives them back, so that one is unset.
+/// -L takes away the input preprocessor, and -+F keeps a short log open.
 fn pager_argv(path: &std::path::Path) -> Vec<String> {
-    ["env", "LESSSECURE=1", "less", "-L", "--"]
-        .into_iter()
-        .map(str::to_string)
-        .chain([path.to_string_lossy().into_owned()])
-        .collect()
+    [
+        "env",
+        "-u",
+        "LESSSECURE_ALLOW",
+        "LESSSECURE=1",
+        "less",
+        "-L",
+        "-+F",
+        "--",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .chain([path.to_string_lossy().into_owned()])
+    .collect()
 }
 
 fn run_in_tab(session: &str, squad: u64, report: &str) -> Result<u64, LogError> {
@@ -130,8 +141,14 @@ mod tests {
             footer(head, &lines, false),
             "exit 78\ntwo\nthree\n(^o all 3 lines)"
         );
-        assert!(footer(head, &lines, true).contains("\none\ntwo\nthree\n"));
+        assert_eq!(
+            footer(head, &lines, true),
+            "exit 78\n(^o log in a tab, esc folds)\none\ntwo\nthree"
+        );
         assert_eq!(report("no folder"), None);
-        assert!(!pager_argv(std::path::Path::new("/l")).contains(&"-l".to_string()));
+        assert_eq!(
+            pager_argv(std::path::Path::new("/l")).join(" "),
+            "env -u LESSSECURE_ALLOW LESSSECURE=1 less -L -+F -- /l"
+        );
     }
 }

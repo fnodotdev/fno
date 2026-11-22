@@ -101,21 +101,32 @@ pub(crate) struct LaunchDesk {
     pending: HashSet<(u64, u64)>,
     /// The client's portal placement, retained until a thread or remote
     /// pane launch returns its receipt.
-    placements: HashMap<(u64, u64), PanePlacement>,
+    placements: HashMap<(u64, u64), HeldPlacement>,
     /// Terminal updates, insertion-ordered for eviction.
     finished: HashMap<(u64, u64), AgentLaunchUpdate>,
     order: VecDeque<(u64, u64)>,
 }
 
-/// Where a launch's portal opens, held on the desk until the receipt. An
-/// explicit index stays. Without one the server picks at the open. A typed
-/// placement is the card's snapshot at Enter. An older client's three words
-/// read through the CLI's own tab grammar.
-fn requested_placement(req: &AgentLaunchRequest) -> PanePlacement {
+/// A launch's placement, held on the desk until the receipt.
+pub(super) struct HeldPlacement {
+    pub(super) placement: PanePlacement,
+    /// The index names a portal that was open when it was picked. An older
+    /// client's index can also name one to create.
+    pub(super) picked_open: bool,
+}
+
+/// Where a launch's portal opens. An explicit index stays. Without one the
+/// server picks at the open. A typed placement is the card's snapshot at
+/// Enter. An older client's three words read through the CLI's own tab
+/// grammar.
+fn requested_placement(req: &AgentLaunchRequest) -> HeldPlacement {
     if let Some(open_as) = &req.open_as {
-        return open_as.clone();
+        return HeldPlacement {
+            picked_open: open_as.portal.is_some(),
+            placement: open_as.clone(),
+        };
     }
-    PanePlacement {
+    let placement = PanePlacement {
         portal: req.portal,
         portal_new: req.portal.is_none(),
         tab: req
@@ -129,6 +140,10 @@ fn requested_placement(req: &AgentLaunchRequest) -> PanePlacement {
             _ => crate::tree::Dir::Right,
         }),
         ..Default::default()
+    };
+    HeldPlacement {
+        placement,
+        picked_open: false,
     }
 }
 
@@ -153,7 +168,12 @@ impl LaunchDesk {
         })
     }
 
-    fn mark_started(&mut self, client: u64, request_id: u64, placement: Option<PanePlacement>) {
+    pub(super) fn mark_started(
+        &mut self,
+        client: u64,
+        request_id: u64,
+        placement: Option<HeldPlacement>,
+    ) {
         let key = (client, request_id);
         self.pending.insert(key);
         if let Some(placement) = placement {
@@ -163,7 +183,7 @@ impl LaunchDesk {
 
     /// Take a launch's portal placement off the desk: consumed exactly
     /// once, on the Launched receipt.
-    fn take_placement(&mut self, client: u64, request_id: u64) -> Option<PanePlacement> {
+    fn take_placement(&mut self, client: u64, request_id: u64) -> Option<HeldPlacement> {
         self.placements.remove(&(client, request_id))
     }
 
@@ -689,7 +709,7 @@ impl super::Core {
     /// the receipt with the placement the card took at Enter. A pane, tab or
     /// workspace that closed meanwhile opens a new tab and says so, because
     /// the worker is already live. The requesting client's view lands on it.
-    fn open_composer_portal(&mut self, client_id: u64, name: &str, mut placement: PanePlacement) {
+    fn open_composer_portal(&mut self, client_id: u64, name: &str, held: HeldPlacement) {
         let Some(view) = self.client_view(client_id) else {
             self.notice(
                 client_id,
@@ -698,6 +718,17 @@ impl super::Core {
             return;
         };
         let vp = self.tab_rect(view.1);
+        let HeldPlacement {
+            mut placement,
+            picked_open,
+        } = held;
+        // Before the index pick: a closed portal's number is no longer a pick.
+        if let Some(change) = self.changed_since_enter(&mut placement, picked_open) {
+            self.notice(
+                client_id,
+                format!("the {change}; {name} opens in a new tab"),
+            );
+        }
         let (portal_idx, explicit) = match placement.portal {
             Some(idx) => (idx, true),
             None => match self.next_free_portal() {
@@ -715,12 +746,6 @@ impl super::Core {
         };
         placement.portal_new = false;
         placement.portal = explicit.then_some(portal_idx);
-        if let Some(closed) = self.closed_since_enter(&mut placement) {
-            self.notice(
-                client_id,
-                format!("the {closed} picked at Enter closed; {name} opens in a new tab"),
-            );
-        }
         let remote = crate::proto::RemoteRow::from_address(name);
         let key = match remote.as_ref() {
             Some(remote) => super::portal_reach::ReachKey::Remote(remote),
@@ -730,12 +755,28 @@ impl super::Core {
     }
 
     /// Point a placement whose target is gone at a new tab, and name what went.
-    fn closed_since_enter(&self, placement: &mut PanePlacement) -> Option<&'static str> {
+    fn changed_since_enter(
+        &self,
+        placement: &mut PanePlacement,
+        picked_open: bool,
+    ) -> Option<&'static str> {
+        let portal_gone =
+            picked_open && placement.portal.is_some_and(|idx| !self.portal_seated(idx));
         let squad_gone = matches!(placement.target, PaneTarget::SquadId(id)
             if self.session.squad(id).is_none());
-        let pane_gone = placement
-            .at
-            .is_some_and(|pane| self.session.find_pane(pane).is_none());
+        let found = placement.at.map(|pane| self.session.find_pane(pane));
+        let pane_gone = matches!(found, Some(None));
+        // A pane that left the workspace or the tab picked with it.
+        let pane_moved = found.flatten().is_some_and(|(sid, ti)| {
+            let left_squad = matches!(placement.target, PaneTarget::SquadId(id) if id != sid);
+            let left_tab = matches!(placement.tab, Some(TabSel::Id(tid))
+                if self
+                    .session
+                    .squad(sid)
+                    .and_then(|sq| sq.tabs.get(ti))
+                    .is_some_and(|tab| tab.id != tid));
+            left_squad || left_tab
+        });
         let tab_gone = match (&placement.target, &placement.tab) {
             (PaneTarget::SquadId(sid), Some(TabSel::Id(tid))) => self
                 .session
@@ -743,20 +784,25 @@ impl super::Core {
                 .is_some_and(|sq| !sq.tabs.iter().any(|tab| tab.id == *tid)),
             _ => false,
         };
-        let closed = if squad_gone {
+        let change = if portal_gone {
+            placement.portal = None;
+            "portal picked at Enter closed"
+        } else if squad_gone {
             placement.target = PaneTarget::CurrentRoute;
-            "workspace"
+            "workspace picked at Enter closed"
         } else if pane_gone {
-            "pane"
+            "pane picked at Enter closed"
         } else if tab_gone {
-            "tab"
+            "tab picked at Enter closed"
+        } else if pane_moved {
+            "pane picked at Enter moved"
         } else {
             return None;
         };
         placement.at = None;
         placement.split = None;
         placement.tab = Some(TabSel::New);
-        Some(closed)
+        Some(change)
     }
 }
 

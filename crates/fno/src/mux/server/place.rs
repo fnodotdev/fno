@@ -39,20 +39,13 @@ impl Core {
                 "a --tab/--at placement needs a resolved workspace".into(),
             ));
         };
-        let Some(si) = self.session.squads.iter().position(|s| s.id == sid) else {
+        let Some(sq) = self.session.squad(sid) else {
             self.reap_pane(pid);
             return Err((err_code::SPAWN_FAILED, "selected workspace vanished".into()));
         };
         // An explicit `New` tab ignores any anchor - it is born with this pane.
         if matches!(placement.tab, Some(TabSel::New)) {
-            let tid = self.session.mint_tab_id();
-            self.session.squads[si].tabs.push(Tab {
-                name: None,
-                id: tid,
-                root: Node::Leaf(pid),
-                focus: pid,
-            });
-            return Ok((sid, tid, false));
+            return Ok((sid, self.tab_born_with(sid, pid), false));
         }
         let ti = match &placement.tab {
             Some(sel) => match self.resolve_tab_index(sid, sel) {
@@ -62,18 +55,19 @@ impl Core {
                     return Err((err_code::BAD_REQUEST, e));
                 }
             },
-            None => {
-                let sq = &self.session.squads[si];
-                sq.active_tab.min(sq.tabs.len().saturating_sub(1))
-            }
+            None => sq.active_tab.min(sq.tabs.len().saturating_sub(1)),
         };
-        let tid = self.session.squads[si].tabs[ti].id;
+        let Some(tab) = self.session.squad(sid).and_then(|s| s.tabs.get(ti)) else {
+            self.reap_pane(pid);
+            return Err((err_code::SPAWN_FAILED, "selected tab vanished".into()));
+        };
+        let (tid, focus, cells) = (tab.id, tab.focus, tree::leaves(&tab.root));
         // Same pane cap as the strict path: a numeric anchor or explicit
         // --tab resolves here instead, and the cap the caller believes in
         // must not silently stop at one spelling of --at. The New-tab branch
         // above is born with a single pane and needs no check.
         if let Some(cap) = placement.max_panes {
-            let pane_count = tree::leaves(&self.session.squads[si].tabs[ti].root).len();
+            let pane_count = cells.len();
             if pane_count >= cap {
                 self.reap_pane(pid);
                 return Err((
@@ -85,22 +79,21 @@ impl Core {
             }
         }
         let vp = self.tab_rect(tid);
-        let anchor = placement
-            .at
-            .unwrap_or(self.session.squads[si].tabs[ti].focus);
+        let anchor = placement.at.unwrap_or(focus);
         let dir = placement.split.unwrap_or(Dir::Down);
-        if !tree::leaves(&self.session.squads[si].tabs[ti].root).contains(&anchor) {
+        if !cells.contains(&anchor) {
             self.reap_pane(pid);
             return Err((
                 err_code::BAD_REQUEST,
                 format!("anchor pane {anchor} is not in the target tab"),
             ));
         }
-        let res = {
-            let tab = &mut self.session.squads[si].tabs[ti];
-            tree::split_at(tab, vp, anchor, dir, pid)
+        let squad = self.session.squad_mut(sid);
+        let Some(tab) = squad.and_then(|s| s.tabs.get_mut(ti)) else {
+            self.reap_pane(pid);
+            return Err((err_code::SPAWN_FAILED, "selected tab vanished".into()));
         };
-        match res {
+        match tree::split_at(tab, vp, anchor, dir, pid) {
             Ok(()) => {
                 self.maybe_reflow(sid, tid);
                 Ok((sid, tid, false))
@@ -118,20 +111,27 @@ impl Core {
                             .into(),
                     ));
                 }
-                let ntid = self.session.mint_tab_id();
-                self.session.squads[si].tabs.push(Tab {
-                    name: None,
-                    id: ntid,
-                    root: Node::Leaf(pid),
-                    focus: pid,
-                });
-                Ok((sid, ntid, true))
+                Ok((sid, self.tab_born_with(sid, pid), true))
             }
             Err(e) => {
                 self.reap_pane(pid);
                 Err((err_code::BAD_REQUEST, e.to_string()))
             }
         }
+    }
+
+    /// A new tab of workspace `sid` whose one cell is `pid`.
+    fn tab_born_with(&mut self, sid: u64, pid: u64) -> TabId {
+        let id = self.session.mint_tab_id();
+        if let Some(sq) = self.session.squad_mut(sid) {
+            sq.tabs.push(Tab {
+                name: None,
+                id,
+                root: Node::Leaf(pid),
+                focus: pid,
+            });
+        }
+        id
     }
 
     /// Strict origin placement for `--at current` (v44): the anchor is

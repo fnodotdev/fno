@@ -136,23 +136,19 @@ pub(super) async fn run_with(
     let cwd = l.draft.cwd();
     let request_id = l.next_request_id;
     l.next_request_id += 1;
+    let refuse = |reason: String| {
+        let row = refused_row(&session, &cwd, &line, &reason, "refused");
+        emit(events, &row);
+        Phase::Refused { request_id, reason }
+    };
     if let Some(host) = &l.draft.host {
         let reason =
             format!("shell runs on {host} are not supported; choose Local to run this line");
-        emit(
-            events,
-            &refused_row(&session, &cwd, &line, &reason, "refused"),
-        );
-        l.phase = Phase::Refused { request_id, reason };
+        l.phase = refuse(reason);
         return Ok(());
     }
     if cwd.is_empty() {
-        let reason = "no project chosen; pick one on the Project chip".to_string();
-        emit(
-            events,
-            &refused_row(&session, &cwd, &line, &reason, "refused"),
-        );
-        l.phase = Phase::Refused { request_id, reason };
+        l.phase = refuse("no project chosen; pick one on the Project chip".to_string());
         return Ok(());
     }
     let shell = user_shell();
@@ -164,12 +160,7 @@ pub(super) async fn run_with(
     let placement = match placed {
         Ok(placement) => placement,
         Err(e) => {
-            let reason = e.to_string();
-            emit(
-                events,
-                &refused_row(&session, &cwd, &line, &reason, "refused"),
-            );
-            l.phase = Phase::Refused { request_id, reason };
+            l.phase = refuse(e.to_string());
             return Ok(());
         }
     };

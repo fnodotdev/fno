@@ -825,6 +825,14 @@ fn run_client_spawn(
     if let Some(code) = relay_client_spawn(home, args, params, agent_name, substrate, lease) {
         return Some(code);
     }
+    // A relay checked for the host it picked. Every other lane is born here.
+    if substrate == "bg" {
+        if let Err(refusal) = fno_agent::spawn_portal::check_before_birth(params, agent_name, None)
+        {
+            eprintln!("{refusal}");
+            return Some(2);
+        }
+    }
     // A DEFAULT never opens a view: a bare spawn is a paneless thread,
     // inside a mux or out. Only an explicit placement flag opens
     // anything, and it opens through spawn_portal::place_after_birth.
@@ -927,13 +935,7 @@ fn admit_client_spawn(
     if lease.promotion.is_none() {
         fno_agent::spawn_promote::raw_role_pair_gate(params)?;
     }
-    if substrate == "bg" {
-        // Every lane passes here before a birth or a relay.
-        if let Err(refusal) = fno_agent::spawn_portal::check_before_birth(params, agent_name) {
-            eprintln!("{refusal}");
-            return Err(2);
-        }
-    }
+
     Ok(substrate)
 }
 
@@ -1010,6 +1012,14 @@ fn relay_client_spawn(
         }
     };
     let t = target?;
+    if substrate == "bg" {
+        if let Err(refusal) =
+            fno_agent::spawn_portal::check_before_birth(params, agent_name, Some(&t.host))
+        {
+            eprintln!("{refusal}");
+            return Some(2);
+        }
+    }
     let strip = if substrate == "pane" {
         fno_agent::spawn_place::PANE_STRIP
     } else {

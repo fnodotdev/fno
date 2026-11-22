@@ -3550,17 +3550,90 @@ mod serve_setup {
 }
 
 #[test]
+fn a_launch_receipt_opens_one_portal_where_enter_put_it() {
+    use crate::proto::agent_launch::{AgentLaunchUpdate, LaunchState};
+    use crate::proto::TabSel;
+    use crate::server::agent_launch::HeldPlacement;
+
+    set_attach_program(&["/bin/cat"]);
+    // (case, the index, the anchor is the first tab's pane, the tab, the notice)
+    let cases = [
+        ("a new tab", None, false, TabSel::New, None),
+        (
+            "a closed portal",
+            Some(5),
+            false,
+            TabSel::New,
+            Some("portal picked at Enter closed"),
+        ),
+        (
+            "a moved anchor",
+            None,
+            true,
+            TabSel::Id(2),
+            Some("pane picked at Enter moved"),
+        ),
+    ];
+    for (case, portal, anchored, tab, notice) in cases {
+        let (mut core, client_id, first, mut rx) = thread_core();
+        let second = core.spawn_pane(24, 40, "/tmp/seen").expect("pane 2");
+        let squad = core.session.squad_mut(1).expect("the workspace");
+        squad.tabs.push(Tab {
+            name: None,
+            id: 2,
+            root: Node::Leaf(second),
+            focus: second,
+        });
+        core.agents = vec![bg_row("kite", "/tmp/seen", Some("deadbee1"))];
+        let placement = PanePlacement {
+            portal,
+            portal_new: portal.is_none(),
+            at: anchored.then_some(first),
+            split: anchored.then_some(Dir::Down),
+            tab: Some(tab),
+            ..Default::default()
+        };
+        let held = HeldPlacement {
+            placement,
+            picked_open: portal.is_some(),
+        };
+        core.launch_desk.mark_started(client_id, 7, Some(held));
+        let update = AgentLaunchUpdate {
+            request_id: 7,
+            state: LaunchState::Launched {
+                name: "kite".into(),
+                pane: None,
+                seed_delivered: None,
+            },
+        };
+        // A repeated receipt finds nothing left on the desk.
+        core.agent_launch_update(client_id, update.clone(), 0);
+        core.agent_launch_update(client_id, update, 0);
+        assert_eq!(core.portals.len(), 1, "{case}: one opener");
+        assert!(core.portals.contains_key(&0), "{case}: the server picks");
+        let tabs = core.session.squad(1).map_or(0, |s| s.tabs.len());
+        assert_eq!(tabs, 3, "{case}: it opens in a new tab");
+        let said = drain_notices(&mut rx);
+        match notice {
+            Some(text) => assert!(said.iter().any(|n| n.contains(text)), "{case}: {said:?}"),
+            None => assert!(!said.iter().any(|n| n.contains("at Enter")), "{case}"),
+        }
+    }
+}
+
+#[test]
 fn thread_check_answers_by_the_reach_rule_and_changes_nothing() {
     use crate::proto::{TabSel, ThreadOrigin};
     let (mut core, _client_id, first, _rx) = thread_core();
     let second = core.spawn_pane(24, 40, "/tmp/seen").expect("pane 2");
-    core.session.squads[0].tabs.push(Tab {
+    let squad = core.session.squad_mut(1).expect("the workspace");
+    squad.tabs.push(Tab {
         name: None,
         id: 2,
         root: Node::Leaf(second),
         focus: second,
     });
-    core.session.squads[0].active_tab = 1;
+    squad.active_tab = 1;
     let origin = ThreadOrigin {
         cwd: "/tmp/seen".into(),
         parent: None,

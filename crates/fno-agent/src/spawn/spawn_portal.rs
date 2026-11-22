@@ -61,7 +61,6 @@ struct Placement {
     cwd: Option<String>,
     here: Option<bool>,
     spawned_by_session: Option<String>,
-    machine_host: Option<String>,
 }
 
 impl Placement {
@@ -142,13 +141,6 @@ impl Placement {
         args
     }
 
-    /// The host a `--machine` pin sends the worker to, when it is not this one.
-    fn far_host(&self) -> Option<&str> {
-        self.machine_host
-            .as_deref()
-            .filter(|host| !crate::spawn_place::same_host_pin(host))
-    }
-
     /// Who asks, for a thread with no row here: the folder it runs in (the
     /// caller's for a worker on another machine) and the spawning session.
     fn origin_args(&self, params: &Value, remote: bool) -> Vec<String> {
@@ -191,20 +183,24 @@ pub fn admit(params: &mut Value, substrate: &str) -> Result<(), PlacementRefusal
     Ok(())
 }
 
-/// Ask the mux whether the placement would land, before a worker starts and
-/// before a relay. Only a refusal from the mux stops the spawn: with no
-/// server, an older one or no answer, the spawn goes on and the reach after
-/// the birth reports.
-pub fn check_before_birth(params: &Value, name: &str) -> Result<(), PlacementRefusal> {
+/// Ask the mux whether the placement would land, before a worker starts.
+/// `host` is the machine a relay picked, pinned or least-loaded, and `None`
+/// is this one. Only a refusal from the mux stops the spawn: with no server,
+/// an older one or no answer, the spawn goes on and the reach after the birth
+/// reports.
+pub fn check_before_birth(
+    params: &Value,
+    name: &str,
+    host: Option<&str>,
+) -> Result<(), PlacementRefusal> {
     let placement = Placement::read(params);
     let Some(portal) = placement.portal_word() else {
         return Ok(());
     };
-    let far = placement.far_host();
-    let address = far.map_or_else(|| name.to_string(), |host| address_on(name, host));
+    let address = host.map_or_else(|| name.to_string(), |host| address_on(name, host));
     let mut args = placement.thread_args(&address, &portal);
     args.insert(2, "--check".to_string());
-    args.extend(placement.origin_args(params, far.is_some()));
+    args.extend(placement.origin_args(params, host.is_some()));
     let Ok(out) = run_fno(&args, CHECK_SECS) else {
         return Ok(());
     };

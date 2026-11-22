@@ -1181,7 +1181,8 @@ impl Core {
                                 && self
                                     .session
                                     .squad(found)
-                                    .is_some_and(|s| s.tabs[ti].id == tid)
+                                    .and_then(|s| s.tabs.get(ti))
+                                    .is_some_and(|tab| tab.id == tid)
                         })
                     }),
                     ..Default::default()

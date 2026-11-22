@@ -74,7 +74,7 @@ fno agent spawn --name lead-<epic> "<brief>" --effort high --model <your frontie
   --promote <epic> --substrate pane --workspace <epic>
 ```
 
-`--as pane` is explicit here rather than assumed. `pane` is the built-in default. When the flag is absent, `config.agents.defaults.substrate` takes precedence and is injected. If the user set `thread`, this command becomes a placement flag on a non-pane substrate and exits 2. Promotion then fails because you cannot see or change that config here.
+`--as pane` is explicit here rather than assumed. `thread` is the built-in default, and `config.agents.defaults.substrate` replaces it. On a thread this `--workspace` opens a portal in that workspace, and the lead has no pane of its own.
 
 What `pane` buys here is the ORG, not the role.
 

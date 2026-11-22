@@ -20,19 +20,22 @@ pub(super) enum LandingRefusal {
     Anchor(String),
     #[error("{0}")]
     Workspace(String),
-    #[error(
-        "{reason}: workspace {workspace} has {count} tabs; name one of them, or pass --tab new"
-    )]
+    #[error("{reason}: workspace {workspace} has {tabs}; name one of them, or pass --tab new")]
     Tab {
         reason: String,
         workspace: String,
-        count: usize,
+        tabs: String,
     },
-    #[error("anchor pane {0} no longer exists")]
+    #[error("anchor pane {0} no longer exists; name a live cell with --from")]
     AnchorGone(u64),
-    #[error("anchor pane {0} is not in the requested workspace")]
+    #[error(
+        "anchor pane {0} is not in the requested workspace; change --workspace, or name a \
+         cell there with --from"
+    )]
     AnchorOutsideWorkspace(u64),
-    #[error("anchor pane {0} is not in the target tab")]
+    #[error(
+        "anchor pane {0} is not in the target tab; change --tab, or name a cell in it with --from"
+    )]
     AnchorOutsideTab(u64),
 }
 
@@ -49,8 +52,9 @@ pub(super) fn unused_geometry(placement: &PanePlacement) -> Option<String> {
     if !matches!(placement.target, PaneTarget::CurrentRoute) {
         flags.push("--workspace");
     }
-    // An anchor beside a split is the split's own cell, often a default.
-    if placement.split.is_none() && (placement.at.is_some() || placement.from.is_some()) {
+    // A `from` is always typed. An `at` beside a split is often the caller's
+    // own pane, filled in as the split's default.
+    if placement.from.is_some() || (placement.split.is_none() && placement.at.is_some()) {
         flags.push("--from");
     }
     let verb = if flags.len() == 1 { "was" } else { "were" };
@@ -79,17 +83,17 @@ impl Core {
         let remote = RemoteRow::from_address(name);
         let owner = self.origin_workspace(&origin);
         if origin.check {
-            let _ = reply.send(
-                match self.check_reach(portal, &placement, owner, remote.as_ref()) {
-                    Ok(()) => ServerMsg::Notice {
-                        text: "placement ok".to_string(),
-                    },
-                    Err(refusal) => ServerMsg::Err {
-                        code: err_code::BAD_REQUEST,
-                        msg: refusal.to_string(),
-                    },
+            let answer = match self.check_reach(portal, &placement, owner, remote.as_ref()) {
+                Ok(()) => ServerMsg::Notice {
+                    text: "placement ok".to_string(),
                 },
-            );
+                Err(refusal) => ServerMsg::Err {
+                    code: err_code::BAD_REQUEST,
+                    msg: refusal.to_string(),
+                },
+            };
+            // A caller that gave up waiting needs no answer.
+            drop(reply.send(answer));
             return;
         }
         // An anchor names its own workspace, and a live seat keeps its own.
@@ -120,7 +124,7 @@ impl Core {
             .unwrap_or_else(|| observers::passive_anchor(&self.session).0)
     }
 
-    fn portal_seated(&self, idx: u8) -> bool {
+    pub(super) fn portal_seated(&self, idx: u8) -> bool {
         self.portals.get(&idx).is_some_and(|p| {
             self.panes.contains_key(&p.seat) && self.session.find_pane(p.seat).is_some()
         })
@@ -219,7 +223,10 @@ impl Core {
                         .map_err(|reason| LandingRefusal::Tab {
                             reason,
                             workspace: self.workspace_label(sid),
-                            count: self.session.squad(sid).map_or(0, |s| s.tabs.len()),
+                            tabs: match self.session.squad(sid).map_or(0, |s| s.tabs.len()) {
+                                1 => "1 tab".to_string(),
+                                count => format!("{count} tabs"),
+                            },
                         })?,
                 )
             }
@@ -256,10 +263,11 @@ impl Core {
             .map(|s| s.canonical_cwd().to_string())
             .collect();
         let derived = squad::display_names(&cwds);
-        squads[at]
-            .name
-            .clone()
-            .unwrap_or_else(|| derived[at].clone())
+        squads
+            .get(at)
+            .and_then(|s| s.name.clone())
+            .or_else(|| derived.get(at).cloned())
+            .unwrap_or_else(|| sid.to_string())
     }
 
     /// The one landing line: `thread pane -> w1 (portal 2, workspace app, tab 1, split down)`.
@@ -274,11 +282,11 @@ impl Core {
             format!("portal {idx}"),
             format!("workspace {}", self.workspace_label(sid)),
         ];
-        if let Some((sq, ti)) = self.session.squad(sid).and_then(|sq| {
-            let ti = sq.tabs.iter().position(|t| t.id == tid)?;
-            Some((sq, ti))
-        }) {
-            let tab = &sq.tabs[ti];
+        if let Some((ti, tab)) = self
+            .session
+            .squad(sid)
+            .and_then(|sq| sq.tabs.iter().enumerate().find(|(_, t)| t.id == tid))
+        {
             at.push(match tab.name.as_deref() {
                 Some(named) => format!("tab {} ·{named}", ti + 1),
                 None => format!("tab {}", ti + 1),

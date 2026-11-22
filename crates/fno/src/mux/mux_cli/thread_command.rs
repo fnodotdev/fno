@@ -173,7 +173,8 @@ pub fn thread(args: &[OsString], env_session: Option<&str>) -> i32 {
         Ok(p) => p,
         Err(e) => {
             eprintln!("fno mux thread: {e}");
-            return EXIT_USAGE;
+            // Exit 2 under a check is the server's refusal, and none answered.
+            return if check { EXIT_ERROR } else { EXIT_USAGE };
         }
     };
     let stream = match proto::connect_unix_timeout(&sock, PROBE_TIMEOUT) {

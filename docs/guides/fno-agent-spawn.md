@@ -168,7 +168,7 @@ Every refusal below exits 2 before the worker starts, and each message names the
 | `--portal` with a pane or headless substrate | a pane hosts its own geometry, and headless hosts no session |
 | `--tab new` with `--split` | drop one of the two |
 | `--split` with no tab, no `--from` and no calling pane | names `--tab` and `--from` |
-| a `--from` cell outside the named tab | the cell is not in the target tab |
+| a `--from` cell outside the named tab | the cell is not in the target tab, and the flag to change |
 | `--portal` with `--once` | a one-shot hosts no session to show |
 | `--portal` with `--bounded-placement` | a portal takes no placement lease |
 | `--at` on a thread | name the cell with `--from` |
