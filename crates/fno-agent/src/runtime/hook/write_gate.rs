@@ -1199,10 +1199,10 @@ fn bash_idiom_targets(cmd: &str, pre_armed: bool, out: &mut Vec<String>) {
 /// The contents of regular repo files the command invokes as scripts: an
 /// existing file named directly after an interpreter (python3 tools/gen.py,
 /// node x.js, bash hooks/x.sh). Relative tokens resolve against the payload
-/// cwd, the same resolution the targets use. The toplevel arrives resolved
-/// once per call; reads cap at 256 KiB, name repo files only, and the
-/// contents never print or log: they feed the same extraction as the command
-/// text. Each entry carries whether its interpreter is a shell runner.
+/// cwd, the same resolution the targets use. Reads cap at 256 KiB, name
+/// repo files only, and the contents never print or log: they feed the same
+/// extraction as the command text. Each entry carries whether its
+/// interpreter is a shell runner.
 fn invoked_script_contents(cmd: &str, payload_cwd: &str) -> Vec<(String, bool)> {
     const INTERPRETERS: [&str; 13] = [
         "python3", "python", "python2", "node", "nodejs", "deno", "bun", "ruby", "perl", "bash",
@@ -1250,6 +1250,7 @@ fn invoked_script_contents(cmd: &str, payload_cwd: &str) -> Vec<(String, bool)> 
         };
         let Some(rel) = abs
             .strip_prefix(root.as_str())
+            .ok()
             .map(|p| p.to_string_lossy().into_owned())
         else {
             continue;
@@ -1335,10 +1336,6 @@ fn generated_section(p: &Payload, _cwd: &Path) -> Sec {
     Sec::Allow
 }
 
-/// Whether any manifest row could match `target`: the fixed prefix and tail
-/// of each glob bound the row's reach, bundle and install-prefix surfaces
-/// carry their own rows, and everything else skips the judge. `root` is the
-/// payload's toplevel, resolved once per call.
 /// A row whose regen redirects into its own target reads as a write. Only the
 /// row's whole command passes, so nothing can chain behind it.
 fn runs_the_regen(command: &str, regen: &str) -> bool {
@@ -1351,9 +1348,9 @@ fn trace_gen(msg: &str) {
     }
 }
 
-/// The toplevel memo: keyed by a target's nearest existing ancestor
-/// directory, cleared at the top of every gate call, so a root never
-/// outlives the payload that resolved it.
+// The toplevel memo: keyed by a target's nearest existing ancestor
+// directory, cleared at the top of every gate call, so a root never
+// outlives the payload that resolved it.
 thread_local! {
     static TOPLEVEL_MEMO: std::cell::RefCell<std::collections::HashMap<PathBuf, Option<String>>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
@@ -1776,7 +1773,7 @@ mod tests {
             .join("fno-state/install/plugin-stage/fno/hooks/stop.sh")
             .to_string_lossy()
             .into_owned();
-        let reason = generated_target(&path, "", "", "").expect("installed stage edits refuse");
+        let reason = generated_target(&path, "", "").expect("installed stage edits refuse");
         assert!(reason.contains("installed plugin copy"), "{reason}");
         assert!(reason.contains("hooks/stop.sh"), "{reason}");
     }
@@ -1851,7 +1848,7 @@ mod tests {
                         "{cmd}: {reason}"
                     );
                 }
-                other => panic!("must refuse: {cmd}"),
+                _ => panic!("must refuse: {cmd}"),
             }
         }
         // Admit arms: a read, a bare mention, command text that merely carries
