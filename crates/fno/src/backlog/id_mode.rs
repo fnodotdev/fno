@@ -36,7 +36,7 @@ pub(crate) fn facts() -> &'static IdMode {
                 .stderr(std::process::Stdio::piped())
                 .spawn()
                 .ok()
-                .and_then(|mut child| child.wait_with_output().ok())
+                .and_then(|child| child.wait_with_output().ok())
                 .filter(|out| out.status.success())
                 .and_then(|out| serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).ok());
         let read = read.unwrap_or_default();
