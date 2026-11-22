@@ -150,6 +150,39 @@ pub(crate) fn fire_argv(row: &sched::ScheduledSpawn) -> Vec<String> {
     full
 }
 
+/// The reboot backstop: the pr-watch launchd tick (every 600s) calls this
+/// so a reboot restarts the daemon inside one interval while the store
+/// holds a pending row. The tick is sync and daemon-free, so the ensure
+/// rides this binary's own `restart --if-down` subprocess: the idempotent
+/// arm starts only a measured-down daemon and exits 0 when one serves. A
+/// pinned lane is skipped; it never forks its own daemon.
+pub(crate) fn reboot_backstop(home: &AgentsHome) {
+    if std::env::var_os("FNO_SUPERVISOR_SOCKET").is_some_and(|v| !v.is_empty()) {
+        return;
+    }
+    let Ok(rows) = sched::pending(home) else {
+        return;
+    };
+    if rows.is_empty() {
+        return;
+    }
+    if std::os::unix::net::UnixStream::connect(home.supervisor_sock()).is_ok() {
+        return;
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let args = vec!["restart".to_string(), "--if-down".to_string()];
+    let _ = crate::gate::pr_watch::clock::run(crate::gate::pr_watch::clock::Call {
+        program: exe.as_os_str(),
+        args: &args,
+        stdin: None,
+        cwd: None,
+        env: &[],
+        timeout_s: 30.0,
+    });
+}
+
 /// The arm entry: cadence 30s, one pass in flight, body off-loop.
 pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
     {

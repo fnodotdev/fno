@@ -22,6 +22,7 @@ sources:
   - sh   # target self-handoff
   - ex   # execute foreign wave
   - jn   # backlog join (operator command)
+  - sc   # scheduled spawn (daemon fires a queued spawn)
 commands:
   - t   # target
   - bp  # blueprint
