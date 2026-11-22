@@ -166,7 +166,7 @@ function requests(model) {
 }
 
 function mdHeadline(text) {
-  const m = (text || "").match(/^#{1,6}\s+(.*)$/);
+  const m = (text || "").match(/^(#{1,6})\s+(.*)$/);
   return m ? { level: m[1].length <= 2 ? "h2" : "h3", body: m[2], cls: "reqhead" } : null;
 }
 function stripHashes(s) {
