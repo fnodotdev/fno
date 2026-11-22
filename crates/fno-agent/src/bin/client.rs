@@ -518,7 +518,7 @@ async fn run_daemon_command(
     // strict parse would demand a spawn name no such request carries.
     if command == "spawn" {
         let home = AgentsHome::from_env();
-        if let Some(code) = fno_agent::spawn_schedule::front_door(&home, &args[1..]) {
+        if let Some(code) = fno_agent::spawn::spawn_schedule::front_door(&home, &args[1..]) {
             return code;
         }
     }
