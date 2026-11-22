@@ -520,7 +520,7 @@
       "tier": "advanced",
       "question": "",
       "default_source": "",
-      "doc": "Push sinks for open questions: a list of tables with name, type (ntfy or webhook), url, topic, token_env, answer_base_url and body (title-only or full)."
+      "doc": "Push sinks for open questions: a list of tables with name, type (ntfy or webhook), url, topic, token_env, answer_base_url and body (title-only or full). Read from the global config only: a project file grants none."
     },
     {
       "path": "web.invites",
@@ -529,7 +529,7 @@
       "tier": "advanced",
       "question": "",
       "default_source": "",
-      "doc": "Who may answer on the HQ page over a tailnet: a list of tables with email, scope (* or a node id) and role (viewer, commenter, editor, owner)."
+      "doc": "Who can read and answer on the web bridge over a tailnet: a list of tables with email, scope (* or a node id) and role (viewer, commenter, editor, owner). Read from the global config only: a project file invites nobody. A change applies without a restart."
     },
     {
       "path": "research.output_dir",
