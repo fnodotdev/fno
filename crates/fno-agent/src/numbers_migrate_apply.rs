@@ -1351,6 +1351,38 @@ mod tests {
         std::env::set_current_dir(&sibling).unwrap();
         let code = super::super::run(&["--apply".to_string()]);
         eprintln!("child: apply from project-b exited {code}");
+        if code != 0 {
+            // Name every row the second apply refused on, so a fixture leak
+            // (an extra hex key in the store) reads its own origin.
+            let db = std::env::var_os("FNO_HOME").unwrap();
+            let db = std::path::Path::new(&db).join("db").join("graph.db");
+            let conn = Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .unwrap();
+            for row in conn
+                .prepare("SELECT store, kind, num, key FROM fno_numbers")
+                .unwrap()
+                .query_map([], |r| {
+                    Ok(format!(
+                        "{} {} {} {}",
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, i64>(2)?,
+                        r.get::<_, String>(3)?
+                    ))
+                })
+                .unwrap()
+            {
+                eprintln!("child: fno_numbers {}", row.unwrap());
+            }
+            let ids: Vec<String> = conn
+                .prepare("SELECT event_id FROM decisions LIMIT 10")
+                .unwrap()
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .flatten()
+                .collect();
+            eprintln!("child: decisions {:?}", ids);
+        }
         assert_eq!(code, 0);
     }
 
