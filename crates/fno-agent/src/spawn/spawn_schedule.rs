@@ -923,29 +923,32 @@ fn run_list_cancel(home: &AgentsHome, req: &ScheduleRequest, json: bool) -> Resu
 }
 
 /// The trigger-side fields one row resolves before insert: the grace, the
-/// first fire instant (None for --on), and the --on command. Err carries
-/// the refusal text the caller prints.
+/// first fire instant (None for --on), and the --on command. None after
+/// printing the refusal.
 fn resolve_trigger(
     req: &ScheduleRequest,
     now: DateTime<Utc>,
     now_local: DateTime<Local>,
-) -> Result<(i64, Option<DateTime<Utc>>, Option<String>), String> {
+) -> Option<(i64, Option<DateTime<Utc>>, Option<String>)> {
     let triggers = [req.when.is_some(), req.every.is_some(), req.on.is_some()]
         .into_iter()
         .filter(|b| *b)
         .count();
     if triggers > 1 {
-        return Err("pick one of --when, --every, --on (a row carries one trigger)".into());
+        eprintln!("fno agent spawn: pick one of --when, --every, --on (a row carries one trigger)");
+        return None;
     }
     if req.grace.is_some() && !req.trigger {
-        return Err("--grace needs --when, --every or --on".into());
+        eprintln!("fno agent spawn: --grace needs --when, --every or --on");
+        return None;
     }
     let grace_secs = match req.grace.as_deref() {
         Some(raw) => match crate::duration::parse_duration_secs(raw) {
             Some(0) | None => {
-                return Err(format!(
-                    "--grace wants a positive duration like 30m or 1h (got {raw})"
-                ));
+                eprintln!(
+                    "fno agent spawn: --grace wants a positive duration like 30m or 1h (got {raw})"
+                );
+                return None;
             }
             Some(secs) => secs as i64,
         },
@@ -962,18 +965,30 @@ fn resolve_trigger(
     // front door. A row that would refuse fires anyway, retries inside its
     // grace, and journals `missed` with the gate reason.
     let fire_at = if let Some(raw) = req.when.as_deref() {
-        Some(parse_when(raw, now, now_local).map_err(|e| e.to_string())?)
+        match parse_when(raw, now, now_local) {
+            Ok(at) => Some(at),
+            Err(e) => {
+                eprintln!("fno agent spawn: {e}");
+                return None;
+            }
+        }
     } else if let Some(raw) = req.every.as_deref() {
-        let secs = parse_interval(raw).map_err(|e| e.to_string())?;
-        Some(now + chrono::Duration::seconds(secs))
+        match parse_interval(raw) {
+            Ok(secs) => Some(now + chrono::Duration::seconds(secs)),
+            Err(e) => {
+                eprintln!("fno agent spawn: {e}");
+                return None;
+            }
+        }
     } else {
         None
     };
     let command = req.on.clone();
     if command.as_deref().is_some_and(str::is_empty) {
-        return Err("--on needs a command".into());
+        eprintln!("fno agent spawn: --on needs a command");
+        return None;
     }
-    Ok((grace_secs, fire_at, command))
+    Some((grace_secs, fire_at, command))
 }
 
 /// The row-body fields the recorded argv carries, held out of
@@ -1045,12 +1060,8 @@ fn run_front_door(
     }
     let now = Utc::now();
     let now_local = Local::now();
-    let (grace_secs, fire_at, command) = match resolve_trigger(&req, now, now_local) {
-        Ok(fields) => fields,
-        Err(message) => {
-            eprintln!("fno agent spawn: {message}");
-            return 2;
-        }
+    let Some((grace_secs, fire_at, command)) = resolve_trigger(&req, now, now_local) else {
+        return 2;
     };
     let name = name_flag.clone().or_else(|| args.get(name_index).cloned());
     if name.as_deref().is_none_or(str::is_empty) {
