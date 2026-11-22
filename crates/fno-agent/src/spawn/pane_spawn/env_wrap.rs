@@ -293,9 +293,7 @@ mod tests {
         let overlay = vec![("CLAUDE_CONFIG_DIR".to_string(), String::new())];
         let (unset, pairs) = mesh_env_pairs("w", "claude", None, &[], &overlay);
         assert!(
-            unset
-                .windows(2)
-                .any(|w| w[0] == "-u" && w[1] == "CLAUDE_CONFIG_DIR"),
+            unset.windows(2).any(|w| w == ["-u", "CLAUDE_CONFIG_DIR"]),
             "the clear marker must unset, got {unset:?}"
         );
         assert!(
@@ -306,9 +304,7 @@ mod tests {
         let overlay = vec![("CLAUDE_CONFIG_DIR".to_string(), "/tmp/own".to_string())];
         let (unset, pairs) = mesh_env_pairs("w", "claude", None, &[], &overlay);
         assert!(
-            !unset
-                .windows(2)
-                .any(|w| w[0] == "-u" && w[1] == "CLAUDE_CONFIG_DIR"),
+            !unset.windows(2).any(|w| w == ["-u", "CLAUDE_CONFIG_DIR"]),
             "a valued pair must not unset, got {unset:?}"
         );
         assert!(pairs.contains(&"CLAUDE_CONFIG_DIR=/tmp/own".to_string()));
