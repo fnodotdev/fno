@@ -32,6 +32,10 @@ pub(crate) fn facts() -> &'static IdMode {
         let read: Option<Receipt> =
             std::process::Command::new(crate::ui::digest_overlay::fno_agent_bin())
                 .args(["state", "path", "settings-read"])
+                // The door reads stdin to EOF: inherited stdin never ends
+                // and the board thread blocks forever behind this read
+                // (the mux e2e caught it as a stuck "reading board...").
+                .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
                 .spawn()
