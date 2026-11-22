@@ -1389,12 +1389,9 @@ pub struct GateInput {
 /// None: the overlay writes `""` when no node is bound, and a blank node in
 /// the open-PR branch scan would match every hyphenated head.
 pub fn gate_node_from_params(params: &Value) -> Option<String> {
-    params
-        .get("node")
-        .and_then(Value::as_str)
-        .map(str::trim)
+    crate::spawn_gate_command::opt_str_of(params, "node")
+        .map(|node| node.trim().to_string())
         .filter(|node| !node.is_empty())
-        .map(str::to_string)
 }
 
 pub type NodeOccupancy = Result<BTreeMap<String, Vec<String>>, String>;
