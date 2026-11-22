@@ -16,6 +16,7 @@
 
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 /// One section outcome. `Allow` carries nothing; a block carries the refusal
 /// string the shell guard printed.
@@ -77,18 +78,149 @@ fn norm(s: &str) -> String {
     out.replace("/./", "/")
 }
 
+// Compile-once regexes: the gate runs per tool call on the hot path and
+// hook_latency pins its budget, so every fixed pattern below compiles once.
+// The path-parameterized arms further down stay per-call; they run only when
+// a target was already extracted.
+static HEREDOC_QUOTED: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r#"<<-?[[:space:]]*(['"])([A-Za-z_][A-Za-z0-9_]*)(['"])"#)
+        .expect("fixed pattern")
+});
+static SHELL_RUNNER: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"(^|[[:space:];|&(])(bash|sh|zsh|dash|ksh|eval|source|ssh)([[:space:]]|$)")
+        .expect("fixed pattern")
+});
+static FD_DUP: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"[0-9]*[<>]&([0-9]+|-)").expect("fixed pattern"));
+
+/// The operator families' path token, quoted forms first.
+const OPERATOR_TOK: &str = r#"("[^"]*"|'[^']*'|[^[:space:];|&<>"']+)"#;
+static STRIP_FD_DUPS: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"[0-9]*>&[0-9]+").expect("fixed pattern"));
+static STRIP_REDIRS: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(&format!(
+        r"(^|[[:space:]])(([0-9]*>>?)|&>|>\||>!)[[:space:]]*{OPERATOR_TOK}"
+    ))
+    .expect("fixed pattern")
+});
+static OPERATOR_RAW: LazyLock<Vec<(regex::Regex, usize)>> = LazyLock::new(|| {
+    vec![
+        (
+            regex::Regex::new(&format!(r"[0-9]*(>>|>)[[:space:]]*{OPERATOR_TOK}"))
+                .expect("fixed pattern"),
+            2,
+        ),
+        (
+            regex::Regex::new(&format!(r"(&>|>\||>!)[[:space:]]*{OPERATOR_TOK}"))
+                .expect("fixed pattern"),
+            2,
+        ),
+        (
+            regex::Regex::new(&format!(
+                r"(^|[^[:alnum:]_])tee[[:space:]]+(-[^[:space:]]+[[:space:]]+)*{OPERATOR_TOK}"
+            ))
+            .expect("fixed pattern"),
+            3,
+        ),
+        (
+            regex::Regex::new(&format!(
+                r"(^|[^[:alnum:]_])sponge[[:space:]]+{OPERATOR_TOK}"
+            ))
+            .expect("fixed pattern"),
+            2,
+        ),
+    ]
+});
+static OPERATOR_CLEAN: LazyLock<Vec<(regex::Regex, usize)>> = LazyLock::new(|| {
+    vec![
+        (
+            regex::Regex::new(&format!(
+                r"(^|[^[:alnum:]_])(cp|mv|install|truncate)[[:space:]][^;|&]*[[:space:]]{OPERATOR_TOK}"
+            ))
+            .expect("fixed pattern"),
+            3,
+        ),
+        (
+            regex::Regex::new(&format!(r"(^|[^[:alnum:]_])dd[[:space:]][^;|&]*of={OPERATOR_TOK}"))
+                .expect("fixed pattern"),
+            2,
+        ),
+        (
+            regex::Regex::new(&format!(
+                r"(^|[^[:alnum:]_])(sed|perl)[[:space:]][^;|&]*(-[a-zA-Z]*i|--in-place)[^;|&]*[[:space:]]{OPERATOR_TOK}"
+            ))
+            .expect("fixed pattern"),
+            4,
+        ),
+        (
+            regex::Regex::new(&format!(
+                r"(^|[^[:alnum:]_])jq[[:space:]][^;|&]*(-i|--in-place)[^;|&]*[[:space:]]{OPERATOR_TOK}"
+            ))
+            .expect("fixed pattern"),
+            3,
+        ),
+        (
+            regex::Regex::new(&format!(
+                r"(^|[^[:alnum:]_])(ex|ed)[[:space:]][^;|&]*[[:space:]]{OPERATOR_TOK}"
+            ))
+            .expect("fixed pattern"),
+            3,
+        ),
+    ]
+});
+
+/// The idiom families' path token: quoted literal with an optional
+/// single-letter language prefix, the prefix outside the capture group.
+const IDIOM_TOK: &str = r#"(?:(?:[A-Za-z])?("[^"]*"|'[^']*')|([^[:space:];|&<>"']+))"#;
+const IDIOM_MODE: &str = r#"['"](?:[wax][a-zA-Z0-9+]*|r\+[a-zA-Z0-9+]*)['"]"#;
+static INTERPRETER_CTX: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(
+        r"(^|[[:space:];|&(])(python3|python2|python|nodejs|node|deno|bun|ruby|perl)([[:space:]]|$)",
+    )
+    .expect("fixed pattern")
+});
+static IDIOM_FAMILIES: LazyLock<Vec<regex::Regex>> = LazyLock::new(|| {
+    vec![
+        // open(path, ... mode) for the write and append modes, and the 3-arg
+        // form perl and awk use: open(fh, '>', path).
+        regex::Regex::new(&format!(
+            r#"open[[:space:]]*\([[:space:]]*{IDIOM_TOK}[[:space:]]*,[^)]*{IDIOM_MODE}"#
+        ))
+        .expect("fixed pattern"),
+        regex::Regex::new(&format!(
+            r#"open[[:space:]]*\([^,()]+,[[:space:]]*['"]>[>]?['"][[:space:]]*,[[:space:]]*{IDIOM_TOK}"#
+        ))
+        .expect("fixed pattern"),
+        // Path('p').write_text(..) / .write_bytes(..)
+        regex::Regex::new(&format!(
+            r#"{IDIOM_TOK}[[:space:]]*\)[[:space:]]*\.(?:write_text|write_bytes)[[:space:]]*\("#
+        ))
+        .expect("fixed pattern"),
+        // (fs.)writeFile(Sync) / appendFile(Sync) / copyFileSync /
+        // createWriteStream with the path as the first argument.
+        regex::Regex::new(&format!(
+            r#"(?:^|[[:space:]_.])(?:fs\.)?(?:writeFile(?:Sync)?|appendFile(?:Sync)?|copyFileSync|createWriteStream)[[:space:]]*\([[:space:]]*{IDIOM_TOK}"#
+        ))
+        .expect("fixed pattern"),
+        // File.write / IO.write with the path as the first argument.
+        regex::Regex::new(&format!(
+            r#"(?:^|[[:space:]_])(?:File|IO)\.(?:write|binwrite|atomic_write)[[:space:]]*\([[:space:]]*{IDIOM_TOK}"#
+        ))
+        .expect("fixed pattern"),
+        // shutil and os movers with the destination as the second argument.
+        regex::Regex::new(&format!(
+            r#"(?:shutil\.(?:copy|copyfile|copy2|move)|os\.(?:rename|replace|renames))[[:space:]]*\([^,()]*,[[:space:]]*{IDIOM_TOK}"#
+        ))
+        .expect("fixed pattern"),
+    ]
+});
+
 /// The part of a Bash command the shell parses as redirects. Two spans are
 /// not: an fd duplication (`2>&1`, `>&-`), whose `1` the relative-path arm
 /// read as the file `<cwd>/1`, and the body of a QUOTED heredoc
 /// (`<<'EOF'`), which is literal data. An unquoted body still expands
 /// `$(...)`, and a body fed to a shell runs, so both stay.
 fn shell_surface(cmd: &str) -> String {
-    let heredoc =
-        regex::Regex::new(r#"<<-?[[:space:]]*(['"])([A-Za-z_][A-Za-z0-9_]*)(['"])"#).unwrap();
-    let shell = regex::Regex::new(
-        r"(^|[[:space:];|&(])(bash|sh|zsh|dash|ksh|eval|source|ssh)([[:space:]]|$)",
-    )
-    .unwrap();
     let mut kept: Vec<&str> = Vec::new();
     let mut close: Vec<(String, bool)> = Vec::new();
     for line in cmd.lines() {
@@ -103,20 +235,19 @@ fn shell_surface(cmd: &str) -> String {
             }
             continue;
         }
-        for caps in heredoc.captures_iter(line) {
+        for caps in HEREDOC_QUOTED.captures_iter(line) {
             // `bash <<'EOF'` runs its body as shell, so that body stays.
             let text = |n: usize| caps.get(n).map_or("", |m| m.as_str());
             let start = caps.get(0).map_or(0, |m| m.start());
             let before = line.get(..start).unwrap_or("");
-            if text(1) == text(3) && !shell.is_match(before) {
+            if text(1) == text(3) && !SHELL_RUNNER.is_match(before) {
                 let dash = text(0).starts_with("<<-");
                 close.push((text(2).to_string(), dash));
             }
         }
         kept.push(line);
     }
-    let fd_dup = regex::Regex::new(r"[0-9]*[<>]&([0-9]+|-)").unwrap();
-    fd_dup.replace_all(&kept.join("\n"), "").into_owned()
+    FD_DUP.replace_all(&kept.join("\n"), "").into_owned()
 }
 
 /// Entry: read the payload once, run the three sections in order, print, and
@@ -998,17 +1129,11 @@ fn bash_operator_targets(cmd: &str, out: &mut Vec<String>) {
     if cmd.is_empty() {
         return;
     }
-    let tok = r#"("[^"]*"|'[^']*'|[^[:space:];|&<>"']+)"#;
     // Redirects read off the raw command; the positional forms read off a copy
     // with redirect clauses stripped, so the last argument of a cp is not a
     // trailing 2>/dev/null.
-    let strip_fd_dups = regex::Regex::new(r"[0-9]*>&[0-9]+").unwrap();
-    let strip_redirs = regex::Regex::new(&format!(
-        r"(^|[[:space:]])(([0-9]*>>?)|&>|>\||>!)[[:space:]]*{tok}"
-    ))
-    .unwrap();
-    let fd_dup_stripped = strip_fd_dups.replace_all(cmd, "");
-    let clean = strip_redirs.replace_all(&fd_dup_stripped, "${1}");
+    let fd_dup_stripped = STRIP_FD_DUPS.replace_all(cmd, "");
+    let clean = STRIP_REDIRS.replace_all(&fd_dup_stripped, "${1}");
     let mut push = |m: Option<regex::Match<'_>>| {
         if let Some(m) = m {
             let mut frag = m.as_str().to_string();
@@ -1024,67 +1149,14 @@ fn bash_operator_targets(cmd: &str, out: &mut Vec<String>) {
             }
         }
     };
-    let raw_families: Vec<(regex::Regex, usize)> = vec![
-        (
-            regex::Regex::new(&format!(r"[0-9]*(>>|>)[[:space:]]*{tok}")).unwrap(),
-            2,
-        ),
-        (
-            regex::Regex::new(&format!(r"(&>|>\||>!)[[:space:]]*{tok}")).unwrap(),
-            2,
-        ),
-        (
-            regex::Regex::new(&format!(
-                r"(^|[^[:alnum:]_])tee[[:space:]]+(-[^[:space:]]+[[:space:]]+)*{tok}"
-            ))
-            .unwrap(),
-            3,
-        ),
-        (
-            regex::Regex::new(&format!(r"(^|[^[:alnum:]_])sponge[[:space:]]+{tok}")).unwrap(),
-            2,
-        ),
-    ];
-    let clean_families: Vec<(regex::Regex, usize)> = vec![
-        (
-            regex::Regex::new(&format!(
-                r"(^|[^[:alnum:]_])(cp|mv|install|truncate)[[:space:]][^;|&]*[[:space:]]{tok}"
-            ))
-            .unwrap(),
-            3,
-        ),
-        (
-            regex::Regex::new(&format!(r"(^|[^[:alnum:]_])dd[[:space:]][^;|&]*of={tok}")).unwrap(),
-            2,
-        ),
-        (
-            regex::Regex::new(&format!(
-                r"(^|[^[:alnum:]_])(sed|perl)[[:space:]][^;|&]*(-[a-zA-Z]*i|--in-place)[^;|&]*[[:space:]]{tok}"
-            ))
-            .unwrap(),
-            4,
-        ),
-        (
-            regex::Regex::new(&format!(
-                r"(^|[^[:alnum:]_])jq[[:space:]][^;|&]*(-i|--in-place)[^;|&]*[[:space:]]{tok}"
-            ))
-            .unwrap(),
-            3,
-        ),
-        (
-            regex::Regex::new(&format!(r"(^|[^[:alnum:]_])(ex|ed)[[:space:]][^;|&]*[[:space:]]{tok}"))
-                .unwrap(),
-            3,
-        ),
-    ];
     // Every matching clause reports, not just the leftmost, so a second write
     // in a compound command is still seen.
-    for (re, grp) in &raw_families {
+    for (re, grp) in OPERATOR_RAW.iter() {
         for caps in re.captures_iter(cmd) {
             push(caps.get(*grp));
         }
     }
-    for (re, grp) in &clean_families {
+    for (re, grp) in OPERATOR_CLEAN.iter() {
         for caps in re.captures_iter(&clean) {
             push(caps.get(*grp));
         }
@@ -1136,61 +1208,27 @@ fn bash_idiom_targets(cmd: &str, pre_armed: bool, out: &mut Vec<String>) {
         // own runner list: a bare substring would read every command carrying
         // `sh` inside another word, and a shell runner arms nothing on its
         // own - shell writes present their operators to the families above.
-        let interpreter = regex::Regex::new(
-            r"(^|[[:space:];|&(])(python3|python2|python|nodejs|node|deno|bun|ruby|perl)([[:space:]]|$)",
-        )
-        .map(|re| re.is_match(cmd))
-        .unwrap_or(false);
-        if !interpreter {
+        if !INTERPRETER_CTX.is_match(cmd) {
             return;
         }
     }
-    // A quoted literal with an optional single-letter language prefix; the
-    // prefix sits outside the capture group, so a quoted capture strips to
-    // the bare path. The quoted alternative lands in group 1, the unquoted
-    // token in group 2.
-    let tok = r#"(?:(?:[A-Za-z])?("[^"]*"|'[^']*')|([^[:space:];|&<>"']+))"#;
-    let mode = r#"['"](?:[wax][a-zA-Z0-9+]*|r\+[a-zA-Z0-9+]*)['"]"#;
-    let families: Vec<String> = vec![
-        // open(path, ... mode) for the write and append modes, and the 3-arg
-        // form perl and awk use: open(fh, '>', path).
-        format!(r#"open[[:space:]]*\([[:space:]]*{tok}[[:space:]]*,[^)]*{mode}"#),
-        format!(
-            r#"open[[:space:]]*\([^,()]+,[[:space:]]*['"]>[>]?['"][[:space:]]*,[[:space:]]*{tok}"#
-        ),
-        // Path('p').write_text(..) / .write_bytes(..)
-        format!(r#"{tok}[[:space:]]*\)[[:space:]]*\.(?:write_text|write_bytes)[[:space:]]*\("#),
-        // (fs.)writeFile(Sync) / appendFile(Sync) / copyFileSync /
-        // createWriteStream with the path as the first argument.
-        format!(
-            r#"(?:^|[[:space:]_.])(?:fs\.)?(?:writeFile(?:Sync)?|appendFile(?:Sync)?|copyFileSync|createWriteStream)[[:space:]]*\([[:space:]]*{tok}"#
-        ),
-        // File.write / IO.write with the path as the first argument.
-        format!(
-            r#"(?:^|[[:space:]_])(?:File|IO)\.(?:write|binwrite|atomic_write)[[:space:]]*\([[:space:]]*{tok}"#
-        ),
-        // shutil and os movers with the destination as the second argument.
-        format!(
-            r#"(?:shutil\.(?:copy|copyfile|copy2|move)|os\.(?:rename|replace|renames))[[:space:]]*\([^,()]*,[[:space:]]*{tok}"#
-        ),
-    ];
-    for pattern in &families {
-        if let Ok(re) = regex::Regex::new(pattern) {
-            for caps in re.captures_iter(cmd) {
-                let Some(m) = caps.get(1).or_else(|| caps.get(2)) else {
-                    continue;
-                };
-                let mut frag = m.as_str().to_string();
-                let n = frag.len();
-                if n >= 2
-                    && ((frag.starts_with('"') && frag.ends_with('"'))
-                        || (frag.starts_with('\'') && frag.ends_with('\'')))
-                {
-                    frag = frag[1..n - 1].to_string();
-                }
-                if !frag.is_empty() {
-                    out.push(frag);
-                }
+    // The quoted alternative lands in group 1, the unquoted token in group 2,
+    // so a quoted capture strips to the bare path.
+    for re in IDIOM_FAMILIES.iter() {
+        for caps in re.captures_iter(cmd) {
+            let Some(m) = caps.get(1).or_else(|| caps.get(2)) else {
+                continue;
+            };
+            let mut frag = m.as_str().to_string();
+            let n = frag.len();
+            if n >= 2
+                && ((frag.starts_with('"') && frag.ends_with('"'))
+                    || (frag.starts_with('\'') && frag.ends_with('\'')))
+            {
+                frag = frag[1..n - 1].to_string();
+            }
+            if !frag.is_empty() {
+                out.push(frag);
             }
         }
     }
@@ -1281,6 +1319,11 @@ fn git_root_of(path: &Path) -> Option<String> {
         .parent()
         .map(|d| d.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("/"));
+    // The memo keys existing directories, so a parent hit is the answer the
+    // walk would have produced for it; skip the walk's stats in that case.
+    if let Some(hit) = TOPLEVEL_MEMO.with(|memo| memo.borrow_mut().get(&dir).cloned()) {
+        return hit;
+    }
     while !dir.is_dir() {
         match dir.parent() {
             Some(parent) if parent != dir => dir = parent.to_path_buf(),
@@ -1310,6 +1353,114 @@ fn git_root_of(path: &Path) -> Option<String> {
     })
 }
 
+/// One repo's guard inputs, loaded once per root per call: the parsed
+/// generated-artifacts rows and, lazily, the bundle rows. Before this cache
+/// the manifest re-read, its re-parse, the two bundle file stats and the
+/// bundle parser spawn ran once per target; on a 294-target call that was
+/// 294 reads, 294 parses, up to 294 python spawns. Now each runs at most
+/// once per distinct root.
+struct RepoCache {
+    tsv_rows: Option<Vec<(String, String, String)>>,
+    bundle_ready: bool,
+    bundle_rows: Option<Vec<String>>,
+}
+
+/// The generated-artifacts.tsv rows as (glob, source, regen). Comment and
+/// malformed rows skip, exactly as the per-target arm skipped them.
+fn parse_tsv_rows(rows: &str) -> Vec<(String, String, String)> {
+    let mut parsed = Vec::new();
+    for line in rows.lines() {
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() < 3 || fields[0].is_empty() || fields[0].starts_with('#') {
+            continue;
+        }
+        let (source, regen) = (fields[1], fields[2]);
+        parsed.push((fields[0].to_string(), source.to_string(), regen.to_string()));
+    }
+    parsed
+}
+
+impl RepoCache {
+    fn load(root: &str) -> Self {
+        let tsv_rows = {
+            let manifest = Path::new(root).join("generated-artifacts.tsv");
+            if manifest.is_file() {
+                match std::fs::read_to_string(&manifest) {
+                    Ok(rows) => Some(parse_tsv_rows(&rows)),
+                    Err(_) => None,
+                }
+            } else {
+                None
+            }
+        };
+        let bundle_ready = Path::new(root).join("skill-bundles.yaml").is_file()
+            && Path::new(root)
+                .join("scripts/lib/parse-bundle-manifest.py")
+                .is_file();
+        Self {
+            tsv_rows,
+            bundle_ready,
+            bundle_rows: None,
+        }
+    }
+}
+
+/// Per-call caches: one canonical ancestor per distinct walk-stop directory,
+/// one repo's guard inputs per root. Cleared per call with the root memo, so
+/// nothing outlives the payload it served.
+#[derive(Default)]
+struct CallCache {
+    repos: std::collections::HashMap<String, RepoCache>,
+    real_dirs: std::collections::HashMap<PathBuf, PathBuf>,
+}
+
+/// The same walk and canonicalization as physicalize, with the canonical
+/// ancestor cached per distinct stop directory: same-folder targets share
+/// one canonicalize syscall instead of one per target.
+fn physicalize_cached(
+    abs: &Path,
+    real_dirs: &mut std::collections::HashMap<PathBuf, PathBuf>,
+) -> PathBuf {
+    let mut tail = PathBuf::new();
+    let mut dir = abs.to_path_buf();
+    loop {
+        if dir.is_dir() {
+            break;
+        }
+        match (dir.parent(), dir.file_name()) {
+            (Some(parent), Some(name)) if parent != dir => {
+                // Join onto an empty tail with the bare name: `join("")`
+                // appends a separator, and a trailing slash here would
+                // survive into every comparison downstream (exists(), the
+                // depth checks) and flip them.
+                if tail.as_os_str().is_empty() {
+                    tail = PathBuf::from(name);
+                } else {
+                    tail = Path::new(name).join(tail);
+                }
+                dir = parent.to_path_buf();
+            }
+            _ => break,
+        }
+    }
+    let real = match real_dirs.get(&dir) {
+        Some(r) => r.clone(),
+        None => {
+            let r = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+            real_dirs.insert(dir.clone(), r.clone());
+            r
+        }
+    };
+    // `join("")` appends a trailing separator, which would break every
+    // equality and depth comparison downstream; an empty tail returns the
+    // canonical ancestor as-is.
+    if tail.as_os_str().is_empty() {
+        real
+    } else {
+        real.join(tail)
+    }
+}
+
 fn generated_section(p: &Payload, _cwd: &Path) -> Sec {
     let mut targets = write_targets(&p.file_path, &p.command);
     // A script's own file I/O never presents a shell write operator; the
@@ -1327,8 +1478,9 @@ fn generated_section(p: &Payload, _cwd: &Path) -> Sec {
     if targets.is_empty() {
         return Sec::Allow;
     }
+    let mut cache = CallCache::default();
     for t in &targets {
-        if let Some(reason) = generated_target(t, &p.cwd, &p.command) {
+        if let Some(reason) = generated_target(t, &p.cwd, &p.command, &mut cache) {
             return Sec::Block(reason);
         }
     }
@@ -1355,7 +1507,12 @@ thread_local! {
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
-fn generated_target(t: &str, payload_cwd: &str, command: &str) -> Option<String> {
+fn generated_target(
+    t: &str,
+    payload_cwd: &str,
+    command: &str,
+    cache: &mut CallCache,
+) -> Option<String> {
     let abs = if t.starts_with('/') {
         PathBuf::from(t)
     } else {
@@ -1364,33 +1521,11 @@ fn generated_target(t: &str, payload_cwd: &str, command: &str) -> Option<String>
         }
         PathBuf::from(format!("{}/{}", payload_cwd.trim_end_matches('/'), t))
     };
-    let abs = physicalize(&abs);
+    let abs = physicalize_cached(&abs, &mut cache.real_dirs);
     let abs_str = abs.to_string_lossy().into_owned();
 
-    // Installed plugin copies: the path under the installed prefix is the
-    // source-checkout path to edit instead.
-    let plugin_msg = |inner: String| {
-        format!(
-            "{abs_str} is the installed plugin copy. `fno doctor update` restages it from the footnote source checkout and discards this edit. Edit {inner} in a feature worktree of the source checkout, then run `fno doctor update`."
-        )
-    };
-    for prefix in ["/plugin-stage/fno/", "/plugin-stage/fno-pack/"] {
-        if let Some(i) = abs_str.find(prefix) {
-            return Some(plugin_msg(abs_str[i + prefix.len()..].to_string()));
-        }
-    }
-    // The marketplace dir is "fno", "fno-dev" for the local stage, or a
-    // "footnote" name on an install made before the rename.
-    for prefix in [
-        "/plugins/cache/fno/fno/",
-        "/plugins/cache/fno-dev/fno/",
-        "/plugins/cache/footnote/fno/",
-        "/plugins/cache/footnote-dev/fno/",
-        "/plugins/cache/footnote-local/fno/",
-    ] {
-        if let Some(i) = abs_str.find(prefix) {
-            return Some(plugin_msg(abs_str[i + prefix.len()..].to_string()));
-        }
+    if let Some(reason) = installed_copy_reason(&abs_str) {
+        return Some(reason);
     }
 
     // Repo manifests live at the git toplevel the target sits in. The target
@@ -1405,65 +1540,111 @@ fn generated_target(t: &str, payload_cwd: &str, command: &str) -> Option<String>
     }
     let rel = abs_str[prefix.len()..].to_string();
     trace_gen(&format!("root={root} rel={rel}"));
-
-    // generated-artifacts.tsv rows: tab-separated glob, source, regen.
-    let manifest = Path::new(&root).join("generated-artifacts.tsv");
-    if manifest.is_file() {
-        if let Ok(rows) = std::fs::read_to_string(&manifest) {
-            for line in rows.lines() {
-                let fields: Vec<&str> = line.split('\t').collect();
-                if fields.len() < 3 || fields[0].is_empty() || fields[0].starts_with('#') {
-                    continue;
-                }
-                if bash_glob_match(fields[0], &rel) {
-                    let (source, regen) = (fields[1], fields[2]);
-                    if runs_the_regen(command, regen) {
-                        return None;
-                    }
-                    let mut message = format!(
-                        "{rel} is generated from {source}. The next `{regen}` run overwrites an edit here. Edit {source}, then run `{regen}`."
-                    );
-                    // The plain-copy .rs twins, the verbatim .toml mirrors
-                    // and the events_schema.json projection also rebuild
-                    // without a compile, so a session under a build freeze
-                    // can still regen-and-commit a drifted copy.
-                    if (rel.ends_with(".rs") || rel.ends_with(".toml") || rel.ends_with(".json"))
-                        && regen.contains("cargo build --manifest-path crates/fno-agent")
-                    {
-                        message.push_str(
-                            " Without a build: python3 scripts/regen-generated-copies.py.",
-                        );
-                    }
-                    return Some(message);
-                }
-            }
-        }
+    let repo = cache
+        .repos
+        .entry(root.clone())
+        .or_insert_with(|| RepoCache::load(&root));
+    // The manifest arm can outright allow: the row's whole regen command
+    // passed. Encode the three outcomes rather than fold them into the
+    // bundle arm.
+    match manifest_row_reason(&rel, command, repo.tsv_rows.as_deref()) {
+        Some(verdict) => return verdict,
+        None => {}
     }
 
-    // Bundle copies: rows from skill-bundles.yaml via the shipped parser.
     if (rel.starts_with("skills/") || rel.starts_with("agents/"))
-        && Path::new(&root).join("skill-bundles.yaml").is_file()
-        && Path::new(&root)
-            .join("scripts/lib/parse-bundle-manifest.py")
-            .is_file()
+        && repo.bundle_ready
+        && repo.bundle_rows.is_none()
     {
-        let rows = load_bundle_rows(&root);
-        for row in &rows {
-            let fields: Vec<&str> = row.split('\t').collect();
-            if fields.len() < 4 || fields[0].is_empty() {
-                continue;
+        repo.bundle_rows = Some(load_bundle_rows(&root));
+    }
+    if let Some(rows) = &repo.bundle_rows {
+        if let Some(reason) = bundle_row_reason(&rel, rows) {
+            return Some(reason);
+        }
+    }
+    None
+}
+
+/// Installed plugin copies: the path under the installed prefix names the
+/// source-checkout path to edit instead. The marketplace dir is "fno",
+/// "fno-dev" for the local stage, or a "footnote" name on an install made
+/// before the rename.
+fn installed_copy_reason(abs_str: &str) -> Option<String> {
+    let plugin_msg = |inner: String| {
+        format!(
+            "{abs_str} is the installed plugin copy. `fno doctor update` restages it from the footnote source checkout and discards this edit. Edit {inner} in a feature worktree of the source checkout, then run `fno doctor update`."
+        )
+    };
+    for prefix in ["/plugin-stage/fno/", "/plugin-stage/fno-pack/"] {
+        if let Some(i) = abs_str.find(prefix) {
+            return Some(plugin_msg(abs_str[i + prefix.len()..].to_string()));
+        }
+    }
+    for prefix in [
+        "/plugins/cache/fno/fno/",
+        "/plugins/cache/fno-dev/fno/",
+        "/plugins/cache/footnote/fno/",
+        "/plugins/cache/footnote-dev/fno/",
+        "/plugins/cache/footnote-local/fno/",
+    ] {
+        if let Some(i) = abs_str.find(prefix) {
+            return Some(plugin_msg(abs_str[i + prefix.len()..].to_string()));
+        }
+    }
+    None
+}
+
+/// One judged target against the parsed manifest rows. None: no row matched,
+/// keep judging. Some(None): the row's whole regen passed, allow outright.
+/// Some(Some(reason)): refuse with the reason.
+fn manifest_row_reason(
+    rel: &str,
+    command: &str,
+    rows: Option<&[(String, String, String)]>,
+) -> Option<Option<String>> {
+    let rows = rows?;
+    for (glob, source, regen) in rows {
+        if bash_glob_match(glob, rel) {
+            if runs_the_regen(command, regen) {
+                return Some(None);
             }
-            let out_path = if fields[0].starts_with("pack-") {
-                fields[3].to_string()
-            } else {
-                format!("skills/{}/{}", fields[1], fields[3])
-            };
-            if rel == out_path || rel.starts_with(&format!("{out_path}/")) {
-                let src = format!("{}{}", fields[2], &rel[out_path.len()..]);
-                return Some(format!(
-                    "{rel} is a bundled copy of {src} (skill-bundles.yaml). The next `bash scripts/generate-skill-bundles.sh` run overwrites an edit here. Edit {src}, then run `bash scripts/generate-skill-bundles.sh`."
-                ));
+            let mut message = format!(
+                "{rel} is generated from {source}. The next `{regen}` run overwrites an edit here. Edit {source}, then run `{regen}`."
+            );
+            // The plain-copy .rs twins, the verbatim .toml mirrors
+            // and the events_schema.json projection also rebuild
+            // without a compile, so a session under a build freeze
+            // can still regen-and-commit a drifted copy.
+            if (rel.ends_with(".rs") || rel.ends_with(".toml") || rel.ends_with(".json"))
+                && regen.contains("cargo build --manifest-path crates/fno-agent")
+            {
+                message.push_str(" Without a build: python3 scripts/regen-generated-copies.py.");
             }
+            return Some(Some(message));
+        }
+    }
+    None
+}
+
+/// One judged target against the cached bundle rows: a bundled copy keeps
+/// its tail under skills/<name>/.
+fn bundle_row_reason(rel: &str, rows: &[String]) -> Option<String> {
+    for row in rows {
+        let fields: Vec<&str> = row.split('\t').collect();
+        if fields.len() < 4 || fields[0].is_empty() {
+            continue;
+        }
+        let out_path = if fields[0].starts_with("pack-") {
+            fields[3].to_string()
+        } else {
+            format!("skills/{}/{}", fields[1], fields[3])
+        };
+        if rel == out_path || rel.starts_with(&format!("{out_path}/")) {
+            let src = format!("{}{}", fields[2], &rel[out_path.len()..]);
+            return Some(format!(
+                "{rel} is a bundled copy of {src} (skill-bundles.yaml). The next `bash scripts/generate-skill-bundles.sh` run overwrites an edit here. Edit {src}, then run `bash scripts/generate-skill-bundles.sh`."
+            ));
         }
     }
     None
@@ -1772,7 +1953,8 @@ mod tests {
             .join("fno-state/install/plugin-stage/fno/hooks/stop.sh")
             .to_string_lossy()
             .into_owned();
-        let reason = generated_target(&path, "", "").expect("installed stage edits refuse");
+        let reason = generated_target(&path, "", "", &mut CallCache::default())
+            .expect("installed stage edits refuse");
         assert!(reason.contains("installed plugin copy"), "{reason}");
         assert!(reason.contains("hooks/stop.sh"), "{reason}");
     }
