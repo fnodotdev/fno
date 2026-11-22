@@ -485,6 +485,8 @@ When Cargo runs the wrapper before a native fno binary exists, the wrapper uses 
 
 **The ssh fast options.** Shared-vocabulary. `SSH_FAST_OPTIONS` in `crates/fno-agent/src/runtime/mail_remote.rs` and the option pair in `crates/fno/src/ui/client/remote_hosts.rs` `probe_argv` spell the same BatchMode + ConnectTimeout=5 probe prefix at two sites. The fno crate lists no fno-agent dependency, so neither site can import the other. A served constant door through an `fno-agent` read is the one-owner form. Until then the copy is named here, so the next audit counts it.
 
+**The trusted config file.** Dual, disposition generated-artifact, live (2026-11-22). `crates/fno-agent/src/trusted_config.rs` is the one source. It names the file that can grant `web.invites` and `attention.sinks`, and it reads their rows. `crates/fno/src/trusted_config.rs` is its generated copy, listed in `generated-artifacts.tsv`, because the fno crate does not link the agent crate. Every reader of both keys calls it, and so does setup before it rewrites a list. The general config ladders stay for other keys. Do not read either key through them: they let a project file win.
+
 ## The four CI parity scripts
 
 All four are shared-vocabulary. None is a port candidate. The reasons differ enough to state one at a time.
