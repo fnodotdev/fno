@@ -941,11 +941,14 @@ fn undo_all(entries: Vec<Undo>) -> Vec<String> {
     let mut left = Vec::new();
     let mut moved: BTreeMap<PathBuf, Vec<String>> = BTreeMap::new();
     for entry in entries.into_iter().rev() {
-        if let Undo::Moved { graph, to, .. } = &entry {
-            moved.entry(graph.clone()).or_default().push(to.clone());
-        }
         if let Err(reason) = undo_one(&entry) {
             left.push(format!("{entry:?}: {reason}"));
+            continue;
+        }
+        // Only a move that went back loses its numbered row: one a later
+        // write changed is the sole copy of that decision.
+        if let Undo::Moved { graph, to, .. } = entry {
+            moved.entry(graph).or_default().push(to);
         }
     }
     // The second half of each move back: the number's row goes once the
@@ -1211,6 +1214,30 @@ mod tests {
                 "r2d2:d-0000c001"
             ]
         );
+
+        // A moved decision that changed after apply stays under its number.
+        let graph = dir.path().join("board").join("graph.json");
+        std::fs::create_dir_all(dir.path().join("board")).unwrap();
+        let board = crate::backlog::open(&graph).unwrap();
+        let event = json!({"ts": "2026-11-21T00:00:00Z", "type": "operator_decision",
+            "source": "test", "data": {"decision_id": "D7", "decision": "edited after apply"}});
+        crate::backlog::decisions::insert_event(&board, &event).unwrap();
+        let left = undo_all(vec![Undo::Moved {
+            graph,
+            from: "d-0000c007".into(),
+            to: "D7".into(),
+            before: "{}".into(),
+            after: "what apply wrote".into(),
+        }]);
+        assert_eq!(left.len(), 1, "{left:?}");
+        let kept: i64 = board
+            .query_row(
+                "SELECT count(*) FROM decisions WHERE event_id = 'D7'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kept, 1, "rollback deleted a decision it could not restore");
     }
 
     #[test]

@@ -1260,7 +1260,7 @@ decision index. Run `fno backlog decide-reindex` before retrying."
                 }
             }
             // A hold disarms an armed merge now, not at the drain.
-            if let Some(line) = crate::pr_admission::after_record(
+            if let Some(line) = crate::pr_admission::after_queue(
                 &subject,
                 &decision,
                 provenance.authority_source.as_deref(),

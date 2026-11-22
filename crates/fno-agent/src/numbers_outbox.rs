@@ -390,14 +390,20 @@ fn follow_up(queued: &Queued, label: &str) {
             crate::question_clear::after_retraction(question, subject, target, decision)
         }
         After::Law { sweep } => crate::law_match::after_law(label, subject, decision, sweep),
-        After::Decide { question } => crate::decide_door::after_decide(
-            journal,
-            label,
-            subject,
-            decision,
-            data.decided_by.as_deref(),
-            data.authority_source.as_deref(),
-            question.as_deref(),
-        ),
+        After::Decide { question } => {
+            let authority = data.authority_source.as_deref();
+            if let Some(line) = crate::pr_admission::after_record(subject, decision, authority) {
+                eprintln!("{line}");
+            }
+            crate::decide_door::after_decide(
+                journal,
+                label,
+                subject,
+                decision,
+                data.decided_by.as_deref(),
+                authority,
+                question.as_deref(),
+            )
+        }
     }
 }
