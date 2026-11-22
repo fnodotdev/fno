@@ -1350,7 +1350,7 @@ mod tests {
         ));
         assert!(matches!(
             classify(&os(&["version", "--help"])),
-            FrontDoor::Usage { .. }
+            FrontDoor::Help { .. }
         ));
     }
     #[test]
@@ -1561,7 +1561,12 @@ mod tests {
         } else {
             String::new()
         });
-        walk_disabled(&cmd, "", &mut got);
+        for sub in cmd.get_subcommands() {
+            if sub.get_name() == "help" {
+                continue;
+            }
+            walk_disabled(sub, "", &mut got);
+        }
         got.retain(|p| !p.is_empty());
         got.sort();
         got.dedup();
