@@ -103,7 +103,7 @@ pub(crate) fn bind_pr_rows(
                     ));
                 }
             }
-        } else if !node_pr_refs(&entries[index]).is_empty() {
+        } else if !blocking_pr_refs(&entries[index]).is_empty() {
             return PrRowBindResult::refused(format!(
                 "{nid} already carries a PR ref and this PR's repo is \
                  unresolvable - refusing an unscoped claim"
@@ -262,6 +262,51 @@ fn normalize_path(path: &str) -> String {
         format!("/{joined}")
     } else {
         joined
+    }
+}
+
+/// The docs-twin repair outcome: `repaired` carries what moved, `refused`
+/// the reason. The refusal-in-struct shape `PrRowBindResult` uses.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct DocsTwinRepair {
+    pub action: &'static str, // repaired | refused
+    pub detail: Option<String>,
+}
+
+/// Demote a docs twin from a node's primary slot: clear `pr_number`,
+/// `pr_url` and `merge_status`, leaving the twin in `additional_prs` with
+/// note "docs". The primary number sitting in the docs-noted set is the
+/// proof the primary IS the twin; any other primary refuses, and so does a
+/// primary twin with no additional row to prove it (nothing there says the
+/// primary was docs). Validation first, one mutation, like `bind_pr_rows`.
+pub(crate) fn repair_docs_twin_primary(entries: &mut [Value], node_id: &str) -> DocsTwinRepair {
+    let refused = |why: String| DocsTwinRepair {
+        action: "refused",
+        detail: Some(why),
+    };
+    let Some(index) = find_node_index(entries, node_id) else {
+        return refused(format!("unknown node: {node_id}"));
+    };
+    let node = &mut entries[index];
+    let Some(primary) = node.get("pr_number").and_then(Value::as_i64) else {
+        return refused(format!("{node_id} carries no primary PR to repair"));
+    };
+    if !docs_noted_pr_numbers(node).contains(&primary) {
+        return refused(format!(
+            "{node_id}'s primary PR #{primary} is not a docs twin: no \
+             additional_prs row names it with note docs"
+        ));
+    }
+    let obj = node.as_object_mut().expect("graph rows are objects");
+    obj.remove("pr_number");
+    obj.remove("pr_url");
+    obj.remove("merge_status");
+    DocsTwinRepair {
+        action: "repaired",
+        detail: Some(format!(
+            "{node_id}: primary docs PR #{primary} demoted; the twin stays \
+             in additional_prs with note docs"
+        )),
     }
 }
 
@@ -473,5 +518,54 @@ mod tests {
         assert!(refusal.contains("--repair-docs-twin"), "{refusal}");
         assert!(refusal.contains("docs-twin primary"), "{refusal}");
         assert_eq!(entries[0]["pr_number"], 288, "no partial binding");
+    }
+
+    #[test]
+    fn the_docs_twin_repair_demotes_a_twin_primary_and_refuses_the_rest() {
+        // Happy arm: the primary number sits in additional_prs with note
+        // docs, so the demotion clears the primary keys and keeps the twin.
+        let mut entries = vec![node(json!({
+            "id": "x-aaaa",
+            "pr_number": 288,
+            "pr_url": "https://github.com/fnodotdev/fno-web/pull/288",
+            "additional_prs": [
+                {"number": 288, "url": "https://github.com/fnodotdev/fno-web/pull/288", "note": "docs"},
+            ],
+        }))];
+        let result = repair_docs_twin_primary(&mut entries, "x-aaaa");
+        assert_eq!(result.action, "repaired");
+        assert!(entries[0].get("pr_number").is_none());
+        assert!(entries[0].get("pr_url").is_none());
+        assert!(entries[0].get("merge_status").is_none());
+        assert_eq!(entries[0]["additional_prs"][0]["note"], "docs");
+    }
+
+    #[test]
+    fn the_repair_refuses_a_code_primary_and_a_twinless_docs_primary() {
+        let cases = [
+            (
+                json!({
+                    "id": "x-aaaa",
+                    "pr_number": 548,
+                    "pr_url": "https://github.com/fnodotdev/fno/pull/548",
+                }),
+                "not a docs twin",
+            ),
+            (
+                json!({
+                    "id": "x-aaaa",
+                    "pr_number": 288,
+                    "pr_url": "https://github.com/fnodotdev/fno-web/pull/288",
+                }),
+                "no additional_prs row names it with note docs",
+            ),
+        ];
+        for (row, why) in cases {
+            let mut entries = vec![node(row)];
+            let result = repair_docs_twin_primary(&mut entries, "x-aaaa");
+            assert_eq!(result.action, "refused");
+            let detail = result.detail.as_deref().unwrap_or("");
+            assert!(detail.contains(why), "{detail}");
+        }
     }
 }
