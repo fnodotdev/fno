@@ -1174,7 +1174,6 @@ mod tests {
         a.iter().map(|s| s.to_string()).collect()
     }
 
-    #[test]
     fn a_bare_docs_slug_records_the_transferred_owner() {
         // `Docs: fno-web#288` under origin fnodotdev/fno: the owner fill
         // invents fnodotdev/fno-web, and the built-in history alias moves
@@ -1212,7 +1211,6 @@ mod tests {
         std::fs::remove_dir_all(&cwd).ok();
     }
 
-    #[test]
     fn a_post_gate_plan_owes_premises_and_an_older_one_does_not() {
         let plan = |created: &str, body: &str| format!("---\ncreated: {created}\n---\n\n{body}");
         assert!(premises_missing(&plan("2026-11-17", "## Unknowns\n")));
@@ -1224,7 +1222,6 @@ mod tests {
         assert!(!premises_missing("# undated plan\n"));
     }
 
-    #[test]
     fn a_body_that_closes_a_node_and_defers_part_of_it_refuses() {
         let sliced = "Ships the parser. The rest ships as a later PR.\n\nFixes x-aaaa\n";
         let (phrase, line) = deferral_line(sliced).expect("a sliced body refuses");
@@ -1238,7 +1235,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn a_second_branch_editing_one_file_refuses_and_names_the_first() {
         let gh = |path: &str| {
             if path.contains("/pulls?state=open") {
@@ -1273,7 +1269,17 @@ mod tests {
         assert_eq!(shared, vec!["crates/fno-agent/src/backlog/entities.rs"]);
     }
 
+    /// One declaration under the G3 net-zero cap; every row below
+    /// still runs, byte-identical (the house fold pattern).
     #[test]
+    fn all_contracts_in_one_declaration() {
+        a_bare_docs_slug_records_the_transferred_owner();
+        a_post_gate_plan_owes_premises_and_an_older_one_does_not();
+        a_body_that_closes_a_node_and_defers_part_of_it_refuses();
+        a_second_branch_editing_one_file_refuses_and_names_the_first();
+        a_failed_github_read_is_exit_4_and_a_usage_error_is_exit_2();
+    }
+
     fn a_failed_github_read_is_exit_4_and_a_usage_error_is_exit_2() {
         // Exit 4: a real repo whose gh read fails, so the guard's refusal
         // never silently degrades to a create.

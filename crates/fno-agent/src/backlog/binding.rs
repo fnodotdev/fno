@@ -452,8 +452,11 @@ mod tests {
         );
         assert_eq!(result.outcome, "bound", "{:?}", result.refusal);
         assert_eq!(result.bindings[0].action, "filled_primary");
-        assert_eq!(entries[0]["pr_number"], 7);
-        let twin = &entries[0]["additional_prs"][0];
+        let first = entries.first().expect("one row");
+        assert_eq!(first["pr_number"], 7);
+        let rows = first["additional_prs"].as_array().expect("the twin kept");
+        assert_eq!(rows.len(), 1);
+        let twin = rows.first().expect("the twin row");
         assert_eq!(twin["number"], 9);
         assert_eq!(twin["note"], "Docs");
     }
@@ -482,7 +485,8 @@ mod tests {
                 result.refusal.as_deref(),
                 Some("x-aaaa already carries a other/repo PR ref; this PR is o/r - refusing a cross-repo claim")
             );
-            assert!(entries[0]["pr_number"].is_null(), "no partial binding");
+            let first = entries.first().expect("one row");
+            assert!(first["pr_number"].is_null(), "no partial binding");
         }
     }
 
@@ -514,7 +518,8 @@ mod tests {
         let refusal = result.refusal.as_deref().unwrap_or("");
         assert!(refusal.contains("--repair-docs-twin"), "{refusal}");
         assert!(refusal.contains("docs-twin primary"), "{refusal}");
-        assert_eq!(entries[0]["pr_number"], 288, "no partial binding");
+        let first = entries.first().expect("one row");
+        assert_eq!(first["pr_number"], 288, "no partial binding");
     }
 
     #[test]
@@ -531,10 +536,13 @@ mod tests {
         }))];
         let result = repair_docs_twin_primary(&mut entries, "x-aaaa");
         assert_eq!(result.action, "repaired");
-        assert!(entries[0]["pr_number"].is_null());
-        assert!(entries[0]["pr_url"].is_null());
-        assert!(entries[0]["merge_status"].is_null());
-        assert_eq!(entries[0]["additional_prs"][0]["note"], "docs");
+        let first = entries.first().expect("one row");
+        assert!(first["pr_number"].is_null());
+        assert!(first["pr_url"].is_null());
+        assert!(first["merge_status"].is_null());
+        let rows = first["additional_prs"].as_array().expect("the twin kept");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows.first().expect("the twin row")["note"], "docs");
     }
 
     #[test]
@@ -553,9 +561,12 @@ mod tests {
         }))];
         let result = repair_docs_twin_primary(&mut entries, "x-aaaa");
         assert_eq!(result.action, "repaired");
-        assert!(entries[0]["pr_number"].is_null());
-        assert!(entries[0]["pr_url"].is_null());
-        assert_eq!(entries[0]["additional_prs"][0]["note"], "docs");
+        let first = entries.first().expect("one row");
+        assert!(first["pr_number"].is_null());
+        assert!(first["pr_url"].is_null());
+        let rows = first["additional_prs"].as_array().expect("the twin kept");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows.first().expect("the twin row")["note"], "docs");
     }
 
     #[test]
