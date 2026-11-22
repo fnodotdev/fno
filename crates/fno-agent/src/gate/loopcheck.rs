@@ -457,6 +457,26 @@ pub(crate) fn decide_with_payload(
         // spends no turns; the park row lets the daemon wake it when that
         // cargo exits.
         watch_lease::record_build_park(parsed);
+        // An incident park leaves one sidecar row, so the clear can wake
+        // the loop: an idle parked loop has no running turn for the `--now`
+        // sidecar to carry. Parks the incident did not cause (the manual
+        // sentinel, a build hold) record nothing.
+        if let crate::fleet_incident::Verdict::Stopped(record) =
+            crate::fleet_incident::verdict_for_subject("loops", &subject)
+        {
+            let manifest = std::fs::read_to_string(&parsed.state_path).unwrap_or_default();
+            let session = ["harness_session_id", "claude_session_id", "session_id"]
+                .iter()
+                .find_map(|field| scan_manifest_field(&manifest, field));
+            let home = crate::paths::AgentsHome::from_env();
+            crate::fleet_incident::record_parked(
+                &home,
+                session.as_deref().unwrap_or_default(),
+                &parsed.cwd.to_string_lossy(),
+                record.target.as_deref(),
+                record.generation,
+            );
+        }
         return (0, paused_output(&parsed.driver, &message));
     }
     // The lead uses a separate manifest and decision path.

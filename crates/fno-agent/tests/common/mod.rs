@@ -500,9 +500,9 @@ fn streams_match_modulo_build_stamp(g: &str, r_raw: &str) -> bool {
 /// parse; the goldens predate that line and cannot pin a build rev, so the
 /// rust side peels a well-formed LEADING line off and keeps the remainder,
 /// which may be empty or more output: `merge-door build ` + 12 hex +
-/// optional ` dirty` + a newline. Anything else compares raw and fails
+/// optional `-dirty` + a newline. Anything else compares raw and fails
 /// loudly.
-fn strip_merge_door_build_line(s: &str) -> Option<&str> {
+pub(crate) fn strip_merge_door_build_line(s: &str) -> Option<&str> {
     let rest = s.strip_prefix("merge-door build ")?;
     let hex = rest
         .find(|c: char| !c.is_ascii_hexdigit())
@@ -510,7 +510,7 @@ fn strip_merge_door_build_line(s: &str) -> Option<&str> {
     if hex != 12 {
         return None;
     }
-    let rest = rest[12..].strip_prefix(" dirty").unwrap_or(&rest[12..]);
+    let rest = rest[12..].strip_prefix("-dirty").unwrap_or(&rest[12..]);
     rest.strip_prefix('\n')
 }
 

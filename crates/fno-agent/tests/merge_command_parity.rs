@@ -85,6 +85,22 @@ const STRIP_VARS: [&str; 21] = [
 
 #[test]
 fn merge_command_matches_python_goldens() {
+    // The build stamp peel must match the line the merge door prints: a
+    // dirty build appends `-dirty` to the rev, a clean one appends nothing,
+    // and anything else stays raw so a malformed stamp fails loudly.
+    assert_eq!(
+        common::strip_merge_door_build_line("merge-door build 0123456789ab\nrest"),
+        Some("rest")
+    );
+    assert_eq!(
+        common::strip_merge_door_build_line("merge-door build 0123456789ab-dirty\n"),
+        Some("")
+    );
+    assert_eq!(
+        common::strip_merge_door_build_line("merge-door build zz\n"),
+        None
+    );
+    assert_eq!(common::strip_merge_door_build_line("no stamp\n"), None);
     if common::capture_mode() {
         // See the module docs: the driver is the capture path.
         return;

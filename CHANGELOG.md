@@ -16,6 +16,10 @@ Releases before 0.4.8 were built in a private repository. Their entries here sum
 * The builtin visual paint list covers the desktop app. An `fno-app` UI PR now carries the same look evidence a mux client PR takes. The CI selector answers paint the same way. The gate list also re-reads `crates/fno/src/ui/band_remap.rs` after the module regroup renamed it. The CI list had tracked the rename and the gate list had not.
 * Renamed `fno-agents` to `fno-agent`: the crate, the three binaries (`fno-agent`, `fno-agent-daemon`, `fno-agent-worker`), the release tarballs and the `FNO_AGENT_*` env vars. The `fno agents` command group is now `fno agent`. The old names still work for one release. `fno agents` is a hidden alias. The installer and `fno update` link each `fno-agents*` name to its new binary. In each fno binary, a set `FNO_AGENTS_*` var fills its unset `FNO_AGENT_*` name. Shell hooks read only the new names.
 
+### Fixed
+
+* Fixed the merge door's main-repair exemption. A PR whose own node carries the `main-repair` tag merges through a red main again. The hold's graph slice returned a tags-less projection row for the node. The gate refused the PR while naming that same tagged node as the declared repair lane.
+
 ## Preview releases (0.0.x)
 
 The public repository restarts the version line at 0.0.x. The private-repository previews below ran 0.1.0 to 0.4.9. Decision D3437 (2026-11-16) postponed the v0.1.0 public launch, so releases continue on v0.0.x stamps of current code, next at v0.0.17.

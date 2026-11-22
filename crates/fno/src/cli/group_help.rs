@@ -55,7 +55,7 @@ const DOCTOR: &[(&str, &str)] = &[
     ("disk", "size per class with what is safe to delete"),
     ("evals", "golden-task evals"),
     ("event", "the event journal"),
-    ("footprint", "fleet CPU and process count"),
+    ("footprint", "fleet CPU, process count and spawn rate"),
     ("harness", "probe one harness"),
     ("harness-matrix", "the harness capability matrix"),
     ("intel", "the intel report"),

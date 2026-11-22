@@ -807,7 +807,7 @@ pub fn bundled_manifest(agent: &str) -> Option<&'static str> {
         // zcode: pane-less (the headless lane is the measured one), so the
         // manifest is deliberately rule-free; see manifests/zcode.toml.
         "zcode" => Some(include_str!("../manifests/zcode.toml")),
-        // footnote: no pane lane, so no rules; see manifests/footnote.toml.
+        // footnote: the fnh pane lane; its rules live in manifests/footnote.toml.
         "footnote" => Some(include_str!("../manifests/footnote.toml")),
         // muse: MSP and exec lanes only, so no rules; see manifests/muse.toml.
         "muse" => Some(include_str!("../manifests/muse.toml")),
@@ -952,6 +952,66 @@ mod tests {
         )
         .unwrap();
         assert_eq!(idle["matched"], false);
+    }
+
+    /// fnh's redesigned consent band and the [a] always-allow variant of the
+    /// old band read blocked; a reply that prints the question line alone,
+    /// or an "allow" line without the y/n grammar, or a numbered reply list
+    /// beside the question line, matches nothing. Row strings are pinned by
+    /// fnh's own TUI tests, where the caret ❯ sits on the selected option.
+    #[test]
+    fn footnote_screen_rules_read_the_consent_band_and_always_variant() {
+        let caret_one = evaluate_screen_json(
+            "footnote",
+            "transcript scroll\n Bash ls\n Do you want to proceed?\n ❯ 1. Yes\n   2. No",
+        )
+        .unwrap();
+        assert_eq!(caret_one["state"], "blocked");
+        assert_eq!(caret_one["rule_id"], "permission_ask");
+        let caret_two = evaluate_screen_json(
+            "footnote",
+            " Bash ls\n Do you want to proceed?\n   1. Yes\n ❯ 2. Yes, always allow Bash(ls)\n   3. No",
+        )
+        .unwrap();
+        assert_eq!(caret_two["state"], "blocked");
+        assert_eq!(caret_two["rule_id"], "permission_ask");
+        let caret_three = evaluate_screen_json(
+            "footnote",
+            " Bash ls\n Do you want to proceed?\n   1. Yes\n   2. Yes, always allow Bash(ls)\n ❯ 3. No",
+        )
+        .unwrap();
+        assert_eq!(caret_three["state"], "blocked");
+        assert_eq!(caret_three["rule_id"], "permission_ask");
+        let two_row = evaluate_screen_json(
+            "footnote",
+            " Bash ls\n Do you want to proceed?\n   1. Yes\n ❯ 2. No",
+        )
+        .unwrap();
+        assert_eq!(two_row["state"], "blocked");
+        let wrapped = evaluate_screen_json(
+            "footnote",
+            " Do you want to proceed?\n   1. Yes\n   2. Yes, always allow Bash(sleep 15:*)\n      Bash(wc -l notes.txt)\n      Bash(cargo test:*)\n      Bash(git status:*)\n      Bash(ls -la:*)\n      Bash(cat notes:*)\n      Bash(dmesg:*)\n   3. No",
+        )
+        .unwrap();
+        assert_eq!(wrapped["state"], "blocked");
+        let always = evaluate_screen_json(
+            "footnote",
+            " allow Bash ls?  [y] yes  [a] Always allow Bash(ls)  [n] no",
+        )
+        .unwrap();
+        assert_eq!(always["state"], "blocked");
+        assert_eq!(always["rule_id"], "permission_ask");
+        let question_only =
+            evaluate_screen_json("footnote", "model reply\n Do you want to proceed?").unwrap();
+        assert_eq!(question_only["matched"], false);
+        let plain_allow = evaluate_screen_json("footnote", " allow Bash ls?  [y] yes").unwrap();
+        assert_eq!(plain_allow["matched"], false);
+        let reply_list = evaluate_screen_json(
+            "footnote",
+            "I can do that.\n Do you want to proceed?\n\nSteps:\n  1. Edit the file\n  2. Run the tests\n  3. Push",
+        )
+        .unwrap();
+        assert_eq!(reply_list["matched"], false);
     }
 
     fn view(text: &str) -> ScreenView<'_> {

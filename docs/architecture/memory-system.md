@@ -118,6 +118,7 @@ Both passes write entries via `scripts/memory/write-memory-entry.sh`. The interf
 bash scripts/memory/write-memory-entry.sh \
     --memory-dir     /path/to/memory/dir  \
     --session-id     20260505T102342Z-...  \
+    --evidence       20260505T102342Z-...:18407  \
     --candidate      '{"type":"feedback","name":"...","description":"...","body":"..."}' \
     --source-sha256  <sha256 of the existing target file, if any>
 ```
@@ -132,6 +133,8 @@ Exit codes:
 | 3 | Staged (see [Guards against bad autonomous writes](#guards-against-bad-autonomous-writes) below) |
 
 The `type` field must be one of `feedback`, `project`, `reference`, `user`. The `name` field is a `snake_case_identifier` used as the filename and dedup key. Both passes respect the same dedup semantics. If `name` already exists with a matching body, the entry is skipped (exit 2). If `name` exists with a different body, the writer appends a `## Session {sid} update` stanza instead of overwriting the original, subject to the guards below.
+
+**Evidence pointer.** `--evidence` takes `<session id>:<transcript offset>` and is required for every candidate write: the writer refuses a candidate without it. The value is stamped into the entry frontmatter, so a later reviewer or a use-tracked retirement pass can read which transcript lines justified the entry. An update to an entry that predates the field inserts the updating pass's pointer at the same time. An existing pointer is never clobbered, because the update stanza already names the updating session.
 
 ## Guards against bad autonomous writes
 

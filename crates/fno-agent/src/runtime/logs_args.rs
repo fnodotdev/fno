@@ -31,8 +31,6 @@ pub(crate) fn parse_trace_args(rest: &[String]) -> Result<TraceArgs, String> {
             // Python typer.Option aliases so Rust-routed `trace` honors them.
             "--all" | "-A" => a.all_agents = true,
             "--json" | "-J" => a.json_out = true,
-            // Retired (d-460ea8c7): healing is machine-wide; silent no-op.
-            "--cross-project" => {}
             "--request-id" => {
                 a.request_id = Some(it.next().ok_or("--request-id needs a value")?);
             }
@@ -81,8 +79,6 @@ pub(crate) fn parse_logs_args(rest: &[String]) -> Result<LogsArgs, (i32, String)
         match arg.as_str() {
             "--follow" | "-f" => follow = true,
             "--json" | "-J" => json_out = true, // global-register short
-            // Retired (d-460ea8c7): healing is machine-wide; silent no-op.
-            "--cross-project" => {}
             "--tail" | "-n" => {
                 let v = it.next().ok_or((2, "--tail needs a value".to_string()))?;
                 tail = v
@@ -170,11 +166,6 @@ mod tests {
         let a = parse_logs_args(&["w".to_string(), "-J".to_string()]).unwrap();
         assert!(a.json_out);
 
-        // The retired --cross-project flag still parses on logs as a
-        // silent no-op; the old surface died with "unknown logs flag".
-        let a = parse_logs_args(&["w".to_string(), "--cross-project".to_string()]).unwrap();
-        assert_eq!(a.name, "w");
-
         // (codex P2, PR #431): -A/-J must parse identically to
         // --all/--json on the Rust-routed `trace` path.
         let short = parse_trace_args(&["-A".to_string(), "-J".to_string()]).unwrap();
@@ -182,10 +173,5 @@ mod tests {
         assert!(short.all_agents && short.json_out);
         assert_eq!(short.all_agents, long.all_agents);
         assert_eq!(short.json_out, long.json_out);
-
-        // The retired flag still parses on trace as a silent no-op; the
-        // old surface died with "unknown trace flag".
-        let a = parse_trace_args(&["w".to_string(), "--cross-project".to_string()]).unwrap();
-        assert_eq!(a.name.as_deref(), Some("w"));
     }
 }

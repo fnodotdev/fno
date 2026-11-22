@@ -390,17 +390,9 @@ fn fold_transcript(
                     if entry.target.contains("agents spawn") && entry.target.contains("--name") {
                         fold.spawns.push(json!({"ts": ts, "command": entry.target}));
                     }
-                    if [
-                        "org checkin",
-                        "org term",
-                        "org done",
-                        "--team",
-                        "--promote",
-                        "--promote",
-                        "--succeed",
-                    ]
-                    .iter()
-                    .any(|needle| entry.target.contains(needle))
+                    if ["org checkin", "org term", "org done", "--team", "--promote"]
+                        .iter()
+                        .any(|needle| entry.target.contains(needle))
                     {
                         fold.team_moves
                             .push(json!({"ts": ts, "command": entry.target}));

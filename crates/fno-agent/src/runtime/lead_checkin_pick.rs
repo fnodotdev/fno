@@ -29,6 +29,25 @@ fn target(id: &str) -> String {
 /// its owner is usually the lead's own epic.
 fn offers(bp: &Value) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
+    // Seat entries are typed on read (the blueprint's own SeatScope shape):
+    // the offer rides the scope and its command is the seat line.
+    let seats: Vec<crate::lead_checkin_blueprint::SeatScope> = bp["seat_leads"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| serde_json::from_value(s.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    for s in &seats {
+        out.push((
+            s.scope.clone(),
+            format!(
+                "fno agent spawn --as thread --promote {} \"/fno:lead\"",
+                s.scope
+            ),
+        ));
+    }
     for id in ids(bp, "starts") {
         out.push((id.clone(), format!("start /fno:blueprint subagent {id}")));
     }
@@ -115,6 +134,25 @@ mod tests {
         data.get(key).unwrap_or(&Value::Null)
     }
 
+    /// A seat entry offers its scope's seat command, before any start line:
+    /// seating precedes building in the pick order.
+    fn a_seat_entry_offers_the_seat_command_first() {
+        let bp = json!({
+            "seat_leads": [{"scope": "x-eSeat", "children": ["x-seat1"]}],
+            "starts": ["x-1"],
+            "target_ready": [],
+            "plan_ready": [],
+            "skips": [],
+        });
+        let mut data = Map::new();
+        annotate(&mut data, Some(&bp), None, None);
+        assert_eq!(
+            *at(&data, "pick_offered"),
+            "fno agent spawn --as thread --promote x-eSeat \"/fno:lead\""
+        );
+        assert_eq!(*at(&data, "pick_node"), "x-eSeat");
+    }
+
     #[test]
     fn an_offer_is_reactive_until_taken_or_answered() {
         let mut data = Map::new();
@@ -143,5 +181,6 @@ mod tests {
         );
         assert_eq!(*at(&answered, "reactive"), false);
         assert_eq!(*at(&answered, "pick"), "planned it");
+        a_seat_entry_offers_the_seat_command_first();
     }
 }

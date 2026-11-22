@@ -295,15 +295,10 @@ fn control_pane_send(sock: &Path, pane: u64, bytes: &[u8]) {
     }
 }
 
-/// (x-27c7) One mail delivery - a bracketed paste, then a separate Enter -
-/// must resize no pane and change no client's area, with two clients of
-/// different sizes attached. Both panes run the WINCH-counting painter, so
-/// a stray winsize write on the receiver or its tab neighbour moves a count.
-#[test]
-fn multiclient_mail_delivery_resizes_no_pane() {
-    let scratch = Scratch::new("mailresize");
-    let _server = sh_server(&scratch);
-    let cwd = scratch.dir("w");
+/// The WINCH-counting painter the mail-delivery tests run in their panes:
+/// the trap counts SIGWINCHes into `cnt.<tag>` because a count painted on
+/// screen does not survive a delivery's scroll.
+fn write_winch_painter(cwd: &Path) {
     std::fs::write(
         cwd.join("winchpaint.sh"),
         "#!/bin/sh\n\
@@ -318,6 +313,42 @@ paint\n\
 while :; do sleep 0.2; done\n",
     )
     .unwrap();
+}
+
+fn winch_count(cwd: &Path, tag: &str) -> i32 {
+    std::fs::read_to_string(cwd.join(format!("cnt.{tag}")))
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(-1)
+}
+
+/// Start the painter in each (pane, tag) and block until every count file
+/// exists, pumping client `a` while the painters spin up.
+fn start_winch_painters(sock: &Path, cwd: &Path, a: &mut FakeClient, panes: &[(u64, &str)]) {
+    for (pane, tag) in panes {
+        let cmd = format!("sh ./winchpaint.sh {tag}\r");
+        control_pane_send(sock, *pane, cmd.as_bytes());
+    }
+    let started = std::time::Instant::now();
+    while panes.iter().any(|(_, tag)| winch_count(cwd, tag) < 1) {
+        assert!(
+            started.elapsed() < Duration::from_secs(15),
+            "painters never ran"
+        );
+        a.pump(Duration::from_millis(200));
+    }
+}
+
+/// One mail delivery - a bracketed paste, then a separate Enter - must
+/// resize no pane and change no client's area, with two clients of
+/// different sizes attached. Both panes run the WINCH-counting painter, so
+/// a stray winsize write on the receiver or its tab neighbour moves a count.
+#[test]
+fn multiclient_mail_delivery_resizes_no_pane() {
+    let scratch = Scratch::new("mailresize");
+    let _server = sh_server(&scratch);
+    let cwd = scratch.dir("w");
+    write_winch_painter(&cwd);
 
     let mut a = FakeClient::attach(&scratch.sock(), 40, 120, cwd.to_str().unwrap());
     a.wait_layout(10, "first layout", |l| l.panes.len() == 1);
@@ -326,26 +357,12 @@ while :; do sleep 0.2; done\n",
     a.cmd(Command::SplitDir(Dir::Right));
     let split = a.wait_layout(10, "2 panes", |l| l.panes.len() == 2);
     let (receiver, neighbour) = (split.panes[0].0, split.panes[1].0);
-    // Each painter counts its WINCHes in a file: the pasted body scrolls the
-    // screen, so a count painted on screen would not survive the delivery.
-    for (pane, tag) in [(receiver, "r"), (neighbour, "n")] {
-        let cmd = format!("sh ./winchpaint.sh {tag}\r");
-        control_pane_send(&scratch.sock(), pane, cmd.as_bytes());
-    }
-    let count = |tag: &str| -> i32 {
-        std::fs::read_to_string(cwd.join(format!("cnt.{tag}")))
-            .ok()
-            .and_then(|s| s.trim().parse().ok())
-            .unwrap_or(-1)
-    };
-    let started = std::time::Instant::now();
-    while count("r") < 1 || count("n") < 1 {
-        assert!(
-            started.elapsed() < Duration::from_secs(15),
-            "painters never ran"
-        );
-        a.pump(Duration::from_millis(200));
-    }
+    start_winch_painters(
+        &scratch.sock(),
+        &cwd,
+        &mut a,
+        &[(receiver, "r"), (neighbour, "n")],
+    );
     // Let the split's own nudges drain before the baseline: the delivery is
     // the only event inside the measured window.
     a.pump(Duration::from_millis(2500));
@@ -353,7 +370,7 @@ while :; do sleep 0.2; done\n",
     // Client b compares against the same settled layout, so it must hold
     // the split before the delivery, not catch up on it afterwards.
     b.wait_layout(10, "b settled", |l| l.panes == settled.panes);
-    let baseline = [count("r"), count("n")];
+    let baseline = [winch_count(&cwd, "r"), winch_count(&cwd, "n")];
 
     let mut paste = b"\x1b[200~".to_vec();
     for line in 0..60 {
@@ -373,7 +390,7 @@ while :; do sleep 0.2; done\n",
         .zip(baseline)
     {
         assert_eq!(
-            count(tag),
+            winch_count(&cwd, tag),
             before,
             "mail delivery sent a SIGWINCH to pane {pane}"
         );
@@ -383,6 +400,79 @@ while :; do sleep 0.2; done\n",
             c.layout.as_ref().map(|l| (l.area, l.panes.clone())),
             Some((settled.area, settled.panes.clone())),
             "mail delivery changed client {who}'s layout"
+        );
+    }
+}
+
+/// The REAL mail pane lane byte shape resizes no pane either: the
+/// lane types the envelope as LF-terminated lines (C17, never a bracketed
+/// paste) through a plain `pane send --stdin --raw` (`guarded` defaults
+/// false, pane_args.rs), settles the enter delay, writes a separate CR, and
+/// the confirm loop adds one more CR when a busy recipient swallows the
+/// first (`confirm_or_withdraw`). The sibling paste test pins the paste path;
+/// this one pins the bytes a delivery actually sends, across the whole
+/// delivery window including the retry CR and the nudge tick.
+#[test]
+fn multiclient_typed_mail_delivery_resizes_no_pane() {
+    let scratch = Scratch::new("mailtyped");
+    let _server = sh_server(&scratch);
+    let cwd = scratch.dir("w");
+    write_winch_painter(&cwd);
+
+    let mut a = FakeClient::attach(&scratch.sock(), 40, 120, cwd.to_str().unwrap());
+    a.wait_layout(10, "first layout", |l| l.panes.len() == 1);
+    let mut b = FakeClient::attach(&scratch.sock(), 30, 100, cwd.to_str().unwrap());
+    b.wait_layout(10, "b attached", |l| l.area == (30, 100));
+    a.cmd(Command::SplitDir(Dir::Right));
+    let split = a.wait_layout(10, "2 panes", |l| l.panes.len() == 2);
+    let (receiver, neighbour) = (split.panes[0].0, split.panes[1].0);
+    start_winch_painters(
+        &scratch.sock(),
+        &cwd,
+        &mut a,
+        &[(receiver, "r"), (neighbour, "n")],
+    );
+    a.pump(Duration::from_millis(2500));
+    let settled = a.wait_layout(10, "settled", |l| l.panes.len() == 2);
+    b.wait_layout(10, "b settled", |l| l.panes == settled.panes);
+    let baseline = [winch_count(&cwd, "r"), winch_count(&cwd, "n")];
+
+    // C17: the body is typed, not pasted - LF line breaks, no paste markers.
+    let mut body = Vec::new();
+    for line in 0..40 {
+        body.extend_from_slice(
+            format!("line {line:02} of a typed mail body {}\n", "x".repeat(40)).as_bytes(),
+        );
+    }
+    control_pane_send(&scratch.sock(), receiver, &body);
+    // The enter delay (CR_SETTLE_MS), then the submit CR - a separate write.
+    std::thread::sleep(Duration::from_millis(800));
+    control_pane_send(&scratch.sock(), receiver, b"\r");
+    // The lane's confirm loop sends one more CR (its swallowed-CR retry,
+    // half of its 40x250ms budget) when a busy recipient swallowed the
+    // first; the window here must cover a retry wherever it lands.
+    std::thread::sleep(Duration::from_millis(1000));
+    control_pane_send(&scratch.sock(), receiver, b"\r");
+    // Past NUDGE_DELAY (300 ms) plus the 1 s nudge tick, twice: a stray
+    // resize anywhere in the window arms a nudge this window catches.
+    a.pump(Duration::from_millis(2500));
+    b.pump(Duration::from_millis(100));
+
+    for ((pane, tag), before) in [(receiver, "r"), (neighbour, "n")]
+        .into_iter()
+        .zip(baseline)
+    {
+        assert_eq!(
+            winch_count(&cwd, tag),
+            before,
+            "typed mail delivery sent a SIGWINCH to pane {pane}"
+        );
+    }
+    for (who, c) in [("a", &a), ("b", &b)] {
+        assert_eq!(
+            c.layout.as_ref().map(|l| (l.area, l.panes.clone())),
+            Some((settled.area, settled.panes.clone())),
+            "typed mail delivery changed client {who}'s layout"
         );
     }
 }

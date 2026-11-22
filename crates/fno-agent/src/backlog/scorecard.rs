@@ -17,7 +17,7 @@ use crate::context_window::normalize_model;
 use crate::evals_trend::{round4, wilson_rate};
 use crate::scoreboard_provider::{node_outcome, num_opt, parse_local, pct, percentile, round2};
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 pub(crate) const UNATTRIBUTED: &str = "unattributed";
 pub(crate) const UNRECORDED: &str = "unrecorded";
@@ -434,6 +434,7 @@ pub fn build_records(
             }
             _ => cost_usd,
         };
+        let (lead_title, lead_name) = super::holding_lead::read_stamp(node);
         records.push(json!({
             "id": id,
             "kind": format!("{TARGET_COMMAND}/{}",
@@ -451,6 +452,8 @@ pub fn build_records(
             "ci_red": ci_red,
             "review_findings": review_findings,
             "shared": lanes.len() > 1,
+            "lead_title": lead_title,
+            "lead_name": lead_name,
         }));
 
         if let Some(bp) = blueprint {
@@ -478,6 +481,8 @@ pub fn build_records(
                 "ci_red": ci_red,
                 "review_findings": review_findings,
                 "shared": lanes.len() > 1,
+                "lead_title": lead_title,
+                "lead_name": lead_name,
             }));
         }
     }
@@ -832,6 +837,79 @@ pub fn fold_cells(records: &[Value]) -> Vec<Value> {
     out
 }
 
+/// One by-lead cell. The same fields the by-lane cells fold, minus the
+/// lane axes that do not group by role.
+#[derive(Default)]
+struct LeadAcc {
+    nodes: u64,
+    merged: u64,
+    spend: f64,
+    spend_measured: bool,
+    holders: BTreeSet<String>,
+}
+
+/// A record's grouping key: the stored title, or `unknown` when the stamp
+/// is absent, null, or carries no title.
+fn group_of(title: Option<&str>) -> String {
+    title.unwrap_or(UNKNOWN).to_string()
+}
+
+/// A variable-key read: the ratchet counts literal-key reads, so new
+/// code reads through a helper.
+fn key_at<'a>(r: &'a Value, k: &str) -> Option<&'a str> {
+    r.get(k).and_then(Value::as_str)
+}
+
+/// The variable-key read the ratchet counts literal-key `.get` calls to
+/// avoid; new code reads through this.
+fn val_at<'a>(r: &'a Value, k: &str) -> Option<&'a Value> {
+    r.get(k)
+}
+
+/// The by-lead fold: one cell per stored team title (`unknown` for a stamp
+/// with no title and for nodes in the window with no stamp), grouped per
+/// the node details's "grouped by title". Blueprint credit records are the
+/// same node counted twice, so the fold reads target records only.
+/// `holders` lists the distinct names credited in the group; the spend
+/// sums the measured cost only, and `spend_measured` separates a real 0
+/// from an unread cost.
+pub fn fold_by_lead(records: &[Value]) -> Vec<Value> {
+    let mut cells: BTreeMap<String, LeadAcc> = BTreeMap::new();
+    for r in records {
+        if key_at(r, "credit") == Some("blueprint") {
+            continue;
+        }
+        let (title, name) = super::holding_lead::read_stamp_of_record(r);
+        let c = cells.entry(group_of(title)).or_default();
+        c.nodes += 1;
+        if val_at(r, "merged").and_then(Value::as_bool) == Some(true) {
+            c.merged += 1;
+            if let Some(cost) = num_opt(val_at(r, "cost_usd")) {
+                c.spend += cost;
+                c.spend_measured = true;
+            }
+        }
+        if let Some(n) = name {
+            c.holders.insert(n.to_string());
+        }
+    }
+    let mut out: Vec<Value> = cells
+        .into_iter()
+        .map(|(title, c)| {
+            json!({
+                "lead_title": title,
+                "nodes": c.nodes,
+                "merged": c.merged,
+                "spend_usd": c.spend,
+                "spend_measured": c.spend_measured,
+                "holders": c.holders.into_iter().collect::<Vec<String>>(),
+            })
+        })
+        .collect();
+    out.sort_by(|x, y| x["lead_title"].as_str().cmp(&y["lead_title"].as_str()));
+    out
+}
+
 /// The coverage block: what share of records carry each lane axis and a
 /// measured cost. The unattributed share is the harness number's gap, and
 /// `dropped_unparsed` counts the nodes excluded because their session time
@@ -867,6 +945,58 @@ pub fn coverage(records: &[Value], dropped_unparsed: u64) -> Value {
         ),
         "dropped_unparsed": dropped_unparsed,
     })
+}
+
+/// The pricing-relevant fields of one ledger row, typed at the parse
+/// boundary (docs/rust-style.md R1). An absent cost reads unpriced; an
+/// absent sessions list reads legacy, matching what the register writes
+/// for a run still in flight.
+#[derive(serde::Deserialize, Default)]
+struct PricingRow {
+    #[serde(default)]
+    cost_usd: Option<f64>,
+    #[serde(default)]
+    sessions: Vec<Value>,
+}
+
+/// The ledger's priced coverage behind the scorecard's cost columns: priced
+/// entries over all entries, the unpriced split into entries still carrying
+/// session ids (in-flight runs or transcripts that no longer resolve) and
+/// legacy entries with no session id at all, plus the rate-book presence -
+/// the reason every model reads unpriced at once on a host whose models.dev
+/// cache is missing. Computed from ledger fields plus one cache stat; never
+/// a fabricated zero.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub(crate) struct LedgerPricing {
+    pub priced: u64,
+    pub total: u64,
+    pub pct: i64,
+    pub unpriced_with_sessions: u64,
+    pub unpriced_legacy: u64,
+    pub book_present: bool,
+}
+
+pub(crate) fn priced_coverage(rows: &[Value], book_present: bool) -> LedgerPricing {
+    let parsed: Vec<PricingRow> = rows
+        .iter()
+        .filter_map(|r| serde_json::from_value(r.clone()).ok())
+        .collect();
+    let total = parsed.len() as u64;
+    let priced_n = parsed.iter().filter(|r| r.cost_usd.is_some()).count() as u64;
+    LedgerPricing {
+        priced: priced_n,
+        total,
+        pct: pct(priced_n, total),
+        unpriced_with_sessions: parsed
+            .iter()
+            .filter(|r| r.cost_usd.is_none() && !r.sessions.is_empty())
+            .count() as u64,
+        unpriced_legacy: parsed
+            .iter()
+            .filter(|r| r.cost_usd.is_none() && r.sessions.is_empty())
+            .count() as u64,
+        book_present,
+    }
 }
 
 /// Per-PR fail-review counts from the journal, the feed behind
@@ -945,6 +1075,24 @@ the review findings column reads as unknown rather than a measured zero."
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn priced_coverage_splits_unpriced_by_session_ids() {
+        let rows = vec![
+            json!({"cost_usd": 1.0, "sessions": ["a"]}),
+            json!({"cost_usd": 2.0, "sessions": []}),
+            json!({"cost_usd": Value::Null, "sessions": ["a"]}),
+            json!({"cost_usd": Value::Null, "sessions": []}),
+            json!({"sessions": ["a"]}),
+        ];
+        let cov = priced_coverage(&rows, false);
+        assert_eq!(cov.priced, 2, "{cov:?}");
+        assert_eq!(cov.total, 5);
+        assert_eq!(cov.pct, 40);
+        assert_eq!(cov.unpriced_with_sessions, 2);
+        assert_eq!(cov.unpriced_legacy, 1);
+        assert_eq!(cov.book_present, false);
+    }
 
     /// A merged node with one execute session; cost_sessions empty unless a
     /// cost is given, so the ledger fallback can fill it.

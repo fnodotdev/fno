@@ -112,7 +112,7 @@ pub use serve::{attention_api, chat_ws, mux_link, observe, share, web};
 #[cfg(feature = "app")]
 pub(crate) use serve::{screen, web_agent, web_core, web_hq};
 #[cfg(feature = "web")]
-pub(crate) use serve::{web_invites, web_trace};
+pub(crate) use serve::{web_invites, web_mine, web_trace};
 #[cfg(feature = "app")]
 pub use sessions::{
     agents_history, argv_witness, process_admission, restore_gate, restore_liveness,
@@ -122,9 +122,9 @@ pub use sessions::{
 pub use sessions::{session_move, transcript_transfer};
 #[cfg(feature = "app")]
 pub use setup::{
-    cli_hooks, gh_proxy, must_enable, path_migration, setup_autowire, setup_cmds,
-    setup_daemon_agent, setup_detect, setup_messaging, setup_profile, setup_run, setup_services,
-    state_layout, wizard, wizard_term,
+    cli_hooks, gh_proxy, must_enable, path_migration, setup_attention_remote, setup_autowire,
+    setup_cmds, setup_daemon_agent, setup_detect, setup_messaging, setup_profile, setup_run,
+    setup_services, state_layout, wizard, wizard_term,
 };
 #[cfg(feature = "app")]
 pub use ui::{

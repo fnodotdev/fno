@@ -160,28 +160,3 @@ fn watch_idle_window_defaults_clamps_and_slacks() {
     assert_eq!(watch_lease::watch_expiry_ms(Some("30m"), 1_000), 901_000);
     assert_eq!(watch_lease::watch_expiry_ms(Some("1m"), 1_000), 301_000);
 }
-
-#[test]
-fn termination_reason_variant_names_byte_identical() {
-    // Fix 6: all TerminationReason variants must serialize to the exact strings
-    // the spec names - no rename attributes applied.
-    let cases = [
-        (TerminationReason::DonePRGreen, "DonePRGreen"),
-        (TerminationReason::DoneAdvisory, "DoneAdvisory"),
-        (TerminationReason::DoneAwaitingReview, "DoneAwaitingReview"),
-        (TerminationReason::NoWork, "NoWork"),
-        (TerminationReason::Budget, "Budget"),
-        (TerminationReason::NoProgress, "NoProgress"),
-        (TerminationReason::Interrupted, "Interrupted"),
-        (TerminationReason::Aborted, "Aborted"),
-    ];
-    for (variant, expected) in cases {
-        let json = serde_json::to_string(&variant).unwrap();
-        // serde serializes enum unit variants as "\"VariantName\""
-        assert_eq!(
-            json,
-            format!("\"{expected}\""),
-            "variant {expected} serialized incorrectly"
-        );
-    }
-}

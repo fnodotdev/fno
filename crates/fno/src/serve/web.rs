@@ -687,7 +687,7 @@ async fn run(args: WebArgs, socket: PathBuf) -> i32 {
 }
 
 fn router(state: AppState) -> Router {
-    Router::new()
+    let routes = Router::new()
         .route("/", get(page))
         .route("/backlog", get(backlog))
         .route("/backlog/model.json", get(backlog_model))
@@ -699,6 +699,8 @@ fn router(state: AppState) -> Router {
         .route("/hq/model.json", get(hq_model))
         .route("/hq/decisions.json", get(hq_decisions))
         .route("/hq/answer/{id}", post(hq_answer))
+        .route("/hq/mine.json", get(hq_mine))
+        .route("/hq/mine/look", post(hq_mine_look))
         .route("/command", get(command_redirect))
         .route("/command/model.json", get(command_model_redirect))
         .route("/command/answer/{id}", post(command_answer_redirect))
@@ -710,7 +712,13 @@ fn router(state: AppState) -> Router {
             state.clone(),
             invite_gate,
         ))
-        .with_state(state)
+        .with_state(state);
+    routes.clone().nest(
+        // The board answers at the root and under the /fno prefix: a
+        // tailscale route that maps a subpath (the Oct 18 report's
+        // /fno/backlog URL shape) reaches the same routes instead of 404.
+        "/fno", routes,
+    )
 }
 
 /// Every request needs at least a viewer invite when `web.invites` is set.
@@ -1238,6 +1246,108 @@ async fn hq_model(
         model = scope_hq_model(model, &scope, &rows.rows);
     }
     json_response(&model)
+}
+
+/// The caller's name from the invite decision, or the refusal as a response.
+fn mine_person(headers: &HeaderMap, st: &AppState) -> Result<String, Response> {
+    crate::web_invites::decide(
+        &caller_of(headers, st.writable),
+        st.invites.as_deref().map(Vec::as_slice),
+        None,
+        crate::web_invites::Role::Viewer,
+    )
+    .map_err(|r| {
+        plain_status(
+            StatusCode::from_u16(r.code).unwrap_or(StatusCode::FORBIDDEN),
+            &r.text,
+        )
+    })
+}
+
+/// `GET /hq/mine.json`: the caller's own views, filled inside their invite.
+async fn hq_mine(
+    Query(q): Query<WsQuery>,
+    State(st): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if !token_ok(q.t.as_deref(), &st.token) {
+        return unauthorized();
+    }
+    let person = match mine_person(&headers, &st) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    let root = crate::web_mine::store_root();
+    let rows = if crate::web_mine::has_store(&root, &person) {
+        Some(model_inputs(&st).await)
+    } else {
+        None
+    };
+    let invites = st.invites.clone();
+    let out = tokio::task::spawn_blocking(move || {
+        let rows = rows.as_ref().map_or(&[][..], |i| i.rows.as_slice());
+        crate::web_mine::mine_json(&root, rows, invites.as_deref().map(Vec::as_slice), &person)
+    })
+    .await;
+    match out {
+        Ok(v) => json_response(&v),
+        Err(_) => plain_status(StatusCode::INTERNAL_SERVER_ERROR, "the Mine read failed"),
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LookBody {
+    project: String,
+    look: crate::web_mine::Look,
+}
+
+/// `POST /hq/mine/look`: store the caller's look for one project.
+async fn hq_mine_look(
+    Query(q): Query<WsQuery>,
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if !token_ok(q.t.as_deref(), &st.token) {
+        return unauthorized();
+    }
+    if let Err(msg) = crate::web_answer::same_origin(&headers) {
+        return plain_status(StatusCode::FORBIDDEN, msg);
+    }
+    let person = match mine_person(&headers, &st) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    let body: LookBody = match serde_json::from_slice(&body) {
+        Ok(b) => b,
+        Err(e) => {
+            return plain_status(
+                StatusCode::BAD_REQUEST,
+                &format!(
+                    "the body is {{\"project\", \"look\"}} with {}: {e}",
+                    crate::web_mine::LOOK_VALUES
+                ),
+            )
+        }
+    };
+    let out = tokio::task::spawn_blocking(move || {
+        crate::web_mine::set_look(
+            &crate::web_mine::store_root(),
+            &person,
+            &body.project,
+            body.look,
+        )
+    })
+    .await;
+    match out {
+        Ok(Ok(look)) => json_response(&serde_json::json!({ "look": look })),
+        Ok(Err(crate::web_mine::Refused(code, text))) => plain_status(
+            StatusCode::from_u16(code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            &text,
+        ),
+        Err(_) => plain_status(StatusCode::INTERNAL_SERVER_ERROR, "the look write failed"),
+    }
 }
 
 /// `GET /hq/decisions.json`: every recorded decision plus the ids the
@@ -3125,6 +3235,62 @@ console.log("backlog page helpers: 18 cases ok");
         assert!(reply.starts_with("HTTP/1.1 404"), "{reply}");
         server.abort();
     }
+
+    // AC3-HP second half: the deep link opens the question even under the
+    // /fno path prefix a tailscale route can mount (the Oct 18 report's
+    // /fno/backlog shape). The prefix must reach the auth wall, a green
+    // token, and the page itself, or the phone lands on a 404.
+    #[tokio::test]
+    async fn the_board_answers_under_the_fno_prefix_mount() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (tx, _) = broadcast::channel(4);
+        let (_shutdown_tx, shutdown) = tokio::sync::watch::channel(false);
+        let hq = Arc::new(crate::web_hq::HqCache::default());
+        let fleet = serde_json::json!({"machines": [{"host": "u", "sessions": []}]});
+        let none = backlog_model::Inputs::default();
+        hq.board()
+            .await
+            .record(Ok(fleet), Err("x".into()), &none, 1, &[]);
+        hq.first.set(()).unwrap();
+        let state = AppState {
+            tx,
+            snap: Arc::new(Mutex::new(Snapshot::default())),
+            token: Arc::<str>::from("right"),
+            rundown_html: std::env::temp_dir().join("fno-web-hq-lead.html"),
+            rundown_republish: false,
+            hq,
+            writable: true,
+            invites: None,
+            model: Default::default(),
+            shutdown,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router(state)).await.unwrap();
+        });
+        let ask = |path: &'static str| async move {
+            let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let req =
+                format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+            stream.write_all(req.as_bytes()).await.unwrap();
+            let mut reply = String::new();
+            stream.read_to_string(&mut reply).await.unwrap();
+            reply
+        };
+        assert!(
+            ask("/fno/backlog").await.starts_with("HTTP/1.1 401"),
+            "the prefix reaches the auth wall"
+        );
+        let reply = ask("/fno/backlog?t=right").await;
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        let reply = ask("/fno/hq/model.json?t=right").await;
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        let reply = ask("/fno/hq?t=right").await;
+        assert!(reply.contains("data-current=\"hq\""), "{reply}");
+        server.abort();
+    }
     fn tiny_frame() -> proto::Frame {
         proto::Frame {
             rows: 1,
@@ -3527,6 +3693,69 @@ console.log("backlog page helpers: 18 cases ok");
         let reply = raw_request(addr, head, b"").await;
         assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
         server.abort();
+    }
+
+    // A login's look lands in its own store file with three prior versions;
+    // a request that names nobody gets no look and no views.
+    #[allow(clippy::indexing_slicing)]
+    #[tokio::test]
+    async fn hq_mine_routes_answer_per_login() {
+        use crate::web_invites::{Invite, Role};
+        let login = "mine-route@example.com";
+        let dir = crate::web_mine::store_root().join(crate::web_mine::login_key(login));
+        let _ = std::fs::remove_dir_all(&dir);
+        let list = vec![Invite {
+            email: login.into(),
+            scope: "*".into(),
+            role: Role::Viewer,
+        }];
+        let post = |addr: std::net::SocketAddr, login: &str, body: String| {
+            let head = format!(
+                "POST /hq/mine/look?t=right HTTP/1.1\r\nHost: machine.tail1.ts.net\r\nTailscale-User-Login: {login}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            async move { raw_request(addr, &head, body.as_bytes()).await }
+        };
+        let (addr, server) = serve_state(answer_state(true, Some(list))).await;
+        for theme in ["light", "dark", "auto", "dark"] {
+            let body = format!(
+                r#"{{"project":"fno","look":{{"theme":"{theme}","density":"compact","accent":"blue"}}}}"#
+            );
+            let reply = post(addr, login, body).await;
+            assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        }
+        let doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("fno.json")).unwrap()).unwrap();
+        assert_eq!(doc["look"]["theme"], "dark");
+        assert_eq!(doc["history"].as_array().unwrap().len(), 3);
+        let reply = post(
+            addr,
+            login,
+            r#"{"project":"fno","look":{"accent":"url(https://x)"}}"#.into(),
+        )
+        .await;
+        assert!(reply.starts_with("HTTP/1.1 400"), "{reply}");
+        assert!(reply.contains("accent ink|blue|green|violet"), "{reply}");
+        server.abort();
+
+        let (addr, server) = serve_state(answer_state(true, None)).await;
+        let reply = post(
+            addr,
+            "eve@example.com",
+            r#"{"project":"fno","look":{}}"#.into(),
+        )
+        .await;
+        assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
+        assert!(
+            reply.contains("no login on this request: personal look needs an invite"),
+            "{reply}"
+        );
+        let head = "GET /hq/mine.json?t=right HTTP/1.1\r\nHost: machine.tail1.ts.net\r\nTailscale-User-Login: eve@example.com\r\nConnection: close\r\n\r\n";
+        let reply = raw_request(addr, head, b"").await;
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        assert!(reply.contains(r#""projects":[]"#), "{reply}");
+        server.abort();
+        let _ = std::fs::remove_dir_all(&dir);
     }
     // AC6's page half: the act controls exist only on a writing bridge.
     #[tokio::test]

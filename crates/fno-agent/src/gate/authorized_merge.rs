@@ -2109,11 +2109,16 @@ fn effect<P: Probes>(probes: &P, request: &Request, authorized: &Authorized) -> 
         },
         Ok(_) => {
             // gh refuses before merging when the branch is checked out in
-            // another worktree, which is every worktree-first run. Recover
-            // through the REST endpoint, carrying the same pin: `sha` is that
-            // endpoint's `--match-head-commit`, so the retry cannot quietly
-            // land a head the decision never saw.
-            if request.effect == Effect::Merge && checkout_refused(&output) {
+            // another worktree, which is every worktree-first run. And when
+            // the refusal names the graphql channel - a drained bucket, or
+            // fno's own hold on it - rather than the merge itself, the REST
+            // merge endpoint is untouched and serves the write. Both retries
+            // carry the same pin: `sha` is that endpoint's
+            // `--match-head-commit`, so the retry cannot quietly land a head
+            // the decision never saw.
+            if request.effect == Effect::Merge
+                && (checkout_refused(&output) || graphql_channel_refused(&output))
+            {
                 let api = vec![
                     "api".to_string(),
                     "--method".to_string(),
@@ -2126,9 +2131,14 @@ fn effect<P: Probes>(probes: &P, request: &Request, authorized: &Authorized) -> 
                 ];
                 if let Ok((true, _)) = probes.run_gh(cwd, &api) {
                     // The recovery WORKED, so it carries no cleanup failure.
+                    let note = if checkout_refused(&output) {
+                        "merged server-side (worktree fallback)"
+                    } else {
+                        "merged server-side (rest fallback)"
+                    };
                     return Outcome::Merged {
                         head: authorized.head.clone(),
-                        note: Some("merged server-side (worktree fallback)".to_string()),
+                        note: Some(note.to_string()),
                         cleanup_failure: None,
                         merge_grant: authorized.merge_grant.clone(),
                         warnings: authorized.warnings.clone(),
@@ -2155,6 +2165,19 @@ fn effect<P: Probes>(probes: &P, request: &Request, authorized: &Authorized) -> 
 fn checkout_refused(output: &str) -> bool {
     let lower = output.to_lowercase();
     lower.contains("is already used by worktree") || lower.contains("already checked out")
+}
+
+/// The merge write rides GitHub's GraphQL mutation, so two refusals name the
+/// channel, not the merge: fno's own budget hold on a drained graphql bucket
+/// ("gh budget: ... held locally ... this command did not reach GitHub",
+/// gh_budget's refusal_line), and GitHub's primary graphql exhaustion ("API
+/// rate limit exceeded"). Both leave the REST merge endpoint (core bucket)
+/// untouched, so the retry routes there - the law that a tight channel routes
+/// to another instead of refusing. "secondary rate limit" stays out: that
+/// limiter is token-wide and the REST retry would trip it too.
+fn graphql_channel_refused(output: &str) -> bool {
+    output.contains("gh budget: GitHub rate limit held locally")
+        || output.to_lowercase().contains("api rate limit exceeded")
 }
 
 /// The fno gh proxy prefixes its own stderr lines with `fno config:`,
@@ -3218,51 +3241,16 @@ pub(crate) fn pr_bound_index(
 
 /// The main-repair exemption probe over the live graph: `None` when this
 /// PR's node carries the [`MAIN_REPAIR_TAG`], else the repair-lane sentence.
+/// The slice already carries tags and status on every row, so one read
+/// answers both the bound-node exemption and the lane sentence.
 fn main_repair_hold_probe(cwd: &Path, facts: &PrFacts) -> Option<String> {
     let graph_path = crate::org_board::scope::graph_json_path(cwd);
-    let Some(mut entries) = node_binding_entries(&graph_path, facts) else {
+    let Some(entries) = node_binding_entries(&graph_path, facts) else {
         return Some(format!(
             "the graph is unreadable; tag the repair node: \
              fno backlog update <node> tags+={MAIN_REPAIR_TAG}"
         ));
     };
-    // The lane search reads only the tagged nodes: the SQL-side tag read
-    // names them without materializing the graph, and a narrow id read
-    // brings their full rows in. Unreadable tag rows read as no lane, the
-    // sentence names it.
-    let lanes = match crate::graph_store::read_ids_with_tag(&graph_path, MAIN_REPAIR_TAG) {
-        Err(e) => {
-            return Some(format!(
-                "the graph is unreadable ({}); tag the repair node: \
-                 fno backlog update <node> tags+={MAIN_REPAIR_TAG}",
-                e
-            ))
-        }
-        Ok(lanes) => lanes,
-    };
-    let fresh: Vec<String> = lanes
-        .iter()
-        .filter(|(id, _)| {
-            !entries
-                .iter()
-                .any(|e| RowFacts::id_of(e) == Some(id.as_str()))
-        })
-        .map(|(id, _)| id.clone())
-        .collect();
-    if !fresh.is_empty() {
-        if let Ok(tagged) = crate::graph_store::read_rows_where(
-            &graph_path,
-            &crate::backlog::RowQuery {
-                filter: crate::backlog::api::NodeFilter {
-                    id_in: Some(fresh),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-        ) {
-            entries.extend(tagged);
-        }
-    }
     main_repair_hold_from_entries(&entries, facts)
 }
 
@@ -3332,17 +3320,21 @@ fn node_binding_probe(cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
 }
 
 /// The graph slice the binding decision reads, without materializing every
-/// node body: the light (id, cwd, project) projection the project detection
-/// walks, the nodes whose pull_requests rows name this PR (the SQL-narrowed
-/// read the grant ops share), and the exact-id rows the head ref and the
-/// closure line name. The union answers every question the full read
-/// answered for this PR; the rest of the store never enters the decision.
+/// node body: the light (id, cwd, project, tags, status) projection the
+/// project detection and the tag reads walk, the nodes whose pull_requests
+/// rows name this PR (the SQL-narrowed read the grant ops share), and the
+/// exact-id rows the head ref and the closure line name. tags and status
+/// ride on the projection because callers look rows up by id with a
+/// first-match find: the row they land on must answer the tag and done
+/// questions, or a tagged node reads as a tag-less twin of itself. The
+/// union answers every question the full read answered for this PR; the
+/// rest of the store never enters the decision.
 fn node_binding_entries(graph_path: &Path, facts: &PrFacts) -> Option<Vec<Value>> {
     let mut projection = crate::graph_store::read_rows_where(
         graph_path,
         &crate::backlog::RowQuery {
             fields: Some(
-                ["id", "cwd", "project"]
+                ["id", "cwd", "project", "tags", "status"]
                     .iter()
                     .map(|s| s.to_string())
                     .collect(),

@@ -173,6 +173,12 @@
      }
     },
     {
+     "name": "web",
+     "default": {
+      "invites": []
+     }
+    },
+    {
      "name": "research",
      "default": {
       "output_dir": null
@@ -301,6 +307,17 @@
       "alert_badge": true,
       "font": "SF Mono",
       "font_size": 13.0
+     }
+    },
+    {
+     "name": "buddy",
+     "default": {
+      "reroll_bank": 3,
+      "ships_per_reroll": 2,
+      "daily_reroll": true,
+      "model_line_cooldown_s": 10,
+      "model": "haiku",
+      "fleet_interval_s": 300
      }
     },
     {
@@ -910,6 +927,15 @@
     }
    ]
   },
+  "WebBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "invites",
+     "default": []
+    }
+   ]
+  },
   "ObsidianBlock": {
    "extra": "ignore",
    "fields": [
@@ -1363,6 +1389,35 @@
     {
      "name": "font_size",
      "default": 13.0
+    }
+   ]
+  },
+  "BuddyBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "reroll_bank",
+     "default": 3
+    },
+    {
+     "name": "ships_per_reroll",
+     "default": 2
+    },
+    {
+     "name": "daily_reroll",
+     "default": true
+    },
+    {
+     "name": "model_line_cooldown_s",
+     "default": 10
+    },
+    {
+     "name": "model",
+     "default": "haiku"
+    },
+    {
+     "name": "fleet_interval_s",
+     "default": 300
     }
    ]
   },
@@ -3554,6 +3609,7 @@
   "telemetry.usage_report.enabled",
   "attention.enabled",
   "attention.sinks",
+  "web.invites",
   "research.output_dir",
   "done_probes",
   "approvals.authorized_principals",

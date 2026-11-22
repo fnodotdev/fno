@@ -932,8 +932,7 @@ fn argv_has_take_over(argv: &[String]) -> bool {
         .any(|t| t == "--take-over" || t.starts_with("--take-over="))
 }
 
-/// Whether the argv carries `--hand-off` before the boundary. The retired
-/// `--succeed` spelling dies at the tombstone, before compose runs.
+/// Whether the argv carries `--hand-off` before the boundary.
 fn argv_has_hand_off(argv: &[String]) -> bool {
     argv.iter()
         .skip(1)
@@ -1734,7 +1733,7 @@ mod tests {
     }
 
     /// AC7-ERR: the take-over front door refuses `--take-over` without
-    /// `--promote` or combined with `--hand-off`/`--succeed` (exit 2, the
+    /// `--promote` or combined with `--hand-off` (exit 2, the
     /// front-door line), and lets the legal shape compose through.
     #[test]
     fn the_take_over_front_door_refuses_the_illegal_shapes() {

@@ -828,8 +828,7 @@ fn best_scope(votes: &BTreeMap<String, (usize, String)>) -> Option<String> {
 
 /// The hidden `fno-agent mail-threads` command: `--format json` (the only
 /// form) prints the projection; `details --session <id>` prints that
-/// session's token counters and ledger cost. Hidden from help, like
-/// `team-fold` (ruling d-aef0ed7b).
+/// session's token counters and ledger cost. Hidden from help.
 pub fn run_mail_threads(args: &[String]) -> i32 {
     let Some(sub) = args.first() else {
         return run_mail_threads(&["--format".into(), "json".to_string()]);

@@ -134,13 +134,35 @@ pub fn classify(args: &[OsString]) -> Option<Claim> {
         // The diag-family leaves: pure transports onto the census op
         // (shrink law d-fe66560a: no new fno-agent client action).
         Some("footprint") => {
-            let mut argv = vec![OsString::from("census"), OsString::from("--footprint")];
-            for a in &args[2..] {
-                match a.to_str() {
-                    Some("--json") | Some("-J") => argv.push(a.clone()),
-                    Some("--cause-only") => argv.push(OsString::from("--cause")),
+            let spawn_rate = args.iter().any(|a| a.to_str() == Some("--spawn-rate"));
+            let mut argv = vec![
+                OsString::from("census"),
+                OsString::from(if spawn_rate {
+                    "--spawn-rate"
+                } else {
+                    "--footprint"
+                }),
+            ];
+            let mut i = 2;
+            while i < args.len() {
+                match args[i].to_str() {
+                    Some("--json") | Some("-J") => argv.push(args[i].clone()),
+                    Some("--cause-only") if !spawn_rate => argv.push(OsString::from("--cause")),
+                    Some("--spawn-rate") => {}
+                    Some("--secs") => {
+                        let Some(v) = args.get(i + 1) else {
+                            return None;
+                        };
+                        if v.to_str().and_then(|s| s.parse::<u64>().ok()).is_none() {
+                            return None;
+                        }
+                        argv.push(OsString::from("--secs"));
+                        argv.push(v.clone());
+                        i += 1;
+                    }
                     _ => return None,
                 }
+                i += 1;
             }
             Some(Claim::AgentsExec("fno doctor footprint", argv))
         }
@@ -986,6 +1008,9 @@ fn nothing_to_fix_message(
 /// `--cost-check`: cross-check our session cost against the reference tool
 /// for one recent session (doctor.py:978-1016).
 fn cost_check_report() -> i32 {
+    // A pricing door: the stale-gated book fetch fires best-effort so the
+    // cost read prices against live rates; a fresh book costs one stat.
+    crate::model_catalog::refresh_if_stale(&crate::model_catalog::state_dir());
     let skip = |reason: &str| -> i32 {
         echo_stdout(&format!("fno doctor: cost-check skipped ({reason})."));
         0

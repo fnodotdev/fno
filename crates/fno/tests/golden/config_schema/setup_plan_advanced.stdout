@@ -424,6 +424,15 @@
       "doc": "Export event titles as log text (default off: only the event kind)."
     },
     {
+      "path": "telemetry.otlp.forward_requests",
+      "type": "bool",
+      "default": false,
+      "tier": "advanced",
+      "question": "",
+      "default_source": "",
+      "doc": "Also forward the masked api_request records from otel.db through the export arm (needs telemetry.otlp.enabled)."
+    },
+    {
       "path": "telemetry.eval_events.enabled",
       "type": "bool",
       "default": false,
@@ -512,6 +521,15 @@
       "question": "",
       "default_source": "",
       "doc": "Push sinks for open questions: a list of tables with name, type (ntfy or webhook), url, topic, token_env, answer_base_url and body (title-only or full)."
+    },
+    {
+      "path": "web.invites",
+      "type": "list[dict[str, Any]]",
+      "default": [],
+      "tier": "advanced",
+      "question": "",
+      "default_source": "",
+      "doc": "Who may answer on the HQ page over a tailnet: a list of tables with email, scope (* or a node id) and role (viewer, commenter, editor, owner)."
     },
     {
       "path": "research.output_dir",
@@ -1907,6 +1925,24 @@
       "question": "",
       "default_source": "default",
       "doc": "The Dock badge showing the count of blocked agents in fno-app (default on)."
+    },
+    {
+      "path": "app.font",
+      "type": "str",
+      "default": "SF Mono",
+      "tier": "advanced",
+      "question": "",
+      "default_source": "default",
+      "doc": "The terminal pane font family. fno-app's Settings page paints it as a choice page over the installed monospaced families; a name the text system cannot resolve falls back to the platform mono at launch. The chrome (labels, lists, title bar) stays SF Mono."
+    },
+    {
+      "path": "app.font_size",
+      "type": "float",
+      "default": 13.0,
+      "tier": "advanced",
+      "question": "",
+      "default_source": "default",
+      "doc": "The terminal pane font size in points, bounded 8 to 32. fno-app's Settings page cycles it through 11, 12, 13, 14, 15, 16 and 18, and the panes re-measure their cells live."
     },
     {
       "path": "mux.attach_digest",

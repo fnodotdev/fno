@@ -920,6 +920,74 @@ fn emit_pr_opened(cwd: &Path, printed: &str, branch: &str) {
     }
 }
 
+/// Record the PR a `Docs:` line names on the bound node, best-effort. A
+/// `Docs: none, <reason>` body and a body that names no PR record nothing.
+/// Every miss prints a named warning; the create itself never rolls back.
+/// docs_pr_ref canonicalizes the slug against the rename aliases, so a
+/// `Docs:` token written under the repo's old name still records a live
+/// url.
+fn record_docs_pr(cwd: &Path, body_file: &str) {
+    let Some(body) = std::fs::read_to_string(body_file).ok() else {
+        eprintln!(
+            "pr-create: notice: the Docs-line PR was not recorded: the body file is unreadable"
+        );
+        return;
+    };
+    let Some((slug, number)) = crate::docs_gate::docs_pr_ref(&body, Some(cwd)) else {
+        return;
+    };
+    let node_id = crate::target_orient::read_manifest(cwd).and_then(|m| {
+        crate::target_orient::manifest_get(&m, "input")
+            .map(str::to_string)
+            .filter(|s| !s.is_empty())
+    });
+    let Some(node_id) = node_id else {
+        eprintln!(
+            "pr-create: notice: the Docs line names PR #{number} but no node is bound; record it with `fno backlog update <id> additional_prs+={number} --add-pr-url ...`"
+        );
+        return;
+    };
+    let origin = crate::pr_list::origin_slug(cwd, None).ok();
+    // The slug arrives canonicalized from docs_pr_ref; a token still naming
+    // no owner takes the origin's owner, so the recorded url is one GitHub
+    // can resolve.
+    let qualified = slug.map(|slug| match slug.split_once('/') {
+        Some(_) => slug,
+        None => match origin.as_deref().and_then(|o| o.split('/').next()) {
+            Some(owner) => format!("{owner}/{slug}"),
+            None => slug,
+        },
+    });
+    let url = match qualified.as_deref() {
+        None | Some("") => match origin {
+            Some(o) => format!("https://github.com/{o}/pull/{number}"),
+            None => {
+                eprintln!("pr-create: notice: the Docs-line PR #{number} names no repo and the origin slug is unreadable, so nothing recorded it");
+                return;
+            }
+        },
+        Some(s) => crate::backlog::pr_link::pr_url_from_slug(s, number),
+    };
+    let store = crate::backlog::api::Store::new(&crate::backlog::settings::graph_path());
+    match crate::backlog::api::pull_request_record(
+        &store,
+        &node_id,
+        number,
+        Some(&url),
+        Some("docs"),
+        None,
+    ) {
+        Ok(payload) if payload.success => {}
+        Ok(_) => eprintln!(
+            "pr-create: notice: the Docs-line PR #{number} is already recorded on {node_id}"
+        ),
+        Err(err) => eprintln!(
+            "pr-create: notice: the Docs-line PR #{number} was not recorded: {}",
+            err.0
+        ),
+    }
+}
+
 fn run(a: &Args, gh: Gh) -> i32 {
     let branch = match git(&a.cwd, &["rev-parse", "--abbrev-ref", "HEAD"]) {
         Ok(b) if !b.is_empty() && b != "HEAD" => b,
@@ -1052,6 +1120,7 @@ fn run(a: &Args, gh: Gh) -> i32 {
                     let printed = String::from_utf8_lossy(&out);
                     print!("{printed}");
                     emit_pr_opened(&a.cwd, &printed, &branch);
+                    record_docs_pr(&a.cwd, &a.body_file);
                     // The sha origin holds is the PR head; local HEAD can
                     // carry commits that were never pushed.
                     let remote = format!("refs/heads/{branch}");

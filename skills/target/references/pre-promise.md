@@ -195,6 +195,16 @@ MEMORY_DIR="${HOME}/.claude/projects/$(printf '%s' "$_CANON_ROOT" | sed 's|/|-|g
 SESSION_ID=$(grep -E '^[[:space:]]*session_id:' .fno/target-state.md 2>/dev/null \
   | head -1 | sed 's/.*session_id:[[:space:]]*//' | tr -d '"')
 
+# Evidence pointer: "<session id>:<transcript offset>", stamped into the
+# entry frontmatter. It names WHERE in the session transcript the
+# justification for this entry lives, so a later reviewer and the
+# use-tracked retirement pass can read the why. The offset below is the
+# transcript's line count at write time - an honest "as of this line"
+# pointer. Swap in the justifying turn's line number when you know it.
+# The writer refuses a candidate without it.
+TRANSCRIPT="${HOME}/.claude/projects/$(printf '%s' "$PWD" | sed 's|/|-|g')/${SESSION_ID}.jsonl"
+EVIDENCE="${SESSION_ID}:$(wc -l < "$TRANSCRIPT" 2>/dev/null || echo 0)"
+
 CANDIDATE=$(jq -n \
   --arg type "feedback" \
   --arg name "short_slug_here" \
@@ -232,6 +242,7 @@ fi
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/memory/write-memory-entry.sh" \
   --memory-dir "$MEMORY_DIR" \
   --session-id "$SESSION_ID" \
+  --evidence "$EVIDENCE" \
   --candidate "$CANDIDATE" \
   --source-sha256 "$SOURCE_SHA256"
 # exit 0 = wrote/updated; exit 2 = dedup (fine, no action needed);
@@ -257,6 +268,8 @@ fi
 Use `"type": "feedback"` for corrections and surprises; `"type": "project"` for decisions, strategy, and validated architecture choices.
 
 The `name` field is the slug used for the filename (e.g. `feedback_no_foo_pattern` produces `feedback_no_foo_pattern.md`). Keep it specific but short.
+
+Every entry also carries an evidence pointer, `<session id>:<transcript offset>`, stamped into its frontmatter by `--evidence "$EVIDENCE"` above. It is what tells a later reviewer (and use-tracked retirement) which transcript lines justified the entry. The writer refuses a candidate without it. An empty pass needs no evidence.
 
 The `body` is the full entry text - write it as you would want to read it six months from now. A `## Why` and `## How to apply` section make entries much more useful than bare facts.
 

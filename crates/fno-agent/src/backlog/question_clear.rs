@@ -961,6 +961,19 @@ mod tests {
             1
         );
     }
+
+    /// The one line an agent relays to reach the user names the question,
+    /// carries the attested authority, and asks for quoted words. Pinned
+    /// here at the producer; the relay-source sweep that used to re-check
+    /// it from the loopcheck holds gate was cut under the G3 keep rules.
+    #[test]
+    fn clear_answer_line_pins_question_authority_and_quote() {
+        let line = chat_answer_line("q-1");
+        assert!(
+            line.contains("clear q-1") && line.contains("--authority chat_attested --quote"),
+            "{line}"
+        );
+    }
 }
 use crate::backlog::api::{self, Store};
 use crate::decision_trace::{actor_kind_from_authority, Trace};

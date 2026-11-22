@@ -57,6 +57,7 @@ SHA=$(sha256_of "$MEM/feedback_human_note.md")
 RC=0
 bash "$WRITER" --memory-dir "$MEM" --session-id sid-human-1 \
     --source-sha256 "$SHA" \
+    --evidence "sid-human-1:5" \
     --candidate '{"type":"feedback","name":"human_note","description":"autonomous rewrite attempt","body":"An autonomous pass tried to overwrite this."}' \
     >"$WORK/out.log" 2>&1 || RC=$?
 [[ "$RC" == "3" ]] || fail "expected rc=3 (staged), got rc=$RC, log: $(cat "$WORK/out.log")"
@@ -87,6 +88,7 @@ SHA2=$(sha256_of "$MEM/feedback_auto_note.md")
 RC=0
 bash "$WRITER" --memory-dir "$MEM" --session-id sid-auto-2 \
     --source-sha256 "$SHA2" \
+    --evidence "sid-auto-2:6" \
     --candidate '{"type":"feedback","name":"auto_note","description":"updated by a later pass","body":"Revised autonomous body."}' \
     >"$WORK/out2.log" 2>&1 || RC=$?
 [[ "$RC" == "0" ]] || fail "expected rc=0 (updated), got rc=$RC, log: $(cat "$WORK/out2.log")"
