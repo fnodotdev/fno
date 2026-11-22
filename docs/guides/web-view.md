@@ -124,7 +124,7 @@ When `FNO_CONFIG` pins a file, the bridge does not check project files.
 
 ### Which clicks are recorded
 
-The pages record a click only when you are the caller. That means a direct request on this machine, with the token, from the bridge's own page. A click from an invitee or any other proxied caller records nothing. A bridge on a wide bind records no click at all. An SSH tunnel reaches the bridge as this machine, so it counts as you. [Telemetry](../telemetry.md) says what a row holds.
+The pages record only your own clicks. That means a direct request on this machine, with the token, from the bridge's own page. A click from an invitee or any other proxied caller records nothing. A bridge on a wide bind records no click at all. An SSH tunnel reaches the bridge as this machine, so it counts as you. [Telemetry](../telemetry.md) says what a row holds.
 
 ## Share one pane with someone on another network
 
