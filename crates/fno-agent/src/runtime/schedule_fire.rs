@@ -192,14 +192,16 @@ pub(crate) fn reboot_backstop(home: &AgentsHome) {
         return;
     };
     let args = vec!["restart".to_string(), "--if-down".to_string()];
-    let _ = crate::gate::pr_watch::clock::run(crate::gate::pr_watch::clock::Call {
+    // R9: the backstop is best-effort; the next 600s tick retries.
+    crate::gate::pr_watch::clock::run(crate::gate::pr_watch::clock::Call {
         program: exe.as_os_str(),
         args: &args,
         stdin: None,
         cwd: None,
         env: &[],
         timeout_s: 30.0,
-    });
+    })
+    .ok();
 }
 
 /// The arm entry: cadence 30s, one pass in flight, body off-loop.
@@ -269,12 +271,15 @@ fn run_pass(home: &AgentsHome, pending: &AtomicBool) {
             .as_deref()
             .is_some_and(|n| node_status_word(n).is_some())
         {
-            let _ = sched::set_state(
+            // R9: a lost write costs nothing; the journal row below is the
+            // durable record.
+            sched::set_state(
                 home,
                 &row.id,
                 sched::RowState::Skipped,
                 Some("node done, superseded or deferred"),
-            );
+            )
+            .ok();
             journal(home, KIND_SKIPPED, &row, Some("node status"));
             continue;
         }
@@ -282,9 +287,9 @@ fn run_pass(home: &AgentsHome, pending: &AtomicBool) {
             FireDecision::Fire => fire_row(home, &row, now),
             FireDecision::Retry => {}
             FireDecision::Missed => {
-                // A lost state write is read by the next pass; the journal
-                // row below is the durable record either way.
-                let _ = sched::set_state(home, &row.id, sched::RowState::Missed, None);
+                // R9: a lost state write is read by the next pass; the
+                // journal row below is the durable record either way.
+                sched::set_state(home, &row.id, sched::RowState::Missed, None).ok();
                 journal(home, KIND_MISSED, &row, Some("past grace"));
                 mail_scheduler(&row, "past its grace window");
             }
@@ -347,7 +352,8 @@ fn fire_row(home: &AgentsHome, row: &sched::ScheduledSpawn, now: DateTime<Utc>) 
     };
     let fired = matches!(&output, Ok(out) if out.code == 0);
     if fired {
-        let _ = sched::set_state(home, &row.id, sched::RowState::Fired, None);
+        // R9: the journal row below is the durable record of the fire.
+        sched::set_state(home, &row.id, sched::RowState::Fired, None).ok();
         journal(home, KIND_FIRED, row, Some(reading.as_str()));
         if let sched::Trigger::Every { interval_secs } = &row.trigger {
             let next = row.fire_at_utc.unwrap_or(now) + chrono::Duration::seconds(*interval_secs);
@@ -356,15 +362,18 @@ fn fire_row(home: &AgentsHome, row: &sched::ScheduledSpawn, now: DateTime<Utc>) 
             }
         }
     } else {
-        let _ = sched::record_attempt(home, &row.id, Some(reading.as_str()), now);
+        // R9: a lost attempt write only costs one extra 5m retry.
+        sched::record_attempt(home, &row.id, Some(reading.as_str()), now).ok();
         // The retry consumed the grace: close the row missed now.
         if matches!(decide(row, now), FireDecision::Missed) {
-            let _ = sched::set_state(
+            // R9: the journal row below is the durable record either way.
+            sched::set_state(
                 home,
                 &row.id,
                 sched::RowState::Missed,
                 Some(reading.as_str()),
-            );
+            )
+            .ok();
             journal(home, KIND_MISSED, row, Some(reading.as_str()));
             mail_scheduler(row, reading.as_str());
         }
@@ -405,7 +414,8 @@ fn mail_scheduler(row: &sched::ScheduledSpawn, reason: &str) {
         "scheduled spawn {} missed: {}. Re-schedule with: fno agent spawn --when <time> <name> <prompt>",
         row.id, reason
     );
-    let _ = crate::lead_mail::send_to_name("fno-scheduler", &row.scheduler_session, &body);
+    // R9: mail is best-effort; the journal row is the durable record.
+    crate::lead_mail::send_to_name("fno-scheduler", &row.scheduler_session, &body).ok();
 }
 
 /// One agents journal row for the fired/missed/skipped/requeued kinds.

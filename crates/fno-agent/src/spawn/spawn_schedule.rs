@@ -544,13 +544,12 @@ fn parse_zone(name: &str) -> Result<Tz, WhenParseError> {
 
 fn parse_hhmm(input: &str, whole: &str) -> Result<NaiveTime, WhenParseError> {
     let parts: Vec<&str> = input.split(':').collect();
-    if parts.len() != 2 {
+    let [h, m] = parts.as_slice() else {
         return Err(WhenParseError::Malformed {
             input: whole.to_string(),
             reason: "want HH:MM".into(),
         });
-    }
-    let (h, m) = (parts[0], parts[1]);
+    };
     let hour: u32 = h.parse().map_err(|_| WhenParseError::Malformed {
         input: whole.to_string(),
         reason: "hour is not a number".into(),
@@ -745,8 +744,7 @@ fn scan_spawn_argv(args: &[String]) -> (ScheduleRequest, usize, Option<String>) 
     let mut req = ScheduleRequest::default();
     let mut name: Option<String> = None;
     let mut i = 0;
-    while i < args.len() {
-        let tok = args[i].as_str();
+    while let Some(tok) = args.get(i).map(String::as_str) {
         // Schedule spellings answer before the generic value-flag walk:
         // they sit in the owned lists too, and a generic consume would
         // swallow them without recording the request.
@@ -821,12 +819,11 @@ fn scan_spawn_argv(args: &[String]) -> (ScheduleRequest, usize, Option<String>) 
 fn strip_schedule_flags(args: &[String]) -> Vec<String> {
     let mut out = Vec::new();
     let mut i = 0;
-    while i < args.len() {
-        let tok = args[i].as_str();
+    while let Some(tok) = args.get(i).map(String::as_str) {
         if tok == "--" {
             // The fence ends the spawn-owned region; harness passthrough
             // rides verbatim even when a token repeats a schedule spelling.
-            out.extend(args[i..].iter().cloned());
+            out.extend(args.iter().skip(i).cloned());
             return out;
         }
         if matches!(
@@ -870,92 +867,85 @@ pub fn front_door(home: &AgentsHome, args: &[String]) -> Option<i32> {
     Some(run_front_door(home, args, req, name_index, name_flag))
 }
 
-fn run_front_door(
-    home: &AgentsHome,
-    args: &[String],
-    req: ScheduleRequest,
-    name_index: usize,
-    name_flag: Option<String>,
-) -> i32 {
-    let json = args
-        .iter()
-        .take_while(|a| a.as_str() != "--argv")
-        .any(|a| a == "--json" || a == "-J");
+/// The exit for the list and cancel arms; Err(()) when the argv names no
+/// action and the trigger arm answers instead.
+fn run_list_cancel(home: &AgentsHome, req: &ScheduleRequest, json: bool) -> Result<i32, ()> {
+    if !(req.list || req.cancel.is_some()) {
+        return Err(());
+    }
     // Actions first; a trigger beside an action is malformed.
-    if req.list || req.cancel.is_some() {
-        if req.trigger {
-            eprintln!(
-                "fno agent spawn: --list-scheduled and --cancel-scheduled take no trigger flag"
-            );
-            return 2;
-        }
-        if let Some(id) = req.cancel {
-            return match cancel(home, &id) {
-                Ok(row) => {
-                    if json {
-                        println!(
-                            "{}",
-                            serde_json::json!({"schema": "scheduled-spawns/v1", "cancelled": row.id})
-                        );
-                    } else {
-                        println!("cancelled scheduled spawn {}", row.id);
-                    }
-                    0
+    if req.trigger {
+        eprintln!("fno agent spawn: --list-scheduled and --cancel-scheduled take no trigger flag");
+        return Ok(2);
+    }
+    if let Some(id) = req.cancel.as_deref() {
+        return Ok(match cancel(home, id) {
+            Ok(row) => {
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::json!({"schema": "scheduled-spawns/v1", "cancelled": row.id})
+                    );
+                } else {
+                    println!("cancelled scheduled spawn {}", row.id);
                 }
-                Err(e) => {
-                    eprintln!("fno agent spawn: {e}");
-                    2
-                }
-            };
-        }
-        let rows = match list(home) {
-            Ok(rows) => rows,
+                0
+            }
             Err(e) => {
                 eprintln!("fno agent spawn: {e}");
-                return 2;
+                2
             }
-        };
-        if json {
-            let rows_json: Vec<serde_json::Value> = rows.iter().map(schedule_row_json).collect();
-            println!(
-                "{}",
-                serde_json::json!({"schema": "scheduled-spawns/v1", "rows": rows_json})
-            );
-            return 0;
-        }
-        if rows.is_empty() {
-            println!("no scheduled spawns");
-            return 0;
-        }
-        for row in &rows {
-            println!("{}", schedule_row_line(row));
-        }
-        return 0;
+        });
     }
+    let rows = match list(home) {
+        Ok(rows) => rows,
+        Err(e) => {
+            eprintln!("fno agent spawn: {e}");
+            return Ok(2);
+        }
+    };
+    if json {
+        let rows_json: Vec<serde_json::Value> = rows.iter().map(schedule_row_json).collect();
+        println!(
+            "{}",
+            serde_json::json!({"schema": "scheduled-spawns/v1", "rows": rows_json})
+        );
+        return Ok(0);
+    }
+    if rows.is_empty() {
+        println!("no scheduled spawns");
+        return Ok(0);
+    }
+    for row in &rows {
+        println!("{}", schedule_row_line(row));
+    }
+    Ok(0)
+}
 
-    // Trigger arm.
+/// The trigger-side fields one row resolves before insert: the grace, the
+/// first fire instant (None for --on), and the --on command. Err carries
+/// the refusal text the caller prints.
+fn resolve_trigger(
+    req: &ScheduleRequest,
+    now: DateTime<Utc>,
+    now_local: DateTime<Local>,
+) -> Result<(i64, Option<DateTime<Utc>>, Option<String>), String> {
     let triggers = [req.when.is_some(), req.every.is_some(), req.on.is_some()]
         .into_iter()
         .filter(|b| *b)
         .count();
     if triggers > 1 {
-        eprintln!("fno agent spawn: pick one of --when, --every, --on (a row carries one trigger)");
-        return 2;
+        return Err("pick one of --when, --every, --on (a row carries one trigger)".into());
     }
     if req.grace.is_some() && !req.trigger {
-        eprintln!("fno agent spawn: --grace needs --when, --every or --on");
-        return 2;
+        return Err("--grace needs --when, --every or --on".into());
     }
-    let now = Utc::now();
-    let now_local = Local::now();
     let grace_secs = match req.grace.as_deref() {
         Some(raw) => match crate::duration::parse_duration_secs(raw) {
             Some(0) | None => {
-                eprintln!(
-                    "fno agent spawn: --grace wants a positive duration like 30m or 1h (got {})",
-                    raw
-                );
-                return 2;
+                return Err(format!(
+                    "--grace wants a positive duration like 30m or 1h (got {raw})"
+                ));
             }
             Some(secs) => secs as i64,
         },
@@ -972,39 +962,36 @@ fn run_front_door(
     // front door. A row that would refuse fires anyway, retries inside its
     // grace, and journals `missed` with the gate reason.
     let fire_at = if let Some(raw) = req.when.as_deref() {
-        match parse_when(raw, now, now_local) {
-            Ok(t) => Some(t),
-            Err(e) => {
-                eprintln!("fno agent spawn: {e}");
-                return 2;
-            }
-        }
+        Some(parse_when(raw, now, now_local).map_err(|e| e.to_string())?)
     } else if let Some(raw) = req.every.as_deref() {
-        match parse_interval(raw) {
-            Ok(secs) => Some(now + chrono::Duration::seconds(secs)),
-            Err(e) => {
-                eprintln!("fno agent spawn: {e}");
-                return 2;
-            }
-        }
+        let secs = parse_interval(raw).map_err(|e| e.to_string())?;
+        Some(now + chrono::Duration::seconds(secs))
     } else {
         None
     };
     let command = req.on.clone();
     if command.as_deref().is_some_and(str::is_empty) {
-        eprintln!("fno agent spawn: --on needs a command");
-        return 2;
+        return Err("--on needs a command".into());
     }
-    let name = name_flag.clone().or_else(|| args.get(name_index).cloned());
-    if name.as_deref().is_none_or(str::is_empty) {
-        eprintln!("fno agent spawn: a scheduled row still needs a <name> or --name");
-        return 2;
-    }
-    // --wait waits at the gate for a spawn that never starts; refuse it.
-    if args.iter().take(name_index).any(|a| a == "--wait") {
-        eprintln!("fno agent spawn: --wait never fires: it waits at the gate for a spawn that starts now, not one queued for later");
-        return 2;
-    }
+    Ok((grace_secs, fire_at, command))
+}
+
+/// The row-body fields the recorded argv carries, held out of
+/// run_front_door so both stay under the line budget.
+struct RowFields {
+    force: bool,
+    node: Option<String>,
+    cwd: PathBuf,
+    scheduler: Option<String>,
+    trigger: Trigger,
+}
+
+fn row_fields(
+    args: &[String],
+    name_index: usize,
+    req: &ScheduleRequest,
+    command: Option<String>,
+) -> RowFields {
     let force = args
         .iter()
         .take(name_index)
@@ -1026,36 +1013,78 @@ fn run_front_door(
     let trigger = if let Some(command) = command {
         Trigger::On { command }
     } else if let Some(raw) = req.every.as_deref() {
-        // Already validated above; the parse cannot fail here.
+        // Already validated by resolve_trigger; the parse cannot fail here.
         Trigger::Every {
             interval_secs: parse_interval(raw).unwrap_or(3600),
         }
     } else {
         Trigger::At
     };
-    let row = ScheduledSpawn {
-        id: String::new(),
-        fire_at_utc: fire_at,
-        trigger,
-        grace_secs,
+    RowFields {
         force,
         node,
-        argv: strip_schedule_flags(args),
         cwd,
-        scheduler_session: scheduler.unwrap_or_default(),
+        scheduler,
+        trigger,
+    }
+}
+
+fn run_front_door(
+    home: &AgentsHome,
+    args: &[String],
+    req: ScheduleRequest,
+    name_index: usize,
+    name_flag: Option<String>,
+) -> i32 {
+    let json = args
+        .iter()
+        .take_while(|a| a.as_str() != "--argv")
+        .any(|a| a == "--json" || a == "-J");
+    if let Ok(exit) = run_list_cancel(home, &req, json) {
+        return exit;
+    }
+    let now = Utc::now();
+    let now_local = Local::now();
+    let (grace_secs, fire_at, command) = match resolve_trigger(&req, now, now_local) {
+        Ok(fields) => fields,
+        Err(message) => {
+            eprintln!("fno agent spawn: {message}");
+            return 2;
+        }
+    };
+    let name = name_flag.clone().or_else(|| args.get(name_index).cloned());
+    if name.as_deref().is_none_or(str::is_empty) {
+        eprintln!("fno agent spawn: a scheduled row still needs a <name> or --name");
+        return 2;
+    }
+    // --wait waits at the gate for a spawn that never starts; refuse it.
+    if args.iter().take(name_index).any(|a| a == "--wait") {
+        eprintln!("fno agent spawn: --wait never fires: it waits at the gate for a spawn that starts now, not one queued for later");
+        return 2;
+    }
+    let fields = row_fields(args, name_index, &req, command);
+    let mut row = ScheduledSpawn {
+        id: String::new(),
+        fire_at_utc: fire_at,
+        trigger: fields.trigger,
+        grace_secs,
+        force: fields.force,
+        node: fields.node,
+        argv: strip_schedule_flags(args),
+        cwd: fields.cwd,
+        scheduler_session: fields.scheduler.unwrap_or_default(),
         state: RowState::Pending,
         last_gate_reading: None,
         created_at_utc: now,
         last_attempt_utc: None,
     };
-    let mut row = row;
     if let Err(e) = insert(home, &mut row) {
         eprintln!("fno agent spawn: {e}");
         return 2;
     }
     let fire_desc = row
         .fire_at_utc
-        .map(|t| render_dual(t))
+        .map(render_dual)
         .unwrap_or_else(|| "--on polls each tick".to_string());
     let note = row
         .fire_at_utc
@@ -1273,7 +1302,7 @@ mod tests {
 
         let listed = list(&home).unwrap();
         assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0], row);
+        assert_eq!(listed.first(), Some(&row));
 
         let due_rows = due(&home, now_utc()).unwrap();
         assert!(due_rows.is_empty());
@@ -1320,7 +1349,7 @@ mod tests {
         assert!(req.trigger);
         assert!(req.grace.is_none());
         assert_eq!(name_flag, None);
-        assert_eq!(args[name_index], "w1");
+        assert_eq!(args.get(name_index).map(String::as_str), Some("w1"));
         let stripped = strip_schedule_flags(&args);
         // The schedule flags and the force bit drop; the harness passthrough
         // after --argv keeps even a --when spelling verbatim.
