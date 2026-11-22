@@ -108,6 +108,13 @@ impl Core {
         pane: u64,
         argv: Option<Vec<String>>,
     ) -> Option<super::pasted_images::PaneSession> {
+        // However the pane was bound, agent view shows whatever was picked.
+        if argv
+            .as_deref()
+            .is_some_and(crate::pane_argv::shows_agent_view)
+        {
+            return None;
+        }
         let row = match crate::thread_viewer::row_for_pane(&self.portals, pane, &self.agents) {
             Some(row) => {
                 if self.portal_seat_refusal(pane, &self.agents, argv).is_some() {

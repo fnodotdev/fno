@@ -795,7 +795,8 @@ impl Pane {
             line,
             at,
             hyperlink,
-            composing: self.in_draft(first, last),
+            // Only a placeholder asks, and the walk is too dear for each hover.
+            composing: text.contains("[Image ") && self.in_draft(first, last),
         })
     }
 
@@ -814,18 +815,16 @@ impl Pane {
         if to - from >= i32::from(self.rows) {
             return false;
         }
-        let lead = |row: i32| {
-            self.logical_line(Line(row))
-                .map(|(text, _)| text.trim_start().to_string())
-        };
-        let Some(pointed) = lead(first) else {
+        let line = |row: i32| self.logical_line(Line(row)).map(|(text, _)| text);
+        let bar = |text: &str| text.trim_start().starts_with('┃');
+        let Some(pointed) = line(first) else {
             return false;
         };
-        let barred = pointed.starts_with('┃');
+        let barred = bar(&pointed);
+        // An edge starts at column 0. A draft indents what is typed or pasted.
         !(from..=to).any(|row| {
-            lead(row).is_none_or(|text| {
-                DRAFT_EDGES.iter().any(|edge| text.starts_with(edge))
-                    || (barred && !text.starts_with('┃'))
+            line(row).is_none_or(|text| {
+                DRAFT_EDGES.iter().any(|edge| text.starts_with(edge)) || (barred && !bar(&text))
             })
         })
     }

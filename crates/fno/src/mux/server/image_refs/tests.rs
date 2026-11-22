@@ -461,6 +461,13 @@ fn a_pasted_placeholder_opens_only_its_own_turns_image() {
         ),
         "a draft of many lines is still the composer"
     );
+    assert!(
+        matches!(
+            width(&codex, "› [Image #1]\r\n  › pasted\r\n  three"),
+            Err(ImageError::NotSent { .. })
+        ),
+        "an indented prompt glyph is draft text, not an edge"
+    );
     const OTHER: &str = "ffffffff-1111-4222-8333-944455556666";
     let other = agent(Harness::Claude, OTHER);
     w.put(&format!("tmp/slug/{OTHER}/images/7.png"), &png(21, 7));
@@ -491,6 +498,9 @@ fn a_pane_answers_only_for_the_session_its_child_shows() {
     };
     core.agents = vec![row("aaaa1111", SESSION), row("bbbb2222", PER_MESSAGE)];
     core.attached.insert("aaaa1111".into(), 5);
+    let mut hosted = row("cccc3333", "hosted");
+    hosted.mux = Some((core.session_name.clone(), 6));
+    core.agents.push(hosted);
     let shown = |pane: u64, argv: &[&str]| {
         let argv = argv.iter().map(|arg| arg.to_string()).collect();
         core.pane_session_with(pane, Some(argv))
@@ -502,6 +512,8 @@ fn a_pane_answers_only_for_the_session_its_child_shows() {
         (5, &["claude", "attach", "bbbb2222"][..], Some(PER_MESSAGE)),
         (9, &["claude", "attach", "bbbb2222"][..], Some(PER_MESSAGE)),
         (9, &["/bin/zsh"][..], None),
+        (6, &["claude"][..], Some("hosted")),
+        (6, &["/opt/bin/claude", "agents"][..], None),
     ] {
         assert_eq!(shown(pane, argv).as_deref(), want, "pane {pane}: {argv:?}");
     }

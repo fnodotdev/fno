@@ -112,6 +112,16 @@ pub fn attaches(argv: &[String], id: &str) -> bool {
     argv.windows(2).any(|w| w[0] == "attach" && w[1] == id)
 }
 
+/// True when `claude` runs its agent view (`claude [flags] agents`), where
+/// the person picks the session and no registry row names it.
+pub fn shows_agent_view(argv: &[String]) -> bool {
+    let claude = Some(std::ffi::OsStr::new("claude"));
+    argv.iter()
+        .skip_while(|arg| std::path::Path::new(arg).file_name() != claude)
+        .skip(1)
+        .any(|arg| arg == "agents")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
