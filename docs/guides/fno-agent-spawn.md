@@ -155,7 +155,7 @@ After the birth, a placement that fails never changes the exit code. The last st
 fno mux thread w2 --portal new --split right --from portal 0
 ```
 
-`--portal new` opens the next free index. If N is not open, `--portal N` opens it. If N is open, the reach tunes it. A `--split DIR` finds the cell it halves in this order: the cell `--from` names, the focused pane of the tab `--tab` names, then the caller's own pane. A split with none of these refuses and names `--tab` and `--from`. A `--from` cell with no tab brings its own tab and workspace. `--from` takes `portal 0`, a worker name, or `current`. When the command runs inside a pane, it resolves `current` itself. Split right from portal 0, then down from portal 0, then down from portal 1: that is the 2x2.
+`--portal new` opens the next free index. If N is not open, `--portal N` opens it. If N is open, the reach tunes it. A `--split DIR` finds its cell in this order. The cell `--from` names is first. The focused pane of the `--tab` tab is second. The caller's own pane is last. A split with none of these refuses and names `--tab` and `--from`. A `--from` cell with no tab brings its own tab and workspace. `--from` takes `portal 0`, a worker name, or `current`. When the command runs inside a pane, it resolves `current` itself. Split right from portal 0, then down from portal 0, then down from portal 1: that is the 2x2.
 
 If the named portal already shows a live viewer, the reach tunes it. The portal keeps its geometry. The server says which flags it did not use, as in `portal 2 was open: it now shows w2; --split was not used`.
 

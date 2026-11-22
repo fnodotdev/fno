@@ -79,9 +79,8 @@ fno agent spawn --name lead-<epic> "<brief>" --effort high --model <your frontie
 What `pane` buys here is the ORG, not the role.
 
 The role itself rides `--substrate thread` for Claude: a Claude thread worker is persistent, attachable and resumable. Non-Claude thread spawns reject `--promote` because role support is Claude-only. For Claude, only the `headless` one-shot is refused, since it exits before it can lead. The retired `bg` spelling refuses with a redirect to `thread`.
-What a thread lead loses is its own pane as an anchor.
-On a thread the placement flags open a portal. The exact anchor `--at current` resolves from `FNO_PANE`, which a thread session does not have.
-So a thread lead seats teammates in fresh tabs instead of beside itself, and the org stops cohering around one screen.
+
+What a thread lead loses is its own pane as an anchor. On a thread the placement flags open a portal. The exact anchor `--at current` resolves from `FNO_PANE`, which a thread session does not have. So a thread lead seats teammates in fresh tabs instead of beside itself, and the org stops cohering around one screen.
 
 Promote a thread lead for a pass, which steps down before layout matters. Promote a pane lead for a lead that runs an org.
 
@@ -176,7 +175,9 @@ It refuses with a named exit code when it cannot, and [step 4](#4-kick-off) read
 
 **An org places panes, and that applies to both shapes.**
 `--workspace <name>` (short `-s`) sends a new pane into a named mux workspace, and `--split left|right|up|down` tiles it there.
+
 On `thread` both open a portal. On `headless` both refuse, because it has no mux geometry.
+
 The consequence splits cleanly by substrate.
 A pass dispatching on `thread` or `headless` carries its mission in the graph and the spawn provenance, and names no placement flag at all.
 Which placement flag depends on whether you are already in the target workspace, and the two cases split by shape.
