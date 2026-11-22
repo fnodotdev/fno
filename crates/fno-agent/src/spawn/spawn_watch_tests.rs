@@ -220,11 +220,12 @@ fn a_late_read_follow_up_names_both_times_and_owns_the_wrong_notice() {
         (0, "accepted-new-turn".to_string(), String::new())
     };
     run_pass_with(&home, t0 + 6 * 60_000, &mut deliver, &no_roster).unwrap();
-    assert_eq!(notices.len(), 1, "{notices:?}");
     assert!(
-        notices[0].contains("first turn 6s after the call, before the 5m stuck notice"),
-        "{}",
-        notices[0]
+        matches!(
+            notices.as_slice(),
+            [n] if n.contains("first turn 6s after the call, before the 5m stuck notice")
+        ),
+        "{notices:?}"
     );
 }
 
