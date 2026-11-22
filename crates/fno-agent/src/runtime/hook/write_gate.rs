@@ -1292,10 +1292,9 @@ fn git_root_of(path: &Path) -> Option<String> {
         if let Some(root) = memo.get(&dir) {
             return root.clone();
         }
-        let out = std::process::Command::new("git")
+        let root = std::process::Command::new("git")
             .args(["-C", &dir.to_string_lossy(), "rev-parse", "--show-toplevel"])
-            .output();
-        let root = out
+            .output()
             .ok()
             .filter(|o| o.status.success())
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
