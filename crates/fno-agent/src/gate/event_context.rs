@@ -105,6 +105,70 @@ fn observed_model(agent: &str, path: Option<&Path>) -> Value {
     }
 }
 
+/// Flags that make a diff command a size probe, not a read of the change.
+const DIFF_STAT_ONLY: [&str; 7] = [
+    "--stat",
+    "--name-only",
+    "--name-status",
+    "--numstat",
+    "--shortstat",
+    "--summary",
+    "--quiet",
+];
+
+/// True when one shell segment prints the change itself: `git diff`,
+/// `git show` or `gh pr diff` with no stat-only flag.
+fn segment_reads_diff(segment: &str) -> bool {
+    let words: Vec<&str> = segment.split_whitespace().collect();
+    let reads = words
+        .windows(2)
+        .any(|w| w == ["git", "diff"] || w == ["git", "show"])
+        || words.windows(3).any(|w| w == ["gh", "pr", "diff"]);
+    reads && !words.iter().any(|w| DIFF_STAT_ONLY.contains(w))
+}
+
+fn command_segments(command: &str) -> impl Iterator<Item = &str> {
+    command.split(['\n', ';', '|', '&'])
+}
+
+/// Did the session read the diff after its last commit? A transcript that
+/// loaded the review skill and went straight to the emit has no such read.
+/// Only Claude transcripts are parsed; every other harness is `unobserved`.
+fn diff_read(agent: &str, path: Option<&Path>) -> Value {
+    if agent.as_harness() != Harness::Claude {
+        return json!({"kind":"unobserved"});
+    }
+    let Some(text) = path.and_then(|p| std::fs::read_to_string(p).ok()) else {
+        return json!({"kind":"unobserved"});
+    };
+    let (mut last_commit, mut last_read) = (None, None);
+    for (index, line) in text.lines().enumerate() {
+        let Ok(record) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let blocks = record["message"]["content"].as_array();
+        for block in blocks.into_iter().flatten() {
+            if block["type"] != "tool_use" || block["name"] != "Bash" {
+                continue;
+            }
+            let command = block["input"]["command"].as_str().unwrap_or("");
+            for segment in command_segments(command) {
+                if segment.contains("git commit") {
+                    last_commit = Some(index);
+                }
+                if segment_reads_diff(segment) {
+                    last_read = Some(index);
+                }
+            }
+        }
+    }
+    match (last_read, last_commit) {
+        (Some(read), Some(commit)) if read < commit => json!({"kind":"stale"}),
+        (Some(_), _) => json!({"kind":"read"}),
+        (None, _) => json!({"kind":"none"}),
+    }
+}
+
 fn parent_for(rows: &[crate::state::RegistryEntry], sid: &str, harness: &str) -> Option<String> {
     let handle = crate::identity::canonical_handle(sid);
     for row in rows {
@@ -157,6 +221,7 @@ fn event_context() -> Value {
         crate::spawn_context::AttesterWitness::EnvOnly => ("env_only", None),
         crate::spawn_context::AttesterWitness::Conflict(marker, ancestor, environment) => ("conflict", Some(format!("attester identity conflict on {marker}: process ancestry carries {}, the emitting environment carries {}", crate::client_commands::py_repr_str(&ancestor), crate::client_commands::py_repr_str(&environment)))),
     };
+    let mut diff_evidence = json!({"kind":"unobserved"});
     let observed = match (
         std::env::var("FNO_AGENT_HARNESS")
             .ok()
@@ -173,6 +238,7 @@ fn event_context() -> Value {
                 row: None,
             };
             let path = crate::session_truth::session_transcript(&session, &stores);
+            diff_evidence = diff_read(&agent, path.as_deref());
             observed_model(&agent, path.as_deref())
         }
         _ => json!({"kind":"no-transcript"}),
@@ -183,7 +249,7 @@ fn event_context() -> Value {
         None
     };
     let handle = session.as_deref().map(crate::identity::canonical_handle);
-    json!({"session_id":session,"handle":handle,"harness":harness,"model":model,"parent":parent,"attester_session_id":attester.unwrap_or_default(),"attester_witness":witness_name,"attester_conflict":conflict,"observed_model":observed})
+    json!({"session_id":session,"handle":handle,"harness":harness,"model":model,"parent":parent,"attester_session_id":attester.unwrap_or_default(),"attester_witness":witness_name,"attester_conflict":conflict,"observed_model":observed,"diff_read":diff_evidence})
 }
 
 pub(super) fn run(args: &[String]) -> i32 {
@@ -297,6 +363,48 @@ mod tests {
         assert_eq!(
             observed_model("opencode", None),
             json!({"kind":"not-file-backed"})
+        );
+    }
+
+    /// The PR 512 shape: the skill loads, a stat probe runs, the emit follows.
+    /// Only a read of the change after the last commit counts as evidence.
+    #[test]
+    fn diff_read_wants_the_change_itself_after_the_last_commit() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("session.jsonl");
+        let bash = |cmd: &str| {
+            json!({"type":"assistant","message":{"content":[
+                {"type":"tool_use","name":"Bash","input":{"command":cmd}}]}})
+            .to_string()
+        };
+        let kind = |cmds: &[&str]| {
+            let lines: Vec<String> = cmds.iter().map(|c| bash(c)).collect();
+            std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+            diff_read("claude", Some(&path))["kind"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(
+            kind(&[
+                "git commit -m x",
+                "git diff --stat origin/main...HEAD",
+                "emit-attestation.sh code-review"
+            ]),
+            "none"
+        );
+        assert_eq!(
+            kind(&["git commit -m x", "git diff origin/main...HEAD | head -400"]),
+            "read"
+        );
+        assert_eq!(
+            kind(&["git diff origin/main...HEAD", "git commit -m fix"]),
+            "stale"
+        );
+        assert_eq!(kind(&["gh pr diff 512 --name-only"]), "none");
+        assert_eq!(
+            diff_read("codex", Some(&path)),
+            json!({"kind":"unobserved"})
         );
     }
 }

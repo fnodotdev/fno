@@ -265,6 +265,26 @@ fn push(
     }
 }
 
+/// A clean inline `code-review` pass needs proof the lane read the change.
+/// The attester's own transcript carries no read of the diff after its last
+/// commit: the emit would attest a review that never happened.
+fn unread_diff_refusal(data: &Map<String, Value>, diff_read: &Value) -> Option<String> {
+    let text = |key| data.get(key).and_then(Value::as_str).unwrap_or_default();
+    let inline_clean = text("reviewer") == "code-review"
+        && text("verdict") == "pass"
+        && text("execution_context") != "fork";
+    let kind = diff_read["kind"].as_str().unwrap_or("unobserved");
+    if !inline_clean || !matches!(kind, "none" | "stale") {
+        return None;
+    }
+    let why = if kind == "none" {
+        "this session's transcript shows no read of the diff"
+    } else {
+        "this session's last diff read came before its last commit"
+    };
+    Some(format!("a clean code-review pass needs the lane to read the diff at this head, and {why} (a --stat or --name-only probe does not count). Run `git diff origin/main...HEAD`, review it, then emit."))
+}
+
 pub(super) fn run(args: &[OsString], json_mode: bool) -> i32 {
     if args.iter().any(|arg| arg == "--help") {
         print!("{}", include_str!("event_emit_help.txt"));
@@ -341,6 +361,10 @@ pub(super) fn run(args: &[OsString], json_mode: bool) -> i32 {
         let supplied = supplied_string(data.get("attester_session_id"));
         if !supplied.is_empty() && supplied != resolved {
             eprintln!("error: attester_session_id supplied as '{supplied}' but this process resolves to '{resolved}'. Drop the field; the emitter stamps it. No event emitted.");
+            return 1;
+        }
+        if let Some(refusal) = unread_diff_refusal(&data, &ctx["diff_read"]) {
+            eprintln!("error: {refusal} No event emitted.");
             return 1;
         }
         data.insert("attester_session_id".into(), json!(resolved));
