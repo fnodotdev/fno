@@ -28,25 +28,30 @@ pub struct ProviderUse {
 /// The providers in `fno config accounts usage --json` that carry a
 /// reading. An `unknown` entry has no windows and is skipped.
 pub fn parse_usage(json: &str) -> Vec<ProviderUse> {
-    let Ok(Value::Object(map)) = serde_json::from_str::<Value>(json) else {
+    #[derive(serde::Deserialize)]
+    struct Window {
+        used_pct: Option<f64>,
+        resets_at: Option<f64>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Entry {
+        #[serde(default)]
+        windows: Vec<Window>,
+    }
+    let Ok(map) = serde_json::from_str::<std::collections::BTreeMap<String, Value>>(json) else {
         return Vec::new();
     };
     let mut out: Vec<ProviderUse> = map
-        .iter()
+        .into_iter()
         .filter_map(|(name, v)| {
-            let (used_pct, resets_at) = v
-                .get("windows")?
-                .as_array()?
+            let entry: Entry = serde_json::from_value(v).ok()?;
+            let (used_pct, resets_at) = entry
+                .windows
                 .iter()
-                .filter_map(|w| {
-                    Some((
-                        w.get("used_pct")?.as_f64()?,
-                        w.get("resets_at").and_then(Value::as_f64),
-                    ))
-                })
+                .filter_map(|w| Some((w.used_pct?, w.resets_at)))
                 .max_by(|a, b| a.0.total_cmp(&b.0))?;
             Some(ProviderUse {
-                name: name.clone(),
+                name,
                 used_pct,
                 resets_at,
             })
