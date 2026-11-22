@@ -330,6 +330,8 @@ pub struct Root {
     pub(super) rename: Option<mux_modes::Rename>,
     /// The focused agent's row menu (prefix+P).
     pub(super) row_menu: Option<mux_modes::RowMenu>,
+    /// The shot paints the back-to-live pill with no scrolled frame behind it.
+    shot_scrolled: bool,
     /// The Peek reply on screen: the agent and its recent transcript.
     pub(super) peek: Option<(String, Vec<String>)>,
     /// The launch composer: retained state, open flag, id mint, and the
@@ -502,6 +504,7 @@ impl Root {
             scroll_mode: None,
             rename: None,
             row_menu: None,
+            shot_scrolled: false,
             peek: None,
             launch: launch::Panel::default(),
             settings: None,
@@ -2072,9 +2075,40 @@ impl Root {
 
     /// Whether the focused pane shows history, from its newest frame.
     fn focus_scrolled(&self) -> bool {
-        self.frames
-            .get(&self.layout.focus)
-            .is_some_and(|f| f.scroll_offset > 0)
+        self.shot_scrolled
+            || self
+                .frames
+                .get(&self.layout.focus)
+                .is_some_and(|f| f.scroll_offset > 0)
+    }
+
+    /// `--shot-ui`: open one overlay the way its click opens it.
+    pub(super) fn shot_ui(&mut self, ui: crate::UiShot, window: &Window, cx: &mut Context<Self>) {
+        match ui {
+            crate::UiShot::RowMenu => {
+                let name = self.layout.agents.first().map(|a| a.name.clone());
+                if let Some(name) = name {
+                    let at = gpui::point(gpui::px(150.0), gpui::px(150.0));
+                    self.agent_menu_open(&name, at, window, cx);
+                }
+            }
+            crate::UiShot::TabRename => {
+                let tab = self
+                    .layout
+                    .squads
+                    .iter()
+                    .find(|s| s.id == self.layout.active_squad)
+                    .and_then(|s| s.tabs.first())
+                    .map(|t| t.id);
+                if let Some(tab) = tab {
+                    self.rename_tab(tab, cx);
+                }
+            }
+            crate::UiShot::Scrolled => {
+                self.shot_scrolled = true;
+                cx.notify();
+            }
+        }
     }
 
     /// prefix+PgUp: hold the keyboard for the focused pane's shared scroll.

@@ -691,6 +691,9 @@ fn shot(args: &crate::cli_args::AppShotArgs) -> i32 {
     if let Some(tap) = args.tap.as_deref() {
         cmd.arg("--shot-tap").arg(tap);
     }
+    if let Some(ui) = args.ui.as_deref() {
+        cmd.arg("--shot-ui").arg(ui);
+    }
     match cmd.status() {
         Ok(s) => s.code().unwrap_or(1),
         Err(e) => {

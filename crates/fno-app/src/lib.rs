@@ -97,12 +97,22 @@ pub struct ShotOptions {
     /// mouse event before the capture: the proof frame for real
     /// interaction on the running demo window.
     pub tap: Option<(f64, f64)>,
+    /// The overlay the frame opens through its real code path.
+    pub ui: Option<UiShot>,
     /// Text the frame's composer holds.
     pub draft: Option<String>,
     /// Harness the start composer shows picked.
     pub harness: Option<String>,
     /// The Settings panel state the frame paints.
     pub settings: Option<SettingsShot>,
+}
+
+/// The `--shot-ui` states.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum UiShot {
+    RowMenu,
+    TabRename,
+    Scrolled,
 }
 
 /// The --shot-settings values.
@@ -265,6 +275,7 @@ pub fn run(opts: Options) -> i32 {
             empty_chat: shot.empty_chat,
             cmd: shot.cmd,
             tap: shot.tap,
+            ui: shot.ui,
             sheet: shot.sheet,
             draft: shot.draft,
             harness: shot.harness,
