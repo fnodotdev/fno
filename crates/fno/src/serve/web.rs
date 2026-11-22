@@ -759,6 +759,119 @@ pub(crate) fn caller_of(
     }
 }
 
+/// How much of the fold one request's answer may carry. invite_gate has
+/// already admitted the request; this decides the read side, whose routes
+/// serve whole boards a middleware could only refuse.
+enum ReadScope {
+    /// Every node: the local user, a token-only read with no invite list, or
+    /// any invite with scope `*`.
+    All,
+    /// Only nodes whose chain carries one of these invite scopes.
+    Scopes(Vec<String>),
+}
+
+impl ReadScope {
+    /// True when the request came from a viewer who needs a filtered fold.
+    fn is_scoped(&self) -> bool {
+        matches!(self, ReadScope::Scopes(_))
+    }
+
+    /// True when a node whose chain is `chain` sits inside the viewer's
+    /// invites. `chain_of` walks parents, so a scope on an epic covers the
+    /// epic's descendants.
+    fn covers(&self, chain: &[String]) -> bool {
+        match self {
+            ReadScope::All => true,
+            ReadScope::Scopes(scopes) => scopes.iter().any(|s| chain.iter().any(|n| n == s)),
+        }
+    }
+}
+
+/// The read scope of one request. A proxied caller with no login cannot
+/// exist past invite_gate, so the fallthrough there fails closed.
+fn read_scope(headers: &HeaderMap, st: &AppState) -> ReadScope {
+    let Some(invites) = st.invites.as_deref() else {
+        return ReadScope::All; // no invite list: token-only reads stay whole
+    };
+    let caller = caller_of(headers, st.writable);
+    // The user at their own machine owns every scope (decide's first rule).
+    if caller.loopback_bind && caller.loopback_host && caller.login.is_none() {
+        return ReadScope::All;
+    }
+    let login = caller
+        .login
+        .map(|l| l.trim().to_ascii_lowercase())
+        .filter(|l| !l.is_empty());
+    let Some(login) = login else {
+        return ReadScope::Scopes(Vec::new());
+    };
+    let mine = invites.iter().filter(|i| i.email == login);
+    if mine.clone().any(|i| i.scope == "*") {
+        return ReadScope::All;
+    }
+    ReadScope::Scopes(mine.map(|i| i.scope.clone()).collect())
+}
+
+/// 403 when a scoped viewer names a node outside their invites.
+fn scope_refusal(scope: &ReadScope, chain: &[String]) -> Option<Response> {
+    if scope.covers(chain) {
+        None
+    } else {
+        Some(plain_status(
+            StatusCode::FORBIDDEN,
+            "this invite does not cover that node",
+        ))
+    }
+}
+
+/// A scoped viewer's hq board: sections keyed by node keep the chain's rows,
+/// a row with no node drops out, and the fleet grid (hosts, seats, sessions:
+/// machine-wide, not node data) drops whole. The cache is untouched, so the
+/// owner's page still reads the whole fold.
+fn scope_hq_model(
+    mut model: serde_json::Value,
+    scope: &ReadScope,
+    rows: &[crate::node_row::NodeRow],
+) -> serde_json::Value {
+    model["machines"] = serde_json::json!([]);
+    let Some(waiting) = model.get_mut("waiting") else {
+        return model;
+    };
+    for key in ["questions", "prs", "next"] {
+        let Some(items) = waiting
+            .get_mut(key)
+            .and_then(serde_json::Value::as_array_mut)
+        else {
+            continue;
+        };
+        items.retain(|item| {
+            // prs and questions key the node `node`; next rows key it `id`.
+            let node = item
+                .get("node")
+                .or_else(|| item.get("id"))
+                .and_then(serde_json::Value::as_str);
+            match node {
+                Some(n) => scope.covers(&crate::web_answer::chain_of(rows, Some(n))),
+                None => false,
+            }
+        });
+    }
+    model
+}
+
+/// Keep only the rows a scoped viewer's invites cover, decided against the
+/// full row set so parent walks still resolve. The board folds lanes,
+/// offboard and stats from these rows alone.
+fn filter_scoped_rows(inputs: &mut backlog_model::Inputs, scope: &ReadScope) {
+    let keep: Vec<bool> = inputs
+        .rows
+        .iter()
+        .map(|row| scope.covers(&crate::web_answer::chain_of(&inputs.rows, row.id())))
+        .collect();
+    let mut keep = keep.into_iter();
+    inputs.rows.retain(|_| keep.next().unwrap_or(false));
+}
+
 // ---------------------------------------------------------------------------
 // Upstream: attach as an observer, forward frames, reconnect on EOF
 // ---------------------------------------------------------------------------
@@ -1104,10 +1217,15 @@ async fn team(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Response 
 }
 
 /// `GET /hq/model.json`: the first read waits; later reads answer from the cache.
-async fn hq_model(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Response {
+async fn hq_model(
+    Query(q): Query<WsQuery>,
+    State(st): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
     if !token_ok(q.t.as_deref(), &st.token) {
         return unauthorized();
     }
+    let scope = read_scope(&headers, &st);
     st.hq.first.get_or_init(|| refresh_hq(st.clone())).await;
     if st.hq.claim_refresh().await {
         tokio::spawn(refresh_hq(st.clone()));
@@ -1115,15 +1233,30 @@ async fn hq_model(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Respo
     let mut model = st.hq.model().await;
     // A read-only bridge shows the question drawer with no answer controls.
     model["writable"] = serde_json::json!(st.writable);
+    if scope.is_scoped() {
+        let rows = model_inputs(&st).await;
+        model = scope_hq_model(model, &scope, &rows.rows);
+    }
     json_response(&model)
 }
 
 /// `GET /hq/decisions.json`: every recorded decision plus the ids the
 /// user marked reviewed. Read-only: a retract or an overrule needs a real
 /// tty, so the page writes nothing.
-async fn hq_decisions(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Response {
+async fn hq_decisions(
+    Query(q): Query<WsQuery>,
+    State(st): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
     if !token_ok(q.t.as_deref(), &st.token) {
         return unauthorized();
+    }
+    // Decision rows name nodes across the machine; no per-node cut exists.
+    if read_scope(&headers, &st).is_scoped() {
+        return plain_status(
+            StatusCode::FORBIDDEN,
+            "scoped invites read a node-scoped fold; the decision log is machine-wide",
+        );
     }
     let read = tokio::task::spawn_blocking(|| {
         crate::decisions_overlay::load().map(|rows| {
@@ -1161,6 +1294,7 @@ async fn refresh_hq(st: AppState) {
 async fn backlog_model(
     Query(raw): Query<Vec<(String, String)>>,
     State(st): State<AppState>,
+    headers: HeaderMap,
 ) -> Response {
     if !token_ok(
         raw.iter().find(|(k, _)| k == "t").map(|(_, v)| v.as_str()),
@@ -1168,6 +1302,7 @@ async fn backlog_model(
     ) {
         return unauthorized();
     }
+    let scope = read_scope(&headers, &st);
     let q = match backlog_model::Query::from_pairs(&raw) {
         Ok(q) => q,
         Err(e) => return plain_status(StatusCode::BAD_REQUEST, &e.to_string()),
