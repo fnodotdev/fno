@@ -4,9 +4,11 @@
 //!
 //! The staged build must pass four proofs before it is offered: the sha256
 //! sidecar matches the tarball, `codesign --verify --deep --strict` passes,
-//! the bundle's Team ID equals the running bundle's (when the running one
-//! has a Team ID), and the staged binary names the release version. A dev
-//! run outside a `.app` never updates.
+//! the bundle's Team ID equals the running bundle's, and the staged binary
+//! names the release version. The module fails closed on the Team ID: a
+//! running bundle with no Team ID (ad hoc signed or unsigned) never checks
+//! for updates and never installs one, and neither does a dev run outside a
+//! `.app`.
 //!
 //! State lives under `~/Library/Application Support/fno-app/update/`: one
 //! directory per staged version, and `pending-notes.json`, which carries a
@@ -228,6 +230,9 @@ pub fn bundled() -> bool {
 /// Blocking: call it off the UI thread. `Ok(None)` means up to date.
 pub fn check(running: &str) -> Result<Option<Ready>, UpdateError> {
     let bundle = running_bundle().ok_or("not running from an app bundle")?;
+    if team_id(&bundle).is_none() {
+        return Ok(None);
+    }
     let root = update_dir().ok_or("no home directory")?;
     let Some((version, notes)) = newest_stable(running)? else {
         prune(&root, None);
@@ -302,10 +307,9 @@ fn stage(bundle: &Path, version: &str, work: &Path) -> Result<(), UpdateError> {
     if !signed.success() {
         return Err("the staged bundle failed codesign verification".into());
     }
-    if let Some(mine) = team_id(bundle) {
-        if team_id(&app).as_deref() != Some(mine.as_str()) {
-            return Err(format!("the staged bundle is not signed by team {mine}").into());
-        }
+    let mine = team_id(bundle).ok_or("the running app has no Team ID")?;
+    if team_id(&app).as_deref() != Some(mine.as_str()) {
+        return Err(format!("the staged bundle is not signed by team {mine}").into());
     }
     let said = Command::new(app.join("Contents/MacOS/fno-app"))
         .arg("--version")
