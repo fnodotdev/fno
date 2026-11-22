@@ -513,6 +513,15 @@ async fn run_daemon_command(
     args: &[String],
     mut spawn_timing: Option<fno_agent::spawn_seam::SpawnTiming>,
 ) -> i32 {
+    // The schedule arm answers before the strict parse: a trigger flag or
+    // an action like --list-scheduled carries its own grammar, and the
+    // strict parse would demand a spawn name no such request carries.
+    if command == "spawn" {
+        let home = AgentsHome::from_env();
+        if let Some(code) = fno_agent::spawn_schedule::front_door(&home, &args[1..]) {
+            return code;
+        }
+    }
     let flags = RenderFlags::read(args);
     let (method, mut params) = match build_request(command, &args[1..]) {
         Ok(v) => v,
