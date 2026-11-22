@@ -3050,6 +3050,10 @@ crates/fno-agent/src/eval/friction.rs	clippy::too_many_lines	fn record_with(
 crates/fno-agent/src/eval/golden_drafter.rs	clippy::indexing_slicing	assert_eq!(out["kept"], 0);
 crates/fno-agent/src/eval/golden_drafter.rs	clippy::indexing_slicing	assert_eq!(out["kept"], 1, "{out}");
 crates/fno-agent/src/eval/golden_drafter.rs	clippy::let_underscore_must_use	let _ = std::fs::OpenOptions::new()
+crates/fno-agent/src/eval/golden_drafter.rs	clippy::let_underscore_must_use	let _ = std::fs::remove_file(&bank_path);
+crates/fno-agent/src/eval/golden_drafter.rs	clippy::let_underscore_must_use	let _ = std::fs::remove_file(&fix_path);
+crates/fno-agent/src/eval/golden_drafter.rs	clippy::let_underscore_must_use	let _ = std::fs::remove_file(dir.join("pending").join("bank").join(name));
+crates/fno-agent/src/eval/golden_drafter.rs	clippy::let_underscore_must_use	let _ = std::fs::remove_file(dir.join("pending").join("fixtures").join(name));
 crates/fno-agent/src/eval/golden_drafter.rs	clippy::let_underscore_must_use	let _ = std::fs::remove_file(draft);
 crates/fno-agent/src/eval/honesty_sweep.rs	clippy::disallowed_methods	.output()
 crates/fno-agent/src/eval/honesty_sweep.rs	clippy::indexing_slicing	let flag = args[i].as_str();
