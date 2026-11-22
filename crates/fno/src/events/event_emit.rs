@@ -584,8 +584,9 @@ pub(super) fn run(args: &[OsString], json_mode: bool) -> i32 {
         }
         let branch = text_of(&data, "branch");
         let scope = files_in_scope(&branch);
+        let diff_read = ctx.get("diff_read").unwrap_or(&Value::Null);
         if let Some(refusal) =
-            unread_diff_refusal(&data, &ctx["diff_read"], scope.as_deref(), &evidence_fresh)
+            unread_diff_refusal(&data, diff_read, scope.as_deref(), &evidence_fresh)
         {
             eprintln!("error: {refusal} No event emitted.");
             return 1;
