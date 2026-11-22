@@ -131,30 +131,34 @@ fn is_default_root(root: &Path) -> bool {
 }
 
 /// One class home: the env carrier, then `[paths]` config, then the platform
-/// default. Mirrors `paths_cli::class_home` in fno-agent, without a spawn.
+/// default. Mirrors `paths_cli::class_home` in fno-agent, without a spawn: a
+/// pin expands `~` and resolves links, a config value also expands variables,
+/// and a config value with a glob is no answer.
 fn class_home(env_key: &str, config_key: &str, default: fn(&Path) -> PathBuf) -> PathBuf {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let user = std::env::var_os("HOME")
         .filter(|v| !v.is_empty())
         .map_or_else(|| PathBuf::from("/"), PathBuf::from);
-    let pinned = crate::digest_overlay::non_empty_env_os(env_key)
-        .and_then(|v| v.into_string().ok())
-        .or_else(|| crate::digest_overlay::config_str(&cwd, "paths", config_key));
-    let Some(raw) = pinned else {
-        return default(&user);
-    };
-    let raw = raw.trim_end_matches('/');
-    let rest = ["~/", "$HOME/", "${HOME}/"]
-        .iter()
-        .find_map(|prefix| raw.strip_prefix(prefix));
-    match rest {
-        Some(rest) => user.join(rest),
-        None if raw == "~" => user,
-        None => cwd.join(raw),
+    if let Some(pin) = crate::digest_overlay::non_empty_env_os(env_key) {
+        let pin = crate::config_doctor::expanduser(&pin.to_string_lossy());
+        return crate::config_doctor::resolve(Path::new(&pin));
+    }
+    match crate::digest_overlay::config_str(&cwd, "paths", config_key) {
+        Some(raw) if !raw.contains(['*', '?', '[']) => {
+            let raw = crate::config_doctor::expandvars(raw.trim_end_matches('/'));
+            cwd.join(crate::config_doctor::expanduser(&raw))
+        }
+        _ => default(&user),
     }
 }
 
 fn default_cache_home(user: &Path) -> PathBuf {
+    if cfg!(windows) {
+        return crate::digest_overlay::non_empty_env_os("LOCALAPPDATA")
+            .map_or_else(|| user.to_path_buf(), PathBuf::from)
+            .join("fno")
+            .join("cache");
+    }
     if cfg!(target_os = "macos") {
         return user.join("Library").join("Caches").join("fno");
     }
