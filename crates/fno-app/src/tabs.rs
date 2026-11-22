@@ -141,6 +141,12 @@ fn tab(
         .justify_center()
         .max_w(px(200.0))
         .cursor_pointer()
+        .on_mouse_down(
+            gpui::MouseButton::Right,
+            cx.listener(move |root, ev: &gpui::MouseDownEvent, _, cx| {
+                root.tab_menu_open(tab_id, ev.position, cx)
+            }),
+        )
         .text_color(rgb(if t.active { p.fg } else { p.muted }))
         .hover(move |s| s.text_color(rgb(p.fg)))
         .on_click(cx.listener(move |root, ev: &gpui::ClickEvent, _, cx| {

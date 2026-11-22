@@ -1070,6 +1070,7 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
                 .and_then(|h| h.chars().next())
                 .map(|c| c.to_uppercase().to_string());
             let lead = lead_cell(harness_initial, glyph, glyph_color, adv, &p);
+            let agent_name = card.as_ref().map(|_| label.clone());
             let mut item = ui::row(i, cursor, &p).w(px(WIDTH)).child(lead);
             let weight = if blocked || cursor {
                 FontWeight::SEMIBOLD
@@ -1084,6 +1085,14 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
                 }
                 None => plain_cells(item, &label, &detail, mark, &p, adv),
             };
+            if let Some(name) = agent_name {
+                item = item.on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |root, ev: &gpui::MouseDownEvent, window, cx| {
+                        root.agent_menu_open(&name, ev.position, window, cx)
+                    }),
+                );
+            }
             if let Some(action) = action {
                 // On click: a press that leaves the row before release
                 // does nothing. A click is the user's own pick, so the
