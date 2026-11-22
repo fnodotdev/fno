@@ -131,9 +131,8 @@ fn stale_action(row: &Value, apply: bool) -> StaleAction {
 }
 
 enum QuestionOutcome {
+    /// The question's number, or `queued` while the primary is away.
     Filed(String),
-    /// The primary is away: the ask waits in the outbox for its number.
-    Queued,
     AlreadyOpen,
     Refused(String),
 }
@@ -184,7 +183,7 @@ fn file_stale_question(
     let answer = run_intake(&request, &home);
     match answer.qid {
         Some(qid) if answer.exit_code == 0 => QuestionOutcome::Filed(qid),
-        None if answer.exit_code == 0 => QuestionOutcome::Queued,
+        None if answer.exit_code == 0 => QuestionOutcome::Filed("queued".into()),
         _ => QuestionOutcome::Refused(answer.lines.join("; ")),
     }
 }
@@ -288,10 +287,6 @@ pub(crate) fn upkeep_pass(apply: bool) -> Result<Value, UpkeepError> {
                 QuestionOutcome::Filed(qid) => {
                     questioned += 1;
                     action = format!("question:{qid}");
-                }
-                QuestionOutcome::Queued => {
-                    questioned += 1;
-                    action = "question:queued".into();
                 }
                 QuestionOutcome::AlreadyOpen => action = "question:open".into(),
                 QuestionOutcome::Refused(e) => action = format!("question refused: {e}"),

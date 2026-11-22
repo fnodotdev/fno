@@ -87,8 +87,8 @@ fn an_unreachable_primary_queues_with_no_id_and_the_next_beat_records_it() {
     assert_eq!(drain_at(&db, Some(&primary.remote), "h").unwrap(), 1);
     let (asked, _) = crate::question_intake::question_rows(&index);
     let row = asked.get("D1").expect("recorded under its number");
-    assert_eq!(row["data"]["question_id"], json!("D1"));
-    assert_eq!(row["data"]["trace"]["span_id"], json!("D1"));
+    assert_eq!(row.pointer("/data/question_id"), Some(&json!("D1")));
+    assert_eq!(row.pointer("/data/trace/span_id"), Some(&json!("D1")));
     assert!(queued_questions(&db).is_empty());
     assert_eq!(drain_at(&db, Some(&primary.remote), "h").unwrap(), 0);
 }

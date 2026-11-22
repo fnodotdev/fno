@@ -1116,8 +1116,8 @@ decision index. Run `fno backlog decide-reindex` before retrying."
             return 1;
         }
     };
-    if let Some(id) = &decision_id {
-        data["decision_id"] = json!(id);
+    if let (Some(map), Some(id)) = (data.as_object_mut(), &decision_id) {
+        map.insert("decision_id".into(), json!(id));
     }
     if let Some(q) = &question_hash {
         data["question_id"] = json!(q);

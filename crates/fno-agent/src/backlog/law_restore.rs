@@ -262,7 +262,8 @@ mod tests {
 
         // Once restored, the old id reads superseded by a restore.
         let mut restored = data.clone();
-        restored["decision_id"] = json!("D7");
+        let map = restored.as_object_mut().unwrap();
+        map.insert("decision_id".into(), json!("D7"));
         restored["_event_type"] = json!("operator_decision");
         restored["ts"] = json!("2026-09-03T00:00:00Z");
         rows.push(restored.clone());

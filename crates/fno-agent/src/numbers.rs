@@ -1388,7 +1388,11 @@ mod tests {
     #[test]
     fn mint_now_reads_none_when_the_store_cannot_open() {
         let dir = tempfile::tempdir().unwrap();
-        let graph = dir.path().join("missing-dir").join("graph.db");
+        // The open creates a missing dir, so only a file in the way refuses it.
+        let blocker = dir.path().join("a-file");
+        std::fs::write(&blocker, "").unwrap();
+        let graph = blocker.join("graph.db");
+        assert!(open_write_at(&graph).is_err());
         assert_eq!(mint_now_at(&graph, "n:x-aaaa", None, "h"), None);
     }
 

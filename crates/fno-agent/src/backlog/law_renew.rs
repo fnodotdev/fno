@@ -98,8 +98,8 @@ pub fn run_renew(argv: &[String]) -> i32 {
         Ok(key) => key,
         Err(error) => return door_refuse(&error.to_string()),
     };
-    if let Some(id) = &minted {
-        data["decision_id"] = json!(id);
+    if let (Some(map), Some(id)) = (data.as_object_mut(), &minted) {
+        map.insert("decision_id".into(), json!(id));
     }
     let envelope =
         json!({"ts": now_iso(), "type": "operator_decision", "source": "target", "data": data});
