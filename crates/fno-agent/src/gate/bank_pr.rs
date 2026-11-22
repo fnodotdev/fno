@@ -316,6 +316,11 @@ mod tests {
     #[test]
     fn commit_edits_commits_once_and_skips_an_empty_retry() {
         let (_dir, work) = scratch();
+        // commit_edits commits through the production run(), which inherits
+        // the process identity; CI runners have none, and worktrees share
+        // the scratch repo's config.
+        git(&work, &["config", "user.name", "t"]);
+        git(&work, &["config", "user.email", "t@t"]);
         let tree = work.parent().unwrap().join("push-tree");
         git(
             &work,
