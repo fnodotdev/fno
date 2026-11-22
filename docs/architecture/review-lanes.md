@@ -431,11 +431,7 @@ The harness pins one body where it once held two in parity.
 
 ## Diff-read evidence at emit
 
-`fno doctor event emit -t review_attestation` refuses a clean inline `code-review` pass when the attesting Claude session's transcript shows no read of the change after its last commit.
-A read is `git diff`, `git show` or `gh pr diff` without `--stat`, `--name-only` or another size-only flag.
-A finder subagent call counts as a read, because the subagent reads the diff in its own transcript.
-A `fork` execution context, a non-Claude harness and an unreadable transcript stay unobserved and pass.
-The check catches a lane that loaded the skill and emitted with no read. It cannot catch a session that lies about its execution context.
+`fno doctor event emit -t review_attestation` refuses a clean inline `code-review` pass when the attesting Claude session's transcript shows no read of the change after its last commit. A read is `git diff`, `git show` or `gh pr diff` without `--stat`, `--name-only` or another size-only flag. A finder subagent call counts as a read, because the subagent reads the diff in its own transcript. A `fork` execution context, a non-Claude harness and an unreadable transcript stay unobserved and pass. The check catches a lane that loaded the skill and emitted with no read. It cannot catch a session that lies about its execution context.
 
 ## Attestation origin: whose process rendered the verdict
 
