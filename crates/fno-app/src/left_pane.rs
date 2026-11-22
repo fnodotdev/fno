@@ -665,6 +665,9 @@ fn state_color(p: &Palette, s: LatticeState) -> u32 {
     }
 }
 
+/// The mark a pinned agent's row carries after its name.
+const PIN_MARK: &str = "↑";
+
 /// An agent row's cells: the name column, the fact columns every agent row
 /// shares, and how long ago it last did anything.
 fn agent_cells(
@@ -701,10 +704,19 @@ fn agent_cells(
             .w(adv * name_w as f32 + small)
             .flex_none()
             .overflow_hidden()
+            .flex()
+            .flex_row()
             .child(
                 ui::role(div(), ui::Role::Name, p)
                     .font_weight(weight)
-                    .child(ui::cut(&label, name_w)),
+                    .child(ui::cut(
+                        &label,
+                        name_w.saturating_sub(2 * usize::from(card.pinned)),
+                    )),
+            )
+            .children(
+                card.pinned
+                    .then(|| ui::text(PIN_MARK, ui::Role::Fact, p).pl(small)),
             ),
     )
     .child(line)
@@ -773,12 +785,12 @@ fn agent_row(
     name: (String, usize, FontWeight),
     badge: Option<usize>,
     grid: &Grid,
+    p: &Palette,
 ) -> Stateful<Div> {
-    let p = grid.p;
     if badge.is_some() {
         card.activity = None;
     }
-    agent_cells(item, &card, identity, name, &grid.cols, &p, grid.adv)
+    agent_cells(item, &card, identity, name, &grid.cols, p, grid.adv)
         .relative()
         .children(badge.map(|n| {
             div()
@@ -1068,6 +1080,30 @@ fn header_row(
     )
 }
 
+/// An item row's leading cell. Shape carries the state: a triangle for
+/// blocked, a circle for work. A question leads with a diamond, never the `?`
+/// an unmeasured agent wears, so none leans on color. An agent row leads with
+/// its harness mark (the harness word's initial) and the state glyph as a
+/// badge on its corner; every other row keeps the bare glyph.
+fn item_lead(
+    state: Option<LatticeState>,
+    question: bool,
+    agent_detail: Option<&String>,
+    adv: Pixels,
+    p: &Palette,
+) -> Div {
+    let (glyph, glyph_color) = match (state, question) {
+        (Some(s), _) => (lattice_glyph(s).0.to_string(), state_color(p, s)),
+        (None, true) => ("◆".to_string(), p.warn),
+        (None, false) => (String::new(), p.faint),
+    };
+    let harness_initial = agent_detail
+        .and_then(|d| d.split(" · ").next())
+        .and_then(|h| h.chars().next())
+        .map(|c| c.to_uppercase().to_string());
+    lead_cell(harness_initial, glyph, glyph_color, adv, p)
+}
+
 /// One sidebar row as an element.
 fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> Stateful<Div> {
     let (p, adv) = (grid.p, grid.adv);
@@ -1114,26 +1150,14 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
         } => {
             let cursor = mark == Mark::Cursor;
             let blocked = state == Some(LatticeState::Blocked);
-            // Shape carries the state: a triangle for blocked, a circle for
-            // work. A question leads with a diamond, never the `?` an
-            // unmeasured agent wears, so none leans on color.
-            let (glyph, glyph_color) = match (state, question) {
-                (Some(s), _) => (lattice_glyph(s).0.to_string(), state_color(&p, s)),
-                (None, true) => ("◆".to_string(), p.warn),
-                (None, false) => (String::new(), p.faint),
-            };
-            // An agent row leads with its harness mark (the harness
-            // word's initial) and the state glyph as a badge on its
-            // corner; every other row keeps the bare glyph.
-            let harness_initial = card
-                .as_ref()
-                .and_then(|_| detail.split(" · ").next())
-                .and_then(|h| h.chars().next())
-                .map(|c| c.to_uppercase().to_string());
-            let lead = lead_cell(harness_initial, glyph, glyph_color, adv, &p);
+            let lead = item_lead(state, question, card.is_some().then_some(&detail), adv, &p);
+            // Text on the needs fill takes the lifted levels, so tok and
+            // up read AA there.
+            let tinted = blocked && !cursor;
+            let row_p = if tinted { p.on_needs() } else { p };
             let mut item = ui::row(i, cursor, &p)
                 .w(px(WIDTH))
-                .when(blocked && !cursor, |d| d.bg(rgb(p.needs_fill())))
+                .when(tinted, |d| d.bg(rgb(p.needs_fill())))
                 .child(lead);
             let weight = if blocked || cursor {
                 FontWeight::SEMIBOLD
@@ -1144,7 +1168,7 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
                 Some(card) => {
                     let badge = grid.badges.get(i).copied().flatten();
                     let name = (label, grid.name_w, weight);
-                    agent_row(item, card, identity.as_deref(), name, badge, grid)
+                    agent_row(item, card, identity.as_deref(), name, badge, grid, &row_p)
                 }
                 None => plain_cells(item, &label, &detail, mark, &p, adv),
             };
@@ -1651,7 +1675,10 @@ mod tests {
             None,
             None,
         );
-        assert!(matches!(out.get(2), Some(Row::Item { label, .. }) if label == "beta"));
+        assert!(matches!(
+            out.get(2),
+            Some(Row::Item { label, card: Some(c), .. }) if label == "beta" && c.pinned
+        ));
         assert_eq!(out.get(3), Some(&Row::Note("shipped".into())));
         assert!(matches!(out.get(4), Some(Row::Item { label, .. }) if label == "alpha"));
     }

@@ -212,11 +212,24 @@ impl Palette {
         }
     }
 
-    /// The resting fill of a row that needs the user: the panel with a tenth
-    /// of the warn hue, so the row reads from across the pane. A test holds
-    /// the muted and faint text and the warn glyph readable on it.
+    /// The resting fill of a row that needs the user: the panel with a fifth
+    /// of the warn hue, strong enough to read on paper as well as on the
+    /// dark ground. Text on it takes [`Palette::on_needs`].
     pub fn needs_fill(&self) -> u32 {
-        mix(self.panel, self.warn, 0.10)
+        mix(self.panel, self.warn, 0.20)
+    }
+
+    /// The palette for text laid on [`Palette::needs_fill`]: the muted and
+    /// faint levels lifted toward `fg`, to `fg` itself where 12:1 is out of
+    /// reach, so the small facts hold up on the band even when a capture
+    /// brightens it.
+    pub fn on_needs(&self) -> Palette {
+        let fill = self.needs_fill();
+        Palette {
+            muted: mix_to_contrast(self.muted, self.fg, fill, 12.0),
+            faint: mix_to_contrast(self.faint, self.fg, fill, 12.0),
+            ..*self
+        }
     }
 
     /// A status glyph's color: blocked reads as an error, work in progress
@@ -305,17 +318,19 @@ mod tests {
     fn surfaces_step_secondary_reads_and_the_accent_is_the_ink() {
         for name in ["footnote-superscript", "footnote-paper"] {
             let p = Palette::from_theme(&Theme::from_name(name).0);
-            let surfaces = [
-                p.bg,
-                p.panel,
-                p.raised,
-                p.hover,
-                p.row_fill,
-                p.pressed,
-                p.needs_fill(),
-            ];
+            let surfaces = [p.bg, p.panel, p.raised, p.hover, p.row_fill, p.pressed];
             let c = contrast(p.warn, p.needs_fill());
             assert!(c >= 3.0, "{name}: warn glyph on the needs fill is {c:.2}:1");
+            let (on, fill) = (p.on_needs(), p.needs_fill());
+            for (label, c) in [("muted", on.muted), ("faint", on.faint)] {
+                let c = contrast(c, fill);
+                assert!(c >= 7.0, "{name}: {label} on the needs fill is {c:.2}:1");
+            }
+            let c = contrast(fill, p.bg);
+            assert!(
+                c >= 1.2,
+                "{name}: the needs fill steps only {c:.2}:1 off the ground"
+            );
             for s in surfaces {
                 let c = contrast(p.muted, s);
                 assert!(c >= 4.5, "{name}: muted on {s:06x} is {c:.2}:1");
