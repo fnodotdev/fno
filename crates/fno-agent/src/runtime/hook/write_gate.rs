@@ -1103,7 +1103,7 @@ fn content_targets_into(content: &str, shell: bool, out: &mut Vec<String>) {
     }
 }
 
-/// Interpreter write calls: each family pairs a write verb with its path
+/// Interpreter write calls: each family pairs a call with its path
 /// operand, so a mention or a read never produces a target and the judge
 /// downstream stays the only arbiter. Over a command the families only arm
 /// when the command runs a code interpreter, so text that merely carries a
@@ -1827,7 +1827,7 @@ mod tests {
     fn interpreter_write_calls_refuse_and_reads_and_regens_pass() {
         let root = repo_root();
         let judge = generated_judge(&root);
-        // Refuse arms: interpreter write calls pair the verb with the path
+        // Refuse arms: interpreter write calls pair the call with the path
         // operand, inline and through a heredoc body.
         for cmd in [
             "python3 -c \"open('docs/configuration-guide.md','w').write('x')\"",
