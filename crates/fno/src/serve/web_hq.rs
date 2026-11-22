@@ -146,8 +146,9 @@ impl Board {
     }
 
     /// Store the requests fold of one refresh. A failed requests read keeps
-    /// the last good rows, matching the fleet and question reads. Called
-    /// after record() so main's callers keep the five-argument shape.
+    /// the last good rows, matching the fleet and question reads. The caller
+    /// holds the board guard across record() and this, so readers never see
+    /// a fresh read_at beside the previous refresh's requests.
     pub fn record_requests(&mut self, requests: crate::requests_model::RequestsRead) {
         match requests {
             crate::requests_model::RequestsRead::Rows(rows) => {

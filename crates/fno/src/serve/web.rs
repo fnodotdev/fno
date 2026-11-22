@@ -1262,11 +1262,11 @@ async fn refresh_hq(st: AppState) {
     );
     let measured_at = chrono::Utc::now().timestamp().max(0) as u64;
     let agents = layout_agents(&st.snap).unwrap_or_default();
-    st.hq
-        .board()
-        .await
-        .record(fleet, questions, &inputs, measured_at, &agents);
-    st.hq.board().await.record_requests(requests);
+    // One guard across both writes: a reader must never see the fresh
+    // read_at beside the previous refresh's requests.
+    let mut board = st.hq.board().await;
+    board.record(fleet, questions, &inputs, measured_at, &agents);
+    board.record_requests(requests);
 }
 
 /// `GET /backlog/model.json`: the whole board as JSON behind the token.
