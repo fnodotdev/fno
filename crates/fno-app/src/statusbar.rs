@@ -86,8 +86,9 @@ pub fn read_usage() -> Option<Vec<ProviderUse>> {
         match child.try_wait().ok()? {
             Some(s) => break s,
             None if std::time::Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
+                if child.kill().is_ok() {
+                    let _reaped = child.wait();
+                }
                 return None;
             }
             None => std::thread::sleep(std::time::Duration::from_millis(100)),
