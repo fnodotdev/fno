@@ -3,10 +3,15 @@
 //! proxied request. That header proves a login only on a loopback bind: on a
 //! wide bind any client can send it, so a wide bind has no identity at all.
 //!
-//! `[[web.invites]]` rows (`email`, `scope`, `role`) say who may do what. The
-//! decision here is pure, so every refusal is a table test with no listener.
+//! `[[web.invites]]` rows (`email`, `scope`, `role`) say who may do what. They
+//! come only from the trusted file ([`crate::trusted_config`]), read again per
+//! request, so a revoke needs no restart and a served folder invites nobody.
+//! The decision here is pure, so every refusal is a table test with no listener.
 
-use std::path::Path;
+use crate::trusted_config::{Rows, TrustedFile, TrustedKey};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 /// Rank order is the grant order: a higher role does everything a lower one does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -55,33 +60,126 @@ fn refuse(code: u16, text: &str) -> Refusal {
     }
 }
 
-/// The `[[web.invites]]` rows from the same config order every mux reader
-/// uses. `None` when no row exists, so an install with no invites changes
-/// nothing. Some rows may be malformed: a row with a missing field or an
-/// unknown role is dropped and grants nothing, but its presence still turns
-/// the gate on.
-pub(crate) fn read_invites(cwd: &Path) -> Option<Vec<Invite>> {
-    let raw = crate::digest_overlay::resolve_config_key(cwd, &|path| {
-        let table = std::fs::read_to_string(path)
-            .ok()?
-            .parse::<toml::Table>()
-            .ok()?;
-        let rows = table.get("web")?.as_table()?.get("invites")?.as_array()?;
-        (!rows.is_empty())
-            .then(|| serde_json::to_string(rows).ok())
-            .flatten()
-    })?;
-    Some(parse_invites(&raw))
+/// One read of the invite list, held for one request. `None` is no list.
+#[derive(Debug, Clone)]
+pub(crate) struct Grants(Option<Arc<[Invite]>>);
+
+impl Grants {
+    fn nobody() -> Self {
+        Self(Some(Vec::new().into()))
+    }
+
+    pub(crate) fn list(&self) -> Option<&[Invite]> {
+        self.0.as_deref()
+    }
 }
 
-fn parse_invites(raw: &str) -> Vec<Invite> {
-    let rows: Vec<serde_json::Value> = serde_json::from_str(raw).unwrap_or_default();
+/// Where one bridge reads its invites, and what it must not forget.
+pub(crate) struct InviteSource {
+    file: TrustedFile,
+    /// A project list differed at bind. It admits nobody until a restart.
+    held: bool,
+    /// A list or a fault was seen. From then on no list means nobody, so
+    /// removing the last row never reopens token-only reads.
+    gated: AtomicBool,
+}
+
+impl InviteSource {
+    /// The source for the bridge this process serves. Prints what it found.
+    pub(crate) fn for_bridge() -> Self {
+        // An unreadable cwd has no project file to compare.
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let project = crate::digest_overlay::project_config_files(&cwd);
+        let (source, notices) = Self::at_bind(TrustedFile::from_env(), &project);
+        for notice in notices {
+            eprintln!("fno mux serve --web: {notice}");
+        }
+        source
+    }
+
+    /// A project list used to win. It is compared once, here, and never
+    /// grants: the same rows change nothing, different rows hold closed.
+    pub(crate) fn at_bind(file: TrustedFile, project_files: &[PathBuf]) -> (Self, Vec<String>) {
+        let key = TrustedKey::WebInvites;
+        let mut notices = file.notes(key, &[]);
+        let trusted = file.rows(key);
+        let mut held = false;
+        if let Some((project, rows)) = file.ignored_rows(key, project_files) {
+            held = !matches!(&trusted, Rows::List(own) if same_rows(own, &rows));
+            let project = project.display();
+            let count = rows.len();
+            notices.push(if held {
+                let own = file.path().map_or_else(
+                    || "the trusted config file".to_string(),
+                    |path| path.display().to_string(),
+                );
+                format!(
+                    "{project} holds {count} web.invites row(s) that {own} does not match. A project file never invites, so every proxied request is refused until a restart. Write every row you want: fno config set web.invites '[{{\"email\":\"<login>\",\"scope\":\"<node id or *>\",\"role\":\"<role>\"}}]'. Then run `fno config unset web.invites --local` in that folder and restart this bridge once."
+                )
+            } else {
+                format!(
+                    "{project} repeats the {count} trusted web.invites row(s). A project file never invites, so remove them there with `fno config unset web.invites --local`."
+                )
+            });
+        }
+        let gated = AtomicBool::new(held || trusted != Rows::Absent);
+        (Self { file, held, gated }, notices)
+    }
+
+    /// The grants as of now.
+    pub(crate) fn read(&self) -> Grants {
+        if self.held {
+            return Grants::nobody();
+        }
+        match self.file.rows(TrustedKey::WebInvites) {
+            Rows::List(rows) => {
+                self.gated.store(true, Ordering::SeqCst);
+                Grants(Some(parse_invites(&rows).into()))
+            }
+            Rows::Invalid(_) => {
+                self.gated.store(true, Ordering::SeqCst);
+                Grants::nobody()
+            }
+            Rows::Absent if self.gated.load(Ordering::SeqCst) => Grants::nobody(),
+            Rows::Absent => Grants(None),
+        }
+    }
+}
+
+/// The same rows in any order.
+fn same_rows(a: &[toml::Value], b: &[toml::Value]) -> bool {
+    let mut rest = b.to_vec();
+    let all_found = a.iter().all(|row| {
+        let found = rest.iter().position(|other| other == row);
+        found.map(|at| rest.swap_remove(at)).is_some()
+    });
+    all_found && rest.is_empty()
+}
+
+#[derive(serde::Deserialize)]
+struct InviteRow {
+    email: String,
+    #[serde(default = "whole_board")]
+    scope: String,
+    role: String,
+}
+
+fn whole_board() -> String {
+    "*".to_string()
+}
+
+/// A row with a missing or wrong-typed field or an unknown role grants
+/// nothing. A scope that is present is never read as a missing one.
+fn parse_invites(rows: &[toml::Value]) -> Vec<Invite> {
     rows.iter()
+        // A derived struct also reads an array as its fields in order.
+        .filter(|row| row.is_table())
         .filter_map(|row| {
-            let field = |k: &str| row.get(k).and_then(serde_json::Value::as_str);
-            let email = field("email")?.trim().to_ascii_lowercase();
-            let scope = field("scope").unwrap_or("*").trim().to_string();
-            let role = Role::parse(field("role")?)?;
+            // A row that does not parse is dropped, and the gate stays on.
+            let row: InviteRow = row.clone().try_into().ok()?;
+            let email = row.email.trim().to_ascii_lowercase();
+            let scope = row.scope.trim().to_string();
+            let role = Role::parse(&row.role)?;
             (!email.is_empty() && !scope.is_empty()).then_some(Invite { email, scope, role })
         })
         .collect()
@@ -98,6 +196,21 @@ pub(crate) struct Caller<'a> {
     pub(crate) loopback_host: bool,
 }
 
+impl Caller<'_> {
+    /// The user at their own machine. A login header of any value, even an
+    /// empty one, means a proxy sent the request.
+    pub(crate) fn is_direct_local(&self) -> bool {
+        self.loopback_bind && self.loopback_host && self.login.is_none()
+    }
+
+    /// The login the rows are matched against.
+    pub(crate) fn identity(&self) -> Option<String> {
+        self.login
+            .map(|login| login.trim().to_ascii_lowercase())
+            .filter(|login| !login.is_empty())
+    }
+}
+
 /// Allow with the name to stamp on the work, or refuse with the reason.
 /// `chain` is the node and its ancestors; `None` means the route has no node,
 /// so any scope counts.
@@ -107,11 +220,9 @@ pub(crate) fn decide(
     chain: Option<&[String]>,
     needed: Role,
 ) -> Result<String, Refusal> {
-    let login = caller.login.map(|l| l.trim().to_ascii_lowercase());
-    let login = login.filter(|l| !l.is_empty());
     // The user at their own machine: a direct loopback request carries no
     // proxy login. They own every scope.
-    if caller.loopback_bind && caller.loopback_host && login.is_none() {
+    if caller.is_direct_local() {
         return Ok("local".to_string());
     }
     let Some(invites) = invites else {
@@ -132,7 +243,7 @@ pub(crate) fn decide(
             "web.invites is set, so the bridge must bind loopback behind tailscale serve",
         ));
     }
-    let Some(login) = login else {
+    let Some(login) = caller.identity() else {
         return Err(refuse(
             403,
             "no login on the request: it did not come through tailscale serve",
@@ -180,12 +291,23 @@ mod web_invites_tests {
     }
 
     fn web_invites_parse_drops_bad_rows_and_lowercases() {
-        let rows = parse_invites(
-            r#"[{"email":"Ann@Example.com","scope":"x-1","role":"Editor"},
-                {"email":"bob@example.com","role":"boss"},
-                {"scope":"*","role":"viewer"},
-                {"email":"cy@example.com","role":"viewer"}]"#,
-        );
+        #[derive(serde::Deserialize)]
+        struct Doc {
+            rows: Vec<toml::Value>,
+        }
+        let doc: Doc = toml::from_str(
+            r#"rows = [
+                {email = "Ann@Example.com", scope = "x-1", role = "Editor"},
+                {email = "bob@example.com", role = "boss"},
+                {scope = "*", role = "viewer"},
+                {email = "dee@example.com", scope = ["x-1"], role = "owner"},
+                {email = "eve@example.com", scope = " ", role = "owner"},
+                ["fay@example.com", "*", "owner"],
+                {email = "cy@example.com", role = "viewer"},
+            ]"#,
+        )
+        .unwrap();
+        let rows = parse_invites(&doc.rows);
         assert_eq!(
             rows,
             vec![
