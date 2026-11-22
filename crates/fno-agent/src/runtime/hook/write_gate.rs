@@ -1203,11 +1203,7 @@ fn bash_idiom_targets(cmd: &str, pre_armed: bool, out: &mut Vec<String>) {
 /// once per call; reads cap at 256 KiB, name repo files only, and the
 /// contents never print or log: they feed the same extraction as the command
 /// text. Each entry carries whether its interpreter is a shell runner.
-fn invoked_script_contents(
-    cmd: &str,
-    payload_cwd: &str,
-    root: Option<&str>,
-) -> Vec<(String, bool)> {
+fn invoked_script_contents(cmd: &str, payload_cwd: &str) -> Vec<(String, bool)> {
     const INTERPRETERS: [&str; 13] = [
         "python3", "python", "python2", "node", "nodejs", "deno", "bun", "ruby", "perl", "bash",
         "sh", "zsh", "source",
@@ -1237,9 +1233,6 @@ fn invoked_script_contents(
         if !names_script {
             continue;
         }
-        let Some(root) = root else {
-            continue;
-        };
         let abs = if tok.starts_with('/') {
             PathBuf::from(tok)
         } else {
@@ -1252,8 +1245,11 @@ fn invoked_script_contents(
         if !abs.is_file() {
             continue;
         }
+        let Some(root) = git_root_of(&abs) else {
+            continue;
+        };
         let Some(rel) = abs
-            .strip_prefix(root)
+            .strip_prefix(root.as_str())
             .map(|p| p.to_string_lossy().into_owned())
         else {
             continue;
@@ -1275,8 +1271,10 @@ fn invoked_script_contents(
     out
 }
 
-/// The git toplevel of the nearest existing ancestor of `path`, the same
-/// resolution generated_target applies to a write target.
+/// The git toplevel of the nearest existing ancestor of `path`, memoized by
+/// that ancestor directory for one gate invocation. Each target keeps the
+/// per-target resolution the judge has always used, so a write into another
+/// worktree is judged against that worktree's manifest.
 fn git_root_of(path: &Path) -> Option<String> {
     let mut dir = path
         .parent()
@@ -1288,19 +1286,28 @@ fn git_root_of(path: &Path) -> Option<String> {
             _ => break,
         }
     }
-    let out = std::process::Command::new("git")
-        .args(["-C", &dir.to_string_lossy(), "rev-parse", "--show-toplevel"])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let root = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if root.is_empty() {
-        None
-    } else {
-        Some(root)
-    }
+    TOPLEVEL_MEMO.with(|memo| {
+        let mut memo = memo.borrow_mut();
+        if let Some(root) = memo.get(&dir) {
+            return root.clone();
+        }
+        let out = std::process::Command::new("git")
+            .args(["-C", &dir.to_string_lossy(), "rev-parse", "--show-toplevel"])
+            .output();
+        let root = out
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|s| !s.is_empty());
+        if std::env::var_os("FNO_GUARD_TRACE").is_some() {
+            match &root {
+                None => eprintln!("write-gate: git rev-parse failed in {}", dir.display()),
+                Some(root) => eprintln!("write-gate: root={root}"),
+            }
+        }
+        memo.insert(dir, root.clone());
+        root
+    })
 }
 
 fn generated_section(p: &Payload, _cwd: &Path) -> Sec {
@@ -1309,10 +1316,9 @@ fn generated_section(p: &Payload, _cwd: &Path) -> Sec {
     // contents of script files the command invokes join the scanned surface,
     // their interpreter known from the invocation: shell runners feed the
     // operator families, code interpreters arm the write-call idioms. The
-    // toplevel resolves once for every judge in this call.
-    let cwd_path = PathBuf::from(p.cwd.as_str());
-    let root = git_root_of(&cwd_path);
-    for (content, shell) in invoked_script_contents(&p.command, &p.cwd, root.as_deref()) {
+    // memo clears per call, so no root outlives the payload it served.
+    TOPLEVEL_MEMO.with(|memo| memo.borrow_mut().clear());
+    for (content, shell) in invoked_script_contents(&p.command, &p.cwd) {
         content_targets_into(&content, shell, &mut targets);
     }
     targets.sort_unstable();
@@ -1322,11 +1328,7 @@ fn generated_section(p: &Payload, _cwd: &Path) -> Sec {
         return Sec::Allow;
     }
     for t in &targets {
-        if !generated_row_can_match(t, root.as_deref()) {
-            continue;
-        }
-        if let Some(reason) = generated_target(t, &p.cwd, &p.command, root.as_deref().unwrap_or(""))
-        {
+        if let Some(reason) = generated_target(t, &p.cwd, &p.command) {
             return Sec::Block(reason);
         }
     }
@@ -1337,52 +1339,6 @@ fn generated_section(p: &Payload, _cwd: &Path) -> Sec {
 /// of each glob bound the row's reach, bundle and install-prefix surfaces
 /// carry their own rows, and everything else skips the judge. `root` is the
 /// payload's toplevel, resolved once per call.
-fn generated_row_can_match(target: &str, root: Option<&str>) -> bool {
-    if target.starts_with("skills/") || target.starts_with("agents/") {
-        return true;
-    }
-    if target.contains("/plugin-stage/") || target.contains("/plugins/cache/") {
-        return true;
-    }
-    let Some(root) = root else {
-        return false;
-    };
-    let manifest = Path::new(root).join("generated-artifacts.tsv");
-    if !manifest.is_file() {
-        return false;
-    }
-    let Ok(rows) = std::fs::read_to_string(&manifest) else {
-        return false;
-    };
-    let rel = target.strip_prefix(&format!("{root}/")).unwrap_or(target);
-    rows.lines().any(|row| {
-        let Some(glob) = row.split('\t').next() else {
-            return false;
-        };
-        if glob.is_empty() || glob.starts_with('#') {
-            return false;
-        }
-        // The reach of one glob: its fixed leading run and fixed trailing
-        // run. A target that matches neither bound can never match the row.
-        let prefix: String = glob
-            .chars()
-            .take_while(|c| !matches!(c, '*' | '?' | '['))
-            .collect();
-        if !prefix.is_empty() && rel.starts_with(prefix.as_str()) {
-            return true;
-        }
-        let tail: String = glob
-            .chars()
-            .rev()
-            .take_while(|c| !matches!(c, '*' | '?' | ']'))
-            .collect::<String>()
-            .chars()
-            .rev()
-            .collect();
-        !tail.is_empty() && rel.ends_with(tail.as_str())
-    })
-}
-
 /// A row whose regen redirects into its own target reads as a write. Only the
 /// row's whole command passes, so nothing can chain behind it.
 fn runs_the_regen(command: &str, regen: &str) -> bool {
@@ -1395,7 +1351,15 @@ fn trace_gen(msg: &str) {
     }
 }
 
-fn generated_target(t: &str, payload_cwd: &str, command: &str, root: &str) -> Option<String> {
+/// The toplevel memo: keyed by a target's nearest existing ancestor
+/// directory, cleared at the top of every gate call, so a root never
+/// outlives the payload that resolved it.
+thread_local! {
+    static TOPLEVEL_MEMO: std::cell::RefCell<std::collections::HashMap<PathBuf, Option<String>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+fn generated_target(t: &str, payload_cwd: &str, command: &str) -> Option<String> {
     let abs = if t.starts_with('/') {
         PathBuf::from(t)
     } else {
@@ -1433,13 +1397,12 @@ fn generated_target(t: &str, payload_cwd: &str, command: &str, root: &str) -> Op
         }
     }
 
-    // Repo manifests live at the git toplevel the target sits in, resolved
-    // once per call upstream. An empty root fails open, the same posture a
-    // failed spawn had; the target usually does not exist yet, so the walk
-    // over its ancestors is the caller's job and already done.
-    if root.is_empty() {
+    // Repo manifests live at the git toplevel the target sits in. The target
+    // is usually a file that does not exist yet, so walk up to the nearest
+    // existing ancestor before asking git, exactly as the shell guard did.
+    let Some(root) = git_root_of(&abs) else {
         return None;
-    }
+    };
     let prefix = format!("{root}/");
     if !abs_str.starts_with(&prefix) {
         return None;
@@ -1922,7 +1885,7 @@ mod tests {
                 assert!(reason.contains("docs/gen.src"), "{reason}");
                 assert!(reason.contains("make gen"), "{reason}");
             }
-            other => panic!("script contents must refuse: {cmd}"),
+            _ => panic!("script contents must refuse"),
         }
         // A read by an inline script and a bare mention stay allowed.
         assert!(matches!(
@@ -1935,7 +1898,27 @@ mod tests {
         assert!(matches!(judge("make gen"), Sec::Allow));
         match judge("make gen; echo x > docs/gen.md") {
             Sec::Block(reason) => assert!(reason.contains("make gen"), "{reason}"),
-            other => panic!("a chained regen must refuse: {cmd}"),
+            _ => panic!("a chained regen must refuse"),
+        }
+        // An absolute path into a second repo refuses with the payload cwd at
+        // the first repo's root: the toplevel comes from each target.
+        let repo_b = synthetic_repo();
+        let abs_b = repo_b.join("docs/gen.md").to_string_lossy().into_owned();
+        let cross = format!("python3 -c \"open('{abs_b}','w').write('x')\"");
+        match judge(&cross) {
+            Sec::Block(reason) => assert!(reason.contains("docs/gen.src"), "{reason}"),
+            _ => panic!("a cross-repo absolute write must refuse"),
+        }
+        let _ = std::fs::remove_dir_all(&repo_b);
+        // A bundle copy named by absolute path refuses.
+        let bundle = repo_root()
+            .join("skills/blueprint/scripts/validate-plan.sh")
+            .to_string_lossy()
+            .into_owned();
+        let bundled = format!("python3 -c \"open('{bundle}','w').write('x')\"");
+        match judge(&bundled) {
+            Sec::Block(reason) => assert!(reason.contains("bundled copy"), "{reason}"),
+            _ => panic!("an absolute bundle write must refuse"),
         }
         let _ = std::fs::remove_dir_all(&repo);
         // The sanctioned no-build helper is skipped, since writing every row
