@@ -622,6 +622,44 @@ mod tests {
         core
     }
 
+    /// The client each hint test attaches: it views the squad tab that
+    /// holds `witness_test_core`'s leaf, so its DraftHint passes the
+    /// visibility gate and arms the pane.
+    fn hint_client() -> crate::server::Client {
+        crate::server::Client {
+            id: 1,
+            reliable_tx: tokio::sync::mpsc::channel(1).0,
+            dirty: Default::default(),
+            notify: Arc::new(tokio::sync::Notify::new()),
+            synced_modes: Default::default(),
+            view: (1, 1),
+            visible: Default::default(),
+            dims: (24, 80),
+            passive: false,
+            last_press: None,
+        }
+    }
+
+    /// The hint tests witness rows, so each takes the journal env under
+    /// the shared guard and gets a fresh temp dir. Returns `(guard, dir)`;
+    /// the caller drops the guard and removes the dir at the end.
+    fn hint_journal_env(tag: &str) -> (std::sync::MutexGuard<'static, ()>, std::path::PathBuf) {
+        let guard = crate::pane_send_audit::FNO_AGENT_HOME_GUARD
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let dir = std::env::temp_dir().join(format!(
+            "fno-hint-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::env::set_var("FNO_AGENT_HOME", &dir);
+        (guard, dir)
+    }
+
     fn journal_submits(dir: &Path) -> Vec<serde_json::Value> {
         journal_rows(dir, "operator_submit")
     }
@@ -1077,33 +1115,9 @@ mod tests {
     fn a_draft_hint_holds_mail_until_the_app_enter_releases_it() {
         // The hint witnesses like a keystroke burst, so the journal write
         // needs the same env isolation even though the test asserts no row.
-        let guard = crate::pane_send_audit::FNO_AGENT_HOME_GUARD
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        let dir = std::env::temp_dir().join(format!(
-            "fno-hint-hold-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::env::set_var("FNO_AGENT_HOME", &dir);
-
+        let (guard, dir) = hint_journal_env("hold");
         let mut core = witness_test_core(7);
-        core.clients.push(crate::server::Client {
-            id: 1,
-            reliable_tx: tokio::sync::mpsc::channel(1).0,
-            dirty: Default::default(),
-            notify: Arc::new(tokio::sync::Notify::new()),
-            synced_modes: Default::default(),
-            view: (1, 1),
-            visible: Default::default(),
-            dims: (24, 80),
-            passive: false,
-            last_press: None,
-        });
+        core.clients.push(hint_client());
         let t0 = Instant::now();
         core.draft_hint_at(1, 7, t0);
         assert!(
@@ -1147,48 +1161,9 @@ mod tests {
 
     #[test]
     fn a_draft_hint_arms_only_a_pane_its_client_views() {
-        let guard = crate::pane_send_audit::FNO_AGENT_HOME_GUARD
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        let dir = std::env::temp_dir().join(format!(
-            "fno-hint-visibility-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::env::set_var("FNO_AGENT_HOME", &dir);
-
-        use crate::tree::{Node, Tab};
-        let mut core = super::super::tests::empty_core();
-        core.session.add_squad(
-            1,
-            vec!["/fixture".into()],
-            None,
-            Tab {
-                name: None,
-                id: 1,
-                root: Node::Branch {
-                    axis: crate::tree::Axis::Horizontal,
-                    children: vec![(0.5, Node::Leaf(7)), (0.5, Node::Leaf(8))],
-                },
-                focus: 7,
-            },
-        );
-        core.clients.push(crate::server::Client {
-            id: 1,
-            reliable_tx: tokio::sync::mpsc::channel(1).0,
-            dirty: Default::default(),
-            notify: Arc::new(tokio::sync::Notify::new()),
-            synced_modes: Default::default(),
-            view: (1, 1),
-            visible: Default::default(),
-            dims: (24, 80),
-            passive: false,
-            last_press: None,
-        });
+        let (guard, dir) = hint_journal_env("visibility");
+        let mut core = witness_test_core(7);
+        core.clients.push(hint_client());
         let t0 = Instant::now();
         core.draft_hint_at(1, 7, t0);
         assert!(
@@ -1215,33 +1190,9 @@ mod tests {
     /// one `operator_typing` row per window, never one per keystroke.
     #[test]
     fn a_draft_hint_writes_one_coalesced_typing_row_per_window() {
-        let guard = crate::pane_send_audit::FNO_AGENT_HOME_GUARD
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        let dir = std::env::temp_dir().join(format!(
-            "fno-hint-witness-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::env::set_var("FNO_AGENT_HOME", &dir);
-
+        let (guard, dir) = hint_journal_env("witness");
         let mut core = witness_test_core(7);
-        core.clients.push(crate::server::Client {
-            id: 1,
-            reliable_tx: tokio::sync::mpsc::channel(1).0,
-            dirty: Default::default(),
-            notify: Arc::new(tokio::sync::Notify::new()),
-            synced_modes: Default::default(),
-            view: (1, 1),
-            visible: Default::default(),
-            dims: (24, 80),
-            passive: false,
-            last_press: None,
-        });
+        core.clients.push(hint_client());
         let t0 = Instant::now();
         core.draft_hint_at(1, 7, t0);
         core.draft_hint_at(1, 7, t0 + Duration::from_secs(1));
