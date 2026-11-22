@@ -370,10 +370,14 @@ fn child_args(parent: &Value, scope: &str) -> AddArgs {
         project: str_field(parent, "project").map(str::to_string),
         cwd: str_field(parent, "cwd").map(str::to_string),
         // The child serves what the parent serves: the who, why and
-        // done-means carry, so the fork never dies on the required-flags
-        // refusal for a parent that already named them.
+        // done-means carry. A parent filed before the why was required has
+        // none, and `start` takes no flag for it: the typed scope is then
+        // the goal behind the ask.
         audience: str_field(parent, "audience").map(str::to_string),
-        why: str_field(parent, "why").map(str::to_string),
+        why: str_field(parent, "why")
+            .filter(|why| !why.trim().is_empty())
+            .or(Some(scope))
+            .map(str::to_string),
         done_means: str_field(parent, "done_means").map(str::to_string),
         details: Some(scope.to_string()),
         source_node: Some(id),
@@ -670,6 +674,13 @@ mod tests {
         assert_eq!(args.source_node.as_deref(), Some("x-aaaa"));
         assert_eq!(args.details.as_deref(), Some("watch-expiry recovery only"));
         assert!(args.title.starts_with("Follow-up to x-aaaa: "));
+        // A parent with no why still births its child, and a named why carries.
+        assert_eq!(args.why.as_deref(), Some("watch-expiry recovery only"));
+        let named = row("x-eeee", json!({"why": "keep the fleet busy"}));
+        assert_eq!(
+            child_args(&named, "some scope").why.as_deref(),
+            Some("keep the fleet busy")
+        );
 
         // Source resolution: exactly one confirmed id, else no node.
         let req = |input: &str| Request {

@@ -40,7 +40,7 @@ The allowance no longer re-runs the parent. It forks a child with the given scop
 
 ## The `--steps` flag
 
-`fno do target start <node> --steps` stamps the run as steps mode. Start forwards `--steps` to the init door. Init sets `TARGET_TURN_MODE=steps` for the helper process. The manifest carries `turn_mode: steps`. The stop gate then lets every stop through. The flag rides the argv, never the environment. Ruling d-b7ef7d2d put it there. An inherited `TARGET_TURN_MODE` can never stamp a run its caller did not ask for.
+`fno do target start <node> --steps` stamps the run as steps mode. Start forwards `--steps` to the init door. Init sets `TARGET_TURN_MODE=steps` for the helper process. The manifest carries `turn_mode: steps`. The stop gate then lets every stop through. The flag rides the argv, never the environment. Ruling D1970 put it there. An inherited `TARGET_TURN_MODE` can never stamp a run its caller did not ask for.
 
 ## Placement
 

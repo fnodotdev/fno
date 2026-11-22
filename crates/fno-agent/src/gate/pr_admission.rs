@@ -456,6 +456,28 @@ pub(crate) fn after_record(
     after_record_with(&real_gh, subject, decision, authority)
 }
 
+/// Called by the decide door after a ruling is queued. A hold stops work
+/// now. A release waits for the drain: until it is recorded the hold binds.
+pub(crate) fn after_queue(
+    subject: &str,
+    decision: &str,
+    authority: Option<&str>,
+) -> Option<String> {
+    after_queue_with(&real_gh, subject, decision, authority)
+}
+
+fn after_queue_with(
+    gh: GhRun,
+    subject: &str,
+    decision: &str,
+    authority: Option<&str>,
+) -> Option<String> {
+    if !is_hold_text(decision) {
+        return None;
+    }
+    after_record_with(gh, subject, decision, authority)
+}
+
 pub(crate) fn after_record_with(
     gh: GhRun,
     subject: &str,
@@ -972,6 +994,8 @@ mod tests {
         assert_eq!(*seen.borrow(), 6);
         assert!(out.is_some_and(|s| s.contains("marked o/r#9 ready")));
         assert!(after_record_with(&gh, "pr-hold:o/r#7", "release", Some("agent")).is_none());
+        // A queued release runs no gh call: it releases only once recorded.
+        assert!(after_queue_with(&gh, "pr-hold:o/r#9", "release", Some("operator")).is_none());
         assert!(after_record_with(
             &gh,
             "node-subject-that-is-not-a-hold",

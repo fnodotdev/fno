@@ -236,14 +236,24 @@ _plan_node_id() {
 # -<prefix>-<hex>.md rule the plan-path resolver applies.
 # A name that only mentions an id mid-slug is not a filename-encoded id.
 _plan_filename_node_id() {
-    local base
+    local base id
     base=$(basename "$1")
-    printf '%s' "$base" | awk '
+    id=$(printf '%s' "$base" | awk '
         match($0, /-[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}\.md$/) {
             print substr($0, RSTART + 1, RLENGTH - 4)
             exit
         }
-    '
+    ')
+    if [[ -z "$id" && "$base" =~ -([a-z][a-z0-9]{0,7}-[0-9]{1,7})\.md$ ]]; then
+        local numbered="${BASH_REMATCH[1]}"
+        if _ids_sequential; then id="$numbered"; fi
+    fi
+    printf '%s' "$id"
+}
+
+# backlog.id_mode, read only after the hex shape failed. No fno reads as hex.
+_ids_sequential() {
+    [[ "$(fno config get backlog.id_mode 2>/dev/null </dev/null)" == "sequential" ]]
 }
 
 # Is this string one of the two id shapes a graph can hold? The canonical
@@ -251,8 +261,11 @@ _plan_filename_node_id() {
 # mint produced both bind. A bare all-hex word stays out (the letter-led
 # git-hash shape is not an id; ERE has no lookahead, so two tests).
 _is_node_id_sh() {
-    [[ "$1" =~ ^[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}$ ]] \
-        && [[ ! "$1" =~ ^[0-9a-f]+$ ]]
+    if [[ "$1" =~ ^[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}$ ]] \
+        && [[ ! "$1" =~ ^[0-9a-f]+$ ]]; then
+        return 0
+    fi
+    [[ "$1" =~ ^[a-z][a-z0-9]{0,7}-[0-9]{1,7}$ ]] && _ids_sequential
 }
 
 # The parse-door read for the gate-record keys, one plan-cli parse per file.
@@ -1161,7 +1174,7 @@ check_consolidation_file() {
                 local -a stage_laws=()
                 local s_line
                 while IFS= read -r s_line; do
-                    if [[ "$s_line" =~ ^-[[:space:]](d-[0-9a-f]{8})[[:space:]]\((.+)\): ]]; then
+                    if [[ "$s_line" =~ ^-[[:space:]](d-[0-9a-f]{8}|D[0-9]{1,7})[[:space:]]\((.+)\): ]]; then
                         stage_laws+=("${BASH_REMATCH[1]}"$'\t'"${BASH_REMATCH[2]}")
                     fi
                 done <<< "$stage_context"

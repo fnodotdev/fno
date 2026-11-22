@@ -1774,6 +1774,10 @@ pub(crate) fn file_ask(filing: AskFiling, cwd: &Path) -> (i32, Option<String>) {
             );
             println!("{}", crate::question_ladder::push_line(qid, &payload));
         }
+    } else if !template {
+        // A queued ask has no id to wake or notify with; stdout says so in
+        // the number's place.
+        println!("{}", crate::numbers::mint::QUEUED);
     }
     (0, answer.qid)
 }

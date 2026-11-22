@@ -95,6 +95,12 @@ id_hex_width = 8       # hex chars in a minted id, 4-8. `fno config setup` write
 
 Unknown keys are ignored for forward compatibility, so a typo'd section or leaf sets nothing. `fno config doctor` names every unknown key it finds and the file that holds it. Glob characters (`*`, `?`, `[`) and paths longer than 4096 bytes are rejected at load time.
 
+## Question and decision numbers
+
+The graph database also holds `fno_numbers` and `fno_number_outbox`. A question or a decision takes its number as its id from `fno_numbers` on the store that counts. With `store.remote_url` set, that store is the primary. With no primary, it is this machine's graph.db.
+
+`fno_number_outbox` holds what waited for an unreachable primary. The daemon beat empties it. A machine with no primary counts alone, so join the primary before you share numbers between machines.
+
 ## Environment variables
 
 | Variable | Effect |

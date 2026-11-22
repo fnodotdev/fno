@@ -80,6 +80,19 @@ struct Args {
     /// Harness the start composer shows picked. Shot-only.
     #[arg(long = "shot-harness", hide = true)]
     shot_harness: Option<String>,
+    /// First-run state --shot paints: `key-card` is the empty start view
+    /// on a first launch, `no-server` is the offer to start the mux.
+    #[arg(long = "shot-first-run", value_enum, hide = true)]
+    shot_first_run: Option<ShotFirstRun>,
+}
+
+/// The --shot-first-run values.
+#[derive(clap::ValueEnum, Clone)]
+enum ShotFirstRun {
+    /// The empty start view with the splash mark and the key card.
+    KeyCard,
+    /// No mux server answers: the offer to start one.
+    NoServer,
 }
 
 /// The --shot-mode values. The kebab spellings mirror MainView.
@@ -168,6 +181,10 @@ fn main() {
             cmd: args.shot_cmd,
             draft: args.shot_draft,
             harness: args.shot_harness,
+            first_run: args.shot_first_run.map(|f| match f {
+                ShotFirstRun::KeyCard => fno_app::FirstRunShot::KeyCard,
+                ShotFirstRun::NoServer => fno_app::FirstRunShot::NoServer,
+            }),
         })
     } else {
         None
