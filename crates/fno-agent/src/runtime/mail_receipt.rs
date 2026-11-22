@@ -237,7 +237,7 @@ pub(crate) fn held_for_turn(msg_id: &str, target: &str) -> String {
 pub(crate) fn failed_live_leg(msg_id: &str, target: &str, reason: Option<&str>) -> String {
     let why = reason.unwrap_or("no reason recorded");
     format!(
-        "{msg_id} FAILED on the live leg ({why}) - nothing was injected and nothing will wake this recipient; the durable copy sits unclaimed\n  recover, in this order:\n    fno agent peek {target}          # confirm nothing landed\n    fno agent attach {target}        # drive it yourself (claude)\n    fno agent mail withdraw {msg_id} # retract the durable copy FIRST\n    fno agent mail send {target} '<body>'  # then re-send"
+        "{msg_id} FAILED on the live leg ({why}) - nothing was injected and nothing will wake this recipient; the durable copy sits unclaimed\n  recover, in this order:\n    fno agent session peek {target}          # confirm nothing landed\n    fno agent session attach {target}        # drive it yourself (claude)\n    fno agent mail admin withdraw {msg_id} # retract the durable copy FIRST\n    fno agent mail send {target} '<body>'  # then re-send"
     )
 }
 
@@ -495,9 +495,10 @@ mod tests {
         // verify-later hint over a failure.
         let failed = failed_live_leg("fmail-2", "t-worker", Some("no-pane-ref"));
         assert!(failed.contains("FAILED on the live leg (no-pane-ref)"));
-        assert!(failed.contains("fno agent mail withdraw fmail-2"));
+        assert!(failed.contains("fno agent mail admin withdraw fmail-2"));
         assert!(failed.contains("fno agent mail send t-worker '<body>'"));
-        assert!(failed.contains("fno agent peek t-worker"));
+        assert!(failed.contains("fno agent session peek t-worker"));
+        assert!(failed.contains("fno agent session attach t-worker"));
         assert!(failed_live_leg("fmail-3", "t-worker", None).contains("no reason recorded"));
     }
 
