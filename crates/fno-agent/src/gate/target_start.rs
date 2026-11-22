@@ -953,6 +953,12 @@ pub(crate) fn claim_names_current_session(holder: &str, rec: &crate::claims::Cla
         if handover_session_id_matches(rec, own_sid.as_deref()) {
             return true;
         }
+        // The resolver can name a sibling session's transcript from the
+        // canonical checkout, so the harness-stamped id gets the same join
+        // against the window's recorded session.
+        if handover_session_id_matches(rec, env_sid.as_deref()) {
+            return true;
+        }
         // A launch window that outlived its launcher: the pid probe proves
         // the spawner gone (basis pid-absent) while the TTL grace still
         // runs (state suspect), so the named worker never reached init.
@@ -2724,6 +2730,32 @@ mod adopt_rung_tests {
             machine_id: None,
             metadata: Default::default(),
         }
+    }
+
+    #[test]
+    fn a_handover_window_names_the_harness_stamped_session() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for var in [
+            "FNO_NODE_CLAIM_HOLDER",
+            "FNO_WORKER_NAME",
+            "TARGET_SESSION_ID",
+        ] {
+            std::env::remove_var(var);
+        }
+        let mut rec = record("spawn-handover:t-no-such-worker");
+        rec.pid_unavailable = true;
+        rec.session_id = Some("0c1d2e3f-aaaa-bbbb-cccc-000000000001".into());
+        std::env::set_var(
+            "CLAUDE_CODE_SESSION_ID",
+            "0c1d2e3f-aaaa-bbbb-cccc-000000000001",
+        );
+        assert!(claim_names_current_session(&rec.holder, &rec));
+        std::env::set_var(
+            "CLAUDE_CODE_SESSION_ID",
+            "0c1d2e3f-aaaa-bbbb-cccc-000000000002",
+        );
+        assert!(!claim_names_current_session(&rec.holder, &rec));
+        std::env::remove_var("CLAUDE_CODE_SESSION_ID");
     }
 
     #[test]
