@@ -864,10 +864,14 @@ mod tests {
         e.harness_session_id = Some("sess-cost-1".into());
         e.context_used_pct = Some(48);
         let keys = served_session_metrics_keys(&e);
-        assert_eq!(keys.len(), 8);
+        assert_eq!(keys.len(), 12);
         assert_eq!(keys["context_used_pct"], serde_json::json!(48));
         assert_eq!(keys["session_tokens"], serde_json::json!(154_000));
         assert_eq!(keys["compaction_count"], serde_json::json!(1));
+        assert_eq!(keys["session_input_tokens"], serde_json::json!(140_000));
+        assert_eq!(keys["session_output_tokens"], serde_json::json!(14_000));
+        assert_eq!(keys["session_cache_read_tokens"], serde_json::json!(0));
+        assert_eq!(keys["session_cache_write_tokens"], serde_json::json!(0));
         assert_eq!(
             keys["session_cost_measured_at"],
             serde_json::json!("2026-10-02T00:00:00Z")
@@ -883,6 +887,13 @@ mod tests {
         assert_eq!(absent["session_cost_cents"], serde_json::json!(null));
         assert_eq!(absent["session_cost_measured_at"], serde_json::json!(null));
         assert_eq!(absent["compaction_count"], serde_json::json!(null));
+        assert_eq!(absent["session_input_tokens"], serde_json::json!(null));
+        assert_eq!(absent["session_output_tokens"], serde_json::json!(null));
+        assert_eq!(absent["session_cache_read_tokens"], serde_json::json!(null));
+        assert_eq!(
+            absent["session_cache_write_tokens"],
+            serde_json::json!(null)
+        );
 
         let mut unresolved = RegistryEntry::default();
         unresolved.harness = Some("pi".into());
