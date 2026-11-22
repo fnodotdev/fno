@@ -1388,7 +1388,7 @@ pub struct GateInput {
 /// The spawn's node from its params, trimmed. An absent or blank key answers
 /// None: the overlay writes `""` when no node is bound, and a blank node in
 /// the open-PR branch scan would match every hyphenated head.
-pub(crate) fn gate_node_from_params(params: &Value) -> Option<String> {
+pub fn gate_node_from_params(params: &Value) -> Option<String> {
     params
         .get("node")
         .and_then(Value::as_str)
@@ -3189,12 +3189,12 @@ mod tests {
             "a non-string node is not a node"
         );
         assert_eq!(
-            gate_node_from_params(&serde_json::json!({"node": "x-a87c"})),
-            Some("x-a87c".to_string())
+            gate_node_from_params(&serde_json::json!({"node": "x-8888"})),
+            Some("x-8888".to_string())
         );
         assert_eq!(
-            gate_node_from_params(&serde_json::json!({"node": " x-7604 "})),
-            Some("x-7604".to_string())
+            gate_node_from_params(&serde_json::json!({"node": " x-7777 "})),
+            Some("x-7777".to_string())
         );
     }
 

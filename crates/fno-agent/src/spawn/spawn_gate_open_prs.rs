@@ -257,11 +257,8 @@ mod tests {
             }
         };
         let seat = input("/fno:target x-77", Some("x-77"));
-        let held = open(&[
-            "feature/x-77-mux-adds-remote-host",
-            "feat/x-77-copy-menu",
-            "bugfix/x-77-deskew",
-        ]);
+        // No feature/ head: only the segment match admits these.
+        let held = open(&["feat/x-77-copy-menu", "bugfix/x-77-deskew"]);
         assert!(gate_with(td.path(), &seat, |_| false, held).is_ok());
         let other = open(&["feature/x-77b-other", "feature/x-1-a"]);
         assert!(gate_with(td.path(), &seat, |_| false, other).is_err());
@@ -296,7 +293,7 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let graph = td.path().join("graph.json");
         let row = serde_json::json!({
-            "id": "x-a87c",
+            "id": "x-9999",
             "slug": "copy-menu",
             "status": "in_review",
             "title": "copy menu",
@@ -304,16 +301,16 @@ mod tests {
             "pr_url": "https://github.com/fnodotdev/fno/pull/522"
         });
         crate::graph_store::seed_rows(&graph, &[row]).expect("seed rows");
-        assert!(node_has_pr_at(&graph, "x-a87c"), "the linked PR reads");
+        assert!(node_has_pr_at(&graph, "x-9999"), "the linked PR reads");
         assert!(
-            !node_has_pr_at(&graph, "x-9999"),
+            !node_has_pr_at(&graph, "x-8888"),
             "an unlinked node reads false"
         );
         // Over cap, the exemption through the real reader passes the seat.
         let over = |_: &Path| Ok(OpenPrs::counted(36));
         assert!(gate_with(
             td.path(),
-            &input("/fno:target x-a87c", Some("x-a87c")),
+            &input("/fno:target x-9999", Some("x-9999")),
             |node| node_has_pr_at(&graph, node),
             over
         )
