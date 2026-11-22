@@ -194,6 +194,8 @@ pub enum ClientMsg {
     /// `request_id`. Structured values only - the message rides stdin at
     /// the spawn door, never an argv element.
     AgentLaunch(crate::agent_launch::AgentLaunchRequest),
+    /// (v132) The composer's one-shot `!` run: start, keys, move to a tab.
+    ShellRun(crate::shell_run::ShellRunRequest),
     PaneInput(pane_input::PaneInputRequest),
     /// (v116) A passive client names itself and the pane it watches, right
     /// after `Attach`. Ignored from a non-passive client. The tag lasts as
@@ -467,6 +469,8 @@ pub enum ServerMsg {
     /// terminal state per request; a duplicate submission is answered with
     /// the SAME attempt, never a second spawn.
     AgentLaunch(crate::agent_launch::AgentLaunchUpdate),
+    /// (v132) Where a one-shot `!` run stands, sent only to its client.
+    ShellRun(crate::shell_run::ShellRunUpdate),
     // -- v41 (layout-api) control-command replies --
     /// Answer to [`ControlCommand::TabLs`].
     TabList {

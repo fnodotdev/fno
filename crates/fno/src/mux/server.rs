@@ -91,6 +91,7 @@ mod pane_anchors;
 mod pane_scroll;
 mod search_nav;
 mod serve_attach;
+mod shell_run;
 use pane_scroll::{wheel_gate, WheelGateState};
 mod link_drive;
 pub(crate) mod links;
@@ -628,6 +629,8 @@ pub(crate) enum CoreMsg {
         id: u64,
         request: crate::proto::AgentLaunchRequest,
     },
+    /// (v132) One client's one-shot `!` run, see [`shell_run`].
+    ShellRun(u64, crate::proto::shell_run::ShellRunRequest),
     /// (v116) A passive client tags itself as an observer of one pane.
     Observe(u64, crate::proto::ObserverHello),
     /// (v121) A passive client takes the link role for one pane.
@@ -1671,6 +1674,7 @@ pub(crate) struct Core {
     /// (v124) Focus-recall state behind the tmux parity commands; runtime
     /// only, see [`focus_recall::FocusRecall`].
     recall: focus_recall::FocusRecall,
+    shell_runs: shell_run::ShellRuns,
     /// The open PORTALS under the TV model: index -> entry (channel,
     /// screen pane, tab). A portal is never a pane and never a tab: it is
     /// the index plus the placement (which tab, which leaf) plus the
@@ -7641,6 +7645,7 @@ impl Core {
             self.push_layout(true);
         }
         self.publish_visible_panes();
+        self.shell_runs_reseed();
     }
 
     /// One client's `Layout`: the shared squad/tab catalog, with the
@@ -10213,6 +10218,7 @@ impl Core {
             // off-loop task, not a client. AgentLaunch (v83) spawns a real
             // worker the same way, so it gates identically.
             | CoreMsg::DispatchNext { id, .. }
+            | CoreMsg::ShellRun(id, _)
             | CoreMsg::AgentLaunch { id, .. } => Some(*id),
             CoreMsg::PaneInput(request) => Some(request.id),
             _ => None,
@@ -10357,6 +10363,7 @@ impl Core {
                 self.agent_launch(id, request);
                 Flow::Continue
             }
+            CoreMsg::ShellRun(id, request) => self.shell_run(id, request),
             CoreMsg::Observe(id, hello) => self.observe(id, hello),
             CoreMsg::Link(id, hello) => self.link(id, hello),
             CoreMsg::AgentLaunchUpdate {
@@ -10632,6 +10639,7 @@ impl Core {
                 self.sizing.forget(id);
                 self.link_gone(id);
                 self.clients.retain(|c| c.id != id);
+                self.shell_runs_client_gone(id);
                 if self.clients.is_empty() {
                     // The last client just left: the push_layout below
                     // must flush the topology unconditionally, not on the

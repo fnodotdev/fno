@@ -101,16 +101,27 @@ fn run_in_tab(session: &str, squad: u64, report: &str) -> Result<u64, LogError> 
     }
 }
 
-/// The second ctrl+o: save the report and open it in a new tab of the
-/// card's workspace. The draft is held, as after esc.
+/// The log of the `!` run that ended, while the card shows no refusal.
+pub(super) fn run_log(view: &View) -> Option<(u64, String)> {
+    let l = view.launcher.as_ref()?;
+    if !l.shell || !matches!(l.phase, Phase::Editing) {
+        return None;
+    }
+    Some((l.squad, l.run.as_ref()?.log()?))
+}
+
+/// The second ctrl+o of a refusal, or the first after a `!` run: save the
+/// report and open it in a new tab of the card's workspace. The draft is
+/// held, as after esc.
 pub(super) async fn open_log(
     view: &mut View,
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<(), LogError> {
-    let Some((squad, text)) = view.launcher.as_ref().and_then(|l| match &l.phase {
+    let refused = view.launcher.as_ref().and_then(|l| match &l.phase {
         Phase::Refused { reason, .. } => Some((l.squad, reason.clone())),
         _ => None,
-    }) else {
+    });
+    let Some((squad, text)) = refused.or_else(|| run_log(view)) else {
         return Ok(());
     };
     let session = view.session.clone();

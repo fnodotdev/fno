@@ -34,6 +34,8 @@ A bare `!` then Enter opens a plain login shell as a new tab of the card's works
 
 ## Open as
 
+A `!` line with no pick runs in the card, on its own pty, one at a time. While it runs every key but ctrl+o is the command's, esc included. Ctrl+o moves that same process to a tab. A detach moves it to a tab too, and a moved run waits for Enter when it ends. At its end the card shows the exit code and takes the next line. A failure keeps the line. Ctrl+o then opens the full log in a tab. A bare `!` still opens a login shell in a new tab, and a placement pick still opens a pane.
+
 A launch with no pick lands in the open portal this client focused last. With none focused yet it takes the lowest open index, and with none open it opens a new portal. The opens chip names that portal before Enter. An agent that was showing there keeps running.
 
 The opens list holds the last portal, a new tab, four directions, the tabs of the card's workspace, the open portals and a pane in the active tab. A tab row opens a second step for the direction. Esc steps back. A shift+arrow takes that direction at once.

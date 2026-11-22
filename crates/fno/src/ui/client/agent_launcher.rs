@@ -25,6 +25,7 @@ pub(crate) mod grammar;
 pub(crate) mod placement;
 mod refusal;
 pub(crate) mod sets;
+pub(crate) mod shell_box;
 pub(crate) mod will_run;
 
 /// A picker's rows paint inside the card, so its popup anchor is never read.
@@ -354,6 +355,8 @@ pub(crate) struct Launcher {
     /// A refused or unknown footer shows the full raw reason instead of its
     /// one-sentence head. Toggled with Ctrl+O; a fresh attempt clears it.
     pub show_detail: bool,
+    /// The card's `!` run: the live one, or the last one that ended.
+    pub run: Option<shell_box::ShellBox>,
     /// The layout snapshot the Open as list reads.
     pub places: placement::Places,
     /// The selected harness's `--help` flag rows (entry spelling + one-line
@@ -974,6 +977,7 @@ pub(crate) fn open_in(view: &mut View, squad: u64) {
             next_request_id: 1,
             shell: false,
             show_detail: false,
+            run: None,
             places: Default::default(),
             runtime_flags: Vec::new(),
             runtime_flags_harness: String::new(),
@@ -1999,6 +2003,12 @@ pub(crate) async fn launcher_keys(
     bytes: &[u8],
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<StdinFlow, String> {
+    if shell_box::keys(view, bytes, sock_w)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        return Ok(StdinFlow::Continue);
+    }
     let mut esc = std::mem::take(&mut view.launcher_esc);
     let keys = esc.fold(bytes);
     view.launcher_esc = esc;
@@ -2287,7 +2297,7 @@ pub(crate) async fn launcher_keys(
                         && matches!(&l.phase, Phase::Refused { reason, .. }
                             if refusal::report(reason).is_some())
                 });
-                if logged {
+                if logged || refusal::run_log(view).is_some() {
                     refusal::open_log(view, sock_w)
                         .await
                         .map_err(|e| e.to_string())?;
@@ -4572,6 +4582,9 @@ impl Launcher {
         let d = &self.draft;
         match f {
             Focus::Where => d.host.as_deref().unwrap_or("Local").to_string(),
+            Focus::Opens if self.shell && d.placement == Placement::LastPortal => {
+                "in the card".to_string()
+            }
             Focus::Opens => self.places.label(d.placement),
             Focus::Project => d
                 .cwd()

@@ -1,5 +1,6 @@
-//! The composer's bang mode run path: one `!` line becomes one shell run
-//! in a new mux pane, plus its agents-journal rows (`composer_shell_ran`
+//! The composer's bang mode pane path: a bare `!`, or a line with a placement
+//! pick, becomes one shell run in a new mux pane. A line with no pick runs in
+//! the card (`shell_box`). Both write agents-journal rows (`composer_shell_ran`
 //! when a pane was born, `composer_shell_refused` when the run never
 //! started). The line rides as its own argv element and is never spliced
 //! into a script, so quotes, pipes and redirects pass through intact.
@@ -36,7 +37,7 @@ fn shell_argv(shell: &str, line: &str) -> Vec<String> {
 
 /// The user's login shell, resolved where the mux's own shell panes
 /// resolve theirs: `$SHELL`, else `/bin/sh`.
-fn user_shell() -> String {
+pub(super) fn user_shell() -> String {
     crate::pty::shell_candidates(std::env::var_os("SHELL").as_deref())
         .first()
         .map(|c| c.to_string_lossy().into_owned())
@@ -90,12 +91,24 @@ fn emit(events: &Path, row: &serde_json::Value) {
     }
 }
 
-/// Run the drafted line in a new pane through the session's control
-/// socket, journaling to the standard events path.
+/// Journal a run the card hosts.
+pub(super) fn journal_ran(session: &str, cwd: &str, shell: &str, line: &str, pane: u64) {
+    let row = ran_row(session, cwd, shell, line, pane);
+    emit(&pane_send_audit_events_path(), &row);
+}
+
+/// Run the drafted line: in the card with no pick, else in a new pane
+/// through the session's control socket, journaling to the standard events
+/// path.
 pub(super) async fn run(
     view: &mut View,
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<(), String> {
+    if super::shell_box::takes(view) {
+        return super::shell_box::start(view, sock_w)
+            .await
+            .map_err(|e| e.to_string());
+    }
     let events = pane_send_audit_events_path();
     let session = view.session.clone();
     let sock = socket_path(&session)?;

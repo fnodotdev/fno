@@ -6424,7 +6424,7 @@ async fn attach_and_run(
                     }
                     // Frames for pane ids unknown to the current Layout are
                     // ignored (Concurrency: flush-then-re-emit ordering).
-                    let known = view.layout.panes.iter().any(|(id, _)| *id == pane_id);
+                    let known = agent_launcher::shell_box::take_frame(&mut view, pane_id, &frame) || view.layout.panes.iter().any(|(id, _)| *id == pane_id);
                     if known {
                         // (hover affordance) A new frame invalidates the
                         // accepted span and restarts the probe's quiet period
@@ -6528,8 +6528,8 @@ async fn attach_and_run(
                     }
                 }
                 Ok(ServerMsg::Info { .. }) => {} // pre-Attach-only answer; stray here
-                // v4 control-command replies belong to one-shot `fno mux pane`
-                // connections, never an attached client's stream: ignore.
+                Ok(ServerMsg::ShellRun(update)) => { agent_launcher::shell_box::apply(&mut view, update); if let Err(e) = compositor.draw(&view.compose()) { break Err(format!("draw: {e}")); } }
+                // v4 one-shot `fno mux pane` replies, never an attached client's: ignore.
                 Ok(ServerMsg::PaneList { .. }
                     | ServerMsg::PaneText { .. }
                     | ServerMsg::PaneSpawned { .. }

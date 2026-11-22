@@ -500,6 +500,9 @@ impl Launcher {
             Some((PickerMode::Complete { sigil, .. }, filter)) => Some(format!("{sigil}{filter}")),
             _ => None,
         };
+        if let Some(run) = self.run.as_ref().filter(|run| self.shell || run.live()) {
+            out.extend(run.lines(w));
+        }
         let last_chunk = chunks.len().saturating_sub(1);
         for (k, (_, chunk)) in chunks.iter().enumerate().skip(start).take(PROMPT_ROWS) {
             let glyph = match (k == 0, self.shell) {

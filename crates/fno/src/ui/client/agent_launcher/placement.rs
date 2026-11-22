@@ -422,8 +422,10 @@ pub(super) fn rows(l: &Launcher) -> (Vec<PopupRow>, Vec<Option<PickerAction>>) {
         );
     };
     let place = PickerAction::Place;
-    if !l.shell {
-        let last = Placement::LastPortal;
+    let last = Placement::LastPortal;
+    if l.shell {
+        add("!", "in the card", "", picked == last, place(last));
+    } else {
         let shows = l.places.label(last);
         add(
             "\u{25eb}",

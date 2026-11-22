@@ -164,7 +164,7 @@ pub(super) async fn read_preamble<R: tokio::io::AsyncRead + Unpin>(
             ) => {}
             // A launch update cannot precede attach; ignore a misaddressed
             // one rather than failing the handshake.
-            Ok(ServerMsg::AgentLaunch(_)) => {}
+            Ok(ServerMsg::AgentLaunch(_) | ServerMsg::ShellRun(_)) => {}
             Err(ProtoError::Closed) => {
                 return Err(format!("{PREAMBLE_CLOSED}; {log_hint}"))
             }

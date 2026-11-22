@@ -435,7 +435,8 @@ fn default_true() -> bool {
 /// pane; floor stays 58.
 /// v132: `ControlCommand::ThreadPane.origin` and
 /// `AgentLaunchRequest.open_as` (serde default), the pre-birth placement
-/// check and the composer's typed placement; floor stays 58.
+/// check and the composer's typed placement. `ClientMsg::ShellRun` and
+/// `ServerMsg::ShellRun` carry the composer's one-shot run; floor stays 58.
 pub const PROTO_VERSION: u32 = 132;
 
 /// The first server that answers a thread placement check and reads a typed
@@ -476,6 +477,7 @@ pub use observer::{ObserverHello, ObserverRow, ObserverVia};
 
 pub mod pane_input;
 pub mod pane_meta;
+pub mod shell_run;
 pub mod wire_messages;
 pub use wire_messages::{ClientMsg, ServerMsg};
 
