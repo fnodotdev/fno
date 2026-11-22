@@ -4424,9 +4424,8 @@ mod tests {
     const OTHER: &str = "Bash command\n  pwd\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No";
 
     fn answered_events(home: &AgentsHome) -> usize {
-        std::fs::read_to_string(home.events_jsonl())
-            .unwrap_or_default()
-            .matches("agent_prompt_answered")
+        crate::event_store::journal_text(&home.events_jsonl(), &["agent_prompt_answered"])
+            .lines()
             .count()
     }
 
