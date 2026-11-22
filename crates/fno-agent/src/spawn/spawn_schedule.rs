@@ -1291,7 +1291,9 @@ mod tests {
         let mut row = ScheduledSpawn {
             id: String::new(),
             fire_at_utc: Some(now_utc() + chrono::Duration::hours(2)),
-            trigger: Trigger::At,
+            trigger: Trigger::Every {
+                interval_secs: 3600,
+            },
             grace_secs: DEFAULT_GRACE_SECS,
             force: true,
             node: Some("demo-node".into()),
@@ -1329,7 +1331,11 @@ mod tests {
         let requeued = get(&home, &row.id).unwrap();
         assert_eq!(requeued.state, RowState::Pending);
         // requeue refuses a non-every row
-        assert!(requeue(&home, &row.id, now_utc()).is_err());
+        let mut at_row = row.clone();
+        at_row.id = String::new();
+        at_row.trigger = Trigger::At;
+        insert(&home, &mut at_row).unwrap();
+        assert!(requeue(&home, &at_row.id, now_utc()).is_err());
 
         let cancelled = cancel(&home, &row.id).unwrap();
         assert_eq!(cancelled.state, RowState::Pending);
