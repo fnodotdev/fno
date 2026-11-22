@@ -638,3 +638,44 @@ fn binary_homes_record_names_the_census_sites_and_the_data_home() {
     // time: the companion grows a binary_homes object, nothing else moves.
     assert!(record.get("sites").is_some());
 }
+
+#[test]
+fn install_claim_refuses_when_a_machine_visible_binary_carries_an_older_rev() {
+    // The claim gate is the probe core with an injected rev reader: a
+    // binary that answers an older rev is a refusal naming both revs and
+    // the path, an unreadable answer refuses fail-closed, and a matching
+    // answer passes.
+    let probes = vec![
+        PathBuf::from("/bins/fno-agent"),
+        PathBuf::from("/cargo/fno-agent"),
+    ];
+    let expected = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let older = |bin: &std::path::Path| {
+        if bin == std::path::Path::new("/bins/fno-agent") {
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()
+        } else {
+            expected.to_string()
+        }
+    };
+    let refusals = claim_refusals_with(&probes, expected, &older);
+    assert_eq!(refusals.len(), 1, "{refusals:?}");
+    assert!(refusals[0].contains("/bins/fno-agent"), "{refusals:?}");
+    assert!(refusals[0].contains("aaaaaaaaaaaa"), "{refusals:?}");
+    assert!(refusals[0].contains("bbbbbbbbbbbb"), "{refusals:?}");
+    assert!(
+        refusals[0].contains("did not reach the machine's bin set"),
+        "{refusals:?}"
+    );
+
+    let unreadable = |_bin: &std::path::Path| "unknown".to_string();
+    let refusals = claim_refusals_with(&probes, expected, &unreadable);
+    assert_eq!(refusals.len(), 2, "{refusals:?}");
+    assert!(
+        refusals[0].contains("did not answer a rev probe"),
+        "{refusals:?}"
+    );
+
+    let current = |_bin: &std::path::Path| expected.to_string();
+    let refusals = claim_refusals_with(&probes, expected, &current);
+    assert!(refusals.is_empty(), "{refusals:?}");
+}
