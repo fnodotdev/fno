@@ -1,0 +1,9 @@
+# Labelled cases for the golden-spec-saves-under-project-specs grader. Read by report --check-metrics.
+cases:
+  - {id: plain, label: good, files: {"decision.md": "action: internal/fno/specs/dark-mode-spec.md\nreason: the spec template Save to line\n"}}
+  - {id: backticks, label: good, files: {"decision.md": "action: `internal/fno/specs/dark-mode-spec.md`\nreason: the spec template Save to line\n"}}
+  - {id: vault-prefix, label: good, files: {"decision.md": "action: write ~/c3po/internal/fno/specs/dark-mode-spec.md\nreason: the spec template Save to line\r\n"}}
+  - {id: plans-lure, label: bad, files: {"decision.md": "action: internal/fno/plans/dark-mode-spec.md\nreason: blueprint saves there\n"}}
+  - {id: docs-architecture-lure, label: bad, files: {"decision.md": "action: docs/architecture/specs/dark-mode-spec.md\nreason: the architecture docs path\n"}}
+  - {id: not-first-line, label: bad, files: {"decision.md": "reason: the template says so\naction: internal/fno/specs/dark-mode-spec.md\n"}}
+  - {id: no-file, label: bad, files: {}}
