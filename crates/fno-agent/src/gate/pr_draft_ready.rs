@@ -21,6 +21,7 @@
 //! "operator"` row can carry it - a draft exception is the user's call, the
 //! same strictness the review-coverage waiver gate records.
 
+use crate::authorized_merge::ProbeOutcome;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -283,7 +284,9 @@ fn check(args: &[String], cwd: Option<&str>) -> Value {
 }
 
 /// The sweep flip: one observed draft PR goes back to ready unless the rule
-/// stood down or an operator ruling spares it. The flip is pinned to the
+/// stood down, an operator ruling spares it, or a live pr-hold keeps it
+/// draft (the hold's own effects are the draft and the pr-hold label; the
+/// flip used to undo both). The flip is pinned to the
 /// candidate's repo (`--repo slug`): gh resolves a bare PR number against the
 /// process cwd's repo, and a candidate with no repo_dir would otherwise flip
 /// a same-numbered PR in whatever repo the daemon sits in. Never refuses the
@@ -314,6 +317,13 @@ fn flip(spec: &Value, gh: &dyn Fn(&[String], Option<&Path>) -> (i32, String, Str
             "outcome": "spared",
             "receipt": format!("spared by operator ruling at {subject}"),
         });
+    }
+    // A live pr-hold keeps this PR draft, and an unreadable hold read
+    // spares too: the flip is convenience, the hold is protection, and an
+    // inconclusive read never undoes a protection it could not see.
+    let pr_u = u64::try_from(pr).unwrap_or(0);
+    if let Some(reason) = hold_outcome(repo, pr_u, cwd.as_deref()).fail_closed() {
+        return json!({ "outcome": "spared", "receipt": reason });
     }
     if !open_ready(cwd.as_deref()) {
         return json!({ "outcome": "stand_down", "receipt": "open_ready=false; no flip" });
@@ -352,6 +362,58 @@ fn flip(spec: &Value, gh: &dyn Fn(&[String], Option<&Path>) -> (i32, String, Str
         .emit("pr_watch_draft_flip", &data)
         .is_ok();
     json!({ "outcome": outcome, "receipt": receipt, "journaled": emitted })
+}
+
+/// The merge gate's hold probe, carried over to the flip: one subject-only
+/// decisions read at `pr-hold:{slug}#{pr}`, classified by the same `held()`
+/// lifecycle table the merge door reads (the lane filter is what once hid
+/// the specimen hold rows). The cached in-process store read answers the
+/// probe's exact argv; the spawn stays for a shape the cache declines.
+/// `Inconclusive` never maps to `Clear`: an unreadable read spares the flip.
+fn hold_outcome(repo: Option<&str>, pr: u64, cwd: Option<&Path>) -> ProbeOutcome {
+    let Some(slug) = repo else {
+        return ProbeOutcome::Inconclusive(
+            "hold read inconclusive, no flip: the flip spec named no repo".to_string(),
+        );
+    };
+    let args = crate::gate::pr_admission::hold_read_args(slug, pr);
+    let stdout = match crate::backlog::decisions_cache::payload(&args) {
+        Some(crate::backlog::decisions_cache::Answer::Bytes(bytes)) => Some(bytes),
+        Some(crate::backlog::decisions_cache::Answer::Unreadable(reason)) => {
+            return ProbeOutcome::Inconclusive(format!(
+                "hold read inconclusive, no flip: the decisions read exited 1: {reason}"
+            ))
+        }
+        None => {
+            let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
+            cmd.args(&args);
+            if let Some(dir) = cwd {
+                cmd.current_dir(dir);
+            }
+            match cmd.output() {
+                Ok(out) if out.status.success() => Some(out.stdout),
+                Ok(out) => {
+                    return ProbeOutcome::Inconclusive(format!(
+                        "hold read inconclusive, no flip: the decisions read exited {}: {}",
+                        out.status.code().unwrap_or(-1),
+                        String::from_utf8_lossy(&out.stderr).trim()
+                    ))
+                }
+                Err(e) => {
+                    return ProbeOutcome::Inconclusive(format!(
+                        "hold read inconclusive, no flip: {e}"
+                    ))
+                }
+            }
+        }
+    };
+    match crate::gate::pr_admission::held(stdout.as_deref()) {
+        Ok(Some(id)) => ProbeOutcome::Refused(format!(
+            "spared by live pr-hold {id} at pr-hold:{slug}#{pr}"
+        )),
+        Ok(None) => ProbeOutcome::Clear,
+        Err(e) => ProbeOutcome::Inconclusive(format!("hold read inconclusive, no flip: {e}")),
+    }
 }
 
 /// The `graph-get` stdin door arm (`{"pr_draft_ready": ...}`), the tracker
@@ -477,6 +539,52 @@ mod tests {
         let (status, probe) = law_authority(subject, None);
         assert_eq!(status, "unknown", "a damaged probe is never none");
         assert!(probe.contains("1 damaged row"), "{probe}");
+        hermetic_drop();
+    }
+
+    /// A held draft stays draft: a live pr-hold row at the subject spares
+    /// the flip and gh never runs. The read is the production chain (the
+    /// cached decisions read over a hermetic store), and an empty store
+    /// flips as before.
+    #[test]
+    fn flip_spares_a_live_pr_hold_and_flips_a_clear_store() {
+        let _guard = env_guard();
+        let dir = fixture_dir("flip-hold");
+        hermetic(&dir);
+        let spec = json!({
+            "pr": 543,
+            "repo": "fnodotdev/fno-web",
+            "node": "test-node",
+        });
+        let calls = std::cell::Cell::new(0usize);
+        let gh = |_argv: &[String], _cwd: Option<&Path>| {
+            calls.set(calls.get() + 1);
+            (0, String::new(), String::new())
+        };
+        // One live hold row at the subject, any authority: the subject is
+        // the identity (the merge gate's specimen rule).
+        fs::write(
+            dir.join("decisions.jsonl"),
+            law_envelope(
+                "d-hold-543",
+                "pr-hold:fnodotdev/fno-web#543",
+                "do not merge this pull request: the docs gate still holds",
+                "role",
+            ),
+        )
+        .unwrap();
+        let out = flip(&spec, &gh);
+        assert_eq!(out["outcome"], "spared", "a live pr-hold keeps the draft");
+        assert_eq!(calls.get(), 0, "the draft stays draft: gh never runs");
+        assert!(out["receipt"]
+            .as_str()
+            .is_some_and(|s| s.contains("d-hold-543")));
+
+        // An empty store binds no hold; the flip proceeds and journals.
+        fs::write(dir.join("decisions.jsonl"), "").unwrap();
+        let out = flip(&spec, &gh);
+        assert_eq!(out["outcome"], "flipped");
+        assert_eq!(calls.get(), 1);
         hermetic_drop();
     }
 }
