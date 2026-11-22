@@ -56,6 +56,8 @@ struct Watch {
     row: Option<(String, String)>,
     stage: Option<String>,
     notified: bool,
+    /// The age at the call time when the stuck notice went out.
+    notified_age_ms: Option<i64>,
     answered: Option<String>,
     first_turn_at_ms: Option<i64>,
     latency_ms: Option<i64>,
@@ -433,15 +435,21 @@ fn judge(
     if let Some(latency) = watch.latency_ms {
         if watch.notified && !watch.followed_up {
             let stage = watch.stage.as_deref().unwrap_or("an earlier stage");
-            crate::first_check::send_notice(
-                runner,
-                SENDER,
-                &watch.caller,
-                &format!(
-                    "spawn {name}: first turn {}s after the call (reported stuck at {stage} earlier).",
-                    latency / 1000
-                ),
-            )?;
+            let stuck_at = watch.notified_age_ms.unwrap_or(0);
+            let body = if latency < stuck_at {
+                format!(
+                    "spawn {name}: first turn {}s after the call, before the {}m stuck notice at {stage}. The worker was running. The watch read its transcript late.",
+                    latency / 1000,
+                    stuck_at / 60_000
+                )
+            } else {
+                format!(
+                    "spawn {name}: first turn {}s after the call, after the {}m stuck notice at {stage}.",
+                    latency / 1000,
+                    stuck_at / 60_000
+                )
+            };
+            crate::first_check::send_notice(runner, SENDER, &watch.caller, &body)?;
             watch.followed_up = true;
         }
         watch.closed = true;
@@ -466,6 +474,7 @@ fn judge(
         ),
     )?;
     watch.stage = Some(stage.to_string());
+    watch.notified_age_ms = Some(age);
     watch.notified = true;
     Ok(())
 }

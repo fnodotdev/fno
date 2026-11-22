@@ -180,6 +180,55 @@ fn a_spawn_reports_its_stuck_stage_once_and_its_first_turn_quietly() {
 }
 
 #[test]
+fn a_late_read_follow_up_names_both_times_and_owns_the_wrong_notice() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = AgentsHome::at(temp.path().join("agents"));
+    let t0 = crate::claims::now_ms();
+    let transcript = temp.path().join("w.jsonl");
+    std::fs::write(
+        &transcript,
+        format!(
+            "{}\n",
+            json!({"type": "assistant", "timestamp": stamp(t0 + 6_000)})
+        ),
+    )
+    .unwrap();
+    let mut row = RegistryEntry::new(
+        Some("w-session".into()),
+        Lineage::captured((Some("lead-1".into()), Some("claude".into()), None)),
+    );
+    row.name = "w".into();
+    row.harness = Some("claude".into());
+    row.created_at = stamp(t0 + 1_000);
+    row.transcript_path = Some(transcript.to_string_lossy().into_owned());
+    state::update_registry(&home.registry_json(), |r| r.entries.push(row)).unwrap();
+    let watch = Watch {
+        caller: "lead-1".into(),
+        harness: "claude".into(),
+        name: Some("w".into()),
+        called_at_ms: t0,
+        stage: Some("first prompt".into()),
+        notified: true,
+        notified_age_ms: Some(5 * 60_000),
+        ..Default::default()
+    };
+    std::fs::create_dir_all(watch_dir(&home)).unwrap();
+    state::write_json_atomic(&watch_dir(&home).join("w.json"), &watch).unwrap();
+    let mut notices: Vec<String> = Vec::new();
+    let mut deliver = |argv: &[String], _: &str| {
+        notices.push(argv[9].clone());
+        (0, "accepted-new-turn".to_string(), String::new())
+    };
+    run_pass_with(&home, t0 + 6 * 60_000, &mut deliver, &no_roster).unwrap();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(
+        notices[0].contains("first turn 6s after the call, before the 5m stuck notice"),
+        "{}",
+        notices[0]
+    );
+}
+
+#[test]
 fn a_synthetic_model_error_is_no_first_turn_and_names_itself_in_the_stage() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("dead.jsonl");
