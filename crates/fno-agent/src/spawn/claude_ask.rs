@@ -2433,6 +2433,22 @@ fn derive_log_path(home: &AgentsHome, name: &str) -> PathBuf {
     home.root().join("logs").join(format!("{}.log", name))
 }
 
+/// The transport short id: the row's own key, else the one derived from the
+/// harness session id (the claude jobId is its prefix). Empty when the row
+/// carries neither.
+fn transport_short_id(entry: &RegistryEntry) -> String {
+    entry
+        .transport_short()
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            entry
+                .harness_session_id
+                .as_deref()
+                .map(crate::client_commands::derived_short_id)
+                .unwrap_or_default()
+        })
+}
+
 /// Answer a pending permission prompt on a claude thread. The prompt picker
 /// is answered by typing the harness's response key over the attach
 /// transport, so the ask works by session id or row name and needs no TTY
@@ -2474,16 +2490,7 @@ fn answer_thread_prompt(
     if entry.harness_kind() != Harness::Claude {
         return Some(AskOutcome::err("ask --answer reaches only a claude row", 2));
     }
-    let short = entry
-        .transport_short()
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            entry
-                .harness_session_id
-                .as_deref()
-                .map(crate::client_commands::derived_short_id)
-                .unwrap_or_default()
-        });
+    let short = transport_short_id(entry);
     if short.is_empty() {
         return Some(AskOutcome::err(
             format!(
