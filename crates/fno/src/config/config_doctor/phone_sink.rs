@@ -4,6 +4,7 @@
 //! One rename did exactly that on 2026-11-08. `fno config doctor` flags
 //! the drift; nothing here refuses.
 
+use crate::trusted_config::{Rows, TrustedFile, TrustedKey};
 use serde_json::Value;
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -25,7 +26,16 @@ pub fn report(out: &mut String) {
         );
         return;
     };
-    let sink_hosts = ntfy_sink_hosts();
+    let trusted = TrustedFile::from_env();
+    // An unreadable cwd has no project file to report.
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let project = crate::digest_overlay::project_config_files(&cwd);
+    for note in trusted.notes(TrustedKey::AttentionSinks, &project) {
+        out.push_str("\nphone sink: ");
+        out.push_str(&note);
+        out.push('\n');
+    }
+    let sink_hosts = ntfy_sink_hosts(&trusted);
     if sink_hosts.is_empty() {
         return;
     }
@@ -58,45 +68,23 @@ pub fn report(out: &mut String) {
     }
 }
 
-/// The ntfy sink url hosts from the config.toml ladder: the global file,
-/// then the nearest `.fno/config.toml` walking up from the cwd. Deduped.
-fn ntfy_sink_hosts() -> Vec<String> {
-    let mut paths: Vec<PathBuf> = vec![];
-    if let Some(g) = crate::digest_overlay::global_config_toml() {
-        paths.push(g);
-    }
-    let mut dir = std::env::current_dir().ok();
-    while let Some(d) = dir {
-        let candidate = d.join(".fno/config.toml");
-        if candidate.is_file() {
-            paths.push(candidate);
-            break;
-        }
-        dir = d.parent().map(|p| p.to_path_buf());
-    }
+/// The ntfy sink url hosts the runtime uses: the trusted file's. Deduped.
+fn ntfy_sink_hosts(trusted: &TrustedFile) -> Vec<String> {
+    let Rows::List(rows) = trusted.rows(TrustedKey::AttentionSinks) else {
+        return Vec::new();
+    };
     let mut hosts: Vec<String> = vec![];
-    for path in paths {
-        let Ok(text) = std::fs::read_to_string(&path) else {
+    for row in &rows {
+        if row.get("type").and_then(toml::Value::as_str) != Some("ntfy") {
+            continue;
+        }
+        let Some(url) = row.get("url").and_then(toml::Value::as_str) else {
             continue;
         };
-        let Ok(table) = text.parse::<toml::Table>() else {
-            continue;
-        };
-        let Some(sinks) = table.get("attention").and_then(|a| a.get("sinks")) else {
-            continue;
-        };
-        for row in sinks.as_array().unwrap_or(&vec![]) {
-            if row.get("type").and_then(toml::Value::as_str) != Some("ntfy") {
-                continue;
-            }
-            let Some(url) = row.get("url").and_then(toml::Value::as_str) else {
-                continue;
-            };
-            if let Some(host) = host_of(url) {
-                let host = host.to_string();
-                if !hosts.contains(&host) {
-                    hosts.push(host);
-                }
+        if let Some(host) = host_of(url) {
+            let host = host.to_string();
+            if !hosts.contains(&host) {
+                hosts.push(host);
             }
         }
     }

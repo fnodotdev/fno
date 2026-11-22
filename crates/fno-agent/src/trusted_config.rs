@@ -188,6 +188,23 @@ impl TrustedFile {
         let trusted = self.path().is_some_and(|own| same_file(own, &file));
         (!trusted).then_some((file, rows))
     }
+
+    /// What a reader says about `key`: a fault, and project rows it ignores.
+    /// No line carries a row, which can hold a URL, a sender or a token name.
+    pub fn notes(&self, key: TrustedKey, project_files: &[PathBuf]) -> Vec<String> {
+        let name = key.dotted();
+        let mut notes = Vec::new();
+        if let Rows::Invalid(fault) = self.rows(key) {
+            notes.push(format!("{name} grants nothing: {fault}"));
+        }
+        if let Some((file, _)) = self.ignored_rows(key, project_files) {
+            notes.push(format!(
+                "{name} in {} is ignored: a project file never grants it. Write the rows you want with `fno config set {name} '<value>'`, then run `fno config unset {name} --local` there",
+                file.display()
+            ));
+        }
+        notes
+    }
 }
 
 fn same_file(a: &Path, b: &Path) -> bool {
