@@ -3385,7 +3385,7 @@ pub(crate) fn account_for_removed_rows(
         &serde_json::json!({
             "writer": "rust",
             "pid": std::process::id(),
-            "command_code": invocation_command(),
+            "verb": invocation_command(),
             "lost": lost,
         }),
     );
