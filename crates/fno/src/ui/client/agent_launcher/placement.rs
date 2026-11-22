@@ -95,6 +95,9 @@ pub(crate) struct Places {
     focus: Option<(u64, u64)>,
     /// The portal a launch with no pick takes.
     last: Option<u8>,
+    /// The server takes a typed placement and the card's `!` runs. An older
+    /// one opens a new tab for both.
+    pub(super) typed: bool,
 }
 
 impl View {
@@ -142,11 +145,15 @@ impl Places {
                 (idx, shows)
             })
             .collect();
-        let last = default_portal(&portals, view.focused_portal().or(view.last_portal));
+        let typed =
+            crate::mux_rows::wire_at_least(&view.session, crate::proto::LAUNCH_PLACEMENT_PROTO);
+        let last =
+            default_portal(&portals, view.focused_portal().or(view.last_portal)).filter(|_| typed);
         let Some(own) = squads.iter().find(|sq| sq.id == squad) else {
             return Self {
                 portals,
                 last,
+                typed,
                 ..Self::default()
             };
         };
@@ -162,6 +169,7 @@ impl Places {
                 .collect(),
             portals,
             last,
+            typed,
             active: own.tabs.get(own.active_tab).map(|t| t.id),
             focus: own
                 .tabs
@@ -450,7 +458,8 @@ pub(super) fn rows(l: &Launcher) -> (Vec<PopupRow>, Vec<Option<PickerAction>>) {
     let place = PickerAction::Place;
     let last = Placement::LastPortal;
     if l.shell {
-        add("!", "in the card", "", picked == last, place(last));
+        let word = super::shell_box::default_word(l);
+        add("!", word, "default", picked == last, place(last));
     } else {
         let shows = l.places.label(last);
         add(
@@ -628,6 +637,7 @@ mod tests {
             active: Some(11),
             focus: Some((11, 7)),
             last: Some(2),
+            typed: true,
         };
         let third = Placement::Tab {
             id: 33,

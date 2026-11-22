@@ -121,13 +121,24 @@ fn exit_word(exit: Option<i32>) -> String {
 /// A line with no placement pick runs in the card. A bare `!`, a pick, a
 /// remote host and an older server keep the pane.
 pub(super) fn takes(view: &View) -> bool {
-    view.launcher.as_ref().is_some_and(|l| {
-        l.shell
-            && l.draft.placement == Placement::LastPortal
-            && l.draft.host.is_none()
-            && !l.draft.message.trim().is_empty()
-            && !l.draft.cwd().is_empty()
-    }) && crate::mux_rows::wire_at_least(&view.session, crate::proto::LAUNCH_PLACEMENT_PROTO)
+    view.launcher
+        .as_ref()
+        .is_some_and(|l| l.shell && l.draft.placement == Placement::LastPortal && fits(l))
+        && crate::mux_rows::wire_at_least(&view.session, crate::proto::LAUNCH_PLACEMENT_PROTO)
+}
+
+/// Whether the draft is a line the card can host.
+fn fits(l: &Launcher) -> bool {
+    l.draft.host.is_none() && !l.draft.message.trim().is_empty() && !l.draft.cwd().is_empty()
+}
+
+/// Where a `!` with no pick runs, as the chip names it before Enter.
+pub(super) fn default_word(l: &Launcher) -> &'static str {
+    if l.places.typed && fits(l) {
+        "in the card"
+    } else {
+        "new tab"
+    }
 }
 
 /// Enter in shell mode: start the one run.

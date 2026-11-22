@@ -4583,7 +4583,7 @@ impl Launcher {
         match f {
             Focus::Where => d.host.as_deref().unwrap_or("Local").to_string(),
             Focus::Opens if self.shell && d.placement == Placement::LastPortal => {
-                "in the card".to_string()
+                shell_box::default_word(self).to_string()
             }
             Focus::Opens => self.places.label(d.placement),
             Focus::Project => d
