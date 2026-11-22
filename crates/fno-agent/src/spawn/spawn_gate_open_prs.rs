@@ -268,12 +268,13 @@ mod tests {
     fn a_prompt_first_seed_names_the_exempt_node_without_a_flag() {
         let td = tempfile::tempdir().unwrap();
         let over = |_: &Path| Ok(OpenPrs::counted(36));
-        // The node rides the seed's command slot; the gate resolves it and
-        // the graph leg exempts the seat.
+        // The node rides the seed's command slot; the gate resolves it
+        // through the seed scanner, whose node-id shape wants the full
+        // x-<4 hex> form, and the graph leg exempts the seat.
         assert!(gate_with(
             td.path(),
-            &input("/fno:target x-77", None),
-            |node| node == "x-77",
+            &input("/fno:target x-7777", None),
+            |node| node == "x-7777",
             over
         )
         .is_ok());
