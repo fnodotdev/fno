@@ -860,6 +860,22 @@ for a lead ruling inside its own scope; omit the flag to resolve it from this se
         eprintln!("decide: refused. {message}");
         return 3;
     }
+    // The explicit reach rides the same user gate the law door applies to
+    // its scope stamp: a reach past this machine's own user needs the user
+    // certificate, whatever the authority lane. It fires only where the
+    // flag takes effect: the door subjects' global pin overrides the flag
+    // (a hold is a machine contract that binds by repo and number), and
+    // the project derivation is never wide.
+    if let Some(v) = door
+        .reach
+        .as_deref()
+        .filter(|_| !crate::decision_index::is_pr_door_subject(&subject))
+    {
+        if let Some(refusal) = crate::law_match::wide_scope_refusal(v) {
+            eprintln!("decide: refused. {refusal}");
+            return 3;
+        }
+    }
     // The evidence gate: a measured claim carries the read that produced it.
     // Exempt when the RESOLVED authority is operator (an attended terminal;
     // the waiver command inherits this).
@@ -2091,7 +2107,7 @@ mod tests {
                 "--why",
                 "reach fixture",
                 "--reach",
-                "global",
+                "project:fnh",
             ]),
             DecideIdentity::Forced(Some("cl-reach1")),
         );
@@ -2101,7 +2117,36 @@ mod tests {
             .iter()
             .find(|r| decision_row_str(r, "subject") == "reach-topic")
             .expect("the row landed");
-        assert_eq!(crate::decision_index::row_scope(row), "global");
+        assert_eq!(crate::decision_index::row_scope(row), "project:fnh");
+    }
+
+    #[test]
+    fn a_wide_reach_without_a_user_certificate_refuses() {
+        let env = DoorEnv::new();
+        crate::paths::pin_test_claims_root(env.0.path());
+        let code = decide_door_write(
+            decide_argv(&[
+                "reach-wide",
+                "The ruling text",
+                "--authority",
+                "agent",
+                "--why",
+                "wide reach fixture",
+                "--reach",
+                "global",
+            ]),
+            DecideIdentity::Forced(Some("cl-reach2")),
+        );
+        assert_eq!(code, 3);
+        let read = all_decision_rows();
+        if let Ok((rows, _)) = &read {
+            assert!(
+                !rows
+                    .iter()
+                    .any(|r| decision_row_str(r, "subject") == "reach-wide"),
+                "nothing recorded on a refused wide reach"
+            );
+        }
     }
 
     #[test]
