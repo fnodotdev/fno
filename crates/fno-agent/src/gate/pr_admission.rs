@@ -542,7 +542,20 @@ fn armed_auto_merge(gh: GhRun<'_>, slug: &str, pr: u64) -> Option<bool> {
         #[serde(default)]
         auto_merge_request: Option<Value>,
     }
-    let view: AutoMergeView = serde_json::from_str(out.trim()).ok()?;
+    // The gh channel concatenates stderr after stdout, so a warning on a
+    // successful view would break a whole-string parse; the payload is the
+    // span between the outermost braces, warnings ride after it.
+    let text = out.trim();
+    let Some(start) = text.find('{') else {
+        return None;
+    };
+    let Some(end) = text.rfind('}') else {
+        return None;
+    };
+    if end < start {
+        return None;
+    }
+    let view: AutoMergeView = serde_json::from_str(&text[start..=end]).ok()?;
     Some(view.auto_merge_request.is_some())
 }
 
@@ -986,6 +999,14 @@ mod tests {
                 if args.contains(&"13") {
                     return Ok((false, "gh down".to_string()));
                 }
+                if args.contains(&"14") {
+                    // Armed, with a gh warning riding the combined output.
+                    return Ok((
+                        true,
+                        "{\"autoMergeRequest\": {\"mergeMethod\": \"SQUASH\"}}\nwarning: slow\n"
+                            .to_string(),
+                    ));
+                }
                 if args.contains(&"12") {
                     return Ok((true, r#"{"autoMergeRequest": null}"#.to_string()));
                 }
@@ -1043,6 +1064,13 @@ mod tests {
         assert_eq!(*seen.borrow(), 5);
         assert!(out.is_some_and(|s| s.contains("converted o/r#13 to draft")));
         assert!(!out.is_some_and(|s| s.contains("auto-merge")));
+        // A gh warning appended to a successful read must not hide an armed
+        // auto-merge: the payload is the brace span, warnings ride after it.
+        *seen.borrow_mut() = 0;
+        let out = after_record_with(&gh, "pr-hold:o/r#14", HOLD_DECISION, Some("operator"));
+        assert_eq!(*seen.borrow(), 5);
+        assert!(out.is_some_and(|s| s.contains("disabled an armed auto-merge")));
+        assert!(out.is_some_and(|s| s.contains("converted o/r#14 to draft")));
         *seen.borrow_mut() = 0;
         // A release restores ready, drops the label; the head view is the
         // third call and its stub failure skips the ci-required rerun. A
