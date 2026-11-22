@@ -1427,7 +1427,7 @@ fn tsv_help(args: &[OsString]) -> Option<String> {
         [word, ..]
             if matches!(
                 *word,
-                "mux" | "version" | "uninstall" | "agent" | "agents" | "mail" | "help" | "backlog"
+                "mux" | "version" | "uninstall" | "agent" | "agents" | "mail" | "help"
             ) =>
         {
             None
@@ -1435,6 +1435,9 @@ fn tsv_help(args: &[OsString]) -> Option<String> {
         // Claimed rows whose classifier answers `--help` itself, measured
         // per row on the shipped binary; the generic arm must not rob them.
         ["inbox", "decide" | "decisions" | "notify" | "outstanding" | "peers"] => None,
+        // The bare group keeps its full menu (add/get/find/triage); subrows
+        // stay on the generic arm, measured by the tsv-rows walk.
+        ["backlog"] => None,
         [] => None,
         words => {
             let note = fno::command_names::note_for(words)?;
