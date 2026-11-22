@@ -1087,8 +1087,10 @@ fn bash_write_targets(cmd: &str, out: &mut Vec<String>) {
 
 /// Interpreter write calls: each family pairs a write verb with its path
 /// operand, so a mention or a read never produces a target and the judge
-/// downstream stays the only arbiter. Literals only; compilation waits on a
-/// cheap hint scan.
+/// downstream stays the only arbiter. The families only arm when the command
+/// runs an interpreter, so command text that merely carries a write-call
+/// literal (a search pattern, an echoed example) extracts nothing. Literals
+/// only; compilation waits on a cheap hint scan.
 fn bash_idiom_targets(cmd: &str, push: &mut impl FnMut(Option<regex::Match<'_>>)) {
     const HINTS: [&str; 12] = [
         "open(",
@@ -1105,6 +1107,18 @@ fn bash_idiom_targets(cmd: &str, push: &mut impl FnMut(Option<regex::Match<'_>>)
         "os.replace",
     ];
     if !HINTS.iter().any(|h| cmd.contains(h)) {
+        return;
+    }
+    // Interpreter context, token-bounded the way shell_surface bounds its own
+    // runner list: a bare substring would read every command carrying `sh`
+    // inside another word, and a shell runner arms nothing on its own - shell
+    // writes present their operators to the families above.
+    let interpreter = regex::Regex::new(
+        r"(^|[[:space:];|&(])(python3|python2|python|nodejs|node|deno|bun|ruby|perl)([[:space:]]|$)",
+    )
+    .map(|re| re.is_match(cmd))
+    .unwrap_or(false);
+    if !interpreter {
         return;
     }
     // A quoted literal with an optional single-letter language prefix; the
@@ -1805,12 +1819,15 @@ mod tests {
                 other => panic!("must refuse: {cmd} -> {other:?}"),
             }
         }
-        // Admit arms: a read, a bare mention, the row regen, and a regen that
-        // redirects into its own target.
+        // Admit arms: a read, a bare mention, command text that merely carries
+        // a write-call literal with no interpreter running, the row regen, and
+        // a regen that redirects into its own target.
         for cmd in [
             "python3 -c \"print(open('docs/configuration-guide.md').read())\"",
             "echo docs/configuration-guide.md",
             "rg generated docs/configuration-guide.md",
+            "rg \"open('docs/configuration-guide.md', 'w')\" scripts/x.py",
+            "bash -c \"echo open('docs/configuration-guide.md','w')\"",
             "fno config schema --markdown --write",
             "cargo run --manifest-path crates/fno-agent/Cargo.toml --bin fno-agent -- loops table --markdown > docs/loops.md",
         ] {
