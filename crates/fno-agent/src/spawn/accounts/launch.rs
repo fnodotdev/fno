@@ -425,18 +425,17 @@ mod tests {
     #[test]
     fn a_clear_marker_removes_a_parent_carried_config_dir() {
         let key = "CLAUDE_CONFIG_DIR";
+        let overlay = |value: &str| {
+            let mut env = Map::new();
+            env.insert(key.to_string(), Value::String(value.to_string()));
+            env
+        };
         std::env::set_var(key, "/some/stale/dir");
-        apply_overlay_env(&Map::from([(
-            key.to_string(),
-            Value::String(String::new()),
-        )]));
+        apply_overlay_env(&overlay(""));
         assert_eq!(std::env::var_os(key), None);
         // The admit arm: a real value still sets, so the guard is not a
         // refusal of everything.
-        apply_overlay_env(&Map::from([(
-            key.to_string(),
-            Value::String("/tmp/own-dir".to_string()),
-        )]));
+        apply_overlay_env(&overlay("/tmp/own-dir"));
         assert_eq!(
             std::env::var_os(key).as_deref(),
             Some(std::ffi::OsStr::new("/tmp/own-dir"))
