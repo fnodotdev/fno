@@ -6,6 +6,7 @@
 //! the next time a state is added. Lives outside client.rs under the
 //! file-budget gate.
 
+use super::card_line::verb_mark;
 use super::{lattice_glyph, LatticeState, PopupRow, SEVERITY_ORDER};
 
 /// The one-line reading of a glyph. The strings restate the
@@ -39,5 +40,19 @@ pub(super) fn legend_rows() -> Vec<PopupRow> {
         hint: String::new(),
         enabled: false,
     }));
+    rows.push(PopupRow::Header("verb marks".into()));
+    rows.extend(
+        [
+            ("t", "a /fno:target worker"),
+            ("bp", "a /fno:blueprint worker"),
+        ]
+        .into_iter()
+        .map(|(verb, label)| PopupRow::Entry {
+            glyph: verb_mark(verb).to_string(),
+            label: label.to_string(),
+            hint: String::new(),
+            enabled: false,
+        }),
+    );
     rows
 }

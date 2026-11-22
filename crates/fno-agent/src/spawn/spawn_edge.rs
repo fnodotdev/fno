@@ -147,6 +147,23 @@ pub(crate) fn stamp_lineage_kinds(r: &mut crate::state::Registry) {
     }
 }
 
+/// Stamp the row's dispatch verb (the name grammar's command code) beside
+/// [`stamp_lineage_kinds`], for the same readers: the sideline renders the
+/// verb from this served fact instead of re-parsing the name, which is what
+/// lets a worker name drop its verb prefix without blindfolding a renderer.
+/// A name the grammar cannot parse (a bare pane, a shell) stamps no verb,
+/// and a rename re-derives it on the next sweep. Same writer rule as the
+/// lineage kind: the sweep writes it, nothing else does.
+pub(crate) fn stamp_verbs(r: &mut crate::state::Registry) {
+    for row in r.entries.iter_mut() {
+        let verb =
+            crate::naming::parse_dispatch_agent_name(Some(row.name.as_str())).map(|p| p.command);
+        if row.verb != verb {
+            row.verb = verb;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,6 +228,28 @@ mod tests {
                 Some("peer"),
                 None
             ]
+        );
+    }
+
+    #[test]
+    fn stamp_verbs_reads_the_grammar_and_skips_unparseable_names() {
+        // The verb is the grammar's command code, stamped beside the lineage
+        // kind. A bare pane or a shell parses to no verb and stays
+        // unstamped, and a rename re-derives on the next sweep.
+        let mut r = crate::state::Registry::default();
+        r.entries = vec![
+            row("t-x-1-worker", "s-1", None),
+            row("bp-x-2-plan", "s-2", None),
+            row("kg-t-x-3-glm", "s-3", None),
+            row("th-th-x-4", "s-4", None),
+            row("shell", "s-5", None),
+            row("j-x-cccc-2", "s-6", None),
+        ];
+        stamp_verbs(&mut r);
+        let verbs: Vec<Option<&str>> = r.entries.iter().map(|e| e.verb.as_deref()).collect();
+        assert_eq!(
+            verbs,
+            vec![Some("t"), Some("bp"), Some("t"), Some("th"), None, None]
         );
     }
 

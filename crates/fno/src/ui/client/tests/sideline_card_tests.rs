@@ -589,6 +589,35 @@ fn card_slug_drops_node_and_model_and_the_node_taps_open() {
 }
 
 #[test]
+fn a_stamped_verb_paints_the_mark_and_drops_the_token() {
+    // The verb glyph leads the painted label and the stamped verb token
+    // drops from it; the name string keeps the token for every reader that
+    // still parses it. An unstamped row paints whole (the fixture bar:
+    // `agent_row` leaves verb None, and every assertion above holds).
+    let mut a = agent_row("t-x-5316-opus", 5, Some(AgentBadge::Working), false);
+    a.verb = Some("t".into());
+    assert_eq!(card_line::verb_lead(&a), "⌖ ");
+    assert_eq!(
+        card_line::strip_verb(&a.name, a.verb.as_deref()),
+        "x-5316-opus"
+    );
+    // The source-prefixed form drops only the verb token; a foreign word
+    // that merely starts the same never drops.
+    a.name = "kg-t-x-1-slug".into();
+    assert_eq!(
+        card_line::strip_verb(&a.name, a.verb.as_deref()),
+        "kg-x-1-slug"
+    );
+    a.verb = Some("th".into());
+    assert_eq!(
+        card_line::strip_verb(&a.name, a.verb.as_deref()),
+        "kg-t-x-1-slug",
+        "the stamp names the token; nothing else drops"
+    );
+    assert_eq!(card_line::verb_mark("th"), 't', "letter fallback");
+}
+
+#[test]
 fn card_detail_click_routes_to_the_agent_above() {
     // AC5: row_action on a CardDetail equals row_action one row up.
     let v = card_view(lead_and_worker());

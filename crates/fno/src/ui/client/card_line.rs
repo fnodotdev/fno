@@ -477,10 +477,62 @@ pub(super) fn shown_name(a: &AgentRow) -> &str {
         .unwrap_or(&a.name)
 }
 
+/// The verb marks, in the mux glyph set: one cell wide, text presentation
+/// (the hourglass rule - an emoji-presentation glyph squeezes to nothing in
+/// the snapshot grid), and distinct in shape from every lattice glyph. A
+/// verb outside the pair falls back to its own first letter, and no verb
+/// paints nothing: never a fabricated mark.
+pub(crate) const TARGET_MARK: char = '\u{2316}'; // ⌖ position indicator
+pub(crate) const BLUEPRINT_MARK: char = '\u{2315}'; // ⌕ magnifier
+
+/// The mark for one dispatch verb code.
+pub(crate) fn verb_mark(verb: &str) -> char {
+    match verb {
+        "t" => TARGET_MARK,
+        "bp" => BLUEPRINT_MARK,
+        other => other.chars().next().unwrap_or('?'),
+    }
+}
+
+/// The row's leading mark cell: the verb glyph (or letter fallback) plus
+/// the space that separates it from the name, empty when the row stamps no
+/// verb.
+pub(super) fn verb_lead(a: &AgentRow) -> String {
+    match a.verb.as_deref().filter(|v| !v.is_empty()) {
+        Some(verb) => format!("{} ", verb_mark(verb)),
+        None => String::new(),
+    }
+}
+
+/// The display string with the stamped verb token dropped: the mark paints
+/// the verb, so the token reads as noise. Only a token at the grammar's own
+/// position (bare, or after one source token) drops, and only when the
+/// row's stamped verb confirms it; an unstamped name keeps every token it
+/// has, so a fixture or a renamed row never loses a word.
+pub(super) fn strip_verb(name: &str, verb: Option<&str>) -> String {
+    let Some(verb) = verb.filter(|v| !v.is_empty()) else {
+        return name.to_string();
+    };
+    let (head, rest) = match name.split_once('-') {
+        Some(parts) => parts,
+        None => return name.to_string(),
+    };
+    if head == verb {
+        return rest.to_string();
+    }
+    match rest.split_once('-') {
+        // The source-prefixed form: `kg-t-x-1` drops only the verb token.
+        Some((second, tail)) if second == verb => format!("{head}-{tail}"),
+        _ => name.to_string(),
+    }
+}
+
 /// The card's name: the worker name without the node and model the card
 /// now shows in their own columns. `t-<node>-opus` keeps only `t`, so it
 /// reads `t-<node slug>` when the board knows the node; with no slug, it
-/// keeps the node rather than show a bare prefix.
+/// keeps the node rather than show a bare prefix. The painted label drops
+/// the stamped verb token beside the mark (`strip_verb`), so a stamped
+/// card reads the slug alone and the glyph carries the verb.
 pub(super) fn slug(a: &AgentRow, backlog: &[BacklogCard]) -> String {
     let name = shown_name(a);
     let model_tokens: Vec<&str> = a

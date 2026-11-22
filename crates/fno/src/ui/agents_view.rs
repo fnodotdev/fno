@@ -175,6 +175,10 @@ pub struct RegistryAgent {
     /// The served CHILD/PEER word for this row's spawn edge, read from the
     /// registry row. `None` (a pre-v32 row) renders flat like a peer.
     pub lineage_kind: Option<String>,
+    /// The row's dispatch verb (the name grammar's command code), read from
+    /// the registry row (schema v46). `None` = the name parses to no verb
+    /// (a bare pane, a shell) or the row predates the stamp.
+    pub verb: Option<String>,
     /// The registry NAME of the row `spawned_by_session` points at, derived
     /// once per row set in [`merge_rows`]. `None` when the edge names a
     /// session no row holds, or two rows claim the same id: an ambiguous
@@ -2242,6 +2246,11 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(str::to_string);
+        let verb = row
+            .get("verb")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
         let lineage_reason = row
             .get("lineage_reason")
             .and_then(|v| v.as_str())
@@ -2378,6 +2387,7 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
             role_title,
             spawned_by_session,
             lineage_kind,
+            verb,
             spawned_by_name: None,
             lineage_reason,
             liveness,

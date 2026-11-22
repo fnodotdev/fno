@@ -433,7 +433,9 @@ fn default_true() -> bool {
 /// oldest held submission; floor stays 58.
 /// v131: `ClientMsg::PaneInset`, the cells a client keeps empty inside every
 /// pane; floor stays 58.
-pub const PROTO_VERSION: u32 = 131;
+/// v132: `AgentRow.verb` (serde default), the row's dispatch verb the
+/// sideline renders as a glyph instead of parsing the name; floor stays 58.
+pub const PROTO_VERSION: u32 = 132;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -1473,6 +1475,14 @@ pub struct AgentRow {
     /// (v82) Served CHILD/PEER word; `child` nests, `peer`/absent renders flat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lineage_kind: Option<String>,
+    /// (v132) The row's dispatch verb, the command code the name grammar
+    /// parses off the row's name (`t`, `bp`, `r`, `th`, `f`), stamped on the
+    /// registry row by the liveness sweep. The sideline renders the verb
+    /// glyph from this served fact instead of parsing the name string.
+    /// `None` on a name the grammar cannot parse (a bare pane, a shell).
+    /// Additive: `#[serde(default)]` keeps a v131 reader wire-tolerant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verb: Option<String>,
     /// (v84) The registry NAME of the row `spawned_by_session` points at,
     /// derived once per row set server-side (agents_view::merge_rows).
     /// `None` when the edge names no row in the set or the id is claimed

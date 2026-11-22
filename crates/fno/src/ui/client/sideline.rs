@@ -958,17 +958,19 @@ impl View {
                 )),
                 DisplayRow::Agent(a) if density == Density::Slim => {
                     // Small mode (q-334c5e9d option 1): one line per live
-                    // agent - the animated glyph, then the slug, clipped to
-                    // the 16-column rail. Exited rows never reach here:
-                    // Slim drops them at the row fold.
+                    // agent - the animated glyph, the verb mark, then the
+                    // slug, clipped to the 16-column rail. Exited rows never
+                    // reach here: Slim drops them at the row fold.
                     let lat = agent_lattice_state(a);
+                    let slug = card_line::slug(a, &self.backlog);
                     Some((
                         crate::chrome::clip(
                             &format!(
-                                " {} {}",
+                                " {} {}{}",
                                 build_status_cell(a.build, lat, 2)
                                     .unwrap_or_else(|| status_glyph(lat).to_string()),
-                                card_line::slug(a, &self.backlog)
+                                card_line::verb_lead(a),
+                                card_line::strip_verb(&slug, a.verb.as_deref())
                             ),
                             text_w,
                         ),
@@ -1386,13 +1388,23 @@ impl View {
                 let base_width = name_w.saturating_sub(prefix_width + usize::from(card));
                 // Row 1 carries the role vocabulary: a lead's people title
                 // after its slug (`sorrel · lead of mux`), a worker's lead
-                // after its thread slug (`t-x0eee · sorrel`).
+                // after its thread slug (`t-x0eee · sorrel`). The verb mark
+                // leads the label and the stamped verb token drops from it:
+                // the glyph paints the verb, the name keeps it for every
+                // reader that still parses the string.
+                let verb = a.verb.as_deref();
+                let lead = card_line::verb_lead(a);
                 let card_parts =
                     card.then(|| (card_line::slug(a, &self.backlog), self.lead_label(a)));
                 let label = match &card_parts {
-                    Some((slug, Some(role))) => format!("{slug} \u{b7} {role}"),
-                    Some((slug, None)) => slug.clone(),
-                    None => card_line::shown_name(a).to_string(),
+                    Some((slug, Some(role))) => {
+                        format!("{lead}{} \u{b7} {role}", card_line::strip_verb(slug, verb))
+                    }
+                    Some((slug, None)) => format!("{lead}{}", card_line::strip_verb(slug, verb)),
+                    None => format!(
+                        "{lead}{}",
+                        card_line::strip_verb(card_line::shown_name(a), verb)
+                    ),
                 };
                 // (US3, inline) A member with a different project or worktree
                 // path shows it inline in parens after the slug or name, only
@@ -1734,10 +1746,14 @@ impl View {
         // The name matters most: the node may not start before the slug's
         // end plus one space. It cuts its front, or drops, to fit. A slug
         // clipped to fit is not found whole, and leaves the node no room.
+        // The painted label leads with the verb mark and drops the stamped
+        // verb token, so the search string matches what line 1 painted.
         let slug = card_line::slug(agent, &self.backlog);
+        let shown = card_line::strip_verb(&slug, agent.verb.as_deref());
+        let painted_label = format!("{}{shown}", card_line::verb_lead(agent));
         let painted: String = line.iter().map(|c| c.c).collect();
-        let keep = painted.find(&slug).map_or(usize::MAX, |b| {
-            painted[..b].chars().count() + slug.chars().count() + 1
+        let keep = painted.find(&painted_label).map_or(usize::MAX, |b| {
+            painted[..b].chars().count() + painted_label.chars().count() + 1
         });
         let fitted = agent
             .node

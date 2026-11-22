@@ -31,10 +31,37 @@ fn keys_modal_legend_lists_severity_glyphs_in_header_order() {
             other => panic!("legend rows are inert entries, got {other:?}"),
         }
     }
+    // The verb-mark section follows the severity block: its rows go back
+    // through `verb_mark`, the one table the rows call, so the legend
+    // cannot spell a mark the screen never paints.
     assert!(matches!(
         rows.get(start + 1 + SEVERITY_ORDER.len()),
-        Some(PopupRow::Rule) | None
+        Some(PopupRow::Header(h)) if h == "verb marks"
     ));
+    let verb_start = start + 2 + SEVERITY_ORDER.len();
+    let verb_rows: Vec<&PopupRow> = rows
+        .iter()
+        .skip(verb_start)
+        .take_while(|r| matches!(r, PopupRow::Entry { .. }))
+        .collect();
+    assert_eq!(verb_rows.len(), 2, "target and blueprint carry rows");
+    for row in verb_rows {
+        match row {
+            PopupRow::Entry {
+                glyph,
+                label,
+                hint: _,
+                enabled: false,
+            } => {
+                assert!(
+                    glyph == "⌖" || glyph == "⌕",
+                    "unexpected verb glyph {glyph:?}"
+                );
+                assert!(label.contains("/fno:target") || label.contains("/fno:blueprint"));
+            }
+            other => panic!("verb legend rows are inert entries, got {other:?}"),
+        }
+    }
 }
 
 #[test]
