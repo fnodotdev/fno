@@ -1514,7 +1514,12 @@ mod tests {
         assert!(body.contains("kestrel"), "{body}");
         assert!(body.contains("x-1"), "{body}");
         assert!(body.contains("reason: launch account zai"), "{body}");
-        assert!(body.contains("fno agent session resume kestrel"), "{body}");
+        // The respawn line names the row's session id - the resume door's
+        // routing key - not the row's display name.
+        assert!(
+            body.contains("fno agent session resume 22223333-worker"),
+            "{body}"
+        );
         assert!(body.contains("claim release node:x-1 --force"), "{body}");
     }
 
