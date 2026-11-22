@@ -16,6 +16,7 @@
 //! rows and needs no guard trigger.
 
 #[path = "event_context.rs"]
+mod diff_evidence;
 mod event_context;
 
 use crate::finalize::repo_identity_from_git_remote;

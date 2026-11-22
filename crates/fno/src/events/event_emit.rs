@@ -265,24 +265,67 @@ fn push(
     }
 }
 
-/// A clean inline `code-review` pass needs proof the lane read the change.
-/// The attester's own transcript carries no read of the diff after its last
-/// commit: the emit would attest a review that never happened.
+/// A clean `code-review` pass needs proof from the attester's own transcript
+/// that the lane read the change at this head: diff output covering every
+/// changed file after its last head-moving command, or a successful review
+/// subagent call. The caller's `execution_context` word earns no exemption.
 fn unread_diff_refusal(data: &Map<String, Value>, diff_read: &Value) -> Option<String> {
     let text = |key| data.get(key).and_then(Value::as_str).unwrap_or_default();
-    let inline_clean = text("reviewer") == "code-review"
-        && text("verdict") == "pass"
-        && text("execution_context") != "fork";
-    let kind = diff_read["kind"].as_str().unwrap_or("unobserved");
-    if !inline_clean || !matches!(kind, "none" | "stale") {
+    if text("reviewer") != "code-review" || text("verdict") != "pass" {
         return None;
     }
-    let why = if kind == "none" {
-        "this session's transcript shows no read of the diff"
-    } else {
-        "this session's last diff read came before its last commit"
+    // A later round reads only what changed since the prior head, and an
+    // empty diff leaves nothing to read.
+    let later_round =
+        data["review_round"].as_u64().unwrap_or(1) > 1 || data["verify_fixes"] == true;
+    let needed = match data["reviewed_file_count"].as_u64().unwrap_or(0) {
+        0 => return None,
+        _ if later_round => 1,
+        n => n,
     };
-    Some(format!("a clean code-review pass needs the lane to read the diff at this head, and {why} (a --stat or --name-only probe does not count). Run `git diff origin/main...HEAD`, review it, then emit."))
+    let read = diff_read["files"].as_u64().unwrap_or(0);
+    let why = match diff_read["kind"].as_str().unwrap_or("unobserved") {
+        "none" => "this session's transcript shows no diff output".to_string(),
+        "stale" => {
+            "this session's last diff output came before its last commit or merge".to_string()
+        }
+        "read" if diff_read["agent"] != true && read < needed => {
+            format!("this session read the diff of {read} of {needed} changed files")
+        }
+        _ => return None,
+    };
+    Some(format!("a clean code-review pass needs the lane to read the whole diff at this head, and {why} (a --stat or --name-only probe, a failed command, or output sent to a file does not count). Run `git diff origin/main...HEAD` in plain form, review it, then emit."))
+}
+
+#[cfg(test)]
+mod refusal_tests {
+    use super::*;
+
+    fn refusal(extra: Value, diff_read: Value) -> Option<String> {
+        let mut data = json!({"reviewer":"code-review","verdict":"pass","reviewed_file_count":3});
+        data.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        unread_diff_refusal(data.as_object().unwrap(), &diff_read)
+    }
+
+    #[test]
+    fn a_caller_typed_fork_buys_no_exemption_and_partial_reads_refuse() {
+        let fork = json!({"execution_context":"fork"});
+        assert!(refusal(fork.clone(), json!({"kind":"none"})).is_some());
+        assert!(refusal(fork, json!({"kind":"read","files":1,"agent":false})).is_some());
+        assert!(refusal(json!({}), json!({"kind":"read","files":3,"agent":false})).is_none());
+        assert!(refusal(json!({}), json!({"kind":"read","files":0,"agent":true})).is_none());
+        assert!(refusal(json!({}), json!({"kind":"unobserved"})).is_none());
+        assert!(refusal(json!({"verdict":"fail"}), json!({"kind":"none"})).is_none());
+        assert!(refusal(
+            json!({"review_round":2}),
+            json!({"kind":"read","files":1,"agent":false})
+        )
+        .is_none());
+        assert!(refusal(json!({"review_round":2}), json!({"kind":"none"})).is_some());
+        assert!(refusal(json!({"reviewed_file_count":0}), json!({"kind":"none"})).is_none());
+    }
 }
 
 pub(super) fn run(args: &[OsString], json_mode: bool) -> i32 {
