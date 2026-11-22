@@ -295,6 +295,7 @@ fn insert_row(
     row: &BTreeMap<String, Value>,
 ) -> Result<(), MigrateError> {
     let names: Vec<&String> = row.keys().collect();
+    // A row that cannot go back is named, never counted as restored.
     let sql = format!(
         "INSERT OR IGNORE INTO \"{table}\" ({}) VALUES ({})",
         names
@@ -307,9 +308,7 @@ fn insert_row(
             .collect::<Vec<_>>()
             .join(", ")
     );
-    conn.execute(&sql, params_from_iter(row.values().map(cell_sql)))
-        .map(drop)
-        .map_err(MigrateError::from)
+    changed(conn.execute(&sql, params_from_iter(row.values().map(cell_sql)))?)
 }
 
 fn has_column(conn: &Connection, table: &str, column: &str) -> bool {
@@ -1088,6 +1087,13 @@ fn undo_one(entry: &Undo) -> Result<(), MigrateError> {
             if sha_hex(&now) != *after {
                 return changed(0);
             }
+            // A page written at the old name since apply is a later write.
+            if to != from && from.exists() {
+                return Err(MigrateError::RenameTaken {
+                    from: to.clone(),
+                    to: from.clone(),
+                });
+            }
             let text = std::fs::read_to_string(backup)?;
             write_atomic(from, &text)?;
             if to != from {
@@ -1264,5 +1270,23 @@ mod tests {
             "question_id: q-0000beef\n"
         );
         assert!(!moved.exists());
+
+        // A page written at the old name after apply is never overwritten.
+        std::fs::write(&moved, "apply wrote this").unwrap();
+        std::fs::write(&page, "written after apply").unwrap();
+        let backup = dir.path().join("before.md");
+        std::fs::write(&backup, "before apply").unwrap();
+        let left = undo_all(vec![Undo::File {
+            from: page.clone(),
+            to: moved.clone(),
+            backup,
+            after: sha_hex(b"apply wrote this"),
+        }]);
+        assert_eq!(left.len(), 1, "{left:?}");
+        assert_eq!(
+            std::fs::read_to_string(&page).unwrap(),
+            "written after apply"
+        );
+        assert!(moved.exists());
     }
 }
