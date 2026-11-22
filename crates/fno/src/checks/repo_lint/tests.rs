@@ -127,3 +127,19 @@ fn command_ratchet_refuses_a_rust_leaf_the_baseline_lacks() {
     assert_eq!(command_ratchet::run(&inv), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn claims_pattern_gains_only_the_sequential_arm() {
+    assert_eq!(
+        plan_filenames::claims_pattern(false, "t"),
+        r"^[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}$"
+    );
+    let seq = regex::Regex::new(&plan_filenames::claims_pattern(true, "t"))
+        .expect("claims regex compiles");
+    assert!(seq.is_match("t-15"));
+    // Hex ids stay claims in a sequential project.
+    assert!(seq.is_match("x-beef"));
+    // Another prefix's token and a zero lead stay prose.
+    assert!(!seq.is_match("u-9"));
+    assert!(!seq.is_match("t-07"));
+}

@@ -551,6 +551,21 @@ pub mod plan_filenames {
         scan_dir(&plans_dir, &prefixes)
     }
 
+    /// The frontmatter-claims pattern under an explicit mode: the hex id
+    /// grammar, plus the sequential arm when the board config says so.
+    /// Pure so tests drive both modes; `scan_dir` feeds it the door facts.
+    pub(super) fn claims_pattern(sequential: bool, prefix: &str) -> String {
+        let hex_arm = r"[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}";
+        if sequential {
+            format!(
+                "^(?:{hex_arm}|{})",
+                crate::backlog::id_mode::sequential_pattern_for(prefix)
+            )
+        } else {
+            format!("^{hex_arm}$")
+        }
+    }
+
     /// The filename-prefix allowlist: the configured node prefix plus the
     /// legacy `ab`, exactly the set the Python leg passed as
     /// `{LEGACY_PREFIX, node_id_prefix()}`.
@@ -570,15 +585,7 @@ pub mod plan_filenames {
             std::process::exit(1);
         }
         let mode = crate::backlog::id_mode::facts();
-        let hex_arm = r"[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}";
-        let claims_pattern = if mode.sequential {
-            format!(
-                "^(?:{hex_arm}|{})",
-                crate::backlog::id_mode::sequential_pattern_for(&mode.prefix)
-            )
-        } else {
-            format!("^{hex_arm}$")
-        };
+        let claims_pattern = claims_pattern(mode.sequential, &mode.prefix);
         let wellformed = regex::Regex::new(&claims_pattern).expect("claims regex compiles");
         let filename_node =
             regex::Regex::new(r"-(?P<prefix>[a-z][a-z0-9]{0,7})-(?P<hex>[0-9a-f]{4,8})\.md$")
