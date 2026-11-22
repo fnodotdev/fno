@@ -120,13 +120,25 @@ const DIFF_STAT_ONLY: [&str; 7] = [
 /// `git show` or `gh pr diff` with no stat-only flag.
 fn segment_reads_diff(segment: &str) -> bool {
     let words: Vec<&str> = segment.split_whitespace().collect();
-    if !matches!(words.first(), Some(&"git" | &"gh")) {
-        return false;
-    }
-    let reads = words
-        .windows(2)
-        .any(|w| w == ["git", "diff"] || w == ["git", "show"])
-        || words.windows(3).any(|w| w == ["gh", "pr", "diff"]);
+    let reads = match words.first() {
+        Some(&"git") => {
+            // The subcommand is the first word that is no flag and no
+            // `-C <dir>` / `-c <kv>` value, so `git -C wt diff` reads too.
+            let mut rest = words[1..].iter();
+            let mut sub = None;
+            while let Some(word) = rest.next() {
+                if matches!(*word, "-C" | "-c") {
+                    rest.next();
+                } else if !word.starts_with('-') {
+                    sub = Some(*word);
+                    break;
+                }
+            }
+            matches!(sub, Some("diff" | "show"))
+        }
+        Some(&"gh") => words.get(1) == Some(&"pr") && words.get(2) == Some(&"diff"),
+        _ => false,
+    };
     reads && !words.iter().any(|w| DIFF_STAT_ONLY.contains(w))
 }
 
@@ -415,6 +427,12 @@ mod tests {
         assert_eq!(kind(&["gh pr diff 512 --name-only"]), "none");
         assert_eq!(kind(&["git commit -m \"git diff\""]), "none");
         assert_eq!(kind(&["echo git diff"]), "none");
+        assert_eq!(kind(&["git -C /wt diff origin/main...HEAD"]), "read");
+        assert_eq!(kind(&["git -C /wt diff --numstat"]), "none");
+        let agent = json!({"type":"assistant","message":{"content":[
+            {"type":"tool_use","name":"Agent","input":{}}]}});
+        std::fs::write(&path, format!("{agent}\n")).unwrap();
+        assert_eq!(diff_read("claude", Some(&path))["kind"], "read");
         assert_eq!(
             diff_read("codex", Some(&path)),
             json!({"kind":"unobserved"})
