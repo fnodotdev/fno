@@ -1129,6 +1129,7 @@ fn run_archive(
             cap: crate::question_intake::QUESTION_CAP,
             provenance: json!({}),
             closed_by: Some("mux".to_string()),
+            closed_via_succession: None,
             caller,
             home: Some(home.clone()),
             journal_path: crate::paths::space_dir(cwd).join("events.jsonl"),
