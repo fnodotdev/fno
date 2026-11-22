@@ -572,11 +572,11 @@ fn red_is_stale(latest: &[Value], runs: &[Value]) -> bool {
 fn hold_only_red(latest: &[Value]) -> bool {
     let failed: Vec<&Value> = latest
         .iter()
-        .filter(|row| row.get("bucket").and_then(Value::as_str) == Some("fail"))
+        .filter(|row| row.pointer("/bucket").and_then(Value::as_str) == Some("fail"))
         .collect();
     !failed.is_empty()
         && failed.iter().all(|row| {
-            row.get("workflow")
+            row.pointer("/workflow")
                 .and_then(Value::as_str)
                 .map(|w| w.ends_with("/ci-required.yml"))
                 .unwrap_or(false)
@@ -607,7 +607,7 @@ fn pr_hold_label_live(gh_bin: &str, cwd: &Path, pr: u64) -> bool {
         .map(|labels| {
             labels
                 .iter()
-                .any(|l| l.get("name").and_then(Value::as_str) == Some("pr-hold"))
+                .any(|l| l.pointer("/name").and_then(Value::as_str) == Some("pr-hold"))
         })
         .unwrap_or(false)
 }
