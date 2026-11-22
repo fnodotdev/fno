@@ -1387,19 +1387,18 @@ mod tests {
         // path: --exact matches nothing on a bare function name, and a child
         // that ran nothing still exits 0.
         let exe = std::env::current_exe().unwrap();
-        let out = std::process::Command::new(&exe)
-            .args([
-                "--exact",
-                "numbers::migrate::apply::tests::migrate_ids_two_project_apply_child",
-                "--ignored",
-            ])
-            .env("FNO_HOME", &home)
-            .env("HOME", root.path())
-            .env("FNO_CONFIG", proj_a.join(".fno/config.toml"))
-            .env_remove("FNO_STATE_DIR")
-            .current_dir(&proj_a)
-            .output()
-            .unwrap();
+        let mut cmd = std::process::Command::new(&exe);
+        cmd.args([
+            "--exact",
+            "numbers::migrate::apply::tests::migrate_ids_two_project_apply_child",
+            "--ignored",
+        ])
+        .env("FNO_HOME", &home)
+        .env("HOME", root.path())
+        .env("FNO_CONFIG", proj_a.join(".fno/config.toml"))
+        .env_remove("FNO_STATE_DIR")
+        .current_dir(&proj_a);
+        let out = crate::bounded_cmd::output_with_timeout_result(cmd, 600).unwrap();
         assert!(
             out.status.success(),
             "the two-project child failed: {}",
