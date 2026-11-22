@@ -354,20 +354,21 @@ pub(crate) fn header(fleet: &Fleet, item: &Item, tab: crate::view_store::OrgTab)
 }
 
 pub(crate) fn table(rows: &[Row], sel: &str, width: usize, now: u64) -> Vec<Line> {
-    const W: [usize; 6] = [18, 14, 10, 14, 9, 7];
+    const W: [usize; 7] = [18, 14, 10, 14, 9, 7, 8];
     let fixed: usize = W.iter().sum::<usize>() + 1;
     let now_w = width.saturating_sub(fixed).max(8);
     let mut out = vec![
         Lb::default()
             .s(
                 format!(
-                    " {}{}{}{}{}{}Now",
+                    " {}{}{}{}{}{}{}Now",
                     fit("Lead", W[0]),
                     fit("Seat", W[1]),
                     fit("Runtime", W[2]),
                     fit("Model", W[3]),
                     fit("State", W[4]),
-                    fit("Age", W[5])
+                    fit("Age", W[5]),
+                    fit("Use", W[6])
                 ),
                 TextStyle::Title,
             )
@@ -414,6 +415,7 @@ pub(crate) fn table(rows: &[Row], sel: &str, width: usize, now: u64) -> Vec<Line
                 },
             };
             let runtime = r.s.harness.as_deref().unwrap_or("not published");
+            let use_cell = cost_cell_of(r.s);
             out.push(
                 Lb::default()
                     .s(" ", TextStyle::Meta)
@@ -423,7 +425,7 @@ pub(crate) fn table(rows: &[Row], sel: &str, width: usize, now: u64) -> Vec<Line
                     .s(format!("{} ", fit(runtime, W[2] - 1)), TextStyle::Meta)
                     .s(format!("{} ", fit(&model(r.s), W[3] - 1)), TextStyle::Meta)
                     .s(fit(r.s.status, W[4]), status_role(r.s.status))
-                    .s(format!("{} ", fit(&age, W[5] - 1)), TextStyle::Item)
+                    .s(format!("{} ", fit(&use_cell, W[6] - 1)), TextStyle::Item)
                     .s(fit(&last, now_w), TextStyle::Meta)
                     .whole(&key)
                     .band(key == sel)
@@ -436,7 +438,46 @@ pub(crate) fn table(rows: &[Row], sel: &str, width: usize, now: u64) -> Vec<Line
         " {} \u{b7} enter on a seat opens it",
         summary(rows)
     )));
+    if let Some(total) = use_totals(rows) {
+        out.push(meta(total));
+    }
     out
+}
+
+/// The scope's published-use total: priced dollars and the four token
+/// classes summed over the rows that publish them. `None` when no row in
+/// scope publishes any usage, so a fleet with no readings reads no total.
+pub(crate) fn use_totals(rows: &[Row]) -> Option<String> {
+    let any = rows
+        .iter()
+        .any(|r| r.s.cost_cents.is_some() || r.s.input_tokens.is_some());
+    if !any {
+        return None;
+    }
+    let cents: u64 = rows.iter().filter_map(|r| r.s.cost_cents).sum();
+    let mut tokens: u64 = 0;
+    for r in rows {
+        for v in [
+            r.s.input_tokens,
+            r.s.output_tokens,
+            r.s.cache_read_tokens,
+            r.s.cache_write_tokens,
+        ] {
+            tokens += v.unwrap_or(0);
+        }
+    }
+    Some(format!(
+        " use {} \u{b7} {}",
+        super::row_meter::cost_cell(cents),
+        super::row_meter::token_cell(tokens)
+    ))
+}
+
+fn cost_cell_of(s: &Seat) -> String {
+    s.cost_cents.map_or_else(
+        || "not published".into(),
+        |c| super::row_meter::cost_cell(c),
+    )
 }
 
 pub(crate) fn recent(rows: &[Row], width: usize, now: u64) -> Vec<Line> {

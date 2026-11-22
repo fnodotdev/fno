@@ -69,12 +69,17 @@ pub(crate) fn meters(rows: &[AgentRow]) -> BTreeMap<String, serde_json::Value> {
                 .filter(|s| !s.is_empty())?;
             (row.session_cost_cents.is_some()
                 || row.session_tokens.is_some()
-                || row.compaction_count.is_some())
+                || row.compaction_count.is_some()
+                || row.session_input_tokens.is_some())
             .then(|| {
                 let meter = serde_json::json!({
                     "cost_cents": row.session_cost_cents,
                     "tokens": row.session_tokens,
                     "compactions": row.compaction_count,
+                    "input_tokens": row.session_input_tokens,
+                    "output_tokens": row.session_output_tokens,
+                    "cache_read_tokens": row.session_cache_read_tokens,
+                    "cache_write_tokens": row.session_cache_write_tokens,
                 });
                 (session.to_string(), meter)
             })

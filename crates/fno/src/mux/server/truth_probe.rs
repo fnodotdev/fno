@@ -86,6 +86,14 @@ fn truth_map_from_list(result: &serde_json::Value) -> Option<HashMap<String, Tru
         let cost_cents = row.get("session_cost_cents").and_then(|v| v.as_u64());
         let tokens = row.get("session_tokens").and_then(|v| v.as_u64());
         let compaction_count = row.get("compaction_count").and_then(|v| v.as_u64());
+        let input_tokens = row.get("session_input_tokens").and_then(|v| v.as_u64());
+        let output_tokens = row.get("session_output_tokens").and_then(|v| v.as_u64());
+        let cache_read_tokens = row
+            .get("session_cache_read_tokens")
+            .and_then(|v| v.as_u64());
+        let cache_write_tokens = row
+            .get("session_cache_write_tokens")
+            .and_then(|v| v.as_u64());
         // Only an `observed` reading names a model; `no-transcript` and the
         // other kinds are absence, never a model string.
         let observed_model = row
@@ -103,6 +111,10 @@ fn truth_map_from_list(result: &serde_json::Value) -> Option<HashMap<String, Tru
                 cost_cents,
                 tokens,
                 compaction_count,
+                input_tokens,
+                output_tokens,
+                cache_read_tokens,
+                cache_write_tokens,
                 observed_model,
             },
         );
@@ -123,6 +135,12 @@ pub(crate) struct TruthReading {
     pub(crate) cost_cents: Option<u64>,
     pub(crate) tokens: Option<u64>,
     pub(crate) compaction_count: Option<u64>,
+    /// The raw token classes behind `tokens`, served per class by the
+    /// daemon. `None` before the first measurement; never a zero.
+    pub(crate) input_tokens: Option<u64>,
+    pub(crate) output_tokens: Option<u64>,
+    pub(crate) cache_read_tokens: Option<u64>,
+    pub(crate) cache_write_tokens: Option<u64>,
     /// The model the session's transcript shows it running.
     pub(crate) observed_model: Option<String>,
 }
@@ -175,7 +193,9 @@ mod truth_probe_cadence {
                 {"name": "row-a", "harness_session_id": "sess-1",
                  "basis": "transcript", "last_activity_age_s": 12.0,
                  "session_cost_cents": 7, "session_tokens": 9001,
-                 "compaction_count": 2},
+                 "compaction_count": 2,
+                 "session_input_tokens": 100, "session_output_tokens": 40,
+                 "session_cache_read_tokens": 8700, "session_cache_write_tokens": 861},
                 {"name": "row-b", "basis": "process-gone",
                  "observed_model": {"kind": "no-transcript"}},
                 {"name": "row-c",
@@ -201,9 +221,17 @@ mod truth_probe_cadence {
         assert_eq!(a.cost_cents, Some(7));
         assert_eq!(a.tokens, Some(9001));
         assert_eq!(a.compaction_count, Some(2));
+        assert_eq!(a.input_tokens, Some(100));
+        assert_eq!(a.output_tokens, Some(40));
+        assert_eq!(a.cache_read_tokens, Some(8700));
+        assert_eq!(a.cache_write_tokens, Some(861));
         let b = map.get("row-b").expect("label key for a legacy row");
         assert_eq!(b.basis.as_deref(), Some("process-gone"));
         assert_eq!(b.age_s, None, "nulls are absence, not zeros");
+        assert_eq!(
+            b.input_tokens, None,
+            "a row that serves no breakdown reads as absence, never zero"
+        );
         assert!(
             super::truth_map_from_list(&serde_json::json!({})).is_none(),
             "no agents key is a refused answer, not an empty map"

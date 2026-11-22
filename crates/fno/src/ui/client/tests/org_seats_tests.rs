@@ -144,3 +144,92 @@ fn fold_groups_each_seat_under_the_lead_it_reports_to() {
     assert_eq!(imac.lanes, [lane]);
     assert!(fleet.machines[0].lanes.is_empty() && fleet.machines[0].display_name.is_none());
 }
+
+#[test]
+fn fold_reads_published_token_use_and_absence_reads_none() {
+    let mut map = fleet_json();
+    for (k, v) in [
+        ("compactions", json!(2)),
+        ("input_tokens", json!(1_500_000)),
+        ("output_tokens", json!(45_000)),
+        ("cache_read_tokens", json!(89_000_000)),
+        ("cache_write_tokens", json!(12_000_000)),
+        ("cost_cents", json!(4421)),
+    ] {
+        map["machines"][1]["sessions"][0][k] = json!(v);
+    }
+    let fleet = fold(&map, &crate::backlog_model::fixture(vec![]), &[], 7);
+    let mb00 = fleet.seats().find(|s| s.name == "mb-00").unwrap();
+    assert_eq!(mb00.compactions, Some(2));
+    assert_eq!(mb00.input_tokens, Some(1_500_000));
+    assert_eq!(mb00.output_tokens, Some(45_000));
+    assert_eq!(mb00.cache_read_tokens, Some(89_000_000));
+    assert_eq!(mb00.cache_write_tokens, Some(12_000_000));
+    assert_eq!(mb00.cost_cents, Some(4421));
+    let mb01 = fleet.seats().find(|s| s.name == "mb-01").unwrap();
+    assert_eq!(
+        (mb01.compactions, mb01.input_tokens, mb01.cost_cents),
+        (None, None, None),
+        "a machine that publishes no usage reads absence, never zero"
+    );
+}
+
+#[test]
+fn seat_page_and_table_paint_the_published_use() {
+    let mut map = fleet_json();
+    for (k, v) in [
+        ("compactions", json!(2)),
+        ("input_tokens", json!(1_500_000)),
+        ("output_tokens", json!(45_000)),
+        ("cache_read_tokens", json!(89_000_000)),
+        ("cache_write_tokens", json!(12_000_000)),
+        ("cost_cents", json!(4421)),
+    ] {
+        map["machines"][1]["sessions"][0][k] = json!(v);
+    }
+    let fleet = fold(&map, &crate::backlog_model::fixture(vec![]), &[], 7);
+    let m = &fleet.machines[0];
+    let p = &m.leads[0];
+    let s = &p.seats[0];
+    let page = super::super::org_pages::seat(m, p, s, 100, 7);
+    let text: Vec<String> = page.iter().map(|l| l.line.text.clone()).collect();
+    let joined = text.join("\n");
+    assert!(
+        joined.contains("Token use"),
+        "the section lands on the page"
+    );
+    assert!(
+        text.iter()
+            .any(|t| t.contains("input") && t.contains("1.5M tok")),
+        "input paints: {joined}"
+    );
+    assert!(
+        text.iter()
+            .any(|t| t.contains("cost") && t.contains("~$44.21")),
+        "cost paints: {joined}"
+    );
+    // A seat whose machine publishes nothing reads not published, not zero.
+    let bare = fleet.seats().find(|s| s.name == "mb-01").unwrap();
+    let bare_page = super::super::org_pages::seat(m, p, bare, 100, 7);
+    let bare_text: Vec<String> = bare_page.iter().map(|l| l.line.text.clone()).collect();
+    assert!(
+        bare_text.iter().any(|t| t.contains("not published")),
+        "an unpublishing seat reads not published"
+    );
+    let rows: Vec<super::super::org_tabs::Row> =
+        super::super::org_tabs::scope(&fleet, &super::super::org_board::Item::Root);
+    let tab = super::super::org_tabs::table(&rows, "", 120, 7);
+    let tab_text: Vec<String> = tab.iter().map(|l| l.line.text.clone()).collect();
+    assert!(
+        tab_text.iter().any(|t| t.contains("Use")),
+        "the table names the Use column"
+    );
+    assert!(
+        tab_text.iter().any(|t| t.contains("~$44.21")),
+        "the priced seat cost paints in the Use column: {tab_text:?}"
+    );
+    assert!(
+        tab_text.iter().any(|t| t.contains("use ~$44.21 ·")),
+        "the totals line sums published use: {tab_text:?}"
+    );
+}

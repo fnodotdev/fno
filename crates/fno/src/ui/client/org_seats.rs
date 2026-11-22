@@ -48,6 +48,16 @@ pub struct Seat {
     pub project: Option<String>,
     pub context_pct: Option<i64>,
     pub rss_mb: Option<f64>,
+    /// The per-session use the seat's machine publishes: compaction
+    /// boundaries, the four token classes and the priced cost in cents
+    /// (models.dev list rates). `None` when its machine publishes no usage;
+    /// a published zero is a real reading.
+    pub compactions: Option<u64>,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cache_read_tokens: Option<u64>,
+    pub cache_write_tokens: Option<u64>,
+    pub cost_cents: Option<u64>,
     /// The turn facts. Null when the seat's machine publishes none or its
     /// harness has no transcript reader.
     pub last_message: Option<String>,
@@ -288,6 +298,12 @@ pub fn fold(map: &Value, backlog: &Inputs, agents: &[AgentRow], measured_at: u64
                     project,
                     context_pct: s.get("context_pct").and_then(Value::as_i64),
                     rss_mb: s.get("rss_mb").and_then(Value::as_f64),
+                    compactions: s.get("compactions").and_then(Value::as_u64),
+                    input_tokens: s.get("input_tokens").and_then(Value::as_u64),
+                    output_tokens: s.get("output_tokens").and_then(Value::as_u64),
+                    cache_read_tokens: s.get("cache_read_tokens").and_then(Value::as_u64),
+                    cache_write_tokens: s.get("cache_write_tokens").and_then(Value::as_u64),
+                    cost_cents: s.get("cost_cents").and_then(Value::as_u64),
                     last_message: text(s, "last_message"),
                     last_prompt: text(s, "last_prompt"),
                     user_turns: s.get("user_turns").and_then(Value::as_i64),

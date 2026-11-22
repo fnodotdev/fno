@@ -580,6 +580,31 @@ pub(crate) fn served_compaction_count(sid: Option<&str>) -> Option<u64> {
     fold.compaction_readable.then_some(fold.compaction_count)
 }
 
+/// The raw token classes behind the served `session_tokens`: the sum over
+/// every model the transcript recorded plus the codex cumulative total.
+/// `None` before the first sweep measured the session; a measured session
+/// with no usage yet serves zeros, the same reading `session_tokens` gives.
+pub(crate) fn served_token_breakdown(sid: Option<&str>) -> Option<Tokens> {
+    let sid = sid.filter(|sid| !sid.is_empty())?;
+    let cell = FOLDS.get_or_init(|| Mutex::new(HashMap::new()));
+    let folds = cell.lock().ok()?;
+    let (fold, _) = folds.get(sid)?;
+    let mut sum = Tokens::default();
+    for t in fold.per_model.values() {
+        sum.input += t.input;
+        sum.output += t.output;
+        sum.cache_read += t.cache_read;
+        sum.cache_write += t.cache_write;
+    }
+    if let Some(total) = fold.codex_total {
+        sum.input += total.input;
+        sum.output += total.output;
+        sum.cache_read += total.cache_read;
+        sum.cache_write += total.cache_write;
+    }
+    Some(sum)
+}
+
 /// Session metrics served beside the four stored context fields and running
 /// cost. One helper keeps daemon.rs (shrink-only) net zero.
 pub(crate) fn served_session_metrics_keys(
@@ -613,6 +638,23 @@ pub(crate) fn served_session_metrics_keys(
     keys.insert(
         "compaction_count".into(),
         serde_json::json!(compaction_count),
+    );
+    let breakdown = served_token_breakdown(e.harness_session_id.as_deref());
+    keys.insert(
+        "session_input_tokens".into(),
+        serde_json::json!(breakdown.as_ref().map(|t| t.input)),
+    );
+    keys.insert(
+        "session_output_tokens".into(),
+        serde_json::json!(breakdown.as_ref().map(|t| t.output)),
+    );
+    keys.insert(
+        "session_cache_read_tokens".into(),
+        serde_json::json!(breakdown.as_ref().map(|t| t.cache_read)),
+    );
+    keys.insert(
+        "session_cache_write_tokens".into(),
+        serde_json::json!(breakdown.as_ref().map(|t| t.cache_write)),
     );
     keys
 }
