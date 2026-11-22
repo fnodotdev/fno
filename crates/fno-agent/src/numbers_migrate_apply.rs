@@ -1335,7 +1335,49 @@ mod tests {
     /// sibling project the way an operator would.
     #[test]
     #[ignore = "spawned with a seeded FNO_HOME by the two-project vault test"]
+    /// Every numbers row and live decision id in the seeded store, stamped,
+    /// so an extra key reads its own origin and timing.
+    fn dump_store(tag: &str) {
+        let home = std::env::var_os("FNO_HOME").unwrap();
+        let db = std::path::Path::new(&home).join("db").join("graph.db");
+        let Ok(conn) = Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        else {
+            eprintln!("child[{tag}]: no store at {}", db.display());
+            return;
+        };
+        let rows: Vec<String> = conn
+            .prepare(
+                "SELECT store || ' ' || kind || ' ' || num || ' ' || key || ' ' \
+                     || host || ' @' || created_at FROM fno_numbers",
+            )
+            .and_then(|mut s| {
+                s.query_map([], |r| r.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .unwrap_or_default();
+        for row in rows {
+            eprintln!("child[{tag}]: fno_numbers {row}");
+        }
+        let nodes: Vec<String> = conn
+            .prepare("SELECT id FROM nodes LIMIT 10")
+            .and_then(|mut s| {
+                s.query_map([], |r| r.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .unwrap_or_default();
+        eprintln!("child[{tag}]: nodes {nodes:?}");
+        let ids: Vec<String> = conn
+            .prepare("SELECT event_id FROM decisions LIMIT 10")
+            .and_then(|mut s| {
+                s.query_map([], |r| r.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .unwrap_or_default();
+        eprintln!("child[{tag}]: decisions {ids:?}");
+    }
+
     fn migrate_ids_two_project_apply_child() {
+        dump_store("pre-a");
         let code = super::super::run(&["--apply".to_string()]);
         eprintln!("child: apply from project-a exited {code}");
         assert_eq!(code, 0);
@@ -1351,38 +1393,7 @@ mod tests {
         std::env::set_current_dir(&sibling).unwrap();
         let code = super::super::run(&["--apply".to_string()]);
         eprintln!("child: apply from project-b exited {code}");
-        if code != 0 {
-            // Name every row the second apply refused on, so a fixture leak
-            // (an extra hex key in the store) reads its own origin.
-            let db = std::env::var_os("FNO_HOME").unwrap();
-            let db = std::path::Path::new(&db).join("db").join("graph.db");
-            let conn = Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-                .unwrap();
-            for row in conn
-                .prepare("SELECT store, kind, num, key FROM fno_numbers")
-                .unwrap()
-                .query_map([], |r| {
-                    Ok(format!(
-                        "{} {} {} {}",
-                        r.get::<_, String>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get::<_, i64>(2)?,
-                        r.get::<_, String>(3)?
-                    ))
-                })
-                .unwrap()
-            {
-                eprintln!("child: fno_numbers {}", row.unwrap());
-            }
-            let ids: Vec<String> = conn
-                .prepare("SELECT event_id FROM decisions LIMIT 10")
-                .unwrap()
-                .query_map([], |r| r.get(0))
-                .unwrap()
-                .flatten()
-                .collect();
-            eprintln!("child: decisions {:?}", ids);
-        }
+        dump_store("post-b");
         assert_eq!(code, 0);
     }
 
