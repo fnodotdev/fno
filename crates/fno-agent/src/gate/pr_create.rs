@@ -920,6 +920,29 @@ fn emit_pr_opened(cwd: &Path, printed: &str, branch: &str) {
     }
 }
 
+/// The url the docs ref records. A token naming no repo rides the origin's
+/// slug. A qualified slug resolves under the rename aliases first: the
+/// bare-slug owner fill invents `{origin-owner}/{slug}`, and the built-in
+/// history table carries this project's own repo moves, so a token written
+/// beside a transferred repo records the url GitHub actually serves.
+fn docs_pr_url(
+    qualified: Option<&str>,
+    number: i64,
+    origin: Option<&str>,
+    cwd: &Path,
+) -> Option<String> {
+    match qualified {
+        None | Some("") => origin.map(|o| format!("https://github.com/{o}/pull/{number}")),
+        Some(s) => {
+            let aliases = crate::backlog::pr_link::repo_alias_map(Some(cwd));
+            Some(crate::backlog::pr_link::pr_url_from_slug(
+                &crate::backlog::pr_link::canonical_repo_slug(s, &aliases),
+                number,
+            ))
+        }
+    }
+}
+
 /// Record the PR a `Docs:` line names on the bound node, best-effort. A
 /// `Docs: none, <reason>` body and a body that names no PR record nothing.
 /// Every miss prints a named warning; the create itself never rolls back.
@@ -958,15 +981,12 @@ fn record_docs_pr(cwd: &Path, body_file: &str) {
             None => slug,
         },
     });
-    let url = match qualified.as_deref() {
-        None | Some("") => match origin {
-            Some(o) => format!("https://github.com/{o}/pull/{number}"),
-            None => {
-                eprintln!("pr-create: notice: the Docs-line PR #{number} names no repo and the origin slug is unreadable, so nothing recorded it");
-                return;
-            }
-        },
-        Some(s) => crate::backlog::pr_link::pr_url_from_slug(s, number),
+    let url = match docs_pr_url(qualified.as_deref(), number, origin.as_deref(), cwd) {
+        Some(url) => url,
+        None => {
+            eprintln!("pr-create: notice: the Docs-line PR #{number} names no repo and the origin slug is unreadable, so nothing recorded it");
+            return;
+        }
     };
     let store = crate::backlog::api::Store::new(&crate::backlog::settings::graph_path());
     match crate::backlog::api::pull_request_record(
@@ -1152,6 +1172,44 @@ mod tests {
 
     fn args(a: &[&str]) -> Vec<String> {
         a.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_bare_docs_slug_records_the_transferred_owner() {
+        // `Docs: fno-web#288` under origin fnodotdev/fno: the owner fill
+        // invents fnodotdev/fno-web, and the built-in history alias moves
+        // it to the repo GitHub actually serves. An empty temp cwd keeps
+        // the map at the built-ins, so the read is deterministic.
+        let cwd = std::env::temp_dir().join(format!("fno-docs-url-{}", std::process::id()));
+        std::fs::create_dir_all(&cwd).unwrap();
+        let url = docs_pr_url(Some("fnodotdev/fno-web"), 288, Some("fnodotdev/fno"), &cwd);
+        assert_eq!(
+            url.as_deref(),
+            Some("https://github.com/footnote-sh/fno-web/pull/288")
+        );
+        // A token already naming the live repo passes through.
+        assert_eq!(
+            docs_pr_url(
+                Some("footnote-sh/fno-web"),
+                288,
+                Some("fnodotdev/fno"),
+                &cwd
+            )
+            .as_deref(),
+            Some("https://github.com/footnote-sh/fno-web/pull/288")
+        );
+        // An unmapped slug keeps the invented owner (today's fallback).
+        assert_eq!(
+            docs_pr_url(Some("fnodotdev/fno"), 7, Some("fnodotdev/fno"), &cwd).as_deref(),
+            Some("https://github.com/fnodotdev/fno/pull/7")
+        );
+        // No repo token rides the origin's slug; no origin records nothing.
+        assert_eq!(
+            docs_pr_url(None, 5, Some("o/r"), &cwd).as_deref(),
+            Some("https://github.com/o/r/pull/5")
+        );
+        assert_eq!(docs_pr_url(None, 5, None, &cwd), None);
+        std::fs::remove_dir_all(&cwd).ok();
     }
 
     #[test]

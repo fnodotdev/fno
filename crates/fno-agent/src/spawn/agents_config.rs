@@ -1654,11 +1654,14 @@ const BUILTIN_INSTALL_REPO_ALIASES: [(&str, &str); 3] = [
 /// The PR-history aliases: where a PR url recorded under a former repo name
 /// lives after the cutover. Old numbers must bind to the archive repo, never
 /// to a new-repo PR that reuses the number. One answerer per question: the
-/// install map above and this table disagree on purpose.
-const BUILTIN_HISTORY_REPO_ALIASES: [(&str, &str); 3] = [
+/// install map above and this table disagree on purpose. The docs row is a
+/// transfer (numbers preserved), not a cutover: docs PR urls recorded as
+/// `fnodotdev/fno-web` live at `footnote-sh/fno-web` with the same number.
+const BUILTIN_HISTORY_REPO_ALIASES: [(&str, &str); 4] = [
     ("bllshttng/fno", "fnodotdev/fno-workshop"),
     ("bllshttng/footnote", "fnodotdev/fno-workshop"),
     ("bllshttng/fnh", "fno-sh/footnote"),
+    ("fnodotdev/fno-web", "footnote-sh/fno-web"),
 ];
 
 /// The built-in install rename map alone, no config read. The plugin rename
