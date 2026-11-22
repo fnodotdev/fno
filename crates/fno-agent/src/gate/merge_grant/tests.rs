@@ -9,8 +9,8 @@ use std::path::PathBuf;
 
 /// A well-formed node id: the fixture shape decides whether the verdict's
 /// claim read exercises the bare-id to `node:` rewrite, so this stays
-/// hex-suffixed (the bare-id fixture shape was exactly how the x-4abc bug
-/// hid from this suite).
+/// hex-suffixed. The non-hex fixture ids this const once held were exactly
+/// how the bare-id claim lookup hid from this suite.
 const NODE: &str = "ab-cafe12";
 const PR: i64 = 42;
 
@@ -188,8 +188,8 @@ fn verdict_rows() {
 
 // --- The real claim store: a live holder never transfers -------------------
 
-/// x-4abc: the verdict read the bare graph id while the store keys node
-/// claims `node:<id>`, so a live holder answered Free and merge execution
+/// The verdict read the bare graph id while the store keys node claims
+/// `node:<id>`, so a live holder answered Free and merge execution
 /// transferred while the worker still drove the node. Through the real
 /// store (acquire, then the production closure over `claims::status`): no
 /// claim grants, a live claim reads held/live, and the read agrees with

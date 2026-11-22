@@ -221,16 +221,10 @@ pub fn verdict_for_pr(
         .unwrap_or("")
         .to_string();
     // The claim store keys node claims `node:<id>` while graph entries carry
-    // the bare id, and only the CLI rewrote it (claim_cli/status.rs), so a
-    // bare lookup answered Free on a live row and Step 4 transferred merge
-    // execution while the worker still held the claim. The CLI's
-    // `_normalize_status_key` reading: a bare well-formed node id reads its
-    // `node:` row; every other key shape passes through.
-    let claim_key = if crate::backlog::node_ref::is_wellformed_node_id(&node_id) {
-        format!("node:{node_id}")
-    } else {
-        node_id.clone()
-    };
+    // the bare id, so a bare lookup answered Free on a live row and Step 4
+    // transferred merge execution while the worker still held the claim.
+    // The one rewrite owner names the row every node-claim reader reads.
+    let claim_key = crate::backlog::node_ref::claim_key_for(&node_id);
 
     // Step 2: receipts on the do rows.
     let receipts = match do_row_receipts(node) {
