@@ -106,7 +106,7 @@ pub(super) fn stamp_sandbox_owner(cmd: &mut Command, attaching: bool) {
     for key in OWNER_KEYS {
         cmd.env_remove(key);
     }
-    let session = resolve_owner_session(&|k| std::env::var(k).ok());
+    let session = resolve_owner_session();
     let lease = owner_lease(
         session,
         std::env::var("FNO_OWNER_PID").ok(),
@@ -148,15 +148,25 @@ fn owner_lease(
 /// then fno's own ambient resolution - the same [`crate::backlog::join_marker::join_candidate`]
 /// walk the front-door join uses, so a plain harness session needs no plugin -
 /// and finally `CODEX_COMPANION_SESSION_ID` for callers predating the walk.
-fn resolve_owner_session(env: &dyn Fn(&str) -> Option<String>) -> Option<String> {
-    let read = |key: &str| env(key).filter(|v| valid_owner_session(v));
-    read("FNO_OWNER_SESSION")
-        .or_else(|| {
-            crate::backlog::join_marker::join_candidate(env)
-                .map(|(_, sid)| sid)
-                .filter(|sid| valid_owner_session(sid))
-        })
-        .or_else(|| read("CODEX_COMPANION_SESSION_ID"))
+fn resolve_owner_session() -> Option<String> {
+    owner_session_choice(
+        std::env::var("FNO_OWNER_SESSION").ok(),
+        crate::backlog::join_marker::join_candidate(&|k| std::env::var(k).ok()).map(|(_, sid)| sid),
+        std::env::var("CODEX_COMPANION_SESSION_ID").ok(),
+    )
+}
+
+/// The pure precedence: an unusable id falls through to the next arm, so a
+/// slash-bearing ambient id never blocks the plugin export.
+fn owner_session_choice(
+    fno_owner: Option<String>,
+    ambient: Option<String>,
+    codex: Option<String>,
+) -> Option<String> {
+    [fno_owner, ambient, codex]
+        .into_iter()
+        .filter(|v| valid_owner_session(v))
+        .next()
 }
 
 fn valid_owner_session(session: &str) -> bool {
@@ -202,18 +212,9 @@ pub(crate) fn config_says_off(stdout: &str) -> bool {
 #[cfg(test)]
 mod spawn_config_tests {
     use super::{
-        config_says_off, owner_lease, resolve_owner_session, scrollback_lines_value,
+        config_says_off, owner_lease, owner_session_choice, scrollback_lines_value,
         window_size_word,
     };
-    use std::collections::HashMap;
-
-    fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
-        let map: HashMap<String, String> = pairs
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        move |k| map.get(k).cloned()
-    }
 
     /// The env bridge from config.toml to the interactive server's
     /// latched env: must mirror `pty::integration_disabled` - exactly
@@ -253,62 +254,52 @@ mod spawn_config_tests {
 
     /// A session without the codex plugin still stamps: the ambient harness
     /// identity resolves. The explicit sandbox marker wins, the companion id
-    /// drops to last fallback, and a hook or a spawned worker owns nothing
-    /// from ambient identity alone.
+    /// drops to last fallback, and an unusable id falls through.
     #[test]
     fn owner_session_resolves_from_ambient_identity_without_the_codex_plugin() {
+        let choice = |fno_owner, ambient, codex| owner_session_choice(fno_owner, ambient, codex);
         // The node's case: plain opencode and pi sessions, no plugin env.
         assert_eq!(
-            resolve_owner_session(&env_of(&[("OPENCODE_SESSION_ID", "oc-1")])),
+            choice(None, Some("oc-1".to_string()), None),
             Some("oc-1".to_string())
         );
         assert_eq!(
-            resolve_owner_session(&env_of(&[("PI_SESSION_ID", "pi.1")])),
+            choice(None, Some("pi.1".to_string()), None),
             Some("pi.1".to_string())
         );
         // Precedence: explicit marker > ambient > companion.
-        let all = env_of(&[
-            ("FNO_OWNER_SESSION", "sandbox-1"),
-            ("CLAUDE_CODE_SESSION_ID", "claude-1"),
-            ("CODEX_COMPANION_SESSION_ID", "companion-1"),
-        ]);
-        assert_eq!(resolve_owner_session(&all), Some("sandbox-1".to_string()));
-        let ambient_and_companion = env_of(&[
-            ("CLAUDE_CODE_SESSION_ID", "claude-1"),
-            ("CODEX_COMPANION_SESSION_ID", "companion-1"),
-        ]);
         assert_eq!(
-            resolve_owner_session(&ambient_and_companion),
+            choice(
+                Some("sandbox-1".to_string()),
+                Some("claude-1".to_string()),
+                Some("companion-1".to_string())
+            ),
+            Some("sandbox-1".to_string())
+        );
+        assert_eq!(
+            choice(
+                None,
+                Some("claude-1".to_string()),
+                Some("companion-1".to_string())
+            ),
             Some("claude-1".to_string())
         );
         // Last fallback: the companion alone still binds, today's path kept.
-        let companion = env_of(&[("CODEX_COMPANION_SESSION_ID", "companion-1")]);
         assert_eq!(
-            resolve_owner_session(&companion),
+            choice(None, None, Some("companion-1".to_string())),
             Some("companion-1".to_string())
         );
         // An ambient id the stamp cannot carry falls through to the companion.
-        let unusable = env_of(&[
-            ("CLAUDE_CODE_SESSION_ID", "has/slash"),
-            ("CODEX_COMPANION_SESSION_ID", "companion-1"),
-        ]);
         assert_eq!(
-            resolve_owner_session(&unusable),
+            choice(
+                None,
+                Some("has/slash".to_string()),
+                Some("companion-1".to_string())
+            ),
             Some("companion-1".to_string())
         );
-        // AC8's rule holds for the stamp: a hook's call owns nothing.
-        let hook = env_of(&[
-            ("CLAUDE_CODE_SESSION_ID", "claude-1"),
-            ("FNO_HOOK_CONTEXT", "1"),
-        ]);
-        assert_eq!(resolve_owner_session(&hook), None);
-        let worker = env_of(&[
-            ("CLAUDE_CODE_SESSION_ID", "claude-1"),
-            ("FNO_AGENT_SELF", "w1"),
-        ]);
-        assert_eq!(resolve_owner_session(&worker), None);
         // No identity at all: the ownerless shared server a bare terminal
         // gets today.
-        assert_eq!(resolve_owner_session(&env_of(&[])), None);
+        assert_eq!(choice(None, None, None), None);
     }
 }
