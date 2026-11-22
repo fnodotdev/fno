@@ -411,14 +411,30 @@ fn request_row_lines(r: &crate::requests_model::RequestRow, width: usize) -> Vec
     if !reply.is_empty() {
         out2.push(meta(format!("      reply: {reply}")));
     }
-    if !r.responses.is_empty() {
-        let list = r
-            .responses
-            .iter()
-            .map(|x| format!("{} {}", x.ts.get(0..10).unwrap_or(&x.ts), x.session))
-            .collect::<Vec<_>>()
-            .join(" \u{b7} ");
-        out2.push(meta(format!("      responses: {list}")));
+    // The responses line names the count and the latest reply's handle, so
+    // it stays on screen; a chain with no reply at all reads through the
+    // outcome line's "no reply" and lists nothing.
+    let replied: Vec<_> = r
+        .responses
+        .iter()
+        .filter(|x| !strip_hashes(x.reply.as_str()).trim().is_empty())
+        .collect();
+    if let Some(latest) = replied.last() {
+        let handle = if latest.name.is_empty() || latest.name == latest.session {
+            latest
+                .session
+                .get(0..8)
+                .unwrap_or(&latest.session)
+                .to_string()
+        } else {
+            latest.name.clone()
+        };
+        out2.push(meta(format!(
+            "      responses: {} \u{b7} latest {} {}",
+            replied.len(),
+            latest.ts.get(0..10).unwrap_or(&latest.ts),
+            handle
+        )));
     }
     out2
 }
