@@ -1144,6 +1144,7 @@ fn hold_daemon_spawn_gate(
                 flags: daemon_gate_flags,
                 seed: daemon_gate_seed.clone(),
                 route_provider: daemon_gate_route_provider.clone(),
+                node: fno_agent::spawn_gate::gate_node_from_params(params),
                 ..fno_agent::spawn_promote::gate_input(lease.promotion.as_ref())
             },
         );
@@ -2010,6 +2011,7 @@ fn run_spawn_gate(
                 flags,
                 seed: fno_agent::spawn_phase::params_seed(&params),
                 route_provider: fno_agent::claude_adopt::gate_route_provider(&params),
+                node: fno_agent::spawn_gate::gate_node_from_params(&params),
                 account: params
                     .get("account")
                     .and_then(Value::as_str)
