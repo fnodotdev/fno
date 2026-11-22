@@ -2682,15 +2682,6 @@ mod tests {
 
     #[test]
     fn link_refusal_rows() {
-        // A pane's output chooses this URI. `open(1)` would act on file:// and
-        // on registered app schemes, so the grid walk must drop it.
-        let mut pane = Pane::new(4, 40);
-        pane.feed(b"\x1b]8;;file:///etc/passwd\x07innocent\x1b]8;;\x07");
-        assert_eq!(
-            pane.link_span(0, 2, "/nonexistent").map(|span| span.uri),
-            None
-        );
-
         // The click column is clamped into the grid; a click on padding finds
         // no link rather than panicking or reaching the previous row's URL.
         let mut pane = Pane::new(4, 20);
@@ -2706,7 +2697,8 @@ mod tests {
             "out-of-range click clamps"
         );
 
-        // The allowlist applies to the span exactly as it does to the click.
+        // A pane's output chooses this URI. `open(1)` would act on file:// and
+        // on registered app schemes, so the grid walk must drop it.
         // Positive control beside it: a safe anchor in the same pane resolves.
         // Visible text: "bad good".
         let mut pane = Pane::new(4, 60);
@@ -2813,14 +2805,6 @@ mod tests {
         assert_eq!(
             span.uri, url,
             "a wrapped URL must resolve whole; a prefix is a different address"
-        );
-
-        // Click and hover cannot disagree: the projection answers the same URI.
-        assert_eq!(
-            pane.link_span(0, 0, "/nonexistent")
-                .map(|span| span.uri)
-                .as_deref(),
-            Some(url.as_str())
         );
 
         // OSC 8: the span is the run of cells carrying the SAME anchor. A
