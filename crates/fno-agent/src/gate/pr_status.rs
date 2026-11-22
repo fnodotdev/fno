@@ -934,7 +934,7 @@ pub(crate) fn job_log<P: GhProbe>(
     let dir = crate::agents_config::pr_status_cache_dir(cwd)
         .ok_or_else(|| "no pr-status cache dir".to_string())?;
     let path: PathBuf = dir.join(format!("job-{slug_key}-{job_id}.json"));
-    if let Ok(row) = std::fs::read_to_string(&path) {
+    if let Ok(row) = std::fs::read_to_string(crate::state_layout_home::cache_read(&path)) {
         if let Ok(parsed) = serde_json::from_str::<Value>(&row) {
             if let Some(log) = parse::<de::LogTail>(&parsed).log.as_deref() {
                 // Rows written before the strip carry raw ANSI; the strip is

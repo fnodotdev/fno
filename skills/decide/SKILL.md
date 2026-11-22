@@ -28,7 +28,7 @@ Type `/fno:decide Merges belong to the user` in chat. A `d-` id comes back.
 4. Record it:
 
 ```bash
-fno inbox decisions set "<subject>" "<decision>" --audience internal|customers|customer:<persona> --rationale "<why>" --quote "<the user's words>" [--supersedes d-xxxxxxxx] [--keep d-xxxxxxxx]... [--sweep <word>]...
+fno inbox decisions set "<subject>" "<decision>" --audience internal|customers|customer:<persona> --rationale "<why>" --quote "<the user's words>" [--supersedes D<n>] [--keep D<n>]... [--sweep <word>]...
 ```
 
 The door compares the new decision with every live ruling in the same scope, subject and text together. A ruling that shares six or more topic words, and half of the shorter text, is near. The door refuses until you name each near ruling. `--supersedes <id>` retires it. `--keep <id>` keeps it beside the new decision. Read each near ruling before you choose. Never pass `--keep` to get past the refusal.
@@ -56,7 +56,7 @@ Recording decision from chat works, and so does retracting a chat-recorded law. 
 - the statement is coordination rather than durable decision,
 - the subject carries no live law this ruling retires. Nothing conflicts. A law records only conflict resolutions. The refusal names `fno inbox decide` as the plain channel,
 - the rationale is missing,
-- `--supersedes` is not a `d-` decision id, or names no recoverable decision,
+- `--supersedes` is not a decision number (`D<n>`), or names no recoverable decision,
 - `--supersedes` names an `operator` decision row while this recording is `chat_attested`,
 - `--graduation` is not a valid kind,
 - a live ruling near the new decision is named by neither `--supersedes` nor `--keep`,

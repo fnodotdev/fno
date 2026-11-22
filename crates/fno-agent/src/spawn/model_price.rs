@@ -194,15 +194,15 @@ pub(crate) fn state_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".fno"))
 }
 
-fn cache_path(state: &Path) -> PathBuf {
-    state.join("cache").join("models-dev.json")
+fn book_path(state: &Path) -> PathBuf {
+    crate::state_layout_home::read_home(state, "cache/models-dev.json")
 }
 
 /// Whether the models.dev rate book is on disk: the coverage hint names it
 /// missing rather than reading every model as unpriced-by-mystery. One
 /// stat, no fetch.
 pub(crate) fn book_present() -> bool {
-    std::fs::metadata(cache_path(&state_dir())).is_ok()
+    std::fs::metadata(book_path(&state_dir())).is_ok()
 }
 
 /// The parsed book for `state`, re-read only when the cache file moves.
@@ -210,7 +210,7 @@ pub(crate) fn book_present() -> bool {
 /// the catalog once.
 pub(crate) fn price_book(state: &Path) -> Option<Arc<PriceBook>> {
     static BOOK: OnceLock<Mutex<Option<(PathBuf, SystemTime, Arc<PriceBook>)>>> = OnceLock::new();
-    let path = cache_path(state);
+    let path = book_path(state);
     let mtime = std::fs::metadata(&path).ok()?.modified().ok()?;
     let cell = BOOK.get_or_init(|| Mutex::new(None));
     let mut seen = cell.lock().ok()?;
@@ -580,6 +580,31 @@ pub(crate) fn served_compaction_count(sid: Option<&str>) -> Option<u64> {
     fold.compaction_readable.then_some(fold.compaction_count)
 }
 
+/// The raw token classes behind the served `session_tokens`: the sum over
+/// every model the transcript recorded plus the codex cumulative total.
+/// `None` before the first sweep measured the session; a measured session
+/// with no usage yet serves zeros, the same reading `session_tokens` gives.
+pub(crate) fn served_token_breakdown(sid: Option<&str>) -> Option<Tokens> {
+    let sid = sid.filter(|sid| !sid.is_empty())?;
+    let cell = FOLDS.get_or_init(|| Mutex::new(HashMap::new()));
+    let folds = cell.lock().ok()?;
+    let (fold, _) = folds.get(sid)?;
+    let mut sum = Tokens::default();
+    for t in fold.per_model.values() {
+        sum.input += t.input;
+        sum.output += t.output;
+        sum.cache_read += t.cache_read;
+        sum.cache_write += t.cache_write;
+    }
+    if let Some(total) = fold.codex_total {
+        sum.input += total.input;
+        sum.output += total.output;
+        sum.cache_read += total.cache_read;
+        sum.cache_write += total.cache_write;
+    }
+    Some(sum)
+}
+
 /// Session metrics served beside the four stored context fields and running
 /// cost. One helper keeps daemon.rs (shrink-only) net zero.
 pub(crate) fn served_session_metrics_keys(
@@ -613,6 +638,23 @@ pub(crate) fn served_session_metrics_keys(
     keys.insert(
         "compaction_count".into(),
         serde_json::json!(compaction_count),
+    );
+    let breakdown = served_token_breakdown(e.harness_session_id.as_deref());
+    keys.insert(
+        "session_input_tokens".into(),
+        serde_json::json!(breakdown.as_ref().map(|t| t.input)),
+    );
+    keys.insert(
+        "session_output_tokens".into(),
+        serde_json::json!(breakdown.as_ref().map(|t| t.output)),
+    );
+    keys.insert(
+        "session_cache_read_tokens".into(),
+        serde_json::json!(breakdown.as_ref().map(|t| t.cache_read)),
+    );
+    keys.insert(
+        "session_cache_write_tokens".into(),
+        serde_json::json!(breakdown.as_ref().map(|t| t.cache_write)),
     );
     keys
 }
@@ -790,6 +832,14 @@ mod tests {
         assert_eq!(session.tokens, 3000);
     }
 
+    #[derive(serde::Deserialize)]
+    struct ServedTokenKeys {
+        session_input_tokens: Option<u64>,
+        session_output_tokens: Option<u64>,
+        session_cache_read_tokens: Option<u64>,
+        session_cache_write_tokens: Option<u64>,
+    }
+
     #[test]
     fn served_keys_carry_the_measured_cost() {
         let dir = tmpdir("served");
@@ -822,10 +872,16 @@ mod tests {
         e.harness_session_id = Some("sess-cost-1".into());
         e.context_used_pct = Some(48);
         let keys = served_session_metrics_keys(&e);
-        assert_eq!(keys.len(), 8);
+        assert_eq!(keys.len(), 12);
         assert_eq!(keys["context_used_pct"], serde_json::json!(48));
         assert_eq!(keys["session_tokens"], serde_json::json!(154_000));
         assert_eq!(keys["compaction_count"], serde_json::json!(1));
+        let token_keys: ServedTokenKeys =
+            serde_json::from_value(serde_json::Value::Object(keys.clone())).unwrap();
+        assert_eq!(token_keys.session_input_tokens, Some(140_000));
+        assert_eq!(token_keys.session_output_tokens, Some(14_000));
+        assert_eq!(token_keys.session_cache_read_tokens, Some(0));
+        assert_eq!(token_keys.session_cache_write_tokens, Some(0));
         assert_eq!(
             keys["session_cost_measured_at"],
             serde_json::json!("2026-10-02T00:00:00Z")
@@ -841,6 +897,12 @@ mod tests {
         assert_eq!(absent["session_cost_cents"], serde_json::json!(null));
         assert_eq!(absent["session_cost_measured_at"], serde_json::json!(null));
         assert_eq!(absent["compaction_count"], serde_json::json!(null));
+        let absent_keys: ServedTokenKeys =
+            serde_json::from_value(serde_json::Value::Object(absent)).unwrap();
+        assert_eq!(absent_keys.session_input_tokens, None);
+        assert_eq!(absent_keys.session_output_tokens, None);
+        assert_eq!(absent_keys.session_cache_read_tokens, None);
+        assert_eq!(absent_keys.session_cache_write_tokens, None);
 
         let mut unresolved = RegistryEntry::default();
         unresolved.harness = Some("pi".into());

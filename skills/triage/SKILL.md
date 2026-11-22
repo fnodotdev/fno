@@ -355,6 +355,6 @@ A row with `source_kind: external_request` holds visitor text from the public bo
 - `fno backlog triage` (canonical) — the v2 CLI sub-app; source in
   the native `fno backlog triage` door
 - `crates/fno-agent/src/backlog/graph_store.rs` - `mutate_rows` entry point
-- `~/.fno/cache/pages/graph.md` — the kanban view that reflects applied changes
+- `<cache home>/pages/graph.md`: the kanban view that reflects applied changes
 - `crates/fno-agent/src/backlog/triage_health.rs` — threshold evaluation,
   notification dispatch, history append/read, trend summary

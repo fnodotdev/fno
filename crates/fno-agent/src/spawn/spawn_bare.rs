@@ -149,6 +149,62 @@ fn first_prompt_index(toks: &[String]) -> Option<usize> {
     None
 }
 
+/// Whether `token` is a `+flag` spelling: `+`, then a flag body - an ASCII
+/// letter, then letters, digits, `-` or `_`, optionally `=value`, no
+/// whitespace. `+1`, a lone `+` and a quoted phrase stay prompt text.
+fn plus_flag_body(token: &str) -> Option<&str> {
+    let body = token.strip_prefix('+')?;
+    let flag = body.split_once('=').map_or(body, |(flag, _)| flag);
+    let mut chars = flag.chars();
+    if !matches!(chars.next(), Some(c) if c.is_ascii_alphabetic()) {
+        return None;
+    }
+    chars
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        .then_some(body)
+}
+
+/// The `+flag` spelling folds to `--flag` before the boundary reads the
+/// line (the 2026-11-05 mobile ask, asked four times: `--` is costly on a
+/// phone keyboard). The composer converts a picked `+word` to the canonical
+/// `--word` the same way, so both surfaces speak one grammar. One law
+/// answers both spellings: the pair arms consume their values, the scalar
+/// `--yolo` arm rides, the space-form refusal names the legal positions,
+/// and the daemon-side vocabulary never sees a `+` token. The fold stops
+/// at the explicit fence; the payload after `--` or `--argv` stays
+/// byte-exact.
+pub fn plus_fold(tail: &[String]) -> Vec<String> {
+    let mut out = Vec::with_capacity(tail.len());
+    let mut fenced = false;
+    // A space-form value flag's next token is its value, never a + spelling
+    // (`--name +model` names the worker "+model"); the same skip
+    // `first_prompt_index` reads the boundary with.
+    let mut skip_value = false;
+    for tok in tail {
+        if fenced {
+            out.push(tok.clone());
+            continue;
+        }
+        if tok == "--" || tok == "--argv" {
+            fenced = true;
+            out.push(tok.clone());
+            continue;
+        }
+        if skip_value {
+            skip_value = false;
+            out.push(tok.clone());
+            continue;
+        }
+        if let Some(body) = plus_flag_body(tok) {
+            out.push(format!("--{body}"));
+            continue;
+        }
+        skip_value = !tok.contains('=') && crate::spawn_admission::is_value_flag(tok);
+        out.push(tok.clone());
+    }
+    out
+}
+
 ///
 /// The prompt starts at the first non-flag token; the first flag-looker after
 /// it ends the prompt region. Tokens from there to the line end are harness
@@ -1311,6 +1367,102 @@ mod tests {
             boundary_rewrite(&toks(&["w", "--resume", "abc"])),
             crate::spawn_bare::Boundary::Keep
         ));
+    }
+
+    #[test]
+    fn plus_flag_folds_to_the_dash_spelling_before_the_fence() {
+        // The composer converts a picked +word to --word the same way, so
+        // both surfaces speak one grammar.
+        assert_eq!(
+            plus_fold(&toks(&["+model=opus", "fix", "the", "bug"])),
+            toks(&["--model=opus", "fix", "the", "bug"])
+        );
+        // The scalar rides through its own arm's spelling.
+        assert_eq!(plus_fold(&toks(&["+yolo"])), toks(&["--yolo"]));
+        // A known pair in space form consumes its value downstream; the
+        // fold only relays the spelling.
+        assert_eq!(
+            plus_fold(&toks(&["+model", "opus", "fix"])),
+            toks(&["--model", "opus", "fix"])
+        );
+        // A value glued to a short body folds the same.
+        assert_eq!(plus_fold(&toks(&["+m2"])), toks(&["--m2"]));
+    }
+
+    #[test]
+    fn plus_fold_never_touches_non_flag_bodies_or_the_payload() {
+        // A digit body is prompt text, not a flag.
+        assert_eq!(plus_fold(&toks(&["thanks", "+1"])), toks(&["thanks", "+1"]));
+        // A lone +, a non-letter body and a mid-token + stay prompt text.
+        assert_eq!(
+            plus_fold(&toks(&["+", "+-model", "a+b"])),
+            toks(&["+", "+-model", "a+b"])
+        );
+        // A quoted phrase (one token with a space) never folds.
+        assert_eq!(plus_fold(&toks(&["+model opus"])), toks(&["+model opus"]));
+        // The payload after the explicit fence stays byte-exact.
+        assert_eq!(
+            plus_fold(&toks(&["+yolo", "--", "+model=opus"])),
+            toks(&["--yolo", "--", "+model=opus"])
+        );
+        // The --argv payload fence stops the fold the same way.
+        assert_eq!(
+            plus_fold(&toks(&["--argv", "claude", "+model=opus"])),
+            toks(&["--argv", "claude", "+model=opus"])
+        );
+    }
+
+    #[test]
+    fn plus_fold_leaves_a_space_form_value_flag_s_value_untouched() {
+        // The value of `--name +model` is the worker's name, never a flag
+        // spelling; folding it would rename the worker "--model".
+        assert_eq!(
+            plus_fold(&toks(&["--name", "+model", "fix"])),
+            toks(&["--name", "+model", "fix"])
+        );
+        // The equals form carries its value inside the token.
+        assert_eq!(
+            plus_fold(&toks(&["--name=+model", "fix"])),
+            toks(&["--name=+model", "fix"])
+        );
+        // A folded pair reads like its -- spelling: the parse's own arm
+        // consumes the next token, so a bare + after a folded flag folds
+        // too, exactly as `--model --yolo` would parse.
+        assert_eq!(
+            plus_fold(&toks(&["+model", "+yolo", "fix"])),
+            toks(&["--model", "--yolo", "fix"])
+        );
+    }
+
+    #[test]
+    fn a_plus_flag_after_the_prompt_rides_behind_the_inserted_fence() {
+        // Today the token joins the message; the fold makes the boundary
+        // treat it as harness argv like its -- spelling.
+        let rewritten = match boundary_rewrite(&plus_fold(&toks(&["w", "msg", "+model=opus"]))) {
+            crate::spawn_bare::Boundary::Fence(out) => out,
+            other => panic!("the folded token fences: {other:?}"),
+        };
+        assert_eq!(rewritten, toks(&["w", "msg", "--", "--model=opus"]));
+    }
+
+    #[test]
+    fn a_plus_spelled_owned_flag_after_the_prompt_refuses_the_same_way() {
+        let crate::spawn_bare::Boundary::Refuse(err) =
+            boundary_rewrite(&plus_fold(&toks(&["w", "msg", "+dry-run=true"])))
+        else {
+            panic!("the folded owned flag refuses");
+        };
+        assert!(err.contains("--dry-run=true"), "{err}");
+    }
+
+    #[test]
+    fn a_plus_flag_before_the_prompt_keeps_the_boundary() {
+        // The folded token reads as a flag, so the prompt starts after it
+        // and the line stays Keep; the parse's own arms take it from here.
+        assert_eq!(
+            boundary_rewrite(&plus_fold(&toks(&["+model=opus", "fix"]))),
+            crate::spawn_bare::Boundary::Keep
+        );
     }
 
     #[test]

@@ -2,6 +2,9 @@
 //! (`docs/state-root-layout.tsv`, read at build time) and the same `place`
 //! semantics as `fno-agent/src/runtime/state_layout.rs` - the dual-implementation
 //! inventory pattern. No migration lives here; the daemon crate owns it.
+//!
+//! A destination that starts with `cache/` or `logs/` names a class home on
+//! the default root ([`home_of`]); every other root keeps both inside itself.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -117,6 +120,96 @@ pub fn find(legacy_name: &str) -> Option<&'static Row> {
     rows().iter().find(|r| r.legacy == legacy_name)
 }
 
+/// Whether `root` is this HOME's default state root.
+fn is_default_root(root: &Path) -> bool {
+    let Some(home) = std::env::var_os("HOME").filter(|v| !v.is_empty()) else {
+        return false;
+    };
+    let default = PathBuf::from(home).join(".fno");
+    root == default
+        || matches!((root.canonicalize(), default.canonicalize()), (Ok(a), Ok(b)) if a == b)
+}
+
+/// One class home: the env carrier, then `[paths]` config, then the platform
+/// default. Mirrors `paths_cli::class_home` in fno-agent, without a spawn: a
+/// pin expands `~` and resolves links, a config value also expands variables,
+/// and a config value with a glob or a template is no answer.
+fn class_home(env_key: &str, config_key: &str, default: fn(&Path) -> PathBuf) -> PathBuf {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let user = std::env::var_os("HOME")
+        .filter(|v| !v.is_empty())
+        .map_or_else(|| PathBuf::from("/"), PathBuf::from);
+    if let Some(pin) = crate::digest_overlay::non_empty_env_os(env_key) {
+        let pin = crate::config_doctor::expanduser(&pin.to_string_lossy());
+        return crate::config_doctor::resolve(Path::new(&pin));
+    }
+    let configured = crate::digest_overlay::config_str(&cwd, "paths", config_key)
+        .filter(|raw| !raw.contains(['*', '?', '[']))
+        .map(|raw| crate::config_doctor::expandvars(raw.trim_end_matches('/')))
+        .filter(|path| crate::config_cli::model::template_vars(path).is_empty());
+    match configured {
+        Some(path) => cwd.join(crate::config_doctor::expanduser(&path)),
+        None => default(&user),
+    }
+}
+
+fn default_cache_home(user: &Path) -> PathBuf {
+    if cfg!(windows) {
+        return crate::digest_overlay::non_empty_env_os("LOCALAPPDATA")
+            .map_or_else(|| user.to_path_buf(), PathBuf::from)
+            .join("fno")
+            .join("cache");
+    }
+    if cfg!(target_os = "macos") {
+        return user.join("Library").join("Caches").join("fno");
+    }
+    crate::digest_overlay::non_empty_env_os("XDG_CACHE_HOME")
+        .map_or_else(|| user.join(".cache"), PathBuf::from)
+        .join("fno")
+}
+
+fn default_state_home(user: &Path) -> PathBuf {
+    crate::digest_overlay::non_empty_env_os("XDG_STATE_HOME")
+        .map_or_else(|| user.join(".local").join("state"), PathBuf::from)
+        .join("fno")
+}
+
+/// A root-relative table destination as a path. Only a class name reads the
+/// environment or config.
+pub fn home_of(root: &Path, rel: &str) -> PathBuf {
+    let (head, rest) = rel.split_once('/').unwrap_or((rel, ""));
+    if !matches!(head, "cache" | "logs") || !is_default_root(root) {
+        return root.join(rel);
+    }
+    let base = if head == "cache" {
+        class_home("FNO_CACHE_HOME", "cache_dir", default_cache_home)
+    } else {
+        class_home("FNO_STATE_HOME", "state_dir_local", default_state_home).join("logs")
+    };
+    if rest.is_empty() {
+        base
+    } else {
+        base.join(rest)
+    }
+}
+
+/// The read ladder for a root-relative name: its home when that exists, else
+/// the spelling inside the root, else the home.
+pub fn read_home(root: &Path, rel: &str) -> PathBuf {
+    let home = home_of(root, rel);
+    let inside = root.join(rel);
+    if !home.exists() && inside.exists() {
+        inside
+    } else {
+        home
+    }
+}
+
+/// Where a writer puts `legacy_name`: its home, always.
+pub fn place_new(root: &Path, legacy_name: &str) -> PathBuf {
+    find(legacy_name).map_or_else(|| root.join(legacy_name), |row| home_of(root, &row.new))
+}
+
 /// The graph store's anchor under `root`, through the layout ladder. The name
 /// is frozen: the lock, its queue, the keeper socket and the note journal all
 /// derive from it.
@@ -137,7 +230,7 @@ pub fn place(root: &Path, legacy_name: &str) -> PathBuf {
     let Some(row) = find(legacy_name) else {
         return root.join(legacy_name);
     };
-    let new = root.join(&row.new);
+    let new = home_of(root, &row.new);
     let legacy = root.join(&row.legacy);
     match row.kind {
         Kind::Anchor => {
@@ -150,8 +243,9 @@ pub fn place(root: &Path, legacy_name: &str) -> PathBuf {
             }
         }
         _ => {
-            if new.exists() {
-                new
+            let found = read_home(root, &row.new);
+            if found.exists() {
+                found
             } else if legacy.exists() {
                 legacy
             } else {
@@ -170,7 +264,7 @@ pub fn place_dir(root: &Path, name: &str) -> Option<PathBuf> {
     if row.kind != Kind::Dir {
         return None;
     }
-    Some(root.join(&row.new))
+    Some(home_of(root, &row.new))
 }
 
 /// The one-level-down read: `file` at the new dir when it exists, else at
@@ -186,9 +280,11 @@ pub fn place_in(root: &Path, name: &str, file: &str) -> PathBuf {
     }
     if let Some(row) = find(name) {
         if row.kind == Kind::Dir && row.legacy != row.new {
-            let legacy_file = root.join(&row.legacy).join(file);
-            if legacy_file.exists() {
-                return legacy_file;
+            for dir in [&row.new, &row.legacy] {
+                let older = root.join(dir).join(file);
+                if older.exists() {
+                    return older;
+                }
             }
         }
     }
@@ -202,7 +298,11 @@ pub fn list_dir_children(root: &Path, name: &str) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let new_dir = place_dir(root, name).unwrap_or_else(|| root.join(name));
     let mut seen: Vec<String> = Vec::new();
-    for dir in [Some(new_dir), legacy_dir_of(root, name)] {
+    let inside = find(name)
+        .filter(|row| row.kind == Kind::Dir)
+        .map(|row| root.join(&row.new))
+        .filter(|dir| *dir != new_dir);
+    for dir in [Some(new_dir), inside, legacy_dir_of(root, name)] {
         let Some(dir) = dir else { continue };
         let Ok(children) = std::fs::read_dir(&dir) else {
             continue;
@@ -255,7 +355,7 @@ pub fn migrate_mux_sidecars_at(root: &Path) -> usize {
             Kind::Overwrite => {
                 if new.exists() {
                     if mtime_of(&legacy) > mtime_of(&new) {
-                        move_mux(&legacy, &new)
+                        keep_older(root, &stamp, &new) && move_mux(&legacy, &new)
                     } else {
                         park_mux(root, &stamp, &legacy)
                     }
@@ -324,6 +424,18 @@ fn park_mux(root: &Path, stamp: &str, legacy: &Path) -> bool {
         Some(name) => std::fs::rename(legacy, dir.join(name)).is_ok(),
         None => false,
     }
+}
+
+/// A second name in the stamp for the copy a newer legacy file replaces.
+fn keep_older(root: &Path, stamp: &str, new: &Path) -> bool {
+    let dir = root
+        .join("backups")
+        .join("state-root-migration")
+        .join(stamp);
+    let Some(name) = new.file_name() else {
+        return false;
+    };
+    std::fs::create_dir_all(&dir).is_ok() && std::fs::hard_link(new, dir.join(name)).is_ok()
 }
 
 fn mtime_of(p: &Path) -> std::time::SystemTime {

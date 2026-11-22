@@ -264,9 +264,12 @@ pub fn repo_alias_map(cwd: Option<&Path>) -> BTreeMap<String, String> {
     let Some(root) = crate::gh_cache::rows_root(base) else {
         return map;
     };
-    let Ok(rows) = std::fs::read_dir(root.join("rename")) else {
-        return map;
-    };
+    // The pre-move folder reads first, so a row in the home wins a clash.
+    let rows = crate::state_layout_home::cache_read_dirs(&root.join("rename"))
+        .into_iter()
+        .rev()
+        .filter_map(|dir| std::fs::read_dir(dir).ok())
+        .flatten();
     for row in rows.flatten() {
         let Some(stem) = row
             .path()

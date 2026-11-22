@@ -832,7 +832,8 @@ fn throttle_path() -> Option<PathBuf> {
 /// The alert log (health_monitor.py _default_alert_log_path).
 fn alert_log_path() -> Option<PathBuf> {
     let cwd = std::env::current_dir().ok()?;
-    crate::agents_config::state_dir(&cwd).map(|root| root.join("logs").join("health-alerts.log"))
+    crate::agents_config::state_dir(&cwd)
+        .map(|root| crate::state_layout::place_new(&root, "health-alerts.log"))
 }
 
 /// The breach line the terminal and log surfaces share.

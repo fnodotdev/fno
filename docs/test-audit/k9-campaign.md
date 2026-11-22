@@ -1,6 +1,6 @@
 # K9 campaign ledger - the Rust giants (client/server suites)
 
-Re-aimed at the Rust suites per the operator ruling on q-061106b1: the two
+Re-aimed at the Rust suites per the operator ruling on Q3097: the two
 largest files in crates/fno. Base origin/main at the branch cut (3,013
 declarations crate-wide). Cut: client_tests.rs 481 to 357 (-124),
 server_tests.rs 273 to 174 (-99). K9 total: -223 (7.4% of the suite).

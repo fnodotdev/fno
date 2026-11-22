@@ -51,6 +51,27 @@ pub fn run(rest: &[String]) -> i32 {
             argv.extend(rest.iter().skip(1).cloned());
             crate::mail_backfill::run_mail_backfill(&argv)
         }
+        // Leaf-level help: the family listing answers for every leaf
+        // without its own body; a hold or an ack never runs on a request.
+        cmd if help_asked
+            && matches!(
+                cmd,
+                "hold"
+                    | "dnd"
+                    | "hold-release"
+                    | "seed-provenance"
+                    | "team"
+                    | "withdraw"
+                    | "sent"
+                    | "pane-prepare"
+                    | "unread"
+                    | "ack"
+                    | "drain-self"
+            ) =>
+        {
+            print_help();
+            0
+        }
         "hold" | "dnd" => hold::run_hold(&rest[1..]),
         "hold-release" => hold::run_hold_release(&rest[1..]),
         "seed-provenance" => seed_provenance::run(&rest[1..]),

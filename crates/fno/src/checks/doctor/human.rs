@@ -594,7 +594,7 @@ fn emit_web_bridge(rep: &Value, err: bool) {
         emit(
             err,
             &format!(
-                "fno doctor: web bridge: the agent is loaded but the bridge is {} ({}); if this repeats, read ~/.fno/logs/web-bridge.err.log - KeepAlive may be restarting a bridge that cannot bind. Permanent stop: `fno mux web uninstall-agent`.",
+                "fno doctor: web bridge: the agent is loaded but the bridge is {} ({}); if this repeats, read ~/.local/state/fno/logs/web-bridge.err.log - KeepAlive may be restarting a bridge that cannot bind. Permanent stop: `fno mux web uninstall-agent`.",
                 wb.bridge_detail.state, wb.bridge_detail.detail
             ),
         );
@@ -875,7 +875,7 @@ fn emit_groom(view: &de::DoctorReport, err: bool) {
     let agent_installed = gr.and_then(|g| g.agent_installed) == Some(true);
     if state == "never" {
         let remedy = if agent_installed {
-            " despite an installed agent; check ~/.fno/logs/groom.err.log."
+            " despite an installed agent; check ~/.local/state/fno/logs/groom.err.log."
         } else {
             "; run `fno backlog groom --install-agent` to schedule it daily."
         };
@@ -885,7 +885,7 @@ fn emit_groom(view: &de::DoctorReport, err: bool) {
         );
     } else if gr.and_then(|g| g.stale) == Some(true) {
         emit(err, &format!(
-            "fno doctor: backlog grooming last ran {}h ago (the daily pass is not running); check `launchctl list | grep {}` and ~/.fno/logs/groom.err.log.",
+            "fno doctor: backlog grooming last ran {}h ago (the daily pass is not running); check `launchctl list | grep {}` and ~/.local/state/fno/logs/groom.err.log.",
             gr.and_then(|g| g.hours).unwrap_or(0.0) as i64,
             crate::setup_services::groom_label()
         ));
@@ -896,7 +896,7 @@ fn emit_post_merge_sync(view: &de::DoctorReport, err: bool) {
     let pms = view.post_merge_sync.as_ref();
     if pms.and_then(|p| p.stale) == Some(true) {
         emit(err, &format!(
-            "fno doctor: post-merge sync STALE - the canonical checkout is not synced with recent merges ({}); run `fno do pr sync-canonical --pr-number <n>` and check ~/.fno/logs/pr-watcher.err.log.",
+            "fno doctor: post-merge sync STALE - the canonical checkout is not synced with recent merges ({}); run `fno do pr sync-canonical --pr-number <n>` and check ~/.local/state/fno/logs/pr-watcher.err.log.",
             pms.and_then(|p| p.detail.as_deref()).unwrap_or_default()
         ));
     } else if pms.and_then(|p| p.state.as_deref()) == Some("unknown") {

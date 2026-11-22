@@ -601,6 +601,12 @@ const STANDING_ANSWERS: &[&str] = &[
     "d-b181c28f", // D3024: every Anthropic lane gets --advisor opus
     "d-8e33a5c9", // D2965: telemetry is opt-in, grades and counts only
     "d-fefe281d", // D2809: the approval passkey rule, no approve tool
+    // The same five once the migration makes the number the key.
+    "D3199",
+    "D3029",
+    "D3024",
+    "D2965",
+    "D2809",
 ];
 
 /// Whether a row with no stated expiry ends with its subject: a

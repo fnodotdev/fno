@@ -1628,17 +1628,11 @@ fn record_branch_question(
     if seen.contains(&needle) {
         return;
     }
-    let mut id_bytes = [0u8; 4];
-    if getrandom::fill(&mut id_bytes).is_err() {
-        return;
-    }
-    let hex: String = id_bytes.iter().map(|x| format!("{x:02x}")).collect();
     let event = json!({
         "ts": crate::daemon::now_rfc3339_like(),
         "type": "operator_question",
         "source": "hook",
         "data": {
-            "question_id": format!("q-{hex}"),
             "question": format!(
                 "{needle} Branch {name} ({harness}) forked live session \
                  {predecessor} into {successor}. Should it inherit the node \
@@ -1651,11 +1645,11 @@ fn record_branch_question(
             "options": ["inherit node and claim", "start clean"],
         },
     });
-    let _ = crate::question_intake::append_question_event(
-        &event,
-        &branch_question_journal(home),
-        &index,
-    );
+    if let Err(error) =
+        crate::numbers::mint::file_question(event, branch_question_journal(home), index)
+    {
+        eprintln!("session-report: the branch question was not recorded: {error}");
+    }
 }
 
 /// The project journal a question records into: the repo's space journal

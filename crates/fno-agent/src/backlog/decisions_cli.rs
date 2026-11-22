@@ -47,6 +47,9 @@ const REGISTERED_TEST_PROBES: &[(&str, &str)] = &[(
 /// command classified.
 fn looks_like_decision_id(token: &str) -> bool {
     let token = token.trim();
+    if crate::numbers::is_label_key(token) {
+        return true;
+    }
     let Some(rest) = token.strip_prefix("d-") else {
         return false;
     };

@@ -32,7 +32,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `CLAUDE_PLUGIN_ROOT` | rs | The plugin stage root the doctor's hook probes read. |
 | `CLAUDE_SESSION_ID` | rs | unclear: crates/fno-agent/src/runtime/claims.rs:3690 |
 | `CLI` | rs | unclear: crates/fno-agent/src/spawn/loop_dispatch.rs:198 |
-| `CODEX_COMPANION_SESSION_ID` | rs | The Codex session id used as the owner-session fallback when a lazy mux server starts from an agent shell. |
+| `CODEX_COMPANION_SESSION_ID` | rs | The Claude session id, exported by the openai-codex Claude plugin's SessionStart hook. Last fallback for the lazy mux server's owner stamp (crates/fno/src/ui/client/server_spawn.rs `resolve_owner_session`), after FNO_OWNER_SESSION and the client's own ambient harness session. |
 | `CODEX_HOME` | rs | unclear: crates/fno-agent/src/spawn/accounts/store.rs:299 |
 | `CODEX_PLUGIN_ROOT` | rs | A Codex plugin stage root. The Visual Log reader probe's script ladder reads it beside `CLAUDE_PLUGIN_ROOT` (crates/fno-agent/src/runtime/visual_log_reader.rs). |
 | `CODEX_SESSION_ID` | rs | unclear: crates/fno-agent/src/runtime/hook/lead_guard.rs:654 |
@@ -84,6 +84,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_BUS_LOCK_TIMEOUT_SECS` | rs | Overrides the bus-append door's sidecar-lock wait; test escape hatch for the contended-lock refusal. |
 | `FNO_BUS_MAX_BYTES` | rs | Size cap the bus-append door rotates the live log at; malformed degrades to 5 MB. |
 | `FNO_BUS_RETAIN` | rs | Rotated bus segments the append door keeps; malformed degrades to 5. |
+| `FNO_CACHE_HOME` | rs | The cache class home pin for the default state root: it wins over config `paths.cache_dir` and the platform cache folder. The PreToolUse read skips the config key and takes this pin, then the platform folder. |
 | `FNO_CALLER_KIND` | rs | The surface that shelled this fno-agent command; `mux` stamps `caller_kind` on its events. |
 | `FNO_CARGO_CLASS` | rs | The lane an agent cargo asks for at the cargo admission doors: `repair` for a red PR or a main repair, `prepush` for the compile a push waits on. Unset is the normal lane. Both lanes queue ahead of normal, and a normal try-lock never takes a slot they wait for. |
 | `FNO_CARGO_FREE_BYTES` | rs | Overrides the free-space read the `cargo_build_dirs` cap lane defends against; test escape hatch. |
@@ -213,7 +214,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_ORPHANS_SKIP_PROBE` | rs | unclear: crates/fno-agent/src/runtime/orphans.rs:706 |
 | `FNO_OWNER_BIRTH` | rs | The owner process start token paired with FNO_OWNER_PID; protects sandbox process cleanup from PID reuse. |
 | `FNO_OWNER_PID` | rs | The owner process for an owner-bound sandbox server and its descendants; shared fleet launches leave it unset. |
-| `FNO_OWNER_SESSION` | rs | The harness session id that owns a sandbox server and descendants; required with FNO_OWNER_PID and FNO_OWNER_BIRTH. |
+| `FNO_OWNER_SESSION` | rs | The harness session id that owns a sandbox server and descendants; required with FNO_OWNER_PID and FNO_OWNER_BIRTH. Read first as the explicit sandbox marker; unset, the attaching client's own ambient session resolves and CODEX_COMPANION_SESSION_ID is the last fallback (crates/fno/src/ui/client/server_spawn.rs `resolve_owner_session`). |
 | `FNO_PANE` | rs | The pane id every inline (`pty.rs`) and keeper-hosted (`pane_keeper.rs`) pane exports. Read by `crates/fno-agent/src/runtime/pane_claim.rs` to bind a foreground SessionStart report's registry row to this pane, proven by an ancestry walk so a process that merely inherited it (a long-lived server born once inside a pane) is refused. |
 | `FNO_PANE_EPOCH` | rs | The pane's restart epoch; with `FNO_PANE` and `FNO_SERVER` it names the turn-pin file whose first writer reports the leg's session state (session_state.rs). |
 | `FNO_PANE_STATS_EMIT` | rs | unclear: crates/fno/src/mux/server.rs:10563 |

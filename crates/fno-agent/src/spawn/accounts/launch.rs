@@ -27,7 +27,12 @@ pub fn account(id: &str, cwd: &Path, src: &Sources<'_>) -> Value {
                 crate::claude_login::probe_refusal(
                     &home,
                     id,
-                    got.env.get("CLAUDE_CONFIG_DIR").map(String::as_str),
+                    got.env
+                        .get("CLAUDE_CONFIG_DIR")
+                        .map(String::as_str)
+                        // A clear marker is no dir: the empty string would
+                        // suppress every dir-scoped probe refusal.
+                        .filter(|dir| !dir.is_empty()),
                 )
             }),
         }),
@@ -289,6 +294,24 @@ pub fn routed_receipt(applied: &Applied, route: &Map<String, Value>, cwd: &Path)
 }
 
 /// The thread and headless lanes' account step: the overlay goes into this
+/// process's env, which every harness child inherits. An empty value is the
+/// clear marker (the accounts::pick::env_lines convention): the var is
+/// REMOVED, because a SET-but-empty CLAUDE_CONFIG_DIR still selects the
+/// hashed keychain slot, never the shared one.
+fn apply_overlay_env(env: &Map<String, Value>) {
+    for (key, value) in env {
+        let Some(value) = value.as_str() else {
+            continue;
+        };
+        if value.is_empty() {
+            std::env::remove_var(key);
+        } else {
+            std::env::set_var(key, value);
+        }
+    }
+}
+
+/// The thread and headless lanes' account step: the overlay goes into this
 /// process's env, which every harness child inherits; a claude launch scrubs
 /// the inherited auth vars first. `route_env` is the resolved route the
 /// launch layers over this overlay; the caller resolves it first, because
@@ -308,11 +331,7 @@ pub fn seam_exit(
             std::env::remove_var(var);
         }
     }
-    for (key, value) in &applied.env {
-        if let Some(value) = value.as_str() {
-            std::env::set_var(key, value);
-        }
-    }
+    apply_overlay_env(&applied.env);
     if let Some(route) = route_env.filter(|r| !r.is_empty()) {
         let route: Map<String, Value> = route
             .iter()
@@ -397,4 +416,30 @@ pub fn resolve_kind(kind: &str, payload: &Value) -> Result<Value, String> {
             json!({ "login_present": env::login_present(Path::new(text("dir").unwrap_or("")), src.slot) })
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_clear_marker_removes_a_parent_carried_config_dir() {
+        let key = "CLAUDE_CONFIG_DIR";
+        let overlay = |value: &str| {
+            let mut env = Map::new();
+            env.insert(key.to_string(), Value::String(value.to_string()));
+            env
+        };
+        std::env::set_var(key, "/some/stale/dir");
+        apply_overlay_env(&overlay(""));
+        assert_eq!(std::env::var_os(key), None);
+        // The admit arm: a real value still sets, so the guard is not a
+        // refusal of everything.
+        apply_overlay_env(&overlay("/tmp/own-dir"));
+        assert_eq!(
+            std::env::var_os(key).as_deref(),
+            Some(std::ffi::OsStr::new("/tmp/own-dir"))
+        );
+        std::env::remove_var(key);
+    }
 }

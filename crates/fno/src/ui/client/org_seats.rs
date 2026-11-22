@@ -31,6 +31,19 @@ pub struct Work {
     pub details: Option<String>,
 }
 
+/// The per-session use a seat's machine publishes, parsed once per seat
+/// row (docs/rust-style.md R1). Absent keys read `None`: absence, never
+/// zero.
+#[derive(Debug, Default, Deserialize)]
+struct SeatUse {
+    compactions: Option<u64>,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    cache_read_tokens: Option<u64>,
+    cache_write_tokens: Option<u64>,
+    cost_cents: Option<u64>,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Seat {
     pub name: String,
@@ -48,6 +61,16 @@ pub struct Seat {
     pub project: Option<String>,
     pub context_pct: Option<i64>,
     pub rss_mb: Option<f64>,
+    /// The per-session use the seat's machine publishes: compaction
+    /// boundaries, the four token classes and the priced cost in cents
+    /// (models.dev list rates). `None` when its machine publishes no usage;
+    /// a published zero is a real reading.
+    pub compactions: Option<u64>,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cache_read_tokens: Option<u64>,
+    pub cache_write_tokens: Option<u64>,
+    pub cost_cents: Option<u64>,
     /// The turn facts. Null when the seat's machine publishes none or its
     /// harness has no transcript reader.
     pub last_message: Option<String>,
@@ -274,6 +297,7 @@ pub fn fold(map: &Value, backlog: &Inputs, agents: &[AgentRow], measured_at: u64
                         .find(|a| !a.exited && a.harness_session_id.as_deref() == Some(sid))
                         .cloned()
                 });
+                let use_facts: SeatUse = serde_json::from_value(s.clone()).unwrap_or_default();
                 let seat = Seat {
                     name,
                     short,
@@ -288,6 +312,12 @@ pub fn fold(map: &Value, backlog: &Inputs, agents: &[AgentRow], measured_at: u64
                     project,
                     context_pct: s.get("context_pct").and_then(Value::as_i64),
                     rss_mb: s.get("rss_mb").and_then(Value::as_f64),
+                    compactions: use_facts.compactions,
+                    input_tokens: use_facts.input_tokens,
+                    output_tokens: use_facts.output_tokens,
+                    cache_read_tokens: use_facts.cache_read_tokens,
+                    cache_write_tokens: use_facts.cache_write_tokens,
+                    cost_cents: use_facts.cost_cents,
                     last_message: text(s, "last_message"),
                     last_prompt: text(s, "last_prompt"),
                     user_turns: s.get("user_turns").and_then(Value::as_i64),

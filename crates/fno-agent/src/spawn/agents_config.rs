@@ -462,7 +462,8 @@ pub fn pr_status_cache_dir(cwd: &Path) -> Option<PathBuf> {
     if let Some(path) = non_empty_env("FNO_PR_STATUS_CACHE_DIR") {
         return Some(PathBuf::from(path));
     }
-    Some(state_dir(cwd)?.join("cache/pr-status"))
+    let root = state_dir(cwd)?;
+    Some(crate::state_layout::home_of(&root, "cache/pr-status"))
 }
 
 fn table_headless_yolo(t: &toml::Table, provider: &str) -> Option<bool> {

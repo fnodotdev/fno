@@ -3856,7 +3856,7 @@ pub fn reap_state_files(
             agents_root: root.to_path_buf(),
             agents_dir: root.join("agents"),
             state_root: root.to_path_buf(),
-            pr_status_dir: root.join("cache/pr-status"),
+            pr_status_dir: crate::state_layout::home_of(root, "cache/pr-status"),
         },
         config,
         apply,

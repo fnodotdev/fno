@@ -44,6 +44,9 @@ fixture "$FLOAT_AGE_FIXTURE" '{"agents": [{"name": "visual-log-reader", "last_ac
 EMPTY_FIXTURE="$TMP/empty.json"
 : > "$EMPTY_FIXTURE"
 
+TRUNCATED_FIXTURE="$TMP/truncated.json"
+fixture "$TRUNCATED_FIXTURE" '{"agents": [{"name": "visual-log-reader", "last_activity_age_s": 42'
+
 fail_count=0
 expect() {
     # expect <desc> <want_exit> <want_output_pattern> <cmd...>
@@ -80,6 +83,10 @@ expect "float age floors to an integer and reads fresh" 0 "" \
     bash "$SCRIPT" check --status-file "$FLOAT_AGE_FIXTURE"
 expect "a failed registry read never reads fresh" 1 "unreadable" \
     bash "$SCRIPT" check --status-file "$EMPTY_FIXTURE"
+expect "a truncated registry exits 1 with jq's error kept in the verdict" 1 "registry unreadable" \
+    bash "$SCRIPT" check --status-file "$TRUNCATED_FIXTURE"
+expect "a truncated registry verdict names the jq parse error" 1 "parse error" \
+    bash "$SCRIPT" check --status-file "$TRUNCATED_FIXTURE"
 expect "freshness bound is overridable" 1 "" \
     bash "$SCRIPT" check --status-file "$FRESH_FIXTURE" --fresh-seconds 60
 
@@ -120,6 +127,37 @@ if [[ -s "$STUB_LOG" ]]; then
     fail_count=$((fail_count + 1))
 else
     echo "ok: fresh spawn mode called fno only for the check"
+fi
+
+# spawn mode on an unreadable registry must refuse with the read error,
+# never name the stale repair, and never spawn.
+: > "$STUB_LOG"
+rc=0
+SPAWN_UNREADABLE_OUT="$(env PATH="$STUB_BIN:$PATH" FNO_STUB_LOG="$STUB_LOG" \
+    bash "$SCRIPT" spawn --status-file "$TRUNCATED_FIXTURE")" || rc=$?
+if [[ "$rc" != 1 ]]; then
+    echo "FAIL: unreadable spawn mode exited $rc, want 1"
+    fail_count=$((fail_count + 1))
+else
+    echo "ok: unreadable spawn mode exits 1"
+fi
+if ! grep -q "registry unreadable" <<< "$SPAWN_UNREADABLE_OUT"; then
+    echo "FAIL: unreadable spawn mode lost the read error: $SPAWN_UNREADABLE_OUT"
+    fail_count=$((fail_count + 1))
+else
+    echo "ok: unreadable spawn mode carries the read error"
+fi
+if grep -q "stale readers resume" <<< "$SPAWN_UNREADABLE_OUT"; then
+    echo "FAIL: unreadable spawn mode names the stale repair"
+    fail_count=$((fail_count + 1))
+else
+    echo "ok: unreadable spawn mode never names the stale repair"
+fi
+if [[ -s "$STUB_LOG" ]]; then
+    echo "FAIL: unreadable spawn mode still called fno with: $(cat "$STUB_LOG")"
+    fail_count=$((fail_count + 1))
+else
+    echo "ok: unreadable spawn mode spawned nothing"
 fi
 
 if [[ "$fail_count" -gt 0 ]]; then

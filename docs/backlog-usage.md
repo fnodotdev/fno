@@ -89,7 +89,7 @@ fno backlog update <id> tags+=<tag>            # add one tag, e.g. area:mail (se
 The operator form (`field=value`, `field+=value`, `field-=value`) covers every field. `fno backlog update --help` lists them by kind.
 
 
-`<id>` resolves by canonical id (`ab-1a2b3c4d`), title-derived slug (`dashless-spawn`), or bare hex (`1a2b3c4d`). A display number (`x-15`) resolves when the number table carries it. A number no store holds refuses with both forms named, so a typed token never acts on a different node.
+`<id>` resolves by canonical id (`ab-1a2b3c4d`), title-derived slug (`dashless-spawn`), or bare hex (`1a2b3c4d`). A display number (`x-15`) resolves through the number table. With `backlog.id_mode` set to `sequential`, `x-15` is the id itself, and the shell id checks accept that shape. A number no store holds refuses with both forms named, so a typed token never acts on a different node.
 
 When a PR opens outside the Footnote PR path, acquire the owner claim with `fno agent claim acquire node:<id> --holder <worker>`, then record the primary PR with `fno backlog update <id> pr_number=<n>`. The claim lockfile is the owner source, and the update receipt reports its owner, PR, and status. `--add-pr` records only an additional PR and can leave a ready node offered for dispatch. Without a claim lockfile, the owner reads as `unknown`.
 
@@ -470,7 +470,7 @@ Press prefix+V to cycle the left sideline between agents, backlog and org. The b
 
 ### A local HTML file
 
-The daemon writes the board page to `~/.fno/cache/pages/graph.html` with no setup. The page looks like this:
+The daemon writes the board page to `pages/graph.html` in the [cache home](path-config.md#cache-and-logs-homes) with no setup. The page looks like this:
 
 ![The HTML backlog page: a search bar and filters above kanban columns, with a node's fields, details, parent and sessions open in the side panel](images/backlog-html-page.png)
 
@@ -508,7 +508,7 @@ Like `render_targets`, the renderer reads `backlog.render_default` from the glob
 
 The path must be absolute or start with `~/`. A row with an unknown key, an empty scope, or a duplicate path skips with a warning. A row that names a graph state file skips too.
 
-Do not point a row at the state root, for example `~/.fno/graph.html`. The daemon already writes the canonical page under `~/.fno/cache/pages/`, so a state-root row only adds a stray file.
+Do not point a row at the state root, for example `~/.fno/graph.html`. The daemon already writes the canonical page under `pages/` in the cache home, so a state-root row only adds a stray file.
 
 `fno backlog admin render-views` runs one render pass now. It writes `graph.md` and every configured board target. It is the same pass the daemon runs.
 

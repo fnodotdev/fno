@@ -461,6 +461,18 @@ impl Core {
                                 compaction_count: self
                                     .truth_reading(a)
                                     .and_then(|t| t.compaction_count),
+                                session_input_tokens: self
+                                    .truth_reading(a)
+                                    .and_then(|t| t.input_tokens),
+                                session_output_tokens: self
+                                    .truth_reading(a)
+                                    .and_then(|t| t.output_tokens),
+                                session_cache_read_tokens: self
+                                    .truth_reading(a)
+                                    .and_then(|t| t.cache_read_tokens),
+                                session_cache_write_tokens: self
+                                    .truth_reading(a)
+                                    .and_then(|t| t.cache_write_tokens),
                                 activity: self.activity_of(a),
                                 resumable: false,
                                 no_pane_reason: None,
@@ -523,6 +535,10 @@ impl Core {
                                 session_cost_cents: None,
                                 session_tokens: None,
                                 compaction_count: None,
+                                session_input_tokens: None,
+                                session_output_tokens: None,
+                                session_cache_read_tokens: None,
+                                session_cache_write_tokens: None,
                                 activity: None,
                                 started_at: None,
                                 mail_unread: None,
@@ -675,6 +691,14 @@ impl Core {
                         session_cost_cents: self.truth_cost(a).0,
                         session_tokens: self.truth_cost(a).1,
                         compaction_count: self.truth_reading(a).and_then(|t| t.compaction_count),
+                        session_input_tokens: self.truth_reading(a).and_then(|t| t.input_tokens),
+                        session_output_tokens: self.truth_reading(a).and_then(|t| t.output_tokens),
+                        session_cache_read_tokens: self
+                            .truth_reading(a)
+                            .and_then(|t| t.cache_read_tokens),
+                        session_cache_write_tokens: self
+                            .truth_reading(a)
+                            .and_then(|t| t.cache_write_tokens),
                         activity: self.activity_of(a),
                         resumable,
                         no_pane_reason: if detached_live {
@@ -773,6 +797,14 @@ impl Core {
                         session_cost_cents: self.truth_cost(a).0,
                         session_tokens: self.truth_cost(a).1,
                         compaction_count: self.truth_reading(a).and_then(|t| t.compaction_count),
+                        session_input_tokens: self.truth_reading(a).and_then(|t| t.input_tokens),
+                        session_output_tokens: self.truth_reading(a).and_then(|t| t.output_tokens),
+                        session_cache_read_tokens: self
+                            .truth_reading(a)
+                            .and_then(|t| t.cache_read_tokens),
+                        session_cache_write_tokens: self
+                            .truth_reading(a)
+                            .and_then(|t| t.cache_write_tokens),
                         activity: self.activity_of(a),
                         resumable: self.row_resumable_in_session(a),
                         no_pane_reason: self.row_no_pane_reason_in_session(a),
@@ -912,6 +944,10 @@ impl Core {
                 session_cost_cents: None,
                 session_tokens: None,
                 compaction_count: None,
+                session_input_tokens: None,
+                session_output_tokens: None,
+                session_cache_read_tokens: None,
+                session_cache_write_tokens: None,
                 activity: None,
                 started_at: None,
                 mail_unread: None,

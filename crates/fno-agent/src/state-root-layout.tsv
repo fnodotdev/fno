@@ -8,6 +8,9 @@
 # new_relative_path  where the file lives after the migration, relative to
 #                the state root. `-` for park rows: their destination is
 #                backups/state-root-migration/<stamp>/, computed per run.
+#                A first segment of `cache` or `logs` names a class: on the
+#                default root (~/.fno) it resolves to the cache home or to
+#                <state home>/logs. Any other root keeps both inside itself.
 # kind           sqlite | anchor | append | overwrite | marker | page | lock | park
 #                anchor = the virtual graph.json; its existence probe is the
 #                sibling .db. lock = deleted (or parked, for sockets) only
@@ -116,7 +119,7 @@ squads.json	mux/squads.json	overwrite	mux
 squads.json.lock	mux/squads.json.lock	lock	mux
 session-names.json	mux/session-names.json	overwrite	mux
 session-names.json.lock	mux/session-names.json.lock	lock	mux
-# Fold candidates (ruled set, d-c74fda50): one dir row per folder, mapping
+# Fold candidates (ruled set, D2070): one dir row per folder, mapping
 # each to itself until its group slice retargets the destination. The mover
 # folds a retargeted dir row per child; a self-mapped row declares the
 # folder and moves nothing. `worktrees` has no row on purpose: the ruled
