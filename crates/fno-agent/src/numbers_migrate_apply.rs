@@ -745,7 +745,10 @@ fn mint_fresh(graph_db: &Path, keys: &[String]) -> Result<(), MigrateError> {
 /// every hex this machine holds, so a second project's apply would otherwise
 /// return before its vault step and leave that project's pages on their
 /// hashes for good.
-fn stored_map(db: &Path) -> Result<BTreeMap<String, String>, MigrateError> {
+/// The hex-to-number pairs `fno_id_map` holds.
+type StoredPairs = BTreeMap<String, String>;
+
+fn stored_map(db: &Path) -> Result<StoredPairs, MigrateError> {
     let conn = Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let present: bool = conn.query_row(
         "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'fno_id_map')",
@@ -757,7 +760,7 @@ fn stored_map(db: &Path) -> Result<BTreeMap<String, String>, MigrateError> {
     }
     let mut stmt = conn.prepare("SELECT hex, label FROM fno_id_map")?;
     let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
-    rows.collect::<Result<BTreeMap<_, _>, _>>()
+    rows.collect::<Result<StoredPairs, _>>()
         .map_err(MigrateError::from)
 }
 
@@ -1397,9 +1400,9 @@ mod tests {
         let db = home.join("db").join("graph.db");
         let stored = stored_map(&db).unwrap();
         assert_eq!(stored.len(), 2, "{stored:?}");
+        let d_label = stored.get("d-0000feed").unwrap();
+        let q_label = stored.get("q-0000beef").unwrap();
         for (vault, plain) in [(&vault_a, "ruling.md"), (&vault_b, "notes.md")] {
-            let d_label = &stored["d-0000feed"];
-            let q_label = &stored["q-0000beef"];
             let moved = vault.join(format!("{q_label}.md"));
             let page = std::fs::read_to_string(&moved).unwrap();
             assert!(page.contains(d_label) && page.contains(q_label), "{page:?}");
@@ -1419,7 +1422,7 @@ mod tests {
             .collect();
         dirs.sort();
         assert_eq!(dirs.len(), 2, "one backup dir per apply: {dirs:?}");
-        let undo = std::fs::read_to_string(dirs[1].join("undo.jsonl")).unwrap();
+        let undo = std::fs::read_to_string(dirs.last().unwrap().join("undo.jsonl")).unwrap();
         let entries: Vec<Value> = undo
             .lines()
             .map(|l| serde_json::from_str(l).unwrap())
