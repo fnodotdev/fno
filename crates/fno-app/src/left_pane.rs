@@ -1376,7 +1376,6 @@ pub(super) fn render(
         .flex_none()
         .w(px(WIDTH))
         .h_full()
-        .pt(px(ui::TITLE_H))
         .bg(rgb(p.panel))
         .border_r_1()
         .border_color(rgb(p.border))

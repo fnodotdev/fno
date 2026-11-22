@@ -159,7 +159,14 @@ pub(super) fn render(root: &Root) -> Div {
     for u in &root.usage {
         left = left.child(ui::text(usage_text(u, now), Role::Fact, &p).whitespace_nowrap());
     }
-    let mut right = div().flex().flex_row().flex_none().items_center().gap_2();
+    // pr_2 lines the last fact up with the title bar's last label.
+    let mut right = div()
+        .flex()
+        .flex_row()
+        .flex_none()
+        .items_center()
+        .gap_2()
+        .pr_2();
     for (i, f) in facts(root).into_iter().enumerate() {
         if i > 0 {
             right = right.child(ui::text("·", Role::Hint, &p));

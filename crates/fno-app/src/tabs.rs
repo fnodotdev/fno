@@ -239,7 +239,9 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
         .items_center()
         .gap_4()
         .h(px(ui::TITLE_H))
-        .px_3()
+        // The left inset clears the traffic lights the transparent title bar draws.
+        .pl(px(78.0))
+        .pr_3()
         .border_b_1()
         .border_color(rgb(p.border))
         .child(mark)

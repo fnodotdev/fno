@@ -392,7 +392,7 @@ fn wire_window(root: &mut Root, window: &mut Window, cx: &mut Context<Root>) {
 }
 
 fn grid_size(viewport: Size<Pixels>, cell: Size<Pixels>) -> (u16, u16) {
-    let height = viewport.height - px(ui::TITLE_H);
+    let height = viewport.height - px(ui::TITLE_H) - px(super::statusbar::BAR_H);
     let width = viewport.width - px(left_pane::WIDTH);
     let rows = ((height / cell.height).floor() - 1.0).max(1.0);
     let cols = ((width / cell.width).floor() - 1.0).max(1.0);
@@ -3855,7 +3855,7 @@ impl Render for Root {
                 .right(px(12.0))
                 // Stacked above the chat status row (the empty-state line sits
                 // in the bottom 40px); a corner pin cut that line off.
-                .bottom(px(44.0 + super::statusbar::BAR_H))
+                .bottom(px(44.0))
                 .max_w(px(520.0))
                 .px_3()
                 .py_1()
@@ -3882,25 +3882,32 @@ impl Render for Root {
             .relative()
             .size_full()
             .flex()
-            .flex_row()
+            .flex_col()
             .bg(rgb(self.palette.bg))
             .text_color(rgb(self.palette.fg))
             .font_family(self.metrics.font.family.clone())
             .text_size(self.metrics.font_size)
-            .child(left)
+            .child(strip)
             .child(
                 div()
-                    .relative()
-                    .flex_1()
-                    .min_w_0()
                     .flex()
-                    .flex_col()
-                    .child(strip)
-                    .child(main)
-                    .child(super::statusbar::render(self))
-                    .children(toast)
-                    .children(qtoast),
-            );
+                    .flex_row()
+                    .flex_1()
+                    .min_h_0()
+                    .child(left)
+                    .child(
+                        div()
+                            .relative()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(main)
+                            .children(toast)
+                            .children(qtoast),
+                    ),
+            )
+            .child(super::statusbar::render(self));
         self.overlays(page, window, cx)
     }
 }
