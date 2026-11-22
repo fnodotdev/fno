@@ -2152,10 +2152,13 @@ impl Root {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(agent) = self.layout.agents.iter().find(|a| a.name == name) else {
+        // A just-launched row shows its task as the label until the next
+        // layout, so the name can miss: say so rather than do nothing.
+        let Some(agent) = self.layout.agents.iter().find(|a| a.name == name).cloned() else {
+            self.say("this row has no menu yet".into(), cx);
             return;
         };
-        let mut menu = mux_modes::RowMenu::of(Some(agent));
+        let mut menu = mux_modes::RowMenu::of(Some(&agent));
         // Keep the menu on screen: a long one opens upward from the bottom.
         let room = f32::from(window.viewport_size().height) - 420.0;
         menu.anchor = Some((f32::from(at.x), f32::from(at.y).min(room.max(0.0))));
