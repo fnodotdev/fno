@@ -140,14 +140,51 @@ pub fn resolve(path: &Path, line: Option<u32>) -> Target {
 pub fn launch(target: &Target) -> Result<crate::link::OpenOutcome, String> {
     match target {
         Target::Obsidian { uri } => crate::link::open_fno_uri(uri),
+        Target::System(path) if can_run_code(path) => Err(format!(
+            "{} can run code, so a click does not open it",
+            path.file_name().unwrap_or_default().to_string_lossy()
+        )),
         Target::System(path) => crate::link::open_fno_path(path),
         Target::Viewer { .. } => Ok(crate::link::OpenOutcome::Opened),
     }
 }
 
+/// What the platform opener runs instead of shows. Pane output picks the
+/// path, so a click must not become a launch.
+const LAUNCHABLE_EXTS: &[&str] = &[
+    "app", "command", "tool", "terminal", "pkg", "mpkg", "workflow", "action", "scpt", "shortcut",
+    "inetloc", "fileloc", "webloc", "prefpane", "desktop", "jar",
+];
+
+fn can_run_code(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    // A link named `notes` can point at `Evil.app`, so judge what it resolves to.
+    let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let named = real
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| LAUNCHABLE_EXTS.contains(&e.to_ascii_lowercase().as_str()));
+    named
+        || std::fs::metadata(&real)
+            .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_click_never_launches_what_can_run_code() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir.path().join("Evil.app");
+        std::fs::create_dir(&app).unwrap();
+        let alias = dir.path().join("notes");
+        std::os::unix::fs::symlink(&app, &alias).unwrap();
+        for path in [app, alias] {
+            assert!(launch(&Target::System(path)).is_err());
+        }
+        assert!(!can_run_code(dir.path()), "a plain folder still opens");
+    }
 
     fn cfg(enabled: bool, vault: Option<&str>) -> ObsidianCfg {
         ObsidianCfg {
