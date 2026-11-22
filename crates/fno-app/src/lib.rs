@@ -29,6 +29,7 @@ mod skills;
 mod start;
 mod tabs;
 mod ui;
+mod update;
 mod window;
 
 use std::path::{Path, PathBuf};

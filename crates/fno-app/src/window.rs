@@ -135,6 +135,10 @@ pub enum Action {
     /// Open the launch composer, with a kind pre-picked when the opener
     /// named one; `None` keeps the retained draft's kind.
     OpenLaunch(Option<launch::Kind>),
+    /// The update card's Restart: swap in the staged build and relaunch.
+    RestartForUpdate,
+    /// The update card's Later or Dismiss: drop the card.
+    DismissUpdate,
 }
 
 /// The stable control id a click's [`Action`] ships to the usage events arm
@@ -176,7 +180,18 @@ fn click_id(action: &Action) -> &'static str {
         Action::Reconnect => "reconnect",
         Action::Mail(_) => "mail_lead",
         Action::OpenLaunch(_) => "open_launch",
+        Action::RestartForUpdate => "restart_for_update",
+        Action::DismissUpdate => "dismiss_update",
     }
+}
+
+/// What the update card says.
+#[derive(Debug, Clone, PartialEq)]
+enum UpdateCard {
+    /// A proven build is staged; Restart swaps it in.
+    Ready(super::update::Ready),
+    /// This launch is the new build: its release notes, shown once.
+    Installed { version: String, notes: String },
 }
 
 /// Where an answer the user clicked stands. The row shows it in place of its
@@ -308,6 +323,9 @@ pub struct Root {
     /// so only the newest toast's expiry clears it.
     question_toast: Option<(String, u64)>,
     question_toast_gen: u64,
+    /// The update card: a staged build waiting for Restart, or the notes of
+    /// the build this launch just installed (shown once).
+    update_card: Option<UpdateCard>,
     /// Every question id any board read has listed. Arrival = an id the set
     /// has not met; the first read seeds it silently, unless the shot flag
     /// below is set, so an app open never toasts a backlog.
@@ -357,6 +375,7 @@ pub struct Root {
     _appearance: Option<Subscription>,
     _notice: Option<Task<()>>,
     _question_toast: Option<Task<()>>,
+    _update: Option<Task<()>>,
     _alerts: Option<Task<()>>,
     _alerts_tick: Option<Task<()>>,
     /// The attention signals: the lattice diff, the switch cache, the badge.
@@ -491,6 +510,7 @@ impl Root {
             answer: None,
             question_toast: None,
             question_toast_gen: 0,
+            update_card: None,
             seen_questions: HashSet::new(),
             questions_seeded: false,
             toast_on_first_read: false,
@@ -513,6 +533,7 @@ impl Root {
             _appearance: None,
             _notice: None,
             _question_toast: None,
+            _update: None,
             _alerts: None,
             _alerts_tick: None,
             alerts: alerts::Alerts::new(),
@@ -809,6 +830,87 @@ impl Root {
         }));
     }
 
+    /// Read the release feed now and every [`update::RECHECK`] until a build
+    /// is staged. A failed read waits for the next round, and a build that
+    /// already names the running version never shows a card.
+    pub(super) fn start_update(&mut self, cx: &mut Context<Self>) {
+        self.update_card = super::update::take_pending_notes(super::update::RUNNING)
+            .map(|(version, notes)| UpdateCard::Installed { version, notes });
+        self._update = Some(cx.spawn(async move |this, cx| loop {
+            let read = cx
+                .background_executor()
+                .spawn(async { super::update::check(super::update::RUNNING) })
+                .await;
+            if let Ok(Some(ready)) = read {
+                let _ = this.update(cx, |root, cx| {
+                    if !matches!(root.update_card, Some(UpdateCard::Installed { .. })) {
+                        root.update_card = Some(UpdateCard::Ready(ready));
+                    }
+                    cx.notify();
+                });
+                break;
+            }
+            cx.background_executor().timer(super::update::RECHECK).await;
+        }));
+    }
+
+    /// The update card: a raised card top-right, below the question toast's
+    /// slot. A staged build offers Restart; a fresh install shows its notes
+    /// once and drops on Dismiss.
+    fn update_card_view(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        let card = self.update_card.as_ref()?;
+        let (head, body, buttons) = match card {
+            UpdateCard::Ready(r) => (
+                format!("fno-app {} is ready", r.version),
+                "Restart to finish the update.".to_string(),
+                vec![
+                    ui::button(
+                        "update-restart",
+                        "Restart",
+                        ui::Button::Primary,
+                        &self.palette,
+                    )
+                    .on_click(cx.listener(|root, _, _, cx| root.act(Action::RestartForUpdate, cx))),
+                    ui::button("update-later", "Later", ui::Button::Quiet, &self.palette).on_click(
+                        cx.listener(|root, _, _, cx| root.act(Action::DismissUpdate, cx)),
+                    ),
+                ],
+            ),
+            UpdateCard::Installed { version, notes } => (
+                format!("Updated to fno-app {version}"),
+                ui::cut(notes.trim(), 600),
+                vec![ui::button(
+                    "update-dismiss",
+                    "Dismiss",
+                    ui::Button::Primary,
+                    &self.palette,
+                )
+                .on_click(cx.listener(|root, _, _, cx| root.act(Action::DismissUpdate, cx)))],
+            ),
+        };
+        Some(
+            div()
+                .absolute()
+                .bottom(px(44.0))
+                .left(px(12.0))
+                .w(px(420.0))
+                .flex()
+                .flex_col()
+                .gap(px(6.0))
+                .px_3()
+                .py_2()
+                .rounded(px(6.0))
+                .border_1()
+                .border_color(rgb(self.palette.border))
+                .bg(rgb(self.palette.raised))
+                .font_family(ui::MONO)
+                .text_size(px(ui::BODY))
+                .child(ui::role(div(), ui::Role::Name, &self.palette).child(head))
+                .child(div().text_color(rgb(self.palette.muted)).child(body))
+                .child(div().flex().flex_row().gap(px(6.0)).children(buttons)),
+        )
+    }
+
     /// Raise the arrival toast for one question. The element reads the
     /// board live at paint, so a question the board drops hides the toast
     /// even before the timer does. The shot holds it: the capture wants
@@ -930,6 +1032,19 @@ impl Root {
                 self.answer = Some(answer::Sheet::new(id));
             }
             Action::CloseAnswer => self.answer = None,
+            Action::DismissUpdate => self.update_card = None,
+            Action::RestartForUpdate => {
+                if let Some(UpdateCard::Ready(ready)) = self.update_card.clone() {
+                    match super::update::install_and_relaunch(&ready) {
+                        Ok(()) => {
+                            self.send(ClientMsg::Detach);
+                            record_ui_state(self, cx);
+                            cx.quit();
+                        }
+                        Err(e) => self.say_as(format!("update: {e}"), true, cx),
+                    }
+                }
+            }
             Action::PickAnswer(n) => {
                 if let Some(s) = self.answer.as_mut() {
                     s.pick = Some(n);
@@ -3836,6 +3951,7 @@ impl Render for Root {
                 .child(text)
         });
         let qtoast = self.question_toast_card(cx);
+        let utoast = self.update_card_view(cx);
         let page = div()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
@@ -3867,7 +3983,8 @@ impl Render for Root {
                     .child(strip)
                     .child(main)
                     .children(toast)
-                    .children(qtoast),
+                    .children(qtoast)
+                    .children(utoast),
             );
         self.overlays(page, window, cx)
     }
@@ -4070,7 +4187,7 @@ pub fn run(
                     cell: size(snap(width), snap(font_size * 1.25)),
                 };
                 cx.new(|cx| {
-                    let root = Root::new(
+                    let mut root = Root::new(
                         session,
                         main,
                         pinned.clone(),
@@ -4094,6 +4211,7 @@ pub fn run(
                         true
                     });
                     window.focus(&root.focus);
+                    root.start_update(cx);
                     root
                 })
             },
