@@ -2326,7 +2326,7 @@ pub(crate) fn list_json() -> serde_json::Value {
                 "effect": s.effect,
             });
             if s.id == "messaging" {
-                match crate::setup_messaging::sink_rows() {
+                match crate::setup_messaging::sink_rows().map_err(|fault| fault.to_string()) {
                     Ok(rows) => {
                         let me = crate::setup_messaging::machine();
                         v["channels"] = crate::setup_messaging::channel_states(&rows, &me)
@@ -2392,15 +2392,35 @@ fn step_messaging(exe: &Path, prompting: bool, picked: Option<&[&str]>, rep: &mu
 
 /// The `attention-remote` step: the phone answer path. Reads the current
 /// sinks and invites rows, walks the prompts, writes through the validated
-/// config doors, and folds into the report like every other step.
+/// config doors, and folds into the report like every other step. Rows it
+/// cannot read stop the step, because each write replaces a whole list.
 fn step_attention_remote(exe: &Path, prompting: bool, rep: &mut Report) {
-    let rows = crate::setup_messaging::sink_rows().unwrap_or_default();
-    let invites = invites_rows();
+    use crate::trusted_config::{TrustedFile, TrustedKey};
     if !prompting {
+        // The skip line writes nothing, so rows it cannot read count as none.
+        let rows = crate::setup_messaging::sink_rows().unwrap_or_default();
         rep.skipped
             .push(crate::setup_attention_remote::summary_line(&rows));
         return;
     }
+    let file = TrustedFile::from_env();
+    let read = |key| crate::setup_messaging::rows_to_rewrite(&file, key);
+    let (rows, invites) = match (
+        read(TrustedKey::AttentionSinks),
+        read(TrustedKey::WebInvites),
+    ) {
+        (Ok(rows), Ok(invites)) => (rows, invites),
+        (Err(fault), _) | (_, Err(fault)) => {
+            let message = format!("attention-remote: nothing written: {fault}");
+            rep.rows.push(row(
+                "needs_human",
+                "attention_remote_unfinished",
+                message.clone(),
+            ));
+            rep.needs_human.push(message);
+            return;
+        }
+    };
     let set_sinks = |value: &str| {
         config_set(exe, &[("attention.sinks", value)], false)
             .map_err(crate::setup_attention_remote::RemoteError::Config)
@@ -2433,19 +2453,6 @@ fn step_attention_remote(exe: &Path, prompting: bool, rep: &mut Report) {
         ));
         rep.needs_human.push(message);
     }
-}
-
-/// The `web.invites` rows of the global config, read the way `sink_rows`
-/// reads the sinks.
-fn invites_rows() -> Vec<serde_json::Value> {
-    let global = crate::config_defaults::global_config_path();
-    let map = crate::config_defaults::read_flat(&global).ok().flatten();
-    map.and_then(|map| map.get("web.invites").cloned())
-        .map(|v| match toml_as_json(&v) {
-            serde_json::Value::Array(a) => a,
-            _ => Vec::new(),
-        })
-        .unwrap_or_default()
 }
 
 fn layer_name(l: Layer) -> &'static str {

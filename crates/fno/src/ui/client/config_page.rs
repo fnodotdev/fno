@@ -635,16 +635,27 @@ async fn set_key(
     reload_rows();
 }
 
-/// Clear one key through the same door (`fno config unset`, project scope).
+/// Clear one key through the same door (`fno config unset`), in the file
+/// [`write_value`] writes: a revoke must remove the row that grants.
 async fn unset_key(id: &str) {
-    record_write(id, config_set::spawn_scoped(id, None, true).await.err());
+    let local = !machine_only(id);
+    record_write(id, config_set::spawn_scoped(id, None, local).await.err());
     reload_rows();
 }
 
-/// The one write door: `fno config set`, project scope, except the global
-/// host list, which belongs to the user file.
+/// A key that belongs to the user file: the host list, and the keys that
+/// grant access, which a project file cannot set.
+fn machine_only(id: &str) -> bool {
+    id == "mux.remote_hosts"
+        || crate::trusted_config::TrustedKey::ALL
+            .iter()
+            .any(|key| key.dotted() == id)
+}
+
+/// The one write door: `fno config set`, project scope, except a
+/// [`machine_only`] key.
 async fn write_value(id: &str, value: &str) -> Option<String> {
-    let result = if id == "mux.remote_hosts" {
+    let result = if machine_only(id) {
         config_set::spawn_config_set_global(id, value).await
     } else {
         config_set::spawn_config_set(id, value).await
