@@ -62,12 +62,14 @@ pub(crate) fn no_live_worker(home: &AgentsHome) -> bool {
 /// both fire; both still need the fresh no-worker probe verdict and a
 /// connection-free moment before anything exits. Fail-safe by construction:
 /// the caller maps a missing fingerprint or an unreadable exe to
-/// `drifted = false`, and a live active-backlog supervisor or an unfinished
+/// `drifted = false`, and a live active-backlog supervisor, a pending
+/// scheduled-spawn row (idle only; drift outranks it), or an unfinished
 /// accepted RPC (a `--follow` log stream holds one open on purpose) blocks
-/// both reasons.
+/// the retirement.
 pub(crate) fn quiet_retire_reason(
     drifted: bool,
     ab_active: bool,
+    schedule_pending: bool,
     idle_elapsed: bool,
     no_open_rpc: bool,
 ) -> Option<&'static str> {
@@ -76,6 +78,11 @@ pub(crate) fn quiet_retire_reason(
     }
     if drifted {
         return Some("drift");
+    }
+    // A pending scheduled-spawn row holds the idle exit only: drift is
+    // checked above, so a weekly --every row never pins an old binary.
+    if schedule_pending {
+        return None;
     }
     if idle_elapsed {
         return Some("idle");
@@ -208,26 +215,30 @@ impl DriftFlag {
 mod tests {
     use super::*;
 
-    /// Args: (drifted, ab_active, idle_elapsed, no_open_rpc). Drift retires without the
-    /// idle wait and outranks idle; no drift never retires alone; a live
-    /// active-backlog supervisor or an open RPC blocks both.
+    /// Args: (drifted, ab_active, schedule_pending, idle_elapsed,
+    /// no_open_rpc). Drift retires without the idle wait and outranks idle
+    /// and a pending schedule; no drift never retires alone; a live
+    /// active-backlog supervisor, a pending scheduled-spawn row (idle
+    /// only), or an open RPC blocks the retirement.
     #[test]
     fn quiet_retire_reason_truth_table() {
         let rows = [
-            ((true, false, false, true), Some("drift")),
-            ((true, false, true, true), Some("drift")),
-            ((false, false, false, true), None),
-            ((false, false, true, true), Some("idle")),
-            ((true, true, false, true), None),
-            ((false, true, true, true), None),
-            ((true, false, false, false), None),
-            ((false, false, true, false), None),
+            ((true, false, false, false, true), Some("drift")),
+            ((true, false, false, true, true), Some("drift")),
+            ((true, false, true, false, true), Some("drift")),
+            ((false, false, false, false, true), None),
+            ((false, false, false, true, true), Some("idle")),
+            ((false, false, true, true, true), None),
+            ((true, true, false, false, true), None),
+            ((false, true, false, true, true), None),
+            ((true, false, false, false, false), None),
+            ((false, false, false, true, false), None),
         ];
-        for ((d, ab, idle, rpc), want) in rows {
+        for ((d, ab, sched_pending, idle, rpc), want) in rows {
             assert_eq!(
-                quiet_retire_reason(d, ab, idle, rpc),
+                quiet_retire_reason(d, ab, sched_pending, idle, rpc),
                 want,
-                "{d} {ab} {idle} {rpc}"
+                "{d} {ab} {sched_pending} {idle} {rpc}"
             );
         }
     }

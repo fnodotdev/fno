@@ -56,6 +56,14 @@ Everything after the prompt is harness argv, never parsed. A spawn-owned flag th
 
 `--dry-run` plans the spawn and prints the plan: the drawn name, the role scope and whether it is a hand-off. It launches nothing, writes no registry row and settles no promotion. The name draw stays pending, so the next real hand-off offers the same name. Run `fno agent spawn --promote <scope> --hand-off --dry-run` to see the successor's drawn name before you commit to the hand-off.
 
+## Scheduling
+
+`--when <time>` queues the spawn for the daemon to fire through the normal gate at that time. The row, not a worker, is what a schedule creates: `--list-scheduled` shows rows with both zones, force, node, grace and the last gate reading; `--cancel-scheduled <id>` drops one row and names the list command on an unknown id. Time input accepts local, a named IANA zone, PT/ET/CT/MT, UTC (`20:00Z`) and RFC 3339. A past bare `HH:MM` rolls to tomorrow and the echo says so. A DST-ambiguous wall clock refuses naming both UTC candidates.
+
+`--every <interval>` re-queues the row after each fire (`hourly`, `daily`, `weekly`, `30m`, `2h`). `--on <command>` polls the command each arm pass in the row's cwd under the 60s bound. The row fires when the command exits 0. An `--on` row's grace counts from creation (7 days default).
+
+`--grace <duration>` bounds the retry: a refused fire retries every 5 minutes inside the grace (60 minutes default for a timed row), then the row reads `missed` and one mail goes to the scheduler. `--force` recorded at schedule time skips at fire time exactly what `spawn --force` skips now (seat caps, `--at` placement anchor aside), and never lifts the memory or disk axis. Rows due in one minute fire in live node priority order. A pending row holds the daemon's idle exit, never drift retirement. The gate is `config.schedule.enabled` (default true).
+
 ## Misc
 
 Without `--name`, an adjective-noun slug is minted. The one positional is the prompt, not the name. A prompt from `--prompt-file <path>` or `--prompt-file -` is read once before admission and naming. Do not supply an inline prompt beside a prompt file.

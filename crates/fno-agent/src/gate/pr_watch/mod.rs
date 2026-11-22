@@ -2,7 +2,7 @@
 //! `uninstall`, `heal` and `tick` all live here; the wheel keeps one forward
 //! leaf so every spelling still answers.
 
-mod clock;
+pub(crate) mod clock;
 mod discover;
 mod dispatch;
 mod heal;
