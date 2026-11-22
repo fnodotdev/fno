@@ -1429,10 +1429,13 @@ mod tests {
         std::fs::write(vault_b.join("q-0000beef.md"), keyed_page).unwrap();
         std::fs::write(vault_b.join("notes.md"), "see d-0000feed for the ruling\n").unwrap();
 
-        // The child carries its own FNO_HOME, HOME and FNO_CONFIG, so no
-        // ambient store is ever a candidate. The filter names the full test
-        // path: --exact matches nothing on a bare function name, and a child
-        // that ran nothing still exits 0.
+        // The child carries its own FNO_HOME, HOME, FNO_CONFIG, spaces dir
+        // and events journal, so no ambient or shared-sandbox store is ever
+        // a candidate: the beat reads question journals under the spaces
+        // root, which the hermetic lane otherwise shares across every test
+        // process on the runner. The filter names the full test path:
+        // --exact matches nothing on a bare function name, and a child that
+        // ran nothing still exits 0.
         let exe = std::env::current_exe().unwrap();
         let mut cmd = std::process::Command::new(&exe);
         cmd.args([
@@ -1443,6 +1446,8 @@ mod tests {
         .env("FNO_HOME", &home)
         .env("HOME", root.path())
         .env("FNO_CONFIG", proj_a.join(".fno/config.toml"))
+        .env("FNO_SPACES_DIR", root.path().join("spaces"))
+        .env("FNO_EVENTS_PATH", root.path().join("events.jsonl"))
         .env_remove("FNO_STATE_DIR")
         .current_dir(&proj_a);
         let out = crate::bounded_cmd::output_with_timeout_result(cmd, 600).unwrap();
