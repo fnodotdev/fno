@@ -382,14 +382,27 @@ pub(super) fn report_landing(
     false
 }
 
-/// The live-drain verdict gate: an unconfirmed inject holds for the turn
-/// boundary (the documented semantic - it may land past the confirm window),
-/// and a hard refusal (`no-pane-ref` among them) is a failed send. A missing
+/// The refusals that can never land. A send fails on these names alone;
+/// every other reason (an unconfirmed inject, a busy recipient's
+/// `not-injectable`, anything unknown) holds for the turn boundary.
+const TERMINAL_REFUSAL_REASONS: [&str; 5] = [
+    "no-pane-ref",
+    "no-lane",
+    "no-recipient",
+    "stage-failed",
+    "turn-parse-failed",
+];
+
+/// The live-drain verdict gate: a send fails only on a named refusal from
+/// [`TERMINAL_REFUSAL_REASONS`]. Everything else holds for the turn boundary
+/// (the documented semantic - it may land past the confirm window). A missing
 /// reason is unknown, not a refusal: unknown holds, because every caller
 /// that reaches the gate with None recorded no live miss at all.
 pub(super) fn live_drain_holds(failed_reason: Option<&str>) -> bool {
     match failed_reason {
         None => true,
-        Some(r) => crate::mail_receipt::is_live_lane_failure(Some(r)),
+        Some(r) => !r
+            .split(';')
+            .any(|token| TERMINAL_REFUSAL_REASONS.contains(&token)),
     }
 }

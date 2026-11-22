@@ -2258,15 +2258,28 @@ mod mail_addr_fallback_tests {
             || panic!("only the pane lane falls back to the raw door"),
         );
         assert_eq!(state.reason(), Some("pane-not-ready"));
-        // The live-drain verdict rows: a hard refusal fails the send, an
-        // unconfirmed inject or a missing reason holds for the turn boundary.
+        // The live-drain verdict rows: a named never-lands refusal fails the
+        // send; a busy recipient (`not-injectable`), an unconfirmed inject
+        // or a missing reason holds for the turn boundary.
         assert!(!crate::mail_cli::send::verify::live_drain_holds(Some(
             "no-pane-ref"
         )));
         assert!(!crate::mail_cli::send::verify::live_drain_holds(Some(
             "stage-failed"
         )));
+        assert!(!crate::mail_cli::send::verify::live_drain_holds(Some(
+            "no-lane"
+        )));
+        assert!(!crate::mail_cli::send::verify::live_drain_holds(Some(
+            "no-recipient"
+        )));
+        assert!(!crate::mail_cli::send::verify::live_drain_holds(Some(
+            "turn-parse-failed"
+        )));
         assert!(crate::mail_cli::send::verify::live_drain_holds(None));
+        assert!(crate::mail_cli::send::verify::live_drain_holds(Some(
+            "not-injectable"
+        )));
         assert!(crate::mail_cli::send::verify::live_drain_holds(Some(
             "not-confirmed;waited-3s"
         )));
