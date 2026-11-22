@@ -777,7 +777,7 @@ pub struct ServerArgs {
 fn root_flag_help(args: &[OsString]) -> Option<bool> {
     let mut all = false;
     let mut help = false;
-    let mut words = args
+    let words = args
         .iter()
         .map(|a| a.to_str())
         .collect::<Option<Vec<_>>>()?;
