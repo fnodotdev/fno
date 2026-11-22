@@ -266,6 +266,9 @@ pub struct Root {
     sent_size: (u16, u16),
     pub(super) board: Board,
     pub(super) poller: Option<Poller>,
+    /// Each provider's tightest usage window, for the status bar.
+    pub(super) usage: Vec<super::statusbar::ProviderUse>,
+    _usage: Option<gpui::Task<()>>,
     /// The terminal area's bounds at the last paint, for mouse hit tests.
     area: Rc<Cell<Bounds<Pixels>>>,
     /// The pane a left-button drag started in.
@@ -465,6 +468,8 @@ impl Root {
             sent_size,
             board: Board::default(),
             poller: None,
+            usage: Vec::new(),
+            _usage: None,
             area: Rc::new(Cell::new(Bounds::default())),
             drag: None,
             seam_drag: None,
@@ -525,6 +530,7 @@ impl Root {
         Self::attach_link(&mut root, &session, sent_size, prewarmed, cx);
         root.wire_alerts(cx);
         root.start_board_poll(cx);
+        root.start_usage_poll(cx);
         root.start_plugins(cx);
         // The control channel: the drain loop applies rows through the
         // same paths clicks ride (focus, view switch, quit).
@@ -609,6 +615,29 @@ impl Root {
             if this.update(cx, |root, cx| root.on_alerts_tick(cx)).is_err() {
                 break;
             }
+        }));
+    }
+
+    /// The usage poll: the provider windows the status bar shows, read once
+    /// a minute off the UI thread.
+    fn start_usage_poll(&mut self, cx: &mut Context<Self>) {
+        self._usage = Some(cx.spawn(async move |this, cx| loop {
+            let usage = cx
+                .background_executor()
+                .spawn(async { super::statusbar::read_usage() })
+                .await;
+            let live = this
+                .update(cx, |root, cx| {
+                    root.usage = usage;
+                    cx.notify();
+                })
+                .is_ok();
+            if !live {
+                break;
+            }
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(60))
+                .await;
         }));
     }
 
@@ -3866,6 +3895,7 @@ impl Render for Root {
                     .flex_col()
                     .child(strip)
                     .child(main)
+                    .child(super::statusbar::render(self))
                     .children(toast)
                     .children(qtoast),
             );

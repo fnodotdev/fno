@@ -27,6 +27,7 @@ mod sheet;
 mod shot;
 mod skills;
 mod start;
+mod statusbar;
 mod tabs;
 mod ui;
 mod window;
