@@ -1378,6 +1378,18 @@ mod tests {
     #[ignore = "spawned with a seeded FNO_HOME by the two-project vault test"]
     fn migrate_ids_two_project_apply_child() {
         dump_store("pre-a");
+        if let Ok(index) = crate::decision_index::default_store_live() {
+            let ids: Vec<String> = index
+                .rows
+                .iter()
+                .filter_map(|r| r["decision_id"].as_str().map(str::to_string))
+                .collect();
+            eprintln!("child[pre-a]: decision index {ids:?}");
+        }
+        let cwd = std::env::current_dir().unwrap();
+        let (items, unreadable, _) = crate::attention_arm::read_items(&cwd);
+        let extra: Vec<String> = items.iter().map(|i| i.id.clone()).collect();
+        eprintln!("child[pre-a]: attention items {extra:?} unreadable {unreadable:?}");
         let code = super::super::run(&["--apply".to_string()]);
         eprintln!("child: apply from project-a exited {code}");
         assert_eq!(code, 0);
