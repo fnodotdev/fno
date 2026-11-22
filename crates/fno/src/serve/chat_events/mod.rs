@@ -94,6 +94,9 @@ pub(crate) fn pasted_turns(
         }
     }
     reader.whole_images = true;
+    // Only OpenCode splits a message over events. A Codex row with no id takes
+    // its timestamp as one, so two messages can share it.
+    let split = key.harness.as_harness() == Harness::Opencode;
     let mut messages: Vec<(String, PastedTurn)> = Vec::new();
     for event in reader.poll()? {
         let ChatBody::UserMessage { id, parts, .. } = event.body else {
@@ -101,7 +104,7 @@ pub(crate) fn pasted_turns(
         };
         let same = messages
             .last()
-            .is_some_and(|(last, _)| !id.is_empty() && *last == id);
+            .is_some_and(|(last, _)| split && !id.is_empty() && *last == id);
         if !same {
             let turn = PastedTurn {
                 at_ms: event.at_ms,

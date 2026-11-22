@@ -25,6 +25,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `CLAUDE_CODE_SESSION_ATTENDED` | rs | The Claude Code attended flag: `0` marks an unattended session, the second agent-cargo marker at the cargo admission doors. |
 | `CLAUDE_CODE_SESSION_ID` | rs | The current claude session id marker, first in claims' ambient table; `identity::claude_env_session_id` prefers it when it stamps an ask or a done. |
 | `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` | rs | Consecutive Stop-hook block cap the harness enforces before it force-ends the turn (Claude Code default 9). The run records whether the env override or the default bound. |
+| `CLAUDE_CODE_TMPDIR` | rs | Claude Code's temp base override. The mux also looks under its `claude-<uid>` folder for pasted images, and reads the value from the mux server's environment (crates/fno/src/mux/server/pasted_images.rs). |
 | `CLAUDE_CONFIG_DIR` | rs | Overrides the Claude config directory for managed provider lookups. |
 | `CLAUDE_DIR_OVERRIDE` | rs | Redirects the whole Claude config root. Read by crates/fno-agent/src/runtime/claude_roster.rs `config_dir` and crates/fno-agent/src/runtime/harness_reader.rs. |
 | `CLAUDE_EFFORT` | rs | The effort level an encounter vote records, on claude only. |
