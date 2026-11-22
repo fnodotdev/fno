@@ -9,9 +9,18 @@ use serde_json::Value;
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-/// The advisory reporter: prints nothing on a machine without the ntfy
-/// server installed, one ok line when aligned, one flag per mismatch.
+/// The advisory reporter: the sink rows it ignores on any machine, then, with
+/// the ntfy server installed, one ok line when aligned, one flag per mismatch.
 pub fn report(out: &mut String) {
+    let trusted = TrustedFile::from_env();
+    // An unreadable cwd has no project file to report.
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let project = crate::digest_overlay::project_config_files(&cwd);
+    for note in trusted.notes(TrustedKey::AttentionSinks, &project) {
+        out.push_str("\nphone sink: ");
+        out.push_str(&note);
+        out.push('\n');
+    }
     let Some(yaml_path) = server_yml_candidates().into_iter().find(|p| p.is_file()) else {
         return;
     };
@@ -26,15 +35,6 @@ pub fn report(out: &mut String) {
         );
         return;
     };
-    let trusted = TrustedFile::from_env();
-    // An unreadable cwd has no project file to report.
-    let cwd = std::env::current_dir().unwrap_or_default();
-    let project = crate::digest_overlay::project_config_files(&cwd);
-    for note in trusted.notes(TrustedKey::AttentionSinks, &project) {
-        out.push_str("\nphone sink: ");
-        out.push_str(&note);
-        out.push('\n');
-    }
     let sink_hosts = ntfy_sink_hosts(&trusted);
     if sink_hosts.is_empty() {
         return;
