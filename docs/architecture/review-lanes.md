@@ -439,7 +439,7 @@ The receipt names the session, the head, the base, the changed files and the sha
 
 The check is harness-neutral. It reads no transcript, so Claude, Codex and opencode sessions meet the same rule.
 
-The limit is plain: a receipt proves the diff was served to the session. It does not prove the session read or understood it.
+The limit is plain: a receipt proves the diff was served to the session. It does not prove the session read or understood it. A session that writes the receipt file by hand can also pass the check.
 
 ## Attestation origin: whose process rendered the verdict
 
