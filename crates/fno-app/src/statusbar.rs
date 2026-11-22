@@ -81,21 +81,30 @@ pub fn read_usage() -> Option<Vec<ProviderUse>> {
         .stderr(Stdio::null())
         .spawn()
         .ok()?;
+    // Drained on its own thread so a full pipe never stalls the child.
+    let mut out = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        out.read_to_string(&mut text).ok().map(|_| text)
+    });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let status = loop {
-        match child.try_wait().ok()? {
-            Some(s) => break s,
-            None if std::time::Instant::now() >= deadline => {
+        match child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            _ => {
                 if child.kill().is_ok() {
                     let _reaped = child.wait();
                 }
                 return None;
             }
-            None => std::thread::sleep(std::time::Duration::from_millis(100)),
         }
     };
-    let mut text = String::new();
-    child.stdout.take()?.read_to_string(&mut text).ok()?;
+    let text = reader.join().ok()??;
+    // Output that is not JSON is a failed read, not an empty one.
+    serde_json::from_str::<Value>(&text).ok()?;
     status.success().then(|| parse_usage(&text))
 }
 
