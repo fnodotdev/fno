@@ -1198,7 +1198,8 @@ mod tests {
             1,
             "hints inside one burst window coalesce to one row"
         );
-        assert_eq!(rows[0]["data"]["pane"], 7);
+        let first = rows.first().expect("one coalesced typing row");
+        assert_eq!(first["data"]["pane"], 7);
         core.draft_hint_at(1, 7, t0 + Duration::from_secs(6));
         assert_eq!(
             journal_rows(&dir, "operator_typing").len(),
