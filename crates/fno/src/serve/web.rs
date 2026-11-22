@@ -173,6 +173,8 @@ struct AppState {
     /// Where `[[web.invites]]` is read per request. [`invite_gate`] hands the
     /// handler the read it decided on.
     invites: Arc<InviteSource>,
+    /// Where a direct-local click lands. `None` records nothing.
+    click_journal: Option<PathBuf>,
     /// The cached backlog read model (`None` until the first gather).
     model: Arc<tokio::sync::Mutex<Option<CachedModel>>>,
     /// Fires on Ctrl-C so every ws loop ends and axum's graceful shutdown can
@@ -669,6 +671,7 @@ async fn run(args: WebArgs, socket: PathBuf) -> i32 {
         hq: Default::default(),
         writable,
         invites: Arc::new(InviteSource::for_bridge()),
+        click_journal: crate::cli_usage::agents_journal(),
         model: Default::default(),
         shutdown: shutdown_rx,
     };
@@ -1813,15 +1816,34 @@ async fn backlog_act(
 /// writes the row through the same door the TUI client uses, and a dropped
 /// id or failed write tells nobody. The body parses once into this struct
 /// (R1); a body missing a field never reaches the handler.
+///
+/// Only the user's own click records: a direct loopback request with the
+/// token and the same origin. An invitee or any other proxied caller gave no
+/// opt-in, so they get the same 204 and no row.
 #[derive(serde::Deserialize)]
 struct UiClickBody {
     screen: String,
     control: String,
 }
 
-async fn ui_click(Json(body): Json<UiClickBody>) -> StatusCode {
-    crate::ui_usage::click(&body.screen, &body.control);
-    StatusCode::NO_CONTENT
+async fn ui_click(
+    Query(q): Query<WsQuery>,
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<UiClickBody>,
+) -> Response {
+    if !token_ok(q.t.as_deref(), &st.token) {
+        return unauthorized();
+    }
+    if let Err(msg) = crate::web_answer::same_origin(&headers) {
+        return plain_status(StatusCode::FORBIDDEN, msg);
+    }
+    if caller_of(&headers, st.writable).is_direct_local() {
+        if let Some(journal) = &st.click_journal {
+            crate::ui_usage::click_into(journal, &body.screen, &body.control);
+        }
+    }
+    StatusCode::NO_CONTENT.into_response()
 }
 
 /// `POST /hq/answer/{id}?t=<token>`: answer one open question from the
@@ -2448,6 +2470,7 @@ mod tests {
             hq: Default::default(),
             writable: true,
             invites: invite_source(None),
+            click_journal: None,
             model: Default::default(),
             shutdown,
         };
@@ -3361,6 +3384,7 @@ console.log("backlog page helpers: 18 cases ok");
             hq,
             writable: true,
             invites: invite_source(None),
+            click_journal: None,
             model: Default::default(),
             shutdown,
         };
@@ -3432,6 +3456,7 @@ console.log("backlog page helpers: 18 cases ok");
             hq,
             writable: true,
             invites: invite_source(None),
+            click_journal: None,
             model: Default::default(),
             shutdown,
         };
@@ -3782,6 +3807,7 @@ console.log("backlog page helpers: 18 cases ok");
             hq: Default::default(),
             writable,
             invites: invite_source(invites),
+            click_journal: None,
             model: Default::default(),
             shutdown,
         }
@@ -4176,6 +4202,7 @@ console.log("backlog page helpers: 18 cases ok");
             hq: Default::default(),
             writable: true,
             invites: invite_source(None),
+            click_journal: None,
             model: Default::default(),
             shutdown,
         };
@@ -4198,6 +4225,7 @@ console.log("backlog page helpers: 18 cases ok");
         let ro_state = AppState {
             writable: false,
             invites: invite_source(None),
+            click_journal: None,
             ..state.clone()
         };
         let ro_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

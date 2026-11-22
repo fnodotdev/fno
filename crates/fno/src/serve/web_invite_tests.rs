@@ -362,6 +362,67 @@ async fn the_layer_gates_every_caller_shape() {
 }
 
 #[tokio::test]
+async fn ui_click_consent_table() {
+    use crate::web_invites::Role;
+    let dir = tempfile::tempdir().unwrap();
+    let journal = dir.path().join("events.jsonl");
+    let query = crate::event_store::EventQuery {
+        types: vec!["ui_click".into()],
+        ..Default::default()
+    };
+    let click = "/ui/click?t=right";
+    let own = format!("{LOCAL}Origin: http://127.0.0.1:8722\r\n");
+    let foreign = format!("{LOCAL}Origin: https://evil.example\r\n");
+    // The first case is the only row. Every later one leaves it alone.
+    let mut cases = vec![
+        (true, None, click, own, "204"),
+        (true, None, "/ui/click", LOCAL.to_string(), "401"),
+        (true, None, "/ui/click?t=wrong", LOCAL.to_string(), "401"),
+        (true, None, click, foreign, "403"),
+        (true, None, click, via(ANN), "204"),
+        (true, None, click, PROXY.to_string(), "204"),
+        (true, None, click, via_loopback(""), "204"),
+        (
+            true,
+            None,
+            "/fno/ui/click?t=right",
+            via_loopback(ANN),
+            "204",
+        ),
+        (false, None, click, LOCAL.to_string(), "204"),
+    ];
+    for header in ["X-Forwarded-For", "X-Forwarded-Host", "Forwarded"] {
+        let who = format!("{LOCAL}{header}: 100.64.0.9\r\n");
+        cases.push((true, None, click, who, "204"));
+    }
+    for role in [Role::Viewer, Role::Commenter, Role::Editor, Role::Owner] {
+        let invite = Invite {
+            email: ANN.into(),
+            scope: "*".into(),
+            role,
+        };
+        cases.push((true, Some(vec![invite]), click, via(ANN), "204"));
+    }
+    for (writable, invites, path, who, status) in cases {
+        let mut st = answer_state(writable, invites);
+        st.click_journal = Some(journal.clone());
+        let tx = st.tx.clone();
+        let (addr, server) = serve_state(st).await;
+        let bridge = Bridge {
+            addr,
+            tx,
+            server,
+            notices: Vec::new(),
+        };
+        let body = r#"{"screen":"web_hq","control":"tab_row"}"#;
+        let got = bridge.status("POST", path, &who, body).await;
+        assert_eq!(got, status, "{path} {who} writable={writable}");
+        let rows = crate::event_store::query_events(&journal, &query).unwrap();
+        assert_eq!(rows.len(), 1, "{path} {who} writable={writable}");
+    }
+}
+
+#[tokio::test]
 async fn invite_revoke_request_table() {
     a_replaced_file_rules_the_next_request().await;
     no_removal_reopens_the_bridge().await;
