@@ -238,18 +238,6 @@ fn parse_reach_flag(v: &str) -> Option<String> {
     crate::decision_index::is_reach_value(v).then(|| v.to_string())
 }
 
-/// The decide-local wide-reach refusal. The certificate rule is one
-/// definition with the law door (`wide_scope_refusal` answers whether a
-/// certificate is owed), and the remedy names this door's forms: decide
-/// has no `--machine` or `--user` flags to name.
-fn wide_reach_refusal(v: &str) -> String {
-    format!(
-        "the reach '{v}' binds more than this machine's own user, and no user certificate \
-proves who records it. A project reach, this machine's own id and your own name need \
-no certificate. Run fno-agent mail-remote key show for the key and the certify command."
-    )
-}
-
 /// The parse refusal for a value that is not a session reach.
 fn reach_refusal(v: &str) -> String {
     format!(
@@ -897,8 +885,8 @@ for a lead ruling inside its own scope; omit the flag to resolve it from this se
         .as_deref()
         .filter(|_| !crate::decision_index::is_pr_door_subject(&subject))
     {
-        if crate::law_match::wide_scope_refusal(v).is_some() {
-            eprintln!("decide: refused. {}", wide_reach_refusal(v));
+        if let Some(refusal) = crate::law_match::wide_scope_refusal(v) {
+            eprintln!("decide: refused. {refusal}");
             return 3;
         }
     }
@@ -1579,8 +1567,8 @@ pub(crate) fn reach_receipt_line(row: &Value) -> String {
     match crate::decision_index::reach_stamp(row) {
         Some(stamp) => format!("decide: reach {stamp}; {load}."),
         None => format!(
-            "decide: no reach stamp (unstamped rows read {}); {load}.",
-            crate::decision_index::row_scope(row)
+            "decide: no reach stamped because no project resolved here \
+(readers treat this row as project:fno); {load}."
         ),
     }
 }
@@ -2207,20 +2195,22 @@ mod tests {
         assert!(line.contains("reach global"), "{line}");
         assert!(line.contains("session rules load this row"), "{line}");
         assert!(!line.contains("do not load"), "{line}");
-        // An unstamped row says so, and never prints the fallback as a
-        // reach decide stamped.
+        // An unstamped row says so with the cause, and never prints the
+        // fallback as a reach decide stamped.
         let unstamped = json!({"authority_source": "role", "subject": "some-topic"});
         let line = reach_receipt_line(&unstamped);
-        assert!(line.contains("no reach stamp"), "{line}");
-        assert!(line.contains("unstamped rows read project:fno"), "{line}");
+        assert!(
+            line.contains("no reach stamped because no project resolved here"),
+            "{line}"
+        );
+        assert!(
+            line.contains("readers treat this row as project:fno"),
+            "{line}"
+        );
     }
 
     #[test]
     fn a_wide_reach_without_a_user_certificate_refuses() {
-        // The refusal names this door's forms, never the law door's flags.
-        let message = wide_reach_refusal("global");
-        assert!(!message.contains("--machine"), "{message}");
-        assert!(message.contains("project reach"), "{message}");
         let env = DoorEnv::new();
         crate::paths::pin_test_claims_root(env.0.path());
         let code = decide_door_write(
