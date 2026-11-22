@@ -3049,36 +3049,8 @@ impl Root {
             cx.stop_propagation();
             return;
         }
-        // The Settings panel takes every key while it shows; a cmd key
-        // closes it and runs as today (the key sheet's grammar).
-        if self.settings.is_some() {
-            if key.cmd {
-                self.settings = None;
-                cx.notify();
-            } else {
-                let ev = self
-                    .settings
-                    .as_mut()
-                    .and_then(|st| settings::key(st, &key));
-                cx.stop_propagation();
-                match ev {
-                    Some(settings::Event::Close) => {
-                        self.settings = None;
-                        cx.notify();
-                    }
-                    Some(settings::Event::Set { id, value }) => {
-                        if let Some(st) = self.settings.as_mut() {
-                            settings::apply_local(&mut st.rows, &id, &value);
-                        }
-                        self.spawn_settings_write(true, id, value, cx)
-                    }
-                    Some(settings::Event::Unset { id }) => {
-                        self.spawn_settings_write(false, id, String::new(), cx)
-                    }
-                    None => {}
-                }
-                return;
-            }
+        if self.settings_key(&key, cx) {
+            return;
         }
         // After chord: with the key sheet open, esc closes the sheet first.
         if key.key == "escape" && self.seam_escape(cx) {
@@ -3147,6 +3119,38 @@ impl Root {
             cx.stop_propagation();
             self.mux_key(bytes, window, cx);
         }
+    }
+
+    /// The Settings panel takes every key while it shows; a cmd key closes it
+    /// and runs as today (the key sheet's grammar). True when it took the key.
+    fn settings_key(&mut self, key: &Key, cx: &mut Context<Self>) -> bool {
+        if self.settings.is_none() {
+            return false;
+        }
+        if key.cmd {
+            self.settings = None;
+            cx.notify();
+            return false;
+        }
+        let ev = self.settings.as_mut().and_then(|st| settings::key(st, key));
+        cx.stop_propagation();
+        match ev {
+            Some(settings::Event::Close) => {
+                self.settings = None;
+                cx.notify();
+            }
+            Some(settings::Event::Set { id, value }) => {
+                if let Some(st) = self.settings.as_mut() {
+                    settings::apply_local(&mut st.rows, &id, &value);
+                }
+                self.spawn_settings_write(true, id, value, cx)
+            }
+            Some(settings::Event::Unset { id }) => {
+                self.spawn_settings_write(false, id, String::new(), cx)
+            }
+            None => {}
+        }
+        true
     }
 
     /// One encoded keystroke through the mux scanner: the prefix claims its
