@@ -96,16 +96,28 @@ impl Core {
 
     /// The harness session a pane shows, for its pasted-image placeholders.
     /// Only fno's own records answer, never pane text or a title: the portal
-    /// row, else the one live row bound to the pane. `None` when unsure.
+    /// row, else the one live row bound to the pane, else the row the pane's
+    /// child attaches to. `None` when unsure.
     pub(super) fn pane_session(&self, pane: u64) -> Option<super::pasted_images::PaneSession> {
+        self.pane_session_with(pane, self.child_argv(pane))
+    }
+
+    /// [`Self::pane_session`] over an injected child argv.
+    pub(super) fn pane_session_with(
+        &self,
+        pane: u64,
+        argv: Option<Vec<String>>,
+    ) -> Option<super::pasted_images::PaneSession> {
         let row = match crate::thread_viewer::row_for_pane(&self.portals, pane, &self.agents) {
             Some(row) => {
-                if self.portal_seat_refusal_live(pane, &self.agents).is_some() {
+                if self.portal_seat_refusal(pane, &self.agents, argv).is_some() {
                     return None;
                 }
                 row
             }
-            None => self.live_bound_row(pane)?,
+            None => self
+                .live_bound_row(pane, argv.as_deref())
+                .or_else(|| self.attached_row(argv.as_deref()?))?,
         };
         let harness = Harness::parse(row.harness.as_deref()?);
         if !matches!(
@@ -125,7 +137,21 @@ impl Core {
         })
     }
 
-    fn live_bound_row(&self, pane: u64) -> Option<&RegistryAgent> {
+    /// The one live claude row this argv attaches to.
+    fn attached_row(&self, argv: &[String]) -> Option<&RegistryAgent> {
+        let mut rows = self.agents.iter().filter(|row| {
+            !row.exited
+                && row.harness.as_deref().map(Harness::parse) == Some(Harness::Claude)
+                && row
+                    .attach_id
+                    .as_deref()
+                    .is_some_and(|id| crate::pane_argv::attaches(argv, id))
+        });
+        let row = rows.next()?;
+        rows.next().is_none().then_some(row)
+    }
+
+    fn live_bound_row(&self, pane: u64, argv: Option<&[String]>) -> Option<&RegistryAgent> {
         let at = super::agent_rows_join::bind_agent_to_pane(
             &self.agents,
             &self.session_name,
@@ -135,7 +161,16 @@ impl Core {
         )?;
         let row = self.agents.get(at).filter(|row| !row.exited)?;
         let Some(bound) = &row.mux else {
-            return Some(row);
+            // The map says what the pane was opened on, its argv what it shows
+            // now: a viewer detached to agent view shows some other session.
+            let claude = row.harness.as_deref().map(Harness::parse) == Some(Harness::Claude);
+            let attach = row
+                .attach_id
+                .as_deref()
+                .filter(|id| claude && self.attached.get(*id) == Some(&pane));
+            let shows = attach
+                .is_none_or(|id| argv.is_some_and(|argv| crate::pane_argv::attaches(argv, id)));
+            return shows.then_some(row);
         };
         // Pane ids recycle: a second live claim, or another pid, is not proof.
         let claims = self
@@ -159,12 +194,14 @@ impl Core {
 
     /// The live-argv half: the pane's current child, read at gate time.
     fn portal_seat_refusal_live(&self, pane: u64, agents: &[RegistryAgent]) -> Option<String> {
-        let argv = self
-            .panes
+        self.portal_seat_refusal(pane, agents, self.child_argv(pane))
+    }
+
+    fn child_argv(&self, pane: u64) -> Option<Vec<String>> {
+        self.panes
             .get(&pane)
             .and_then(|e| e.pty.child_pid())
-            .and_then(crate::pane_argv::process_argv);
-        self.portal_seat_refusal(pane, agents, argv)
+            .and_then(crate::pane_argv::process_argv)
     }
 
     /// Fold the cached registry rows and the spawn journal into the same

@@ -242,7 +242,7 @@ impl Joined {
 
     /// Where a path ending at `end` can start, nearest first.
     fn starts(&self, end: usize) -> Vec<usize> {
-        let wraps = |c: char| c.is_whitespace() || "<>()[]{}\"'`*|,;:=│".contains(c);
+        let wraps = |c: char| c.is_whitespace() || "<>()[]{}\"'`*|,;:=@│".contains(c);
         let mut out = Vec::new();
         let mut words = 1;
         for i in (0..end).rev() {
@@ -277,8 +277,16 @@ fn find_path(
     let here = Some((window.line, window.at));
     let mut probes = 0;
     let mut best: Option<(usize, PathBuf, Joined, usize, usize)> = None;
-    for first in window.line.saturating_sub(MAX_JOINED)..=window.line {
-        for last in window.line..lines.len().min(first + MAX_JOINED + 1) {
+    // Narrowest first, so the joins never spend the probes a plain line needs.
+    for extra in 0..=MAX_JOINED {
+        for back in 0..=extra {
+            let Some(first) = window.line.checked_sub(back) else {
+                continue;
+            };
+            let last = first + extra;
+            if last >= lines.len() {
+                continue;
+            }
             let wraps = lines.get(first..last)?.iter().all(|line| line.reaches_edge);
             if !wraps {
                 continue;

@@ -32,7 +32,11 @@ impl Core {
     fn drop_pane_entry(&mut self, pid: u64, kill: bool) {
         // Read the session before the mappings that name it are dropped.
         if let Some(session) = self.pane_session(pid) {
-            pasted_images::forget(&session);
+            pasted_images::forget(&session, || {
+                self.panes.keys().any(|&other| {
+                    other != pid && self.pane_session(other).is_some_and(|s| s.id == session.id)
+                })
+            });
         }
         if let Some(entry) = self.panes.remove(&pid) {
             if let Ok(mut children) = self.pane_children.lock() {

@@ -123,9 +123,13 @@ pub(crate) fn resolve(
         .filter(|turn| turn.images.iter().any(|image| image.number == number))
         .collect();
     let Some(newest) = candidates.last() else {
-        return stored
-            .map(|(path, _)| path)
-            .ok_or(ImageError::NoLongerStored { number });
+        // Only the draft takes the store with no turn to vouch for it: a
+        // placeholder elsewhere can be quoted from another session.
+        return Err(if stored.is_some() {
+            ImageError::NoMatch { number }
+        } else {
+            ImageError::NoLongerStored { number }
+        });
     };
     let turn = only_match(&candidates, &paste.row_text).ok_or(ImageError::NoMatch { number })?;
     if let Some((path, written_ms)) = stored {
@@ -288,13 +292,14 @@ fn trim(cache: &Path, just_kept: &Path, cap: u64) {
     }
 }
 
-/// Drop one closed pane's images. They come back from the transcript on a click.
-pub(super) fn forget(session: &PaneSession) {
+/// Drop one closed pane's images, unless another pane shows the session.
+/// They come back from the transcript on a click.
+pub(super) fn forget(session: &PaneSession, shown_elsewhere: impl FnOnce() -> bool) {
     let Some(id) = safe_component(&session.id) else {
         return;
     };
     let dir = cache_dir().join(id);
-    if dir.is_dir() {
+    if dir.is_dir() && !shown_elsewhere() {
         std::thread::spawn(move || {
             if let Err(error) = std::fs::remove_dir_all(&dir) {
                 crate::mux_log!(error; "fno mux: cannot remove {}: {error}", dir.display());

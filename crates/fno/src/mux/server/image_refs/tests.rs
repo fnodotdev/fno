@@ -97,9 +97,9 @@ impl World {
     }
 }
 
-/// Output the cursor has moved well past.
+/// Output above an agent's composer, which holds the cursor.
 fn printed(text: &str) -> String {
-    format!("{text}\r\n\r\n\r\n\r\n")
+    format!("{text}\r\n\r\n────────────\r\n❯ ")
 }
 
 fn agent(harness: Harness, id: &str) -> PaneSession {
@@ -147,7 +147,29 @@ fn every_image_reference_form_opens() {
     );
     // Claude hard wraps a long path and indents the rest.
     let hard_wrap = "⏺ saved docs/a-very-long-screenshot-\r\n  file-name-of-the-page.png";
+    let names = |prefix: &str, count: usize| {
+        let all: Vec<String> = (0..count).map(|i| format!("{prefix}{i}.png")).collect();
+        all.join(",")
+    };
+    // Two wrapped lists: their joins alone would spend every probe.
+    let dense = format!("{}\r\nbare.png,{}", names("a", 8), names("b", 7));
     let cases: Vec<(&str, u16, String, &str, Option<PathBuf>, (u32, u32))> = vec![
+        (
+            "plain name under a dense row",
+            60,
+            printed(&dense),
+            "bare.png",
+            Some(bare.clone()),
+            (12, 8),
+        ),
+        (
+            "at mention",
+            300,
+            printed("read @docs/shot.png"),
+            "shot.png",
+            Some(shot.clone()),
+            (12, 8),
+        ),
         (
             "claude placeholder before send",
             300,
@@ -314,24 +336,17 @@ fn image_references_refuse_what_is_not_a_local_image() {
         ("fifo", printed("see pipe.png"), "pipe"),
         ("missing", printed("see gone.png"), "gone"),
         ("longer extension", printed("see shot.png.bak"), "shot"),
-        (
-            "placeholder with no session",
-            printed("> [Image #1]"),
-            "[Image",
-        ),
     ];
     for (case, output, needle) in plain {
         assert!(w.click(300, &output, needle, None).is_none(), "{case}");
     }
 
     // The right extension and the wrong bytes spans, and opens nothing.
-    for output in [
-        link(format!("file://{}", fake.display())),
-        printed("picture: fake.png"),
-    ] {
-        let got = w.click(300, &output, "picture", None);
-        assert!(!matches!(got, Some(Ok(_))), "{got:?}");
-    }
+    let output = link(format!("file://{}", fake.display()));
+    assert!(matches!(
+        w.click(300, &output, "picture", None),
+        Some(Err(ImageError::NotAnImage { .. }))
+    ));
     assert!(matches!(
         w.click(300, &printed("see fake.png"), "fake", None),
         Some(Err(ImageError::NotAnImage { .. }))
@@ -438,11 +453,56 @@ fn a_pasted_placeholder_opens_only_its_own_turns_image() {
         ),
         "the composer never shows an older turn's image"
     );
-    let other = agent(Harness::Claude, "ffffffff-1111-4222-8333-944455556666");
+    // The cursor is three rows and a blank line under the marker.
+    assert!(
+        matches!(
+            width(&codex, "› [Image #1]\r\n  two\r\n\r\n  four"),
+            Err(ImageError::NotSent { .. })
+        ),
+        "a draft of many lines is still the composer"
+    );
+    const OTHER: &str = "ffffffff-1111-4222-8333-944455556666";
+    let other = agent(Harness::Claude, OTHER);
+    w.put(&format!("tmp/slug/{OTHER}/images/7.png"), &png(21, 7));
+    assert!(
+        matches!(
+            width(&other, &printed("quoted: look at [Image #7]")),
+            Err(ImageError::NoMatch { .. })
+        ),
+        "only the draft takes the store without a turn"
+    );
     assert_eq!(
         width(&other, &printed("> old [Image #4]"))
             .unwrap_err()
             .to_string(),
         "image #4 is no longer stored"
     );
+}
+
+#[test]
+fn a_pane_answers_only_for_the_session_its_child_shows() {
+    let mut core = crate::mux::server::tests::empty_core();
+    let row = |attach: &str, session: &str| crate::agents_view::RegistryAgent {
+        name: attach.into(),
+        harness: Some("claude".into()),
+        attach_id: Some(attach.into()),
+        harness_session_id: Some(session.into()),
+        ..Default::default()
+    };
+    core.agents = vec![row("aaaa1111", SESSION), row("bbbb2222", PER_MESSAGE)];
+    core.attached.insert("aaaa1111".into(), 5);
+    let shown = |pane: u64, argv: &[&str]| {
+        let argv = argv.iter().map(|arg| arg.to_string()).collect();
+        core.pane_session_with(pane, Some(argv))
+            .map(|session| session.id)
+    };
+    for (pane, argv, want) in [
+        (5, &["claude", "attach", "aaaa1111"][..], Some(SESSION)),
+        (5, &["claude", "agents"][..], None),
+        (5, &["claude", "attach", "bbbb2222"][..], Some(PER_MESSAGE)),
+        (9, &["claude", "attach", "bbbb2222"][..], Some(PER_MESSAGE)),
+        (9, &["/bin/zsh"][..], None),
+    ] {
+        assert_eq!(shown(pane, argv).as_deref(), want, "pane {pane}: {argv:?}");
+    }
 }

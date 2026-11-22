@@ -61,12 +61,16 @@ pub struct LinkWindow {
     pub line: usize,
     pub at: usize,
     pub hyperlink: Option<LinkSpan>,
-    /// The cursor sits on the pointed line or just under it.
+    /// The pointed line is in the draft that holds the cursor.
     pub composing: bool,
 }
 
 /// How many columns of border and padding an app keeps right of its text.
 const CONTENT_EDGE_SLOP: usize = 8;
+
+/// How a row starts where a draft ends: Claude's rules around its composer,
+/// and the prompt glyph that opens a Claude or Codex message.
+const DRAFT_EDGES: [&str; 4] = ["────", "━━━━", "❯", "›"];
 
 /// Default grid until the first client reports its real size. 24x80 is the
 /// historical terminal default (matches the fno-agent drive fallback).
@@ -791,7 +795,38 @@ impl Pane {
             line,
             at,
             hyperlink,
-            composing: (first..=last + 2).contains(&self.term.cursor().pos.row.0),
+            composing: self.in_draft(first, last),
+        })
+    }
+
+    /// Whether lines `first..=last` share the cursor's draft: no edge lies
+    /// between them. A draft may hold blank lines, so a blank is no edge,
+    /// except under OpenCode's bar, which every row of its draft carries.
+    fn in_draft(&self, first: i32, last: i32) -> bool {
+        let cursor = self.term.cursor().pos.row.0;
+        let (from, to) = if cursor < first {
+            (cursor + 1, first)
+        } else if cursor > last {
+            (last + 1, cursor)
+        } else {
+            return true;
+        };
+        if to - from >= i32::from(self.rows) {
+            return false;
+        }
+        let lead = |row: i32| {
+            self.logical_line(Line(row))
+                .map(|(text, _)| text.trim_start().to_string())
+        };
+        let Some(pointed) = lead(first) else {
+            return false;
+        };
+        let barred = pointed.starts_with('┃');
+        !(from..=to).any(|row| {
+            lead(row).is_none_or(|text| {
+                DRAFT_EDGES.iter().any(|edge| text.starts_with(edge))
+                    || (barred && !text.starts_with('┃'))
+            })
         })
     }
 

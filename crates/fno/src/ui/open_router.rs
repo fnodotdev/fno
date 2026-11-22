@@ -152,21 +152,26 @@ pub fn launch(target: &Target) -> Result<crate::link::OpenOutcome, String> {
 /// What the platform opener runs instead of shows. Pane output picks the
 /// path, so a click must not become a launch.
 const LAUNCHABLE_EXTS: &[&str] = &[
-    "app", "command", "tool", "terminal", "pkg", "mpkg", "workflow", "action", "scpt", "shortcut",
-    "inetloc", "fileloc", "webloc", "prefpane", "desktop", "jar",
+    "app", "command", "tool", "terminal", "pkg", "mpkg", "workflow", "action", "scpt", "scptd",
+    "shortcut", "inetloc", "fileloc", "webloc", "prefpane", "desktop", "jar",
 ];
 
 fn can_run_code(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     // A link named `notes` can point at `Evil.app`, so judge what it resolves to.
     let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let named = real
+    let ext = real
         .extension()
         .and_then(|e| e.to_str())
-        .is_some_and(|e| LAUNCHABLE_EXTS.contains(&e.to_ascii_lowercase().as_str()));
-    named
-        || std::fs::metadata(&real)
-            .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if LAUNCHABLE_EXTS.contains(&ext.as_str()) {
+        return true;
+    }
+    let exec = std::fs::metadata(&real)
+        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0);
+    // An exFAT volume marks each file executable, and these are only shown.
+    exec && ext != "pdf" && crate::server::image_refs::verify(&real).is_err()
 }
 
 #[cfg(test)]
@@ -184,6 +189,13 @@ mod tests {
             assert!(launch(&Target::System(path)).is_err());
         }
         assert!(!can_run_code(dir.path()), "a plain folder still opens");
+        use std::os::unix::fs::PermissionsExt;
+        for (name, runs) in [("shot.png", false), ("tool", true)] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR").unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert_eq!(can_run_code(&path), runs, "{name} with an exec bit");
+        }
     }
 
     fn cfg(enabled: bool, vault: Option<&str>) -> ObsidianCfg {

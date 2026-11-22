@@ -82,7 +82,7 @@ Emulators: iTerm2, Ghostty, kitty and WezTerm emit the xterm CSI form. Verify yo
 
 ## Click an image
 
-A plain click on an image reference opens it in the file viewer. If the app in the pane owns the mouse, as full-screen Claude does, the click still opens the image. The reference can be a path, a file name in the pane's directory, a file link, or a pasted-image placeholder such as `[Image #1]`. Hover underlines what a click opens. In the viewer, `Esc` closes the image and `o` opens it outside the mux.
+A plain click on an image reference opens it in the file viewer. If the app in the pane owns the mouse, as full-screen Claude does, the click still opens the image. The reference can be a path, a file name in the pane's directory, a file link, or a pasted-image placeholder such as `[Image #1]`. Hover underlines what a click opens. In Claude's agent view a placeholder does not open, because the pane has no one session. In the viewer, `Esc` closes the image and `o` opens it outside the mux.
 
 For any other link in a pane whose app owns the mouse, hold Option (Alt) and click.
 
