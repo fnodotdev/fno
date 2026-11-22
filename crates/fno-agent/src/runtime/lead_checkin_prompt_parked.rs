@@ -59,9 +59,12 @@ impl ParkedRow {
             );
         }
         match &self.answer_key {
-            Some(key) => format!(
-                "WAITING ON APPROVAL: {} ({}) pane {} {} - answer with: fno mux pane send {} --raw {}",
-                self.holder, self.harness, self.pane_id, head, self.pane_id, key
+            // The pane answer is typed by a person at the pane; the notice
+            // names no command, so a worker reading the bell cannot answer
+            // someone else's prompt.
+            Some(_) => format!(
+                "WAITING ON APPROVAL: {} ({}) pane {} {} - a person answers in the pane",
+                self.holder, self.harness, self.pane_id, head
             ),
             None => format!(
                 "WAITING ON APPROVAL: {} ({}) pane {} {} - no numbered menu; focus or attach to answer",
@@ -353,7 +356,8 @@ mod tests {
             line.starts_with("WAITING ON APPROVAL: wake-a9770da3 (claude) pane 42"),
             "{line}"
         );
-        assert!(line.contains("fno mux pane send 42 --raw 1"), "{line}");
+        assert!(!line.contains("mux pane send"), "{line}");
+        assert!(line.contains("a person answers in the pane"), "{line}");
         // Codex approval: parked the same way (different rule, same state).
         let codex = bundled("codex");
         let screen = "Would you like to run the following command?\n\
