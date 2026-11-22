@@ -1042,17 +1042,16 @@ fn asked_ids(asked: &serde_json::Map<String, Value>) -> std::collections::HashSe
     asked.keys().map(|id| canonical(id).to_string()).collect()
 }
 
-fn beat(cwd: &Path) -> Result<usize, String> {
-    // What waited for the primary lands first, so the sweep reads it.
+/// Land what waited for the primary. A caller runs it before [`beat`], so
+/// the sweep reads what landed.
+fn land_queued() {
     if let Err(error) = mint::drain() {
         eprintln!("numbers-arm: the outbox waits ({error})");
     }
-    number_held(cwd)
 }
 
-/// The beat without the drain: it numbers what is recorded and records
-/// nothing, so a dry run can use it.
-fn number_held(cwd: &Path) -> Result<usize, String> {
+/// Number what is recorded. It records nothing, so a dry run can use it.
+fn beat(cwd: &Path) -> Result<usize, String> {
     let remote = crate::store_remote::configured()?;
     let decisions = crate::decision_index::default_store_live()?;
     let home = crate::paths::AgentsHome::from_env();
@@ -1102,6 +1101,7 @@ pub fn maybe_tick(arm: &Arm, cwd: &Path) {
     let cwd = cwd.to_path_buf();
     tokio::task::spawn_blocking(move || {
         let _gate = crate::daemon::SweepGate(flag);
+        land_queued();
         if let Err(error) = beat(&cwd) {
             eprintln!("numbers-arm: {error}");
         }
