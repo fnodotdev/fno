@@ -1741,6 +1741,16 @@ async fn backlog_act(
     if !token_ok(q.t.as_deref(), &st.token) {
         return unauthorized();
     }
+    // write_guard reads Host and Origin, both of which tailscale serve
+    // rewrites or omits for a proxied caller, so it does not see the
+    // invite: an act on any node would undo the read scoping. A scoped
+    // viewer acts from their CLI session, never this bridge.
+    if read_scope(&headers, &st).is_scoped() {
+        return plain_status(
+            StatusCode::FORBIDDEN,
+            "scoped invites read a node-scoped fold; board acts run from the local machine",
+        );
+    }
     let id = body.id().to_string();
     let inputs = model_inputs(&st).await;
     let planned = match plan_act(&inputs, &body) {
@@ -3984,6 +3994,28 @@ console.log("backlog page helpers: 18 cases ok");
         assert_eq!(code, 1008, "policy close: {text:?}");
         let reason = std::str::from_utf8(&frame[4..2 + len]).unwrap_or("");
         assert!(reason.contains("machine-wide"), "{reason}");
+        server.abort();
+    }
+
+    // write_guard passes a proxied caller whose Host was rewritten to
+    // loopback, so the act route reads the invite itself and refuses a
+    // scoped viewer before any plan runs.
+    #[tokio::test]
+    async fn scoped_invites_refuse_board_acts() {
+        let list = vec![invite("ann@example.com", "x-b1")];
+        let (addr, server) = serve_state(answer_state(true, Some(list))).await;
+        let body = br#"{"act":"blueprint","id":"x-oth"}"#;
+        let head = format!(
+            "POST /backlog/act?t=right HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nTailscale-User-Login: ann@example.com\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            addr.port(),
+            body.len()
+        );
+        let reply = raw_request(addr, &head, body).await;
+        assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
+        assert!(
+            reply.contains("board acts run from the local machine"),
+            "{reply}"
+        );
         server.abort();
     }
 
