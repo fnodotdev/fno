@@ -355,7 +355,11 @@ fn run_sweep(
 ) -> Result<TickResult, DoorError> {
     let now = opts.now_iso.as_str();
     clock::set_phase("sweep:discover");
-    let mut candidates = discover::discover_open_prs(&entries, now, opts.max_age_days);
+    // One alias read per tick: discovery canonicalizes candidate slugs and
+    // the store migration lands old-org keys on their canonical twins, so
+    // neither leg sweeps a dead repo name.
+    let aliases = crate::backlog::pr_link::repo_alias_map(None);
+    let mut candidates = discover::discover_open_prs(&entries, now, opts.max_age_days, &aliases);
     let mut store = Store::load(opts.store_path.clone());
     let candidate_keys: BTreeSet<String> = candidates
         .iter()
@@ -364,7 +368,7 @@ fn run_sweep(
     let Normalization {
         normalized,
         dropped,
-    } = store.normalize_keys();
+    } = store.normalize_keys(&aliases);
     let mut dropped = dropped;
     let mut delivery = Store::load(delivery_path(&opts.store_path));
     // Prune only on a healthy discovery: zero candidates is the graph-hiccup
