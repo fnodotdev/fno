@@ -1106,11 +1106,9 @@ mod tests {
             "the record's repo reaches the reader, which resolves the alias"
         );
         assert_eq!(records.len(), 1, "{records:?}");
-        assert_eq!(records[0].pr_state, "MERGED");
-        assert!(
-            records[0].closeable(),
-            "the node closes on the reader's answer"
-        );
+        let record = records.first().expect("one record");
+        assert_eq!(record.pr_state, "MERGED");
+        assert!(record.closeable(), "the node closes on the reader's answer");
     }
 
     #[test]

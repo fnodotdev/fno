@@ -331,8 +331,9 @@ mod tests {
         });
         let found = discover_open_prs(&[node], NOW, 14, &aliases);
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].pr, 273);
-        assert_eq!(found[0].repo_slug.as_deref(), Some("footnote-sh/fno-web"));
+        let cand = found.first().expect("one candidate");
+        assert_eq!(cand.pr, 273);
+        assert_eq!(cand.repo_slug.as_deref(), Some("footnote-sh/fno-web"));
     }
 
     fn obs(state: &str) -> Observation {
