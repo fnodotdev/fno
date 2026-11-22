@@ -145,19 +145,38 @@ fn fold_groups_each_seat_under_the_lead_it_reports_to() {
     assert!(fleet.machines[0].lanes.is_empty() && fleet.machines[0].display_name.is_none());
 }
 
-#[test]
-fn fold_reads_published_token_use_and_absence_reads_none() {
-    let mut map = fleet_json();
-    for (k, v) in [
+/// Stamp the six use facts onto mb-00's session in the fixture, so a test
+/// reads what a publishing machine serves.
+fn publish_use(map: &mut Value) {
+    let facts: [(&str, Value); 6] = [
         ("compactions", json!(2)),
         ("input_tokens", json!(1_500_000)),
         ("output_tokens", json!(45_000)),
         ("cache_read_tokens", json!(89_000_000)),
         ("cache_write_tokens", json!(12_000_000)),
         ("cost_cents", json!(4421)),
-    ] {
-        map["machines"][1]["sessions"][0][k] = json!(v);
+    ];
+    let session = map
+        .get_mut("machines")
+        .and_then(Value::as_array_mut)
+        .and_then(|a| a.get_mut(1))
+        .and_then(|m| m.get_mut("sessions"))
+        .and_then(Value::as_array_mut)
+        .and_then(|a| {
+            a.iter_mut()
+                .find(|s| s.get("name").and_then(Value::as_str) == Some("mb-00"))
+        })
+        .and_then(|s| s.as_object_mut());
+    let session = session.expect("mb-00 session in the fixture");
+    for (k, v) in facts {
+        session.insert(k.into(), v);
     }
+}
+
+#[test]
+fn fold_reads_published_token_use_and_absence_reads_none() {
+    let mut map = fleet_json();
+    publish_use(&mut map);
     let fleet = fold(&map, &crate::backlog_model::fixture(vec![]), &[], 7);
     let mb00 = fleet.seats().find(|s| s.name == "mb-00").unwrap();
     assert_eq!(mb00.compactions, Some(2));
@@ -177,20 +196,23 @@ fn fold_reads_published_token_use_and_absence_reads_none() {
 #[test]
 fn seat_page_and_table_paint_the_published_use() {
     let mut map = fleet_json();
-    for (k, v) in [
-        ("compactions", json!(2)),
-        ("input_tokens", json!(1_500_000)),
-        ("output_tokens", json!(45_000)),
-        ("cache_read_tokens", json!(89_000_000)),
-        ("cache_write_tokens", json!(12_000_000)),
-        ("cost_cents", json!(4421)),
-    ] {
-        map["machines"][1]["sessions"][0][k] = json!(v);
-    }
+    publish_use(&mut map);
     let fleet = fold(&map, &crate::backlog_model::fixture(vec![]), &[], 7);
-    let m = &fleet.machines[0];
-    let p = &m.leads[0];
-    let s = &p.seats[0];
+    let m = fleet
+        .machines
+        .iter()
+        .find(|m| m.host == "u")
+        .expect("u sorts first in the fold");
+    let p = m
+        .leads
+        .iter()
+        .find(|l| l.name == "mb-00")
+        .expect("mb-00 leads its group");
+    let s = p
+        .seats
+        .iter()
+        .find(|s| s.name == "mb-00")
+        .expect("mb-00 in its own group");
     let page = super::super::org_pages::seat(m, p, s, 100, 7);
     let text: Vec<String> = page.iter().map(|l| l.line.text.clone()).collect();
     let joined = text.join("\n");
