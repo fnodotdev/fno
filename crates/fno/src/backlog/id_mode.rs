@@ -4,6 +4,12 @@
 //! One door read per process, the same per-process cache
 //! `node_ref::is_sequential_tail` holds in fno-agent, because the query
 //! parser calls the shape check per token.
+//
+// The contract build (no `app` feature) keeps this module compiling for
+// the parse surface but reaches it through no live caller, so the
+// dead-code pass names the whole chain; that is structural there, not a
+// defect.
+#![cfg_attr(not(feature = "app"), allow(dead_code))]
 
 /// The mode-and-prefix pair the shape checks share. The pure predicate and
 /// pattern builders take it as an argument so tests drive both modes
@@ -26,8 +32,11 @@ pub(crate) fn facts() -> &'static IdMode {
         let read: Option<Receipt> =
             std::process::Command::new(crate::ui::digest_overlay::fno_agent_bin())
                 .args(["state", "path", "settings-read"])
-                .output()
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
                 .ok()
+                .and_then(|mut child| child.wait_with_output().ok())
                 .filter(|out| out.status.success())
                 .and_then(|out| serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).ok());
         let read = read.unwrap_or_default();
