@@ -165,6 +165,7 @@ fn owner_session_choice(
 ) -> Option<String> {
     [fno_owner, ambient, codex]
         .into_iter()
+        .flatten()
         .filter(|v| valid_owner_session(v))
         .next()
 }
