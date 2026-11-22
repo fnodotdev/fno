@@ -220,6 +220,17 @@ pub fn verdict_for_pr(
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
+    // The claim store keys node claims `node:<id>` while graph entries carry
+    // the bare id, and only the CLI rewrote it (claim_cli/status.rs), so a
+    // bare lookup answered Free on a live row and Step 4 transferred merge
+    // execution while the worker still held the claim. The CLI's
+    // `_normalize_status_key` reading: a bare well-formed node id reads its
+    // `node:` row; every other key shape passes through.
+    let claim_key = if crate::backlog::node_ref::is_wellformed_node_id(&node_id) {
+        format!("node:{node_id}")
+    } else {
+        node_id.clone()
+    };
 
     // Step 2: receipts on the do rows.
     let receipts = match do_row_receipts(node) {
@@ -238,7 +249,7 @@ pub fn verdict_for_pr(
         // The absent reading still names the liveness it saw: a free or stale
         // claim is the standing proof nobody is driving the node, so nothing
         // would merge this PR even if a receipt existed. Report, never grant.
-        let claim_str = claim_of(&node_id).as_str();
+        let claim_str = claim_of(&claim_key).as_str();
         return Verdict {
             state: ABSENT,
             reason: "no do row on the node records a merge grant".to_string(),
@@ -293,7 +304,7 @@ recorded {newest_stamp})"
     }
 
     // Step 4: only a positively not-live holder transfers execution.
-    let claim = claim_of(node_id.as_deref().unwrap_or(""));
+    let claim = claim_of(&claim_key);
     let claim_str = claim.as_str();
     if claim == Corrupted {
         return Verdict {
