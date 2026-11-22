@@ -192,7 +192,7 @@ async fn mail_and_relay_doors(command: &str, args: &[String]) -> Option<i32> {
         return Some(fno_agent::org_remote::run(rest));
     }
     if matches!(command, "spawn-remote") {
-        return Some(fno_agent::spawn_remote::run(rest));
+        return Some(fno_agent::spawn_remote::run_direct(rest));
     }
 
     // Binary-direct mail transport for the events/note Python adapters; not routable.

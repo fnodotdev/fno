@@ -827,7 +827,7 @@ fn run_client_spawn(
     }
     // A DEFAULT never opens a view: a bare spawn is a paneless thread,
     // inside a mux or out. Only an explicit placement flag opens
-    // anything, and it opens through place_thread_portal_after_spawn.
+    // anything, and it opens through spawn_portal::place_after_birth.
     if substrate == "pane" {
         // 4a-G2: the `pane` substrate (the default) is mux-hosted, and
         // the pane spine answers every harness arm itself - the Python
@@ -863,8 +863,8 @@ fn run_client_spawn(
         // A placement failure never recolors the spawn verdict: the
         // receipt is the truth, the worker is live, and a nonzero here
         // reads as spawn failure to a retrying caller - a duplicate.
-        if let Err(detail) = place_thread_portal_after_spawn(params, agent_name) {
-            eprintln!("{detail}");
+        if let Some(line) = fno_agent::spawn_portal::place_after_birth(params, agent_name, None) {
+            eprintln!("{line}");
         }
     }
     Some(code)
@@ -903,8 +903,8 @@ fn admit_client_spawn(
     if substrate == "thread" {
         substrate = "bg".to_string();
     }
-    if let Err(message) = validate_spawn_placement(params, &substrate) {
-        eprintln!("{message}");
+    if let Err(refusal) = fno_agent::spawn_portal::admit(params, &substrate) {
+        eprintln!("{refusal}");
         return Err(2);
     }
     // Trust preflight: refuse an untrusted claude workspace before the
@@ -926,6 +926,13 @@ fn admit_client_spawn(
     // mint trusts this seam to own the territory policy.
     if lease.promotion.is_none() {
         fno_agent::spawn_promote::raw_role_pair_gate(params)?;
+    }
+    if substrate == "bg" {
+        // Every lane passes here before a birth or a relay.
+        if let Err(refusal) = fno_agent::spawn_portal::check_before_birth(params, agent_name) {
+            eprintln!("{refusal}");
+            return Err(2);
+        }
     }
     Ok(substrate)
 }
@@ -1017,18 +1024,20 @@ fn relay_client_spawn(
         if was_pinned { "" } else { " (least-loaded)" }
     );
     let code = fno_agent::spawn_remote::run(&tail);
-    if code == 0 && substrate == "bg" {
-        if let Err(detail) = place_thread_portal_after_spawn(params, agent_name) {
-            eprintln!("{detail}");
-        }
-    }
-    // The receipt's last line names the host: a lead reading the
-    // tail sees where the spawn went without scrolling.
+    // The receipt's tail names the host, and the portal under it: a lead
+    // reading the tail sees where the spawn went without scrolling.
     eprintln!(
         "{}",
         fno_agent::spawn_place::receipt_line(&t.host, how, code)
     );
     fno_agent::spawn_promote::settle(lease.promotion.as_ref(), code, agent_name);
+    if code == 0 && substrate == "bg" {
+        if let Some(line) =
+            fno_agent::spawn_portal::place_after_birth(params, agent_name, Some(&t.host))
+        {
+            eprintln!("{line}");
+        }
+    }
     Some(code)
 }
 
@@ -1236,8 +1245,10 @@ impl DaemonReply<'_> {
         // portal places here, after the receipt, exactly as the
         // client-side lanes do.
         if let Some(place_params) = self.thread_portal_params {
-            if let Err(detail) = place_thread_portal_after_spawn(place_params, self.agent_name) {
-                eprintln!("{detail}");
+            if let Some(line) =
+                fno_agent::spawn_portal::place_after_birth(place_params, self.agent_name, None)
+            {
+                eprintln!("{line}");
             }
         }
         0
@@ -1335,72 +1346,6 @@ fn report_call_failure(command: &str, agent_name: &str, home: &AgentsHome, e: &C
     1
 }
 
-fn validate_spawn_placement(params: &Value, substrate: &str) -> Result<(), String> {
-    // R1: one typed read of the placement block at this boundary. A
-    // field of an unexpected JSON type lands on None, the same answer a
-    // misspelled or absent key gave the string-key reads this replaces.
-    #[derive(serde::Deserialize, Default)]
-    struct PlacementParams {
-        squad: Option<String>,
-        split: Option<String>,
-        at: Option<String>,
-        tab: Option<String>,
-        portal: Option<u8>,
-        portal_new: Option<bool>,
-    }
-    let p: PlacementParams = serde_json::from_value(params.clone()).unwrap_or_default();
-    let squad = p.squad.as_deref();
-    let split = p.split.as_deref();
-    let at = p.at.as_deref();
-    let tab = p.tab.as_deref();
-    let portal = p.portal;
-    let portal_new = p.portal_new == Some(true);
-
-    if squad.is_some_and(|name| name.trim().is_empty()) {
-        return Err("--workspace/-s needs a nonblank workspace name".into());
-    }
-    // A portal is the pane a thread hosts: the placement flags are
-    // legal for a thread WHEN --portal names it (an index, or `new` where
-    // the server picks the index), refused for a bare thread where they
-    // mean nothing. Mirrors Python's placement_refusal, the one contract
-    // both runtimes read; the portal's 0-255 range is enforced at the
-    // parse arm, so a bad index never reaches this check.
-    if (portal.is_some() || portal_new) && substrate != "bg" {
-        return Err(
-            "--portal applies only to the thread lane; a pane hosts its \
-             own geometry and headless hosts no session at all"
-                .into(),
-        );
-    }
-    if at.is_some() && substrate == "bg" {
-        return Err("--at needs --as pane (a thread has no calling pane)".into());
-    }
-    let placement_requested = squad.is_some() || split.is_some() || at.is_some() || tab.is_some();
-    if placement_requested && substrate == "bg" && portal.is_none() && !portal_new {
-        return Err("--workspace/-s, --split/-x, and --tab on the \
-             thread lane need --portal N|new: a thread hosts no pane until a portal \
-             opens one, so the placement has nothing to place"
-            .into());
-    }
-    if placement_requested && portal.is_none() && !portal_new && substrate != "pane" {
-        return Err(
-            "--workspace/-s, --split/-x, --at, and --tab apply only to the pane lane \
-             (thread/headless have no pane geometry)"
-                .into(),
-        );
-    }
-    if split.is_some_and(|direction| !matches!(direction, "left" | "right" | "up" | "down")) {
-        return Err(format!(
-            "--split/-x must be left, right, up, or down (got {:?})",
-            split.unwrap_or_default()
-        ));
-    }
-    if tab.is_some_and(|selector| selector.trim().is_empty()) {
-        return Err("--tab needs a nonblank selector or pane-group name".into());
-    }
-    Ok(())
-}
-
 fn effective_spawn_message(message: &str, substrate: &str) -> String {
     if substrate == "pane" {
         message.to_owned()
@@ -1423,115 +1368,6 @@ fn effective_spawn_message(message: &str, substrate: &str) -> String {
 /// - no resolvable / unknown provider: stderr usage error + exit 2.
 ///
 /// Returns `Some(exit_code)` when handled client-side, `None` to fall through.
-/// One-call portal placement on the Rust lanes, the twin of the
-/// Python `thread_portal.place_thread_portal`: a thread spawn with
-/// `--portal` ends with the portal open, through the same `fno mux thread`
-/// reach a manual second command would type. The worker is already live, so
-/// a placement failure is reported AFTER the spawn receipt and never
-/// un-spawns anyone; the exit code stays the spawn's, because a nonzero
-/// here reads as spawn failure to a retrying caller - a duplicate worker.
-fn place_thread_portal_after_spawn(params: &Value, name: &str) -> Result<(), String> {
-    // R1: the portal pick rides one typed read, the twin of the
-    // validator's placement struct.
-    #[derive(serde::Deserialize, Default)]
-    struct PortalParams {
-        portal: Option<u8>,
-        portal_new: Option<bool>,
-    }
-    let p: PortalParams = serde_json::from_value(params.clone()).unwrap_or_default();
-    let portal = p.portal;
-    let portal_new = p.portal_new == Some(true);
-    if portal.is_none() && !portal_new {
-        return Ok(());
-    }
-    // The word --portal named: an index, or `new` for the server-picked
-    // next free one. The literal forwards; this caller never computes an
-    // index from a render (portals.md's repoint race).
-    let portal_word = portal
-        .map(|p| p.to_string())
-        .unwrap_or_else(|| "new".into());
-    // `--from current` names the calling pane: resolve it HERE, where
-    // FNO_PANE still names the pane the spawn ran inside, and ride the
-    // plain `--at` anchor the server splits beside. The literal never
-    // forwards - the thread door has no calling pane to resolve it with.
-    let mut from_current = false;
-    if params.get("from").and_then(Value::as_str).map(str::trim) == Some("current") {
-        from_current = true;
-    }
-    let mut args = vec![
-        "mux".to_string(),
-        "thread".to_string(),
-        name.to_string(),
-        "--portal".to_string(),
-        portal_word.clone(),
-    ];
-    for (flag, key) in [
-        ("--workspace", "squad"),
-        ("--split", "split"),
-        ("--at", "at"),
-        ("--tab", "tab"),
-        ("--from", "from"),
-    ] {
-        if from_current && key == "from" {
-            continue;
-        }
-        if let Some(v) = params.get(key).and_then(|v| v.as_str()) {
-            if !v.is_empty() {
-                args.push(flag.to_string());
-                args.push(v.to_string());
-            }
-        }
-    }
-    if from_current {
-        let fno_pane = std::env::var("FNO_PANE")
-            .ok()
-            .and_then(|s| s.trim().trim_start_matches('%').parse::<u64>().ok());
-        match fno_pane {
-            Some(pane) => {
-                args.push("--at".to_string());
-                args.push(pane.to_string());
-            }
-            None => {
-                return Err(format!(
-                    "--from current needs a calling pane; run the spawn \
-                     inside a mux pane (FNO_PANE unset) or name the cell: \
-                     `--from portal N` / `--from <worker>`"
-                ));
-            }
-        }
-    }
-    let out = std::process::Command::new(fno_agent::scrape::fno_bin())
-        .args(&args)
-        .output()
-        .map_err(|e| {
-            format!(
-                "portal {portal_word} placement failed: {e} (the worker is live; \
-                 place it with 'fno mux thread {name} --portal {portal_word}')"
-            )
-        })?;
-    if !out.status.success() {
-        let raw = if out.stderr.is_empty() {
-            &out.stdout
-        } else {
-            &out.stderr
-        };
-        let detail = String::from_utf8_lossy(raw).trim().to_string();
-        let detail = if detail.is_empty() {
-            "no output".to_string()
-        } else {
-            detail
-        };
-        return Err(format!(
-            "portal {portal_word} placement failed: {detail} (the worker is live; \
-             place it with 'fno mux thread {name} --portal {portal_word}')"
-        ));
-    }
-    if !out.stdout.is_empty() {
-        print!("{}", String::from_utf8_lossy(&out.stdout));
-    }
-    Ok(())
-}
-
 fn maybe_run_spawn(
     home: &AgentsHome,
     params: &Value,
@@ -3284,26 +3120,6 @@ mod spawn_parse_tests {
         let err = build_request("spawn", &rest).unwrap_err();
         assert_eq!(err, "--portal takes an index 0-255 or new");
     }
-
-    #[test]
-    fn a_portal_new_thread_counts_as_a_named_portal_for_the_gates() {
-        // `--portal new` satisfies the thread lane's portal gates exactly
-        // like an explicit index: legal on the thread lane, a named portal
-        // for the placement flags, refused on the pane lane.
-        let params = serde_json::json!({"portal_new": true});
-        validate_spawn_placement(&params, "bg").expect("new places on the thread lane");
-        validate_spawn_placement(&params, "pane")
-            .expect_err("a portal belongs to the thread lane only");
-        let placed = serde_json::json!({"portal_new": true, "split": "left"});
-        validate_spawn_placement(&placed, "bg")
-            .expect("new names the portal the placement flags need");
-        let bare: serde_json::Value = serde_json::json!({"split": "left"});
-        let err = validate_spawn_placement(&bare, "bg").unwrap_err();
-        assert!(
-            err.contains("--portal"),
-            "a bare thread still refuses without a portal: {err}"
-        );
-    }
 }
 
 /// `fno-agent roster-reap`: the roster-side sweep (gap one). Dry-run
@@ -3924,7 +3740,7 @@ fn parse_axis_flag(
         // The portal placement trio, same spellings the mux
         // thread command uses. Parsed here so the default Rust runtime
         // accepts what the help advertises; the placement itself runs
-        // after the spawn receipt (place_thread_portal_after_spawn).
+        // after the spawn receipt (spawn_portal::place_after_birth).
         "--portal" => {
             let raw = str_arg(it, "--portal")?;
             match raw.as_str().and_then(|s| s.parse::<u8>().ok()) {
@@ -3983,8 +3799,8 @@ fn parse_seat_flag(
     match a {
         // The named cell a split halves (spawn only): `portal N`, a
         // worker name, or `current`. `current` stays literal here: the
-        // placement layer resolves it from FNO_PANE when the spawn ran
-        // inside a pane. Every other command's `--from` is promote's
+        // pane spine and the mux thread door each resolve it from FNO_PANE
+        // when the spawn ran inside a pane. Every other command's `--from` is promote's
         // resume pointer below.
         "--from" if command == "spawn" => {
             params.insert("from".into(), str_arg(it, "--from")?);

@@ -141,7 +141,46 @@ fn parent_edge_args(session: Option<&str>) -> Vec<String> {
 }
 
 /// Binary-direct entry from `fno-agent spawn-remote <tail...>`, where the
-/// tail is the spawn argv after the command word.
+/// tail is the spawn argv after the command word. This road skips the
+/// client's placement relay, so a thread's placement refuses before the hop:
+/// the far host would open the portal in its own mux.
+pub fn run_direct(args: &[String]) -> i32 {
+    let local_host = crate::name_ledger::local_bus_host();
+    if let Ok(plan) = spawn_plan(args, &local_host) {
+        if !plan.same_host {
+            if let Some(flag) = thread_placement_flag(args) {
+                eprintln!(
+                    "fno agent spawn: {flag} places the worker in this machine's mux; \
+                     spell the host as --machine {} with a plain --name",
+                    plan.host
+                );
+                return 2;
+            }
+        }
+    }
+    run(args)
+}
+
+/// The first caller-side placement flag of a spawn tail that is not a pane.
+fn thread_placement_flag(args: &[String]) -> Option<&str> {
+    let mut found = None;
+    let mut words = args.iter().map(String::as_str).take_while(|w| *w != "--");
+    while let Some(word) = words.next() {
+        let (flag, inline) = word
+            .split_once('=')
+            .map_or((word, None), |(flag, value)| (flag, Some(value)));
+        if matches!(flag, "--as" | "--substrate") {
+            if inline.or_else(|| words.next()) == Some("pane") {
+                return None;
+            }
+        } else if crate::spawn_place::THREAD_STRIP.contains(&flag) && found.is_none() {
+            found = Some(flag);
+        }
+    }
+    found
+}
+
+/// The relay itself, also the client's after it stripped the placement.
 pub fn run(args: &[String]) -> i32 {
     let local_host = crate::name_ledger::local_bus_host();
     let plan = match spawn_plan(args, &local_host) {
@@ -251,6 +290,17 @@ mod tests {
         assert!(!plan.same_host);
         assert!(plan.words.contains(&"q".to_string()));
         assert!(!plan.words.iter().any(|w| w.contains('@')));
+        // A thread's placement never rides the direct hop. A pane's does.
+        let placed = |tail: &[&str]| {
+            let tail: Vec<String> = tail.iter().map(|w| w.to_string()).collect();
+            thread_placement_flag(&tail).map(str::to_string)
+        };
+        assert_eq!(
+            placed(&["--name", "q@b", "--tab=1"]).as_deref(),
+            Some("--tab")
+        );
+        assert_eq!(placed(&["--tab", "1", "--as", "pane"]), None);
+        assert_eq!(placed(&["hi", "--", "--tab", "1"]), None);
         // Each refusal shape: no @ name, a double @, empty host, bare @,
         // missing value.
         assert!(spawn_plan(&["hi".to_string()], "x").is_err());
