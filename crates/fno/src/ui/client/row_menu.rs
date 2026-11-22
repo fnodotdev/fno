@@ -681,11 +681,17 @@ mod tests {
             .position(|r| matches!(r, PopupRow::Header(h) if h == "Copy"))
             .expect("the menu has a Copy section");
         assert!(
-            matches!(menu.popup.rows[header - 1], PopupRow::Rule),
+            matches!(
+                menu.popup.rows.get(header.saturating_sub(1)),
+                Some(PopupRow::Rule)
+            ),
             "a rule sets the section apart"
         );
-        let tail: Vec<&str> = menu.popup.rows[header + 1..]
+        let tail: Vec<&str> = menu
+            .popup
+            .rows
             .iter()
+            .skip(header + 1)
             .filter_map(|r| match r {
                 PopupRow::Entry { label, .. } => Some(label.as_str()),
                 _ => None,
