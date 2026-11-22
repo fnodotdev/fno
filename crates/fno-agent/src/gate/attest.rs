@@ -15,8 +15,9 @@
 //! carrier writes through its own commands, so an older build cannot corrupt
 //! rows and needs no guard trigger.
 
-#[path = "event_context.rs"]
+#[path = "diff_evidence.rs"]
 mod diff_evidence;
+#[path = "event_context.rs"]
 mod event_context;
 
 use crate::finalize::repo_identity_from_git_remote;
