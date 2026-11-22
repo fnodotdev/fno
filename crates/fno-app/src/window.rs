@@ -595,6 +595,18 @@ impl Root {
         }
     }
 
+    /// The main pane while no server answers: the offer card.
+    fn offer_view(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let offer = self.offer.unwrap_or(crate::first_run::Offer::Ask);
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .child(crate::first_run::offer_card(self, offer, cx))
+            .into_any_element()
+    }
+
     /// The offer's answer: spawn the server off the UI thread, then attach
     /// as a fresh launch would. A refusal lands in the closed notice and
     /// the card asks again.
@@ -3833,17 +3845,7 @@ impl Render for Root {
         self.width = window.viewport_size().width;
 
         let main = match self.main {
-            _ if self.offer.is_some() => div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_h_0()
-                .child(crate::first_run::offer_card(
-                    self,
-                    self.offer.unwrap_or(crate::first_run::Offer::Ask),
-                    cx,
-                ))
-                .into_any_element(),
+            _ if self.offer.is_some() => self.offer_view(cx),
             MainView::Chat => self.chat_view(window, cx).into_any_element(),
             MainView::Terminal => self.terminal(cx).into_any_element(),
             MainView::Orchestration => mono_view(orchestration::render(self, cx)),
