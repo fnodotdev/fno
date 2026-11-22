@@ -1432,6 +1432,9 @@ fn tsv_help(args: &[OsString]) -> Option<String> {
         {
             None
         }
+        // Claimed rows whose classifier answers `--help` itself, measured
+        // per row on the shipped binary; the generic arm must not rob them.
+        ["inbox", "decide" | "decisions" | "notify" | "outstanding" | "peers"] => None,
         [] => None,
         words => {
             let note = fno::command_names::note_for(words)?;
