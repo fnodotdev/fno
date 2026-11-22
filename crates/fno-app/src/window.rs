@@ -2166,7 +2166,7 @@ impl Root {
                     // row a worker with a node gets.
                     if ui == crate::UiShot::RowMenuNode {
                         if let Some(a) = self.layout.agents.iter_mut().find(|a| a.name == name) {
-                            a.node = Some("x-1a2b".into());
+                            a.node = Some("node-demo".into());
                         }
                     }
                     let at = gpui::point(gpui::px(150.0), gpui::px(150.0));

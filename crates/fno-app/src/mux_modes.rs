@@ -675,7 +675,7 @@ mod tests {
                 .iter()
                 .any(|(l, _, _)| *l == "Copy node id")
         };
-        assert!(has(&row(Some("x-1a2b"))));
+        assert!(has(&row(Some("node-demo"))));
         assert!(!has(&row(None)));
     }
 
