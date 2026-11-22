@@ -138,7 +138,7 @@ fn claims_pattern_gains_only_the_sequential_arm() {
         .expect("claims regex compiles");
     assert!(seq.is_match("t-15"));
     // Hex ids stay claims in a sequential project.
-    assert!(seq.is_match("x-beef"));
+    assert!(seq.is_match("x-ffff"));
     // Another prefix's token and a zero lead stay prose.
     assert!(!seq.is_match("u-9"));
     assert!(!seq.is_match("t-07"));

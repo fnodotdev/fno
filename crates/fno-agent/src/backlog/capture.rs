@@ -2353,10 +2353,10 @@ mod capture_tests {
         );
         assert!(hex.captures(line).is_none());
         // A hex id beside it still reads, and wins by leftmost-first.
-        let mixed = "promoted -> x-beef t-15";
+        let mixed = "promoted -> x-ffff t-15";
         assert_eq!(
             seq.captures(mixed).map(|m| m[1].to_string()),
-            Some("x-beef".to_string())
+            Some("x-ffff".to_string())
         );
     }
 }

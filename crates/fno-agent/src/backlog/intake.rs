@@ -3037,8 +3037,8 @@ mod tests {
         );
         // Hex ids still read in a sequential project.
         assert_eq!(
-            plan_filename_node_id_in("plans/rust-node-id-readers-x-beef.md", &[], seq),
-            Some("x-beef".to_string())
+            plan_filename_node_id_in("plans/rust-node-id-readers-x-ffff.md", &[], seq),
+            Some("x-ffff".to_string())
         );
         // Another prefix's token and a zero lead stay prose.
         assert_eq!(
