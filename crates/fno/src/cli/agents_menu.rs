@@ -1,5 +1,7 @@
 //! The `fno agent` menu: twelve entries, each holding at most twelve commands,
-//! and nothing hidden. A nested spelling is rewritten lexically to the argv
+//! and nothing hidden except a retired spelling: it still answers with its
+//! replacement notice, but no help list shows it. A nested spelling is
+//! rewritten lexically to the argv
 //! that answers today, so no command's behavior, flags or output change. An old
 //! flat spelling still answers for one release: it prints one stderr line
 //! naming the nested form, then runs as before (stderr, because callers
@@ -27,6 +29,9 @@ pub struct Node {
     pub strict: bool,
     /// `org chart rundown`: add the default `--out` when the caller gave none.
     pub pages_out: bool,
+    /// A retired spelling: it answers with its replacement notice, but no
+    /// help list shows it.
+    pub retired: bool,
 }
 
 const fn command(name: &'static str, legacy: &'static [&'static str], about: &'static str) -> Node {
@@ -39,6 +44,17 @@ const fn command(name: &'static str, legacy: &'static [&'static str], about: &'s
         bare: false,
         strict: true,
         pages_out: false,
+        retired: false,
+    }
+}
+
+/// A retired spelling that still answers with its replacement notice for one
+/// release, and that no help list shows. The about line stays the tombstone
+/// answer itself: the node's own `--help` forward and the refusal carry it.
+const fn retired(name: &'static str, legacy: &'static [&'static str], about: &'static str) -> Node {
+    Node {
+        retired: true,
+        ..command(name, legacy, about)
     }
 }
 
@@ -115,10 +131,10 @@ const MAIL: &[Node] = &[
     command("unread", &["mail", "unread"], "Show unread bus messages addressed to a name."),
     command("show", &["mail", "show"], "Print one message."),
     command("ack", &["mail", "ack"], "Advance a read cursor to a message id."),
-    command("list", &["mail", "list"], "Retired: prints its replacement, unread."),
-    command("drain", &["mail", "drain"], "Retired: prints its replacement, drain-self."),
-    command("status", &["mail", "status"], "Retired: prints its replacement, unread."),
-    command("triage", &["mail", "triage"], "Retired: prints its replacement, show."),
+    retired("list", &["mail", "list"], "Retired: prints its replacement, unread."),
+    retired("drain", &["mail", "drain"], "Retired: prints its replacement, drain-self."),
+    retired("status", &["mail", "status"], "Retired: prints its replacement, unread."),
+    retired("triage", &["mail", "triage"], "Retired: prints its replacement, show."),
     command("ask", &["ask"], "Send a follow-up message to a registered agent."),
     command("announce", &["announce"], "Fleet announcements on one scope."),
     group("admin", "Mailbox upkeep: holds, sends, retractions, lessons.", MAIL_ADMIN),
@@ -449,17 +465,19 @@ fn spelled(words: &[&str]) -> String {
     }
 }
 
-/// The menu of one group: every child, one line each. Nothing is hidden,
-/// so this list is the whole group.
+/// The menu of one group: every live child, one line each. A retired
+/// spelling answers but no list shows it, so the footer says so when one
+/// sits in this group.
 pub fn menu(path: &[&str], node: &Node) -> String {
-    let width = node
-        .children
-        .iter()
-        .map(|c| c.name.len())
-        .max()
-        .unwrap_or(0);
+    let shown: Vec<&Node> = node.children.iter().filter(|c| !c.retired).collect();
+    let width = shown.iter().map(|c| c.name.len()).max().unwrap_or(0);
+    let footer = if shown.len() == node.children.len() {
+        "Nothing is hidden: this list is the whole group."
+    } else {
+        "Retired spellings still answer for one release; they are not listed."
+    };
     let mut text = format!("{} - {}\n\n", spelled(path), node.about);
-    for child in node.children {
+    for child in shown {
         let mark = if child.children.is_empty() {
             ""
         } else {
@@ -468,14 +486,19 @@ pub fn menu(path: &[&str], node: &Node) -> String {
         text.push_str(&format!("  {:width$}  {}{mark}\n", child.name, child.about));
     }
     text.push_str(&format!(
-        "\n{} <command> --help shows one command. Nothing is hidden: this list is the whole group.\n",
+        "\n{} <command> --help shows one command. {footer}\n",
         spelled(path)
     ));
     text
 }
 
 fn unknown(path: &[&str], node: &Node, word: &str) -> String {
-    let names: Vec<&str> = node.children.iter().map(|c| c.name).collect();
+    let names: Vec<&str> = node
+        .children
+        .iter()
+        .filter(|c| !c.retired)
+        .map(|c| c.name)
+        .collect();
     format!(
         "{} {word}: unknown command. Commands: {}. `{} --help` shows them.",
         spelled(path),
@@ -929,5 +952,47 @@ mod tests {
             unplaced.is_empty(),
             "agents rows with no single home: {unplaced:#?}"
         );
+    }
+
+    #[test]
+    fn agents_menu_hides_retired_rows_but_the_tombstone_answers() {
+        let node = |path: &[&str]| -> &'static Node {
+            walk(&ROOT)
+                .into_iter()
+                .find(|(p, _)| p.as_slice() == path)
+                .map(|(_, n)| n)
+                .expect("path in table")
+        };
+        // The mail group's menu hides its retired rows and says so in the
+        // footer; every other group's footer keeps the whole-group promise.
+        let mail = menu(&["mail"], node(&["mail"]));
+        for word in ["list", "drain", "status", "triage"] {
+            assert!(!mail.contains(&format!("  {word} ")), "{mail}");
+        }
+        assert!(
+            mail.contains("Retired spellings still answer for one release"),
+            "{mail}"
+        );
+        let fleet = menu(&["fleet"], node(&["fleet"]));
+        assert!(fleet.contains("Nothing is hidden"), "{fleet}");
+
+        // The unknown-word refusal lists live commands only.
+        let refused = unknown(&["mail"], node(&["mail"]), "lst");
+        assert!(!refused.contains("list,"), "{refused}");
+        assert!(refused.contains("send"), "{refused}");
+
+        // The tombstone still answers: the resolve walk finds the retired
+        // child and forwards its legacy argv, tail intact.
+        assert_eq!(
+            run(&["mail", "list"]),
+            Some((Agents::Run(osv(&["agents", "mail", "list"])), None))
+        );
+        // `help agents mail` shows the menu, not the tombstone rows.
+        match help(&osv(&["mail"])) {
+            Some(Agents::Help(text)) => {
+                assert!(!text.contains("Retired:"), "{text}");
+            }
+            other => panic!("help agents mail: expected Help, got {other:?}"),
+        }
     }
 }
