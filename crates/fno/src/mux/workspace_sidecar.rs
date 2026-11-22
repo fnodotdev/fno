@@ -246,7 +246,9 @@ mod tests {
             serde_json::json!({
                 "at": 1000,
                 "by_session": {"s1": "fno"},
-                "meters": {"s1": {"cost_cents": 42, "tokens": 9000, "compactions": null}},
+                "meters": {"s1": {"cost_cents": 42, "tokens": 9000, "compactions": null,
+                    "input_tokens": null, "output_tokens": null,
+                    "cache_read_tokens": null, "cache_write_tokens": null}},
                 "cards": {"s1": {
                     "badge": "working", "seen": false, "context_pct": 40,
                     "pr": 7, "build": null, "activity": [[1, 0], [3, 1]],
