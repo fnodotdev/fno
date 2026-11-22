@@ -350,7 +350,7 @@ mod tests {
             Vec::<String>::new()
         );
         assert_eq!(
-            node_ids_under("feature/t-12345678", Some("t")),
+            node_ids_under("feature/t-123456789", Some("t")),
             Vec::<String>::new()
         );
         assert_eq!(
