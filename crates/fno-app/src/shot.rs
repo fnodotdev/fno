@@ -43,16 +43,22 @@ pub fn run(opts: ShotOptions) -> i32 {
         eprintln!("fno-app --shot: {e}");
         return 2;
     }
-    let session = opts
-        .session
-        .clone()
-        .unwrap_or_else(|| "default".to_string());
+    // The no-server frame must not meet a real server, so an unnamed one
+    // attaches to a session no mux was ever started for.
+    let session = opts.session.clone().unwrap_or_else(|| {
+        if opts.first_run == Some(crate::FirstRunShot::NoServer) {
+            format!("shot-no-server-{}", std::process::id())
+        } else {
+            "default".to_string()
+        }
+    });
     let mode = opts.mode.unwrap_or(MainView::Orchestration);
     let find = opts.find;
     let out = opts.out.clone();
     let family = opts.font.clone();
     let font_size = opts.font_size;
-    let empty_chat = opts.empty_chat;
+    let first_run = opts.first_run;
+    let empty_chat = opts.empty_chat || first_run == Some(crate::FirstRunShot::KeyCard);
     let cmd = opts.cmd;
     let sheet = opts.sheet;
     let draft = opts.draft.clone();
@@ -63,11 +69,17 @@ pub fn run(opts: ShotOptions) -> i32 {
     // open and only re-draws when the window server composites the
     // window (the display link gates on occlusion), so the first frame
     // is the shot.
-    let warmed = match prewarm(&session, &opts) {
-        Ok(w) => w,
-        Err(e) => {
-            eprintln!("fno-app --shot: the world did not populate: {e}");
-            return 1;
+    // The no-server frame has no world to wait for: it attaches to a
+    // socket nobody listens on, so the offer is what paints.
+    let warmed = if first_run == Some(crate::FirstRunShot::NoServer) {
+        None
+    } else {
+        match prewarm(&session, &opts) {
+            Ok(w) => Some(w),
+            Err(e) => {
+                eprintln!("fno-app --shot: the world did not populate: {e}");
+                return 1;
+            }
         }
     };
     gpui::Application::new().run(move |cx: &mut App| {
@@ -88,6 +100,7 @@ pub fn run(opts: ShotOptions) -> i32 {
                 sheet,
                 draft,
                 harness,
+                first_run,
                 window,
                 cx,
             )

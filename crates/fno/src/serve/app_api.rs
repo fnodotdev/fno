@@ -42,6 +42,18 @@ pub mod mail_door {
     pub use crate::serve::mail_door::{send, MailVerdict, FROM};
 }
 
+pub mod splash {
+    pub use crate::ui::splash::{mark_cells, MARK_SECS};
+}
+
+/// Start a detached mux server for `session` and wait for its socket, the
+/// same spawn `fno mux` makes when none runs. Returns once the socket
+/// accepts, or the reason it did not.
+pub fn start_server(session: &str) -> Result<(), String> {
+    let path = crate::proto::socket_path(session)?;
+    crate::client::start_server_at(&path)
+}
+
 pub mod digest_overlay {
     pub use crate::digest_overlay::{now_secs, theme_resolved};
 }
