@@ -1956,8 +1956,8 @@ pub const MENU_BINDINGS: &[MenuKeyBinding] = &[
     // the sideline's own vocabulary so the two scopes teach one keyboard:
     // `s` stop (the sideline spends `x` on stop-then-remove and `X` on bulk
     // reap, so the menu's own free mnemonic takes Stop), `p` peek (the
-    // sideline's attach/peek neighbour), `y` copy session id (yank), `d` diff (the prefix-chord diff-pane letter, now a menu byte
-    // too), `o` open-here, `r` resume (peek `r` resumes), and `l` label
+    // sideline's attach/peek neighbour), `y` copy session id (yank), `d`
+    // diff (the prefix-chord diff-pane letter, now a menu byte too), `o` open-here, `r` resume (peek `r` resumes), and `l` label
     // (the row rename renames the registry LABEL).
     MenuKeyBinding {
         action: "stop-row",

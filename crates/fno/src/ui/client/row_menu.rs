@@ -289,7 +289,7 @@ pub(super) fn build_row_menu(agent: &AgentRow, anchor: Anchor) -> RowMenu {
     add(PopupRow::Header(agent.name.clone()), &[]);
     add(PopupRow::Rule, &[]);
     if agent.remote.is_some() {
-        // A row on another machine opens, peeks and takes mail. Everything that
+        // A row on another machine opens, peeks and copies its id. Everything that
         // ends or moves a session needs that machine's own grant. Open takes
         // the portal Enter takes; the second entry keeps that portal's row.
         add(entry("→", "Open"), &[MenuAction::Focus]);
@@ -298,6 +298,9 @@ pub(super) fn build_row_menu(agent: &AgentRow, anchor: Anchor) -> RowMenu {
             &[MenuAction::PortalAt(None)],
         );
         add(entry("◉", "Peek"), &[MenuAction::Peek]);
+        if agent.harness_session_id.is_some() {
+            add(entry("⧉", "Copy session ID"), &[MenuAction::CopySessionId]);
+        }
         return RowMenu {
             popup: Popup::new(rows, anchor),
             target: MenuTarget::Agent(AgentIdent::of(agent)),
