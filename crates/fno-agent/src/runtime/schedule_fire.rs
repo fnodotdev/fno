@@ -238,7 +238,10 @@ fn run_pass(home: &AgentsHome, pending: &AtomicBool) {
         .into_iter()
         .map(|row| (node_priority(&row), row.fire_at_utc, row.id.clone(), row))
         .collect();
-    keyed.sort_by(|a, b| a[..3].cmp(&b[..3]));
+    keyed.sort_by(|a, b| {
+        // Tuples carry no Index; compare the three key fields directly.
+        (&a.0, &a.1, &a.2).cmp(&(&b.0, &b.1, &b.2))
+    });
     for (_prio, _fire, _id, row) in keyed {
         // The gate never refuses a done, superseded or deferred node
         // (premise P6), so the fire path reads the status itself.
