@@ -733,10 +733,15 @@ jobs:
         # claims-substrate note). The advisory names no vulnerability; the
         # crate is unmaintained with no fixed upgrade. Drop the ignore when
         # serde_yaml_ng swaps parsers.
-        run: cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0449
+        # RUSTSEC-2026-0441 (pin-utils unmaintained): pin-utils 0.1 rides in
+        # through async-std, which magic-wormhole and async-tungstenite carry
+        # for the relay transfer substrate. The advisory names no
+        # vulnerability and no fixed upgrade exists. Drop the ignore when the
+        # wormhole stack drops async-std.
+        run: cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0449 --ignore RUSTSEC-2026-0441
 
       - name: cargo audit (fno)
         working-directory: crates/fno
-        # Same RUSTSEC-2024-0449 ignore: the fno lockfile carries the same
-        # serde_yaml_ng tree.
-        run: cargo audit --ignore RUSTSEC-2024-0449
+        # Same ignores: the fno lockfile carries the same serde_yaml_ng and
+        # async-std trees.
+        run: cargo audit --ignore RUSTSEC-2024-0449 --ignore RUSTSEC-2026-0441
