@@ -3,7 +3,8 @@
 //! keeps both copies; a pending row retries on the next lane pass.
 
 use crate::pid::Pid;
-use crate::state_layout::{find, park_file_at, Row, Status};
+use crate::state_layout::{backup_dir, find, park_file_at, Row, Status};
+use crate::state_layout_undo::{record, Action, Holds};
 use rusqlite::Connection;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -182,10 +183,10 @@ fn seq_high_water(
 /// kept serving the parked inode after the move; the row reads refused and
 /// both copies stay for a human. Nothing is deleted on a mismatch; a clean
 /// verify removes only the record.
-fn verify_stamp(backup_root: &Path, stamp: &str) -> Option<Status> {
-    let dir = backup_root.join(stamp);
+fn verify_stamp(root: &Path, stamp: &str, pass: &str, apply: bool) -> Option<Status> {
+    let dir = backup_dir(root, stamp);
     let record_path = dir.join("verify.tsv");
-    let record = std::fs::read_to_string(&record_path).ok()?;
+    let recorded = std::fs::read_to_string(&record_path).ok()?;
     let age_ok = std::fs::metadata(&record_path)
         .and_then(|m| m.modified())
         .ok()?
@@ -198,7 +199,11 @@ fn verify_stamp(backup_root: &Path, stamp: &str) -> Option<Status> {
     // Two-field lines predate the seq high-water; their counts still verify.
     let mut then_counts: BTreeMap<String, i64> = BTreeMap::new();
     let mut then_seqs: BTreeMap<String, i64> = BTreeMap::new();
-    for line in record.lines() {
+    if !apply {
+        // Even a read-only open can write a -shm beside the parked copy.
+        return Some(Status::Pending("verify (dry run)".to_string()));
+    }
+    for line in recorded.lines() {
         let mut parts = line.split('\t');
         let (Some(name), Some(count)) = (parts.next(), parts.next()) else {
             return None;
@@ -236,7 +241,9 @@ fn verify_stamp(backup_root: &Path, stamp: &str) -> Option<Status> {
                 Err(_) => false,
             };
             if seqs_ok {
-                let _ = std::fs::remove_file(&record_path);
+                if let Err(e) = crate::state_layout_undo::remove_file(root, pass, &record_path) {
+                    return Some(Status::Refused(format!("verify record stays: {e}")));
+                }
                 return Some(Status::Moved);
             }
             Some(Status::Refused(
@@ -311,7 +318,7 @@ fn sidecar_status(root: &Path, row: &Row) -> Status {
 /// The sweep over earlier stamps: every verify.tsv older than the verify
 /// delay gets its parked copy compared against its recorded counts. Entries
 /// land on the receipt naming the stamp.
-pub fn verify_sweep(root: &Path, stamp: &str) -> Vec<(String, Status)> {
+pub fn verify_sweep(root: &Path, stamp: &str, apply: bool) -> Vec<(String, Status)> {
     let backup_root = root.join("backups").join("state-root-migration");
     let mut out = Vec::new();
     let Ok(entries) = std::fs::read_dir(&backup_root) else {
@@ -322,7 +329,7 @@ pub fn verify_sweep(root: &Path, stamp: &str) -> Vec<(String, Status)> {
         if name == stamp {
             continue;
         }
-        if let Some(status) = verify_stamp(&backup_root, &name) {
+        if let Some(status) = verify_stamp(root, &name, stamp, apply) {
             out.push((name, status));
         }
     }
@@ -345,10 +352,11 @@ fn both_exist(root: &Path, row: &Row, legacy: &Path, new: &Path, stamp: &str) ->
         if std::fs::create_dir_all(&dir).is_err() {
             return Status::Refused("cannot create the backup folder".to_string());
         }
-        let parked_name = format!("{}.empty-at-publish", row.legacy);
-        if std::fs::rename(new, dir.join(parked_name)).is_err() {
+        let parked = dir.join(format!("{}.empty-at-publish", row.legacy));
+        if std::fs::rename(new, &parked).is_err() {
             return Status::Refused("cannot park the empty new file".to_string());
         }
+        record(root, stamp, Action::Published, new, &parked);
         return run_protocol(root, row, legacy, new, stamp);
     }
     // Empty is a zero length, or a read-only open whose every table is
@@ -376,6 +384,7 @@ fn both_exist(root: &Path, row: &Row, legacy: &Path, new: &Path, stamp: &str) ->
         if std::fs::rename(legacy, dir.join(parked_name.clone())).is_err() {
             return Status::Refused("cannot park the empty legacy file".to_string());
         }
+        record(root, stamp, Action::Parked, legacy, &dir.join(&parked_name));
         // Sidecars leave with the main file, best-effort: a zero-length
         // -wal and a -shm renamed beside it. The -wal guard above already
         // kept a row-bearing -wal out of this branch; a nonzero -shm stays
@@ -386,12 +395,24 @@ fn both_exist(root: &Path, row: &Row, legacy: &Path, new: &Path, stamp: &str) ->
                 .map(|m| m.len() == 0)
                 .unwrap_or(true)
             {
-                let _ = std::fs::rename(&side, dir.join(format!("{parked_name}{suffix}")));
+                park_sidecar(
+                    root,
+                    stamp,
+                    &side,
+                    &dir.join(format!("{parked_name}{suffix}")),
+                );
             }
         }
         return Status::Parked;
     }
     Status::Refused("both copies hold rows".to_string())
+}
+
+/// A sidecar leaves with its store, best effort: most passes have none.
+fn park_sidecar(root: &Path, stamp: &str, side: &Path, parked: &Path) {
+    if std::fs::rename(side, parked).is_ok() {
+        record(root, stamp, Action::Parked, side, parked);
+    }
 }
 
 /// True when the store's `-wal` sidecar is absent or zero length. A main
@@ -408,12 +429,6 @@ fn wal_is_empty(store: &Path) -> bool {
 fn empty_store(conn: &Connection) -> Result<bool, String> {
     let counts = table_counts(conn)?;
     Ok(counts.values().all(|n| *n == 0))
-}
-
-fn backup_dir(root: &Path, stamp: &str) -> PathBuf {
-    root.join("backups")
-        .join("state-root-migration")
-        .join(stamp)
 }
 
 /// One rollback helper so every failure arm reads the same: drop the drain,
@@ -588,8 +603,11 @@ fn run_protocol(root: &Path, row: &Row, legacy: &Path, new: &Path, stamp: &str) 
     for suffix in ["", "-wal", "-shm"] {
         let name = format!("{}{suffix}", row.legacy);
         let p = root.join(&name);
-        if p.exists() && std::fs::rename(&p, dir.join(&name)).is_err() {
-            return drain.fail(&guard, pid, format!("cannot park {name}"));
+        if p.exists() {
+            if std::fs::rename(&p, dir.join(&name)).is_err() {
+                return drain.fail(&guard, pid, format!("cannot park {name}"));
+            }
+            record(root, stamp, Action::Published, &p, &dir.join(&name));
         }
     }
     let seqs = match seq_high_water(&src, &counts) {
@@ -614,7 +632,12 @@ fn migrating_path(new: &Path) -> PathBuf {
 /// the move published `db/<stem>.db`. One lane pass imports its rows into the
 /// published store by `event_id` with INSERT OR IGNORE, then parks the file.
 /// A refused row keeps both copies; the pass retries it next time.
-pub fn straggler_import(root: &Path, stamp: &str, apply: bool) -> Vec<(String, Status)> {
+pub(crate) fn straggler_import(
+    root: &Path,
+    stamp: &str,
+    apply: bool,
+    holds: &Holds,
+) -> Vec<(String, Status)> {
     let mut out = Vec::new();
     if !apply {
         return out;
@@ -623,6 +646,10 @@ pub fn straggler_import(root: &Path, stamp: &str, apply: bool) -> Vec<(String, S
         let name = format!("{stem}.db");
         let legacy = root.join(&name);
         if !legacy.exists() {
+            continue;
+        }
+        if holds.holds(&name) {
+            out.push((name, Status::Held));
             continue;
         }
         let new = root.join("db").join(&name);
@@ -643,6 +670,7 @@ pub fn straggler_import(root: &Path, stamp: &str, apply: bool) -> Vec<(String, S
             let moved = std::fs::create_dir_all(&dir).is_ok()
                 && std::fs::rename(&legacy, dir.join(&name)).is_ok();
             if moved {
+                record(root, stamp, Action::Parked, &legacy, &dir.join(&name));
                 // Sidecars leave with the main file, best-effort, on the
                 // same terms as both_exist's empty-legacy park.
                 for suffix in ["-wal", "-shm"] {
@@ -651,7 +679,7 @@ pub fn straggler_import(root: &Path, stamp: &str, apply: bool) -> Vec<(String, S
                         .map(|m| m.len() == 0)
                         .unwrap_or(true)
                     {
-                        let _ = std::fs::rename(&side, dir.join(format!("{name}{suffix}")));
+                        park_sidecar(root, stamp, &side, &dir.join(format!("{name}{suffix}")));
                     }
                 }
                 out.push((name, Status::Parked));
@@ -669,6 +697,7 @@ pub fn straggler_import(root: &Path, stamp: &str, apply: bool) -> Vec<(String, S
                 if std::fs::create_dir_all(&dir).is_ok()
                     && std::fs::rename(&legacy, dir.join(&name)).is_ok()
                 {
+                    record(root, stamp, Action::Parked, &legacy, &dir.join(&name));
                     out.push((name, Status::Merged));
                 } else {
                     out.push((
@@ -695,7 +724,12 @@ pub fn straggler_import(root: &Path, stamp: &str, apply: bool) -> Vec<(String, S
 /// carries `repeat: true`. A routed read never serves the raw bytes
 /// (see `event_store::routed_root_journal`), so a stray that appears between
 /// passes stays invisible to readers until its own pass ingests it.
-pub fn journal_retire(root: &Path, stamp: &str, apply: bool) -> Vec<(String, Status)> {
+pub(crate) fn journal_retire(
+    root: &Path,
+    stamp: &str,
+    apply: bool,
+    holds: &Holds,
+) -> Vec<(String, Status)> {
     let mut out: Vec<(String, Status)> = Vec::new();
     let live = root.join("events.jsonl");
     let mut family: Vec<PathBuf> = Vec::new();
@@ -714,6 +748,14 @@ pub fn journal_retire(root: &Path, stamp: &str, apply: bool) -> Vec<(String, Sta
             }
         }
     }
+    family.retain(|path| {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        let held = holds.holds(&name);
+        if held {
+            out.push((name.into_owned(), Status::Held));
+        }
+        !held
+    });
     if family.is_empty() {
         return out;
     }

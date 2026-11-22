@@ -196,7 +196,10 @@ pub(crate) use runtime::{
     opencode_permission, prompt_wait, reap_evidence, resume_reroute, resume_route, retired_lead,
     served_liveness, session_receipt, shot_save, thread_dialog, thread_permission,
 };
-use runtime::{agent_lock, boot_revival, codex_thread_entry, repo_identity, state_layout_merge};
+use runtime::{
+    agent_lock, boot_revival, codex_thread_entry, repo_identity, state_layout_class,
+    state_layout_home, state_layout_merge, state_layout_move, state_layout_undo,
+};
 pub use spawn::reader_route;
 pub use spawn::{
     accounts, agents_config, agy_ask, agy_launch, ask_project, capability_leaves, capacity,

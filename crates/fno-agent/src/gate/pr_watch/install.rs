@@ -167,9 +167,9 @@ pub(crate) fn render_plist(
     interval: i64,
 ) -> String {
     let home = home_dir();
-    let fno_state = home.join(".fno");
-    let log_out = fno_state.join("logs").join("pr-watcher.out.log");
-    let log_err = fno_state.join("logs").join("pr-watcher.err.log");
+    let logs = crate::state_layout::logs_dir(&home.join(".fno"));
+    let log_out = logs.join("pr-watcher.out.log");
+    let log_err = logs.join("pr-watcher.err.log");
 
     let base = install_path
         .map(str::to_string)
@@ -594,6 +594,10 @@ fn install_command(
     }
 
     if let Err(exc) = std::fs::create_dir_all(launch_agents_dir)
+        // launchd creates no missing parent for the paths the plist names.
+        .and_then(|()| {
+            std::fs::create_dir_all(crate::state_layout::logs_dir(&home_dir().join(".fno")))
+        })
         .and_then(|()| std::fs::write(&plist_path, &plist_text))
     {
         eprintln!(
@@ -674,8 +678,8 @@ pub(crate) fn ensure_activated(
     if std::fs::create_dir_all(launch_agents_dir).is_err() {
         return "write-failed".to_string();
     }
-    let state = state_root(cwd);
-    if std::fs::create_dir_all(state.join("logs")).is_err() {
+    // launchd creates no missing parent for the paths the plist names.
+    if std::fs::create_dir_all(crate::state_layout::logs_dir(&home_dir().join(".fno"))).is_err() {
         return "write-failed".to_string();
     }
     if std::fs::write(&plist_path, plist_text).is_err() {

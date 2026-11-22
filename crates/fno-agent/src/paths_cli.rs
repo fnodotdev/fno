@@ -688,6 +688,19 @@ pub(crate) fn cache_home(cwd: &Path) -> PathBuf {
     class_home(cwd, "FNO_CACHE_HOME", "cache_dir", default_cache_home)
 }
 
+/// [`cache_home`] without the config read, for a PreToolUse path: env, then
+/// the platform default. The twin of `fno_cache_home_fast` in
+/// `scripts/lib/class-home.sh`.
+pub(crate) fn cache_home_fast(cwd: &Path) -> PathBuf {
+    match std::env::var_os("FNO_CACHE_HOME").filter(|v| !v.is_empty()) {
+        Some(carrier) => anchor_at(
+            cwd,
+            crate::paths::resolve_loose(&expanduser(&carrier.to_string_lossy())),
+        ),
+        None => default_cache_home(),
+    }
+}
+
 /// Binaries and installed release payloads. Env `FNO_DATA_HOME`, then
 /// `config.paths.data_dir`, then `~/.local/share/fno` (`$XDG_DATA_HOME/fno`
 /// when set on the XDG platforms).

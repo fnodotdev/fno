@@ -191,7 +191,20 @@ fn rundown_html_path() -> (PathBuf, bool) {
     #[cfg(not(test))]
     {
         let (root, faithful) = crate::org_root::lead_state_root();
-        (crate::state_layout::place(&root, "rundown.html"), faithful)
+        let page = crate::state_layout::place_new(&root, "rundown.html");
+        let found = crate::state_layout::place(&root, "rundown.html");
+        // The bridge serves and republishes one path, the home. A page from
+        // before the move seeds it, so the first view is not empty.
+        if found != page && found.exists() {
+            let seeded = page
+                .parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| std::fs::copy(&found, &page).map(|_| ()));
+            if let Err(e) = seeded {
+                eprintln!("fno mux serve --web: {} starts empty ({e})", page.display());
+            }
+        }
+        (page, faithful)
     }
     #[cfg(test)]
     {
@@ -200,7 +213,7 @@ fn rundown_html_path() -> (PathBuf, bool) {
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
-        (crate::state_layout::place(&root, "rundown.html"), true)
+        (crate::state_layout::place_new(&root, "rundown.html"), true)
     }
 }
 

@@ -142,12 +142,9 @@ fn iso(t: chrono::DateTime<chrono::Utc>) -> String {
     t.to_rfc3339_opts(format, false)
 }
 
-fn snapshot_path(cwd: &Path) -> Option<PathBuf> {
-    Some(
-        crate::agents_config::state_dir(cwd)?
-            .join("cache")
-            .join("benchmarks.json"),
-    )
+pub(crate) fn snapshot_path(cwd: &Path) -> Option<PathBuf> {
+    let root = crate::agents_config::state_dir(cwd)?;
+    Some(crate::state_layout::home_of(&root, "cache/benchmarks.json"))
 }
 
 /// Fetch the snapshot through `http` (a curl `-K` config in, status and body

@@ -484,11 +484,11 @@ fn state_dir() -> PathBuf {
 }
 
 fn graph_md_path() -> PathBuf {
-    crate::state_layout::place(&state_dir(), "graph.md")
+    crate::state_layout::place_new(&state_dir(), "graph.md")
 }
 
 fn graph_html_path() -> PathBuf {
-    crate::state_layout::place(&state_dir(), "graph.html")
+    crate::state_layout::place_new(&state_dir(), "graph.html")
 }
 
 /// A target at a page's pre-fold spelling (`~/.fno/graph.html`) renders at
@@ -663,9 +663,10 @@ fn parse_target(row: &Value) -> Result<RenderTarget, String> {
 /// Whether the canonical board page is already among the targets.
 fn names_canonical_page(targets: &[RenderTarget]) -> bool {
     let canonical = resolve(&graph_html_path());
+    let root = state_dir();
     targets
         .iter()
-        .any(|t| resolve(&expand(&t.path)) == canonical)
+        .any(|t| resolve(&fold_legacy_page(&root, &expand(&t.path))) == canonical)
 }
 
 /// The target list `fno backlog view` renders: the configured targets, plus

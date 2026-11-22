@@ -176,8 +176,8 @@ pub fn held(decisions_stdout: Option<&[u8]>) -> Result<Option<String>, String> {
 }
 
 /// The per-PR origin-facts cache directory: `pr_status_cache_dir` with its
-/// last segment swapped for `pr-origin`, so `<state>/cache/pr-origin`.
-fn pr_origin_cache_dir(cwd: &Path) -> Option<PathBuf> {
+/// last segment swapped for `pr-origin`, so it follows the cache class home.
+pub(crate) fn pr_origin_cache_dir(cwd: &Path) -> Option<PathBuf> {
     let mut dir = crate::agents_config::pr_status_cache_dir(cwd)?;
     dir.set_file_name("pr-origin");
     Some(dir)
@@ -232,7 +232,7 @@ fn pulls_of_facts(facts: &OriginFacts) -> Value {
 const ORIGIN_TTL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
 fn read_cached(dir: &Path, slug: &str, pr: u64) -> Option<OriginFacts> {
-    let path = cache_path(dir, slug, pr)?;
+    let path = crate::state_layout_home::cache_read(&cache_path(dir, slug, pr)?);
     let age = std::fs::metadata(&path)
         .ok()?
         .modified()

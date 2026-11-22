@@ -6,9 +6,11 @@
 //!
 //! `place` is read-old-as-fallback: a migrated root reads the new path, an
 //! unmigrated root keeps reading the legacy one, a fresh install gets the
-//! new path. Nothing here ever deletes data: the only deletion is an empty
-//! legacy lock file after its data file moved and a non-blocking flock
-//! succeeds, and every conflict parks into `backups/state-root-migration/`.
+//! new path. Nothing here ever deletes data: the lawful deletions are an
+//! emptied lock after its data moved, an emptied shell, and a page the
+//! daemon rebuilds. Every conflict parks into `backups/state-root-migration/`.
+//! A dry run writes nothing. An apply records each step in its stamp's
+//! `manifest.json`, and a reverse holds (`state_layout_undo`).
 //! The `sqlite` kind moves through a backup-API protocol in a later wave;
 //! until that lands the migrate pass reports those rows pending.
 //!
@@ -20,6 +22,14 @@
 use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+
+use crate::state_layout_move::{ensure_dir_like, move_path, occupied};
+use crate::state_layout_undo::{Action, Holds};
+
+pub use crate::state_layout_home::{cache_dir, home_of, logs_dir};
+
+/// The step record an apply writes into its stamp.
+pub(crate) const MANIFEST_NAME: &str = "manifest.json";
 
 /// The shipped layout table, vendored beside this module: a `cargo package`
 /// tarball carries only crate-root files, so the repo's `docs/` copy cannot
@@ -226,14 +236,16 @@ fn db_twin(p: &Path) -> PathBuf {
 }
 
 /// Where `legacy_name` lives under `root`: the new path when it exists, else
-/// the legacy path when it exists, else the new path (fresh install). The
+/// the legacy path when it exists, else the new path (fresh install). A
+/// `cache/` or `logs/` destination also reads its spelling inside the root.
+/// The
 /// `anchor` kind probes the `.db` twin instead of the virtual json. A name
 /// the table does not carry resolves to `root/<name>` unchanged.
 pub fn place(root: &Path, legacy_name: &str) -> PathBuf {
     let Some(row) = find(legacy_name) else {
         return root.join(legacy_name);
     };
-    let new = root.join(&row.new);
+    let new = home_of(root, &row.new);
     let legacy = root.join(&row.legacy);
     match row.kind {
         Kind::Anchor => {
@@ -246,8 +258,9 @@ pub fn place(root: &Path, legacy_name: &str) -> PathBuf {
             }
         }
         _ => {
-            if new.exists() {
-                new
+            let found = crate::state_layout_home::read_home(root, &row.new);
+            if found.exists() {
+                found
             } else if legacy.exists() {
                 legacy
             } else {
@@ -257,16 +270,23 @@ pub fn place(root: &Path, legacy_name: &str) -> PathBuf {
     }
 }
 
-/// The home of a page named by its pre-fold spelling right under `root`
-/// (`<root>/graph.html` -> `<root>/cache/pages/graph.html`), else `None`.
-/// A render target that still names the old spelling writes the home
-/// instead, so no writer re-creates a file the migration must clear.
+/// Where a writer puts `legacy_name`: its home, always. A writer that took
+/// [`place`]'s fallback would refresh the legacy copy on every write.
+pub fn place_new(root: &Path, legacy_name: &str) -> PathBuf {
+    find(legacy_name).map_or_else(|| root.join(legacy_name), |row| home_of(root, &row.new))
+}
+
+/// The home of a page named by a legacy spelling: right under `root`
+/// (`<root>/graph.html`) or in the root's own cache folder
+/// (`<root>/cache/pages/graph.html`). A render target that still names one
+/// writes the home instead, so no writer re-creates a file the migration
+/// must clear, and no config needs an edit.
 pub fn page_home(root: &Path, path: &Path) -> Option<PathBuf> {
-    if path.parent()? != root {
-        return None;
-    }
-    let row = find(path.file_name()?.to_str()?)?;
-    (row.kind == Kind::Page && row.new != row.legacy).then(|| root.join(&row.new))
+    let name = path.strip_prefix(root).ok()?.to_str()?;
+    let row = rows().iter().find(|row| {
+        row.kind == Kind::Page && row.new != row.legacy && (name == row.legacy || name == row.new)
+    })?;
+    Some(home_of(root, &row.new))
 }
 
 /// Where a ruled folder lives after its fold: the `dir` row's destination,
@@ -278,7 +298,7 @@ pub fn place_dir(root: &Path, name: &str) -> Option<PathBuf> {
     if row.kind != Kind::Dir {
         return None;
     }
-    Some(root.join(&row.new))
+    Some(home_of(root, &row.new))
 }
 
 /// The one-level-down read: `file` at the new dir when it exists, else at
@@ -294,13 +314,33 @@ pub fn place_in(root: &Path, name: &str, file: &str) -> PathBuf {
     }
     if let Some(row) = find(name) {
         if row.kind == Kind::Dir && row.legacy != row.new {
-            let legacy_file = root.join(&row.legacy).join(file);
-            if legacy_file.exists() {
-                return legacy_file;
+            for dir in [&row.new, &row.legacy] {
+                let older = root.join(dir).join(file);
+                if older.exists() {
+                    return older;
+                }
             }
         }
     }
     new_file
+}
+
+/// The write path of a cache file that is read and rewritten in place (a
+/// cursor file): the home, seeded once from a legacy copy.
+pub(crate) fn adopt(root: &Path, name: &str, file: &str) -> PathBuf {
+    let home = place_dir(root, name)
+        .unwrap_or_else(|| root.join(name))
+        .join(file);
+    let found = place_in(root, name, file);
+    if found != home {
+        let seeded = std::fs::read_to_string(&found)
+            .map_err(|e| e.to_string())
+            .and_then(|text| crate::rundown::write_atomic(&home, &text));
+        if let Err(e) = seeded {
+            eprintln!("state-root: {} starts empty ({e})", home.display());
+        }
+    }
+    home
 }
 
 /// The folder read for listers (cursors, latches, tickets): the children of
@@ -310,7 +350,11 @@ pub fn list_dir_children(root: &Path, name: &str) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let new_dir = place_dir(root, name).unwrap_or_else(|| root.join(name));
     let mut seen: Vec<String> = Vec::new();
-    for dir in [Some(new_dir), legacy_dir_of(root, name)] {
+    let inside = find(name)
+        .filter(|row| row.kind == Kind::Dir)
+        .map(|row| root.join(&row.new))
+        .filter(|dir| *dir != new_dir);
+    for dir in [Some(new_dir), inside, legacy_dir_of(root, name)] {
         let Some(dir) = dir else { continue };
         let Ok(children) = std::fs::read_dir(&dir) else {
             continue;
@@ -351,6 +395,8 @@ pub enum Status {
     Parked,
     Deleted,
     Absent,
+    /// A reverse put it back and recorded a hold. A forward pass leaves it.
+    Held,
     Pending(String),
     Refused(String),
 }
@@ -363,6 +409,7 @@ impl Status {
             Status::Parked => "parked",
             Status::Deleted => "deleted",
             Status::Absent => "absent",
+            Status::Held => "held",
             Status::Pending(_) => "pending",
             Status::Refused(_) => "refused",
         }
@@ -415,358 +462,139 @@ impl Receipt {
 
     pub fn summary(&self) -> String {
         format!(
-            "{} moved, {} merged, {} parked, {} deleted, {} pending, {} refused, {} absent",
+            "{} moved, {} merged, {} parked, {} deleted, {} pending, {} refused, {} held, {} absent",
             self.count_matching(|s| matches!(s, Status::Moved)),
             self.count_matching(|s| matches!(s, Status::Merged)),
             self.count_matching(|s| matches!(s, Status::Parked)),
             self.count_matching(|s| matches!(s, Status::Deleted)),
             self.pending_count(),
             self.refused_count(),
+            self.count_matching(|s| matches!(s, Status::Held)),
             self.count_matching(|s| matches!(s, Status::Absent)),
         )
+    }
+
+    /// The reclaim note: the counts, then which entries wait and why. A
+    /// count alone cannot say which folder sat refused for a month.
+    pub fn note(&self) -> String {
+        const SHOWN: usize = 12;
+        let mut note = self.summary();
+        for word in ["pending", "refused", "held"] {
+            let named: Vec<String> = self
+                .entries
+                .iter()
+                .filter(|e| e.status.word() == word)
+                .map(|e| match e.status.detail() {
+                    Some(why) => format!("{} ({why})", e.legacy),
+                    None => e.legacy.clone(),
+                })
+                .collect();
+            if named.is_empty() {
+                continue;
+            }
+            let shown = named[..named.len().min(SHOWN)].join(", ");
+            note.push_str(&format!("; {word}: {shown}"));
+            if named.len() > SHOWN {
+                note.push_str(&format!(", and {} more", named.len() - SHOWN));
+            }
+        }
+        note
+    }
+
+    fn extend(&mut self, lane: &str, found: Vec<(String, Status)>) {
+        self.entries
+            .extend(found.into_iter().map(|(name, status)| Entry {
+                legacy: format!("{name} ({lane})"),
+                status,
+            }));
+    }
+}
+
+fn holds_unreadable(error: &crate::state_layout_move::MoveError) -> Entry {
+    Entry {
+        legacy: "layout-hold.json".to_string(),
+        status: Status::Refused(format!("unreadable, so nothing moves: {error}")),
     }
 }
 
 /// One migration pass over the whole table against one state root.
-/// Dry run (default) reports every owed row `pending`; `apply` moves,
-/// merges, parks and deletes per kind. Idempotent: a second apply over a
-/// migrated root reports moved/absent and parks nothing new.
+/// Dry run (default) reports every owed row `pending` and writes nothing;
+/// `apply` moves, merges, parks and deletes per kind. A held name stays.
+/// Idempotent: a second apply over a migrated root moves nothing and writes
+/// no stamp.
 pub fn migrate(root: &Path, apply: bool) -> Receipt {
-    let stamp = utc_stamp();
+    let _pass = if apply {
+        crate::state_layout_undo::lock_root(root)
+    } else {
+        None
+    };
     let mut receipt = Receipt::default();
+    let holds = match Holds::load(root) {
+        Ok(holds) => holds,
+        Err(e) => {
+            receipt.entries.push(holds_unreadable(&e));
+            return receipt;
+        }
+    };
+    let stamp = fresh_stamp(root);
     // The sqlite family's deferred verify: stamps parked on earlier passes
     // get their parked copies compared against their recorded counts here.
-    for (name, status) in crate::state_layout_sqlite::verify_sweep(root, &stamp) {
-        receipt.entries.push(Entry {
-            legacy: format!("{name} (verify)"),
-            status,
-        });
-    }
+    receipt.extend(
+        "verify",
+        crate::state_layout_sqlite::verify_sweep(root, &stamp, apply),
+    );
     // A stale writer's reappeared legacy event-family store imports into the
     // published store, then parks. Dry runs skip it.
-    for (name, status) in crate::state_layout_sqlite::straggler_import(root, &stamp, apply) {
-        receipt.entries.push(Entry {
-            legacy: format!("{name} (straggler)"),
-            status,
-        });
-    }
+    receipt.extend(
+        "straggler",
+        crate::state_layout_sqlite::straggler_import(root, &stamp, apply, &holds),
+    );
     // The retired root journal family: a reappeared `events.jsonl*` imports
     // once and parks whole, and the receipt row carries `repeat: true`.
-    for (name, status) in crate::state_layout_sqlite::journal_retire(root, &stamp, apply) {
-        receipt.entries.push(Entry {
-            legacy: format!("{name} (journal)"),
-            status,
-        });
-    }
+    receipt.extend(
+        "journal",
+        crate::state_layout_sqlite::journal_retire(root, &stamp, apply, &holds),
+    );
     // The ledger history imports once into the store: a pass ahead of the
     // carrier's deployment refuses by name, an imported root is silent.
-    for (name, status) in crate::run_import::ledger_history_import(root, &stamp, apply) {
-        receipt.entries.push(Entry {
-            legacy: format!("{name} (run-history)"),
-            status,
-        });
-    }
-    for entry in migrate_rows(root, rows(), apply, &stamp) {
-        receipt.entries.push(entry);
-    }
-    for entry in park_nested_duplicates(root, apply, &stamp) {
-        receipt.entries.push(entry);
-    }
-    for (name, status) in migrate_cache_class(root, &stamp, apply) {
-        receipt.entries.push(Entry {
-            legacy: format!("{name} (cache-class)"),
-            status,
-        });
-    }
-    for (name, status) in move_logs_class(root, &stamp, apply) {
-        receipt.entries.push(Entry {
-            legacy: format!("{name} (logs-class)"),
-            status,
-        });
-    }
+    receipt.extend(
+        "run-history",
+        crate::run_import::ledger_history_import(root, &stamp, apply),
+    );
     receipt
-}
-
-/// The quiet window a cache child must sit inside before the class move
-/// may rename it: a live cargo build under `cache/cargo-build` holds
-/// absolute paths into the tree, and a parent rename re-points the names a
-/// later artifact write resolves. Six hours, the same shape the build-dir
-/// lanes use for their fresh window.
-const CACHE_CLASS_QUIET_SECS: u64 = 6 * 3600;
-
-/// Move every child of `<state_root>/cache` to the OS cache dir, once:
-/// rename on the same volume, copy-plus-delete across devices, a child the
-/// destination already holds parks under the stamp's backup dir. A child
-/// touched inside the quiet window is refused this pass and picked up by
-/// the next one; the stamp under `state/` lands only when the folder
-/// drained, so a crashed pass retries. Dry runs report `would-move`
-/// pendings and write nothing.
-
-/// What the pass books for one cache child, beside its receipt status.
-enum CacheBook {
-    Moved,
-    Parked,
-    Held,
-    None,
-}
-
-/// One cache child's move: the conflict park, the file rename, the
-/// quiet-window hold, and the whole-dir move. Returns the receipt status
-/// plus the counter the caller books. A dry run answers a pending status
-/// and touches nothing.
-fn move_cache_child(
-    name: &str,
-    from: &Path,
-    dest: &Path,
-    park_base: &Path,
-    cache_dir: &Path,
-    apply: bool,
-) -> (Status, CacheBook) {
-    if dest.exists() {
-        // The destination holds different content: park the legacy copy
-        // rather than clobber it, the layout mover's conflict rule.
-        let park = park_base.join(format!("cache-{name}"));
-        if apply {
-            if std::fs::create_dir_all(park.parent().unwrap_or(park.as_path())).is_ok()
-                && std::fs::rename(from, &park).is_ok()
-            {
-                return (Status::Parked, CacheBook::Parked);
-            }
-            return (
-                Status::Refused("park-rename-failed".to_string()),
-                CacheBook::None,
-            );
-        }
-        return (
-            Status::Pending(format!("would park into {}", park.display())),
-            CacheBook::None,
-        );
-    }
-    if !from.is_dir() {
-        // Small files (a stamp, a lock) carry no live writer.
-        if apply {
-            if std::fs::create_dir_all(cache_dir).is_ok() && std::fs::rename(from, dest).is_ok() {
-                return (Status::Moved, CacheBook::Moved);
-            }
-            return (
-                Status::Refused("file-rename-failed".to_string()),
-                CacheBook::None,
-            );
-        }
-        return (
-            Status::Pending("would move (file)".to_string()),
-            CacheBook::None,
-        );
-    }
-    // Depth 4 reaches a live build's deps dir; depth 2 read only the
-    // profile and hash levels and renamed trees under running builds.
-    let quiet = newest_mtime_within(from, 4)
-        .and_then(|m| std::time::SystemTime::now().duration_since(m).ok())
-        .map(|age| age.as_secs())
-        .unwrap_or(u64::MAX);
-    if quiet < CACHE_CLASS_QUIET_SECS {
-        return (
-            Status::Refused(format!("quiet {}s < {}s", quiet, CACHE_CLASS_QUIET_SECS)),
-            CacheBook::Held,
-        );
-    }
-    if apply {
-        if std::fs::create_dir_all(cache_dir).is_ok() && move_dir(from, dest) {
-            return (Status::Moved, CacheBook::Moved);
-        }
-        return (Status::Refused("move-failed".to_string()), CacheBook::None);
-    }
-    (Status::Pending("would move".to_string()), CacheBook::None)
-}
-
-fn migrate_cache_class(root: &Path, stamp: &str, apply: bool) -> Vec<(String, Status)> {
-    let mut out = Vec::new();
-    let marker = root.join("state/cache-home-migration.json");
-    if marker.exists() {
-        return out;
-    }
-    let source = root.join("cache");
-    let Ok(children) = std::fs::read_dir(&source) else {
-        // Nothing to move (fresh root, or the folder never existed): the
-        // class is already outside, so stamp the migration done.
-        if apply {
-            let _ = std::fs::create_dir_all(marker.parent().unwrap_or(root));
-            let _ = std::fs::write(
-                &marker,
-                format!("{{\"migrated_at\": \"{stamp}\", \"moved\": 0, \"parked\": 0}}\n"),
-            );
-        }
-        return out;
-    };
-    let cache_dir = crate::paths_cli::cache_home(
-        &std::env::current_dir().unwrap_or_else(|_| root.to_path_buf()),
+        .entries
+        .extend(migrate_rows(root, rows(), apply, &stamp));
+    receipt
+        .entries
+        .extend(park_nested_duplicates(root, apply, &stamp, &holds));
+    receipt.extend(
+        "cache-class",
+        crate::state_layout_class::cache_pass(root, &stamp, apply, &holds),
     );
-    let park_base = root
-        .join("backups")
-        .join("state-root-migration")
-        .join(stamp);
-    let mut moved = 0usize;
-    let mut parked = 0usize;
-    let mut held = 0usize;
-    for child in children.flatten() {
-        let name = child.file_name().to_string_lossy().into_owned();
-        let from = child.path();
-        let dest = cache_dir.join(&name);
-        let (status, booked) = move_cache_child(&name, &from, &dest, &park_base, &cache_dir, apply);
-        match booked {
-            CacheBook::Moved => moved += 1,
-            CacheBook::Parked => parked += 1,
-            CacheBook::Held => held += 1,
-            CacheBook::None => {}
-        }
-        out.push((name, status));
-    }
-    if apply && held == 0 {
-        let _ = std::fs::create_dir_all(marker.parent().unwrap_or(root));
-        let _ = std::fs::write(
-            &marker,
-            format!("{{\"migrated_at\": \"{stamp}\", \"moved\": {moved}, \"parked\": {parked}}}\n"),
-        );
-    }
-    out
-}
-
-/// The logs family: `<state>/logs` moves whole to `state_home()/logs`,
-/// then the legacy spelling becomes a symlink to the new home. The append
-/// fds holding launchd log rows keep writing the renamed inode, and the
-/// writers that spell `<state>/logs` directly keep working through the
-/// link, so no call site rewires. Idempotent on the symlink itself; the
-/// stamp file records the home for `doctor disk`. A destination that
-/// already holds content parks the legacy copy under the stamp's backup
-/// dir, the same conflict rule the cache children follow.
-fn move_logs_class(root: &Path, stamp: &str, apply: bool) -> Vec<(String, Status)> {
-    let mut out = Vec::new();
-    let source = root.join("logs");
-    let Ok(meta) = std::fs::symlink_metadata(&source) else {
-        return out;
-    };
-    if meta.file_type().is_symlink() {
-        return out;
-    }
-    let label = String::from("logs");
-    let dest_root = crate::paths_cli::state_home(
-        &std::env::current_dir().unwrap_or_else(|_| root.to_path_buf()),
+    receipt.extend(
+        "logs-class",
+        crate::state_layout_class::logs_pass(root, &stamp, apply, &holds),
     );
-    let dest = dest_root.join("logs");
-    if !apply {
-        out.push((
-            label,
-            Status::Pending("would move to the state home".to_string()),
-        ));
-        return out;
-    }
-    if std::fs::create_dir_all(&dest_root).is_err() {
-        out.push((
-            label,
-            Status::Refused("state-home-create-failed".to_string()),
-        ));
-        return out;
-    }
-    if dest.exists() {
-        let park = root
-            .join("backups")
-            .join("state-root-migration")
-            .join(stamp)
-            .join("logs");
-        if std::fs::create_dir_all(&park).is_ok() && move_dir(&source, &park) {
-            out.push((
-                label.clone(),
-                Status::Refused(format!(
-                    "destination held content; parked into {}",
-                    park.display()
-                )),
-            ));
-        } else {
-            out.push((label, Status::Refused("logs-park-failed".to_string())));
-            return out;
-        }
-    } else if !move_dir(&source, &dest) {
-        out.push((label, Status::Refused("logs-move-failed".to_string())));
-        return out;
-    } else {
-        out.push((label.clone(), Status::Moved));
-    }
-    // The legacy spelling keeps resolving for unrewired writers.
-    if std::os::unix::fs::symlink(&dest, &source).is_ok() {
-        let marker = root.join("state/logs-home-migration.json");
-        let _ = std::fs::create_dir_all(marker.parent().unwrap_or(root));
-        let _ = std::fs::write(
-            &marker,
-            format!(
-                "{{\"migrated_at\": \"{stamp}\", \"logs_home\": \"{}\"}}\n",
-                dest.display()
-            ),
-        );
-    } else {
-        out.push((label, Status::Refused("logs-symlink-failed".to_string())));
-    }
-    out
-}
-
-/// Newest mtime within `depth` levels of `dir`.
-fn newest_mtime_within(dir: &Path, depth: u32) -> Option<std::time::SystemTime> {
-    let meta = std::fs::symlink_metadata(dir).ok()?;
-    let mut acc = meta.modified().ok();
-    if depth > 0 {
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                if let Some(t) = newest_mtime_within(&entry.path(), depth - 1) {
-                    acc = match acc {
-                        Some(cur) if cur >= t => Some(cur),
-                        _ => Some(t),
-                    };
-                }
-            }
-        }
-    }
-    acc
-}
-
-/// Rename `from` to `dest`; across devices, copy the tree then remove the
-/// source. Returns false when either leg fails.
-fn move_dir(from: &Path, dest: &Path) -> bool {
-    if std::fs::rename(from, dest).is_ok() {
-        return true;
-    }
-    if copy_dir(from, dest) {
-        return std::fs::remove_dir_all(from).is_ok();
-    }
-    false
-}
-
-fn copy_dir(from: &Path, dest: &Path) -> bool {
-    if std::fs::create_dir_all(dest).is_err() {
-        return false;
-    }
-    let Ok(entries) = std::fs::read_dir(from) else {
-        return false;
-    };
-    for entry in entries.flatten() {
-        let target = dest.join(entry.file_name());
-        let path = entry.path();
-        let ok = if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-            copy_dir(&path, &target)
-        } else {
-            std::fs::copy(&path, &target).is_ok()
-        };
-        if !ok {
-            return false;
-        }
-    }
-    true
+    receipt
 }
 
 /// The per-row pass over any table: the shipped rows for `migrate`, a
 /// synthetic table for the tests. Glob and plain park rows need the state
 /// root's own child scan; everything else dispatches on kind.
 fn migrate_rows(root: &Path, table: &[Row], apply: bool, stamp: &str) -> Vec<Entry> {
+    let holds = match Holds::load(root) {
+        Ok(holds) => holds,
+        Err(e) => return vec![holds_unreadable(&e)],
+    };
     let mut out = Vec::new();
     for row in table {
+        if row_held(root, row, &holds) {
+            out.push(Entry {
+                legacy: row.legacy.to_string(),
+                status: Status::Held,
+            });
+            continue;
+        }
         match row.kind {
             // Glob rows: every root entry the pattern matches parks.
             Kind::Park if row.legacy.contains('*') => {
@@ -786,7 +614,9 @@ fn migrate_rows(root: &Path, table: &[Row], apply: bool, stamp: &str) -> Vec<Ent
                     continue;
                 }
                 for name in names {
-                    let status = if apply {
+                    let status = if holds.holds(&name) {
+                        Status::Held
+                    } else if apply {
                         park_entry(root, &stamp, &name)
                     } else {
                         Status::Pending("park (dry run)".to_string())
@@ -822,6 +652,16 @@ fn migrate_rows(root: &Path, table: &[Row], apply: bool, stamp: &str) -> Vec<Ent
     out
 }
 
+/// A held row, or a lock or sidecar whose store is held, with work at the
+/// legacy path.
+fn row_held(root: &Path, row: &Row, holds: &Holds) -> bool {
+    let base = [".lock", "-wal", "-shm"]
+        .iter()
+        .find_map(|suffix| row.legacy.strip_suffix(suffix));
+    let held = holds.holds(&row.legacy) || base.is_some_and(|base| holds.holds(base));
+    held && occupied(&root.join(&row.legacy))
+}
+
 fn migrate_entry(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
     if row.kind == Kind::Lock {
         return migrate_lock(root, row, apply, stamp);
@@ -830,7 +670,7 @@ fn migrate_entry(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
         return migrate_dir(root, row, apply, stamp);
     }
     let legacy = root.join(&row.legacy);
-    let new = root.join(&row.new);
+    let new = home_of(root, &row.new);
     let legacy_exists = legacy.exists();
     let new_exists = new.exists();
     if !legacy_exists && !new_exists {
@@ -861,14 +701,11 @@ fn migrate_entry(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
         Kind::Marker if legacy_exists && new_exists => park_file(root, stamp, &legacy),
         // A page is a render the daemon rebuilds, so the stale copy goes.
         // Parking it filled the backups pile with one page per pass.
-        Kind::Page if legacy_exists && new_exists => drop_page(&legacy),
+        Kind::Page if legacy_exists && new_exists => drop_page(root, stamp, &legacy),
         Kind::Overwrite if legacy_exists && new_exists => {
             let legacy_newer = mtime_of(&legacy) > mtime_of(&new);
             if legacy_newer {
-                if std::fs::rename(&legacy, &new).is_err() {
-                    return Status::Refused("rename over new failed".to_string());
-                }
-                Status::Moved
+                replace_older(root, stamp, &legacy, &new)
             } else {
                 park_file(root, stamp, &legacy)
             }
@@ -877,12 +714,15 @@ fn migrate_entry(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
         // append merge must copy bytes, never re-open through the old name.
         Kind::Append if legacy_exists && new_exists => match append_merge(&legacy, &new) {
             Ok(()) => match park_file(root, stamp, &legacy) {
-                Status::Parked => Status::Merged,
+                Status::Parked => {
+                    crate::state_layout_undo::record(root, stamp, Action::Merged, &legacy, &new);
+                    Status::Merged
+                }
                 other => other,
             },
             Err(e) => Status::Refused(format!("merge failed: {e}")),
         },
-        _ => match move_entry(&legacy, &new) {
+        _ => match crate::state_layout_undo::carry(root, stamp, &legacy, &new) {
             Ok(()) => Status::Moved,
             Err(e) => Status::Refused(format!("refused: {e}")),
         },
@@ -937,7 +777,7 @@ fn migrate_lock(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
             if rc != 0 {
                 return Status::Pending("lock held".to_string());
             }
-            match std::fs::remove_file(&legacy) {
+            match crate::state_layout_undo::remove_file(root, stamp, &legacy) {
                 Ok(()) => Status::Deleted,
                 Err(e) => Status::Refused(format!("refused: {e}")),
             }
@@ -959,8 +799,8 @@ fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
     if row.owner == Owner::Mux {
         return Status::Pending("owner mux (the mux server folds it at its start)".to_string());
     }
-    let legacy = root.join(&row.legacy);
-    let new = root.join(&row.new);
+    let legacy = home_of(root, &row.legacy);
+    let new = home_of(root, &row.new);
     if !legacy.exists() {
         return if new.exists() {
             Status::Moved
@@ -997,7 +837,7 @@ fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
         if !emptied {
             return Status::Pending("drains: recorded paths stay until pruned".to_string());
         }
-        return match std::fs::remove_dir(&legacy) {
+        return match crate::state_layout_undo::remove_shell(root, stamp, &legacy) {
             Ok(()) => Status::Moved,
             Err(e) => Status::Refused(format!("refused: {e}")),
         };
@@ -1017,7 +857,7 @@ fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
     // every claim-aux child is a dir, so the lock probe never sees a ticket.
     // The fold waits until every child dir is empty; the next daemon-start
     // pass retries.
-    if row.legacy == "claim-aux" && !lane_dirs_empty(&legacy) {
+    if name == "claim-aux" && !lane_dirs_empty(&legacy) {
         return Status::Pending("a waiter holds a ticket".to_string());
     }
     // The probe fds stay open through the fold: a lock another writer takes
@@ -1035,20 +875,12 @@ fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
     // row for this pass with place() still answering the legacy dir. Only
     // the destination's parent is created first; the rename carries every
     // child in one step.
-    if row.legacy == "claim-aux" || row.legacy == "locks" || merges {
-        if row.legacy == "claim-aux" && !lane_dirs_empty(&legacy) {
+    if name == "claim-aux" || name == "locks" || merges {
+        if name == "claim-aux" && !lane_dirs_empty(&legacy) {
             return Status::Pending("a waiter holds a ticket".to_string());
         }
         if !new.exists() {
-            match new.parent() {
-                Some(parent) => {
-                    if let Err(e) = std::fs::create_dir_all(parent) {
-                        return Status::Refused(format!("refused: {e}"));
-                    }
-                }
-                None => return Status::Refused("refused: no destination parent".to_string()),
-            }
-            return match std::fs::rename(&legacy, &new) {
+            return match crate::state_layout_undo::carry(root, stamp, &legacy, &new) {
                 Ok(()) => Status::Moved,
                 Err(e) => Status::Refused(format!("refused: {e}")),
             };
@@ -1066,38 +898,49 @@ fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
             };
         }
     }
-    if let Err(e) = std::fs::create_dir_all(&new) {
+    fold_dir_children(root, row, stamp, &legacy, &new)
+}
+
+/// The per-child fold. A clash parks, but a cache clash first waits until
+/// the legacy copy's writer has been quiet.
+fn fold_dir_children(root: &Path, row: &Row, stamp: &str, legacy: &Path, new: &Path) -> Status {
+    if let Err(e) = ensure_dir_like(legacy, new) {
         return Status::Refused(format!("refused: {e}"));
     }
-    let mut moved_any = false;
-    if let Ok(children) = std::fs::read_dir(&legacy) {
-        for child in children.flatten() {
-            let target = new.join(child.file_name());
-            if target.exists() {
-                let status = if is_page_home(root, &target) {
-                    drop_page(&child.path())
-                } else {
-                    park_file(root, stamp, &child.path())
-                };
-                if matches!(status, Status::Parked | Status::Deleted) {
-                    moved_any = true;
-                }
-            } else if std::fs::rename(child.path(), &target).is_ok() {
-                moved_any = true;
+    let children = match std::fs::read_dir(legacy) {
+        Ok(children) => children,
+        Err(e) => return Status::Refused(format!("refused: {e}")),
+    };
+    let cache = row.new.starts_with("cache/") && crate::state_layout_home::is_default_root(root);
+    let (mut moved, mut waiting, mut refused) = (false, None, None);
+    for child in children.flatten() {
+        let from = child.path();
+        let target = new.join(child.file_name());
+        let status = if !occupied(&target) {
+            match crate::state_layout_undo::carry(root, stamp, &from, &target) {
+                Ok(()) => Status::Moved,
+                Err(e) => Status::Refused(format!("refused: {e}")),
             }
+        } else if is_page_home(root, &target) {
+            drop_page(root, stamp, &from)
+        } else if let Some(wait) = cache
+            .then(|| crate::state_layout_class::waits_for_quiet(&from))
+            .flatten()
+        {
+            wait
+        } else {
+            park_file(root, stamp, &from)
+        };
+        match status {
+            Status::Pending(_) => waiting = Some(status),
+            Status::Refused(_) => refused = Some(status),
+            _ => moved = true,
         }
     }
-    let emptied = std::fs::read_dir(&legacy)
-        .map(|mut d| d.next().is_none())
-        .unwrap_or(false);
-    if emptied {
-        std::fs::remove_dir(&legacy).ok();
-    }
-    if moved_any {
-        Status::Moved
-    } else {
-        Status::Absent
-    }
+    crate::state_layout_undo::remove_if_empty(root, stamp, legacy);
+    refused
+        .or(waiting)
+        .unwrap_or(if moved { Status::Moved } else { Status::Absent })
 }
 
 /// Whether `path` is the home a page row names.
@@ -1105,12 +948,12 @@ fn is_page_home(root: &Path, path: &Path) -> bool {
     path.file_name()
         .and_then(|n| n.to_str())
         .and_then(find)
-        .is_some_and(|row| row.kind == Kind::Page && root.join(&row.new) == path)
+        .is_some_and(|row| row.kind == Kind::Page && home_of(root, &row.new) == path)
 }
 
 /// Remove a stale page copy whose home already holds a render.
-fn drop_page(legacy: &Path) -> Status {
-    match std::fs::remove_file(legacy) {
+fn drop_page(root: &Path, stamp: &str, legacy: &Path) -> Status {
+    match crate::state_layout_undo::remove_file(root, stamp, legacy) {
         Ok(()) => Status::Deleted,
         Err(e) => Status::Refused(format!("refused: {e}")),
     }
@@ -1177,13 +1020,15 @@ fn lane_dirs_empty(dir: &Path) -> bool {
 /// migration writes that folder live (its receipt path derives from the
 /// agents home's parent), so folding it into `migrations/` fights the
 /// writer and re-fills every pass.
-fn park_nested_duplicates(root: &Path, apply: bool, stamp: &str) -> Vec<Entry> {
+fn park_nested_duplicates(root: &Path, apply: bool, stamp: &str, holds: &Holds) -> Vec<Entry> {
     let mut out = Vec::new();
     let backups = root.join("backups");
     if backups.is_dir() {
         for name in glob_matches(&backups, "graph.db.*") {
             let path = backups.join(&name);
-            let status = if apply {
+            let status = if holds.holds(&format!("backups/{name}")) {
+                Status::Held
+            } else if apply {
                 park_file(root, stamp, &path)
             } else {
                 Status::Pending("park backups rotation (dry run)".to_string())
@@ -1197,11 +1042,24 @@ fn park_nested_duplicates(root: &Path, apply: bool, stamp: &str) -> Vec<Entry> {
     out
 }
 
-fn move_entry(legacy: &Path, new: &Path) -> std::io::Result<()> {
-    if let Some(parent) = new.parent() {
-        std::fs::create_dir_all(parent)?;
+/// The legacy copy is newer: the older one keeps a name in the stamp, then
+/// the rename replaces it, so readers never see the path empty.
+fn replace_older(root: &Path, stamp: &str, legacy: &Path, new: &Path) -> Status {
+    let dir = backup_dir(root, stamp);
+    let Some(name) = new.file_name() else {
+        return Status::Refused("refused: no file name".to_string());
+    };
+    let parked = park_target(&dir, name);
+    let replaced = std::fs::create_dir_all(&dir)
+        .and_then(|()| std::fs::hard_link(new, &parked))
+        .and_then(|()| std::fs::rename(legacy, new));
+    if let Err(e) = replaced {
+        // Either copy of the older bytes is whole; the extra name is harmless.
+        return Status::Refused(format!("rename over new failed: {e}"));
     }
-    std::fs::rename(legacy, new)
+    crate::state_layout_undo::record(root, stamp, Action::Parked, new, &parked);
+    crate::state_layout_undo::record(root, stamp, Action::Moved, legacy, new);
+    Status::Moved
 }
 
 /// Legacy bytes then new bytes, through a tmp file in the new folder, fsync,
@@ -1348,7 +1206,7 @@ fn quiet_tree(path: &Path, now: std::time::SystemTime) -> Result<bool, &'static 
 }
 
 /// The run's backup folder: `backups/state-root-migration/<utc stamp>/`.
-fn backup_dir(root: &Path, stamp: &str) -> PathBuf {
+pub(crate) fn backup_dir(root: &Path, stamp: &str) -> PathBuf {
     root.join("backups")
         .join("state-root-migration")
         .join(stamp)
@@ -1370,28 +1228,35 @@ pub(crate) fn park_file_at(root: &Path, stamp: &str, legacy: &Path) -> Result<Pa
     let Some(name) = legacy.file_name() else {
         return Err("refused: no file name".to_string());
     };
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        return Err(format!("refused: {e}"));
+    let target = park_target(&dir, name);
+    match move_path(legacy, &target) {
+        Ok(()) => {
+            crate::state_layout_undo::record(root, stamp, Action::Parked, legacy, &target);
+            Ok(target)
+        }
+        Err(e) => {
+            // A failed park leaves no empty stamp behind.
+            std::fs::remove_dir(&dir).ok();
+            Err(format!("refused: {e}"))
+        }
     }
+}
+
+/// A free name in the stamp. The manifest's own name is never free.
+fn park_target(dir: &Path, name: &std::ffi::OsStr) -> PathBuf {
     let mut target = dir.join(name);
     let mut n = 0;
-    while target.exists() {
+    while occupied(&target) || target == dir.join(MANIFEST_NAME) {
         n += 1;
         let mut os = name.to_os_string();
         os.push(format!(".{n}"));
         target = dir.join(os);
     }
-    std::fs::rename(legacy, &target)
-        .map(|()| target)
-        .map_err(|e| {
-            // A failed park leaves no empty stamp behind.
-            std::fs::remove_dir(&dir).ok();
-            format!("refused: {e}")
-        })
+    target
 }
 
 /// [`park_file_at`] as a [`Status`], for callers that only report the fold.
-fn park_file(root: &Path, stamp: &str, legacy: &Path) -> Status {
+pub(crate) fn park_file(root: &Path, stamp: &str, legacy: &Path) -> Status {
     match park_file_at(root, stamp, legacy) {
         Ok(_) => Status::Parked,
         Err(e) => Status::Refused(e),
@@ -1422,6 +1287,18 @@ fn glob_matches(root: &Path, pattern: &str) -> Vec<String> {
     }
     out.sort();
     out
+}
+
+/// A stamp no earlier pass used: a reverse by stamp must name one pass.
+fn fresh_stamp(root: &Path) -> String {
+    let base = utc_stamp();
+    let mut stamp = base.clone();
+    let mut n = 1;
+    while backup_dir(root, &stamp).exists() {
+        n += 1;
+        stamp = format!("{base}-{n}");
+    }
+    stamp
 }
 
 fn utc_stamp() -> String {
@@ -1468,59 +1345,133 @@ pub fn run_at_daemon_start(home: &crate::paths::AgentsHome) {
     }
 }
 
-/// The fold run backwards for the named folders: each `dir` row's ends swap
-/// and the same mover (merge lane included) carries the folder home. Names
-/// the table does not carry as a moved `dir` row are an error, so a typo
-/// never reads as a clean rollback.
+/// The rollback. A stamp restores what that pass recorded. A folder name
+/// swaps its `dir` row's ends and the same mover (merge lane included)
+/// carries it home. Both record a hold. A name that is neither is an error,
+/// so a typo never reads as a clean rollback.
 fn migrate_reverse(root: &Path, names: &[String], apply: bool) -> Result<Receipt, String> {
-    let stamp = utc_stamp();
-    let mut receipt = Receipt::default();
+    let _pass = if apply {
+        crate::state_layout_undo::lock_root(root)
+    } else {
+        None
+    };
+    let mut folders = Vec::new();
+    let mut stamps = Vec::new();
     for name in names {
+        if crate::state_layout_undo::is_stamp(root, name) {
+            stamps.push(name);
+            continue;
+        }
         let row = find(name)
             .filter(|r| r.kind == Kind::Dir && r.legacy != r.new)
-            .ok_or_else(|| format!("no moved dir row named {name}"))?;
-        let swapped = Row {
-            legacy: row.new.clone(),
-            new: row.legacy.clone(),
-            ..row.clone()
-        };
-        let status = migrate_dir(root, &swapped, apply, &stamp);
-        if let Some(parent) = root.join(&swapped.legacy).parent() {
-            if parent != root && parent.parent() != Some(root) {
-                std::fs::remove_dir(parent).ok();
-            }
-        }
+            .ok_or_else(|| format!("no stamp with a manifest and no moved dir row named {name}"))?;
+        folders.push(row);
+    }
+    let mut receipt = Receipt::default();
+    for from_stamp in stamps {
+        let stamp = fresh_stamp(root);
+        let part = crate::state_layout_undo::reverse_stamp(root, from_stamp, &stamp, apply)
+            .map_err(|e| e.to_string())?;
+        receipt.entries.extend(part.entries);
+    }
+    for row in folders {
+        let stamp = fresh_stamp(root);
         receipt.entries.push(Entry {
-            legacy: swapped.legacy,
-            status,
+            legacy: row.new.clone(),
+            status: reverse_folder(root, row, &stamp, apply),
         });
     }
     Ok(receipt)
 }
 
-/// `fno-agent state migrate [--apply] [--reverse <name>...] [--json|-J]`:
-/// dry run by default. Resolves the state root the way every other
-/// state-root reader does.
-pub fn run_migrate_cli(args: &[String]) -> i32 {
-    let mut apply = false;
-    let mut reverse: Option<Vec<String>> = None;
-    let json = crate::json_output::requested(args);
-    for arg in args {
-        match arg.as_str() {
-            "--apply" => apply = true,
-            "--reverse" => reverse = Some(Vec::new()),
-            other if crate::json_output::is_flag(other) => {}
-            other if reverse.is_some() && !other.starts_with('-') => {
-                if let Some(names) = reverse.as_mut() {
-                    names.push(other.to_string());
-                }
-            }
-            other => {
-                eprintln!("fno-agent state migrate: unknown arg: {other}");
-                return 2;
+/// One folder home, held before it moves.
+fn reverse_folder(root: &Path, row: &Row, stamp: &str, apply: bool) -> Status {
+    let swapped = Row {
+        legacy: row.new.clone(),
+        new: row.legacy.clone(),
+        ..row.clone()
+    };
+    let now = home_of(root, &row.new);
+    let home = root.join(&row.legacy);
+    if !MERGE_FOLDERS.contains(&row.legacy.as_str()) {
+        for child in std::fs::read_dir(&now).into_iter().flatten().flatten() {
+            let back = home.join(child.file_name());
+            if occupied(&back) {
+                let clash = crate::state_layout_move::MoveError::Occupied {
+                    from: child.path(),
+                    to: back,
+                };
+                return Status::Refused(format!("a reverse never overwrites: {clash}"));
             }
         }
     }
+    if !apply {
+        return migrate_dir(root, &swapped, false, stamp);
+    }
+    let held = Holds::load(root).and_then(|mut holds| {
+        let added = holds.add(root, [row.legacy.clone()])?;
+        Ok((holds, added))
+    });
+    let (mut holds, added) = match held {
+        Ok(held) => held,
+        Err(e) => return Status::Refused(format!("the hold was not recorded: {e}")),
+    };
+    let status = migrate_dir(root, &swapped, true, stamp);
+    if matches!(status, Status::Pending(_)) && !added.is_empty() {
+        if let Err(e) = holds.drop_names(root, &added) {
+            return Status::Refused(format!("nothing moved and the hold stays: {e}"));
+        }
+        return status;
+    }
+    if let Some(parent) = now.parent() {
+        if parent.starts_with(root) && parent != root && parent.parent() != Some(root) {
+            crate::state_layout_undo::remove_if_empty(root, stamp, parent);
+        }
+    }
+    status
+}
+
+/// What one `state migrate` call asks for.
+enum Ask {
+    Forward,
+    Release(Vec<String>),
+    Reverse(Vec<String>),
+}
+
+fn parse_ask(args: &[String]) -> Result<(bool, Ask), &'static str> {
+    let (mut apply, mut reverse) = (false, false);
+    let mut names = Vec::new();
+    for arg in args {
+        match arg.as_str() {
+            "--apply" => apply = true,
+            "--reverse" => reverse = true,
+            other if crate::json_output::is_flag(other) => {}
+            other if other.starts_with('-') => return Err("unknown flag"),
+            other => names.push(other.to_string()),
+        }
+    }
+    let ask = match (reverse, names.is_empty()) {
+        (true, true) => return Err("--reverse needs at least one folder name or stamp"),
+        (true, false) => Ask::Reverse(names),
+        (false, true) => Ask::Forward,
+        (false, false) if apply => Ask::Release(names),
+        (false, false) => return Err("a name clears a hold, and that needs --apply"),
+    };
+    Ok((apply, ask))
+}
+
+/// `fno-agent state migrate [--apply [<held name>...]] [--reverse
+/// <name|stamp>...] [--json|-J]`: dry run by default, and a dry run writes
+/// nothing. A name after `--apply` clears that hold. Resolves the state root
+/// the way every other state-root reader does.
+pub fn run_migrate_cli(args: &[String]) -> i32 {
+    let (apply, ask) = match parse_ask(args) {
+        Ok(asked) => asked,
+        Err(why) => {
+            eprintln!("fno-agent state migrate: {why}: {}", args.join(" "));
+            return 2;
+        }
+    };
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let root = crate::agents_config::state_dir(&cwd).unwrap_or_else(|| {
         let home = std::env::var_os("HOME")
@@ -1528,20 +1479,32 @@ pub fn run_migrate_cli(args: &[String]) -> i32 {
             .unwrap_or_default();
         home.join(".fno")
     });
-    let receipt = match &reverse {
-        Some(names) if names.is_empty() => {
-            eprintln!("fno-agent state migrate: --reverse needs at least one folder name");
-            return 2;
-        }
-        Some(names) => match migrate_reverse(&root, names, apply) {
-            Ok(r) => r,
+    let receipt = match ask {
+        Ask::Forward => migrate(&root, apply),
+        Ask::Release(names) => match crate::state_layout_undo::release(&root, &names) {
+            Ok(()) => migrate(&root, apply),
             Err(e) => {
                 eprintln!("fno-agent state migrate: {e}");
                 return 2;
             }
         },
-        None => migrate(&root, apply),
+        Ask::Reverse(names) => match migrate_reverse(&root, &names, apply) {
+            Ok(receipt) => receipt,
+            Err(e) => {
+                eprintln!("fno-agent state migrate: {e}");
+                return 2;
+            }
+        },
     };
+    print_receipt(&root, &receipt, apply, crate::json_output::requested(args));
+    if receipt.refused_count() > 0 {
+        1
+    } else {
+        0
+    }
+}
+
+fn print_receipt(root: &Path, receipt: &Receipt, apply: bool, json: bool) {
     if json {
         let entries: Vec<String> = receipt
             .entries
@@ -1565,27 +1528,19 @@ pub fn run_migrate_cli(args: &[String]) -> i32 {
             receipt.pending_count(),
             entries.join(",")
         );
-    } else {
-        for e in &receipt.entries {
-            match e.status.detail() {
-                Some(d) => println!("  {}: {} ({})", e.status.word(), e.legacy, d),
-                None if matches!(e.status, Status::Pending(_)) => {
-                    println!("  pending: {}", e.legacy)
-                }
-                None => println!("  {}: {}", e.status.word(), e.legacy),
-            }
+        return;
+    }
+    for e in &receipt.entries {
+        match e.status.detail() {
+            Some(d) => println!("  {}: {} ({})", e.status.word(), e.legacy, d),
+            None => println!("  {}: {}", e.status.word(), e.legacy),
         }
-        println!(
-            "state migrate ({}): {}",
-            if apply { "applied" } else { "dry run" },
-            receipt.summary()
-        );
     }
-    if receipt.refused_count() > 0 {
-        1
-    } else {
-        0
-    }
+    println!(
+        "state migrate ({}): {}",
+        if apply { "applied" } else { "dry run" },
+        receipt.summary()
+    );
 }
 
 fn json_escape(s: &str) -> String {
@@ -2111,7 +2066,7 @@ mod tests {
         )
         .unwrap();
         drop(f);
-        let swept = crate::state_layout_sqlite::verify_sweep(&root, "ow-later");
+        let swept = crate::state_layout_sqlite::verify_sweep(&root, "ow-later", true);
         assert_eq!(swept.len(), 1, "{swept:?}");
         assert!(matches!(swept[0].1, Status::Moved), "{swept:?}");
         // Branch: a reappeared legacy event-family store imports by
@@ -2410,6 +2365,14 @@ mod tests {
         assert_eq!(lines(&root.join("bus/messages.jsonl")), ["a"]);
         assert!(!root.join("db/mail").exists());
         assert!(migrate_reverse(&root, &["nope".to_string()], true).is_err());
+        // Outside the message folders a reverse never overwrites.
+        std::fs::create_dir_all(root.join("flight")).unwrap();
+        std::fs::create_dir_all(root.join("state/flight")).unwrap();
+        std::fs::write(root.join("flight/a"), "legacy").unwrap();
+        std::fs::write(root.join("state/flight/a"), "new").unwrap();
+        let out = migrate_reverse(&root, &["flight".to_string()], true).unwrap();
+        assert!(matches!(out.entries[0].status, Status::Refused(_)));
+        assert_eq!(std::fs::read(root.join("state/flight/a")).unwrap(), b"new");
         clean(&root);
     }
 
@@ -2422,41 +2385,382 @@ mod tests {
         );
     }
 
+    fn age_tree_for_class(path: &Path) {
+        let Ok(meta) = std::fs::symlink_metadata(path) else {
+            return;
+        };
+        if meta.file_type().is_symlink() {
+            return;
+        }
+        if meta.is_dir() {
+            for child in std::fs::read_dir(path).unwrap().flatten() {
+                age_tree_for_class(&child.path());
+            }
+        }
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(8 * 3600);
+        std::fs::File::open(path)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+    }
+
+    fn put(path: &Path, bytes: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    /// One machine in a temp dir: a HOME and both class homes, all pinned.
+    struct Machine {
+        base: PathBuf,
+        root: PathBuf,
+        cache: PathBuf,
+        state: PathBuf,
+        _env: Vec<crate::claims::EnvVarGuard>,
+    }
+
+    impl Machine {
+        /// Call with the env lock held.
+        fn new(tag: &str) -> Self {
+            use crate::claims::EnvVarGuard;
+            let base = tmp_root(tag).canonicalize().unwrap();
+            let root = base.join("home/.fno");
+            let cache = base.join("cache-home");
+            let state = base.join("state-home");
+            let config = base.join("config.toml");
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(&config, "").unwrap();
+            let set = |key, value: &Path| EnvVarGuard::set(key, value.to_str().unwrap());
+            let env = vec![
+                set("HOME", &base.join("home")),
+                set("FNO_STATE_DIR", &root),
+                set("FNO_AGENT_HOME", &root.join("agents")),
+                set("FNO_CONFIG", &config),
+                set("FNO_CACHE_HOME", &cache),
+                set("FNO_STATE_HOME", &state),
+                EnvVarGuard::unset("FNO_PR_STATUS_CACHE_DIR"),
+                EnvVarGuard::unset("FNO_GH_FACTS_DIR"),
+                EnvVarGuard::unset("FNO_PLANS_DIRS_CACHE_DIR"),
+            ];
+            Self {
+                base,
+                root,
+                cache,
+                state,
+                _env: env,
+            }
+        }
+
+        fn stamps(&self) -> Vec<String> {
+            let mut names: Vec<String> =
+                std::fs::read_dir(self.root.join("backups/state-root-migration"))
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect();
+            names.sort();
+            names
+        }
+    }
+
+    impl Drop for Machine {
+        fn drop(&mut self) {
+            clean(&self.base);
+        }
+    }
+
+    /// Every path below `root` with its mode, mtime and bytes.
+    fn snapshot(root: &Path) -> Vec<(PathBuf, u32, std::time::SystemTime, Vec<u8>)> {
+        use std::os::unix::fs::PermissionsExt;
+        let mut out = Vec::new();
+        let mut todo = vec![root.to_path_buf()];
+        while let Some(path) = todo.pop() {
+            let Ok(meta) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
+            let mut bytes = Vec::new();
+            if meta.is_dir() {
+                todo.extend(
+                    std::fs::read_dir(&path)
+                        .unwrap()
+                        .flatten()
+                        .map(|e| e.path()),
+                );
+            } else if meta.is_file() {
+                bytes = std::fs::read(&path).unwrap();
+            }
+            let modified = meta.modified().unwrap();
+            out.push((path, meta.permissions().mode(), modified, bytes));
+        }
+        out.sort();
+        out
+    }
+
     #[test]
-    fn logs_class_moves_to_the_state_home_and_leaves_a_link() {
-        let _guard = crate::claims::test_env_lock();
-        let root = tmp_root("logs-class");
-        let home = tmp_root("logs-class-home");
-        std::fs::create_dir_all(root.join("logs")).unwrap();
-        std::fs::write(root.join("logs/launchd.out"), "rows\n").unwrap();
-        std::env::set_var("FNO_STATE_HOME", &home);
-        let receipt = migrate(&root, true);
-        std::env::remove_var("FNO_STATE_HOME");
+    fn cache_class_moves_once_and_every_writer_lands_in_the_cache_home() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let m = Machine::new("class-cache");
+        let legacy = m.root.join("cache");
+        let row = r#"{"row":1}"#;
+        put(&legacy.join("gh-facts/merged/o--r-pr1.json"), row);
+        put(&legacy.join("pr-status/a.json"), "{}");
+        put(&legacy.join("corrections/cursors.json"), "{}");
+        put(&legacy.join("lead-drain.json"), "{}");
+        age_tree_for_class(&legacy);
+
+        // Until the move, a writer's home read falls back to the legacy row.
+        let facts = crate::gh_cache::rows_root(&m.base).unwrap();
+        assert_eq!(facts, m.cache.join("gh-facts"));
+        assert_eq!(
+            crate::gh_cache::read_row(&facts, "merged", "o/r", Some(1), None, 0.0),
+            serde_json::json!({"row": {"row": 1}})
+        );
+
+        migrate(&m.root, true);
+        assert!(!legacy.exists(), "the cache folder drained");
+        for child in [
+            "gh-facts/merged/o--r-pr1.json",
+            "pr-status/a.json",
+            "corrections/cursors.json",
+            "lead-drain.json",
+        ] {
+            assert!(m.cache.join(child).is_file(), "{child} lives in the home");
+        }
+
+        let cwd = &m.base;
+        let writers = [
+            crate::gh_cache::rows_root(cwd).unwrap().join("row.json"),
+            crate::agents_config::pr_status_cache_dir(cwd)
+                .unwrap()
+                .join("b.json"),
+            crate::pr_admission::pr_origin_cache_dir(cwd)
+                .unwrap()
+                .join("o.json"),
+            crate::pr_steward::state_dir(cwd).unwrap().join("s.json"),
+            crate::lead_ops::drain_cache_file(cwd).unwrap(),
+            crate::plans_dirs::cache_path(cwd).unwrap(),
+            crate::accounts::benchmarks::snapshot_path(cwd).unwrap(),
+            crate::model_price::cache_path(&m.root),
+            crate::correction_fold::write_path(&m.root),
+            place_new(&m.root, "graph.html"),
+            place_dir(&m.root, "context-cache").unwrap().join("c.json"),
+            place_dir(&m.root, "cargo-build").unwrap().join("c.json"),
+            place_dir(&m.root, "fleet").unwrap().join("activity.json"),
+        ];
+        for path in &writers {
+            assert!(
+                path.starts_with(&m.cache),
+                "{} left the home",
+                path.display()
+            );
+            put(path, "{}");
+        }
+        assert_eq!(
+            place_new(&m.root, "health-alerts.log"),
+            m.state.join("logs/health-alerts.log")
+        );
+        assert_eq!(
+            page_home(&m.root, &m.root.join("cache/pages/graph.html")),
+            Some(m.cache.join("pages/graph.html")),
+            "the legacy default spelling renders at the home"
+        );
+
+        let before = (m.stamps(), snapshot(&m.cache));
+        migrate(&m.root, true);
+        assert_eq!(
+            (m.stamps(), snapshot(&m.cache)),
+            before,
+            "a second pass moves and parks nothing"
+        );
+
+        // An old binary's fresh copy waits: it never parks under its writer.
+        put(&legacy.join("lead-drain.json"), "old binary");
+        let receipt = migrate(&m.root, true);
+        assert!(
+            receipt
+                .entries
+                .iter()
+                .any(|e| e.legacy.contains("lead-drain.json") && e.status.is_pending()),
+            "{receipt:?}"
+        );
+        assert_eq!(m.stamps(), before.0);
+        assert!(legacy.join("lead-drain.json").exists());
+    }
+
+    #[test]
+    fn a_failed_cross_volume_copy_leaves_the_source_whole_and_parks_nothing() {
+        use std::os::unix::fs::PermissionsExt;
+        // SAFETY: geteuid takes no argument and cannot fail.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let m = Machine::new("class-copy");
+        let source = m.root.join("cache/tree");
+        put(&source.join("a"), "A");
+        put(&source.join("nested/b"), "B");
+        std::os::unix::fs::symlink("a", source.join("link")).unwrap();
+        age_tree_for_class(&m.root.join("cache"));
+        let chmod = |name: &str, mode: u32| {
+            std::fs::set_permissions(source.join(name), std::fs::Permissions::from_mode(mode))
+                .unwrap()
+        };
+        chmod("a", 0o640);
+        chmod("nested/b", 0o000);
+        let _copy = crate::state_layout_move::ForceCopy::new();
+
+        for pass in 1..=2 {
+            let receipt = migrate(&m.root, true);
+            assert!(
+                receipt.entries.iter().any(|e| e.legacy.starts_with("tree")
+                    && matches!(e.status, Status::Refused(_))),
+                "pass {pass}: {receipt:?}"
+            );
+            assert_eq!(std::fs::read(source.join("a")).unwrap(), b"A");
+            assert!(
+                source.join("nested/b").exists(),
+                "pass {pass}: source whole"
+            );
+            assert!(
+                std::fs::read_dir(&m.cache).map_or(true, |mut d| d.next().is_none()),
+                "pass {pass}: no partial destination and no temp"
+            );
+            assert!(m.stamps().is_empty(), "pass {pass}: nothing parked");
+        }
+
+        chmod("nested/b", 0o600);
+        migrate(&m.root, true);
+        assert!(!source.exists(), "the whole copy removed its source");
+        let moved = m.cache.join("tree");
+        assert_eq!(std::fs::read(moved.join("nested/b")).unwrap(), b"B");
+        assert_eq!(
+            std::fs::read_link(moved.join("link")).unwrap(),
+            Path::new("a")
+        );
+        let mode = std::fs::metadata(moved.join("a"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o640, "the copy keeps the mode");
+    }
+
+    #[test]
+    fn class_passes_move_the_default_root_and_leave_another_root_alone() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let m = Machine::new("class-roots");
+        // A second root that shares HOME keeps cache and logs inside itself.
+        let other = m.base.join("home/.fno-second");
+        put(&other.join("logs/health-alerts.log"), "mine\n");
+        put(&other.join("cache/corrections/cursors.json"), "{}");
+        age_tree_for_class(&other);
+        migrate(&other, true);
+        assert!(
+            !m.cache.exists() && !m.state.exists(),
+            "no shared home changed"
+        );
+        assert_eq!(
+            std::fs::read_to_string(place(&other, "health-alerts.log")).unwrap(),
+            "mine\n"
+        );
+        assert_eq!(
+            place_in(&other, "corrections", "cursors.json"),
+            other.join("cache/corrections/cursors.json")
+        );
+        assert!(other.join("cache/corrections/cursors.json").is_file());
+
+        // The default root's logs move, and the legacy spelling stays a link.
+        put(&m.root.join("logs/launchd.out"), "rows\n");
+        // A new plist can write the home before this pass runs.
+        put(&m.state.join("logs/new.out"), "new\n");
+        let receipt = migrate(&m.root, true);
         let entry = receipt
             .entries
             .iter()
             .find(|e| e.legacy == "logs (logs-class)")
             .expect("logs entry in the receipt");
         assert!(matches!(entry.status, Status::Moved), "{:?}", entry.status);
-        assert_eq!(
-            std::fs::read_to_string(home.join("logs/launchd.out")).unwrap(),
-            "rows\n"
-        );
-        let meta = std::fs::symlink_metadata(root.join("logs")).unwrap();
+        let meta = std::fs::symlink_metadata(m.root.join("logs")).unwrap();
         assert!(meta.file_type().is_symlink(), "legacy spelling is a link");
-        // A writer spelling the legacy path keeps resolving through the link.
-        assert_eq!(
-            std::fs::read_to_string(root.join("logs/launchd.out")).unwrap(),
-            "rows\n"
-        );
-        assert!(root.join("state/logs-home-migration.json").exists());
-        // A second pass is a no-op: the symlink is the idempotence gate.
-        let again = migrate(&root, true);
+        for name in ["launchd.out", "new.out"] {
+            // A writer spelling the legacy path keeps resolving through the link.
+            assert!(m.root.join("logs").join(name).is_file(), "{name}");
+        }
+        let again = migrate(&m.root, true);
         assert!(again
             .entries
             .iter()
             .all(|e| e.legacy != "logs (logs-class)"));
-        clean(&root);
-        clean(&home);
+    }
+
+    #[test]
+    fn a_stamp_reverse_holds_and_every_dry_run_changes_no_byte() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let m = Machine::new("class-reverse");
+        let old = [
+            m.root.join("flight/a.json"),
+            m.root.join("notify-signals.json"),
+            m.root.join("ledger.md"),
+            m.root.join("cache/benchmarks.json"),
+            m.root.join("logs/launchd.out"),
+        ];
+        for path in &old {
+            put(path, "kept\n");
+        }
+        age_tree_for_class(&m.root.join("cache"));
+        // An aged verify record: the apply pass may clear it, a dry run may not.
+        let parked = m.root.join("backups/state-root-migration/old");
+        std::fs::create_dir_all(&parked).unwrap();
+        rusqlite::Connection::open(parked.join("events.db"))
+            .unwrap()
+            .execute_batch("CREATE TABLE t (a); INSERT INTO t VALUES (1);")
+            .unwrap();
+        put(&parked.join("verify.tsv"), "t\t1\t-\n");
+        age_tree_for_class(&parked.join("verify.tsv"));
+
+        let untouched = snapshot(&m.base);
+        migrate(&m.root, false);
+        assert_eq!(snapshot(&m.base), untouched, "a forward dry run wrote");
+
+        migrate(&m.root, true);
+        for path in &old[..4] {
+            assert!(!path.exists(), "{} moved", path.display());
+        }
+        let stamp = m.stamps().into_iter().find(|s| s != "old").unwrap();
+
+        let applied = snapshot(&m.base);
+        migrate_reverse(&m.root, &[stamp.clone()], false).unwrap();
+        assert_eq!(snapshot(&m.base), applied, "a reverse dry run wrote");
+
+        migrate_reverse(&m.root, &[stamp], true).unwrap();
+        let logs = std::fs::symlink_metadata(m.root.join("logs")).unwrap();
+        assert!(logs.is_dir(), "the link left and the folder is back");
+        let receipt = migrate(&m.root, true);
+        for path in &old {
+            assert_eq!(
+                std::fs::read_to_string(path).unwrap(),
+                "kept\n",
+                "{} survives the forward pass",
+                path.display()
+            );
+        }
+        for name in ["flight", "notify-signals.json", "ledger.md"] {
+            let entry = receipt.entries.iter().find(|e| e.legacy == name).unwrap();
+            assert_eq!(entry.status.word(), "held", "{entry:?}");
+        }
+        let held = snapshot(&m.base);
+        migrate(&m.root, false);
+        assert_eq!(snapshot(&m.base), held, "a dry run over a hold wrote");
+
+        crate::state_layout_undo::release(&m.root, &["flight".to_string()]).unwrap();
+        migrate(&m.root, true);
+        assert!(!old[0].exists(), "a cleared hold lets the fold run");
     }
 }

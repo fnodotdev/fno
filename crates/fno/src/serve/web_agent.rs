@@ -197,7 +197,7 @@ fn default_agent_path(fno_binary: &str) -> String {
 /// Render the web-bridge LaunchAgent plist. No filesystem writes.
 fn render_plist(fno_binary: &str, web_port: u16, attention_port: u16, label: &str) -> String {
     let home = home();
-    let logs = home.join(".fno").join("logs");
+    let logs = crate::state_layout::home_of(&home.join(".fno"), "logs");
     let esc = xml_escape;
     PLIST
         .replace("{label}", &esc(label))
@@ -276,6 +276,14 @@ fn install_agent(
                 label: None,
             };
         }
+    }
+    // launchd creates no missing parent for the paths the plist names.
+    let logs = crate::state_layout::home_of(&home().join(".fno"), "logs");
+    if let Err(e) = std::fs::create_dir_all(&logs) {
+        eprintln!(
+            "fno mux web install-agent: could not create {} ({e})",
+            logs.display()
+        );
     }
     match write_if_changed(&plist_path, &rendered) {
         Ok(false) => {

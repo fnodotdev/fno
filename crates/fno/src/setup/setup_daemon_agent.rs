@@ -77,7 +77,7 @@ pub(crate) fn install_into(
     }
     // The logs dir must exist before launchd's first write; launchd does
     // not create missing StandardOutPath parents.
-    let logs = home().join(".fno").join("logs");
+    let logs = crate::state_layout::home_of(&home().join(".fno"), "logs");
     if let Err(e) = std::fs::create_dir_all(&logs) {
         return DaemonAgentReceipt {
             status: "failed".to_string(),
@@ -216,7 +216,7 @@ fn xml_escape(value: &str) -> String {
 /// Render the daemon LaunchAgent plist. No filesystem writes.
 fn render_plist(daemon_bin: &str, agents_home: &str, label: &str) -> String {
     let home = home();
-    let logs = home.join(".fno").join("logs");
+    let logs = crate::state_layout::home_of(&home.join(".fno"), "logs");
     let esc = xml_escape;
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
