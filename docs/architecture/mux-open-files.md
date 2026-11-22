@@ -8,9 +8,28 @@ For: a worker who builds or reviews a slice of the mux file viewer, the open rou
 
 ## 1. Links and paths in pane text
 
-This part has shipped. OSC 8 hyperlinks win over text matching in `Pane::link_span` (`crates/fno/src/mux/vt.rs:497`). Plain `http(s)` URLs come from `find_urls` (`crates/fno/src/ui/link.rs:76`). Bare paths come from `find_paths` (`crates/fno/src/ui/link.rs:230`). The matcher resolves each path candidate against the pane cwd. If the path does not exist on disk, it gets no link. So a prose word dies at the stat and not at the scan. A `path:line` tail keeps the line.
+This part has shipped. OSC 8 hyperlinks win over text matching in `Pane::link_span` (`crates/fno/src/mux/vt.rs`). Plain `http(s)` URLs come from `find_urls` (`crates/fno/src/ui/link.rs`). Bare paths come from `find_paths` in the same file. The matcher resolves each path candidate against the pane cwd. If the path does not exist on disk, it gets no link. So a prose word dies at the stat and not at the scan. A `path:line` tail keeps the line.
 
-A path becomes an internal `fno-file:` URI (`FILE_SCHEME`, `crates/fno/src/ui/link.rs:177`) that carries the canonical absolute path. `file_uri_parts` (`crates/fno/src/ui/link.rs:183`) parses it strictly: absolute, with no whitespace or control characters. The server sends only a URI that passes `is_openable` or `is_file_uri` (`crates/fno/src/mux/server/open_link.rs:25`). `OPENABLE_SCHEMES` (`crates/fno/src/ui/link.rs:24`) stays at `http://` and `https://`, so a pane can never make the platform opener run a scheme fno did not build.
+Image references have their own resolver, `crates/fno/src/mux/server/image_refs.rs`. It links these forms to PNG, JPEG, GIF and WebP files on this machine:
+
+| Form | How it resolves |
+|---|---|
+| `file://` hyperlink | percent-decoded. The host is empty, `localhost` or this machine. |
+| absolute, `~/` or relative path | against the pane cwd. |
+| bare file name | against the pane cwd, for these image types only. |
+| path with spaces | the longest existing path, up to 8 words back from the extension. |
+| hard-wrapped path | up to 2 more rows, when the row above reaches the content edge. |
+| `[Image #N]`, `[Image N]` | through the pane's agent session (see below). |
+
+The press does one stat for each candidate and no read. The release reads the first bytes off the core loop. If the extension and the bytes do not both name an image, nothing opens. A hyperlink to any other `file://` target still links nothing.
+
+A click on an image reference is the mux's, also in a pane whose app owns the mouse. The app sees neither the press nor the release. A drag replays the press, so a text selection starts whole. Hover underlines the same cells. Other text reaches the app as before.
+
+`crates/fno/src/mux/server/pasted_images.rs` resolves a placeholder. The session comes from fno's own records and never from pane text. The row's text picks one turn in that session. If no turn or two turns match, nothing opens. For Claude's newest use of a number, the stored file answers. It also answers before the message is sent. For an older use, the transcript answers. Codex and OpenCode images open after the message is sent. A transcript image is kept at `mux/images/<session>/<hash>.<ext>` in the state root. The mux never reads the clipboard.
+
+These do not link yet: a bare name outside the pane cwd, an image the agent read without printing a name, a Codex turn in a compressed rollout, and any path in a portal onto another machine. A custom `CLAUDE_CODE_TMPDIR` is found only when the mux server has the same value. Panes show no thumbnail. Images that a program prints as escape bytes do not draw.
+
+A path becomes an internal `fno-file:` URI (`FILE_SCHEME`, `crates/fno/src/ui/link.rs`) that carries the canonical absolute path. `file_uri_parts` parses it strictly: absolute, with no control characters. Only an image path can hold a space. The server sends only a URI that passes `is_openable` or `is_file_uri` (`crates/fno/src/mux/server/open_link.rs`). `OPENABLE_SCHEMES` stays at `http://` and `https://`, so a pane can never make the platform opener run a scheme fno did not build.
 
 The client routes every clicked URI in `route` (`crates/fno/src/ui/client/open_link.rs:29`). Today `Route::File` calls `open_fno_path` and drops the line (`crates/fno/src/ui/client/open_link.rs:83`). The open router in section 6 replaces that one call. Nothing else in detection changes.
 
@@ -80,6 +99,8 @@ A `.md` file renders in the viewer through `md_lines` (`crates/fno/src/ui/client
 - `inmux` sends text, markdown, images and PDFs to the viewer. Other types go to `system`. Today the viewer shows text, source files, markdown, PNG, JPEG, GIF and WebP images, and PDF pages. Other files still go to `system`: other image formats, archives, media, office documents and directories. The list is `OUTSIDE_EXTS` and `viewable` in `crates/fno/src/ui/open_router.rs`. Each of those joins the viewer with its own slice. A file with no telling extension goes to the viewer, which says "no preview" for a binary.
 - `obsidian` covers files under the vault root. For such a file the router builds an `obsidian://open` URI. It uses the existing builder `obsidian_open_uri` (`crates/fno/src/ui/link.rs:690`) and the root that `resolve_vault_root` gives (`crates/fno/src/ui/link.rs:681`). Move the vault-relative step out of `plan_link` (`crates/fno/src/ui/link.rs:625`) into one shared function. Then `plan_link` and the router call the same code. The URI opens through `open_fno_uri` (`crates/fno/src/ui/link.rs:719`). A file outside the vault, or `obsidian.enabled = false` (`ObsidianCfg`, `crates/fno/src/ui/digest_overlay.rs:1202`), falls back to `system`.
 - `system` calls `open_fno_path` (`crates/fno/src/ui/link.rs:739`), the behavior today.
+
+A click never hands the platform opener a file that can run code: an app bundle, an installer, a script type or an executable file (`can_run_code` in `crates/fno/src/ui/open_router.rs`). The notice names the file.
 
 The router is the one function that `Route::File` calls in `open_link::start`. It is pure: it takes the path, the line and the config and returns a target. Tests assert the target, and only the caller spawns. The client reads both keys with `config_str` (`crates/fno/src/ui/digest_overlay.rs:962`) and latches them at client start, like `mux.card_graph`.
 
