@@ -552,31 +552,26 @@ fn acquire_move_lock() -> Option<PathBuf> {
 fn link_binaries(bin: &Path, dir: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     for name in update_prebuilt::BINARIES {
-        link_one(bin, dir, name)?;
+        link_one(bin, dir, name).map_err(|e| format!("{}: {e}", dir.join(name).display()))?;
     }
-    link_extras(bin, dir)?;
+    link_extras(bin, dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     crate::install::legacy_links::retarget(dir);
     Ok(())
 }
 
 /// One PATH link: a temp symlink beside the target, renamed over the old
 /// link, so a running command never sees the name missing.
-fn link_one(bin: &Path, dir: &Path, name: &str) -> Result<(), String> {
+fn link_one(bin: &Path, dir: &Path, name: &str) -> std::io::Result<()> {
     let link = dir.join(name);
     let tmp = link.with_file_name(format!(".{name}.fno-adopt-{}", std::process::id()));
     let _ = std::fs::remove_file(&tmp);
-    std::os::unix::fs::symlink(bin.join(name), &tmp)
-        .and_then(|_| std::fs::rename(&tmp, &link))
-        .map_err(|e| {
-            let _ = std::fs::remove_file(&tmp);
-            format!("{}: {e}", link.display())
-        })
+    std::os::unix::fs::symlink(bin.join(name), &tmp).and_then(|_| std::fs::rename(&tmp, &link))
 }
 
 /// Link the carried extras into `dir` when the bin dir holds them: fno-app
 /// rides the macOS tarballs only, so a linux install links nothing here and
 /// never creates `dir`.
-fn link_extras(bin: &Path, dir: &Path) -> Result<(), String> {
+fn link_extras(bin: &Path, dir: &Path) -> std::io::Result<()> {
     let carried: Vec<&str> = update_prebuilt::LINKED_EXTRAS
         .iter()
         .copied()
@@ -585,7 +580,7 @@ fn link_extras(bin: &Path, dir: &Path) -> Result<(), String> {
     if carried.is_empty() {
         return Ok(());
     }
-    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    std::fs::create_dir_all(dir)?;
     for name in carried {
         link_one(bin, dir, name)?;
     }
@@ -596,7 +591,7 @@ fn link_extras(bin: &Path, dir: &Path) -> Result<(), String> {
 /// ~/.local/bin): every upgrade path calls this after its swap so an older
 /// install gains fno-app beside its existing links. No HOME resolves: Ok,
 /// nothing linked.
-pub(crate) fn link_path_extras(bin: &Path) -> Result<(), String> {
+pub(crate) fn link_path_extras(bin: &Path) -> std::io::Result<()> {
     let dir = std::env::var_os("FNO_INSTALL_DIR")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/bin")));
@@ -659,7 +654,7 @@ pub(crate) fn adopt_release(unpacked: &Path) -> i32 {
         }
     } else if let Err(e) = link_path_extras(&bin) {
         let _ = std::fs::remove_file(marker_path());
-        return failed("link", &e);
+        return failed("link", &e.to_string());
     }
     println!(
         "fno update: done; {} runs {running}.",
