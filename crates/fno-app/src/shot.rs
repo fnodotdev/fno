@@ -93,6 +93,7 @@ pub fn run(opts: ShotOptions) -> i32 {
                 font_size,
                 find,
                 opts.settings,
+                opts.update,
                 empty_chat,
                 cmd,
                 sheet,

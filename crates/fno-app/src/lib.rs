@@ -104,6 +104,17 @@ pub struct ShotOptions {
     pub harness: Option<String>,
     /// The Settings panel state the frame paints.
     pub settings: Option<SettingsShot>,
+    /// The update card the frame paints.
+    pub update: Option<UpdateShot>,
+}
+
+/// The --shot-update values.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum UpdateShot {
+    /// A staged build is ready: the Restart card.
+    Ready,
+    /// The first launch of a new build: the release notes card.
+    Notes,
 }
 
 /// The --shot-settings values.
@@ -270,6 +281,7 @@ pub fn run(opts: Options) -> i32 {
             draft: shot.draft,
             harness: shot.harness,
             settings: shot.settings,
+            update: shot.update,
         });
     }
     if let Some(home) = std::env::var_os("HOME").and_then(|h| h.into_string().ok()) {

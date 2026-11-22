@@ -4259,6 +4259,7 @@ pub(super) fn root_for_shot(
     font_size: f32,
     find: Option<crate::FindShot>,
     settings: Option<crate::SettingsShot>,
+    update: Option<crate::UpdateShot>,
     empty_chat: bool,
     cmd: bool,
     sheet: bool,
@@ -4299,6 +4300,17 @@ pub(super) fn root_for_shot(
         root.shot = true;
         root.toast_on_first_read = true;
         root.sheet_on_first_read = sheet;
+        root.update_card = update.map(|u| match u {
+            crate::UpdateShot::Ready => UpdateCard::Ready(super::update::Ready {
+                version: "0.0.2".to_string(),
+                notes: String::new(),
+                staged: std::path::PathBuf::new(),
+            }),
+            crate::UpdateShot::Notes => UpdateCard::Installed {
+                version: "0.0.2".to_string(),
+                notes: "The app now checks for new releases in the background and downloads a signed build. When one is ready, a card offers Restart.".to_string(),
+            },
+        });
         if empty_chat {
             root.shot_empty_chat = true;
             root.chat.switch(None, "");
