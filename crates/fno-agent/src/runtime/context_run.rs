@@ -425,7 +425,7 @@ pub(crate) struct SessionTranscripts {
 impl SessionTranscripts {
     pub(crate) fn find(&self, sid: &str, harness: &str) -> Option<PathBuf> {
         match harness.as_harness() {
-            Harness::Claude => crate::claude_drive::find_transcript(sid),
+            Harness::Claude => crate::claude_drive::find_transcript_any_root(sid),
             Harness::Codex => self
                 .codex
                 .get_or_init(|| crate::gc_inventory::codex_store_sessions().ok())

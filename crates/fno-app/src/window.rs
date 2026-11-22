@@ -250,11 +250,15 @@ pub struct Root {
     notice_gen: u64,
     /// A shot window paints the durable surface only: server notices are a
     /// transient corner toast that would photobomb a still frame.
-    shot: bool,
+    pub(super) shot: bool,
     /// The empty-pane shot: sync_chat never hands the pane a session, so
     /// the start view holds for the frame.
     shot_empty_chat: bool,
     pub(super) closed: Option<String>,
+    /// The no-server offer: set when the attach found no socket listening.
+    pub(super) offer: Option<crate::first_run::Offer>,
+    /// A launch with no saved state: the start view adds the key card.
+    pub(super) first_run: bool,
     pub(super) metrics: Metrics,
     pub(super) palette: Palette,
     /// Whether the window appearance is light, and the project directory the
@@ -461,6 +465,8 @@ impl Root {
             shot: false,
             shot_empty_chat: false,
             closed: None,
+            offer: None,
+            first_run: false,
             metrics,
             palette,
             focus: cx.focus_handle(),
@@ -581,9 +587,63 @@ impl Root {
                     });
                     root.spawn_reader(Vec::new(), rx, cx);
                 }
-                Err(e) => root.closed = Some(e.to_string()),
+                Err(e) => {
+                    if crate::first_run::offers_start(&e) {
+                        root.offer = Some(crate::first_run::Offer::Ask);
+                    } else {
+                        root.closed = Some(e.to_string());
+                    }
+                }
             },
         }
+    }
+
+    /// The main pane while no server answers: the offer card.
+    fn offer_view(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let offer = self.offer.unwrap_or(crate::first_run::Offer::Ask);
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .child(crate::first_run::offer_card(self, offer, cx))
+            .into_any_element()
+    }
+
+    /// The offer's answer: spawn the server off the UI thread, then attach
+    /// as a fresh launch would. A refusal lands in the closed notice and
+    /// the card asks again.
+    pub(super) fn start_mux(&mut self, cx: &mut Context<Self>) {
+        if self.offer != Some(crate::first_run::Offer::Ask) {
+            return;
+        }
+        self.offer = Some(crate::first_run::Offer::Starting);
+        cx.notify();
+        let session = self.session.clone();
+        cx.spawn(async move |this, cx| {
+            let started = {
+                let session = session.clone();
+                cx.background_executor()
+                    .spawn(async move { fno::app_api::start_server(&session) })
+                    .await
+            };
+            this.update(cx, |root, cx| {
+                match started {
+                    Ok(()) => {
+                        root.offer = None;
+                        let sent = root.sent_size;
+                        Self::attach_link(root, &session, sent, None, cx);
+                    }
+                    Err(e) => {
+                        root.offer = Some(crate::first_run::Offer::Ask);
+                        root.closed = Some(e.to_string());
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// The attention signals: notification taps land here and the task
@@ -2977,6 +3037,12 @@ impl Root {
             cx.stop_propagation();
             return;
         }
+        // With no server to talk to, Enter answers the offer.
+        if self.offer.is_some() && !key.cmd && !key.ctrl && key.key == "enter" {
+            self.start_mux(cx);
+            cx.stop_propagation();
+            return;
+        }
         // The palette takes every key while it shows: escape closes, enter
         // goes, up and down move, other cmd keys close it and run as today.
         if self.goto.is_some() && goto::key(self, &key, cx) {
@@ -3974,6 +4040,7 @@ impl Render for Root {
         self.width = window.viewport_size().width;
 
         let main = match self.main {
+            _ if self.offer.is_some() => self.offer_view(cx),
             MainView::Chat => self.chat_view(window, cx).into_any_element(),
             MainView::Terminal => self.terminal(cx).into_any_element(),
             MainView::Orchestration => mono_view(orchestration::render(self, cx)),
@@ -4248,6 +4315,7 @@ pub fn run(
         let group_by = restored.as_ref().map(|s| s.group_by).unwrap_or_default();
         // Where the exit paths write; a HOME-less environment saves nothing.
         let state_path = super::app_state::state_path();
+        let first_run = restored.is_none();
         let opened = cx.open_window(
             WindowOptions {
                 window_bounds: Some(window_bounds),
@@ -4279,7 +4347,7 @@ pub fn run(
                     cell: size(snap(width), snap(font_size * 1.25)),
                 };
                 cx.new(|cx| {
-                    let root = Root::new(
+                    let mut root = Root::new(
                         session,
                         main,
                         pinned.clone(),
@@ -4302,6 +4370,7 @@ pub fn run(
                         persist_window_state(window, cx);
                         true
                     });
+                    root.first_run = first_run;
                     window.focus(&root.focus);
                     root
                 })
@@ -4326,7 +4395,7 @@ pub(super) fn root_for_shot(
     session: &str,
     mode: MainView,
     pinned: Option<SessionKey>,
-    warmed: super::link::WarmedLink,
+    warmed: Option<super::link::WarmedLink>,
     family: String,
     font_size: f32,
     find: Option<crate::FindShot>,
@@ -4336,6 +4405,7 @@ pub(super) fn root_for_shot(
     sheet: bool,
     draft: Option<String>,
     harness: Option<String>,
+    first_run: Option<crate::FirstRunShot>,
     window: &mut Window,
     cx: &mut App,
 ) -> gpui::Entity<Root> {
@@ -4362,7 +4432,7 @@ pub(super) fn root_for_shot(
             HashSet::new(),
             GroupBy::Workspaces,
             metrics,
-            Some(warmed),
+            warmed,
             window,
             cx,
         )
@@ -4371,6 +4441,7 @@ pub(super) fn root_for_shot(
         root.shot = true;
         root.toast_on_first_read = true;
         root.sheet_on_first_read = sheet;
+        root.first_run = first_run == Some(crate::FirstRunShot::KeyCard);
         if empty_chat {
             root.shot_empty_chat = true;
             root.chat.switch(None, "");

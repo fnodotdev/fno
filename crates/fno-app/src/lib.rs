@@ -9,6 +9,7 @@ mod boxdraw;
 mod chat;
 mod control;
 mod find;
+mod first_run;
 mod goto;
 mod grid;
 mod hq;
@@ -103,6 +104,8 @@ pub struct ShotOptions {
     pub draft: Option<String>,
     /// Harness the start composer shows picked.
     pub harness: Option<String>,
+    /// The first-run state the frame paints.
+    pub first_run: Option<FirstRunShot>,
     /// The Settings panel state the frame paints.
     pub settings: Option<SettingsShot>,
 }
@@ -114,6 +117,15 @@ pub enum UiShot {
     RowMenuNode,
     TabRename,
     Scrolled,
+}
+
+/// The --shot-first-run values.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FirstRunShot {
+    /// The empty start view on a first launch: splash mark and key card.
+    KeyCard,
+    /// No mux server answers: the offer to start one.
+    NoServer,
 }
 
 /// The --shot-settings values.
@@ -280,6 +292,7 @@ pub fn run(opts: Options) -> i32 {
             sheet: shot.sheet,
             draft: shot.draft,
             harness: shot.harness,
+            first_run: shot.first_run,
             settings: shot.settings,
         });
     }

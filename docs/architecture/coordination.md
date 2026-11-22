@@ -31,7 +31,7 @@ One primitive, flat key namespace, atomic lockfiles, append-only audit trail.
 
 ### Lockfile claim store
 
-The lockfiles under the resolved claims root are the one store used by native `fno-agent claim` commands and other readers. The open direction is recorded in operator question `q-5e30ff75`.
+The lockfiles under the resolved claims root are the one store used by native `fno-agent claim` commands and other readers. The open direction is recorded in operator question `Q2975`.
 
 ### Key namespace
 
@@ -431,7 +431,7 @@ If the worker cannot create the lockfile, the claim is not mutual exclusion. Eve
 
 This is not one harness's problem. codex `workspace-write` is the visible case. A claude worker fails the same way. When a personal `~/.claude/settings.json` grants `permissions.additionalDirectories`, it looks fine on that maintainer's machine. The repository ships no such file, so a fresh clone reproduces it.
 
-**How the grant reaches the worker.** `worker_writable_dirs` in `crates/fno-agent/src/spawn/spawn_seam.rs` computes the set per spawn. It passes through the `--add-dir` cell, which already maps natively for claude, codex and agy. fno never writes into a harness settings file (operator ruling `d-926a2b90`). The set is by need, never blanket, because `--add-dir` is a WRITE grant:
+**How the grant reaches the worker.** `worker_writable_dirs` in `crates/fno-agent/src/spawn/spawn_seam.rs` computes the set per spawn. It passes through the `--add-dir` cell, which already maps natively for claude, codex and agy. fno never writes into a harness settings file (operator ruling `D418`). The set is by need, never blanket, because `--add-dir` is a WRITE grant:
 
 | Directory | When |
 |---|---|

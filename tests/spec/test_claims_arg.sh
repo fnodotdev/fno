@@ -77,6 +77,18 @@ assert "ab- prefix but non-hex" 'CLAIMS_ID=""' "$OUT"
 OUT="$(bash "$PARSER" "AB-deadbeef")"
 assert "uppercase prefix rejected" 'CLAIMS_ID=""' "$OUT"
 
+# A short numeric suffix is an id only when the config mints sequential ids.
+MODE_BIN="$(mktemp -d -t id-mode-stub.XXXXXX)"
+for mode in sequential hex; do
+    printf '#!/bin/sh\necho %s\n' "$mode" > "$MODE_BIN/fno"
+    chmod +x "$MODE_BIN/fno"
+    want=none
+    [[ "$mode" == sequential ]] && want=fno
+    OUT="$(PATH="$MODE_BIN:$PATH" bash -c 'source "$1"; node_id_kind x-15' _ "$REPO_ROOT/scripts/lib/node-id.sh")"
+    assert "x-15 under id_mode $mode" "$want" "$OUT"
+done
+rm -rf "$MODE_BIN"
+
 # --- AC1.2-HP: ab-id input resolves to seed via fno backlog get ---
 echo ""
 echo "AC1.2-HP: ab-id input resolves to CLAIMS_ID and CLAIMS_SEED_ARG"

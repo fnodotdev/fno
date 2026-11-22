@@ -2,7 +2,7 @@
 
 Use `fno agent audit incident cutover` to move the fleet from one computer to another. It keeps the backlog, the event provenance and the history.
 
-It rides the `incident` command because decision D1101 (d-fe66560a) allows no new top-level command. The Rust entry is `crates/fno-agent/src/runtime/cutover.rs`, reached as an argument of `fleet-incident`.
+It rides the `incident` command because decision D1101 allows no new top-level command. The Rust entry is `crates/fno-agent/src/runtime/cutover.rs`, reached as an argument of `fleet-incident`.
 
 ## Save, on the source
 
