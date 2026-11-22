@@ -3366,10 +3366,11 @@ mod tests {
         let gated = epic_children_gate(&[record.clone()], &entries, &mut held);
         assert!(gated.is_empty(), "{gated:?}");
         assert_eq!(held.len(), 1, "{held:?}");
-        assert_eq!(held[0].0, "x-aaaa");
-        assert_eq!(held[0].2, "epic_children_open");
-        assert!(held[0].1.contains("4 open child(ren)"), "{}", held[0].1);
-        assert!(held[0].1.contains("x-cccc"), "{}", held[0].1);
+        let held_row = held.first().expect("one held row");
+        assert_eq!(held_row.0, "x-aaaa");
+        assert_eq!(held_row.2, "epic_children_open");
+        assert!(held_row.1.contains("4 open child(ren)"), "{}", held_row.1);
+        assert!(held_row.1.contains("x-cccc"), "{}", held_row.1);
         // Locked recheck: the record reaches the mutator anyway (a race
         // between the scan and the lock) and must not close the epic or
         // move a child off it.
@@ -3424,8 +3425,10 @@ mod tests {
             result.reparented
         );
         assert_eq!(result.held_recheck.len(), 1, "{:?}", result.held_recheck);
-        assert_eq!(result.held_recheck[0].2, "epic_children_open");
-        assert!(entries[0]["completed_at"].is_null());
+        let recheck_row = result.held_recheck.first().expect("one recheck row");
+        assert_eq!(recheck_row.2, "epic_children_open");
+        let epic_row = entries.first().expect("epic row");
+        assert!(epic_row["completed_at"].is_null());
         for entry in entries.iter().skip(1) {
             assert_eq!(entry["parent"], "x-aaaa", "{entry}");
         }
@@ -3468,8 +3471,9 @@ mod tests {
             result.actually_closed.len()
         );
         assert!(result.held_recheck.is_empty(), "{:?}", result.held_recheck);
-        assert!(!entries[0]["completed_at"].is_null());
-        assert_eq!(entries[0]["merge_status"], "merged");
+        let epic_row = entries.first().expect("epic row");
+        assert!(!epic_row["completed_at"].is_null());
+        assert_eq!(epic_row["merge_status"], "merged");
     }
     #[test]
     fn a_shared_pr_child_does_not_hold_its_parent_in_the_gate() {
