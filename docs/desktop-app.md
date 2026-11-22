@@ -20,9 +20,19 @@ The `codesign -s -` step gives the binary an ad-hoc signature. No developer acco
 
 Each app release ships `fno-app-macos.tar.gz` on its own `fno-app-v<version>` release. The bundle holds a universal binary, so it runs on Apple silicon and Intel Macs, macOS 11 or later. It holds `fno-app.app`, signed with a Developer ID, notarized and stapled, so it opens with no prompt. If the release was built without the notary secrets, the bundle is Developer ID signed but not notarized, so Gatekeeper asks once. If it was built without the certificate secrets, the bundle is ad-hoc signed instead. Then Gatekeeper asks once. Clear the prompt with `xattr -d com.apple.quarantine fno-app.app`. The app runs the `fno` and `fno-agent` it finds beside itself, then on `PATH`, so install fno first.
 
+## Updates
+
+The app checks the `fno-app-v*` release feed at launch and every 6 hours after, until it stages a build. It downloads the newest stable release in the background and proves it before it offers it. The sha256 file must match, `codesign --verify --deep --strict` must pass, the Team ID must equal the running app's (when the running app has one), and the new binary must name the release version. A build that fails any proof is dropped, and the app tries again at the next check.
+
+When a build is ready, a card appears at the bottom left: `fno-app <version> is ready`, with Restart and Later. Restart quits the app, swaps the staged bundle in place of the running one, and opens it. If the swap fails, the old bundle stays in place and opens again. Later hides the card until the next launch.
+
+The first launch of the new build shows the release notes once, in the same card. The notes come from the `## <version>` section of `crates/fno-app/CHANGELOG.md`, which the release workflow reads. A version with no section gets the one-line default.
+
+A dev build run outside a `.app` bundle never updates. Staged builds live in `~/Library/Application Support/fno-app/update/`.
+
 ## Versions
 
-The app has its own version line, starting at 0.0.1, separate from fno. `sync-version.sh` never stamps it. To release the app, bump `version` in `crates/fno-app/Cargo.toml` and push a `fno-app-v<version>` tag. The `release-app` workflow builds that tag and publishes it.
+The app has its own version line, starting at 0.0.1, separate from fno. `sync-version.sh` never stamps it. To release the app, add a `## <version>` section to `crates/fno-app/CHANGELOG.md`, bump `version` in `crates/fno-app/Cargo.toml` and push a `fno-app-v<version>` tag. The `release-app` workflow builds that tag and publishes it.
 
 The app never reads that version to judge compatibility. It reads the wire version the mux server stamps in its `.ver` file. The app needs wire v131 or newer. A server below that, or one with no stamp, makes the app stop with one line. The line names both versions. Run `fno update`, then `fno agent restart --mux`.
 
