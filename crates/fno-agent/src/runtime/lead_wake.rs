@@ -547,7 +547,7 @@ pub(crate) fn run_pass(home: &AgentsHome, config_cwd: &Path) -> Result<Outcome, 
                 loaded
                     .entries
                     .into_iter()
-                    .map(|e| {
+                    .flat_map(|e| {
                         let member = e
                             .role_scope
                             .as_deref()
@@ -556,8 +556,19 @@ pub(crate) fn run_pass(home: &AgentsHome, config_cwd: &Path) -> Result<Outcome, 
                         // Keyed on the session id (law d-e952ed19); a row
                         // with no id keeps the name key, the legacy shape.
                         let sid = crate::territory::row_session_id(&e).to_string();
-                        let key = if sid.is_empty() { e.name.clone() } else { sid };
-                        (key, root)
+                        if sid.is_empty() {
+                            return vec![(e.name.clone(), root)];
+                        }
+                        // A row whose id came from the Rust-only session_id
+                        // field keeps its name key too: the beat team's
+                        // holder_session reads only harness_session_id, so
+                        // the resume lookup falls back to the name.
+                        let harness = e.harness_session_id.as_deref().unwrap_or("");
+                        if harness.is_empty() {
+                            vec![(sid.clone(), root.clone()), (e.name.clone(), root)]
+                        } else {
+                            vec![(sid, root)]
+                        }
                     })
                     .collect()
             })

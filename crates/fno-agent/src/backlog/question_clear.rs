@@ -624,8 +624,15 @@ mod tests {
             "harness_session_id": "00000000-0000-4000-8000-000000000002",
             "predecessor_session_ids": ["00000000-0000-4000-8000-000000000001"],
         });
+        let home = req.home.as_ref().unwrap();
+        std::fs::create_dir_all(
+            home.registry_json()
+                .parent()
+                .expect("registry path has a parent"),
+        )
+        .unwrap();
         crate::registry_store::seed_raw(
-            &req.home.as_ref().unwrap().registry_json(),
+            &home.registry_json(),
             serde_json::json!({"schema_version": 11, "agents": [row]}).to_string(),
         );
         let result = run_clear(&req);
@@ -640,6 +647,53 @@ mod tests {
             closes[0]["data"]["closed_via_succession"]["predecessor_session"],
             json!("00000000-0000-4000-8000-000000000001")
         );
+    }
+
+    #[test]
+    fn a_rung_close_refuses_without_a_recorded_predecessor() {
+        // The negative arm: the closer holds the rung scope's current role
+        // but the registry records no predecessor term. Succession is a
+        // recorded fact, never an inference from a shared name or role, so
+        // the clear refuses.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = request(&tmp, "q-nosucc", Some("C: do as asked"));
+        req.provenance = json!({"decided_by": "01a0cbdd", "authority_source": "role"});
+        req.closed_by = Some("00000000-0000-4000-8000-000000000002".to_string());
+        let mut ask = ask_from("q-nosucc", "49a80492", "which lane?");
+        ask["data"]["rung"] = json!({
+            "level": "lead",
+            "holder_session": "00000000-0000-4000-8000-000000000001",
+            "holder_name": "rowan",
+            "scope": "epic-x",
+        });
+        seed_question(&req, &ask);
+        let row = json!({
+            "name": "lenore",
+            "cwd": "/tmp",
+            "status": "busy",
+            "created_at": "2026-11-21T00:00:00Z",
+            "role_level": 2,
+            "role_scope": "epic-x",
+            "role_grantor": "human",
+            "harness_session_id": "00000000-0000-4000-8000-000000000002",
+            "predecessor_session_ids": [],
+        });
+        let home = req.home.as_ref().unwrap();
+        std::fs::create_dir_all(
+            home.registry_json()
+                .parent()
+                .expect("registry path has a parent"),
+        )
+        .unwrap();
+        crate::registry_store::seed_raw(
+            &home.registry_json(),
+            serde_json::json!({"schema_version": 11, "agents": [row]}).to_string(),
+        );
+        let result = run_clear(&req);
+        assert_eq!(result.exit_code, 3, "{:?}", result.lines);
+        assert!(result.lines[0].contains("refused"), "{:?}", result.lines);
+        let closes = rows(&req.journal_path, &["operator_question_closed"]);
+        assert!(closes.is_empty(), "nothing closed: {:?}", closes);
     }
 
     #[test]

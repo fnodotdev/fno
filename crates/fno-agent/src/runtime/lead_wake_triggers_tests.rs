@@ -8,10 +8,10 @@ use crate::state::RegistryEntry;
 use serde_json::{json, Value};
 use std::path::Path;
 
-fn row(name: &str, sid: Option<&str>, status: &str, scope: Option<&str>) -> Value {
+fn row(name: &str, sid: Option<&str>, status: &str, scope: Option<&str>, cwd: &str) -> Value {
     json!({
         "name": name,
-        "cwd": "/tmp",
+        "cwd": cwd,
         "status": status,
         "created_at": "2026-11-21T00:00:00Z",
         "role_level": scope.map(|_| 2),
@@ -45,18 +45,21 @@ fn two_sessions_sharing_one_name_wake_by_session_id() {
     let cwd = _root.path().join("repo");
     std::fs::create_dir_all(&cwd).unwrap();
     write_manifest(&cwd, "epic-x");
+    let cwd_str = cwd.display().to_string();
     let rows = rows(&[
         row(
             "wren",
             Some("aaaaaaaa-1111-4aaa-8aaa-aaaaaaaaaaaa"),
             "exited",
             Some("epic-x"),
+            &cwd_str,
         ),
         row(
             "wren",
             Some("bbbbbbbb-2222-4bbb-8bbb-bbbbbbbbbbbb"),
             "busy",
             Some("epic-x"),
+            &cwd_str,
         ),
     ]);
     let selection = select_targets(&rows);
@@ -102,7 +105,8 @@ fn a_row_with_no_session_id_still_wakes_by_name() {
     let cwd = _root.path().join("repo");
     std::fs::create_dir_all(&cwd).unwrap();
     write_manifest(&cwd, "epic-x");
-    let rows = rows(&[row("briar", None, "busy", Some("epic-x"))]);
+    let cwd_str = cwd.display().to_string();
+    let rows = rows(&[row("briar", None, "busy", Some("epic-x"), &cwd_str)]);
     let selection = select_targets(&rows);
     assert!(selection.drops.is_empty(), "{:?}", selection.drops);
     let target: &Target = &selection.ok[0];
