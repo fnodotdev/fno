@@ -82,6 +82,18 @@ pub(crate) struct Skipped {
     pub cross_node: u64,
 }
 
+/// One agent response inside an ask group: the session that answered,
+/// when, the reply excerpt, and the transcript that carries it. The
+/// evidence chain a reader walks to check the row's judged outcome.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub(crate) struct ResponseRef {
+    pub session: String,
+    pub name: String,
+    pub ts: String,
+    pub reply: String,
+    pub transcript: String,
+}
+
 /// One merged ask. `key` is `node:<id>` once linked, else `ask:<earliest
 /// turn id>`; `aliases` keeps every turn id, so a reader that stored an
 /// `ask:` key finds the row after it links.
@@ -101,6 +113,12 @@ pub(crate) struct RequestRow {
     pub node_status: Option<String>,
     pub node_completed_at: Option<String>,
     pub reply_excerpt: String,
+    /// Every agent response across the group's asks, oldest first.
+    pub responses: Vec<ResponseRef>,
+    /// `solved`, `lost`, `forgotten` or `open`: the judged outcome.
+    pub outcome: &'static str,
+    /// The observed facts the judgment rests on.
+    pub outcome_why: String,
     /// `new`, `no_node`, `linked`, `stalled`, `done` or `regression`.
     pub state: &'static str,
     pub days_unaddressed: i64,
@@ -336,6 +354,72 @@ pub(crate) fn fold(
     Fold { rows, skipped }
 }
 
+/// The judged outcome and the facts behind it, from what the row already
+/// observed. A closed node reads solved unless the ask came back after the
+/// close, or the node went quiet: both read forgotten. A reply the operator
+/// asked again past reads forgotten too. Silence with no node reads lost.
+/// Everything still in flight reads open. `turns` is oldest first.
+fn judge(
+    state: &str,
+    node: Option<&str>,
+    node_status: Option<&str>,
+    completed: Option<&str>,
+    turns: &[&AskTurn],
+    ask_count: usize,
+) -> (&'static str, String) {
+    let date = |ts: &str| ts.get(0..10).unwrap_or(ts).to_string();
+    let id = node.unwrap_or("?");
+    let status = node_status.unwrap_or("open");
+    let newest = turns.last().copied();
+    match state {
+        "done" => (
+            "solved",
+            format!(
+                "node {id} closed {}",
+                completed
+                    .map(|c| date(c))
+                    .unwrap_or_else(|| "without a close date".into()),
+            ),
+        ),
+        "regression" => (
+            "forgotten",
+            format!(
+                "node {id} closed {}, asked again {}",
+                completed.map(|c| date(c)).unwrap_or_else(|| "?".into()),
+                newest.map(|t| date(&t.ts)).unwrap_or_else(|| "?".into()),
+            ),
+        ),
+        "stalled" => (
+            "forgotten",
+            format!("node {id} {status} took the ask and has not moved since"),
+        ),
+        "linked" => ("open", format!("node {id} {status} holds the ask")),
+        "no_node" => {
+            let answered = turns.iter().rev().find(|t| !t.reply_excerpt.is_empty());
+            match answered {
+                Some(t) if ask_count > 1 => (
+                    "forgotten",
+                    format!(
+                        "reply {} in {}, asked again {}",
+                        date(&t.ts),
+                        t.session_id,
+                        newest.map(|t| date(&t.ts)).unwrap_or_else(|| "?".into()),
+                    ),
+                ),
+                Some(t) => ("open", format!("reply {} in {}", date(&t.ts), t.session_id)),
+                None => (
+                    "lost",
+                    format!(
+                        "no reply and no node since {}",
+                        newest.map(|t| date(&t.ts)).unwrap_or_else(|| "?".into()),
+                    ),
+                ),
+            }
+        }
+        _ => ("open", format!("asked {ask_count}x, awaiting a reply")),
+    }
+}
+
 /// One group's row. `group` holds the turns oldest first (the walk sorts
 /// them) with each turn's own link kind.
 fn row_for(
@@ -391,6 +475,24 @@ fn row_for(
         (None, None) => String::new(),
     };
     let ask_count = sessions.len();
+    let responses: Vec<ResponseRef> = turns
+        .iter()
+        .map(|t| ResponseRef {
+            session: t.session_id.clone(),
+            name: t.name.clone(),
+            ts: t.ts.clone(),
+            reply: t.reply_excerpt.clone(),
+            transcript: t.transcript.clone(),
+        })
+        .collect();
+    let (outcome, outcome_why) = judge(
+        state,
+        node.as_deref(),
+        facts.and_then(|n| n.status.as_deref()),
+        facts.and_then(|n| n.completed_at.as_deref()),
+        &turns,
+        ask_count,
+    );
     RequestRow {
         key,
         aliases: turns.iter().map(|t| t.turn_id.clone()).collect(),
@@ -407,6 +509,9 @@ fn row_for(
         node,
         node_link,
         reply_excerpt: newest.map(|t| t.reply_excerpt.clone()).unwrap_or_default(),
+        responses,
+        outcome,
+        outcome_why,
         state,
         days_unaddressed: days,
         rank_score: days * ask_count as i64,
@@ -630,5 +735,88 @@ mod tests {
         keys.sort();
         assert_eq!(keys, ["node:x-aaaa", "node:x-bbbb"]);
         assert!(out.rows.iter().all(|r| r.state == "linked"));
+    }
+
+    /// The judged outcome table: a closed node with no return reads solved,
+    /// a closed node asked again or a stalled one reads forgotten, silence
+    /// with no node reads lost, and a reply the operator asked again past
+    /// reads forgotten with the reply and the re-ask as its evidence.
+    #[test]
+    fn judged_outcomes_read_the_observed_facts() {
+        let mut solved_ask = turn(
+            "s1",
+            "t1",
+            "2026-11-05T00:00:00Z",
+            "fix the x-cccc stamp regression",
+        );
+        solved_ask.reply_excerpt = "fixed in the merge stamp".into();
+        let mut forgotten_ask = turn(
+            "s2",
+            "t2",
+            "2026-11-12T00:00:00Z",
+            "the x-dddd pane is still blank",
+        );
+        forgotten_ask.reply_excerpt = "looking into it".into();
+        let mut repeat = turn("s2", "t3", "2026-11-18T00:00:00Z", "x-dddd is still blank");
+        repeat.reply_excerpt = "on it now".into();
+        let mut lost_ask = turn(
+            "s3",
+            "t4",
+            "2026-11-15T00:00:00Z",
+            "the install doc is missing steps",
+        );
+        let nodes = [
+            node(
+                "x-cccc",
+                "done",
+                Some("2026-11-08T00:00:00Z"),
+                "2026-11-08T00:00:00Z",
+            ),
+            node("x-dddd", "ready", None, "2026-11-13T00:00:00Z"),
+        ];
+        let out = fold(
+            &[solved_ask, forgotten_ask, repeat, lost_ask],
+            &HashMap::new(),
+            &nodes,
+            now(),
+        );
+        // x-dddd: movement 11-13, now 11-21: 8 days idle -> stalled ->
+        // forgotten, and the response chain carries both turns.
+        let mut by_key: BTreeMap<&str, &RequestRow> =
+            out.rows.iter().map(|r| (r.key.as_str(), r)).collect();
+        let solved = by_key.remove("node:x-cccc").unwrap();
+        assert_eq!((solved.state, solved.outcome), ("done", "solved"));
+        assert!(
+            solved.outcome_why.contains("closed 2026-11-08"),
+            "{}",
+            solved.outcome_why
+        );
+        let forgotten = by_key.remove("node:x-dddd").unwrap();
+        assert_eq!(
+            (forgotten.state, forgotten.outcome),
+            ("stalled", "forgotten")
+        );
+        let lost = by_key
+            .values()
+            .find(|r| r.text.contains("install doc"))
+            .unwrap();
+        assert_eq!((lost.state, lost.outcome), ("no_node", "lost"));
+        assert!(
+            lost.outcome_why.contains("no reply"),
+            "{}",
+            lost.outcome_why
+        );
+        // t2 (11-12) and t3 (11-18) share node x-dddd -> one row; the
+        // response chain carries both turns with their replies.
+        assert_eq!(forgotten.responses.len(), 2, "{:?}", forgotten.responses);
+        assert_eq!(
+            forgotten.responses.first().unwrap().reply,
+            "looking into it"
+        );
+        assert_eq!(
+            forgotten.responses.last().unwrap().transcript,
+            "t",
+            "the transcript path rides each response"
+        );
     }
 }

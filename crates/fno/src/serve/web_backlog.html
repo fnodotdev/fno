@@ -3028,6 +3028,8 @@ function laneKeyOf(card, lanesBy, parents, byId) {
   if (SNAPSHOT && snap.failed) {
     showNoteLine(snap.failed);
   }
+  const wanted = new URLSearchParams(location.search).get("node");
+  if (wanted) openNode(wanted);
   if (openId) openNode(openId);
   // One row per click on a control that names itself (data-fno): the bridge
   // writes it through the same door the TUI client uses, ids only, and a

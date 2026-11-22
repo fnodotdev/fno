@@ -69,7 +69,7 @@ body[data-density="compact"] .wrap{gap:6px;padding-top:6px}body[data-density="co
       <div class="hint">Hover to fire · click for details · drag to pan · scroll to zoom</div>
       <div class="tip" id="tip"></div>
     </section>
-    <section class="panel" aria-label="Requests"><h2>Requests <button id="req-topics" class="chip" aria-pressed="false">by topic</button></h2><div id="requests"></div></section>
+    <section class="panel" aria-label="Thoughts"><h2>Thoughts <button id="req-topics" class="chip" aria-pressed="false">by topic</button></h2><div id="requests"></div></section>
     <section class="panel" aria-label="Waiting on you"><h2>Waiting on you</h2><div id="waiting"></div></section>
   </div>
   <section class="tablewrap" id="view-table" hidden aria-label="Seats">
@@ -152,7 +152,7 @@ function requests(model) {
   box.replaceChildren();
   const btn = document.getElementById("req-topics");
   btn.onclick = () => { reqTopics = !reqTopics; btn.setAttribute("aria-pressed", String(reqTopics)); requests(model); };
-  if (model.requests_error && !(model.requests || []).length) box.append(el("p", "empty", "requests not read: " + model.requests_error));
+  if (model.requests_error && !(model.requests || []).length) box.append(el("p", "empty", "thoughts not read: " + model.requests_error));
   const rows = model.requests || [];
   if (!reqTopics) {
     for (const r of rows) box.append(reqRow(r));
@@ -164,6 +164,15 @@ function requests(model) {
     for (const i of g.rows) { const r = rows[i]; if (r) box.append(reqRow(r)); }
   }
 }
+
+function mdHeadline(text) {
+  const m = (text || "").match(/^#{1,6}\s+(.*)$/);
+  return m ? { level: m[1].length <= 2 ? "h2" : "h3", body: m[2] } : null;
+}
+function stripHashes(s) {
+  return (s || "").replace(/^#{1,6}\s+/gm, "");
+}
+
 function reqRow(r) {
   const r0 = el("div", "lk qrow"), t = el("span", "lt");
   r0.dataset.fno = "request_row";
@@ -172,13 +181,25 @@ function reqRow(r) {
   const open = days == null ? "" : days <= 0 ? "new today" : days === 1 ? "open 1 day" : "open " + days + " days";
   const nodeWord = r.node ? (r.node + (r.node_status ? " " + r.node_status : "")) : "no linked node";
   const stateWord = r.state === "stalled" ? "stalled" : (r.state === "regression" ? "asked again after done" : "");
+  const outcomeWord = { solved: "solved", lost: "lost", open: "open", forgotten: "acknowledged but forgotten" }[r.outcome] || "";
+  const outcomeLine = outcomeWord ? outcomeWord + (r.outcome_why ? " · " + r.outcome_why : "") : "";
   const windowWord = (r.first_ts && r.last_ts && r.first_ts.slice(0, 10) !== r.last_ts.slice(0, 10))
     ? "window " + r.first_ts.slice(0, 10) + " to " + r.last_ts.slice(0, 10) : "";
-  const meta = [asked, open, nodeWord, stateWord, windowWord].filter(Boolean).join(" · ");
-  const head = el("b", null, r.text || "(empty ask)");
+  const meta = [asked, open, stateWord, outcomeWord, windowWord].filter(Boolean).join(" · ");
+  const h = mdHeadline(r.text);
+  const head = h ? el(h.level, null, h.body) : el("b", null, r.text || "(empty ask)");
   head.title = meta;
   t.append(head, el("code", null, meta));
-  if (r.reply_excerpt) t.append(el("code", null, "reply: " + r.reply_excerpt));
+  if (outcomeLine) t.append(el("code", null, "outcome: " + outcomeLine));
+  if (r.reply_excerpt) t.append(el("code", null, "reply: " + stripHashes(r.reply_excerpt)));
+  for (const x of (r.responses || []).slice(0, 4)) {
+    t.append(el("code", null, x.ts.slice(0, 10) + " " + x.name + " in " + x.session + ": " + stripHashes(x.reply || "").slice(0, 80)));
+  }
+  if (r.node) {
+    const a = el("a", null, nodeWord);
+    a.href = "/backlog?node=" + encodeURIComponent(r.node);
+    t.append(a);
+  }
   r0.append(t);
   return r0;
 }

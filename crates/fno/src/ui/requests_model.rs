@@ -8,6 +8,18 @@
 
 use serde::{Deserialize, Serialize};
 
+/// One agent response inside an ask row: the session that answered, when,
+/// the reply excerpt, and the transcript path that carries it.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ResponseRef {
+    pub session: String,
+    pub name: String,
+    pub ts: String,
+    pub reply: String,
+    pub transcript: String,
+}
+
 /// One merged ask row as the fold printed it, parsed once off the door's
 /// stdout. Fields beyond these are the fold's own bookkeeping and are
 /// skipped, so the struct carries only what the board surfaces read.
@@ -23,6 +35,9 @@ pub struct RequestRow {
     pub state: String,
     pub days_unaddressed: Option<i64>,
     pub reply_excerpt: String,
+    pub responses: Vec<ResponseRef>,
+    pub outcome: Option<String>,
+    pub outcome_why: Option<String>,
 }
 
 /// A requests read's outcome: the ranked rows, or why the read failed.
@@ -86,12 +101,25 @@ fn parse_rows(bytes: &[u8]) -> RequestsRead {
 mod tests {
     #[test]
     fn parse_rows_reads_the_array_and_refuses_junk() {
-        let read = super::parse_rows(br#"[{"key":"node:x-1","ask_count":3}]"#);
+        let read = super::parse_rows(
+            br#"[{"key":"node:x-1","ask_count":3,"outcome":"solved",
+                 "responses":[{"session":"s1","name":"n1","ts":"2026-11-12T00:00:00Z",
+                 "reply":"done","transcript":"/t/p.jsonl"}]}]"#,
+        );
         let super::RequestsRead::Rows(rows) = read else {
             panic!("a well-shaped array parses");
         };
         assert_eq!(rows.len(), 1);
         assert_eq!(rows.first().map(|r| r.ask_count), Some(3));
+        let first = rows.first().unwrap();
+        assert_eq!(first.outcome.as_deref(), Some("solved"));
+        assert_eq!(
+            first
+                .responses
+                .first()
+                .map(|x| (x.session.as_str(), x.reply.as_str())),
+            Some(("s1", "done"))
+        );
         let failed = super::parse_rows(b"no requests since 2026-11-14");
         let super::RequestsRead::Failed(reason) = failed else {
             panic!("junk stdout refuses");

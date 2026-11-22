@@ -214,7 +214,7 @@ pub(crate) fn feed(
     let mut out = vec![
         Lb::default().s(" fleet / the user", TextStyle::Meta).done(),
         blank(),
-        Lb::default().s(" Your requests", TextStyle::Title).done(),
+        Lb::default().s(" Your thoughts", TextStyle::Title).done(),
     ];
     out.extend(requests_section(requests, error, grouped, width));
     out.push(blank());
@@ -264,7 +264,7 @@ pub(crate) fn feed(
     out
 }
 
-/// The HQ Requests rows above the questions: rank order, or the by-topic
+/// The HQ Thoughts rows above the questions: rank order, or the by-topic
 /// groups, each row with its ask count, dates, node state and flag.
 pub(crate) fn requests_section(
     requests: Option<&[crate::requests_model::RequestRow]>,
@@ -273,12 +273,12 @@ pub(crate) fn requests_section(
     width: usize,
 ) -> Vec<Line> {
     let Some(rows) = requests else {
-        return vec![meta("   requests not read yet")];
+        return vec![meta("   thoughts not read yet")];
     };
     let mut out = Vec::new();
     if rows.is_empty() {
         out.push(meta(match error {
-            Some(e) => format!("   requests not read: {e}"),
+            Some(e) => format!("   thoughts not read: {e}"),
             None => "   no asks recorded yet".to_string(),
         }));
         return out;
@@ -310,14 +310,33 @@ pub(crate) fn requests_section(
     out
 }
 
-/// One row: the ask text with its flag, then a dim line with the count,
-/// node state, dates and the reply excerpt.
+/// Render-safe text: markdown heading markers a pasted ask carries read as
+/// prose here; the web page renders the same markers as a real heading.
+fn strip_hashes(s: &str) -> String {
+    s.lines()
+        .map(|line| {
+            let t = line.trim_start();
+            let hashes = t.chars().take_while(|c| *c == '#').count();
+            let rest = t.get(hashes..).unwrap_or(t);
+            if hashes > 0 && hashes <= 6 && (rest.starts_with(' ') || rest.is_empty()) {
+                rest.trim_start()
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// One row: the ask text with its flag, then dim lines with the count,
+/// node state, dates, the judged outcome, the reply excerpt and the
+/// response chain.
 fn request_row_lines(r: &crate::requests_model::RequestRow, width: usize) -> Vec<Line> {
-    let text = if r.text.is_empty() {
+    let text = strip_hashes(if r.text.is_empty() {
         "(empty ask)"
     } else {
         r.text.as_str()
-    };
+    });
     let ask_count = r.ask_count.max(1);
     let asked_word = if ask_count == 1 {
         "asked once".to_string()
@@ -358,7 +377,7 @@ fn request_row_lines(r: &crate::requests_model::RequestRow, width: usize) -> Vec
             last.get(0..10).unwrap_or(last)
         )
     };
-    let reply = r.reply_excerpt.as_str();
+    let reply = strip_hashes(r.reply_excerpt.as_str());
     let meta_word = [asked_word, open_word, node_word, state_word, window]
         .into_iter()
         .filter(|w| !w.is_empty())
@@ -367,14 +386,39 @@ fn request_row_lines(r: &crate::requests_model::RequestRow, width: usize) -> Vec
     let head = Lb::default()
         .s("  ", TextStyle::Meta)
         .s(
-            fit(text, width.saturating_sub(4)).trim_end().to_string(),
+            fit(&text, width.saturating_sub(4)).trim_end().to_string(),
             TextStyle::Item,
         )
         .done();
     let mut out2 = vec![head];
     out2.push(meta(format!("      {meta_word}")));
+    let outcome_word = match r.outcome.as_deref() {
+        Some("solved") => Some("solved"),
+        Some("lost") => Some("lost"),
+        Some("forgotten") => Some("acknowledged but forgotten"),
+        Some("open") => Some("open"),
+        _ => None,
+    };
+    if let Some(word) = outcome_word {
+        let why = r.outcome_why.as_deref().unwrap_or("");
+        let line = if why.is_empty() {
+            word.to_string()
+        } else {
+            format!("{word} \u{b7} {why}")
+        };
+        out2.push(meta(format!("      outcome: {line}")));
+    }
     if !reply.is_empty() {
         out2.push(meta(format!("      reply: {reply}")));
+    }
+    if !r.responses.is_empty() {
+        let list = r
+            .responses
+            .iter()
+            .map(|x| format!("{} {}", x.ts.get(0..10).unwrap_or(&x.ts), x.session))
+            .collect::<Vec<_>>()
+            .join(" \u{b7} ");
+        out2.push(meta(format!("      responses: {list}")));
     }
     out2
 }
