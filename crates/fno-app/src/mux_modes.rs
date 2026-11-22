@@ -195,7 +195,7 @@ impl Rename {
                         div()
                             .text_color(rgb(p.muted))
                             .child(if self.agent.is_some() {
-                                "rename agent (fno label only)"
+                                "rename agent (and its harness session where it can)"
                             } else {
                                 "rename tab"
                             }),
@@ -457,7 +457,13 @@ impl RowMenu {
             )
             .children(rows)
             .when(renames, |d| {
-                d.child(ui::kbd("Rename changes the fno label only.", &p).px_2())
+                d.child(
+                    ui::kbd(
+                        "Rename agent also renames the harness session where it can.",
+                        &p,
+                    )
+                    .px_2(),
+                )
             })
             .child(ui::kbd("enter or 1-9 runs, esc closes", &p).px_2());
         // A click anywhere off the panel closes the menu.
