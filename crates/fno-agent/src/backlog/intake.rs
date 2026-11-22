@@ -781,24 +781,51 @@ fn resolve_depends_on(
 /// scoped to `prefixes` when given. `_PLAN_NODE_RE` is a suffix match on the
 /// filename, and a `#fragment` on the path never participates.
 fn plan_filename_node_id(path: &str, prefixes: &[String]) -> Option<String> {
+    plan_filename_node_id_in(
+        path,
+        prefixes,
+        super::node_ref::sequential_prefix().as_deref(),
+    )
+}
+
+/// `plan_filename_node_id` under an explicit mode: `Some("t")` reads a
+/// `-t-15.md` basename, `None` is hex. The seam the tests drive. The hex
+/// reader runs first (renamed rows keep hex ids in a sequential project);
+/// the sequential arm only reads the configured prefix.
+fn plan_filename_node_id_in(
+    path: &str,
+    prefixes: &[String],
+    seq_prefix: Option<&str>,
+) -> Option<String> {
     use regex::Regex;
     use std::sync::OnceLock;
     static PLAN_NODE_RE: OnceLock<Regex> = OnceLock::new();
     let plan_node_re = PLAN_NODE_RE.get_or_init(|| {
         Regex::new(r"-(?P<prefix>[a-z][a-z0-9]{0,7})-(?P<hex>[0-9a-f]{4,8})\.md$").unwrap()
     });
+    static PLAN_NODE_SEQ_RE: OnceLock<Regex> = OnceLock::new();
+    let plan_node_seq_re = PLAN_NODE_SEQ_RE.get_or_init(|| {
+        Regex::new(r"-(?P<prefix>[a-z][a-z0-9]{0,7})-(?P<num>[1-9][0-9]{0,6})\.md$").unwrap()
+    });
     let base = path.split('#').next().unwrap_or(path);
     let name = Path::new(base).file_name()?.to_string_lossy();
-    let caps = plan_node_re.captures(&name)?;
-    let prefix = caps.name("prefix")?.as_str().to_string();
+    let hex_caps = plan_node_re.captures(&name);
+    let seq_allowed = seq_prefix.is_some() && plan_node_seq_re.captures(&name).is_some();
+    if seq_allowed {
+        let seq_caps = plan_node_seq_re.captures(&name).unwrap();
+        let prefix = seq_caps["prefix"].to_string();
+        if seq_prefix == Some(prefix.as_str())
+            && (prefixes.is_empty() || prefixes.iter().any(|p| p.trim_end_matches('-') == prefix))
+        {
+            return Some(format!("{}-{}", prefix, &seq_caps["num"]));
+        }
+    }
+    let caps = hex_caps?;
+    let prefix = caps["prefix"].to_string();
     if !prefixes.is_empty() && !prefixes.iter().any(|p| p.trim_end_matches('-') == prefix) {
         return None;
     }
-    Some(format!(
-        "{}-{}",
-        caps.name("prefix")?.as_str(),
-        caps.name("hex")?.as_str()
-    ))
+    Some(format!("{}-{}", prefix, &caps["hex"]))
 }
 
 /// Refuse identity disagreement across filename, frontmatter, and CLI claim.
@@ -2992,5 +3019,35 @@ mod tests {
         );
         assert!(row.is_none());
         assert_eq!(seen.get(), 1, "the skip path spawns nothing");
+    }
+
+    #[test]
+    fn the_plan_filename_reads_a_sequential_id_in_sequential_mode_only() {
+        use super::plan_filename_node_id_in;
+        let seq = Some("t");
+        // Sequential mode reads the configured prefix's digit tails.
+        assert_eq!(
+            plan_filename_node_id_in("plans/rust-node-id-readers-t-15.md", &[], seq),
+            Some("t-15".to_string())
+        );
+        // Hex mode refuses the same basename.
+        assert_eq!(
+            plan_filename_node_id_in("plans/rust-node-id-readers-t-15.md", &[], None),
+            None
+        );
+        // Hex ids still read in a sequential project.
+        assert_eq!(
+            plan_filename_node_id_in("plans/rust-node-id-readers-x-beef.md", &[], seq),
+            Some("x-beef".to_string())
+        );
+        // Another prefix's token and a zero lead stay prose.
+        assert_eq!(
+            plan_filename_node_id_in("plans/rust-node-id-readers-u-9.md", &[], seq),
+            None
+        );
+        assert_eq!(
+            plan_filename_node_id_in("plans/rust-node-id-readers-t-07.md", &[], seq),
+            None
+        );
     }
 }
