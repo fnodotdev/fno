@@ -46,6 +46,8 @@ pub(crate) enum Placement {
     Tab { id: u64, ordinal: usize, dir: Dir },
     /// An open portal, shown the new worker in place.
     Portal(u8),
+    /// A new portal split off an open one, which keeps showing.
+    PortalSplit(u8, Dir),
     /// The one pane entry: a pane-hosted session in the active tab.
     PaneActiveTab,
 }
@@ -69,7 +71,7 @@ pub(crate) enum PickError {
     NoTab(String),
     #[error("--portal takes new or an open portal (got {0:?})")]
     NoPortal(String),
-    #[error("portal {0} is open, so it takes no tab or split")]
+    #[error("portal {0} is open, so drop --tab; --split opens a new portal beside it")]
     PortalGeometry(u8),
     #[error("--as pane opens in the active tab; it takes no portal, split or other tab")]
     PaneGeometry,
@@ -190,6 +192,7 @@ impl Places {
                 format!("tab {shown} {}", dir_word(dir))
             }
             Placement::Portal(idx) => format!("portal {idx}"),
+            Placement::PortalSplit(idx, dir) => format!("portal {idx} {}", dir_word(dir)),
             Placement::PaneActiveTab => "pane in active tab".to_string(),
         }
     }
@@ -224,6 +227,17 @@ impl Places {
                     ..PanePlacement::default()
                 };
             }
+            Placement::PortalSplit(idx, dir) => {
+                if !self.portal_open(idx) {
+                    return Err(PickError::PortalClosed(idx));
+                }
+                // The server turns the split into a new portal off this one.
+                out = PanePlacement {
+                    portal: Some(idx),
+                    split: Some(dir),
+                    ..PanePlacement::default()
+                };
+            }
             Placement::Split(dir) => {
                 let tab = self
                     .focus
@@ -254,7 +268,9 @@ impl Places {
         placement: Placement,
     ) -> Result<PanePlacement, PickError> {
         let placed = match placement {
-            Placement::Portal(_) => return Err(PickError::ShellPortal),
+            Placement::Portal(_) | Placement::PortalSplit(..) => {
+                return Err(PickError::ShellPortal)
+            }
             Placement::PaneActiveTab => PanePlacement {
                 tab: Some(TabSel::Active),
                 ..PanePlacement::default()
@@ -284,6 +300,11 @@ impl Places {
             Placement::NewTab => vec!["--tab", "new"],
             Placement::Split(dir) => vec!["--portal", "new", "--split", dir_word(dir)],
             Placement::Portal(idx) => return vec!["--portal".to_string(), idx.to_string()],
+            Placement::PortalSplit(idx, dir) => {
+                return ["--portal", &idx.to_string(), "--split", dir_word(dir)]
+                    .map(str::to_string)
+                    .to_vec();
+            }
             Placement::Tab { id, ordinal, dir } => {
                 let shown = self.ordinal(id).unwrap_or(ordinal).to_string();
                 return ["--tab", &shown, "--portal", "new", "--split", dir_word(dir)]
@@ -335,10 +356,12 @@ impl Places {
                 .ok()
                 .filter(|idx| self.portal_open(*idx))
                 .ok_or_else(|| PickError::NoPortal(word.to_string()))?;
-            if tab.is_some() || dir.is_some() {
+            if tab.is_some() {
                 return Err(PickError::PortalGeometry(idx));
             }
-            return Ok(Placement::Portal(idx));
+            return Ok(dir.map_or(Placement::Portal(idx), |dir| {
+                Placement::PortalSplit(idx, dir)
+            }));
         }
         match tab {
             Some("new") if dir.is_some() => Err(PickError::NewTabSplit),
@@ -378,7 +401,10 @@ pub(super) fn set_word(placement: Placement) -> &'static str {
         Placement::Split(Dir::Down) => "split-down",
         Placement::PaneActiveTab => "pane",
         Placement::NewTab => "tab",
-        Placement::LastPortal | Placement::Tab { .. } | Placement::Portal(_) => "thread",
+        Placement::LastPortal
+        | Placement::Tab { .. }
+        | Placement::Portal(_)
+        | Placement::PortalSplit(..) => "thread",
     }
 }
 
@@ -605,6 +631,7 @@ mod tests {
             ),
             (third, Some(TabSel::Id(33)), None, None),
             (Placement::Portal(2), None, None, Some(2)),
+            (Placement::PortalSplit(2, Dir::Down), None, None, Some(2)),
         ];
         for (pick, tab, at, portal) in cases {
             let placed = places

@@ -34,13 +34,13 @@ A bare `!` then Enter opens a plain login shell as a new tab of the card's works
 
 ## Open as
 
-A `!` line with no pick runs in the card, on its own pty, one at a time. While it runs every key but ctrl+o is the command's, esc included. Ctrl+o moves that same process to a tab. A detach moves it to a tab too, and a moved run waits for Enter when it ends. At its end the card shows the exit code and takes the next line. A failure keeps the line. Ctrl+o then opens the full log in a tab. A bare `!` still opens a login shell in a new tab, and a placement pick still opens a pane.
+A `!` line with no pick runs in the card, on its own pty, one at a time. While it runs every key but ctrl+o is the command's, esc included. Ctrl+o moves that same process to a tab. A detach moves it to a tab too. A moved run waits for Enter at its end. At its end the card shows the exit code and takes the next line. A failure keeps the line. Ctrl+o then opens the full log in a tab. A bare `!` still opens a login shell in a new tab, and a placement pick still opens a pane.
 
 A launch with no pick lands in the open portal this client focused last. With none focused yet it takes the lowest open index, and with none open it opens a new portal. The opens chip names that portal before Enter. An agent that was showing there keeps running.
 
-The opens list holds the last portal, a new tab, four directions, the tabs of the card's workspace, the open portals and a pane in the active tab. A tab row opens a second step for the direction. Esc steps back. A shift+arrow takes that direction at once.
+The opens list holds the last portal, a new tab and four directions. It also holds the workspace's tabs, the open portals and a pane in the active tab. A tab row opens a second step for the direction. Esc steps back. A shift+arrow takes that direction at once.
 
-The card holds a tab by its id. At Enter it reads the layout again. A tab or portal that closed refuses in the card and keeps the draft. After the worker starts, a target that closed or moved opens a new tab and says so. An open portal keeps its geometry and shows the new worker.
+The card holds a tab by its id. At Enter it reads the layout again. A tab or portal that closed refuses in the card and keeps the draft. After the worker starts, a target that closed or moved opens a new tab and says so. A picked open portal keeps its geometry and shows the new worker. An edited `--portal 2 --split down` opens a new portal below portal 2, which keeps showing.
 
 A saved set keeps a direction, a new tab or the pane entry. It never keeps a tab or portal number, and saves new tab for those picks. A server older than v132 takes only the default and the pane entry, so the card asks you to reconnect for the others.
 
