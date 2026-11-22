@@ -5,7 +5,7 @@
 //! place, and only then removes the source. A failed copy removes its temp,
 //! so the next pass never reads a partial copy as a destination.
 
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -220,7 +220,7 @@ fn discard(temp: &Path) {
     };
     let removed = if meta.is_dir() {
         // A failed chmod or listing shows up as the failed removal below.
-        if std::fs::set_permissions(temp, std::fs::Permissions::from_mode(0o700)).is_ok() {
+        if crate::paths::set_dir_mode_0700(temp).is_ok() {
             for child in std::fs::read_dir(temp).into_iter().flatten().flatten() {
                 discard(&child.path());
             }
