@@ -671,7 +671,7 @@ mod tests {
         // node and a session offers all three; a bare row offers only the
         // name.
         let mut row = paneless_row();
-        row.node = Some("x-a87c".into());
+        row.node = Some("demo-node".into());
         row.harness_session_id = Some("sid-0123".into());
         let menu = build_row_menu(&row, test_anchor());
         let header = menu
