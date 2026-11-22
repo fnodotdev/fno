@@ -549,7 +549,7 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
                 // provider names nothing here. A stale pane ref can no
                 // longer type into an unrelated pane: the ladder gates the
                 // pane lane on the row's live mux object itself.
-                match TurnText::parse(&wrapped) {
+                match fno_mail::turn::TurnText::parse(&wrapped) {
                     Ok(turn) => {
                         let mut reasons: Vec<String> = Vec::new();
                         let (state, _fallback) = deliver_live_lane(
