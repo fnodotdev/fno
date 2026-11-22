@@ -218,15 +218,28 @@ fn parse_ts(id: &str, raw: Option<&str>) -> Result<Option<DateTime<Utc>>, Schedu
 }
 
 fn row_from(row: &rusqlite::Row) -> Result<ScheduledSpawn, ScheduleError> {
-    let id: String = row.get("id")?;
-    let state_raw: String = row.get("state")?;
+    // Positional reads by SELECT_COLUMNS order: the shared value-read gate
+    // holds string-key map reads shrink-only crate-wide, so this store
+    // reads by index the way registry_store does.
+    let id: String = row.get(0)?;
+    let fire_at_raw: Option<String> = row.get(1)?;
+    let kind: String = row.get(2)?;
+    let interval_secs: Option<i64> = row.get(3)?;
+    let on_command: Option<String> = row.get(4)?;
+    let grace_secs: i64 = row.get(5)?;
+    let force: bool = row.get::<_, i64>(6)? != 0;
+    let node: Option<String> = row.get(7)?;
+    let argv_json: String = row.get(8)?;
+    let cwd: String = row.get(9)?;
+    let scheduler_session: String = row.get(10)?;
+    let state_raw: String = row.get(11)?;
+    let last_gate_reading: Option<String> = row.get(12)?;
+    let created_at_raw: String = row.get(13)?;
+    let last_attempt_raw: Option<String> = row.get(14)?;
     let state = RowState::parse(&state_raw).ok_or_else(|| ScheduleError::CorruptRow {
         id: id.clone(),
         detail: format!("unknown state {state_raw:?}"),
     })?;
-    let kind: String = row.get("trigger_kind")?;
-    let interval_secs: Option<i64> = row.get("interval_secs")?;
-    let on_command: Option<String> = row.get("on_command")?;
     let trigger = match kind.as_str() {
         "at" => Trigger::At,
         "every" => Trigger::Every {
@@ -248,32 +261,29 @@ fn row_from(row: &rusqlite::Row) -> Result<ScheduledSpawn, ScheduleError> {
             })
         }
     };
-    let argv_json: String = row.get("argv_json")?;
     let argv: Vec<String> =
         serde_json::from_str(&argv_json).map_err(|e| ScheduleError::CorruptRow {
             id: id.clone(),
             detail: format!("argv_json: {e}"),
         })?;
+    let created_at_utc =
+        parse_ts(&id, Some(&created_at_raw))?.ok_or_else(|| ScheduleError::CorruptRow {
+            id: id.clone(),
+            detail: "created_at_utc is never absent".into(),
+        })?;
     Ok(ScheduledSpawn {
-        fire_at_utc: parse_ts(&id, row.get::<_, Option<String>>("fire_at_utc")?.as_deref())?,
+        fire_at_utc: parse_ts(&id, fire_at_raw.as_deref())?,
         trigger,
-        grace_secs: row.get("grace_secs")?,
-        force: row.get::<_, i64>("force")? != 0,
-        node: row.get("node")?,
+        grace_secs,
+        force,
+        node,
         argv,
-        cwd: PathBuf::from(row.get::<_, String>("cwd")?),
-        scheduler_session: row.get("scheduler_session")?,
+        cwd: PathBuf::from(cwd),
+        scheduler_session,
         state,
-        last_gate_reading: row.get("last_gate_reading")?,
-        created_at_utc: parse_ts(&id, Some(row.get::<_, String>("created_at_utc")?.as_str()))?
-            .ok_or_else(|| ScheduleError::CorruptRow {
-                id: id.clone(),
-                detail: "created_at_utc is never absent".into(),
-            })?,
-        last_attempt_utc: parse_ts(
-            &id,
-            row.get::<_, Option<String>>("last_attempt_utc")?.as_deref(),
-        )?,
+        last_gate_reading,
+        created_at_utc,
+        last_attempt_utc: parse_ts(&id, last_attempt_raw.as_deref())?,
         id,
     })
 }
