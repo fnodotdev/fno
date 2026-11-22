@@ -32,6 +32,23 @@ pub const RECHECK: Duration = Duration::from_secs(6 * 60 * 60);
 /// `$1` is the running bundle, `$2` the staged one, `$3` the old pid.
 const RELAUNCH: &str = r#"while kill -0 "$3" 2>/dev/null; do sleep 0.2; done; if mv "$1" "$1.old"; then if mv "$2" "$1"; then rm -rf "$1.old"; else mv "$1.old" "$1"; fi; fi; open "$1""#;
 
+/// Why an update step failed: one line, ready to show.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct UpdateError(String);
+
+impl From<String> for UpdateError {
+    fn from(why: String) -> Self {
+        Self(why)
+    }
+}
+
+impl From<&str> for UpdateError {
+    fn from(why: &str) -> Self {
+        Self(why.to_string())
+    }
+}
+
 /// A build staged on disk and proven, waiting for the user's Restart.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Ready {
@@ -90,7 +107,7 @@ fn running_bundle() -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
-fn curl(url: &str, out: Option<&Path>) -> Result<Vec<u8>, String> {
+fn curl(url: &str, out: Option<&Path>) -> Result<Vec<u8>, UpdateError> {
     let mut cmd = Command::new("curl");
     cmd.args(["-fsSL", "--max-time", "300"]);
     // Only the API wants the header: a release download redirects to a
@@ -107,15 +124,12 @@ fn curl(url: &str, out: Option<&Path>) -> Result<Vec<u8>, String> {
         .output()
         .map_err(|e| format!("curl did not run: {e}"))?;
     if !o.status.success() {
-        return Err(format!(
-            "curl exited {} for {url}",
-            o.status.code().unwrap_or(-1)
-        ));
+        return Err(format!("curl exited {} for {url}", o.status.code().unwrap_or(-1)).into());
     }
     Ok(o.stdout)
 }
 
-fn sha256_of(path: &Path) -> Result<String, String> {
+fn sha256_of(path: &Path) -> Result<String, UpdateError> {
     let o = Command::new("shasum")
         .args(["-a", "256"])
         .arg(path)
@@ -158,7 +172,7 @@ fn prune(root: &Path, keep: Option<&str>) {
 /// The newest stable `fno-app-v*` release past `running`. The ref listing
 /// is filtered by the tag prefix on the server, so releases of the other
 /// products in this repository never crowd it out of the page.
-fn newest_stable(running: &str) -> Result<Option<(String, String)>, String> {
+fn newest_stable(running: &str) -> Result<Option<(String, String)>, UpdateError> {
     let api = format!("https://api.github.com/repos/{}", repo_slug());
     let refs = curl(&format!("{api}/git/matching-refs/tags/{TAG_PREFIX}"), None)?;
     let refs: Vec<TagRef> =
@@ -191,7 +205,7 @@ fn newest_stable(running: &str) -> Result<Option<(String, String)>, String> {
 
 /// Read the feed and, when a newer release exists, stage and prove it.
 /// Blocking: call it off the UI thread. `Ok(None)` means up to date.
-pub fn check(running: &str) -> Result<Option<Ready>, String> {
+pub fn check(running: &str) -> Result<Option<Ready>, UpdateError> {
     let bundle = running_bundle().ok_or("not running from an app bundle")?;
     let root = update_dir().ok_or("no home directory")?;
     let Some((version, notes)) = newest_stable(running)? else {
@@ -220,7 +234,7 @@ pub fn check(running: &str) -> Result<Option<Ready>, String> {
         // Another instance staged the same version first: its copy stands.
         let _ = std::fs::remove_dir_all(&work);
         if !staged.is_dir() {
-            return Err(format!("{}: {e}", dir.display()));
+            return Err(format!("{}: {e}", dir.display()).into());
         }
     }
     Ok(Some(Ready {
@@ -231,7 +245,7 @@ pub fn check(running: &str) -> Result<Option<Ready>, String> {
 }
 
 /// Download into `work`, unpack, and run the four proofs.
-fn stage(bundle: &Path, version: &str, work: &Path) -> Result<(), String> {
+fn stage(bundle: &Path, version: &str, work: &Path) -> Result<(), UpdateError> {
     let base = format!(
         "https://github.com/{}/releases/download/{TAG_PREFIX}{version}",
         repo_slug()
@@ -246,7 +260,7 @@ fn stage(bundle: &Path, version: &str, work: &Path) -> Result<(), String> {
         .ok_or("the sha256 sidecar is empty")?;
     let got = sha256_of(&tarball)?;
     if got != want {
-        return Err(format!("sha256 mismatch: want {want}, got {got}"));
+        return Err(format!("sha256 mismatch: want {want}, got {got}").into());
     }
     let untar = Command::new("tar")
         .arg("-xzf")
@@ -256,7 +270,7 @@ fn stage(bundle: &Path, version: &str, work: &Path) -> Result<(), String> {
         .status()
         .map_err(|e| format!("tar did not run: {e}"))?;
     if !untar.success() {
-        return Err("the tarball did not unpack".to_string());
+        return Err("the tarball did not unpack".into());
     }
     let app = work.join("fno-app.app");
     let signed = Command::new("codesign")
@@ -265,11 +279,11 @@ fn stage(bundle: &Path, version: &str, work: &Path) -> Result<(), String> {
         .status()
         .map_err(|e| format!("codesign did not run: {e}"))?;
     if !signed.success() {
-        return Err("the staged bundle failed codesign verification".to_string());
+        return Err("the staged bundle failed codesign verification".into());
     }
     if let Some(mine) = team_id(bundle) {
         if team_id(&app).as_deref() != Some(mine.as_str()) {
-            return Err(format!("the staged bundle is not signed by team {mine}"));
+            return Err(format!("the staged bundle is not signed by team {mine}").into());
         }
     }
     let said = Command::new(app.join("Contents/MacOS/fno-app"))
@@ -277,7 +291,7 @@ fn stage(bundle: &Path, version: &str, work: &Path) -> Result<(), String> {
         .output()
         .map_err(|e| format!("the staged app did not run: {e}"))?;
     if String::from_utf8_lossy(&said.stdout).trim() != format!("fno-app {version}") {
-        return Err(format!("the staged app does not name version {version}"));
+        return Err(format!("the staged app does not name version {version}").into());
     }
     Ok(())
 }
@@ -285,9 +299,9 @@ fn stage(bundle: &Path, version: &str, work: &Path) -> Result<(), String> {
 /// Refuse before quitting when the swap cannot work: a translocated
 /// bundle is read-only, and a folder the user cannot write to blocks the
 /// rename. The relaunch script cannot report either.
-fn swappable(bundle: &Path) -> Result<(), String> {
+fn swappable(bundle: &Path) -> Result<(), UpdateError> {
     if bundle.to_string_lossy().contains("/AppTranslocation/") {
-        return Err("the app runs from a quarantined copy: move fno-app.app to Applications, then reopen it".to_string());
+        return Err("the app runs from a quarantined copy: move fno-app.app to Applications, then reopen it".into());
     }
     let dir = bundle.parent().ok_or("the app bundle has no folder")?;
     let probe = dir.join(format!(".fno-app-update-{}", std::process::id()));
@@ -299,7 +313,7 @@ fn swappable(bundle: &Path) -> Result<(), String> {
 
 /// Record the notes for the next launch, then start the swap-and-open
 /// script. The caller quits right after: the script waits for this pid.
-pub fn install_and_relaunch(ready: &Ready) -> Result<(), String> {
+pub fn install_and_relaunch(ready: &Ready) -> Result<(), UpdateError> {
     let bundle = running_bundle().ok_or("not running from an app bundle")?;
     let root = update_dir().ok_or("no home directory")?;
     swappable(&bundle)?;
