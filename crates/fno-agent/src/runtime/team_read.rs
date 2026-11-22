@@ -891,7 +891,7 @@ mod tests {
         let map = past_leads_by_scope(&store);
         let past = map
             .iter()
-            .find(|(scope, _)| scope == "epic-x")
+            .find(|(scope, _)| scope.as_str() == "epic-x")
             .map(|(_, list)| list)
             .expect("epic-x carries past leads");
         assert_eq!(
