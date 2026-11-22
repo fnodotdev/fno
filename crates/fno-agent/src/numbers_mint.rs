@@ -4,8 +4,8 @@
 //! number it, so one number never names two records.
 
 use super::{
-    canonical, is_label_key, is_question_hash, mint_local, mint_remote, open_write_at, pull,
-    retired, DDL, LOCAL_STORE,
+    canonical, is_label_key, kind_and_key, mint_local, mint_remote, open_write_at, pull, retired,
+    DDL, LOCAL_STORE,
 };
 use crate::store_remote::{Remote, SqlValue};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -131,17 +131,19 @@ pub(crate) fn answer_key_at(
     let store = remote.map_or(LOCAL_STORE, Remote::host);
     let question = canonical(question);
     let mut label = own_number(&conn, question, store)?.or_else(|| retired(&conn, question));
-    if label.is_none() && (is_label_key(question) || is_question_hash(question)) {
-        // An older question the beat has not reached gets its number now. A
-        // number is never made up from typed text: a label needs a row.
+    // A question keyed by a hash or a fixed id gets its number before its
+    // answer takes it, so the two never read as two numbers. A number is never
+    // made up from typed text: a label needs a row of its own.
+    let unkeyed = kind_and_key(question).is_some_and(|(kind, _)| kind == "d");
+    if label.is_none() && (is_label_key(question) || unkeyed) {
         match remote {
-            None if is_question_hash(question) => {
+            None if unkeyed => {
                 mint_local(&conn, question, store, host).map_err(MintError::Store)?;
             }
             None => {}
             Some(remote) => {
                 let numbered = remote.script(DDL).and_then(|()| {
-                    if is_question_hash(question) {
+                    if unkeyed {
                         mint_remote(remote, &[question.to_string()], host)?;
                     }
                     pull(remote, &conn)

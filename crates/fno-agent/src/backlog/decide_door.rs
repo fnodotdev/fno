@@ -2057,14 +2057,15 @@ mod tests {
             .get("decision_id")
             .and_then(Value::as_str)
             .unwrap_or("");
-        // The receipt label rides the record: the answer decision reads as
-        // its question's number, never a second mint of its own.
+        // The first answer holds its question's number. A later ruling on
+        // that question is a record of its own, so it takes another.
         let qlabel = crate::numbers::label("q-closeaa1").expect("numbered");
-        assert_eq!(
-            crate::numbers::label(did).as_deref(),
-            Some(qlabel.as_str()),
-            "{did}"
+        assert!(
+            rows.iter()
+                .any(|r| crate::law_match::row_id(r) == qlabel.as_str()),
+            "no answer holds {qlabel}"
         );
+        assert_ne!(did, qlabel, "a later ruling reused the question's number");
         // Already closed: the numbered rerun adds no second close.
         let closes = crate::event_store::journal_text(&index, &["operator_question_closed"]);
         assert_eq!(closes.lines().count(), 1, "{closes}");

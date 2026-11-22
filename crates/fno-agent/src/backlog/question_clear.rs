@@ -108,7 +108,8 @@ mod tests {
         let result = run_clear(&req);
 
         assert_eq!(result.exit_code, 0, "{:?}", result.lines);
-        assert!(result.lines[0].starts_with("outstanding: closed q-open (decision d-"));
+        // The fixed-id question takes D1, and its answer takes the same number.
+        assert!(result.lines[0].starts_with("outstanding: closed q-open (decision D1 "));
         assert!(result.lines[0].ends_with(" recorded)"));
         assert!(result
             .lines
