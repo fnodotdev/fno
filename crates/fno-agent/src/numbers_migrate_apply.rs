@@ -1336,7 +1336,9 @@ mod tests {
     #[test]
     #[ignore = "spawned with a seeded FNO_HOME by the two-project vault test"]
     fn migrate_ids_two_project_apply_child() {
-        assert_eq!(super::super::run(&["--apply".to_string()]), 0);
+        let code = super::super::run(&["--apply".to_string()]);
+        eprintln!("child: apply from project-a exited {code}");
+        assert_eq!(code, 0);
         // The backup dir stamps at second resolution; keep the two applies
         // in distinct dirs.
         std::thread::sleep(std::time::Duration::from_millis(1100));
@@ -1347,7 +1349,9 @@ mod tests {
             .join("project-b");
         std::env::set_var("FNO_CONFIG", sibling.join(".fno/config.toml"));
         std::env::set_current_dir(&sibling).unwrap();
-        assert_eq!(super::super::run(&["--apply".to_string()]), 0);
+        let code = super::super::run(&["--apply".to_string()]);
+        eprintln!("child: apply from project-b exited {code}");
+        assert_eq!(code, 0);
     }
 
     #[test]
@@ -1401,12 +1405,13 @@ mod tests {
         let out = crate::bounded_cmd::output_with_timeout_result(cmd, 600).unwrap();
         assert!(
             out.status.success(),
-            "the two-project child failed: {}",
+            "the two-project child failed:\n-- child stdout --\n{}\n-- child stderr --\n{}",
+            String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         );
         assert!(
             String::from_utf8_lossy(&out.stdout).contains("1 passed"),
-            "the child matched no test: {}",
+            "the child matched no test:\n{}",
             String::from_utf8_lossy(&out.stdout)
         );
 
