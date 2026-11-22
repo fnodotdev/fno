@@ -93,22 +93,20 @@ pub(crate) fn start_server_at(path: &Path) -> std::io::Result<()> {
     }
 }
 
-/// A Codex companion session is the explicit sandbox marker for an owner-bound
-/// mux server. A caller may pass an outer script's pid; otherwise an attaching
-/// client owns the detached server for the duration of its attach.
+/// An owner-bound mux server. An explicit `FNO_OWNER_SESSION` is the sandbox
+/// marker; without it the attaching client's own ambient harness session
+/// names the owner, so a lazy server binds in any harness (claude, codex,
+/// opencode, gemini, pi) with no third-party plugin. `CODEX_COMPANION_SESSION_ID`
+/// - the openai-codex Claude plugin's stamp, which carries the Claude session
+/// id - stays as the last fallback. A caller may pass an outer script's pid;
+/// otherwise an attaching client owns the detached server for the duration
+/// of its attach.
 pub(super) fn stamp_sandbox_owner(cmd: &mut Command, attaching: bool) {
     const OWNER_KEYS: [&str; 3] = ["FNO_OWNER_PID", "FNO_OWNER_BIRTH", "FNO_OWNER_SESSION"];
     for key in OWNER_KEYS {
         cmd.env_remove(key);
     }
-    let session = std::env::var("FNO_OWNER_SESSION")
-        .ok()
-        .filter(|v| valid_owner_session(v))
-        .or_else(|| {
-            std::env::var("CODEX_COMPANION_SESSION_ID")
-                .ok()
-                .filter(|v| valid_owner_session(v))
-        });
+    let session = resolve_owner_session();
     let lease = owner_lease(
         session,
         std::env::var("FNO_OWNER_PID").ok(),
@@ -143,6 +141,33 @@ fn owner_lease(
         None => crate::proto::pid_start_time(owner_pid)?,
     };
     (crate::proto::pid_start_time(owner_pid) == Some(birth)).then_some((owner_pid, birth, session))
+}
+
+/// The session id an owner stamp carries, or `None` for an ownerless server.
+/// Highest precedence first: the explicit `FNO_OWNER_SESSION` sandbox marker,
+/// then fno's own ambient resolution - the same [`crate::backlog::join_marker::join_candidate`]
+/// walk the front-door join uses, so a plain harness session needs no plugin -
+/// and finally `CODEX_COMPANION_SESSION_ID` for callers predating the walk.
+fn resolve_owner_session() -> Option<String> {
+    owner_session_choice(
+        std::env::var("FNO_OWNER_SESSION").ok(),
+        crate::backlog::join_marker::join_candidate(&|k| std::env::var(k).ok()).map(|(_, sid)| sid),
+        std::env::var("CODEX_COMPANION_SESSION_ID").ok(),
+    )
+}
+
+/// The pure precedence: an unusable id falls through to the next arm, so a
+/// slash-bearing ambient id never blocks the plugin export.
+fn owner_session_choice(
+    fno_owner: Option<String>,
+    ambient: Option<String>,
+    codex: Option<String>,
+) -> Option<String> {
+    [fno_owner, ambient, codex]
+        .into_iter()
+        .flatten()
+        .filter(|v| valid_owner_session(v))
+        .next()
 }
 
 fn valid_owner_session(session: &str) -> bool {
@@ -187,7 +212,10 @@ pub(crate) fn config_says_off(stdout: &str) -> bool {
 
 #[cfg(test)]
 mod spawn_config_tests {
-    use super::{config_says_off, owner_lease, scrollback_lines_value, window_size_word};
+    use super::{
+        config_says_off, owner_lease, owner_session_choice, scrollback_lines_value,
+        window_size_word,
+    };
 
     /// The env bridge from config.toml to the interactive server's
     /// latched env: must mirror `pty::integration_disabled` - exactly
@@ -223,5 +251,56 @@ mod spawn_config_tests {
         let declared = owner_lease(session(), Some(me.to_string()), None, false);
         assert_eq!(declared.map(|lease| lease.0), Some(me));
         assert_eq!(owner_lease(None, None, None, true), None);
+    }
+
+    /// A session without the codex plugin still stamps: the ambient harness
+    /// identity resolves. The explicit sandbox marker wins, the companion id
+    /// drops to last fallback, and an unusable id falls through.
+    #[test]
+    fn owner_session_resolves_from_ambient_identity_without_the_codex_plugin() {
+        let choice = |fno_owner, ambient, codex| owner_session_choice(fno_owner, ambient, codex);
+        // The node's case: plain opencode and pi sessions, no plugin env.
+        assert_eq!(
+            choice(None, Some("oc-1".to_string()), None),
+            Some("oc-1".to_string())
+        );
+        assert_eq!(
+            choice(None, Some("pi.1".to_string()), None),
+            Some("pi.1".to_string())
+        );
+        // Precedence: explicit marker > ambient > companion.
+        assert_eq!(
+            choice(
+                Some("sandbox-1".to_string()),
+                Some("claude-1".to_string()),
+                Some("companion-1".to_string())
+            ),
+            Some("sandbox-1".to_string())
+        );
+        assert_eq!(
+            choice(
+                None,
+                Some("claude-1".to_string()),
+                Some("companion-1".to_string())
+            ),
+            Some("claude-1".to_string())
+        );
+        // Last fallback: the companion alone still binds, today's path kept.
+        assert_eq!(
+            choice(None, None, Some("companion-1".to_string())),
+            Some("companion-1".to_string())
+        );
+        // An ambient id the stamp cannot carry falls through to the companion.
+        assert_eq!(
+            choice(
+                None,
+                Some("has/slash".to_string()),
+                Some("companion-1".to_string())
+            ),
+            Some("companion-1".to_string())
+        );
+        // No identity at all: the ownerless shared server a bare terminal
+        // gets today.
+        assert_eq!(choice(None, None, None), None);
     }
 }
