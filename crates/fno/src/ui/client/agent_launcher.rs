@@ -613,7 +613,7 @@ impl LaunchDraft {
         // placement names the lane, and `prepare` adds it typed. The one
         // pane entry pins the pane lane and its tab.
         let (substrate, placement): (&str, Option<&str>) = match self.placement {
-            Placement::NewTab => ("", None),
+            Placement::LastPortal => ("", None),
             Placement::PaneActiveTab => ("pane", Some("active")),
             _ => ("thread", None),
         };
@@ -1487,7 +1487,7 @@ async fn submit(
     }
     if !matches!(
         l.draft.placement,
-        Placement::NewTab | Placement::PaneActiveTab
+        Placement::LastPortal | Placement::NewTab | Placement::PaneActiveTab
     ) && !crate::mux_rows::wire_at_least(&view.session, crate::proto::LAUNCH_PLACEMENT_PROTO)
     {
         l.phase = Phase::Refused {

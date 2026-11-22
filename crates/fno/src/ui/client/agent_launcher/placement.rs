@@ -33,8 +33,11 @@ fn dir_mark(dir: Dir) -> (&'static str, &'static str) {
 /// cannot carry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum Placement {
-    /// A new portal in a new tab.
+    /// No pick: the open portal this client focused last, or a new one when
+    /// none is open.
     #[default]
+    LastPortal,
+    /// A new portal in a new tab.
     NewTab,
     /// A new portal split off the pane focused at Enter.
     Split(Dir),
@@ -88,12 +91,41 @@ pub(crate) struct Places {
     active: Option<u64>,
     /// The focused pane and its tab, when they are in this workspace.
     focus: Option<(u64, u64)>,
+    /// The portal a launch with no pick takes.
+    last: Option<u8>,
+}
+
+impl View {
+    /// The portal whose seat has the focus.
+    fn focused_portal(&self) -> Option<u8> {
+        let focus = self.layout.focus;
+        self.layout
+            .agents
+            .iter()
+            .find(|row| row.pane_id == Some(focus) && row.portal.is_some())
+            .and_then(|row| row.portal)
+    }
+
+    /// Remember the portal this client focused last, for as long as it is open.
+    pub(in crate::ui::client) fn note_portal_focus(&mut self) {
+        self.last_portal = self.focused_portal().or_else(|| {
+            self.last_portal
+                .filter(|last| self.open_portal_rows().iter().any(|(_, idx)| idx == last))
+        });
+    }
+}
+
+/// The portal of a launch with no pick: the focused or last focused one that
+/// is open, else the lowest open index, as Enter on a row takes.
+fn default_portal(open: &[(u8, String)], last: Option<u8>) -> Option<u8> {
+    last.filter(|last| open.iter().any(|(idx, _)| idx == last))
+        .or_else(|| open.first().map(|(idx, _)| *idx))
 }
 
 impl Places {
     pub(super) fn read(view: &View, squad: u64) -> Self {
         let squads = &view.layout.squads;
-        let portals = view
+        let portals: Vec<(u8, String)> = view
             .open_portal_rows()
             .into_iter()
             .map(|(row, idx)| {
@@ -108,9 +140,11 @@ impl Places {
                 (idx, shows)
             })
             .collect();
+        let last = default_portal(&portals, view.focused_portal().or(view.last_portal));
         let Some(own) = squads.iter().find(|sq| sq.id == squad) else {
             return Self {
                 portals,
+                last,
                 ..Self::default()
             };
         };
@@ -125,6 +159,7 @@ impl Places {
                 })
                 .collect(),
             portals,
+            last,
             active: own.tabs.get(own.active_tab).map(|t| t.id),
             focus: own
                 .tabs
@@ -144,6 +179,10 @@ impl Places {
 
     pub(super) fn label(&self, placement: Placement) -> String {
         match placement {
+            Placement::LastPortal => match self.last {
+                Some(idx) => format!("portal {idx}"),
+                None => "new portal".to_string(),
+            },
             Placement::NewTab => "new tab".to_string(),
             Placement::Split(dir) => format!("split {}", dir_word(dir)),
             Placement::Tab { id, ordinal, dir } => {
@@ -170,6 +209,10 @@ impl Places {
         }
         match placement {
             Placement::PaneActiveTab => return Ok(None),
+            Placement::LastPortal => {
+                let resolved = self.last.map_or(Placement::NewTab, Placement::Portal);
+                return self.open_as(squad, resolved);
+            }
             Placement::NewTab => out.tab = Some(TabSel::New),
             Placement::Portal(idx) => {
                 if !self.portal_open(idx) {
@@ -216,6 +259,8 @@ impl Places {
                 tab: Some(TabSel::Active),
                 ..PanePlacement::default()
             },
+            // A shell never takes a portal, so no pick is a new tab.
+            Placement::LastPortal => self.open_as(squad, Placement::NewTab)?.unwrap_or_default(),
             other => self.open_as(squad, other)?.unwrap_or_default(),
         };
         Ok(PanePlacement {
@@ -229,7 +274,14 @@ impl Places {
     /// launch carries none: the server opens the one portal.
     pub(super) fn flags(&self, placement: Placement) -> Vec<String> {
         let words = match placement {
-            Placement::NewTab | Placement::PaneActiveTab => Vec::new(),
+            Placement::PaneActiveTab => Vec::new(),
+            Placement::LastPortal => {
+                return self
+                    .last
+                    .map(|idx| vec!["--portal".to_string(), idx.to_string()])
+                    .unwrap_or_default();
+            }
+            Placement::NewTab => vec!["--tab", "new"],
             Placement::Split(dir) => vec!["--portal", "new", "--split", dir_word(dir)],
             Placement::Portal(idx) => return vec!["--portal".to_string(), idx.to_string()],
             Placement::Tab { id, ordinal, dir } => {
@@ -298,7 +350,11 @@ impl Places {
                 let dir = dir.unwrap_or(Dir::Down);
                 Ok(Placement::Tab { id, ordinal, dir })
             }
-            None => Ok(dir.map_or(Placement::NewTab, Placement::Split)),
+            None => Ok(match dir {
+                Some(dir) => Placement::Split(dir),
+                None if portal.is_some() => Placement::NewTab,
+                None => Placement::LastPortal,
+            }),
         }
     }
 }
@@ -321,7 +377,8 @@ pub(super) fn set_word(placement: Placement) -> &'static str {
         Placement::Split(Dir::Up) => "split-up",
         Placement::Split(Dir::Down) => "split-down",
         Placement::PaneActiveTab => "pane",
-        Placement::NewTab | Placement::Tab { .. } | Placement::Portal(_) => "tab",
+        Placement::NewTab => "tab",
+        Placement::LastPortal | Placement::Tab { .. } | Placement::Portal(_) => "thread",
     }
 }
 
@@ -332,7 +389,8 @@ pub(super) fn from_set_word(word: &str) -> Placement {
         "split-up" => Placement::Split(Dir::Up),
         "split-down" => Placement::Split(Dir::Down),
         "pane" => Placement::PaneActiveTab,
-        _ => Placement::NewTab,
+        "tab" => Placement::NewTab,
+        _ => Placement::LastPortal,
     }
 }
 
@@ -364,6 +422,17 @@ pub(super) fn rows(l: &Launcher) -> (Vec<PopupRow>, Vec<Option<PickerAction>>) {
         );
     };
     let place = PickerAction::Place;
+    if !l.shell {
+        let last = Placement::LastPortal;
+        let shows = l.places.label(last);
+        add(
+            "\u{25eb}",
+            "last portal",
+            &shows,
+            picked == last,
+            place(last),
+        );
+    }
     let new_tab = Placement::NewTab;
     add("+", "new tab", "", picked == new_tab, place(new_tab));
     for dir in DIRS {
@@ -516,6 +585,7 @@ mod tests {
             portals: vec![(2, "kite".to_string())],
             active: Some(11),
             focus: Some((11, 7)),
+            last: Some(2),
         };
         let third = Placement::Tab {
             id: 33,
@@ -565,8 +635,40 @@ mod tests {
             places.shell(1, Placement::Portal(2)),
             Err(PickError::ShellPortal)
         );
-        assert_eq!(from_set_word(set_word(third)), Placement::NewTab);
-        assert_eq!(from_set_word("thread"), Placement::NewTab);
+        assert_eq!(from_set_word(set_word(third)), Placement::LastPortal);
+        assert_eq!(from_set_word("thread"), Placement::LastPortal);
         assert_eq!(from_set_word("split"), Placement::Split(Dir::Right));
+    }
+
+    #[test]
+    fn composer_decided_defaults_table() {
+        let open = || vec![(1, "one".to_string()), (4, "four".to_string())];
+        // (case, the open portals, the one focused last, where no pick lands)
+        let cases = [
+            ("the one focused last", open(), Some(4), Some(4)),
+            ("the last one closed", open(), Some(9), Some(1)),
+            ("none focused yet", open(), None, Some(1)),
+            ("none open", Vec::new(), Some(4), None),
+        ];
+        for (case, portals, focused, want) in cases {
+            let last = default_portal(&portals, focused);
+            assert_eq!(last, want, "{case}");
+            let places = Places {
+                portals,
+                last,
+                ..Places::default()
+            };
+            let pick = Placement::LastPortal;
+            let placed = places
+                .open_as(1, pick)
+                .expect("it lands")
+                .expect("a thread");
+            assert_eq!(placed.portal, want, "{case}");
+            assert_eq!(placed.portal_new, want.is_none(), "{case}");
+            let chip = want.map_or("new portal".to_string(), |idx| format!("portal {idx}"));
+            assert_eq!(places.label(pick), chip, "{case}: the chip names it");
+            let shell = places.shell(1, pick).expect("a shell lands");
+            assert_eq!(shell.tab, Some(TabSel::New), "{case}: never a portal");
+        }
     }
 }

@@ -34,7 +34,9 @@ A bare `!` then Enter opens a plain login shell as a new tab of the card's works
 
 ## Open as
 
-The opens list holds a new tab, four directions, the tabs of the card's workspace, the open portals and a pane in the active tab. A tab row opens a second step for the direction. Esc steps back. A shift+arrow takes that direction at once.
+A launch with no pick lands in the open portal this client focused last. With none focused yet it takes the lowest open index, and with none open it opens a new portal. The opens chip names that portal before Enter. An agent that was showing there keeps running.
+
+The opens list holds the last portal, a new tab, four directions, the tabs of the card's workspace, the open portals and a pane in the active tab. A tab row opens a second step for the direction. Esc steps back. A shift+arrow takes that direction at once.
 
 The card holds a tab by its id. At Enter it reads the layout again. A tab or portal that closed refuses in the card and keeps the draft. After the worker starts, a target that closed or moved opens a new tab and says so. An open portal keeps its geometry and shows the new worker.
 
