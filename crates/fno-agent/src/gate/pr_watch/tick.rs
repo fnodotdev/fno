@@ -1545,7 +1545,7 @@ pub fn run(args: &[String]) -> i32 {
     // The scheduled-spawn reboot backstop: a pending row is a promise the
     // daemon fires; after a reboot the next launchd tick restarts the
     // daemon inside one interval so the fire lands inside the row's grace.
-    crate::schedule_fire::reboot_backstop(&crate::paths::AgentsHome::from_env());
+    crate::runtime::schedule_fire::reboot_backstop(&crate::paths::AgentsHome::from_env());
     let (mut grant_timeout, mut merge_cap) = (GRANT_QUEUE_READ_TIMEOUT_S, MERGE_CAP_S);
     let mut load = [0.0_f64; 1];
     // SAFETY: load is a live one-element array.

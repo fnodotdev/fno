@@ -123,14 +123,16 @@ pub struct ScheduledSpawn {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ScheduleError {
-    #[error("schedule store at {path}: {source}")]
-    Store { path: PathBuf, source: String },
+    #[error("schedule store at {path}: {cause}")]
+    Store { path: PathBuf, cause: String },
     #[error(
         "scheduled spawn {id}: no such row; run `fno agent spawn --list-scheduled` to see live ids"
     )]
     UnknownId { id: String },
     #[error("scheduled spawn {id}: stored row is corrupt: {detail}")]
     CorruptRow { id: String, detail: String },
+    #[error("schedule store: {0}")]
+    Sql(#[from] rusqlite::Error),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -152,7 +154,7 @@ pub enum WhenParseError {
 fn store_err(path: &Path, source: impl std::fmt::Display) -> ScheduleError {
     ScheduleError::Store {
         path: path.to_path_buf(),
-        source: source.to_string(),
+        cause: source.to_string(),
     }
 }
 
@@ -167,7 +169,7 @@ pub fn database_path(home: &AgentsHome) -> Result<PathBuf, ScheduleError> {
     let registry = home.registry_json();
     crate::runtime::registry_read::database_path(&registry).ok_or_else(|| ScheduleError::Store {
         path: registry,
-        source: "no state root to anchor the schedule store".into(),
+        cause: "no state root to anchor the schedule store".into(),
     })
 }
 
@@ -196,9 +198,18 @@ fn read_only(home: &AgentsHome) -> Result<Option<Connection>, ScheduleError> {
 }
 
 fn mint_id() -> String {
-    use rand::Rng;
-    let mut rng = rand::thread_rng();
-    format!("ss-{:08x}", rng.gen::<u32>())
+    // getrandom is the production entropy dep (rand is dev-only here); the
+    // clock+pid fallback still mints a unique-enough id and the insert
+    // retry loop absorbs a collision.
+    let mut bytes = [0u8; 4];
+    if getrandom::fill(&mut bytes).is_err() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos() ^ std::process::id())
+            .unwrap_or(0);
+        bytes = nanos.to_le_bytes();
+    }
+    format!("ss-{:08x}", u32::from_le_bytes(bytes))
 }
 
 fn rfc3339(t: DateTime<Utc>) -> String {
@@ -215,6 +226,13 @@ fn parse_ts(id: &str, raw: Option<&str>) -> Result<Option<DateTime<Utc>>, Schedu
             })
     })
     .transpose()
+}
+
+/// The query seam: rusqlite's query_map and query_row want their own
+/// Result from the closure, so the typed parser converts at the boundary
+/// and the Display chain carries the CorruptRow detail through.
+fn row_map(row: &rusqlite::Row) -> rusqlite::Result<ScheduledSpawn> {
+    row_from(row).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
 }
 
 fn row_from(row: &rusqlite::Row) -> Result<ScheduledSpawn, ScheduleError> {
@@ -362,7 +380,7 @@ pub fn list(home: &AgentsHome) -> Result<Vec<ScheduledSpawn>, ScheduleError> {
         .prepare(&format!("{SELECT_COLUMNS} ORDER BY created_at_utc"))
         .map_err(|e| store_err(&database_path(home)?, e))?;
     let rows = statement
-        .query_map([], row_from)
+        .query_map([], row_map)
         .map_err(|e| store_err(&database_path(home)?, e))?;
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|e| store_err(&database_path(home)?, e))
@@ -379,7 +397,7 @@ pub fn pending(home: &AgentsHome) -> Result<Vec<ScheduledSpawn>, ScheduleError> 
         ))
         .map_err(|e| store_err(&database_path(home)?, e))?;
     let rows = statement
-        .query_map([], row_from)
+        .query_map([], row_map)
         .map_err(|e| store_err(&database_path(home)?, e))?;
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|e| store_err(&database_path(home)?, e))
@@ -404,7 +422,7 @@ pub fn get(home: &AgentsHome, id: &str) -> Result<ScheduledSpawn, ScheduleError>
         .query_row(
             &format!("{SELECT_COLUMNS} WHERE id = ?1"),
             params![id],
-            row_from,
+            row_map,
         )
         .optional()
         .map_err(|e| store_err(&database_path(home)?, e))?
@@ -735,17 +753,15 @@ fn scan_spawn_argv(args: &[String]) -> (ScheduleRequest, usize, Option<String>) 
             .or_else(|| tok.strip_prefix("--grace="))
             .or_else(|| tok.strip_prefix("--cancel-scheduled="))
         {
-            let key = tok[2..]
-                .split('=')
-                .next()
-                .unwrap_or("")
-                .trim_start_matches('-');
-            // The inline spelling normalizes to the absorb keys; the cancel
-            // flag spells its key differently in space form.
-            let key = if key == "cancel-scheduled" {
-                "cancel"
-            } else {
-                key
+            // The absorb keys are 'static literals matched off the spelling,
+            // never a trim of the borrowed token; the cancel flag spells its
+            // key differently from its flag name.
+            let key = match tok.split_once('=').map(|(flag, _)| flag).unwrap_or(tok) {
+                "--when" => "when",
+                "--every" => "every",
+                "--on" => "on",
+                "--grace" => "grace",
+                _ => "cancel",
             };
             req.absorb(ScheduleToken::Value(key, inline.to_string()));
             i += 1;
@@ -754,7 +770,13 @@ fn scan_spawn_argv(args: &[String]) -> (ScheduleRequest, usize, Option<String>) 
         match tok {
             "--when" | "--every" | "--on" | "--grace" | "--cancel-scheduled" => {
                 let value = args.get(i + 1).cloned().unwrap_or_default();
-                let key = tok.trim_start_matches('-');
+                let key = match tok {
+                    "--when" => "when",
+                    "--every" => "every",
+                    "--on" => "on",
+                    "--grace" => "grace",
+                    _ => "cancel",
+                };
                 req.absorb(ScheduleToken::Value(key, value));
                 i += 2;
                 continue;

@@ -113,6 +113,16 @@ fn node_priority(row: &sched::ScheduledSpawn) -> u8 {
         .unwrap_or(2)
 }
 
+fn priority_rank(word: &str) -> Option<u8> {
+    match word {
+        "p0" => Some(0),
+        "p1" => Some(1),
+        "p2" => Some(2),
+        "p3" => Some(3),
+        _ => Some(2),
+    }
+}
+
 /// The argv the fire re-enters: the recorded argv plus --force when the
 /// row recorded it, plus --spawned-by <scheduler> so lead share counts
 /// against the scheduler while that session lives. A dead scheduler
@@ -331,7 +341,7 @@ fn fire_row(home: &AgentsHome, row: &sched::ScheduledSpawn, now: DateTime<Utc>) 
     let fired = matches!(&output, Ok(out) if out.code == 0);
     if fired {
         sched::set_state(home, &row.id, sched::RowState::Fired, None);
-        journal(home, KIND_FIRED, row, reading.as_deref());
+        journal(home, KIND_FIRED, row, Some(reading.as_str()));
         if let sched::Trigger::Every { interval_secs } = &row.trigger {
             let next = row.fire_at_utc.unwrap_or(now) + chrono::Duration::seconds(*interval_secs);
             if sched::requeue(home, &row.id, next).is_ok() {
@@ -339,12 +349,17 @@ fn fire_row(home: &AgentsHome, row: &sched::ScheduledSpawn, now: DateTime<Utc>) 
             }
         }
     } else {
-        sched::record_attempt(home, &row.id, reading.as_deref(), now);
+        sched::record_attempt(home, &row.id, Some(reading.as_str()), now);
         // The retry consumed the grace: close the row missed now.
         if matches!(decide(row, now), FireDecision::Missed) {
-            sched::set_state(home, &row.id, sched::RowState::Missed, reading.as_deref());
-            journal(home, KIND_MISSED, row, reading.as_deref());
-            mail_scheduler(row, reading.as_deref());
+            sched::set_state(
+                home,
+                &row.id,
+                sched::RowState::Missed,
+                Some(reading.as_str()),
+            );
+            journal(home, KIND_MISSED, row, Some(reading.as_str()));
+            mail_scheduler(row, Some(reading.as_str()));
         }
     }
 }
