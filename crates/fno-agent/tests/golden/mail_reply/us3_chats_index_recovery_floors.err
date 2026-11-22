@@ -1,6 +1,10 @@
 mail: liveness of web could not be established; queued durably as recovery only - the recipient must drain its inbox to read this, and may never do so
   live delivery NOT confirmed - do not wait for a reply, recover:
-    fno agent peek web     # did it land? a busy peer may have queued it
-    fno agent resume web   # wakes it (claude) or resumes it (other harnesses), then re-send
-    fno agent attach web   # drive it yourself (claude)
-    fno agent mail withdraw <id>      # none of the above? retract it
+    fno agent session peek web     # did it land? a busy peer may have queued it
+    fno agent session resume web   # wakes it (claude) or resumes it (other harnesses)
+    fno agent session attach web   # drive it yourself (claude)
+    fno agent mail admin withdraw <id> # retract the queued copy FIRST
+    fno agent mail send web '<message>'  # then re-send
+  a withdraw that refuses because the recipient already claimed
+  the message is telling you it LANDED. Stop there: re-sending on
+  top of that is the double delivery this ladder exists to avoid.

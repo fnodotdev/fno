@@ -264,24 +264,28 @@ const LIVE_ARM: &str = concat!(
     "{TARGET}",
     " not confirmed (",
     "{REASON}",
-    "); queued durably as recovery only - the recipient was live and reachable, so the message may still land past the confirm window or sit until the recipient drains its inbox\n  live delivery NOT confirmed - do not wait for a reply, recover:\n    fno agent peek ",
+    "); queued durably as recovery only - the recipient was live and reachable, so the message may still land past the confirm window or sit until the recipient drains its inbox\n  live delivery NOT confirmed - do not wait for a reply, recover:\n    fno agent session peek ",
     "{TARGET}",
-    "     # did it land? a busy peer may have queued it\n    fno agent resume ",
+    "     # did it land? a busy peer may have queued it\n    fno agent session resume ",
     "{TARGET}",
-    "   # wakes it (claude) or resumes it (other harnesses), then re-send\n    fno agent attach ",
+    "   # wakes it (claude) or resumes it (other harnesses)\n    fno agent session attach ",
     "{TARGET}",
-    "   # drive it yourself (claude)\n    fno agent mail withdraw <id>      # none of the above? retract it",
+    "   # drive it yourself (claude)\n    fno agent mail admin withdraw <id> # retract the queued copy FIRST\n    fno agent mail send ",
+    "{TARGET}",
+    " '<message>'  # then re-send\n  a withdraw that refuses because the recipient already claimed\n  the message is telling you it LANDED. Stop there: re-sending on\n  top of that is the double delivery this ladder exists to avoid.",
 );
 
 const PLAIN_ARM: &str = concat!(
     "{HEAD}",
-    "  live delivery NOT confirmed - do not wait for a reply, recover:\n    fno agent peek ",
+    "  live delivery NOT confirmed - do not wait for a reply, recover:\n    fno agent session peek ",
     "{TARGET}",
-    "     # did it land? a busy peer may have queued it\n    fno agent resume ",
+    "     # did it land? a busy peer may have queued it\n    fno agent session resume ",
     "{TARGET}",
-    "   # wakes it (claude) or resumes it (other harnesses), then re-send\n    fno agent attach ",
+    "   # wakes it (claude) or resumes it (other harnesses)\n    fno agent session attach ",
     "{TARGET}",
-    "   # drive it yourself (claude)\n    fno agent mail withdraw <id>      # none of the above? retract it",
+    "   # drive it yourself (claude)\n    fno agent mail admin withdraw <id> # retract the queued copy FIRST\n    fno agent mail send ",
+    "{TARGET}",
+    " '<message>'  # then re-send\n  a withdraw that refuses because the recipient already claimed\n  the message is telling you it LANDED. Stop there: re-sending on\n  top of that is the double delivery this ladder exists to avoid.",
 );
 
 pub(crate) fn warn_deferred(
@@ -500,6 +504,22 @@ mod tests {
         assert!(failed.contains("fno agent session peek t-worker"));
         assert!(failed.contains("fno agent session attach t-worker"));
         assert!(failed_live_leg("fmail-3", "t-worker", None).contains("no reason recorded"));
+        // The deferred ladders order withdraw before re-send: resume only
+        // wakes, the send rung comes last, and a claimed copy stops the
+        // reader before the re-send.
+        let live = warn_deferred("t-worker", "live", Some("not-confirmed"), None);
+        let plain = warn_deferred("t-worker", "plain", None, Some("head"));
+        for ladder in [live, plain] {
+            let w = ladder.find("mail admin withdraw").expect("withdraw rung");
+            let s = ladder.find("mail send").expect("send rung");
+            assert!(w < s, "withdraw must print before the re-send");
+            assert!(!ladder.contains("resumes it (other harnesses), then re-send"));
+            assert!(ladder.contains("retract the queued copy FIRST"));
+            assert!(ladder.contains("already claimed"));
+            assert!(ladder.contains("fno agent session peek"));
+            assert!(ladder.contains("fno agent session resume"));
+            assert!(ladder.contains("fno agent session attach"));
+        }
     }
 
     #[test]
