@@ -18,7 +18,8 @@
 #
 # Classification:
 #   fno       a graph node id (hyphenated, or compact legacy x+hex), resolved
-#             against graph.json.
+#             against graph.json. Under backlog.id_mode = sequential, also
+#             <prefix>-<digits> (x-15).
 #   external  a recognized external tracker id. footnote treats it as an opaque
 #             work handle: it keys claims and sidecars on it but never resolves
 #             it against graph.json.
@@ -47,6 +48,16 @@ _NODE_ID_FNO_RE='^[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}$'
 # demanded a Fixes line for it, which names no node, so the branch could
 # never pass.
 _NODE_ID_CLOSURE_RE='^((x|ab)-[0-9a-f]{4,8}|x[0-9a-f]{4,8})$'
+# The sequential id shape. It reads as an id only under backlog.id_mode =
+# sequential: in hex mode "ab-123" is a typo and must stay refused.
+_NODE_ID_SEQ_RE='^[a-z][a-z0-9]{0,7}-[0-9]{1,7}$'
+
+# The config read costs a process, so callers ask only after the hex shape
+# failed. No fno reads as hex.
+node_id_sequential() {
+    [[ "$(fno config get backlog.id_mode 2>/dev/null </dev/null)" == "sequential" ]]
+}
+
 # Recognized external tracker shapes. Add a clause here when a new backend
 # ships; the sourcing resolvers need no other change.
 _NODE_ID_LINEAR_JIRA_RE='^[A-Z][A-Z0-9_]+-[0-9]+$'
@@ -57,6 +68,9 @@ node_id_kind() {
     node_id_value=""
     [[ -z "$arg" ]] && { echo none; return 0; }
     if [[ "$arg" =~ $_NODE_ID_FNO_RE ]]; then
+        node_id_value="$arg"; echo fno; return 0
+    fi
+    if [[ "$arg" =~ $_NODE_ID_SEQ_RE ]] && node_id_sequential; then
         node_id_value="$arg"; echo fno; return 0
     fi
     if [[ "$arg" =~ $_NODE_ID_LINEAR_JIRA_RE ]] || [[ "$arg" =~ $_NODE_ID_GITHUB_ISSUE_RE ]]; then

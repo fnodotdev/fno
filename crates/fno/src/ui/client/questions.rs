@@ -911,7 +911,10 @@ fn one_row_per_question(
     items
         .into_iter()
         // A fixed id with a host is a different question on that machine.
-        .filter(|q| q.host.is_none() || bare_id(&q.id) == q.id || !here.contains(&key(q)))
+        .filter(|q| {
+            let fixed = bare_id(&q.id) == q.id && !is_number_id(&q.id);
+            q.host.is_none() || fixed || !here.contains(&key(q))
+        })
         .collect()
 }
 
@@ -928,17 +931,27 @@ fn bare_id(id: &str) -> &str {
 fn split_number(text: &str) -> (Option<String>, &str) {
     if let Some((head, rest)) = text.split_once(": ") {
         let number = head.split('@').next().unwrap_or(head);
-        let digits = number.strip_prefix('Q').unwrap_or("");
-        if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+        if is_number_id(number) {
             return (Some(head.to_string()), rest);
         }
     }
     (None, text)
 }
 
-/// The stem's question id: the `q` segment followed by an 8-hex segment.
+/// An id that is its own number: `D142`, or an older question's `Q87`.
+fn is_number_id(id: &str) -> bool {
+    id.strip_prefix(['D', 'Q']).is_some_and(|digits| {
+        (1..=7).contains(&digits.len()) && digits.bytes().all(|b| b.is_ascii_digit())
+    })
+}
+
+/// The stem's question id: a number beside the date, else the `q` segment
+/// followed by an 8-hex segment.
 fn stem_id(stem: &str) -> Option<String> {
     let segments: Vec<&str> = stem.split('-').collect();
+    if let Some(number) = segments.iter().take(2).find(|s| is_number_id(s)) {
+        return Some(number.to_string());
+    }
     let i = segments.iter().position(|s| *s == "q")?;
     let hex = segments.get(i + 1)?;
     if hex.len() == 8 && hex.chars().all(|c| c.is_ascii_hexdigit()) {

@@ -8,8 +8,8 @@ use serde_json::{json, Value};
 use crate::decision_index;
 use crate::law_match::{
     all_decision_rows, append_decision, autonomy_ask_gate, chat_may_retire, door_refuse,
-    is_decision_id, is_retraction_row, mint_decision_id, now_iso, resolve_caller, row_id,
-    row_subject, scope_filtered_rows, Caller,
+    is_decision_id, is_retraction_row, now_iso, project_events_journal, queue_ruling,
+    resolve_caller, row_id, row_subject, scope_filtered_rows, Caller,
 };
 
 const RENEW_USAGE: &str =
@@ -90,13 +90,23 @@ pub fn run_renew(argv: &[String]) -> i32 {
         }
     };
     let rows = scope_filtered_rows(rows);
-    let data = match renewed_data(&token, &until, &rows, &caller) {
+    let mut data = match renewed_data(&token, &until, &rows, &caller) {
         Ok(d) => d,
         Err(message) => return door_refuse(&message),
     };
-    let new_id = data["decision_id"].as_str().unwrap_or("").to_string();
+    let minted = match crate::numbers::mint::mint_key() {
+        Ok(key) => key,
+        Err(error) => return door_refuse(&error.to_string()),
+    };
+    if let (Some(map), Some(id)) = (data.as_object_mut(), &minted) {
+        map.insert("decision_id".into(), json!(id));
+    }
     let envelope =
         json!({"ts": now_iso(), "type": "operator_decision", "source": "target", "data": data});
+    let Some(new_id) = minted else {
+        let after = crate::numbers::mint::After::Nothing;
+        return queue_ruling(envelope, project_events_journal(), false, after);
+    };
     if let Err(code) = append_decision(&envelope, &new_id) {
         return code;
     }
@@ -160,7 +170,6 @@ fn renewed_data(
         ));
     }
     let mut data = json!({
-        "decision_id": mint_decision_id(),
         "authority_source": caller.authority,
         "decided_by": caller.decided_by,
         "supersedes": row_id(old),

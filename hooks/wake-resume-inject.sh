@@ -4,7 +4,7 @@
 # protocol; the fno-agent `wake-context` door owns the decision (wake word,
 # registry row, live manifest, session match, closed run), the shim adds the
 # cheap bash word gate and relays the door's block. Silent on every miss:
-# nothing optional fails closed on the foreground path (law d-bad5a42f).
+# nothing optional fails closed on the foreground path (law D1838).
 # Claude config only, the bind hook's documented limitation.
 
 set -uo pipefail
