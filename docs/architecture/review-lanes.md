@@ -429,21 +429,17 @@ The emitter's copy of the rule is gone.
 
 The harness pins one body where it once held two in parity.
 
-## Diff-read evidence at emit
+## Review receipt at emit
 
-`fno doctor event emit -t review_attestation` refuses a clean `code-review` pass unless the attesting Claude session's own transcript proves the lane read every file in this round's scope.
+`fno do review read` serves the whole diff a review round must read and records a receipt. `fno doctor event emit -t review_attestation` refuses a clean `code-review` pass without one.
 
-The scope comes from git and the attestation journal, never from the emit's data. A first round covers every file the branch changed against its base. When the prior attested head is an ancestor, a later round covers every file changed since that head.
+The scope comes from git and the attestation journals, never from flags or the emit's data. A first round covers everything the branch changed against its merge base. A later round starts at the newest attested head that also has a receipt, when that head is an ancestor. Otherwise it starts at the merge base.
 
-Evidence comes from tool results that succeeded, never from command text. Diff output counts, because its `diff --git` or `+++ b/` header lines name the files. This holds for a diff piped through `head`, and for a saved diff read back with `Read` or `sed`. A `Read` of a file counts, and so does a `sed`, `cat`, `head` or `tail` that only reads. A successful subagent call whose brief names the diff covers the `--fresh` reviewer.
+The receipt names the session, the head, the base, the changed files and the sha256 of the scoped diff. The emit needs a receipt from the same session at the same head, and the sha256 must match a fresh computation. A different session, an older head, a changed diff or a git failure refuses the pass. The round, flags, counts and execution context in the emit's data relax nothing.
 
-Evidence counts only after the session's last review Skill call. A session with no such call has no review window, so nothing it read counts.
+The check is harness-neutral. It reads no transcript, so Claude, Codex and opencode sessions meet the same rule.
 
-Evidence stays fresh while git shows no commit or working-tree change to that file since it was read. It also stays fresh while everything changed since totals under 100 lines, as a small fix commit does. A merge of main alone voids nothing.
-
-A `--stat` probe, a failed command, empty output, a diff saved and never read, `sed -i` and a `>` redirect give no proof. Reading one region of one of six changed files is refused. The round, flags, counts and execution context in the emit's data relax nothing.
-
-A non-Claude harness and an unreadable transcript read as unobserved and pass. The check stops the accidental skip. It cannot stop a session that fakes its own transcript.
+The limit is plain: a receipt proves the diff was served to the session. It does not prove the session read or understood it.
 
 ## Attestation origin: whose process rendered the verdict
 

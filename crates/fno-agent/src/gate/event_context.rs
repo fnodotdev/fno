@@ -157,7 +157,6 @@ fn event_context() -> Value {
         crate::spawn_context::AttesterWitness::EnvOnly => ("env_only", None),
         crate::spawn_context::AttesterWitness::Conflict(marker, ancestor, environment) => ("conflict", Some(format!("attester identity conflict on {marker}: process ancestry carries {}, the emitting environment carries {}", crate::client_commands::py_repr_str(&ancestor), crate::client_commands::py_repr_str(&environment)))),
     };
-    let mut diff_evidence = json!({"kind":"unobserved"});
     let observed = match (
         std::env::var("FNO_AGENT_HARNESS")
             .ok()
@@ -174,7 +173,6 @@ fn event_context() -> Value {
                 row: None,
             };
             let path = crate::session_truth::session_transcript(&session, &stores);
-            diff_evidence = super::diff_evidence::scan(&agent, path.as_deref());
             observed_model(&agent, path.as_deref())
         }
         _ => json!({"kind":"no-transcript"}),
@@ -185,7 +183,7 @@ fn event_context() -> Value {
         None
     };
     let handle = session.as_deref().map(crate::identity::canonical_handle);
-    json!({"session_id":session,"handle":handle,"harness":harness,"model":model,"parent":parent,"attester_session_id":attester.unwrap_or_default(),"attester_witness":witness_name,"attester_conflict":conflict,"observed_model":observed,"diff_read":diff_evidence})
+    json!({"session_id":session,"handle":handle,"harness":harness,"model":model,"parent":parent,"attester_session_id":attester.unwrap_or_default(),"attester_witness":witness_name,"attester_conflict":conflict,"observed_model":observed})
 }
 
 pub(super) fn run(args: &[String]) -> i32 {

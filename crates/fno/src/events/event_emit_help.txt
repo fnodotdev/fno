@@ -8,10 +8,8 @@ Usage: fno doctor event emit [OPTIONS]
   acquired so a malformed call cannot block writers.
 
   A review_attestation from reviewer code-review with verdict pass is refused
-  unless the attesting Claude session's transcript shows diff output or a
-  successful read for every file in the round's scope (read after its review
-  Skill call, and not changed since), or a successful review subagent call.
-  A --stat probe or a failed diff gives no proof.
+  unless this session recorded a receipt at this head with
+  `fno do review read`, and the receipt's diff sha256 still matches git.
 
   Source defaults to ``target`` when a target state file is present. Otherwise
   ``--source`` is required; the emit refuses rather than guessing a producer.

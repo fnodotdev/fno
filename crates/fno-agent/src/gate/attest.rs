@@ -15,8 +15,6 @@
 //! carrier writes through its own commands, so an older build cannot corrupt
 //! rows and needs no guard trigger.
 
-#[path = "diff_evidence.rs"]
-mod diff_evidence;
 #[path = "event_context.rs"]
 mod event_context;
 
