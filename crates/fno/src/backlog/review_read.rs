@@ -66,7 +66,10 @@ struct Identity {
 }
 
 fn git_bytes(args: &[&str]) -> Option<Vec<u8>> {
-    let out = Command::new("git").args(args).output().ok()?;
+    let mut command = Command::new("git");
+    command.args(args);
+    let out =
+        crate::config_doctor::bounded_output(&mut command, None, Duration::from_secs(120)).ok()?;
     out.status.success().then_some(out.stdout)
 }
 
