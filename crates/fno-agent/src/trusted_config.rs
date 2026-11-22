@@ -168,25 +168,25 @@ impl TrustedFile {
         }
     }
 
-    /// The first project file with rows for `key`. They grant nothing, so a
-    /// caller reads them only to say so. A pin skips the probe, and the
-    /// trusted file itself is not a project file.
+    /// Every project file with rows for `key`, in the order they used to win.
+    /// They grant nothing, so a caller reads them only to say so. A pin skips
+    /// the probe, and the trusted file itself is not a project file.
     pub fn ignored_rows(
         &self,
         key: TrustedKey,
         project_files: &[PathBuf],
-    ) -> Option<(PathBuf, Vec<toml::Value>)> {
+    ) -> Vec<(PathBuf, Vec<toml::Value>)> {
         if matches!(self, Self::Pin(_)) {
-            return None;
+            return Vec::new();
         }
-        let (file, rows) = project_files
+        project_files
             .iter()
-            .find_map(|file| match file_rows(file, key) {
+            .filter(|file| !self.path().is_some_and(|own| same_file(own, file)))
+            .filter_map(|file| match file_rows(file, key) {
                 Rows::List(rows) => Some((file.clone(), rows)),
                 Rows::Absent | Rows::Invalid(_) => None,
-            })?;
-        let trusted = self.path().is_some_and(|own| same_file(own, &file));
-        (!trusted).then_some((file, rows))
+            })
+            .collect()
     }
 
     /// What a reader says about `key`: a fault, and project rows it ignores.
@@ -197,7 +197,7 @@ impl TrustedFile {
         if let Rows::Invalid(fault) = self.rows(key) {
             notes.push(format!("{name} grants nothing: {fault}"));
         }
-        if let Some((file, _)) = self.ignored_rows(key, project_files) {
+        for (file, _) in self.ignored_rows(key, project_files) {
             notes.push(format!(
                 "{name} in {} is ignored: a project file never grants it. Write the rows you want with `fno config set {name} '<value>'`, then run `fno config unset {name} --local` there",
                 file.display()

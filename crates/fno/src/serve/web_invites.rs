@@ -103,8 +103,9 @@ impl InviteSource {
         let mut notices = file.notes(key, &[]);
         let trusted = file.rows(key);
         let mut held = false;
-        if let Some((project, rows)) = file.ignored_rows(key, project_files) {
-            held = !matches!(&trusted, Rows::List(own) if same_rows(own, &rows));
+        let ignored = file.ignored_rows(key, project_files);
+        if let Some(((project, rows), others)) = ignored.split_first() {
+            held = !matches!(&trusted, Rows::List(own) if same_rows(own, rows));
             let project = project.display();
             let count = rows.len();
             notices.push(if held {
@@ -120,6 +121,14 @@ impl InviteSource {
                     "{project} repeats the {count} trusted web.invites row(s). A project file never invites, so remove them there with `fno config unset web.invites --local`."
                 )
             });
+            // A linked worktree also has its main checkout's file. That one
+            // decides the next start, so one restart needs both cleared.
+            for (other, _) in others {
+                notices.push(format!(
+                    "{} also holds web.invites rows. Run `fno config unset web.invites --local` in that folder too before you restart, or they can hold the next start closed.",
+                    other.display()
+                ));
+            }
         }
         let gated = AtomicBool::new(held || trusted != Rows::Absent);
         (Self { file, held, gated }, notices)

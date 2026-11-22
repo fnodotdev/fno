@@ -313,6 +313,12 @@ async fn a_project_list_holds_or_changes_nothing() {
     );
 
     put(&project, &row(BEN, "*", "owner"));
+    let main_checkout = dir.path().join("main-checkout.toml");
+    put(&main_checkout, &row(ANN, "x-2", "owner"));
+    let both_files = [project.clone(), main_checkout];
+    let two = Bridge::start(file.clone(), &both_files).await;
+    assert_eq!(two.notices.len(), 2, "each file to clear is named");
+    assert!(two.notices.join("\n").contains("main-checkout.toml"));
     let pinned = Bridge::start(TrustedFile::Pin(global.clone()), &[project]).await;
     assert_eq!(pinned.hq(&via(ANN)).await, "200", "a pin checks no project");
     assert_eq!(pinned.hq(&via(BEN)).await, "403");

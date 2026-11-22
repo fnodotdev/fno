@@ -117,8 +117,8 @@ To end a hold:
 
 1. Read the project rows, and decide which ones you still want.
 2. Write your full global list with `fno config set web.invites '<json list>'`.
-3. In the project folder, run `fno config unset web.invites --local`.
-4. Restart the bridge once. A hold lasts until then. A later revoke needs no restart.
+3. In each folder the notice names, run `fno config unset web.invites --local`. A linked worktree can also name its main checkout.
+4. Restart the bridge once, in the folder it started in. A hold lasts until then. A later revoke needs no restart.
 
 When `FNO_CONFIG` pins a file, the bridge does not check project files.
 
