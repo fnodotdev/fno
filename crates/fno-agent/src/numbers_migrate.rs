@@ -13,14 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// The code paths that still mint a hex key for a question or decision.
 /// Each entry leaves this list in the change that deletes its mint, and the
 /// cutover is done when `--check` reads zero here and zero hex keys.
-const HEX_MINT_SITES: &[&str] = &[
-    "backlog::question_intake::mint_id",
-    "backlog::law_match::mint_decision_id",
-    "backlog::question_clear answer decision",
-    "backlog::question_bus::copy_id",
-    "runtime::lead_wake_triggers operator question",
-    "eval::session_report forked question",
-];
+const HEX_MINT_SITES: &[&str] = &[];
 
 fn is_hex_key(key: &str) -> bool {
     let tail = key.strip_prefix("d-").or_else(|| key.strip_prefix("q-"));
@@ -114,6 +107,16 @@ fn seq_of(conn: &Connection, key: &str) -> i64 {
     .unwrap_or(i64::MAX)
 }
 
+/// Whether a decision's key is this number already.
+fn decision_holds_key(conn: &Connection, label: &str) -> bool {
+    conn.query_row(
+        "SELECT 1 FROM decisions WHERE event_id = ?1",
+        params![label],
+        |_| Ok(()),
+    )
+    .is_ok()
+}
+
 fn foreign_store(conn: &Connection, key: &str) -> Option<String> {
     conn.query_row(
         "SELECT store FROM fno_numbers WHERE key = ?1 ORDER BY created_at DESC LIMIT 1",
@@ -144,10 +147,15 @@ pub(crate) fn plan_map(conn: &Connection, keys: &BTreeSet<String>, current: &str
         }
     }
     for key in keys {
-        let later = links
-            .get(key)
-            .and_then(|question| first.get(canonical(question)))
-            .is_some_and(|(_, earliest)| *earliest != key.as_str());
+        let question = links.get(key).map(|question| canonical(question));
+        // An answer written since the mint holds the number as its key.
+        let taken = question
+            .and_then(|question| own_label(conn, question, current))
+            .is_some_and(|label| decision_holds_key(conn, &label));
+        let later = taken
+            || question
+                .and_then(|question| first.get(question))
+                .is_some_and(|(_, earliest)| *earliest != key.as_str());
         if later && own_label(conn, key, current).is_none() {
             out.fresh.push(key.clone());
             continue;

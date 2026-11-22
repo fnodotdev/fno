@@ -7,8 +7,8 @@ use serde_json::{json, Value};
 use crate::decision_index;
 use crate::law_match::{
     all_decision_rows, append_decision, autonomy_ask_gate, chat_may_retire, door_refuse,
-    is_decision_id, is_retraction_row, mint_decision_id, now_iso, resolve_caller, row_id,
-    row_subject, scope_filtered_rows, wide_scope_refusal, Caller,
+    is_decision_id, is_retraction_row, now_iso, project_events_journal, queue_ruling,
+    resolve_caller, row_id, row_subject, scope_filtered_rows, wide_scope_refusal, Caller,
 };
 
 const RESTORE_USAGE: &str =
@@ -85,13 +85,21 @@ pub fn run_restore(argv: &[String]) -> i32 {
     {
         return door_refuse(&refusal);
     }
-    let new_id = data["decision_id"].as_str().unwrap_or("").to_string();
+    let minted = match crate::numbers::mint::mint_key() {
+        Ok(key) => key,
+        Err(error) => return door_refuse(&error.to_string()),
+    };
     // One ts for the signature and the envelope.
     let ts = now_iso();
-    if let Some(map) = data.as_object_mut() {
+    if let (Some(map), Some(id)) = (data.as_object_mut(), &minted) {
+        map.insert("decision_id".into(), json!(id));
         crate::identity::sign_law_row(map, "operator_decision", &ts);
     }
     let envelope = json!({"ts": ts, "type": "operator_decision", "source": "target", "data": data});
+    let Some(new_id) = minted else {
+        let after = crate::numbers::mint::After::Nothing;
+        return queue_ruling(envelope, project_events_journal(), true, after);
+    };
     if let Err(code) = append_decision(&envelope, &new_id) {
         return code;
     }
@@ -163,7 +171,6 @@ fn restored_data(token: &str, rows: &[Value], caller: &Caller) -> Result<Value, 
         is_retraction_row(r) && field(r, "target_decision_id").eq_ignore_ascii_case(token)
     });
     let mut data = json!({
-        "decision_id": mint_decision_id(),
         "authority_source": caller.authority,
         "decided_by": caller.decided_by,
         "supersedes": row_id(old),
@@ -255,6 +262,7 @@ mod tests {
 
         // Once restored, the old id reads superseded by a restore.
         let mut restored = data.clone();
+        restored["decision_id"] = json!("D7");
         restored["_event_type"] = json!("operator_decision");
         restored["ts"] = json!("2026-09-03T00:00:00Z");
         rows.push(restored.clone());

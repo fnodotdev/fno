@@ -309,7 +309,11 @@ fn page_candidates(row: &Value, record: &Record) -> Vec<String> {
     let mut scored: Vec<(usize, &String)> = record
         .sources
         .iter()
-        .filter(|(id, _)| id.starts_with("q-"))
+        .filter(|(id, _)| {
+            id.starts_with("q-")
+                || (crate::numbers::is_label_key(id)
+                    && !record.laws.iter().any(|law| law.decision_id == **id))
+        })
         .filter_map(|(id, source)| {
             let shared = words(&source.text).intersection(&asked).count();
             (shared >= 2).then_some((shared, id))

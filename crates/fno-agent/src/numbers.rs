@@ -1,5 +1,4 @@
-//! Short numbers for decisions and questions: `D142` and the legacy `Q87`
-//! beside the hash ids.
+//! The numbers of decisions and questions: `D142` and the legacy `Q87`.
 //!
 //! Decisions and questions are one record: a question is a decision not yet
 //! made, and answering it keeps its number. New rows mint in the one D
@@ -7,9 +6,10 @@
 //! of its own and reads as the number its question holds. Old Q rows keep
 //! their numbers and stay resolvable beside the D rows.
 //!
-//! The hash stays the durable key. The number is a display name the store
-//! mints: the shared primary when `store.remote_url` is set, else this
-//! machine's graph.db. With a primary set, a machine never mints locally; its
+//! A new record's number is its key ([`mint`]). A record from before that
+//! keeps its hash key, read here beside its number, until `fno doctor
+//! migrate ids --apply` retires it. The store mints: the shared primary when
+//! `store.remote_url` is set, else this machine's graph.db. With a primary set, a machine never mints locally; its
 //! local `fno_numbers` table is a cache of the primary's rows. Two machines
 //! therefore read one number for one question.
 //!
@@ -72,9 +72,29 @@ pub(crate) fn is_question_hash(id: &str) -> bool {
         .is_some_and(|hex| hex.len() == 8 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
+/// A key that is its own number: `D142`, or a retired question's `Q87`.
+pub(crate) fn is_label_key(key: &str) -> bool {
+    key.strip_prefix(['D', 'Q']).is_some_and(|digits| {
+        (1..=7).contains(&digits.len()) && digits.bytes().all(|b| b.is_ascii_digit())
+    })
+}
+
+/// Whether `text` names `id` as a whole word, in any case: `D1` is not in
+/// `D12`.
+pub(crate) fn names_id(text: &str, id: &str) -> bool {
+    let (text, id) = (text.to_lowercase(), id.to_lowercase());
+    let word = |c: Option<char>| c.is_some_and(char::is_alphanumeric);
+    !id.is_empty()
+        && text.match_indices(&id).any(|(at, _)| {
+            !word(text[..at].chars().next_back()) && !word(text[at + id.len()..].chars().next())
+        })
+}
+
 fn kind_of(key: &str) -> Option<&'static str> {
-    if key.starts_with("r-") {
-        None // A retraction prints as `retracts D142`; it has no number.
+    // A retraction prints as `retracts D142`, and a label key is a number
+    // already: neither takes one.
+    if key.starts_with("r-") || is_label_key(key) {
+        None
     }
     // One record, one number: a question is a decision not yet made, so
     // every new row mints in the single D sequence whatever its key shape.
@@ -442,15 +462,16 @@ pub fn labels_in(conn: &Connection, current: &str) -> HashMap<String, String> {
 ///
 /// The typed letter selects the sequence and every door accepts both: one
 /// record means a Q number names the same row on the decide door that the
-/// question door serves. The `kind` argument stays for the callers' own
-/// voice in error text; the lookup ignores it.
+/// question door serves. An answer takes its question's number as its key,
+/// so the decision door (`kind` is `d`) reads a number as that decision
+/// first, while the question can still sit under a hash.
 ///
 /// A bare number prefers this store's row and falls back to the newest row
 /// another store holds: the same number names one id on every machine. A
 /// number typed with a `@store` tail resolves strictly in that store.
 pub fn resolve_in(
     conn: Option<&Connection>,
-    _kind: char,
+    kind: char,
     text: &str,
     current: &str,
 ) -> Option<String> {
@@ -471,6 +492,20 @@ pub fn resolve_in(
     let num: i64 = digits.parse().ok()?;
     let store = store.unwrap_or(current);
     let conn = conn?;
+    let key = format!("{}{num}", letter.to_ascii_uppercase());
+    let decided = || {
+        conn.query_row(
+            "SELECT event_id FROM decisions WHERE event_id = ?1",
+            params![key],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+    };
+    if kind == 'd' && store == current {
+        if let Some(id) = decided() {
+            return Some(id);
+        }
+    }
     let sql = if store == current {
         // A bare number prefers this store's row, then the newest foreign
         // row: the same number names one id on every machine.
@@ -484,12 +519,14 @@ pub fn resolve_in(
         row.get(0)
     })
     .ok()
+    // A peer's decision can arrive before its number does.
+    .or_else(|| (store == current).then(decided).flatten())
 }
 
 /// A number token nothing holds reads as this refusal, never as a hash.
 pub fn unresolved(text: &str) -> String {
     format!(
-        "no {} numbered {} on this machine yet; use the hash",
+        "no {} numbered {} on this machine yet; the next beat pulls new numbers",
         if text.trim().to_ascii_lowercase().starts_with('d') {
             "decision"
         } else {
@@ -1006,6 +1043,10 @@ fn asked_ids(asked: &serde_json::Map<String, Value>) -> std::collections::HashSe
 }
 
 fn beat(cwd: &Path) -> Result<usize, String> {
+    // What waited for the primary lands first, so the sweep reads it.
+    if let Err(error) = mint::drain() {
+        eprintln!("numbers-arm: the outbox waits ({error})");
+    }
     let remote = crate::store_remote::configured()?;
     let decisions = crate::decision_index::default_store_live()?;
     let home = crate::paths::AgentsHome::from_env();
@@ -1060,6 +1101,9 @@ pub fn maybe_tick(arm: &Arm, cwd: &Path) {
         }
     });
 }
+
+#[path = "numbers_mint.rs"]
+pub(crate) mod mint;
 
 #[path = "numbers_migrate.rs"]
 pub(crate) mod migrate;
