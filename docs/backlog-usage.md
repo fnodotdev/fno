@@ -470,7 +470,7 @@ Press prefix+V to cycle the left sideline between agents, backlog and org. The b
 
 ### A local HTML file
 
-The daemon writes the board page to `~/.fno/cache/pages/graph.html` with no setup. The page looks like this:
+The daemon writes the board page to `pages/graph.html` in the [cache home](path-config.md#cache-and-logs-homes) with no setup. The page looks like this:
 
 ![The HTML backlog page: a search bar and filters above kanban columns, with a node's fields, details, parent and sessions open in the side panel](images/backlog-html-page.png)
 
@@ -508,7 +508,7 @@ Like `render_targets`, the renderer reads `backlog.render_default` from the glob
 
 The path must be absolute or start with `~/`. A row with an unknown key, an empty scope, or a duplicate path skips with a warning. A row that names a graph state file skips too.
 
-Do not point a row at the state root, for example `~/.fno/graph.html`. The daemon already writes the canonical page under `~/.fno/cache/pages/`, so a state-root row only adds a stray file.
+Do not point a row at the state root, for example `~/.fno/graph.html`. The daemon already writes the canonical page under `pages/` in the cache home, so a state-root row only adds a stray file.
 
 `fno backlog admin render-views` runs one render pass now. It writes `graph.md` and every configured board target. It is the same pass the daemon runs.
 

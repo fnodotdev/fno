@@ -108,6 +108,35 @@ Unknown keys are ignored for forward compatibility, so a typo'd section or leaf 
 | `FNO_REPO_ROOT` | Overrides `git rev-parse --show-toplevel` for tests and CI environments where git is unavailable. Scopes **project/config resolution only**, not events-schema resolution (the schema is compiled into `fno-agent`; see [architecture/schema-config-resolution.md](architecture/schema-config-resolution.md)). Do NOT export it from inside another repo: pinning it to the footnote checkout silently repoints `fno config get` at the wrong project. |
 | `FNO_SKIP_MIGRATION` | Set to `1` to skip the automatic startup migration check. Useful in CI. |
 
+## Cache and logs homes
+
+Only the default root (`~/.fno`) uses the machine's cache home and state home. Another state root keeps `<root>/cache` and `<root>/logs`. This keeps a test root or a project root away from your shared homes.
+
+A writer always writes the home. A reader also reads the old path inside the root until the mover drains it. The mover waits until a cache entry is quiet for 6 hours. It leaves a link at `~/.fno/logs`, so an older launchd plist still writes to the right folder.
+
+## Move and reverse
+
+The daemon runs the mover at start. You can run it yourself.
+
+| Command | Effect |
+|---------|--------|
+| `fno-agent state migrate` | Dry run. It prints the moves and writes nothing. |
+| `fno-agent state migrate --apply` | Move what is ready. |
+| `fno-agent state migrate --reverse <stamp>` | Dry run of a reverse. |
+| `fno-agent state migrate --reverse <stamp> --apply` | Put back the moves of that stamp and hold those names. |
+| `fno-agent state migrate <name> --apply` | Clear the hold on a name and move it again. |
+
+Each run that changes a file gets a stamp under `~/.fno/backups/state-root-migration/`. Its `manifest.json` lists every step. A reverse reads that list from the last step to the first. It refuses to overwrite a file, and it names both paths. It also refuses a published SQLite store, because you must roll a store back by hand.
+
+A reverse writes `~/.fno/state/layout-hold.json` before its first move. Each later pass prints `held` for those names and leaves them in place.
+
+To go back to an older fno, do these steps in this order:
+
+1. Reverse the stamps with the new binary, newest first.
+2. Install the older binary.
+
+The older binary cannot read a manifest, so it cannot do step 1.
+
 ## Template variables
 
 Path values in `state_dir`, `plans_dir`, and any `paths.*` field may contain template variables:

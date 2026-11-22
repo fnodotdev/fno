@@ -36,7 +36,7 @@ Not for: per-CLI command syntax or hook wiring detail. Those are the harness's o
 |---|---|---|
 | `api.anthropic.com needs an API key` | A Claude.ai login cannot drive a third-party loop | Use `-H claude`, or set `ANTHROPIC_API_KEY` |
 | `no model endpoint` | No route env and no provider prefix on the model id | Spawn with `-m <provider>/<model>`; the record lives at `config.model_routing.providers.<p>` |
-| `a dollar cap is set but <model> has no price` | The models.dev cache has no row for the model | Refresh `~/.fno/cache/models-dev.json` or drop the manifest's `budget_cost_cap_usd` |
+| `a dollar cap is set but <model> has no price` | The models.dev cache has no row for the model | Refresh `<cache home>/models-dev.json` or drop the manifest's `budget_cost_cap_usd` |
 | `session <id> has a live writer` | Another process holds the session's `<fno_id>.lock` | `fno agent session stop <name>`, then ask again |
 | `the footnote host exited before the session opened` | The binary refused the launch spec, often a version skew | Read the host log the refusal names, under `~/.fno/agents/fnh/` |
 | `footnote is retired; use fno` | The release tarball ships no `footnote` name; only an install that last updated during the 2026-10 compat window still carries the stub on PATH | Build fnh from its checkout and point `FNO_FOOTNOTE_BIN` at it, or spawn another harness |
