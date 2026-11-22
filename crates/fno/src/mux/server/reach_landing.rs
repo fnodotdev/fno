@@ -63,8 +63,8 @@ pub(super) fn unused_geometry(placement: &PanePlacement) -> Option<String> {
     if placement.from.is_some() || (placement.split.is_none() && placement.at.is_some()) {
         flags.push("--from");
     }
-    let verb = if flags.len() == 1 { "was" } else { "were" };
-    (!flags.is_empty()).then(|| format!("{} {verb} not used", flags.join(", ")))
+    let was = if flags.len() == 1 { "was" } else { "were" };
+    (!flags.is_empty()).then(|| format!("{} {was} not used", flags.join(", ")))
 }
 
 impl Core {

@@ -2134,6 +2134,8 @@ pub(crate) async fn launcher_keys(
             continue;
         }
         match key {
+            // `plain` folded every shift+arrow above; the type cannot say so.
+            LKey::Shift(_) => {}
             LKey::Esc
                 if view
                     .launcher
