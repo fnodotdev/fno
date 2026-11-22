@@ -659,21 +659,20 @@ fn install_claim_refuses_when_a_machine_visible_binary_carries_an_older_rev() {
     };
     let refusals = claim_refusals_with(&probes, expected, &older);
     assert_eq!(refusals.len(), 1, "{refusals:?}");
-    assert!(refusals[0].contains("/bins/fno-agent"), "{refusals:?}");
-    assert!(refusals[0].contains("aaaaaaaaaaaa"), "{refusals:?}");
-    assert!(refusals[0].contains("bbbbbbbbbbbb"), "{refusals:?}");
+    let first = refusals.first().map(String::as_str).unwrap_or_default();
+    assert!(first.contains("/bins/fno-agent"), "{refusals:?}");
+    assert!(first.contains("aaaaaaaaaaaa"), "{refusals:?}");
+    assert!(first.contains("bbbbbbbbbbbb"), "{refusals:?}");
     assert!(
-        refusals[0].contains("did not reach the machine's bin set"),
+        first.contains("did not reach the machine's bin set"),
         "{refusals:?}"
     );
 
     let unreadable = |_bin: &std::path::Path| "unknown".to_string();
     let refusals = claim_refusals_with(&probes, expected, &unreadable);
     assert_eq!(refusals.len(), 2, "{refusals:?}");
-    assert!(
-        refusals[0].contains("did not answer a rev probe"),
-        "{refusals:?}"
-    );
+    let first = refusals.first().map(String::as_str).unwrap_or_default();
+    assert!(first.contains("did not answer a rev probe"), "{refusals:?}");
 
     let current = |_bin: &std::path::Path| expected.to_string();
     let refusals = claim_refusals_with(&probes, expected, &current);
