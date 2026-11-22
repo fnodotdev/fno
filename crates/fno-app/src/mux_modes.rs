@@ -412,7 +412,7 @@ impl RowMenu {
                     d.mt(px(4.0))
                         .pt(px(4.0))
                         .border_t_1()
-                        .border_color(rgb(p.border))
+                        .border_color(rgb(p.faint))
                 })
                 .child(
                     div()
@@ -425,6 +425,12 @@ impl RowMenu {
                         .bg(rgb(fill))
                         .hover(move |s| s.bg(rgb(p.hover)))
                         .on_click(cx.listener(move |root, _, _, cx| root.row_menu_run(i, cx)))
+                        .child(
+                            div()
+                                .w(px(10.0))
+                                .text_color(rgb(p.accent))
+                                .child(if i == self.selected { "▸" } else { "" }),
+                        )
                         .child(*label),
                 )
         });
@@ -442,7 +448,7 @@ impl RowMenu {
             .flex_col()
             .rounded(px(6.0))
             .border_1()
-            .border_color(rgb(p.border))
+            .border_color(rgb(p.faint))
             .bg(rgb(p.panel))
             .font_family(ui::MONO)
             .text_size(px(ui::BODY))
@@ -462,10 +468,15 @@ impl RowMenu {
                         "Rename agent also renames the harness session where it can.",
                         &p,
                     )
+                    .text_color(rgb(p.muted))
                     .px_2(),
                 )
             })
-            .child(ui::kbd("enter or 1-9 runs, esc closes", &p).px_2());
+            .child(
+                ui::kbd("enter or 1-9 runs, esc closes", &p)
+                    .text_color(rgb(p.muted))
+                    .px_2(),
+            );
         // A click anywhere off the panel closes the menu.
         div()
             .absolute()
