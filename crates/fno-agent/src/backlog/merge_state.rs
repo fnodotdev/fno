@@ -38,17 +38,13 @@ pub(crate) struct PrMergeState {
     pub body: Option<String>,
 }
 
-/// The stored slug under the rename aliases: a PR recorded before a repo
-/// move reads its new location, so a dead old name (the fno-web org move
-/// ships a built-in row because the old name 404s with no redirect) never
-/// reaches gh. Unknown slugs pass through.
-fn canonical_repo(repo: &str, cwd: &Path) -> String {
-    pr_link::canonical_repo_slug(repo, &pr_link::repo_alias_map(Some(cwd)))
-}
-
 /// The production read: cache first, REST on a miss, write-back on a fresh
 /// MERGED read. Tests go through [`fresh_read`] and [`paginate_files`] with
-/// injected readers, so no test traffic reaches gh.
+/// injected readers, so no test traffic reaches gh. A recorded repo reads
+/// under the rename aliases, so a PR recorded before a repo move (the
+/// fno-web org move ships a built-in row because the old name 404s with no
+/// redirect) answers its new location, in the cache row and the gh call
+/// alike.
 pub(crate) fn query_pr_merge_state(
     pr: i64,
     repo: Option<&str>,
@@ -56,7 +52,7 @@ pub(crate) fn query_pr_merge_state(
     include_files: bool,
 ) -> Result<PrMergeState, PrReadError> {
     let cwd_path = Path::new(cwd.unwrap_or("."));
-    let repo = repo.map(|r| canonical_repo(r, cwd_path));
+    let repo = repo.map(|r| pr_link::canonical_repo(cwd_path, r));
     if let Some(row) = cached_row(pr, repo.as_deref(), cwd_path, include_files) {
         return Ok(row);
     }
@@ -229,7 +225,7 @@ pub(crate) fn read_body(
 /// rather than risk asking the wrong repository.
 fn repo_slug_or_err(repo: Option<&str>, cwd: &Path) -> Result<String, PrReadError> {
     match repo {
-        Some(r) => Ok(canonical_repo(r, cwd)),
+        Some(r) => Ok(pr_link::canonical_repo(cwd, r)),
         None => pr_link::resolve_current_repo_slug(cwd.to_str())
             .ok_or_else(|| PrReadError::new("could not resolve owner/repo from the checkout", "")),
     }
@@ -468,11 +464,12 @@ pub(crate) fn fetch_pr_closure_context(
     let Some(gh) = gh_executable_for_merge_state() else {
         return Err(PrReadError::new("gh CLI not found on PATH", "availability"));
     };
+    let repo = repo.map(|r| pr_link::canonical_repo(Path::new("."), r));
     let mut cmd = Command::new(gh);
     cmd.args(["pr", "view", &pr_number.to_string(), "--json"]);
     cmd.arg("number,body,url,state,mergedAt,files");
     if let Some(repo) = repo {
-        cmd.args(["--repo", repo]);
+        cmd.args(["--repo", repo.as_str()]);
     }
     let out = crate::gh_budget::output(cmd)
         .map_err(|e| PrReadError::new(format!("gh subprocess failed to launch: {e}"), ""))?;

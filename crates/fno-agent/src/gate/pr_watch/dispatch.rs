@@ -371,6 +371,10 @@ fn run_sweep(
     } = store.normalize_keys(&aliases);
     let mut dropped = dropped;
     let mut delivery = Store::load(delivery_path(&opts.store_path));
+    // The delivery store migrates under the same aliases: an old-org key
+    // left unmigrated would prune as stale against canonical candidate keys
+    // and lose its in-flight retry facts.
+    delivery.normalize_keys(&aliases);
     // Prune only on a healthy discovery: zero candidates is the graph-hiccup
     // signature, and pruning on it would wipe every terminal PR's retry facts.
     if !candidate_keys.is_empty() {

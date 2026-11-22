@@ -138,6 +138,9 @@ pub(crate) fn run(graph: &Path, apply: bool, json_out: bool) -> i32 {
     };
     let rows = parse_rows(&entries);
     let cwd = std::env::current_dir().unwrap_or_default();
+    // One alias read for the whole pass: an owner PR recorded before a repo
+    // move reads its new location instead of reporting the owner unreadable.
+    let aliases = super::pr_link::repo_alias_map(Some(cwd.as_path()));
     let mut names_by_owner: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut unread: Vec<String> = Vec::new();
     let owners: BTreeSet<&String> = rows
@@ -148,13 +151,8 @@ pub(crate) fn run(graph: &Path, apply: bool, json_out: bool) -> i32 {
     for owner in owners {
         let row = rows.iter().find(|r| r.id.as_ref() == Some(owner));
         let pr = row.and_then(Row::pr);
-        let slug =
-            super::pr_link::repo_slug_from_url(row.and_then(|r| r.pr_url.as_deref())).map(|s| {
-                super::pr_link::canonical_repo_slug(
-                    &s,
-                    &super::pr_link::repo_alias_map(Some(cwd.as_path())),
-                )
-            });
+        let slug = super::pr_link::repo_slug_from_url(row.and_then(|r| r.pr_url.as_deref()))
+            .map(|s| super::pr_link::canonical_repo_slug(&s, &aliases));
         match (pr, slug) {
             (Some(pr), Some(slug)) => match names_in_pr(&cwd, &slug, pr) {
                 Some(names) => {

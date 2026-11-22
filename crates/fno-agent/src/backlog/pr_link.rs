@@ -306,6 +306,13 @@ pub fn canonical_repo_slug(slug: &str, aliases: &BTreeMap<String, String>) -> St
     aliases.get(&lower).cloned().unwrap_or(lower)
 }
 
+/// [`canonical_repo_slug`] with the alias map read from `cwd`'s config and
+/// cache rows: the one-line form a reader resolving one stored slug wants.
+/// A caller resolving many slugs reads [`repo_alias_map`] once instead.
+pub fn canonical_repo(cwd: &Path, slug: &str) -> String {
+    canonical_repo_slug(slug, &repo_alias_map(Some(cwd)))
+}
+
 /// Do two `owner/repo` slugs name the same repo once rename aliases apply?
 pub fn same_repo_slug(a: &str, b: &str, aliases: &BTreeMap<String, String>) -> bool {
     canonical_repo_slug(a, aliases) == canonical_repo_slug(b, aliases)
