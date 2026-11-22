@@ -386,7 +386,7 @@ fn rerun_stranded(home: &AgentsHome) {
 
 fn rerun_repo(root: &Path, slug: &str, path: &Path) -> Result<(), String> {
     let now = crate::ci_cadence::millis_now();
-    let named = crate::ci_tier::named_cancels(path, slug, now - 24 * 3_600_000)?;
+    let (named, _wait_named) = crate::ci_tier::named_cancels(path, slug, now - 24 * 3_600_000)?;
     let emitter = crate::events::EventEmitter::new(path.to_path_buf(), "daemon");
     let paint = crate::look_hold::PaintCache::default();
     let pulls = crate::pr_push::gh_api_pages_conditional(

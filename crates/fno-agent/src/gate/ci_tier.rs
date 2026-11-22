@@ -301,20 +301,22 @@ fn ours(passes: &[Value]) -> HashSet<u64> {
     landed.filter_map(|p| p["run"].as_u64()).collect()
 }
 
-/// The runs another row names as cancelled at this slug: a look hold owns
-/// its rerun, and a wait cancel answered a red the head already carries.
-/// The rerun ledger reads this beside the journal's own cancels: a run a
-/// `ci_wait_cancel` row AND the journal's own cancel both name stays on
-/// the ledger (`wait_named_cancels`), because the tier only cancels live
-/// runs, so where both name one run the wait's claim is the later, no-op
-/// claim on a run already going down. A run a look row names keeps the
-/// look's ownership either way.
+/// The runs another row names as cancelled at this slug: the first set
+/// folds `look_hold_cancel` and `ci_wait_cancel` rows, the second names
+/// only the `ci_wait_cancel` rows. A look hold owns its rerun, and a wait
+/// cancel answered a red the head already carries. The rerun ledger reads
+/// the sets beside the journal's own cancels: a run a wait row AND the
+/// journal's own cancel both name stays on the ledger, because the tier
+/// only cancels live runs, so where both name one run the wait's claim is
+/// the later, no-op claim on a run already going down. A run a look row
+/// names keeps the look's ownership either way.
 pub(crate) fn named_cancels(
     path: &Path,
     slug: &str,
     since_ms: i64,
-) -> Result<HashSet<u64>, String> {
+) -> Result<(HashSet<u64>, HashSet<u64>), String> {
     let mut named = HashSet::new();
+    let mut wait_named = HashSet::new();
     for kind in ["look_hold_cancel", "ci_wait_cancel"] {
         for row in rows_of(path, kind, slug, since_ms)? {
             for post in row
@@ -326,38 +328,15 @@ pub(crate) fn named_cancels(
                 if post.get("ok").and_then(Value::as_bool) == Some(true) {
                     if let Some(run) = post.get("run").and_then(Value::as_u64) {
                         named.insert(run);
+                        if kind == "ci_wait_cancel" {
+                            wait_named.insert(run);
+                        }
                     }
                 }
             }
         }
     }
-    Ok(named)
-}
-
-/// The runs a `ci_wait_cancel` row names with `ok true`: the slice of
-/// `named_cancels` a keeper cancel outranks. A look row owns its rerun
-/// unconditionally - the look arm restores its own on release - so only
-/// wait rows take the precedence. The tier only cancels live runs
-/// (`plan.cancel` folds `in_flight` heads), so where a keeper cancel and
-/// a wait row name one run, the wait's claim is the later no-op on a run
-/// already going down.
-fn wait_named_cancels(path: &Path, slug: &str, since_ms: i64) -> Result<HashSet<u64>, String> {
-    let mut named = HashSet::new();
-    for row in rows_of(path, "ci_wait_cancel", slug, since_ms)? {
-        for post in row
-            .pointer("/data/runs")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default()
-        {
-            if post.get("ok").and_then(Value::as_bool) == Some(true) {
-                if let Some(run) = post.get("run").and_then(Value::as_u64) {
-                    named.insert(run);
-                }
-            }
-        }
-    }
-    Ok(named)
+    Ok((named, wait_named))
 }
 
 /// Whether a cancelled run stays on the rerun ledger: any run no hold row
@@ -366,7 +345,8 @@ fn wait_named_cancels(path: &Path, slug: &str, since_ms: i64) -> Result<HashSet<
 /// machine or a hand cancel, and it reruns at the head's tier turn. A wait
 /// cancel answered a red the head already carries, so a rerun would burn a
 /// slot on a known red - except a run this journal's own cancel took away
-/// (`wait_named_cancels`). A look hold reruns its own when the look clears.
+/// (the wait-named slice of `named_cancels`). A look hold reruns its own
+/// when the look clears.
 fn rerunnable(run: u64, named: &HashSet<u64>) -> bool {
     !named.contains(&run)
 }
@@ -724,8 +704,7 @@ fn pass_repo(root: &Path, slug: &str, path: &Path) -> Result<(), String> {
     let now = crate::ci_cadence::millis_now();
     let passes = rows_of(path, PASS_EVENT, slug, now - DAY_MS)?;
     let ours = ours(&passes);
-    let named = named_cancels(path, slug, now - DAY_MS)?;
-    let wait_named = wait_named_cancels(path, slug, now - DAY_MS)?;
+    let (named, wait_named) = named_cancels(path, slug, now - DAY_MS)?;
     for (_, head) in &mut ranked {
         head.cancelled
             .retain(|run| stays_on_ledger(*run, &named, &wait_named, &ours));
