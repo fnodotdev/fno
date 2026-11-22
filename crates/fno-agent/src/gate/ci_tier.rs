@@ -864,9 +864,16 @@ mod tests {
         let full_named: HashSet<u64> = [70u64, 90u64].into();
         assert!(stays_on_ledger(70, &full_named, &wait_named, &ours));
         assert!(!stays_on_ledger(90, &full_named, &wait_named, &ours));
+        assert!(stays_on_ledger(80, &full_named, &wait_named, &ours));
         let look_only: HashSet<u64> = [90u64].into();
         assert!(!stays_on_ledger(90, &look_only, &HashSet::new(), &ours));
-        assert!(!stays_on_ledger(70, &look_only, &HashSet::new(), &ours));
+        let look_names_ours: HashSet<u64> = [70u64].into();
+        assert!(!stays_on_ledger(
+            70,
+            &look_names_ours,
+            &HashSet::new(),
+            &ours
+        ));
         // Each rerun post names who cancelled the run: the journal's own
         // cancel reads tier, any other reads unattributed.
         let posts = vec![json!({"pr": 3, "runs": [

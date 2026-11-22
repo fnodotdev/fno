@@ -1083,17 +1083,6 @@ exit 1
             "{lines:?}"
         );
         let text = crate::event_store::journal_text_checked(&journal, &query).unwrap();
-        let lines = cancel_in_flight(gh.to_str().unwrap(), dir.path(), 4254, "abc123").unwrap();
-        assert!(
-            lines.iter().all(|l| l.contains("cancelled run 302")),
-            "{lines:?}"
-        );
-        // The store lands the row: read it back through the sanctioned
-        // reader instead of the flat file the store replaces.
-        let journal = home.path().join("events.jsonl");
-        let query =
-            crate::event_store::EventQuery::of_types(&["ci_wait_cancel", "ci_cancel_intent"]);
-        let text = crate::event_store::journal_text_checked(&journal, &query).unwrap();
         let rows: Vec<Value> = text
             .lines()
             .filter_map(|l| serde_json::from_str(l).ok())
