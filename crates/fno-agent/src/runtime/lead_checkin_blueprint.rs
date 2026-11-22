@@ -175,8 +175,10 @@ pub(crate) fn seat_leads(
 const OFFER_LINES: usize = 2;
 
 /// The statuses a node may hold and still be offered for a blueprint: open
-/// work that no state parks.
-const OFFERABLE_STATUSES: [&str; 4] = ["intake", "triage", "ready", "next"];
+/// work that no state parks. `idea` counts: the lifecycle table routes a
+/// planless high idea to /blueprint, whose discovery gate grounds it, so a
+/// drained scope offers it instead of naming a triage step first.
+const OFFERABLE_STATUSES: [&str; 5] = ["idea", "intake", "triage", "ready", "next"];
 
 /// The graph-row fields the offer walk reads, typed once at the read.
 #[derive(Deserialize, Default)]
@@ -1065,7 +1067,7 @@ mod tests {
             json!({"id": "x-scope", "parent": "x-top", "type": "epic", "status": "ready"}),
             json!({"id": "x-sib", "parent": "x-top", "status": "ready",
                 "difficulty": "high", "title": "sibling work"}),
-            json!({"id": "x-far", "status": "ready", "difficulty": "high", "title": "far"}),
+            json!({"id": "x-far", "status": "idea", "difficulty": "high", "title": "far"}),
             json!({"id": "x-low", "parent": "x-top", "status": "ready", "difficulty": "low"}),
             json!({"id": "x-held", "parent": "x-top", "status": "ready",
                 "difficulty": "high", "locked_by": "sess-9"}),
