@@ -462,6 +462,40 @@ pub(crate) fn deliver_command_to_session(
     })
 }
 
+/// Why a rename owes no native push, in the words the receipt prints. `None`
+/// when nothing is owed: the harness title already matches. Every other
+/// skip names its cause, so a rename that cannot reach the harness says so
+/// instead of leaving the old title in place without a word.
+fn title_push_gap(row: &RegistryEntry, new_name: &str) -> Option<String> {
+    if row.harness_title.as_deref() == Some(new_name) {
+        return None;
+    }
+    let harness = row.harness.as_deref().filter(|h| !h.is_empty());
+    let has_session = row
+        .harness_session_id
+        .as_deref()
+        .is_some_and(|s| !s.is_empty());
+    let Some(harness) = harness.filter(|_| has_session) else {
+        return Some(
+            "title push skipped: the row names no harness or no harness session".to_string(),
+        );
+    };
+    let native = TITLE_PUSH_HARNESSES.contains(&harness)
+        && title_rename_command(harness, new_name, None).is_some();
+    if !native {
+        return Some(format!(
+            "title push skipped: {harness} has no native rename; its session title stays as it was"
+        ));
+    }
+    if TITLE_PUSH_STATUSES.contains(&row.status) {
+        return None;
+    }
+    Some(format!(
+        "title push skipped: row is {:?}, not quiet-capable; the harness title stays stale until the row is idle",
+        row.status
+    ))
+}
+
 /// After a successful `agent.rename` RPC: when the renamed row's harness
 /// session can hear a native rename, deliver it and stamp the receipt
 /// field that says what happened. Best-effort by contract: the registry
@@ -478,23 +512,8 @@ pub fn stamp_title_push(home: &crate::paths::AgentsHome, result: &mut Value) {
         return;
     };
     let Some(command) = title_push(row, new_name) else {
-        // A thread row that holds a session but sits outside the quiet
-        // statuses used to skip in silence, leaving the harness title stale
-        // with no word why. Name the route.
-        let hears_title = row
-            .harness_session_id
-            .as_deref()
-            .is_some_and(|s| !s.is_empty())
-            && row
-                .harness
-                .as_deref()
-                .is_some_and(|h| TITLE_PUSH_HARNESSES.contains(&h))
-            && !TITLE_PUSH_STATUSES.contains(&row.status);
-        if hears_title {
-            result["title_push"] = Value::String(format!(
-                "title push skipped: row is {:?}, not quiet-capable; the harness title stays stale until the row is idle",
-                row.status
-            ));
+        if let Some(why) = title_push_gap(row, new_name) {
+            result["title_push"] = Value::String(why);
         }
         return;
     };
@@ -599,6 +618,27 @@ mod tests {
         r.harness_title = Some("quill".into());
         r.status = crate::AgentStatus::Busy;
         assert_eq!(title_push(&r, "wren"), None);
+    }
+
+    #[test]
+    fn a_harness_without_native_rename_says_so_instead_of_skipping_in_silence() {
+        let mut r = row("wren", "sess-1");
+        r.harness = Some("agy".into());
+        r.status = crate::AgentStatus::Live;
+        let why = title_push_gap(&r, "wren").unwrap();
+        assert!(why.contains("agy has no native rename"), "{why}");
+        let mut bare = row("wren", "");
+        bare.harness_session_id = None;
+        assert!(title_push_gap(&bare, "wren")
+            .unwrap()
+            .contains("no harness"));
+    }
+
+    #[test]
+    fn a_matching_title_owes_no_word() {
+        let mut r = row("wren", "sess-1");
+        r.harness_title = Some("wren".into());
+        assert_eq!(title_push_gap(&r, "wren"), None);
     }
 
     #[test]
