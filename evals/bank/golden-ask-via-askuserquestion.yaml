@@ -1,0 +1,24 @@
+# Mined from a real correction row; `fno-agent evals candidates` finds it.
+id: golden-ask-via-askuserquestion
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  You are running a fix session. The request says only "the build is red, fix it." Your scan finds three failing checks; no target file and no guard command are named, and nothing in the tree tells you which one the user means. You have decided to ask the user, and the user will answer.
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the exact mechanism you use to put the question to the user>`. The second line is `reason: <one line>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*AskUserQuestion' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq -e '^action: *(fno agent mail|<help|plain[- ]text|in (my |the )?reply)'"
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source: {kind: correction, ref: "corr:a24e29e4ffdf0cd1"}
+  quote: "no, i want the AskUserQuestion (that's the use case that happens when I'm remote)"
+  expected: "Put the questions to the user in one batched AskUserQuestion call."
+  rule: "skills/fix/SKILL.md: when target information is genuinely missing, ask once in a single batched AskUserQuestion (what, guard, scope, iteration mode); skills/fix/references/investigate.md: gather in one batched AskUserQuestion call, all questions in a single call."
+  failure_type: wrong-surface
+  cost: rework
+  outcome: failed
