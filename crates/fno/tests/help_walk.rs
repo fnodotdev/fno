@@ -1,4 +1,18 @@
-use std::process::Command;
+use std::process::{Command, Stdio};
+
+/// `Command::output` is disallowed (spawn seams); this reproduces it
+/// through spawn + wait_with_output: stdin nulled, stdout/stderr piped.
+fn run(bin: &str, args: &[&str]) -> std::process::Output {
+    Command::new(bin)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn the binary")
+        .wait_with_output()
+        .expect("wait for the binary")
+}
 
 /// The tail carriers, one per line: a `--help` after a selector is the
 /// pane payload's, never the family's. One committed list:
@@ -21,7 +35,7 @@ fn fno_clap_tree_answers_help_everywhere_except_tails() {
         }
         let path = row.split('\t').next().expect("inventory row");
         if path == "(root)" {
-            let out = Command::new(bin).arg("--help").output().expect("spawn fno");
+            let out = run(bin, &["--help"]);
             assert_eq!(out.status.code(), Some(0), "fno --help must exit 0");
             walked += 1;
             continue;
@@ -30,12 +44,9 @@ fn fno_clap_tree_answers_help_everywhere_except_tails() {
         if tails.iter().any(|t| t == path) {
             continue;
         }
-        let tokens: Vec<&str> = path.split(' ').collect();
-        let out = Command::new(bin)
-            .args(tokens)
-            .arg("--help")
-            .output()
-            .expect("spawn fno");
+        let mut args: Vec<&str> = path.split(' ').collect();
+        args.push("--help");
+        let out = run(bin, &args);
         assert_eq!(
             out.status.code(),
             Some(0),
@@ -64,14 +75,11 @@ fn fno_agents_table_leaves_answer_help() {
         if node.retired {
             continue;
         }
-        let words: Vec<&str> = std::iter::once("agent")
+        let mut args: Vec<&str> = std::iter::once("agent")
             .chain(path.iter().copied())
             .collect();
-        let out = Command::new(bin)
-            .args(words)
-            .arg("--help")
-            .output()
-            .expect("spawn fno");
+        args.push("--help");
+        let out = run(bin, &args);
         assert_eq!(
             out.status.code(),
             Some(0),
@@ -100,11 +108,9 @@ fn fno_tsv_rows_answer_help() {
         rows.len()
     );
     for path in &rows {
-        let out = Command::new(bin)
-            .args(path)
-            .arg("--help")
-            .output()
-            .expect("spawn fno");
+        let mut args: Vec<&str> = path.clone();
+        args.push("--help");
+        let out = run(bin, &args);
         assert_eq!(
             out.status.code(),
             Some(0),
