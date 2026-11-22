@@ -49,8 +49,8 @@ pub mod splash {
 /// Start a detached mux server for `session` and wait for its socket, the
 /// same spawn `fno mux` makes when none runs. Returns once the socket
 /// accepts, or the reason it did not.
-pub fn start_server(session: &str) -> Result<(), String> {
-    let path = crate::proto::socket_path(session)?;
+pub fn start_server(session: &str) -> std::io::Result<()> {
+    let path = crate::proto::socket_path(session).map_err(std::io::Error::other)?;
     crate::client::server_spawn::start_server_at(&path)
 }
 

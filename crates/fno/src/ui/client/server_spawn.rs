@@ -68,25 +68,25 @@ pub(super) fn spawn_server(path: &Path, attaching: bool) -> Result<(), String> {
 /// Spawn a detached server at `path` and wait for its socket to accept: the
 /// desktop app's "start the mux" door. A server already there is not
 /// replaced; the bind is the lock, so a lost race still ends connected.
-pub(crate) fn start_server_at(path: &Path) -> Result<(), String> {
+pub(crate) fn start_server_at(path: &Path) -> std::io::Result<()> {
     use super::{log_path, ATTACH_CONNECT_TIMEOUT, SPAWN_CONNECT_TIMEOUT};
     use crate::proto;
     use std::time::{Duration, Instant};
-    proto::ensure_mux_dir().map_err(|e| format!("cannot prepare the mux dir: {e}"))?;
+    proto::ensure_mux_dir()?;
     if proto::connect_unix_timeout(path, ATTACH_CONNECT_TIMEOUT).is_ok() {
         return Ok(());
     }
-    spawn_server(path, false)?;
+    spawn_server(path, false).map_err(std::io::Error::other)?;
     let deadline = Instant::now() + SPAWN_CONNECT_TIMEOUT;
     loop {
         match proto::connect_unix_timeout(path, ATTACH_CONNECT_TIMEOUT) {
             Ok(_) => return Ok(()),
             Err(e) if Instant::now() >= deadline => {
-                return Err(format!(
+                return Err(std::io::Error::other(format!(
                     "server did not come up at {} ({e}); check {}",
                     path.display(),
                     log_path(path).display()
-                ));
+                )));
             }
             Err(_) => std::thread::sleep(Duration::from_millis(100)),
         }

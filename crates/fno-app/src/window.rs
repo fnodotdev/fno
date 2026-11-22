@@ -621,7 +621,7 @@ impl Root {
                     }
                     Err(e) => {
                         root.offer = Some(crate::first_run::Offer::Ask);
-                        root.closed = Some(e);
+                        root.closed = Some(e.to_string());
                     }
                 }
                 cx.notify();
@@ -4132,7 +4132,7 @@ pub fn run(
                     cell: size(snap(width), snap(font_size * 1.25)),
                 };
                 cx.new(|cx| {
-                    let root = Root::new(
+                    let mut root = Root::new(
                         session,
                         main,
                         pinned.clone(),
