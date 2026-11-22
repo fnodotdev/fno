@@ -15,8 +15,9 @@
 //! only, never typed text. It never ends and is not a hold.
 //!
 //! The delivery gate (C15, C16) lives here too: it answers whether mail to a
-//! session delivers live now. Own sends and `control:` mail pass a hold; the
-//! receipt names when it ends.
+//! session delivers live now. Own sends pass every hold, and `control:` mail
+//! passes a hold the user set; a live conversation hold keeps both, so a
+//! live chat is never broken into. The receipt names when it ends.
 
 use crate::pid::Pid;
 use std::path::PathBuf;
@@ -558,8 +559,10 @@ pub(crate) fn conversation_turn_end(session_id: &str) {
     let _ = hold_store().put(&hold.shortened_to(now + chrono::Duration::seconds(GRACE_S)));
 }
 
-/// The delivery gate's answer for one send (C15, C16).
-pub(crate) struct GateVerdict {
+/// The delivery gate's answer for one send (C15, C16). Pub so the door
+/// contracts (tests/hold_arm_door.rs) drive the policy at the same
+/// boundary the send lanes do.
+pub struct GateVerdict {
     /// True when the mail may deliver live now.
     pub deliver: bool,
     /// Why a held send delivered anyway: the caller IS the recipient
@@ -676,13 +679,11 @@ fn hold_receipt(hold: &Hold, name: &str, now: chrono::DateTime<chrono::Utc>) -> 
 /// The delivery gate (C15, C16): does mail to `token` deliver live now?
 /// A mail-only row never takes typed text and carries no receipt; a live
 /// hold record holds with one. An ended record is removed here and the mail
-/// delivers. Own sends and `control:` mail pass either. The gate never
-/// writes the registry, so it runs inside callers that hold its lock.
-pub(crate) fn gate(
-    token: &str,
-    body: Option<&str>,
-    now: chrono::DateTime<chrono::Utc>,
-) -> GateVerdict {
+/// delivers. Own sends and `control:` mail past a hold the user set pass
+/// either. The gate never writes the registry, so it runs inside callers
+/// that hold its lock. Pub for the door contracts (tests/hold_arm_door.rs);
+/// the send lanes are the production callers.
+pub fn gate(token: &str, body: Option<&str>, now: chrono::DateTime<chrono::Utc>) -> GateVerdict {
     let deliver = |pass| GateVerdict {
         deliver: true,
         pass,
@@ -703,7 +704,13 @@ pub(crate) fn gate(
     if caller_is_recipient(&sid) {
         return deliver(Some("own"));
     }
-    if body.is_some_and(body_is_control) {
+    // The control pass splits by hold kind. A hold the user set lets a
+    // `control:` directive through: that lane is how a peer or daemon
+    // reaches a DND'd session. A conversation hold is the user's live chat;
+    // a `control:` nudge landing mid-chat is the 2026-11-19 interrupt, so
+    // it waits for the grace with everything else. Own sends passed above.
+    if body.is_some_and(body_is_control) && hold.as_ref().is_some_and(|h| h.set_by() == SetBy::User)
+    {
         return deliver(Some("control"));
     }
     GateVerdict {

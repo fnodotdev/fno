@@ -326,7 +326,7 @@ fn mux_clients(title: &str, message: &str) -> Option<u64> {
 /// The macOS app that owns the user's terminal, from `TERM_PROGRAM` or the
 /// launching bundle id. A multiplexer (Zellij) sets neither of its own, so the
 /// outer terminal's value shows through. `None` means no known terminal.
-fn terminal_app(term_program: &str, bundle_id: &str) -> Option<&'static str> {
+pub(crate) fn terminal_app(term_program: &str, bundle_id: &str) -> Option<&'static str> {
     match term_program {
         "WarpTerminal" => return Some("Warp"),
         "iTerm.app" => return Some("iTerm"),
@@ -347,25 +347,49 @@ fn terminal_app(term_program: &str, bundle_id: &str) -> Option<&'static str> {
     }
 }
 
-/// The AppleScript for one toast. Backslash first, then double quote, so a
-/// title or body cannot end the string literal and inject script. A known
-/// terminal owns the alert, so macOS shows that app's icon, not Script Editor.
-fn toast_script(app: Option<&str>, title: &str, message: &str) -> String {
+/// The AppleScript for one toast. Backslash first, then quote, so a
+/// title or body cannot end the string literal and inject script. The toast
+/// tries each named app in order: only a running app is told (`tell` on a
+/// closed one launches it), a terminal with no Apple-event dictionary
+/// (Warp, WezTerm, Hyper) errors inside its try and falls through, and a
+/// terminal that has one shows that app's icon instead of Script Editor's.
+/// With no candidate at all, the plain toast stands alone.
+fn toast_script(apps: &[&str], title: &str, message: &str) -> String {
     let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
     let show = format!(
         "display notification \"{}\" with title \"{}\"",
         esc(message),
         esc(title)
     );
-    match app {
-        // Only a running app is told: `tell` on a closed one launches it. A
-        // terminal with no Apple-event dictionary (Warp, WezTerm, Hyper)
-        // errors, so the handler falls back to the plain toast, never none.
-        Some(app) => format!(
-            "try\nif application \"{app}\" is running then\ntell application \"{app}\" to {show}\nelse\n{show}\nend if\non error\n{show}\nend try"
-        ),
-        None => show,
+    if apps.is_empty() {
+        return show;
     }
+    // Each candidate is one independent try: a closed app or a failed tell
+    // leaves `fired` false, walking the list to the plain toast at the end.
+    let mut script = String::from("set fired to false\n");
+    for app in apps {
+        script.push_str(&format!(
+            "try\nif application \"{app}\" is running then\ntell application \"{app}\" to {show}\nset fired to true\nend if\nend try\n"
+        ));
+    }
+    script.push_str(&format!("if not fired then\n{show}\nend if"));
+    script
+}
+
+/// The toast candidates for one fire: the detected or stamped terminal
+/// first, then the terminals with an Apple-event dictionary (Terminal,
+/// iTerm, Ghostty) before the plain toast. Deduped, in order.
+fn toast_candidates(primary: Option<&'static str>) -> Vec<&'static str> {
+    let mut list: Vec<&'static str> = Vec::with_capacity(4);
+    if let Some(app) = primary {
+        list.push(app);
+    }
+    for known in ["Terminal", "iTerm", "Ghostty"] {
+        if !list.contains(&known) && list.len() < 4 {
+            list.push(known);
+        }
+    }
+    list
 }
 
 /// The desk toast the daemon fires on a done badge: an attached mux client
@@ -396,7 +420,14 @@ fn dispatch_local(title: &str, message: &str) -> bool {
             &std::env::var("TERM_PROGRAM").unwrap_or_default(),
             &std::env::var("__CFBundleIdentifier").unwrap_or_default(),
         );
-        let script = toast_script(app, title, message);
+        // The env names the terminal when a session runs in one; the stamp
+        // names the operator's last terminal for the launchd daemon, whose
+        // own env is empty. Either way the dictionary-capable terminals stay
+        // behind it as fallbacks before the plain toast.
+        // @fno-copy:begin terminal_stamp
+        let primary = app.or_else(|| crate::runtime::terminal_stamp::stamped_terminal_app());
+        // @fno-copy:end terminal_stamp
+        let script = toast_script(&toast_candidates(primary), title, message);
         let _ = run_bounded(
             Command::new("osascript")
                 .arg("-e")
@@ -548,10 +579,49 @@ mod tests {
     #[test]
     fn toast_script_escapes_and_names_the_app() {
         assert_eq!(
-            toast_script(Some("iTerm"), "a\"b", "c\\d"),
-            "try\nif application \"iTerm\" is running then\ntell application \"iTerm\" to display notification \"c\\\\d\" with title \"a\\\"b\"\nelse\ndisplay notification \"c\\\\d\" with title \"a\\\"b\"\nend if\non error\ndisplay notification \"c\\\\d\" with title \"a\\\"b\"\nend try"
+            toast_script(&["iTerm"], "a\"b", "c\\d"),
+            "set fired to false\ntry\nif application \"iTerm\" is running then\ntell application \"iTerm\" to display notification \"c\\\\d\" with title \"a\\\"b\"\nset fired to true\nend if\nend try\nif not fired then\ndisplay notification \"c\\\\d\" with title \"a\\\"b\"\nend if"
         );
-        assert!(toast_script(None, "t", "m").starts_with("display notification"));
+        assert!(toast_script(&[], "t", "m").starts_with("display notification"));
+    }
+
+    // AC4-EDGE: with the operator's last terminal stamped, the daemon toast
+    // names that app first, walks the dictionary-capable fallbacks behind
+    // it, and still ends at the plain toast when none of them runs.
+    #[test]
+    fn a_stamped_ghostty_daemon_toast_tells_ghostty_first() {
+        let script = toast_script(
+            &toast_candidates(Some("Ghostty")),
+            "done badge",
+            "PR 123 green",
+        );
+        let ghostty = script
+            .find("tell application \"Ghostty\"")
+            .expect("Ghostty named");
+        let terminal = script
+            .find("tell application \"Terminal\"")
+            .expect("Terminal walks");
+        let iterm = script
+            .find("tell application \"iTerm\"")
+            .expect("iTerm walks");
+        assert!(ghostty < terminal && terminal < iterm, "{}", script);
+        assert_eq!(
+            script.matches("if application").count(),
+            3,
+            "every candidate tell carries its own running guard: {script}"
+        );
+        assert!(
+            script.contains("if not fired then\ndisplay notification"),
+            "the plain toast follows the walk: {script}"
+        );
+    }
+
+    #[test]
+    fn candidates_dedupe_and_cap_at_four() {
+        let list = toast_candidates(Some("Terminal"));
+        assert_eq!(list, vec!["Terminal", "iTerm", "Ghostty"]);
+        let list = toast_candidates(Some("Warp"));
+        assert_eq!(list, vec!["Warp", "Terminal", "iTerm", "Ghostty"]);
     }
 
     #[test]

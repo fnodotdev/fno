@@ -575,7 +575,7 @@ fn target_and_merge_doors(command: &str, args: &[String]) -> Option<i32> {
     // `mail-threads`: the mux Messages tab's thread read model (see
     // mail_threads.rs doc). Direct dispatch like chats; no daemon RPC - a
     // read must work when the daemon is wedged. Hidden from help and from
-    // ALL_CLIENT_ACTIONS, like team-fold.
+    // ALL_CLIENT_ACTIONS.
     if command == "mail-threads" {
         return Some(fno_agent::mail_threads::run_mail_threads(rest));
     }
@@ -739,14 +739,14 @@ fn spawn_policy_and_lead_doors(command: &str, args: &[String]) -> Option<i32> {
     // dispatcher (the early transport arm); see backlog::cli's doc.
     // `org-vacancies`: the orphan-team sweep for `fno agent hq`, daemon-free;
     // `==` dispatch like graph-get, registered in ALL_CLIENT_ACTIONS.
-    if command == "org-vacancies" || command == "team-orphans" {
+    if command == "org-vacancies" {
         return Some(fno_agent::lead_state::run_org_vacancies(rest));
     }
     // `org-fold`: the team scope fold for `fno agent hq --nodes` and the
     // local board's org section, daemon-free like org-vacancies; the workers
     // column rides the same native claim verdicts `claim sweep` established,
     // so a fold and the claims surface cannot disagree about who holds a node.
-    if command == "org-fold" || command == "team-fold" {
+    if command == "org-fold" {
         return Some(fno_agent::org_fold::run_org_fold(rest));
     }
     None
@@ -798,7 +798,7 @@ fn fleet_read_doors(command: &str, args: &[String]) -> Option<i32> {
     // Same split as lead-history: Python resolves the org and the paths,
     // the native side owns the page assembly, and the fold's scope_nodes ride
     // in the org JSON, so the page cannot disagree with the org.
-    if command == "lead-rundown" || command == "term-ledger" {
+    if command == "lead-rundown" {
         return Some(fno_agent::rundown::run_lead_ledger(rest));
     }
     if command == "bash-census" {

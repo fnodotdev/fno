@@ -20,9 +20,9 @@ fn the_gate_pins_every_pr_read_to_the_node_pr_url_repo() {
     let dir = tempfile::tempdir().unwrap();
     let calls = dir.path().join("calls");
     let oid = "a".repeat(40);
-    let script = format!(
+    let loopcheck_script = format!(
         r#"#!/bin/sh
-printf '%s\n' "$*" >> "$RECORD_CALLS"
+printf '%s\n' "LOOPCHECK $*" >> "$RECORD_CALLS"
 case "$*" in
   *pr*view*)
     echo '{{"state":"OPEN","number":7,"headRefName":"feature","headRefOid":"{oid}","mergeable":"MERGEABLE","mergeStateStatus":"clean","baseRefName":"main","author":{{"login":"jj"}},"url":"https://github.com/b/r/pull/7"}}'
@@ -30,12 +30,30 @@ case "$*" in
   *pr*checks*)
     echo '[]'
     exit 0 ;;
+  *pulls/7/comments*)
+    echo '[{{"body":"![high] fix this"}}]'
+    exit 0 ;;
+  *pulls/7/commits*)
+    echo '[{{"commit":{{"committer":{{"date":"2026-01-02T03:04:05Z"}}}}}}]'
+    exit 0 ;;
 esac
-echo 'unexpected gh call' >&2
+echo "unexpected loopcheck call: $*" >&2
 exit 1
 "#
     );
-    let gh = crate::write_exec_stub(dir.path(), "gh-pin", &script);
+    let coverage_script = r#"#!/bin/sh
+printf '%s\n' "COVERAGE $*" >> "$RECORD_CALLS"
+case "$*" in
+  *pr*view*)
+    echo '{"reviews":[],"comments":[],"headRefOid":"c0ffee","baseRefName":"main"}'
+    exit 0 ;;
+esac
+echo "unexpected coverage call: $*" >&2
+exit 1
+"#
+    .to_string();
+    let gh = crate::write_exec_stub(dir.path(), "fno-gh-loopcheck", &loopcheck_script);
+    let _coverage = crate::write_exec_stub(dir.path(), "fno-gh-coverage", &coverage_script);
     std::env::set_var("RECORD_CALLS", &calls);
     let events = dir.path().join("events.jsonl");
     let global = dir.path().join("global.jsonl");
@@ -47,8 +65,8 @@ exit 1
         "git",
         dir.path(),
         false,
-        true, // no_external: the review reads stay out; the pin is the point
-        &[],
+        false, // no_external=false: the review reads run, and the pin holds on them too
+        &["chatgpt-codex-connector".to_string()], // a required login: the else arm runs (Read 3 + 4)
         &[],
         false,
         &[],
@@ -68,14 +86,14 @@ exit 1
         &[],
         Some("b/r"),
     )
-    .unwrap_or_else(|_| panic!("the pinned read answers"));
+    .unwrap_or_else(|_| panic!("every read answers"));
     std::env::remove_var("RECORD_CALLS");
     assert_eq!(info.number, 7);
     let recorded = std::fs::read_to_string(&calls).unwrap();
     let mut pr_view_pinned = false;
     let mut checks_pinned = false;
     for row in recorded.lines() {
-        if row.contains("pr view") {
+        if row.contains("LOOPCHECK pr view") {
             assert!(
                 row.contains("--repo b/r"),
                 "the terminal read pins the node repo: {row}"
@@ -99,6 +117,86 @@ exit 1
         "the terminal read ran with the pin: {recorded}"
     );
     assert!(checks_pinned, "the checks read ran: {recorded}");
+    // The folded transport contract: the ordinary fire's review reads ride
+    // the REST transports, never the loopcheck broker. The reviews read is
+    // answered by the coverage shim (the promise-fire transport) and the
+    // commits read rides the raw commits endpoint pinned to the node repo,
+    // so a drained GraphQL bucket cannot park a fire whose merge question
+    // these reads answer.
+    assert!(
+        recorded.contains("COVERAGE pr view 7 --repo b/r --json reviews,comments"),
+        "the reviews read rode the coverage shim: {recorded}"
+    );
+    for row in recorded.lines() {
+        assert!(
+            !(row.starts_with("LOOPCHECK") && row.contains("reviews")),
+            "the loopcheck shim never served a reviews read: {row}"
+        );
+        assert!(
+            !(row.starts_with("LOOPCHECK") && row.contains("--json commits")),
+            "the commits read rides the api endpoint, not pr view: {row}"
+        );
+    }
+    assert!(
+        recorded.contains("LOOPCHECK api repos/b/r/pulls/7/commits"),
+        "the commits read rode the REST endpoint pinned to the node repo: {recorded}"
+    );
+    // The pin is per-number (the pure half, `pr_repo_from_rows`): among the
+    // session node's PR rows, the row naming the asked number pins its repo.
+    // A node whose only numbered row is its cross-repo `additional_prs`
+    // docs PR must not pin a different operand number to that repo: the
+    // status read for PR 485 asked footnote-sh/fno-web for PR 485 (no such
+    // PR there, gh 404) and ready never turned true, so the merge door
+    // stalled. The split docs PR itself still reads in its own repo, from
+    // its url.
+    let extras_only: Vec<(i64, Option<&str>, bool, Option<&str>)> = vec![(
+        268,
+        Some("docs"),
+        false,
+        Some("https://github.com/footnote-sh/fno-web/pull/268"),
+    )];
+    assert_eq!(
+        pr_read::pr_repo_from_rows(&extras_only, 268).as_deref(),
+        Some("footnote-sh/fno-web"),
+        "the split docs PR reads in its own repo, from its url"
+    );
+    assert_eq!(
+        pr_read::pr_repo_from_rows(&extras_only, 485),
+        None,
+        "a number the node never recorded keeps the ambient origin"
+    );
+    // A split node: primary in this repo, docs PR in another.
+    let split: Vec<(i64, Option<&str>, bool, Option<&str>)> = vec![
+        (
+            485,
+            Some("open"),
+            false,
+            Some("https://github.com/fnodotdev/fno/pull/485"),
+        ),
+        (
+            268,
+            None,
+            false,
+            Some("https://github.com/footnote-sh/fno-web/pull/268"),
+        ),
+    ];
+    assert_eq!(
+        pr_read::pr_repo_from_rows(&split, 485).as_deref(),
+        Some("fnodotdev/fno")
+    );
+    assert_eq!(
+        pr_read::pr_repo_from_rows(&split, 268).as_deref(),
+        Some("footnote-sh/fno-web")
+    );
+    // A bare-number row (no url) never pins.
+    let bare: Vec<(i64, Option<&str>, bool, Option<&str>)> = vec![(7, None, false, None)];
+    assert_eq!(pr_read::pr_repo_from_rows(&bare, 7), None);
+    // One number recorded in two repos: refuse to the ambient origin.
+    let clash: Vec<(i64, Option<&str>, bool, Option<&str>)> = vec![
+        (9, None, false, Some("https://github.com/a/r/pull/9")),
+        (9, None, false, Some("https://github.com/b/r/pull/9")),
+    ];
+    assert_eq!(pr_read::pr_repo_from_rows(&clash, 9), None);
 }
 
 /// The unmeasured fold: a green checks read over a head whose
@@ -184,3 +282,8 @@ exit 1
         info.ci_conclusion
     );
 }
+
+// The pin is per-number: the asserts live inside
+// `the_gate_pins_every_pr_read_to_the_node_pr_url_repo`, whose harness they
+// extend - the G3 scope is shrink-only, so the per-number contract shares
+// that declaration instead of adding one.

@@ -3499,6 +3499,22 @@ fn api_mutation(
                 "version": payload.version,
             }))
         }
+        "pull_request_record" => {
+            let input: api::PullRequestInput = input_of(params, "input")?;
+            let payload = api::pull_request_record(
+                store,
+                id.unwrap_or_default(),
+                input.number,
+                input.url.as_deref(),
+                input.note.as_deref(),
+                input.merge_status.as_deref(),
+            )?;
+            Ok(json!({
+                "success": payload.success,
+                "node": payload.node.map(|n| n.to_json()),
+                "version": payload.version,
+            }))
+        }
         "session_append" => {
             let row: api::SessionRecord = input_of(params, "row")?;
             let payload = api::session_append(store, id.unwrap_or_default(), row)?;

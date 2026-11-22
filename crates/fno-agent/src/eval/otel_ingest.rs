@@ -113,6 +113,7 @@ async fn run_on_port_ready(
         let _ = ready.send(port);
     }
     let db = dir.join("otel.db");
+    let journal = home.events_jsonl();
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
@@ -124,8 +125,10 @@ async fn run_on_port_ready(
                 match accepted {
                     Ok((stream, _)) => {
                         let db = db.clone();
+                        let journal = journal.clone();
                         tokio::spawn(async move {
-                            let _ = tokio::time::timeout(Duration::from_secs(30), handle_conn(stream, db)).await;
+                            let _handled =
+                                tokio::time::timeout(Duration::from_secs(30), handle_conn(stream, db, journal)).await;
                         });
                     }
                     Err(error) => {
@@ -156,7 +159,7 @@ pub fn spawn_for_daemon(home: &AgentsHome, sandbox: bool) -> Option<Arc<AtomicBo
     Some(shutdown)
 }
 
-async fn handle_conn(mut stream: tokio::net::TcpStream, db: PathBuf) {
+async fn handle_conn(mut stream: tokio::net::TcpStream, db: PathBuf, journal: PathBuf) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut buf: Vec<u8> = Vec::with_capacity(8 * 1024);
     let mut chunk = [0u8; 8192];
@@ -215,7 +218,7 @@ async fn handle_conn(mut stream: tokio::net::TcpStream, db: PathBuf) {
     let status = if method != "POST" || path != "/v1/logs" {
         (404, "Not Found")
     } else {
-        match ingest(&db, &body) {
+        match ingest(&db, &journal, &body) {
             Ok(()) => (200, "OK"),
             Err(IngestError::Payload) => (400, "Bad Request"),
             Err(IngestError::Storage(error)) => {
@@ -233,6 +236,7 @@ async fn handle_conn(mut stream: tokio::net::TcpStream, db: PathBuf) {
         .await;
 }
 
+#[derive(Debug)]
 enum IngestError {
     Payload,
     Storage(rusqlite::Error),
@@ -244,7 +248,7 @@ impl From<rusqlite::Error> for IngestError {
     }
 }
 
-fn ingest(db: &Path, body: &[u8]) -> Result<(), IngestError> {
+fn ingest(db: &Path, journal: &Path, body: &[u8]) -> Result<(), IngestError> {
     let value: Value = serde_json::from_slice(body).map_err(|_| IngestError::Payload)?;
     let records = log_records(&value)?;
     let mut conn = Connection::open(db)?;
@@ -252,7 +256,7 @@ fn ingest(db: &Path, body: &[u8]) -> Result<(), IngestError> {
     let transaction = conn.transaction()?;
     transaction.execute_batch(crate::otel_read::schema_sql())?;
     for (record, resource) in records {
-        store_event(&transaction, record, resource)?;
+        store_event(&transaction, record, resource, journal)?;
         if attrs(record).get("event.name").and_then(|v| value_str(v)) == Some("api_request") {
             store_record(&transaction, record)?;
         }
@@ -449,6 +453,7 @@ fn store_event(
     conn: &Connection,
     record: &Value,
     resource: Option<&Value>,
+    journal: &Path,
 ) -> rusqlite::Result<()> {
     let attributes = attrs(record);
     let text = |key: &str| attributes.get(key).and_then(|v| value_str(v));
@@ -474,13 +479,110 @@ fn store_event(
             .as_bytes(),
     );
     let key = format!("{:x}", hash.finalize());
-    conn.execute(
+    let name = text("event.name").unwrap_or("unknown");
+    let inserted = conn.execute(
         "INSERT OR IGNORE INTO otel_events (dedupe_key, event_name, ts, session_id, prompt_id, attributes, resource)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        rusqlite::params![key, text("event.name").unwrap_or("unknown"), text("event.timestamp"),
+        rusqlite::params![key, name, text("event.timestamp"),
             text("session.id"), text("prompt.id").or_else(|| text("prompt_id")), retained, resource],
     )?;
+    // A redelivered batch IGNOREs here, so the alert emits exactly once per
+    // first-seen telemetry record.
+    if inserted > 0 && name == "api_error" {
+        emit_rate_limit(record, journal);
+    }
     Ok(())
+}
+
+/// One `provider_rate_limited` row per first-seen rate-limited `api_error`
+/// (status_code 429 or 529; overloaded detection already lives in the
+/// watchdog's outage fold). The declared kind had no emitter, so the
+/// scoreboard lanes view counted nothing and a lead never saw a hit.
+/// `session_id` and `node_id` ride the event store's own column extraction;
+/// the route is stamped because a custom base URL's 529 belongs to that
+/// provider, never to the Anthropic account. The attribute bag parses once
+/// into typed structs (rust-style R1).
+fn emit_rate_limit(record: &Value, journal: &Path) {
+    let Ok(parsed) = serde_json::from_value::<AlertRecord>(record.clone()) else {
+        return;
+    };
+    let find = |key: &str| {
+        parsed
+            .attributes
+            .iter()
+            .find(|a| a.key == key)
+            .map(|a| &a.value)
+    };
+    let Some(value) = find("status_code").and_then(|v| v.int_value.as_ref()) else {
+        return;
+    };
+    // proto3 JSON maps 64-bit ints to strings; accept both spellings.
+    let Some(status) = value
+        .as_i64()
+        .or_else(|| value.as_str().and_then(|s| s.parse().ok()))
+        .filter(|s| *s == 429 || *s == 529)
+    else {
+        return;
+    };
+    let session = find("session.id")
+        .and_then(|v| v.string_value.as_deref())
+        .unwrap_or("unknown");
+    let mut data = serde_json::json!({
+        "session_id": session,
+        "status": status,
+        "provider": find("anthropropic.provider")
+            .and_then(|v| v.string_value.as_deref())
+            .unwrap_or("unknown"),
+        "model": find("model")
+            .and_then(|v| v.string_value.as_deref())
+            .unwrap_or("unknown"),
+        "custom_base_url": find("anthropropic.custom_base_url")
+            .and_then(|v| v.bool_value)
+            .unwrap_or(false),
+    });
+    if let Some(node) = node_for_session(session) {
+        if let Some(map) = data.as_object_mut() {
+            map.insert("node_id".to_string(), Value::String(node));
+        }
+    }
+    let emitter = crate::runtime::events::EventEmitter::new(journal, "daemon");
+    if let Err(error) = emitter.emit("provider_rate_limited", &data) {
+        eprintln!("fno OTEL ingest: the provider_rate_limited row did not land: {error}");
+    }
+}
+
+/// One OTLP log-record attribute, the typed shape `emit_rate_limit` reads
+/// (rust-style R1). `int_value` stays a raw JSON value because proto3 maps
+/// 64-bit ints to strings and some exporters send numbers.
+#[derive(serde::Deserialize)]
+struct AlertRecord {
+    #[serde(default)]
+    attributes: Vec<AlertAttr>,
+}
+
+#[derive(serde::Deserialize)]
+struct AlertAttr {
+    key: String,
+    #[serde(default)]
+    value: AlertValue,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct AlertValue {
+    string_value: Option<String>,
+    int_value: Option<Value>,
+    bool_value: Option<bool>,
+}
+
+/// Best-effort node provenance: the claim (live or stale; this is
+/// provenance, not liveness) whose harness session matches the exporter's
+/// `session.id`. No match names no node, so the row stays session-true.
+fn node_for_session(session: &str) -> Option<String> {
+    let rows = crate::runtime::claim_store::records_db(None, true, None).ok()?;
+    rows.into_iter()
+        .find(|r| r.session_id.as_deref() == Some(session))
+        .and_then(|r| r.key.strip_prefix("node:").map(str::to_string))
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -533,19 +635,20 @@ fn value_f64(v: &Value) -> Option<f64> {
         .or_else(|| v.as_f64())
 }
 
-struct Row {
-    dedupe_key: String,
-    session_id: String,
-    ts: Option<String>,
-    model: Option<String>,
-    cost_usd_micros: Option<i64>,
-    input_tokens: Option<i64>,
-    output_tokens: Option<i64>,
-    cache_read_tokens: Option<i64>,
-    cache_creation_tokens: Option<i64>,
-    skill_name: Option<String>,
-    plugin_name: Option<String>,
-    agent_name: Option<String>,
+#[derive(Clone)]
+pub struct Row {
+    pub dedupe_key: String,
+    pub session_id: String,
+    pub ts: Option<String>,
+    pub model: Option<String>,
+    pub cost_usd_micros: Option<i64>,
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub cache_read_tokens: Option<i64>,
+    pub cache_creation_tokens: Option<i64>,
+    pub skill_name: Option<String>,
+    pub plugin_name: Option<String>,
+    pub agent_name: Option<String>,
 }
 
 fn store_record(conn: &Connection, record: &Value) -> rusqlite::Result<()> {
@@ -612,6 +715,56 @@ fn store_record(conn: &Connection, record: &Value) -> rusqlite::Result<()> {
 /// ledger estimate.
 pub fn session_cost_usd(db: &Path, session_id: &str) -> Option<f64> {
     crate::otel_read::session_cost_usd(db, session_id)
+}
+
+/// The `api_requests` rows inside the forward window: dated, at or after
+/// `cutoff_ms`, oldest first. Undated rows never forward, because
+/// `timeUnixNano` cannot be honest about them. The SQL floor carries a
+/// string cutoff (both ts columns are ISO-8601 UTC strings, so a string
+/// compare is correct, the same assumption retention deletes on); the
+/// parsed filter below stays the exact truth. A missing db reads as no
+/// rows (the receiver may never have run); a read error is the typed
+/// rusqlite error, for the tick row to name.
+pub fn requests_in_window(db: &Path, cutoff_ms: i64) -> Result<Vec<Row>, rusqlite::Error> {
+    if !db.exists() {
+        return Ok(Vec::new());
+    }
+    let floor = chrono::DateTime::from_timestamp(cutoff_ms.div_euclid(1000), 0)
+        .map(|t| t.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
+        .unwrap_or_default();
+    let conn = Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    conn.busy_timeout(Duration::from_secs(5))?;
+    let mut stmt = conn.prepare(
+        "SELECT dedupe_key, session_id, ts, model, cost_usd_micros, input_tokens, \
+         output_tokens, cache_read_tokens, cache_creation_tokens, skill_name, \
+         plugin_name, agent_name FROM api_requests WHERE ts IS NOT NULL AND ts >= ?1",
+    )?;
+    let mapped = stmt.query_map([&floor], |r| {
+        Ok(Row {
+            dedupe_key: r.get(0)?,
+            session_id: r.get(1)?,
+            ts: r.get(2)?,
+            model: r.get(3)?,
+            cost_usd_micros: r.get(4)?,
+            input_tokens: r.get(5)?,
+            output_tokens: r.get(6)?,
+            cache_read_tokens: r.get(7)?,
+            cache_creation_tokens: r.get(8)?,
+            skill_name: r.get(9)?,
+            plugin_name: r.get(10)?,
+            agent_name: r.get(11)?,
+        })
+    })?;
+    let mut pending: Vec<(i64, Row)> = mapped
+        .filter_map(|row| row.ok())
+        .filter_map(|row| {
+            let ts = row.ts.clone()?;
+            Some((crate::event_store::parse_rfc3339_ms(&ts)?, row))
+        })
+        .filter(|(ms, _)| *ms >= cutoff_ms)
+        .collect();
+    pending.sort_by_key(|(ms, _)| *ms);
+    Ok(pending.into_iter().map(|(_, row)| row).collect())
 }
 
 #[cfg(test)]
@@ -893,6 +1046,75 @@ mod tests {
         );
         conn.execute_batch("DROP TRIGGER refuse_cost").unwrap();
         drop(conn);
+
+        // The rate-limit alert: a first-seen 429 api_error mints exactly one
+        // provider_rate_limited row in the agents journal, a redelivered
+        // batch mints none, a second distinct burst mints its own row, a 529
+        // rides the same kind with its own status, and a non-rate-limit
+        // status mints nothing.
+        let api_error = |status: &str, seq: &str| {
+            json!({
+                "attributes": [
+                    {"key": "event.name", "value": {"stringValue": "api_error"}},
+                    {"key": "session.id", "value": {"stringValue": "sess-429"}},
+                    {"key": "status_code", "value": {"intValue": status}},
+                    {"key": "model", "value": {"stringValue": "claude-opus-5-5"}},
+                    {"key": "anthropropic.provider", "value": {"stringValue": "claude"}},
+                    {"key": "event.sequence", "value": {"intValue": seq}},
+                    {"key": "event.timestamp", "value": {"stringValue": "2026-11-21T00:00:00Z"}},
+                ]
+            })
+        };
+        let alert_payload = body(json!([api_error("429", "1")]));
+        assert_eq!(post(port, "/v1/logs", &alert_payload).await, 200);
+        // The exporter redelivers the same batch: one record, one alert.
+        assert_eq!(post(port, "/v1/logs", &alert_payload).await, 200);
+        // A distinct burst mints its own row; a 529 rides the same kind.
+        let burst = body(json!([api_error("429", "2"), api_error("529", "3")]));
+        assert_eq!(post(port, "/v1/logs", &burst).await, 200);
+        // A 400 is an error but not a rate limit: no alert.
+        let bad = body(json!([api_error("400", "4")]));
+        assert_eq!(post(port, "/v1/logs", &bad).await, 200);
+        let alert_rows = crate::event_store::query_events(
+            &home.events_jsonl(),
+            &crate::event_store::EventQuery {
+                types: vec!["provider_rate_limited".to_string()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(alert_rows.len(), 3, "one per distinct first-seen record");
+        let statuses: Vec<i64> = alert_rows
+            .iter()
+            .filter_map(|r| {
+                let line: Value = serde_json::from_str(&r.line).ok()?;
+                line.pointer("/data/status").and_then(Value::as_i64)
+            })
+            .collect();
+        assert_eq!(statuses, vec![429, 429, 529]);
+        let first_alert = alert_rows.first().unwrap();
+        let alert_line: Value = serde_json::from_str(&first_alert.line).unwrap();
+        assert_eq!(
+            alert_line.pointer("/data/session_id"),
+            Some(&json!("sess-429"))
+        );
+        assert_eq!(
+            alert_line.pointer("/data/provider"),
+            Some(&json!("claude")),
+            "the provider attribute ships so a custom route is nameable"
+        );
+        assert_eq!(
+            alert_line.pointer("/data/model"),
+            Some(&json!("claude-opus-5-5"))
+        );
+        assert!(
+            alert_line.pointer("/data/node_id").is_none(),
+            "a session with no claim names no node, never a guess"
+        );
+        assert_eq!(
+            first_alert.r#type, "provider_rate_limited",
+            "the kind lands under its declared schema name"
+        );
 
         shutdown.store(true, Ordering::SeqCst);
         tokio::time::timeout(Duration::from_secs(3), task)

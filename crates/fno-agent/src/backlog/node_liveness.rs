@@ -426,7 +426,11 @@ fn file_recovery(home: &AgentsHome, store: &Path, id: &str, v: &Verdict, f: &Fac
     }
     // Balanced auto: resume the node's own worker once per filing, never on
     // another machine's claim.
-    if let Some(name) = restartable_worker(home, id) {
+    if let Some((name, job)) = restartable_worker(home, id) {
+        if let Some(job) = job.filter(|job| claude_job_runs(job)) {
+            eprintln!("node-liveness: {id}: restart {name}: skipped (claude job {job} still runs)");
+            return true;
+        }
         let row = crate::boot_revival::revive_unattended(home, &name);
         eprintln!(
             "node-liveness: {id}: restart {name}: {} ({})",
@@ -436,10 +440,26 @@ fn file_recovery(home: &AgentsHome, store: &Path, id: &str, v: &Verdict, f: &Fac
     true
 }
 
-/// The node's newest registry worker with a session to resume. A row that
-/// still reads live is never resumed (it may be driving without a claim),
-/// and neither is one a stop through fno still holds down.
-fn restartable_worker(home: &AgentsHome, id: &str) -> Option<String> {
+/// True when `claude agents` lists the job with a hosted process behind it.
+/// `claude respawn` kills a running job, so a lead that is working but holds
+/// no live claim must never take one. An unreadable listing reads as running:
+/// a skipped restart is recoverable, a killed lead is not.
+fn claude_job_runs(job: &str) -> bool {
+    listing_shows_running(&crate::claude_roster::read_all_agents_union(), job)
+}
+
+fn listing_shows_running(listing: &crate::claude_roster::ClaudeAgentsSnapshot, job: &str) -> bool {
+    if !listing.is_known() {
+        return true;
+    }
+    listing.holds_session(job)
+}
+
+/// The node's newest registry worker with a session to resume, and its
+/// claude job id (None for a keeper-lane row, which `claude agents` never
+/// lists). A row that still reads live is never resumed (it may be driving
+/// without a claim), and neither is one a stop through fno still holds down.
+fn restartable_worker(home: &AgentsHome, id: &str) -> Option<(String, Option<String>)> {
     let registry = crate::state::load_registry(&home.registry_json()).ok()?;
     registry
         .entries
@@ -453,7 +473,13 @@ fn restartable_worker(home: &AgentsHome, id: &str) -> Option<String> {
         .filter(|e| !crate::state::is_non_terminal(e.status))
         .filter(|e| !(matches!(e.status, crate::AgentStatus::Exited) && e.stop.is_some()))
         .last()
-        .map(|e| e.name.clone())
+        .map(|e| {
+            let job = (e.harness_kind() == crate::harness::Harness::Claude)
+                .then(|| e.harness_session_id.as_deref())
+                .flatten()
+                .map(|s| s.chars().take(8).collect());
+            (e.name.clone(), job)
+        })
 }
 
 /// `fno agent status --liveness --nodes [--json]`: read the served verdict.
@@ -556,6 +582,29 @@ mod tests {
         );
         recovering.task_since_ms = Some(now - RECOVERY_BOUND_MS);
         assert!(matches!(verdict(&recovering), Verdict::Uncovered { .. }));
+    }
+
+    #[test]
+    fn a_listed_working_job_is_never_restarted() {
+        use crate::claude_roster::{ClaudeAgentRow, ClaudeAgentsSnapshot};
+        let row = |state: &str, pid| ClaudeAgentRow::new("aa92c0d7", Some(state)).with_pid(pid);
+        let known = |r| ClaudeAgentsSnapshot::known(vec![r]);
+        assert!(listing_shows_running(
+            &known(row("working", Some(7))),
+            "aa92c0d7"
+        ));
+        assert!(!listing_shows_running(
+            &known(row("stopped", None)),
+            "aa92c0d7"
+        ));
+        assert!(!listing_shows_running(
+            &ClaudeAgentsSnapshot::known(vec![]),
+            "aa92c0d7"
+        ));
+        assert!(listing_shows_running(
+            &ClaudeAgentsSnapshot::unknown("broken"),
+            "aa92c0d7"
+        ));
     }
 
     #[test]

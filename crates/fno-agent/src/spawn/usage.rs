@@ -22,7 +22,7 @@ pub const CLIENT_COMMAND_USAGE: &[&str] = &[
     // idempotent ensure: start only when nothing serves, never bounce a live one.
     "restart [--force] [--if-down]  # --force: break-glass SIGKILL of the lockfile holder; plain restart is graceful; --if-down swaps only a measured-down daemon and exits 0 when one is serving",
     "reap [--json] [--dry-run] [--release <row>] [--keep <row>] [--unkeep <row>] [--kept]",
-    "rename <name> --name <new-label>   -- renames the registry label and, for a teamed session, its team name (generation restarts at 1); old label stays an alias; harness session is untouched",
+    "rename <name> --name <new-label>   -- renames the registry label and, for a teamed session, its team name (generation restarts at 1); old label stays an alias; a quiet session whose harness has a native rename also gets its title pushed, and the receipt says why when it does not",
     "rename --from-journal [--apply]    -- plan registry label rebuilds from the agents journal; --apply renames",
     "stop <name> [--force]",
     // retired-ok: help names the existing Claude callee to describe actual behavior, not to teach a direct retired command.

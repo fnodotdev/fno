@@ -43,6 +43,7 @@ A pack install drops five skills: agent, mail, dnd, fno-me and lead. Their rows 
 | `fno:decide` | The user states a durable rule mid-run. | The recorded decision id. |
 | `fno:harness-commands` | Before you use a harness-native slash command. | The roster with risk classes. |
 | `fno:setup` | `fno` is missing, or `fno config doctor` fails. | The setup report. |
+| `fno:vision` | A repo has none of the judge's three vision homes, and a lead beat, setup, or the user asks for the draft. | A VISION.md draft PR the user edits and merges, plus the grill questions. |
 | `fno:using-fno` | You are unsure whether a CLI primitive or a skill fits. | The surface table. |
 | `fno:agent` | A second worker is needed (spawn, handoff, peek). Full install only. | A spawn receipt. |
 | `fno:mail` | The lead or a peer must hear something. Full install only. | A message id. |

@@ -65,15 +65,18 @@ A lead can **challenge** a live decision: `fno inbox outstanding ask --challenge
 
 Every write door also checks for a near live ruling before it records. A near ruling shares six or more topic words with the new decision. Those words are also half of the shorter text, or more. In that case the door refuses until the writer names each near ruling. `--supersedes <id>` retires it, and `--keep <id>` keeps it. The user's own board answer is the ruling, so it is never refused. Near a live ruling it prints that ruling as a warning line and records itself as superseding it. A `--keep <id>` on the answer keeps that ruling instead.
 
+The standing door (`fno inbox decisions set`) records conflict resolutions only. When the subject carries no live law and the call names no `--supersedes`, nothing conflicts. The door refuses and names the plain channel. `fno inbox decide` records the ruling instead. `--expiry never` makes a plain decision standing. A store that does not exist yet counts as no live law. The refusal holds on a fresh install, and the plain decision door bootstraps the store. A store that exists but reads damaged proves nothing. The gate skips, and the write never blocks on a broken read. A PR door subject (`merge-grant:`, `merge-freeze:` lift, `pr-hold:`) keeps the old path. It is a per-head machine contract the merge gates read, not a policy law. A ruling with no subject still records: the conflict read is per subject, and a subjectless row has none to read.
+
 ## Which field a reader can trust
 
-A row is quoted far more often than it is read in the list, and a quoted row carries no lane column. So provenance has to survive on the row itself. Five fields. `decided_by` is the one fact about who ran the command, and `user_sig` is the one fact about which user key stands behind the row.
+A row is quoted far more often than it is read in the list, and a quoted row carries no lane column. So provenance has to survive on the row itself. Six fields. `decided_by` is the one fact about who ran the command, and `user_sig` is the one fact about which user key stands behind the row.
 
 | Field | Who writes it | What it means |
 |---|---|---|
 | `decided_by` | stamped from the ambient session, always, when one resolves | who recorded the ruling. This is the field to trust. It cannot be typed. |
 | `attested_by` | only a caller with no session identity AND a terminal on stdin | a name a person stood behind, rather than a handle a process stamped |
 | `relayed_by` | filled from `--decided-by` when the caller is not the decider | a name the caller supplied for someone else. A claim, not a stamp. |
+| `session_provenance` | every decide door, when the caller resolves as a session | the full session id, the harness, the transcript path, and the user turn the row answers. `fno inbox decisions <subject> --provenance` prints it. |
 | `user_cert` | the decision, retract and restore doors, on a machine with a user certificate | the certificate: a user name and user key bound to this machine's key, signed by that user key |
 | `user_sig` | the same doors, beside `user_cert` | the machine key's signature over the row except `subject`. A certified reader binds a wide row only when it verifies under its own user key. |
 
@@ -88,6 +91,12 @@ Decision is defaulted in state 2 only, and only for the person at the terminal. 
 State 3 exists because state 2 used to be everything that was not state 1. That made attendance an ABSENCE, and `env -u CLAUDE_CODE_SESSION_ID fno backlog decide --authority operator` was enough to forge an attested row in the standing lane.
 
 Say the residual limit out loud, because it is narrower than the rule it satisfies. A tty is OBTAINABLE: `script -q /dev/null <cmd>` reports one from a context with no person in it, measured on this machine. So the terminal raises the cost of forging decision and does not prevent it. Forging decision through this command takes one deliberate act, a wrapped tty, which is also the cost at `fno inbox decisions set`. It does not happen by accident.
+
+### Session provenance
+
+A `decided_by` handle is the first eight chars of the session id. The row also records the rest. If the caller resolves as a session, the row also carries `session_provenance`. The field holds the full session id, the harness, the transcript path, and the id of the user turn the row answers. The turn is the last real user turn the transcript held at write time. A relayed ruling stores the relaying session and the user turn it quotes. The turn pointer is pinned at write time because a transcript only grows. A later read cannot recover which turn the ruling came from.
+
+`fno inbox decisions <subject-or-id> --provenance` prints the block. It prints `session:`, `harness:`, `transcript:`, and `turn:` with the quoted excerpt. The transcript line prints the stored path. With no stored path, it resolves from the stored session at read time. An unresolvable session prints `(unresolved - not-found)`. A row without the field prints nothing, so old rows read as they always did.
 
 ### Chat-origin probe
 

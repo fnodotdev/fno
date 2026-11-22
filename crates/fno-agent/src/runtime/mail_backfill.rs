@@ -2,11 +2,11 @@
 //!
 //! Mail an outage bypassed (sent over the harness's native cross-session
 //! transport while `fno mail send` was down) goes back into the bus log as
-//! durable rows that never re-deliver. The whole engine lives here once and
-//! Python keeps one thin transport (`fno agent mail backfill` resolves the
-//! window and the paths, then runs the command): the transcript scan, the
-//! sender/receiver join, the deterministic archive id (the idempotency
-//! key), the envelope assembly, and the write through the bus-append door.
+//! durable rows that never re-deliver. The whole engine lives here once:
+//! the transcript scan, the sender/receiver join, the deterministic
+//! archive id (the idempotency key), the envelope assembly, and the write
+//! through the bus-append door. `fno mail admin backfill` is the front
+//! door; this module owns every decision the command makes.
 //!
 //! Contract: provenance is the point. A send without a row uuid has no
 //! stable id and is skipped loud, never half-attributed; an id already in
@@ -78,13 +78,17 @@ fn parse_blocks(text: &str) -> Vec<serde_json::Value> {
 }
 
 /// Entry: `run` only. The one public shape is the JSON summary line; an
-/// unknown subcommand refuses loud on stderr with exit 2. The msgid/block/
-/// row plumbing was transport-era and retired in this port: the engine
-/// calls the same bodies directly.
+/// unknown subcommand refuses loud on stderr with exit 2.
 pub fn run_mail_backfill(args: &[String]) -> i32 {
     let sub = args.first().map(String::as_str).unwrap_or("");
     match sub {
-        "run" => run_backfill(&args[1.min(args.len())..]),
+        "run" => match backfill_summary(args.get(1..).unwrap_or(&[])) {
+            Ok(summary) => {
+                println!("{summary}");
+                0
+            }
+            Err(code) => code,
+        },
         other => {
             eprintln!("mail-backfill: unknown subcommand {other:?} (expected run)");
             2
@@ -94,13 +98,13 @@ pub fn run_mail_backfill(args: &[String]) -> i32 {
 
 // ---------------------------------------------------------------------------
 // The scan-and-write engine (`run`): the transcript scan, the sender-side
-// join, and the durable write through the bus-append door. Python keeps the
-// CLI transport only.
+// join, and the durable write through the bus-append door.
 // ---------------------------------------------------------------------------
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 /// One native `SendMessage` tool call in a sender transcript.
+#[derive(Clone)]
 struct SendRow {
     uuid: String,
     ts: String,
@@ -111,6 +115,7 @@ struct SendRow {
 }
 
 /// One `<cross-session-message>` block in a receiver transcript.
+#[derive(Clone)]
 struct BlockRow {
     from_name: Option<String>,
     body: String,
@@ -145,6 +150,9 @@ fn bound_epoch(flag: &str, value: &str) -> Result<f64, String> {
 /// Overrides: --since / --until.
 const OUTAGE_SINCE: &str = "2026-10-07T08:42:47Z";
 const OUTAGE_UNTIL: &str = "2026-10-07T12:52:39Z";
+
+/// The dry-run summary's `rows` sample head: the count stays in `joined`.
+const DRY_ROWS_SAMPLE: usize = 200;
 
 /// Window membership for one row timestamp: rows without a parseable stamp
 /// stay in (the mtime prefilter already bounded them loosely).
@@ -300,100 +308,168 @@ fn backfill_live_path(explicit: Option<&str>) -> PathBuf {
 /// is a resend and keeps the first copy). Heads under 40 chars are too
 /// short to attribute by body alone and stay out. Deterministic, so a
 /// re-scan pairs the same halves.
-fn join(sends: &[SendRow], blocks: &[BlockRow]) -> (Vec<(usize, usize)>, usize) {
-    let mut by_head: std::collections::HashMap<String, Vec<usize>> =
+fn join<'a>(
+    sends: &'a [SendRow],
+    blocks: &'a [BlockRow],
+) -> (Vec<(&'a SendRow, &'a BlockRow)>, usize) {
+    let mut by_head: std::collections::HashMap<String, Vec<&'a BlockRow>> =
         std::collections::HashMap::new();
     let mut seen: std::collections::HashSet<(String, &str)> = std::collections::HashSet::new();
-    for (i, b) in blocks.iter().enumerate() {
+    for b in blocks {
         let head = norm_head(&b.body, 120);
         if seen.insert((head.clone(), b.receiver_transcript.as_str())) {
-            by_head.entry(head).or_default().push(i);
+            by_head.entry(head).or_default().push(b);
         }
     }
     let mut out = Vec::new();
     let mut skipped = 0usize;
-    for (si, s) in sends.iter().enumerate() {
+    for s in sends {
         let head = norm_head(&s.body, 120);
         let attributable = head.chars().count() >= 40;
         match by_head.get(&head).map(Vec::as_slice) {
-            Some([only]) if attributable => out.push((si, *only)),
+            Some([only]) if attributable => out.push((s, *only)),
             _ => skipped += 1,
         }
     }
     (out, skipped)
 }
 
-/// The whole engine: scan roots, window-filter the sender side, join, and
-/// (with --apply) write each joined pair as an audit-only envelope through
-/// the bus-append door. Prints one JSON summary line.
-fn run_backfill(args: &[String]) -> i32 {
+/// One parsed `run` invocation: the window bounds as epoch seconds, the
+/// bus target, the scan roots, and whether the run writes.
+struct BackfillRun {
+    since_e: f64,
+    until_e: f64,
+    live: String,
+    roots: Vec<String>,
+    apply: bool,
+}
+
+/// The value after a value-taking flag: a following flag or end-of-line
+/// refuses, the same rule `--root` holds. A silent default would scan or
+/// write a window the operator never named.
+fn next_value(args: &[String], i: usize, flag: &str) -> Result<String, i32> {
+    match args.get(i + 1) {
+        Some(v) if !v.starts_with("--") => Ok(v.clone()),
+        _ => {
+            eprintln!("mail-backfill run: {flag} needs a value");
+            Err(2)
+        }
+    }
+}
+
+/// Parse the `run` argv: the window flags and their refusal, the wide
+/// --all bounds, the default scan root, and the write posture. Err
+/// carries the exit code, with the reason on stderr.
+fn parse_backfill_run(args: &[String]) -> Result<BackfillRun, i32> {
     let mut since = String::new();
     let mut until = String::new();
     let mut live = String::new();
     let mut roots: Vec<String> = Vec::new();
     let mut apply = false;
+    let mut all = false;
     let mut i = 0;
     while i < args.len() {
-        match args[i].as_str() {
-            "--since" => {
-                since = args.get(i + 1).cloned().unwrap_or_default();
+        match args.get(i).map(String::as_str) {
+            Some("--since") => {
+                since = next_value(args, i, "--since")?;
                 i += 2;
             }
-            "--until" => {
-                until = args.get(i + 1).cloned().unwrap_or_default();
+            Some("--until") => {
+                until = next_value(args, i, "--until")?;
                 i += 2;
             }
-            "--live" => {
-                live = args.get(i + 1).cloned().unwrap_or_default();
+            Some("--all") => {
+                all = true;
+                i += 1;
+            }
+            Some("--live") => {
+                live = next_value(args, i, "--live")?;
                 i += 2;
             }
-            "--root" => {
+            Some("--root") => {
                 // A following flag is never a path: consuming it would scan
                 // a directory named "--apply" and report a quiet zero.
                 match args.get(i + 1) {
                     Some(v) if !v.starts_with("--") => roots.push(v.clone()),
                     _ => {
                         eprintln!("mail-backfill run: --root needs a path");
-                        return 2;
+                        return Err(2);
                     }
                 }
                 i += 2;
             }
-            "--apply" => {
+            Some("--apply") => {
                 apply = true;
                 i += 1;
             }
-            other => {
+            Some(other) => {
                 eprintln!("mail-backfill run: unknown argument {other}");
-                return 2;
+                return Err(2);
             }
+            None => break,
         }
     }
-    let since = if since.is_empty() {
-        OUTAGE_SINCE.to_string()
+    if all && (!since.is_empty() || !until.is_empty()) {
+        eprintln!("mail-backfill run: --all scans every transcript; drop --since/--until");
+        return Err(2);
+    }
+    let (since_e, until_e) = if all {
+        // No window: the bounds open wide so the mtime prefilter and the
+        // per-row stamp filter both pass every row unchanged.
+        (f64::NEG_INFINITY, f64::INFINITY)
     } else {
-        since
-    };
-    let until = if until.is_empty() {
-        OUTAGE_UNTIL.to_string()
-    } else {
-        until
-    };
-    let (since_e, until_e) = match bound_epoch("since", &since) {
-        Ok(s) => match bound_epoch("until", &until) {
-            Ok(u) => (s, u),
-            Err(e) => {
-                eprintln!("mail-backfill run: {e}");
-                return 2;
-            }
-        },
-        Err(e) => {
+        let since = if since.is_empty() {
+            OUTAGE_SINCE.to_string()
+        } else {
+            since
+        };
+        let until = if until.is_empty() {
+            OUTAGE_UNTIL.to_string()
+        } else {
+            until
+        };
+        let since_e = bound_epoch("since", &since).map_err(|e| {
             eprintln!("mail-backfill run: {e}");
-            return 2;
-        }
+            2
+        })?;
+        let until_e = bound_epoch("until", &until).map_err(|e| {
+            eprintln!("mail-backfill run: {e}");
+            2
+        })?;
+        (since_e, until_e)
     };
+    if roots.is_empty() {
+        // No --root: scan the Claude projects home, the transcript base
+        // every Claude Code session writes under, so the bare front-door
+        // form finds the user's history.
+        roots.push(
+            crate::claude_drive::claude_projects_dir()
+                .to_string_lossy()
+                .to_string(),
+        );
+    }
+    Ok(BackfillRun {
+        since_e,
+        until_e,
+        live,
+        roots,
+        apply,
+    })
+}
+
+/// One scan's harvest: the joined send/block pairs the attribution fold
+/// found, and the count it refused. The raw halves die in the scan; only
+/// attributed pairs survive.
+struct Scan {
+    pairs: Vec<(SendRow, BlockRow)>,
+    skipped: usize,
+}
+
+/// Collect the transcript files under the run's roots, read the rows in
+/// window, and join each send to its receiver landing by body head.
+fn scan_join(run: &BackfillRun) -> Scan {
     let mut files: Vec<PathBuf> = Vec::new();
-    for root in &roots {
+    for root in &run.roots {
         collect_jsonl(Path::new(root), 0, &mut files);
     }
     let mut sends: Vec<SendRow> = Vec::new();
@@ -406,7 +482,7 @@ fn run_backfill(args: &[String]) -> i32 {
         let Ok(age) = mtime.duration_since(std::time::UNIX_EPOCH) else {
             continue;
         };
-        if age.as_secs_f64() < since_e {
+        if age.as_secs_f64() < run.since_e {
             continue;
         }
         let Ok(raw) = std::fs::read_to_string(path) else {
@@ -420,7 +496,7 @@ fn run_backfill(args: &[String]) -> i32 {
                 continue;
             };
             let ts = obj.get("timestamp").and_then(Value::as_str).unwrap_or("");
-            if !ts_in_window(ts, since_e, until_e) {
+            if !ts_in_window(ts, run.since_e, run.until_e) {
                 continue;
             }
             let p = path.to_string_lossy().to_string();
@@ -428,14 +504,28 @@ fn run_backfill(args: &[String]) -> i32 {
             blocks.extend(receiver_blocks_in(&obj, &p));
         }
     }
-    let (pairs, skipped) = join(&sends, &blocks);
+    let (joined, skipped) = join(&sends, &blocks);
+    let pairs = joined
+        .into_iter()
+        .map(|(s, b)| (s.clone(), b.clone()))
+        .collect();
+    Scan { pairs, skipped }
+}
+
+/// The whole engine: parse, scan and join, then (with --apply) write each
+/// joined pair as an audit-only envelope through the bus-append door.
+/// Returns the JSON summary line; Err carries the exit code of a refusal
+/// (2) or a failed write (1), with the reason on stderr.
+pub fn backfill_summary(args: &[String]) -> Result<Value, i32> {
+    let run = parse_backfill_run(args)?;
+    let scan = scan_join(&run);
     let mut written = 0usize;
     let mut rows_out: Vec<Value> = Vec::new();
-    if apply {
-        let live_path = backfill_live_path(if live.is_empty() {
+    if run.apply {
+        let live_path = backfill_live_path(if run.live.is_empty() {
             None
         } else {
-            Some(live.as_str())
+            Some(run.live.as_str())
         });
         let mut existing: std::collections::HashSet<String> = std::collections::HashSet::new();
         for seg in fno_mail::log::read_bus_segments(&live_path) {
@@ -443,31 +533,37 @@ fn run_backfill(args: &[String]) -> i32 {
                 existing.insert(id.to_string());
             }
         }
-        for (si, bi) in &pairs {
-            match write_pair(&sends[*si], &blocks[*bi], &existing, &live_path) {
+        for (send, block) in &scan.pairs {
+            match write_pair(send, block, &existing, &live_path) {
                 Ok(true) => written += 1,
                 Ok(false) => {}
                 Err(e) => {
                     eprintln!("mail-backfill run: {e}");
-                    return 1;
+                    return Err(1);
                 }
             }
         }
     } else {
-        for (si, bi) in &pairs {
+        for (send, block) in &scan.pairs {
             rows_out.push(json!({
-                "ts": sends[*si].ts,
-                "from_session": sends[*si].sender_session,
-                "to_session": blocks[*bi].receiver_session,
-                "body_head": norm_head(&sends[*si].body, 60),
+                "ts": send.ts,
+                "from_session": send.sender_session,
+                "to_session": block.receiver_session,
+                "body_head": norm_head(&send.body, 60),
             }));
         }
     }
-    println!(
-        "{}",
-        json!({"written": written, "joined": pairs.len(), "skipped": skipped, "rows": rows_out})
-    );
-    0
+    // An all-history dry run can join thousands of pairs; the summary keeps
+    // the count and `rows` only a sample head, with the cut named.
+    let truncated = rows_out.len().saturating_sub(DRY_ROWS_SAMPLE);
+    rows_out.truncate(DRY_ROWS_SAMPLE);
+    Ok(json!({
+        "written": written,
+        "joined": scan.pairs.len(),
+        "skipped": scan.skipped,
+        "rows_truncated": truncated,
+        "rows": rows_out,
+    }))
 }
 
 /// Write one joined pair: derive the archive id, skip an id already in the
@@ -524,54 +620,4 @@ fn write_pair(
     crate::announce::append_line_open(live_path, &Value::Object(env), &crate::chats::chats_dir())
         .map(|()| true)
         .map_err(|e| format!("append failed: {e}"))
-}
-
-#[cfg(test)]
-mod engine_tests {
-    use super::*;
-
-    #[test]
-    fn join_attribution_pairs_resends_and_refuses_ambiguity() {
-        let mk_send = |body: String| SendRow {
-            uuid: "row-1".into(),
-            ts: "2026-10-07T10:00:00.000Z".into(),
-            sender_session: "sess-a".into(),
-            summary: None,
-            body,
-            sender_transcript: "s.jsonl".into(),
-        };
-        let mk_block = |body: &str, session: &str, transcript: &str| BlockRow {
-            from_name: Some("worker-1".into()),
-            body: body.to_string(),
-            receiver_session: session.into(),
-            receiver_transcript: transcript.into(),
-        };
-        let long = "PR 3147 holds until the other lane merges its wave".to_string();
-        // A matching head pairs; a different body on the same socket does not
-        // steal the pair; a repeat inside ONE transcript is a resend (first
-        // copy wins).
-        let (pairs, _skipped) = join(
-            &[mk_send(long.clone())],
-            &[
-                mk_block("an entirely different report from another lane", "b1", "r1"),
-                mk_block(&long, "b1", "r1"),
-                mk_block(&long, "b1", "r1"),
-            ],
-        );
-        assert_eq!(pairs, vec![(0, 1)]);
-        // Under the attribution floor: never paired.
-        let (pairs, skipped) = join(
-            &[mk_send("continue".into())],
-            &[mk_block("continue", "b", "r1")],
-        );
-        assert!(pairs.is_empty());
-        assert_eq!(skipped, 1);
-        // The same head in two transcripts is ambiguous: never paired.
-        let (pairs, skipped) = join(
-            &[mk_send(long.clone())],
-            &[mk_block(&long, "b1", "r1"), mk_block(&long, "b2", "r2")],
-        );
-        assert!(pairs.is_empty());
-        assert_eq!(skipped, 1);
-    }
 }

@@ -443,17 +443,20 @@ pub fn header_third_field(subject: Option<&str>, body: &str) -> Option<String> {
 }
 
 /// The header's inner span and what follows it: the opening backtick through
-/// the first closing backtick whose remainder is the line's end or the
-/// transcript's one-line body separator " ⏎ " (a legacy stored turn
-/// renders on ONE physical line, header then separator then body; the law
-/// form is two physical lines). `None` when no closer reads.
+/// the first closing backtick whose remainder is the line's end, the
+/// transcript's one-line body separator " ⏎ " (a legacy stored turn renders
+/// on ONE physical line, header then separator then body), or one space -
+/// the `NewlineRule::OneLine` keystrokes (`fno_mail::turn::one_line`),
+/// which collapse every whitespace run, the header's new line included, to
+/// one space; the law form is two physical lines. `None` when no closer
+/// reads.
 fn split_header_span(trimmed: &str) -> Option<(&str, &str)> {
     let rest = trimmed.strip_prefix('`')?;
     let mut from = 0;
     while let Some(rel) = rest[from..].find('`') {
         let close = from + rel;
         let tail = &rest[close + 1..];
-        if tail.is_empty() || tail.starts_with(crate::mail_inject::NEWLINE_GLYPH) {
+        if tail.is_empty() || tail.starts_with(' ') {
             return Some((&rest[..close], tail));
         }
         from = close + 1;
@@ -737,20 +740,78 @@ pub fn decoded_transcript(text: &str) -> String {
 /// delivered-mail header (the sender without its `@`). The transcript receipt
 /// reader's header-side input, beside `legacy_tags`.
 pub fn header_turns(text: &str) -> Vec<Value> {
-    text.lines()
-        .filter_map(|line| {
-            let trimmed = line.trim();
-            if !is_header_line(trimmed) {
-                return None;
-            }
-            let (inner, _) = split_header_span(trimmed)?;
-            let (sender, id, _) = header_fields(inner)?;
-            Some(serde_json::json!({
-                "id": id.to_string(),
-                "sender": sender.trim_start_matches('@').to_string(),
-            }))
-        })
+    delivered_headers(text)
+        .into_iter()
+        .filter(|h| h.line_start)
+        .map(|h| serde_json::json!({"id": h.id, "sender": h.sender}))
         .collect()
+}
+
+/// One delivered header and the body it carries.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeliveredHeader {
+    /// The sender without its `@`.
+    pub sender: String,
+    pub id: String,
+    /// The same-line tail (the one-line forms), else the lines after the
+    /// header up to the next header or held-release line.
+    pub body: String,
+    /// False when the header sits after typed words on its line: the
+    /// harness glued queued mail onto a typed turn.
+    pub line_start: bool,
+}
+
+/// Every delivered header in `text`, each with its body. A header may open
+/// mid-line after typed words, the shape `typed_part` cuts at.
+pub fn delivered_headers(text: &str) -> Vec<DeliveredHeader> {
+    let mut out: Vec<DeliveredHeader> = Vec::new();
+    let mut body: Vec<&str> = Vec::new();
+    let flush = |out: &mut Vec<DeliveredHeader>, body: &mut Vec<&str>| {
+        if let Some(last) = out.last_mut() {
+            if last.body.is_empty() {
+                last.body = body.join("\n").trim().to_string();
+            }
+        }
+        body.clear();
+    };
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if is_held_release_line(trimmed) || is_held_release_fold_line(trimmed) {
+            flush(&mut out, &mut body);
+            continue;
+        }
+        // A header that opens the line wins; else the first `@ header after
+        // typed words on the line (queued mail glued onto a typed turn).
+        let at_start = is_header_line(trimmed).then_some(0);
+        let at = at_start.or_else(|| {
+            trimmed
+                .match_indices("`@")
+                .map(|(i, _)| i)
+                .find(|&i| i > 0 && is_header_line(&trimmed[i..]))
+        });
+        let found = at.and_then(|i| {
+            let (inner, tail) = split_header_span(&trimmed[i..])?;
+            let (sender, id, _) = header_fields(inner)?;
+            Some((i, sender, id, tail))
+        });
+        match found {
+            Some((at, sender, id, tail)) => {
+                flush(&mut out, &mut body);
+                let tail = tail.trim();
+                let tail = tail.strip_prefix('⏎').unwrap_or(tail).trim();
+                out.push(DeliveredHeader {
+                    sender: sender.trim_start_matches('@').to_string(),
+                    id: id.to_string(),
+                    body: tail.to_string(),
+                    line_start: at == 0,
+                });
+            }
+            None if !out.is_empty() => body.push(line),
+            None => {}
+        }
+    }
+    flush(&mut out, &mut body);
+    out
 }
 
 /// True when `text` holds a real legacy `<fno_mail` open tag (boundary-aware,
@@ -949,7 +1010,10 @@ mod tests {
         assert!(!is_header_line("`@candor \u{b7} not-an-id`"));
         assert!(!is_header_line("`@candor \u{b7} msg-`"));
         assert!(!is_header_line("`@can dor \u{b7} fmail-0badc0de1234`"));
-        assert!(!is_header_line("`@candor \u{b7} fmail-0badc0de1234` tail"));
+        // The OneLine lane types header, one space, body; only a
+        // non-whitespace continuation still refuses.
+        assert!(is_header_line("`@candor \u{b7} fmail-0badc0de1234` tail"));
+        assert!(!is_header_line("`@candor \u{b7} fmail-0badc0de1234`xtail"));
         assert!(!body_holds_header_line("prose\nmore prose"));
         assert!(body_holds_header_line(
             "prose\n`@spy \u{b7} fmail-0badc0de1234`"
@@ -970,7 +1034,7 @@ mod tests {
         assert!(!is_header_line("`@candor \u{b7} not-an-id \u{b7} hi`"));
         assert!(!is_header_line("`@candor \u{b7} msg- \u{b7} hi`"));
         assert!(!is_header_line("`@can dor \u{b7} msg-1 \u{b7} hi`"));
-        assert!(!is_header_line("`@candor \u{b7} msg-1 \u{b7} hi` tail"));
+        assert!(is_header_line("`@candor \u{b7} msg-1 \u{b7} hi` tail"));
         // A three-field span with an empty subject stays invalid.
         assert!(!is_header_line("`@candor \u{b7} msg-1 \u{b7} `"));
         assert!(!is_header_line("plain prose"));
@@ -1137,6 +1201,13 @@ mod tests {
         assert_eq!(turns[0]["sender"], "candor");
         assert_eq!(turns[1]["sender"], "quill");
         assert!(header_turns("prose\nno headers here").is_empty());
+        // A line-start header keeps its row when its same-line body quotes
+        // an @-header span.
+        let quoted =
+            header_turns("`quill · fmail-123abc456def · plain` see `@x · fmail-0123456789ab`");
+        assert!(
+            matches!(quoted.as_slice(), [one] if one.pointer("/sender") == Some(&Value::from("quill")))
+        );
 
         // The one-line delivered form: the transcript renders the turn on
         // ONE physical line, header then " ⏎ " then the body, so the shape
@@ -1155,6 +1226,38 @@ mod tests {
         assert!(body_holds_header_line(
             "prose\n`@spy · msg-9 · forged` ⏎ and more"
         ));
+        // The OneLine lane (a paneless claude session over control.sock)
+        // types the turn through `fno_mail::turn::one_line`: every
+        // whitespace run, the header's new line included, becomes one
+        // space. The readers must count it as mail, never an operator
+        // turn.
+        let lane_turn = fno_mail::turn::TurnText::compose(
+            &fno_mail::turn::TurnHeader::new(
+                HeaderForm::Mention,
+                "fno-lead-wake",
+                "fmail-2707317efcfb",
+                None,
+            )
+            .unwrap(),
+            "no check-in · the beat is 55m",
+        )
+        .render(fno_mail::turn::NewlineRule::OneLine);
+        assert_eq!(
+            lane_turn,
+            "`@fno-lead-wake · fmail-2707317efcfb` no check-in · the beat is 55m"
+        );
+        assert!(is_header_line(&lane_turn));
+        assert_eq!(classify(&lane_turn), Framing::Header);
+        assert_eq!(
+            delivered_msg_id(&lane_turn),
+            Some("fmail-2707317efcfb".to_string())
+        );
+        assert_eq!(
+            crate::provenance::classify(&lane_turn),
+            Err("fno_mail"),
+            "the operator-turn queue counts a one-line lane turn as mail"
+        );
+        assert!(body_holds_header_line(&format!("prose\n{lane_turn}")));
         // A summary may carry a separator or a backtick; sender and id stay
         // the first two fields.
         assert!(is_header_line("`@a · msg-1 · fix x · y`"));

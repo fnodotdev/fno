@@ -1,0 +1,26 @@
+# Mined from a real correction row; `fno-agent evals candidates` finds it.
+id: golden-frontend-routes-impeccable
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  A plan task's file list is src/components/Modal.tsx. Neither the task block nor the plan frontmatter declares an executor. State which executor the wave resolver routes this task to.
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `executor: <the executor name>`. The second line is `source: <the path in this repository that states this resolution>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^executor: *impeccable' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '(tdd|archer|frontend-executor|research|scout)'"
+  - kind: exit
+    command: "sed -n 2p decision.md | grep -Ei 'executor-resolution'"
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source: {kind: correction, ref: "corr:5538bf0d8839a243"}
+  quote: "no i'll do it in a new thread. prepare a handoff. (how come you were able to not use impeccable? i thought we had it baked into being able to use it if it exists for frontend)"
+  expected: "The executor resolves to impeccable, the frontend-executor craft loop, not the tdd default."
+  rule: "AGENTS.md Execution: executor resolution runs task block, then plan frontmatter, then surface inference, which routes tasks touching tsx/jsx, components/, routes/ or src/styles/ to the impeccable executor; the locked list lives in skills/execute/references/executor-resolution.md."
+  failure_type: skipped-step
+  cost: rework
+  outcome: failed
