@@ -133,7 +133,7 @@ fn is_default_root(root: &Path) -> bool {
 /// One class home: the env carrier, then `[paths]` config, then the platform
 /// default. Mirrors `paths_cli::class_home` in fno-agent, without a spawn: a
 /// pin expands `~` and resolves links, a config value also expands variables,
-/// and a config value with a glob is no answer.
+/// and a config value with a glob or a template is no answer.
 fn class_home(env_key: &str, config_key: &str, default: fn(&Path) -> PathBuf) -> PathBuf {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let user = std::env::var_os("HOME")
@@ -143,12 +143,13 @@ fn class_home(env_key: &str, config_key: &str, default: fn(&Path) -> PathBuf) ->
         let pin = crate::config_doctor::expanduser(&pin.to_string_lossy());
         return crate::config_doctor::resolve(Path::new(&pin));
     }
-    match crate::digest_overlay::config_str(&cwd, "paths", config_key) {
-        Some(raw) if !raw.contains(['*', '?', '[']) => {
-            let raw = crate::config_doctor::expandvars(raw.trim_end_matches('/'));
-            cwd.join(crate::config_doctor::expanduser(&raw))
-        }
-        _ => default(&user),
+    let configured = crate::digest_overlay::config_str(&cwd, "paths", config_key)
+        .filter(|raw| !raw.contains(['*', '?', '[']))
+        .map(|raw| crate::config_doctor::expandvars(raw.trim_end_matches('/')))
+        .filter(|path| crate::config_cli::model::template_vars(path).is_empty());
+    match configured {
+        Some(path) => cwd.join(crate::config_doctor::expanduser(&path)),
+        None => default(&user),
     }
 }
 
