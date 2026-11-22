@@ -453,7 +453,7 @@ pub(super) fn keys(view: &mut View, bytes: &[u8]) {
         let pan_limit = report.pan_limit(view.term);
         report.pan = report.pan.min(pan_limit);
         for key in report.carry.fold_carry(bytes, bytes.is_empty()) {
-            match key {
+            match key.plain() {
                 LKey::Esc => {
                     if report.issue.is_some() || report.node.is_some() {
                         view.report = None;

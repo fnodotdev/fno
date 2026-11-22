@@ -30,6 +30,7 @@ pub(crate) fn group_order(sigil: char) -> Vec<Focus> {
         Focus::Branch,
         Focus::Worktree,
         Focus::Where,
+        Focus::Opens,
     ];
     let mut order = Vec::new();
     if sigil == '+' {
@@ -53,6 +54,7 @@ fn group_title(field: Focus) -> &'static str {
         Focus::Branch => "branch",
         Focus::Worktree => "worktree",
         Focus::Where => "where",
+        Focus::Opens => "opens",
         Focus::Message => "message",
         Focus::WillRun => "command",
     }

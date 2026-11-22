@@ -185,6 +185,7 @@ fn chip_token(l: &Launcher, f: Focus, catalog: &Option<CatalogOutcome>, labelled
         Focus::Project => "folder",
         Focus::Branch => "branch",
         Focus::Where => "where",
+        Focus::Opens => "opens",
         Focus::Worktree => "worktree",
         _ => "",
     };
@@ -606,10 +607,16 @@ impl Launcher {
         // Where reads as noise while the launch stays local; it appears once
         // a host is chosen, or while Tab holds it.
         let local = self.focus != Focus::Where && self.chip_label(Focus::Where, catalog) == "Local";
-        let second: Vec<Focus> = [Focus::Project, Focus::Branch, Focus::Worktree, Focus::Where]
-            .into_iter()
-            .filter(|f| !(local && *f == Focus::Where))
-            .collect();
+        let second: Vec<Focus> = [
+            Focus::Project,
+            Focus::Branch,
+            Focus::Worktree,
+            Focus::Where,
+            Focus::Opens,
+        ]
+        .into_iter()
+        .filter(|f| !(local && *f == Focus::Where))
+        .collect();
         let firsts = [
             Focus::Harness,
             Focus::Model,
@@ -766,7 +773,6 @@ pub(crate) async fn card_hit(
             }
         }
         CardHit::Pick(target) => {
-            let portal = next_free_portal(view);
             let catalog = view.launcher_catalog.clone();
             let Some(l) = view.launcher.as_mut() else {
                 return Ok(());
@@ -786,7 +792,7 @@ pub(crate) async fn card_hit(
             let anchor = picker.anchor;
             l.picker = Some(picker);
             if let Some(action) = action {
-                commit_picker_action(l, &catalog, action, portal, field, anchor);
+                commit_picker_action(l, &catalog, action, field, anchor);
             }
         }
         CardHit::More => {

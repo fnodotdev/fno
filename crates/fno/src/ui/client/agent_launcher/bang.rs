@@ -7,12 +7,10 @@
 use std::path::Path;
 use std::time::Duration;
 
-use super::{close, write_msg, ClientMsg, Phase, Placement, View};
+use super::{close, placement::Places, write_msg, ClientMsg, Phase, View};
 use crate::mux_cli::{control_roundtrip_with_timeouts, ControlError};
 use crate::pane_send_audit::{append_agents_event, pane_send_audit_events_path};
-use crate::proto::{
-    socket_path, Command, ControlCommand, PanePlacement, PaneTarget, ServerMsg, TabSel,
-};
+use crate::proto::{socket_path, Command, ControlCommand, ServerMsg};
 
 /// The journal line is data, not a transcript: past this the row truncates.
 const MAX_LINE_CHARS: usize = 512;
@@ -22,31 +20,18 @@ const CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// `/bin/sh` runs `<shell> -lc <line>`, prints `[exit N]`, then hands the
 /// pane to an interactive login shell. Positional args keep the line out of
-/// the script text; the pane never hangs because the command exited.
+/// the script text; the pane never hangs because the command exited. The
+/// trap lets Ctrl-C end the line and still leave the shell.
 fn shell_argv(shell: &str, line: &str) -> Vec<String> {
     vec![
         "/bin/sh".to_string(),
         "-c".to_string(),
-        format!("\"$0\" -lc \"$1\"; s=$?; printf '\\n[exit %s]\\n' \"$s\"; exec \"$0\" -l"),
+        format!(
+            "trap : INT; \"$0\" -lc \"$1\"; s=$?; printf '\\n[exit %s]\\n' \"$s\"; exec \"$0\" -l"
+        ),
         shell.to_string(),
         line.to_string(),
     ]
-}
-
-/// Where a `!` shell lands: in the card's workspace, as a new tab unless the
-/// Open as token names a split beside the focused pane or the active tab.
-fn shell_placement(squad: u64, open_as: Placement) -> PanePlacement {
-    let (tab, split) = match open_as {
-        Placement::ThreadSplitBeside => (None, Some(crate::tree::Dir::Right)),
-        Placement::PaneActiveTab => (Some(TabSel::Active), None),
-        Placement::Thread | Placement::ThreadNewTab => (Some(TabSel::New), None),
-    };
-    PanePlacement {
-        target: PaneTarget::SquadId(squad),
-        split,
-        tab,
-        ..PanePlacement::default()
-    }
 }
 
 /// The user's login shell, resolved where the mux's own shell panes
@@ -129,7 +114,11 @@ pub(super) async fn run_with(
     events: &Path,
     roundtrip: impl FnOnce(ControlCommand) -> Result<ServerMsg, ControlError> + Send + 'static,
 ) -> Result<(), String> {
-    let Some(l) = view.launcher.as_mut() else {
+    let placed = view
+        .launcher
+        .as_ref()
+        .map(|l| Places::read(view, l.squad).shell(l.squad, l.draft.placement));
+    let (Some(l), Some(placed)) = (view.launcher.as_mut(), placed) else {
         return Ok(());
     };
     if !l.shell {
@@ -172,7 +161,18 @@ pub(super) async fn run_with(
     } else {
         shell_argv(&shell, &line)
     };
-    let placement = shell_placement(l.squad, l.draft.placement);
+    let placement = match placed {
+        Ok(placement) => placement,
+        Err(e) => {
+            let reason = e.to_string();
+            emit(
+                events,
+                &refused_row(&session, &cwd, &line, &reason, "refused"),
+            );
+            l.phase = Phase::Refused { request_id, reason };
+            return Ok(());
+        }
+    };
     let command = ControlCommand::PaneRun {
         cwd: cwd.clone(),
         argv,
@@ -237,6 +237,7 @@ pub(super) async fn run_with(
 mod tests {
     use super::super::open;
     use super::*;
+    use crate::proto::{PaneTarget, TabSel};
 
     fn tmp_dir(tag: &str) -> std::path::PathBuf {
         let nonce = std::time::SystemTime::now()
