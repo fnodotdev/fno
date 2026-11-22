@@ -432,6 +432,9 @@ pub struct CardFacts {
     pub activity: Option<String>,
     pub context: Option<String>,
     pub tokens: Option<String>,
+    /// The user pinned this session (a keep mark): a surface that marks pins
+    /// reads it here.
+    pub pinned: bool,
 }
 
 pub fn card_facts(a: &AgentRow, now: u64) -> CardFacts {
@@ -445,6 +448,7 @@ pub fn card_facts(a: &AgentRow, now: u64) -> CardFacts {
             .then(|| row_age(a, now).trim().to_string()),
         context: a.context_used_pct.map(|p| format!("{p}%")),
         tokens: a.session_tokens.map(super::row_meter::token_cell),
+        pinned: a.pinned,
     }
 }
 

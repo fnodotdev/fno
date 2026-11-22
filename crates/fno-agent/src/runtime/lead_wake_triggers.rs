@@ -836,60 +836,31 @@ fn ask_marker_question(target: &Target, count: i64, ceiling: i64, marker: &str) 
     if existing.is_some() {
         return;
     }
-    let qid = format!("q-{}", crate::law_match::random_hex8());
     // The marker prefix is the dedupe key's other half: the next pass finds
-    // the question by the same `[{marker}:{scope}]` needle it stores.
+    // the question by the same `[{marker}:{scope}]` needle it stores. The
+    // subject keys the outbox row, because the count in the text moves.
     let stored = format!("[{marker}:{}] {question}", target.scope);
+    let mut data = serde_json::Map::new();
+    data.insert("question".into(), json!(stored));
+    data.insert(
+        "subject".into(),
+        json!(format!("{marker}:{}", target.scope)),
+    );
+    data.insert("cwd".into(), json!(target.root.display().to_string()));
+    data.insert("ask".into(), json!(ask));
+    crate::identity::stamp_person(&mut data);
     let envelope = json!({
         "ts": iso_stamp(now_epoch()),
         "type": "operator_question",
         "source": "daemon",
-        "data": {
-            "question_id": qid,
-            "question": stored,
-            "cwd": target.root.display().to_string(),
-            "ask": ask.clone(),
-        },
+        "data": data,
     });
-    let req = crate::question_intake::IntakeRequest {
-        question: stored,
-        template: false,
-        ask: Some(ask),
-        options: Vec::new(),
-        blocks: Vec::new(),
-        node: None,
-        // Machine-asked rows serve this project's own operation.
-        audience: Some("internal".to_string()),
-        why: None,
-        job: Vec::new(),
-        subject: None,
-        session_id: None,
-        harness: None,
-        cwd: Some(target.root.display().to_string()),
-        asker: None,
-        laws: Vec::new(),
-        rung: None,
-        storage_root: target.root.clone(),
-        index_path: None,
-        // This line only names the question-intake door's append target,
-        // the space journal the Python leg supplied; intake does the write.
-        journal_path: Some(crate::paths::space_dir(&target.root).join("events.jsonl")),
-        // events-discipline:allow: the raw writes in this window are the
-        // walk's wake log, never an event journal.
-        display_name: None,
-        render_cap: None,
-        op: Some("append".to_string()),
-        event: Some(envelope),
-        images: Vec::new(),
-        screens_dir: None,
-    };
-    let home = AgentsHome::from_env();
-    let answer = crate::question_intake::run_intake(&req, &home);
-    if answer.exit_code != 0 {
-        eprintln!(
-            "lead-wake-triggers: the ceiling question could not be raised: {:?}",
-            answer.lines
-        );
+    // events-discipline:allow: the space journal the question door appends
+    // to; the raw writes in this window are the walk's wake log.
+    let journal = crate::paths::space_dir(&target.root).join("events.jsonl");
+    let index = crate::provider_cap::questions_path(&AgentsHome::from_env());
+    if let Err(error) = crate::numbers::mint::file_question(envelope, journal, index) {
+        eprintln!("lead-wake-triggers: the ceiling question could not be raised: {error}");
     }
 }
 

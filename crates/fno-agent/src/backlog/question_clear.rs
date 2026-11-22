@@ -108,7 +108,9 @@ mod tests {
         let result = run_clear(&req);
 
         assert_eq!(result.exit_code, 0, "{:?}", result.lines);
-        assert!(result.lines[0].starts_with("outstanding: closed q-open (decision d-"));
+        // The fixed-id question takes D1, and its answer takes the same number.
+        let receipt = result.lines.first().map(String::as_str).unwrap_or_default();
+        assert!(receipt.starts_with("outstanding: closed q-open (decision D1 "));
         assert!(result.lines[0].ends_with(" recorded)"));
         assert!(result
             .lines
@@ -1647,8 +1649,13 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                         .as_str()
                         .unwrap_or_default()
                         .to_string();
-                    if let Err(error) = api::decision_record(&Store::new(&req.graph), event.clone())
-                    {
+                    let written = if id.is_empty() {
+                        let after = queued_retraction(req, question_event, &text);
+                        queue_answer(req, event.clone(), after)
+                    } else {
+                        api::decision_record(&Store::new(&req.graph), event.clone()).map(drop)
+                    };
+                    if let Err(error) = written {
                         answer.exit_code = 1;
                         answer.lines.push(format!(
                             "outstanding: nothing was written for {shown} (decision record failed: {})",
@@ -1669,20 +1676,30 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                     (event, line, id, false)
                 }
             };
-            if let Err(error) = append_decision_mirror(&req.journal_path, &line, &decision_id) {
-                answer.exit_code = 1;
-                answer.lines.push(format!(
-                    "outstanding: decision {decision_id} is recorded; its project journal mirror failed ({error}); rerun the same clear to finish"
-                ));
-                break;
+            // A queued answer is mirrored by the drain that numbers it.
+            let queued = decision_id.is_empty();
+            if !queued {
+                if let Err(error) = append_decision_mirror(&req.journal_path, &line, &decision_id) {
+                    answer.exit_code = 1;
+                    answer.lines.push(format!(
+                        "outstanding: decision {decision_id} is recorded; its project journal mirror failed ({error}); rerun the same clear to finish"
+                    ));
+                    break;
+                }
+                if let Err(error) = append_decision_mirror(&req.decisions_path, &line, &decision_id)
+                {
+                    answer.exit_code = 1;
+                    answer.lines.push(format!(
+                        "outstanding: decision {decision_id} is recorded; its decision index mirror failed ({error}); rerun the same clear to finish"
+                    ));
+                    break;
+                }
             }
-            if let Err(error) = append_decision_mirror(&req.decisions_path, &line, &decision_id) {
-                answer.exit_code = 1;
-                answer.lines.push(format!(
-                    "outstanding: decision {decision_id} is recorded; its decision index mirror failed ({error}); rerun the same clear to finish"
-                ));
-                break;
-            }
+            let named = if queued {
+                crate::numbers::mint::QUEUED.to_string()
+            } else {
+                format!("decision {decision_id}")
+            };
             let node = question_event
                 .get("data")
                 .and_then(|data| data.get("node"))
@@ -1692,21 +1709,23 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             if let Err(error) = append_close(&req.journal_path, &close_line, qid) {
                 answer.exit_code = 1;
                 answer.lines.push(format!(
-                    "outstanding: decision {decision_id} is recorded; the close did not land ({error}); rerun the same clear to finish"
+                    "outstanding: {named}: the answer is kept; the close did not land ({error}); rerun the same clear to finish"
                 ));
                 break;
             }
             if let Err(error) = crate::provider_cap::append_questions_row(&req.index_path, &close) {
                 answer.exit_code = 1;
                 answer.lines.push(format!(
-                    "outstanding: decision {decision_id} and project close are recorded; the index close did not land ({error}); rerun the same clear to finish"
+                    "outstanding: {named}: the answer and project close are kept; the index close did not land ({error}); rerun the same clear to finish"
                 ));
                 break;
             }
             let label = if was_resumed { "resumed" } else { "recorded" };
-            answer.lines.push(format!(
-                "outstanding: closed {shown} (decision {decision_id} {label})"
-            ));
+            answer.lines.push(if queued {
+                format!("outstanding: closed {shown} ({named})")
+            } else {
+                format!("outstanding: closed {shown} ({named} {label})")
+            });
             // The page closes in this step. The arm's later beat finds it
             // already answered; a lost beat no longer leaves it open.
             let vault = crate::paths::canonical_repo_root(&req.repo_root)
@@ -1740,7 +1759,11 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                     ));
                 }
                 if operator_can_grant(req) {
-                    answer.lines.push(if merge_answer_grants(question_event, &text) {
+                    answer.lines.push(if queued {
+                        format!(
+                            "outstanding: the answer at {subject} binds nothing until the primary numbers it"
+                        )
+                    } else if merge_answer_grants(question_event, &text) {
                         format!(
                             "outstanding: operator merge grant recorded at {subject} (binds this head only)"
                         )
@@ -1757,7 +1780,11 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                 .or_else(|| retraction_fallback(question_event))
                 .filter(|_| operator_can_grant(req))
             {
-                if retraction_answer_grants(question_event, &text, stamped) {
+                if queued {
+                    answer.lines.push(format!(
+                        "outstanding: the answer at {subject} retracts nothing until the primary numbers it"
+                    ));
+                } else if retraction_answer_grants(question_event, &text, stamped) {
                     // The validate gate decides, first pass or resumed
                     // repair alike: a live target writes now, an already
                     // retired target receipts its refusal, and a partial
@@ -1777,8 +1804,8 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             }
             answer.closed.push(ClosedQuestion {
                 qid: qid.clone(),
-                decision_id: Some(decision_id.clone()),
-                decision_event: Some(event),
+                decision_id: (!queued).then(|| decision_id.clone()),
+                decision_event: (!queued).then_some(event),
                 node,
             });
             if was_resumed {
@@ -2011,15 +2038,39 @@ pub(crate) fn append_decision_mirror(
         .map_err(|e| e.to_string())
 }
 
+/// Hold an answer the primary could not number. The question still closes
+/// now; the drain writes the decision.
+fn queue_answer(
+    req: &ClearRequest,
+    event: Value,
+    after: crate::numbers::mint::After,
+) -> Result<(), api::ApiError> {
+    let queued = crate::numbers::mint::Queued::Decision {
+        event,
+        journal: req.journal_path.clone(),
+        index: req.decisions_path.clone(),
+        graph: req.graph.clone(),
+        sign: false,
+        after,
+    };
+    crate::numbers::mint::queue(&queued).map_err(|e| api::ApiError(e.to_string()))
+}
+
 /// Record one built decision event everywhere the door writes it: the graph
 /// store, the project journal, and the decisions index. The caller owns the
-/// error text. Returns the decision id.
+/// error text. Returns the decision id, empty when the answer queued.
 pub(crate) fn record_decision_row(req: &ClearRequest, event: Value) -> Result<String, String> {
     let line = serde_json::to_string(&event).map_err(|e| e.to_string())?;
     let id = event["data"]["decision_id"]
         .as_str()
         .unwrap_or_default()
         .to_string();
+    if id.is_empty() {
+        let after = crate::numbers::mint::After::Nothing;
+        return queue_answer(req, event, after)
+            .map(|()| id)
+            .map_err(|e| e.0);
+    }
     api::decision_record(&Store::new(&req.graph), event).map_err(|e| e.0)?;
     append_decision_mirror(&req.journal_path, &line, &id)?;
     append_decision_mirror(&req.decisions_path, &line, &id)?;
@@ -2135,10 +2186,12 @@ pub(crate) fn make_decision(
             .unwrap_or_else(|| format!("question:{qid}")),
     };
     let mut decision = Map::new();
-    let mut id_bytes = [0u8; 4];
-    getrandom::fill(&mut id_bytes).expect("OS CSPRNG unavailable");
-    let did = format!("d-{}", hex(&id_bytes));
-    decision.insert("decision_id".into(), json!(&did));
+    // The answer takes its question's number. With the primary away it has
+    // no id, and the caller queues it.
+    let did = crate::numbers::mint::answer_key(&req.graph, qid).map_err(|e| e.to_string())?;
+    if let Some(id) = &did {
+        decision.insert("decision_id".into(), json!(id));
+    }
     // The answer span: the decision row IS the span, span_id = decision_id,
     // parented at the question it answers, traced to the question's node.
     let actor_kind = actor_kind_from_authority(
@@ -2150,7 +2203,7 @@ pub(crate) fn make_decision(
         "trace".into(),
         serde_json::to_value(&Trace {
             trace_id: node.unwrap_or("none").to_string(),
-            span_id: did,
+            span_id: did.unwrap_or_default(),
             parent_span_id: Some(qid.to_string()),
             // actor_session carries a canonical harness session only: a
             // user-kind decision's decided_by is an attested human name, not
@@ -2360,6 +2413,11 @@ fn retraction_subject(question_event: &Value) -> Option<(String, String)> {
         .strip_prefix(LAW_RETRACT_SUBJECT)?
         .strip_prefix(':')?
         .trim();
+    // The stamped subject is lowercased; a number key is uppercase.
+    let number = id.to_ascii_uppercase();
+    if crate::numbers::is_label_key(&number) {
+        return Some((subject.to_string(), number));
+    }
     let hex = id.strip_prefix("d-")?;
     if hex.is_empty() || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
@@ -2382,7 +2440,21 @@ fn retraction_fallback(question_event: &Value) -> Option<(String, String)> {
     }
     let (rows, _) = crate::law_match::all_decision_rows().ok()?;
     let retired = crate::decision_index::retirement_map(&rows);
+    let is_live = |id: &str| {
+        rows.iter()
+            .filter(|r| !crate::law_match::is_retraction_row(r))
+            .find(|r| crate::law_match::row_id(r).eq_ignore_ascii_case(id))
+            .is_some_and(|row| {
+                crate::decision_index::is_law(row) && !retired.contains_key(&id.to_lowercase())
+            })
+    };
     let mut cited: Vec<String> = Vec::new();
+    for word in lower.split(|c: char| !c.is_ascii_alphanumeric()) {
+        let id = word.to_ascii_uppercase();
+        if crate::numbers::is_label_key(&id) && !cited.contains(&id) && is_live(&id) {
+            cited.push(id);
+        }
+    }
     let mut from = 0usize;
     while let Some(pos) = lower[from..].find("d-") {
         let abs = from + pos + 2;
@@ -2396,19 +2468,7 @@ fn retraction_fallback(question_event: &Value) -> Option<(String, String)> {
         // from reading as a decision).
         if (4..=8).contains(&hex.len()) {
             let id = format!("d-{hex}");
-            let live = rows
-                .iter()
-                .filter(|r| !crate::law_match::is_retraction_row(r))
-                .find(|r| {
-                    r.get("decision_id")
-                        .and_then(Value::as_str)
-                        .map(|v| v.eq_ignore_ascii_case(&id))
-                        == Some(true)
-                })
-                .is_some_and(|row| {
-                    crate::decision_index::is_law(row) && !retired.contains_key(&id)
-                });
-            if live && !cited.contains(&id) {
+            if !cited.contains(&id) && is_live(&id) {
                 cited.push(id);
             }
         }
@@ -2521,6 +2581,36 @@ fn validate_live_law_target(target_id: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// The retraction a queued answer owes once it has its number.
+fn queued_retraction(
+    req: &ClearRequest,
+    question_event: &Value,
+    text: &str,
+) -> crate::numbers::mint::After {
+    let stamped = retraction_subject(question_event).is_some();
+    retraction_subject(question_event)
+        .or_else(|| retraction_fallback(question_event))
+        .filter(|_| operator_can_grant(req))
+        .filter(|_| retraction_answer_grants(question_event, text, stamped))
+        .map_or(crate::numbers::mint::After::Nothing, |(subject, target)| {
+            crate::numbers::mint::After::Retract { subject, target }
+        })
+}
+
+/// The drain's half of [`queued_retraction`]: the same gate and write, now
+/// that the answer is recorded. The migration can have renamed the target.
+pub(crate) fn after_retraction(qid: &str, subject: &str, target: &str, reason: &str) {
+    let target = crate::numbers::resolve('d', target).unwrap_or_else(|| target.to_string());
+    let mut answer = ClearAnswer::new();
+    match validate_live_law_target(&target) {
+        Err(error) => answer.lines.push(format!("outstanding: {error}")),
+        Ok(()) => perform_retraction(&mut answer, qid, subject, &target, reason),
+    }
+    for line in &answer.lines {
+        eprintln!("{line}");
+    }
 }
 
 /// The board answer's retraction: write through the shared writer, receipt
@@ -2807,8 +2897,4 @@ pub(crate) fn chat_answer_line(qid: &str) -> String {
 
 fn cut(text: &str, cap: usize) -> String {
     text.chars().take(cap).collect()
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }

@@ -62,15 +62,7 @@ fn codex_rollout(sid: &str) -> Option<PathBuf> {
 
 fn transcript(harness: &str, sid: &str) -> Option<PathBuf> {
     match harness.as_harness() {
-        // A worker on an isolated account keeps its transcript under that
-        // account's config dir, not the ambient one.
-        Harness::Claude => crate::claude_drive::find_transcript(sid).or_else(|| {
-            crate::claude_roster::isolated_account_dirs()
-                .into_iter()
-                .find_map(|(_, dir)| {
-                    crate::claude_drive::find_transcript_in(&dir.join("projects"), sid)
-                })
-        }),
+        Harness::Claude => crate::claude_drive::find_transcript_any_root(sid),
         Harness::Codex => codex_rollout(sid),
         _ => None,
     }

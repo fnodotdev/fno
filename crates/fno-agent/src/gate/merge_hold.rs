@@ -931,10 +931,17 @@ fn release_node_hold(
 /// `question:<qid>` instead of at the node.
 fn named_question_ids(hold_text: &str) -> Vec<String> {
     static QID: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let re = QID.get_or_init(|| regex::Regex::new(r"(?i)\bq-[0-9a-z]{1,}\b").expect("static"));
+    let re = QID.get_or_init(|| {
+        regex::Regex::new(r"(?i:\bq-[0-9a-z]{1,}\b)|\b[DQ][0-9]{1,7}\b").expect("static")
+    });
     let mut ids: Vec<String> = Vec::new();
     for cap in re.captures_iter(hold_text) {
-        let id = cap[0].to_lowercase();
+        let found = &cap[0];
+        let id = if crate::numbers::is_label_key(found) {
+            found.to_string()
+        } else {
+            found.to_lowercase()
+        };
         if !ids.contains(&id) {
             ids.push(id);
         }
@@ -959,7 +966,9 @@ fn release_evidence_refusal(
     graph: &Path,
     decisions_jsonl: &Path,
 ) -> Option<Value> {
-    let qids = named_question_ids(hold_text);
+    let mut qids = named_question_ids(hold_text);
+    // A number can cite a decision ("per D12") or be plain words ("Q3").
+    qids.retain(|id| crate::numbers::mint::names_question(graph, id));
     if !set_by.eq_ignore_ascii_case("user") && qids.is_empty() {
         return None;
     }

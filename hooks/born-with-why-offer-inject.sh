@@ -42,7 +42,7 @@ OFFER_BUDGET="$(hook_budget_secs)"
 source "$HOOK_DIR/../scripts/lib/events-lock.sh" 2>/dev/null || exit 0
 
 REPO_ROOT=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || echo "$PWD")
-# HOME-as-repo guard (law d-8ddaba56): a cwd of $HOME outside git resolves
+# HOME-as-repo guard (law D1564): a cwd of $HOME outside git resolves
 # REPO_ROOT to $HOME, so the cursor write below would land a dot file at the
 # top level of the state root. No checkout, no offer to surface.
 if [[ "$REPO_ROOT" == "$HOME" ]] \

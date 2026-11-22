@@ -94,6 +94,20 @@ pub fn has_node_id_prefix(s: &str) -> bool {
     s.starts_with(settings::node_id_prefix().as_str()) || s.starts_with("ab-")
 }
 
+/// The claim-store key a node reference reads under: a bare well-formed id
+/// reads its `node:` row; every other key shape passes through untouched.
+/// The one owner of that rewrite - the CLI status door and the merge-grant
+/// verdict both call it, because a bare lookup answers Free on a live row
+/// and the two readers must never disagree about the row a node claim
+/// lives in.
+pub fn claim_key_for(s: &str) -> String {
+    if is_wellformed_node_id(s) {
+        format!("node:{s}")
+    } else {
+        s.to_string()
+    }
+}
+
 /// The row's retired ids: the `aliases` list the update --to rename
 /// rewrites and other modules read (mint exclusion, collision checks).
 /// Absent on rows never renamed.

@@ -434,7 +434,7 @@ pub(crate) fn ask_answer(req: &AskRequest) -> AskAnswer {
     let nearby = nearby_tier(req, &exact);
     let uncited: Vec<String> = nearby
         .iter()
-        .filter(|h| !req.question.contains(&h.decision_id))
+        .filter(|h| !crate::numbers::names_id(&req.question, &h.decision_id))
         .map(|h| h.decision_id.clone())
         .collect();
     let nearby_notice = if uncited.is_empty() {
@@ -970,8 +970,11 @@ const COORDINATION_MARKERS: &[&str] = &[
     "for this change",
 ];
 
-/// `^d-[0-9a-f]{8}$`, the shape `law.py` enforced on `--supersedes`.
+/// A number key (`D142`), or the `^d-[0-9a-f]{8}$` of a row from before it.
 pub(crate) fn is_decision_id(s: &str) -> bool {
+    if crate::numbers::is_label_key(s) {
+        return true;
+    }
     let Some(rest) = s.strip_prefix("d-") else {
         return false;
     };
@@ -1647,9 +1650,38 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
     Ok(door)
 }
 
-pub(crate) fn mint_decision_id() -> String {
-    // 'd-<hex>', matching decide/__init__.py::mint_decision_id (8 hex chars).
-    format!("d-{}", random_hex8())
+/// Hold a ruling the primary could not number; the beat records it.
+pub(crate) fn queue_ruling(
+    event: Value,
+    journal: std::path::PathBuf,
+    sign: bool,
+    after: crate::numbers::mint::After,
+) -> i32 {
+    let queued = crate::numbers::mint::Queued::Decision {
+        event,
+        journal,
+        index: decision_index::default_state_path("decisions.jsonl"),
+        graph: crate::graph_get::default_graph_path(),
+        sign,
+        after,
+    };
+    if let Err(error) = crate::numbers::mint::queue(&queued) {
+        return door_refuse(&format!("the ruling could not be queued ({error})"));
+    }
+    eprintln!(
+        "decide: {}. The primary is unreachable, so this ruling has no id and binds nothing yet. \
+         The next daemon beat that reaches the primary records it; do not record it again.",
+        crate::numbers::mint::QUEUED
+    );
+    println!("{}", crate::numbers::mint::QUEUED);
+    0
+}
+
+/// The work that follows a recorded law, at the door or at the drain.
+pub(crate) fn after_law(decision_id: &str, subject: &str, decision: &str, sweep: &[String]) {
+    crate::law_reach::sweep_after_law(decision_id, subject, decision, sweep);
+    crate::law_reach::mail_near_leads(decision_id, subject, decision);
+    crate::decision_log::refresh();
 }
 
 /// 'r-<hex>', the Python `decision_retracted` builder's shape.
@@ -2297,12 +2329,14 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
     ) {
         return door_refuse(&message);
     }
-    let decision_id = mint_decision_id();
+    let decision_id = match crate::numbers::mint::mint_key() {
+        Ok(key) => key,
+        Err(error) => return door_refuse(&error.to_string()),
+    };
     let ts = now_iso();
     // The envelope mirrors the Python `operator_decision` builder: a key
     // appears only when its value is set; text fields cap at 2000 chars.
     let mut data = json!({
-        "decision_id": decision_id,
         "decision": text_cap(&decision, 2000),
         "authority_source": authority,
         "graduation": graduation,
@@ -2402,17 +2436,22 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
     }
     if let Some(map) = data.as_object_mut() {
         crate::identity::stamp_person(map);
-        crate::identity::sign_law_row(map, "operator_decision", &ts);
+        if let Some(id) = &decision_id {
+            map.insert("decision_id".into(), json!(id));
+            // The signature covers the id, so a queued row signs at the drain.
+            crate::identity::sign_law_row(map, "operator_decision", &ts);
+        }
     }
     let envelope = json!({"ts": ts, "type": "operator_decision", "source": "target", "data": data});
+    let Some(decision_id) = decision_id else {
+        let after = crate::numbers::mint::After::Law {
+            sweep: door.sweep.clone(),
+        };
+        return queue_ruling(envelope, project_events_journal(), true, after);
+    };
     if let Err(code) = append_decision(&envelope, &decision_id) {
         return code;
     }
-    // The receipt's short number, minted in step with the record so the
-    // caller leaves with it. Advisory and idempotent; the daemon beat mints
-    // the same key anyway.
-    let graph = crate::backlog::database_path(&crate::graph_get::default_graph_path());
-    let _ = crate::numbers::mint_now(&graph, &decision_id);
     let shown = crate::numbers::display(&decision_id);
     if matches_node_id_shape(&door.subject.to_lowercase()) {
         // The node-view projection (`_project`) is Python-side and not ported;
@@ -2430,9 +2469,7 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
     if let Some(old) = &auto_superseded {
         eprintln!("superseded {}", crate::numbers::display(old));
     }
-    crate::law_reach::sweep_after_law(&decision_id, door.subject.trim(), &decision, &door.sweep);
-    crate::law_reach::mail_near_leads(&decision_id, door.subject.trim(), &decision);
-    crate::decision_log::refresh();
+    after_law(&decision_id, door.subject.trim(), &decision, &door.sweep);
     // The best-effort rule-time join, on stderr: near laws first, then the
     // open questions the new law may answer.
     let law_row = LawRow {
