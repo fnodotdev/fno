@@ -832,6 +832,14 @@ mod tests {
         assert_eq!(session.tokens, 3000);
     }
 
+    #[derive(serde::Deserialize)]
+    struct ServedTokenKeys {
+        session_input_tokens: Option<u64>,
+        session_output_tokens: Option<u64>,
+        session_cache_read_tokens: Option<u64>,
+        session_cache_write_tokens: Option<u64>,
+    }
+
     #[test]
     fn served_keys_carry_the_measured_cost() {
         let dir = tmpdir("served");
@@ -868,22 +876,12 @@ mod tests {
         assert_eq!(keys["context_used_pct"], serde_json::json!(48));
         assert_eq!(keys["session_tokens"], serde_json::json!(154_000));
         assert_eq!(keys["compaction_count"], serde_json::json!(1));
-        assert_eq!(
-            keys.get("session_input_tokens"),
-            Some(&serde_json::json!(140_000))
-        );
-        assert_eq!(
-            keys.get("session_output_tokens"),
-            Some(&serde_json::json!(14_000))
-        );
-        assert_eq!(
-            keys.get("session_cache_read_tokens"),
-            Some(&serde_json::json!(0))
-        );
-        assert_eq!(
-            keys.get("session_cache_write_tokens"),
-            Some(&serde_json::json!(0))
-        );
+        let token_keys: ServedTokenKeys =
+            serde_json::from_value(serde_json::Value::Object(keys.clone())).unwrap();
+        assert_eq!(token_keys.session_input_tokens, Some(140_000));
+        assert_eq!(token_keys.session_output_tokens, Some(14_000));
+        assert_eq!(token_keys.session_cache_read_tokens, Some(0));
+        assert_eq!(token_keys.session_cache_write_tokens, Some(0));
         assert_eq!(
             keys["session_cost_measured_at"],
             serde_json::json!("2026-10-02T00:00:00Z")
@@ -899,22 +897,12 @@ mod tests {
         assert_eq!(absent["session_cost_cents"], serde_json::json!(null));
         assert_eq!(absent["session_cost_measured_at"], serde_json::json!(null));
         assert_eq!(absent["compaction_count"], serde_json::json!(null));
-        assert_eq!(
-            absent.get("session_input_tokens"),
-            Some(&serde_json::json!(null))
-        );
-        assert_eq!(
-            absent.get("session_output_tokens"),
-            Some(&serde_json::json!(null))
-        );
-        assert_eq!(
-            absent.get("session_cache_read_tokens"),
-            Some(&serde_json::json!(null))
-        );
-        assert_eq!(
-            absent.get("session_cache_write_tokens"),
-            Some(&serde_json::json!(null))
-        );
+        let absent_keys: ServedTokenKeys =
+            serde_json::from_value(serde_json::Value::Object(absent)).unwrap();
+        assert_eq!(absent_keys.session_input_tokens, None);
+        assert_eq!(absent_keys.session_output_tokens, None);
+        assert_eq!(absent_keys.session_cache_read_tokens, None);
+        assert_eq!(absent_keys.session_cache_write_tokens, None);
 
         let mut unresolved = RegistryEntry::default();
         unresolved.harness = Some("pi".into());
