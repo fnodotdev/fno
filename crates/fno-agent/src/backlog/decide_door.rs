@@ -8,8 +8,8 @@ use serde_json::{json, Map, Value};
 
 use crate::decision_trace::{actor_kind_from_authority, emit_span_to, new_span_id, Trace};
 use crate::law_match::{
-    all_decision_rows, attended_terminal, evidence_repo_root, is_retraction_row, mint_decision_id,
-    now_iso, project_events_journal, text_cap, UNATTRIBUTED_CALLER, WAIVER_SUBJECT_PREFIX,
+    all_decision_rows, attended_terminal, evidence_repo_root, is_retraction_row, now_iso,
+    project_events_journal, text_cap, UNATTRIBUTED_CALLER, WAIVER_SUBJECT_PREFIX,
 };
 
 // ---------------------------------------------------------------------------
@@ -901,6 +901,17 @@ for a lead ruling inside its own scope; omit the flag to resolve it from this se
     if let (None, Some(t)) = (&door.supersedes, overturns) {
         if t.starts_with("d-") {
             door.supersedes = Some(t.to_string());
+        } else if crate::numbers::is_label_key(t) {
+            // The supersession gate compares keys, and an older row's key is
+            // still its hash. A number no decision holds links nothing.
+            door.supersedes = crate::numbers::resolve('d', t).filter(|id| {
+                !id.starts_with("q-")
+                    && (!crate::numbers::is_label_key(id)
+                        || all_decision_rows().map_or(true, |(rows, _)| {
+                            rows.iter()
+                                .any(|r| decision_row_str(r, "decision_id") == *id)
+                        }))
+            });
         }
     }
     // Supersession: an unknown target refuses before any write (a transposed
@@ -1055,9 +1066,7 @@ decision index. Run `fno backlog decide-reindex` before retrying."
     }
     // Mint and envelope. A key appears only when its value is set; the text
     // caps mirror the Python builder (2000 chars).
-    let decision_id = mint_decision_id();
     let mut data = json!({
-        "decision_id": decision_id,
         "decision": text_cap(&decision, 2000),
         "graduation": graduation,
     });
@@ -1096,6 +1105,20 @@ decision index. Run `fno backlog decide-reindex` before retrying."
         .map(str::trim)
         .filter(|q| !q.is_empty())
         .map(|q| crate::numbers::resolve_with_pull('q', q).unwrap_or_else(|| q.to_string()));
+    let minted = match &question_hash {
+        Some(q) => crate::numbers::mint::answer_key(&crate::graph_get::default_graph_path(), q),
+        None => crate::numbers::mint::mint_key(),
+    };
+    let decision_id = match minted {
+        Ok(key) => key,
+        Err(error) => {
+            eprintln!("decide: failed to record: {error}");
+            return 1;
+        }
+    };
+    if let (Some(map), Some(id)) = (data.as_object_mut(), &decision_id) {
+        map.insert("decision_id".into(), json!(id));
+    }
     if let Some(q) = &question_hash {
         data["question_id"] = json!(q);
     }
@@ -1203,7 +1226,7 @@ decision index. Run `fno backlog decide-reindex` before retrying."
     if door.answers_ask.is_some() || overturns.is_some() || question_hash.is_some() {
         data["trace"] = serde_json::to_value(&Trace {
             trace_id: subject.clone(),
-            span_id: decision_id.clone(),
+            span_id: decision_id.clone().unwrap_or_default(),
             parent_span_id: route_span_id
                 .or_else(|| overturns.map(str::to_string))
                 .or_else(|| question_hash.clone()),
@@ -1225,6 +1248,28 @@ decision index. Run `fno backlog decide-reindex` before retrying."
     // precede the parent the trace names.
     let ts = now_iso();
     let envelope = json!({"ts": ts, "type": "operator_decision", "source": "target", "data": data});
+    let Some(decision_id) = decision_id else {
+        let after = crate::numbers::mint::After::Decide {
+            question: question_hash.clone(),
+        };
+        let code = crate::law_match::queue_ruling(envelope, journal.clone(), false, after);
+        if code == 0 {
+            if let Some((trace, attrs)) = pending_correction {
+                if let Err(e) = emit_span_to(&journal, "correction", &trace, &attrs) {
+                    eprintln!("decide: correction span skipped: {e}");
+                }
+            }
+            // A hold disarms an armed merge now, not at the drain.
+            if let Some(line) = crate::pr_admission::after_queue(
+                &subject,
+                &decision,
+                provenance.authority_source.as_deref(),
+            ) {
+                eprintln!("{line}");
+            }
+        }
+        return code;
+    };
     // Durability first: the project journal. A failed write here records
     // nothing anywhere (the Python generic handler's exit 1).
     if let Err(e) = crate::event_store::append_envelope(&journal, &envelope.to_string(), None) {
@@ -1305,42 +1350,61 @@ Do NOT re-run decide; that records it twice.",
             );
         }
     }
-    crate::law_reach::mail_near_leads(&decision_id, &subject, &decision);
+    after_decide(
+        &journal,
+        &decision_id,
+        &subject,
+        &decision,
+        Some(&provenance.decided_by),
+        provenance.authority_source.as_deref(),
+        question_hash.as_deref(),
+    );
+    println!("{}", crate::numbers::display(&decision_id));
+    0
+}
+
+/// The work that follows a recorded ruling, at the door or at the drain.
+pub(crate) fn after_decide(
+    journal: &std::path::Path,
+    decision_id: &str,
+    subject: &str,
+    decision: &str,
+    decided_by: Option<&str>,
+    authority: Option<&str>,
+    question: Option<&str>,
+) {
+    crate::law_reach::mail_near_leads(decision_id, subject, decision);
     // The ruling closes the question it names, in the same write: the
     // check-in that prints the answer command reads the close, not the
     // decision. The close is bookkeeping on a durable ruling, so a
     // failed write reports and never fails the record.
-    if let Some(qid) = &question_hash {
+    if let Some(qid) = question {
         let index = crate::provider_cap::questions_path(&crate::paths::AgentsHome::from_env());
         match crate::question_clear::close_with_recorded_answer(
-            &journal,
+            journal,
             &index,
             qid,
-            &decision,
-            Some(&provenance.decided_by),
+            decision,
+            decided_by,
             crate::question_intake::QUESTION_CAP,
         ) {
-            Ok(crate::question_clear::AnsweredClose::Closed) => {
-                eprintln!(
-                    "decide: closed question {} (decision {})",
-                    crate::numbers::display(qid),
-                    crate::numbers::display(&decision_id)
-                )
-            }
+            Ok(crate::question_clear::AnsweredClose::Closed) => eprintln!(
+                "decide: closed question {} (decision {})",
+                crate::numbers::display(qid),
+                crate::numbers::display(decision_id)
+            ),
             Ok(crate::question_clear::AnsweredClose::AlreadyClosed) => {}
             Ok(crate::question_clear::AnsweredClose::Unknown) => eprintln!(
                 "decide: question {} is not a question id this machine knows; nothing to close",
                 crate::numbers::display(qid)
             ),
-            Ok(crate::question_clear::AnsweredClose::Peer(host)) => {
-                eprintln!(
-                    "decide: question {} was asked on {host}; close it there",
-                    crate::numbers::display(qid)
-                )
-            }
+            Ok(crate::question_clear::AnsweredClose::Peer(host)) => eprintln!(
+                "decide: question {} was asked on {host}; close it there",
+                crate::numbers::display(qid)
+            ),
             Err(e) => eprintln!(
                 "decide: recorded {}, but the question close for --question-id {} did not land ({e}); finish it with: fno inbox outstanding clear {}",
-                crate::numbers::display(&decision_id),
+                crate::numbers::display(decision_id),
                 crate::numbers::display(qid),
                 crate::numbers::display(qid)
             ),
@@ -1353,23 +1417,11 @@ Do NOT re-run decide; that records it twice.",
     // commands, so they retire nothing. Peer-origin copies close through
     // their own machine's door. The close is bookkeeping on a durable
     // ruling; a failed write reports and never fails the record.
-    if let Err(errors) = supersede_parallel_asks(
-        &subject,
-        &decision_id,
-        provenance.authority_source.as_deref(),
-        question_hash.as_deref(),
-    ) {
+    if let Err(errors) = supersede_parallel_asks(subject, decision_id, authority, question) {
         for error in errors {
             eprintln!("decide: {error}");
         }
     }
-    // The receipt mints the decision's number in step with the record, so
-    // the printed id is the short one from the first read. Any failure
-    // keeps the hash: the daemon beat mints the same key as a no-op.
-    let graph = crate::backlog::database_path(&crate::graph_get::default_graph_path());
-    let _ = crate::numbers::mint_now(&graph, &decision_id);
-    println!("{}", crate::numbers::display(&decision_id));
-    0
 }
 
 /// The decide door's agent-lane refusal: the exact law-door-advice paragraph
@@ -2005,14 +2057,15 @@ mod tests {
             .get("decision_id")
             .and_then(Value::as_str)
             .unwrap_or("");
-        // The receipt label rides the record: the answer decision reads as
-        // its question's number, never a second mint of its own.
+        // The first answer holds its question's number. A later ruling on
+        // that question is a record of its own, so it takes another.
         let qlabel = crate::numbers::label("q-closeaa1").expect("numbered");
-        assert_eq!(
-            crate::numbers::label(did).as_deref(),
-            Some(qlabel.as_str()),
-            "{did}"
+        assert!(
+            rows.iter()
+                .any(|r| crate::law_match::row_id(r) == qlabel.as_str()),
+            "no answer holds {qlabel}"
         );
+        assert_ne!(did, qlabel, "a later ruling reused the question's number");
         // Already closed: the numbered rerun adds no second close.
         let closes = crate::event_store::journal_text(&index, &["operator_question_closed"]);
         assert_eq!(closes.lines().count(), 1, "{closes}");

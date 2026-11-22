@@ -131,6 +131,7 @@ fn stale_action(row: &Value, apply: bool) -> StaleAction {
 }
 
 enum QuestionOutcome {
+    /// The question's number, or `queued` while the primary is away.
     Filed(String),
     AlreadyOpen,
     Refused(String),
@@ -148,7 +149,10 @@ fn file_stale_question(
     let index = outstanding::project_log(repo_root, "questions.jsonl");
     match outstanding::read_open_questions(&index) {
         Ok(open) => {
-            if open.iter().any(|q| q.question.contains(id)) {
+            if open
+                .iter()
+                .any(|q| crate::numbers::names_id(&q.question, id))
+            {
                 return QuestionOutcome::AlreadyOpen;
             }
         }
@@ -179,6 +183,7 @@ fn file_stale_question(
     let answer = run_intake(&request, &home);
     match answer.qid {
         Some(qid) if answer.exit_code == 0 => QuestionOutcome::Filed(qid),
+        None if answer.exit_code == 0 => QuestionOutcome::Filed("queued".into()),
         _ => QuestionOutcome::Refused(answer.lines.join("; ")),
     }
 }
