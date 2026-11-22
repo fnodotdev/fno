@@ -6,6 +6,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde::Deserialize;
+
 /// (v48) How often the off-loop task re-probes the fleet's reachability
 /// evidence. One `agent.list` RPC per interval (the Python
 /// CLI it replaced spent its wall time cold-starting an interpreter inside
@@ -86,14 +88,11 @@ fn truth_map_from_list(result: &serde_json::Value) -> Option<HashMap<String, Tru
         let cost_cents = row.get("session_cost_cents").and_then(|v| v.as_u64());
         let tokens = row.get("session_tokens").and_then(|v| v.as_u64());
         let compaction_count = row.get("compaction_count").and_then(|v| v.as_u64());
-        let input_tokens = row.get("session_input_tokens").and_then(|v| v.as_u64());
-        let output_tokens = row.get("session_output_tokens").and_then(|v| v.as_u64());
-        let cache_read_tokens = row
-            .get("session_cache_read_tokens")
-            .and_then(|v| v.as_u64());
-        let cache_write_tokens = row
-            .get("session_cache_write_tokens")
-            .and_then(|v| v.as_u64());
+        let served: ServedTokenClasses = serde_json::from_value(row.clone()).unwrap_or_default();
+        let input_tokens = served.session_input_tokens;
+        let output_tokens = served.session_output_tokens;
+        let cache_read_tokens = served.session_cache_read_tokens;
+        let cache_write_tokens = served.session_cache_write_tokens;
         // Only an `observed` reading names a model; `no-transcript` and the
         // other kinds are absence, never a model string.
         let observed_model = row
@@ -120,6 +119,21 @@ fn truth_map_from_list(result: &serde_json::Value) -> Option<HashMap<String, Tru
         );
     }
     Some(map)
+}
+
+/// The four token classes the daemon serves beside the running cost,
+/// parsed once per row (docs/rust-style.md R1). `None` when the daemon is
+/// older than the breakdown or the row is not an object.
+#[derive(Default, Deserialize)]
+struct ServedTokenClasses {
+    #[serde(default)]
+    session_input_tokens: Option<u64>,
+    #[serde(default)]
+    session_output_tokens: Option<u64>,
+    #[serde(default)]
+    session_cache_read_tokens: Option<u64>,
+    #[serde(default)]
+    session_cache_write_tokens: Option<u64>,
 }
 
 /// One registry row's reachability evidence, as the off-loop probe read

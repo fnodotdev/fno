@@ -214,7 +214,9 @@ mod tests {
             counts,
             BTreeMap::from([(
                 "s1".to_string(),
-                serde_json::json!({"cost_cents": 42, "tokens": 9000, "compactions": null}),
+                serde_json::json!({"cost_cents": 42, "tokens": 9000, "compactions": null,
+                    "input_tokens": null, "output_tokens": null,
+                    "cache_read_tokens": null, "cache_write_tokens": null}),
             )]),
             "only a session with a reading files a meter"
         );
