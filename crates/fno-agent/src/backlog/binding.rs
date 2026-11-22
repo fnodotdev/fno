@@ -74,8 +74,11 @@ pub(crate) fn bind_pr_rows(
         let Some(index) = find_node_index(entries, nid) else {
             return PrRowBindResult::refused(format!("unknown node: {nid}"));
         };
+        let Some(entry) = entries.get(index) else {
+            return PrRowBindResult::refused(format!("unknown node: {nid}"));
+        };
         if let Some(our) = &our_repo {
-            for (number, url) in blocking_pr_refs(&entries[index]) {
+            for (number, url) in blocking_pr_refs(entry) {
                 let Some(existing_repo) = repo_slug_from_url(url.as_deref()) else {
                     return PrRowBindResult::refused(format!(
                         "{nid} already carries a PR #{number} ref with no \
@@ -84,7 +87,7 @@ pub(crate) fn bind_pr_rows(
                     ));
                 };
                 if !crate::backlog::pr_link::same_repo_slug(&existing_repo, our, aliases) {
-                    if primary_docs_twin_number(&entries[index]) == Some(number) {
+                    if primary_docs_twin_number(entry) == Some(number) {
                         // The twin won the primary slot (the state the 404
                         // hint once produced): the shape is broken, and the
                         // sanctioned repair demotes it. The refusal names
@@ -102,7 +105,7 @@ pub(crate) fn bind_pr_rows(
                     ));
                 }
             }
-        } else if !blocking_pr_refs(&entries[index]).is_empty() {
+        } else if !blocking_pr_refs(entry).is_empty() {
             return PrRowBindResult::refused(format!(
                 "{nid} already carries a PR ref and this PR's repo is \
                  unresolvable - refusing an unscoped claim"
@@ -337,7 +340,8 @@ mod tests {
         );
         assert_eq!(result.outcome, "refused");
         assert_eq!(result.refusal.as_deref(), Some("unknown node: x-missing"));
-        assert!(entries[0]["pr_number"].is_null(), "no partial binding");
+        let first = entries.first().expect("one row");
+        assert!(first["pr_number"].is_null(), "no partial binding");
     }
 
     #[test]
@@ -466,7 +470,9 @@ mod tests {
         for note in [Some("folded"), None] {
             let mut extra = json!({"number": 9, "url": "https://github.com/other/repo/pull/9"});
             if let Some(note) = note {
-                extra["note"] = json!(note);
+                if let Some(obj) = extra.as_object_mut() {
+                    obj.insert("note".to_string(), json!(note));
+                }
             }
             let mut entries = vec![node(json!({"id": "x-aaaa", "additional_prs": [extra]}))];
             let claimed = vec!["x-aaaa".to_string()];
