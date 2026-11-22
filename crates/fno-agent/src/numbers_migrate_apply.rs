@@ -1368,6 +1368,22 @@ mod tests {
             })
             .unwrap_or_default();
         eprintln!("child[{tag}]: decisions {ids:?}");
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let home_dot = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_default()
+            .join(".fno");
+        for path in [
+            crate::paths::space_dir(&cwd).join("events.jsonl"),
+            home_dot.join("events.jsonl"),
+            home_dot.join("questions.jsonl"),
+            crate::escalation::questions_dir(&cwd),
+            crate::escalation::dir(&cwd),
+            crate::org_board::scope::operator_lane_path(&cwd),
+        ] {
+            let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            eprintln!("child[{tag}]: input {} exists={bytes}", path.display());
+        }
     }
 
     /// The child of the two-project test: the real command twice, each run
