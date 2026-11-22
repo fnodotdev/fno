@@ -5,7 +5,7 @@ One composer launches a new harness session through the canonical spawn door and
 ## Primary flow
 
 1. Four gestures open a workspace's draft card. The `+` on its header opens it. So do prefix+i in the focused workspace, the sideline menu and `t` on a board card. With the sideline hidden, prefix+i reveals it at its normal width first. The catalog read arms at attach (a prefetch), not at first open.
-2. The tokens carry the pick itself, never a field label. The harness token reads `claude`. The model token reads `default` or the pinned row. The Where token reads `Local` or the selected machine from the fleet tree. The opens token reads the placement: `new tab`, `split down`, `tab 3 up`, `portal 2` or `pane in active tab`. A new card starts on the workspace's own folder and on Local.
+2. The tokens carry the pick itself, never a field label. The harness token reads `claude`. The model token reads `default` or the pinned row. The Where token reads `Local` or the selected machine from the fleet tree. The opens token reads the placement: `new portal`, `new tab`, `split down`, `tab 3 up`, `portal 2` or `pane in active tab`. In shell mode with no pick it reads `in the card`. A new card starts on the workspace's own folder and on Local.
 3. Enter in the input puts ONE typed request (`ClientMsg::AgentLaunch`, v83) on the wire. Duplicate submissions are suppressed at the source and at the server desk.
 4. The server validates pre-birth: absolute project path (checked for existence locally only for a local launch), supported substrate, message length. It answers duplicates with the SAME attempt and runs exactly one `fno agent spawn` off the core loop. The message rides `--prompt-file -` stdin, never argv.
 5. The client receives `ServerMsg::AgentLaunch` progress: `Starting`, then one terminal state (`Launched` / `Refused` / `Unknown`).
@@ -30,11 +30,11 @@ The card has five parts, top to bottom. First, the prompt: one to six wrapped ro
 
 Tokens paint values, never axis names: `Local`, `footnote`, `main`, `auto`, `claude`, `default`, `high`. When the harness's capability row declares no effort axis, the effort token does not paint. A launch that succeeds closes the card. The new row takes its place in the workspace group. The request carries the workspace's folder, and the server's cwd rung maps that folder back to the workspace. A refusal keeps the card open with the reason under the prompt. A workspace with no folder refuses at launch and names the missing folder.
 
-A bare `!` then Enter opens a plain login shell as a new tab of the card's workspace, in its folder. `!cmd` runs the command first, then leaves the same shell. Each opens pick works here except a portal, so shell mode hides the portal rows. Ctrl-C ends the line and leaves the shell.
+A bare `!` then Enter opens a plain login shell as a new tab of the card's workspace, in its folder. A `!cmd` with a pick runs the command in that pane, then leaves the same shell. There Ctrl-C ends the line and leaves the shell. Each opens pick works except a portal, so shell mode hides the portal rows.
+
+A `!` line with no pick runs in the card, on its own pty, one at a time. While it runs every key but ctrl+o is the command's, esc included. Ctrl+o moves that same process to a tab. A detach moves it to a tab too. A moved run waits for Enter at its end. At its end the card shows the exit code and takes the next line. A failure keeps the line. Ctrl+o then opens the full log in a tab. A remote host or a server older than v132 keeps the pane.
 
 ## Open as
-
-A `!` line with no pick runs in the card, on its own pty, one at a time. While it runs every key but ctrl+o is the command's, esc included. Ctrl+o moves that same process to a tab. A detach moves it to a tab too. A moved run waits for Enter at its end. At its end the card shows the exit code and takes the next line. A failure keeps the line. Ctrl+o then opens the full log in a tab. A bare `!` still opens a login shell in a new tab, and a placement pick still opens a pane.
 
 A launch with no pick lands in the open portal this client focused last. With none focused yet it takes the lowest open index, and with none open it opens a new portal. The opens chip names that portal before Enter. An agent that was showing there keeps running.
 
@@ -42,7 +42,7 @@ The opens list holds the last portal, a new tab and four directions. It also hol
 
 The card holds a tab by its id. At Enter it reads the layout again. A tab or portal that closed refuses in the card and keeps the draft. After the worker starts, a target that closed or moved opens a new tab and says so. A picked open portal keeps its geometry and shows the new worker. An edited `--portal 2 --split down` opens a new portal below portal 2, which keeps showing.
 
-A saved set keeps a direction, a new tab or the pane entry. It never keeps a tab or portal number, and saves new tab for those picks. A server older than v132 takes only the default and the pane entry, so the card asks you to reconnect for the others.
+A saved set keeps a direction, a new tab or the pane entry. It never keeps a tab or portal number, and saves no pick for those. A server older than v132 takes only the default and the pane entry, so the card asks you to reconnect for the others.
 
 ## Saved sets
 

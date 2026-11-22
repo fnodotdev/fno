@@ -556,6 +556,10 @@ pub enum Shot {
     List,
     TabStep,
     Placed,
+    /// No pick, with the chip naming the portal Enter takes.
+    NoPick,
+    ShellRunning,
+    ShellFailed,
     Shell,
 }
 
@@ -577,6 +581,16 @@ pub(crate) fn for_snapshot(view: &mut View, shot: Shot) {
             l.focus = Focus::Message;
         }
         (Shot::Placed, None) => l.focus = Focus::Message,
+        (Shot::NoPick, _) => {}
+        (Shot::ShellRunning | Shot::ShellFailed, _) => {
+            l.shell = true;
+            l.focus = Focus::Message;
+            l.draft.message = "make check".to_string();
+            l.draft.cursor_chars = l.draft.message.chars().count();
+            let failed = shot == Shot::ShellFailed;
+            let (cwd, line) = (l.draft.cwd(), l.draft.message.clone());
+            l.run = Some(super::shell_box::staged(cwd, line, failed));
+        }
         _ => {
             if shot == Shot::Shell {
                 l.shell = true;

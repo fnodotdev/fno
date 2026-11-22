@@ -89,6 +89,29 @@ impl ShellBox {
     }
 }
 
+/// A box staged for a shot, with invented output.
+pub(super) fn staged(cwd: String, line: String, failed: bool) -> ShellBox {
+    let output = "checking format\nchecking docs".to_string();
+    let state = if failed {
+        State::Done {
+            exit: Some(1),
+            output: format!("{output}\nexample.md: line 4 is too long"),
+        }
+    } else {
+        State::Running {
+            pane: 0,
+            screen: output,
+        }
+    };
+    ShellBox {
+        run: 0,
+        cwd,
+        shell: "/bin/sh".to_string(),
+        line,
+        state,
+    }
+}
+
 fn exit_word(exit: Option<i32>) -> String {
     exit.map_or("ended with no exit code".to_string(), |code| {
         format!("exit {code}")
