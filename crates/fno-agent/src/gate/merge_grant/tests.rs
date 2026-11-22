@@ -176,6 +176,51 @@ fn verdict_rows() {
         ],
     )];
     assert_eq!(verdict(&entries, &stale_claims(), &live).state, UNKNOWN);
+
+    // The real claim store: a live holder never transfers. The verdict read
+    // the bare graph id while the store keys node claims `node:<id>`, so a
+    // live holder answered Free and merge execution transferred while the
+    // worker still drove the node. Through the real store (acquire, then
+    // the production closure over `claims::status`): no claim grants, a
+    // live claim reads held/live, and the read agrees with the prefixed
+    // row `fno agent claim status` prints.
+    {
+        let _env_lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let temp = tempfile::TempDir::new().unwrap();
+        let _root = EnvRestore::set("FNO_CLAIMS_ROOT", temp.path().to_path_buf());
+        let entries = vec![node_with(
+            NODE,
+            PR,
+            vec![do_row(
+                Some(receipt(true, "config", "2026-08-24T12:00:00Z")),
+                "w1",
+            )],
+        )];
+        let read = |k: &str| claim_status(k, None).0;
+        assert_eq!(
+            verdict_for_pr(&entries, PR, None, &read, &live).state,
+            GRANTED,
+            "no claim on the node grants"
+        );
+        let opts = crate::claims::AcquireOpts {
+            pid: Some(std::process::id()),
+            // The audit event lands in the fixture, never the checkout.
+            events_dir: Some(temp.path().to_path_buf()),
+            ..Default::default()
+        };
+        match crate::claims::acquire(&format!("node:{NODE}"), "worker-a", opts) {
+            crate::claims::AcquireOutcome::Acquired(_) => {}
+            other => panic!("expected a fresh acquire, got {other:?}"),
+        }
+        let v = verdict_for_pr(&entries, PR, None, &read, &live);
+        assert_eq!(v.state, HELD, "{}", v.reason);
+        assert_eq!(v.claim_state.as_deref(), Some("live"));
+        let (state, rec) = claim_status(&format!("node:{NODE}"), None);
+        assert_eq!(state, Live);
+        assert_eq!(rec.expect("the live record").holder, "worker-a");
+    }
 }
 
 // --- AC9-EDGE: newest explicit receipt wins, by recorded_at not row order -
@@ -185,53 +230,6 @@ fn verdict_rows() {
 // --- Absence and ambiguity never grant ------------------------------------
 
 // --- AC12-ERR: malformed receipts are loud unknowns ------------------------
-
-// --- The real claim store: a live holder never transfers -------------------
-
-/// The verdict read the bare graph id while the store keys node claims
-/// `node:<id>`, so a live holder answered Free and merge execution
-/// transferred while the worker still drove the node. Through the real
-/// store (acquire, then the production closure over `claims::status`): no
-/// claim grants, a live claim reads held/live, and the read agrees with
-/// the prefixed row `fno agent claim status` prints.
-#[test]
-fn live_holder_reads_held_through_the_real_claim_store() {
-    let _env_lock = crate::claims::test_env_lock()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let temp = tempfile::TempDir::new().unwrap();
-    let _root = EnvRestore::set("FNO_CLAIMS_ROOT", temp.path().to_path_buf());
-    let entries = vec![node_with(
-        NODE,
-        PR,
-        vec![do_row(
-            Some(receipt(true, "config", "2026-08-24T12:00:00Z")),
-            "w1",
-        )],
-    )];
-    let read = |k: &str| claim_status(k, None).0;
-    assert_eq!(
-        verdict_for_pr(&entries, PR, None, &read, &live).state,
-        GRANTED,
-        "no claim on the node grants"
-    );
-    let opts = crate::claims::AcquireOpts {
-        pid: Some(std::process::id()),
-        // The audit event lands in the fixture, never the checkout.
-        events_dir: Some(temp.path().to_path_buf()),
-        ..Default::default()
-    };
-    match crate::claims::acquire(&format!("node:{NODE}"), "worker-a", opts) {
-        crate::claims::AcquireOutcome::Acquired(_) => {}
-        other => panic!("expected a fresh acquire, got {other:?}"),
-    }
-    let v = verdict_for_pr(&entries, PR, None, &read, &live);
-    assert_eq!(v.state, HELD, "{}", v.reason);
-    assert_eq!(v.claim_state.as_deref(), Some("live"));
-    let (state, rec) = claim_status(&format!("node:{NODE}"), None);
-    assert_eq!(state, Live);
-    assert_eq!(rec.expect("the live record").holder, "worker-a");
-}
 
 // --- The queue --------------------------------------------------------------
 
