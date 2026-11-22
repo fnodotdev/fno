@@ -1822,10 +1822,6 @@ fn chrome_hit_rows() {
     // top-K cap, so all 40 render and the list still reaches the bottom.
     let agents: Vec<AgentRow> = (0..40)
         .map(|i| AgentRow {
-            session_input_tokens: None,
-            session_output_tokens: None,
-            session_cache_read_tokens: None,
-            session_cache_write_tokens: None,
             name: format!("a{i}"),
             pane_id: Some(100 + i),
             badge: Some(AgentBadge::Working),
@@ -5207,10 +5203,6 @@ fn pane_hosted_row(name: &str, pane_id: u64) -> AgentRow {
 /// Split grid, the Move grid's twin.
 fn attachable_row(name: &str, attach_id: &str) -> AgentRow {
     AgentRow {
-        session_input_tokens: None,
-        session_output_tokens: None,
-        session_cache_read_tokens: None,
-        session_cache_write_tokens: None,
         portal: None,
         harness: None,
         model: None,
@@ -6137,10 +6129,6 @@ fn tab_badge_rows() {
     footnote.tabs[1].name = "rev".into();
     footnote.tabs[1].named = true;
     let here = AgentRow {
-        session_input_tokens: None,
-        session_output_tokens: None,
-        session_cache_read_tokens: None,
-        session_cache_write_tokens: None,
         portal: None,
         harness: None,
         model: None,
@@ -6150,10 +6138,6 @@ fn tab_badge_rows() {
         ..focus_agent(0)
     };
     let elsewhere = AgentRow {
-        session_input_tokens: None,
-        session_output_tokens: None,
-        session_cache_read_tokens: None,
-        session_cache_write_tokens: None,
         portal: None,
         harness: None,
         model: None,
@@ -6198,10 +6182,6 @@ fn tab_badge_rows() {
     let panes = view.layout.panes.clone();
     let agents: Vec<AgentRow> = (0..8)
         .map(|i| AgentRow {
-            session_input_tokens: None,
-            session_output_tokens: None,
-            session_cache_read_tokens: None,
-            session_cache_write_tokens: None,
             harness: None,
             model: None,
             route: None,
@@ -6252,10 +6232,6 @@ fn tab_badge_rows() {
     let panes = view.layout.panes.clone();
     let agents: Vec<AgentRow> = (0..8)
         .map(|i| AgentRow {
-            session_input_tokens: None,
-            session_output_tokens: None,
-            session_cache_read_tokens: None,
-            session_cache_write_tokens: None,
             harness: None,
             model: None,
             route: None,
@@ -8116,10 +8092,6 @@ fn squad_rollup_bare_pane_folds_to_idle() {
         ..Default::default()
     };
     let bare = AgentRow {
-        session_input_tokens: None,
-        session_output_tokens: None,
-        session_cache_read_tokens: None,
-        session_cache_write_tokens: None,
         portal: None,
         harness: None,
         model: None,
@@ -8981,10 +8953,6 @@ fn density_rows() {
 #[test]
 fn sort_rows() {
     let stale = AgentRow {
-        session_input_tokens: None,
-        session_output_tokens: None,
-        session_cache_read_tokens: None,
-        session_cache_write_tokens: None,
         portal: None,
         harness: None,
         model: None,
@@ -8994,10 +8962,6 @@ fn sort_rows() {
         ..agent_row("stale-live", 4, Some(AgentBadge::Working), false)
     };
     let fresh = AgentRow {
-        session_input_tokens: None,
-        session_output_tokens: None,
-        session_cache_read_tokens: None,
-        session_cache_write_tokens: None,
         portal: None,
         harness: None,
         model: None,
@@ -9007,10 +8971,6 @@ fn sort_rows() {
         ..agent_row("fresh-live", 5, Some(AgentBadge::Working), false)
     };
     let sunk = AgentRow {
-        session_input_tokens: None,
-        session_output_tokens: None,
-        session_cache_read_tokens: None,
-        session_cache_write_tokens: None,
         portal: None,
         harness: None,
         model: None,
@@ -9166,10 +9126,6 @@ fn attention_rows() {
         .iter()
         .map(|r| {
             let row = AgentRow {
-                session_input_tokens: None,
-                session_output_tokens: None,
-                session_cache_read_tokens: None,
-                session_cache_write_tokens: None,
                 basis: r["basis"].as_str().map(str::to_string),
                 last_activity_age_s: r["last_activity_age_s"].as_u64(),
                 exited: r["exited"].as_bool().unwrap_or(false),
