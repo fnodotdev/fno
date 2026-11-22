@@ -192,7 +192,7 @@ function reqRow(r) {
   t.append(head, el("code", null, meta));
   if (outcomeLine) t.append(el("code", null, "outcome: " + outcomeLine));
   if (r.reply_excerpt) t.append(el("code", null, "reply: " + stripHashes(r.reply_excerpt)));
-  for (const x of (r.responses || []).slice(0, 4)) {
+  for (const x of (r.responses || []).slice(-4)) {
     const resp = el("code", null, x.ts.slice(0, 10) + " " + x.name + " in " + x.session + ": " + stripHashes(x.reply || "").slice(0, 80));
     resp.title = x.transcript || "";
     t.append(resp);

@@ -819,7 +819,12 @@ mod tests {
         let paired = fold(
             &[
                 {
-                    let mut a = turn("s5", "t5", "2026-11-10T00:00:00Z", "add the quota screen");
+                    let mut a = turn(
+                        "s5",
+                        "t5",
+                        "2026-11-10T00:00:00Z",
+                        "add the quota screen today",
+                    );
                     a.reply_excerpt = "drafted the screen".into();
                     a
                 },
@@ -828,7 +833,7 @@ mod tests {
                         "s6",
                         "t6",
                         "2026-11-17T00:00:00Z",
-                        "where is the quota screen",
+                        "add the quota screen tomorrow",
                     );
                     b.reply_excerpt = "rebuilt it today".into();
                     b
@@ -840,6 +845,7 @@ mod tests {
         );
         let row = paired.rows.first().unwrap();
         assert_eq!(row.outcome, "forgotten", "{}", row.outcome_why);
+        assert_eq!(row.ask_count, 2, "{}", row.outcome_why);
         assert!(
             row.outcome_why.contains("reply 2026-11-10")
                 && row.outcome_why.contains("asked again 2026-11-17"),
