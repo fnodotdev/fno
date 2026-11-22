@@ -1168,8 +1168,8 @@ mod tests {
     use super::*;
 
     fn now_utc() -> DateTime<Utc> {
-        // One hour before the sample instants below, so a same-day 20:00Z
-        // candidate stays in the future on every machine zone.
+        // Between the two sample instants below: 21:00Z stays today,
+        // 18:00Z rolls to tomorrow.
         Utc.with_ymd_and_hms(2026, 11, 4, 19, 0, 0).unwrap()
     }
 
@@ -1194,9 +1194,9 @@ mod tests {
         // 21:00Z is one hour in the future: stays today.
         let t = parse("21:00Z").unwrap();
         assert_eq!(t, Utc.with_ymd_and_hms(2026, 11, 4, 21, 0, 0).unwrap());
-        // 20:00Z is now: rolls to tomorrow.
-        let t = parse("20:00Z").unwrap();
-        assert_eq!(t, Utc.with_ymd_and_hms(2026, 11, 5, 20, 0, 0).unwrap());
+        // 18:00Z is one hour past: rolls to tomorrow.
+        let t = parse("18:00Z").unwrap();
+        assert_eq!(t, Utc.with_ymd_and_hms(2026, 11, 5, 18, 0, 0).unwrap());
     }
 
     #[test]
