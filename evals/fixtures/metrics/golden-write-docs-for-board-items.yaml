@@ -1,0 +1,11 @@
+# Labelled cases for the golden-write-docs-for-board-items grader. Read by report --check-metrics.
+cases:
+  - {id: dash-slug, label: good, files: {"docs/architecture/daemon-graph-rescan-bounds.md": "# Graph rescan bounds\n", "docs/architecture/doctor-reclaim-doors.md": "# Reclaim doors\n", "docs/architecture/backlog-display-numbers.md": "# Display numbers\n"}}
+  - {id: underscore-slug, label: good, files: {"docs/architecture/graph_rescan_bounds.md": "x\n", "docs/architecture/doctor_reclaim_doors.md": "x\n", "docs/architecture/backlog_display_numbers.md": "x\n"}}
+  - {id: terse-names, label: good, files: {"docs/architecture/rescan.md": "x\n", "docs/architecture/reclaim.md": "x\n", "docs/architecture/display.md": "x\n"}}
+  - {id: reply-only, label: bad, files: {"decision.md": "Here is a summary of the board.\n"}}
+  - {id: implemented-not-docs, label: bad, files: {"src/rescan_bounds.rs": "fn bounds() {}\n"}}
+  - {id: docs-root, label: bad, files: {"docs/board-docs.md": "# Board\n"}}
+  - {id: specs-subdir, label: bad, files: {"docs/architecture/specs/rescan-spec.md": "x\n", "docs/architecture/specs/reclaim-spec.md": "x\n", "docs/architecture/specs/display-spec.md": "x\n"}}
+  - {id: one-of-three, label: bad, files: {"docs/architecture/graph-rescan-bounds.md": "x\n"}}
+  - {id: one-merged-doc, label: bad, files: {"docs/architecture/triage-board-docs.md": "# All three items\n"}}

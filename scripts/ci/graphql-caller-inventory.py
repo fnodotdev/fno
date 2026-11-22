@@ -56,7 +56,14 @@ def _disposition(relative: str, source: str, offset: int) -> str:
         return "quota-soak-broker"
     if relative.startswith("skills/"):
         return "worker-proxy-or-hook"
-    if relative.startswith("scripts/metrics/") or relative.startswith("scripts/release/"):
+    if (
+        relative.startswith("scripts/metrics/")
+        or relative.startswith("scripts/release/")
+        or relative.startswith("scripts/ops/")
+    ):
+        # Operator-run one-shots: a human runs these from a checkout, and
+        # every plain gh call rides the transparent shim's broker like any
+        # other machine caller.
         return "operator-one-shot"
     return "unclassified"
 

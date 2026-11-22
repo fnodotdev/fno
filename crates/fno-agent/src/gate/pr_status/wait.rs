@@ -369,11 +369,12 @@ pub(crate) fn run_wait(payload: &Value) -> (i32, String, String) {
     let sleeper = |s: f64| std::thread::sleep(std::time::Duration::from_secs_f64(s));
     let start = Instant::now();
     let clock = move || start.elapsed().as_secs_f64();
-    // The session node's PR repo pins every PR read: a node whose pr_url
-    // names another repo must never be answered from the ambient origin's
-    // same-number PR (the cutover shape: repo A checkout, repo B node).
+    // The session node's PR repo pins every PR read: the repo the node's
+    // rows record for THIS pr, so a cross-repo additional_prs row pins its
+    // own repo and a number no row names keeps the ambient origin (the
+    // cutover shape: repo A checkout, repo B node).
     let slug_override: Option<String> =
-        crate::gate::loopcheck::pr_read::session_node_pr_target(cwd).1;
+        crate::gate::loopcheck::pr_read::session_node_pr_repo(cwd, pr);
     if until == "review" {
         // The slug resolves once, not per tick; an unresolvable slug retries
         // per tick, so a transient failure never wedges the wait. The node

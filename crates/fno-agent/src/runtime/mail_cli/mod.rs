@@ -2,7 +2,8 @@
 //! release timer, the pane-send renderer, the session seed-provenance leaf,
 //! the `team` broadcast, the outbound sent view, the withdraw leaf, the
 //! unread listing, the ack leaf, the raw prompt-line send, the reply leaf,
-//! and the drain-self leaf. Dispatch only; the commands live in [hold],
+//! the drain-self leaf, and the transcript backfill (the engine lives in
+//! [crate::mail_backfill]). Dispatch only; the commands live in [hold],
 //! [pane_prepare], [seed_provenance], [team], [sent], [withdraw], [unread],
 //! [ack], [send_raw], [reply], and [drain_self].
 pub mod ack;
@@ -40,6 +41,16 @@ pub fn run(rest: &[String]) -> i32 {
             print_style_rules();
             0
         }
+        "backfill" if help_asked => {
+            print!("{BACKFILL_HELP}");
+            0
+        }
+        "backfill" => {
+            let mut argv: Vec<String> = Vec::with_capacity(rest.len());
+            argv.push("run".to_string());
+            argv.extend(rest.iter().skip(1).cloned());
+            crate::mail_backfill::run_mail_backfill(&argv)
+        }
         "hold" | "dnd" => hold::run_hold(&rest[1..]),
         "hold-release" => hold::run_hold_release(&rest[1..]),
         "seed-provenance" => seed_provenance::run(&rest[1..]),
@@ -54,7 +65,7 @@ pub fn run(rest: &[String]) -> i32 {
         "drain-self" => drain_self::run_drain_self(&rest[1..]),
         other => {
             eprintln!(
-                "fno-agent mail: unknown command {other:?} (hold | dnd | hold-release | seed-provenance | team | withdraw | sent | send | reply | pane-prepare | unread | ack | drain-self)"
+                "fno-agent mail: unknown command {other:?} (hold | dnd | hold-release | seed-provenance | team | withdraw | backfill | sent | send | reply | pane-prepare | unread | ack | drain-self)"
             );
 
             2
@@ -168,10 +179,35 @@ Options:
   --help                   Show this message and exit.
 ";
 
+const BACKFILL_HELP: &str = "\
+Usage: fno agent mail backfill [--all | --since T --until T] [--apply]
+                               [--root DIR]... [--live PATH]
+
+  Rebuild past cross-session mail: scan Claude Code transcripts for
+  SendMessage calls and their receiver-side blocks, join each send to its
+  landing by body attribution, and (with --apply) append the pair to the
+  bus log as a durable audit-only row. Without --apply nothing is written.
+
+  The default window is the one mail-send outage. --all scans every
+  transcript, no window; it refuses --since/--until.
+
+Options:
+  --all            Scan all history; refuses --since/--until.
+  --since <ts>     Window start (default: the outage start).
+  --until <ts>     Window end (default: the outage end).
+  --apply          Write the joined pairs; default is a dry run.
+  --root <dir>     A transcript tree to scan (repeatable; default: the
+                   Claude projects home).
+  --live <path>    The bus log to write (default: the resolved live path).
+  --help           Show this message and exit.
+";
+
 fn print_help() {
-    println!("fno-agent mail - the do-not-disturb hold, team broadcast, sent view, withdraw, unread listing, ack, raw prompt-line send, reply, and drain-self for agent mail");
+    println!("fno-agent mail - the do-not-disturb hold, team broadcast, sent view, withdraw, backfill, unread listing, ack, raw prompt-line send, reply, and drain-self for agent mail");
     println!("  hold [--minutes N | --for N] [--status] [--off]   alias: dnd");
     println!("  hold-release --handle KEY [--poll-s S]");
+    println!("  backfill [--all | --since T --until T] [--apply] [--root DIR]... [--live PATH]");
+    println!("           every past SendMessage its receiver block joins, dry run by default");
     println!("  seed-provenance                                 payload from FNO_SEED_PROV_* env");
     println!("  team --scope <all|leads|<role>|project:<p>> <message>");
     println!("  withdraw MSG_ID [--from-name NAME]");

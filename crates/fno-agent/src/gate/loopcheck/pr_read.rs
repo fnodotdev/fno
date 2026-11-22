@@ -219,12 +219,12 @@ pub(super) struct PrInfo {
     pub(super) range_tiling: RangeTiling,
 }
 
-/// The node's numbered PR rows: (number, merge_status, history-marked, url).
-/// The one collection every store-side PR row rule reads, so the live/terminal
-/// and reopen-age rules cannot drift between them.
+/// The node's numbered PR rows: (number, merge_status, history-marked, url,
+/// note). The one collection every store-side PR row rule reads, so the
+/// live/terminal and reopen-age rules cannot drift between them.
 fn numbered_pr_rows(
     node: &crate::backlog::model::Node,
-) -> Vec<(i64, Option<&str>, bool, Option<&str>)> {
+) -> Vec<(i64, Option<&str>, bool, Option<&str>, Option<&str>)> {
     node.primary_pr
         .iter()
         .chain(node.additional_prs.iter().flatten())
@@ -235,6 +235,7 @@ fn numbered_pr_rows(
                     pr.merge_status.as_deref(),
                     pr.extras.get("history").and_then(Value::as_bool) == Some(true),
                     pr.url.as_deref(),
+                    pr.note.as_deref(),
                 )
             })
         })
@@ -277,6 +278,9 @@ fn terminal_stamp(status: &Option<&str>) -> bool {
 /// whose PR lives in another repo (the 2026-11-11 cutover moved workers to
 /// fnodotdev/fno while their worktrees still originated fno-workshop) must
 /// never have the gate read the ambient origin's same-number PR instead.
+/// A docs-note row (the twin `record_docs_pr` files from a PR body's
+/// `Docs:` line) is never the target: the gate's head check compares
+/// against this checkout's HEAD, which a docs repo's commit cannot share.
 /// None on every fail-open shape the selector documents.
 pub(super) fn manifest_node_pr_target(
     cwd: &Path,
@@ -289,6 +293,17 @@ pub(super) fn manifest_node_pr_target(
         _ => return None,
     };
     let mut rows = numbered_pr_rows(&node);
+    // The docs twin sinks first, whatever its number or stamp: the note
+    // `record_docs_pr` stamps on the PR a `Docs:` line names marks an
+    // ANCILLARY PR in the docs repo, whose head lives in another commit
+    // graph and can never equal this checkout's HEAD. A twin that won the
+    // selection rendered block_reason's push demand against a PR this
+    // session does not owe - including the shape where the twin is the ONLY
+    // numbered row (the code PR exists but is unrecorded), which then
+    // fail-opens to the ambient origin's branch-resolved read: the session's
+    // own repo. A first-class docs session's row carries no such note, so
+    // its pin is untouched.
+    rows.retain(|(_, _, _, _, note)| !note.is_some_and(|n| n.trim().eq_ignore_ascii_case("docs")));
     // Newest first, then a stable pass that lifts non-terminal rows above
     // stamped ones. The stamps ride the writers' own spelling, which is
     // lowercase today but GitHub-adjacent prose elsewhere, so the compare is
@@ -300,14 +315,14 @@ pub(super) fn manifest_node_pr_target(
     let terminal = terminal_stamp;
     let max_terminal = rows
         .iter()
-        .filter(|(_, status, _, _)| terminal(status))
-        .map(|(number, _, _, _)| *number)
+        .filter(|(_, status, ..)| terminal(status))
+        .map(|(number, ..)| *number)
         .max();
     rows.sort_by(|a, b| b.0.cmp(&a.0));
     // Key 0 = live, 1 = settled (stamped, or age-gated history), 2 = an
     // explicitly marked history row. A marked row sinks below even the
     // stamped rows: state, not number order, decides for it.
-    rows.sort_by_key(|(number, status, history, _)| {
+    rows.sort_by_key(|(number, status, history, ..)| {
         if *history {
             2
         } else if terminal(status) || max_terminal.is_some_and(|bound| *number <= bound) {
@@ -317,13 +332,58 @@ pub(super) fn manifest_node_pr_target(
         }
     });
     rows.first()
-        .map(|(number, _, _, url)| (number.to_string(), repo_slug_from_row_url(*url)))
+        .map(|(number, .., url, _)| (number.to_string(), repo_slug_from_row_url(*url)))
 }
 
 /// The PR row url's `owner/repo`, the slug every PR read must pin. A bare
 /// number or a non-GitHub url answers None and keeps the ambient origin.
 fn repo_slug_from_row_url(url: Option<&str>) -> Option<String> {
     crate::backlog::pr_link::repo_slug_from_url(url)
+}
+
+/// The repo the session node's PR rows record for `pr`: the url slug of the
+/// numbered row naming that number, one distinct slug only. A cross-repo
+/// `additional_prs` row pins its own repo, so the split docs PR reads in
+/// fno-web; a number no row names keeps the ambient origin, so the node's
+/// recorded repo never answers for an unrelated same-number PR. The
+/// node-level pin ([`session_node_pr_target`]) answers the node's newest
+/// PR and is wrong for any other number: applied to
+/// `fno do pr status 485` in the split-node worktree it asked
+/// footnote-sh/fno-web for PR 485 (no such PR there, gh 404) because the
+/// node's only numbered row is its fno-web docs PR.
+pub(crate) fn session_node_pr_repo(cwd: &Path, pr: u64) -> Option<String> {
+    let node_id = session_node_id(cwd)?;
+    let store = crate::backlog::api::Store::new(&crate::graph_get::graph_path_for(cwd));
+    let node = match crate::backlog::api::node(&store, &node_id) {
+        Ok(Some(n)) => n,
+        _ => return None,
+    };
+    let rows: Vec<_> = numbered_pr_rows(&node)
+        .into_iter()
+        .map(|(number, status, history, url, _)| (number, status, history, url))
+        .collect();
+    pr_repo_from_rows(&rows, pr)
+}
+
+/// The pure half of [`session_node_pr_repo`]: the url slug of the numbered
+/// row naming `pr`. One distinct located slug answers; none, or two rows
+/// naming one number in two repos, keeps the ambient origin rather than
+/// guess.
+pub(super) fn pr_repo_from_rows(
+    rows: &[(i64, Option<&str>, bool, Option<&str>)],
+    pr: u64,
+) -> Option<String> {
+    let mut slugs: Vec<String> = rows
+        .iter()
+        .filter(|(number, ..)| *number > 0 && *number as u64 == pr)
+        .filter_map(|(.., url)| repo_slug_from_row_url(*url))
+        .collect();
+    slugs.sort();
+    slugs.dedup();
+    match slugs.as_slice() {
+        [one] => Some(one.clone()),
+        _ => None,
+    }
 }
 
 /// The target-session manifest's node id for the checkout at `cwd`: the
@@ -410,18 +470,18 @@ pub(super) fn node_done_terminal(cwd: &Path, node_id: Option<&str>) -> Option<Do
     let terminal = terminal_stamp;
     let max_terminal = rows
         .iter()
-        .filter(|(_, status, _, _)| terminal(status))
-        .map(|(number, _, _, _)| *number)
+        .filter(|(_, status, ..)| terminal(status))
+        .map(|(number, ..)| *number)
         .max();
-    let has_live = rows.iter().any(|(number, status, history, _)| {
+    let has_live = rows.iter().any(|(number, status, history, ..)| {
         !history && !terminal(status) && !max_terminal.is_some_and(|bound| *number <= bound)
     });
     if has_live {
         return None;
     }
     rows.iter()
-        .filter(|(_, status, _, _)| status.is_some_and(|s| s.eq_ignore_ascii_case("merged")))
-        .map(|(number, _, _, _)| *number)
+        .filter(|(_, status, ..)| status.is_some_and(|s| s.eq_ignore_ascii_case("merged")))
+        .map(|(number, ..)| *number)
         .max()
         .map(DoneNodeTerminal::Merged)
 }
@@ -906,14 +966,19 @@ pub(super) fn read_pr_info(
         // cap that fires on a broken read spends a budget that may be
         // unspent.
         if !no_external && (!coverage.coverage.is_covered() || !blockers.is_empty()) {
+            // Same transport as Read 3: the coverage adapter answers the
+            // reviews read from the REST pages. The field set carries
+            // comments so the adapter's coverage matcher serves it; the
+            // parser below reads .reviews only.
+            let reviews_bin = coverage_adapter(gh_bin);
             let mut reviews_args = vec!["pr", "view"];
             reviews_args.extend(sel.iter().copied());
             if let Some((_, flag)) = repo_pin {
                 reviews_args.extend(flag);
             }
-            reviews_args.extend(["--json", "reviews"]);
+            reviews_args.extend(["--json", "reviews,comments"]);
             match bounded_read(
-                gh_bin.as_ref(),
+                reviews_bin.as_ref(),
                 &reviews_args,
                 cwd,
                 "pr_reviews",
@@ -976,7 +1041,13 @@ pub(super) fn read_pr_info(
             blockers.iter().any(|b| b.hard),
         )
     } else {
-        // Read 3: top-level reviews + issue comments
+        // Read 3: top-level reviews + issue comments. The read rides the
+        // coverage adapter on EVERY intent, not only promise fires: under
+        // fno-gh-coverage this exact field set answers from the REST pages
+        // (the adapter's coverage_reviews), so a drained GraphQL bucket can
+        // no longer park the fire until its reset. The merge decision reads
+        // the same payload on both intents; the transport should not differ.
+        let reviews_bin = coverage_adapter(gh_bin);
         let mut reviews_args = vec!["pr", "view"];
         reviews_args.extend(sel.iter().copied());
         if let Some((_, flag)) = repo_pin {
@@ -984,7 +1055,7 @@ pub(super) fn read_pr_info(
         }
         reviews_args.extend(["--json", "reviews,comments"]);
         let reviews_out = bounded_read(
-            gh_bin.as_ref(),
+            reviews_bin.as_ref(),
             &reviews_args,
             cwd,
             "pr_reviews",
@@ -1098,15 +1169,19 @@ pub(super) fn read_pr_info(
                 && blocking_severity(c.get("body").and_then(|v| v.as_str()).unwrap_or("")).is_some()
         });
         let commit_dates: Vec<String> = if has_blocking_candidate {
-            let mut commits_args = vec!["pr", "view"];
-            commits_args.extend(sel.iter().copied());
-            if let Some((_, flag)) = repo_pin {
-                commits_args.extend(flag);
-            }
-            commits_args.extend(["--json", "commits"]);
+            // Commit timestamps ride the REST commits endpoint, Read 4's
+            // shape, not `pr view --json commits`: the gh shape is a
+            // GraphQL read, and a drained GraphQL bucket must not park a
+            // fire whose only remaining question is a commit date.
+            // --paginate may emit CONCATENATED JSON arrays, so parse as a
+            // stream; committedDate lives at commit.committer.date here.
+            let commits_target = match repo_pin {
+                Some((slug, _)) => format!("repos/{slug}/pulls/{number}/commits"),
+                None => format!("repos/{{owner}}/{{repo}}/pulls/{number}/commits"),
+            };
             let commits_out = bounded_read(
                 gh_bin.as_ref(),
-                &commits_args,
+                &["api", &commits_target, "--paginate"],
                 cwd,
                 "pr_commits",
                 stopgate_read_timeout(),
@@ -1117,21 +1192,25 @@ pub(super) fn read_pr_info(
                     failed_read_tail(&commits_out),
                 ));
             }
-            let commits_json: Value = serde_json::from_slice(&commits_out.stdout)
-                .map_err(|_| GhReadError::parse_failed("pr_commits_parse"))?;
-            commits_json
-                .get("commits")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|c| {
-                            c.get("committedDate")
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.to_string())
-                        })
-                        .collect()
-                })
-                .unwrap_or_default()
+            let mut commit_dates: Vec<String> = Vec::new();
+            for page in
+                serde_json::Deserializer::from_slice(&commits_out.stdout).into_iter::<Value>()
+            {
+                let page = page.map_err(|_| GhReadError::parse_failed("pr_commits_parse"))?;
+                match page.as_array() {
+                    Some(arr) => commit_dates.extend(
+                        arr.iter()
+                            .filter_map(|c| {
+                                c.pointer("/commit/committer/date")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_string)
+                            })
+                            .collect::<Vec<_>>(),
+                    ),
+                    None => return Err(GhReadError::parse_failed("pr_commits_parse")),
+                }
+            }
+            commit_dates
         } else {
             Vec::new()
         };

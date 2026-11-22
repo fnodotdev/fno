@@ -70,6 +70,7 @@ agents loop control
 agents mail
 agents mail ack
 agents mail admin
+agents mail admin backfill
 agents mail admin drain-self
 agents mail admin hold
 agents mail admin pane-prepare
@@ -422,9 +423,6 @@ sweep
 sync-canonical
 task-context-gate
 task-context-prepare
-team-fold
-team-orphans
-term-ledger
 terminals
 territory-rows
 territory-verdict
@@ -480,6 +478,7 @@ think
 triage
 using-fno
 verify-footnotes
+vision
 visual-log-reader
 whoami
 # pr: the retired top-level name, still named in the ship history notes

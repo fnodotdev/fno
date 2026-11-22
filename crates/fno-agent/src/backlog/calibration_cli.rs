@@ -248,7 +248,14 @@ fn run_by_lane(
             return super::get_cli::GRAPH_UNREADABLE_EXIT;
         }
     };
-    let ledger = scorecard::LedgerIndex::load();
+    // One ledger read feeds both the lane index and the pricing hint.
+    let ledger_rows = crate::scoreboard_provider::ledger_rows();
+    let ledger = scorecard::LedgerIndex::build(&ledger_rows);
+    // The ledger-level pricing read for the coverage hint: priced entries
+    // over all entries with the unpriced split named, plus rate-book
+    // presence - the reader-side answer to "why is cost unmeasured".
+    let ledger_pricing =
+        scorecard::priced_coverage(&ledger_rows, crate::model_price::book_present());
     let cwd = std::env::current_dir().unwrap_or_default();
     let journal = crate::paths::events_path(&cwd);
     // An unreadable friction store stays None down the fold, so the
@@ -289,6 +296,7 @@ fn run_by_lane(
         }
     }
     let cells = scorecard::fold_cells(&built.records);
+    let by_lead = scorecard::fold_by_lead(&built.records);
     let cov = scorecard::coverage(&built.records, built.dropped_unparsed);
     // The router folds its verdicts from the same cells the table reads;
     // proposals ride the output and write nothing to config.
@@ -306,7 +314,9 @@ fn run_by_lane(
             super::render::py_json_pretty(&json!({
                 "since_days": since_days,
                 "coverage": cov,
+                "ledger_pricing": ledger_pricing,
                 "cells": cells,
+                "by_lead": by_lead,
                 "proposals": proposals,
             }))
         );
@@ -333,6 +343,19 @@ fn run_by_lane(
     if dropped > 0 {
         println!("  dropped, session time unparseable: {dropped}");
     }
+    let with_n = ledger_pricing.unpriced_with_sessions;
+    let legacy_n = ledger_pricing.unpriced_legacy;
+    let mut note = String::new();
+    if with_n > 0 || legacy_n > 0 {
+        note = format!("; unpriced: {with_n} with session ids, {legacy_n} legacy no-session");
+    }
+    if !ledger_pricing.book_present {
+        note.push_str("; rate book missing");
+    }
+    println!(
+        "  ledger cost coverage: {}/{} entries priced ({}%){note}",
+        ledger_pricing.priced, ledger_pricing.total, ledger_pricing.pct
+    );
     println!(
         "\n  {:<24}{:<10}{:<14}{:<22}{:>6}{:>7}{:>13}{:>10}{:>10}{:>9}{:>9}{:>7}{:>7}{:>7}{:>6}",
         "kind",
@@ -404,6 +427,38 @@ fn run_by_lane(
                 .map(|f| format!("{f}"))
                 .unwrap_or_else(|| "n/a".to_string()),
         );
+    }
+    if !by_lead.is_empty() {
+        println!("\n-- by lead (closed work grouped by stored team title) --");
+        println!(
+            "  {:<28}{:>6}{:>8}{:>10}{:>9}  {}",
+            "lead title", "nodes", "merged", "spend$", "$ ok", "holders"
+        );
+        for c in &by_lead {
+            println!(
+                "  {:<28}{:>6}{:>8}{:>10}{:>9}  {}",
+                c["lead_title"].as_str().unwrap_or_default(),
+                c["nodes"].as_i64().unwrap_or(0),
+                c["merged"].as_i64().unwrap_or(0),
+                c["spend_usd"]
+                    .as_f64()
+                    .map(|f| format!("{f:.2}"))
+                    .unwrap_or_else(|| "n/a".to_string()),
+                if c["spend_measured"].as_bool().unwrap_or(false) {
+                    "yes"
+                } else {
+                    "no"
+                },
+                c["holders"]
+                    .as_array()
+                    .map(|hs| hs
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", "))
+                    .unwrap_or_default(),
+            );
+        }
     }
     if let Some(props) = &proposals {
         println!(

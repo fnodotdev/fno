@@ -372,9 +372,10 @@ pub(crate) fn run_pass(home: &AgentsHome) -> Result<(), String> {
             // The session node's PR repo pins the poll, the same pin the
             // wait applies: a cutover worktree must not read the ambient
             // origin's same-number PR.
-            let node_repo =
-                crate::gate::loopcheck::pr_read::session_node_pr_target(std::path::Path::new(cwd))
-                    .1;
+            let node_repo = crate::gate::loopcheck::pr_read::session_node_pr_repo(
+                std::path::Path::new(cwd),
+                pr,
+            );
             let (_code, out, _, _) = crate::pr_status::cache::cached_status_in(
                 cwd,
                 pr,

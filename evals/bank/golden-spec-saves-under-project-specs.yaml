@@ -1,0 +1,24 @@
+# Mined from a real correction row; `fno-agent evals candidates` finds it.
+id: golden-spec-saves-under-project-specs
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  The project is named fno. You have finished writing a spec for a feature called dark-mode with the ship-docs spec template. You must save it. Which file path do you write it to? Give the path relative to the vault root, exactly as the spec template names it for this project and feature.
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the exact path you write the spec to>`. The second line is `reason: <one line>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *(write +)?(~/c3po/)?internal/fno/specs/dark-mode-spec\\.md *$' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '/plans/|docs/architecture'"
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source: {kind: correction, ref: "corr:7cddba3752424e61"}
+  quote: "no, we will save to ~/c3po/internal/abilities/specs/, blueprint will save to plans."
+  expected: "internal/fno/specs/dark-mode-spec.md, the spec template's Save to line with project and feature filled in."
+  rule: "skills/ship-docs/references/spec-template.md: save to internal/{project}/specs/{feature}-spec.md; plans belong to blueprint."
+  failure_type: wrong-location
+  cost: rework
+  outcome: failed

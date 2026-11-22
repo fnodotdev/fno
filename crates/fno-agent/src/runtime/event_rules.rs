@@ -9,6 +9,7 @@
 //! `config_value_deep`; the shipped table lives beside this file and is
 //! `include_str!`ed like `merge_posture.toml`.
 
+use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -38,6 +39,8 @@ const PREDICATES: &[&str] = &[
     "has_recommendation",
     "why_user_set",
     "class_user_only",
+    "lead_idle_reactive_pick",
+    "lead_spawn_gate_refused",
 ];
 
 struct Row {
@@ -55,6 +58,7 @@ struct Row {
 /// `notify` carries the (title, body, pointer) the caller sends through
 /// `notify_operator` - the engine decides, the caller executes, so tests
 /// never spawn a process.
+#[derive(Debug)]
 pub struct Fire {
     pub rule: String,
     pub action: &'static str,
@@ -344,10 +348,18 @@ fn stop_block(
         None,
         "chat",
     );
+    let mut reason = block_reason(row);
+    if row.id == LEAD_IDLE_PICK_RULE {
+        if let Some((beat, _)) = idle_beat(ctx) {
+            if let Some(line) = beat.data.pick_line.as_deref() {
+                reason.push_str(&format!(" Your beat printed: {line}"));
+            }
+        }
+    }
     Some(Fire {
         rule: row.id.clone(),
         action: "block",
-        reason: block_reason(row),
+        reason,
         notify: None,
     })
 }
@@ -483,9 +495,141 @@ fn predicate(ctx: &Ctx, name: &str, ev: Option<&Value>) -> bool {
             .and_then(Value::as_str)
             .is_some_and(|v| !v.trim().is_empty()),
         "class_user_only" => ev.is_some_and(|e| class_user_only(ctx, e)),
+        "lead_idle_reactive_pick" => idle_beat(ctx).is_some_and(|(row, _)| idle_beat_blocks(&row)),
+        "lead_spawn_gate_refused" => idle_beat(ctx).is_some_and(|(row, journals)| {
+            let Some(node) = row.data.pick_node.as_deref() else {
+                return false;
+            };
+            let Some(since_ms) = row.ts_ms() else {
+                return false;
+            };
+            gate_refused_since(&journals, node, since_ms)
+        }),
         _ => false,
     };
     negated != value
+}
+
+/// The rule id whose block reason names the beat's actual pick line.
+const LEAD_IDLE_PICK_RULE: &str = "lead_idle_pick_unanswered";
+
+/// The beat row's typed read: the keys the idle-pick rules consume. Every
+/// field defaults, so a beat whose data carries another shape reads all
+/// None and never blocks (the unmeasured-beat fail-open).
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct BeatRow {
+    ts: Option<String>,
+    data: BeatFacts,
+}
+
+/// The beat-data keys the block reads on.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct BeatFacts {
+    scope_live_workers: Option<u64>,
+    reactive: Option<bool>,
+    pick_offered: Option<String>,
+    pick: Option<String>,
+    pick_node: Option<String>,
+    pick_line: Option<String>,
+}
+
+impl BeatRow {
+    /// The row's top-level ts as epoch millis, for the refusal comparison.
+    fn ts_ms(&self) -> Option<i64> {
+        self.ts
+            .as_deref()
+            .and_then(|t| t.parse::<chrono::DateTime<chrono::Utc>>().ok())
+            .map(|t| t.timestamp_millis())
+    }
+}
+
+/// A refused-spawn row's typed read: the row wraps its facts under `data`.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct RefusalRow {
+    data: RefusalData,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct RefusalData {
+    node: Option<String>,
+    argv: Option<Vec<String>>,
+}
+
+impl RefusalData {
+    /// The node match or the argv match: a seat pick names a scope, not a
+    /// node, so the promote token in the refused argv is its evidence.
+    fn matches(&self, node: &str) -> bool {
+        self.node.as_deref() == Some(node)
+            || self
+                .argv
+                .as_deref()
+                .is_some_and(|argv| argv.iter().any(|a| a == node))
+    }
+}
+
+/// The newest `lead_checkin` beat row for the scope this session holds, with
+/// the journals it was read from. `None` when the session holds no live team
+/// or no beat was journaled: an unmeasured beat never blocks a stop.
+fn idle_beat(ctx: &Ctx) -> Option<(BeatRow, Vec<PathBuf>)> {
+    let teams = crate::territory::live_teams(&ctx.home.registry_json()).ok()?;
+    let scope = teams
+        .iter()
+        .find(|t| {
+            t.holder_session
+                .as_deref()
+                .is_some_and(|s| crate::identity::canonical_handle(s) == ctx.session)
+        })?
+        .scope
+        .clone();
+    let journals = crate::runtime::lead_history::default_journals(ctx.cwd);
+    let beat =
+        crate::runtime::lead_history::previous_beat(&journals, &scope, Some(&ctx.session), false)
+            .ok()??;
+    let row: BeatRow = serde_json::from_value(beat).unwrap_or_default();
+    Some((row, journals))
+}
+
+/// The idle-beat facts the rule blocks on: zero live scope workers, a pick
+/// still on offer with no `--pick` answer, and the beat's own `reactive` tag
+/// saying the last offer went untaken. Every key must read: a beat whose
+/// worker reading failed carries no count and never blocks.
+fn idle_beat_blocks(row: &BeatRow) -> bool {
+    let d = &row.data;
+    d.scope_live_workers == Some(0)
+        && d.reactive == Some(true)
+        && d.pick_offered
+            .as_deref()
+            .is_some_and(|s| !s.trim().is_empty())
+        && d.pick
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .is_none()
+}
+
+/// A spawn the gate refused for `node` after `since_ms`, in any journal the
+/// beat reads. `agent_spawn_refused` is the one feed-visible refusal row that
+/// names the node (`spawn_gate.rs` emits it at the single refusal site). The
+/// row's argv matches too: a seat pick names a scope, not a node, so the
+/// promote token in the refused argv is the seat-pick's evidence.
+fn gate_refused_since(journals: &[PathBuf], node: &str, since_ms: i64) -> bool {
+    let query = crate::event_store::EventQuery::of_types(&["agent_spawn_refused"]);
+    journals.iter().any(|j| {
+        crate::event_store::query_events(j, &query)
+            .unwrap_or_default()
+            .iter()
+            .any(|r| {
+                r.ts_ms > since_ms
+                    && serde_json::from_str::<RefusalRow>(&r.line)
+                        .unwrap_or_default()
+                        .data
+                        .matches(node)
+            })
+    })
 }
 
 /// A worker ask addressed to its lead (the `Approval:` template), or an ask
@@ -1052,10 +1196,8 @@ mod tests {
         fn new(promoted: bool) -> Self {
             let dir = tempfile::TempDir::new().unwrap();
             let home_dir = dir.path().join("agents-home");
-            let journal_dir = dir.path().join("journal");
             let cwd = dir.path().join("project");
             std::fs::create_dir_all(&home_dir).unwrap();
-            std::fs::create_dir_all(&journal_dir).unwrap();
             std::fs::create_dir_all(&cwd).unwrap();
             std::env::set_var("FNO_AGENT_HOME", &home_dir);
             let session = crate::identity::canonical_handle(SESSION);
@@ -1081,7 +1223,10 @@ mod tests {
             Rig {
                 _dir: dir,
                 home: crate::paths::AgentsHome::from_env(),
-                journal: journal_dir.join("events.jsonl"),
+                // The idle-pick predicates read default_journals(cwd), whose
+                // agents-home entry resolves here: one file serves the engine
+                // read and the predicate read.
+                journal: home_dir.join("events.jsonl"),
                 cwd,
                 session,
             }
@@ -1305,6 +1450,7 @@ mod tests {
         every_harness_stop_payload_shape_reaches_the_rule_leg();
         r2_and_r3_legs();
         stop_stamp_binds_the_question_to_the_asking_session_leg();
+        idle_pick_legs();
     }
 
     #[test]
@@ -1530,5 +1676,157 @@ mod tests {
             !fires.iter().any(|f| f.rule == "why_user_escape"),
             "a user-only class escapes the escape check"
         );
+    }
+
+    /// The idle beat row a lead rule reads: zero live scope workers, a pick
+    /// offered and untaken, the reactive tag set.
+    fn idle_beat_row(rig: &Rig, node: &str) {
+        let hour_ago = (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
+        rig.seed(json!({
+            "ts": hour_ago,
+            "type": "lead_checkin",
+            "source": "loop",
+            "data": {
+                "scope": "e-63be",
+                "holder_session": rig.session,
+                "change": "beat legs: a seeded idle beat",
+                "scope_live_workers": 0,
+                "reactive": true,
+                "pick_offered": format!("fno agent spawn \"/fno:target {node}\""),
+                "pick_node": node,
+                "pick": null,
+                "pick_line": format!(
+                    "pick: fno agent spawn \"/fno:target {node}\" (answer with --pick \"<what you started>\")"
+                ),
+            },
+        }));
+    }
+
+    /// An idle lead whose beat offered a pick with zero scope workers is
+    /// blocked, and the block reason names the pick command it printed.
+    fn an_idle_lead_with_an_untaken_pick_is_blocked() {
+        let rig = Rig::new(true);
+        idle_beat_row(&rig, "x-idle1");
+        let fires = eval_stop_in(&rig.cwd, &rig.journal, &rig.home, &rig.payload("done"));
+        let blocks: Vec<&Fire> = fires
+            .iter()
+            .filter(|f| f.rule == "lead_idle_pick_unanswered")
+            .collect();
+        assert_eq!(blocks.len(), 1, "{fires:?}");
+        let block = blocks.first().expect("the idle pick block fires");
+        assert!(
+            block.reason.contains("x-idle1"),
+            "the reason names the pick command: {}",
+            block.reason
+        );
+    }
+
+    /// The same stop passes when the spawn gate refused the pick's start:
+    /// the refusal row for the pick's node, newer than the beat, is the
+    /// evidence that the idleness is the gate's, not the lead's.
+    fn a_spawn_gate_refusal_lets_the_idle_lead_stop() {
+        let rig = Rig::new(true);
+        idle_beat_row(&rig, "x-idle2");
+        rig.seed(json!({
+            "ts": crate::events::now_rfc3339(),
+            "type": "agent_spawn_refused",
+            "source": "daemon",
+            "data": {
+                "node": "x-idle2",
+                "argv": ["spawn", "/fno:target x-idle2"],
+                "exit_code": 6,
+                "reason": "share cap: 2 of 2 slots held",
+            },
+        }));
+        let fires = eval_stop_in(&rig.cwd, &rig.journal, &rig.home, &rig.payload("done"));
+        assert!(
+            !fires.iter().any(|f| f.rule == "lead_idle_pick_unanswered"),
+            "a refused pick is not an untaken one: {fires:?}"
+        );
+
+        // A seat pick names a scope, not a node: the refused argv carries the
+        // promote token, and that is the allow evidence.
+        let rig = Rig::new(true);
+        idle_beat_row(&rig, "x-eSeat");
+        rig.seed(json!({
+            "ts": crate::events::now_rfc3339(),
+            "type": "agent_spawn_refused",
+            "source": "daemon",
+            "data": {
+                "node": null,
+                "argv": ["spawn", "--as", "thread", "--promote", "x-eSeat", "/fno:lead"],
+                "exit_code": 6,
+                "reason": "share cap: 2 of 2 slots held",
+            },
+        }));
+        let fires = eval_stop_in(&rig.cwd, &rig.journal, &rig.home, &rig.payload("done"));
+        assert!(
+            !fires.iter().any(|f| f.rule == "lead_idle_pick_unanswered"),
+            "a refused seat pick rides the argv token: {fires:?}"
+        );
+    }
+
+    /// A beat whose pick was answered, whose worker reading failed (no count
+    /// key), or whose session holds no live team never blocks.
+    fn an_answered_pick_or_unread_count_or_untitled_session_never_blocks() {
+        let rig = Rig::new(true);
+        rig.seed(json!({
+            "ts": crate::events::now_rfc3339(),
+            "type": "lead_checkin",
+            "source": "loop",
+            "data": {
+                "scope": "e-63be",
+                "holder_session": rig.session,
+                "change": "beat legs: a seeded idle beat",
+                "scope_live_workers": 0,
+                "reactive": true,
+                "pick_offered": "fno agent spawn \"/fno:target x-idle3\"",
+                "pick_node": "x-idle3",
+                "pick": "started the worker",
+                "pick_line": "pick: fno agent spawn \"/fno:target x-idle3\"",
+            },
+        }));
+        let fires = eval_stop_in(&rig.cwd, &rig.journal, &rig.home, &rig.payload("done"));
+        assert!(
+            !fires.iter().any(|f| f.rule == "lead_idle_pick_unanswered"),
+            "an answered pick is work started: {fires:?}"
+        );
+
+        let rig = Rig::new(true);
+        rig.seed(json!({
+            "ts": crate::events::now_rfc3339(),
+            "type": "lead_checkin",
+            "source": "loop",
+            "data": {
+                "scope": "e-63be",
+                "holder_session": rig.session,
+                "change": "beat legs: a seeded idle beat",
+                "reactive": true,
+                "pick_offered": "fno agent spawn \"/fno:target x-idle4\"",
+                "pick_node": "x-idle4",
+                "pick": null,
+            },
+        }));
+        let fires = eval_stop_in(&rig.cwd, &rig.journal, &rig.home, &rig.payload("done"));
+        assert!(
+            !fires.iter().any(|f| f.rule == "lead_idle_pick_unanswered"),
+            "an unread worker count never blocks: {fires:?}"
+        );
+
+        let rig = Rig::new(false);
+        idle_beat_row(&rig, "x-idle5");
+        let fires = eval_stop_in(&rig.cwd, &rig.journal, &rig.home, &rig.payload("done"));
+        assert!(
+            !fires.iter().any(|f| f.rule == "lead_idle_pick_unanswered"),
+            "an untitled session holds no scope to idle: {fires:?}"
+        );
+    }
+
+    /// The idle-pick row's legs, run beside the other rule legs from the
+    /// engine test: block, refusal-evidence, and the never-block arms.
+    fn idle_pick_legs() {
+        an_idle_lead_with_an_untaken_pick_is_blocked();
+        a_spawn_gate_refusal_lets_the_idle_lead_stop();
+        an_answered_pick_or_unread_count_or_untitled_session_never_blocks();
     }
 }

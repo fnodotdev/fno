@@ -587,17 +587,16 @@ pub(crate) fn coverage_adapter(gh_bin: &str) -> String {
     }
 }
 
+/// pr_reviews and pr_commits left the list when their transports moved to
+/// REST (the coverage pages, the commits endpoint): their failures must
+/// classify core, never blame a bucket they cannot spend. pr_view stays -
+/// its earned fallback retry is genuinely GraphQL (read_pr_view_fields);
+/// pr_checks stays - on a real gh bin (no internal adapter) the raw
+/// `pr checks` shape is GraphQL.
 pub(crate) fn is_graphql_read(read: &str) -> bool {
     matches!(
         read,
-        "pr_view"
-            | "pr_view_parse"
-            | "pr_checks"
-            | "pr_checks_parse"
-            | "pr_reviews"
-            | "pr_reviews_parse"
-            | "pr_commits"
-            | "pr_commits_parse"
+        "pr_view" | "pr_view_parse" | "pr_checks" | "pr_checks_parse"
     )
 }
 
