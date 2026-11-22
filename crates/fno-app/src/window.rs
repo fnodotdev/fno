@@ -498,7 +498,7 @@ impl Root {
         theme_cwd: PathBuf,
         session: String,
         font_want: (String, f32),
-        sent_size: Pixels,
+        sent_size: (u16, u16),
         window: &Window,
         cx: &Context<Self>,
     ) -> Root {
