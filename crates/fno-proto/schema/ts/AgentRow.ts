@@ -325,14 +325,14 @@ spawned_by_session?: string | null,
  */
 lineage_kind?: string | null, 
 /**
- * (v134) The row's dispatch verb, the command code the name grammar
+ * (v134) The row's dispatch command code, the code the name grammar
  * parses off the row's name (`t`, `bp`, `r`, `th`, `f`), stamped on the
- * registry row by the liveness sweep. The sideline renders the verb
+ * registry row by the liveness sweep. The sideline renders the mark
  * glyph from this served fact instead of parsing the name string.
  * `None` on a name the grammar cannot parse (a bare pane, a shell).
  * Additive: `#[serde(default)]` keeps a v133 reader wire-tolerant.
  */
-verb?: string | null, 
+command_code?: string | null, 
 /**
  * (v84) The registry NAME of the row `spawned_by_session` points at,
  * derived once per row set server-side (agents_view::merge_rows).
