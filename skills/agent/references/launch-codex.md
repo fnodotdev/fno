@@ -47,7 +47,7 @@ These tables are read from the harness's own `--help`. The harness-launch-docs w
 
 ### `codex --help`
 
-Captured from `codex-cli 0.169.0`.
+Captured from `codex-cli 0.171.0`.
 
 #### Commands
 

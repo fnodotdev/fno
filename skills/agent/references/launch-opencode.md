@@ -45,7 +45,7 @@ These tables are read from the harness's own `--help`. The harness-launch-docs w
 
 ### `opencode run --help`
 
-Captured from `opencode v2.3.0`.
+Captured from `opencode v2.4.1`.
 
 #### FLAGS
 
@@ -79,7 +79,7 @@ Captured from `opencode v2.3.0`.
 
 ### `opencode --help`
 
-Captured from `opencode v2.3.0`.
+Captured from `opencode v2.4.1`.
 
 #### FLAGS
 
@@ -122,5 +122,6 @@ Captured from `opencode v2.3.0`.
 | `session` | Manage sessions |
 | `service` | Manage the background server |
 | `reload` | Reload configuration |
+| `machine` | Manage remote machines |
 | `pair` | Print one-time links to connect a browser or app |
 | `serve` | Start the v2 API and web server |

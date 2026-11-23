@@ -1,5 +1,5 @@
 $ opencode --help
-version: opencode v2.3.0
+version: opencode v2.4.1
 
 DESCRIPTION
   OpenCode command line interface
@@ -42,5 +42,6 @@ SUBCOMMANDS
   session            Manage sessions
   service            Manage the background server
   reload             Reload configuration
+  machine            Manage remote machines
   pair               Print one-time links to connect a browser or app
   serve              Start the v2 API and web server

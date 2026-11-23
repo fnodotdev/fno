@@ -1,5 +1,5 @@
 $ codex --help
-version: codex-cli 0.169.0
+version: codex-cli 0.171.0
 
 Codex CLI
 

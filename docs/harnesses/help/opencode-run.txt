@@ -1,5 +1,5 @@
 $ opencode run --help
-version: opencode v2.3.0
+version: opencode v2.4.1
 
 DESCRIPTION
   Run OpenCode with a message

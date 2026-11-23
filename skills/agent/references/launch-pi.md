@@ -45,7 +45,7 @@ These tables are read from the harness's own `--help`. The harness-launch-docs w
 
 ### `pi --help`
 
-Captured from `1.5.2`.
+Captured from `1.6.0`.
 
 #### Commands
 
