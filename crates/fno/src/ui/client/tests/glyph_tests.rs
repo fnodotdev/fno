@@ -54,7 +54,7 @@ fn keys_modal_legend_lists_severity_glyphs_in_header_order() {
                 enabled: false,
             } => {
                 assert!(
-                    glyph == "⌖" || glyph == "⌕",
+                    glyph == "◉" || glyph == "⌕",
                     "unexpected command glyph {glyph:?}"
                 );
                 assert!(label.contains("/fno:target") || label.contains("/fno:blueprint"));

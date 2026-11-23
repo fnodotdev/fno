@@ -486,7 +486,7 @@ pub(super) fn shown_name(a: &AgentRow) -> &str {
 /// the snapshot grid), and distinct in shape from every lattice glyph. A
 /// code outside the pair falls back to its own first letter, and no code
 /// paints nothing: never a fabricated mark.
-pub(crate) const TARGET_MARK: char = '\u{2316}'; // ⌖ position indicator
+pub(crate) const TARGET_MARK: char = '\u{25c9}'; // ◉ fisheye, the bullseye: the shot font lacks U+2316
 pub(crate) const BLUEPRINT_MARK: char = '\u{2315}'; // ⌕ magnifier
 
 /// The mark for one dispatch command code.

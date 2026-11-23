@@ -596,7 +596,7 @@ fn a_stamped_command_code_paints_the_mark_and_drops_the_token() {
     // `agent_row` leaves the code None, and every assertion above holds).
     let mut a = agent_row("t-x-5316-opus", 5, Some(AgentBadge::Working), false);
     a.command_code = Some("t".into());
-    assert_eq!(card_line::command_lead(&a), "⌖ ");
+    assert_eq!(card_line::command_lead(&a), "◉ ");
     assert_eq!(
         card_line::strip_command_code(&a.name, a.command_code.as_deref()),
         "x-5316-opus"
