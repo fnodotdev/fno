@@ -125,7 +125,8 @@ pub(crate) fn route_emitted_distress(
         }
         Route::Timer { backoff_secs } => {
             // The row's `to` is the wake target the sweep fires at, so it
-            // names the emitting session, not the literal word "self".
+            // names the emitting session by the id a wake resolves, not by
+            // the literal word "self".
             emit_help_route(
                 cwd,
                 run,
@@ -134,7 +135,7 @@ pub(crate) fn route_emitted_distress(
                 reason,
                 rung,
                 "timer",
-                run,
+                sender_id(run, harness_session),
                 None,
                 Some(backoff_secs),
                 0,
@@ -157,6 +158,16 @@ pub(crate) fn route_emitted_distress(
             );
         }
     }
+}
+
+/// The id a route addresses the sender by: the harness session id, else the
+/// run id. The claim and team records carry the first, and a route compares
+/// by it.
+fn sender_id<'a>(run: &'a str, harness_session: Option<&'a str>) -> &'a str {
+    harness_session
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(run)
 }
 
 /// A live decision row names this node: the lead already ruled on the
@@ -267,10 +278,7 @@ fn deliver_off_session(
     }
     // The ladder skips the sender by the id a team's holder record carries,
     // the harness session id. A manifest's run id never matches it.
-    let from = harness_session
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(run);
+    let from = sender_id(run, harness_session);
     let mut ladder_pos: u64 = 0;
     loop {
         let target = resolve_recipient(to, node, from, evidence, ladder_pos, cwd);
@@ -610,7 +618,7 @@ fn act_on_route_row(home: &crate::paths::AgentsHome, config_cwd: &Path, row: &Va
                     .and_then(Value::as_u64)
                     .unwrap_or(300) as i64;
             if now >= due {
-                fire_timer(home, row, run, now - due);
+                fire_timer(home, row, run);
             }
         }
         "off-session" => {
@@ -650,11 +658,22 @@ fn act_on_route_row(home: &crate::paths::AgentsHome, config_cwd: &Path, row: &Va
 /// Bounded tail search for the route's proof; a transcript the reader cannot
 /// resolve simply never proves a read, and the lease decides.
 fn recipient_has_read(to: &str, key: &RouteKey<'_>) -> bool {
-    let Some(path) = crate::claude_drive::find_transcript(to) else {
+    let Some(path) = recipient_transcript(to) else {
         return false;
     };
     let marker = read_proof(key.run, key.class, key.turn);
     tail_contains(&path, &marker, 256 * 1024)
+}
+
+/// The recipient's transcript: the Claude projects store under every
+/// account root, else the codex rollout. An id outside the uuid shape names
+/// neither, and a harness that keeps no per-session file proves no read.
+fn recipient_transcript(to: &str) -> Option<PathBuf> {
+    if !fno_mail::session::is_uuid_shape(to) {
+        return None;
+    }
+    crate::claude_drive::find_transcript_any_root(to)
+        .or_else(|| crate::codex_store::codex_rollout_path(None, to))
 }
 
 /// The bounded tail check the read proof uses: the last `cap` bytes of the
@@ -688,7 +707,13 @@ fn climb(home: &crate::paths::AgentsHome, config_cwd: &Path, row: &Value, run: &
         .pointer("/data/to")
         .and_then(Value::as_str)
         .unwrap_or("");
-    let next = row_ladder(row) + 1;
+    // A holder the route addressed directly sits before the ladder, so its
+    // climb starts at the ladder's first rung. A ladder rung climbs one step.
+    let next = if holder_session(key.node).as_deref() == Some(to_sid) {
+        0
+    } else {
+        row_ladder(row) + 1
+    };
     let body = format!(
         "help-router: a question climbed the ladder (run {run}, class {}). The holder never read the delivery; a ruling is owed.",
         key.class.as_str()
@@ -819,16 +844,12 @@ fn follow_up(
     }
 }
 
-/// How long past its due time a timer retries a wake that did not land.
-const TIMER_RETRY_SECS: i64 = 600;
-
 /// The wait elapsed: wake the session with the timer's resolution. A
 /// budget-class timer is the terminal route's resume leg: the body names
-/// the resume, not a wait re-check. `late_secs` is how far past due this
-/// fire is. A wake that lands retires the timer with its leg. One that
-/// fails retries each sweep while `TIMER_RETRY_SECS` holds, then retires
-/// with the leg that failed, so a lost wake is a row and not a gap.
-fn fire_timer(home: &crate::paths::AgentsHome, row: &Value, run: &str, late_secs: i64) {
+/// the resume, not a wait re-check. One wake retires the timer with its leg,
+/// landed or not. A retry would queue a second mail for a session that
+/// cannot be woken, so a lost wake is a row and never a second ask.
+fn fire_timer(home: &crate::paths::AgentsHome, row: &Value, run: &str) {
     let to = row
         .pointer("/data/to")
         .and_then(Value::as_str)
@@ -839,10 +860,8 @@ fn fire_timer(home: &crate::paths::AgentsHome, row: &Value, run: &str, late_secs
         "help-router: your wait backoff elapsed. Re-check the condition you were waiting on; if it cleared, carry on, else re-emit <help class=\"wait\"> with fresh evidence."
     };
     let (delivered, leg) = wake(to, body);
-    if delivered || late_secs >= TIMER_RETRY_SECS {
-        let kind = if delivered { "handed" } else { "queued" };
-        follow_up(home, row, "fired", 0, Some((kind, leg)));
-    }
+    let kind = if delivered { "handed" } else { "queued" };
+    follow_up(home, row, "fired", 0, Some((kind, leg)));
 }
 
 /// The `help_route` follow-up event: one row per route step, so a failed
@@ -993,17 +1012,16 @@ fn sweep(home: &crate::paths::AgentsHome, config_cwd: &Path) {
     }
 }
 
+/// The sweep key: the four fields `route_key` reads, so a follow-up row
+/// lands on the key of the row it follows.
 fn row_key(row: &Value) -> String {
+    let key = route_key(row);
     format!(
         "{}|{}|{}|{}",
-        row.get("run").and_then(Value::as_str).unwrap_or(""),
-        row.get("node").and_then(Value::as_str).unwrap_or(""),
-        row.pointer("/data/class")
-            .and_then(Value::as_str)
-            .unwrap_or(""),
-        row.pointer("/data/turn")
-            .and_then(Value::as_str)
-            .unwrap_or(""),
+        key.run,
+        key.node.unwrap_or(""),
+        key.class.as_str(),
+        key.turn
     )
 }
 
@@ -1311,33 +1329,24 @@ mod tests {
         );
     }
 
-    /// A wake that does not land retries while the retry window holds. After
-    /// it the timer retires with the leg that failed, so the loss is a row.
+    /// A wake that does not land retires the timer after one try, with the
+    /// leg that did not take. A session that cannot be woken is not asked a
+    /// second time.
     #[test]
-    fn a_failed_timer_wake_retries_then_records_the_failure() {
+    fn a_failed_timer_wake_retires_after_one_try() {
         let _lock = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().expect("tempdir");
         let (_roots, home) = PinnedRoots::under(dir.path());
         let _stub = StubbedRun::install(durable_then_failed);
-        let timer = |run: &str, turn: &str| json!({"class": "wait", "route": "timer", "to": run, "backoff_secs": 300, "turn": turn});
         journal_row(
             &home,
             &aged_row(
                 600,
-                "run-timer-retry",
+                "run-timer-lost",
                 "x-timer",
-                timer("run-timer-retry", "turn-retry"),
-            ),
-        );
-        journal_row(
-            &home,
-            &aged_row(
-                1200,
-                "run-timer-spent",
-                "x-timer",
-                timer("run-timer-spent", "turn-spent"),
+                json!({"class": "wait", "route": "timer", "to": "run-timer-lost", "backoff_secs": 300, "turn": "turn-lost"}),
             ),
         );
         sweep(&home, dir.path());
@@ -1346,21 +1355,16 @@ mod tests {
         assert_eq!(
             rows.matches("\"route\":\"fired\"").count(),
             1,
-            "only the timer past the retry window retires: {rows}"
+            "one fired row for one timer: {rows}"
         );
         assert!(
             rows.contains("\"delivery\":\"queued\"") && rows.contains("\"leg\":\"resume\""),
-            "the retired row names the leg that failed: {rows}"
+            "the fired row names the leg that did not take: {rows}"
         );
         assert_eq!(
-            calls_mentioning("run-timer-retry"),
-            4,
-            "two sweeps, and each try runs a mail and a resume"
-        );
-        assert_eq!(
-            calls_mentioning("run-timer-spent"),
+            calls_mentioning("run-timer-lost"),
             2,
-            "a timer past the retry window tries once"
+            "two sweeps, and one try runs a mail and a resume"
         );
     }
 
@@ -1463,8 +1467,120 @@ mod tests {
         );
     }
 
+    /// A holder the route addressed directly and never read the delivery
+    /// hands the route to the ladder's first rung, the node lead, and not to
+    /// the rung above it.
+    #[test]
+    fn an_unread_holder_hands_the_route_to_the_ladders_first_rung() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (_roots, home) = PinnedRoots::under(dir.path());
+        std::fs::create_dir_all(dir.path().join("claims")).expect("claims root");
+        let holder = "harness-silent-holder";
+        let acquired = crate::claims::acquire(
+            "node:x-silent-holder",
+            "target-session:harness-silent-holder",
+            crate::claims::AcquireOpts {
+                pid: Some(std::process::id()),
+                identity: Some((holder.to_string(), "claude".to_string())),
+                root: None,
+                events_dir: Some(dir.path().join("claim-events")),
+                ..Default::default()
+            },
+        );
+        assert!(
+            matches!(acquired, crate::claims::AcquireOutcome::Acquired(_)),
+            "the claim was not acquired: {acquired:?}"
+        );
+        let _stub = StubbedRun::install(reached);
+        journal_row(
+            &home,
+            &aged_row(
+                3600,
+                "run-holder-unread",
+                "x-silent-holder",
+                json!({"class": "held", "route": "off-session", "to": holder, "delivery": "handed", "leg": "mail", "ladder": 0, "turn": "turn-holder"}),
+            ),
+        );
+        sweep(&home, dir.path());
+        let rows = journal_text(&home);
+        assert_eq!(
+            rows.matches("\"route\":\"climbed\"").count(),
+            1,
+            "one climb for one lease: {rows}"
+        );
+        let filings = RUN_CALLS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .map(|argv| argv.join(" "))
+            .collect::<Vec<String>>();
+        assert_eq!(
+            filings.len(),
+            1,
+            "the climb ran an unexpected child: {filings:?}"
+        );
+        assert!(
+            filings
+                .iter()
+                .all(|filing| filing.contains("ladder rung 0")),
+            "the climb skipped the ladder's first rung: {filings:?}"
+        );
+    }
+
+    /// A codex thread keeps no Claude transcript. Its rollout holds the mail,
+    /// so the proof search reads that and the route records `read`.
+    #[test]
+    fn a_codex_recipient_proves_a_read_from_its_rollout() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (_roots, home) = PinnedRoots::under(dir.path());
+        let _codex = crate::claims::EnvVarGuard::set(
+            "CODEX_HOME",
+            &dir.path().join("codex").to_string_lossy(),
+        );
+        let sessions = dir.path().join("codex").join("sessions");
+        std::fs::create_dir_all(&sessions).expect("codex sessions");
+        let recipient = "01a1fca9-28cc-7bd2-8d82-72796e1e2942";
+        let run = "run-codex-read";
+        std::fs::write(
+            sessions.join(format!("rollout-{recipient}.jsonl")),
+            format!(
+                "mail read: {}\n",
+                read_proof(run, HelpClass::Question, "turn-codex")
+            ),
+        )
+        .expect("codex rollout");
+        let _stub = StubbedRun::install(reached);
+        journal_row(
+            &home,
+            &aged_row(
+                3600,
+                run,
+                "x-codex",
+                json!({"class": "question", "route": "off-session", "to": recipient, "delivery": "handed", "leg": "mail", "ladder": 0, "turn": "turn-codex"}),
+            ),
+        );
+        sweep(&home, dir.path());
+        let rows = journal_text(&home);
+        assert!(
+            rows.contains("\"route\":\"read\""),
+            "no read row for a codex recipient: {rows}"
+        );
+        assert!(
+            !rows.contains("\"route\":\"climbed\""),
+            "climbed a route the codex recipient read: {rows}"
+        );
+        assert_eq!(calls_mentioning(run), 0, "a read route starts no child");
+    }
+
     /// A timer route lands in the journal the sweep reads. The mirror went
-    /// to another store, so no wait timer ever fired.
+    /// to another store, so no wait timer ever fired. The wake target is the
+    /// harness session id, not the run id the row is filed under.
     #[test]
     fn an_emitted_timer_lands_in_the_journal_the_sweep_reads() {
         let _lock = crate::claims::test_env_lock()
@@ -1487,6 +1603,10 @@ mod tests {
         assert!(
             rows.contains("\"route\":\"timer\"") && rows.contains("\"turn\":\"turn-mirror\""),
             "no timer row in the sweep's journal: {rows}"
+        );
+        assert!(
+            rows.contains("\"to\":\"harness-mirror\""),
+            "the wake target is not the harness session id: {rows}"
         );
     }
 
