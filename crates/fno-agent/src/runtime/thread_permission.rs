@@ -219,7 +219,7 @@ fn file_hold(ask: &ThreadAsk) -> Result<String, HoldError> {
     let filing = crate::outstanding_cmds::AskFiling {
         text: file,
         template: false,
-        ask: Some(format!("fno agent ask {who} --answer allow_once|deny")),
+        ask: Some("the user answers it at the owning session".to_string()),
         options: Vec::new(),
         blocks: Vec::new(),
         node: None,

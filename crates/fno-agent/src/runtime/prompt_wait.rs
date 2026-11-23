@@ -75,13 +75,8 @@ impl Waiting {
             );
         }
         format!(
-            "WAITING ON APPROVAL: {} (claude thread {}) {} for {}m - answer with: fno agent ask {} --answer allow_once (TTY form: claude attach {})",
-            self.name,
-            self.short_id,
-            self.waiting_for,
-            self.minutes(now),
-            self.short_id,
-            self.short_id
+            "WAITING ON APPROVAL: {} (claude thread {}) {} for {}m - a person answers at: claude attach {}",
+            self.name, self.short_id, self.waiting_for, self.minutes(now), self.short_id
         )
     }
 }
@@ -389,6 +384,14 @@ mod tests {
             ClaudeAgentsSnapshot::known(vec![waiting_row("30d6ff6a", "sid", "t-grant-worker")]);
         let mut w = observe(&home, 1_000_000, &snap).unwrap().remove(0);
         assert!(w.line(1_000_000).starts_with("WAITING ON APPROVAL"));
+        // The approval line names a person, not an answer command: a worker
+        // reading the bell cannot answer someone else's prompt.
+        let approval = w.line(1_000_000);
+        assert!(!approval.contains("--answer"), "{approval}");
+        assert!(
+            approval.contains("a person answers at: claude attach"),
+            "{approval}"
+        );
         w.grants = vec!["Accessibility", "Screen Recording"];
         let line = w.line(1_000_000);
         assert!(

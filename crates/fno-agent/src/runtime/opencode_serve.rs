@@ -1258,6 +1258,22 @@ pub fn steer_registered_session(
 /// the oldest pending permission ask of the row's session. Exit 2 when no
 /// ask is pending, so the user learns nothing was sent.
 pub fn answer_registered_session(home: &AgentsHome, name: &str, choice: &str) -> AskOutcome {
+    let caller = crate::spawn_gate_admission::AnswerCaller::from_env();
+    answer_registered_session_with_caller(home, name, choice, &caller)
+}
+
+/// The crate-private injection seam: tests build the caller directly.
+pub(crate) fn answer_registered_session_with_caller(
+    home: &AgentsHome,
+    name: &str,
+    choice: &str,
+    caller: &crate::spawn_gate_admission::AnswerCaller,
+) -> AskOutcome {
+    // The same gate the claude door carries: an agent session never presses
+    // an allow answer on another session's prompt.
+    if let Some(refusal) = caller.allow_refusal(choice) {
+        return AskOutcome::err(refusal, 2);
+    }
     let registry = match load_registry(&home.registry_json()) {
         Ok(registry) => registry,
         Err(error) => return AskOutcome::err(format!("registry read failed: {error}"), 12),
@@ -1288,9 +1304,22 @@ pub fn answer_registered_session(home: &AgentsHome, name: &str, choice: &str) ->
             OpencodeContract::V2 => crate::opencode_permission::Contract::V2,
         },
     ) {
-        Ok(request_id) => AskOutcome::ok_reply(
-            serde_json::json!({"ok": true, "answered": request_id, "answer": choice}).to_string(),
-        ),
+        Ok(request_id) => {
+            emit_event(
+                &home.events_jsonl(),
+                "agent_prompt_answered",
+                &[
+                    ("name", name.into()),
+                    ("answer", choice.into()),
+                    ("short_id", entry.short_id.clone().into()),
+                    ("caller", caller.stamp().into()),
+                ],
+            );
+            AskOutcome::ok_reply(
+                serde_json::json!({"ok": true, "answered": request_id, "answer": choice})
+                    .to_string(),
+            )
+        }
         Err(error) => AskOutcome::err(format!("fno-agent: {name}: {error}"), 2),
     }
 }
@@ -2006,6 +2035,29 @@ mod tests {
             "fno-agent-worker",
         );
         assert_eq!(out.exit_code, 2);
+    }
+
+    #[test]
+    fn an_agent_caller_is_refused_on_allow_and_a_human_falls_through() {
+        let dir = tempfile::tempdir().unwrap();
+        let h = home(dir.path());
+        let agent = crate::spawn_gate_admission::AnswerCaller::agent("w-fix");
+        let out = answer_registered_session_with_caller(&h, "oc", "allow_once", &agent);
+        assert_eq!(out.exit_code, 2, "{}", out.stderr);
+        assert!(out.stderr.contains("only the user"), "{}", out.stderr);
+        // The admit arms: a human caller and a deny answer pass the gate and
+        // fail later on the registry read (empty home), never on the gate.
+        let human = crate::spawn_gate_admission::AnswerCaller::human();
+        let out = answer_registered_session_with_caller(&h, "oc", "allow_once", &human);
+        assert_eq!(out.exit_code, 13, "{}", out.stderr);
+        assert!(out.stderr.contains("has no registry row"), "{}", out.stderr);
+        // An unproven caller reads the same as an agent: no positive proof,
+        // no grant.
+        let unproven = crate::spawn_gate_admission::AnswerCaller::unproven();
+        let out = answer_registered_session_with_caller(&h, "oc", "allow_once", &unproven);
+        assert_eq!(out.exit_code, 2, "{}", out.stderr);
+        let out = answer_registered_session_with_caller(&h, "oc", "deny", &agent);
+        assert_eq!(out.exit_code, 13, "{}", out.stderr);
     }
 }
 

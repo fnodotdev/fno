@@ -814,11 +814,39 @@ fn failed_answer(reason: &str) -> Value {
     v
 }
 
+/// The one reply field the ask turns on; a decode failure reads false.
+#[derive(serde::Deserialize)]
+struct AskOk {
+    #[serde(default)]
+    ok: bool,
+}
+
 /// `fno agent ask <name> [<message>] [--answer allow_once|deny]` on a live
 /// footnote thread row: the message queues as a prompt, the answer resolves
-/// the pending permission ask. None when the row has no reachable host, so
-/// the caller falls back to a headless resume.
-pub fn maybe_ask_host(entry: &RegistryEntry, params: &Value) -> Option<i32> {
+/// the pending permission ask, and a person answers it. None when the row
+/// has no reachable host, so the caller falls back to a headless resume.
+pub fn maybe_ask_host(
+    home: &crate::paths::AgentsHome,
+    entry: &RegistryEntry,
+    params: &Value,
+) -> Option<i32> {
+    let caller = crate::spawn_gate_admission::AnswerCaller::from_env();
+    maybe_ask_host_with_caller(home, entry, params, &caller)
+}
+
+/// The crate-private injection seam: tests build the caller directly.
+pub(crate) fn maybe_ask_host_with_caller(
+    home: &crate::paths::AgentsHome,
+    entry: &RegistryEntry,
+    params: &Value,
+    caller: &crate::spawn_gate_admission::AnswerCaller,
+) -> Option<i32> {
+    if let Some(choice) = params["answer"].as_str() {
+        if let Some(refusal) = caller.allow_refusal(choice) {
+            eprintln!("{refusal}");
+            return Some(2);
+        }
+    }
     let socket = host_socket(entry)?;
     let answer = params["answer"].as_str();
     let req = match answer {
@@ -833,7 +861,25 @@ pub fn maybe_ask_host(entry: &RegistryEntry, params: &Value) -> Option<i32> {
     match host_call(&socket, &req) {
         Ok(reply) => {
             println!("{reply}");
-            Some(if reply["ok"] == true { 0 } else { 2 })
+            // The one field the ask turns on; a decode failure reads false.
+            let ok = serde_json::from_value::<AskOk>(reply)
+                .map(|reply| reply.ok)
+                .unwrap_or(false);
+            if ok {
+                if let Some(choice) = answer {
+                    crate::claude_ask::emit_event(
+                        &home.events_jsonl(),
+                        "agent_prompt_answered",
+                        &[
+                            ("name", entry.name.clone().into()),
+                            ("answer", choice.into()),
+                            ("short_id", entry.short_id.clone().into()),
+                            ("caller", caller.stamp().into()),
+                        ],
+                    );
+                }
+            }
+            Some(if ok { 0 } else { 2 })
         }
         Err(e) if answer.is_some() => {
             eprintln!(

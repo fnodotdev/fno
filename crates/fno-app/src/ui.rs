@@ -235,6 +235,16 @@ pub fn badge(n: usize, p: &Palette) -> Div {
         .child(n.to_string())
 }
 
+/// The command key's label: the glyph on macOS, Ctrl elsewhere. New hint
+/// text spells the key through this, never a literal glyph.
+pub fn cmd_key() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "\u{2318}"
+    } else {
+        "Ctrl+"
+    }
+}
+
 /// A key hint: the keys inline in the quietest level, with no chip, so it
 /// never reads as a button.
 pub fn kbd(keys: impl Into<SharedString>, p: &Palette) -> Div {

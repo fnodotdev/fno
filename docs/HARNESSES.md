@@ -53,7 +53,7 @@ fno declares `clientCapabilities._meta["footnote/author"] = "agent"` at `initial
 |---|---|
 | `fno agent mail send <session-id> ...` | `session/prompt` with `_meta["footnote/origin"]` = `{kind: "mail", sender_session_id, message_id}`. fnh records the turn's origin as `mail`. |
 | `fno agent mail ask <session-id> "<text>"` | `session/prompt` with no origin, so fnh records `operator`. |
-| `fno agent mail ask <session-id> --answer allow_once\|deny` | The answer to the pending `session/request_permission`: `allow_once`, or `reject_once` for `deny`. |
+| `fno agent mail ask <session-id> --answer allow_once\|deny` | The answer to the pending `session/request_permission`: `allow_once`, or `reject_once` for `deny`. A person at their terminal answers it. |
 | `fno agent session stop <name>` | The stop signals the host. The host rejects any pending ask, sends `session/cancel`, and closes its connection. On serve that detaches: the daemon keeps running and ends the idle session after its grace. A private child sees its stdin close and writes its terminal record. |
 
 Mail and asks run one turn at a time. A mail sent during a turn waits until the turn ends. An ask nobody answers rejects after 290 s, and fnh rejects on its own at 300 s. Neither side allows by default. The permission-response rows in the capability table stay unsupported, because they describe pane keystrokes.
@@ -68,7 +68,7 @@ Mail and asks run one turn at a time. A mail sent during a turn waits until the 
 |---|---|
 | `fno agent mail send <session-id> ...` | `turn/start` with the wrapped mail as text, `ifBusy: "queue"`, and `displayText` set to `[fno-mail <envelope id>]`. |
 | `fno agent mail ask <session-id> "<text>"` | `turn/start`. A text that starts with `/<skill>` goes as a skill part. |
-| `fno agent mail ask <session-id> --answer allow_once\|deny` | `approval/decide` with the choice Muse offered for that decision. |
+| `fno agent mail ask <session-id> --answer allow_once\|deny` | `approval/decide` with the choice Muse offered for that decision. A person at their terminal answers it. |
 | `fno agent session stop <name>` | The host denies a pending approval, sends `turn/interrupt` and `session/leave` with `stop: true`, then closes `muse serve`'s stdin. |
 
 The proof of a delivery is the user message that Muse records with the host's own `commandId` and the envelope id. A `turn/started` event alone does not count, because a queued turn starts later. The host answers within 10 s with one of the delivery states. `accepted-new-turn` means Muse recorded the message. `parked` means the message waits in Muse's queue behind a running turn. Muse runs it when that turn ends, so the send reports it hosted and writes no durable copy, which would reach the worker twice. The host appends the late landing to `~/.fno/agents/muse/<session>.delivery.jsonl`. An approval nobody answers is denied after 290 s, the footnote host's bound. `failed` names a reason: `reclaimed` for `turn/unqueued`, `retracted`, or the MSP error kind. Mail never steers a running turn.

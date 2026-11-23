@@ -463,6 +463,11 @@ pub struct AppShotArgs {
     /// options frame, `overflow` makes the first option wrap
     #[arg(long, value_parser = ["rows", "overflow"])]
     pub ask: Option<String>,
+    /// Open one overlay through its real code path before the capture:
+    /// the row menu (`row-menu-node` gives the agent a node first),
+    /// the in-tab rename field, or the scrolled-back pill
+    #[arg(long, value_parser = ["row-menu", "row-menu-node", "tab-rename", "scrolled"])]
+    pub ui: Option<String>,
 }
 
 /// `mux thread`'s operation set: `reseat` is the one declared operation;

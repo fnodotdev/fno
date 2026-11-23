@@ -1155,6 +1155,7 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
             // up read AA there.
             let tinted = blocked && !cursor;
             let row_p = if tinted { p.on_needs() } else { p };
+            let agent_name = card.as_ref().map(|_| label.clone());
             let mut item = ui::row(i, cursor, &p)
                 .w(px(WIDTH))
                 .when(tinted, |d| d.bg(rgb(p.needs_fill())))
@@ -1172,6 +1173,7 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
                 }
                 None => plain_cells(item, &label, &detail, mark, &p, adv),
             };
+            item = agent_menu_on_right_click(item, agent_name, cx);
             if let Some(action) = action {
                 // On click: a press that leaves the row before release
                 // does nothing. A click is the user's own pick, so the
@@ -1185,6 +1187,21 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
             item
         }
     }
+}
+
+/// A right-click on an agent row opens that agent's menu at the pointer.
+fn agent_menu_on_right_click(
+    item: Stateful<Div>,
+    name: Option<String>,
+    cx: &mut Context<Root>,
+) -> Stateful<Div> {
+    let Some(name) = name else { return item };
+    item.on_mouse_down(
+        MouseButton::Right,
+        cx.listener(move |root, ev: &gpui::MouseDownEvent, window, cx| {
+            root.agent_menu_open(&name, ev.position, window, cx)
+        }),
+    )
 }
 
 /// One menu item row: the label, and the action a click sends.

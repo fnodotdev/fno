@@ -981,10 +981,18 @@ pub(crate) fn is_decision_id(s: &str) -> bool {
     rest.len() == 8 && rest.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-/// `^[a-z][a-z0-9]{0,7}-[0-9a-f]{4,8}$`, the node-id shape
-/// `parse-claims-arg.sh` uses. Measured 2026-09-14: the shape matches 3 of
-/// 59 live law subjects, and all 3 are real node ids.
+/// The node-id shape `scripts/lib/node-id.sh` classifies: dashed hex
+/// `^[a-z][a-z0-9]{0,7}-[0-9a-f]{4,8}$`, plus the sequential arm the shell
+/// gate reads only under `backlog.id_mode = "sequential"`. Measured
+/// 2026-09-14: the shape matches 3 of 59 live law subjects, and all 3 are
+/// real node ids.
 pub(crate) fn matches_node_id_shape(s: &str) -> bool {
+    matches_node_id_shape_under(s, super::node_ref::sequential_prefix().as_deref())
+}
+
+/// `matches_node_id_shape` under an explicit mode: `Some("t")` reads
+/// `t-12`, `None` is hex. The seam the tests drive.
+fn matches_node_id_shape_under(s: &str, seq_prefix: Option<&str>) -> bool {
     let Some((prefix, suffix)) = s.split_once('-') else {
         return false;
     };
@@ -999,7 +1007,18 @@ pub(crate) fn matches_node_id_shape(s: &str) -> bool {
         return false;
     }
     let sfx = suffix.as_bytes();
-    (4..=8).contains(&sfx.len()) && sfx.iter().all(|b| b.is_ascii_hexdigit())
+    if (4..=8).contains(&sfx.len()) && sfx.iter().all(|b| b.is_ascii_hexdigit()) {
+        return true;
+    }
+    match seq_prefix {
+        Some(seq) => {
+            (1..=7).contains(&suffix.len())
+                && !suffix.starts_with('0')
+                && suffix.bytes().all(|b| b.is_ascii_digit())
+                && prefix == seq
+        }
+        None => false,
+    }
 }
 
 /// `^pr-[0-9]+$`.
@@ -4256,5 +4275,19 @@ pub(crate) mod scope_tests {
             &Caller::as_authority("chat_attested"),
         );
         assert_eq!(code, 0, "a per-head door subject records: {code}");
+    }
+
+    #[test]
+    fn the_law_subject_shape_reads_sequential_ids_in_sequential_mode_only() {
+        // Hex mode: a digit tail is prose.
+        assert!(!matches_node_id_shape_under("t-15", None));
+        assert!(!matches_node_id_shape_under("wave-1", None));
+        // Sequential mode reads the configured prefix only.
+        assert!(matches_node_id_shape_under("t-15", Some("t")));
+        assert!(matches_node_id_shape_under("t-1", Some("t")));
+        // Refusals: another prefix, a zero lead, an over-long run.
+        assert!(!matches_node_id_shape_under("u-9", Some("t")));
+        assert!(!matches_node_id_shape_under("t-07", Some("t")));
+        assert!(!matches_node_id_shape_under("t-123456789", Some("t")));
     }
 }

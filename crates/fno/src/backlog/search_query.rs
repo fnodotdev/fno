@@ -853,19 +853,25 @@ fn bare_alts(text: &str) -> Vec<Pred> {
     }]
 }
 
-/// `^[a-z][a-z0-9]{0,7}-[0-9a-f]{4,8}$`, the graph's node-id shape.
+/// `^[a-z][a-z0-9]{0,7}-[0-9a-f]{4,8}$`, the graph's node-id shape; a
+/// sequential board's `<prefix>-<n>` reads too (`super::id_mode`), and
+/// hex boards keep refusing it.
 fn looks_node_id(s: &str) -> bool {
     let Some((head, tail)) = s.split_once('-') else {
         return false;
     };
     let mut hc = head.chars();
-    matches!(hc.next(), Some(c) if c.is_ascii_lowercase())
+    if !(matches!(hc.next(), Some(c) if c.is_ascii_lowercase())
         && hc.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-        && head.len() <= 8
-        && (4..=8).contains(&tail.len())
+        && head.len() <= 8)
+    {
+        return false;
+    }
+    let hex_tail = (4..=8).contains(&tail.len())
         && tail
             .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    hex_tail || super::id_mode::sequential_tail_matches(super::id_mode::facts(), head, tail)
 }
 
 /// An 8-4-4-4-12 hex UUID.

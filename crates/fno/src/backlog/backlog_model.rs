@@ -451,6 +451,11 @@ pub struct Board {
     /// The page's key table, served once when the request asks `keys=1`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub search_keys: Option<serde_json::Value>,
+    /// The board's id mode for the page's client-side grammar: a
+    /// sequential board mints `<prefix>-<n>` and the grammar reads them
+    /// only there. The same facts the snapshot embeds.
+    pub id_sequential: bool,
+    pub id_prefix: String,
 }
 
 /// One graph session row joined to the roster.
@@ -867,6 +872,8 @@ pub fn board(inp: &Inputs, q: &Query) -> Board {
                 e
             },
             search_keys: None,
+            id_sequential: crate::backlog::id_mode::facts().sequential,
+            id_prefix: crate::backlog::id_mode::facts().prefix.clone(),
         };
     }
     let order = order_of(inp);
@@ -1024,6 +1031,8 @@ pub fn board(inp: &Inputs, q: &Query) -> Board {
         graph,
         errors: inp.errors.clone(),
         search_keys: None,
+        id_sequential: crate::backlog::id_mode::facts().sequential,
+        id_prefix: crate::backlog::id_mode::facts().prefix.clone(),
     }
 }
 

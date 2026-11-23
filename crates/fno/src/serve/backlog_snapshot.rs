@@ -428,6 +428,8 @@ fn render_one(
         "search": search,
         "search_keys": crate::search_query::keys_json(),
         "search_as_of": inputs.read_at,
+        "id_sequential": crate::backlog::id_mode::facts().sequential,
+        "id_prefix": crate::backlog::id_mode::facts().prefix.clone(),
         "search_names": !inputs
             .errors
             .iter()
