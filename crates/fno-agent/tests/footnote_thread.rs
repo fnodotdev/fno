@@ -172,7 +172,10 @@ fn footnote_thread_takes_mail_an_answer_and_a_stop_over_acp_stdio() {
         fno_agent::footnote_harness::thread::host_call(Path::new(&socket), &json!({"op": "status"}))
     };
     wait_for("the ask", || status().is_ok_and(|s| !s["ask"].is_null()));
-    assert_eq!(maybe_ask_host(&row, &json!({"answer": "deny"})), Some(0));
+    assert_eq!(
+        maybe_ask_host(&home, &row, &json!({"answer": "deny"})),
+        Some(0)
+    );
     let answer = captured(&cap, "answer.json");
     assert_eq!(answer["id"], 90);
     assert_eq!(answer["result"]["outcome"]["optionId"], "reject_once");

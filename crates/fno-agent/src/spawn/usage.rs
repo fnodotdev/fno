@@ -1,9 +1,8 @@
 //! The `fno-agent --help` surface: one usage line per dispatchable command.
 //!
-//! LIVES OUTSIDE THE BIN so the file-budget guard stays honest: the bin grew
-//! past its 5,000-line budget long ago and is shrink-only; this table is the
-//! one piece a new command still has to touch, so it moved to a module named for
-//! the question it answers. Display order == slice order == `--help` order.
+//! LIVES OUTSIDE THE BIN to keep the bin inside its 5,000-line budget: this
+//! table is the one piece a new command still has to touch, so it moved to a
+//! module named for the question it answers. Display order == slice order == `--help` order.
 
 /// Usage line per dispatchable command; the leading token is the command name and the
 /// slice order is the `--help` display order. This MUST cover every routable
@@ -13,7 +12,7 @@
 /// list against that set, so a new command cannot land without a `--help` entry
 ///.
 pub const CLIENT_COMMAND_USAGE: &[&str] = &[
-    "spawn <name> [prompt] [-H <harness>] [--route <provider/model|lane>] [--as pane|thread|headless|cloud] [--machine <host>] [-s <squad>] [-x left|right|up|down] [--cwd <dir>|--fresh|--here] [--force] [--no-wait] [--max <n>] [--] [everything after the prompt is harness argv, never parsed; a spawn-owned flag there refuses with the corrected line; unowned flags before the prompt pass in the --flag=value form only] | --argv -- <cmd...>",
+    "spawn <name> [prompt] [-H <harness>] [--route <provider/model|lane>] [--as pane|thread|headless|cloud] [--machine <host>] [-s <squad>] [-x left|right|up|down] [--cwd <dir>|--fresh|--here] [--force] [--no-wait] [--max <n>] [--when <time>] [--every <interval>] [--on <command>] [--grace <duration>] [--list-scheduled] [--cancel-scheduled <id>]  # a schedule flag queues the spawn for the daemon to fire through the gate at that time; local, named-zone or UTC time, both shown on every echo [+flag=<value> harness args folded to their -- spelling like the composer's + picker; a +token with a non-flag body stays prompt text; nothing folds after the fence] [--] [everything after the prompt is harness argv, never parsed; a spawn-owned flag there refuses with the corrected line; unowned flags before the prompt pass in the --flag=value form only] | --argv -- <cmd...>",
     "ask <name> <message> [--cwd <dir>|--fresh|--here] [--answer allow_once|deny]",
     "list [--all] [--status <writing|quiet|parked|orphaned|refused|unknown|signed_out|harness_error>] [--progress <advancing|awaiting-operator|parked|refused|unknown>]",
     "status",
@@ -109,6 +108,43 @@ shim forward-compat. stdout is one JSON decision; exit 0 = a decision
 pub fn command_help(command: &str) -> Option<&'static str> {
     match command {
         "loop-check" => Some(LOOP_CHECK_USAGE),
+        "announce" => Some("fno agent announce - Fleet announcements on one scope."),
+        "attest" => Some("fno agent attest - The review-attestation carrier over the shared primary."),
+        "authorized-merge" => Some("fno agent authorized-merge - The one authorized merge operation over stdin JSON."),
+        "autonomy" => Some("fno agent autonomy - Every path that can start a session without an operator."),
+        "bash-census" => Some("fno agent bash-census - Bash-call shares and top command tables over transcripts."),
+        "claim" => Some("fno agent backlog - The shared-store backlog claims."),
+        "compaction" => Some("fno agent compaction - Compaction stamps."),
+        "fallback-chain" => Some("fno agent fallback - Failover chain walk over a stdin payload."),
+        "harness" => Some("fno agent harness - Instruments over the harness capability table."),
+        "honesty-sweep" => Some("fno agent honesty-sweep - Declared-vs-measured sweep over declared populations."),
+        "judge" => Some("fno agent judge - Grade a plan against the five product questions."),
+        "lead" => Some("fno agent refresh-canon - Refresh the beat's canon doc, resolving the plugin root itself."),
+        "lead-checkin" => Some("fno agent checkin-raw - The check-in body over explicit scope and event paths."),
+        "lead-history" => Some("fno agent history-raw - The check-in readback over explicit scope and event paths."),
+        "lead-rundown" => Some("fno agent rundown-raw - The rundown page renderer over explicit inputs."),
+        "mcp" => Some("fno agent mcp - MCP sidecar client commands."),
+        "orphans" => Some("fno agent orphans - Processes that outlived whatever started them."),
+        "org-fold" => Some("fno agent org chart fold - The role scope fold."),
+        "org-vacancies" => Some("fno agent org chart vacancies - Roles whose holder is gone."),
+        "permission-tokens" => Some("fno agent permission-tokens - The permission-posture owner over a stdin payload."),
+        "probe-run" => Some("fno agent probe - Evaluate a plan's named probe list."),
+        "prove-it-verdicts" => Some("fno agent prove-it - Read terminal prove-it records."),
+        "provider-cap" => Some("fno agent provider-cap - The provider-cap actor."),
+        "recover" => Some("fno agent recover - Restore a recorded claude session under its account."),
+        "revival-check" => Some("fno agent revival - Whether a spawn --resume revives an existing row."),
+        "roles" => Some("fno agent roles - Bounded business-role definitions and resolutions."),
+        "route-slot" => Some("fno agent slot - Delivery-slot resolver over a stdin payload."),
+        "sandbox-probe" => Some("fno agent sandbox-probe - The codex sandbox verdict over a stdin payload."),
+        "select-read" => Some("fno agent select-read - One bounded backlog read under the select timeout."),
+        "session-start-bytes" => Some("fno agent session-start-bytes - The session-start preamble byte total."),
+        "spawn-axes" => Some("fno agent axes - Spawn billing axes (route, account, model) over a stdin payload."),
+        "spawn-gate" => Some("fno agent gate - The one spawn gate: stdin JSON payload in, admitted or refused out."),
+        "spawn-overlay" => Some("fno agent overlay - Harness-keyed spawn-defaults resolver over a stdin payload."),
+        "test-run" => Some("fno agent test-run - The native test-suite process-group owner."),
+        "transcript" => Some("fno agent transcript - Move a session bundle to another computer."),
+        "verify-evidence" => Some("fno agent verify-evidence - Verify child-promise event evidence."),
+        "worked-nodes" => Some("fno agent worked-nodes - The worked-overlay join over a stdin rows payload."),
         _ => None,
     }
 }
@@ -117,6 +153,20 @@ pub fn command_help(command: &str) -> Option<&'static str> {
 mod tests {
     use super::*;
     use regex::Regex;
+
+    /// the + form the node shipped shows in the one line a user reads
+    #[test]
+    fn the_spawn_usage_line_names_the_plus_form() {
+        let line = command_usage("spawn").expect("spawn has a usage line");
+        assert!(
+            line.contains("+flag=<value>"),
+            "the usage line names the + form: {line}"
+        );
+        assert!(
+            line.contains("nothing folds after the fence"),
+            "the usage line states the byte-exact payload rule: {line}"
+        );
+    }
 
     /// every flag loop-check's parser accepts appears in its help
     /// body. This is the gate that retires the class: --driver was

@@ -77,7 +77,8 @@ fn cache_dir(cwd: &Path) -> Option<PathBuf> {
 /// A row's `{ts, exit, output}` or None: a corrupt row is a miss, never an
 /// error (the network read is the truth).
 fn read_row(dir: &Path, key: &str) -> Option<Value> {
-    let row = std::fs::read_to_string(dir.join(format!("{key}.json"))).ok()?;
+    let path = crate::state_layout_home::cache_read(&dir.join(format!("{key}.json")));
+    let row = std::fs::read_to_string(path).ok()?;
     let parsed: Value = serde_json::from_str(&row).ok()?;
     if parsed.is_object() {
         Some(parsed)
@@ -97,8 +98,11 @@ fn num(row: &Value, key: &str) -> f64 {
 /// Every row file for (slug_key, pr), newest mtime first.
 fn rows_newest_first(dir: &Path, slug_key: &str, pr: &str) -> Vec<PathBuf> {
     let mut candidates: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
-    if let Ok(rd) = std::fs::read_dir(dir) {
-        let prefix = format!("{slug_key}-{pr}-");
+    let prefix = format!("{slug_key}-{pr}-");
+    for dir in crate::state_layout_home::cache_read_dirs(dir) {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            continue;
+        };
         for entry in rd.flatten() {
             let path = entry.path();
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");

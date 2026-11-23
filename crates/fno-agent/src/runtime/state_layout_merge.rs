@@ -3,8 +3,10 @@
 //! recreates the legacy folder, and the per-child park rule would hide those
 //! lines from every reader. `bus`, `chats` and `history` fold through here
 //! instead: a child the destination lacks renames in, a line log merges by
-//! line set, anything else keeps the newer file and parks the older.
+//! line set, anything else keeps the newer file and parks the older. The
+//! manifest records both inputs of a merge, and the merged input parks.
 
+use crate::state_layout_undo::{carry, record, Action};
 use std::collections::HashSet;
 use std::io::{BufRead, Write};
 use std::path::Path;
@@ -26,7 +28,7 @@ pub(crate) fn merge_tree(
         let to = new.join(child.file_name());
         let name = child.file_name().to_string_lossy().into_owned();
         if !to.exists() {
-            std::fs::rename(&from, &to).map_err(|e| format!("refused: {e}"))?;
+            carry(root, stamp, &from, &to).map_err(|e| format!("refused: {e}"))?;
         } else if from.is_dir() && to.is_dir() {
             complete &= merge_tree(root, stamp, &from, &to)?;
         } else if from.is_file() && to.is_file() {
@@ -35,12 +37,13 @@ pub(crate) fn merge_tree(
                 // unlinking a held lock would let a second writer in.
                 let free = std::fs::File::open(&from).is_ok_and(|f| f.try_lock().is_ok());
                 if free {
-                    std::fs::remove_file(&from).map_err(|e| format!("refused: {e}"))?;
+                    crate::state_layout_undo::remove_file(root, stamp, &from)
+                        .map_err(|e| format!("refused: {e}"))?;
                 } else {
                     complete = false;
                 }
             } else if is_line_log(&name) {
-                complete &= merge_lines(&from, &to)?;
+                complete &= merge_lines(root, stamp, &from, &to)?;
             } else {
                 keep_newer(root, stamp, &from, &to)?;
             }
@@ -48,12 +51,7 @@ pub(crate) fn merge_tree(
             crate::state_layout::park_file_at(root, stamp, &from)?;
         }
     }
-    let emptied = std::fs::read_dir(legacy)
-        .map(|mut d| d.next().is_none())
-        .unwrap_or(false);
-    if emptied {
-        std::fs::remove_dir(legacy).ok();
-    }
+    crate::state_layout_undo::remove_if_empty(root, stamp, legacy);
     Ok(complete)
 }
 
@@ -66,9 +64,9 @@ fn is_line_log(name: &str) -> bool {
 }
 
 /// Append the lines of `from` that `to` lacks, in place under the writer's
-/// own `<to>.lock` when one exists, then remove `from`. In place, never a
+/// own `<to>.lock` when one exists, then park `from`. In place, never a
 /// tmp-and-rename: a rename over `to` would drop a concurrent append.
-fn merge_lines(from: &Path, to: &Path) -> Result<bool, String> {
+fn merge_lines(root: &Path, stamp: &str, from: &Path, to: &Path) -> Result<bool, String> {
     let lock_path = format!("{}.lock", to.display());
     let _guard = match std::fs::OpenOptions::new()
         .read(true)
@@ -121,7 +119,8 @@ fn merge_lines(from: &Path, to: &Path) -> Result<bool, String> {
             .and_then(|()| f.sync_all())
             .map_err(|e| format!("merge append: {e}"))?;
     }
-    std::fs::remove_file(from).map_err(|e| format!("refused: {e}"))?;
+    crate::state_layout::park_file_at(root, stamp, from)?;
+    record(root, stamp, Action::Merged, from, to);
     Ok(true)
 }
 
@@ -135,7 +134,7 @@ fn keep_newer(root: &Path, stamp: &str, from: &Path, to: &Path) -> Result<(), St
     };
     if mtime(from) > mtime(to) {
         crate::state_layout::park_file_at(root, stamp, to)?;
-        std::fs::rename(from, to).map_err(|e| format!("refused: {e}"))
+        carry(root, stamp, from, to).map_err(|e| format!("refused: {e}"))
     } else {
         crate::state_layout::park_file_at(root, stamp, from).map(|_| ())
     }

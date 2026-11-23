@@ -324,8 +324,17 @@ fi
 # grammar itself (the merge-posture carrier the injection block below appends,
 # and harness_map's builtin renders into pre-built messages), so refusing it
 # here would reject the canonical autonomous command, not a mangled flag.
+# A node id is the hex shape, or <prefix>-<digits> under backlog.id_mode =
+# sequential. The config is read only after the hex shape failed.
+_is_seq_id() {
+  printf '%s' "$1" | grep -qE '^[a-z][a-z0-9]{0,7}-[0-9]{1,7}$' \
+    && [[ "$(fno config get backlog.id_mode 2>/dev/null </dev/null)" == "sequential" ]]
+}
+_is_node_id() {
+  printf '%s' "$1" | grep -qE '^[a-z][a-z0-9]{0,7}-[0-9a-f]{4,8}$' || _is_seq_id "$1"
+}
 _scan_ft="${msg%%[[:space:]]*}"
-if [[ "$HANDOFF_MODE" -eq 0 ]] && { [[ "$msg" == /* ]] || printf '%s' "$_scan_ft" | grep -qE '^[a-z][a-z0-9]{0,7}-[0-9a-f]{4,8}$'; }; then
+if [[ "$HANDOFF_MODE" -eq 0 ]] && { [[ "$msg" == /* ]] || _is_node_id "$_scan_ft"; }; then
   set -f
   for scan_tok in $msg; do
     scan_cano="$scan_tok"
@@ -419,7 +428,7 @@ if [[ "$HANDOFF_MODE" -eq 1 ]]; then
 elif [[ "$msg_lc" == "next" || "$msg_lc" == "next all" ]]; then
   SPAWN_NEXT=1
   [[ "$msg_lc" == "next all" ]] && NEXT_SCOPE="all" || NEXT_SCOPE="project"
-elif printf '%s' "$first_tok" | grep -qE '^[a-z][a-z0-9]{0,7}-[0-9a-f]{4,8}$'; then
+elif _is_node_id "$first_tok"; then
   NODE="$first_tok"                                   # tier 1: exact node id
   # a-f are letters, so this shape also matches hyphen-joined English
   # ("re-added", "dead-beef"). Whether the payload is NOTHING BUT the id is the
@@ -434,6 +443,8 @@ elif _normalize_is_family "$msg"; then
   # onto an id that does not exist just burns it.
   NODE="$(printf '%s' "$msg" | grep -oE '[a-z][a-z0-9]{0,7}-[0-9a-f]{4,8}' | head -1)"
   second_tok="$(printf '%s' "$msg" | awk 'NR==1 {print $2}')"
+  # A short number is an id only as the command's own argument, never in prose.
+  if [[ -z "$NODE" ]] && _is_seq_id "$second_tok"; then NODE="$second_tok"; fi
   [[ -n "$NODE" && "$second_tok" == "$NODE" && "$(printf '%s' "$msg" | wc -w | tr -d '[:space:]')" -eq 2 ]] && NODE_BARE=1
 elif printf '%s' "$msg" | grep -iqE '^[a-z0-9][a-z0-9-]*$'; then
   # tier 2: slug candidate. Case-insensitive (`-i`) so a mobile-auto-capitalized

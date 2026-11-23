@@ -68,6 +68,32 @@ pub(crate) fn seat(m: &Machine, p: &Lead, s: &Seat, width: usize, now: u64) -> V
         TextStyle::Item,
     ));
     out.push(blank());
+    out.push(rule("Token use", width));
+    out.push(kv(
+        "compactions",
+        s.compactions
+            .map_or_else(|| NOT_PUBLISHED.into(), |n| n.to_string()),
+        TextStyle::Item,
+    ));
+    for (key, value) in [
+        ("input", s.input_tokens),
+        ("output", s.output_tokens),
+        ("cache read", s.cache_read_tokens),
+        ("cache write", s.cache_write_tokens),
+    ] {
+        out.push(kv(
+            key,
+            value.map_or_else(|| NOT_PUBLISHED.into(), |n| super::row_meter::token_cell(n)),
+            TextStyle::Item,
+        ));
+    }
+    out.push(kv(
+        "cost",
+        s.cost_cents
+            .map_or_else(|| NOT_PUBLISHED.into(), |c| super::row_meter::cost_cell(c)),
+        TextStyle::Item,
+    ));
+    out.push(blank());
     match &s.work {
         Some(w) => {
             out.push(rule(&format!("Current work \u{b7} {}", w.id), width));

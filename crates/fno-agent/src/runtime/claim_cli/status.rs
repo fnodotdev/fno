@@ -75,12 +75,10 @@ pub fn run(args: &[String]) -> i32 {
     };
 
     // `_normalize_status_key`: a bare well-formed node id reads as the
-    // node key; everything else passes through untouched.
-    let key = if crate::backlog::node_ref::is_wellformed_node_id(key_arg) {
-        format!("node:{key_arg}")
-    } else {
-        key_arg.to_string()
-    };
+    // node key; everything else passes through untouched. One rewrite
+    // owner beside the merge-grant verdict, so both readers name the
+    // same row.
+    let key = crate::backlog::node_ref::claim_key_for(key_arg);
     // The store is read directly and prints no stderr on a corrupted file:
     // the corrupted payload alone is the answer.
     let store_root = match root {

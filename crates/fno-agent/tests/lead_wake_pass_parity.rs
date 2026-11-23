@@ -355,7 +355,8 @@ fn fold(value: &mut Value, root: &Path) {
             *text = text
                 .replace(&slug, "<ROOTSLUG>")
                 .replace(&root.to_string_lossy().into_owned(), "<ROOT>")
-                .replace(&base, "<ROOT>");
+                .replace(&base, "<ROOT>")
+                .replace("11111111-2222-3333-4444-555555555555", "<SESSION>");
         }
         Value::Array(items) => items.iter_mut().for_each(|v| fold(v, root)),
         Value::Object(map) => map.values_mut().for_each(|v| fold(v, root)),

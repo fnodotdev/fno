@@ -163,10 +163,21 @@ pub(crate) fn render(root: &Root, window: &Window, cx: &mut Context<Root>) -> gp
                 .w(px(CARD))
                 .font_family(ui::MONO)
                 .text_size(px(ui::BODY))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .justify_center()
+                        .child(crate::first_run::mark_playing(p, root.shot)),
+                )
                 .children(header_row(&facts, &p))
                 .child(card(root, window, cx))
                 .children(recent(&rows, &p, cx))
-                .child(hints(root, &p)),
+                .child(if root.first_run {
+                    crate::first_run::key_card(&p)
+                } else {
+                    hints(root, &p)
+                }),
         )
 }
 

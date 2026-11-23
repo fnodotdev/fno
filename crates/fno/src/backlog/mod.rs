@@ -10,6 +10,7 @@ pub mod backlog_write;
 pub mod blocked_rung;
 #[cfg(feature = "app")]
 pub mod board_reader;
+pub(crate) mod id_mode;
 #[cfg(feature = "app")]
 pub mod inbox_user;
 #[cfg(feature = "app")]

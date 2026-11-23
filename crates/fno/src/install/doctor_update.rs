@@ -301,6 +301,11 @@ fn deploy_prebuilt(crates_rev: &str, bin_dir: &Path, dry_run: bool) -> Result<()
         let _ = std::fs::remove_dir_all(staging);
     }
     swapped?;
+    // The carried extras (fno-app) join the PATH dir too: a plain update on
+    // an older install must gain the link the adopt doors write.
+    if let Err(e) = crate::install::release_install::link_path_extras(bin_dir) {
+        eprintln!("fno doctor update: the PATH link for the carried extras failed: {e}");
+    }
     println!(
         "fno doctor update: installed the CI build for crates rev {} into {}",
         &crates_rev[..crates_rev.len().min(12)],
@@ -437,6 +442,9 @@ fn install_newest_published_arm(
         return wait(format!(
             "the newest published build failed to deploy ({why})"
         ));
+    }
+    if let Err(e) = crate::install::release_install::link_path_extras(&bin_dir) {
+        eprintln!("fno doctor update: the PATH link for the carried extras failed: {e}");
     }
     crate::codesign::sign_placed(&bin_dir, false);
     if let Err(e) = sync_rust_bins(&bin_dir, false) {
@@ -2251,6 +2259,64 @@ pub(crate) fn component_rows(report: Option<&Value>) -> std::collections::HashMa
     map
 }
 
+/// The install-claim probe: every fno-agent the machine actually picks up
+/// must self-report the deployed rev. PATH first, then the cargo bin - the
+/// anchors doctor reads. Each refusal names the path, both revs, and the
+/// env the update ran under, so a shadowed root is named in its own
+/// failure.
+fn machine_install_claim_refusals(expected: &str) -> Vec<String> {
+    let mut probes: Vec<PathBuf> = Vec::new();
+    let mut note = |p: PathBuf| {
+        let canon = p.canonicalize().unwrap_or_else(|_| p.clone());
+        if !probes.iter().any(|q| q == &canon) {
+            probes.push(canon);
+        }
+    };
+    if let Some(p) = on_path(&format!("fno-agent{}", exe_suffix())) {
+        note(p);
+    }
+    if let Some(p) = cargo_installed_bin() {
+        note(p);
+    }
+    claim_refusals_with(&probes, expected, &|bin| {
+        crate::install::downgrade_guard::probe_rev(bin)
+    })
+}
+
+/// The probe core, parameterized on the rev reader so a test can inject
+/// answers; the live reader shells `version --json` through the admission
+/// seam. An unreadable answer is a refusal, never a pass: the claim fails
+/// closed.
+pub(crate) fn claim_refusals_with(
+    probes: &[PathBuf],
+    expected: &str,
+    probe: &dyn Fn(&Path) -> String,
+) -> Vec<String> {
+    let env_note = format!(
+        " (CARGO_HOME {:?}, HOME {:?})",
+        std::env::var_os("CARGO_HOME").unwrap_or_default(),
+        std::env::var_os("HOME").unwrap_or_default()
+    );
+    let mut refusals = Vec::new();
+    for probe_path in probes {
+        let carried = probe(probe_path);
+        if carried == "unknown" {
+            refusals.push(format!(
+                "fno doctor update: the machine-visible fno-agent at {} did not answer a rev probe; refusing to claim the install{env_note}",
+                probe_path.display()
+            ));
+        } else if carried != expected {
+            refusals.push(format!(
+                "fno doctor update: the machine-visible fno-agent at {} carries {}, the source builds {}; the install did not reach the machine's bin set{env_note}",
+                probe_path.display(),
+                short_rev(&carried),
+                short_rev(expected)
+            ));
+        }
+    }
+    refusals
+}
+
 fn cargo_default_home() -> PathBuf {
     std::env::var_os("CARGO_HOME")
         .map(PathBuf::from)
@@ -2867,6 +2933,7 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
     std::env::set_var("FNO_INSTALL_BUILD", "1");
 
     let mut rust_outcome: Option<String> = None;
+    let mut claim_refusals: Vec<String> = Vec::new();
     if !flags.no_rust {
         let rust_started = Instant::now();
         rust_outcome = Some(refresh_rust_bins(
@@ -2910,6 +2977,24 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
                     .map_or("unknown", |r| r.get(..12).unwrap_or(r))
             ));
         }
+        // The install claim probes what the machine actually picks up -
+        // PATH first, then the cargo bin, the anchors doctor reads - not
+        // the bindir the leg verified. A deploy into a shadowed or scoped
+        // root proves fresh there while the machine's real bins never
+        // move; the claim fails here instead of mailing an install the
+        // machine does not carry. 2026-11-21: four `installed` mails in
+        // one day while the PATH binary stayed on the morning build and
+        // the marker froze at the previous rev.
+        if matches!(
+            rust_outcome.as_deref(),
+            Some("refreshed") | Some("fresh") | Some("refreshed-no-marker")
+        ) && failed.is_empty()
+        {
+            if let Some(st) = rust_subtree_rev(&resolved) {
+                claim_refusals = machine_install_claim_refusals(&st);
+                failed.extend(claim_refusals.iter().cloned());
+            }
+        }
         let built_fields: Vec<(&str, String)> = {
             let mut f: Vec<(&str, String)> = Vec::new();
             if let Some(r) = rust_subtree_rev(&resolved) {
@@ -2941,7 +3026,14 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
                 | "skipped-no-rev"
         ),
     };
-    if rust_bins_proved {
+    if rust_bins_proved && !claim_refusals.is_empty() {
+        // The claim probe named its refusal through `failed` above; the
+        // marker stays at the old rev so the skew stays visible and the
+        // next update retries.
+        eprintln!(
+            "fno doctor update: marker not written: the machine-visible install claim was refused"
+        );
+    } else if rust_bins_proved {
         if let Some(rev) = &rev {
             if let Err(e) = write_marker(&installed_rev_file(), rev) {
                 eprintln!("fno doctor update: WARNING: marker write failed: {e}");

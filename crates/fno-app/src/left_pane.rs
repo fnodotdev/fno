@@ -112,6 +112,8 @@ pub enum Row {
     Error(String),
     /// A section with nothing to show, and why.
     Empty(&'static str),
+    /// An agent's last result, one quiet line under its row.
+    Note(String),
 }
 
 fn header(title: &'static str) -> Row {
@@ -247,6 +249,27 @@ fn agent_item(
     }
 }
 
+/// The row, then its last result when the agent has one.
+fn push_agent(
+    out: &mut Vec<Row>,
+    a: &AgentRow,
+    layout: &Layout,
+    now_secs: u64,
+    streamed: Option<&str>,
+    launched: Option<(&str, &str)>,
+) {
+    out.push(agent_item(a, layout, now_secs, streamed, launched));
+    out.extend(last_result_note(a));
+}
+
+/// An agent's last result as one line: the one-shot's end word, else the
+/// report reason. `None` when it has neither, so a quiet row stays one line.
+fn last_result_note(a: &AgentRow) -> Option<Row> {
+    let text = a.result.as_deref().or(a.reason.as_deref())?;
+    let line = text.lines().next().unwrap_or("").trim();
+    (!line.is_empty()).then(|| Row::Note(line.to_string()))
+}
+
 /// `streamed` is the session the main view streams, when it streams one: its
 /// agent carries the cursor, else the focused pane's agent does. `launched`
 /// is the (name, task) the composer launched most recently: that row carries
@@ -263,7 +286,10 @@ pub fn rows(
     streamed: Option<&str>,
     launched: Option<(&str, &str)>,
 ) -> Vec<Row> {
-    let agents = fno::app_api::client::agent_sort::sideline_order(&layout.agents, now_secs);
+    let mut agents = fno::app_api::client::agent_sort::sideline_order(&layout.agents, now_secs);
+    // A pinned agent leads its group; the sort is stable, so the sideline
+    // order holds inside each half.
+    agents.sort_by_key(|a| !a.pinned);
     let mut workspaces = header("Workspaces");
     if let Row::Header {
         plus,
@@ -341,7 +367,7 @@ fn push_workspaces(
                 out.push(Row::Empty("no agents in this workspace"));
             }
             for a in &squad_agents {
-                out.push(agent_item(a, layout, now_secs, streamed, launched));
+                push_agent(out, a, layout, now_secs, streamed, launched);
             }
             for p in shells {
                 out.push(shell_item(p));
@@ -365,7 +391,7 @@ fn push_workspaces(
         });
         if open {
             for a in &elsewhere {
-                out.push(agent_item(a, layout, now_secs, streamed, launched));
+                push_agent(out, a, layout, now_secs, streamed, launched);
             }
         }
     }
@@ -508,6 +534,7 @@ fn push_grouped(
                 }
             }
             out.push(row);
+            out.extend(last_result_note(a));
         }
         if group_by == GroupBy::Machine {
             push_machine_shells(out, layout, used, title, &local);
@@ -638,6 +665,9 @@ fn state_color(p: &Palette, s: LatticeState) -> u32 {
     }
 }
 
+/// The mark a pinned agent's row carries after its name.
+const PIN_MARK: &str = "↑";
+
 /// An agent row's cells: the name column, the fact columns every agent row
 /// shares, and how long ago it last did anything.
 fn agent_cells(
@@ -674,10 +704,19 @@ fn agent_cells(
             .w(adv * name_w as f32 + small)
             .flex_none()
             .overflow_hidden()
+            .flex()
+            .flex_row()
             .child(
                 ui::role(div(), ui::Role::Name, p)
                     .font_weight(weight)
-                    .child(ui::cut(&label, name_w)),
+                    .child(ui::cut(
+                        &label,
+                        name_w.saturating_sub(2 * usize::from(card.pinned)),
+                    )),
+            )
+            .children(
+                card.pinned
+                    .then(|| ui::text(PIN_MARK, ui::Role::Fact, p).pl(small)),
             ),
     )
     .child(line)
@@ -746,12 +785,12 @@ fn agent_row(
     name: (String, usize, FontWeight),
     badge: Option<usize>,
     grid: &Grid,
+    p: &Palette,
 ) -> Stateful<Div> {
-    let p = grid.p;
     if badge.is_some() {
         card.activity = None;
     }
-    agent_cells(item, &card, identity, name, &grid.cols, &p, grid.adv)
+    agent_cells(item, &card, identity, name, &grid.cols, p, grid.adv)
         .relative()
         .children(badge.map(|n| {
             div()
@@ -989,6 +1028,82 @@ fn lead_cell(initial: Option<String>, glyph: String, color: u32, adv: Pixels, p:
     }
 }
 
+/// An agent's last result: one quiet line under its row, cut with an
+/// ellipsis at the pane edge.
+fn note_row(i: usize, text: String, p: &Palette) -> Stateful<Div> {
+    div()
+        .id(i)
+        .w(px(WIDTH))
+        .px_3()
+        .pl(px(WIDTH * 0.08 + 12.0))
+        .pb_1()
+        .child(
+            ui::text(text, ui::Role::Fact, p)
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis(),
+        )
+}
+
+/// A section header: the title, its state counts, the open-question count,
+/// and the Workspaces header's two buttons.
+#[allow(clippy::too_many_arguments)]
+fn header_row(
+    i: usize,
+    title: &'static str,
+    rollup: &[(LatticeState, usize)],
+    warn: Option<usize>,
+    plus: bool,
+    grouping: Option<GroupBy>,
+    p: &Palette,
+    cx: &mut Context<Root>,
+) -> Stateful<Div> {
+    div().id(i).px_3().child(
+        ui::section(title, p).justify_between().child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(8.0))
+                .children(rollup_counts(rollup, p))
+                .children(warn.map(|n| {
+                    ui::role(div(), ui::Role::Fact, p)
+                        .flex()
+                        .flex_row()
+                        .gap(px(3.0))
+                        .child(div().text_color(rgb(p.warn)).child("◆"))
+                        .child(n.to_string())
+                }))
+                .children(grouping.map(|mode| grouping_button(mode, p, cx)))
+                .when(plus, |right| right.child(workspaces_header_plus(p, cx))),
+        ),
+    )
+}
+
+/// An item row's leading cell. Shape carries the state: a triangle for
+/// blocked, a circle for work. A question leads with a diamond, never the `?`
+/// an unmeasured agent wears, so none leans on color. An agent row leads with
+/// its harness mark (the harness word's initial) and the state glyph as a
+/// badge on its corner; every other row keeps the bare glyph.
+fn item_lead(
+    state: Option<LatticeState>,
+    question: bool,
+    agent_detail: Option<&String>,
+    adv: Pixels,
+    p: &Palette,
+) -> Div {
+    let (glyph, glyph_color) = match (state, question) {
+        (Some(s), _) => (lattice_glyph(s).0.to_string(), state_color(p, s)),
+        (None, true) => ("◆".to_string(), p.warn),
+        (None, false) => (String::new(), p.faint),
+    };
+    let harness_initial = agent_detail
+        .and_then(|d| d.split(" · ").next())
+        .and_then(|h| h.chars().next())
+        .map(|c| c.to_uppercase().to_string());
+    lead_cell(harness_initial, glyph, glyph_color, adv, p)
+}
+
 /// One sidebar row as an element.
 fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> Stateful<Div> {
     let (p, adv) = (grid.p, grid.adv);
@@ -999,26 +1114,7 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
             warn,
             plus,
             grouping,
-        } => div().id(i).px_3().child(
-            ui::section(title, &p).justify_between().child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(8.0))
-                    .children(rollup_counts(&rollup, &p))
-                    .children(warn.map(|n| {
-                        ui::role(div(), ui::Role::Fact, &p)
-                            .flex()
-                            .flex_row()
-                            .gap(px(3.0))
-                            .child(div().text_color(rgb(p.warn)).child("◆"))
-                            .child(n.to_string())
-                    }))
-                    .children(grouping.map(|mode| grouping_button(mode, &p, cx)))
-                    .when(plus, |right| right.child(workspaces_header_plus(&p, cx))),
-            ),
-        ),
+        } => header_row(i, title, &rollup, warn, plus, grouping, &p, cx),
         Row::Error(e) => div()
             .id(i)
             .px_3()
@@ -1029,6 +1125,7 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
             .px_3()
             .py_1()
             .child(ui::text(why, ui::Role::Fact, &p)),
+        Row::Note(text) => note_row(i, text, &p),
         Row::Workspace {
             id,
             name,
@@ -1053,24 +1150,15 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
         } => {
             let cursor = mark == Mark::Cursor;
             let blocked = state == Some(LatticeState::Blocked);
-            // Shape carries the state: a triangle for blocked, a circle for
-            // work. A question leads with a diamond, never the `?` an
-            // unmeasured agent wears, so none leans on color.
-            let (glyph, glyph_color) = match (state, question) {
-                (Some(s), _) => (lattice_glyph(s).0.to_string(), state_color(&p, s)),
-                (None, true) => ("◆".to_string(), p.warn),
-                (None, false) => (String::new(), p.faint),
-            };
-            // An agent row leads with its harness mark (the harness
-            // word's initial) and the state glyph as a badge on its
-            // corner; every other row keeps the bare glyph.
-            let harness_initial = card
-                .as_ref()
-                .and_then(|_| detail.split(" · ").next())
-                .and_then(|h| h.chars().next())
-                .map(|c| c.to_uppercase().to_string());
-            let lead = lead_cell(harness_initial, glyph, glyph_color, adv, &p);
-            let mut item = ui::row(i, cursor, &p).w(px(WIDTH)).child(lead);
+            let lead = item_lead(state, question, card.is_some().then_some(&detail), adv, &p);
+            // Text on the needs fill takes the lifted levels, so tok and
+            // up read AA there.
+            let tinted = blocked && !cursor;
+            let row_p = if tinted { p.on_needs() } else { p };
+            let mut item = ui::row(i, cursor, &p)
+                .w(px(WIDTH))
+                .when(tinted, |d| d.bg(rgb(p.needs_fill())))
+                .child(lead);
             let weight = if blocked || cursor {
                 FontWeight::SEMIBOLD
             } else {
@@ -1080,7 +1168,7 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
                 Some(card) => {
                     let badge = grid.badges.get(i).copied().flatten();
                     let name = (label, grid.name_w, weight);
-                    agent_row(item, card, identity.as_deref(), name, badge, grid)
+                    agent_row(item, card, identity.as_deref(), name, badge, grid, &row_p)
                 }
                 None => plain_cells(item, &label, &detail, mark, &p, adv),
             };
@@ -1519,6 +1607,7 @@ mod tests {
                 Row::Item { label, detail, .. } => format!("item {label} [{detail}]"),
                 Row::Error(e) => format!("error {e}"),
                 Row::Empty(why) => format!("empty {why}"),
+                Row::Note(t) => format!("note {t}"),
             }
         };
         let kinds: Vec<String> = rows.iter().map(kind_of).collect();
@@ -1562,6 +1651,35 @@ mod tests {
         assert_eq!(shell, Some(Action::Send(Command::FocusPane(4))));
         // A squadless agent never paints twice: delta shows once.
         assert_eq!(kinds.iter().filter(|k| k.contains("delta")).count(), 1);
+    }
+
+    #[test]
+    fn a_pinned_agent_leads_its_workspace_and_a_result_rides_one_line_under_its_row() {
+        let first = agent("alpha", 1, None, 7);
+        let mut second = agent("beta", 2, None, 7);
+        second.pinned = true;
+        second.result = Some("shipped\nsecond line".into());
+        let layout = Layout {
+            squads: vec![squad(7, "fno", vec![tab(10, "main", vec![])])],
+            active_squad: 7,
+            agents: vec![first, second],
+            ..Layout::default()
+        };
+        let out = rows(
+            &layout,
+            &Board::default(),
+            100,
+            &no_folds(),
+            GroupBy::Workspaces,
+            None,
+            None,
+        );
+        assert!(matches!(
+            out.get(2),
+            Some(Row::Item { label, card: Some(c), .. }) if label == "beta" && c.pinned
+        ));
+        assert_eq!(out.get(3), Some(&Row::Note("shipped".into())));
+        assert!(matches!(out.get(4), Some(Row::Item { label, .. }) if label == "alpha"));
     }
 
     #[test]

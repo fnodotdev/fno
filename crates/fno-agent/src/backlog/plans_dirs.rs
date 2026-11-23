@@ -14,7 +14,7 @@
 //! space; that is the chain's own designed behavior, and the session-cwd
 //! probe the guard already runs does the same thing today.
 //!
-//! The set is cached under `<state_dir>/cache/plans-dirs-v1.txt`, keyed on a
+//! The set is cached in the cache class as `plans-dirs-v1.txt`, keyed on a
 //! blake3 stamp over the project list and every config file the chain reads.
 //! A stamp miss recomputes; a cache read failure just recomputes. Callers
 //! (the shell helper) treat empty output identically: fewer accepted dirs,
@@ -174,17 +174,22 @@ fn file_stamp(path: &Path) -> String {
     format!("{}\t{}\t{}\n", path.display(), mtime, len)
 }
 
-fn cache_path(anchor: &Path) -> Option<PathBuf> {
+pub(crate) fn cache_path(anchor: &Path) -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("FNO_PLANS_DIRS_CACHE_DIR") {
         if !dir.is_empty() {
             return Some(PathBuf::from(dir).join("plans-dirs-v1.txt"));
         }
     }
-    Some(state_dir(anchor)?.join("cache").join("plans-dirs-v1.txt"))
+    // The PreToolUse write guards wait on this, so it takes the fast home:
+    // no config read beyond the state root's own.
+    let cache = crate::state_layout_home::cache_dir_fast(&state_dir(anchor)?);
+    Some(cache.join("plans-dirs-v1.txt"))
 }
 
 fn read_cache(path: &Option<PathBuf>, stamp: &str) -> Option<Vec<PathBuf>> {
     let path = path.as_ref()?;
+    // The legacy fallback is skipped on this hook path: a miss recomputes
+    // once, and resolving the twin would read config.
     let content = std::fs::read_to_string(path).ok()?;
     let mut lines = content.lines();
     if lines.next()? != stamp {

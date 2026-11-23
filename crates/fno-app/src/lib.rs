@@ -9,6 +9,7 @@ mod boxdraw;
 mod chat;
 mod control;
 mod find;
+mod first_run;
 mod goto;
 mod grid;
 mod hq;
@@ -30,6 +31,7 @@ mod start;
 mod statusbar;
 mod tabs;
 mod ui;
+mod update;
 mod window;
 
 use std::path::{Path, PathBuf};
@@ -102,8 +104,30 @@ pub struct ShotOptions {
     pub draft: Option<String>,
     /// Harness the start composer shows picked.
     pub harness: Option<String>,
+    /// The first-run state the frame paints.
+    pub first_run: Option<FirstRunShot>,
     /// The Settings panel state the frame paints.
     pub settings: Option<SettingsShot>,
+    /// The update card the frame paints.
+    pub update: Option<UpdateShot>,
+}
+
+/// The --shot-update values.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum UpdateShot {
+    /// A staged build is ready: the Restart card.
+    Ready,
+    /// The first launch of a new build: the release notes card.
+    Notes,
+}
+
+/// The --shot-first-run values.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FirstRunShot {
+    /// The empty start view on a first launch: splash mark and key card.
+    KeyCard,
+    /// No mux server answers: the offer to start one.
+    NoServer,
 }
 
 /// The --shot-settings values.
@@ -269,7 +293,9 @@ pub fn run(opts: Options) -> i32 {
             sheet: shot.sheet,
             draft: shot.draft,
             harness: shot.harness,
+            first_run: shot.first_run,
             settings: shot.settings,
+            update: shot.update,
         });
     }
     if let Some(home) = std::env::var_os("HOME").and_then(|h| h.into_string().ok()) {

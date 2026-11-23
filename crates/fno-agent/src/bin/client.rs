@@ -152,6 +152,16 @@ fn main() {
     run_evals_and_watch_doors(&args);
     // A spawn is admitted in process (spawn_seam) before run() parses it.
     let mut spawn_timing = fno_agent::spawn_seam::SpawnTiming::for_spawn(&args);
+    // The schedule arm answers before admission: a trigger flag or an
+    // action like --list-scheduled carries its own grammar, and the strict
+    // admission would demand a spawn name no such request carries.
+    if args.first().map(String::as_str) == Some("spawn") {
+        let home = AgentsHome::from_env();
+        let rest = args.get(1..).unwrap_or(&[]);
+        if let Some(code) = fno_agent::spawn::spawn_schedule::front_door(&home, rest) {
+            fno_agent::usage_events::exit_cli(code);
+        }
+    }
     let args = match fno_agent::spawn_seam::admit_spawn(args) {
         Ok(args) => args,
         Err(code) => fno_agent::usage_events::exit_cli(code),
@@ -1144,6 +1154,7 @@ fn hold_daemon_spawn_gate(
                 flags: daemon_gate_flags,
                 seed: daemon_gate_seed.clone(),
                 route_provider: daemon_gate_route_provider.clone(),
+                node: fno_agent::spawn_gate::gate_node_from_params(params),
                 ..fno_agent::spawn_promote::gate_input(lease.promotion.as_ref())
             },
         );
@@ -2010,6 +2021,7 @@ fn run_spawn_gate(
                 flags,
                 seed: fno_agent::spawn_phase::params_seed(&params),
                 route_provider: fno_agent::claude_adopt::gate_route_provider(&params),
+                node: fno_agent::spawn_gate::gate_node_from_params(&params),
                 account: params
                     .get("account")
                     .and_then(Value::as_str)

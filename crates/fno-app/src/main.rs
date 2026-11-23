@@ -58,6 +58,10 @@ struct Args {
     /// Theme choice page through real Enter.
     #[arg(long = "shot-settings", value_enum)]
     shot_settings: Option<ShotSettings>,
+    /// Update card state --shot paints: `ready` is the Restart card,
+    /// `notes` the release notes of a build just installed.
+    #[arg(long = "shot-update", value_enum, hide = true)]
+    shot_update: Option<ShotUpdate>,
     /// Hold the composited shot window up for a foreign capturer
     /// instead of capturing. Diagnostic.
     #[arg(long = "shot-hold", hide = true)]
@@ -80,6 +84,19 @@ struct Args {
     /// Harness the start composer shows picked. Shot-only.
     #[arg(long = "shot-harness", hide = true)]
     shot_harness: Option<String>,
+    /// First-run state --shot paints: `key-card` is the empty start view
+    /// on a first launch, `no-server` is the offer to start the mux.
+    #[arg(long = "shot-first-run", value_enum, hide = true)]
+    shot_first_run: Option<ShotFirstRun>,
+}
+
+/// The --shot-first-run values.
+#[derive(clap::ValueEnum, Clone)]
+enum ShotFirstRun {
+    /// The empty start view with the splash mark and the key card.
+    KeyCard,
+    /// No mux server answers: the offer to start one.
+    NoServer,
 }
 
 /// The --shot-mode values. The kebab spellings mirror MainView.
@@ -107,6 +124,15 @@ impl ShotView {
             ShotView::Inbox => fno_app::MainView::Inbox,
         }
     }
+}
+
+/// The --shot-update values.
+#[derive(clap::ValueEnum, Clone)]
+enum ShotUpdate {
+    /// The Restart card for a staged build.
+    Ready,
+    /// The release notes card of a build just installed.
+    Notes,
 }
 
 /// The --shot-find values.
@@ -162,12 +188,20 @@ fn main() {
                 ShotSettings::Filter => fno_app::SettingsShot::Filter,
                 ShotSettings::Page => fno_app::SettingsShot::Page,
             }),
+            update: args.shot_update.map(|u| match u {
+                ShotUpdate::Ready => fno_app::UpdateShot::Ready,
+                ShotUpdate::Notes => fno_app::UpdateShot::Notes,
+            }),
             hold: args.shot_hold,
             sheet: args.shot_sheet,
             empty_chat: args.shot_empty_chat,
             cmd: args.shot_cmd,
             draft: args.shot_draft,
             harness: args.shot_harness,
+            first_run: args.shot_first_run.map(|f| match f {
+                ShotFirstRun::KeyCard => fno_app::FirstRunShot::KeyCard,
+                ShotFirstRun::NoServer => fno_app::FirstRunShot::NoServer,
+            }),
         })
     } else {
         None

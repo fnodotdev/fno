@@ -196,13 +196,15 @@ impl LeadQueue {
         // a hand-run --wake that names nobody - still refuses, so the flag
         // can never double a leading lead.
         if let Some(live_holder) = live_team_holder_in(registry_path, &scope, repo_root) {
-            let caller_named_this_row = wake && wake_holder == Some(live_holder.as_str());
+            let caller_named_this_row =
+                wake && wake_holder.is_some_and(|named| live_holder.named_by(named));
             if !caller_named_this_row {
                 return Err(LoopError::Queue(format!(
-                    "a live lead ({live_holder}) already leads over {scope:?}: the walk \
+                    "a live lead ({}) already leads over {scope:?}: the walk \
                      respawns an orphaned scope, it never doubles a live one. Wake or \
                      reconcile the leading lead instead (`fno agent top`, \
-                     `fno agent watchdog`)"
+                     `fno agent watchdog`)",
+                    live_holder.name
                 )));
             }
         }
@@ -656,7 +658,7 @@ pub(crate) fn team_rivals_pub(
 /// teams a second lead on one member. So an unreadable map downgrades the
 /// check to raw-member overlap: any shared member blocks the walk, the same
 /// rule as the same-rung case. An unrelated scope still recovers.
-fn live_team_holder_in(registry_path: &Path, scope: &str, repo_root: &Path) -> Option<String> {
+fn live_team_holder_in(registry_path: &Path, scope: &str, repo_root: &Path) -> Option<LiveHolder> {
     live_team_holder_in_with_projects(
         registry_path,
         scope,
@@ -664,11 +666,32 @@ fn live_team_holder_in(registry_path: &Path, scope: &str, repo_root: &Path) -> O
     )
 }
 
+/// The live holder a wake guard reads: the display `name` for the refusal
+/// text, and the session id the `--wake-holder` value must match.
+struct LiveHolder {
+    name: String,
+    session: String,
+}
+
+impl LiveHolder {
+    /// Whether a `--wake-holder` value names this row. The session id is
+    /// the match (law d-e952ed19); the name matches only a row with no id,
+    /// the legacy shape, so a renamed or re-seated holder can never be
+    /// named past its id.
+    fn named_by(&self, handle: &str) -> bool {
+        if self.session.is_empty() {
+            handle == self.name
+        } else {
+            handle == self.session
+        }
+    }
+}
+
 fn live_team_holder_in_with_projects(
     registry_path: &Path,
     scope: &str,
     projects: &Result<HashMap<String, String>, String>,
-) -> Option<String> {
+) -> Option<LiveHolder> {
     let registry = crate::state::load_registry(registry_path).ok()?;
     let config_unreadable = projects.is_err();
     let projects = projects.clone().unwrap_or_default();
@@ -687,7 +710,10 @@ fn live_team_holder_in_with_projects(
                 }
             })
         })
-        .map(|row| row.name.clone())
+        .map(|row| LiveHolder {
+            name: row.name.clone(),
+            session: crate::territory::row_session_id(row).to_string(),
+        })
 }
 
 /// Tell the presiding team - or the operator when nothing outranks this
@@ -970,7 +996,7 @@ mod tests {
             .into_owned();
 
         assert_eq!(
-            live_team_holder_in(&registry, "epic-x", &dir),
+            live_team_holder_in(&registry, "epic-x", &dir).map(|h| h.name),
             Some("leading-lead".to_string())
         );
         // The same registry through the walk: an ordinary walk refuses, and a
@@ -1028,6 +1054,111 @@ mod tests {
             wrong_row.is_err(),
             "naming a row other than the live holder never doubles a live one"
         );
+        // The session-id targeting law on a row that carries an id: the id
+        // names the row, the display name never does. Two sessions that
+        // shared one name cannot collide at the wake, because only the ids
+        // tell them apart - the live holder's session id is the address in
+        // the wake argv, and a row with no id still wakes by name.
+        let dir_str = dir.display().to_string();
+        let leads2 = crate::paths::space_dir(&dir).join("leads");
+        fs::write(
+            leads2.join("epic-y.md"),
+            "---\nfno_id: y-1\nscope: epic-y\n---\n",
+        )
+        .unwrap();
+        fs::write(
+            leads2.join("epic-legacy.md"),
+            "---\nfno_id: l-1\nscope: epic-legacy\n---\n",
+        )
+        .unwrap();
+        let wake_rows: Vec<crate::state::RegistryEntry> = serde_json::from_value(serde_json::json!([
+            {"name": "wren", "cwd": &dir_str, "status": "exited", "created_at": "2026-08-23T00:00:00Z",
+             "role_level": 2, "role_scope": "epic-y", "role_grantor": "human",
+             "harness_session_id": "aaaaaaaa-1111-4aaa-8aaa-aaaaaaaaaaaa"},
+            {"name": "wren", "cwd": &dir_str, "status": "busy", "created_at": "2026-08-23T00:00:00Z",
+             "role_level": 2, "role_scope": "epic-y", "role_grantor": "human",
+             "harness_session_id": "cccccccc-3333-4ccc-8ccc-cccccccccccc"},
+            {"name": "briar", "cwd": &dir_str, "status": "busy", "created_at": "2026-08-23T00:00:00Z",
+             "role_level": 2, "role_scope": "epic-legacy", "role_grantor": "human"}
+        ])).unwrap();
+        let selection = crate::runtime::lead_wake_triggers::select_targets(&wake_rows);
+        assert!(
+            selection.drops.is_empty(),
+            "a terminal predecessor never conflicts: {:?}",
+            selection.drops
+        );
+        assert_eq!(
+            selection.ok.len(),
+            2,
+            "one live id holder plus the legacy row"
+        );
+        let target = selection
+            .ok
+            .iter()
+            .find(|t| t.scope == "epic-y")
+            .expect("the epic-y target");
+        assert_eq!(target.holder, "wren");
+        assert_eq!(
+            target.holder_session,
+            "cccccccc-3333-4ccc-8ccc-cccccccccccc"
+        );
+        let argv = crate::runtime::lead_wake_triggers::build_walk_argv(
+            target,
+            "test",
+            std::path::Path::new("/usr/bin/true"),
+            None,
+            None,
+            false,
+            "test-model",
+        );
+        let holder_at = argv
+            .iter()
+            .position(|a| a == "--wake-holder")
+            .expect("--wake-holder present");
+        assert_eq!(
+            argv.get(holder_at + 1).expect("wake holder value present"),
+            "cccccccc-3333-4ccc-8ccc-cccccccccccc",
+            "the wake address is the session id, never the shared name"
+        );
+        let legacy = selection
+            .ok
+            .iter()
+            .find(|t| t.scope == "epic-legacy")
+            .expect("the legacy target");
+        assert_eq!(legacy.holder_session, "", "a no-id row carries no session");
+        assert_eq!(
+            legacy.handle(),
+            "briar",
+            "the legacy fallback wakes by name"
+        );
+        // The registry row WITH an id is named by the id, never the name.
+        // The id row replaces the earlier fixture in the same registry.json
+        // the walk asserts already read: the read path keys on that name.
+        let id_row = serde_json::json!({
+            "name": "wren",
+            "cwd": "/tmp",
+            "status": "busy",
+            "created_at": "2026-08-23T00:00:00Z",
+            "role_level": 2,
+            "role_scope": "epic-z",
+            "role_grantor": "human",
+            "harness_session_id": "cccccccc-3333-4ccc-8ccc-cccccccccccc",
+        });
+        let registry_id = dir.join("registry.json");
+        crate::registry_store::seed_raw(
+            &registry_id,
+            serde_json::json!(
+                {"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": [id_row]}
+            )
+            .to_string(),
+        );
+        let holder = live_team_holder_in(&registry_id, "epic-z", &dir).expect("live id holder");
+        assert_eq!(holder.session, "cccccccc-3333-4ccc-8ccc-cccccccccccc");
+        assert!(holder.named_by("cccccccc-3333-4ccc-8ccc-cccccccccccc"));
+        assert!(
+            !holder.named_by("wren"),
+            "the name is a label, never the lookup key"
+        );
         fs::remove_dir_all(crate::paths::space_dir(&dir)).ok();
         fs::remove_dir_all(&dir).ok();
     }
@@ -1070,14 +1201,14 @@ mod tests {
         let projects: Result<HashMap<String, String>, String> =
             Err("no work.workspaces in any candidate config.toml".to_string());
         assert_eq!(
-            live_team_holder_in_with_projects(&registry, "alpha", &projects),
+            live_team_holder_in_with_projects(&registry, "alpha", &projects).map(|h| h.name),
             Some("leading-lead".to_string())
         );
         // An unrelated scope still recovers: raw overlap answers, not a blanket
         // refusal.
-        assert_eq!(
-            live_team_holder_in_with_projects(&registry, "gamma", &projects),
-            None
+        assert!(
+            live_team_holder_in_with_projects(&registry, "gamma", &projects).is_none(),
+            "an unrelated scope still recovers"
         );
         fs::remove_dir_all(&dir).ok();
     }

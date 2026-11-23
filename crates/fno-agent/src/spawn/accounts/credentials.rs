@@ -114,10 +114,9 @@ fn decision(
             .find_map(|key| truthy(composed, key))
             .map(str::to_string),
     };
-    let config_dir = composed
-        .get("CLAUDE_CONFIG_DIR")
-        .and_then(Value::as_str)
-        .map(str::to_string);
+    // truthy, not a bare read: a clear marker (empty value) is no dir, and
+    // the receipt would otherwise name a config dir that is not set.
+    let config_dir = truthy(composed, "CLAUDE_CONFIG_DIR").map(str::to_string);
     let (profile, auth, bills) = if route_self_authed {
         let named = vendor.unwrap_or_else(|| "unknown".to_string());
         (

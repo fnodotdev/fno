@@ -4,11 +4,11 @@
 # hooks/context-hooks.json; fno-agent context-run runs one group and writes
 # one context_snapshot.
 #
-# SessionStart law d-47400067 pins the hook budget near 2s, but a full pass
+# SessionStart law D1839 pins the hook budget near 2s, but a full pass
 # measures tens of seconds on a loaded machine. So this wrapper is
 # stale-while-revalidate: it answers at once from the project's cached pass
 # output and refreshes that cache in a detached pass for the next session.
-# d-bad5a42f: background work never sits on the foreground path.
+# D1838: background work never sits on the foreground path.
 set -u
 
 # Survive a caller env with no usable PATH (see worktree-write-protect.sh).
@@ -49,6 +49,8 @@ run_sync() {
 # Cache home, env-then-platform only (hook hot path: no fno fork, D1839).
 if [[ -n "${FNO_CONTEXT_CACHE_DIR:-}" ]]; then
     CACHE_DIR="$FNO_CONTEXT_CACHE_DIR"
+elif [[ -n "${FNO_CACHE_HOME:-}" ]]; then
+    CACHE_DIR="${FNO_CACHE_HOME/#\~/${HOME:-/tmp}}/context"
 elif [[ "$(uname -s)" == "Darwin" ]]; then
     CACHE_DIR="${HOME:-/tmp}/Library/Caches/fno/context"
 else
@@ -88,7 +90,7 @@ else
 fi
 
 # Detached refresh. Full stdio redirection so the child never holds the
-# hook's pipes (the harness waits on that stdout), nice'd per d-bad5a42f.
+# hook's pipes (the harness waits on that stdout), nice'd per D1838.
 # The values travel as environment, never interpolated into the child
 # script, so a quote in any path cannot break it. The cache is published by
 # atomic mv only on a clean pass, so a failed run leaves the previous cache

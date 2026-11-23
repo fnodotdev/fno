@@ -47,7 +47,10 @@ fn parse(args: &[String]) -> Result<Option<Args>, String> {
 /// `<harness> --help` under the launch env, the parent env beneath it.
 fn smoke(harness: &str, launch: &std::collections::BTreeMap<String, String>) -> Result<(), String> {
     let mut cmd = std::process::Command::new(harness);
-    cmd.arg("--help").envs(launch);
+    // A clear marker (empty value) means the real launch REMOVES the var;
+    // `envs` cannot, so the probe drops it instead of setting an empty one.
+    cmd.arg("--help")
+        .envs(launch.iter().filter(|(_, v)| !v.is_empty()));
     let started = Instant::now();
     let out = match crate::bounded_cmd::output_with_timeout_result(cmd, SMOKE_TIMEOUT_S) {
         Ok(out) => out,

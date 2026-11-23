@@ -247,7 +247,7 @@ fi
 # is producing tool activity. `refresh` can extend; it cannot acquire or steal.
 _HANDOVER_NODE="${FNO_NODE:-}"
 _HANDOVER_HOLDER="${FNO_NODE_CLAIM_HOLDER:-}"
-# HOME-as-repo guard (law d-8ddaba56): when the cwd is $HOME outside git,
+# HOME-as-repo guard (law D1564): when the cwd is $HOME outside git,
 # $CWD/.fno IS the state root and the handover stamp would land at its top
 # level. A HOME-cwd session holds no repo binding, so the leg skips. The
 # probe runs only when a handover lease is plausible: this hook fires on

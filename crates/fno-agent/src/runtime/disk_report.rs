@@ -454,7 +454,9 @@ mod tests {
 
     #[test]
     fn report_pins_four_classes_and_finds_a_store_row() {
-        let _guard = crate::claims::test_env_lock();
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         let base = std::env::temp_dir().join(format!("fno-disk-report-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let pins = [
@@ -487,7 +489,9 @@ mod tests {
 
     #[test]
     fn an_expired_budget_marks_rows_and_returns_fast() {
-        let _guard = crate::claims::test_env_lock();
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         let base = std::env::temp_dir().join(format!("fno-disk-budget-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let pins = [
