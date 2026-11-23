@@ -37,7 +37,7 @@ Pass the `--no-merge` flag to `fno do target start` or `fno do target init` to r
 /target --no-merge "add login page"
 ```
 
-A bare `no-merge` word in the argument sets nothing. Init prints a note for it and names the flag.
+A bare `no-merge` token is the legacy spelling. The dispatch resolver rewrites it to the flag directly after the command or at the end (`merge_posture.toml`). Typed anywhere else, it sets nothing.
 
 Enabling per-run is deliberately NOT symmetric. A positional `auto-merge` grants nothing on its own. To allow merging, set `auto_merge.enabled` in config. Or start the run with `TARGET_AUTO_MERGE=1` from a user shell. The env grant is folded into the manifest at init. Runs carrying a mesh identity (`FNO_AGENT_SELF`) or an unattended marker scrub it. An interactive session the user launched does not carry either marker. That session sits inside the user's trust boundary and remains the documented way the per-run grant reaches a run. The stamp (`auto_merge_source: env-target-auto-merge`) keeps every such grant auditable. A worker still never exports the variable itself. Exporting it on a merge command line grants nothing.
 
