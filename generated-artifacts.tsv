@@ -36,7 +36,7 @@ crates/fno/src/legacy_env.rs	crates/fno-agent/src/legacy_env.rs	cargo build --ma
 crates/fno/src/harness.rs	crates/fno-agent/src/spawn/harness.rs	cargo build --manifest-path crates/fno-agent/Cargo.toml
 docs/reference/otel-schema.md	crates/fno-agent/src/otel_schema.sql	python3 scripts/docs/generate-otel-schema.py
 crates/fno/src/role_migration.rs	crates/fno-agent/src/spawn/role_migration.rs	cargo build --manifest-path crates/fno-agent/Cargo.toml
-docs/architecture/help-routing.md	crates/fno-agent/src/help_router.rs	cargo test -p fno-agent help_router -- --ignored bless_help_routing
+docs/architecture/help-routing.md	crates/fno-agent/src/help_router.rs	HELP_ROUTING_BLESS=1 cargo test -p fno-agent help_router
 crates/fno/src/model_reach.toml	crates/fno-agent/src/model_reach.toml	cargo build --manifest-path crates/fno-agent/Cargo.toml
 crates/fno/tests/golden/config_schema/*.stdout	crates/fno/config_schema.json	bash scripts/ci/regen-config-schema-goldens.sh
 crates/fno/src/pid.rs	crates/fno-agent/src/runtime/pid.rs	cargo build --manifest-path crates/fno-agent/Cargo.toml
