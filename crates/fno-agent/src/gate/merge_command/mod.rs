@@ -992,8 +992,8 @@ fn approved_true(value: &str) -> bool {
 /// fold applies to a status read (`merge_grant::refusal_binds`). Another
 /// session's `--no-merge` is that session's dispatch brief, so it hands no
 /// posture and the caller's own gates decide: a lead merges the green PR of a
-/// worker that ran with the flag. A permit, and a refusal on an unattributed
-/// manifest, bind every caller.
+/// worker that ran with the flag. A permit reaches the owner for every caller.
+/// A refusal on an unattributed manifest binds every caller.
 fn manifest_posture(
     approved_field: &str,
     source: &str,

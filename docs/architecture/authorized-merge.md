@@ -72,7 +72,7 @@ A worker that ran `--no-merge` cannot merge its own PR. Its lead merges that PR 
 
 A spawn brief that says who merges makes the worker pass that flag, because the worker must not merge. A `flag-no-merge` stamp on a lead-merged PR is then the common shape, and the stamp is true.
 
-An unattributed manifest carries no `harness_session_id`. It cannot be scoped, so it binds every caller and fails closed. The durable-grant lane merges for a parked worker. It keeps the refusal through its node-keyed fold, which no session scopes. A caller with no session id reads as no session, and the refusal does not bind it.
+An unattributed manifest names no session. Init writes `harness_session_id: null` for a session it cannot prove. Such a refusal cannot be scoped, so it binds every caller and fails closed. The durable-grant lane merges for a parked worker. It keeps the refusal through its node-keyed fold, which no session scopes. Against an attributed refusal, a caller with no session id reads as no session, and the refusal does not bind it.
 
 ## The head-scoped user merge grant
 

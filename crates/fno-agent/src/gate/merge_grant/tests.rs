@@ -795,4 +795,7 @@ fn a_bound_refusal_binds_only_the_session_that_wrote_it() {
     // An unattributed manifest cannot be scoped: it binds every caller,
     // fail closed.
     assert!(refusal_binds(None, &[]));
+    // Init writes a session it could not prove as the literal `null`. That
+    // manifest is unattributed the same way, so it binds a named caller.
+    assert!(refusal_binds(Some("null"), &mine));
 }

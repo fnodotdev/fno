@@ -918,10 +918,11 @@ pub(crate) fn refusal_binds_current_session(session: Option<&str>) -> bool {
 
 /// The pure core: a refusal on an unattributed manifest binds any caller;
 /// an attributed refusal binds only a caller whose ambient session id
-/// matches the manifest's.
+/// matches the manifest's. Init writes a session it could not prove as the
+/// literal `null`, so that spelling is unattributed too.
 pub(crate) fn refusal_binds(session: Option<&str>, current: &[String]) -> bool {
     match session {
-        None => true,
+        None | Some("null") => true,
         Some(sess) => current
             .iter()
             .any(|cur| crate::claims::same_session_id(cur, sess)),
