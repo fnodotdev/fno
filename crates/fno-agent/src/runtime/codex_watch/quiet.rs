@@ -1845,18 +1845,21 @@ mod tests {
                 .timestamp()
         };
         let newest = fold_newest_help_routes(lines.iter().map(String::as_str));
+        let s1 = "s1".to_string();
         assert_eq!(
-            newest["s1"],
-            (stamp("2026-01-01T00:05:00Z"), "ruled".to_string()),
+            newest.get(&s1).expect("s1 joins the fold"),
+            &(stamp("2026-01-01T00:05:00Z"), "ruled".to_string()),
             "the newest row wins over journal order"
         );
+        let s2 = "s2".to_string();
         assert_eq!(
-            newest["s2"],
-            (stamp("2026-01-01T00:04:00Z"), "timer".to_string())
+            newest.get(&s2).expect("s2 joins the fold"),
+            &(stamp("2026-01-01T00:04:00Z"), "timer".to_string())
         );
+        let s3 = "s3".to_string();
         assert_eq!(
-            newest["s3"],
-            (stamp("2026-01-01T00:06:00Z"), "ruled".to_string())
+            newest.get(&s3).expect("s3 joins the fold"),
+            &(stamp("2026-01-01T00:06:00Z"), "ruled".to_string())
         );
         assert_eq!(
             newest.len(),
