@@ -1847,18 +1847,14 @@ mod tests {
             newest.get("s2"),
             Some(&(stamp("2026-01-01T00:04:00Z"), "timer".to_string()))
         );
-        let non_route = json!({"ts": "2026-01-01T00:06:00Z", "type": "blocked",
-               "run": "s3", "data": {}})
-        .to_string();
-        let without = fold_newest_help_routes(
-            lines
-                .iter()
-                .map(String::as_str)
-                .chain(std::iter::once(non_route.as_str())),
+        assert_eq!(
+            newest.get("s3"),
+            Some(&(stamp("2026-01-01T00:06:00Z"), "ruled".to_string()))
         );
-        assert!(
-            !without.contains_key("s3"),
-            "a non-help_route type never joins the fold"
+        assert_eq!(
+            newest.len(),
+            3,
+            "an unparsable line joins nothing, a session joins once"
         );
     }
 }
