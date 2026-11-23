@@ -17,6 +17,20 @@ use super::window::Root;
 /// The bar's height. Fixed, like the title bar's.
 pub const BAR_H: f32 = 24.0;
 
+/// The latest reading the poll stored. A static, so the window state
+/// carries no field for it.
+static USAGE: std::sync::Mutex<Vec<ProviderUse>> = std::sync::Mutex::new(Vec::new());
+
+pub fn set_usage(rows: Vec<ProviderUse>) {
+    if let Ok(mut held) = USAGE.lock() {
+        *held = rows;
+    }
+}
+
+fn usage_rows() -> Vec<ProviderUse> {
+    USAGE.lock().map(|held| held.clone()).unwrap_or_default()
+}
+
 /// One provider's tightest window: the one closest to its cap.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderUse {
@@ -156,7 +170,7 @@ pub(super) fn render(root: &Root) -> Div {
     let p = root.palette;
     let now = fno::app_api::digest_overlay::now_secs() as f64;
     let mut left = div().flex().flex_row().items_center().gap_4().min_w_0();
-    for u in &root.usage {
+    for u in &usage_rows() {
         left = left.child(ui::text(usage_text(u, now), Role::Fact, &p).whitespace_nowrap());
     }
     // pr_2 lines the last fact up with the title bar's last label.

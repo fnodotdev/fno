@@ -285,9 +285,6 @@ pub struct Root {
     sent_size: (u16, u16),
     pub(super) board: Board,
     pub(super) poller: Option<Poller>,
-    /// Each provider's tightest usage window, for the status bar.
-    pub(super) usage: Vec<super::statusbar::ProviderUse>,
-    _usage: Option<gpui::Task<()>>,
     /// The terminal area's bounds at the last paint, for mouse hit tests.
     area: Rc<Cell<Bounds<Pixels>>>,
     /// The pane a left-button drag started in.
@@ -495,8 +492,6 @@ impl Root {
             sent_size,
             board: Board::default(),
             poller: None,
-            usage: Vec::new(),
-            _usage: None,
             area: Rc::new(Cell::new(Bounds::default())),
             drag: None,
             seam_drag: None,
@@ -560,7 +555,6 @@ impl Root {
         Self::attach_link(&mut root, &session, sent_size, prewarmed, cx);
         root.wire_alerts(cx);
         root.start_board_poll(cx);
-        root.start_usage_poll(cx);
         root.start_plugins(cx);
         // The control channel: the drain loop applies rows through the
         // same paths clicks ride (focus, view switch, quit).
@@ -704,16 +698,16 @@ impl Root {
 
     /// The usage poll: the provider windows the status bar shows, read once
     /// a minute off the UI thread.
-    fn start_usage_poll(&mut self, cx: &mut Context<Self>) {
-        self._usage = Some(cx.spawn(async move |this, cx| loop {
+    fn start_usage_poll(cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| loop {
             let usage = cx
                 .background_executor()
                 .spawn(async { super::statusbar::read_usage() })
                 .await;
             let live = this
-                .update(cx, |root, cx| {
+                .update(cx, |_, cx| {
                     if let Some(usage) = usage {
-                        root.usage = usage;
+                        super::statusbar::set_usage(usage);
                         cx.notify();
                     }
                 })
@@ -724,11 +718,13 @@ impl Root {
             cx.background_executor()
                 .timer(std::time::Duration::from_secs(60))
                 .await;
-        }));
+        })
+        .detach();
     }
 
     /// The board poll: fleet, questions and seats arrive here.
     fn start_board_poll(&mut self, cx: &mut Context<Self>) {
+        Self::start_usage_poll(cx);
         match Poller::start() {
             Ok((poller, mut rx)) => {
                 self.poller = Some(poller);
@@ -4059,36 +4055,7 @@ impl Render for Root {
         let strip = tabs::render(self, cx)
             .font_family(ui::MONO)
             .text_size(px(ui::BODY));
-        // A closed link and a failed notice use the error color; a notice
-        // is muted and expires. Neither takes a row: the toast floats over the corner.
-        // In chat mode a closed stream's bar already carries the exit
-        // reason, so the corner toast would repeat it - unless a sheet
-        // covers that bar, where the toast is the only visible signal.
-        let bar_shows_reason =
-            self.main == MainView::Chat && self.chat.closed.is_some() && self.chat.sheet.is_none();
-        let (status, status_color) = match (&self.closed, &self.notice) {
-            (Some(c), _) if !bar_shows_reason => (Some(c.clone()), self.palette.error),
-            (_, n) if bar_shows_reason && !self.notice_failed => (n.clone(), self.palette.muted),
-            (_, n) if self.notice_failed => (n.clone(), self.palette.error),
-            (_, n) => (n.clone(), self.palette.muted),
-        };
-        let toast = status.map(|text| {
-            div()
-                .absolute()
-                .right(px(12.0))
-                // Stacked above the chat status row (the empty-state line sits
-                // in the bottom 40px); a corner pin cut that line off.
-                .bottom(px(44.0))
-                .max_w(px(520.0))
-                .px_3()
-                .py_1()
-                .rounded(px(4.0))
-                .bg(rgb(self.palette.raised))
-                .text_color(rgb(status_color))
-                .font_family(ui::MONO)
-                .text_size(px(ui::BODY))
-                .child(text)
-        });
+        let toast = self.corner_toast();
         let qtoast = self.question_toast_card(cx);
         let utoast = self.update_card_view(cx);
         let page = div()
@@ -4138,6 +4105,40 @@ impl Render for Root {
 }
 
 impl Root {
+    /// The corner toast for a closed link or a notice, if either is set.
+    fn corner_toast(&self) -> Option<gpui::Div> {
+        // A closed link and a failed notice use the error color; a notice
+        // is muted and expires. Neither takes a row: the toast floats over the corner.
+        // In chat mode a closed stream's bar already carries the exit
+        // reason, so the corner toast would repeat it - unless a sheet
+        // covers that bar, where the toast is the only visible signal.
+        let bar_shows_reason =
+            self.main == MainView::Chat && self.chat.closed.is_some() && self.chat.sheet.is_none();
+        let (status, status_color) = match (&self.closed, &self.notice) {
+            (Some(c), _) if !bar_shows_reason => (Some(c.clone()), self.palette.error),
+            (_, n) if bar_shows_reason && !self.notice_failed => (n.clone(), self.palette.muted),
+            (_, n) if self.notice_failed => (n.clone(), self.palette.error),
+            (_, n) => (n.clone(), self.palette.muted),
+        };
+        status.map(|text| {
+            div()
+                .absolute()
+                .right(px(12.0))
+                // Stacked above the chat status row (the empty-state line sits
+                // in the bottom 40px); a corner pin cut that line off.
+                .bottom(px(44.0))
+                .max_w(px(520.0))
+                .px_3()
+                .py_1()
+                .rounded(px(4.0))
+                .bg(rgb(self.palette.raised))
+                .text_color(rgb(status_color))
+                .font_family(ui::MONO)
+                .text_size(px(ui::BODY))
+                .child(text)
+        })
+    }
+
     /// The overlays over the window, in draw order: the launch composer,
     /// the key sheet, the go-to palette, the Settings panel.
     fn overlays(
