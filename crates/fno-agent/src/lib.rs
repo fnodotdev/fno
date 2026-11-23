@@ -76,6 +76,7 @@ pub mod remote;
 pub mod single_flight;
 pub mod spawn;
 pub mod text_or_file;
+pub mod trusted_config;
 pub mod version;
 
 pub mod eval;

@@ -1504,6 +1504,15 @@ pub(crate) fn resolve_config_key(
     global_config_toml().and_then(|g| from_file(&g))
 }
 
+/// The project `config.toml` candidates of `cwd`. A reader of a machine-only
+/// key opens them to report rows it ignores, never to take one.
+pub(crate) fn project_config_files(cwd: &Path) -> Vec<PathBuf> {
+    config_roots(cwd)
+        .into_iter()
+        .map(|root| root.join(".fno/config.toml"))
+        .collect()
+}
+
 /// `std::env::var_os` but an empty value reads as unset, the OsString twin of
 /// [`non_empty_env`] for callers that build paths rather than parse text.
 pub(crate) fn non_empty_env_os(key: &str) -> Option<std::ffi::OsString> {
