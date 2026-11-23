@@ -15,6 +15,7 @@ import type { Rect } from "./Rect";
 import type { ResolvedPlacement } from "./ResolvedPlacement";
 import type { RestoreRow } from "./RestoreRow";
 import type { SessionKey } from "./SessionKey";
+import type { ShellRunUpdate } from "./ShellRunUpdate";
 import type { SlotResult } from "./SlotResult";
 import type { SquadLayout } from "./SquadLayout";
 import type { SquadMeta } from "./SquadMeta";
@@ -97,7 +98,7 @@ registry_fno_id: string | null, } } | { "PaneSpawned": { pane_id: number, placem
  * was refused, not lost. Default-skipped so an older reader is
  * unaffected.
  */
-skipped_typing: number, } } | { "WaitDone": { outcome: WaitOutcome, } } | { "Err": { code: number, msg: string, } } | { "Copy": { text: string, } } | { "OpenLink": { url: string, } } | { "LinkHover": { pane_id: number, seq: number, cells: Array<[number, number]>, } } | { "SearchResult": { pane_id: number, total: number, current: number, } } | { "AnchorJumped": { pane_id: number, jumped: boolean, } } | { "PeekBody": { seq: number, name: string, lines: Array<string>, } } | { "AgentLaunch": AgentLaunchUpdate } | { "TabList": { tabs: Array<TabInfo>, } } | { "LayoutTree": { squads: Array<SquadLayout>, } } | { "AgentRowsReceipt": { rows: Array<AgentRowReceipt>, } } | { "PaneLocation": { fno_id: string, squad_id: number, squad_name: string | null, 
+skipped_typing: number, } } | { "WaitDone": { outcome: WaitOutcome, } } | { "Err": { code: number, msg: string, } } | { "Copy": { text: string, } } | { "OpenLink": { url: string, } } | { "LinkHover": { pane_id: number, seq: number, cells: Array<[number, number]>, } } | { "SearchResult": { pane_id: number, total: number, current: number, } } | { "AnchorJumped": { pane_id: number, jumped: boolean, } } | { "PeekBody": { seq: number, name: string, lines: Array<string>, } } | { "AgentLaunch": AgentLaunchUpdate } | { "ShellRun": ShellRunUpdate } | { "TabList": { tabs: Array<TabInfo>, } } | { "LayoutTree": { squads: Array<SquadLayout>, } } | { "AgentRowsReceipt": { rows: Array<AgentRowReceipt>, } } | { "PaneLocation": { fno_id: string, squad_id: number, squad_name: string | null, 
 /**
  * The tabs hosting this id's panes, each with its optional name.
  */
