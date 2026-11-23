@@ -30,27 +30,29 @@ team policy requires it.
 
 ## Disable Once via CLI
 
-Pass the positional `no-merge` modifier at invocation time to revoke merge authority for that run:
+Pass the `--no-merge` flag to `fno do target start` or `fno do target init` to revoke merge authority for that run. A `/target` invocation that carries the flag passes it through to that command:
 
 ```
 # target
-/target M "add login page" no-merge
+/target --no-merge "add login page"
 ```
+
+A bare `no-merge` word in the argument sets nothing. Init prints a note for it and names the flag.
 
 Enabling per-run is deliberately NOT symmetric. A positional `auto-merge` grants nothing on its own. To allow merging, set `auto_merge.enabled` in config. Or start the run with `TARGET_AUTO_MERGE=1` from a user shell. The env grant is folded into the manifest at init. Runs carrying a mesh identity (`FNO_AGENT_SELF`) or an unattended marker scrub it. An interactive session the user launched does not carry either marker. That session sits inside the user's trust boundary and remains the documented way the per-run grant reaches a run. The stamp (`auto_merge_source: env-target-auto-merge`) keeps every such grant auditable. A worker still never exports the variable itself. Exporting it on a merge command line grants nothing.
 
 ## Resolution Order (First Match Wins)
 
 1. `TARGET_NO_MERGE=1` - false
-2. Positional `no-merge` in the invocation - false
+2. `--no-merge` on the start or init command, which sets rung 1 - false
 3. `TARGET_AUTO_MERGE=1` - true
 4. Local `.fno/config.toml` `config.auto_merge.enabled`
 5. Global `~/.fno/config.toml` `config.auto_merge.enabled`
 6. Default - false
 
-Every refusal outranks every grant, so `no-merge` wins whenever it appears. Rung 2 sits above rung 3 on purpose: nothing in the codebase sets `TARGET_AUTO_MERGE`, so the only way it is ever set is inheritance from an ancestor shell or a spawning parent, and an inherited grant must not defeat a refusal typed into this run. The match is whole-token, so `no-merger` or a path like `plans/no-merge-notes.md` does not revoke a configured grant.
+Every refusal outranks every grant, so `--no-merge` wins over a configured grant. Rung 2 sits above rung 3 on purpose. Nothing in the codebase sets `TARGET_AUTO_MERGE`. An ancestor shell or a spawning parent is its only source, and an inherited grant must not defeat a refusal passed to this run. The flag must stand as its own token. `--no-merge-guard` is a different flag and does not count.
 
-At merge and arm time both gates resolve the same posture. The gates are `fno do pr merge` and `fno-agent finalize`. Granted means live `auto_merge.enabled` or the per-run env grant. A per-run refusal is manifest `auto_merge_approved: false`. The refusal outranks every grant. `enabled` is re-read live. A superuser disarm mid-flight withholds even a manifest that reads true. One exception exists. A run granted at spawn carries `auto_merge_source: env-target-auto-merge`. That run arms on its own. Every posture refusal names its sanctioned override in its own text.
+At merge and arm time both gates resolve the same posture. The gates are `fno do pr merge` and `fno-agent finalize`. Granted means live `auto_merge.enabled` or the per-run env grant. A per-run refusal is manifest `auto_merge_approved: false`. The refusal outranks every grant. The refusal binds only the session whose manifest carries it. Another session reads it as that session's brief. A lead then merges the PR on live config. Both the status read and the merge command scope the refusal that way. `enabled` is re-read live. A superuser disarm mid-flight withholds even a manifest that reads true. One exception exists. A run granted at spawn carries `auto_merge_source: env-target-auto-merge`. That run arms on its own. Every posture refusal names its sanctioned override in its own text.
 
 One stamp is never a refusal: `auto_merge_source: default-off` records a failed config read at init, not a decision. A yq-less worker cannot read dotted TOML keys, so it stamped this by accident. The merge gate, finalize's arming, and the fidelity park treat the stamp as unset and fold the live config. An explicit refusal (`flag-no-merge`, or config set false) still wins. Init stamps a config refusal as `source: config` with `approved: false`, which stays a refusal.
 

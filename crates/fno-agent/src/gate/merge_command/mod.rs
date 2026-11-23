@@ -410,7 +410,7 @@ pub fn run_flow(argv: &[String], cwd: &Path, authority: &str, timeout_s: u64) ->
 
     // Posture: which auto-merge posture to hand the owner. The durable-grant
     // arm replaces the manifest for a parked worker; everything else rides
-    // the manifest fields as written.
+    // the manifest fields as written, scoped to the caller by `manifest_posture`.
     let approved_field = manifest_field(&repo, "auto_merge_approved").unwrap_or_default();
     let mut posture_source = manifest_field(&repo, "auto_merge_source")
         .unwrap_or_default()
@@ -443,13 +443,15 @@ pub fn run_flow(argv: &[String], cwd: &Path, authority: &str, timeout_s: u64) ->
         // switch and the floor.
         posture_approved = Some(true);
         posture_source = "durable-grant".to_string();
-    } else if approved_field.is_empty() {
-        // No manifest, or a manifest predating the field: the live config
-        // decides on its own. A manual merge outside a target session is
-        // legitimate.
-        posture_approved = None;
     } else {
-        posture_approved = Some(approved_true(&approved_field));
+        let (approved, source) = manifest_posture(
+            &approved_field,
+            &posture_source,
+            manifest_field(&repo, "harness_session_id").as_deref(),
+            &crate::claims::ambient_session_candidates(),
+        );
+        posture_approved = approved;
+        posture_source = source;
     }
 
     // (2) gh must be installed.
@@ -985,6 +987,32 @@ fn approved_true(value: &str) -> bool {
     matches!(value.trim().to_lowercase().as_str(), "true" | "yes" | "1")
 }
 
+/// The posture `fno do pr merge` hands the owner from the manifest it read.
+/// A refusal binds only the session that wrote it, the rule the owner's own
+/// fold applies to a status read (`merge_grant::refusal_binds`). Another
+/// session's `--no-merge` is that session's dispatch brief, so it hands no
+/// posture and the caller's own gates decide: a lead merges the green PR of a
+/// worker that ran with the flag. A permit, and a refusal on an unattributed
+/// manifest, bind every caller.
+fn manifest_posture(
+    approved_field: &str,
+    source: &str,
+    manifest_session: Option<&str>,
+    caller_sessions: &[String],
+) -> (Option<bool>, String) {
+    // No manifest, or a manifest predating the field: the live config
+    // decides on its own. A manual merge outside a target session is
+    // legitimate.
+    if approved_field.is_empty() {
+        return (None, String::new());
+    }
+    let approved = approved_true(approved_field);
+    if !approved && !crate::merge_grant::refusal_binds(manifest_session, caller_sessions) {
+        return (None, String::new());
+    }
+    (Some(approved), source.to_string())
+}
+
 fn manifest_field(repo: &Path, field: &str) -> Option<String> {
     let path = crate::state_path::resolve("target-state", repo)?;
     let content = fs::read_to_string(path).ok()?;
@@ -1493,6 +1521,65 @@ mod merge_door_build_tests {
         assert_eq!(
             build["dirty"].as_bool(),
             Some(env!("FNO_AGENT_GIT_DIRTY") == "1")
+        );
+    }
+}
+
+#[cfg(test)]
+mod manifest_posture_tests {
+    use super::manifest_posture;
+
+    /// The session whose run stamped the manifest with `--no-merge`. The run
+    /// has ended, and `harness_session_id` is the line it left behind.
+    const STAMPING_SESSION: &str = "aaaa1111-2222-3333-4444-555566667777";
+    const ANOTHER_SESSION: &str = "bbbb2222-3333-4444-5555-666677778888";
+
+    fn refused(manifest_session: Option<&str>, caller_sessions: &[&str]) -> (Option<bool>, String) {
+        let caller: Vec<String> = caller_sessions.iter().map(|s| s.to_string()).collect();
+        manifest_posture("false", "flag-no-merge", manifest_session, &caller)
+    }
+
+    #[test]
+    fn a_stale_sessions_stamp_does_not_refuse_another_sessions_merge() {
+        assert_eq!(
+            refused(Some(STAMPING_SESSION), &[ANOTHER_SESSION]),
+            (None, String::new())
+        );
+        // A person at a terminal carries no session id.
+        assert_eq!(refused(Some(STAMPING_SESSION), &[]), (None, String::new()));
+    }
+
+    #[test]
+    fn the_stamping_sessions_own_merge_still_refuses() {
+        assert_eq!(
+            refused(Some(STAMPING_SESSION), &[STAMPING_SESSION]),
+            (Some(false), "flag-no-merge".to_string())
+        );
+    }
+
+    #[test]
+    fn an_unattributed_refusal_binds_every_caller() {
+        assert_eq!(
+            refused(None, &[ANOTHER_SESSION]),
+            (Some(false), "flag-no-merge".to_string())
+        );
+    }
+
+    #[test]
+    fn a_permit_and_an_empty_field_pass_through_to_the_owner() {
+        assert_eq!(
+            manifest_posture(
+                "true",
+                "config",
+                Some(STAMPING_SESSION),
+                &[ANOTHER_SESSION.to_string()]
+            ),
+            (Some(true), "config".to_string())
+        );
+        // No manifest, or one that predates the field: live config decides.
+        assert_eq!(
+            manifest_posture("", "", None, &[ANOTHER_SESSION.to_string()]),
+            (None, String::new())
         );
     }
 }
