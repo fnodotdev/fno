@@ -175,32 +175,39 @@ fn newest_help_routes(global: &Path) -> std::collections::HashMap<String, (i64, 
     fold_newest_help_routes(crate::event_store::journal_text(global, &["help_route"]).lines())
 }
 
+/// One `help_route` journal row as the fold reads it: the emitting session,
+/// its stamp, and the route kind. Unknown fields are ignored; a missing
+/// stamp or data block reads empty, the same tolerance the journal's
+/// mixed lines always got.
+#[derive(Deserialize)]
+struct HelpRouteRow {
+    run: String,
+    #[serde(default)]
+    ts: String,
+    data: Option<HelpRouteData>,
+}
+
+#[derive(Deserialize)]
+struct HelpRouteData {
+    route: Option<String>,
+}
+
 fn fold_newest_help_routes<'a>(
     lines: impl Iterator<Item = &'a str>,
 ) -> std::collections::HashMap<String, (i64, String)> {
     let mut out = std::collections::HashMap::new();
     for line in lines {
-        let Ok(row) = serde_json::from_str::<Value>(line) else {
+        let Ok(row) = serde_json::from_str::<HelpRouteRow>(line) else {
             continue;
         };
-        let Some(run) = row.get("run").and_then(Value::as_str) else {
-            continue;
-        };
-        let ts = row
-            .get("ts")
-            .and_then(Value::as_str)
-            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+        let ts = chrono::DateTime::parse_from_rfc3339(&row.ts)
             .map(|t| t.timestamp())
             .unwrap_or(0);
-        let route = row
-            .pointer("/data/route")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        match out.get(run) {
+        let route = row.data.and_then(|d| d.route).unwrap_or_default();
+        match out.get(&row.run) {
             Some((prev, _)) if *prev > ts => {}
             _ => {
-                out.insert(run.to_string(), (ts, route));
+                out.insert(row.run, (ts, route));
             }
         }
     }
@@ -1839,17 +1846,17 @@ mod tests {
         };
         let newest = fold_newest_help_routes(lines.iter().map(String::as_str));
         assert_eq!(
-            newest.get("s1"),
-            Some(&(stamp("2026-01-01T00:05:00Z"), "ruled".to_string())),
+            newest["s1"],
+            (stamp("2026-01-01T00:05:00Z"), "ruled".to_string()),
             "the newest row wins over journal order"
         );
         assert_eq!(
-            newest.get("s2"),
-            Some(&(stamp("2026-01-01T00:04:00Z"), "timer".to_string()))
+            newest["s2"],
+            (stamp("2026-01-01T00:04:00Z"), "timer".to_string())
         );
         assert_eq!(
-            newest.get("s3"),
-            Some(&(stamp("2026-01-01T00:06:00Z"), "ruled".to_string()))
+            newest["s3"],
+            (stamp("2026-01-01T00:06:00Z"), "ruled".to_string())
         );
         assert_eq!(
             newest.len(),
