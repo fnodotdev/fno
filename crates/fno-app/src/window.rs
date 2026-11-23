@@ -354,6 +354,8 @@ pub struct Root {
     pub(super) rename: Option<mux_modes::Rename>,
     /// The focused agent's row menu (prefix+P).
     pub(super) row_menu: Option<mux_modes::RowMenu>,
+    /// The Peek reply on screen: the agent and its recent transcript.
+    pub(super) peek: Option<(String, Vec<String>)>,
     /// The launch composer: retained state, open flag, id mint, and the
     /// row the last launch named. Esc closes and keeps the draft.
     pub(super) launch: launch::Panel,
@@ -529,6 +531,7 @@ impl Root {
             scroll_mode: None,
             rename: None,
             row_menu: None,
+            peek: None,
             launch: launch::Panel::default(),
             settings: None,
             font_want,
@@ -1059,7 +1062,7 @@ impl Root {
                     .py_2()
                     .rounded(px(6.0))
                     .border_1()
-                    .border_color(rgb(self.palette.border))
+                    .border_color(rgb(self.palette.faint))
                     .bg(rgb(self.palette.raised))
                     .font_family(ui::MONO)
                     .text_size(px(ui::BODY))
@@ -1097,6 +1100,10 @@ impl Root {
 
     pub(super) fn act(&mut self, action: Action, cx: &mut Context<Self>) {
         fno::ui_usage::click("app", click_id(&action));
+        // Any other click ends an in-tab rename without sending it.
+        if self.rename.as_ref().is_some_and(|r| r.inline) {
+            self.rename = None;
+        }
         match action {
             Action::Send(cmd) => {
                 // A click on the board shows what it picked; chat and the
@@ -1965,6 +1972,10 @@ impl Root {
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
                     self.say(format!("copied {n} characters"), cx);
                 }
+                Event::Peek { name, lines } => {
+                    self.peek = Some((name, lines));
+                    cx.notify();
+                }
                 Event::OpenLink(url) => {
                     if fno::link::is_openable(&url) {
                         cx.open_url(&url);
@@ -2251,10 +2262,102 @@ impl Root {
         });
     }
 
+    /// The focused pane back to its live screen.
+    pub(super) fn back_to_live(&mut self, cx: &mut Context<Self>) {
+        let pane = self.layout.focus;
+        self.send(ClientMsg::PaneScrollEdge { pane, top: false });
+        cx.notify();
+    }
+
+    /// Whether the focused pane shows history, from its newest frame.
+    fn focus_scrolled(&self) -> bool {
+        self.frames
+            .get(&self.layout.focus)
+            .is_some_and(|f| f.scroll_offset > 0)
+    }
+
+    /// Keyboard history scroll with no mode held: true when the key scrolled.
+    fn history_key(&mut self, key: &Key, cx: &mut Context<Self>) -> bool {
+        let pane = self.layout.focus;
+        let rows = self.frames.get(&pane).map_or(24, |f| i32::from(f.rows));
+        let Some(msg) = mux_modes::history_step(key, pane, rows, self.focus_scrolled()) else {
+            return false;
+        };
+        cx.stop_propagation();
+        self.send(msg);
+        true
+    }
+
+    /// `--shot-ui`: open one overlay the way its click opens it.
+    pub(super) fn shot_ui(&mut self, ui: crate::UiShot, window: &Window, cx: &mut Context<Self>) {
+        match ui {
+            crate::UiShot::RowMenu | crate::UiShot::RowMenuNode => {
+                // The row with a session id offers the full menu.
+                let name = self
+                    .layout
+                    .agents
+                    .iter()
+                    .find(|a| a.harness_session_id.is_some())
+                    .or_else(|| self.layout.agents.first())
+                    .map(|a| a.name.clone());
+                if let Some(name) = name {
+                    // The node variant binds one first, so the menu shows the
+                    // row a worker with a node gets.
+                    if ui == crate::UiShot::RowMenuNode {
+                        if let Some(a) = self.layout.agents.iter_mut().find(|a| a.name == name) {
+                            a.node = Some("node-demo".into());
+                        }
+                    }
+                    let at = gpui::point(gpui::px(150.0), gpui::px(150.0));
+                    self.agent_menu_open(&name, at, window, cx);
+                }
+            }
+            crate::UiShot::TabRename => {
+                let tab = self
+                    .layout
+                    .squads
+                    .iter()
+                    .find(|s| s.id == self.layout.active_squad)
+                    .and_then(|s| s.tabs.first())
+                    .map(|t| t.id);
+                if let Some(tab) = tab {
+                    self.rename_tab(tab, cx);
+                    // A named tab mid-edit: the field holds the name being typed.
+                    if let Some(r) = self.rename.as_mut() {
+                        r.field =
+                            crate::ui::LineField::seeded("api-server", fno::proto::MAX_TAB_NAME);
+                    }
+                }
+            }
+            // The shell prints enough lines to fill its history; the second
+            // phase scrolls the pane back through a real frame.
+            crate::UiShot::Scrolled => self.pane_input(b"seq 1 120\r".to_vec(), cx),
+        }
+    }
+
+    /// `--shot-ui`, after the first phase had time to land.
+    pub(super) fn shot_ui_after(&mut self, ui: crate::UiShot) {
+        if ui == crate::UiShot::Scrolled {
+            let pane = self.layout.focus;
+            self.send(ClientMsg::PaneScroll { pane, delta: 30 });
+        }
+    }
+
     /// prefix+PgUp: hold the keyboard for the focused pane's shared scroll.
     fn scroll_open(&mut self, cx: &mut Context<Self>) {
         self.scroll_mode = Some(self.layout.focus);
         cx.notify();
+    }
+
+    /// A double-click on a tab: its name becomes a field in the tab itself.
+    pub(super) fn rename_tab(&mut self, tab: u64, cx: &mut Context<Self>) {
+        match mux_modes::Rename::open_tab(&self.layout, tab) {
+            Some(rename) => {
+                self.rename = Some(rename);
+                cx.notify();
+            }
+            None => self.say("that tab is gone".into(), cx),
+        }
     }
 
     /// prefix+`,`: the rename prompt for the active tab.
@@ -2286,18 +2389,97 @@ impl Root {
             .row_menu
             .take()
             .and_then(|m| m.items.into_iter().nth(at))
-            .map(|(_, act)| act);
+            .map(|(_, act, _)| act);
         match item {
-            Some(MenuAct::Run(action)) => self.act(action, cx),
-            Some(MenuAct::Rename) => self.rename_open(cx),
+            Some(MenuAct::Run(actions)) => {
+                for action in actions {
+                    self.act(action, cx);
+                }
+            }
+            Some(MenuAct::Rename(None)) => self.rename_open(cx),
+            Some(MenuAct::RenameTab(tab)) => self.rename_tab(tab, cx),
+            Some(MenuAct::Rename(Some(name))) => {
+                self.rename = Some(mux_modes::Rename::for_agent(name));
+            }
+            Some(MenuAct::Peek(name)) => {
+                self.send(ClientMsg::Command(Command::PeekAgent { name, seq: 0 }))
+            }
+            Some(MenuAct::Shell(argv, done)) => self.run_agent_tool(argv, done, cx),
             None => {}
         }
         cx.notify();
     }
 
+    /// A right-click on an agent row: its menu at the pointer.
+    pub(super) fn agent_menu_open(
+        &mut self,
+        name: &str,
+        at: gpui::Point<gpui::Pixels>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        // A just-launched row shows its task as the label until the next
+        // layout, so the name can miss: say so rather than do nothing.
+        let Some(agent) = self.layout.agents.iter().find(|a| a.name == name).cloned() else {
+            self.say("this row has no menu yet".into(), cx);
+            return;
+        };
+        let mut menu = mux_modes::RowMenu::of(Some(&agent));
+        // Keep the menu on screen: a long one opens upward from the bottom.
+        let room = f32::from(window.viewport_size().height) - 420.0;
+        menu.anchor = Some((f32::from(at.x), f32::from(at.y).min(room.max(0.0))));
+        self.row_menu = Some(menu);
+        cx.notify();
+    }
+
+    /// A right-click on a tab: rename, move and close.
+    pub(super) fn tab_menu_open(
+        &mut self,
+        tab: u64,
+        at: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut menu = mux_modes::RowMenu::of_tab(self.layout.active_squad, tab);
+        menu.anchor = Some((f32::from(at.x), f32::from(at.y)));
+        self.row_menu = Some(menu);
+        cx.notify();
+    }
+
+    /// Run `fno-agent` off the UI loop and say how it ended.
+    fn run_agent_tool(&mut self, argv: Vec<String>, done: String, cx: &mut Context<Self>) {
+        let bin = fno::app_api::digest_overlay::fno_agent_bin();
+        cx.spawn(async move |this, cx| {
+            let out = cx
+                .background_executor()
+                .spawn(async move {
+                    std::process::Command::new(bin)
+                        .args(&argv)
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::piped())
+                        .spawn()
+                        .and_then(|child| child.wait_with_output())
+                })
+                .await;
+            let text = match out {
+                Ok(o) if o.status.success() => done,
+                Ok(o) => {
+                    let why = String::from_utf8_lossy(&o.stderr);
+                    format!(
+                        "refused: {}",
+                        why.lines().next().unwrap_or("no reason given")
+                    )
+                }
+                Err(e) => format!("did not start: {e}"),
+            };
+            this.update(cx, |root, cx| root.say(text, cx)).ok();
+        })
+        .detach();
+    }
+
     /// prefix+Z: focus the next pane whose agent waits on the user, wrapping
     /// after the last. Nothing waiting beeps and says so.
-    fn focus_next_waiting(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn focus_next_waiting(&mut self, cx: &mut Context<Self>) {
         let now = fno::app_api::digest_overlay::now_secs();
         match mux_modes::next_waiting(&self.layout.agents, self.layout.focus, now) {
             Some((pane, name, at, of)) => {
@@ -2314,6 +2496,12 @@ impl Root {
     /// True when the row menu, the rename prompt or scroll mode consumed the
     /// key. Cmd keys fall through to their shortcuts.
     fn mux_modes_take(&mut self, key: &Key, cx: &mut Context<Self>) -> bool {
+        if self.peek.is_some() && key.key == "escape" {
+            self.peek = None;
+            cx.stop_propagation();
+            cx.notify();
+            return true;
+        }
         if let Some(menu) = self.row_menu.as_ref() {
             if key.cmd {
                 return false;
@@ -3017,36 +3205,8 @@ impl Root {
             cx.stop_propagation();
             return;
         }
-        // The Settings panel takes every key while it shows; a cmd key
-        // closes it and runs as today (the key sheet's grammar).
-        if self.settings.is_some() {
-            if key.cmd {
-                self.settings = None;
-                cx.notify();
-            } else {
-                let ev = self
-                    .settings
-                    .as_mut()
-                    .and_then(|st| settings::key(st, &key));
-                cx.stop_propagation();
-                match ev {
-                    Some(settings::Event::Close) => {
-                        self.settings = None;
-                        cx.notify();
-                    }
-                    Some(settings::Event::Set { id, value }) => {
-                        if let Some(st) = self.settings.as_mut() {
-                            settings::apply_local(&mut st.rows, &id, &value);
-                        }
-                        self.spawn_settings_write(true, id, value, cx)
-                    }
-                    Some(settings::Event::Unset { id }) => {
-                        self.spawn_settings_write(false, id, String::new(), cx)
-                    }
-                    None => {}
-                }
-                return;
-            }
+        if self.settings_key(&key, cx) {
+            return;
         }
         // After chord: with the key sheet open, esc closes the sheet first.
         if key.key == "escape" && self.seam_escape(cx) {
@@ -3108,10 +3268,45 @@ impl Root {
         if self.main != MainView::Terminal || keys::is_text(&key) {
             return;
         }
+        if self.history_key(&key, cx) {
+            return;
+        }
         if let Some(bytes) = keys::encode(&key, self.modes) {
             cx.stop_propagation();
             self.mux_key(bytes, window, cx);
         }
+    }
+
+    /// The Settings panel takes every key while it shows; a cmd key closes it
+    /// and runs as today (the key sheet's grammar). True when it took the key.
+    fn settings_key(&mut self, key: &Key, cx: &mut Context<Self>) -> bool {
+        if self.settings.is_none() {
+            return false;
+        }
+        if key.cmd {
+            self.settings = None;
+            cx.notify();
+            return false;
+        }
+        let ev = self.settings.as_mut().and_then(|st| settings::key(st, key));
+        cx.stop_propagation();
+        match ev {
+            Some(settings::Event::Close) => {
+                self.settings = None;
+                cx.notify();
+            }
+            Some(settings::Event::Set { id, value }) => {
+                if let Some(st) = self.settings.as_mut() {
+                    settings::apply_local(&mut st.rows, &id, &value);
+                }
+                self.spawn_settings_write(true, id, value, cx)
+            }
+            Some(settings::Event::Unset { id }) => {
+                self.spawn_settings_write(false, id, String::new(), cx)
+            }
+            None => {}
+        }
+        true
     }
 
     /// One encoded keystroke through the mux scanner: the prefix claims its
@@ -3398,8 +3593,12 @@ impl Root {
         });
     }
 
-    fn on_down(&mut self, ev: &MouseDownEvent, window: &mut Window, _cx: &mut Context<Self>) {
+    fn on_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus);
+        if self.rename.as_ref().is_some_and(|r| r.inline) {
+            self.rename = None;
+            cx.notify();
+        }
         let (x, y) = self.local(ev.position);
         // A drag whose release never reached the window is closed first, so
         // the server never keeps a half-made selection.
@@ -4114,11 +4313,25 @@ impl Root {
         .when(self.answer.is_some(), |d| d.child(answer::render(self, cx)))
         .when(self.goto.is_some(), |d| d.child(goto::render(self, cx)))
         .children(self.row_menu.as_ref().map(|m| m.view(self, cx)))
-        .children(self.rename.as_ref().map(|r| r.bar(&self.palette)))
+        .children(
+            self.peek
+                .as_ref()
+                .map(|(n, l)| mux_modes::peek_view(n, l, &self.palette, cx)),
+        )
+        .children(
+            self.rename
+                .as_ref()
+                .filter(|r| !r.inline)
+                .map(|r| r.bar(&self.palette)),
+        )
         .children(
             self.scroll_mode
                 .filter(|p| *p == self.layout.focus && self.main == MainView::Terminal)
                 .map(|_| mux_modes::scroll_bar(&self.palette)),
+        )
+        .when(
+            self.scroll_mode.is_none() && self.main == MainView::Terminal && self.focus_scrolled(),
+            |d| d.child(mux_modes::back_to_live(&self.palette, cx)),
         )
         .when(self.settings.is_some(), |d| {
             d.child(settings::render(self, cx))
