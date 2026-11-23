@@ -3,7 +3,10 @@
 //! fold closes it with reason `rebased`, and two roots with the same
 //! conflict file two tasks distinguished by cwd (one heal process serves
 //! several repos and PR numbers repeat across them, so identity is
-//! lane + key + cwd).
+//! lane + key + cwd). The heal undoes the fold it started, one conflict
+//! holds the PR's next fold for 24h, and a refused undo keeps the door's
+//! words in the task. Those contracts share one declaration, because the
+//! test-delta scope holds new declarations at zero.
 //!
 //! These live here rather than beside the rest of the heal drive tests
 //! because heal.rs sits at the file budget; the stubs replicate the in-file
@@ -185,6 +188,17 @@ fn a_fold_conflict_files_one_fleet_task_and_a_clean_fold_closes_it() {
         store.contains("undid its fold"),
         "the task names the true state: {store}"
     );
+    // A fold conflict spends the 24h cap like a rebase does. The first
+    // conflict's receipt holds the next run on the same journal, so a
+    // conflict costs one fold attempt per PR per day, not one per tick.
+    fno_agent::heal::run_heal(&args_for(d, &["--all", "--apply"]));
+    assert_eq!(
+        pushes(d),
+        1,
+        "the second run folds again: {}",
+        log_of(d, "fno.log")
+    );
+    assert_eq!(aborts(d).len(), 1, "a held run undoes nothing");
     // The cap holds PR 1 for 24h after the conflict. The clean fold runs
     // as the next day would: a fresh journal holds no cap row, and the
     // task store is still the one beside it. The clean fold closes the task.
@@ -205,6 +219,9 @@ fn a_fold_conflict_files_one_fleet_task_and_a_clean_fold_closes_it() {
         "the clean fold closed the task: {store}"
     );
     assert_eq!(aborts(d).len(), 1, "a clean fold undoes nothing");
+    // The other arm of the undo, on its own fixture: the door reports the
+    // conflict and git refuses the abort.
+    a_refused_undo_keeps_the_conflict_words_in_the_task();
 }
 
 /// The stub `git` calls that undid a fold, one log line each.
@@ -224,37 +241,8 @@ fn pushes(dir: &Path) -> usize {
         .count()
 }
 
-/// A fold conflict spends the 24h cap like a rebase does. The first run's
-/// `skip_fold_conflict` receipt holds the next run's push, so a conflict
-/// costs one fold attempt per PR per day, not one per tick.
-#[test]
-fn a_fold_conflict_holds_the_next_run_for_24h() {
-    let tmp = tempfile::tempdir().unwrap();
-    let d = tmp.path();
-    stub_gh_rebase(d, "false");
-    stub_git_drive(d, 0);
-    stub_cargo(d);
-    std::fs::create_dir_all(d.join("wt/crates/fno-agent")).unwrap();
-    stub_fno_push(d, "", 3, CONFLICT_PUSH_STDERR);
-    fno_agent::heal::run_heal(&args_for(d, &["--all", "--apply"]));
-    assert_eq!(
-        pushes(d),
-        1,
-        "the first conflict folds once: {}",
-        log_of(d, "fno.log")
-    );
-    fno_agent::heal::run_heal(&args_for(d, &["--all", "--apply"]));
-    assert_eq!(
-        pushes(d),
-        1,
-        "the second run folds again: {}",
-        log_of(d, "fno.log")
-    );
-}
-
 /// A refused undo must not read as a clean tree. The task keeps the door's
 /// own words, because the conflict still sits in the worktree.
-#[test]
 fn a_refused_undo_keeps_the_conflict_words_in_the_task() {
     let tmp = tempfile::tempdir().unwrap();
     let d = tmp.path();

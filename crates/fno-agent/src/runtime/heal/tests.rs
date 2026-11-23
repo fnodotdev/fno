@@ -352,6 +352,9 @@ fn remedy_rows() {
         ]),
         EXIT_READ_ERROR
     );
+    // The fold undo against real git. The drive tests stub `git`, so this
+    // call alone proves what a real `merge --abort` leaves behind.
+    abort_fold_leaves_a_conflicted_worktree_as_found();
 }
 
 // ── the drive loop ─────────────────────────────────────────────────────
@@ -737,7 +740,6 @@ fn closure_edit_writes_once_per_head_then_stands_down() {
 /// The push door leaves a conflicted fold in progress, and that tree
 /// refuses every later push and heal. The heal is not the caller that
 /// resolves it, so it hands the PR's worktree back as the push found it.
-#[test]
 fn abort_fold_leaves_a_conflicted_worktree_as_found() {
     use crate::git_test_helpers::{git_bin, git_run};
     let tmp = tempfile::tempdir().unwrap();
