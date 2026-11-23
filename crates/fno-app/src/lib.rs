@@ -30,6 +30,7 @@ mod skills;
 mod start;
 mod tabs;
 mod ui;
+mod update;
 mod window;
 
 use std::path::{Path, PathBuf};
@@ -106,6 +107,17 @@ pub struct ShotOptions {
     pub first_run: Option<FirstRunShot>,
     /// The Settings panel state the frame paints.
     pub settings: Option<SettingsShot>,
+    /// The update card the frame paints.
+    pub update: Option<UpdateShot>,
+}
+
+/// The --shot-update values.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum UpdateShot {
+    /// A staged build is ready: the Restart card.
+    Ready,
+    /// The first launch of a new build: the release notes card.
+    Notes,
 }
 
 /// The --shot-first-run values.
@@ -282,6 +294,7 @@ pub fn run(opts: Options) -> i32 {
             harness: shot.harness,
             first_run: shot.first_run,
             settings: shot.settings,
+            update: shot.update,
         });
     }
     if let Some(home) = std::env::var_os("HOME").and_then(|h| h.into_string().ok()) {

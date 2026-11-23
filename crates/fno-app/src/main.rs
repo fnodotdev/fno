@@ -58,6 +58,10 @@ struct Args {
     /// Theme choice page through real Enter.
     #[arg(long = "shot-settings", value_enum)]
     shot_settings: Option<ShotSettings>,
+    /// Update card state --shot paints: `ready` is the Restart card,
+    /// `notes` the release notes of a build just installed.
+    #[arg(long = "shot-update", value_enum, hide = true)]
+    shot_update: Option<ShotUpdate>,
     /// Hold the composited shot window up for a foreign capturer
     /// instead of capturing. Diagnostic.
     #[arg(long = "shot-hold", hide = true)]
@@ -122,6 +126,15 @@ impl ShotView {
     }
 }
 
+/// The --shot-update values.
+#[derive(clap::ValueEnum, Clone)]
+enum ShotUpdate {
+    /// The Restart card for a staged build.
+    Ready,
+    /// The release notes card of a build just installed.
+    Notes,
+}
+
 /// The --shot-find values.
 #[derive(clap::ValueEnum, Clone)]
 enum ShotFind {
@@ -174,6 +187,10 @@ fn main() {
                 ShotSettings::Panel => fno_app::SettingsShot::Panel,
                 ShotSettings::Filter => fno_app::SettingsShot::Filter,
                 ShotSettings::Page => fno_app::SettingsShot::Page,
+            }),
+            update: args.shot_update.map(|u| match u {
+                ShotUpdate::Ready => fno_app::UpdateShot::Ready,
+                ShotUpdate::Notes => fno_app::UpdateShot::Notes,
             }),
             hold: args.shot_hold,
             sheet: args.shot_sheet,

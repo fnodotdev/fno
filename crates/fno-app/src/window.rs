@@ -135,6 +135,10 @@ pub enum Action {
     /// Open the launch composer, with a kind pre-picked when the opener
     /// named one; `None` keeps the retained draft's kind.
     OpenLaunch(Option<launch::Kind>),
+    /// The update card's Restart: swap in the staged build and relaunch.
+    RestartForUpdate,
+    /// The update card's Later or Dismiss: drop the card.
+    DismissUpdate,
 }
 
 /// The stable control id a click's [`Action`] ships to the usage events arm
@@ -176,7 +180,18 @@ fn click_id(action: &Action) -> &'static str {
         Action::Reconnect => "reconnect",
         Action::Mail(_) => "mail_lead",
         Action::OpenLaunch(_) => "open_launch",
+        Action::RestartForUpdate => "restart_for_update",
+        Action::DismissUpdate => "dismiss_update",
     }
+}
+
+/// What the update card says.
+#[derive(Debug, Clone, PartialEq)]
+enum UpdateCard {
+    /// A proven build is staged; Restart swaps it in.
+    Ready(super::update::Ready),
+    /// This launch is the new build: its release notes, shown once.
+    Installed { version: String, notes: String },
 }
 
 /// Where an answer the user clicked stands. The row shows it in place of its
@@ -312,6 +327,11 @@ pub struct Root {
     /// so only the newest toast's expiry clears it.
     question_toast: Option<(String, u64)>,
     question_toast_gen: u64,
+    /// The update card: a staged build waiting for Restart, or the notes of
+    /// the build this launch just installed (shown once).
+    update_card: Option<UpdateCard>,
+    /// A staged build found while the notes card was up; Dismiss offers it.
+    held_update: Option<super::update::Ready>,
     /// Every question id any board read has listed. Arrival = an id the set
     /// has not met; the first read seeds it silently, unless the shot flag
     /// below is set, so an app open never toasts a backlog.
@@ -361,6 +381,7 @@ pub struct Root {
     _appearance: Option<Subscription>,
     _notice: Option<Task<()>>,
     _question_toast: Option<Task<()>>,
+    _update: Option<Task<()>>,
     _alerts: Option<Task<()>>,
     _alerts_tick: Option<Task<()>>,
     /// The attention signals: the lattice diff, the switch cache, the badge.
@@ -497,6 +518,8 @@ impl Root {
             answer: None,
             question_toast: None,
             question_toast_gen: 0,
+            update_card: None,
+            held_update: None,
             seen_questions: HashSet::new(),
             questions_seeded: false,
             toast_on_first_read: false,
@@ -519,6 +542,7 @@ impl Root {
             _appearance: None,
             _notice: None,
             _question_toast: None,
+            _update: None,
             _alerts: None,
             _alerts_tick: None,
             alerts: alerts::Alerts::new(),
@@ -869,6 +893,120 @@ impl Root {
         }));
     }
 
+    /// Read the release feed now and every [`update::RECHECK`] until a build
+    /// is staged. A failed read waits for the next round, and a build that
+    /// already names the running version never shows a card.
+    pub(super) fn start_update(&mut self, cx: &mut Context<Self>) {
+        if !super::update::bundled() {
+            return;
+        }
+        self.update_card = super::update::take_pending_notes(super::update::RUNNING)
+            .map(|(version, notes)| UpdateCard::Installed { version, notes });
+        self._update = Some(cx.spawn(async move |this, cx| loop {
+            let read = cx
+                .background_executor()
+                .spawn(async { super::update::check(super::update::RUNNING) })
+                .await;
+            match read {
+                Ok(Some(ready)) => {
+                    let _ = this.update(cx, |root, cx| {
+                        match root.update_card {
+                            // The notes card of the build just installed is
+                            // up: hold the staged build for its Dismiss.
+                            Some(UpdateCard::Installed { .. }) => root.held_update = Some(ready),
+                            _ => root.update_card = Some(UpdateCard::Ready(ready)),
+                        }
+                        cx.notify();
+                    });
+                }
+                Ok(None) => {}
+                Err(e) => eprintln!("fno-app: update check: {e}"),
+            }
+            cx.background_executor().timer(super::update::RECHECK).await;
+        }));
+    }
+
+    /// The update card's two buttons. Later and Dismiss offer a build held
+    /// behind the notes card; Restart swaps in the staged one and quits.
+    fn update_act(&mut self, action: &Action, cx: &mut Context<Self>) {
+        if *action == Action::DismissUpdate {
+            self.update_card = self.held_update.take().map(UpdateCard::Ready);
+            return;
+        }
+        let Some(UpdateCard::Ready(ready)) = self.update_card.clone() else {
+            return;
+        };
+        match super::update::install_and_relaunch(&ready) {
+            Ok(()) => {
+                self.send(ClientMsg::Detach);
+                record_ui_state(self, cx);
+                cx.quit();
+            }
+            Err(e) => self.say_as(format!("update: {e}"), true, cx),
+        }
+    }
+
+    /// The update card: a raised card bottom-left. A staged build offers Restart; a fresh install shows its notes
+    /// once and drops on Dismiss.
+    fn update_card_view(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        // The first-run offer owns the main pane: the card stays set and
+        // returns when the mux attaches.
+        if self.offer.is_some() {
+            return None;
+        }
+        let card = self.update_card.as_ref()?;
+        let (head, body, buttons) = match card {
+            UpdateCard::Ready(r) => (
+                format!("fno-app {} is ready", r.version),
+                "Restart to finish the update.".to_string(),
+                vec![
+                    ui::button(
+                        "update-restart",
+                        "Restart",
+                        ui::Button::Primary,
+                        &self.palette,
+                    )
+                    .on_click(cx.listener(|root, _, _, cx| root.act(Action::RestartForUpdate, cx))),
+                    ui::button("update-later", "Later", ui::Button::Quiet, &self.palette).on_click(
+                        cx.listener(|root, _, _, cx| root.act(Action::DismissUpdate, cx)),
+                    ),
+                ],
+            ),
+            UpdateCard::Installed { version, notes } => (
+                format!("Updated to fno-app {version}"),
+                ui::cut(notes.trim(), 400),
+                vec![ui::button(
+                    "update-dismiss",
+                    "Dismiss",
+                    ui::Button::Primary,
+                    &self.palette,
+                )
+                .on_click(cx.listener(|root, _, _, cx| root.act(Action::DismissUpdate, cx)))],
+            ),
+        };
+        Some(
+            div()
+                .absolute()
+                .bottom(px(88.0))
+                .left(px(12.0))
+                .w(px(420.0))
+                .flex()
+                .flex_col()
+                .gap(px(6.0))
+                .px_4()
+                .py_3()
+                .rounded(px(6.0))
+                .border_1()
+                .border_color(rgb(self.palette.faint))
+                .bg(rgb(self.palette.raised))
+                .font_family(ui::MONO)
+                .text_size(px(ui::BODY))
+                .child(ui::role(div(), ui::Role::Name, &self.palette).child(head))
+                .child(div().text_color(rgb(self.palette.muted)).child(body))
+                .child(div().flex().flex_row().gap(px(6.0)).children(buttons)),
+        )
+    }
+
     /// Raise the arrival toast for one question. The element reads the
     /// board live at paint, so a question the board drops hides the toast
     /// even before the timer does. The shot holds it: the capture wants
@@ -990,6 +1128,7 @@ impl Root {
                 self.answer = Some(answer::Sheet::new(id));
             }
             Action::CloseAnswer => self.answer = None,
+            Action::DismissUpdate | Action::RestartForUpdate => self.update_act(&action, cx),
             Action::PickAnswer(n) => {
                 if let Some(s) = self.answer.as_mut() {
                     s.pick = Some(n);
@@ -3920,6 +4059,7 @@ impl Render for Root {
                 .child(text)
         });
         let qtoast = self.question_toast_card(cx);
+        let utoast = self.update_card_view(cx);
         let page = div()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
@@ -3951,7 +4091,8 @@ impl Render for Root {
                     .child(strip)
                     .child(main)
                     .children(toast)
-                    .children(qtoast),
+                    .children(qtoast)
+                    .children(utoast),
             );
         self.overlays(page, window, cx)
     }
@@ -4180,6 +4321,7 @@ pub fn run(
                     });
                     root.first_run = first_run;
                     window.focus(&root.focus);
+                    root.start_update(cx);
                     root
                 })
             },
@@ -4208,6 +4350,7 @@ pub(super) fn root_for_shot(
     font_size: f32,
     find: Option<crate::FindShot>,
     settings: Option<crate::SettingsShot>,
+    update: Option<crate::UpdateShot>,
     empty_chat: bool,
     cmd: bool,
     sheet: bool,
@@ -4249,6 +4392,17 @@ pub(super) fn root_for_shot(
         root.shot = true;
         root.toast_on_first_read = true;
         root.sheet_on_first_read = sheet;
+        root.update_card = update.map(|u| match u {
+            crate::UpdateShot::Ready => UpdateCard::Ready(super::update::Ready {
+                version: "0.0.2".to_string(),
+                notes: String::new(),
+                staged: std::path::PathBuf::new(),
+            }),
+            crate::UpdateShot::Notes => UpdateCard::Installed {
+                version: "0.0.2".to_string(),
+                notes: "The app now checks for new releases in the background and downloads a signed build. When one is ready, a card offers Restart.".to_string(),
+            },
+        });
         root.first_run = first_run == Some(crate::FirstRunShot::KeyCard);
         if empty_chat {
             root.shot_empty_chat = true;
