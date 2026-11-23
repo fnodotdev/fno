@@ -776,9 +776,19 @@ fn abort_fold_leaves_a_conflicted_worktree_as_found() {
         &wt,
     );
     let head = git(&["rev-parse", "HEAD"], &wt);
-    // The fold conflicts, as the push door's does.
-    let merge = git_run(&["merge", "--no-edit", "main"], &wt).unwrap();
-    assert!(!merge.status.success(), "the fixture must conflict");
+    // The fold conflicts, as the push door's does. A real merge needs a
+    // committer identity before it starts. git_run pins every config source
+    // off, so the identity rides the call.
+    let merge = git_run(
+        &[id, ["merge", "--no-edit", "main"].as_slice()].concat(),
+        &wt,
+    )
+    .unwrap();
+    assert!(
+        !merge.status.success(),
+        "the fixture must conflict: {}",
+        String::from_utf8_lossy(&merge.stderr)
+    );
     assert_eq!(git(&["status", "--porcelain"], &wt), "UU f.txt\n");
     let bin = git_bin().to_string_lossy().into_owned();
     assert_eq!(abort_fold(&bin, &wt, crate::pr_push::READ_TIMEOUT), None);
