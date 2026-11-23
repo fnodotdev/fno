@@ -1,6 +1,10 @@
 mail: liveness of HEX8 could not be established; queued durably as recovery only - the recipient must drain its inbox to read this, and may never do so
   live delivery NOT confirmed - do not wait for a reply, recover:
-    fno agent peek HEX8     # did it land? a busy peer may have queued it
-    fno agent resume HEX8   # wakes it (claude) or resumes it (other harnesses), then re-send
-    fno agent attach HEX8   # drive it yourself (claude)
-    fno agent mail withdraw <id>      # none of the above? retract it
+    fno agent session peek HEX8     # did it land? a busy peer may have queued it
+    fno agent session resume HEX8   # wakes it (claude) or resumes it (other harnesses)
+    fno agent session attach HEX8   # drive it yourself (claude)
+    fno agent mail admin withdraw <id> # retract the queued copy FIRST
+    fno agent mail send HEX8 '<message>'  # then re-send
+  a withdraw that refuses because the recipient already claimed
+  the message is telling you it LANDED. Stop there: re-sending on
+  top of that is the double delivery this ladder exists to avoid.
