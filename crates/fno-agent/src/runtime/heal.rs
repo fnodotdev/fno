@@ -2056,10 +2056,11 @@ fn journal_hold_keys(path: &std::path::Path) -> Vec<String> {
 }
 
 /// PRs whose conflicting-trigger refresh already concluded in the last 24
-/// hours, out of the `pr_heal_pr` journal: a real push (`rebased`) or a
-/// push that moved nothing (`skip_rebase_noop`). A still-conflicting
-/// rebase is deliberately absent: the owner may resolve and need the
-/// retry, so it spends the per-run budget instead. Rows filter on `root`,
+/// hours, out of the `pr_heal_pr` journal: a real push (`rebased`), a
+/// push that moved nothing (`skip_rebase_noop`), or a fold that
+/// conflicted (`skip_fold_conflict`). A conflict counts because the
+/// owner settles it by hand: a retry from here folds the same conflict
+/// again. Rows filter on `root`,
 /// so one checkout's PR 12 never caps another's, and on the 24-hour
 /// window. The drive loop's one store read per run; the conflicting
 /// trigger's per-PR cap filters it per PR.
@@ -2085,7 +2086,7 @@ fn journal_refreshed_prs(path: &std::path::Path, root: &str) -> std::collections
         .filter(|row| {
             matches!(
                 row.pointer("/data/action").and_then(Value::as_str),
-                Some("rebased") | Some("skip_rebase_noop")
+                Some("rebased") | Some("skip_rebase_noop") | Some("skip_fold_conflict")
             )
         })
         .filter_map(|row| {
@@ -2776,7 +2777,7 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
             // holder is next to merge, so its refresh never ages out.
             if trigger == "conflicting" && !slot_holds_this_pr && refreshed_prs_24h.contains(&pr) {
                 println!(
-                    "skip rebase_cap: PR {pr} was rebased within the last 24h; the owner resolves it"
+                    "skip rebase_cap: PR {pr} was refreshed within the last 24h; the owner resolves it"
                 );
                 bump(&mut counts, "skip_rebase_cap");
                 receipt(
@@ -2840,10 +2841,9 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
                     continue;
                 }
                 Ok((false, _, err)) if is_fold_conflict(&err) => {
-                    // A conflict spends the per-run budget, never the 24h
-                    // cap: the owner may resolve and need the retry this
-                    // tick, and the journal cannot tell a resolved tree
-                    // from a stuck one.
+                    // A conflict spends the per-run budget and the 24h cap:
+                    // the owner settles it by hand, and a retry from here
+                    // would fold the same conflict again.
                     rebased_this_run += 1;
                     let files = conflict_files(&err);
                     println!(

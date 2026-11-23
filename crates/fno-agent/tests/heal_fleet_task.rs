@@ -15,6 +15,12 @@ use std::path::Path;
 mod common;
 
 fn args_for(dir: &Path, extra: &[&str]) -> Vec<String> {
+    args_on_journal(dir, "events.jsonl", extra)
+}
+
+/// The journal is caller-named. The fleet-task store is `questions.jsonl`
+/// beside it, whichever journal a run names.
+fn args_on_journal(dir: &Path, journal: &str, extra: &[&str]) -> Vec<String> {
     let mut v = vec![
         "1".to_string(),
         "--gh-bin".to_string(),
@@ -31,7 +37,7 @@ fn args_for(dir: &Path, extra: &[&str]) -> Vec<String> {
     // The journal rides the same test seam as the in-file drive_args: the
     // fleet-task store is questions.jsonl beside it.
     v.push("--events-file".to_string());
-    v.push(dir.join("events.jsonl").to_string_lossy().into_owned());
+    v.push(dir.join(journal).to_string_lossy().into_owned());
     v.extend(extra.iter().map(|s| s.to_string()));
     v
 }
@@ -156,18 +162,60 @@ fn a_fold_conflict_files_one_fleet_task_and_a_clean_fold_closes_it() {
     );
     // The skip receipt itself stays asserted in-file: the events journal is
     // store-committed, and the committed read is crate-private.
-    // The next run folds PR 1 cleanly, and the task closes.
+    // The cap holds PR 1 for 24h after the conflict. The clean fold runs
+    // as the next day would: a fresh journal holds no cap row, and the
+    // task store is still the one beside it. The clean fold closes the task.
     stub_fno_push(
         d,
         "pr-push: origin/main behind-before=9 behind-after=0 preflight=full ci=settled sha=abc pushed=1",
         0,
         "",
     );
-    fno_agent::heal::run_heal(&args_for(d, &["--all", "--apply"]));
+    fno_agent::heal::run_heal(&args_on_journal(
+        d,
+        "events-day-2.jsonl",
+        &["--all", "--apply"],
+    ));
     let store = store_text(d);
     assert!(
         store.contains(r#""type":"fleet_task_closed""#) && store.contains(r#""reason":"rebased""#),
         "the clean fold closed the task: {store}"
+    );
+}
+
+/// How many times the stub `fno` ran `do pr push`.
+fn pushes(dir: &Path) -> usize {
+    log_of(dir, "fno.log")
+        .lines()
+        .filter(|l| l.contains("do pr push"))
+        .count()
+}
+
+/// A fold conflict spends the 24h cap like a rebase does. The first run's
+/// `skip_fold_conflict` receipt holds the next run's push, so a conflict
+/// costs one fold attempt per PR per day, not one per tick.
+#[test]
+fn a_fold_conflict_holds_the_next_run_for_24h() {
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path();
+    stub_gh_rebase(d, "false");
+    stub_git_drive(d);
+    stub_cargo(d);
+    std::fs::create_dir_all(d.join("wt/crates/fno-agent")).unwrap();
+    stub_fno_push(d, "", 3, CONFLICT_PUSH_STDERR);
+    fno_agent::heal::run_heal(&args_for(d, &["--all", "--apply"]));
+    assert_eq!(
+        pushes(d),
+        1,
+        "the first conflict folds once: {}",
+        log_of(d, "fno.log")
+    );
+    fno_agent::heal::run_heal(&args_for(d, &["--all", "--apply"]));
+    assert_eq!(
+        pushes(d),
+        1,
+        "the second run folds again: {}",
+        log_of(d, "fno.log")
     );
 }
 
