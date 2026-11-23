@@ -1426,7 +1426,10 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        let utf8 = |path: &Path| path.to_str().unwrap();
+        // A closure cannot tie its returned `&str` to its `&Path` argument.
+        fn utf8(path: &Path) -> &str {
+            path.to_str().unwrap()
+        }
         let _spaces =
             crate::claims::EnvVarGuard::set("FNO_SPACES_DIR", utf8(&tmp.path().join("spaces")));
         let _agents =
