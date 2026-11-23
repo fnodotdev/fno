@@ -87,6 +87,11 @@ pub enum Event {
     Closed(String),
     /// One launch attempt's progress, correlated by `request_id`.
     Launch(AgentLaunchUpdate),
+    /// The reply to a row menu's Peek: the agent and its recent transcript.
+    Peek {
+        name: String,
+        lines: Vec<String>,
+    },
 }
 
 /// Map one server message to an app event. `None` for messages the app
@@ -133,6 +138,7 @@ fn to_event(msg: ServerMsg) -> Option<Event> {
             .map(|why| Event::Notice(format!("send to pane {} failed: {why}", r.pane_id))),
         ServerMsg::Bye { reason } => Some(Event::Closed(reason)),
         ServerMsg::AgentLaunch(u) => Some(Event::Launch(u)),
+        ServerMsg::PeekBody { name, lines, .. } => Some(Event::Peek { name, lines }),
         _ => None,
     }
 }

@@ -383,9 +383,9 @@ fn seed_world(root: &Path, front: &Path) -> Option<String> {
             "--audience",
             "internal",
             "--why",
-            "the shot world seeds its board",
+            "the demo world needs a populated board",
             "--done-means",
-            "the demo node exists",
+            "the board shows the seeded node",
         ])
         .env("FNO_DEMO_ID_SEED", format!("node-{}", i + 1))
         .stdout(std::process::Stdio::piped())
@@ -696,6 +696,9 @@ fn shot(args: &crate::cli_args::AppShotArgs) -> i32 {
     }
     if let Some(tap) = args.tap.as_deref() {
         cmd.arg("--shot-tap").arg(tap);
+    }
+    if let Some(ui) = args.ui.as_deref() {
+        cmd.arg("--shot-ui").arg(ui);
     }
     match cmd.status() {
         Ok(s) => s.code().unwrap_or(1),

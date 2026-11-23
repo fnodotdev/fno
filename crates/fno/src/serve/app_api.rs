@@ -55,7 +55,7 @@ pub fn start_server(session: &str) -> std::io::Result<()> {
 }
 
 pub mod digest_overlay {
-    pub use crate::digest_overlay::{now_secs, theme_resolved};
+    pub use crate::digest_overlay::{fno_agent_bin, now_secs, theme_resolved};
 }
 
 pub mod lattice {

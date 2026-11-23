@@ -100,6 +100,8 @@ pub struct ShotOptions {
     /// mouse event before the capture: the proof frame for real
     /// interaction on the running demo window.
     pub tap: Option<(f64, f64)>,
+    /// The overlay the frame opens through its real code path.
+    pub ui: Option<UiShot>,
     /// Text the frame's composer holds.
     pub draft: Option<String>,
     /// Harness the start composer shows picked.
@@ -119,6 +121,15 @@ pub enum UpdateShot {
     Ready,
     /// The first launch of a new build: the release notes card.
     Notes,
+}
+
+/// The `--shot-ui` states.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum UiShot {
+    RowMenu,
+    RowMenuNode,
+    TabRename,
+    Scrolled,
 }
 
 /// The --shot-first-run values.
@@ -290,6 +301,7 @@ pub fn run(opts: Options) -> i32 {
             empty_chat: shot.empty_chat,
             cmd: shot.cmd,
             tap: shot.tap,
+            ui: shot.ui,
             sheet: shot.sheet,
             draft: shot.draft,
             harness: shot.harness,

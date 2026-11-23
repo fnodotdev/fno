@@ -53,6 +53,9 @@ struct Args {
     /// posted mouse event before the capture.
     #[arg(long = "shot-tap", value_name = "X,Y")]
     shot_tap: Option<String>,
+    /// Overlay --shot opens through its real code path before the capture.
+    #[arg(long = "shot-ui", value_enum)]
+    shot_ui: Option<ShotUi>,
     /// Settings-panel state --shot paints: `panel` opens the panel,
     /// `filter` types `alert` through the real field, `page` opens the
     /// Theme choice page through real Enter.
@@ -150,6 +153,19 @@ fn parse_point(s: &str) -> Option<(f64, f64)> {
     Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
 }
 
+/// The --shot-ui values.
+#[derive(clap::ValueEnum, Clone)]
+enum ShotUi {
+    /// The first agent's row menu, opened as a right-click opens it.
+    RowMenu,
+    /// The same menu for an agent that carries a node.
+    RowMenuNode,
+    /// The first tab's in-place rename field.
+    TabRename,
+    /// The back-to-live pill, as a scrolled-back pane shows it.
+    Scrolled,
+}
+
 /// The --shot-settings values.
 #[derive(clap::ValueEnum, Clone)]
 enum ShotSettings {
@@ -183,6 +199,12 @@ fn main() {
                 ShotFind::Chords => fno_app::FindShot::Chords,
             }),
             tap: args.shot_tap.as_deref().and_then(parse_point),
+            ui: args.shot_ui.map(|u| match u {
+                ShotUi::RowMenu => fno_app::UiShot::RowMenu,
+                ShotUi::RowMenuNode => fno_app::UiShot::RowMenuNode,
+                ShotUi::TabRename => fno_app::UiShot::TabRename,
+                ShotUi::Scrolled => fno_app::UiShot::Scrolled,
+            }),
             settings: args.shot_settings.map(|s| match s {
                 ShotSettings::Panel => fno_app::SettingsShot::Panel,
                 ShotSettings::Filter => fno_app::SettingsShot::Filter,
