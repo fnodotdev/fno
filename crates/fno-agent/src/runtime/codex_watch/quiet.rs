@@ -167,6 +167,55 @@ fn quota_reset_ahead(path: Option<&Path>, codex: bool, now: i64) -> Option<i64> 
     (reset > now).then_some(reset)
 }
 
+/// The newest `help_route` row per emitting session, folded from the
+/// global journal once per tick: the same rows the help-router sweep acts
+/// on, so the shield and the sweep cannot disagree on the newest truth.
+/// `(ts, route kind)` per session id (`run`).
+fn newest_help_routes(global: &Path) -> std::collections::HashMap<String, (i64, String)> {
+    fold_newest_help_routes(crate::event_store::journal_text(global, &["help_route"]).lines())
+}
+
+fn fold_newest_help_routes<'a>(
+    lines: impl Iterator<Item = &'a str>,
+) -> std::collections::HashMap<String, (i64, String)> {
+    let mut out = std::collections::HashMap::new();
+    for line in lines {
+        let Ok(row) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let Some(run) = row.get("run").and_then(Value::as_str) else {
+            continue;
+        };
+        let ts = row
+            .get("ts")
+            .and_then(Value::as_str)
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+            .map(|t| t.timestamp())
+            .unwrap_or(0);
+        let route = row
+            .pointer("/data/route")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        match out.get(run) {
+            Some((prev, _)) if *prev > ts => {}
+            _ => {
+                out.insert(run.to_string(), (ts, route));
+            }
+        }
+    }
+    out
+}
+
+/// The seat's park verdict: the session's newest help route still parks it
+/// and the worker has produced nothing since the row landed. Activity in
+/// the row's own second is still the help emission itself, which the stop
+/// hook routes in that second. A dead worker never parks: no wake lands
+/// on a gone session, so recovery stays the ladder's.
+fn help_parked(park: Option<&(i64, String)>, activity: i64, dead: bool) -> bool {
+    !dead && matches!(park, Some((ts, route)) if *ts >= activity && route_parks_the_seat(route))
+}
+
 /// Fold the quota reading into the ladder verdict: a blocked worker's nudge,
 /// resume and help all hold until the reset ([`Action::Wait`]), and a
 /// transition arms or clears the episode's hold so the caller emits exactly
@@ -287,6 +336,17 @@ pub(crate) fn parked_by_newest_ruling_text<'a>(
 /// "parked" means.
 pub(crate) fn parked_by_newest_ruling(rows: &[Value], node: &str) -> bool {
     parked_by_newest_ruling_text(rows, node).is_some()
+}
+
+/// The route kinds whose wake owner is not the quiet ladder: a `timer`
+/// wait is the help-router sweep's to fire, and an off-session delivery,
+/// its ladder climbs, and a user-page filing all wait on a person. A
+/// `ruled` row names a settled escalation and an `in-session` row names a
+/// session the stop hook is still driving. An unknown kind holds nothing:
+/// a missed park re-wakes a parked worker, while a wrong park strands a
+/// worker whose only waker now refuses.
+fn route_parks_the_seat(route: &str) -> bool {
+    matches!(route, "timer" | "off-session" | "climbed" | "question-page")
 }
 
 fn action(episode: &mut Episode, tail: &Tail, now: i64, live: bool, dead: bool) -> Action {
@@ -639,6 +699,9 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
     let rulings = crate::decision_index::default_store_live()
         .map(|index| index.rows)
         .unwrap_or_default();
+    // The newest help route per session, folded once per tick: the park
+    // shield reads the same rows the help-router sweep acts on.
+    let help_parks = newest_help_routes(&home.events_jsonl());
     let now = chrono::Utc::now().timestamp();
     let claude_home = crate::claude_ask::ClaudeHome::from_env();
     let watches = crate::watch_expiry::read_evidence(home, now * 1000)?;
@@ -781,6 +844,14 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
             let Some(tail) = transcript_tail else {
                 return Ok(());
             };
+            // A worker whose newest help route still parks it waits on the
+            // route's own owner, the sweep's timer or a human answer, so the
+            // ladder holds. Activity newer than the row lifts the park back
+            // into the ordinary ladder: the worker is back, or the owner's
+            // wake just landed.
+            if help_parked(help_parks.get(sid), tail.activity, dead) {
+                return Ok(());
+            }
             let read_receipt = episode
                 .pending
                 .as_ref()
@@ -1701,5 +1772,93 @@ mod tests {
             500_000 + WATCH_LINGER_MS - 1
         ));
         assert!(!watch_shielded(watch, &evidence, 500_000 + WATCH_LINGER_MS));
+    }
+
+    #[test]
+    fn only_wake_owners_other_than_the_ladder_park_the_seat() {
+        assert!(route_parks_the_seat("timer"));
+        assert!(route_parks_the_seat("off-session"));
+        assert!(route_parks_the_seat("climbed"));
+        assert!(route_parks_the_seat("question-page"));
+        assert!(!route_parks_the_seat("ruled"));
+        assert!(!route_parks_the_seat("in-session"));
+        assert!(!route_parks_the_seat(""));
+        assert!(
+            !route_parks_the_seat("some-future-kind"),
+            "an unknown route kind holds nothing"
+        );
+    }
+
+    #[test]
+    fn a_newest_help_wait_park_holds_the_ladder_until_activity_or_death() {
+        let park = Some((2_000, "timer".to_string()));
+        assert!(
+            help_parked(park.as_ref(), 1_000, false),
+            "a live route newer than the last work parks the seat"
+        );
+        assert!(
+            help_parked(park.as_ref(), 2_000, false),
+            "the help emission routes in the same second its transcript line lands"
+        );
+        assert!(
+            !help_parked(park.as_ref(), 2_001, false),
+            "activity past the row is the worker back, or the owner's wake landing"
+        );
+        assert!(
+            !help_parked(park.as_ref(), 1_000, true),
+            "a dead worker never parks: recovery stays the ladder's"
+        );
+        let ruled = Some((2_000, "ruled".to_string()));
+        assert!(
+            !help_parked(ruled.as_ref(), 1_000, false),
+            "a settled escalation leaves the ordinary ladder"
+        );
+        assert!(!help_parked(None, 0, false), "no route row, no park");
+    }
+
+    /// One `help_route` row as the journal carries it.
+    fn route_row(ts: &str, run: &str, route: &str) -> String {
+        json!({"ts": ts, "type": "help_route", "run": run,
+               "data": {"route": route}})
+        .to_string()
+    }
+
+    #[test]
+    fn the_newest_route_row_per_session_wins_over_journal_order() {
+        let lines = [
+            route_row("2026-01-01T00:05:00Z", "s1", "ruled"),
+            route_row("2026-01-01T00:04:00Z", "s1", "off-session"),
+            route_row("2026-01-01T00:04:00Z", "s2", "timer"),
+            "not json at all".to_string(),
+            route_row("2026-01-01T00:06:00Z", "s3", "ruled"),
+        ];
+        let stamp = |iso: &str| {
+            chrono::DateTime::parse_from_rfc3339(iso)
+                .unwrap()
+                .timestamp()
+        };
+        let newest = fold_newest_help_routes(lines.iter().map(String::as_str));
+        assert_eq!(
+            newest.get("s1"),
+            Some(&(stamp("2026-01-01T00:05:00Z"), "ruled".to_string())),
+            "the newest row wins over journal order"
+        );
+        assert_eq!(
+            newest.get("s2"),
+            Some(&(stamp("2026-01-01T00:04:00Z"), "timer".to_string()))
+        );
+        let non_route = json!({"ts": "2026-01-01T00:06:00Z", "type": "blocked",
+               "run": "s3", "data": {}})
+        .to_string();
+        let without = fold_newest_help_routes(
+            lines
+                .iter()
+                .map(String::as_str)
+                .chain(std::iter::once(non_route.as_str())),
+        );
+        assert!(
+            !without.contains_key("s3"),
+            "a non-help_route type never joins the fold"
+        );
     }
 }
