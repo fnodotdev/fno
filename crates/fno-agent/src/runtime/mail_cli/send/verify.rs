@@ -321,8 +321,10 @@ pub(super) fn live_pane_for(target: &str, session_id: Option<&str>) -> Option<i6
 
 /// Python `receipts.report_landing`: after the settle window, re-read the
 /// recipient and print `landed (<how>)`, the held line for a `live-drain`
-/// owner, or the NOT LANDED block. False only for NOT LANDED; the caller owns
-/// the non-zero exit.
+/// owner whose live leg went out unconfirmed, the failed-live-leg arm for a
+/// `live-drain` owner whose live leg refused outright, or the NOT LANDED
+/// block. False only for NOT LANDED and the failed arm; the caller owns the
+/// non-zero exit.
 pub(super) fn report_landing(
     msg_id: &str,
     target: &str,
@@ -330,6 +332,7 @@ pub(super) fn report_landing(
     to_harness: Option<&str>,
     to_session: Option<&str>,
     durable_owner: Option<&str>,
+    failed_reason: Option<&str>,
 ) -> bool {
     let settle = post_send_settle_seconds();
     if settle > 0.0 {
@@ -341,6 +344,13 @@ pub(super) fn report_landing(
         return true;
     }
     if durable_owner == Some("live-drain") {
+        if !live_drain_holds(failed_reason) {
+            println!(
+                "{}",
+                crate::mail_receipt::failed_live_leg(msg_id, target, failed_reason)
+            );
+            return false;
+        }
         println!("{}", crate::mail_receipt::held_for_turn(msg_id, target));
         return true;
     }
@@ -370,4 +380,29 @@ pub(super) fn report_landing(
         Err(exc) => println!("{exc}"),
     }
     false
+}
+
+/// The refusals that can never land. A send fails on these names alone;
+/// every other reason (an unconfirmed inject, a busy recipient's
+/// `not-injectable`, anything unknown) holds for the turn boundary.
+const TERMINAL_REFUSAL_REASONS: [&str; 5] = [
+    "no-pane-ref",
+    "no-lane",
+    "no-recipient",
+    "stage-failed",
+    "turn-parse-failed",
+];
+
+/// The live-drain verdict gate: a send fails only on a named refusal from
+/// [`TERMINAL_REFUSAL_REASONS`]. Everything else holds for the turn boundary
+/// (the documented semantic - it may land past the confirm window). A missing
+/// reason is unknown, not a refusal: unknown holds, because every caller
+/// that reaches the gate with None recorded no live miss at all.
+pub(super) fn live_drain_holds(failed_reason: Option<&str>) -> bool {
+    match failed_reason {
+        None => true,
+        Some(r) => !r
+            .split(';')
+            .any(|token| TERMINAL_REFUSAL_REASONS.contains(&token)),
+    }
 }

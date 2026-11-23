@@ -1075,6 +1075,43 @@ mod tests {
     }
 
     #[test]
+    fn an_aliased_recorded_url_closes_through_a_resolving_reader() {
+        // The done-when probe: the close path hands an aliased record
+        // (fnodotdev/fno-web) to the reader unchanged and closes on its
+        // answer, instead of refusing a dead repo name. The resolution
+        // itself lives in merge_state (query_pr_merge_state,
+        // repo_slug_or_err) and is pinned there.
+        let node = open_node(json!({
+            "pr_number": 273,
+            "pr_url": "https://github.com/fnodotdev/fno-web/pull/273",
+            "cwd": ".",
+        }));
+        let asked = std::sync::Mutex::new(None);
+        let records = scan_merge_drift(&[node], None, None, |pr, repo, _, _| {
+            *asked.lock().unwrap() = repo.map(str::to_string);
+            Ok(PrMergeState {
+                number: pr,
+                state: "MERGED".into(),
+                url: None,
+                merged_at: Some("2026-11-21T00:00:00Z".into()),
+                merge_sha: None,
+                changed_files: Vec::new(),
+                files_truncated: false,
+                body: Some("Fixes x-aaaa".into()),
+            })
+        });
+        assert_eq!(
+            asked.lock().unwrap().as_deref(),
+            Some("fnodotdev/fno-web"),
+            "the record's repo reaches the reader, which resolves the alias"
+        );
+        assert_eq!(records.len(), 1, "{records:?}");
+        let record = records.first().expect("one record");
+        assert_eq!(record.pr_state, "MERGED");
+        assert!(record.closeable(), "the node closes on the reader's answer");
+    }
+
+    #[test]
     fn the_missing_verdict_heal_decision_table() {
         let no_query = |_: i64, _: Option<&str>, _: Option<&str>, _: bool| {
             panic!("query owed nothing: no primary-closed read was owed")
@@ -1412,10 +1449,23 @@ fn primary_closed(
         Ok(state) => state.state == "CLOSED",
         Err(e) => {
             let nid = node.get("id").and_then(Value::as_str).unwrap_or("?");
-            advisories.push(format!(
-                "open-binding rebind: {nid} PR #{number} unreadable ({})",
-                e.message
-            ));
+            if super::merge_evidence::primary_docs_twin_number(node).is_some() {
+                // The twin won the primary slot (the state the 404 hint
+                // once produced): a bare "unreadable" advisory is what
+                // once invited a session to re-point the primary at the
+                // docs PR by hand. Name the state and the sanctioned
+                // repair instead.
+                advisories.push(format!(
+                    "open-binding rebind: {nid}'s primary PR #{number} is \
+                     the docs twin; run `fno backlog reconcile --node {nid} \
+                     --repair-docs-twin` to demote it"
+                ));
+            } else {
+                advisories.push(format!(
+                    "open-binding rebind: {nid} PR #{number} unreadable ({})",
+                    e.message
+                ));
+            }
             false
         }
     }

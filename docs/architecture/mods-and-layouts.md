@@ -96,7 +96,7 @@ Native mods list and preview, and their views open from the mux as before.
 
 ## Hosted users
 
-A hosted user is an invitee on the owner's web bridge. The bridge runs `fno mux serve --web` behind `tailscale serve`, and a `[[web.invites]]` row names the login. The owner at their own machine is the login `local`. A bridge with no invite list knows no login, so it shows no personal views and refuses a look change.
+A hosted user is an invitee on the owner's web bridge. The bridge runs `fno mux serve --web` behind `tailscale serve`, and a `[[web.invites]]` row in the owner's [trusted file](attention-items.md#the-trusted-file) names the login. A mod, a layout or the served folder cannot add that row. A revoke stops the next view read and the next look write, with no restart. The owner at their own machine is the login `local`. A bridge with no invite list knows no login, so it shows no personal views and refuses a look change.
 
 A hosted user's views are personal. They are not packs, and nothing installs them. Each one is a `view` document in the store, kept per login and per project:
 

@@ -47,6 +47,9 @@ const REGISTERED_TEST_PROBES: &[(&str, &str)] = &[(
 /// command classified.
 fn looks_like_decision_id(token: &str) -> bool {
     let token = token.trim();
+    if crate::numbers::is_label_key(token) {
+        return true;
+    }
     let Some(rest) = token.strip_prefix("d-") else {
         return false;
     };
@@ -771,7 +774,10 @@ pub(crate) fn list_core_over(
             let hash = crate::numbers::resolve('d', s)?;
             looks_like_decision_id(&hash).then_some(hash)
         })
-        .unwrap_or_default();
+        .unwrap_or_default()
+        // The mint stores label keys with an uppercase D; the row side of the
+        // comparison below lowercases, so the key side must too.
+        .to_lowercase();
 
     let numbers = crate::numbers::labels();
     let mut out: Vec<Value> = Vec::new();
@@ -837,7 +843,13 @@ pub(crate) fn list_core_over(
                     }
                     expiry_lc
                 }
-                (_, None) if lane_derived == "agent" || lane_derived == "unattributed" => {
+                // A row that names an audience is scoped by it; with no
+                // derivable closure key and no stated expiry it is a standing
+                // ruling, so it reads live like the user-lane rows below.
+                (_, None)
+                    if (lane_derived == "agent" || lane_derived == "unattributed")
+                        && rows_str(&row, "audience").is_empty() =>
+                {
                     "unscoped".to_string()
                 }
                 (_, None) => {
@@ -2473,6 +2485,129 @@ mod tests {
         }
         drop(lock);
         assert_eq!(lifecycle_of(&out, "d-bbbb0002"), "unknown");
+    }
+
+    #[test]
+    fn an_audience_bearing_topic_ruling_reads_live() {
+        let text = [
+            envelope(
+                "d-gggg0007",
+                "2026-09-22T00:00:00Z",
+                "role",
+                "release:test-topic",
+                ",\"audience\":\"internal\"",
+            ),
+            envelope(
+                "d-hhhh0008",
+                "2026-09-22T00:00:00Z",
+                "role",
+                "release:test-topic",
+                "",
+            ),
+        ]
+        .join("\n");
+        let (rows, damaged) = rows_from_jsonl(&text);
+        assert_eq!(damaged, 0);
+        // Some(empty): the derivation never consults the ambient machine
+        // graph, so a topic subject derives no closure key for either row.
+        let entries: Option<Vec<Value>> = Some(Vec::new());
+        let out = list_core_over(
+            &rows,
+            0,
+            GraphEntries {
+                graph: entries.as_deref(),
+                unread: None,
+            },
+            None,
+            None,
+            None,
+            true,
+        );
+        // The D3665 shape: role authority on a topic subject with a named
+        // audience is a standing ruling, so it reads live, not unscoped.
+        assert_eq!(lane_of(&out, "d-gggg0007"), "agent");
+        assert_eq!(lifecycle_of(&out, "d-gggg0007"), "live");
+        // The same shape with no named audience stays unscoped.
+        assert_eq!(lane_of(&out, "d-hhhh0008"), "agent");
+        assert_eq!(lifecycle_of(&out, "d-hhhh0008"), "unscoped");
+    }
+
+    #[test]
+    fn the_number_query_matches_label_keys_in_any_case() {
+        let lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = TempDir::new().unwrap();
+        let db_dir = dir.path().join("db");
+        std::fs::create_dir_all(&db_dir).unwrap();
+        {
+            // The store the listing resolves numbers through: under
+            // FNO_STATE_DIR the anchor walks to db/, so seed the db twin.
+            let conn = rusqlite::Connection::open(db_dir.join("graph.db")).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS fno_numbers (\
+                 kind TEXT NOT NULL, num INTEGER NOT NULL, key TEXT NOT NULL, \
+                 store TEXT NOT NULL, host TEXT NOT NULL, created_at INTEGER NOT NULL, \
+                 PRIMARY KEY (store, kind, num), UNIQUE (store, key));",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO fno_numbers (kind, num, key, store, host, created_at) \
+                 VALUES ('d', 3665, 'D3665', 'local', 'test', 0)",
+                [],
+            )
+            .unwrap();
+        }
+        let saved_home = std::env::var_os("FNO_HOME");
+        std::env::set_var("FNO_HOME", dir.path());
+        let saved_state = std::env::var_os("FNO_STATE_DIR");
+        std::env::set_var("FNO_STATE_DIR", dir.path());
+        let text = [
+            envelope("D3665", "2026-09-22T00:00:00Z", "role", "release:topic", ""),
+            envelope(
+                "d-1a2b3c4d",
+                "2026-09-23T00:00:00Z",
+                "operator",
+                "topic-hash",
+                "",
+            ),
+        ]
+        .join("\n");
+        let (rows, damaged) = rows_from_jsonl(&text);
+        assert_eq!(damaged, 0);
+        let entries: Option<Vec<Value>> = Some(Vec::new());
+        let kept = |subject: &str| -> Vec<String> {
+            let out = list_core_over(
+                &rows,
+                0,
+                GraphEntries {
+                    graph: entries.as_deref(),
+                    unread: None,
+                },
+                Some(subject),
+                None,
+                None,
+                true,
+            );
+            out.rows.iter().map(|r| id_of(r).to_string()).collect()
+        };
+        let kept_upper = kept("D3665");
+        let kept_lower = kept("d3665");
+        match saved_home {
+            Some(v) => std::env::set_var("FNO_HOME", v),
+            None => std::env::remove_var("FNO_HOME"),
+        }
+        match saved_state {
+            Some(v) => std::env::set_var("FNO_STATE_DIR", v),
+            None => std::env::remove_var("FNO_STATE_DIR"),
+        }
+        drop(lock);
+        // The mint stores the label key uppercase; the query matches it in
+        // either case, and the unheld number keeps nothing.
+        assert!(kept_upper.iter().any(|id| id == "D3665"), "{kept_upper:?}");
+        assert!(kept_lower.iter().any(|id| id == "D3665"), "{kept_lower:?}");
+        assert!(!kept_upper.iter().any(|id| id == "d-1a2b3c4d"));
+        assert!(kept("D9999").is_empty());
     }
 
     #[test]

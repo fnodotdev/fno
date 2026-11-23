@@ -205,7 +205,7 @@ A live inject writes nothing to the bus; the durable envelope is written only wh
 
 And do not settle for the queue when the peer is merely idle - the handle you mailed is the same id these take, so bring it back and get the answer now:
 
-`fno agent session peek <short-id>` (alive?) · `resume <short-id>` (wakes it, claude, or resumes it, other harnesses, then re-send) · `attach <short-id>` (drive it yourself, claude).
+`fno agent session peek <short-id>` (alive?) · `resume <short-id>` (wakes it, claude, or resumes it, other harnesses) · `attach <short-id>` (drive it yourself, claude). Withdraw the queued copy with `fno agent mail admin withdraw <id>` before any re-send. When the withdraw says the copy was claimed, stop.
 
 For a ruling, instruction, or decision, confirm action from the recipient's transcript or artifact. A receipt alone is not enough. `accepted-new-turn` and `accepted-steer` prove the recipient's turn record holds the message, not that it acted. A pure ack or FYI can remain durable only with a live drain owner: `live-drain`, `wake-daemon`, or `inbox-drain`. A `dead-letter` owner means nothing drains it. Durable mail there is silent loss.
 

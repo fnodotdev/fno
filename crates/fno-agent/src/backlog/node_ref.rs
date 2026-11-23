@@ -50,18 +50,42 @@ pub(crate) fn valid_prefix_word(word: &str) -> bool {
 /// a number. Gated on the mode, so `wave-1` never reads as an id in a hex
 /// project. Scanners call this per token, so the config is read once per
 /// process.
-fn is_sequential_tail(prefix: &str, tail: &str) -> bool {
+pub(crate) fn is_sequential_tail(prefix: &str, tail: &str) -> bool {
     static SEQUENTIAL_PREFIX: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     (1..=7).contains(&tail.len())
         && !tail.starts_with('0')
         && tail.bytes().all(|b| b.is_ascii_digit())
         && SEQUENTIAL_PREFIX
-            .get_or_init(|| {
-                settings::node_id_sequential()
-                    .then(|| settings::node_id_prefix().trim_end_matches('-').to_string())
-            })
+            .get_or_init(super::node_ref::sequential_prefix)
             .as_deref()
             == Some(prefix)
+}
+
+/// The configured sequential id prefix (`t`), `None` in hex mode: the
+/// mode-and-prefix pair the tail gate and the pattern builders share.
+pub(crate) fn sequential_prefix() -> Option<String> {
+    settings::node_id_sequential()
+        .then(|| settings::node_id_prefix().trim_end_matches('-').to_string())
+}
+
+/// The sequential arm of the id grammar as a regex fragment
+/// (`t-[1-9][0-9]{0,6}`) for a prefix. Pure over the prefix so tests drive
+/// both modes; `sequential_id_pattern` is the production splice.
+pub(crate) fn sequential_id_pattern_for(prefix: &str) -> String {
+    format!(
+        "{}-[1-9][0-9]{{0,6}}",
+        regex::escape(prefix.trim_end_matches('-'))
+    )
+}
+
+/// `sequential_id_pattern_for` under the board config: the configured
+/// prefix when `backlog.id_mode = "sequential"`, `None` in hex mode. Regex
+/// builders splice it beside the hex arm (the capture shortcode, the
+/// plan-filename readers).
+pub(crate) fn sequential_id_pattern() -> Option<String> {
+    sequential_prefix()
+        .as_deref()
+        .map(sequential_id_pattern_for)
 }
 
 fn valid_hex_suffix(suffix: &str) -> bool {
@@ -92,6 +116,20 @@ pub fn has_node_id_prefix(s: &str) -> bool {
         return true;
     }
     s.starts_with(settings::node_id_prefix().as_str()) || s.starts_with("ab-")
+}
+
+/// The claim-store key a node reference reads under: a bare well-formed id
+/// reads its `node:` row; every other key shape passes through untouched.
+/// The one owner of that rewrite - the CLI status door and the merge-grant
+/// verdict both call it, because a bare lookup answers Free on a live row
+/// and the two readers must never disagree about the row a node claim
+/// lives in.
+pub fn claim_key_for(s: &str) -> String {
+    if is_wellformed_node_id(s) {
+        format!("node:{s}")
+    } else {
+        s.to_string()
+    }
 }
 
 /// The row's retired ids: the `aliases` list the update --to rename

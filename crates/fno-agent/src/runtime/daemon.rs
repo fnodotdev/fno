@@ -1495,11 +1495,11 @@ pub async fn run(home: AgentsHome, opts: DaemonOptions) -> Result<(), DaemonErro
                 let (drifted, drift_refreshed) = drift_flag.tick(ctx.exe_fingerprint.as_ref());
                 let idle_elapsed = last_activity.elapsed() >= ctx.opts.idle_exit;
                 let no_open_rpc = live_conns.load(std::sync::atomic::Ordering::SeqCst) == 0;
+                // A pending schedule holds the idle exit only; drift outranks it.
+                let schedule_pending =
+                    fleet_arms.as_ref().is_some_and(|a| a.schedule_fire.pending_signal());
                 let retire_reason = crate::quiet_retire::quiet_retire_reason(
-                    drifted,
-                    ab_active,
-                    idle_elapsed,
-                    no_open_rpc,
+                    drifted, ab_active, schedule_pending, idle_elapsed, no_open_rpc,
                 );
                 if retire_reason.is_some() {
                     // The liveness read (blocking CONNECT probes) runs OFF the

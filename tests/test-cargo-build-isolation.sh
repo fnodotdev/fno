@@ -54,8 +54,8 @@ if [[ -x "$WRAPPER" ]]; then
   FB_HOME="$TMP/home"
   FB_TMP="$TMP/tmp"
   mkdir -p "$FB_HOME" "$FB_TMP"
-  FB_LOG="$FB_HOME/.fno/logs/cargo-fallback-writers.log"
-  FB_ENV=(-u CI -u CARGO_BUILD_BUILD_DIR HOME="$FB_HOME" TMPDIR="$FB_TMP" PATH="/usr/bin:/bin")
+  FB_LOG="$FB_HOME/.local/state/fno/logs/cargo-fallback-writers.log"
+  FB_ENV=(-u CI -u CARGO_BUILD_BUILD_DIR -u FNO_STATE_HOME -u XDG_STATE_HOME HOME="$FB_HOME" TMPDIR="$FB_TMP" PATH="/usr/bin:/bin")
 
   # Two env-less builds under one parent pid: the log gains exactly one line
   # naming that pid, and stderr carries the remedy once.

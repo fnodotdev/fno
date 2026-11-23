@@ -3412,10 +3412,7 @@ unheard_of_field = true
         );
         std::env::set_var("PWD", &stage);
         std::env::set_var("HOME", &stage);
-        std::env::set_var(
-            "FNO_GLOBAL_SETTINGS_PATH",
-            stage.join("global-settings.yaml"),
-        );
+        std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", stage.join("settings.yaml"));
         let mut rows: std::collections::BTreeMap<String, toml::Value> =
             toml::from_str::<toml::Value>(CAPABILITY_TOML)
                 .unwrap()

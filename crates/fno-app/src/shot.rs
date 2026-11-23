@@ -39,18 +39,17 @@ pub fn run(opts: ShotOptions) -> i32 {
         eprintln!("fno-app --shot: {e}");
         return 2;
     }
-    let session = opts
-        .session
-        .clone()
-        .unwrap_or_else(|| "default".to_string());
+    let session = shot_session(&opts);
     let mode = opts.mode.unwrap_or(MainView::Orchestration);
     let find = opts.find;
     let out = opts.out.clone();
     let family = opts.font.clone();
     let font_size = opts.font_size;
-    let empty_chat = opts.empty_chat;
+    let first_run = opts.first_run;
+    let empty_chat = opts.empty_chat || first_run == Some(crate::FirstRunShot::KeyCard);
     let cmd = opts.cmd;
     let tap = opts.tap;
+    let ui = opts.ui;
     let sheet = opts.sheet;
     let draft = opts.draft.clone();
     let harness = opts.harness.clone();
@@ -93,11 +92,13 @@ pub fn run(opts: ShotOptions) -> i32 {
                 font_size,
                 find,
                 opts.settings,
+                opts.update,
                 empty_chat,
                 cmd,
                 sheet,
                 draft,
                 harness,
+                first_run,
                 window,
                 cx,
             )
@@ -155,7 +156,7 @@ pub fn run(opts: ShotOptions) -> i32 {
             // composited at visible occlusion), so the refresh presents
             // for real. The optional tap posts after the settle so the
             // fold it opens presents before the capture.
-            settle_then_tap(cx, &handle, w, tap).await;
+            settle_then_tap(cx, &handle, w, tap, ui).await;
             // Hold mode: leave the near-invisible composited window up
             // for a foreign capturer, skip the raise and the capture.
             // A foreign capture during hold reads one-percent precision
@@ -234,15 +235,33 @@ fn theme_pin(theme: &str) -> std::io::Result<()> {
     std::env::set_current_dir(&pin_dir)
 }
 
+/// The session the frame attaches to. The no-server frame must not meet a
+/// real server, so an unnamed one attaches to a session no mux was ever
+/// started for.
+fn shot_session(opts: &ShotOptions) -> String {
+    opts.session.clone().unwrap_or_else(|| {
+        if opts.first_run == Some(crate::FirstRunShot::NoServer) {
+            format!("shot-no-server-{}", std::process::id())
+        } else {
+            "default".to_string()
+        }
+    })
+}
+
 /// The pre-warm: connect the link and drain events until the world's
 /// first `Layout` arrives or the budget runs out. Returns the live link,
 /// every event drained before the layout, and the receiver so the root
 /// adopts the stream mid-flight.
+/// The warmed link, or `None` for the no-server frame: it has no world to
+/// wait for and attaches to a socket nobody listens on, so the offer paints.
 fn prewarm(
     session: &str,
-    _opts: &ShotOptions,
-) -> Result<crate::link::WarmedLink, crate::link::LinkError> {
-    crate::link::connect_warmed(session, PREWARM)
+    opts: &ShotOptions,
+) -> Result<Option<crate::link::WarmedLink>, crate::link::LinkError> {
+    if opts.first_run == Some(crate::FirstRunShot::NoServer) {
+        return Ok(None);
+    }
+    crate::link::connect_warmed(session, PREWARM).map(Some)
 }
 
 // The window-server reads the proof needs. CGWindowListCopyWindowInfo
@@ -336,10 +355,25 @@ async fn settle_then_tap(
     handle: &gpui::WindowHandle<crate::window::Root>,
     w: *mut objc::runtime::Object,
     tap: Option<(f64, f64)>,
+    ui: Option<crate::UiShot>,
 ) {
     let settled = wait_settled(cx, handle).await;
     if !settled {
         eprintln!("fno-app --shot: the board feeds never settled; capturing anyway");
+    }
+    // The overlay opens through the same Root method a click calls.
+    if let Some(ui) = ui {
+        handle
+            .update(cx, |root, window, cx| root.shot_ui(ui, window, cx))
+            .ok();
+        cx.background_executor()
+            .timer(Duration::from_millis(300))
+            .await;
+        handle.update(cx, |root, _, _| root.shot_ui_after(ui)).ok();
+        cx.background_executor()
+            .timer(Duration::from_millis(400))
+            .await;
+        handle.update(cx, |_, window, _| window.refresh()).ok();
     }
     // The tap: one real click inside the shot window before the
     // capture. The events queue in the app and run its own mouse

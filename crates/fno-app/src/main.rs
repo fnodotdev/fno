@@ -53,11 +53,18 @@ struct Args {
     /// posted mouse event before the capture.
     #[arg(long = "shot-tap", value_name = "X,Y")]
     shot_tap: Option<String>,
+    /// Overlay --shot opens through its real code path before the capture.
+    #[arg(long = "shot-ui", value_enum)]
+    shot_ui: Option<ShotUi>,
     /// Settings-panel state --shot paints: `panel` opens the panel,
     /// `filter` types `alert` through the real field, `page` opens the
     /// Theme choice page through real Enter.
     #[arg(long = "shot-settings", value_enum)]
     shot_settings: Option<ShotSettings>,
+    /// Update card state --shot paints: `ready` is the Restart card,
+    /// `notes` the release notes of a build just installed.
+    #[arg(long = "shot-update", value_enum, hide = true)]
+    shot_update: Option<ShotUpdate>,
     /// Hold the composited shot window up for a foreign capturer
     /// instead of capturing. Diagnostic.
     #[arg(long = "shot-hold", hide = true)]
@@ -80,6 +87,19 @@ struct Args {
     /// Harness the start composer shows picked. Shot-only.
     #[arg(long = "shot-harness", hide = true)]
     shot_harness: Option<String>,
+    /// First-run state --shot paints: `key-card` is the empty start view
+    /// on a first launch, `no-server` is the offer to start the mux.
+    #[arg(long = "shot-first-run", value_enum, hide = true)]
+    shot_first_run: Option<ShotFirstRun>,
+}
+
+/// The --shot-first-run values.
+#[derive(clap::ValueEnum, Clone)]
+enum ShotFirstRun {
+    /// The empty start view with the splash mark and the key card.
+    KeyCard,
+    /// No mux server answers: the offer to start one.
+    NoServer,
 }
 
 /// The --shot-mode values. The kebab spellings mirror MainView.
@@ -109,6 +129,15 @@ impl ShotView {
     }
 }
 
+/// The --shot-update values.
+#[derive(clap::ValueEnum, Clone)]
+enum ShotUpdate {
+    /// The Restart card for a staged build.
+    Ready,
+    /// The release notes card of a build just installed.
+    Notes,
+}
+
 /// The --shot-find values.
 #[derive(clap::ValueEnum, Clone)]
 enum ShotFind {
@@ -122,6 +151,19 @@ enum ShotFind {
 fn parse_point(s: &str) -> Option<(f64, f64)> {
     let (x, y) = s.split_once(',')?;
     Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+}
+
+/// The --shot-ui values.
+#[derive(clap::ValueEnum, Clone)]
+enum ShotUi {
+    /// The first agent's row menu, opened as a right-click opens it.
+    RowMenu,
+    /// The same menu for an agent that carries a node.
+    RowMenuNode,
+    /// The first tab's in-place rename field.
+    TabRename,
+    /// The back-to-live pill, as a scrolled-back pane shows it.
+    Scrolled,
 }
 
 /// The --shot-settings values.
@@ -157,10 +199,20 @@ fn main() {
                 ShotFind::Chords => fno_app::FindShot::Chords,
             }),
             tap: args.shot_tap.as_deref().and_then(parse_point),
+            ui: args.shot_ui.map(|u| match u {
+                ShotUi::RowMenu => fno_app::UiShot::RowMenu,
+                ShotUi::RowMenuNode => fno_app::UiShot::RowMenuNode,
+                ShotUi::TabRename => fno_app::UiShot::TabRename,
+                ShotUi::Scrolled => fno_app::UiShot::Scrolled,
+            }),
             settings: args.shot_settings.map(|s| match s {
                 ShotSettings::Panel => fno_app::SettingsShot::Panel,
                 ShotSettings::Filter => fno_app::SettingsShot::Filter,
                 ShotSettings::Page => fno_app::SettingsShot::Page,
+            }),
+            update: args.shot_update.map(|u| match u {
+                ShotUpdate::Ready => fno_app::UpdateShot::Ready,
+                ShotUpdate::Notes => fno_app::UpdateShot::Notes,
             }),
             hold: args.shot_hold,
             sheet: args.shot_sheet,
@@ -168,6 +220,10 @@ fn main() {
             cmd: args.shot_cmd,
             draft: args.shot_draft,
             harness: args.shot_harness,
+            first_run: args.shot_first_run.map(|f| match f {
+                ShotFirstRun::KeyCard => fno_app::FirstRunShot::KeyCard,
+                ShotFirstRun::NoServer => fno_app::FirstRunShot::NoServer,
+            }),
         })
     } else {
         None

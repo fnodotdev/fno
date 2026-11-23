@@ -697,6 +697,17 @@ impl ActiveBacklogFacts {
     }
 }
 
+/// The session id a row routes on: `harness_session_id` when non-empty,
+/// else `session_id`, else empty. The one definition every waker reads
+/// (laws d-e952ed19, d-8b72097f: the id is the key, the name a label).
+pub(crate) fn row_session_id(row: &RegistryEntry) -> &str {
+    row.harness_session_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .or_else(|| row.session_id.as_deref().filter(|s| !s.is_empty()))
+        .unwrap_or("")
+}
+
 /// Whether a registry row counts as live for every team-holder read. The
 /// reconcile sweep's fresh `liveness` word decides when it has one; the
 /// stored `status` is only the fallback. A reboot leaves `status: exited`

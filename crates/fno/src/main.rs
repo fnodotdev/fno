@@ -536,6 +536,9 @@ enum Role {
     RootVersion,
     /// A group menu (`fno config`, `fno do --help`, ...), already rendered.
     GroupHelp(String),
+    /// A help request the typed tree resolved (`fno mux pane --help`):
+    /// clap's rendered help, stdout, exit 0.
+    TreeHelp(String),
     /// `fno do delivery evaluate ...`: the tail rides to
     /// `fno-agent delivery-evaluate`, which owns the flags and defaults.
     DoDelivery(Vec<OsString>),
@@ -1408,6 +1411,42 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
     }
 }
 
+/// The command-names row for this argv, when the tail is exactly one
+/// --help/-h and no richer owner answers the spelling. The row's note is
+/// the usage line.
+fn tsv_help(args: &[OsString]) -> Option<String> {
+    let last = args.last()?.to_str()?;
+    if last != "--help" && last != "-h" {
+        return None;
+    }
+    let Some((_, head)) = args.split_last() else {
+        return None;
+    };
+    let path: Vec<&str> = head.iter().map(|a| a.to_str()).collect::<Option<_>>()?;
+    match path.as_slice() {
+        [word, ..]
+            if matches!(
+                *word,
+                "mux" | "version" | "uninstall" | "agent" | "agents" | "mail" | "help"
+            ) =>
+        {
+            None
+        }
+        // Claimed rows whose classifier answers `--help` itself, measured
+        // per row on the shipped binary; the generic arm must not rob them.
+        ["inbox", "decide" | "decisions" | "notify" | "outstanding" | "peers"] => None,
+        // The bare group keeps its full menu (add/get/find/triage); subrows
+        // stay on the generic arm, measured by the tsv-rows walk.
+        ["backlog"] => None,
+        [] => None,
+        words => {
+            let note = fno::command_names::note_for(words)?;
+            let row = words.join(" ");
+            Some(format!("usage: fno {row} - {note}\n"))
+        }
+    }
+}
+
 fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     #[cfg(not(test))]
     fno::doctor_cost::default_report(args);
@@ -1415,6 +1454,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     // The group menus no other classifier claims answer first.
     if let Some(menu) = fno::group_help::classify(args) {
         return Role::GroupHelp(menu);
+    }
+    if let Some(line) = tsv_help(args) {
+        return Role::TreeHelp(line);
     }
     if let [group, family, leaf, rest @ ..] = args {
         if group == "do" && family == "delivery" && leaf == "evaluate" {
@@ -1759,6 +1801,7 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     match cli_args::classify(args) {
         FrontDoor::RootHelp { all } => Role::RootHelp(all),
         FrontDoor::RootVersion => Role::RootVersion,
+        FrontDoor::Help { message } => Role::TreeHelp(message),
         FrontDoor::Usage { message } => {
             // A removed command is refused BY NAME, before the catch-all
             // refusal turns it into an anonymous message (same order the
@@ -1891,12 +1934,13 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
                     .map(|v| v == "-h" || v == "--help")
                     .unwrap_or(false) =>
             {
-                Role::MuxUsage(cli_args::render_path_help(&["mux", "view"]))
+                Role::TreeHelp(cli_args::render_path_help(&["mux", "view"]))
             }
             cli_args::MuxCmd::View(t) => Role::MuxView(t.tail),
-            // Thread help routes in classify's error branch: clap refuses the
-            // hyphen spelling before the external arm can carry it, so
-            // ThreadOp::Name never sees `-h`/`--help`.
+            // An explicit help request on the thread group resolves in the
+            // typed tree now (the group re-enabled its help flag); only the
+            // reseat tail keeps its flag off, so a selector tail never
+            // swallows `-h`.
             cli_args::MuxCmd::Thread { op } => match op {
                 cli_args::ThreadOp::Reseat(t) => Role::MuxThreadReseat(t.tail),
                 cli_args::ThreadOp::Name(words) => Role::MuxThread(words),
@@ -2092,6 +2136,10 @@ fn run_root_role(role: Role, args: &[OsString]) -> ControlFlow<(), Role> {
     match role {
         Role::RootHelp(all) => {
             print!("{}", fno::group_help::root(all));
+            fno::cli_usage::exit(0);
+        }
+        Role::TreeHelp(message) => {
+            print!("{message}");
             fno::cli_usage::exit(0);
         }
         Role::RootVersion => {
@@ -3196,18 +3244,19 @@ mod tests {
     #[test]
     fn proto_role_mux_thread_help_routes_to_one_body_and_never_swallows_a_key() {
         // AC2-HP: both spellings render the SAME self-teaching body, which
-        // carries the addressing contract the docs quote. AC2-EDGE lives in
+        // carries the addressing contract the docs quote, now as a help
+        // answer (stdout, exit 0) rather than a refusal. AC2-EDGE lives in
         // the characterization test beside it: a bare name, a full Codex
         // session UUID and reseat keep their roles rather than routing here.
         let long = match decide_role(&os(&["mux", "thread", "--help"]), false) {
-            Role::MuxUsage(body) => body,
-            other => panic!("--help is usage, got {other:?}"),
+            Role::TreeHelp(body) => body,
+            other => panic!("--help is a help answer, got {other:?}"),
         };
         assert_eq!(
             long,
             match decide_role(&os(&["mux", "thread", "-h"]), false) {
-                Role::MuxUsage(body) => body,
-                other => panic!("-h is usage, got {other:?}"),
+                Role::TreeHelp(body) => body,
+                other => panic!("-h is a help answer, got {other:?}"),
             },
             "both spellings render one body"
         );
@@ -3303,10 +3352,10 @@ mod tests {
             ),
             Role::MuxThread(os(&["3f9d3c55-1c2b-4e8a-9a3f-7b2c5d6e8f90"]))
         );
-        // view: -h is usage; a selector rides verbatim.
+        // view: a bare -h rides to the family's help line; a selector rides verbatim.
         assert!(matches!(
             decide_role(&os(&["mux", "view", "-h"]), false),
-            Role::MuxUsage(_)
+            Role::TreeHelp(_)
         ));
         assert_eq!(
             decide_role(&os(&["mux", "view", "x919", "--url", "--json"]), false),
@@ -3404,7 +3453,7 @@ mod tests {
         // which renders after_help with the pane reference texts.
         assert!(matches!(
             decide_role(&os(&["mux", "pane", "-h"]), false),
-            Role::MuxUsage(_)
+            Role::TreeHelp(_)
         ));
     }
 

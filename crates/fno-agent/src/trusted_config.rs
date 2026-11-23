@@ -1,0 +1,309 @@
+//! The one config file that can grant access: `web.invites` and `attention.sinks`.
+//!
+//! A project file never grants either key, so a served or cloned folder cannot
+//! invite a login, add a bearer or choose where a secret is sent. The file is
+//! the one `fno config set` writes, so a revoke lands where the readers look.
+//! An environment in which those two would differ names no file at all.
+//! The fno crate compiles a generated copy (`build.rs` `sync_module_copy`;
+//! refreshable without a build through `scripts/regen-generated-copies.py`).
+
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+
+/// A key only the trusted file can set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrustedKey {
+    WebInvites,
+    AttentionSinks,
+}
+
+impl TrustedKey {
+    pub const ALL: [Self; 2] = [Self::WebInvites, Self::AttentionSinks];
+
+    fn parts(self) -> [&'static str; 2] {
+        match self {
+            Self::WebInvites => ["web", "invites"],
+            Self::AttentionSinks => ["attention", "sinks"],
+        }
+    }
+
+    pub fn dotted(self) -> &'static str {
+        match self {
+            Self::WebInvites => "web.invites",
+            Self::AttentionSinks => "attention.sinks",
+        }
+    }
+
+    /// The trusted key a write at `parts` changes: the key, a part of it, or
+    /// a table that holds it.
+    pub fn covering(parts: &[String]) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|key| parts.iter().zip(key.parts()).all(|(part, own)| part == own))
+    }
+}
+
+/// Why no trusted row could be read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Fault {
+    /// The environment names no file. The text is the rule it broke.
+    Untrusted(&'static str),
+    Missing(PathBuf),
+    Unreadable(PathBuf),
+    NotToml(PathBuf),
+    NotAList(PathBuf, TrustedKey),
+    /// Only a legacy yaml exists, and a write would replace its rows unread.
+    Unmigrated(PathBuf),
+}
+
+impl std::fmt::Display for Fault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Untrusted(rule) => f.write_str(rule),
+            Self::Missing(path) => write!(f, "{} does not exist", path.display()),
+            Self::Unreadable(path) => write!(f, "{} cannot be read", path.display()),
+            Self::NotToml(path) => write!(f, "{} is not valid TOML", path.display()),
+            Self::NotAList(path, key) => {
+                write!(f, "{} in {} is not a list", key.dotted(), path.display())
+            }
+            Self::Unmigrated(path) => write!(
+                f,
+                "{} is not converted yet: a `fno config set` of any other key converts it to config.toml",
+                path.display()
+            ),
+        }
+    }
+}
+
+/// What the trusted file holds for one key.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Rows {
+    /// No key, an empty list, or no global file.
+    Absent,
+    List(Vec<toml::Value>),
+    /// Never read as absent: the caller grants nothing.
+    Invalid(Fault),
+}
+
+/// Where the trusted rows live.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TrustedFile {
+    /// An absolute `.toml` `FNO_CONFIG`. It must exist, and no project file is read.
+    Pin(PathBuf),
+    /// The global file the writer writes. A missing file is no list.
+    Global(PathBuf),
+    /// The environment names no file the reader and the writer share.
+    Untrusted(&'static str),
+}
+
+impl TrustedFile {
+    pub fn from_env() -> Self {
+        Self::resolve(&|key| std::env::var_os(key))
+    }
+
+    pub fn resolve(var: &dyn Fn(&str) -> Option<OsString>) -> Self {
+        let set = |key: &str| var(key).filter(|v| !v.is_empty()).map(PathBuf::from);
+        let extension = |path: &Path| path.extension().and_then(|e| e.to_str()).map(str::to_owned);
+        if let Some(pin) = set("FNO_CONFIG") {
+            return if pin.is_absolute() && extension(&pin).as_deref() == Some("toml") {
+                Self::Pin(pin)
+            } else {
+                Self::Untrusted("FNO_CONFIG must be an absolute path to a .toml file")
+            };
+        }
+        if let Some(at) = set("FNO_GLOBAL_SETTINGS_PATH") {
+            if !at.is_absolute() {
+                return Self::Untrusted("FNO_GLOBAL_SETTINGS_PATH must be an absolute path");
+            }
+            // The loader reads a custom toml or yaml name as it is. The writer
+            // always writes its config.toml sibling.
+            let name = at.file_name().and_then(|n| n.to_str());
+            let loader_reads_it =
+                matches!(extension(&at).as_deref(), Some("toml" | "yaml" | "yml"));
+            if loader_reads_it && !matches!(name, Some("settings.yaml" | "config.toml")) {
+                return Self::Untrusted(
+                    "FNO_GLOBAL_SETTINGS_PATH must name settings.yaml or config.toml: fno config set writes the config.toml beside it",
+                );
+            }
+            return Self::Global(at.with_file_name("config.toml"));
+        }
+        match set("HOME").filter(|home| home.is_absolute()) {
+            Some(home) => Self::Global(home.join(".fno").join("config.toml")),
+            None => Self::Untrusted("HOME must be an absolute path"),
+        }
+    }
+
+    pub fn path(&self) -> Option<&Path> {
+        match self {
+            Self::Pin(path) | Self::Global(path) => Some(path),
+            Self::Untrusted(_) => None,
+        }
+    }
+
+    pub fn rows(&self, key: TrustedKey) -> Rows {
+        match self {
+            Self::Untrusted(rule) => Rows::Invalid(Fault::Untrusted(rule)),
+            Self::Pin(path) => file_rows(path, key),
+            Self::Global(path) => match file_rows(path, key) {
+                Rows::Invalid(Fault::Missing(_)) => Rows::Absent,
+                rows => rows,
+            },
+        }
+    }
+
+    /// The rows a writer must carry over. It never answers "none" for rows it
+    /// could not read, because the write replaces the whole list.
+    pub fn rows_to_rewrite(&self, key: TrustedKey) -> Result<Vec<toml::Value>, Fault> {
+        if let Self::Global(path) = self {
+            let legacy = path.with_file_name("settings.yaml");
+            if !path.exists() && legacy.is_file() {
+                return Err(Fault::Unmigrated(legacy));
+            }
+        }
+        match self.rows(key) {
+            Rows::List(rows) => Ok(rows),
+            // The write creates a pin that does not exist yet.
+            Rows::Absent | Rows::Invalid(Fault::Missing(_)) => Ok(Vec::new()),
+            Rows::Invalid(fault) => Err(fault),
+        }
+    }
+
+    /// Every project file with rows for `key`, in the order they used to win.
+    /// They grant nothing, so a caller reads them only to say so. A pin skips
+    /// the probe, and the trusted file itself is not a project file.
+    pub fn ignored_rows(
+        &self,
+        key: TrustedKey,
+        project_files: &[PathBuf],
+    ) -> Vec<(PathBuf, Vec<toml::Value>)> {
+        if matches!(self, Self::Pin(_)) {
+            return Vec::new();
+        }
+        project_files
+            .iter()
+            .filter(|file| !self.path().is_some_and(|own| same_file(own, file)))
+            .filter_map(|file| match file_rows(file, key) {
+                Rows::List(rows) => Some((file.clone(), rows)),
+                Rows::Absent | Rows::Invalid(_) => None,
+            })
+            .collect()
+    }
+
+    /// What a reader says about `key`: a fault, and project rows it ignores.
+    /// No line carries a row, which can hold a URL, a sender or a token name.
+    pub fn notes(&self, key: TrustedKey, project_files: &[PathBuf]) -> Vec<String> {
+        let name = key.dotted();
+        let mut notes = Vec::new();
+        if let Rows::Invalid(fault) = self.rows(key) {
+            notes.push(format!("{name} grants nothing: {fault}"));
+        }
+        for (file, _) in self.ignored_rows(key, project_files) {
+            notes.push(format!(
+                "{name} in {} is ignored: a project file never grants it. Write the rows you want with `fno config set {name} '<value>'`, then run `fno config unset {name} --local` there",
+                file.display()
+            ));
+        }
+        notes
+    }
+}
+
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
+fn file_rows(path: &Path, key: TrustedKey) -> Rows {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Rows::Invalid(Fault::Missing(path.to_path_buf()));
+        }
+        Err(_) => return Rows::Invalid(Fault::Unreadable(path.to_path_buf())),
+    };
+    let Ok(table) = text.parse::<toml::Table>() else {
+        return Rows::Invalid(Fault::NotToml(path.to_path_buf()));
+    };
+    let wrong = || Rows::Invalid(Fault::NotAList(path.to_path_buf(), key));
+    let [section, field] = key.parts();
+    let Some(block) = table.get(section) else {
+        return Rows::Absent;
+    };
+    let Some(block) = block.as_table() else {
+        return wrong();
+    };
+    match block.get(field) {
+        None => Rows::Absent,
+        Some(toml::Value::Array(rows)) if rows.is_empty() => Rows::Absent,
+        Some(toml::Value::Array(rows)) => Rows::List(rows.clone()),
+        Some(_) => wrong(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The one pin table both crates and the writer share. Every shape whose
+    /// reader and writer would differ, or that a served folder could steer,
+    /// names no file.
+    #[test]
+    fn trusted_file_pin_table() {
+        let resolve = |env: &[(&str, &str)]| {
+            TrustedFile::resolve(&|key| {
+                env.iter()
+                    .find(|(name, _)| *name == key)
+                    .map(|(_, value)| OsString::from(value))
+            })
+        };
+        let pin = "FNO_CONFIG";
+        let global = "FNO_GLOBAL_SETTINGS_PATH";
+        let home = ("HOME", "/h");
+        let at_home = TrustedFile::Global("/h/.fno/config.toml".into());
+        let beside = TrustedFile::Global("/g/config.toml".into());
+        for (env, want) in [
+            (vec![home], at_home.clone()),
+            (vec![(pin, ""), (global, ""), home], at_home.clone()),
+            (vec![("FNO_STATE_DIR", "/s"), home], at_home.clone()),
+            (
+                vec![(pin, "/p/pin.toml"), home],
+                TrustedFile::Pin("/p/pin.toml".into()),
+            ),
+            (
+                vec![(pin, "/p/pin.toml"), (global, "/g/settings.yaml")],
+                TrustedFile::Pin("/p/pin.toml".into()),
+            ),
+            (vec![(global, "/g/settings.yaml"), home], beside.clone()),
+            (vec![(global, "/g/config.toml"), home], beside.clone()),
+            (vec![(global, "/g/settings.json"), home], beside.clone()),
+        ] {
+            assert_eq!(resolve(&env), want, "{env:?}");
+        }
+        for env in [
+            vec![],
+            vec![("HOME", "")],
+            vec![("HOME", "relative")],
+            vec![(pin, ".fno/config.toml"), home],
+            vec![(pin, "/p/settings.yaml"), home],
+            vec![(global, ".fno/settings.yaml"), home],
+            vec![(global, "/g/custom.toml"), home],
+            vec![(global, "/g/other.yaml"), home],
+        ] {
+            assert!(
+                matches!(resolve(&env), TrustedFile::Untrusted(_)),
+                "{env:?}"
+            );
+        }
+
+        // A writer never rewrites over rows it did not read.
+        let dir = tempfile::tempdir().unwrap();
+        let file = TrustedFile::Global(dir.path().join("config.toml"));
+        std::fs::write(dir.path().join("settings.yaml"), "web: {}\n").unwrap();
+        assert!(matches!(
+            file.rows_to_rewrite(TrustedKey::WebInvites),
+            Err(Fault::Unmigrated(_))
+        ));
+        assert_eq!(file.rows(TrustedKey::WebInvites), Rows::Absent);
+    }
+}

@@ -58,10 +58,26 @@ const TEAM_STEP: &str = "team";
 #[derive(Debug, Clone, PartialEq)]
 pub struct Target {
     pub holder: String,
+    /// The holder's session id when the registry row carries one, else
+    /// empty. The routing key (laws d-e952ed19, d-8b72097f): liveness and
+    /// the wake address resolve the session id, never the mutable name.
+    pub holder_session: String,
     pub scope: String,
     pub root: PathBuf,
     pub manifest: PathBuf,
     pub short_id: String,
+}
+
+impl Target {
+    /// The identity the wake routes on: the session id when the row
+    /// carries one, else the name, so a legacy row with no id still wakes.
+    pub(crate) fn handle(&self) -> &str {
+        if self.holder_session.is_empty() {
+            &self.holder
+        } else {
+            &self.holder_session
+        }
+    }
 }
 
 /// The `lead.*` wake keys, read once per pass. A 0 is the unbounded
@@ -430,8 +446,8 @@ pub fn run_with(config: &TriggerConfig, seams: Seams) -> TriggerOutcome {
         // The truth read costs seconds per role; a quiet role can never
         // wake, so it runs only for a role that can.
         let deadline = Some(Instant::now() + Duration::from_secs_f64(wait_cap(left, truth_wait_s)));
-        let holder = target.holder.clone();
-        let (truth_map, measured) = truth(&[holder], deadline);
+        let handle = target.handle().to_string();
+        let (truth_map, measured) = truth(&[handle], deadline);
         if !measured {
             // Yields to the rest; triggers stay armed, so the next
             // rotation retries it first.
@@ -442,7 +458,7 @@ pub fn run_with(config: &TriggerConfig, seams: Seams) -> TriggerOutcome {
         }
         summary.truth_reads += 1;
         let truth = truth_map
-            .get(&target.holder)
+            .get(target.handle())
             .cloned()
             .unwrap_or_else(TruthAnswer::no_evidence);
         if let Some(word) = holder_absent(&truth) {
@@ -836,60 +852,31 @@ fn ask_marker_question(target: &Target, count: i64, ceiling: i64, marker: &str) 
     if existing.is_some() {
         return;
     }
-    let qid = format!("q-{}", crate::law_match::random_hex8());
     // The marker prefix is the dedupe key's other half: the next pass finds
-    // the question by the same `[{marker}:{scope}]` needle it stores.
+    // the question by the same `[{marker}:{scope}]` needle it stores. The
+    // subject keys the outbox row, because the count in the text moves.
     let stored = format!("[{marker}:{}] {question}", target.scope);
+    let mut data = serde_json::Map::new();
+    data.insert("question".into(), json!(stored));
+    data.insert(
+        "subject".into(),
+        json!(format!("{marker}:{}", target.scope)),
+    );
+    data.insert("cwd".into(), json!(target.root.display().to_string()));
+    data.insert("ask".into(), json!(ask));
+    crate::identity::stamp_person(&mut data);
     let envelope = json!({
         "ts": iso_stamp(now_epoch()),
         "type": "operator_question",
         "source": "daemon",
-        "data": {
-            "question_id": qid,
-            "question": stored,
-            "cwd": target.root.display().to_string(),
-            "ask": ask.clone(),
-        },
+        "data": data,
     });
-    let req = crate::question_intake::IntakeRequest {
-        question: stored,
-        template: false,
-        ask: Some(ask),
-        options: Vec::new(),
-        blocks: Vec::new(),
-        node: None,
-        // Machine-asked rows serve this project's own operation.
-        audience: Some("internal".to_string()),
-        why: None,
-        job: Vec::new(),
-        subject: None,
-        session_id: None,
-        harness: None,
-        cwd: Some(target.root.display().to_string()),
-        asker: None,
-        laws: Vec::new(),
-        rung: None,
-        storage_root: target.root.clone(),
-        index_path: None,
-        // This line only names the question-intake door's append target,
-        // the space journal the Python leg supplied; intake does the write.
-        journal_path: Some(crate::paths::space_dir(&target.root).join("events.jsonl")),
-        // events-discipline:allow: the raw writes in this window are the
-        // walk's wake log, never an event journal.
-        display_name: None,
-        render_cap: None,
-        op: Some("append".to_string()),
-        event: Some(envelope),
-        images: Vec::new(),
-        screens_dir: None,
-    };
-    let home = AgentsHome::from_env();
-    let answer = crate::question_intake::run_intake(&req, &home);
-    if answer.exit_code != 0 {
-        eprintln!(
-            "lead-wake-triggers: the ceiling question could not be raised: {:?}",
-            answer.lines
-        );
+    // events-discipline:allow: the space journal the question door appends
+    // to; the raw writes in this window are the walk's wake log.
+    let journal = crate::paths::space_dir(&target.root).join("events.jsonl");
+    let index = crate::provider_cap::questions_path(&AgentsHome::from_env());
+    if let Err(error) = crate::numbers::mint::file_question(envelope, journal, index) {
+        eprintln!("lead-wake-triggers: the ceiling question could not be raised: {error}");
     }
 }
 
@@ -983,7 +970,7 @@ pub fn build_walk_argv(
         "--wake-reason".to_string(),
         reason.to_string(),
         "--wake-holder".to_string(),
-        target.holder.clone(),
+        target.handle().to_string(),
     ];
     if let Some(address) = address {
         argv.extend(["--wake-address".to_string(), address.to_string()]);
@@ -1060,6 +1047,7 @@ pub(crate) fn select_targets(rows: &[crate::state::RegistryEntry]) -> TargetSele
         }
         ok.push(Target {
             holder: row.name.clone(),
+            holder_session: crate::territory::row_session_id(row).to_string(),
             scope,
             root,
             manifest,
@@ -1262,10 +1250,14 @@ pub(crate) fn backstop_due(target: &Target, undelivered: i64, now: i64, backstop
     true
 }
 
-/// The matched address with undrained mail: the holder, its short id, and
-/// every scope member, in sorted order.
+/// The matched address with undrained mail: the holder's session id, the
+/// holder name (legacy mail addressed by name), its short id, and every
+/// scope member, in sorted order.
 pub(crate) fn mail_trigger(target: &Target, unread: &dyn Fn(&str) -> bool) -> Option<String> {
     let mut addresses: BTreeSet<String> = BTreeSet::new();
+    if !target.holder_session.is_empty() {
+        addresses.insert(target.holder_session.clone());
+    }
     if !target.holder.is_empty() {
         addresses.insert(target.holder.clone());
     }

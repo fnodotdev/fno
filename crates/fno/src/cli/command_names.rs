@@ -50,6 +50,13 @@ pub fn retired_root_rows() -> Vec<(&'static str, &'static str)> {
         .collect()
 }
 
+/// The note for a live path, when the tsv lists it. The generic help arm
+/// (tsv_help) prints it as the row's usage line.
+pub fn note_for(path: &[&str]) -> Option<&'static str> {
+    let path = path.join(" ");
+    rows().filter(|r| r.1).find(|r| r.0 == path).map(|r| r.3)
+}
+
 /// The old plural root. It answers as a hidden alias of `agent` for one
 /// release, and it stays the word the doors below route on.
 pub const LEGACY_AGENT_ROOT: &str = "agents";
