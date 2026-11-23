@@ -453,7 +453,7 @@ if (( reviewed_file_count == 0 )); then
   # on the flags alone and pays no witness read.
   if jq -e 'index("--verify-fixes")' <<<"$review_flags" >/dev/null 2>&1; then
     raise_witness="$("${FNO:-fno}" do pr review-hold round --branch "$branch" --head "$head_sha" \
-      --raise-at-head 2>/dev/null || true)"
+      --repo "${repo_root_target:-$repo_root}" --raise-at-head 2>/dev/null || true)"
     if [[ "$raise_witness" == "raised" ]]; then
       echo "emit-attestation: empty diff accepted as an in-place fix-verification (a raise at head ${head_sha:0:8} on branch ${branch}); the disposition rides the classified verdict" >&2
     else
@@ -526,11 +526,13 @@ review_level_source="$(printf '%s' "$hold_json" | jq -r '.metadata.level_source 
 # counts as a fresh round, exactly as an undeclared pass always has.
 review_round=""
 if jq -e 'index("--verify-fixes")' <<<"$review_flags" >/dev/null 2>&1; then
-  review_round="$("${FNO:-fno}" do pr review-hold round --branch "$branch" --head "$head_sha" 2>/dev/null || true)"
+  review_round="$("${FNO:-fno}" do pr review-hold round --branch "$branch" --head "$head_sha" \
+    --repo "${repo_root_target:-$repo_root}" 2>/dev/null || true)"
 else
   # An ordinary pass spends the next round; record it so the posted summary
   # names a round instead of "unscoped".
-  review_round="$("${FNO:-fno}" do pr review-hold round --fresh --branch "$branch" --head "$head_sha" 2>/dev/null || true)"
+  review_round="$("${FNO:-fno}" do pr review-hold round --fresh --branch "$branch" --head "$head_sha" \
+    --repo "${repo_root_target:-$repo_root}" 2>/dev/null || true)"
 fi
 [[ "$review_round" =~ ^[0-9]+$ ]] || review_round=""
 # A bare or diff-sized run leaves the hold without a level; resolve the one the
