@@ -515,7 +515,30 @@ pub fn deliver_rpc(home: &AgentsHome, req: &Request) -> Option<Response> {
 
 /// `fno agent ask` on a live muse thread row. None when the row has no
 /// reachable host, so the caller falls back to the once lane's resume.
-pub fn maybe_ask_host(entry: &RegistryEntry, params: &Value) -> Option<i32> {
+pub fn maybe_ask_host(
+    home: &crate::paths::AgentsHome,
+    entry: &RegistryEntry,
+    params: &Value,
+) -> Option<i32> {
+    let caller = crate::spawn_gate_admission::AnswerCaller::from_env();
+    maybe_ask_host_with_caller(home, entry, params, &caller)
+}
+
+/// The crate-private injection seam: tests build the caller directly.
+pub(crate) fn maybe_ask_host_with_caller(
+    home: &crate::paths::AgentsHome,
+    entry: &RegistryEntry,
+    params: &Value,
+    caller: &crate::spawn_gate_admission::AnswerCaller,
+) -> Option<i32> {
+    // The same gate the other answer doors carry: without the human proof,
+    // no grant, and nothing reaches the host.
+    if let Some(choice) = params["answer"].as_str() {
+        if let Some(refusal) = caller.allow_refusal(choice) {
+            eprintln!("{refusal}");
+            return Some(2);
+        }
+    }
     let socket = host_socket(entry)?;
     let answer = params["answer"].as_str();
     let req = match answer {
@@ -530,6 +553,20 @@ pub fn maybe_ask_host(entry: &RegistryEntry, params: &Value) -> Option<i32> {
         Ok(reply) => {
             println!("{reply}");
             let ok = reply["ok"] == true || reply["state"].as_str().is_some_and(|s| s != "failed");
+            if ok {
+                if let Some(choice) = answer {
+                    crate::claude_ask::emit_event(
+                        &home.events_jsonl(),
+                        "agent_prompt_answered",
+                        &[
+                            ("name", entry.name.clone().into()),
+                            ("answer", choice.into()),
+                            ("short_id", entry.short_id.clone().into()),
+                            ("caller", caller.stamp().into()),
+                        ],
+                    );
+                }
+            }
             Some(if ok { 0 } else { 2 })
         }
         Err(e) if answer.is_some() => {

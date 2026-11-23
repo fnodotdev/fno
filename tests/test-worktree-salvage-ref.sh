@@ -81,8 +81,8 @@ attached="$SCRATCH/attached-wt"
 git -C "$canonical" worktree add -q -b attached-branch "$attached" >/dev/null
 link_real_hook "$attached"
 run_setup_worktree_install "$attached"
-mirror_key="$(git -C "$attached" config --local --bool fno.salvageRemoteMirror)"
-[[ "$mirror_key" == "true" ]] || fail "setup-worktree did not turn the salvage mirror on"
+mirror_key="$(git -C "$attached" config --local --bool --get fno.salvageRemoteMirror 2>/dev/null || true)"
+[[ -z "$mirror_key" ]] || fail "setup-worktree set the salvage mirror key; it must stay unset"
 git -C "$attached" config user.email t@t.co
 git -C "$attached" config user.name t
 echo y > "$attached/g.txt"
@@ -96,18 +96,17 @@ ref_out="$(git -C "$canonical" for-each-ref "refs/fno/salvage/$wt_name")"
 [[ -n "$ref_out" ]] || fail "no local salvage ref written for $wt_name"
 echo "$ref_out" | grep -q "$sha_attached" || fail "salvage ref does not point at the commit"
 
-# The mirror is default-on (x-28ff): the push is backgrounded, so poll for a
-# bounded window instead of racing it.
-mirrored=""
+# The mirror is off unless opted in by hand: give any wrongly-backgrounded
+# push a bounded window, then require origin to hold no salvage ref.
+unmirrored="set"
 for _ in 1 2 3 4 5; do
-  mirrored="$(git ls-remote "$remote" "refs/fno/salvage/$wt_name")"
-  [[ -n "$mirrored" ]] && break
+  unmirrored="$(git ls-remote "$remote" "refs/fno/salvage/$wt_name")"
+  [[ -z "$unmirrored" ]] || break
   sleep 1
 done
-[[ -n "$mirrored" ]] || fail "default-on mirror did not push the salvage ref to origin"
-echo "$mirrored" | grep -q "$sha_attached" || fail "mirrored salvage ref does not point at the commit"
+[[ -z "$unmirrored" ]] || fail "mirror fired without an opt-in: the salvage ref reached origin"
 
-echo "PASS: commit lands a local salvage ref and the default-on mirror reaches origin"
+echo "PASS: commit lands a local salvage ref and origin stays free of it without an opt-in"
 
 # --- AC1b: repository opt-in enables the best-effort remote mirror --------
 

@@ -191,7 +191,7 @@ An all-inert tree falls through to `would-archive` (dry run) or removal. `archiv
 
 `scripts/setup/setup-worktree.sh` installs a shared `post-commit` dispatcher that runs the committing worktree's `hooks/worktree-salvage-ref.sh`. Every commit advances a local `refs/fno/salvage/<worktree>` ref so a detached or provider-killed worktree stays recoverable without a network dependency.
 
-Remote mirroring is on by default: `setup-worktree.sh` sets `fno.salvageRemoteMirror true` in every worktree it prepares. Each commit then reaches `refs/fno/salvage/<worktree>` on origin within seconds, so death before a PR loses nothing. To opt a worktree back out, for example an air-gapped clone, run `git config --local --unset fno.salvageRemoteMirror`. The local salvage ref stays active either way, and a remote failure never blocks the commit. When `fno do target start` dispatches, it reads `origin/feature/<node>` and the salvage ref and continues whichever is ahead of main. See `worktree ensure`.
+Remote mirroring is off: `setup-worktree.sh` never enables it. When this machine is the only home for in-flight work, set `fno.salvageRemoteMirror true` in the worktree by hand. The local salvage ref stays active either way, and a remote failure never blocks the commit. When `fno do target start` dispatches, it reads `origin/feature/<node>` and the salvage ref and continues whichever is ahead of main. See `worktree ensure`.
 
 ## Cargo build storage
 

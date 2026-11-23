@@ -255,6 +255,7 @@ pub mod roster_reap;
 pub mod run_import;
 pub mod run_outcome;
 pub mod run_state;
+pub mod schedule_fire;
 pub mod scrape;
 pub mod scratch;
 pub mod screen;

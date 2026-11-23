@@ -2426,10 +2426,27 @@ pub fn validate_spawn_inputs(name: &str, from_name: &str) -> Result<(), String> 
 }
 
 use crate::agent_lock::{holder_note, AgentLock};
+use crate::spawn_gate_admission::AnswerCaller;
 
 /// Stable fno-side log path for `fno agent logs <name>` (`_derive_log_path`).
 fn derive_log_path(home: &AgentsHome, name: &str) -> PathBuf {
     home.root().join("logs").join(format!("{}.log", name))
+}
+
+/// The transport short id: the row's own key, else the one derived from the
+/// harness session id (the claude jobId is its prefix). Empty when the row
+/// carries neither.
+fn transport_short_id(entry: &RegistryEntry) -> String {
+    entry
+        .transport_short()
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            entry
+                .harness_session_id
+                .as_deref()
+                .map(crate::client_commands::derived_short_id)
+                .unwrap_or_default()
+        })
 }
 
 /// Answer a pending permission prompt on a claude thread. The prompt picker
@@ -2438,7 +2455,18 @@ fn derive_log_path(home: &AgentsHome, name: &str) -> PathBuf {
 /// (`claude attach` needs one). The key comes from the packaged harness
 /// contract; a worker whose row still carries no transport key derives it
 /// from the session id (the claude jobId is its prefix).
-fn answer_thread_prompt(home: &AgentsHome, name: &str, answer: &str) -> Option<AskOutcome> {
+fn answer_thread_prompt(
+    home: &AgentsHome,
+    name: &str,
+    answer: &str,
+    caller: &AnswerCaller,
+) -> Option<AskOutcome> {
+    // A prompt is the holder's gate. An agent session never presses an
+    // allow answer on it; the refusal comes before any key resolution, so
+    // the door types nothing.
+    if let Some(refusal) = caller.allow_refusal(answer) {
+        return Some(AskOutcome::err(refusal, 2));
+    }
     let contract = match crate::harness_capabilities::HarnessContract::packaged() {
         Ok(c) => c,
         Err(e) => {
@@ -2462,16 +2490,7 @@ fn answer_thread_prompt(home: &AgentsHome, name: &str, answer: &str) -> Option<A
     if entry.harness_kind() != Harness::Claude {
         return Some(AskOutcome::err("ask --answer reaches only a claude row", 2));
     }
-    let short = entry
-        .transport_short()
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            entry
-                .harness_session_id
-                .as_deref()
-                .map(crate::client_commands::derived_short_id)
-                .unwrap_or_default()
-        });
+    let short = transport_short_id(entry);
     if short.is_empty() {
         return Some(AskOutcome::err(
             format!(
@@ -2527,6 +2546,7 @@ fn answer_thread_prompt(home: &AgentsHome, name: &str, answer: &str) -> Option<A
                     ("name", name.into()),
                     ("answer", answer.into()),
                     ("short_id", short.clone().into()),
+                    ("caller", caller.stamp().into()),
                 ],
             );
             Some(AskOutcome {
@@ -2562,7 +2582,10 @@ pub fn dispatch_claude_ask(
     _extra_env: &[(&str, &str)],
     answer: Option<&str>,
 ) -> AskOutcome {
-    if let Some(outcome) = answer.and_then(|a| answer_thread_prompt(home, name, a)) {
+    if let Some(outcome) = answer.and_then(|a| {
+        let caller = AnswerCaller::from_env();
+        answer_thread_prompt(home, name, a, &caller)
+    }) {
         return outcome;
     }
     if let Err(msg) = validate_inputs(name, message, from_name) {
@@ -4402,5 +4425,36 @@ mod tests {
             .unwrap();
         assert_eq!(state.endpoint, "/tmp/control.sock");
         assert_eq!(state.incarnation, "42:99:a1b2c3d4");
+    }
+
+    #[test]
+    fn an_agent_caller_is_refused_on_allow_and_nothing_is_typed_or_answered() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = AgentsHome::at(tmp.path().join("agents"));
+        fs::create_dir_all(home.root()).unwrap();
+        let agent = AnswerCaller::agent("w-fix");
+        let out = answer_thread_prompt(&home, "lead-row", "allow_once", &agent).unwrap();
+        assert_eq!(out.exit_code, 2, "{}", out.stderr);
+        assert!(out.stderr.contains("only the user"), "{}", out.stderr);
+        assert!(
+            !fs::read_to_string(home.events_jsonl())
+                .unwrap_or_default()
+                .contains("agent_prompt_answered"),
+            "a refused answer records no answered event"
+        );
+        // Casing cannot dodge the gate: the prefix match is case-insensitive.
+        let out = answer_thread_prompt(&home, "lead-row", "ALLOW_ONCE", &agent).unwrap();
+        assert_eq!(out.exit_code, 2, "{}", out.stderr);
+        // An unproven caller reads the same as an agent: no positive proof,
+        // no grant.
+        let unproven = AnswerCaller::unproven();
+        let out = answer_thread_prompt(&home, "lead-row", "allow_once", &unproven).unwrap();
+        assert_eq!(out.exit_code, 2, "{}", out.stderr);
+        // The admit arms: a human caller and a deny answer pass the gate and
+        // fall through (the empty home resolves no row), so the outcome is
+        // not the refusal.
+        let human = AnswerCaller::human();
+        assert!(answer_thread_prompt(&home, "lead-row", "allow_once", &human).is_none());
+        assert!(answer_thread_prompt(&home, "lead-row", "deny", &agent).is_none());
     }
 }

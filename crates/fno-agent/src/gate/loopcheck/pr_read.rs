@@ -303,7 +303,7 @@ pub(super) fn manifest_node_pr_target(
     // fail-opens to the ambient origin's branch-resolved read: the session's
     // own repo. A first-class docs session's row carries no such note, so
     // its pin is untouched.
-    rows.retain(|(_, _, _, _, note)| !note.is_some_and(|n| n.trim().eq_ignore_ascii_case("docs")));
+    rows.retain(|(_, _, _, _, note)| !crate::backlog::merge_evidence::note_is_docs(*note));
     // Newest first, then a stable pass that lifts non-terminal rows above
     // stamped ones. The stamps ride the writers' own spelling, which is
     // lowercase today but GitHub-adjacent prose elsewhere, so the compare is
