@@ -138,7 +138,14 @@ fn priority_rank(word: &str) -> Option<u8> {
 /// passes the axis (spawn_gate_lanes share_reading), so a missed
 /// scheduler never wedges the fire.
 pub(crate) fn fire_argv(row: &sched::ScheduledSpawn) -> Vec<String> {
-    let mut argv = row.argv.clone();
+    // A row stored before the schedule-time refusal can carry a
+    // caller-relative anchor. It fires as an unshown thread, never a
+    // refusal: one refused fire would end an --every series.
+    let mut argv = if sched::relative_placement(&row.argv).is_some() {
+        sched::unshown_thread_argv(&row.argv)
+    } else {
+        row.argv.clone()
+    };
     let has_flag = |name: &str| {
         row.argv
             .iter()
@@ -350,10 +357,16 @@ fn fire_row(home: &AgentsHome, row: &sched::ScheduledSpawn, now: DateTime<Utc>) 
         }
         Err(_) => "fire subprocess failed".to_string(),
     };
+    let unshown = sched::relative_placement(&row.argv);
+    let reading = match unshown {
+        Some(why) => format!("started unshown as a thread ({why}); {reading}"),
+        None => reading,
+    };
     let fired = matches!(&output, Ok(out) if out.code == 0);
     if fired {
         // R9: the journal row below is the durable record of the fire.
-        sched::set_state(home, &row.id, sched::RowState::Fired, None).ok();
+        let note = unshown.map(|_| reading.as_str());
+        sched::set_state(home, &row.id, sched::RowState::Fired, note).ok();
         journal(home, KIND_FIRED, row, Some(reading.as_str()));
         if let sched::Trigger::Every { interval_secs } = &row.trigger {
             let next = row.fire_at_utc.unwrap_or(now) + chrono::Duration::seconds(*interval_secs);
@@ -508,5 +521,38 @@ mod tests {
         assert!(argv
             .windows(2)
             .any(|w| w == ["agents".to_string(), "spawn".to_string()]));
+    }
+
+    #[test]
+    fn a_caller_relative_row_fires_as_an_unshown_thread() {
+        let words = |s: &str| s.split(' ').map(String::from).collect::<Vec<_>>();
+        for (argv, relative) in [
+            ("w1 hi --from current", true),
+            ("w1 hi --from=current", true),
+            ("w1 hi -x right", true),
+            ("w1 hi --split=down --portal new", true),
+            ("w1 hi -x right --portal 2", false),
+            ("w1 hi -x right --tab 3", false),
+            ("w1 hi -x right --from w2", false),
+            ("w1 hi --portal 2", false),
+            ("w1 hi -- --from current", false),
+        ] {
+            assert_eq!(
+                sched::relative_placement(&words(argv)).is_some(),
+                relative,
+                "{argv}"
+            );
+        }
+        assert_eq!(
+            sched::unshown_thread_argv(&words(
+                "--as pane w1 hi -x right --tab=3 --machine m2 -- -x up"
+            )),
+            words("--as thread w1 hi --machine m2 -- -x up")
+        );
+        let mut row = sample_row(Trigger::Every { interval_secs: 60 });
+        row.argv = words("w1 hi --from current -x left");
+        let argv = fire_argv(&row);
+        assert!(argv.windows(2).any(|w| w == ["--as", "thread"]));
+        assert!(!argv.iter().any(|t| t == "--from" || t == "-x"));
     }
 }
