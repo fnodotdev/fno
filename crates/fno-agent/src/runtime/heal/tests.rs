@@ -733,3 +733,57 @@ fn closure_edit_writes_once_per_head_then_stands_down() {
         "the open task is never re-filed: {store}"
     );
 }
+
+/// The push door leaves a conflicted fold in progress, and that tree
+/// refuses every later push and heal. The heal is not the caller that
+/// resolves it, so it hands the PR's worktree back as the push found it.
+#[test]
+fn abort_fold_leaves_a_conflicted_worktree_as_found() {
+    use crate::git_test_helpers::{git_bin, git_run};
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    let wt = tmp.path().join("wt");
+    let id: &[&str] = &["-c", "user.name=t", "-c", "user.email=t@t"];
+    let git = |args: &[&str], cwd: &Path| {
+        let out = git_run(args, cwd).unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?} in {} failed: {}",
+            cwd.display(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&["init", "-q", "-b", "main"], &repo);
+    std::fs::write(repo.join("f.txt"), "base\n").unwrap();
+    git(&[id, ["add", "f.txt"].as_slice()].concat(), &repo);
+    git(
+        &[id, ["commit", "-q", "-m", "base"].as_slice()].concat(),
+        &repo,
+    );
+    git(&["branch", "pr"], &repo);
+    let wt_dir = wt.to_str().unwrap();
+    git(&["worktree", "add", "-q", wt_dir, "pr"], &repo);
+    std::fs::write(repo.join("f.txt"), "main-side\n").unwrap();
+    git(
+        &[id, ["commit", "-q", "-am", "main edit"].as_slice()].concat(),
+        &repo,
+    );
+    std::fs::write(wt.join("f.txt"), "pr-side\n").unwrap();
+    git(
+        &[id, ["commit", "-q", "-am", "pr edit"].as_slice()].concat(),
+        &wt,
+    );
+    let head = git(&["rev-parse", "HEAD"], &wt);
+    // The fold conflicts, as the push door's does.
+    let merge = git_run(&["merge", "--no-edit", "main"], &wt).unwrap();
+    assert!(!merge.status.success(), "the fixture must conflict");
+    assert_eq!(git(&["status", "--porcelain"], &wt), "UU f.txt\n");
+    let bin = git_bin().to_string_lossy().into_owned();
+    assert_eq!(abort_fold(&bin, &wt, crate::pr_push::READ_TIMEOUT), None);
+    assert_eq!(git(&["status", "--porcelain"], &wt), "", "clean again");
+    assert_eq!(git(&["rev-parse", "HEAD"], &wt), head, "HEAD unmoved");
+    // The other arm: with no merge in progress git refuses, and the helper says so.
+    assert!(abort_fold(&bin, &wt, crate::pr_push::READ_TIMEOUT).is_some());
+}

@@ -66,8 +66,9 @@ echo '[]'
 }
 
 /// A stub `git` that lists one worktree (on feature/x-1111) and answers
-/// run_one's branch/porcelain questions inside it.
-fn stub_git_drive(dir: &Path) {
+/// run_one's branch/porcelain questions inside it. `merge --abort` answers
+/// `abort_exit`, and every call logs its physical cwd after the arguments.
+fn stub_git_drive(dir: &Path, abort_exit: u8) {
     let wt = dir.join("wt").to_string_lossy().into_owned();
     make_script(
         dir,
@@ -75,7 +76,10 @@ fn stub_git_drive(dir: &Path) {
         &format!(
             r#"#!/bin/sh
 D="$(dirname "$0")"
-echo "git $*" >> "$D/git.log"
+echo "git $* @ $(pwd -P)" >> "$D/git.log"
+case "$*" in
+  "merge --abort") echo "fatal: fixture refusal" >&2; exit ABORT_EXIT ;;
+esac
 case "$1 $2" in
   "worktree list") printf 'worktree {wt}\nHEAD aaa\nbranch refs/heads/feature/x-1111\n\n'; exit 0 ;;
   "rev-parse --abbrev-ref") echo feature/x-1111; exit 0 ;;
@@ -83,7 +87,8 @@ case "$1 $2" in
 esac
 exit 0
 "#
-        ),
+        )
+        .replace("ABORT_EXIT", &abort_exit.to_string()),
     );
 }
 
@@ -134,7 +139,7 @@ fn a_fold_conflict_files_one_fleet_task_and_a_clean_fold_closes_it() {
     let tmp = tempfile::tempdir().unwrap();
     let d = tmp.path();
     stub_gh_rebase(d, "false");
-    stub_git_drive(d);
+    stub_git_drive(d, 0);
     stub_cargo(d);
     std::fs::create_dir_all(d.join("wt/crates/fno-agent")).unwrap();
     stub_fno_push(d, "", 3, CONFLICT_PUSH_STDERR);
@@ -162,6 +167,24 @@ fn a_fold_conflict_files_one_fleet_task_and_a_clean_fold_closes_it() {
     );
     // The skip receipt itself stays asserted in-file: the events journal is
     // store-committed, and the committed read is crate-private.
+    // The door leaves the conflicted fold in progress. The heal is not the
+    // caller that resolves it, so it undoes the fold in the PR's worktree.
+    let in_wt = format!("@ {}", d.join("wt").canonicalize().unwrap().display());
+    let undo = aborts(d);
+    assert_eq!(
+        undo.len(),
+        1,
+        "one undo per conflict: {}",
+        log_of(d, "git.log")
+    );
+    assert!(
+        undo.iter().all(|l| l.ends_with(&in_wt)),
+        "the undo runs in the PR worktree: {undo:?}"
+    );
+    assert!(
+        store.contains("undid its fold"),
+        "the task names the true state: {store}"
+    );
     // The cap holds PR 1 for 24h after the conflict. The clean fold runs
     // as the next day would: a fresh journal holds no cap row, and the
     // task store is still the one beside it. The clean fold closes the task.
@@ -181,6 +204,16 @@ fn a_fold_conflict_files_one_fleet_task_and_a_clean_fold_closes_it() {
         store.contains(r#""type":"fleet_task_closed""#) && store.contains(r#""reason":"rebased""#),
         "the clean fold closed the task: {store}"
     );
+    assert_eq!(aborts(d).len(), 1, "a clean fold undoes nothing");
+}
+
+/// The stub `git` calls that undid a fold, one log line each.
+fn aborts(dir: &Path) -> Vec<String> {
+    log_of(dir, "git.log")
+        .lines()
+        .filter(|l| l.contains("merge --abort"))
+        .map(str::to_string)
+        .collect()
 }
 
 /// How many times the stub `fno` ran `do pr push`.
@@ -199,7 +232,7 @@ fn a_fold_conflict_holds_the_next_run_for_24h() {
     let tmp = tempfile::tempdir().unwrap();
     let d = tmp.path();
     stub_gh_rebase(d, "false");
-    stub_git_drive(d);
+    stub_git_drive(d, 0);
     stub_cargo(d);
     std::fs::create_dir_all(d.join("wt/crates/fno-agent")).unwrap();
     stub_fno_push(d, "", 3, CONFLICT_PUSH_STDERR);
@@ -219,6 +252,27 @@ fn a_fold_conflict_holds_the_next_run_for_24h() {
     );
 }
 
+/// A refused undo must not read as a clean tree. The task keeps the door's
+/// own words, because the conflict still sits in the worktree.
+#[test]
+fn a_refused_undo_keeps_the_conflict_words_in_the_task() {
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path();
+    stub_gh_rebase(d, "false");
+    stub_git_drive(d, 128);
+    stub_cargo(d);
+    std::fs::create_dir_all(d.join("wt/crates/fno-agent")).unwrap();
+    stub_fno_push(d, "", 3, CONFLICT_PUSH_STDERR);
+    fno_agent::heal::run_heal(&args_for(d, &["--all", "--apply"]));
+    let store = store_text(d);
+    assert!(
+        store.contains("could not undo its fold (fatal: fixture refusal)"),
+        "{store}"
+    );
+    assert!(store.contains("`git merge --continue`"), "{store}");
+    assert!(!store.contains("as found"), "{store}");
+}
+
 #[test]
 fn two_roots_with_the_same_conflict_file_two_tasks_distinguished_by_cwd() {
     // One heal process serves several roots and PR numbers repeat across
@@ -229,7 +283,7 @@ fn two_roots_with_the_same_conflict_file_two_tasks_distinguished_by_cwd() {
     std::fs::create_dir_all(root1.join(".git")).unwrap();
     std::fs::create_dir_all(d.join(".git")).unwrap();
     stub_gh_rebase(d, "false");
-    stub_git_drive(d);
+    stub_git_drive(d, 0);
     stub_cargo(d);
     stub_fno_push(d, "", 3, CONFLICT_PUSH_STDERR);
     // The push seam spawns from the PR's worktree; a missing cwd is a
