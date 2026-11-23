@@ -50,6 +50,13 @@
 #               attempt that produced no verdict without failing a measurement
 #               (the fresh runner's silent reviewer). Emits NO attestation and
 #               exits 1: the exit is the refusal, the row is the record.
+#   [--repo-root <path>]  record a review of a PAIRED PR in another repo (the
+#               cross-repo docs pair). Every git read runs against that
+#               checkout and the journal, repo slug and mirror resolve to it
+#               through the standard FNO_REPO_ROOT accessor - no second writer.
+#               The arm is gated on dispatch evidence: a live review hold held
+#               by THIS session on the target branch at the target head. A
+#               session that did not dispatch the review cannot record it.
 set -euo pipefail
 
 usage() {
@@ -99,7 +106,9 @@ esac
 # rule is never reimplemented in bash. A malformed or unreadable findings
 # file is a refusal, not an empty record: an unmeasurable finding set must
 # not attest as though it classified zero.
+# --repo-root <path> rides the same shape: positionals first, flag after.
 findings_file=""
+repo_root_target=""
 prev_arg=""
 positional=()
 for arg in "$@"; do
@@ -112,10 +121,19 @@ for arg in "$@"; do
     prev_arg="$arg"
     continue
   fi
+  if [[ "$prev_arg" == "--repo-root" ]]; then
+    repo_root_target="$arg"
+    prev_arg=""
+    continue
+  fi
+  if [[ "$arg" == "--repo-root" ]]; then
+    prev_arg="$arg"
+    continue
+  fi
   positional+=("$arg")
 done
 [[ -z "$prev_arg" ]] || {
-  echo "emit-attestation: --findings-file needs a path; no event emitted" >&2
+  echo "emit-attestation: ${prev_arg} needs a value; no event emitted" >&2
   exit 2
 }
 
@@ -146,7 +164,46 @@ if [[ -z "$refuse_reason" ]]; then
 fi
 while [[ "$reviewer" == /* ]]; do reviewer="${reviewer#/}"; done # strip ALL leading slashes (parity with both parsers' lstrip / trim_start_matches)
 
-head_sha="$(git rev-parse HEAD 2>/dev/null)" || {
+# Cross-repo target (the paired docs PR): validate the checkout, then pin the
+# fno calls at it. FNO_REPO_ROOT routes journal, repo slug and mirror through
+# the SAME accessors every reader uses (config_cli resolve_repo_root), so no
+# second writer appears. run_git scopes every derivation read to the target;
+# ambient reads (the caller's own toplevel, manifest, identity) stay bare.
+# The caller must be able to say WHICH checkout: an empty or non-git target
+# is a refusal, never a silent fallback to the ambient repo.
+run_git() {
+  if [[ -n "$repo_root_target" ]]; then
+    git -C "$repo_root_target" "$@"
+  else
+    git "$@"
+  fi
+}
+if [[ -n "$repo_root_target" ]]; then
+  [[ -d "$repo_root_target" ]] || {
+    echo "emit-attestation: --repo-root is not a directory: $repo_root_target; no event emitted" >&2
+    exit 2
+  }
+  if ! ambient_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+    echo "emit-attestation: caller is not in a git repo; no event emitted" >&2
+    exit 1
+  fi
+  target_physical="$(cd "$repo_root_target" 2>/dev/null && pwd -P)" || {
+    echo "emit-attestation: --repo-root is unreadable: $repo_root_target; no event emitted" >&2
+    exit 2
+  }
+  if [[ "$target_physical" == "$(cd "$ambient_root" && pwd -P)" ]]; then
+    echo "emit-attestation: --repo-root names the caller's own repo; drop the flag and run the ordinary form; no event emitted" >&2
+    exit 2
+  fi
+  if ! git -C "$target_physical" rev-parse --git-dir >/dev/null 2>&1; then
+    echo "emit-attestation: --repo-root is not a git checkout: $repo_root_target; no event emitted" >&2
+    exit 2
+  fi
+  repo_root_target="$target_physical"
+  export FNO_REPO_ROOT="$repo_root_target"
+fi
+
+head_sha="$(run_git rev-parse HEAD 2>/dev/null)" || {
   echo "emit-attestation: not a git repo (cannot head-pin); no event emitted" >&2
   exit 1
 }
@@ -176,15 +233,15 @@ head_sha="$(git rev-parse HEAD 2>/dev/null)" || {
 # no later carry can scope. git rev-parse is local and free; do NOT reach
 # for `gh pr view` here - a network call on the emit path turns a review
 # receipt into something that fails when GitHub is slow.
-branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+branch="$(run_git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 if [[ -z "$branch" || "$branch" == "HEAD" ]]; then
   echo "emit-attestation: detached HEAD names no PR branch (an empty branch field would read as a pre-branch-field event and never carry past a head move); no event emitted" >&2
   exit 1
 fi
-base="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+base="$(run_git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || true)"
 base="${base#*/}"
 base="${base:-main}"
-upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
+upstream="$(run_git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
 # The upstream is the PR branch only when this checkout carries NO WORK OF ITS
 # OWN. That is what separates the two shapes, and the base name never was: an
 # author worktree tracking any branch other than origin/HEAD (origin/HEAD at
@@ -207,7 +264,7 @@ upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev
 # and the wrong name is recorded exactly as before.
 ahead=1
 if [[ -n "$upstream" ]]; then
-  ahead="$(git rev-list --count '@{upstream}..HEAD' 2>/dev/null || echo 1)"
+  ahead="$(run_git rev-list --count '@{upstream}..HEAD' 2>/dev/null || echo 1)"
 fi
 if [[ "$upstream" == */* && "${upstream#*/}" != "$base" && "$ahead" == "0" ]]; then
   branch="${upstream#*/}"
@@ -250,7 +307,7 @@ if [[ -z "$harness_session_id" || -z "$session_id" ]]; then
     read_manifest_fields "$space_manifest"
   fi
 fi
-local_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+local_branch="$(run_git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 hold_json=""
 if [[ -n "$local_branch" ]]; then
   hold_json="$("${FNO:-fno}" do pr review-hold metadata --branch "$local_branch" \
@@ -266,6 +323,30 @@ if [[ -z "$invocation_id" && -n "$harness_session_id" && "$harness_session_id" !
 fi
 if [[ -z "$invocation_id" ]]; then
   invocation_id="UNJOINED"
+fi
+if [[ -n "$repo_root_target" ]]; then
+  # The cross-repo arm's permission is the dispatch hold. The cwd proves
+  # nothing about a foreign repo, so the only accepted evidence is a live
+  # hold on review:branch:<target branch> at the target head, held by THIS
+  # harness session - the row the review-hold hook takes when the review was
+  # dispatched here. Without it a session that never reviewed the paired PR
+  # could mint its coverage evidence from any checkout.
+  if [[ -z "$harness_session_id" || "$harness_session_id" == "null" ]]; then
+    echo "emit-attestation: cross-repo emit cannot resolve this session's id (no harness_session_id in the caller manifest); the hold join is unprovable, so no event emitted" >&2
+    exit 1
+  fi
+  claims_json="$("${FNO:-fno}" agents claim list --prefix review:branch: --json 2>/dev/null || true)"
+  held_claim="$(printf '%s' "$claims_json" | jq -c --arg holder "review-session:$harness_session_id" --arg key "review:branch:$branch" --arg head "$head_sha" '
+    [ .[] | select(type == "object" and .holder == $holder and .key == $key
+        and ((.expired // false) | not)
+        and ((.metadata.head_sha // "") == $head)) ]
+    | sort_by(.acquired_at // 0) | (.[-1] // empty)' 2>/dev/null || true)"
+  if [[ -z "$held_claim" ]]; then
+    echo "emit-attestation: no live review hold held by this session on branch ${branch} at head ${head_sha:0:8} of the target repo; a session that did not dispatch the review cannot record it. Dispatch the review aimed at the paired PR so the hold registers, then re-run this emit." >&2
+    exit 1
+  fi
+  joined_id="$(printf '%s' "$held_claim" | jq -r '.metadata.invocation_id // empty' 2>/dev/null || true)"
+  [[ -n "$joined_id" ]] && invocation_id="$joined_id"
 fi
 review_command="$(printf '%s' "$hold_json" | jq -r '.metadata.verb // "/code-review"' 2>/dev/null || echo /code-review)"  # verb-wording: allow (hold metadata key)
 # jq reads EMPTY stdin as zero inputs: no output, exit 0, so the || default
@@ -308,7 +389,7 @@ fi
 # The base is the resolved base BRANCH above, not the upstream - a reviewer
 # worktree tracks the PR branch itself, and diffing against that would read
 # zero lines for every legitimate reviewer at the PR tip.
-reviewed_base_sha="$(git merge-base HEAD "origin/${base}" 2>/dev/null || git merge-base HEAD "${base}" 2>/dev/null || true)"
+reviewed_base_sha="$(run_git merge-base HEAD "origin/${base}" 2>/dev/null || run_git merge-base HEAD "${base}" 2>/dev/null || true)"
 if [[ -z "$reviewed_base_sha" ]]; then
   # The other DIFF-MEASUREMENT refusal gets the same durable terminal as the
   # empty-diff one below: an attempt that cannot say what it read journals
@@ -342,8 +423,8 @@ reviewed_head_sha="$head_sha"
 # count reads a real binary-only diff as empty and refuses the one review that
 # exists. The line count stays in the record (0 is an honest measurement of a
 # binary diff); the refusal fires only when the diff changed no file at all.
-reviewed_file_count="$(git diff --name-only "${reviewed_base_sha}..HEAD" 2>/dev/null | command grep -c . || true)"
-reviewed_line_count="$(git diff --numstat "${reviewed_base_sha}..HEAD" 2>/dev/null | awk '{ add += $1; del += $2 } END { print add + del + 0 }')"
+reviewed_file_count="$(run_git diff --name-only "${reviewed_base_sha}..HEAD" 2>/dev/null | command grep -c . || true)"
+reviewed_line_count="$(run_git diff --numstat "${reviewed_base_sha}..HEAD" 2>/dev/null | awk '{ add += $1; del += $2 } END { print add + del + 0 }')"
 # The invocation's flags resolve BEFORE the empty-diff refusal, because the
 # fix-verification carve-out below reads them: a refusal that fires first
 # never learns the run was scoped (the shape: a worker that fixes a
@@ -624,10 +705,16 @@ fi
 # Both branch spellings, because they can differ. `branch` above is rewritten to
 # the upstream-derived name for a reviewer worktree, while the hook keys on the
 # local `rev-parse --abbrev-ref HEAD`. Releasing one name leaves the other held.
+# The ambient spelling joins only on a same-repo emit: a cross-repo emit must
+# not release a live hold on the caller's own branch from an unrelated review.
 #
 # Best-effort. A release failure leaves a hold that ages out on its TTL with a
 # receipt, and an attestation must never fail because a lockfile survived.
-for _b in "${branch:-}" "$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"; do
+release_branches=("${branch:-}")
+if [[ -z "$repo_root_target" ]]; then
+  release_branches+=("$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)")
+fi
+for _b in "${release_branches[@]}"; do
   [[ -n "$_b" && "$_b" != "HEAD" ]] || continue
   # Releasing the same name twice costs one no-op and says "no hold" the second
   # time, which is cheaper than a dedup nobody reads.
@@ -648,4 +735,4 @@ if [[ "$reviewer" == "peer" ]]; then
 elif [[ "$reviewer_context" == "fresh" ]]; then
   review_level_word="fresh"
 fi
-echo "review_attestation emitted: reviewer=$reviewer head_sha=${head_sha:0:8} branch=${branch:-detached} verdict=$verdict run=${session_id:-none} run_harness=${harness:-unknown} attester=<stamped-at-emit> model=<stamped-at-emit> provider=${provider:-unset} reviewer_context=$reviewer_context review_level=$review_level_word lines=$reviewed_line_count files=$reviewed_file_count" >&2
+echo "review_attestation emitted: reviewer=$reviewer head_sha=${head_sha:0:8} branch=${branch:-detached} verdict=$verdict run=${session_id:-none} run_harness=${harness:-unknown} attester=<stamped-at-emit> model=<stamped-at-emit> provider=${provider:-unset} reviewer_context=$reviewer_context review_level=$review_level_word lines=$reviewed_line_count files=$reviewed_file_count target_repo_root=${repo_root_target:-inline}" >&2
