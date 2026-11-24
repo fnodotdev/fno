@@ -2945,8 +2945,11 @@ pub(crate) fn decide_with_payload(
     }
 
     // ── Step 5: no intent, no backstop -> block, record fingerprint ───────────
+    // A provider goal owns plain continuation: allow, and still record the
+    // fingerprint. Every done read and the backstop ran above.
+    let goal_owned = parsed.continuation_owner == "goal";
     fire_row(
-        "block",
+        if goal_owned { "allow" } else { "block" },
         "none",
         false,
         serde_json::json!({
@@ -2955,6 +2958,12 @@ pub(crate) fn decide_with_payload(
             "reviewed": false
         }),
     );
+    if goal_owned {
+        return (
+            0,
+            allow_output("allow", None, "", this_fire, Some(fingerprint)),
+        );
+    }
 
     // P2: the dominant loop-yield boundary. Enrich the continue
     // message with a one-line inbox nudge so an autonomous loop surfaces mail.

@@ -1085,6 +1085,58 @@ fn corrupt_manifest_allows_exit() {
     );
 }
 
+/// AC5/AC6: a goal-owned no-intent stop is allowed, but a goal-owned
+/// promise still meets every done read.
+#[test]
+fn goal_owner_allows_plain_continuation_but_not_a_false_done() {
+    let tmp = TempDir::new().unwrap();
+    let cwd = tmp.path();
+    fs::create_dir_all(cwd.join(".fno")).unwrap();
+    isolate_settings(cwd);
+    let manifest_path = cwd.join("target-state.md");
+    let transcript_path = cwd.join("transcript.jsonl");
+    let mock = MockBins::no_pr();
+    // One session per fire: a second fire on one session reaches the mute
+    // probe's done read, not Step 5.
+    let fire_as = |transcript: String, owner: &str| {
+        let session = format!("sess-goal-{owner}-{}", transcript.len());
+        let manifest = new_manifest(&session, "2026-06-05T00:00:00Z", true);
+        fs::write(&manifest_path, manifest).unwrap();
+        fs::write(&transcript_path, transcript).unwrap();
+        fire(&[
+            "loop-check",
+            "--state",
+            manifest_path.to_str().unwrap(),
+            "--transcript",
+            transcript_path.to_str().unwrap(),
+            "--cwd",
+            cwd.to_str().unwrap(),
+            "--now",
+            "2026-06-05T00:30:00Z",
+            "--continuation-owner",
+            owner,
+            &format!("--gh-bin={}", mock.gh.display()),
+            &format!("--git-bin={}", mock.git.display()),
+        ])
+        .1
+    };
+    let nagged = fire_as(transcript_empty(), "loop_check");
+    assert_eq!(nagged.decision, "block");
+    assert!(
+        nagged.message.contains("continue working"),
+        "{}",
+        nagged.message
+    );
+    let owned = fire_as(transcript_empty(), "goal");
+    assert_eq!(owned.decision, "allow", "{}", owned.message);
+    assert!(
+        owned.fingerprint.is_some(),
+        "the fingerprint is still recorded"
+    );
+    let false_done = fire_as(transcript_with_promise(), "goal");
+    assert_eq!(false_done.decision, "block", "{}", false_done.message);
+}
+
 /// Events are appended to BOTH project and global paths.
 #[test]
 fn events_appended_to_both_project_and_global() {
