@@ -635,6 +635,11 @@ pub trait Probes {
     fn merge_freeze(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
         ProbeOutcome::Clear
     }
+    /// The bound node's open `blocked_by` edge. Default `Clear` keeps an impl
+    /// that does not read the graph inert.
+    fn blocked_by(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
+        ProbeOutcome::Clear
+    }
     /// The rule engine's read of this merge: a block verdict holds with
     /// blocker `rule`. Default `Clear` keeps an impl that does not read
     /// rule sources inert.
@@ -1313,6 +1318,9 @@ pub fn preview_walk<P: Probes>(probes: &P, request: &Request, facts: &PrFacts) -
     if let Some(reason) = probes.pr_hold(cwd, facts).fail_closed() {
         blockers.push(Blocker::held("pr_hold", reason));
     }
+    if let Some(reason) = probes.blocked_by(cwd, facts).fail_closed() {
+        blockers.push(Blocker::held("blocked_by", reason));
+    }
     if let Some(reason) = probes.merge_freeze(cwd, facts).fail_closed() {
         blockers.push(Blocker::held("merge_freeze", reason));
     }
@@ -1729,6 +1737,7 @@ fn authority_hold<P: Probes>(probes: &P, cwd: &Path, facts: &PrFacts) -> Option<
         .dispatch_hold(cwd, facts)
         .fail_closed()
         .or_else(|| probes.pr_hold(cwd, facts).fail_closed())
+        .or_else(|| probes.blocked_by(cwd, facts).fail_closed())
         .or_else(|| probes.merge_freeze(cwd, facts).fail_closed())
         .or_else(|| probes.rules(cwd, facts).fail_closed())
         .map(|reason| Outcome::Held {
@@ -2398,6 +2407,11 @@ impl Probes for RealProbes {
     fn pr_hold(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
         let _step = step_timer::step("pr_hold");
         crate::pr_admission::pr_hold(cwd, facts)
+    }
+
+    fn blocked_by(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
+        let _step = step_timer::step("blocked_by");
+        blocked_by_probe(cwd, facts)
     }
 
     fn merge_freeze(&self, _cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
@@ -3343,6 +3357,14 @@ fn node_binding_entries(graph_path: &Path, facts: &PrFacts) -> Option<Vec<Value>
         },
     )
     .ok()?;
+    let mut carriers = bound_node_rows(graph_path, facts)?;
+    projection.append(&mut carriers);
+    Some(projection)
+}
+
+/// Full rows of every node the PR binds to: the nodes whose pull_requests
+/// rows name it, plus the exact ids its head ref and closure line name.
+fn bound_node_rows(graph_path: &Path, facts: &PrFacts) -> Option<Vec<Value>> {
     let mut carriers =
         crate::backlog::read_pr_entries(graph_path, Some(facts.number as i64)).ok()?;
     let mut named = crate::backlog::node_branch::node_ids(&facts.head_ref);
@@ -3377,8 +3399,75 @@ fn node_binding_entries(graph_path: &Path, facts: &PrFacts) -> Option<Vec<Value>
         });
         carriers.append(&mut rows);
     }
-    projection.append(&mut carriers);
-    Some(projection)
+    Some(carriers)
+}
+
+/// A PR whose bound node waits on an open `blocked_by` node does not merge.
+/// The edge is the whole hold: no decision row, no question. It lifts when
+/// the blocker closes, so the verdict is `Held`, never `Refused`.
+fn blocked_by_probe(cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
+    let graph_path = crate::org_board::scope::graph_json_path(cwd);
+    let Some(bound) = bound_node_rows(&graph_path, facts) else {
+        return ProbeOutcome::Inconclusive(
+            "blocked_by: graph unreadable; refusing to assume unblocked".to_string(),
+        );
+    };
+    let mut waits: Vec<(String, String)> = Vec::new();
+    for row in &bound {
+        let Some(owner) = RowFacts::id_of(row) else {
+            continue;
+        };
+        for blocker in row
+            .get("blocked_by")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            waits.push((owner.to_string(), blocker.to_string()));
+        }
+    }
+    if waits.is_empty() {
+        return ProbeOutcome::Clear;
+    }
+    let ids: Vec<String> = waits.iter().map(|(_, b)| b.clone()).collect();
+    let Ok(rows) = crate::graph_store::read_rows_where(
+        &graph_path,
+        &crate::backlog::RowQuery {
+            filter: crate::backlog::api::NodeFilter {
+                id_in: Some(ids),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    ) else {
+        return ProbeOutcome::Inconclusive(
+            "blocked_by: graph unreadable; refusing to assume unblocked".to_string(),
+        );
+    };
+    blocked_by_verdict(facts.number, &waits, &rows)
+}
+
+/// The pure half of [`blocked_by_probe`]. A blocker the graph no longer
+/// holds reads closed: nothing is left to wait for.
+fn blocked_by_verdict(pr: u64, waits: &[(String, String)], rows: &[Value]) -> ProbeOutcome {
+    let open: Vec<String> = waits
+        .iter()
+        .filter(|(_, blocker)| {
+            rows.iter().any(|row| {
+                RowFacts::id_of(row) == Some(blocker.as_str())
+                    && crate::backlog_ready::node_is_open(row)
+            })
+        })
+        .map(|(owner, blocker)| format!("{owner} waits on {blocker}"))
+        .collect();
+    if open.is_empty() {
+        return ProbeOutcome::Clear;
+    }
+    ProbeOutcome::Refused(format!(
+        "blocked_by: PR {pr} waits on an open node ({}); it merges once the blocker closes",
+        open.join(", ")
+    ))
 }
 
 /// The binding decision over already-read graph entries: the pure half of

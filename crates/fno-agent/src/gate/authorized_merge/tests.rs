@@ -2451,3 +2451,23 @@ fn pin_graph_env(tmp: &Path) -> (std::sync::MutexGuard<'static, ()>, GraphEnvRes
     std::env::set_var("FNO_HOME", tmp);
     (lock, GraphEnvRestore(prior_spaces, prior_home))
 }
+
+#[test]
+fn a_pr_waits_on_an_open_blocker_and_merges_once_it_closes() {
+    let waits = vec![("x-1".to_string(), "x-2".to_string())];
+    let open = vec![json!({"id": "x-2", "status": "in_progress"})];
+    let closed =
+        vec![json!({"id": "x-2", "status": "done", "completed_at": "2026-11-24T00:00:00Z"})];
+    match blocked_by_verdict(9, &waits, &open) {
+        ProbeOutcome::Refused(reason) => assert!(reason.contains("x-1 waits on x-2"), "{reason}"),
+        other => panic!("an open blocker must hold: {other:?}"),
+    }
+    assert!(matches!(
+        blocked_by_verdict(9, &waits, &closed),
+        ProbeOutcome::Clear
+    ));
+    assert!(matches!(
+        blocked_by_verdict(9, &waits, &[]),
+        ProbeOutcome::Clear
+    ));
+}
