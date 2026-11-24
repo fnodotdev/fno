@@ -15,16 +15,6 @@ pub(crate) enum Tag {
     Untagged,
 }
 
-impl Tag {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Tag::Behavioural => "behavioural",
-            Tag::State => "state",
-            Tag::Untagged => "untagged",
-        }
-    }
-}
-
 /// The tag table, read once per Stop.
 pub(crate) struct Tags(Value);
 
@@ -89,7 +79,6 @@ mod tests {
         for (id, tag) in cases {
             assert_eq!(tags.get(id), tag, "{id}");
         }
-        assert_eq!(Tag::State.as_str(), "state");
         // A damaged file tags nothing, which fails toward never judged.
         std::fs::write(&file, "d-03c304bb = \n").unwrap();
         assert_eq!(Tags::read(dir.path()).get(law), Tag::Untagged);
