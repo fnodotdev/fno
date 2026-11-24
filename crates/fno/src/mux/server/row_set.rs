@@ -5,6 +5,8 @@
 //! helpers the walk reads (`compose_subline`, `truth_basis`, `portal_of`,
 //! ...) stay where they are.
 
+pub(super) mod pr_status_sweep;
+
 use crate::backlog_view::{BacklogJoin, GraphBinding};
 use crate::proto::{AgentRow, AgentRowReceipt, SessionBinding};
 

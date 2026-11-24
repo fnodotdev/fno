@@ -43,7 +43,7 @@ pub(super) async fn serve(
 
     crate::board_reader::spawn(core_tx.clone(), client_count_rx.clone());
 
-    pr_status_sweep::spawn();
+    super::row_set::pr_status_sweep::spawn();
 
     spawn_pane_stats_tick(core_tx.clone());
 

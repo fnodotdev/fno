@@ -109,7 +109,6 @@ mod pane_reseat;
 mod pane_run;
 mod pane_spawn;
 mod place;
-mod pr_status_sweep;
 use pane_spawn::{SpawnOrder, KEEPER_ROAD};
 pub(crate) mod placement_fit;
 mod portal_journal;
