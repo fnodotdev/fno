@@ -114,6 +114,7 @@ mod tests {
         assert_eq!(canonical_status(Some("shipped")), "in_review");
         assert_eq!(canonical_status(Some("archived")), "superseded");
         assert_eq!(canonical_status(Some("stub")), "idea");
+        assert_eq!(canonical_status(Some("draft")), "design");
         assert_eq!(canonical_status(Some("Ready")), "ready");
         assert_eq!(canonical_status(Some("'done'")), "done");
         assert_eq!(canonical_status(None), "");
