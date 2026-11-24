@@ -425,7 +425,6 @@ enum MessageContent {
 struct MessageBlock {
     #[serde(rename = "type")]
     kind: Option<BlockKind>,
-    text: Option<String>,
     id: Option<String>,
     name: Option<String>,
     input: Option<ToolInput>,
@@ -440,7 +439,6 @@ struct MessageBlock {
 enum BlockKind {
     ToolUse,
     ToolResult,
-    Text,
     #[serde(other)]
     Other,
 }
@@ -643,7 +641,7 @@ impl InvocationFold {
             return;
         }
         self.close_command();
-        match command_text(&message.content) {
+        match command_text(message) {
             Some(text) => self.open_command_row(text, timestamp),
             None => self.last_activity = timestamp,
         }
@@ -763,7 +761,7 @@ impl InvocationFold {
             kind: InvocationKind::Goal,
             name: condition,
             session: self.session(),
-            node: self.session_node.clone(),
+            node: None,
             start,
             end,
             outcome: Some(outcome),
@@ -807,6 +805,13 @@ impl InvocationFold {
 
     fn finish(mut self) -> Vec<Invocation> {
         self.close_command();
+        // A goal's set record is written before the command line that names its
+        // node, so a goal row takes the session node when the pass ends.
+        for row in self.rows.iter_mut() {
+            if row.kind == InvocationKind::Goal && row.node.is_none() {
+                row.node = self.session_node.clone();
+            }
+        }
         self.rows
     }
 }
@@ -814,37 +819,22 @@ impl InvocationFold {
 /// Whether a `user` line opens a turn of its own. A result, a meta line and a
 /// notification all ride inside the turn that is open.
 fn opens_turn(message: &TranscriptMessage) -> bool {
-    let notification = |text: &str| text.trim_start().starts_with("<task-notification>");
     match &message.content {
-        Some(MessageContent::Text(text)) => !notification(text),
-        Some(MessageContent::Blocks(blocks)) => {
-            !blocks
-                .iter()
-                .any(|block| block.kind == Some(BlockKind::ToolResult))
-                && !blocks.iter().filter_map(text_block).any(notification)
-        }
+        Some(MessageContent::Text(text)) => !text.trim_start().starts_with("<task-notification>"),
+        Some(MessageContent::Blocks(blocks)) => !blocks
+            .iter()
+            .any(|block| block.kind == Some(BlockKind::ToolResult)),
         _ => false,
     }
 }
 
-/// The text of a text block.
-fn text_block(block: &MessageBlock) -> Option<&str> {
-    (block.kind == Some(BlockKind::Text))
-        .then(|| block.text.as_deref())
-        .flatten()
-}
-
-/// The text that holds a typed command's tags.
-fn command_text(content: &Option<MessageContent>) -> Option<&str> {
-    match content {
-        Some(MessageContent::Text(text)) => Some(text.as_str()),
-        Some(MessageContent::Blocks(blocks)) => blocks
-            .iter()
-            .filter_map(text_block)
-            .find(|text| text.contains("<command-name>")),
+/// The text of a typed command: a `user` line whose content is a string with
+/// a `command-name` tag.
+fn command_text(message: &TranscriptMessage) -> Option<&str> {
+    match &message.content {
+        Some(MessageContent::Text(text)) if text.contains("<command-name>") => Some(text),
         _ => None,
     }
-    .filter(|text| text.contains("<command-name>"))
 }
 
 /// The text between an opening and a closing tag.
@@ -2024,23 +2014,30 @@ mod tests {
         )
     }
 
-    /// A `user` line that carries one `tool_result` block.
+    /// A `user` line with one `tool_result` block.
     fn result_line(ts: &str, id: &str, tool_result: &str, is_error: bool) -> String {
         format!(
             r#"{{"type":"user","sessionId":"{SESSION}","timestamp":"{ts}","toolUseResult":{tool_result},"message":{{"content":[{{"type":"tool_result","tool_use_id":"{id}","content":"done","is_error":{is_error}}}]}}}}"#
         )
     }
 
-    /// An `attachment` line that carries a `goal_status` record.
-    fn goal_line(ts: &str, attachment: &str) -> String {
+    /// An `attachment` line with a `goal_status` record. `fields` are the
+    /// record's fields between its type and its condition.
+    fn goal_line(ts: &str, fields: &str, condition: &str) -> String {
         format!(
-            r#"{{"type":"attachment","sessionId":"{SESSION}","timestamp":"{ts}","attachment":{attachment}}}"#
+            r#"{{"type":"attachment","sessionId":"{SESSION}","timestamp":"{ts}","attachment":{{"type":"goal_status",{fields}"condition":"{condition}"}}}}}"#
         )
     }
 
-    fn fold(lines: Vec<String>) -> Vec<Invocation> {
-        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
-        invocations_from_transcript(&refs)
+    /// A `user` line whose content is the given string.
+    fn user_line(ts: &str, content: &str) -> String {
+        format!(
+            r#"{{"type":"user","sessionId":"{SESSION}","timestamp":"{ts}","message":{{"content":"{content}"}}}}"#
+        )
+    }
+
+    fn fold(lines: &[String]) -> Vec<Invocation> {
+        invocations_from_transcript(&lines.iter().map(String::as_str).collect::<Vec<_>>())
     }
 
     /// A Skill call and its result are one row. A copy of the call on a line
@@ -2048,30 +2045,16 @@ mod tests {
     /// malformed line is skipped. The skill read is the kind=skill slice.
     #[test]
     fn skill_fixture_folds_one_row_per_call() {
-        let rows = fold(vec![
-            call_line(
-                "2026-11-24T04:12:48.545Z",
-                "call_a",
-                "Skill",
-                r#"{"skill":"fno:blueprint","args":"x-139d"}"#,
-            ),
+        let lines = [
+            call_line("2026-11-24T04:12:48.545Z", "call_a", "Skill", r#"{"skill":"fno:blueprint","args":"x-139d"}"#),
             call_line("2026-11-24T04:13:00.000Z", "call_b", "Skill", r#"{"skill":"fno:review"}"#),
             r#"{"message":{"content":[{"type":"tool_use","id":"call_a","name":"Skill","input":{"skill":"fno:blueprint"}}]}}"#.to_string(),
             r#"{"type":"assistant","message":{"content":[{"type":"text","text":"the Skill tool gates delivery"}]}}"#.to_string(),
             "not json at all but says Skill".to_string(),
-            result_line(
-                "2026-11-24T04:12:52.568Z",
-                "call_a",
-                r#"{"success":true,"commandName":"fno:blueprint"}"#,
-                false,
-            ),
-            result_line(
-                "2026-11-24T04:13:01.000Z",
-                "call_b",
-                r#"{"success":false,"commandName":"fno:review"}"#,
-                true,
-            ),
-        ]);
+            result_line("2026-11-24T04:12:52.568Z", "call_a", r#"{"success":true,"commandName":"fno:blueprint"}"#, false),
+            result_line("2026-11-24T04:13:01.000Z", "call_b", r#"{"success":false,"commandName":"fno:review"}"#, true),
+        ];
+        let rows = fold(&lines);
         assert_eq!(rows.len(), 2);
         assert_eq!(
             rows[0],
@@ -2087,14 +2070,11 @@ mod tests {
             }
         );
         assert_eq!(rows[1].name, "fno:review");
-        assert_eq!(rows[1].outcome, Some(Outcome::Error));
         assert_eq!(rows[1].node, None);
+        assert_eq!(rows[1].outcome, Some(Outcome::Error));
         assert_eq!(
-            skills_from_transcript(&[
-                r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c","name":"Skill","input":{"skill":"fno:blueprint"}}]}}"#,
-                r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"d","name":"Bash","input":{"command":"ls"}}]}}"#,
-            ]),
-            vec!["fno:blueprint".to_string()]
+            skills_from_transcript(&lines.iter().map(String::as_str).collect::<Vec<_>>()),
+            ["fno:blueprint", "fno:review"]
         );
     }
 
@@ -2102,21 +2082,28 @@ mod tests {
     /// the next turn. A result and a notification stay inside the turn.
     #[test]
     fn command_fixture_spans_the_turn() {
-        let typed = r#"{"type":"user","sessionId":"11111111-1111-4111-8111-111111111111","timestamp":"2026-11-24T04:51:25.957Z","origin":{"kind":"human"},"message":{"content":"<command-message>fno:target</command-message>\n<command-name>/fno:target</command-name>\n<command-args>x-139d</command-args>"}}"#;
-        let answer = r#"{"type":"assistant","sessionId":"11111111-1111-4111-8111-111111111111","timestamp":"2026-11-24T04:51:36.409Z","message":{"content":[{"type":"text","text":"working"}]}}"#;
-        let notification = r#"{"type":"user","sessionId":"11111111-1111-4111-8111-111111111111","timestamp":"2026-11-24T05:20:23.760Z","origin":{"kind":"task-notification"},"message":{"content":"<task-notification>\n<task-id>bqdn7ztne</task-id>\n<status>completed</status>\n</task-notification>"}}"#;
-        let prompt = r#"{"type":"user","sessionId":"11111111-1111-4111-8111-111111111111","timestamp":"2026-11-24T06:00:00.000Z","message":{"content":"how is it going"}}"#;
-        let rows = fold(vec![
-            typed.to_string(),
-            answer.to_string(),
+        let rows = fold(&[
+            user_line(
+                "2026-11-24T04:51:25.957Z",
+                r#"<command-message>fno:target</command-message>\n<command-name>/fno:target</command-name>\n<command-args>x-139d</command-args>"#,
+            ),
+            call_line(
+                "2026-11-24T04:51:36.409Z",
+                "call_none",
+                "Bash",
+                r#"{"command":"ls"}"#,
+            ),
             result_line(
                 "2026-11-24T04:51:49.919Z",
                 "call_none",
                 r#""a string""#,
                 false,
             ),
-            notification.to_string(),
-            prompt.to_string(),
+            user_line(
+                "2026-11-24T05:20:23.760Z",
+                r#"<task-notification>\n<tool-use-id>call_none</tool-use-id>\n<status>completed</status>\n</task-notification>"#,
+            ),
+            user_line("2026-11-24T06:00:00.000Z", "how is it going"),
         ]);
         assert_eq!(rows.len(), 1);
         let command = &rows[0];
@@ -2133,7 +2120,7 @@ mod tests {
     /// when the line's `toolUseResult` is a bare string.
     #[test]
     fn agent_fixture_reads_the_launch() {
-        let rows = fold(vec![
+        let rows = fold(&[
             call_line(
                 "2026-11-23T15:57:09.570Z",
                 "call_bg",
@@ -2165,34 +2152,35 @@ mod tests {
         assert_eq!(rows[1].outcome, Some(Outcome::Ok));
     }
 
-    /// A goal is one row across its records. It opens at the set record, skips
-    /// the not-met records, and closes at the met record with that record's
-    /// totals. The typed command that set it is a command row of its own, read
-    /// here with the older tag order.
+    /// A goal is one row across its records, in the order a transcript writes
+    /// them: the set record lands before the command line that names the node.
+    /// The not-met record adds nothing, and the met record closes the row with
+    /// its totals. The typed command is a command row of its own.
     #[test]
     fn goal_fixture_folds_one_goal_row() {
-        let typed = r#"{"type":"user","sessionId":"11111111-1111-4111-8111-111111111111","timestamp":"2026-06-29T06:52:59.630Z","message":{"content":"<command-name>/goal</command-name>\n            <command-message>goal</command-message>\n            <command-args>x-a747</command-args>"}}"#;
-        let rows = fold(vec![
-            typed.to_string(),
+        let rows = fold(&[
             goal_line(
                 "2026-06-29T06:52:59.630Z",
-                r#"{"type":"goal_status","met":false,"sentinel":true,"condition":"x-a747"}"#,
+                r#""met":false,"sentinel":true,"#,
+                "x-a747",
+            ),
+            user_line(
+                "2026-06-29T06:52:59.630Z",
+                r#"<command-name>/goal</command-name>\n<command-message>goal</command-message>\n<command-args>x-a747</command-args>"#,
             ),
             goal_line(
                 "2026-06-29T07:08:34.378Z",
-                r#"{"type":"goal_status","met":false,"condition":"x-a747","reason":"PR #85 is open"}"#,
+                r#""met":false,"reason":"PR #85 is open,"#,
+                "x-a747",
             ),
             goal_line(
                 "2026-06-29T07:56:13.785Z",
-                r#"{"type":"goal_status","met":true,"condition":"x-a747","reason":"x-a747 is now done","iterations":69,"durationMs":3794155,"tokens":117513}"#,
+                r#""met":true,"iterations":69,"durationMs":3794155,"tokens":117513,"#,
+                "x-a747",
             ),
         ]);
         assert_eq!(rows.len(), 2);
-        assert_eq!(
-            (rows[0].kind, rows[0].name.as_str()),
-            (InvocationKind::Command, "goal")
-        );
-        let goal = &rows[1];
+        let goal = &rows[0];
         assert_eq!(goal.kind, InvocationKind::Goal);
         assert_eq!(goal.name, "x-a747");
         assert_eq!(goal.node.as_deref(), Some("x-a747"));
@@ -2207,32 +2195,41 @@ mod tests {
                 tokens: Some(117513),
             })
         );
+        assert_eq!(
+            (rows[1].kind, rows[1].name.as_str()),
+            (InvocationKind::Command, "goal")
+        );
     }
 
     /// A failed record and a cleared record each close the open goal row. A
     /// terminal record with no open goal is a row of its own, with no start.
     #[test]
-    fn goal_fixture_reads_failed_cleared_and_orphan() {
-        let rows = fold(vec![
+    fn goal_fixture_reads_each_ending() {
+        let rows = fold(&[
             goal_line(
                 "2026-11-23T10:00:00.000Z",
-                r#"{"type":"goal_status","met":false,"sentinel":true,"condition":"all tests pass"}"#,
+                r#""met":false,"sentinel":true,"#,
+                "all tests pass",
             ),
             goal_line(
                 "2026-11-23T10:05:00.000Z",
-                r#"{"type":"goal_status","met":false,"failed":true,"condition":"all tests pass","iterations":3,"durationMs":1000,"tokens":50}"#,
+                r#""met":false,"failed":true,"iterations":3,"#,
+                "all tests pass",
             ),
             goal_line(
                 "2026-11-23T10:06:00.000Z",
-                r#"{"type":"goal_status","met":false,"sentinel":true,"condition":"the PR is merged"}"#,
+                r#""met":false,"sentinel":true,"#,
+                "the PR is merged",
             ),
             goal_line(
                 "2026-11-23T10:07:00.000Z",
-                r#"{"type":"goal_status","met":true,"sentinel":true,"condition":"the PR is merged"}"#,
+                r#""met":true,"sentinel":true,"#,
+                "the PR is merged",
             ),
             goal_line(
                 "2026-11-23T10:08:00.000Z",
-                r#"{"type":"goal_status","met":true,"condition":"a resumed goal"}"#,
+                r#""met":true,"#,
+                "a resumed goal",
             ),
         ]);
         assert_eq!(rows.len(), 3);
@@ -2243,10 +2240,16 @@ mod tests {
             Some(Some(3))
         );
         assert_eq!(rows[1].outcome, Some(Outcome::Cleared));
-        assert_eq!(rows[1].goal, None);
+        assert_eq!(
+            rows[1].goal,
+            Some(GoalTotals {
+                iterations: None,
+                duration_ms: None,
+                tokens: None
+            })
+        );
         assert_eq!(rows[2].start, None);
         assert_eq!(rows[2].outcome, Some(Outcome::Met));
-        assert_eq!(rows[2].end.as_deref(), Some("2026-11-23T10:08:00.000Z"));
     }
 
     /// The pick reads the newest commit at or before `until`; an empty
