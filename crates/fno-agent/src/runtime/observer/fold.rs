@@ -21,6 +21,7 @@
 //! decision, a PR and CI state and a fingerprint, and a transcript holds
 //! none of them.
 
+use crate::runtime::attended::xml_block;
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -782,11 +783,11 @@ impl InvocationFold {
     /// A typed command opens a row. Its tags are read one at a time, because
     /// their order differs between harness builds.
     fn open_command_row(&mut self, text: &str, timestamp: Option<String>) {
-        let Some(name) = tag(text, "<command-name>", "</command-name>") else {
+        let Some(name) = xml_block(text, "<command-name>", "</command-name>") else {
             self.last_activity = timestamp;
             return;
         };
-        let node = tag(text, "<command-args>", "</command-args>")
+        let node = xml_block(text, "<command-args>", "</command-args>")
             .and_then(crate::rules_source::node_in_text);
         if self.session_node.is_none() {
             self.session_node = node.clone();
@@ -845,14 +846,6 @@ fn command_text(message: &TranscriptMessage) -> Option<&str> {
         Some(MessageContent::Text(text)) if text.contains("<command-name>") => Some(text),
         _ => None,
     }
-}
-
-/// The text between an opening and a closing tag.
-fn tag<'a>(text: &'a str, open: &str, close: &str) -> Option<&'a str> {
-    text.split_once(open)?
-        .1
-        .split_once(close)
-        .map(|(inner, _)| inner.trim())
 }
 
 /// The kind=skill slice of [`invocations_from_transcript`]: the `input.skill`

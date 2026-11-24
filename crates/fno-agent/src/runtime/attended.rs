@@ -32,7 +32,7 @@ fn typed(p: Provenance) -> bool {
 }
 
 /// First `open`..`close` block body in `text`, trimmed.
-fn xml_block<'a>(text: &'a str, open: &str, close: &str) -> Option<&'a str> {
+pub(crate) fn xml_block<'a>(text: &'a str, open: &str, close: &str) -> Option<&'a str> {
     let start = text.find(open)? + open.len();
     let rest = &text[start..];
     let body = match rest.find(close) {
