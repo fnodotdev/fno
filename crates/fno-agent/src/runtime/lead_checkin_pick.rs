@@ -215,13 +215,7 @@ mod tests {
 
         // A blueprint offer keeps the `start` word the pick line prints.
         let mut plan = Map::new();
-        let reading = json!({
-            "starts": [],
-            "offers": [{"id": "x-plan", "command": "/blueprint"}],
-            "target_ready": [],
-            "plan_ready": [],
-            "skips": [],
-        });
+        let reading = json!({"offers": [{"id": "x-plan", "command": "/blueprint"}]});
         annotate(&mut plan, Some(&reading), None, None);
         assert_eq!(
             *at(&plan, "pick_offered"),

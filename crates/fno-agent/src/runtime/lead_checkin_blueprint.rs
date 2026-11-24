@@ -309,9 +309,7 @@ pub(crate) fn adjacent_offers(
         {
             continue;
         }
-        // The table decides: a node that owes a plan takes the blueprint
-        // command. An idea that owes none goes straight to a target. Any
-        // other row is no offer.
+        // The table decides the command. Only an idea takes a target.
         let idea = s_str(row, "status") == Some("idea");
         let command = routed(row);
         let offerable = command.as_deref() == Some("/blueprint")
@@ -1014,6 +1012,15 @@ mod tests {
                 children: vec!["x-c1".to_string(), "x-c2".to_string()],
             }]
         );
+        // A scope is several ids. A member of it is never seated under.
+        let seats = seat_leads(
+            "x-mine,x-e1",
+            Some(1),
+            &entries,
+            Some(&folded),
+            Some(&board),
+        );
+        assert!(seats.is_empty(), "{seats:?}");
         assert!(seat_leads("x-mine", Some(2), &entries, Some(&folded), None).is_empty());
         assert!(seat_leads("x-mine", None, &entries, Some(&folded), None).is_empty());
     }
@@ -1283,26 +1290,6 @@ mod tests {
         ] {
             assert!(lines.iter().any(|l| l == line), "{lines:?}");
         }
-    }
-
-    /// The seat walk stops at any member of a multi-root scope, so a lead
-    /// never seats a sub-lead over its own root epic.
-    #[test]
-    fn the_seat_walk_stops_at_every_scope_member() {
-        let entries = vec![
-            json!({"id": "x-kid", "parent": "x-root-b", "type": "feature", "status": "idea"}),
-            json!({"id": "x-root-b", "type": "epic", "status": "idea"}),
-        ];
-        let board = json!({"queues": [{"name": "unplanned", "rows": [{"id": "x-kid"}]}]});
-        let folded = json!({});
-        let seats = seat_leads(
-            "x-root-a,x-root-b",
-            Some(1),
-            &entries,
-            Some(&folded),
-            Some(&board),
-        );
-        assert!(seats.is_empty(), "{seats:?}");
     }
 
     /// An open planless root of the scope routes like an idea child: high
