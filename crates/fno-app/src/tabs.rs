@@ -236,6 +236,9 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
         }
     }
     let mut modes = div().flex().flex_row().flex_none().items_center().gap_1();
+    // The mail entry: the unread badge rides the poller, the click opens
+    // the Mail panel.
+    modes = modes.child(mail_button(root, cx));
     for (i, v) in VIEWS.into_iter().enumerate() {
         modes = modes.child(mode(i, v, root, cx));
     }
@@ -260,6 +263,29 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
             bar.child(waiting_pill(waiting, root, cx))
         })
         .child(modes)
+}
+
+/// The mail entry: an envelope glyph with the unread count beside the view
+/// switch. `None` unread hides the badge (a broken read hides, not a lying
+/// zero); a click opens the Mail panel.
+fn mail_button(root: &Root, cx: &mut Context<Root>) -> Stateful<Div> {
+    let p = root.palette;
+    let unread = root.mail_unread.as_ref().map(|rows| rows.len());
+    div()
+        .id("mail-icon")
+        .flex_none()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .px_2()
+        .cursor_pointer()
+        .hover(move |s| s.bg(rgb(p.hover)))
+        .on_click(cx.listener(move |root, _, _, cx| root.act(Action::OpenMail, cx)))
+        .child(ui::role(div(), Role::Item, &p).child("✉"))
+        .when_some(unread, |d, n| {
+            d.child(ui::role(div(), Role::Meta, &p).child(format!("{n}")))
+        })
 }
 
 /// The next-waiting pill: shown only while an agent waits on the user. A

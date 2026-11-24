@@ -135,6 +135,62 @@ pub async fn reply(id: &str, body: &str) -> MailVerdict {
     }
 }
 
+/// One unread bus row, exactly the keys `fno agent mail unread --json`
+/// prints: sender, addressing, thread key, timestamps and the body.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct UnreadRow {
+    pub id: String,
+    pub thread: String,
+    pub from: String,
+    pub to: String,
+    #[serde(default)]
+    pub kind: String,
+    pub ts: String,
+    #[serde(default)]
+    pub in_reply_to: Option<String>,
+    #[serde(default)]
+    pub body: String,
+}
+
+/// The unread argv: `fno agents mail unread [-n name] --json`.
+fn unread_argv(name: Option<&str>) -> Vec<OsString> {
+    let mut out = vec![fno_bin().into_os_string()];
+    out.push("agents".into());
+    out.push("mail".into());
+    out.push("unread".into());
+    if let Some(name) = name {
+        out.push("-n".into());
+        out.push(name.into());
+    }
+    out.push("--json".into());
+    out
+}
+
+/// Read one name's unread rows through the porcelain, bounded. A nonzero
+/// exit or unparseable stdout is an Err, never empty-as-success: a name
+/// with no mail reads as an empty list, a broken read does not.
+pub async fn unread(name: Option<&str>) -> Result<Vec<UnreadRow>, String> {
+    let mut parts = unread_argv(name);
+    let bin = parts.remove(0);
+    let mut command = Command::new(bin);
+    command.args(&parts).stdin(Stdio::null()).kill_on_drop(true);
+    let run = crate::sessions::process_admission::tokio_output(&mut command);
+    match tokio::time::timeout(MAIL_TIMEOUT, run).await {
+        Err(_) => Err("unread: timed out".into()),
+        Ok(Err(e)) => Err(format!("unread: {e}")),
+        Ok(Ok(o)) => {
+            if !o.status.success() {
+                return Err(crate::mux::server::first_line_or(
+                    &String::from_utf8_lossy(&o.stderr),
+                    "unread: failed",
+                )
+                .to_string());
+            }
+            serde_json::from_slice(&o.stdout).map_err(|e| format!("unread: {e}"))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

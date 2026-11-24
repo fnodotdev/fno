@@ -35,3 +35,17 @@ mods:
     preview: mods/decisions/preview.png
     recipe: mods/decisions/RECIPE.md
     native: decisions
+
+  - id: mail
+    title: Mail
+    summary: Open the Mail panel to read agent mail threads without leaving the window.
+    preview: mods/mail/preview.png
+    recipe: mods/mail/RECIPE.md
+    native: mail
+
+  - id: questions
+    title: Questions
+    summary: Open the Inbox view to answer questions and read decisions.
+    preview: mods/questions/preview.png
+    recipe: mods/questions/RECIPE.md
+    native: questions

@@ -16,7 +16,8 @@ use super::link::Layout;
 use super::palette::Palette;
 use super::ui::{self, Role};
 use super::window::{Action, MainView, Root};
-use fno::proto::AgentRow;
+use fno::app_api::mail_door::UnreadRow;
+use fno::proto::{AgentRow, Command};
 
 /// The panel's one width, fixed until the pane edges learn to drag.
 pub const WIDTH: f32 = 320.0;
@@ -103,8 +104,19 @@ pub struct Diffstat {
 
 /// The panel's live state: the saved part plus the last diff read.
 #[derive(Debug, Default)]
+/// Which pane the right side shows: the focused session's facts, or the
+/// mail threads. The mode is runtime state; the session facts stay saved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Mode {
+    #[default]
+    Session,
+    Mail,
+}
+
 pub struct Panel {
     pub saved: Saved,
+    /// Which pane the right side shows; the mail icon's click lands here.
+    pub mode: Mode,
     /// The cwd the last read ran in and what it found.
     changes: Option<(String, Result<Diffstat, DiffFailed>)>,
     read_at: Option<Instant>,
@@ -147,6 +159,94 @@ impl PanelAct {
             PanelAct::Open(_) => "session_panel_open",
         }
     }
+}
+
+/// The Mail panel: the unread threads the poller carries, grouped by each
+/// row's addressee. A click on a row's sender opens that agent in chat.
+fn mail_panel(root: &Root, cx: &mut Context<Root>) -> Stateful<Div> {
+    let p = root.palette;
+    let mut col = div()
+        .id("mail-panel")
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .px_3()
+        .pb_3()
+        .gap_2();
+    match root.mail_unread.as_ref() {
+        None => col.child(ui::quiet("mail: reading…", &p)),
+        Some(rows) if rows.is_empty() => col.child(ui::quiet("no unread mail", &p)),
+        Some(rows) => {
+            // One section per addressee, thread order stable.
+            let mut order: Vec<String> = Vec::new();
+            let mut groups: HashMap<&str, Vec<&UnreadRow>> = HashMap::new();
+            for r in rows {
+                let key = r.to.as_str();
+                if !groups.contains_key(key) {
+                    order.push(r.to.clone());
+                }
+                groups.entry(key).or_default().push(r);
+            }
+            for to in order {
+                col = col.child(ui::role(div(), Role::Section, &p).child(format!("to {to}")));
+                let mut threads: Vec<&UnreadRow> =
+                    groups.get(to.as_str()).cloned().unwrap_or_default();
+                threads.sort_by(|a, b| b.ts.cmp(&a.ts));
+                for r in threads {
+                    col = col.child(
+                        div()
+                            .id(ElementId::NamedInteger("mail-row".into(), hash_id(&r.id)))
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |root, _, _, cx| {
+                                // A row opens the sender's agent row: by
+                                // name, else by the session handle mail
+                                // addresses use.
+                                let pane = root
+                                    .layout
+                                    .agents
+                                    .iter()
+                                    .find(|a| {
+                                        a.name == from
+                                            || a.harness_session_id
+                                                .as_deref()
+                                                .is_some_and(|sid| sid.starts_with(&from))
+                                    })
+                                    .and_then(|a| a.pane_id);
+                                match pane {
+                                    Some(id) => root.act(Action::Send(Command::FocusPane(id)), cx),
+                                    None => root.say(
+                                        format!("no pane for {from}: launch it from Workspaces"),
+                                        cx,
+                                    ),
+                                }
+                            }))
+                            .child(div().flex().flex_col().gap_0().child(
+                                div().flex().flex_row().gap_1().child(
+                                    div().text_color(rgb(p.fg)).child(format!(
+                                        "{} · {}",
+                                        r.from,
+                                        super::chat::model::first_words(&r.body)
+                                    )),
+                                ),
+                            )),
+                    );
+                }
+            }
+            col
+        }
+    }
+}
+
+/// A small stable id from a msg id so a row's element id survives re-renders.
+fn hash_id(id: &str) -> u64 {
+    let mut h: u64 = 1469598103934665603;
+    for b in id.bytes() {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(1099511628211);
+    }
+    h
 }
 
 /// Whether the panel takes a column in this view.
@@ -361,6 +461,9 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
 
 fn body(root: &Root, cx: &mut Context<Root>) -> Stateful<Div> {
     let p = root.palette;
+    if root.right.mode == Mode::Mail {
+        return mail_panel(root, cx);
+    }
     let mut col = div()
         .id("right-pane-body")
         .flex()

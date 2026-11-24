@@ -252,6 +252,8 @@ fn kind_words(c: &Component) -> &'static str {
 fn native_open(target: &str) -> Action {
     match target.rsplit('/').next() {
         Some("backlog-board") => Action::Show(MainView::Orchestration),
+        Some("mail") => Action::OpenMail,
+        Some("questions") => Action::Show(MainView::Inbox),
         _ => Action::Notice("Open this view from the mux menu".into()),
     }
 }
@@ -1252,6 +1254,8 @@ mod tests {
     const LISTING: &[u8] = br#"{"packs": [
         {"pack_id": "fno-panels", "mods": [
             {"id": "backlog-board", "title": "Backlog board", "kind": "native", "enabled": true},
+            {"id": "mail", "title": "Mail", "kind": "native", "enabled": true},
+            {"id": "questions", "title": "Questions", "kind": "native", "enabled": true},
             {"id": "review-ledger", "title": "Review ledger", "kind": "feed", "enabled": true,
              "recipe": "/demo/RECIPE.md"},
             {"id": "decisions", "title": "Decisions", "kind": "native", "enabled": true},
@@ -1287,6 +1291,8 @@ mod tests {
             shown,
             [
                 have("fno-panels/backlog-board", true),
+                have("fno-panels/mail", true),
+                have("fno-panels/questions", true),
                 have("fno-panels/review-ledger", true),
                 have("fno-panels/decisions", true),
                 have("fno-panels/notes", true),
@@ -1310,6 +1316,19 @@ mod tests {
         page.confirm = None;
         page.press("demo-clock/ci-feed".into(), false);
         assert!(matches!(rx.try_recv(), Ok(Ask::Switch(t, false)) if t == "demo-clock/ci-feed"));
+    }
+
+    #[test]
+    fn mail_and_questions_open_where_the_app_has_the_view() {
+        assert_eq!(native_open("fno-panels/mail"), Action::OpenMail);
+        assert_eq!(
+            native_open("fno-panels/questions"),
+            Action::Show(MainView::Inbox)
+        );
+        assert_eq!(
+            native_open("fno-panels/backlog-board"),
+            Action::Show(MainView::Orchestration)
+        );
     }
 
     #[test]
