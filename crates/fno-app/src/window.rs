@@ -144,6 +144,16 @@ pub enum Action {
     DismissUpdate,
 }
 
+/// The key layer (config.mux.prefix, [mux.keys]), installed before the
+/// scanner reads its first keystroke - the same loader the terminal client
+/// uses. A refused rebind comes back as the startup notice rather than
+/// silently running the shipped default.
+fn install_keymap(cwd: &std::path::Path) -> Option<String> {
+    let (keymap, warnings) = fno::ui::digest_overlay::keymap(cwd);
+    fno::ui::keys::install(keymap);
+    warnings.first().map(|w| w.0.clone())
+}
+
 /// The stable control id a click's [`Action`] ships to the usage events arm
 /// (`fno::ui_usage`). One constant per control, never a label.
 fn click_id(action: &Action) -> &'static str {
@@ -472,12 +482,7 @@ impl Root {
         );
         let theme_cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());
         let (palette, theme_warning) = super::palette::for_appearance(light, &theme_cwd);
-        // The key layer (config.mux.prefix, [mux.keys]), installed before the
-        // scanner reads its first keystroke - the same loader the terminal
-        // client uses. A refused rebind surfaces as the startup notice rather
-        // than silently running the shipped default.
-        let (keymap, key_warnings) = fno::ui::digest_overlay::keymap(&theme_cwd);
-        fno::ui::keys::install(keymap);
+        let key_warning = install_keymap(&theme_cwd);
         let mut root = Root {
             main,
             link: None,
@@ -486,7 +491,7 @@ impl Root {
             panes: HashMap::new(),
             modes: Modes::default(),
             scanner: fno::ui::keys::Scanner::default(),
-            notice: key_warnings.first().map(|w| w.0.clone()).or(theme_warning),
+            notice: key_warning.or(theme_warning),
             notice_failed: false,
             notice_gen: 0,
             shot: false,
