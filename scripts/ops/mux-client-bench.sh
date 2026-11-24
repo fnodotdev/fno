@@ -47,15 +47,26 @@
 #
 # macOS caveats: bash 3.2-safe (no assoc arrays); `date` has no %N, so
 # timing uses perl Time::HiRes; TUI and mux server share the process name
-# `fno`, so ps matching keys on argv; opening the bench app can overwrite
-# ~/Library/Application Support/fno-app/window-state.json on quit, so close
-# a running fno-app first or accept the overwrite.
+# `fno`, so ps matching keys on argv.
+#
+# State isolation: the whole script pins FNO_CONFIG at a config inside the
+# temp root, so every fno-side write (mux sidecars, view prefs, graph)
+# lands there and nothing reads the real ~/.fno. The app surface runs
+# under a temp HOME (the app has no state-path flag; its state file is
+# $HOME/Library/Application Support/fno-app/window-state.json), so the
+# bench app can never touch the real window-state.json. The bench asserts
+# both: the temp state file must exist after a clean app quit, and the
+# real file's mtime+size must be byte-identical before and after. A
+# violation prints FAIL in the report and the run's numbers read suspect.
 set -euo pipefail
 
 SESSION=""
 ROOT=""
 OUT_DIR=""
 PIDS=()
+REAL_HOME="${HOME:?HOME unset}"
+REAL_STATE="$REAL_HOME/Library/Application Support/fno-app/window-state.json"
+REAL_SIG_BEFORE=""
 
 FNO_BIN="$(command -v fno)"
 APP_BIN="$(command -v fno-app)"
@@ -71,6 +82,10 @@ PANE_SIZE="120x40"
 now_ms() { perl -MTime::HiRes=time -e 'printf("%.0f\n", time()*1000)'; }
 
 die() { echo "mux-client-bench: $*" >&2; exit 2; }
+
+state_sig() { # state_sig <file> : mtime+size fingerprint, "absent" when missing
+  if [ -f "$1" ]; then stat -f '%m %z' "$1"; else echo absent; fi
+}
 
 # ---- args ----
 while [ $# -gt 0 ]; do
@@ -124,6 +139,14 @@ teardown() {
   else
     echo "teardown: sweep clean (no strays)"
   fi
+  # Last isolation check before the temp root disappears: the real
+  # window-state.json must still carry the signature taken at world-up.
+  if [ -n "$REAL_SIG_BEFORE" ] && [ -n "$ROOT" ]; then
+    if [ "$(state_sig "$REAL_STATE")" != "$REAL_SIG_BEFORE" ]; then
+      echo "FAIL_real_state_touched" > "$OUT_DIR/isolation.txt" 2>/dev/null || true
+      echo "ISOLATION FAIL: the real window-state.json changed during the bench" >&2
+    fi
+  fi
   [ -n "$ROOT" ] && rm -rf "$ROOT"
   set -e
 }
@@ -151,6 +174,13 @@ world_up() {
   ROOT="$(cd "$ROOT" && pwd -P)"
   export FNO_MUX_DIR="$ROOT/mux"
   export FNO_SERVER="$SESSION"
+  # Pin the config inside the temp root: the state root becomes this
+  # directory, so no fno write reaches the real ~/.fno.
+  : > "$ROOT/config.toml"
+  export FNO_CONFIG="$ROOT/config.toml"
+  # The app surface's own HOME; window-state and control files land here.
+  mkdir -p "$ROOT/home/Library/Application Support"
+  REAL_SIG_BEFORE="$(state_sig "$REAL_STATE")"
 
   spawn_tracked "$FNO_BIN" mux server --server "$SESSION"
   local i=0
@@ -187,6 +217,21 @@ wake_busy() {
   # The newline ends the busy pane's `read _`; the stream starts.
   "$FNO_BIN" mux pane send "$BUSY_ID" --raw $'\n' --server "$SESSION" >/dev/null \
     || die "could not wake the busy pane (pane send refused)"
+}
+
+app_env() { # app_env <cmd...> : run an app-surface call under the temp HOME
+  HOME="$ROOT/home" "$@"
+}
+
+isolation_verdict() { # compare temp-state presence and the real file's signature
+  local iso="ok"
+  if [ ! -f "$ROOT/home/Library/Application Support/fno-app/window-state.json" ]; then
+    iso="FAIL_temp_state_absent"
+  fi
+  if [ "$(state_sig "$REAL_STATE")" != "$REAL_SIG_BEFORE" ]; then
+    iso="FAIL_real_state_touched"
+  fi
+  echo "$iso"
 }
 
 # ---- p50/p90 (nearest-rank) ----
@@ -347,7 +392,7 @@ EOF
 
   local app_pid=""
   if $needs_app; then
-    app_pid="$("$FNO_BIN" mux app open --server "$SESSION" --mode terminal 2>/dev/null | sed -n 's/^[^0-9]*\([0-9][0-9]*\).*$/\1/p' | head -1)"
+    app_pid="$(app_env "$FNO_BIN" mux app open --server "$SESSION" --mode terminal 2>/dev/null | sed -n 's/^[^0-9]*\([0-9][0-9]*\).*$/\1/p' | head -1)"
     if [ -n "$app_pid" ]; then
       PIDS+=("$app_pid")
     else
@@ -371,6 +416,17 @@ EOF
     fi
     sleep 1; t=$((t + 1))
   done
+
+  # Clean quit through the control channel so the app runs its save-on-quit
+  # path into the temp HOME; the isolation verdict needs that file.
+  if [ -n "$app_pid" ]; then
+    app_env "$FNO_BIN" mux app close --server "$SESSION" >/dev/null 2>&1 || true
+    local n=0
+    while [ "$n" -lt 50 ] && [ ! -f "$ROOT/home/Library/Application Support/fno-app/window-state.json" ]; do
+      sleep 0.2; n=$((n + 1))
+    done
+  fi
+  isolation_verdict > "$OUT_DIR/isolation.txt"
 }
 
 metric_switch() {
@@ -471,6 +527,18 @@ write_report() {
     echo "|---|---|---|"
     echo "| TUI | $(fmt_stats "$(stats_for idle_cpu tui)") | $(fmt_stats "$(stats_for idle_rss_kb tui)") |"
     echo "| fno-app | $(fmt_stats "$(stats_for idle_cpu app)") | $(fmt_stats "$(stats_for idle_rss_kb app)") |"
+    echo ""
+    echo "## App state isolation"
+    echo ""
+    local iso
+    iso="$(cat "$OUT_DIR/isolation.txt" 2>/dev/null || echo "not_run")"
+    if [ "$iso" = "ok" ]; then
+      echo "ok: the bench app wrote its state under the temp HOME and the real window-state.json kept its world-up signature."
+    elif [ "$iso" = "not_run" ]; then
+      echo "not run: no app surface in this metric set."
+    else
+      echo "**FAIL: $iso** - the bench touched state outside the temp root. Treat every number in this report as suspect."
+    fi
     echo ""
     echo "## Unmeasured cells"
     echo ""
