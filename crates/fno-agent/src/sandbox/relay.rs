@@ -172,9 +172,17 @@ pub fn rewrite_argv(
         .file_name()
         .map_or_else(|| argv[0].clone(), |n| n.to_string_lossy().into_owned())];
     let mut settings = None;
+    let codex = out[0] == "codex";
     let mut it = argv[1..].iter();
     while let Some(a) = it.next() {
         match a.as_str() {
+            // Codex's own bwrap sandbox cannot start in a container with no
+            // capabilities and no user namespaces; the container is the
+            // boundary there.
+            "--sandbox" | "-s" if codex => {
+                it.next();
+                out.extend([a.clone(), "danger-full-access".to_string()]);
+            }
             "--add-dir" => match it.next() {
                 Some(d) => match inside(d) {
                     Some(p) => out.extend([a.clone(), p]),
@@ -292,6 +300,24 @@ fn lifecycle(a: &Args) -> Result<i32, String> {
             )
         }
     );
+    if let Some(sid) = &a.session {
+        let params = json!({
+            "harness": a.harness,
+            "session_id": sid,
+            "source": "startup",
+            "agent_self": a.name,
+            "cwd": a.cwd,
+            "sandbox_transcript": transcript_path,
+        });
+        let method = format!("agent.{}", crate::session_report::SESSION_REPORT_COMMAND);
+        let sock = crate::client::client_sock(&home);
+        if crate::protocol::blocking_call(&sock, &method, params, DAEMON_BOUND).is_none() {
+            eprintln!(
+                "fno sandbox {}: the daemon took no start report; the row may be missing",
+                a.id
+            );
+        }
+    }
     let mut harness_argv = vec![
         "fno-agent".to_string(),
         "hook".into(),
@@ -611,6 +637,7 @@ fn start_relay(
         streams: Mutex::default(),
         owned: super::egress::host_addresses(),
         sock: crate::client::client_sock(&home()),
+        transcript: store.path().display().to_string(),
     });
     std::thread::spawn(move || loop {
         match GuestFrame::read(&mut stdout) {
@@ -646,6 +673,7 @@ struct Ctx {
     streams: Mutex<HashMap<u32, TcpStream>>,
     owned: Vec<IpAddr>,
     sock: PathBuf,
+    transcript: String,
 }
 
 impl Ctx {
@@ -693,6 +721,7 @@ impl Ctx {
                             "source": source,
                             "agent_self": self.name,
                             "cwd": self.cwd,
+                            "sandbox_transcript": self.transcript,
                         }),
                     ),
                     None => Err("this sandbox has no bound session to report".into()),
@@ -823,6 +852,22 @@ mod tests {
         let err =
             rewrite_argv(&["codex".into(), settings.display().to_string()], wt.path()).unwrap_err();
         assert!(err.contains("host path"), "{err}");
+        let codex = ["/x/codex", "exec", "--sandbox", "workspace-write", "-C"]
+            .map(String::from)
+            .into_iter()
+            .chain([wt.path().display().to_string()])
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rewrite_argv(&codex, wt.path()).unwrap().0,
+            [
+                "codex",
+                "exec",
+                "--sandbox",
+                "danger-full-access",
+                "-C",
+                "/work"
+            ]
+        );
         assert!(Args::parse(&["--id".into(), "../x".into(), "--".into(), "c".into()]).is_err());
     }
 }

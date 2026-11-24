@@ -697,6 +697,7 @@ fn registry_schema_fields() {
         related_session_id: Some("value".into()),
         transcript_path: Some("value".into()),
         start_source: Some("value".into()),
+        sandbox_transcript: Some("value".into()),
         node: Some("value".into()),
         node_basis: Some("value".into()),
         node_reason: Some("value".into()),
