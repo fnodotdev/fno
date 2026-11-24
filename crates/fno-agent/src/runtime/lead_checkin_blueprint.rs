@@ -1470,6 +1470,7 @@ mod tests {
             unplanned_board(&[], Some(0)),
             Some("sess-1"),
             vec![],
+            0,
             Ok(4),
             "high",
             Ok(HashMap::new()),
