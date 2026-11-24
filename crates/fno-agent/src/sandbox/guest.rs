@@ -455,18 +455,18 @@ fn serve_proxy(shared: &Shared, conn: TcpStream) {
     let text = String::from_utf8_lossy(&head).into_owned();
     let first = text.lines().next().unwrap_or("");
     let mut parts = first.split_whitespace();
-    let (verb, target, version) = (
+    let (method, target, version) = (
         parts.next().unwrap_or(""),
         parts.next().unwrap_or(""),
         parts.next().unwrap_or("HTTP/1.1"),
     );
-    let (host, port, preamble) = if verb.eq_ignore_ascii_case("CONNECT") {
+    let (host, port, preamble) = if method.eq_ignore_ascii_case("CONNECT") {
         let (h, p) = split_host_port(target, 443);
         (h, p, None)
     } else if let Some(rest) = target.strip_prefix("http://") {
         let (authority, path) = rest.split_once('/').map_or((rest, ""), |(a, p)| (a, p));
         let (h, p) = split_host_port(authority, 80);
-        let rewritten = text.replacen(first, &format!("{verb} /{path} {version}"), 1);
+        let rewritten = text.replacen(first, &format!("{method} /{path} {version}"), 1);
         (h, p, Some(rewritten.into_bytes()))
     } else {
         write_half
