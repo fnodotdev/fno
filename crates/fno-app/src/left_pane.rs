@@ -104,6 +104,11 @@ pub enum Row {
         /// `None` on non-agent rows. The identity cell renders its verdict
         /// and review tokens.
         pr_fact: Option<PrStatusFact>,
+        /// The row's own PR number and URL, so the sheet opens with the
+        /// row's data and never a name lookup's (two live rows can share a
+        /// name).
+        pr: Option<u64>,
+        pr_url: Option<String>,
         /// The mux card's served facts; `None` for anything but an agent.
         card: Option<CardFacts>,
         /// An agent's lattice state; `None` for shells, machines, questions.
@@ -309,6 +314,13 @@ fn agent_item(
         detail: agent_status_word(a),
         identity: agent_identity(a),
         pr_fact: a.pr_status.clone(),
+        pr: a.pr,
+        pr_url: a
+            .bindings
+            .iter()
+            .rev()
+            .find(|b| b.pr.is_some())
+            .and_then(|b| b.pr_url.clone()),
         card: Some(card_facts(a, now_secs)),
         state: Some(state),
         question: false,
@@ -488,6 +500,8 @@ fn push_questions(out: &mut Vec<Row>, board: &Board) {
         detail: qdetail,
         identity: None,
         pr_fact: None,
+        pr: None,
+        pr_url: None,
         card: None,
         state: None,
         question: false,
@@ -530,6 +544,8 @@ fn push_machines(out: &mut Vec<Row>, board: &Board) {
             ),
             identity: None,
             pr_fact: None,
+            pr: None,
+            pr_url: None,
             card: None,
             state: None,
             question: false,
@@ -1235,6 +1251,8 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
             detail,
             identity,
             pr_fact,
+            pr,
+            pr_url,
             card,
             state,
             question,
@@ -1249,8 +1267,8 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
             let tinted = blocked && !cursor;
             let row_p = if tinted { p.on_needs() } else { p };
             let agent_name = card.as_ref().map(|_| label.clone());
-            // The sheet's lookup names the row's agent; the name tuple below
-            // moves `label`, so the listener carries its own copy.
+            // The sheet's data rides the row, so the listener carries its
+            // own name copy: the name tuple below moves `label`.
             let label_for_sheet = label.clone();
             let mut item = ui::row(i, cursor, &p)
                 .w(px(WIDTH))
@@ -1287,31 +1305,22 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
                 // sheet; a plain click keeps the row's own action.
                 let openable = pr_fact.is_some();
                 let pr_fact = pr_fact.clone();
+                let pr_num = pr;
+                let pr_url = pr_url.clone();
                 item = ui::clickable(item, &p).on_click(cx.listener(
                     move |root, ev: &gpui::ClickEvent, _, cx| {
                         if openable && ev.modifiers().alt {
-                            if let Some(row) = root
-                                .layout
-                                .agents
-                                .iter()
-                                .find(|r| r.name == label_for_sheet)
-                            {
-                                let binding = row.bindings.iter().rev().find(|b| b.pr.is_some());
+                            if let Some(num) = pr_num {
                                 root.pr_sheet = Some(pr_sheet::PrSheet {
-                                    pr: row.pr.unwrap_or(0),
-                                    url: binding.and_then(|b| b.pr_url.clone()),
-                                    fact: row
-                                        .pr_status
-                                        .clone()
-                                        .unwrap_or_else(|| pr_fact.clone().unwrap()),
+                                    pr: num,
+                                    url: pr_url.clone(),
+                                    fact: pr_fact.clone().unwrap_or_default(),
                                     agent: label_for_sheet.clone(),
-                                    slug: pr_sheet::slug_from_url(
-                                        binding.and_then(|b| b.pr_url.as_deref()),
-                                    ),
+                                    slug: pr_sheet::slug_from_url(pr_url.as_deref()),
                                 });
                                 cx.notify();
-                                return;
                             }
+                            return;
                         }
                         root.launch.show = None;
                         root.launch.show_task = None;
