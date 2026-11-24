@@ -292,6 +292,8 @@ pub struct Root {
     /// A split drag: the pane pair under the grabbed hairline and the last
     /// position sent, so a move sends only on a cell crossing.
     seam_drag: Option<mouse::SeamDrag>,
+    /// A pane seam's live drag: which edge, where the grab happened.
+    edge_drag: Option<pane_seam::EdgeDrag>,
     wheel: f32,
     /// The pane the wheel remainder belongs to.
     wheel_pane: Option<u64>,
@@ -523,6 +525,7 @@ impl Root {
             area: Rc::new(Cell::new(Bounds::default())),
             drag: None,
             seam_drag: None,
+            edge_drag: None,
             wheel: 0.0,
             wheel_pane: None,
             answers: HashMap::new(),
@@ -3669,7 +3672,54 @@ impl Root {
         }
     }
 
+    /// Store a pane width on the field its seam's kind names.
+    fn set_pane_width(&mut self, kind: pane_seam::SeamKind, w: f32) {
+        match kind {
+            pane_seam::SeamKind::LeftPane => self.left_w = w,
+            pane_seam::SeamKind::BoardNext => self.board_next_w = w,
+            pane_seam::SeamKind::BoardFeed => self.board_feed_w = w,
+        }
+    }
+
+    /// A seam's mouse-down: the second click of a double-click resets the
+    /// pane to its default; the first starts or restarts a drag.
+    pub(super) fn seam_down(
+        &mut self,
+        kind: pane_seam::SeamKind,
+        ev: &MouseDownEvent,
+        cx: &mut Context<Self>,
+    ) {
+        if ev.click_count == 2 {
+            let w = pane_seam::default_width(kind);
+            self.set_pane_width(kind, w);
+            self.edge_drag = None;
+            record_ui_state(self, cx);
+            cx.notify();
+            return;
+        }
+        let start_w = match kind {
+            pane_seam::SeamKind::LeftPane => self.left_w,
+            pane_seam::SeamKind::BoardNext => self.board_next_w,
+            pane_seam::SeamKind::BoardFeed => self.board_feed_w,
+        };
+        self.edge_drag = Some(pane_seam::EdgeDrag {
+            kind,
+            grab_x: f32::from(ev.position.x),
+            start_w,
+        });
+        cx.notify();
+    }
+
     fn on_move(&mut self, ev: &MouseMoveEvent, _window: &mut Window, _cx: &mut Context<Self>) {
+        // A pane seam drag points a width at the cursor; the width lands
+        // on Root's field and the next paint reflows every reader.
+        if let Some(drag) = self.edge_drag {
+            if ev.pressed_button == Some(MouseButton::Left) {
+                let w = drag.width_now(f32::from(ev.position.x), f32::from(self.width));
+                self.set_pane_width(drag.kind, w);
+            }
+            return;
+        }
         // A seam drag streams the cursor's own coordinate along the seam's
         // axis; the cell crossing is what keeps the wire quiet.
         if let Some(drag) = self.seam_drag {
@@ -3707,7 +3757,15 @@ impl Root {
         );
     }
 
-    fn on_up(&mut self, ev: &MouseUpEvent, _window: &mut Window, _cx: &mut Context<Self>) {
+    fn on_up(&mut self, ev: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        // A pane seam drag commits the last width it pointed at and
+        // releases; the widths ride the state file at quit through the
+        // snapshot record_ui_state just refreshed.
+        if self.edge_drag.take().is_some() {
+            record_ui_state(self, cx);
+            cx.notify();
+            return;
+        }
         // A seam drag ends with no message: the server applied every cell
         // the drag crossed, and a dragged size holds for the session.
         if self.seam_drag.take().is_some() {
@@ -4309,6 +4367,14 @@ impl Render for Root {
             .font_family(self.metrics.font.family.clone())
             .text_size(self.metrics.font_size)
             .child(left)
+            .child(
+                pane_seam::seam(pane_seam::SeamKind::LeftPane, &self.palette).on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|root, ev, _, cx| {
+                        root.seam_down(pane_seam::SeamKind::LeftPane, ev, cx)
+                    }),
+                ),
+            )
             .child(
                 div()
                     .relative()

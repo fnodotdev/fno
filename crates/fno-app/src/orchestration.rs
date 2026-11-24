@@ -5,11 +5,12 @@
 //! board, so they match `/hq/model.json`. A failed read shows its error
 //! above the last good rows.
 
-use gpui::{div, prelude::*, px, rgb, Context, Div, ElementId, Pixels, Stateful};
+use gpui::{div, prelude::*, px, rgb, Context, Div, ElementId, MouseButton, Pixels, Stateful};
 
 use super::chat::composer::Draft;
 use super::keys::Key;
 use super::left_pane;
+use super::pane_seam;
 use super::ui::{self, Role};
 use super::window::{Action, AnswerState, MailState, Root};
 use fno::app_api::client::org_seats::Machine;
@@ -547,10 +548,26 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
         .gap_6()
         .child(column("board-table").flex_1().min_w_0().child(table(root)))
         .child(
+            pane_seam::seam(pane_seam::SeamKind::BoardNext, &p).on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|root, ev, _, cx| {
+                    root.seam_down(pane_seam::SeamKind::BoardNext, ev, cx)
+                }),
+            ),
+        )
+        .child(
             column("board-next")
                 .w(px(NEXT_W))
                 .flex_none()
                 .child(next_column(root)),
+        )
+        .child(
+            pane_seam::seam(pane_seam::SeamKind::BoardFeed, &p).on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|root, ev, _, cx| {
+                    root.seam_down(pane_seam::SeamKind::BoardFeed, ev, cx)
+                }),
+            ),
         )
         .child(
             column("board-feed")
