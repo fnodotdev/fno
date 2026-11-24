@@ -9,7 +9,10 @@ use std::time::Duration;
 use super::input_field::InputField;
 use super::machine_tree::MachineTree;
 use super::org_board::{OrgMsg, OrgTx};
-use super::remote_hosts_door::{beat, fold_host, host_identity, parse_host, probe, HostState};
+use door::{beat, fold_host, host_identity, parse_host, probe, HostState};
+
+#[path = "remote_hosts/door.rs"]
+pub mod door;
 use super::*;
 
 const OWN_HOST_TIMEOUT: Duration = Duration::from_secs(6);
@@ -82,7 +85,7 @@ struct Line {
     configured: bool,
 }
 
-/// The door core (the address forms above are now [`super::remote_hosts_door`]):
+/// The door core (the address forms above are now [`door`]):
 /// parse, fold, probe and the state words are one leg; the page below is
 /// view only.
 
@@ -166,7 +169,7 @@ impl RemoteHosts {
                         .find(|(h, ..)| *h == name)
                         .map(|&(_, fresh, age_s)| (fresh, age_s))
                 });
-                let (word, detail) = super::remote_hosts_door::state_word(band, &host.state);
+                let (word, detail) = door::state_word(band, &host.state);
                 Line {
                     name: host.name.clone(),
                     word,

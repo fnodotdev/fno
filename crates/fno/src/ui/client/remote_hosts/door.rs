@@ -6,8 +6,6 @@
 
 use std::time::Duration;
 
-use crate::process_admission::{tokio_command, tokio_output};
-
 /// One bounded ssh probe's overall bound; the ssh connect itself gives up
 /// at 5 s ([`probe_argv`]).
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(12);

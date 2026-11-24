@@ -28,7 +28,7 @@ pub mod client {
         pub use crate::client::org_seats::{read_fleet, Fleet, Lead, Machine};
     }
     pub mod remote_hosts {
-        pub use crate::client::remote_hosts_door::{
+        pub use crate::client::remote_hosts::door::{
             fold_host, host_identity, parse_host, probe, state_word, HostState,
         };
     }

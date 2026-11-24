@@ -8956,9 +8956,7 @@ mod nav_rows;
 #[path = "client/needs_queue.rs"]
 mod needs_queue;
 #[path = "client/remote_hosts.rs"]
-mod remote_hosts;
-#[path = "client/remote_hosts_door.rs"]
-pub mod remote_hosts_door;
+pub(crate) mod remote_hosts;
 #[path = "client/reserve_apps.rs"]
 mod reserve_apps;
 
