@@ -204,21 +204,28 @@ static ACTIVE: OnceLock<(SandboxPlan, PathBuf)> = OnceLock::new();
 /// a different answer refuses rather than launch under the wrong one.
 pub fn arm(home: &crate::paths::AgentsHome, cwd: &Path) -> Result<(), (i32, String)> {
     let sock = crate::client::client_sock(home);
-    let reply = crate::protocol::blocking_response(
-        &sock,
-        &format!("agent.{SANDBOX_PLAN_COMMAND}"),
-        serde_json::json!({ "worktree": cwd.to_string_lossy() }),
-        std::time::Duration::from_secs(5),
-    )
-    .map_err(|e| {
-        (
-            13,
-            format!(
-                "no daemon answered at {} ({e}); start it with `fno-agent status`",
-                sock.display()
-            ),
+    let ask = || {
+        crate::protocol::blocking_response(
+            &sock,
+            &format!("agent.{SANDBOX_PLAN_COMMAND}"),
+            serde_json::json!({ "worktree": cwd.to_string_lossy() }),
+            std::time::Duration::from_secs(5),
         )
-    })?;
+    };
+    let reply = ask()
+        .or_else(|_| {
+            start_daemon(home)?;
+            ask()
+        })
+        .map_err(|e| {
+            (
+                13,
+                format!(
+                    "no daemon answered at {} ({e}), and starting one failed",
+                    sock.display()
+                ),
+            )
+        })?;
     let plan: SandboxPlan = match reply.payload {
         crate::protocol::ResponsePayload::Ok(v) => serde_json::from_value(v)
             .map_err(|e| (13, format!("the daemon's sandbox plan does not parse: {e}")))?,
@@ -244,6 +251,26 @@ pub fn arm(home: &crate::paths::AgentsHome, cwd: &Path) -> Result<(), (i32, Stri
     }
     ACTIVE.set((plan, cwd.to_path_buf())).ok();
     Ok(())
+}
+
+/// Start the daemon the way every other client command does. The spawn path
+/// is sync inside the client's runtime, so the async start runs on a scoped
+/// thread with its own runtime.
+fn start_daemon(home: &crate::paths::AgentsHome) -> std::io::Result<()> {
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            rt.block_on(crate::client::ensure_daemon(
+                home,
+                &crate::client::resolve_daemon_bin(),
+            ))
+            .map_err(|e| std::io::Error::other(e.to_string()))
+        })
+        .join()
+        .unwrap_or_else(|_| Err(std::io::Error::other("the daemon start thread panicked")))
+    })
 }
 
 /// Where the harness writes its transcript inside, for the harnesses whose

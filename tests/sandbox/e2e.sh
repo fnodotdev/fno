@@ -211,8 +211,8 @@ fi
 required "a refused set writes nothing" test "$before" = "$(cat "$FNO_CONFIG")"
 got="$("$BIN/fno" config get sandbox.provider 2> "$WORK/get.err")"
 required "config get reads the provider" test "$got" = "$ENGINE"
-required "config get warns nothing" test ! -s "$WORK/get.err"
-if [ -s "$WORK/get.err" ]; then sed 's/^/  config get stderr: /' "$WORK/get.err"; fi
+# stderr carries the `source:` provenance line by design; a warning is the defect.
+required "config get warns nothing" bash -c '! grep -qiE "warn|unknown|ignored" "$1"' _ "$WORK/get.err"
 
 repo="$WORK/repo"
 git init -q -b main "$repo"
@@ -231,7 +231,6 @@ required "control: host loopback answers" curl -fsS -o /dev/null "http://127.0.0
 required "control: host bridge answers" curl -fsS -o /dev/null "http://$bridge:8765/"
 required "control: example.com answers" curl -fsS -o /dev/null "https://example.com/"
 
-"$BIN/fno-agent" status >/dev/null 2>&1 || true
 
 # --- the spawn
 out="$WORK/spawn.out"
