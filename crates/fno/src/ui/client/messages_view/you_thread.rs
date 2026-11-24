@@ -345,18 +345,33 @@ fn push_band(
     push_blank(lines, owners);
     let marker = if open { "v" } else { ">" };
     let head = format!("  {marker} {}", band_line(item));
-    let rows = item.gap.iter().filter(|_| open).filter_map(|g| match g {
-        GapView::Mail {
-            sender, summary, ..
-        } => Some(format!("    {sender} \u{b7} {summary}")),
-        GapView::LeadUpdate { text, .. } => Some(format!(
-            "    lead \u{b7} {}",
-            text.lines().next().unwrap_or("")
-        )),
-        GapView::Other => None,
-    });
-    for row in std::iter::once(head).chain(rows) {
-        let mut line = TLine::meta(cut_chars(&row, wrap_w));
+    let mut rows: Vec<TLine> = vec![TLine::meta(cut_chars(&head, wrap_w))];
+    if open {
+        for g in &item.gap {
+            let line = match g {
+                // The x-79a5 card form: one flat row, no box, the mail
+                // label in the fg slot so it reads as a solid label square.
+                GapView::Mail {
+                    sender, summary, ..
+                } => {
+                    let mut segs = Vec::new();
+                    segs.push(super::seg("    MAIL ", TextStyle::Item));
+                    segs.push(super::seg(
+                        &format!("{sender} \u{b7} {summary}"),
+                        TextStyle::Meta,
+                    ));
+                    TLine::of(&segs).trunc(wrap_w)
+                }
+                GapView::LeadUpdate { text, .. } => TLine::meta(cut_chars(
+                    &format!("    lead \u{b7} {}", text.lines().next().unwrap_or("")),
+                    wrap_w,
+                )),
+                GapView::Other => continue,
+            };
+            rows.push(line);
+        }
+    }
+    for mut line in rows {
         line.band = selected;
         lines.push(line);
         owners.push(Some(item_index));
