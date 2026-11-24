@@ -50,16 +50,15 @@ STUB
   out_file="$stub_dir/out.txt"
   err_file="$stub_dir/err.txt"
 
-  # Opted out with FNO_SCCACHE=0: sccache is installed, so the probe names
-  # bare rustc and the remedy, and the bare compiler really runs.
-  # SCCACHE_DISABLE is pinned off so a machine that exports it still
-  # exercises the gate.
-  SCCACHE_DISABLE=0 PATH="$stub_dir:$PATH" FNO_SCCACHE=0 "$BASH_BIN" "$WRAPPER" /bin/echo -vV >"$out_file" 2>"$err_file"
+  # Default: sccache installed but not opted in, so the probe names bare
+  # rustc and the remedy, and the bare compiler really runs. SCCACHE_DISABLE
+  # is pinned off so a machine that exports it still exercises the gate.
+  SCCACHE_DISABLE=0 PATH="$stub_dir:$PATH" "$BASH_BIN" "$WRAPPER" /bin/echo -vV >"$out_file" 2>"$err_file"
   rc=$?
 
   [[ "$rc" -eq 0 ]] || { fail "T01: expected rc=0, got $rc (stderr: $(cat "$err_file"))"; rm -rf "$stub_dir"; return; }
-  grep -q "bare rustc (sccache is off" "$err_file" \
-    || { fail "T01: the opted-out probe does not name the remedy: $(cat "$err_file")"; rm -rf "$stub_dir"; return; }
+  grep -q "bare rustc (sccache is opt-in" "$err_file" \
+    || { fail "T01: the default probe does not name the opt-in remedy: $(cat "$err_file")"; rm -rf "$stub_dir"; return; }
   grep -q -- "-vV" "$out_file" \
     || fail "T01: the bare compiler did not run: $(cat "$out_file")"
 
@@ -75,7 +74,7 @@ STUB
     && { fail "T01: the announcement leaked onto stdout: $(cat "$out_file")"; rm -rf "$stub_dir"; return; }
   grep -q "stub-sccache-stdout" "$out_file" \
     || fail "T01: stdout does not carry the compiler's own output: $(cat "$out_file")"
-  pass "T01 -vV probe: bare rustc plus remedy under FNO_SCCACHE=0, sccache under FNO_SCCACHE=1"
+  pass "T01 -vV probe: bare rustc plus remedy by default, sccache under FNO_SCCACHE=1"
   rm -rf "$stub_dir"
 }
 
@@ -475,10 +474,10 @@ STUB
   rm -rf "$stub_dir"
 }
 
-# T20: the compile door with sccache on PATH. Nothing opts out, so the
-# compile runs through sccache, whose default cache follows the state layout.
-# A project `.fno/config.toml` carrying `build.sccache = false` sends the
-# same argv to the real compiler and sccache never runs.
+# T20: the compile door under the opt-in gate. With sccache installed and
+# nothing opting in, the compile reaches the real compiler and sccache never
+# runs. A project `.fno/config.toml` carrying `build.sccache = true` opts
+# the same argv in through sccache, whose default cache follows the state layout.
 t20_config_key_opts_the_compile_in() {
   local stub_dir out_file rc
   stub_dir="$(mktemp -d -t cargo-wrapper-test-XXXXXX)"
@@ -499,28 +498,27 @@ STUB
   cp "$REPO_ROOT/scripts/lib/class-home.sh" "$REPO_ROOT/scripts/lib/paths.sh" "$REPO_ROOT/scripts/lib/with-timeout.sh" "$stub_dir/scripts/lib/"
   out_file="$stub_dir/out.txt"
 
-  # Default: sccache on PATH, nothing opts out, so the compile routes through it.
-  TMPDIR="$stub_dir" REPO_ROOT="$stub_dir" HOME="$stub_dir/home" FNO_CACHE_HOME="$stub_dir/home/cache" SCCACHE_DISABLE=0 \
-    PATH="$stub_dir:/usr/bin:/bin" "$BASH_BIN" "$WRAPPER" "$stub_dir/compiler" --crate-name warm >"$out_file" 2>/dev/null
-  rc=$?
-  [[ "$rc" -eq 0 ]] || { fail "T20: expected rc=0, got $rc"; rm -rf "$stub_dir"; return; }
-  grep -q -- "--crate-name warm" "$stub_dir/sccache.log" \
-    || { fail "T20: the default compile did not route through sccache: $(cat "$stub_dir/sccache.log" 2>/dev/null)"; rm -rf "$stub_dir"; return; }
-  [[ "$(cat "$stub_dir/sccache-dir.txt")" == "$stub_dir/home/cache/cargo-build/sccache" ]] \
-    || { fail "T20: default SCCACHE_DIR did not follow cache/cargo-build: $(cat "$stub_dir/sccache-dir.txt" 2>/dev/null)"; rm -rf "$stub_dir"; return; }
-
-  # The project file opts out: the same argv reaches the real compiler.
-  rm -f "$stub_dir/sccache.log"
-  printf '[build]\nsccache = false\n' > "$stub_dir/.fno/config.toml"
+  # Default: bare rustc, sccache untouched.
   TMPDIR="$stub_dir" REPO_ROOT="$stub_dir" HOME="$stub_dir/home" SCCACHE_DISABLE=0 \
     PATH="$stub_dir:/usr/bin:/bin" "$BASH_BIN" "$WRAPPER" "$stub_dir/compiler" --crate-name cold >"$out_file" 2>/dev/null
   rc=$?
   [[ "$rc" -eq 0 ]] || { fail "T20: expected rc=0, got $rc"; rm -rf "$stub_dir"; return; }
   grep -q -- "--crate-name cold" "$stub_dir/compiler.log" \
-    || { fail "T20: the opted-out compile did not reach the compiler"; rm -rf "$stub_dir"; return; }
+    || { fail "T20: the default compile did not reach the compiler"; rm -rf "$stub_dir"; return; }
   [[ -e "$stub_dir/sccache.log" ]] \
-    && { fail "T20: sccache ran under build.sccache = false: $(cat "$stub_dir/sccache.log")"; rm -rf "$stub_dir"; return; }
-  pass "T20 the default compile runs through sccache; a project build.sccache = false opts it out"
+    && { fail "T20: sccache ran without an opt-in: $(cat "$stub_dir/sccache.log")"; rm -rf "$stub_dir"; return; }
+
+  # The project file opts in: the same argv now routes through sccache.
+  printf '[build]\nsccache = true\n' > "$stub_dir/.fno/config.toml"
+  TMPDIR="$stub_dir" REPO_ROOT="$stub_dir" HOME="$stub_dir/home" FNO_CACHE_HOME="$stub_dir/home/cache" SCCACHE_DISABLE=0 \
+    PATH="$stub_dir:/usr/bin:/bin" "$BASH_BIN" "$WRAPPER" "$stub_dir/compiler" --crate-name warm >"$out_file" 2>/dev/null
+  rc=$?
+  [[ "$rc" -eq 0 ]] || { fail "T20: expected rc=0, got $rc"; rm -rf "$stub_dir"; return; }
+  grep -q -- "--crate-name warm" "$stub_dir/sccache.log" \
+    || { fail "T20: build.sccache = true did not route the compile through sccache: $(cat "$stub_dir/sccache.log" 2>/dev/null)"; rm -rf "$stub_dir"; return; }
+  [[ "$(cat "$stub_dir/sccache-dir.txt")" == "$stub_dir/home/cache/cargo-build/sccache" ]] \
+    || { fail "T20: default SCCACHE_DIR did not follow cache/cargo-build: $(cat "$stub_dir/sccache-dir.txt" 2>/dev/null)"; rm -rf "$stub_dir"; return; }
+  pass "T20 the default compile is bare rustc; a project build.sccache = true opts it in"
   rm -rf "$stub_dir"
 }
 

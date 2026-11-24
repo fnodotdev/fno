@@ -161,11 +161,11 @@ pub fn fill_pane_env(root: &Path) {
     }
 }
 
-/// sccache is on whenever it is installed: the rustc wrapper compiles bare
-/// rustc only when the global `~/.fno/config.toml` sets `build.sccache = false`
-/// or FNO_SCCACHE=0, and SCCACHE_DISABLE=1 wins over everything. The
-/// machine-wide server keep-alive reads the same signal (the machine scope is
-/// why only the global config counts here).
+/// sccache is opt-in: the rustc wrapper compiles bare rustc unless the
+/// global `~/.fno/config.toml` sets `build.sccache = true` or FNO_SCCACHE=1,
+/// and SCCACHE_DISABLE=1 wins over either. The machine-wide server keep-alive
+/// reads the same signal (the machine scope is why only the global config
+/// counts here), so a machine nobody opted in runs no server.
 pub fn sccache_opted_in() -> bool {
     sccache_opted_in_values(
         std::env::var("SCCACHE_DISABLE").ok().as_deref(),
@@ -184,19 +184,17 @@ fn sccache_opted_in_values(
     if disable == Some("1") {
         return false;
     }
-    match opt_in {
-        Some("1") => return true,
-        Some("0") => return false,
-        _ => {}
+    if opt_in == Some("1") {
+        return true;
     }
-    config != Some(false)
+    config == Some(true)
 }
 
 /// Best-effort: one long-lived sccache server per machine. Probes for a live
 /// server and, when none answers, the machine opted into sccache, and sccache
 /// is installed, starts one detached with the never-stop idle timeout. Never
 /// blocks or fails the caller: a machine without sccache, one where the start
-/// fails, or one that opted out, keeps every current behavior.
+/// fails, or one that never opted in, keeps every current behavior.
 pub fn ensure_sccache_server() {
     ensure_sccache_server_unless(sccache_server_pid().is_some());
 }
