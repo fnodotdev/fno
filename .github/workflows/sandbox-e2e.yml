@@ -1,100 +1,119 @@
 name: sandbox-e2e
 
-# Throwaway spike for the sandbox seam unknowns. Run 45370388683 measured the
-# exec-stdio stream (U1, U2, U3); this one measures U4 (devcontainer
-# lifecycle keys on an image-only config), U5 (whether each harness honors the
-# proxy env) and U6 (whether codex's own sandbox starts inside a locked
-# container). The real journey replaces this file before the PR leaves draft.
+# The sandboxed headless worker journey on a real engine. It builds the
+# binaries from the PR head (never a published rev), bakes them into the
+# embedded recipe, and runs tests/sandbox/e2e.sh: one headless spawn whose
+# stub harness probes every forbidden reach from inside, while the host checks
+# the sandbox ref, the row, the transcript bytes and teardown. Green means
+# `forbidden reached: 0` and `required failed: 0`.
 
 on:
   pull_request:
+    paths:
+      - crates/fno-agent/**
+      - crates/fno/src/config/**
+      - crates/fno/config_schema.json
+      - tests/sandbox/**
+      - .github/workflows/sandbox-e2e.yml
   push:
     branches: ["feature/x-a666-*"]
 
 permissions:
   contents: read
 
+concurrency:
+  group: sandbox-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  spike-harness:
-    name: harness spike (U4 U5 U6)
+  journey:
+    name: sandbox journey (${{ matrix.engine }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [docker, podman]
     steps:
-      - name: Install the CLIs
-        run: |
-          npm install -g @devcontainers/cli @anthropic-ai/claude-code @openai/codex @google/gemini-cli opencode-ai >/dev/null 2>&1
-          for b in devcontainer claude codex gemini opencode; do printf '%s: ' "$b"; "$b" --version 2>&1 | head -1; done
+      - uses: actions/checkout@v5
 
-      - name: U4 devcontainer lifecycle keys on an image-only config
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl tools and cargo-zigbuild
         run: |
-          set +e
-          ws="$RUNNER_TEMP/u4"
-          mkdir -p "$ws/.devcontainer"
-          keys="initializeCommand onCreateCommand updateContentCommand postCreateCommand postStartCommand postAttachCommand"
+          sudo apt-get update && sudo apt-get install -y musl-tools jq
+          python3 -m pip install --quiet cargo-zigbuild
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/fno-agent/target
+            crates/fno/target
+          key: sandbox-e2e-${{ hashFiles('crates/fno-agent/Cargo.lock', 'crates/fno/Cargo.lock') }}
+
+      - name: Build fno-agent and fno from the PR head
+        run: |
+          (cd crates/fno-agent && cargo zigbuild --target x86_64-unknown-linux-musl --bins)
+          (cd crates/fno && cargo zigbuild --target x86_64-unknown-linux-musl --bin fno)
+          bin="$RUNNER_TEMP/bin"
+          mkdir -p "$bin/linux"
+          for b in fno-agent fno-agent-daemon fno-agent-worker; do
+            cp "crates/fno-agent/target/x86_64-unknown-linux-musl/debug/$b" "$bin/"
+          done
+          cp crates/fno/target/x86_64-unknown-linux-musl/debug/fno "$bin/"
+          cp "$bin/fno-agent" "$bin/linux/"
+          echo "BIN=$bin" >> "$GITHUB_ENV"
+
+      - name: Run the journey
+        run: |
+          export PATH="$BIN:$PATH"
+          bash tests/sandbox/e2e.sh "$BIN" "${{ matrix.engine }}" | tee "$RUNNER_TEMP/journey.log"
+          code=${PIPESTATUS[0]}
           {
-            echo '{ "image": "debian:bookworm-slim"'
-            for k in $keys; do echo ", \"$k\": \"touch $RUNNER_TEMP/marker-$k\""; done
-            echo '}'
-          } > "$ws/.devcontainer/devcontainer.json"
-          cat "$ws/.devcontainer/devcontainer.json"
-          devcontainer read-configuration --workspace-folder "$ws" >/dev/null 2>&1; echo "read-configuration exit $?"
-          for k in $keys; do [ -e "$RUNNER_TEMP/marker-$k" ] && echo "HOST RAN after read-configuration: $k"; done
-          devcontainer build --workspace-folder "$ws" >/dev/null 2>&1; echo "build exit $?"
-          for k in $keys; do
-            [ -e "$RUNNER_TEMP/marker-$k" ] && echo "HOST RAN after build: $k" || echo "host clean after build: $k"
-          done
-          devcontainer up --workspace-folder "$ws" >/dev/null 2>&1; echo "up exit $?"
-          for k in $keys; do
-            [ -e "$RUNNER_TEMP/marker-$k" ] && echo "HOST RAN after up: $k" || echo "host clean after up: $k"
-          done
+            echo "### sandbox journey on ${{ matrix.engine }}"
+            echo '```'
+            grep -E '^(forbidden|FORBIDDEN|required|REQUIRED)' "$RUNNER_TEMP/journey.log"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$code"
 
-      - name: U5 harness proxy env
+  config-copies:
+    name: generated config copies match
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/fno/target
+          key: sandbox-config-${{ hashFiles('crates/fno/Cargo.lock') }}
+      - name: Build fno from the PR head
+        run: cd crates/fno && cargo build --bin fno
+      - name: Regenerate and diff
         run: |
-          set +e
-          cat > "$RUNNER_TEMP/proxy.py" <<'PY'
-          import socket, sys, threading
-          log = open(sys.argv[1], "a", buffering=1)
-          s = socket.socket()
-          s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-          s.bind(("127.0.0.1", 3128))
-          s.listen(64)
-          def serve(c):
-              try:
-                  line = c.recv(4096).split(b"\r\n", 1)[0].decode("latin1")
-                  log.write(line + "\n")
-                  c.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
-              finally:
-                  c.close()
-          while True:
-              c, _ = s.accept()
-              threading.Thread(target=serve, args=(c,), daemon=True).start()
-          PY
-          log="$RUNNER_TEMP/proxy.log"
-          : > "$log"
-          python3 "$RUNNER_TEMP/proxy.py" "$log" &
-          sleep 1
-          export HTTPS_PROXY=http://127.0.0.1:3128 HTTP_PROXY=http://127.0.0.1:3128
-          export https_proxy=http://127.0.0.1:3128 http_proxy=http://127.0.0.1:3128 NO_PROXY= no_proxy=
-          home="$RUNNER_TEMP/h"
-          mkdir -p "$home"
-          run() {
-            name=$1; shift
-            before=$(wc -l < "$log")
-            HOME="$home" timeout 60 "$@" > "$RUNNER_TEMP/$name.out" 2>&1
-            code=$?
-            after=$(wc -l < "$log")
-            echo "$name: exit $code, proxy saw $((after-before)) request(s): $(tail -n $((after-before)) "$log" | sort -u | tr '\n' ' ')"
-            tail -c 300 "$RUNNER_TEMP/$name.out"; echo
-          }
-          run claude env ANTHROPIC_API_KEY=sk-ant-fake claude -p hi --dangerously-skip-permissions
-          run codex env OPENAI_API_KEY=sk-fake codex exec --skip-git-repo-check hi
-          run gemini env GEMINI_API_KEY=fake gemini -p hi
-          run opencode env ANTHROPIC_API_KEY=sk-ant-fake opencode run hi
-
-      - name: U6 codex sandbox inside a locked container
-        run: |
-          set +e
-          root=$(npm root -g)
-          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
-            --user 65534:65534 -e HOME=/tmp -v "$root/@openai/codex:/codex:ro" node:22-slim \
-            sh -c 'node /codex/bin/codex.js sandbox linux -- true; echo "codex sandbox linux exit $?"; node /codex/bin/codex.js sandbox linux -- sh -c "echo hi > /tmp/x && cat /tmp/x"; echo "write probe exit $?"' 2>&1 | tail -8
+          export PATH="$PWD/crates/fno/target/debug:$PATH"
+          export FNO_HOME="$(mktemp -d)" FNO_AGENT_HOME="$(mktemp -d)"
+          fno config schema --markdown --write
+          fno config schema --toml --write
+          bash scripts/ci/regen-config-schema-goldens.sh
+          git add -A
+          git diff --cached --binary > "$RUNNER_TEMP/config-copies.patch"
+          git status --short
+          if [ -s "$RUNNER_TEMP/config-copies.patch" ]; then
+            echo "the generated config copies are stale; apply the config-copies artifact"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: config-copies
+          path: ${{ runner.temp }}/config-copies.patch
