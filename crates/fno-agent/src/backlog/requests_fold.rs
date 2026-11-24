@@ -438,6 +438,19 @@ fn judge(
     }
 }
 
+/// The session name a response line shows: the registry name, or none. A
+/// name that is empty or echoes the session id is the enumerator's fallback,
+/// not a name, so it clears and the boards show their unnamed-session label
+/// while the id stays in the web title for provenance.
+fn display_name(session: &str, name: &str) -> String {
+    let id_short = session.get(0..8).unwrap_or(session);
+    if name.is_empty() || name == session || name == id_short {
+        String::new()
+    } else {
+        name.to_string()
+    }
+}
+
 /// One group's row. `group` holds the turns oldest first (the walk sorts
 /// them) with each turn's own link kind.
 fn row_for(
@@ -497,7 +510,7 @@ fn row_for(
         .iter()
         .map(|t| ResponseRef {
             session: t.session_id.clone(),
-            name: t.name.clone(),
+            name: display_name(&t.session_id, &t.name),
             ts: t.ts.clone(),
             reply: t.reply_excerpt.clone(),
             transcript: t.transcript.clone(),
@@ -874,5 +887,14 @@ mod tests {
             "t",
             "the transcript path rides each response"
         );
+    }
+
+    #[test]
+    fn response_names_keep_handles_and_clear_id_fallbacks() {
+        assert_eq!(super::display_name("2222bbbb-aaaa", "t-worker"), "t-worker");
+        assert_eq!(super::display_name("2222bbbb-aaaa", "lara"), "lara");
+        assert_eq!(super::display_name("2222bbbb-aaaa", ""), "");
+        assert_eq!(super::display_name("2222bbbb-aaaa", "2222bbbb-aaaa"), "");
+        assert_eq!(super::display_name("2222bbbb-aaaa", "2222bbbb"), "");
     }
 }

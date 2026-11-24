@@ -194,9 +194,10 @@ function reqRow(r) {
   if (r.reply_excerpt) t.append(el("code", null, "reply: " + stripHashes(r.reply_excerpt)));
   const replies = (r.responses || []).filter((x) => stripHashes(x.reply || "").trim());
   for (const x of replies.slice(-4)) {
-    const handle = x.name && x.name !== x.session ? x.name : x.session.slice(0, 8);
+    const handle = x.name || "unnamed session";
     const resp = el("code", null, x.ts.slice(0, 10) + " " + handle + ": " + stripHashes(x.reply || "").trim().slice(0, 90));
-    resp.title = x.transcript || "";
+    // Provenance: the session id rides the hover, never the visible line.
+    resp.title = x.session + (x.transcript ? " · " + x.transcript : "");
     t.append(resp);
   }
   if (r.node) {

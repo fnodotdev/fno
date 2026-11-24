@@ -420,12 +420,8 @@ fn request_row_lines(r: &crate::requests_model::RequestRow, width: usize) -> Vec
         .filter(|x| !strip_hashes(x.reply.as_str()).trim().is_empty())
         .collect();
     if let Some(latest) = replied.last() {
-        let handle = if latest.name.is_empty() || latest.name == latest.session {
-            latest
-                .session
-                .get(0..8)
-                .unwrap_or(&latest.session)
-                .to_string()
+        let handle = if latest.name.is_empty() {
+            "unnamed session".to_string()
         } else {
             latest.name.clone()
         };
