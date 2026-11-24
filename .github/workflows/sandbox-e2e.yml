@@ -1,0 +1,225 @@
+name: sandbox-e2e
+
+# Throwaway spike for the exec-stdio seam unknowns (U1, U2, U3). It measures
+# the engines, not fno code: one `exec -i` stream carrying a control lane, a
+# bulk lane and eight proxy lanes; whether killing the host exec client kills
+# the guest process; and which isolation flags podman and docker accept.
+# The real journey replaces this file before the PR leaves draft.
+
+on:
+  pull_request:
+  push:
+    branches: ["feature/x-a666-*"]
+
+permissions:
+  contents: read
+
+jobs:
+  spike:
+    name: exec-stdio spike (${{ matrix.engine }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [docker, podman]
+    steps:
+      - name: Write the spike scripts
+        run: |
+          mkdir -p "$RUNNER_TEMP/spike"
+          cat > "$RUNNER_TEMP/spike/guest.py" <<'PY'
+          import os, sys, struct, subprocess
+          # Frame: chan u8, len u32 BE, payload. chan 0 = ping echo, chan 1 =
+          # bulk sink (ack every frame with its length), chan 2..9 = proxy
+          # echo, chan 255 = start a child and kill it on stdin EOF.
+          rd, wr = sys.stdin.buffer, sys.stdout.buffer
+          child = None
+          def read_exact(n):
+              buf = b""
+              while len(buf) < n:
+                  b = rd.read(n - len(buf))
+                  if not b:
+                      return None
+                  buf += b
+              return buf
+          while True:
+              hdr = read_exact(5)
+              if hdr is None:
+                  break
+              chan, n = hdr[0], struct.unpack(">I", hdr[1:])[0]
+              body = read_exact(n)
+              if body is None:
+                  break
+              if chan == 1:
+                  out = struct.pack(">I", n)
+              elif chan == 255:
+                  child = subprocess.Popen(["sleep", "1000"])
+                  out = str(child.pid).encode()
+              else:
+                  out = body
+              wr.write(bytes([chan]) + struct.pack(">I", len(out)) + out)
+              wr.flush()
+          if child is not None:
+              child.kill()
+          PY
+          cat > "$RUNNER_TEMP/spike/host.py" <<'PY'
+          import os, sys, struct, subprocess, threading, time, statistics, json, signal
+          engine, cname = sys.argv[1], sys.argv[2]
+          PROCS = "for d in /proc/[0-9]*; do tr '\\0' ' ' < $d/cmdline 2>/dev/null; echo; done"
+          p = subprocess.Popen([engine, "exec", "-i", cname, "python3", "/tmp/guest.py"],
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=0)
+          wlock = threading.Lock()
+          waiters = {}
+          cond = threading.Condition()
+          def send(chan, body):
+              with wlock:
+                  p.stdin.write(bytes([chan]) + struct.pack(">I", len(body)) + body)
+          def reader():
+              rd = p.stdout
+              def rx(n):
+                  buf = b""
+                  while len(buf) < n:
+                      b = rd.read(n - len(buf))
+                      if not b:
+                          return None
+                      buf += b
+                  return buf
+              while True:
+                  hdr = rx(5)
+                  if hdr is None:
+                      return
+                  chan, n = hdr[0], struct.unpack(">I", hdr[1:])[0]
+                  body = rx(n)
+                  with cond:
+                      waiters.setdefault(chan, []).append((time.perf_counter(), body))
+                      cond.notify_all()
+          threading.Thread(target=reader, daemon=True).start()
+          def take(chan, timeout=30):
+              end = time.time() + timeout
+              with cond:
+                  while not waiters.get(chan):
+                      left = end - time.time()
+                      if left <= 0:
+                          raise TimeoutError(f"chan {chan} stalled")
+                      cond.wait(left)
+                  return waiters[chan].pop(0)
+          def rtts(chan, n, size=64):
+              out = []
+              for _ in range(n):
+                  t = time.perf_counter()
+                  send(chan, os.urandom(size))
+                  t2, _ = take(chan)
+                  out.append((t2 - t) * 1000)
+              return out
+          def pct(xs, q):
+              xs = sorted(xs)
+              return round(xs[min(len(xs) - 1, int(len(xs) * q))], 3)
+          idle = rtts(0, 2000)
+          # 100 MiB bulk on chan 1 while eight proxy lanes and the control lane ping.
+          total, frame = 100 * 1024 * 1024, 64 * 1024
+          loaded = {c: [] for c in range(0, 10) if c != 1}
+          stop = threading.Event()
+          def pinger(c):
+              while not stop.is_set():
+                  loaded[c].extend(rtts(c, 1, 1024))
+          ts = [threading.Thread(target=pinger, args=(c,)) for c in loaded]
+          for t in ts:
+              t.start()
+          t0 = time.perf_counter()
+          sent = 0
+          chunk = os.urandom(frame)
+          while sent < total:
+              send(1, chunk)
+              sent += frame
+          acked = 0
+          while acked < total:
+              _, body = take(1, timeout=120)
+              acked += struct.unpack(">I", body)[0]
+          dt = time.perf_counter() - t0
+          stop.set()
+          for t in ts:
+              t.join()
+          all_loaded = [x for c in loaded for x in loaded[c]]
+          report = {
+              "engine": engine,
+              "idle_rtt_ms": {"p50": pct(idle, 0.5), "p99": pct(idle, 0.99), "max": round(max(idle), 3)},
+              "bulk_MiB_per_s": round(total / dt / 1048576, 1),
+              "loaded_rtt_ms": {"lanes": len(loaded), "samples": len(all_loaded),
+                                "p50": pct(all_loaded, 0.5), "p99": pct(all_loaded, 0.99),
+                                "max": round(max(all_loaded), 3)},
+              "lanes_starved": [c for c in loaded if not loaded[c]],
+          }
+          # U2: kill the host exec client while the guest holds a child.
+          send(255, b"")
+          _, pid = take(255)
+          report["guest_child_pid"] = int(pid)
+          os.kill(p.pid, signal.SIGKILL)
+          p.wait()
+          time.sleep(3)
+          ps = subprocess.run([engine, "exec", cname, "sh", "-c", PROCS],
+                              capture_output=True, text=True).stdout
+          report["after_sigkill_client"] = {
+              "guest_py_alive": "guest.py" in ps,
+              "sleep_child_alive": "sleep 1000" in ps,
+          }
+          # U2 control: a bare exec child with no guest EOF handling.
+          bare = subprocess.Popen([engine, "exec", "-i", cname, "sleep", "1001"],
+                                  stdin=subprocess.PIPE)
+          time.sleep(2)
+          os.kill(bare.pid, signal.SIGKILL)
+          bare.wait()
+          time.sleep(3)
+          ps = subprocess.run([engine, "exec", cname, "sh", "-c", PROCS],
+                              capture_output=True, text=True).stdout
+          report["bare_exec_child_alive_after_sigkill_client"] = "sleep 1001" in ps
+          print(json.dumps(report, indent=2))
+          PY
+
+      - name: Engine version
+        run: ${{ matrix.engine }} version
+
+      - name: U3 isolation flags
+        id: flags
+        run: |
+          set +e
+          e=${{ matrix.engine }}
+          img=docker.io/library/python:3.12-slim
+          $e pull -q "$img" >/dev/null
+          base=(run -d --rm --label fno.sandbox=spike --network none --cap-drop ALL
+                --security-opt no-new-privileges --user 65534:65534 --pids-limit 512
+                --memory 2g --init)
+          for extra in "" "--read-only --tmpfs /tmp:rw,size=64m" "--userns=keep-id"; do
+            # shellcheck disable=SC2086
+            if out=$($e "${base[@]}" $extra --name "probe-$$" "$img" sleep 30 2>&1); then
+              echo "accepted: ${base[*]:1} $extra"
+              $e rm -f "probe-$$" >/dev/null 2>&1
+            else
+              echo "refused: $extra -> $out"
+            fi
+          done
+          # Network really is off: no route out, and no host loopback.
+          $e run --rm --network none "$img" python3 -c "import socket; s=socket.socket(); s.settimeout(3); s.connect(('1.1.1.1', 443))" \
+            && echo "NETWORK OPEN (bad)" || echo "network none: connect refused (good)"
+          # The container sees no engine socket and runs as nobody.
+          $e run --rm --network none --user 65534:65534 "$img" sh -c 'id; ls -l /var/run/docker.sock 2>&1 || true'
+
+      - name: U1 + U2 one exec stream
+        run: |
+          e=${{ matrix.engine }}
+          img=docker.io/library/python:3.12-slim
+          $e run -d --label fno.sandbox=spike --network none --cap-drop ALL \
+            --security-opt no-new-privileges --user 65534:65534 --init \
+            --name spike "$img" sleep 600
+          # No bind: copy the guest in, the way the real seam ships its frames.
+          $e cp "$RUNNER_TEMP/spike/guest.py" spike:/tmp/guest.py
+          python3 "$RUNNER_TEMP/spike/host.py" "$e" spike | tee "$RUNNER_TEMP/report.json"
+          {
+            echo "### ${e}"
+            echo '```json'
+            cat "$RUNNER_TEMP/report.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Teardown
+        if: always()
+        run: ${{ matrix.engine }} rm -f spike || true
