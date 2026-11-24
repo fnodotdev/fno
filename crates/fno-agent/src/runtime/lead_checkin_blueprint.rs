@@ -1026,7 +1026,11 @@ mod tests {
             &[],
         )
         .unwrap();
-        assert_eq!(reading["running"], 3, "{reading}");
+        let lines = render_lines(&reading);
+        assert!(
+            lines.iter().any(|l| l.contains("running 3 of")),
+            "{lines:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
