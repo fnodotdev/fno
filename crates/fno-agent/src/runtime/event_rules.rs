@@ -329,13 +329,10 @@ fn stop_block(
     if prior + 1 >= BLOCK_CAP {
         attrs.insert("cap_reached".to_string(), json!(true));
     }
-    let skip = ctx
-        .last_message
-        .chars()
-        .count()
-        .saturating_sub(EXCERPT_CHARS);
-    let excerpt: String = ctx.last_message.chars().skip(skip).collect();
-    attrs.insert("excerpt".to_string(), json!(excerpt));
+    attrs.insert(
+        "excerpt".to_string(),
+        json!(crate::fnod::tail(&ctx.last_message, EXCERPT_CHARS)),
+    );
     // fnod scores the same message beside the keyword verdict. Advice only:
     // the keyword answer already fired this block, and the span carries both
     // so `intel --lens rules` can compare them.
@@ -1132,7 +1129,9 @@ fn write_judge_request(journal: &Path, ctx: &Ctx) {
             crate::fnod_tags::Tag::Untagged => {}
         }
     }
-    let url = crate::fnod::configured_url(ctx.cwd);
+    // The shadow judge takes no default url. Until config names fnod, the
+    // row reads off and this path opens no connection.
+    let url = crate::fnod::named_url(ctx.cwd).unwrap_or_default();
     let fnod = if url.trim().is_empty() {
         "off"
     } else if !crate::fnod::loopback(&url) {
@@ -1142,14 +1141,8 @@ fn write_judge_request(journal: &Path, ctx: &Ctx) {
     } else {
         "down"
     };
-    let tail = (fnod == "up").then(|| {
-        let skip = ctx
-            .last_message
-            .chars()
-            .count()
-            .saturating_sub(JUDGE_TAIL_CHARS);
-        ctx.last_message.chars().skip(skip).collect::<String>()
-    });
+    let tail =
+        (fnod == "up").then(|| crate::fnod::tail(&ctx.last_message, JUDGE_TAIL_CHARS).to_string());
     let row = json!({
         "ts": crate::events::now_rfc3339(),
         "phase": "request",
@@ -1277,7 +1270,7 @@ fn cursor_path(journal: &Path, session: &str) -> PathBuf {
     } else {
         session.to_string()
     };
-    dir.join("event-rules").join(format!("{key}.cursor"))
+    dir.join(format!("{key}.cursor"))
 }
 
 fn read_cursor(journal: &Path, session: &str) -> (i64, Option<i64>) {
@@ -1627,6 +1620,18 @@ mod tests {
         assert_eq!(row.fnod.as_deref(), Some("down"));
         assert!(row.excerpt.is_none(), "{row:?}");
         assert_eq!(row.rules, vec!["d-behav001"]);
+
+        // fnod is not named: the row says off and keeps no tail.
+        std::fs::write(rig.cwd.join(".fno/config.toml"), &tags).unwrap();
+        eval_stop_in(
+            &rig.cwd,
+            &rig.journal,
+            &rig.home,
+            &rig.payload("Still working."),
+        );
+        let [_, _, row] = <[JudgeRow; 3]>::try_from(judge_rows(&rig.journal)).unwrap();
+        assert_eq!(row.fnod.as_deref(), Some("off"));
+        assert!(row.excerpt.is_none(), "{row:?}");
     }
 
     fn stop_stamp_binds_the_question_to_the_asking_session_leg() {

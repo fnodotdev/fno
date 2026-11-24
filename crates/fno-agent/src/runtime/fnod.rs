@@ -254,11 +254,15 @@ pub(crate) fn is_ask(cwd: &Path, message: &str) -> Map<String, Value> {
     out
 }
 
-/// `fnod.url` from fno config, else the kev.serve default.
-pub(crate) fn configured_url(cwd: &Path) -> String {
+/// `fnod.url` from fno config, with no default. None when it is not set.
+pub(crate) fn named_url(cwd: &Path) -> Option<String> {
     crate::agents_config::config_value_deep(cwd, &["fnod", "url"])
         .and_then(|v| v.as_str().map(str::to_string))
-        .unwrap_or_else(|| DEFAULT_URL.to_string())
+}
+
+/// `fnod.url` from fno config, else the kev.serve default.
+pub(crate) fn configured_url(cwd: &Path) -> String {
+    named_url(cwd).unwrap_or_else(|| DEFAULT_URL.to_string())
 }
 
 /// Every address `url` resolves to is a loopback address.
@@ -312,7 +316,8 @@ pub(crate) fn rule_question(law: &str, label: &str) -> Question {
     }
 }
 
-fn tail(text: &str, max: usize) -> &str {
+/// The last `max` characters of `text`, cut on a character boundary.
+pub(crate) fn tail(text: &str, max: usize) -> &str {
     let count = text.chars().count();
     if count <= max {
         return text;
