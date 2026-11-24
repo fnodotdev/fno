@@ -1421,6 +1421,15 @@ fn collect_readings(
             let claims = crate::claims::list(Some("node:"), None, false)
                 .map(|rows| rows.iter().map(|r| r.holder.clone()).collect());
             let home = crate::paths::AgentsHome::from_env();
+            let spawned = match session_id.as_deref() {
+                Some(session) => {
+                    let registry = crate::state::load_registry(&home.registry_json())
+                        .map_err(|e| format!("fno registry unreadable: {e}"))?;
+                    crate::lead_checkin_blueprint::spawned_in_registry(&registry, &home, session)
+                        .len()
+                }
+                None => 0,
+            };
             let slots = crate::spawn_gate_lanes::share_reading(
                 &home.registry_json(),
                 crate::capacity::effective_for(&cwd).cap,
@@ -1445,6 +1454,7 @@ fn collect_readings(
                 &cwd,
                 session_id,
                 claims,
+                spawned,
                 slots,
                 &floor,
                 &other_owned,
