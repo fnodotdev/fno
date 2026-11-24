@@ -231,9 +231,45 @@ fn open_unparked(row: &Value) -> bool {
     OFFERABLE_STATUSES.contains(&status) && !locked && !archived
 }
 
+/// The node and then its ancestors, nearest first. A parent cycle ends the walk.
+fn chain(by_id: &HashMap<&str, &Value>, start: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = Some(start.to_string());
+    while let Some(id) = cur {
+        if out.contains(&id) {
+            break;
+        }
+        cur = by_id
+            .get(id.as_str())
+            .and_then(|e| crate::lead_checkin::s_str(e, "parent"))
+            .map(str::to_string);
+        out.push(id);
+    }
+    out
+}
+
+/// The fewest hops between a node and a scope: up from the node to an
+/// ancestor, then down to the member that shares it. A node that shares no
+/// ancestor with any member is farthest.
+fn nearest(path: &[String], members: &[Vec<String>]) -> (usize, String) {
+    members
+        .iter()
+        .flat_map(|member| {
+            path.iter().enumerate().filter_map(|(i, a)| {
+                member
+                    .iter()
+                    .position(|m| m == a)
+                    .map(|j| (i + j, a.clone()))
+            })
+        })
+        .min()
+        .unwrap_or((usize::MAX, String::new()))
+}
+
 /// One offer candidate's sort key: hops to a shared ancestor, audience miss,
-/// domain miss, priority, the shared ancestor, then the node id and title.
-type OfferKey<'a> = (usize, bool, bool, String, String, &'a str, String);
+/// domain miss, priority, the shared ancestor, the node id, the title, then
+/// the lifecycle command that starts it.
+type OfferKey<'a> = (usize, bool, bool, String, String, &'a str, String, String);
 
 /// Open planless nodes outside this scope that the lifecycle table starts: a
 /// node that owes a plan takes a blueprint, an idea that owes none goes
@@ -260,21 +296,6 @@ pub(crate) fn adjacent_offers(
         .iter()
         .filter_map(|e| s_str(e, "id").map(|id| (id, e)))
         .collect();
-    let chain = |start: &str| -> Vec<String> {
-        let mut out: Vec<String> = Vec::new();
-        let mut cur = Some(start.to_string());
-        while let Some(id) = cur {
-            if out.contains(&id) {
-                break;
-            }
-            cur = by_id
-                .get(id.as_str())
-                .and_then(|e| s_str(e, "parent"))
-                .map(str::to_string);
-            out.push(id);
-        }
-        out
-    };
     let audience = |row: &Value| -> Option<String> {
         OfferMeta::deserialize(row)
             .unwrap_or_default()
@@ -282,15 +303,12 @@ pub(crate) fn adjacent_offers(
             .into_iter()
             .find(|t| t.starts_with("audience:"))
     };
-    // A scope is several node ids, so its own chain is every member's.
-    let mut mine: Vec<String> = Vec::new();
-    for member in scope_members(scope) {
-        for id in chain(member) {
-            if !mine.contains(&id) {
-                mine.push(id);
-            }
-        }
-    }
+    // A scope is several node ids, and each member keeps its own chain, so a
+    // hop count runs from that member up to the shared ancestor.
+    let members: Vec<Vec<String>> = scope_members(scope).map(|m| chain(&by_id, m)).collect();
+    let own: std::collections::HashSet<&str> =
+        members.iter().flatten().map(String::as_str).collect();
+    let is_member = |id: &str| scope_members(scope).any(|m| m == id);
     let me = scope_members(scope).find_map(|m| by_id.get(m)).copied();
     let my_audience = me.and_then(audience);
     let my_domain = me.and_then(|m| s_str(m, "domain"));
@@ -305,7 +323,7 @@ pub(crate) fn adjacent_offers(
         if !open_unparked(row)
             || queued.contains(id)
             || other_owned.contains_key(id)
-            || mine.iter().any(|m| m == id)
+            || own.contains(id)
         {
             continue;
         }
@@ -317,20 +335,13 @@ pub(crate) fn adjacent_offers(
         if !offerable {
             continue;
         }
-        let path = chain(id);
+        let path = chain(&by_id, id);
         // A row whose chain names a scope member is the scope's own child. It
         // rides its epic, so an outside offer never names it.
-        if path
-            .iter()
-            .any(|a| scope_members(scope).any(|m| m == a.as_str()))
-        {
+        if path.iter().any(|a| is_member(a)) {
             continue;
         }
-        let (distance, via) = path
-            .iter()
-            .enumerate()
-            .find_map(|(i, a)| mine.iter().position(|m| m == a).map(|j| (i + j, a.clone())))
-            .unwrap_or((usize::MAX, String::new()));
+        let (distance, via) = nearest(&path, &members);
         ranked.push((
             distance,
             my_audience.is_none() || audience(row) != my_audience,
@@ -339,13 +350,14 @@ pub(crate) fn adjacent_offers(
             via,
             id,
             s_str(row, "title").unwrap_or("").to_string(),
+            command.unwrap_or_default(),
         ));
     }
     ranked.sort();
     ranked
         .into_iter()
         .take(limit)
-        .map(|(distance, _, _, _, via, id, title)| {
+        .map(|(distance, _, _, _, via, id, title, command)| {
             let near = if distance == usize::MAX {
                 "no shared ancestor".to_string()
             } else {
@@ -353,10 +365,7 @@ pub(crate) fn adjacent_offers(
             };
             serde_json::to_value(Offer {
                 id: id.to_string(),
-                command: by_id
-                    .get(id)
-                    .and_then(|row| routed(row))
-                    .unwrap_or_default(),
+                command,
                 near,
                 title,
             })
@@ -1223,17 +1232,23 @@ mod tests {
     }
 
     /// A scope spelled with several members is not one node id. The offer
-    /// walk drops the scope's own roots, their ancestor and their children,
-    /// names a sibling with the ancestor it shares, and names an idea of
-    /// lower difficulty with the target that starts it.
+    /// walk drops the scope's own roots, their ancestors and their children,
+    /// counts hops from the member that shares the ancestor, names a sibling
+    /// with that ancestor, and names an idea of lower difficulty with the
+    /// target that starts it.
     #[test]
     fn a_multi_root_scope_never_offers_its_own_subtree() {
         let entries = vec![
             json!({"id": "x-parent", "status": "idea", "difficulty": "high", "title": "above"}),
-            json!({"id": "x-root-a", "parent": "x-parent", "type": "epic", "status": "idea",
+            json!({"id": "x-a-2", "parent": "x-parent", "status": "done", "title": "above a"}),
+            json!({"id": "x-a-1", "parent": "x-a-2", "status": "done", "title": "above a"}),
+            json!({"id": "x-root-a", "parent": "x-a-1", "type": "epic", "status": "idea",
                 "difficulty": "high", "title": "own a"}),
-            json!({"id": "x-root-b", "type": "epic", "status": "idea", "difficulty": "medium",
-                "title": "own b"}),
+            json!({"id": "x-b-parent", "status": "done", "title": "above b"}),
+            json!({"id": "x-root-b", "parent": "x-b-parent", "type": "epic", "status": "idea",
+                "difficulty": "medium", "title": "own b"}),
+            json!({"id": "x-b-sib", "parent": "x-b-parent", "status": "idea", "difficulty": "high",
+                "title": "sibling of b"}),
             json!({"id": "x-b-kid", "parent": "x-root-b", "status": "idea",
                 "difficulty": "medium", "title": "inside b"}),
             json!({"id": "x-b-grand", "parent": "x-b-kid", "status": "idea",
@@ -1259,28 +1274,27 @@ mod tests {
                 limit,
             )
         };
+        // The first member's chain is long. Hops still count from the member
+        // that shares the ancestor, so the sibling of the second member leads.
         let offers = walk(3);
         assert_eq!(
             offers,
             vec![
+                json!({"id": "x-b-sib", "command": "/blueprint",
+                    "near": "shares x-b-parent", "title": "sibling of b"}),
                 json!({"id": "x-sib", "command": "/blueprint",
                     "near": "shares x-parent", "title": "sibling"}),
                 json!({"id": "x-out-hi", "command": "/blueprint",
                     "near": "no shared ancestor", "title": "out high"}),
-                json!({"id": "x-out-mid", "command": "/target",
-                    "near": "no shared ancestor", "title": "out mid"}),
             ],
             "{offers:?}"
         );
         // The table decides the command, not the difficulty band: a medium
         // idea with an open premise question owes a plan.
         let offers = walk(5);
-        assert_eq!(
-            offers[3],
-            json!({"id": "x-pq", "command": "/blueprint", "near": "no shared ancestor",
-                "title": "premise open"}),
-            "{offers:?}"
-        );
+        let last = json!({"id": "x-pq", "command": "/blueprint", "near": "no shared ancestor",
+            "title": "premise open"});
+        assert_eq!(offers.last(), Some(&last), "{offers:?}");
         let lines = render_lines(&json!({"offers": offers}));
         for line in [
             "  offer: fno agent spawn \"/fno:target x-out-mid\" \
@@ -1294,19 +1308,25 @@ mod tests {
 
     /// An open planless root of the scope routes like an idea child: high
     /// owes a blueprint, medium goes to a target. A closed root, a root with
-    /// a plan and a locked root are not unplanned work. A root the idea rows
-    /// already carry prints once.
+    /// a plan and a locked root print no line. A root the idea rows already
+    /// carry prints once.
     #[test]
     fn an_open_planless_scope_root_routes_like_an_idea_child() {
         let dir = std::env::temp_dir().join(format!("fno-bp-roots-{}", std::process::id()));
         let entries = vec![
             json!({"id": "x-r-hi", "type": "epic", "status": "idea", "difficulty": "high"}),
-            json!({"id": "x-r-mid", "type": "epic", "status": "idea", "difficulty": "medium"}),
+            json!({"id": "x-r-mid", "type": "epic", "status": "idea", "difficulty": "medium",
+                "parent": "x-r-hi"}),
+            json!({"id": "x-r-low", "type": "epic", "status": "idea", "difficulty": "medium"}),
             json!({"id": "x-r-done", "type": "epic", "status": "done", "difficulty": "high"}),
             json!({"id": "x-r-plan", "type": "epic", "status": "idea", "difficulty": "high",
                 "plan_path": "/plans/x-r-plan.md"}),
             json!({"id": "x-r-lock", "type": "epic", "status": "idea", "difficulty": "high",
                 "locked_by": "sess-9"}),
+        ];
+        let idea_rows = [
+            json!({"id": "x-r-mid", "parent": "x-r-hi", "status": "idea",
+            "difficulty": "medium"}),
         ];
         let reading = blueprint_reading_owned(
             &dir,
@@ -1319,28 +1339,32 @@ mod tests {
             Ok(HashMap::new()),
             Ok(0),
             vec![],
-            &[
-                json!({"id": "x-r-mid", "parent": "x-r-hi", "status": "idea",
-                "difficulty": "medium"}),
-            ],
+            &idea_rows,
             &entries,
-            "x-r-hi,x-r-mid,x-r-done,x-r-plan,x-r-lock",
+            "x-r-hi,x-r-mid,x-r-low,x-r-done,x-r-plan,x-r-lock",
         )
         .unwrap();
-        assert_eq!(reading["starts"], json!(["x-r-hi"]), "{reading}");
-        assert_eq!(reading["target_ready"], json!(["x-r-mid"]), "{reading}");
-        assert_eq!(reading["offers"], json!([]), "{reading}");
-        let skipped: Vec<&str> = reading["skips"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|s| s["id"].as_str())
-            .collect();
+        let lines = render_lines(&reading);
+        for line in [
+            "  start /fno:blueprint subagent x-r-hi",
+            "  target-ready: fno agent spawn \"/fno:target x-r-mid\"",
+            "  target-ready: fno agent spawn \"/fno:target x-r-low\"",
+        ] {
+            assert!(lines.iter().any(|l| l == line), "{lines:?}");
+        }
+        assert_eq!(
+            lines.iter().filter(|l| l.contains("x-r-mid")).count(),
+            1,
+            "{lines:?}"
+        );
+        for parked in ["x-r-done", "x-r-plan", "x-r-lock"] {
+            assert!(lines.iter().all(|l| !l.contains(parked)), "{lines:?}");
+        }
         assert!(
-            !skipped.contains(&"x-r-done")
-                && !skipped.contains(&"x-r-plan")
-                && !skipped.contains(&"x-r-lock"),
-            "{reading}"
+            lines
+                .iter()
+                .all(|l| !l.contains("offer:") && !l.contains("skip")),
+            "{lines:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
