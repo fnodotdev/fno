@@ -1454,7 +1454,7 @@ fn collect_readings(
                 &cwd,
                 session_id,
                 claims,
-                &spawned,
+                spawned,
                 slots,
                 &floor,
                 &other_owned,

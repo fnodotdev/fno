@@ -973,8 +973,11 @@ mod tests {
         ]});
         let reading =
             blueprint_reading(&dir, "", board, Some("sess-1"), vec![], Ok(4), "high").unwrap();
-        assert_eq!(reading["plans_ready"], 1, "{reading}");
         let lines = render_lines(&reading);
+        assert!(
+            lines.iter().any(|l| l.contains("plans ready 1 /")),
+            "{lines:?}"
+        );
         assert!(
             lines
                 .iter()
