@@ -143,7 +143,7 @@ Exit 0 for both allow AND block. Exit 2 for CLI misuse only.
 3. `<promise>MISSION COMPLETE: ...</promise>` in transcript -> run `done()`:
    - If all reads pass: terminate with `DonePRGreen` (or `DoneAdvisory` in advisory mode).
    - If a read fails: block, name the failing read in `message`. Loop continues.
-4. No promise -> backstop check (see below).
+4. No promise -> backstop check (see below). With no trip, the fire blocks with "continue working". When a provider goal owns continuation (a verified goal truth, or a Claude `/goal` whose latest transcript `goal_status` row is unmet), the stop handler passes `--continuation-owner goal`, and the fire allows instead. Every read above still runs, and a lead keeps the goal's early return.
 
 ### `done()` reads
 
@@ -258,8 +258,9 @@ When a cap is reached: terminate with `Budget` and record `budget_axis: wall_clo
 - Cancel sentinel still -> `Interrupted`
 
 **(b) Transient gh failure during `done()` read (step 2 semantics):**
-- Affected read fails closed: block with the read named in `message`, emit `loop_check_gh_error`
-- Loop retries on the next stop-hook fire
+- Affected read fails closed: the session never terminates on it, and `loop_check_gh_error` names the read
+- On a harness the daemon can wake (claude, codex, opencode, pi, agy, gemini, outside a loop-run child), a transient failure parks: the fire allows and writes a `loop_check_watch_idle` row with blocker `gh_read`. The daemon re-wakes the session after 3 minutes, doubling per failed fire in a row up to 2 hours, and the gate reads again
+- A permanent failure (an unrunnable gh, an unparseable payload, a remoteless PR) or a harness the daemon cannot wake blocks with the read named in `message`, and the loop retries on the next stop-hook fire
 - gh-errored fires are TRANSPARENT to the NoProgress streak: they neither advance nor reset the consecutive count, and a tripped backstop never terminates `NoProgress` on a gh error (a healthy session must not be killed because GitHub blipped - reverses the wedge's behavior, locked decision 6). After the outage clears, the streak resumes from its pre-outage value. Budget remains the sole ceiling during a sustained outage.
 - "No PR exists" is NOT an outage: `gh pr view`'s deterministic `no pull requests found` stderr classifies the fire as healthy world-state (`pr_state=none` fingerprint), so a session that never ships a PR still resolves via the NoProgress backstop. If gh ever changes that message, no-PR fires degrade to outage semantics (freeze -> budget ceiling) - safe, never premature termination.
 
