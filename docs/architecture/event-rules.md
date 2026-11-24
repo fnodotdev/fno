@@ -167,7 +167,7 @@ tags_file = "/absolute/path/to/judge-tags.toml"
 "d-5e6f7a8b" = "state"
 ```
 
-Every Stop that carries a session id writes one request row to `.fno/event-rules/judge.jsonl` in the repository's main checkout. The row names the machine, the Stop key (`stop:<session>:<turn>`) and the laws the turn's prompt picked. `rules` holds at most 3 behavioural laws. `judge_dropped` counts the other behavioural laws, and `judge_state` counts the state laws. The `fnod` field reads `off`, `refused`, `down` or `up`. Only an `up` row keeps the reply tail, its last 4,000 characters, in `excerpt`. If fnod is absent, the row is a skip row. No later run can score it, so the report counts it as coverage lost. The file rotates after 64 MB and keeps one older copy.
+Every Stop that carries a session id writes one request row to `.fno/event-rules/judge.jsonl` in the repository's main checkout. The row names the machine, the Stop key (`stop:<session>:<turn>`) and the laws the turn's prompt picked. `rules` holds at most 3 behavioural laws. `judge_dropped` counts the other behavioural laws, and `judge_state` counts the state laws. The `fnod` field reads `off`, `refused`, `down` or `up`. If the install never set `fnod.url`, the row also reads `off`. The shadow judge takes no default url, so its request row opens no connection there. The inline score at a keyword block still tries the default url. Only an `up` row keeps the reply tail, its last 4,000 characters, in `excerpt`. If fnod is absent, the row is a skip row. No later run can score it, so the report counts it as coverage lost. The file rotates after 64 MB and keeps one older copy.
 
 Stop makes no fnod call. The kev README reports 721 ms for a pass of the 4B model on an M5 with five questions on new text. If the text comes from the cache, the same pass takes 136 ms. The visitor Stop fixture is held at p90 300 ms (`tests/hook_latency.rs`). Scoring thus runs off the Stop path. `fno-agent intel --lens rules --score` first asks fnod about the request rows that carry no verdict. One pass per request asks `is_ask` and one `rule_obeyed` question per law, and the state carries each law's text. A pass is bounded at 10 seconds. One run scores at most 2,000 requests, and three failed passes in a row end the run. A pass that fnod fails whole writes no row, so the request waits for the next run. Each answer lands as one verdict row. It names its request in `judge_of` and carries `verdict`, `confidence`, `escalate`, `trained` and `fnod_ms`. An answer the reply skips carries `fnod_error` and reads `error`.
 
@@ -176,7 +176,8 @@ The lens prints the judge section after the rule table:
 | Line | What it reads |
 |---|---|
 | `judge rows (days N)` | Requests, scored, skipped and pending in the window. |
-| `<machine> <day>` | The same four counts for one machine and day. Coverage reads here. |
+| `<machine> <day>` | The same four counts for one machine and one UTC day. Coverage reads here. |
+| `skipped while fnod was` | The skipped requests, counted by the fnod state their row read. |
 | `judge:<label>` | Verdict counts for one question. A law prints as its D number. `labeled` and `wrong` follow when a labels file marks its verdict rows. |
 | `fnod_ms p50 .. p90 ..` | The cost of one pass. |
 | `ask pair by stop key` | Stops where both the keyword lint blocked and fnod read an ask, where only the lint blocked (`keyword-only`), and where only fnod read an ask (`judge-only`). |
