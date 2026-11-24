@@ -461,6 +461,14 @@ pub(crate) fn held_reading(scope: &str) -> Result<Value, String> {
     Ok(json!({"open": shown.len(), "quiet": quiet.len() + folded, "rows": shown}))
 }
 
+/// The fields `fold_reported` reads from one due row, typed once.
+#[derive(serde::Deserialize, Default)]
+struct DueFields {
+    question_id: Option<String>,
+    window: Option<i64>,
+    overdue: Option<String>,
+}
+
 /// A due question is said once per 24h window. Rows whose window the record
 /// already holds fold into the quiet count; a lost record only repeats a
 /// question once. Other scopes' keys pass through untouched.
@@ -478,18 +486,18 @@ fn fold_reported(
     let mut shown = Vec::new();
     let mut folded = 0;
     for row in due {
-        let Some(qid) = row.get("question_id").and_then(Value::as_str) else {
+        let fields: DueFields = serde_json::from_value(row.clone()).unwrap_or_default();
+        let Some(qid) = fields.question_id else {
             shown.push(row);
             continue;
         };
         let key = format!("{prefix}{qid}");
-        let window = row.get("window").and_then(Value::as_i64).unwrap_or(0);
+        let window = fields.window.unwrap_or(0);
         let recorded = seen.get(&key).copied();
         // A take-recommended default is a work order, not news: it lists
         // until the lead records it, whatever session reads the beat.
-        let work_order = row
-            .get("overdue")
-            .and_then(Value::as_str)
+        let work_order = fields
+            .overdue
             .is_some_and(|o| o.starts_with("overdue: take"));
         if work_order || recorded.is_none_or(|r| window > r) {
             next.insert(key, window);
