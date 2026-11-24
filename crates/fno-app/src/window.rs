@@ -304,6 +304,10 @@ pub struct Root {
     pub(super) folds: HashSet<String>,
     /// The Workspaces section's grouping.
     pub(super) group_by: GroupBy,
+    /// The pane widths the user dragged; the constants are the defaults.
+    pub(super) left_w: f32,
+    pub(super) board_next_w: f32,
+    pub(super) board_feed_w: f32,
     /// The inline workspace-name field: it names a new workspace, or
     /// renames the workspace it carries.
     pub(super) squad_field: Option<SquadField>,
@@ -433,12 +437,26 @@ impl Root {
         pinned: Option<SessionKey>,
         folds: HashSet<String>,
         group_by: GroupBy,
+        left_w: Option<f32>,
+        board_next_w: Option<f32>,
+        board_feed_w: Option<f32>,
         metrics: Metrics,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         Self::new_with_link(
-            session, main, pinned, folds, group_by, metrics, None, window, cx,
+            session,
+            main,
+            pinned,
+            folds,
+            group_by,
+            left_w,
+            board_next_w,
+            board_feed_w,
+            metrics,
+            None,
+            window,
+            cx,
         )
     }
 
@@ -451,12 +469,20 @@ impl Root {
         pinned: Option<SessionKey>,
         folds: HashSet<String>,
         group_by: GroupBy,
+        left_w: Option<f32>,
+        board_next_w: Option<f32>,
+        board_feed_w: Option<f32>,
         metrics: Metrics,
         prewarmed: Option<super::link::WarmedLink>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         Self::write_pid_file(&session);
+        // A drag from an earlier run resumes where it left off; the
+        // constants stand in when the state file carries no widths.
+        let left_w = left_w.unwrap_or(left_pane::WIDTH);
+        let board_next_w = board_next_w.unwrap_or(orchestration::NEXT_W);
+        let board_feed_w = board_feed_w.unwrap_or(orchestration::QUESTIONS_W);
         let sent_size = grid_size(window.viewport_size(), metrics.cell);
         let light = super::palette::appearance_is_light(window.appearance());
         let font_want = (
@@ -504,6 +530,9 @@ impl Root {
             mail: None,
             folds,
             group_by,
+            left_w,
+            board_next_w,
+            board_feed_w,
             squad_field: None,
             workspace_menu: None,
             workspace_confirm: None,
@@ -4349,6 +4378,9 @@ struct UiState {
     view: MainView,
     folds: HashSet<String>,
     group_by: GroupBy,
+    left_w: f32,
+    board_next_w: f32,
+    board_feed_w: f32,
     chat_key: Option<SessionKey>,
     path: Option<PathBuf>,
 }
@@ -4368,6 +4400,9 @@ fn record_ui_state(root: &Root, cx: &mut App) {
     ui.view = root.main;
     ui.folds = root.folds.clone();
     ui.group_by = root.group_by;
+    ui.left_w = root.left_w;
+    ui.board_next_w = root.board_next_w;
+    ui.board_feed_w = root.board_feed_w;
     ui.chat_key = root.chat.key.clone();
 }
 
@@ -4398,6 +4433,9 @@ fn persist_window_state(window: &Window, cx: &mut App) {
         pinned: ui.chat_key.clone(),
         folds: ui.folds.clone(),
         group_by: ui.group_by,
+        left_w: Some(ui.left_w),
+        board_next_w: Some(ui.board_next_w),
+        board_feed_w: Some(ui.board_feed_w),
     };
     if let Err(e) = super::app_state::save(path, &state) {
         eprintln!("fno-app: window state save failed: {e}");
@@ -4475,6 +4513,11 @@ pub fn run(
             .map(|s| s.folds.clone())
             .unwrap_or_default();
         let group_by = restored.as_ref().map(|s| s.group_by).unwrap_or_default();
+        // The widths a previous run dragged; the constants stand in when the
+        // state file carries none.
+        let left_w = restored.as_ref().and_then(|s| s.left_w);
+        let board_next_w = restored.as_ref().and_then(|s| s.board_next_w);
+        let board_feed_w = restored.as_ref().and_then(|s| s.board_feed_w);
         // Where the exit paths write; a HOME-less environment saves nothing.
         let state_path = super::app_state::state_path();
         let first_run = restored.is_none();
@@ -4515,6 +4558,9 @@ pub fn run(
                         pinned.clone(),
                         folds.clone(),
                         group_by,
+                        left_w,
+                        board_next_w,
+                        board_feed_w,
                         metrics,
                         window,
                         cx,
@@ -4525,6 +4571,9 @@ pub fn run(
                         view: main,
                         folds,
                         group_by,
+                        left_w: root.left_w,
+                        board_next_w: root.board_next_w,
+                        board_feed_w: root.board_feed_w,
                         chat_key: pinned,
                         path: state_path,
                     });
@@ -4595,6 +4644,9 @@ pub(super) fn root_for_shot(
             pinned,
             HashSet::new(),
             GroupBy::Workspaces,
+            None,
+            None,
+            None,
             metrics,
             warmed,
             window,

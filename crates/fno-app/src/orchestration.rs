@@ -19,9 +19,9 @@ use fno::app_api::web_hq::Board;
 /// A node id's width in advances: an 11-character id shows whole.
 const NODE_W: usize = 11;
 /// The questions column's width.
-const QUESTIONS_W: f32 = 440.0;
+pub(crate) const QUESTIONS_W: f32 = 440.0;
 /// The next queue's column width.
-const NEXT_W: f32 = 300.0;
+pub(crate) const NEXT_W: f32 = 300.0;
 
 /// A failed read in the error color. Before the first read the body says
 /// "reading…" instead, so this shows nothing.
