@@ -2378,7 +2378,7 @@ mod tests {
             "plan_path": plan.display().to_string(),
         });
         let (command, note) = effective_command(&row).expect("a draft doc routes");
-        assert_eq!(command, "/blueprint");
+        assert_eq!(command.as_deref(), Some("/blueprint"));
         assert!(note.contains("plan design"), "{note}");
 
         // The deny arm of the same guard: an unresolvable status word still
