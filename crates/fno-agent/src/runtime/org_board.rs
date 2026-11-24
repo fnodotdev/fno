@@ -1484,6 +1484,9 @@ fn spawn_blocked_child<'scope>(
     let entries = ctx.entries_arc.cloned();
     let cwd = ctx.cwd.to_path_buf();
     let spent_err = ctx.spent_err.clone();
+    // The wait and the read each name the spent receipt, and the detached
+    // read cannot borrow the wait's copy.
+    let read_spent_err = spent_err.clone();
     s.spawn(move || {
         run_in_process_until(dl, &spent_err, move || {
             blocked_child_source(
@@ -1491,7 +1494,7 @@ fn spawn_blocked_child<'scope>(
                 entries.as_ref().map(|rows| rows.as_slice()),
                 &cwd,
                 dl,
-                &spent_err,
+                &read_spent_err,
             )
         })
     })
@@ -1645,6 +1648,9 @@ fn spawn_stranded<'scope>(
     let entries = ctx.entries_arc.cloned();
     let cwd = ctx.cwd.to_path_buf();
     let spent_err = ctx.spent_err.clone();
+    // The wait and the read each name the spent receipt, and the detached
+    // read cannot borrow the wait's copy.
+    let read_spent_err = spent_err.clone();
     s.spawn(move || {
         run_in_process_until(dl, &spent_err, move || {
             let candidates = entries
@@ -1652,7 +1658,7 @@ fn spawn_stranded<'scope>(
                 .map(|rows| stranded_candidates(rows))
                 .unwrap_or_default();
             let repos = scope::project_repo_paths(&cwd);
-            read_stranded_trees(&repos, &candidates, dl, &spent_err)
+            read_stranded_trees(&repos, &candidates, dl, &read_spent_err)
         })
     })
 }
