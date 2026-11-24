@@ -210,7 +210,7 @@ struct DoorLine {
     review_coverage: Option<DoorReview>,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Clone, Deserialize, Default)]
 struct DoorChecks {
     #[serde(default)]
     pass: Option<u64>,
@@ -220,7 +220,7 @@ struct DoorChecks {
     pending: Option<u64>,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Clone, Deserialize, Default)]
 struct DoorFailure {
     #[serde(default)]
     check: String,
