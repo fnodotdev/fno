@@ -1421,6 +1421,13 @@ fn collect_readings(
             let claims = crate::claims::list(Some("node:"), None, false)
                 .map(|rows| rows.iter().map(|r| r.holder.clone()).collect());
             let home = crate::paths::AgentsHome::from_env();
+            let spawned = match session_id.as_deref() {
+                Some(session) => crate::lead_checkin_blueprint::read_spawned_blueprints(
+                    &home.registry_json(),
+                    session,
+                ),
+                None => Ok(Vec::new()),
+            };
             let slots = crate::spawn_gate_lanes::share_reading(
                 &home.registry_json(),
                 crate::capacity::effective_for(&cwd).cap,
@@ -1445,6 +1452,7 @@ fn collect_readings(
                 &cwd,
                 session_id,
                 claims,
+                &spawned,
                 slots,
                 &floor,
                 &other_owned,
