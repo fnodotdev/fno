@@ -1637,7 +1637,35 @@ pub(super) fn render(
 mod tests {
     use super::super::app_state::GroupBy;
     use super::*;
+    use fno::app_api::digest_overlay::Theme;
     use fno::proto::{AgentBadge, PaneMeta, SquadMeta, TabMeta};
+
+    #[test]
+    fn a_red_fact_wears_the_fail_token_with_the_true_count_in_warn() {
+        let p = Palette::from_theme(&Theme::default_theme());
+        let fact = PrStatusFact {
+            verdict: "red".into(),
+            fail: 3,
+            review_state: Some("reviewed".into()),
+            ..Default::default()
+        };
+        let marks = pr_status_marks(&fact, &p);
+        assert_eq!(marks[0], ("✗3".to_string(), p.warn));
+        assert_eq!(marks[1], ("r✓".to_string(), p.ok));
+    }
+
+    #[test]
+    fn a_pending_zero_renders_no_count_and_an_unknown_fact_wears_no_token() {
+        let p = Palette::from_theme(&Theme::default_theme());
+        let pending = PrStatusFact {
+            verdict: "pending".into(),
+            ..Default::default()
+        };
+        let marks = pr_status_marks(&pending, &p);
+        assert_eq!(marks[0], ("…".to_string(), p.faint));
+        let unknown = PrStatusFact::default();
+        assert!(pr_status_marks(&unknown, &p).is_empty());
+    }
 
     fn agent(name: &str, pane: u64, badge: Option<AgentBadge>, squad: u64) -> AgentRow {
         serde_json::from_value(serde_json::json!({
