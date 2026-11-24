@@ -1143,7 +1143,7 @@ event_types:
 
   - name: transcript_record
     retention: ephemeral
-    description: "One raw transcript line pushed over the daemon socket by a session's turn hook, for a session whose transcript file the host-side readers cannot read (a sandboxed worker). Stored through the judged event store; readers read stored records first and fall back to the file."
+    description: "Retired: one raw transcript line a sandboxed turn hook once pushed over the daemon socket. No writer remains; the sandbox host now writes one transcript file per sandbox. The type stays so stored rows still parse until they expire."
     sources: [hook]
     data:
       required: [session_id, line]

@@ -204,7 +204,12 @@ pub(crate) fn handle_session_report(
             "no session id in the payload or --session-id",
         );
     };
-    let transcript_path = payload_field(p, "transcript_path").map(String::from);
+    // The sandbox relay names its host copy here. A sandbox row never gets
+    // `transcript_path`: that field's readers trust user turns.
+    let sandbox_transcript = str_field(p, "sandbox_transcript");
+    let transcript_path = payload_field(p, "transcript_path")
+        .map(String::from)
+        .filter(|_| sandbox_transcript.is_none());
     let source = payload_field(p, "source")
         .map(String::from)
         .or_else(|| str_field(p, "source"));
@@ -434,6 +439,9 @@ pub(crate) fn handle_session_report(
                 if let Some(tp) = &transcript_path {
                     entry.transcript_path = Some(tp.clone());
                 }
+                if sandbox_transcript.is_some() {
+                    entry.sandbox_transcript = sandbox_transcript.clone();
+                }
                 if let Some(src) = &source {
                     entry.start_source = Some(src.clone());
                 }
@@ -458,6 +466,7 @@ pub(crate) fn handle_session_report(
                     entry.name = crate::native_adopt::unique_name(&r.entries, &entry.name);
                     // The report that mints the row is its first report.
                     entry.last_report_at = Some(now_stamp.clone());
+                    entry.sandbox_transcript = sandbox_transcript.clone();
                     crate::node_bind::bind_adopted_node(&mut entry);
                     row_name = Some(entry.name.clone());
                     r.entries.push(entry);
@@ -709,6 +718,9 @@ pub(crate) fn handle_session_report(
         }
         if let Some(tp) = &transcript_path {
             entry.transcript_path = Some(tp.clone());
+        }
+        if sandbox_transcript.is_some() {
+            entry.sandbox_transcript = sandbox_transcript.clone();
         }
         if let Some(src) = &source {
             entry.start_source = Some(src.clone());
