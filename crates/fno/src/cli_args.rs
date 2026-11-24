@@ -33,6 +33,9 @@ pub enum FrontDoor {
     /// text is either clap's rendered help (an explicit help request on a
     /// group) or one command-qualified refusal line naming the bad token.
     Usage { message: String },
+    /// An explicit `--help`/`-h` the typed tree resolved: the rendered help
+    /// prints on stdout, exit 0.
+    Help { message: String },
     /// `fno --help` / `fno -h`: the root menu, read from command-names.tsv.
     /// `all` adds the retired names with their new spellings.
     RootHelp { all: bool },
@@ -316,36 +319,29 @@ pub enum WorkspaceOp {
 pub enum AppOp {
     /// `mux app open [--mode <view>] [--focus <agent>] [--server <name>]`:
     /// launch fno-app attached to the session and print its pid
-    #[command(disable_help_flag = true)]
     Open(AppOpenArgs),
     /// `mux app show <view> [--server <name>]`: point the running app at a
     /// view, or open it there when none runs
-    #[command(disable_help_flag = true)]
     Show(AppShowArgs),
     /// `mux app focus <agent> [--server <name>]`: focus one agent row in
     /// the running app; refuses naming the session when none runs
-    #[command(disable_help_flag = true)]
     Focus(AppFocusArgs),
     /// `mux app answer <option> [--server <name>]`: pick option N (1 is
     /// the first) on the question the focused chat waits on; refuses
     /// naming the session when none runs
-    #[command(disable_help_flag = true)]
     Answer(AppAnswerArgs),
     /// `mux app shot --out <path> [--theme dark|light] [--mode <view>]
     /// [--find bar|chords] [--ask rows|overflow]`: render one offscreen
     /// demo frame and write a
     /// png; never opens a window on any display
-    #[command(disable_help_flag = true)]
     Shot(AppShotArgs),
     /// `mux app state [--json]`: read the app's saved window state
-    #[command(disable_help_flag = true)]
     State {
         #[command(flatten)]
         json: JsonOnly,
     },
     /// `mux app close [--server <name>]`: ask the running app to quit;
     /// exits 0 when none runs
-    #[command(disable_help_flag = true)]
     Close {
         #[command(flatten)]
         common: MuxCommon,
@@ -386,7 +382,7 @@ impl AppView {
 #[derive(Debug, PartialEq, Eq, Subcommand)]
 pub enum DiagOp {
     /// `mux diag stats [--json]`: the mux counters (hidden, read-only)
-    #[command(disable_help_flag = true, hide = true)]
+    #[command(hide = true)]
     Stats {
         #[command(flatten)]
         json: JsonOnly,
@@ -459,10 +455,19 @@ pub struct AppShotArgs {
     /// the bar with a query typed; `chords` also holds the cmd hint
     #[arg(long, value_parser = ["bar", "chords"])]
     pub find: Option<String>,
+    /// Window-relative X,Y in logical points the frame clicks through a
+    /// posted mouse event before the capture
+    #[arg(long, value_name = "X,Y")]
+    pub tap: Option<String>,
     /// Seed an open ask-the-user question in the chat: `rows` is the short
     /// options frame, `overflow` makes the first option wrap
     #[arg(long, value_parser = ["rows", "overflow"])]
     pub ask: Option<String>,
+    /// Open one overlay through its real code path before the capture:
+    /// the row menu (`row-menu-node` gives the agent a node first),
+    /// the in-tab rename field, or the scrolled-back pill
+    #[arg(long, value_parser = ["row-menu", "row-menu-node", "tab-rename", "scrolled"])]
+    pub ui: Option<String>,
 }
 
 /// `mux thread`'s operation set: `reseat` is the one declared operation;
@@ -638,7 +643,7 @@ impl WebOp {
 
 /// The root declaration set: the leading attach pair plus the subcommands.
 #[derive(Parser, Debug)]
-#[command(name = "fno", disable_help_flag = true, disable_version_flag = true)]
+#[command(name = "fno", disable_version_flag = true)]
 pub struct FnoRoot {
     /// Attach to (or spawn) the named server; a value containing `/` names an explicit socket path (internal role)
     #[arg(long, value_name = "NAME", conflicts_with = "session")]
@@ -771,6 +776,36 @@ pub struct ServerArgs {
 /// usage, exit 2. The mapping reads the raw `ArgMatches` (not the derive's
 /// typed layer) on purpose: the typed layer misroutes subcommand capture
 /// once the enum also carries a non-subcommand arm.
+/// A help request that rides the root's own flags (`--server x --help`):
+/// every word is a root flag, a flag value or the help request itself, and
+/// the help flag is present. `Some(all)` when the argv asks the root menu.
+fn root_flag_help(args: &[OsString]) -> Option<bool> {
+    let mut all = false;
+    let mut help = false;
+    let words = args
+        .iter()
+        .map(|a| a.to_str())
+        .collect::<Option<Vec<_>>>()?;
+    let mut it = words.iter();
+    while let Some(&w) = it.next() {
+        match w {
+            "--server" | "--session" => {
+                it.next();
+            }
+            "--help" | "-h" => {
+                help = true;
+            }
+            "--all" | "-A" => {
+                all = true;
+            }
+            w if w.starts_with("--server=") || w.starts_with("--session=") => {}
+            "-J" | "--json" => {}
+            _ => return None,
+        }
+    }
+    help.then_some(all)
+}
+
 pub fn classify(args: &[OsString]) -> FrontDoor {
     match args.first().and_then(|a| a.to_str()) {
         Some("--help" | "-h") => {
@@ -779,6 +814,14 @@ pub fn classify(args: &[OsString]) -> FrontDoor {
             }
         }
         Some("--version" | "-V") if args.len() == 1 => return FrontDoor::RootVersion,
+        Some(first) if first.starts_with('-') => {
+            // Root flags before a help request (`fno --server x --help`) ask
+            // the root menu too: the root carries no clap help flag, because
+            // a derive disable there propagates into every subcommand.
+            if let Some(all) = root_flag_help(args) {
+                return FrontDoor::RootHelp { all };
+            }
+        }
         _ => {}
     }
     match front_command()
@@ -794,23 +837,6 @@ pub fn classify(args: &[OsString]) -> FrontDoor {
         Err(e) => {
             if !native_first(args) {
                 return unclaimed(args);
-            }
-            // `fno mux thread -h`/`--help` is the addressing door's one
-            // self-teaching surface. The thread group keeps its help flag OFF
-            // (its tail is a row key, and clap refuses a hyphen spelling
-            // before the external arm can read it as one), so the help
-            // request arrives here as a parse error: render the group's help
-            // instead of reciting the refusal.
-            if path_words(args).as_slice() == ["mux", "thread"]
-                && args.len() == 3
-                && args[2]
-                    .to_str()
-                    .map(|v| v == "-h" || v == "--help")
-                    .unwrap_or(false)
-            {
-                return FrontDoor::Usage {
-                    message: render_path_help(&["mux", "thread"]),
-                };
             }
             // `fno mux app` with no operation word: clap's missing-subcommand
             // error names none of the commands, and the group's guide lives
@@ -829,24 +855,26 @@ pub fn classify(args: &[OsString]) -> FrontDoor {
                     message: crate::mux::app_cli::bare_usage(),
                 };
             }
-            // `fno mux -h` (or any explicit help request on a mux group)
-            // renders clap's help for that group: the banner's replacement.
-            let message = if args.first().and_then(|a| a.to_str()) == Some("mux")
-                && e.kind() == clap::error::ErrorKind::DisplayHelp
-            {
-                e.render().to_string()
-            } else {
-                // One command-qualified line naming the bad token; the
-                // deepest declared path becomes the prefix.
-                let prefix = format!(
-                    "fno{}",
-                    path_words(args)
-                        .iter()
-                        .fold(String::new(), |a, w| format!("{a} {w}"))
-                );
-                refusal_line(&prefix, &e)
-            };
-            FrontDoor::Usage { message }
+            // An explicit help request the tree resolved (mux groups and
+            // leaves, version): the rendered help answers on stdout, exit 0.
+            // The mux thread group keeps its flag off, so its `-h` arrives as
+            // a parse error and its arm above keeps the authored body.
+            if e.kind() == clap::error::ErrorKind::DisplayHelp {
+                return FrontDoor::Help {
+                    message: e.render().to_string(),
+                };
+            }
+            // One command-qualified line naming the bad token; the
+            // deepest declared path becomes the prefix.
+            let prefix = format!(
+                "fno{}",
+                path_words(args)
+                    .iter()
+                    .fold(String::new(), |a, w| format!("{a} {w}"))
+            );
+            FrontDoor::Usage {
+                message: refusal_line(&prefix, &e),
+            }
         }
     }
 }
@@ -872,9 +900,16 @@ fn unclaimed(args: &[OsString]) -> FrontDoor {
 }
 
 /// The front-door command, assembled once: the derive-built tree with the
-/// pane group's after_help injected (the four pane help texts clap renders
-/// on `fno mux pane -h`). classify, the inventory and completion all read
-/// this one command, so the surfaces cannot drift.
+/// pane and thread groups' after_help injected. classify, the inventory
+/// and completion all read this one command, so the surfaces cannot drift.
+///
+/// The root carries no help flag: its derive disable would be a clap
+/// GLOBAL setting, and clap ORs a parent's global settings into every
+/// subcommand at build time, drowning any child-level override. The
+/// curated `fno --help` menu owns the root spelling through the
+/// intercept in classify; the typed tree answers `--help` everywhere
+/// else (stdout, exit 0), and the tail carriers' own disables keep a
+/// pane payload's `--help`.
 pub fn front_command() -> clap::Command {
     FnoRoot::command().mut_subcommand("mux", |mux| {
         mux.mut_subcommand("pane", |pane| pane.after_help(pane_group_help()))
@@ -904,9 +939,9 @@ pub fn pane_group_help() -> String {
 }
 
 /// The thread group's self-teaching help: the addressing contract the two
-/// portal documents quote. classify routes `fno mux thread -h`/`--help` here
-/// (the group keeps its help flag off, so the spelling arrives as a parse
-/// error); `render_path_help(["mux", "thread"])` reads it.
+/// portal documents quote. It rides the group's clap help as `after_help`
+/// (the group re-enabled its help flag), and
+/// `render_path_help(["mux", "thread"])` reads it.
 pub fn thread_group_help() -> String {
     "\
 The addressing door onto a live thread row. An explicit placement flag creates a portal from any command, human or agent: `--portal new`, or `--portal N` when N is not open, and a `--split DIR` halves the caller's own pane unless `--from portal N|worker|current` names another cell. No flag tunes: the reach focuses the row's open portal, and with none open the door's own portal 0 opens for it. A default never creates: a bare `fno agent spawn` is a paneless thread. The key matches one live row exactly, not by the prefix or substring tiers `fno mux view` uses; zero matches, or several rows answering the same key, refuse and spawn no worker.
@@ -1320,7 +1355,7 @@ mod tests {
         ));
         assert!(matches!(
             classify(&os(&["version", "--help"])),
-            FrontDoor::Usage { .. }
+            FrontDoor::Help { .. }
         ));
     }
     #[test]
@@ -1450,6 +1485,122 @@ mod tests {
         }
     }
     #[test]
+    fn mux_tree_resolves_an_explicit_help_request_as_help() {
+        // The mux subtree and `version` re-enabled their help flag (AC6-HP):
+        // an explicit request resolves as Help, which prints clap's rendered
+        // help on stdout and exits 0. The root keeps its flag off (the
+        // curated `fno --help` menu owns the spelling).
+        for args in [
+            &["mux", "--help"][..],
+            &["mux", "-h"][..],
+            &["mux", "pane", "--help"],
+            &["mux", "app", "--help"],
+            &["mux", "app", "open", "--help"],
+            &["mux", "diag", "stats", "--help"],
+            &["mux", "thread", "--help"],
+            &["version", "--help"],
+        ] {
+            match classify(&os(args)) {
+                FrontDoor::Help { message } => assert!(!message.trim().is_empty(), "{args:?}"),
+                other => panic!("{args:?}: expected Help, got {other:?}"),
+            }
+        }
+        // The root itself keeps the curated menu: RootHelp, not clap's tree.
+        assert!(matches!(
+            classify(&os(&["--help"])),
+            FrontDoor::RootHelp { .. }
+        ));
+    }
+    #[test]
+    fn only_tail_carriers_keep_their_help_flag_off() {
+        // Every command whose help flag stays off carries a passthrough
+        // payload tail (or owns the spelling itself, like the root's curated
+        // menu and uninstall's help field). A new leaf lands with its help
+        // flag on by default; adding to this list is the named, reviewed
+        // decision (AC6-HP). The help-walk integration test skips this same
+        // list, so the two cannot drift without one of them failing.
+        let expected: std::collections::BTreeSet<&str> = [
+            "uninstall",
+            "mux serve",
+            "mux where",
+            "mux view",
+            "mux retire-session",
+            "mux thread reseat",
+            "mux web reap",
+            "mux web install-agent",
+            "mux web uninstall-agent",
+            "mux block pipe",
+            "mux block annotate",
+            "mux tab ls",
+            "mux tab create",
+            "mux tab rename",
+            "mux tab join",
+            "mux tab move",
+            "mux tab close",
+            "mux layout get",
+            "mux layout apply",
+            "mux layout graft",
+            "mux workspace prune",
+            "mux workspace restore",
+            "mux workspace origin",
+            "mux diag rows",
+            "mux pane ls",
+            "mux pane read",
+            "mux pane run",
+            "mux pane send",
+            "mux pane wait",
+            "mux pane kill",
+            "mux pane claim",
+            "mux pane release",
+            "mux pane split",
+            "mux pane break",
+            "mux pane focus",
+            "mux pane keeper list",
+        ]
+        .into_iter()
+        .collect();
+        let cmd = front_command();
+        let mut got: Vec<String> = Vec::new();
+        got.push(if cmd.is_disable_help_flag_set() {
+            "(root)".to_string()
+        } else {
+            String::new()
+        });
+        for sub in cmd.get_subcommands() {
+            if sub.get_name() == "help" {
+                continue;
+            }
+            walk_disabled(sub, "", &mut got);
+        }
+        got.retain(|p| !p.is_empty());
+        got.sort();
+        got.dedup();
+        let expected_strings: Vec<String> = expected.iter().map(|e| e.to_string()).collect();
+        assert_eq!(
+            got, expected_strings,
+            "help-off set must stay exactly the tail carriers"
+        );
+    }
+
+    fn walk_disabled(cmd: &clap::Command, prefix: &str, out: &mut Vec<String>) {
+        let name = cmd.get_name().to_string();
+        let path = if prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{prefix} {name}")
+        };
+        if cmd.is_disable_help_flag_set() {
+            out.push(path.clone());
+        }
+        for sub in cmd.get_subcommands() {
+            if sub.get_name() == "help" {
+                continue;
+            }
+            walk_disabled(sub, &path, out);
+        }
+    }
+
+    #[test]
     fn typed_families_resolve_with_re_sliced_tails() {
         // The carry families ride their typed op enums; the payload tail is
         // re-sliced from the ORIGINAL argv, so a leading `--` survives
@@ -1528,11 +1679,6 @@ mod tests {
 /// tokens ride through in `rest`, order kept, so each command's own grammar
 /// still refuses its unknowns.
 #[derive(Parser, Debug, Default, PartialEq, Eq, Clone)]
-#[command(
-    no_binary_name = true,
-    disable_help_flag = true,
-    disable_version_flag = true
-)]
 pub struct MuxCommon {
     /// Server (socket session) this command addresses
     #[arg(long, value_name = "NAME")]
@@ -1581,7 +1727,10 @@ impl MuxCommon {
             rest.push(tok.to_string());
             i += 1;
         }
-        let cmd = <Self as clap::CommandFactory>::command();
+        let cmd = <Self as clap::CommandFactory>::command()
+            .no_binary_name(true)
+            .disable_help_flag(true)
+            .disable_version_flag(true);
         let matches = cmd
             .try_get_matches_from(pairs)
             .map_err(|e| refusal_line("fno mux", &e))?;

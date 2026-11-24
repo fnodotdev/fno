@@ -1,0 +1,10 @@
+# Labelled cases for the golden-frontend-routes-impeccable grader. Read by report --check-metrics.
+cases:
+  - {id: plain, label: good, files: {"decision.md": "executor: impeccable\nsource: skills/execute/references/executor-resolution.md\n"}}
+  - {id: caps-spaces, label: good, files: {"decision.md": "Executor:  Impeccable\nsource: skills/execute/references/executor-resolution.md\n"}}
+  - {id: crlf-two-docs, label: good, files: {"decision.md": "executor: impeccable\r\nsource: AGENTS.md and skills/execute/references/executor-resolution.md\r\n"}}
+  - {id: lure-default-tdd, label: bad, files: {"decision.md": "executor: tdd\nsource: skills/execute/references/executor-resolution.md\n"}}
+  - {id: subagent-name, label: bad, files: {"decision.md": "executor: frontend-executor\nsource: skills/execute/references/executor-resolution.md\n"}}
+  - {id: wrong-source, label: bad, files: {"decision.md": "executor: impeccable\nsource: docs/api-reference.md\n"}}
+  - {id: swapped-lines, label: bad, files: {"decision.md": "source: skills/execute/references/executor-resolution.md\nexecutor: impeccable\n"}}
+  - {id: no-file, label: bad, files: {}}

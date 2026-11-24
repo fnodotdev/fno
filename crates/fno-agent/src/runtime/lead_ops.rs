@@ -201,8 +201,9 @@ pub(crate) fn scope_undelivered(scope: &str, rows: &[Value], cwd: &Path) -> Resu
     Ok(undelivered_of(&scope_ids(scope, rows, cwd)?, rows))
 }
 
-fn drain_cache_file(cwd: &Path) -> Option<PathBuf> {
-    crate::agents_config::state_dir(cwd).map(|root| root.join("cache").join("lead-drain.json"))
+pub(crate) fn drain_cache_file(cwd: &Path) -> Option<PathBuf> {
+    crate::agents_config::state_dir(cwd)
+        .map(|root| crate::state_layout::home_of(&root, "cache/lead-drain.json"))
 }
 
 /// The cache identity: the store's own content version. A changed graph
@@ -215,7 +216,8 @@ fn graph_ident(cwd: &Path) -> Option<String> {
 }
 
 fn cache_load(cwd: &Path, scope: &str, ident: &str) -> Option<i64> {
-    let text = std::fs::read_to_string(drain_cache_file(cwd)?).ok()?;
+    let path = crate::state_layout_home::cache_read(&drain_cache_file(cwd)?);
+    let text = std::fs::read_to_string(path).ok()?;
     let data: Value = serde_json::from_str(&text).ok()?;
     let row = data.get(scope)?;
     let key = json!(["sqlite", ident]);
@@ -243,10 +245,11 @@ fn cache_store(cwd: &Path, scope: &str, ident: &str, undelivered: i64) {
     if std::fs::create_dir_all(parent).is_err() {
         return;
     }
-    let mut data: Map<String, Value> = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default();
+    let mut data: Map<String, Value> =
+        std::fs::read_to_string(crate::state_layout_home::cache_read(&path))
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default();
     data.insert(
         scope.to_string(),
         json!({"ident": ["sqlite", ident], "undelivered": undelivered}),

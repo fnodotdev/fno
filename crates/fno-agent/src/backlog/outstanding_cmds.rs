@@ -471,6 +471,7 @@ pub(crate) fn run_clear_cmd(args: &[String]) -> i32 {
         cap: crate::question_intake::QUESTION_CAP,
         provenance,
         closed_by: crate::outstanding::session_id(&cwd),
+        closed_via_succession: None,
         caller: None,
         home: Some(home.clone()),
         journal_path: crate::paths::events_path(&cwd),
@@ -1774,6 +1775,10 @@ pub(crate) fn file_ask(filing: AskFiling, cwd: &Path) -> (i32, Option<String>) {
             );
             println!("{}", crate::question_ladder::push_line(qid, &payload));
         }
+    } else if !template {
+        // A queued ask has no id to wake or notify with; stdout says so in
+        // the number's place.
+        println!("{}", crate::numbers::mint::QUEUED);
     }
     (0, answer.qid)
 }

@@ -1398,7 +1398,13 @@ pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
         // answer_url is refused at load), deliver, close, retry transient
         // failures next beat with the same delivery_id.
         mark("sinks");
-        let (sinks, refused) = crate::attention_http::load_sinks(&cwd);
+        let trusted = crate::trusted_config::TrustedFile::from_env();
+        let notes = trusted.notes(
+            crate::trusted_config::TrustedKey::AttentionSinks,
+            &crate::agents_config::config_candidates(&cwd),
+        );
+        detail.extend(notes.into_iter().map(|note| format!("sinks: {note}")));
+        let (sinks, refused) = crate::attention_http::load_sinks(&trusted);
         for r in &refused {
             detail.push(format!("sinks: refused sink {}: {}", r.name, r.reason));
         }
@@ -1420,7 +1426,8 @@ pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
         // machine owns. A reply lands as an attention_answer row, so the
         // answers stage below clears it in this same beat.
         mark("chat");
-        let (chat_sinks, chat_refused, chat_skipped) = crate::attention_chat::load_chat_sinks(&cwd);
+        let (chat_sinks, chat_refused, chat_skipped) =
+            crate::attention_chat::load_chat_sinks(&trusted);
         for r in &chat_refused {
             detail.push(format!("chat: refused sink {}: {}", r.name, r.reason));
         }
@@ -2134,6 +2141,7 @@ fn mint_answer_law_row(
             "attested_by": attested_by,
         }),
         closed_by: None,
+        closed_via_succession: None,
         caller: None,
         home: Some(home.clone()),
         journal_path: crate::paths::events_path(&cwd),

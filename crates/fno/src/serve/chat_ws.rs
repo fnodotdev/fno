@@ -7,6 +7,7 @@ use crate::attention_api::{authorize, bearer, load_sink_auth, to_response, SinkA
 use crate::chat_events::{pump, BatchSink, ChatReadError, ChatRoots, SessionReader, IDLE_POLL};
 use crate::proto::chat_event::{ChatEvent, SessionKey};
 use crate::proto::{BUILD_VERSION, PROTO_VERSION};
+use crate::trusted_config::TrustedFile;
 use axum::extract::ws::{close_code, CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
@@ -40,8 +41,11 @@ pub fn router(roots: ChatRoots) -> axum::Router {
         .with_state(roots)
 }
 
-async fn version(headers: HeaderMap) -> Response {
-    let sinks = load_sink_auth();
+async fn version(
+    axum::Extension(file): axum::Extension<TrustedFile>,
+    headers: HeaderMap,
+) -> Response {
+    let sinks = load_sink_auth(&file);
     to_response(version_response(&sinks, bearer(&headers).as_deref()))
 }
 
@@ -79,11 +83,12 @@ async fn chat(
     ws: WebSocketUpgrade,
     Path((harness, session_id)): Path<(String, String)>,
     Query(query): Query<ChatQuery>,
+    axum::Extension(file): axum::Extension<TrustedFile>,
     headers: HeaderMap,
     State(roots): State<ChatRoots>,
 ) -> Response {
     let token = ws_token(&headers);
-    let authorized = authorize(&load_sink_auth(), token.as_deref()).is_ok();
+    let authorized = authorize(&load_sink_auth(&file), token.as_deref()).is_ok();
     let ws = ws.protocols([SUBPROTOCOL]).max_message_size(INBOUND_CAP);
     if !authorized {
         // A browser cannot read a failed handshake's status, so a bad token

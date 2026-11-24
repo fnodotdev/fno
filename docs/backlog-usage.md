@@ -89,7 +89,7 @@ fno backlog update <id> tags+=<tag>            # add one tag, e.g. area:mail (se
 The operator form (`field=value`, `field+=value`, `field-=value`) covers every field. `fno backlog update --help` lists them by kind.
 
 
-`<id>` resolves by canonical id (`ab-1a2b3c4d`), title-derived slug (`dashless-spawn`), or bare hex (`1a2b3c4d`). A display number (`x-15`) resolves when the number table carries it. A number no store holds refuses with both forms named, so a typed token never acts on a different node.
+`<id>` resolves by canonical id (`ab-1a2b3c4d`), title-derived slug (`dashless-spawn`), or bare hex (`1a2b3c4d`). A display number (`x-15`) resolves through the number table. With `backlog.id_mode` set to `sequential`, `x-15` is the id itself, and the shell id checks accept that shape. A number no store holds refuses with both forms named, so a typed token never acts on a different node.
 
 When a PR opens outside the Footnote PR path, acquire the owner claim with `fno agent claim acquire node:<id> --holder <worker>`, then record the primary PR with `fno backlog update <id> pr_number=<n>`. The claim lockfile is the owner source, and the update receipt reports its owner, PR, and status. `--add-pr` records only an additional PR and can leave a ready node offered for dispatch. Without a claim lockfile, the owner reads as `unknown`.
 
@@ -470,7 +470,7 @@ Press prefix+V to cycle the left sideline between agents, backlog and org. The b
 
 ### A local HTML file
 
-The daemon writes the board page to `~/.fno/cache/pages/graph.html` with no setup. The page looks like this:
+The daemon writes the board page to `pages/graph.html` in the [cache home](path-config.md#cache-and-logs-homes) with no setup. The page looks like this:
 
 ![The HTML backlog page: a search bar and filters above kanban columns, with a node's fields, details, parent and sessions open in the side panel](images/backlog-html-page.png)
 
@@ -508,7 +508,7 @@ Like `render_targets`, the renderer reads `backlog.render_default` from the glob
 
 The path must be absolute or start with `~/`. A row with an unknown key, an empty scope, or a duplicate path skips with a warning. A row that names a graph state file skips too.
 
-Do not point a row at the state root, for example `~/.fno/graph.html`. The daemon already writes the canonical page under `~/.fno/cache/pages/`, so a state-root row only adds a stray file.
+Do not point a row at the state root, for example `~/.fno/graph.html`. The daemon already writes the canonical page under `pages/` in the cache home, so a state-root row only adds a stray file.
 
 `fno backlog admin render-views` runs one render pass now. It writes `graph.md` and every configured board target. It is the same pass the daemon runs.
 
@@ -537,6 +537,8 @@ The PR-keyed outcome columns measure only merged nodes that carry a PR number on
 The coverage block reports what share of records carry each lane axis and a measured cost. A record whose last execute session carries no harness lands in the `unattributed` bucket, sorted last, never dropped. Provider reads `unrecorded` without a ledger row. Model reads `unknown` without a session or ledger value. One axis going missing never hides a record.
 
 `--kind-depth` splits the kind by the node's merge commit on the default branch. Depth 2 appends the conventional type: fix, feat, docs, refactor, other. Depth 3 appends the type-surface pair. The surface reads rust for crates/ and Cargo.lock, python for cli/ with its tests, and ui for the web pages and the mux-server lane. docs covers a commit whose every changed path is docs or markdown. Support paths (scripts, skills, hooks, the root tests/) carry no vote. Anything else reads mixed. A node with no in-repo PR, or whose diff read fails, reads unknown at deeper depths - an unmeasured part groups visibly instead of guessing. A node with a blueprint session row also credits that session's lane with the node's downstream outcome under a blueprint kind, beside its target cell. The planning lane then shows up in the same fold at every depth. Its cost is its own session's ledger row, not the node's whole bill. The coverage block counts the population once: credit records never double it. The default depth stays 1. The plain by-lane read keeps its cell shape, and the blueprint kind is the one addition at that depth. The router rides the same read. `--propose --stage <command>` folds one verdict per candidate lane per kind, names the contradicted seat decisions, and writes nothing to config. The stage takes target or blueprint. A blueprint proposal comes only from the blueprint seat decision's model families.
+
+The by-lane read also folds a by-lead view. One cell per stored team title counts the window's nodes, merges, measured spend and the distinct holder names. `holding_lead` is stamped at close and reads the lead that held the node's scope at `completed_at`. A node with no stamp or no title groups under `unknown`, and the unknown group prints too so the unattributed share stays visible.
 
 The plain read, `fno backlog calibration --json`, emits four keys. `nodes` and `aggregate` cover done nodes with a `cost_sessions` row. The aggregate groups by domain, filed difficulty and planned size. `revisions` covers every done node with a `difficulty_history`, and counts per domain and filed band how many nodes ended above or below it. `friction_since` names the journal's first friction row. A node created before that row had no recorder, so its `smooth` reads null. A friction row or a re-estimate still marks it rough. The aggregate counts smooth only among its `measured_count` nodes. The blueprint's difficulty step reads the `revisions` row. `--since` requires `--by-lane`. `--kind-depth` requires `--by-lane`. `--json` gives the machine shape and `--domain` filters by domain.
 
@@ -573,6 +575,8 @@ fno backlog maintain --repo-moved fnodotdev/fno=fnodotdev/fno-workshop --apply
 ```
 
 Without `--min-number`, the pass moves every stored url naming the old slug to the new one. It covers open and closed rows alike. A closed row left behind collides with the new repo's first PR. It rewrites primary and `additional_prs` slots. Url-less rows whose cwd still resolves to the moved repo get filled. Dry run by default. `--json` reports candidates and applied rows. After it runs, every PR read binds by repo plus number. A url naming another repo never binds. A located ref outranks a bare number. Two bare rows naming one number refuse rather than guess.
+
+The maintain pass also carries a one-shot attribution backfill. `fno backlog maintain --lead-backfill` stamps every done node that lacks the field. The derivation reads only the canonical `lead_checkin` journal rows, so the lead that held the node's scope at `completed_at` gets the credit. The live holder is never a credit here. A node closed under a predecessor stays with the predecessor even after a succession. A node whose scope or journal history does not resolve stamps `unknown`, never a guess. An epic also records every distinct holder over its life. The stamp is insert-only. A rerun never overwrites an existing one. Dry run by default. `--apply` writes. `--json` reports candidates and applied nodes. It runs alone, like `--repo-moved`.
 
 A UTC-day claim, not the scheduler, enforces once-a-day, so a double-fire or a manual run on a day that already groomed is a no-op (`already-ran`, zero subprocesses).
 That makes the cadence boring to install:

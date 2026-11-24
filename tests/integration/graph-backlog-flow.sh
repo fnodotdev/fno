@@ -22,6 +22,7 @@ printf '# Dashboard feature (independent)\n' > "$TEST_HOME/plans/dashboard.md"
 # clean checkout - where .fno/settings.yaml is gitignored - would default
 # obsidian.enabled=false and the kanban-plugin assertion below would fail.
 mkdir -p "$TEST_HOME/.fno"
+export FNO_CACHE_HOME="$TEST_HOME/cache-home"
 printf 'config:\n  obsidian:\n    enabled: true\n    vault: testvault\n' \
     > "$TEST_HOME/.fno/settings.yaml"
 
@@ -42,7 +43,7 @@ HOME="$TEST_HOME" fno backlog intake "$TEST_HOME/plans/dashboard.md" \
     || fail "intake dashboard"
 
 # Step 2: graph.md renders with all three cards in the Next column.
-GRAPH_MD="$TEST_HOME/.fno/pages/graph.md"
+GRAPH_MD="$FNO_CACHE_HOME/pages/graph.md"
 [[ -f "$GRAPH_MD" ]] || fail "graph.md missing after intake"
 grep -q "^kanban-plugin: board" "$GRAPH_MD" || fail "kanban-plugin frontmatter missing"
 grep -q "^## Now" "$GRAPH_MD" || fail "Now column missing"

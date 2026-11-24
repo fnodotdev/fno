@@ -32,7 +32,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `CLAUDE_PLUGIN_ROOT` | rs | The plugin stage root the doctor's hook probes read. |
 | `CLAUDE_SESSION_ID` | rs | unclear: crates/fno-agent/src/runtime/claims.rs:3690 |
 | `CLI` | rs | unclear: crates/fno-agent/src/spawn/loop_dispatch.rs:198 |
-| `CODEX_COMPANION_SESSION_ID` | rs | The Codex session id used as the owner-session fallback when a lazy mux server starts from an agent shell. |
+| `CODEX_COMPANION_SESSION_ID` | rs | The Claude session id, exported by the openai-codex Claude plugin's SessionStart hook. Last fallback for the lazy mux server's owner stamp (crates/fno/src/ui/client/server_spawn.rs `resolve_owner_session`), after FNO_OWNER_SESSION and the client's own ambient harness session. |
 | `CODEX_HOME` | rs | unclear: crates/fno-agent/src/spawn/accounts/store.rs:299 |
 | `CODEX_PLUGIN_ROOT` | rs | A Codex plugin stage root. The Visual Log reader probe's script ladder reads it beside `CLAUDE_PLUGIN_ROOT` (crates/fno-agent/src/runtime/visual_log_reader.rs). |
 | `CODEX_SESSION_ID` | rs | unclear: crates/fno-agent/src/runtime/hook/lead_guard.rs:654 |
@@ -84,6 +84,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_BUS_LOCK_TIMEOUT_SECS` | rs | Overrides the bus-append door's sidecar-lock wait; test escape hatch for the contended-lock refusal. |
 | `FNO_BUS_MAX_BYTES` | rs | Size cap the bus-append door rotates the live log at; malformed degrades to 5 MB. |
 | `FNO_BUS_RETAIN` | rs | Rotated bus segments the append door keeps; malformed degrades to 5. |
+| `FNO_CACHE_HOME` | rs | The cache class home pin for the default state root: it wins over config `paths.cache_dir` and the platform cache folder. The PreToolUse read skips the config key and takes this pin, then the platform folder. |
 | `FNO_CALLER_KIND` | rs | The surface that shelled this fno-agent command; `mux` stamps `caller_kind` on its events. |
 | `FNO_CARGO_CLASS` | rs | The lane an agent cargo asks for at the cargo admission doors: `repair` for a red PR or a main repair, `prepush` for the compile a push waits on. Unset is the normal lane. Both lanes queue ahead of normal, and a normal try-lock never takes a slot they wait for. |
 | `FNO_CARGO_FREE_BYTES` | rs | Overrides the free-space read the `cargo_build_dirs` cap lane defends against; test escape hatch. |
@@ -213,7 +214,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_ORPHANS_SKIP_PROBE` | rs | unclear: crates/fno-agent/src/runtime/orphans.rs:706 |
 | `FNO_OWNER_BIRTH` | rs | The owner process start token paired with FNO_OWNER_PID; protects sandbox process cleanup from PID reuse. |
 | `FNO_OWNER_PID` | rs | The owner process for an owner-bound sandbox server and its descendants; shared fleet launches leave it unset. |
-| `FNO_OWNER_SESSION` | rs | The harness session id that owns a sandbox server and descendants; required with FNO_OWNER_PID and FNO_OWNER_BIRTH. |
+| `FNO_OWNER_SESSION` | rs | The harness session id that owns a sandbox server and descendants; required with FNO_OWNER_PID and FNO_OWNER_BIRTH. Read first as the explicit sandbox marker; unset, the attaching client's own ambient session resolves and CODEX_COMPANION_SESSION_ID is the last fallback (crates/fno/src/ui/client/server_spawn.rs `resolve_owner_session`). |
 | `FNO_PANE` | rs | The pane id every inline (`pty.rs`) and keeper-hosted (`pane_keeper.rs`) pane exports. Read by `crates/fno-agent/src/runtime/pane_claim.rs` to bind a foreground SessionStart report's registry row to this pane, proven by an ancestry walk so a process that merely inherited it (a long-lived server born once inside a pane) is refused. |
 | `FNO_PANE_EPOCH` | rs | The pane's restart epoch; with `FNO_PANE` and `FNO_SERVER` it names the turn-pin file whose first writer reports the leg's session state (session_state.rs). |
 | `FNO_PANE_STATS_EMIT` | rs | unclear: crates/fno/src/mux/server.rs:10563 |
@@ -257,6 +258,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_RUNTIME_STATE_PATH` | rs | Overrides the provider runtime-state file (quota locks, usage); the default is ~/.fno/runtime-state.json. |
 | `FNO_SCCACHE` | rs | Set to `1` to opt a build into sccache; the rustc wrapper compiles with bare rustc unless this or `build.sccache = true` in `.fno/config.toml` (project first, `~/.fno/config.toml` as the fallback) says so. The daemon's server keep-alive reads the same signal from the global config and this env. `SCCACHE_DISABLE=1` still wins over an opt-in. |
 | `FNO_SCCACHE_WATCH` | rs | Pins the sccache-watch state file (last server pid + restart timestamps, written per machine-watch tick); tests use it to keep off the live machine's file. |
+| `FNO_SCHEDULE_FIRE_SEAM` | rs | Test seam for the daemon's scheduled-spawn fire: set, the fire re-entry runs this program with the recorded argv instead of the fno binary, so a probe asserts the exact re-entry shape without launching a worker (crates/fno-agent/src/runtime/schedule_fire.rs `fire_argv`). |
 | `FNO_SERVER` | rs | Names the target mux server; the session-state entry also reads it as the namespace of the turn-pin file (session_state.rs). |
 | `FNO_SESSION` | rs | Deprecated alias of FNO_SERVER; the Rust pane-send audit row also reads it as the calling session the send came from. |
 | `FNO_SESSION_HARNESS` | rs | The launcher-stamped harness half of the session-proof pair; a known name beside a live `FNO_SESSION_PID` answers the harness before the census walk (spawn_context.rs stamp_pair_harness). |
@@ -333,7 +335,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_VERBOSE` | rs | Set to 1 to print non-fatal notes that are quiet by default: the registry provenance heal and the loop-runtime global mirror failure. |
 | `FNO_VERIFY_GIT_BIN` | rs | unclear: crates/fno-agent/src/gate/verify_evidence.rs:906 |
 | `FNO_WHOAMI_SEAM_CHILD` | rs | Set by the front door on the child it runs for `fno whoami`, so the child takes the plain Python forward instead of the receipt seam (crates/fno/src/cli/whoami_seam.rs). |
-| `FNO_WORKER_ADD_DIRS` | rs | unclear: crates/fno-agent/src/spawn/claude_ask.rs:687 |
+| `FNO_WORKER_ADD_DIRS` | rs | Set by the spawn seam to the worker's writable-dir grants (state root, claims and registry dirs, the plans dir, the guarded vault slice beside it); the argv builders read it into `--add-dir` pairs (`crates/fno-agent/src/spawn/claude_ask.rs state_dirs_from_env`). |
 | `FNO_WORKER_NAME` | rs | The spawned worker's name: the task-grain claim metadata reads it back (crates/fno-agent/src/backlog/task.rs). |
 | `FNO_WORKTREE_POLICY` | rs | Overrides the resolved worktree policy from env, above every config layer; the dispatcher sets it to never for a spawn into an undeclared repo. |
 | `GEMINI_SANDBOX` | rs | unclear: crates/fno-agent/src/spawn/gemini_ask.rs:103 |

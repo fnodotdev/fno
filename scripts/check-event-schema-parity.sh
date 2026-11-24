@@ -579,6 +579,11 @@ dual_owner_kinds = {
     "skill_invoked",
     "pr_opened",
     "node_done",
+    # provider_rate_limited: the OTel receiver's rate-limit alert row
+    # (eval/otel_ingest.rs) is the one emitter; schema.yaml carried the
+    # declared kind before an emitter existed, and the scoreboard plus the
+    # lead check-in read it.
+    "provider_rate_limited",
 }
 collisions -= dual_owner_kinds
 if collisions:

@@ -554,6 +554,15 @@ pub fn is_user_ruling(row: &Value) -> bool {
 /// Door subjects that name one PR: `merge-grant:<repo>#<n>@<sha>` and kin.
 const PR_DOOR_PREFIXES: &[&str] = &["merge-grant:", "merge-freeze:", "pr-hold:"];
 
+/// Whether the subject names one PR through a door prefix. A per-head door
+/// row is a machine contract the merge and hold gates read, never a policy
+/// law, so the record door's no-conflict gate exempts it: each head's
+/// subject is fresh by construction.
+pub fn is_pr_door_subject(subject: &str) -> bool {
+    let s = subject.trim();
+    PR_DOOR_PREFIXES.iter().any(|p| s.starts_with(p))
+}
+
 /// The repository-scoped PR a subject names, door prefix and head pin cut
 /// first. A bare PR number never proves closure.
 pub fn pr_expiry_ref(subject: Option<&str>) -> Option<Value> {
@@ -592,6 +601,12 @@ const STANDING_ANSWERS: &[&str] = &[
     "d-b181c28f", // D3024: every Anthropic lane gets --advisor opus
     "d-8e33a5c9", // D2965: telemetry is opt-in, grades and counts only
     "d-fefe281d", // D2809: the approval passkey rule, no approve tool
+    // The same five once the migration makes the number the key.
+    "D3199",
+    "D3029",
+    "D3024",
+    "D2965",
+    "D2809",
 ];
 
 /// Whether a row with no stated expiry ends with its subject: a

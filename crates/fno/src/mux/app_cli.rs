@@ -380,6 +380,12 @@ fn seed_world(root: &Path, front: &Path) -> Option<String> {
             prio,
             "--difficulty",
             "medium",
+            "--audience",
+            "internal",
+            "--why",
+            "the demo world needs a populated board",
+            "--done-means",
+            "the board shows the seeded node",
         ])
         .env("FNO_DEMO_ID_SEED", format!("node-{}", i + 1))
         .stdout(std::process::Stdio::piped())
@@ -568,6 +574,10 @@ fn seed_transcript(root: &Path, ask: Option<&str>) -> bool {
         "\n",
         r#"{"parentUuid":null,"isSidechain":false,"type":"assistant","uuid":"a2","message":{"id":"m2","role":"assistant","content":[{"type":"text","text":"Frontmost identical across the three reads, no keystrokes, no Dock bounce, and the frame lands. The window composites invisible the whole time."}]},"sessionId":"00000000-0000-4000-8000-000000000001"}"#,
         "\n",
+        r#"{"parentUuid":null,"isSidechain":false,"type":"assistant","uuid":"a3","message":{"id":"m3","role":"assistant","content":[{"type":"thinking","thinking":"The fold needs a row that carries text, so the chevron has something to open and the body holds this sentence."},{"type":"text","text":"The thinking row above carries text, so its fold opens."}]},"sessionId":"00000000-0000-4000-8000-000000000001"}"#,
+        "\n",
+        r#"{"parentUuid":null,"isSidechain":false,"type":"assistant","uuid":"a4","message":{"id":"m4","role":"assistant","content":[{"type":"redacted_thinking"},{"type":"text","text":"A redacted block carries no text, so no fold paints at all."}]},"sessionId":"00000000-0000-4000-8000-000000000001"}"#,
+        "\n",
     );
     let rows = match ask {
         Some(kind) => format!("{rows}{}", ask_rows(kind == "overflow")),
@@ -675,11 +685,20 @@ fn shot(args: &crate::cli_args::AppShotArgs) -> i32 {
     if let Some(view) = mode {
         cmd.arg("--shot-mode").arg(view.as_spelling());
         if matches!(view, AppView::Chat) {
-            cmd.arg("--chat").arg("newest");
+            // The seeded session id, not `newest`: newest resolves inside
+            // the cwd's project dir, and the shot world's transcript lives
+            // in its own demo-project root the pin cwd never matches.
+            cmd.arg("--chat").arg(DEMO_CHAT_SESSION);
         }
     }
     if let Some(find) = find {
         cmd.arg("--shot-find").arg(find);
+    }
+    if let Some(tap) = args.tap.as_deref() {
+        cmd.arg("--shot-tap").arg(tap);
+    }
+    if let Some(ui) = args.ui.as_deref() {
+        cmd.arg("--shot-ui").arg(ui);
     }
     match cmd.status() {
         Ok(s) => s.code().unwrap_or(1),

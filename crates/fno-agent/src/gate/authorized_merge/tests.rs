@@ -1185,17 +1185,21 @@ fn an_immediate_merge_never_passes_auto() {
     assert!(!calls[0].contains(&"--auto".to_string()));
     assert!(calls[0].contains(&"--match-head-commit".to_string()));
     // The owner's record: one merge_landed span for the run, naming the
-    // command lane and the merged PR.
+    // command lane and the merged PR. The global-journal mirror doubles the
+    // row under the test journal target (both writes fold into one file),
+    // so the doubled count proves the mirror fired.
     let spans: Vec<_> = journal
         .rows()
         .into_iter()
         .filter(|r| r["data"]["span_kind"] == "merge_landed")
         .collect();
-    assert_eq!(spans.len(), 1);
-    assert_eq!(spans[0]["data"]["path"], "pr_merge");
-    assert_eq!(spans[0]["data"]["pr"], 7);
-    assert_eq!(spans[0]["data"]["repo"], "o/r");
-    assert_eq!(spans[0]["data"]["head"], "abc123");
+    assert_eq!(spans.len(), 2);
+    for span in &spans {
+        assert_eq!(span.pointer("/data/path"), Some(&json!("pr_merge")));
+        assert_eq!(span.pointer("/data/pr"), Some(&json!(7)));
+        assert_eq!(span.pointer("/data/repo"), Some(&json!("o/r")));
+        assert_eq!(span.pointer("/data/head"), Some(&json!("abc123")));
+    }
 }
 
 #[test]
@@ -1628,6 +1632,81 @@ fn the_main_red_gate_refuses_red_and_exempts_only_the_declared_repair() {
             decide(&clearing, &request(Effect::Merge)).is_ok(),
             "{}",
             err_words(&clearing)
+        );
+    }
+
+    // The probe's truth under the wiring: the exemption reads the tagged
+    // node from a real store. The live refusal (2026-11-21) had the slice's
+    // light projection precede the full carrier rows, so the tag check read
+    // the tag-less twin and refused the very lane it named. The store shape
+    // is the incident's: tags on the node, pr_number set, primary_pr null,
+    // and the Fixes line as the last body line. Each store phase holds the
+    // env pin inside its own block: the pin carries the shared env lock,
+    // and a std Mutex never relocks on one thread.
+    {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".fno")).unwrap();
+        let (_env_lock, _env) = pin_graph_env(tmp.path());
+        crate::graph_store::seed_rows(
+            &crate::org_board::scope::graph_json_path(tmp.path()),
+            &[json!({
+                "id": "x-9999",
+                "status": "in_progress",
+                "project": "fno",
+                "tags": [MAIN_REPAIR_TAG],
+                "pr_number": 497,
+                "pr_url": "https://github.com/o/r/pull/497",
+                "primary_pr": null
+            })],
+        )
+        .unwrap();
+        let incident = PrFacts {
+            number: 497,
+            head_ref: "fix/pr-read-e0308".to_string(),
+            url: "https://github.com/o/r/pull/497".to_string(),
+            body: Some("Fixes x-9999\n".to_string()),
+            ..open_facts()
+        };
+        assert_eq!(main_repair_hold_probe(tmp.path(), &incident), None);
+    }
+
+    // The withhold arm: the exemption is for the PR whose own node is the
+    // repair. An untagged PR bound beside a tagged lane still holds, and the
+    // sentence names the lane.
+    {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".fno")).unwrap();
+        let (_env_lock, _env) = pin_graph_env(tmp.path());
+        crate::graph_store::seed_rows(
+            &crate::org_board::scope::graph_json_path(tmp.path()),
+            &[
+                json!({
+                    "id": "x-1111",
+                    "status": "in_progress",
+                    "project": "fno",
+                    "pr_number": 7,
+                    "pr_url": "https://github.com/o/r/pull/7"
+                }),
+                json!({
+                    "id": "x-8888",
+                    "status": "in_progress",
+                    "project": "fno",
+                    "tags": [MAIN_REPAIR_TAG]
+                }),
+            ],
+        )
+        .unwrap();
+        let untagged = PrFacts {
+            number: 7,
+            head_ref: "feature/x-1111".to_string(),
+            url: "https://github.com/o/r/pull/7".to_string(),
+            body: Some("Fixes x-1111\n".to_string()),
+            ..open_facts()
+        };
+        let hold = main_repair_hold_probe(tmp.path(), &untagged);
+        assert!(
+            hold.as_deref().is_some_and(|h| h.contains("x-8888")),
+            "{hold:?}"
         );
     }
 }
@@ -2340,4 +2419,35 @@ fn docs_line_missing_holds_merge_and_passes_with_a_docs_line() {
             .any(|w| w.code.starts_with("docs_")),
         "{unknown:?}"
     );
+}
+
+/// A graph-seeding test's hermetic env. The graph anchor ignores cwd and
+/// resolves through FNO_HOME, so an unpinned store would land in the real
+/// home; pin it (and the claims root the bound-node lookup transitively
+/// resolves) for the life of the test, under the shared env lock so
+/// parallel tests cannot race the mutation.
+struct GraphEnvRestore(Option<std::ffi::OsString>, Option<std::ffi::OsString>);
+impl Drop for GraphEnvRestore {
+    fn drop(&mut self) {
+        match self.0.take() {
+            Some(v) => std::env::set_var("FNO_SPACES_DIR", v),
+            None => std::env::remove_var("FNO_SPACES_DIR"),
+        }
+        match self.1.take() {
+            Some(v) => std::env::set_var("FNO_HOME", v),
+            None => std::env::remove_var("FNO_HOME"),
+        }
+    }
+}
+
+fn pin_graph_env(tmp: &Path) -> (std::sync::MutexGuard<'static, ()>, GraphEnvRestore) {
+    let lock = crate::pr_status::cache_env_lock();
+    let spaces = std::env::temp_dir().join(format!("x17ee-spaces-{}", std::process::id()));
+    std::fs::create_dir_all(&spaces).unwrap();
+    crate::paths::pin_test_claims_root(&spaces);
+    let prior_spaces = std::env::var_os("FNO_SPACES_DIR");
+    std::env::set_var("FNO_SPACES_DIR", &spaces);
+    let prior_home = std::env::var_os("FNO_HOME");
+    std::env::set_var("FNO_HOME", tmp);
+    (lock, GraphEnvRestore(prior_spaces, prior_home))
 }

@@ -856,6 +856,127 @@ got="$(stored '.branch')"
   && pass "classified path records the rewritten PR branch, not the local name" \
   || fail "classified branch: want feature/x-e601, got '$got'"
 
+echo "== cross-repo paired-PR target (x-66d4) =="
+# A second scratch repo is the review target: the caller stays in $REPO and the
+# emit derives head, branch and diff from --repo-root. The dispatch hold is the
+# permission: a live claim held by this session on the target branch at the
+# target head. The manifest must name the harness session again (case 15's
+# cleanup removed it), because the join keys the holder on it.
+mkdir -p "$REPO/.fno"
+cat > "$REPO/.fno/target-state.md" <<'STATE'
+session_id: target-run
+harness_session_id: harness-run
+harness: claude
+STATE
+git -C "$REPO" checkout -q feature/x-e601
+TARGET="$TMP/target"
+git init -q -b docs/pair-case "$TARGET"
+git -C "$TARGET" config user.email t@t.t
+git -C "$TARGET" config user.name t
+echo one > "$TARGET/a.md"
+git -C "$TARGET" add a.md
+git -C "$TARGET" commit -qm "base"
+TARGET_BASE="$(git -C "$TARGET" rev-parse HEAD)"
+git -C "$TARGET" update-ref refs/remotes/origin/main "$TARGET_BASE"
+echo two >> "$TARGET/a.md"
+git -C "$TARGET" add a.md
+git -C "$TARGET" commit -qm "docs change"
+TARGET_HEAD="$(git -C "$TARGET" rev-parse HEAD)"
+
+CR_EMITTED="$TMP/cr-attest.json"
+CR_ENV="$TMP/cr-env.txt"
+CR_ALL="$TMP/cr-all-calls.txt"
+cat > "$TMP/fno-cr-stub" <<STUB
+#!/usr/bin/env bash
+if [[ "\${1:-}" == "agents" && "\${2:-}" == "claim" && "\${3:-}" == "list" ]]; then
+  if [[ "\${CASE_CLAIMS:-}" == "held" ]]; then
+    printf '%s\\n' '[{"key":"review:branch:docs/pair-case","holder":"review-session:harness-run","expired":false,"acquired_at":1700000000,"metadata":{"head_sha":"$TARGET_HEAD","invocation_id":"ri-cross-joined"}}]'
+  else
+    echo '[]'
+  fi
+  exit 0
+fi
+if [[ "\${1:-}" == "do" && "\${2:-}" == "pr" && "\${3:-}" == "review-hold" && "\${4:-}" == "metadata" ]]; then
+  printf '%s\\n' '{"metadata":{"invocation_id":"ri-hold-meta","verb":"/code-review","level":"high","level_source":"explicit","flags":["--comment"]}}'
+  exit 0
+fi
+if [[ "\${1:-}" == "doctor" && "\${2:-}" == "event" && "\${3:-}" == "emit" ]]; then
+  type=""; data=""
+  while [[ \$# -gt 0 ]]; do
+    case "\$1" in
+      -t) type="\$2"; shift 2 ;;
+      -d) data="\$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  [[ "\$type" == "review_attestation" ]] && { printf '%s\\n' "\$data" > "$CR_EMITTED"; printf '%s\\n' "\${FNO_REPO_ROOT:-unset}" > "$CR_ENV"; }
+fi
+printf '%s\\n' "\$*" >> "$CR_ALL"
+exit 0
+STUB
+chmod +x "$TMP/fno-cr-stub"
+
+# CR-1: the same-root guard. The default form already covers the caller's own
+# repo; a --repo-root naming it is a caller confusion, refused before any read.
+rm -f "$CR_EMITTED"
+CR_RC=0
+(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL -u CASE_CLAIMS \
+  FNO="$TMP/fno-cr-stub" FNO_AGENT_BIN="$TMP/fno-cr-stub" \
+  bash "$EMITTER" code-review pass --repo-root "$REPO") >/dev/null 2>&1 || CR_RC=$?
+[[ $CR_RC -eq 2 ]] && pass "same-root --repo-root refuses with exit 2" \
+  || fail "same-root guard: want exit 2, got $CR_RC"
+[[ ! -f "$CR_EMITTED" ]] && pass "same-root guard writes no event" \
+  || fail "same-root guard emitted anyway"
+
+# CR-2: the unheld refuse arm. No live hold held by this session on the target
+# branch: a session that did not dispatch the review cannot record it. The
+# refusal names the branch, the head and the remedy, and no attestation lands.
+rm -f "$CR_EMITTED"
+CR_OUT="$(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+  CASE_CLAIMS=empty FNO="$TMP/fno-cr-stub" FNO_AGENT_BIN="$TMP/fno-cr-stub" \
+  bash "$EMITTER" code-review pass --repo-root "$TARGET" 2>&1 >/dev/null)"; CR_RC=$?
+[[ $CR_RC -ne 0 ]] && pass "unheld cross-repo emit refuses" \
+  || fail "unheld cross-repo emit passed (exit $CR_RC)"
+[[ ! -f "$CR_EMITTED" ]] && pass "unheld cross-repo refuse writes no attestation" \
+  || fail "unheld refuse emitted anyway"
+grep -q "docs/pair-case" <<<"$CR_OUT" && pass "refusal names the target branch" \
+  || fail "refusal lacks the target branch: $CR_OUT"
+grep -q "cannot record it" <<<"$CR_OUT" && pass "refusal states the non-reviewer rule" \
+  || fail "refusal lacks the rule: $CR_OUT"
+
+# CR-3: the admit arm. The held claim supplies the invocation id (it wins over
+# the hold metadata fixture's id), the payload carries the TARGET branch, head
+# and diff, and the emit sink ran with FNO_REPO_ROOT pinned at the target.
+rm -f "$CR_EMITTED" "$CR_ENV" "$CR_ALL"
+CR_RC=0
+(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+  CASE_CLAIMS=held FNO="$TMP/fno-cr-stub" FNO_AGENT_BIN="$TMP/fno-cr-stub" \
+  bash "$EMITTER" code-review pass --repo-root "$TARGET") >/dev/null 2>&1 || CR_RC=$?
+[[ $CR_RC -eq 0 ]] && pass "held cross-repo emit succeeds" \
+  || fail "held cross-repo emit failed (exit $CR_RC)"
+[[ -f "$CR_EMITTED" ]] && pass "held cross-repo emit writes the attestation" \
+  || fail "held cross-repo emit wrote no attestation"
+got="$(jq -r '.branch // ""' "$CR_EMITTED" 2>/dev/null)"
+[[ "$got" == "docs/pair-case" ]] && pass "payload carries the TARGET branch" \
+  || fail "payload branch: want docs/pair-case, got '$got'"
+got="$(jq -r '.head_sha // ""' "$CR_EMITTED" 2>/dev/null)"
+[[ "$got" == "$TARGET_HEAD" ]] && pass "payload pins the TARGET head" \
+  || fail "payload head: want ${TARGET_HEAD:0:8}, got '$got'"
+got="$(jq -r '.invocation_id // ""' "$CR_EMITTED" 2>/dev/null)"
+[[ "$got" == "ri-cross-joined" ]] && pass "payload joins the DISPATCH hold id, not the metadata fixture" \
+  || fail "payload invocation_id: want ri-cross-joined, got '$got'"
+got="$(jq -r '.reviewed_file_count // ""' "$CR_EMITTED" 2>/dev/null)"
+[[ "$got" == "1" ]] && pass "payload measures the TARGET diff (files=1)" \
+  || fail "payload file count: want 1, got '$got'"
+[[ "$(cat "$CR_ENV" 2>/dev/null)" == "$TARGET" ]] && pass "emit sink ran with FNO_REPO_ROOT at the target" \
+  || fail "sink FNO_REPO_ROOT: got '$(cat "$CR_ENV" 2>/dev/null)'"
+grep -q "review-hold release --branch docs/pair-case" "$CR_ALL" \
+  && pass "completion releases the TARGET hold" \
+  || fail "no target-branch release: $(grep 'review-hold' "$CR_ALL" 2>/dev/null || echo none)"
+grep -q "review-hold release --branch wt/r-4" "$CR_ALL" \
+  && fail "cross-repo emit released the caller's own branch hold" \
+  || pass "cross-repo emit leaves the caller's own branch hold alone"
+
 echo ""
 echo "emit-attestation: $PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]]

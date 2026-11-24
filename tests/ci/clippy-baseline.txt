@@ -3050,6 +3050,10 @@ crates/fno-agent/src/eval/friction.rs	clippy::too_many_lines	fn record_with(
 crates/fno-agent/src/eval/golden_drafter.rs	clippy::indexing_slicing	assert_eq!(out["kept"], 0);
 crates/fno-agent/src/eval/golden_drafter.rs	clippy::indexing_slicing	assert_eq!(out["kept"], 1, "{out}");
 crates/fno-agent/src/eval/golden_drafter.rs	clippy::let_underscore_must_use	let _ = std::fs::OpenOptions::new()
+crates/fno-agent/src/eval/golden_drafter.rs	clippy::let_underscore_must_use	let _ = std::fs::remove_file(&bank_path);
+crates/fno-agent/src/eval/golden_drafter.rs	clippy::let_underscore_must_use	let _ = std::fs::remove_file(&fix_path);
+crates/fno-agent/src/eval/golden_drafter.rs	clippy::let_underscore_must_use	let _ = std::fs::remove_file(dir.join("pending").join("bank").join(name));
+crates/fno-agent/src/eval/golden_drafter.rs	clippy::let_underscore_must_use	let _ = std::fs::remove_file(dir.join("pending").join("fixtures").join(name));
 crates/fno-agent/src/eval/golden_drafter.rs	clippy::let_underscore_must_use	let _ = std::fs::remove_file(draft);
 crates/fno-agent/src/eval/honesty_sweep.rs	clippy::disallowed_methods	.output()
 crates/fno-agent/src/eval/honesty_sweep.rs	clippy::indexing_slicing	let flag = args[i].as_str();
@@ -8257,6 +8261,8 @@ crates/fno-agent/src/runtime/mail_threads.rs	clippy::indexing_slicing	rows[0].ge
 crates/fno-agent/src/runtime/mail_threads.rs	clippy::indexing_slicing	threads[0]["chat_id"], "c1",
 crates/fno-agent/src/runtime/mail_threads.rs	clippy::too_many_lines	pub(crate) fn fold_fleet_rows(
 crates/fno-agent/src/runtime/mail_threads.rs	clippy::too_many_lines	pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
+crates/fno-agent/src/runtime/manifest.rs	clippy::indexing_slicing	assert_eq!(always["rule_id"], "permission_ask");
+crates/fno-agent/src/runtime/manifest.rs	clippy::indexing_slicing	assert_eq!(always["state"], "blocked");
 crates/fno-agent/src/runtime/manifest.rs	clippy::indexing_slicing	assert_eq!(ans.options[0].idx, "1");
 crates/fno-agent/src/runtime/manifest.rs	clippy::indexing_slicing	assert_eq!(ans.options[0].keystroke, b"1");
 crates/fno-agent/src/runtime/manifest.rs	clippy::indexing_slicing	assert_eq!(ans.options[0].label, "Yes");
@@ -8267,9 +8273,20 @@ crates/fno-agent/src/runtime/manifest.rs	clippy::indexing_slicing	assert_eq!(ask
 crates/fno-agent/src/runtime/manifest.rs	clippy::indexing_slicing	assert_eq!(ask["state"], "blocked");
 crates/fno-agent/src/runtime/manifest.rs	clippy::indexing_slicing	assert_eq!(busy["rule_id"], "working_status");
 crates/fno-agent/src/runtime/manifest.rs	clippy::indexing_slicing	assert_eq!(busy["state"], "working");
+crates/fno-agent/src/runtime/manifest.rs	clippy::indexing_slicing	assert_eq!(caret_one["rule_id"], "permission_ask");
+crates/fno-agent/src/runtime/manifest.rs	clippy::indexing_slicing	assert_eq!(caret_one["state"], "blocked");
+crates/fno-agent/src/runtime/manifest.rs	clippy::indexing_slicing	assert_eq!(caret_three["rule_id"], "permission_ask");
+crates/fno-agent/src/runtime/manifest.rs	clippy::indexing_slicing	assert_eq!(caret_three["state"], "blocked");
+crates/fno-agent/src/runtime/manifest.rs	clippy::indexing_slicing	assert_eq!(caret_two["rule_id"], "permission_ask");
+crates/fno-agent/src/runtime/manifest.rs	clippy::indexing_slicing	assert_eq!(caret_two["state"], "blocked");
 crates/fno-agent/src/runtime/manifest.rs	clippy::indexing_slicing	assert_eq!(idle["matched"], false);
 crates/fno-agent/src/runtime/manifest.rs	clippy::indexing_slicing	assert_eq!(m.rules()[0].id, "high", "highest priority sorts first");
 crates/fno-agent/src/runtime/manifest.rs	clippy::indexing_slicing	assert_eq!(m.rules()[1].id, "low");
+crates/fno-agent/src/runtime/manifest.rs	clippy::indexing_slicing	assert_eq!(plain_allow["matched"], false);
+crates/fno-agent/src/runtime/manifest.rs	clippy::indexing_slicing	assert_eq!(question_only["matched"], false);
+crates/fno-agent/src/runtime/manifest.rs	clippy::indexing_slicing	assert_eq!(reply_list["matched"], false);
+crates/fno-agent/src/runtime/manifest.rs	clippy::indexing_slicing	assert_eq!(two_row["state"], "blocked");
+crates/fno-agent/src/runtime/manifest.rs	clippy::indexing_slicing	assert_eq!(wrapped["state"], "blocked");
 crates/fno-agent/src/runtime/manifest.rs	clippy::indexing_slicing	if idx.len() != 1 || !idx.as_bytes()[0].is_ascii_digit() || label.is_empty() {
 crates/fno-agent/src/runtime/manifest.rs	clippy::indexing_slicing	if let Some(top) = lines[..bottom].iter().rposition(|l| l.contains('╭')) {
 crates/fno-agent/src/runtime/manifest.rs	clippy::indexing_slicing	let Some(top) = lines[..bottom]
@@ -15837,3 +15854,6 @@ crates/fno/src/serve/screen.rs	clippy::let_underscore_must_use	let _ = out.flush
 crates/fno/src/serve/screen.rs	clippy::let_underscore_must_use	let _ = out.write_all(b"\\x1b[0m\\x1b[?25h\\x1b[?1049l");
 crates/fno/src/serve/screen.rs	clippy::let_underscore_must_use	let _ = out.write_all(b"\\x1b[?1049h\\x1b[?25l\\x1b[2J");
 crates/fno/src/serve/web_core.rs	clippy::indexing_slicing	token: state["token"].as_str().unwrap_or_default().to_string(),
+crates/fno-agent/src/runtime/attention_http.rs	clippy::indexing_slicing	assert_eq!(body["click"], "https://phone.example/hq?question=q-9");
+crates/fno-agent/src/runtime/attention_http.rs	clippy::indexing_slicing	body["click"],
+crates/fno-agent/src/runtime/attention_http.rs	clippy::indexing_slicing	let actions = body["actions"].as_array().unwrap();

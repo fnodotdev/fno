@@ -182,8 +182,12 @@ The typed lanes (`inject_with_submit` in `crates/fno-agent/src/runtime/mail_inje
 
 Two consequences:
 
-- The raw door's multi-line refusal ("an unframed payload must be a single line") is gone. Its premise was that a second line rides in as a second submitted turn. Flattening removed that harm. The held-mail drain (hold.py `release` -> `_deliver_live`) was the caller this stranded. Its digest now delivers, and it stays audited as a raw inject. A single-line unframed payload is still a command (starts with `/` or `$`, decision D1211 (d-f6570dc9)).
+- The raw door's multi-line refusal ("an unframed payload must be a single line") is gone. Its premise was that a second line rides in as a second submitted turn. Flattening removed that harm. The held-mail drain (hold.py `release` -> `_deliver_live`) was the caller this stranded. Its digest now delivers, and it stays audited as a raw inject. A single-line unframed payload is still a command (starts with `/` or `$`, decision D1211).
 - The confirm marker derives from the typed text up to the first glyph. That is the same first line `text.lines().next()` always gave, so transcript confirms are unchanged.
+
+## A delivery never resizes the pane
+
+Measured live 2026-11-21 with a client attached. The whole delivery window leaves the pane tty unchanged for every sample and pushes no layout. The window spans the typed envelope lines, the enter settle, the submit CR, and the confirm loop's retry CR. The writes ride `pty.write_input`, a channel send. The only PTY resize sits behind `resize_pane_entry`'s real-rect-change guard (`crates/fno/src/mux/server/pane_inset.rs`), reachable from no delivery call. The guard test is `multiclient_typed_mail_delivery_resizes_no_pane` in `crates/fno/tests/multiclient_e2e.rs`. When the CR submits, the envelope leaves the composer of the receiving harness and the box collapses. The rows and cols have never moved. No fno lane shrinks it.
 
 ## The quiet wait, the one extra Enter, and the withdraw (C11, C12, C14)
 

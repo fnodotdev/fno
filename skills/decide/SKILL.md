@@ -24,11 +24,11 @@ Type `/fno:decide Merges belong to the user` in chat. A `d-` id comes back.
 
 1. Read the argument as a proposed durable rule. When the text names an area, query it and use the returned `canonical_subject`. A subject matches exactly. A near-synonym does not. When the subject or the rationale is genuinely unclear, ask one focused question. Do not ask for permission you already have. The user typing the line IS the invocation.
 2. Classify the statement. A rule limited to this PR, node, target, change, or merge is coordination. Refuse to label it law. Offer `/fno:mail` or an ordinary agent ruling instead. `fno inbox decisions set` refuses those markers itself, so a slip is caught rather than recorded.
-3. Read current decision with `fno inbox decisions <subject> --lane law --state live --json`. Treat an unreadable result as unknown. Continue only from `current_law.status`. `single` names the decision this ruling can supersede. `conflict` requires every id and a resolution first. `none` proves only that this canonical subject has no current law.
+3. Read current decision with `fno inbox decisions <subject> --lane law --state live --json`. Treat an unreadable result as unknown. Continue only from `current_law.status`. `single` names the decision this ruling can supersede. `conflict` requires every id and a resolution first. `none` means this ruling conflicts with nothing. A law only settles a conflict between rulings. Record a plain decision instead, and say so: `fno inbox decide "<subject>" "<decision>" --audience internal --why "<why>"`. Add `--expiry never` for a standing rule. The door refuses the law itself, so the plain channel is the one path.
 4. Record it:
 
 ```bash
-fno inbox decisions set "<subject>" "<decision>" --audience internal|customers|customer:<persona> --rationale "<why>" --quote "<the user's words>" [--supersedes d-xxxxxxxx] [--keep d-xxxxxxxx]... [--sweep <word>]...
+fno inbox decisions set "<subject>" "<decision>" --audience internal|customers|customer:<persona> --rationale "<why>" --quote "<the user's words>" [--supersedes D<n>] [--keep D<n>]... [--sweep <word>]...
 ```
 
 The door compares the new decision with every live ruling in the same scope, subject and text together. A ruling that shares six or more topic words, and half of the shorter text, is near. The door refuses until you name each near ruling. `--supersedes <id>` retires it. `--keep <id>` keeps it beside the new decision. Read each near ruling before you choose. Never pass `--keep` to get past the refusal.
@@ -51,11 +51,12 @@ Recording decision from chat works, and so does retracting a chat-recorded law. 
 
 ## Refusals
 
-`fno inbox decisions set` refuses, records nothing, and exits **3** in eight cases:
+`fno inbox decisions set` refuses, records nothing, and exits **3** in nine cases:
 
 - the statement is coordination rather than durable decision,
+- the subject carries no live law this ruling retires. Nothing conflicts. A law records only conflict resolutions. The refusal names `fno inbox decide` as the plain channel,
 - the rationale is missing,
-- `--supersedes` is not a `d-` decision id, or names no recoverable decision,
+- `--supersedes` is not a decision number (`D<n>`), or names no recoverable decision,
 - `--supersedes` names an `operator` decision row while this recording is `chat_attested`,
 - `--graduation` is not a valid kind,
 - a live ruling near the new decision is named by neither `--supersedes` nor `--keep`,

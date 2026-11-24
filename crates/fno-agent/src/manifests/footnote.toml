@@ -7,7 +7,13 @@
 # WHAT WAS READ, in fnh src/tui/view.rs and src/tui/app.rs:
 #
 #   ask band    " allow {title}?  [y] yes  [n] no", drawn only while an ask
-#               is up, in the band directly above the status line.
+#               is up, in the band directly above the status line. fnh also
+#               draws " allow {title}?  [y] yes  [a] Always allow {x}  [n] no"
+#               when an always-allow offer exists. Its redesigned consent
+#               band (fnh src/tui/view.rs consent_band) draws " {title}"
+#               (wrapping), optional change rows, " Do you want to
+#               proceed?", then numbered options " ❯ {n}. {label}", the ❯
+#               on the SELECTED row, with " 2. No" or " 3. No" lowest.
 #   busy line   "Churning… {n}s  (esc to interrupt)", drawn only while a
 #               turn runs; the ellipsis is U+2026 and the count moves every
 #               second.
@@ -32,10 +38,18 @@ id = "permission_ask"
 state = "blocked"
 priority = 960
 region = "bottom_non_empty_lines(8)"
-# The band pads to the pane width, so the line starts with the band's own
-# space and the y/n grammar ends it. No `$` anchor: the band's trailing
-# padding is width-dependent.
-gate = { line_regex = '^\s*allow .*\?\s+\[y\] yes\s+\[n\] no' }
+# Two band families block; either suffices. The old band pads to the pane
+# width and ends in the y/n grammar (the [a] segment sits between yes and
+# no); no `$` anchor there, the trailing padding is width-dependent. The
+# consent band anchors on its LOWEST row, "2. No" or "3. No" in the caret
+# grammar (❯ + space, or blank) and `\s*$` matching the row's padding: it
+# is the only band row that always sits inside bottom_non_empty_lines(8),
+# because wrapped headings, change rows and wrapped always-allow labels
+# can push the question row out of that window. The caret moves with the
+# selection, so no literal caret row is pinned. Detection only: this rule
+# carries no [rule.answer] grammar, so a consent prompt shows as
+# focus-only in the queue.
+gate = { any = [ { line_regex = '^\s*allow .*\?\s+\[y\] yes(?:\s+\[a\] .*?)?\s+\[n\] no' }, { line_regex = '^\s*(❯\s+)?[23]\. No\s*$' } ] }
 
 [[rule]]
 id = "working_status"

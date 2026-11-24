@@ -32,6 +32,9 @@ pub(super) struct FleetArms {
     tool_scan_in_flight: Arc<std::sync::atomic::AtomicBool>,
     last_tool_scan: Instant,
     // The periodic arms: each module owns its cadence, gate and memory.
+    // The battery-save arm: at or below 5% on battery, flush the outbox and
+    // checkpoint the graph so a dead-battery shutdown restores clean.
+    battery_save: crate::battery_save::Arm,
     build_marks: crate::build_marks::Arm,
     machine_watch: crate::machine_watch::Arm,
     claude_restart_watch: crate::claude_restart_watch::Arm,
@@ -46,6 +49,9 @@ pub(super) struct FleetArms {
     lead_eval: crate::lead_eval::Arm,
     fleet_beacon: crate::fleet_beacon::Arm,
     arm_watch: crate::arm_watch::Arm,
+    // Fires due scheduled-spawn rows through the spawn front door; its
+    // pending signal holds the daemon's idle exit while a row waits.
+    pub(crate) schedule_fire: crate::runtime::schedule_fire::Arm,
     provider_cap: crate::provider_cap_commands::Arm,
     usage_refresh: crate::usage_refresh::Arm,
     slot_cutover: crate::slot_cutover::Arm,
@@ -151,6 +157,7 @@ impl FleetArms {
             last_tool_scan: Instant::now(),
             machine_watch: crate::machine_watch::Arm::default(),
             claude_restart_watch: crate::claude_restart_watch::Arm::default(),
+            battery_save: crate::battery_save::Arm::default(),
             build_marks: crate::build_marks::Arm::default(),
             merge_close: crate::merge_close::Arm::default(),
             symptom_recheck: crate::symptom_recheck::Arm::default(),
@@ -163,6 +170,7 @@ impl FleetArms {
             lead_eval: crate::lead_eval::Arm::default(),
             fleet_beacon: crate::fleet_beacon::Arm::default(),
             arm_watch: crate::arm_watch::Arm::new(opts.agents_config_cwd.clone()),
+            schedule_fire: crate::runtime::schedule_fire::Arm::default(),
             provider_cap: crate::provider_cap_commands::Arm::new(opts.agents_config_cwd.clone()),
             usage_refresh: crate::usage_refresh::Arm::new(opts.agents_config_cwd.clone()),
             slot_cutover: crate::slot_cutover::Arm::new(opts.agents_config_cwd.clone()),
@@ -377,6 +385,7 @@ impl FleetArms {
             ctx.home.events_jsonl(),
         );
         crate::machine_watch::maybe_tick(&self.machine_watch, ctx.home.clone());
+        crate::battery_save::maybe_tick(&self.battery_save);
         crate::claude_restart_watch::maybe_tick(&self.claude_restart_watch, ctx.home.clone());
         crate::merge_close::maybe_tick(&self.merge_close, ctx.home.clone());
         crate::symptom_recheck::maybe_tick(&self.symptom_recheck, ctx.home.clone());
@@ -395,6 +404,7 @@ impl FleetArms {
         crate::lead_eval::maybe_tick(&self.lead_eval, ctx.home.clone());
         crate::fleet_beacon::maybe_tick(&self.fleet_beacon, ctx.home.clone());
         crate::arm_watch::maybe_tick(&self.arm_watch, ctx.home.clone());
+        crate::runtime::schedule_fire::maybe_tick(&self.schedule_fire, ctx.home.clone());
         crate::provider_cap_commands::maybe_tick(&self.provider_cap, ctx.home.clone());
         // Every account's usage re-measured inside the cache TTL.
         crate::usage_refresh::maybe_tick(&self.usage_refresh);

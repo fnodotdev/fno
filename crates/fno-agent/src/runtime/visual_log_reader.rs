@@ -73,6 +73,14 @@ fn ensure_reader_script() -> Option<PathBuf> {
 /// is without this module keying on the script's English wording.
 fn visual_log_verdict(exit: i32, stdout: &str) -> Value {
     let detail = stdout.lines().next().unwrap_or("").trim().to_string();
+    // An empty detail renders as "visual log reader: ;" downstream and a
+    // refusal built from it reads "refused: ; repair first": a probe that
+    // died before any verdict still names its exit here.
+    let detail = if detail.is_empty() {
+        format!("ensure-reader.sh check exited {exit} with no verdict line")
+    } else {
+        detail
+    };
     let status = if exit == 0 { "fresh" } else { "down" };
     json!({"status": status, "detail": detail})
 }
@@ -105,7 +113,11 @@ pub(crate) fn reading_once() -> &'static ReadResult {
 pub(crate) fn tap_ask_refusal(probe: &ReadResult) -> Option<String> {
     let detail = match probe {
         Ok(v) if v["status"].as_str() == Some("fresh") => return None,
-        Ok(v) => v["detail"].as_str().unwrap_or("reader down").to_string(),
+        Ok(v) => v["detail"]
+            .as_str()
+            .filter(|d| !d.is_empty())
+            .unwrap_or("reader down")
+            .to_string(),
         Err(e) => e.clone(),
     };
     Some(format!(
@@ -152,6 +164,18 @@ mod visual_log_reader_tests {
             ),
             json!({"status": "down", "detail": "reader present but its last activity is unreadable; check with: peek"})
         );
+    }
+
+    #[test]
+    fn an_empty_probe_output_never_renders_or_refuses_with_an_empty_detail() {
+        assert_eq!(
+            visual_log_verdict(5, ""),
+            json!({"status": "down", "detail": "ensure-reader.sh check exited 5 with no verdict line"})
+        );
+        let refusal = tap_ask_refusal(&Ok(json!({"status": "down", "detail": ""})))
+            .expect("a down reader refuses");
+        assert!(refusal.contains("reader down"), "{refusal}");
+        assert!(!refusal.contains(": ;"), "{refusal}");
     }
 
     #[test]

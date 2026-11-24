@@ -42,11 +42,14 @@ ARTIFACT="$T1/.fno/artifacts/memory-${SID}.md" \
     bash "$WRITER" \
     --memory-dir "$T1/memory" \
     --session-id "$SID" \
+    --evidence "${SID}:4242" \
     --candidate '{"type":"feedback","name":"Test Entry","description":"Test description","body":"Test body content"}' \
     >"$T1/out.log" 2>&1
 RC=$?
 [[ "$RC" == "0" ]] || fail "AC1-HP: writer failed rc=$RC, log: $(cat "$T1/out.log")"
 [[ -f "$T1/memory/feedback_test_entry.md" ]] || fail "AC1-HP: memory file not created"
+grep -q "^evidence: ${SID}:4242$" "$T1/memory/feedback_test_entry.md" \
+    || fail "AC1-HP: evidence pointer missing from entry frontmatter"
 [[ -f "$T1/.fno/artifacts/memory-${SID}.md" ]] \
     || fail "AC1-HP: gate artifact not created at $T1/.fno/artifacts/memory-${SID}.md"
 grep -q "^phase: memory$" "$T1/.fno/artifacts/memory-${SID}.md" \
@@ -65,6 +68,7 @@ ARTIFACTS_DIR="$T1/.fno/artifacts" \
     bash "$WRITER" \
     --memory-dir "$T1/memory" \
     --session-id "$SID" \
+    --evidence "${SID}:4243" \
     --candidate '{"type":"feedback","name":"Second Entry","description":"Second","body":"Body 2"}' \
     >"$T1/out2.log" 2>&1
 RC=$?
@@ -84,6 +88,7 @@ ARTIFACTS_DIR="$T1/.fno/artifacts" \
     bash "$WRITER" \
     --memory-dir "$T1/memory" \
     --session-id "$SID" \
+    --evidence "${SID}:4244" \
     --candidate '{"type":"feedback","name":"Test Entry","description":"Test description","body":"Test body content"}' \
     >"$T1/out_dedup.log" 2>&1
 RC=$?
@@ -134,6 +139,22 @@ bash "$WRITER" --empty-pass >/dev/null 2>&1 || RC=$?
 [[ "$RC" == "1" ]] || fail "AC2-ERR-3: empty-pass-no-sid expected rc=1, got rc=$RC"
 pass "AC2-ERR-3: --empty-pass without session-id correctly rejected"
 
+# AC-EVIDENCE-REQ: a candidate write without --evidence is refused (rc=1)
+# and writes nothing. Every auto-written entry must carry the
+# session-id:transcript-offset pointer; use-tracked retirement reads it.
+log "AC-EVIDENCE-REQ: candidate without --evidence rejected, nothing written"
+T9=$(test_dir noevid)
+SID9=20261121T000000Z-99999-cccccc
+RC=0
+ERRTXT=$(bash "$WRITER" --memory-dir "$T9/memory" --session-id "$SID9" --repo-root "$T9" \
+    --candidate '{"type":"feedback","name":"No Evidence","description":"d","body":"b"}' 2>&1 >/dev/null) || RC=$?
+[[ "$RC" == "1" ]] || fail "AC-EVIDENCE-REQ: expected rc=1, got rc=$RC"
+printf '%s' "$ERRTXT" | grep -qiE 'evidence' \
+    || fail "AC-EVIDENCE-REQ: no surfaced reason naming --evidence, got: '$ERRTXT'"
+MEMCOUNT=$(find "$T9/memory" -type f 2>/dev/null | wc -l | tr -d ' ')
+[[ "$MEMCOUNT" == "0" ]] || fail "AC-EVIDENCE-REQ: memory file written without --evidence"
+pass "AC-EVIDENCE-REQ: missing --evidence rc=1 + reason surfaced, nothing written"
+
 # AC-DEDUP-FIRST: dedup hit on the LLM's first writer call this session
 # emits a zero-entry passing gate artifact so strict mode doesn't block on
 # a no-op. Without this fix, an honest session whose only candidate happens
@@ -165,6 +186,7 @@ ARTIFACTS_DIR="$T4/.fno/artifacts" \
     bash "$WRITER" \
     --memory-dir "$T4/memory" \
     --session-id "$SID4" \
+    --evidence "${SID4}:100" \
     --candidate '{"type":"feedback","name":"Seed Entry","description":"Seed description","body":"Seed body content"}' \
     >"$T4/dedup-first.log" 2>&1 || RC=$?
 [[ "$RC" == "2" ]] || fail "AC-DEDUP-FIRST: expected dedup rc=2, got rc=$RC, log: $(cat "$T4/dedup-first.log")"
@@ -185,6 +207,7 @@ ARTIFACTS_DIR="$T4/.fno/artifacts" \
     bash "$WRITER" \
     --memory-dir "$T4/memory" \
     --session-id "$SID4" \
+    --evidence "${SID4}:101" \
     --candidate '{"type":"feedback","name":"Seed Entry","description":"Seed description","body":"Seed body content"}' \
     >/dev/null 2>&1 || RC=$?
 [[ "$RC" == "2" ]] || fail "AC-DEDUP-SUBSEQUENT: expected rc=2, got rc=$RC"
@@ -203,6 +226,7 @@ SID5=20260604T000000Z-55555-ffffff
 for ty in reference user feedback project; do
     RC=0
     bash "$WRITER" --memory-dir "$T5/memory" --session-id "$SID5" --repo-root "$T5" \
+        --evidence "${SID5}:7" \
         --candidate "{\"type\":\"$ty\",\"name\":\"Typed $ty\",\"description\":\"d\",\"body\":\"b\"}" \
         >"$T5/types-$ty.log" 2>&1 || RC=$?
     [[ "$RC" == "0" ]] || fail "AC-TYPES: type=$ty rejected rc=$RC, log: $(cat "$T5/types-$ty.log")"
@@ -217,6 +241,7 @@ T6=$(test_dir badtype)
 SID6=20260604T000100Z-66666-aaaaaa
 RC=0
 ERRTXT=$(bash "$WRITER" --memory-dir "$T6/memory" --session-id "$SID6" --repo-root "$T6" \
+    --evidence "${SID6}:1" \
     --candidate '{"type":"bogus","name":"x","description":"d","body":"b"}' 2>&1 >/dev/null) || RC=$?
 [[ "$RC" == "1" ]] || fail "AC-ERR-SURFACED: invalid type expected rc=1, got rc=$RC"
 printf '%s' "$ERRTXT" | grep -qiE 'invalid type' \
@@ -228,6 +253,7 @@ log "AC-ERR-FIELD: missing field surfaces which field"
 T7=$(test_dir badfield)
 RC=0
 ERRTXT=$(bash "$WRITER" --memory-dir "$T7/memory" --session-id "x" --repo-root "$T7" \
+    --evidence "x:1" \
     --candidate '{"type":"reference","name":"x","description":"","body":"b"}' 2>&1 >/dev/null) || RC=$?
 [[ "$RC" == "1" ]] || fail "AC-ERR-FIELD: missing field expected rc=1, got rc=$RC"
 printf '%s' "$ERRTXT" | grep -qiE 'missing required field' \
@@ -243,6 +269,7 @@ T8=$(test_dir nonstring)
 SID8=20260604T000200Z-77777-bbbbbb
 RC=0
 ERRTXT=$(bash "$WRITER" --memory-dir "$T8/memory" --session-id "$SID8" --repo-root "$T8" \
+    --evidence "${SID8}:1" \
     --candidate '{"type":"reference","name":"x","description":"d","body":{"oops":1}}' 2>&1 >/dev/null) || RC=$?
 [[ "$RC" == "1" ]] || fail "AC-NONSTRING: expected rc=1, got rc=$RC"
 printf '%s' "$ERRTXT" | grep -qiE 'non-string field' \

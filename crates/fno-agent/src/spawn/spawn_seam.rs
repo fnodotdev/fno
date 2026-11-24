@@ -84,14 +84,23 @@ pub fn admit_spawn(args: Vec<String>) -> Result<Vec<String>, i32> {
         // ["spawn"] alone: nothing to rewrite.
         return Ok(args);
     };
-    let args = match crate::spawn_bare::boundary_rewrite(tail) {
+    // The + spelling folds before the boundary reads the line, so the
+    // boundary, the parse and the daemon vocabulary answer one grammar
+    // (the composer converts a picked +word to --word the same way).
+    let folded = crate::spawn_bare::plus_fold(tail);
+    let args = match crate::spawn_bare::boundary_rewrite(&folded) {
         crate::spawn_bare::Boundary::Fence(rewritten) => {
             let mut out = Vec::with_capacity(rewritten.len() + 1);
             out.extend(args.first().cloned());
             out.extend(rewritten);
             out
         }
-        crate::spawn_bare::Boundary::Keep => args,
+        crate::spawn_bare::Boundary::Keep => {
+            let mut out = Vec::with_capacity(folded.len() + 1);
+            out.extend(args.first().cloned());
+            out.extend(folded);
+            out
+        }
         crate::spawn_bare::Boundary::Refuse(line) => {
             eprintln!("fno agent spawn: {line}");
             return Err(2);
@@ -470,8 +479,10 @@ fn refuse_codex_unreachable_tools(args: &[String], cwd: &Path) -> Result<(), i32
 }
 
 /// The write grants a worker spawned at `cwd` needs: the state root, the
-/// claim store's root, the two registry directories, and this spawn's plan
-/// directory. Absolute, deduplicated, existing only, in that order.
+/// claim store's root, the two registry directories, this spawn's plan
+/// directory, and the vault slice beside that plans directory (the parent
+/// that carries `decision-log.md` and the backlog docs). Absolute,
+/// deduplicated, existing only, in that order.
 pub fn worker_writable_dirs(cwd: &Path) -> Vec<String> {
     let mut roots: Vec<PathBuf> = Vec::new();
     roots.extend(crate::agents_config::state_dir(cwd));
@@ -490,7 +501,31 @@ pub fn worker_writable_dirs(cwd: &Path) -> Vec<String> {
             roots.push(dir);
         }
     }
-    roots.extend(crate::plans_path::plans_content_dir(cwd));
+    if let Some(plans) = crate::plans_path::plans_content_dir(cwd) {
+        roots.push(plans.clone());
+        // The vault slice beside the plans dir: decision_log reads
+        // `plans.parent()`, so the ruling file and the backlog docs the
+        // worker must reach live there. Two guards keep the parent from
+        // widening the grant: the plans leaf contract (require_plans_leaf)
+        // and the slice being named for the project (project_name), so a
+        // shallow configured plans dir (`~/plans`, a vault root) never
+        // grants the tree above it. Under the default sentinel the parent
+        // is the space dir inside the state-root grant, and the containment
+        // check adds nothing.
+        if let Some(slice) = plans.parent().map(Path::to_path_buf) {
+            let leaf = plans.file_name().and_then(|n| n.to_str()) == Some("plans");
+            let named = crate::plans_path::project_folder(Some(cwd), false)
+                .ok()
+                .is_some_and(|name| {
+                    slice
+                        .file_name()
+                        .is_some_and(|n| n == std::ffi::OsStr::new(&name))
+                });
+            if leaf && named && !roots.iter().any(|root| slice.starts_with(root)) {
+                roots.push(slice);
+            }
+        }
+    }
     let mut out: Vec<String> = Vec::new();
     for cand in roots {
         let Ok(resolved) = cand.canonicalize() else {
@@ -531,6 +566,99 @@ pub(crate) fn granted_dirs(cwd: &Path, sealed: bool) -> Vec<String> {
         worker_writable_dirs(cwd)
     }
 }
+
+/// The eval sandbox's Claude config root: `<state dir>/evals/claude-config`.
+/// A sealed claude eval worker pins this root, so the harness's own state
+/// writes (transcripts, history, config) land under the fno eval dir instead
+/// of the user's `~/.claude`. `None` when no state dir resolves.
+pub fn evals_claude_config_dir() -> Option<PathBuf> {
+    crate::backlog::settings::state_dir().map(|state| state.join("evals").join("claude-config"))
+}
+
+/// Stage the sandbox so a pinned worker keeps its ambient context while its
+/// state writes land sandbox-side. State files (`.credentials.json` auth,
+/// `.claude.json` onboarding, `settings.json`) copy in fresh on every call,
+/// so a rotation at the source reaches the next spawn. Context entries
+/// (`plugins`, `commands`, `agents`, `skills`, `CLAUDE.md`) symlink through
+/// to the ambient ones: a capability worker reads the installed plugin and
+/// the user's global memory exactly as an unpinned spawn would, and no
+/// eval-time write travels those trees. Each copy lands through a temp-file
+/// rename, so concurrent stages of one run's parallel spawns cannot tear it.
+/// Returns the sandbox root, or `None` when no state dir resolves; a missing
+/// source entry stages nothing for it and never fails the spawn.
+pub fn stage_evals_claude_config() -> Option<PathBuf> {
+    let dir = evals_claude_config_dir()?;
+    let source = crate::claude_drive::ambient_claude_config_root()?;
+    std::fs::create_dir_all(&dir).ok()?;
+    // A stage interrupted by a dead runner leaves its temp behind; a stage
+    // past this age sweeps it. A live stage's temp is seconds old and is
+    // never swept mid-write.
+    let now = std::time::SystemTime::now();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if !name.to_string_lossy().contains(".stage-") {
+                continue;
+            }
+            let stale = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|m| now.duration_since(m).ok())
+                .is_some_and(|age| age >= STAGE_MIN_AGE);
+            if stale {
+                std::fs::remove_file(entry.path()).ok();
+            }
+        }
+    }
+    static STAGE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let tag = format!(
+        "{}-{}",
+        std::process::id(),
+        STAGE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    for name in STAGED_STATE_FILES {
+        let from = source.join(name);
+        let Ok(bytes) = std::fs::read(&from) else {
+            continue;
+        };
+        let tmp = dir.join(format!("{name}.stage-{tag}"));
+        if std::fs::write(&tmp, &bytes).is_ok() {
+            std::fs::rename(&tmp, dir.join(name)).ok();
+        } else {
+            std::fs::remove_file(&tmp).ok();
+        }
+    }
+    for name in MIRRORED_CONTEXT_ENTRIES {
+        let from = source.join(name);
+        if !from.exists() {
+            continue;
+        }
+        let to = dir.join(name);
+        if std::fs::symlink_metadata(&to)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        std::os::unix::fs::symlink(&from, &to).ok();
+    }
+    Some(dir)
+}
+
+/// The state files a pinned worker needs copied to run headless.
+const STAGED_STATE_FILES: [&str; 3] = [".credentials.json", ".claude.json", "settings.json"];
+
+/// How old a stage temp must read before a sweep calls it abandoned and not
+/// a write still settling (the same bound the Claude temp reaper holds).
+const STAGE_MIN_AGE: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// The context entries a pinned worker reads through symlinks to the ambient
+/// root, so a capability worker keeps the installed plugin and the user's
+/// global memory. A golden fence changes none of this: it already ran with
+/// the user's memory loaded and its plugins off through the settings gate.
+const MIRRORED_CONTEXT_ENTRIES: [&str; 5] =
+    ["plugins", "commands", "agents", "skills", "CLAUDE.md"];
 
 /// A `--cwd` naming a repo no project declares pins the worktree policy to
 /// `never` for this spawn and prints the receipt. An operator-set policy wins.
@@ -690,6 +818,156 @@ mod tests {
         assert_eq!(granted_dirs(cwd, false), worker_writable_dirs(cwd));
     }
 
+    /// One env pin that restores the previous value on drop. Scoped here so
+    /// the seam test does not depend on another module's fixture.
+    struct EnvPin(&'static str, Option<std::ffi::OsString>);
+
+    impl EnvPin {
+        fn set(name: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let old = std::env::var_os(name);
+            std::env::set_var(name, value);
+            EnvPin(name, old)
+        }
+    }
+
+    impl Drop for EnvPin {
+        fn drop(&mut self) {
+            match self.1.take() {
+                Some(v) => std::env::set_var(self.0, v),
+                None => std::env::remove_var(self.0),
+            }
+        }
+    }
+
+    #[test]
+    fn the_vault_slice_beside_a_vault_plans_dir_is_granted_and_a_covered_parent_is_not() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let base = std::env::temp_dir().join(format!("fno-seam-vault-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let proj = base.join("proj");
+        std::fs::create_dir_all(proj.join(".fno")).unwrap();
+        let config = base.join("config.toml");
+
+        // Scenario A: a vault plans dir grants the slice beside it.
+        let plans = base.join("vault/internal/fno/plans");
+        std::fs::create_dir_all(&plans).unwrap();
+        std::fs::write(
+            &config,
+            format!(
+                "plans_dir = \"{}\"\n\n[project]\nid = \"fno\"\n",
+                plans.display()
+            ),
+        )
+        .unwrap();
+        let _cfg = EnvPin::set("FNO_CONFIG", &config);
+        let _state = EnvPin::set("FNO_STATE_DIR", &base.join("state"));
+        let dirs = worker_writable_dirs(&proj);
+        let slice = plans
+            .parent()
+            .unwrap()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            dirs.contains(&slice),
+            "the vault slice rides the grant: {dirs:?}"
+        );
+
+        // Scenario B: a plans dir inside the state root adds no parent grant.
+        let covered = base.join("state/spaces/fno/plans");
+        std::fs::create_dir_all(&covered).unwrap();
+        std::fs::write(
+            &config,
+            format!(
+                "plans_dir = \"{}\"\n\n[project]\nid = \"fno\"\n",
+                covered.display()
+            ),
+        )
+        .unwrap();
+        let dirs = worker_writable_dirs(&proj);
+        let covered_str = covered
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let slice_str = covered.parent().unwrap().to_string_lossy().into_owned();
+        assert!(
+            dirs.contains(&covered_str),
+            "the covered plans dir still rides: {dirs:?}"
+        );
+        assert!(
+            !dirs.contains(&slice_str),
+            "no parent already under a grant joins: {dirs:?}"
+        );
+
+        // Scenario C: a plans dir whose leaf is not `plans` grants no parent.
+        let shallow = base.join("shallow/plans-dir");
+        std::fs::create_dir_all(&shallow).unwrap();
+        std::fs::write(
+            &config,
+            format!(
+                "plans_dir = \"{}\"\n\n[project]\nid = \"fno\"\n",
+                shallow.display()
+            ),
+        )
+        .unwrap();
+        let dirs = worker_writable_dirs(&proj);
+        let shallow_str = shallow
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let shallow_parent = shallow
+            .parent()
+            .unwrap()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            dirs.contains(&shallow_str),
+            "the plans dir itself still rides: {dirs:?}"
+        );
+        assert!(
+            !dirs.contains(&shallow_parent),
+            "no parent of a non-plans-leaf dir joins: {dirs:?}"
+        );
+
+        // Scenario D: a plans leaf under a slice not named for the project
+        // grants no parent.
+        let wide = base.join("wide/plans");
+        std::fs::create_dir_all(&wide).unwrap();
+        std::fs::write(
+            &config,
+            format!(
+                "plans_dir = \"{}\"\n\n[project]\nid = \"fno\"\n",
+                wide.display()
+            ),
+        )
+        .unwrap();
+        let dirs = worker_writable_dirs(&proj);
+        let wide_str = wide.canonicalize().unwrap().to_string_lossy().into_owned();
+        let wide_parent = wide
+            .parent()
+            .unwrap()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            dirs.contains(&wide_str),
+            "the plans dir still rides: {dirs:?}"
+        );
+        assert!(
+            !dirs.contains(&wide_parent),
+            "no parent outside the project-named slice joins: {dirs:?}"
+        );
+        std::fs::remove_dir_all(&base).ok();
+    }
+
     #[test]
     fn only_a_bounded_codex_code_spawn_needs_the_grant_and_the_probe() {
         let code = |extra: &[&str]| {
@@ -746,5 +1024,78 @@ mod tests {
             None
         );
         std::fs::remove_file(&file).ok();
+    }
+
+    #[test]
+    fn evals_sandbox_resolves_under_the_state_dir() {
+        let state = tempfile::tempdir().expect("tempdir");
+        // SAFETY: single-key env write, restored before the test returns; the
+        // crate's other env-scoped tests hold the same contract.
+        let previous = std::env::var_os("FNO_STATE_DIR");
+        unsafe { std::env::set_var("FNO_STATE_DIR", state.path()) };
+        assert_eq!(
+            evals_claude_config_dir(),
+            Some(state.path().join("evals").join("claude-config"))
+        );
+        match previous {
+            Some(v) => unsafe { std::env::set_var("FNO_STATE_DIR", v) },
+            None => unsafe { std::env::remove_var("FNO_STATE_DIR") },
+        }
+    }
+
+    #[test]
+    fn staging_copies_the_ambient_auth_files_into_the_sandbox() {
+        let state = tempfile::tempdir().expect("tempdir");
+        let ambient = tempfile::tempdir().expect("tempdir");
+        std::fs::write(ambient.path().join(".credentials.json"), br#"{"auth":1}"#).unwrap();
+        std::fs::write(
+            ambient.path().join(".claude.json"),
+            br#"{"onboarded":true}"#,
+        )
+        .unwrap();
+        std::fs::write(ambient.path().join("settings.json"), br#"{"model":"opus"}"#).unwrap();
+        let plugins = ambient.path().join("plugins");
+        std::fs::create_dir_all(&plugins).unwrap();
+        std::fs::write(ambient.path().join("unrelated.txt"), b"skip").unwrap();
+        // SAFETY: same single-key contract as the resolver test above.
+        let state_previous = std::env::var_os("FNO_STATE_DIR");
+        let config_previous = std::env::var_os("CLAUDE_CONFIG_DIR");
+        unsafe {
+            std::env::set_var("FNO_STATE_DIR", state.path());
+            std::env::set_var("CLAUDE_CONFIG_DIR", ambient.path());
+        }
+        let staged = stage_evals_claude_config().expect("staged sandbox");
+        assert_eq!(staged, state.path().join("evals").join("claude-config"));
+        // An abandoned temp from a dead runner sweeps on a later stage; a
+        // fresh temp (a live stage) survives.
+        let orphan = staged.join(".claude.json.stage-dead");
+        std::fs::write(&orphan, b"{}").unwrap();
+        {
+            let f = std::fs::File::options().write(true).open(&orphan).unwrap();
+            f.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(7200))
+                .unwrap();
+        }
+        let fresh = staged.join(".credentials.json.stage-live");
+        std::fs::write(&fresh, b"{}").unwrap();
+        assert!(stage_evals_claude_config().is_some());
+        assert!(!orphan.exists());
+        assert!(fresh.exists());
+        std::fs::remove_file(&fresh).ok();
+        let creds = std::fs::read(staged.join(".credentials.json")).unwrap();
+        assert_eq!(creds, br#"{"auth":1}"#);
+        let onboarding = std::fs::read(staged.join(".claude.json")).unwrap();
+        assert_eq!(onboarding, br#"{"onboarded":true}"#);
+        assert!(!staged.join("unrelated.txt").exists());
+        let link = std::fs::read_link(staged.join("plugins")).expect("plugins symlink");
+        assert_eq!(link, plugins);
+        assert!(staged.join("settings.json").is_file());
+        match state_previous {
+            Some(v) => unsafe { std::env::set_var("FNO_STATE_DIR", v) },
+            None => unsafe { std::env::remove_var("FNO_STATE_DIR") },
+        }
+        match config_previous {
+            Some(v) => unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", v) },
+            None => unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") },
+        }
     }
 }

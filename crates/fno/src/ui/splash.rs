@@ -209,6 +209,19 @@ fn footer_segs(version: &str, dim: CtColor) -> Vec<Seg> {
     segs
 }
 
+/// Seconds the mark plays before it holds still.
+pub const MARK_SECS: f64 = MARK_PLAY_SECS;
+
+/// The mark as ink cells at `t` seconds (`None` = the finished mark), for a
+/// surface that is not a terminal: one `bool` per cell, 8 rows, two cells to
+/// a pixel. The desktop app paints the same frames the terminal splash plays.
+pub fn mark_cells(t: Option<f64>) -> Vec<Vec<bool>> {
+    mark_rows(t)
+        .iter()
+        .map(|row| row.chars().map(|c| c == '█').collect())
+        .collect()
+}
+
 /// The frame's visual rows: 8 block rows (F + gap + stamp) plus the footer
 /// on the final frame.
 fn visual_rows(frame: Frame, version: &str, dim: CtColor) -> Vec<Vec<Seg>> {

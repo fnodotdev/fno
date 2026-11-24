@@ -30,6 +30,7 @@ pub fn dispatch(command: &str, rest: &[String]) -> Option<i32> {
 fn run_visual_door(rest: &[String]) -> i32 {
     match rest.first().map(String::as_str) {
         Some("frames") => crate::frames::run_frames(rest),
+        Some("shot-save") => crate::shot_save::run_shot_save(rest),
         _ => crate::visual_screen::run_critique_prep(rest),
     }
 }

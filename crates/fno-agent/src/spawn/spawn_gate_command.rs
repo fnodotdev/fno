@@ -334,7 +334,7 @@ fn str_of(payload: &Value, key: &str) -> String {
         .to_string()
 }
 
-fn opt_str_of(payload: &Value, key: &str) -> Option<String> {
+pub(crate) fn opt_str_of(payload: &Value, key: &str) -> Option<String> {
     payload
         .get(key)
         .and_then(Value::as_str)

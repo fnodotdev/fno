@@ -208,6 +208,8 @@ pub enum Item {
         part: String,
         text: String,
         md: OnceCell<Vec<Block>>,
+        /// A redacted block: the harness never sends its text.
+        redacted: bool,
     },
     Tool {
         call_id: String,
@@ -234,10 +236,15 @@ impl Item {
     }
 }
 
-fn text_item(part: String, text: String, thinking: bool) -> Item {
+fn text_item(part: String, text: String, thinking: bool, redacted: bool) -> Item {
     let md = OnceCell::new();
     if thinking {
-        Item::Thinking { part, text, md }
+        Item::Thinking {
+            part,
+            text,
+            md,
+            redacted,
+        }
     } else {
         Item::Text { part, text, md }
     }
@@ -373,8 +380,10 @@ impl Conversation {
                 content: Content::of(&parts),
                 meta: origin == UserOrigin::Meta,
             },
-            ChatBody::TextStarted { part } => text_item(part, String::new(), false),
-            ChatBody::ThinkingStarted { part, .. } => text_item(part, String::new(), true),
+            ChatBody::TextStarted { part } => text_item(part, String::new(), false, false),
+            ChatBody::ThinkingStarted { part, redacted } => {
+                text_item(part, String::new(), true, redacted)
+            }
             ChatBody::TextDelta { part, text } => return Some(self.append(part, text, false)),
             ChatBody::ThinkingDelta { part, text } => return Some(self.append(part, text, true)),
             ChatBody::TextEnded { .. }
@@ -467,9 +476,9 @@ impl Conversation {
             .rev()
             .find_map(|(i, it)| match it {
                 Item::Text { part: p, text, md } if !thinking && *p == part => Some((i, text, md)),
-                Item::Thinking { part: p, text, md } if thinking && *p == part => {
-                    Some((i, text, md))
-                }
+                Item::Thinking {
+                    part: p, text, md, ..
+                } if thinking && *p == part => Some((i, text, md)),
                 _ => None,
             });
         if let Some((i, text, md)) = open {
@@ -477,7 +486,7 @@ impl Conversation {
             md.take();
             return i;
         }
-        self.items.push(text_item(part, delta, thinking));
+        self.items.push(text_item(part, delta, thinking, false));
         self.items.len() - 1
     }
 }
@@ -580,5 +589,33 @@ mod tests {
         );
         assert!(matches!(&conv.items[3], Item::Line(l) if l.starts_with("from_a_newer_server: ")));
         assert_eq!(conv.items.len(), 4);
+    }
+
+    #[test]
+    fn thinking_started_keeps_its_redacted_flag() {
+        let line = |seq: u64, body: serde_json::Value| json!({"seq": seq, "source": {"type": "line", "offset": seq}, "body": body});
+        let push = |conv: &mut Conversation, seq: u64, body: serde_json::Value| {
+            conv.push(serde_json::from_value(line(seq, body)).unwrap())
+                .unwrap();
+        };
+        let mut conv = Conversation::default();
+        push(
+            &mut conv,
+            0,
+            json!({"kind": "thinking_started", "part": "p", "redacted": true}),
+        );
+        assert!(matches!(
+            &conv.items[0],
+            Item::Thinking { redacted: true, text, .. } if text.is_empty()
+        ));
+        push(
+            &mut conv,
+            1,
+            json!({"kind": "thinking_started", "part": "q", "redacted": false}),
+        );
+        assert!(matches!(
+            &conv.items[1],
+            Item::Thinking { redacted: false, text, .. } if text.is_empty()
+        ));
     }
 }

@@ -51,10 +51,10 @@
   <string><CASE>/home</string>
 
   <key>StandardOutPath</key>
-  <string><CASE>/home/.fno/logs/pr-watcher.out.log</string>
+  <string><CASE>/home/.local/state/fno/logs/pr-watcher.out.log</string>
 
   <key>StandardErrorPath</key>
-  <string><CASE>/home/.fno/logs/pr-watcher.err.log</string>
+  <string><CASE>/home/.local/state/fno/logs/pr-watcher.err.log</string>
 </dict>
 </plist>
 

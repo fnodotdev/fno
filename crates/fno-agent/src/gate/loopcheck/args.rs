@@ -56,6 +56,10 @@ pub(crate) struct LoopCheckArgs {
     /// so every existing caller keeps its exact behavior.
     pub(super) harness: Option<String>,
     pub(super) harness_session: Option<String>,
+    /// Who owns plain continuation (`--continuation-owner`): `loop_check`
+    /// (default) or `goal`, when a provider goal does. A goal-owned no-intent
+    /// stop is allowed; every done read still runs.
+    pub(super) continuation_owner: String,
 }
 
 pub(crate) fn parse_args(args: &[String]) -> Result<LoopCheckArgs, String> {
@@ -86,11 +90,9 @@ pub(crate) fn parse_args(args: &[String]) -> Result<LoopCheckArgs, String> {
         .and_then(|v| v.parse::<u64>().ok());
 
     // Skip the "loop-check" command itself if present
-    let args = if args.first().map(|s| s.as_str()) == Some("loop-check") {
-        &args[1..]
-    } else {
-        args
-    };
+    let args = args
+        .strip_prefix(&["loop-check".to_string()])
+        .unwrap_or(args);
 
     let mut i = 0;
     while i < args.len() {
@@ -179,7 +181,16 @@ pub(crate) fn parse_args(args: &[String]) -> Result<LoopCheckArgs, String> {
         read_timeout_ms,
         harness,
         harness_session,
+        continuation_owner: flag_value(args, "--continuation-owner")
+            .unwrap_or_else(|| "loop_check".to_string()),
     })
+}
+
+/// The value of `flag` in either form, wherever it sits in `args`.
+fn flag_value(args: &[String], flag: &str) -> Option<String> {
+    args.iter()
+        .enumerate()
+        .find_map(|(mut i, arg)| try_flag_value(arg, flag, args, &mut i))
 }
 
 pub(crate) fn try_flag_value(

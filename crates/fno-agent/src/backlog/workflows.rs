@@ -194,7 +194,7 @@ pub(crate) fn list_at<'a>(row: &'a Value, key: &str) -> Vec<&'a str> {
 
 /// Ids of the owner's live membership children; contained children never
 /// count (the _live_child_ids twin).
-fn live_child_ids(entries: &[Value], owner_id: &str) -> Vec<String> {
+pub(crate) fn live_child_ids(entries: &[Value], owner_id: &str) -> Vec<String> {
     let mut live = Vec::new();
     for e in entries {
         if !e.is_object() {
@@ -867,6 +867,11 @@ fn close_node(args: &DoneArgs, task_id: &str) -> i32 {
     let rollup = rollup_from_ledger(&node);
     let env_session = crate::identity::claude_env_session_id();
 
+    // Holding-lead stamp: the live team record at this instant IS the record
+    // at completed_at. Gathered pre-lock like the cost rollup; inserted
+    // insert-only inside the mutation, never rewritten.
+    let lead_stamp = super::holding_lead::stamp_at_close(node, &rows);
+
     // Mutation under the store lock.
     let not_found = RefCell::new(false);
     let raced = RefCell::new(false);
@@ -901,6 +906,13 @@ fn close_node(args: &DoneArgs, task_id: &str) -> i32 {
         }
         apply_completion_fields(&mut rows[idx], evidence_present);
         let obj = rows[idx].as_object_mut().expect("row is an object");
+        if obj
+            .get(super::holding_lead::FIELD)
+            .map(Value::is_null)
+            .unwrap_or(true)
+        {
+            obj.insert(super::holding_lead::FIELD.into(), lead_stamp.clone());
+        }
         if let Some(note) = args
             .note
             .as_deref()

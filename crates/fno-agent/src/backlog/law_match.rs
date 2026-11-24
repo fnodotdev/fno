@@ -434,7 +434,7 @@ pub(crate) fn ask_answer(req: &AskRequest) -> AskAnswer {
     let nearby = nearby_tier(req, &exact);
     let uncited: Vec<String> = nearby
         .iter()
-        .filter(|h| !req.question.contains(&h.decision_id))
+        .filter(|h| !crate::numbers::names_id(&req.question, &h.decision_id))
         .map(|h| h.decision_id.clone())
         .collect();
     let nearby_notice = if uncited.is_empty() {
@@ -970,18 +970,29 @@ const COORDINATION_MARKERS: &[&str] = &[
     "for this change",
 ];
 
-/// `^d-[0-9a-f]{8}$`, the shape `law.py` enforced on `--supersedes`.
+/// A number key (`D142`), or the `^d-[0-9a-f]{8}$` of a row from before it.
 pub(crate) fn is_decision_id(s: &str) -> bool {
+    if crate::numbers::is_label_key(s) {
+        return true;
+    }
     let Some(rest) = s.strip_prefix("d-") else {
         return false;
     };
     rest.len() == 8 && rest.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-/// `^[a-z][a-z0-9]{0,7}-[0-9a-f]{4,8}$`, the node-id shape
-/// `parse-claims-arg.sh` uses. Measured 2026-09-14: the shape matches 3 of
-/// 59 live law subjects, and all 3 are real node ids.
+/// The node-id shape `scripts/lib/node-id.sh` classifies: dashed hex
+/// `^[a-z][a-z0-9]{0,7}-[0-9a-f]{4,8}$`, plus the sequential arm the shell
+/// gate reads only under `backlog.id_mode = "sequential"`. Measured
+/// 2026-09-14: the shape matches 3 of 59 live law subjects, and all 3 are
+/// real node ids.
 pub(crate) fn matches_node_id_shape(s: &str) -> bool {
+    matches_node_id_shape_under(s, super::node_ref::sequential_prefix().as_deref())
+}
+
+/// `matches_node_id_shape` under an explicit mode: `Some("t")` reads
+/// `t-12`, `None` is hex. The seam the tests drive.
+fn matches_node_id_shape_under(s: &str, seq_prefix: Option<&str>) -> bool {
     let Some((prefix, suffix)) = s.split_once('-') else {
         return false;
     };
@@ -996,7 +1007,18 @@ pub(crate) fn matches_node_id_shape(s: &str) -> bool {
         return false;
     }
     let sfx = suffix.as_bytes();
-    (4..=8).contains(&sfx.len()) && sfx.iter().all(|b| b.is_ascii_hexdigit())
+    if (4..=8).contains(&sfx.len()) && sfx.iter().all(|b| b.is_ascii_hexdigit()) {
+        return true;
+    }
+    match seq_prefix {
+        Some(seq) => {
+            (1..=7).contains(&suffix.len())
+                && !suffix.starts_with('0')
+                && suffix.bytes().all(|b| b.is_ascii_digit())
+                && prefix == seq
+        }
+        None => false,
+    }
 }
 
 /// `^pr-[0-9]+$`.
@@ -1647,9 +1669,38 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
     Ok(door)
 }
 
-pub(crate) fn mint_decision_id() -> String {
-    // 'd-<hex>', matching decide/__init__.py::mint_decision_id (8 hex chars).
-    format!("d-{}", random_hex8())
+/// Hold a ruling the primary could not number; the beat records it.
+pub(crate) fn queue_ruling(
+    event: Value,
+    journal: std::path::PathBuf,
+    sign: bool,
+    after: crate::numbers::mint::After,
+) -> i32 {
+    let queued = crate::numbers::mint::Queued::Decision {
+        event,
+        journal,
+        index: decision_index::default_state_path("decisions.jsonl"),
+        graph: crate::graph_get::default_graph_path(),
+        sign,
+        after,
+    };
+    if let Err(error) = crate::numbers::mint::queue(&queued) {
+        return door_refuse(&format!("the ruling could not be queued ({error})"));
+    }
+    eprintln!(
+        "decide: {}. The primary is unreachable, so this ruling has no id and binds nothing yet. \
+         The next daemon beat that reaches the primary records it; do not record it again.",
+        crate::numbers::mint::QUEUED
+    );
+    println!("{}", crate::numbers::mint::QUEUED);
+    0
+}
+
+/// The work that follows a recorded law, at the door or at the drain.
+pub(crate) fn after_law(decision_id: &str, subject: &str, decision: &str, sweep: &[String]) {
+    crate::law_reach::sweep_after_law(decision_id, subject, decision, sweep);
+    crate::law_reach::mail_near_leads(decision_id, subject, decision);
+    crate::decision_log::refresh();
 }
 
 /// 'r-<hex>', the Python `decision_retracted` builder's shape.
@@ -1936,6 +1987,43 @@ pub(crate) fn door_refuse(message: &str) -> i32 {
     3
 }
 
+/// The no-conflict refusal: the same text whether the index read empty or
+/// the store is absent, because both prove the same fact: nothing live
+/// conflicts with this ruling, and a law only settles a conflict between
+/// rulings. The pointer names the plain decision door. The scope rides the
+/// message because the decide skill's step-3 read is machine-wide while the
+/// door's conflict count is scope-equal, so a cross-project law can read
+/// `single` in the skill and refuse here.
+fn no_conflict_refusal(subject: &str, scope: &str, missing_store: bool) -> String {
+    let store = if missing_store {
+        " (the decision store does not exist yet)"
+    } else {
+        ""
+    };
+    let supersede_hint = if missing_store {
+        ""
+    } else {
+        " If this ruling retires an existing decision under another spelling, pass --supersedes <id>."
+    };
+    format!(
+        "no live law under the subject {subject:?} conflicts with this ruling (searched scope \
+         {scope}){store}, and a law only settles a conflict between rulings. Record a plain \
+         decision instead: fno inbox decide {subject:?} \"<decision>\" --audience internal \
+         --why \"<why>\" --rationale \"<why>\" (--expiry never makes one standing).{supersede_hint}"
+    )
+}
+
+/// Whether the machine holds no decision store at all: no db twin at the
+/// graph anchor, no JSONL, no journal side-store. Absence proves the
+/// subject carries no live law; a present-but-unreadable store proves
+/// nothing and skips the gate.
+fn decision_store_absent() -> bool {
+    let jsonl = decision_index::default_state_path("decisions.jsonl");
+    !(crate::backlog::database_path(&crate::graph_get::default_graph_path()).exists()
+        || jsonl.exists()
+        || crate::event_store::store_path(&jsonl).exists())
+}
+
 /// The door body, gate by gate in `record_command`'s order. Prints the
 /// decision id on stdout alone; every refusal and hint rides stderr.
 fn run_record_door(args: &[String], stdin_text: &str) -> i32 {
@@ -2174,6 +2262,19 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
                     })
                     .collect();
                 match same.len() {
+                    // Nothing live under this subject means nothing conflicts,
+                    // and a law only settles a conflict between rulings. The
+                    // plain decision door records it; this door stays
+                    // conflict-only. A PR door subject (merge-grant,
+                    // merge-freeze lift, pr-hold) is a per-head machine
+                    // contract, never a policy law, so it keeps the old path.
+                    0 if !decision_index::is_pr_door_subject(&door.subject) => {
+                        return door_refuse(&no_conflict_refusal(
+                            door.subject.trim(),
+                            &scope,
+                            false,
+                        ))
+                    }
                     0 => auto_superseded = None,
                     1 => {
                         auto_superseded = Some(same[0].clone());
@@ -2190,6 +2291,17 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
                         ));
                     }
                 }
+            }
+            // A store that is ABSENT proves the subject carries no live law
+            // (the plain decision door bootstraps the store), so the refusal
+            // fires on a fresh install too. A store that exists but reads
+            // damaged proves nothing: the gate skips, and a legal write never
+            // blocks on a broken read.
+            Err(_)
+                if decision_store_absent()
+                    && !decision_index::is_pr_door_subject(&door.subject) =>
+            {
+                return door_refuse(&no_conflict_refusal(door.subject.trim(), &scope, true));
             }
             Err(_) => auto_superseded = None,
         }
@@ -2236,12 +2348,14 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
     ) {
         return door_refuse(&message);
     }
-    let decision_id = mint_decision_id();
+    let decision_id = match crate::numbers::mint::mint_key() {
+        Ok(key) => key,
+        Err(error) => return door_refuse(&error.to_string()),
+    };
     let ts = now_iso();
     // The envelope mirrors the Python `operator_decision` builder: a key
     // appears only when its value is set; text fields cap at 2000 chars.
     let mut data = json!({
-        "decision_id": decision_id,
         "decision": text_cap(&decision, 2000),
         "authority_source": authority,
         "graduation": graduation,
@@ -2341,17 +2455,22 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
     }
     if let Some(map) = data.as_object_mut() {
         crate::identity::stamp_person(map);
-        crate::identity::sign_law_row(map, "operator_decision", &ts);
+        if let Some(id) = &decision_id {
+            map.insert("decision_id".into(), json!(id));
+            // The signature covers the id, so a queued row signs at the drain.
+            crate::identity::sign_law_row(map, "operator_decision", &ts);
+        }
     }
     let envelope = json!({"ts": ts, "type": "operator_decision", "source": "target", "data": data});
+    let Some(decision_id) = decision_id else {
+        let after = crate::numbers::mint::After::Law {
+            sweep: door.sweep.clone(),
+        };
+        return queue_ruling(envelope, project_events_journal(), true, after);
+    };
     if let Err(code) = append_decision(&envelope, &decision_id) {
         return code;
     }
-    // The receipt's short number, minted in step with the record so the
-    // caller leaves with it. Advisory and idempotent; the daemon beat mints
-    // the same key anyway.
-    let graph = crate::backlog::database_path(&crate::graph_get::default_graph_path());
-    let _ = crate::numbers::mint_now(&graph, &decision_id);
     let shown = crate::numbers::display(&decision_id);
     if matches_node_id_shape(&door.subject.to_lowercase()) {
         // The node-view projection (`_project`) is Python-side and not ported;
@@ -2369,9 +2488,7 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
     if let Some(old) = &auto_superseded {
         eprintln!("superseded {}", crate::numbers::display(old));
     }
-    crate::law_reach::sweep_after_law(&decision_id, door.subject.trim(), &decision, &door.sweep);
-    crate::law_reach::mail_near_leads(&decision_id, door.subject.trim(), &decision);
-    crate::decision_log::refresh();
+    after_law(&decision_id, door.subject.trim(), &decision, &door.sweep);
     // The best-effort rule-time join, on stderr: near laws first, then the
     // open questions the new law may answer.
     let law_row = LawRow {
@@ -3894,6 +4011,31 @@ pub(crate) mod scope_tests {
 
         let env = DoorEnv::new();
         crate::paths::pin_test_claims_root(env.0.path());
+        // Each expecting-0 record rides its own live same-subject seed: the
+        // auto-supersede path reads it, so the record is a conflict
+        // resolution past the door's no-conflict refusal. A superseded row
+        // is no longer a recoverable target, so one shared seed dies with
+        // the first record that supersedes it. Seeds commit through the
+        // ingest path, and their ts sits after the law-lane cutover but
+        // before the proof cutover, so a wide seed is never withheld as
+        // unproven.
+        let seed = |id: &str, subject: &str, reach: &str| {
+            let line = format!(
+                "{{\"ts\":\"2026-08-29T19:00:00Z\",\"type\":\"operator_decision\",\"source\":\"test\",\
+                 \"data\":{{\"decision_id\":\"{id}\",\"subject\":\"{subject}\",\
+                 \"decision\":\"The {subject} seed.\",\"authority_source\":\"operator\",\
+                 \"reach\":\"{reach}\"}}}}"
+            );
+            crate::event_store::append_envelope(&env.0.path().join("decisions.jsonl"), &line, None)
+                .expect("seeds");
+        };
+        seed("d-1eed0001", "project-one", "project:demo");
+        let mine = crate::claims::machine_id();
+        if !mine.is_empty() {
+            seed("d-2eed0002", "machine-one", &format!("machine:{mine}"));
+        }
+        seed("d-3eed0003", "wide-two", "global");
+        seed("d-4eed0004", "typo-one", "user:nobody-zz9");
         let operator = Caller::as_authority("operator");
         let record = |text: &str, widen: Option<Widen>| {
             let mut d = door(text, text);
@@ -3908,7 +4050,6 @@ pub(crate) mod scope_tests {
         assert_eq!(record("other-one", other), 3, "another user is wide too");
         // A project law and this machine's own scope need no name.
         assert_eq!(record("project-one", None), 0);
-        let mine = crate::claims::machine_id();
         let own = record("machine-one", Some(Widen::Machine(None)));
         assert_eq!(
             own,
@@ -4039,8 +4180,23 @@ pub(crate) mod scope_tests {
         assert_eq!(code, 3, "unmeasured claim refused");
         assert!(env.index_text().is_empty());
 
+        // A recoverable seed row: the successful record carries an explicit
+        // supersession target, a conflict resolution, past the door's
+        // no-conflict refusal. The seed commits through the ingest path for
+        // the same reason the scope test's seed does.
+        crate::event_store::append_envelope(
+            &env.0.path().join("decisions.jsonl"),
+            concat!(
+                "{\"ts\":\"2026-08-29T19:00:00Z\",\"type\":\"operator_decision\",\"source\":\"test\",",
+                "\"data\":{\"decision_id\":\"d-e1e1e111\",\"subject\":\"evidence-seed\",",
+                "\"decision\":\"The evidence seed.\",\"authority_source\":\"chat_attested\"}}"
+            ),
+            None,
+        )
+        .expect("seeds");
         let mut d = door("territory-resolver", "advance.py is 200 lines");
         d.reads = vec!["head -5 advance.py".to_string()];
+        d.supersedes = Some("d-e1e1e111".to_string());
         let code = record_door_write(
             d,
             "advance.py is 200 lines".to_string(),
@@ -4050,5 +4206,88 @@ pub(crate) mod scope_tests {
         let index = env.index_text();
         assert!(index.contains("\"reads\":[{"), "{index}");
         assert!(index.contains("head -5 advance.py"), "{index}");
+    }
+
+    #[test]
+    fn a_law_with_no_conflict_refuses_and_a_conflict_records() {
+        let env = DoorEnv::new();
+        crate::paths::pin_test_claims_root(env.0.path());
+        // Missing store: absence proves no live law, so the refusal fires on
+        // a fresh install too. The plain decision door bootstraps the store.
+        let code = record_door_write(
+            door("fresh-subject", "Nothing live conflicts."),
+            "Nothing live conflicts.".to_string(),
+            &Caller::as_authority("operator"),
+        );
+        assert_eq!(code, 3, "a no-conflict law refuses");
+        assert!(env.index_text().is_empty(), "nothing recorded");
+
+        // A store holding another subject's law: still no live law under
+        // this subject. The seed commits through the ingest path.
+        crate::event_store::append_envelope(
+            &env.0.path().join("decisions.jsonl"),
+            concat!(
+                "{\"ts\":\"2026-08-29T19:00:00Z\",\"type\":\"operator_decision\",\"source\":\"test\",",
+                "\"data\":{\"decision_id\":\"d-badc0de1\",\"subject\":\"other-subject\",",
+                "\"decision\":\"The other subject's law.\",\"authority_source\":\"operator\"}}"
+            ),
+            None,
+        )
+        .expect("seeds");
+        let code = record_door_write(
+            door("fresh-subject", "Still nothing live under this subject."),
+            "Still nothing live under this subject.".to_string(),
+            &Caller::as_authority("operator"),
+        );
+        assert_eq!(code, 3, "another subject's law is still no conflict");
+
+        // The admit arm: a live law under the subject records, as an
+        // auto-supersession. The seed's reach names the door's project scope
+        // so the scope-equal filter sees it. This seed appends beside the
+        // prior one instead of rewriting the file under its store.
+        crate::event_store::append_envelope(
+            &env.0.path().join("decisions.jsonl"),
+            concat!(
+                "{\"ts\":\"2026-08-29T19:00:00Z\",\"type\":\"operator_decision\",\"source\":\"test\",",
+                "\"data\":{\"decision_id\":\"d-cafef00d\",\"subject\":\"fresh-subject\",",
+                "\"decision\":\"The law this ruling replaces.\",\"authority_source\":\"chat_attested\",",
+                "\"reach\":\"project:demo\"}}"
+            ),
+            None,
+        )
+        .expect("seeds");
+        let code = record_door_write(
+            door("fresh-subject", "The replacement ruling."),
+            "The replacement ruling.".to_string(),
+            &Caller::as_authority("operator"),
+        );
+        assert_eq!(code, 0, "a conflict records: {code}");
+        assert!(env.index_text().contains("The replacement ruling."));
+
+        // A PR door subject is a per-head machine contract: each fresh head
+        // records with no live law under it, on the old path.
+        let code = record_door_write(
+            door(
+                "merge-grant:o/r#2131@e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+                "Merge authorized for this head.",
+            ),
+            "Merge authorized for this head.".to_string(),
+            &Caller::as_authority("chat_attested"),
+        );
+        assert_eq!(code, 0, "a per-head door subject records: {code}");
+    }
+
+    #[test]
+    fn the_law_subject_shape_reads_sequential_ids_in_sequential_mode_only() {
+        // Hex mode: a digit tail is prose.
+        assert!(!matches_node_id_shape_under("t-15", None));
+        assert!(!matches_node_id_shape_under("wave-1", None));
+        // Sequential mode reads the configured prefix only.
+        assert!(matches_node_id_shape_under("t-15", Some("t")));
+        assert!(matches_node_id_shape_under("t-1", Some("t")));
+        // Refusals: another prefix, a zero lead, an over-long run.
+        assert!(!matches_node_id_shape_under("u-9", Some("t")));
+        assert!(!matches_node_id_shape_under("t-07", Some("t")));
+        assert!(!matches_node_id_shape_under("t-123456789", Some("t")));
     }
 }

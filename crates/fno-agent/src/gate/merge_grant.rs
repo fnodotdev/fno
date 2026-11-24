@@ -220,6 +220,11 @@ pub fn verdict_for_pr(
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
+    // The claim store keys node claims `node:<id>` while graph entries carry
+    // the bare id, so a bare lookup answered Free on a live row and Step 4
+    // transferred merge execution while the worker still held the claim.
+    // The one rewrite owner names the row every node-claim reader reads.
+    let claim_key = crate::backlog::node_ref::claim_key_for(&node_id);
 
     // Step 2: receipts on the do rows.
     let receipts = match do_row_receipts(node) {
@@ -238,7 +243,7 @@ pub fn verdict_for_pr(
         // The absent reading still names the liveness it saw: a free or stale
         // claim is the standing proof nobody is driving the node, so nothing
         // would merge this PR even if a receipt existed. Report, never grant.
-        let claim_str = claim_of(&node_id).as_str();
+        let claim_str = claim_of(&claim_key).as_str();
         return Verdict {
             state: ABSENT,
             reason: "no do row on the node records a merge grant".to_string(),
@@ -293,7 +298,7 @@ recorded {newest_stamp})"
     }
 
     // Step 4: only a positively not-live holder transfers execution.
-    let claim = claim_of(node_id.as_deref().unwrap_or(""));
+    let claim = claim_of(&claim_key);
     let claim_str = claim.as_str();
     if claim == Corrupted {
         return Verdict {
@@ -913,10 +918,11 @@ pub(crate) fn refusal_binds_current_session(session: Option<&str>) -> bool {
 
 /// The pure core: a refusal on an unattributed manifest binds any caller;
 /// an attributed refusal binds only a caller whose ambient session id
-/// matches the manifest's.
+/// matches the manifest's. Init writes a session it could not prove as the
+/// literal `null`, so that spelling is unattributed too.
 pub(crate) fn refusal_binds(session: Option<&str>, current: &[String]) -> bool {
     match session {
-        None => true,
+        None | Some("null") => true,
         Some(sess) => current
             .iter()
             .any(|cur| crate::claims::same_session_id(cur, sess)),

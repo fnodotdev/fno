@@ -482,8 +482,15 @@ pub fn claude_route(
 }
 
 /// The model pin every claude route carries: each model key names the
-/// model, and a `[1m]` model widens the auto-compact window to match.
+/// model, and a `[1m]` model widens the auto-compact window to match. A
+/// bare tier alias answers an empty pin: the settings env reaches the API
+/// verbatim and "opus" is not a model id there, while the argv pin is what
+/// the CLI resolves natively - on the native lane and behind a record whose
+/// endpoint is Anthropic's own alike.
 fn model_pin_env(model: &str) -> BTreeMap<String, String> {
+    if crate::model_env_scrub::TIER_ALIASES.contains(&model.to_ascii_lowercase().as_str()) {
+        return BTreeMap::new();
+    }
     let mut env: BTreeMap<String, String> = MODEL_ENV_KEYS
         .iter()
         .map(|k| (k.to_string(), model.to_string()))
@@ -524,7 +531,9 @@ pub fn claude_route_with(
     let record = match record_for(block, cwd, provider) {
         Some(record) => record,
         // Anthropic is a claude worker's own lane: no record, no endpoint and
-        // no key override, only the model pin `-H claude --model` sets.
+        // no key override, only the model pin `-H claude --model` sets. A
+        // bare tier alias rides nothing here (model_pin_env answers empty for
+        // one); the argv pin carries it.
         None if provider.eq_ignore_ascii_case("anthropic") && !model.is_empty() => {
             return ClaudeRoute::Routed {
                 env: model_pin_env(model),
@@ -728,6 +737,24 @@ mod tests {
                 for k in MODEL_ENV_KEYS {
                     assert_eq!(env.get(k).map(String::as_str), Some("claude-opus-5-5"));
                 }
+            }
+            ClaudeRoute::Skipped { notices } => panic!("anthropic is native: {notices:?}"),
+        }
+        // A bare tier alias never rides the env: the settings env reaches the
+        // API verbatim and "opus" is not a model id there (the 2026-11-17
+        // unrecognized_model launch death). The argv pin carries the alias and
+        // the CLI resolves it natively, so the env answer is empty.
+        match claude_route_with(
+            Some(&block),
+            Path::new("/nonexistent-fno-cwd"),
+            "anthropic",
+            "opus",
+            &RouteCtx::Peer("anthropic".to_string()),
+            &|_key: &str| None,
+        ) {
+            ClaudeRoute::Routed { env, notices, .. } => {
+                assert!(notices.is_empty(), "{notices:?}");
+                assert!(env.is_empty(), "{env:?}");
             }
             ClaudeRoute::Skipped { notices } => panic!("anthropic is native: {notices:?}"),
         }

@@ -844,6 +844,22 @@ fn run_items(home: &AgentsHome, cwd: &Path) -> i32 {
         crate::attention::attach_reach(&mut items, &registry);
     }
     crate::attention_arm::attach_numbers(&mut items);
+    // An ask waiting for the primary has no id to answer by, but it shows.
+    let db = crate::backlog::database_path(&crate::graph_get::default_graph_path());
+    for waiting in crate::numbers::mint::queued_questions(&db) {
+        items.push(crate::attention::AttentionItem {
+            id: format!("queued:{}", waiting.seq),
+            kind: "question".to_string(),
+            title: format!("{} ({})", waiting.title, crate::numbers::mint::QUEUED),
+            priority: "normal".to_string(),
+            created_at: waiting.ts,
+            subject: waiting.subject,
+            node: waiting.node,
+            state: "open".to_string(),
+            missing: vec!["number".to_string()],
+            ..Default::default()
+        });
+    }
     // The settled flag shares the sweep's question fold, rules and all. An
     // unreadable graph closes nothing.
     let facts = crate::question_sweep::read_closed_rung_facts(cwd, home);
@@ -1129,6 +1145,7 @@ fn run_archive(
             cap: crate::question_intake::QUESTION_CAP,
             provenance: json!({}),
             closed_by: Some("mux".to_string()),
+            closed_via_succession: None,
             caller,
             home: Some(home.clone()),
             journal_path: crate::paths::space_dir(cwd).join("events.jsonl"),

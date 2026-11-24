@@ -1,0 +1,35 @@
+mux serve
+mux where
+mux view
+mux retire-session
+mux thread reseat
+mux web reap
+mux web install-agent
+mux web uninstall-agent
+mux block pipe
+mux block annotate
+mux tab ls
+mux tab create
+mux tab rename
+mux tab join
+mux tab move
+mux tab close
+mux layout get
+mux layout apply
+mux layout graft
+mux workspace prune
+mux workspace restore
+mux workspace origin
+mux diag rows
+mux pane ls
+mux pane read
+mux pane run
+mux pane send
+mux pane wait
+mux pane kill
+mux pane claim
+mux pane release
+mux pane split
+mux pane break
+mux pane focus
+mux pane keeper list

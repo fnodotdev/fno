@@ -161,6 +161,10 @@ fn agent_row_unmeasured_renders_a_distinct_dim_glyph_from_exited() {
     assert_eq!(lattice_glyph(agent_lattice_state(&confirmed_dead)).0, '✗');
 
     let uncorroborated = AgentRow {
+        session_input_tokens: None,
+        session_output_tokens: None,
+        session_cache_read_tokens: None,
+        session_cache_write_tokens: None,
         portal: None,
         harness: None,
         model: None,
@@ -187,6 +191,10 @@ fn agent_row_unmeasured_renders_a_distinct_dim_glyph_from_exited() {
     // at all renders Unmeasured for the absence, which is the new
     // predicate, not the old bug.)
     let live_with_stale_bit = AgentRow {
+        session_input_tokens: None,
+        session_output_tokens: None,
+        session_cache_read_tokens: None,
+        session_cache_write_tokens: None,
         portal: None,
         harness: None,
         model: None,

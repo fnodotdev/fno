@@ -3241,51 +3241,16 @@ pub(crate) fn pr_bound_index(
 
 /// The main-repair exemption probe over the live graph: `None` when this
 /// PR's node carries the [`MAIN_REPAIR_TAG`], else the repair-lane sentence.
+/// The slice already carries tags and status on every row, so one read
+/// answers both the bound-node exemption and the lane sentence.
 fn main_repair_hold_probe(cwd: &Path, facts: &PrFacts) -> Option<String> {
     let graph_path = crate::org_board::scope::graph_json_path(cwd);
-    let Some(mut entries) = node_binding_entries(&graph_path, facts) else {
+    let Some(entries) = node_binding_entries(&graph_path, facts) else {
         return Some(format!(
             "the graph is unreadable; tag the repair node: \
              fno backlog update <node> tags+={MAIN_REPAIR_TAG}"
         ));
     };
-    // The lane search reads only the tagged nodes: the SQL-side tag read
-    // names them without materializing the graph, and a narrow id read
-    // brings their full rows in. Unreadable tag rows read as no lane, the
-    // sentence names it.
-    let lanes = match crate::graph_store::read_ids_with_tag(&graph_path, MAIN_REPAIR_TAG) {
-        Err(e) => {
-            return Some(format!(
-                "the graph is unreadable ({}); tag the repair node: \
-                 fno backlog update <node> tags+={MAIN_REPAIR_TAG}",
-                e
-            ))
-        }
-        Ok(lanes) => lanes,
-    };
-    let fresh: Vec<String> = lanes
-        .iter()
-        .filter(|(id, _)| {
-            !entries
-                .iter()
-                .any(|e| RowFacts::id_of(e) == Some(id.as_str()))
-        })
-        .map(|(id, _)| id.clone())
-        .collect();
-    if !fresh.is_empty() {
-        if let Ok(tagged) = crate::graph_store::read_rows_where(
-            &graph_path,
-            &crate::backlog::RowQuery {
-                filter: crate::backlog::api::NodeFilter {
-                    id_in: Some(fresh),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-        ) {
-            entries.extend(tagged);
-        }
-    }
     main_repair_hold_from_entries(&entries, facts)
 }
 
@@ -3355,17 +3320,21 @@ fn node_binding_probe(cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
 }
 
 /// The graph slice the binding decision reads, without materializing every
-/// node body: the light (id, cwd, project) projection the project detection
-/// walks, the nodes whose pull_requests rows name this PR (the SQL-narrowed
-/// read the grant ops share), and the exact-id rows the head ref and the
-/// closure line name. The union answers every question the full read
-/// answered for this PR; the rest of the store never enters the decision.
+/// node body: the light (id, cwd, project, tags, status) projection the
+/// project detection and the tag reads walk, the nodes whose pull_requests
+/// rows name this PR (the SQL-narrowed read the grant ops share), and the
+/// exact-id rows the head ref and the closure line name. tags and status
+/// ride on the projection because callers look rows up by id with a
+/// first-match find: the row they land on must answer the tag and done
+/// questions, or a tagged node reads as a tag-less twin of itself. The
+/// union answers every question the full read answered for this PR; the
+/// rest of the store never enters the decision.
 fn node_binding_entries(graph_path: &Path, facts: &PrFacts) -> Option<Vec<Value>> {
     let mut projection = crate::graph_store::read_rows_where(
         graph_path,
         &crate::backlog::RowQuery {
             fields: Some(
-                ["id", "cwd", "project"]
+                ["id", "cwd", "project", "tags", "status"]
                     .iter()
                     .map(|s| s.to_string())
                     .collect(),

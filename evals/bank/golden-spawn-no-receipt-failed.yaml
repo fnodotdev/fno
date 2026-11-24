@@ -1,0 +1,24 @@
+# Mined from a real correction row; `fno-agent evals candidates` finds it.
+id: golden-spawn-no-receipt-failed
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  You are the runner for a dispatched discuss request. Your spawn command has been running for 50 seconds: the process is alive, but its stdout holds zero bytes - no receipt line, no short_id, no reply. State the spawn's disposition.
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `disposition: <the one word the repo's spawn-receipt rules assign to a launch with no valid receipt>`. The second line is `rule: <the file in this repo that says it>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^disposition: *FAILED' && grep -Eiq 'receipts\\.md|SKILL\\.md|spawn-flow\\.md' decision.md && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq 'booting|in flight|pending|working|launched'"
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source: {kind: correction, ref: "corr:e4e8e603707247ec"}
+  quote: "no it didn't. i  don't think it's working."
+  expected: "Report the spawn FAILED - no valid receipt is FAILED, full stop - then read the raw output and the registry to prove no worker was created, and kill the wedged spawn process."
+  rule: "skills/agent/references/receipts.md: report only what spawn.sh actually captured; 'No valid receipt' is FAILED, full stop. Also skills/agent/SKILL.md: never fabricate a receipt."
+  failure_type: unverified-claim
+  cost: rework
+  outcome: failed

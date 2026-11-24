@@ -9,6 +9,15 @@ root=$(git rev-parse --show-toplevel) || exit 1
 out_dir="crates/fno/tests/golden/config_schema"
 cd "$root" || exit 1
 
+# Capture against a private state root. A feature-worktree build refuses the
+# operator's live store and would print that refusal into every stderr
+# capture; the message carries machine paths no golden can hold. CI sets
+# FNO_HOME/FNO_AGENT_HOME on its own runs for the same reason.
+FNO_HOME=$(mktemp -d)
+FNO_AGENT_HOME=$(mktemp -d)
+export FNO_HOME FNO_AGENT_HOME
+trap 'rm -rf "$FNO_HOME" "$FNO_AGENT_HOME"' EXIT
+
 fold() {
     # The parity test replaces the repo root with <ROOT> before comparing.
     sed -e "s|$root|<ROOT>|g"
@@ -36,6 +45,12 @@ capture() { # <golden-stem> <exit-code> <command...>
     rm -f "$stdout" "$stderr"
     echo "regen: wrote $out_dir/$stem.stdout"
 }
+
+# A fresh store prints its one-time birth notice on first open, and every
+# capture opens the store to land its usage row. Spend the notice on a
+# throwaway run so the captures see quiet stderr (two_modes stays the one
+# non-empty capture).
+fno config schema --json-schema >/dev/null 2>&1 || true
 
 capture json_schema 0 fno config schema --json-schema
 capture wizard_plan 0 fno config schema --wizard-plan

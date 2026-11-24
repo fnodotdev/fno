@@ -33,12 +33,14 @@ use axum::extract::{Json, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::Router;
+use axum::{Extension, Router};
 use tokio::net::unix::OwnedReadHalf;
 use tokio::net::{TcpListener, UnixStream};
 use tokio::sync::{broadcast, oneshot};
 
 use crate::proto::{self, ClientMsg, ObserverHello, ServerMsg, BUILD_VERSION, PROTO_VERSION};
+use crate::trusted_config::TrustedFile;
+use crate::web_invites::{Grants, InviteSource};
 
 /// The served page, vendored inline (no CDN) so the strict CSP holds offline.
 pub(crate) const PAGE: &str = include_str!("web_page.html");
@@ -52,6 +54,9 @@ const TRACE_PAGE: &str = include_str!("web_trace.html");
 /// The browser drives nothing, so anything it sends is dropped - but cap it so
 /// a hostile client cannot OOM the bridge with one giant frame.
 const INBOUND_WS_CAP: usize = 64 * 1024;
+/// The longest an open feed goes without reading the invites again, so a
+/// revoke ends it inside this bound.
+const FEED_RECHECK: Duration = Duration::from_secs(1);
 /// Per-subscriber buffered frames before a slow phone starts lag-dropping stale
 /// ones (each browser drops independently; one slow viewer never blocks another).
 const BROADCAST_CAP: usize = 256;
@@ -166,8 +171,11 @@ struct AppState {
     /// True when the bound address is loopback, so the backlog page may act.
     /// Computed from the bound address, never from `--bind` text.
     writable: bool,
-    /// The `[[web.invites]]` rows, `None` when config sets none. Read once at bind.
-    invites: Option<Arc<Vec<crate::web_invites::Invite>>>,
+    /// Where `[[web.invites]]` is read per request. [`invite_gate`] hands the
+    /// handler the read it decided on.
+    invites: Arc<InviteSource>,
+    /// Where a direct-local click lands. `None` records nothing.
+    click_journal: Option<PathBuf>,
     /// The cached backlog read model (`None` until the first gather).
     model: Arc<tokio::sync::Mutex<Option<CachedModel>>>,
     /// Fires on Ctrl-C so every ws loop ends and axum's graceful shutdown can
@@ -191,7 +199,20 @@ fn rundown_html_path() -> (PathBuf, bool) {
     #[cfg(not(test))]
     {
         let (root, faithful) = crate::org_root::lead_state_root();
-        (crate::state_layout::place(&root, "rundown.html"), faithful)
+        let page = crate::state_layout::place_new(&root, "rundown.html");
+        let found = crate::state_layout::place(&root, "rundown.html");
+        // The bridge serves and republishes one path, the home. A page from
+        // before the move seeds it, so the first view is not empty.
+        if found != page && found.exists() {
+            let seeded = page
+                .parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| std::fs::copy(&found, &page).map(|_| ()));
+            if let Err(e) = seeded {
+                eprintln!("fno mux serve --web: {} starts empty ({e})", page.display());
+            }
+        }
+        (page, faithful)
     }
     #[cfg(test)]
     {
@@ -200,7 +221,7 @@ fn rundown_html_path() -> (PathBuf, bool) {
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
-        (crate::state_layout::place(&root, "rundown.html"), true)
+        (crate::state_layout::place_new(&root, "rundown.html"), true)
     }
 }
 
@@ -551,6 +572,9 @@ pub fn serve(args: WebArgs) -> i32 {
     if args.stop {
         return stop_web(&args.session, &socket);
     }
+    // Taken before anything can change the cwd. The invite hold and the sink
+    // notice compare this folder. An unreadable one has no project file.
+    let startup = std::env::current_dir().unwrap_or_default();
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
@@ -558,10 +582,10 @@ pub fn serve(args: WebArgs) -> i32 {
             return 1;
         }
     };
-    runtime.block_on(run(args, socket))
+    runtime.block_on(run(args, socket, startup))
 }
 
-async fn run(args: WebArgs, socket: PathBuf) -> i32 {
+async fn run(args: WebArgs, socket: PathBuf, startup: PathBuf) -> i32 {
     let token: Arc<str> = match mint_token() {
         Some(t) => t.into(),
         None => {
@@ -650,8 +674,8 @@ async fn run(args: WebArgs, socket: PathBuf) -> i32 {
         rundown_republish,
         hq: Default::default(),
         writable,
-        invites: crate::web_invites::read_invites(&std::env::current_dir().unwrap_or_default())
-            .map(Arc::new),
+        invites: InviteSource::for_bridge(TrustedFile::from_env(), &startup).into(),
+        click_journal: crate::cli_usage::agents_journal(),
         model: Default::default(),
         shutdown: shutdown_rx,
     };
@@ -662,7 +686,7 @@ async fn run(args: WebArgs, socket: PathBuf) -> i32 {
     if args.attention_api {
         let port = args.attention_port;
         tokio::spawn(async move {
-            if let Err(e) = crate::attention_api::serve(port).await {
+            if let Err(e) = crate::attention_api::serve(port, startup).await {
                 eprintln!("fno mux serve --web: attention api: {e}");
             }
         });
@@ -687,7 +711,7 @@ async fn run(args: WebArgs, socket: PathBuf) -> i32 {
 }
 
 fn router(state: AppState) -> Router {
-    Router::new()
+    let routes = Router::new()
         .route("/", get(page))
         .route("/backlog", get(backlog))
         .route("/backlog/model.json", get(backlog_model))
@@ -712,30 +736,53 @@ fn router(state: AppState) -> Router {
             state.clone(),
             invite_gate,
         ))
-        .with_state(state)
+        .with_state(state);
+    routes.clone().nest(
+        // The board answers at the root and under the /fno prefix: a
+        // tailscale route that maps a subpath (the Oct 18 report's
+        // /fno/backlog URL shape) reaches the same routes instead of 404.
+        "/fno", routes,
+    )
 }
 
 /// Every request needs at least a viewer invite when `web.invites` is set.
 /// Per-route checks would let a new route slip past, so this one layer covers
 /// them all. With no invite list the layer passes and the token rules stand.
+/// A handler reads the grants decided here, so one request sees one list.
 async fn invite_gate(
     State(st): State<AppState>,
-    req: axum::extract::Request,
+    mut req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
-    let caller = caller_of(req.headers(), st.writable);
-    match crate::web_invites::decide(
-        &caller,
-        st.invites.as_deref().map(Vec::as_slice),
+    let grants = st.invites.read();
+    match viewer(req.headers(), &st, &grants) {
+        Ok(_) => {
+            req.extensions_mut().insert(grants);
+            next.run(req).await
+        }
+        Err(r) => refused(&r),
+    }
+}
+
+/// The caller's name when `grants` let them read at all.
+fn viewer(
+    headers: &HeaderMap,
+    st: &AppState,
+    grants: &Grants,
+) -> Result<String, crate::web_invites::Refusal> {
+    crate::web_invites::decide(
+        &caller_of(headers, st.writable),
+        grants.list(),
         None,
         crate::web_invites::Role::Viewer,
-    ) {
-        Ok(_) => next.run(req).await,
-        Err(r) => plain_status(
-            StatusCode::from_u16(r.code).unwrap_or(StatusCode::FORBIDDEN),
-            &r.text,
-        ),
-    }
+    )
+}
+
+fn refused(r: &crate::web_invites::Refusal) -> Response {
+    plain_status(
+        StatusCode::from_u16(r.code).unwrap_or(StatusCode::FORBIDDEN),
+        &r.text,
+    )
 }
 
 /// The facts of one request that the invite decision reads.
@@ -744,9 +791,10 @@ pub(crate) fn caller_of(
     loopback_bind: bool,
 ) -> crate::web_invites::Caller<'_> {
     crate::web_invites::Caller {
+        // A value that is no text still says a proxy sent it. It names nobody.
         login: headers
             .get("tailscale-user-login")
-            .and_then(|v| v.to_str().ok()),
+            .map(|v| v.to_str().unwrap_or_default()),
         loopback_bind,
         // A proxy can rewrite Host, but tailscale serve and every common
         // reverse proxy add a forwarding header, so one of those marks the
@@ -759,6 +807,129 @@ pub(crate) fn caller_of(
                 .and_then(|h| h.to_str().ok())
                 .is_some_and(names_loopback),
     }
+}
+
+/// How much of the fold one request's answer may carry. invite_gate has
+/// already admitted the request; this decides the read side, whose routes
+/// serve whole boards a middleware could only refuse.
+enum ReadScope {
+    /// Every node: the local user, a token-only read with no invite list, or
+    /// any invite with scope `*`.
+    All,
+    /// Only nodes whose chain carries one of these invite scopes.
+    Scopes(Vec<String>),
+}
+
+impl ReadScope {
+    /// True when the request came from a viewer who needs a filtered fold.
+    fn is_scoped(&self) -> bool {
+        matches!(self, ReadScope::Scopes(_))
+    }
+
+    /// True when a node whose chain is `chain` sits inside the viewer's
+    /// invites. `chain_of` walks parents, so a scope on an epic covers the
+    /// epic's descendants.
+    fn covers(&self, chain: &[String]) -> bool {
+        match self {
+            ReadScope::All => true,
+            ReadScope::Scopes(scopes) => scopes.iter().any(|s| chain.iter().any(|n| n == s)),
+        }
+    }
+}
+
+/// The read scope of one request. A proxied caller with no login cannot
+/// exist past invite_gate, so the fallthrough there fails closed.
+fn read_scope(headers: &HeaderMap, st: &AppState, grants: &Grants) -> ReadScope {
+    let Some(invites) = grants.list() else {
+        return ReadScope::All; // no invite list: token-only reads stay whole
+    };
+    let caller = caller_of(headers, st.writable);
+    // The user at their own machine owns every scope (decide's first rule).
+    if caller.is_direct_local() {
+        return ReadScope::All;
+    }
+    let Some(login) = caller.identity() else {
+        return ReadScope::Scopes(Vec::new());
+    };
+    let mine = invites.iter().filter(|i| i.email == login);
+    if mine.clone().any(|i| i.scope == "*") {
+        return ReadScope::All;
+    }
+    ReadScope::Scopes(mine.map(|i| i.scope.clone()).collect())
+}
+
+/// 403 when a scoped viewer names a node outside their invites.
+fn scope_refusal(scope: &ReadScope, chain: &[String]) -> Option<Response> {
+    if scope.covers(chain) {
+        None
+    } else {
+        Some(plain_status(
+            StatusCode::FORBIDDEN,
+            "this invite does not cover that node",
+        ))
+    }
+}
+
+/// A scoped viewer's hq board: sections keyed by node keep the chain's rows,
+/// a row with no node drops out, and the fleet grid (hosts, seats, sessions:
+/// machine-wide, not node data) drops whole. The cache is untouched, so the
+/// owner's page still reads the whole fold.
+fn scope_hq_model(
+    mut model: serde_json::Value,
+    scope: &ReadScope,
+    rows: &[crate::node_row::NodeRow],
+) -> serde_json::Value {
+    let Some(obj) = model.as_object_mut() else {
+        return model;
+    };
+    obj.insert("machines".to_string(), serde_json::json!([]));
+    let Some(waiting) = obj.get_mut("waiting") else {
+        return model;
+    };
+    for key in ["questions", "prs", "next"] {
+        let Some(items) = waiting
+            .get_mut(key)
+            .and_then(serde_json::Value::as_array_mut)
+        else {
+            continue;
+        };
+        items.retain(|item| {
+            // prs and questions key the node `node`; next rows key it `id`.
+            // One typed parse per item (R1): the compiler checks the keys.
+            let node = serde_json::from_value::<ScopedItemNode>(item.clone())
+                .ok()
+                .and_then(|keys| keys.node.or(keys.id));
+            match node {
+                Some(n) => scope.covers(&crate::web_answer::chain_of(rows, Some(&n))),
+                None => false,
+            }
+        });
+    }
+    model
+}
+
+/// The node key one hq waiting item carries. Both fields are optional: a
+/// next row names `id`, a pr or question row names `node`, and an item
+/// naming neither drops out.
+#[derive(serde::Deserialize)]
+struct ScopedItemNode {
+    #[serde(default)]
+    node: Option<String>,
+    #[serde(default)]
+    id: Option<String>,
+}
+
+/// Keep only the rows a scoped viewer's invites cover, decided against the
+/// full row set so parent walks still resolve. The board folds lanes,
+/// offboard and stats from these rows alone.
+fn filter_scoped_rows(inputs: &mut backlog_model::Inputs, scope: &ReadScope) {
+    let keep: Vec<bool> = inputs
+        .rows
+        .iter()
+        .map(|row| scope.covers(&crate::web_answer::chain_of(&inputs.rows, row.id())))
+        .collect();
+    let mut keep = keep.into_iter();
+    inputs.rows.retain(|_| keep.next().unwrap_or(false));
 }
 
 // ---------------------------------------------------------------------------
@@ -1039,13 +1210,28 @@ async fn trace(Query(q): Query<TraceQuery>, State(st): State<AppState>) -> Respo
 }
 
 /// `GET /trace/model.json`: the fold for `node`, read per request.
-async fn trace_model(Query(q): Query<TraceQuery>, State(st): State<AppState>) -> Response {
+async fn trace_model(
+    Query(q): Query<TraceQuery>,
+    State(st): State<AppState>,
+    Extension(grants): Extension<Grants>,
+    headers: HeaderMap,
+) -> Response {
     if !token_ok(q.t.as_deref(), &st.token) {
         return unauthorized();
     }
     let node = q.node.as_deref().unwrap_or("");
     if !crate::web_trace::valid_node(node) {
         return plain_status(StatusCode::BAD_REQUEST, "node must be a node id");
+    }
+    let scope = read_scope(&headers, &st, &grants);
+    if scope.is_scoped() {
+        let inputs = model_inputs(&st).await;
+        if let Some(reply) = scope_refusal(
+            &scope,
+            &crate::web_answer::chain_of(&inputs.rows, Some(node)),
+        ) {
+            return reply;
+        }
     }
     match crate::web_trace::read_trace(node).await {
         Ok(body) => (
@@ -1072,8 +1258,21 @@ fn html_response(body: String) -> Response {
         .into_response()
 }
 
-async fn team(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Response {
+async fn team(
+    Query(q): Query<WsQuery>,
+    State(st): State<AppState>,
+    Extension(grants): Extension<Grants>,
+    headers: HeaderMap,
+) -> Response {
     let authorized = token_ok(q.t.as_deref(), &st.token);
+    // The chart is org-wide: refuse a scoped viewer before any marker write,
+    // so their visit never triggers a render they cannot read.
+    if authorized && read_scope(&headers, &st, &grants).is_scoped() {
+        return plain_status(
+            StatusCode::FORBIDDEN,
+            "scoped invites read a node-scoped fold; the rundown chart is machine-wide",
+        );
+    }
     let modified = std::fs::metadata(&st.rundown_html)
         .and_then(|m| m.modified())
         .ok();
@@ -1106,10 +1305,16 @@ async fn team(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Response 
 }
 
 /// `GET /hq/model.json`: the first read waits; later reads answer from the cache.
-async fn hq_model(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Response {
+async fn hq_model(
+    Query(q): Query<WsQuery>,
+    State(st): State<AppState>,
+    Extension(grants): Extension<Grants>,
+    headers: HeaderMap,
+) -> Response {
     if !token_ok(q.t.as_deref(), &st.token) {
         return unauthorized();
     }
+    let scope = read_scope(&headers, &st, &grants);
     st.hq.first.get_or_init(|| refresh_hq(st.clone())).await;
     if st.hq.claim_refresh().await {
         tokio::spawn(refresh_hq(st.clone()));
@@ -1117,35 +1322,29 @@ async fn hq_model(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Respo
     let mut model = st.hq.model().await;
     // A read-only bridge shows the question drawer with no answer controls.
     model["writable"] = serde_json::json!(st.writable);
+    if scope.is_scoped() {
+        let rows = model_inputs(&st).await;
+        model = scope_hq_model(model, &scope, &rows.rows);
+    }
     json_response(&model)
 }
 
 /// The caller's name from the invite decision, or the refusal as a response.
-fn mine_person(headers: &HeaderMap, st: &AppState) -> Result<String, Response> {
-    crate::web_invites::decide(
-        &caller_of(headers, st.writable),
-        st.invites.as_deref().map(Vec::as_slice),
-        None,
-        crate::web_invites::Role::Viewer,
-    )
-    .map_err(|r| {
-        plain_status(
-            StatusCode::from_u16(r.code).unwrap_or(StatusCode::FORBIDDEN),
-            &r.text,
-        )
-    })
+fn mine_person(headers: &HeaderMap, st: &AppState, grants: &Grants) -> Result<String, Response> {
+    viewer(headers, st, grants).map_err(|r| refused(&r))
 }
 
 /// `GET /hq/mine.json`: the caller's own views, filled inside their invite.
 async fn hq_mine(
     Query(q): Query<WsQuery>,
     State(st): State<AppState>,
+    Extension(grants): Extension<Grants>,
     headers: HeaderMap,
 ) -> Response {
     if !token_ok(q.t.as_deref(), &st.token) {
         return unauthorized();
     }
-    let person = match mine_person(&headers, &st) {
+    let person = match mine_person(&headers, &st, &grants) {
         Ok(p) => p,
         Err(r) => return r,
     };
@@ -1155,10 +1354,9 @@ async fn hq_mine(
     } else {
         None
     };
-    let invites = st.invites.clone();
     let out = tokio::task::spawn_blocking(move || {
         let rows = rows.as_ref().map_or(&[][..], |i| i.rows.as_slice());
-        crate::web_mine::mine_json(&root, rows, invites.as_deref().map(Vec::as_slice), &person)
+        crate::web_mine::mine_json(&root, rows, grants.list(), &person)
     })
     .await;
     match out {
@@ -1178,6 +1376,7 @@ struct LookBody {
 async fn hq_mine_look(
     Query(q): Query<WsQuery>,
     State(st): State<AppState>,
+    Extension(grants): Extension<Grants>,
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
@@ -1187,7 +1386,7 @@ async fn hq_mine_look(
     if let Err(msg) = crate::web_answer::same_origin(&headers) {
         return plain_status(StatusCode::FORBIDDEN, msg);
     }
-    let person = match mine_person(&headers, &st) {
+    let person = match mine_person(&headers, &st, &grants) {
         Ok(p) => p,
         Err(r) => return r,
     };
@@ -1204,6 +1403,9 @@ async fn hq_mine_look(
         }
     };
     let out = tokio::task::spawn_blocking(move || {
+        // The body arrived after the gate's read, so the invite may be gone.
+        viewer(&headers, &st, &st.invites.read())
+            .map_err(|r| crate::web_mine::Refused(r.code, r.text))?;
         crate::web_mine::set_look(
             &crate::web_mine::store_root(),
             &person,
@@ -1225,9 +1427,21 @@ async fn hq_mine_look(
 /// `GET /hq/decisions.json`: every recorded decision plus the ids the
 /// user marked reviewed. Read-only: a retract or an overrule needs a real
 /// tty, so the page writes nothing.
-async fn hq_decisions(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Response {
+async fn hq_decisions(
+    Query(q): Query<WsQuery>,
+    State(st): State<AppState>,
+    Extension(grants): Extension<Grants>,
+    headers: HeaderMap,
+) -> Response {
     if !token_ok(q.t.as_deref(), &st.token) {
         return unauthorized();
+    }
+    // Decision rows name nodes across the machine; no per-node cut exists.
+    if read_scope(&headers, &st, &grants).is_scoped() {
+        return plain_status(
+            StatusCode::FORBIDDEN,
+            "scoped invites read a node-scoped fold; the decision log is machine-wide",
+        );
     }
     let read = tokio::task::spawn_blocking(|| {
         crate::decisions_overlay::load().map(|rows| {
@@ -1265,6 +1479,8 @@ async fn refresh_hq(st: AppState) {
 async fn backlog_model(
     Query(raw): Query<Vec<(String, String)>>,
     State(st): State<AppState>,
+    Extension(grants): Extension<Grants>,
+    headers: HeaderMap,
 ) -> Response {
     if !token_ok(
         raw.iter().find(|(k, _)| k == "t").map(|(_, v)| v.as_str()),
@@ -1272,6 +1488,7 @@ async fn backlog_model(
     ) {
         return unauthorized();
     }
+    let scope = read_scope(&headers, &st, &grants);
     let q = match backlog_model::Query::from_pairs(&raw) {
         Ok(q) => q,
         Err(e) => return plain_status(StatusCode::BAD_REQUEST, &e.to_string()),
@@ -1292,6 +1509,9 @@ async fn backlog_model(
     if wants_questions {
         let mut fresh = (*model_inputs(&st).await).clone();
         backlog_model::read_search_sources(&mut fresh, true);
+        if scope.is_scoped() {
+            filter_scoped_rows(&mut fresh, &scope);
+        }
         let mut board = backlog_model::board(&fresh, &q);
         if raw.iter().any(|(k, v)| k == "keys" && v == "1") {
             board.search_keys = Some(crate::search_query::keys_json());
@@ -1299,7 +1519,15 @@ async fn backlog_model(
         return json_response(&board);
     }
     let inputs = model_inputs(&st).await;
-    let mut board = backlog_model::board(&inputs, &q);
+    // Only a scoped viewer pays the clone; the shared cache stays whole.
+    let scoped_rows = if scope.is_scoped() {
+        let mut owned = (*inputs).clone();
+        filter_scoped_rows(&mut owned, &scope);
+        Some(owned)
+    } else {
+        None
+    };
+    let mut board = backlog_model::board(scoped_rows.as_ref().unwrap_or(&inputs), &q);
     if raw.iter().any(|(k, v)| k == "keys" && v == "1") {
         board.search_keys = Some(crate::search_query::keys_json());
     }
@@ -1310,6 +1538,8 @@ async fn backlog_model(
 async fn backlog_node(
     Query(raw): Query<HashMap<String, String>>,
     State(st): State<AppState>,
+    Extension(grants): Extension<Grants>,
+    headers: HeaderMap,
 ) -> Response {
     if !token_ok(raw.get("t").map(String::as_str), &st.token) {
         return unauthorized();
@@ -1317,7 +1547,14 @@ async fn backlog_node(
     let Some(id) = raw.get("id").filter(|s| !s.is_empty()) else {
         return plain_status(StatusCode::BAD_REQUEST, "id is required");
     };
+    let scope = read_scope(&headers, &st, &grants);
     let inputs = model_inputs(&st).await;
+    if let Some(reply) = scope_refusal(
+        &scope,
+        &crate::web_answer::chain_of(&inputs.rows, Some(id.as_str())),
+    ) {
+        return reply;
+    }
     node_response(&inputs, id)
 }
 
@@ -1546,6 +1783,7 @@ fn act_response(ok: bool, notice: &str) -> Response {
 async fn backlog_act(
     Query(q): Query<WsQuery>,
     State(st): State<AppState>,
+    Extension(grants): Extension<Grants>,
     headers: HeaderMap,
     Json(body): Json<Act>,
 ) -> Response {
@@ -1554,6 +1792,16 @@ async fn backlog_act(
     }
     if !token_ok(q.t.as_deref(), &st.token) {
         return unauthorized();
+    }
+    // write_guard reads Host and Origin, both of which tailscale serve
+    // rewrites or omits for a proxied caller, so it does not see the
+    // invite: an act on any node would undo the read scoping. A scoped
+    // viewer acts from their CLI session, never this bridge.
+    if read_scope(&headers, &st, &grants).is_scoped() {
+        return plain_status(
+            StatusCode::FORBIDDEN,
+            "scoped invites read a node-scoped fold; board acts run from the local machine",
+        );
     }
     let id = body.id().to_string();
     let inputs = model_inputs(&st).await;
@@ -1572,15 +1820,34 @@ async fn backlog_act(
 /// writes the row through the same door the TUI client uses, and a dropped
 /// id or failed write tells nobody. The body parses once into this struct
 /// (R1); a body missing a field never reaches the handler.
+///
+/// Only the user's own click records: a direct loopback request with the
+/// token and the same origin. An invitee or any other proxied caller gave no
+/// opt-in, so they get the same 204 and no row.
 #[derive(serde::Deserialize)]
 struct UiClickBody {
     screen: String,
     control: String,
 }
 
-async fn ui_click(Json(body): Json<UiClickBody>) -> StatusCode {
-    crate::ui_usage::click(&body.screen, &body.control);
-    StatusCode::NO_CONTENT
+async fn ui_click(
+    Query(q): Query<WsQuery>,
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<UiClickBody>,
+) -> Response {
+    if !token_ok(q.t.as_deref(), &st.token) {
+        return unauthorized();
+    }
+    if let Err(msg) = crate::web_answer::same_origin(&headers) {
+        return plain_status(StatusCode::FORBIDDEN, msg);
+    }
+    if caller_of(&headers, st.writable).is_direct_local() {
+        if let Some(journal) = &st.click_journal {
+            crate::ui_usage::click_into(journal, &body.screen, &body.control);
+        }
+    }
+    StatusCode::NO_CONTENT.into_response()
 }
 
 /// `POST /hq/answer/{id}?t=<token>`: answer one open question from the
@@ -1636,19 +1903,16 @@ async fn hq_answer(
     };
     let inputs = model_inputs(&st).await;
     let chain = crate::web_answer::chain_of(&inputs.rows, node.as_deref());
+    // Read again after the last wait: the gate's read predates the body.
+    let grants = st.invites.read();
     let person = match crate::web_invites::decide(
         &caller_of(&headers, st.writable),
-        st.invites.as_deref().map(Vec::as_slice),
+        grants.list(),
         Some(&chain),
         crate::web_invites::Role::Editor,
     ) {
         Ok(person) => person,
-        Err(r) => {
-            return plain_status(
-                StatusCode::from_u16(r.code).unwrap_or(StatusCode::FORBIDDEN),
-                &r.text,
-            )
-        }
+        Err(r) => return refused(&r),
     };
     match crate::needs_overlay::answer_as(&id, pick, "command_page", Some(&person)).await {
         Ok(receipt) => {
@@ -1979,6 +2243,8 @@ async fn ws_handler(
     ws: WebSocketUpgrade,
     Query(q): Query<WsQuery>,
     State(st): State<AppState>,
+    Extension(grants): Extension<Grants>,
+    headers: HeaderMap,
 ) -> Response {
     let ok =
         q.t.as_deref()
@@ -2000,11 +2266,71 @@ async fn ws_handler(
                 .await;
         });
     }
+    // Bridge frames have no node mapping, so no filtered stream exists: a
+    // scoped viewer gets the reason instead, through the same
+    // upgrade-then-close shape the token path uses (a browser cannot read
+    // the HTTP status of a failed handshake).
+    if read_scope(&headers, &st, &grants).is_scoped() {
+        return ws.on_upgrade(|mut socket| async move {
+            let _ = socket
+                .send(Message::Close(Some(CloseFrame {
+                    code: close_code::POLICY,
+                    reason: "scoped invites read a node-scoped fold; the live bridge feed is machine-wide".into(),
+                })))
+                .await;
+        });
+    }
     ws.max_message_size(INBOUND_WS_CAP)
-        .on_upgrade(move |socket| ws_conn(socket, st))
+        .on_upgrade(move |socket| ws_conn(socket, st, headers))
 }
 
-async fn ws_conn(mut socket: WebSocket, st: AppState) {
+/// An open feed's right to frames, under the invites as they are now. The
+/// feed is machine-wide, so it needs a whole-board read.
+fn feed_allowed(headers: &HeaderMap, st: &AppState) -> bool {
+    let grants = st.invites.read();
+    viewer(headers, st, &grants).is_ok() && !read_scope(headers, st, &grants).is_scoped()
+}
+
+async fn close_revoked(socket: &mut WebSocket) {
+    // A client that already left needs no close frame.
+    socket
+        .send(Message::Close(Some(CloseFrame {
+            code: close_code::POLICY,
+            reason: "this caller may no longer read the live bridge feed".into(),
+        })))
+        .await
+        .ok();
+}
+
+/// Send one frame, reading the invites first when the last read is a
+/// [`FEED_RECHECK`] old. False ends the feed.
+async fn send_frame(
+    socket: &mut WebSocket,
+    st: &AppState,
+    headers: &HeaderMap,
+    checked: &mut Instant,
+    text: String,
+) -> bool {
+    if checked.elapsed() >= FEED_RECHECK {
+        if !feed_allowed(headers, st) {
+            close_revoked(socket).await;
+            return false;
+        }
+        *checked = Instant::now();
+    }
+    socket.send(Message::Text(text.into())).await.is_ok()
+}
+
+async fn ws_conn(mut socket: WebSocket, st: AppState, headers: HeaderMap) {
+    // The upgrade may have waited, and the invite may have gone meanwhile.
+    if !feed_allowed(&headers, &st) {
+        return close_revoked(&mut socket).await;
+    }
+    let mut checked = Instant::now();
+    // A quiet feed sends nothing, so it reads the invites on a timer too.
+    let first = tokio::time::Instant::now() + FEED_RECHECK;
+    let mut recheck = tokio::time::interval_at(first, FEED_RECHECK);
+    recheck.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // Subscribe BEFORE snapshotting so no frame slips through the gap between
     // reading the snapshot and joining the live stream (a duplicate is harmless;
     // a gap would leave a stale grid).
@@ -2025,7 +2351,7 @@ async fn ws_conn(mut socket: WebSocket, st: AppState) {
             p
         };
         for m in preamble {
-            if socket.send(Message::Text(m.into())).await.is_err() {
+            if !send_frame(&mut socket, &st, &headers, &mut checked, m).await {
                 return;
             }
         }
@@ -2036,7 +2362,7 @@ async fn ws_conn(mut socket: WebSocket, st: AppState) {
         tokio::select! {
             r = rx.recv() => match r {
                 Ok(json) => {
-                    if socket.send(Message::Text(json.into())).await.is_err() {
+                    if !send_frame(&mut socket, &st, &headers, &mut checked, json).await {
                         return;
                     }
                 }
@@ -2050,6 +2376,12 @@ async fn ws_conn(mut socket: WebSocket, st: AppState) {
                 Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return,
                 Some(Ok(_)) => {}
             },
+            _ = recheck.tick() => {
+                if !feed_allowed(&headers, &st) {
+                    return close_revoked(&mut socket).await;
+                }
+                checked = Instant::now();
+            }
             _ = shutdown.changed() => {
                 let _ = socket
                     .send(Message::Close(Some(CloseFrame {
@@ -2093,7 +2425,12 @@ pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 #[cfg(test)]
+#[path = "web_invite_tests.rs"]
+mod invite_tests;
+
+#[cfg(test)]
 mod tests {
+    use super::invite_tests::invite_source;
     use super::*;
 
     #[test]
@@ -2136,7 +2473,8 @@ mod tests {
             rundown_republish: true,
             hq: Default::default(),
             writable: true,
-            invites: None,
+            invites: invite_source(None),
+            click_journal: None,
             model: Default::default(),
             shutdown,
         };
@@ -3049,7 +3387,8 @@ console.log("backlog page helpers: 18 cases ok");
             rundown_republish: false,
             hq,
             writable: true,
-            invites: None,
+            invites: invite_source(None),
+            click_journal: None,
             model: Default::default(),
             shutdown,
         };
@@ -3092,6 +3431,63 @@ console.log("backlog page helpers: 18 cases ok");
         assert!(reply.contains("data-current=\"hq\""), "{reply}");
         let reply = ask("/fleet?t=right").await;
         assert!(reply.starts_with("HTTP/1.1 404"), "{reply}");
+        server.abort();
+    }
+
+    // AC3-HP second half: the deep link opens the question even under the
+    // /fno path prefix a tailscale route can mount (the Oct 18 report's
+    // /fno/backlog shape). The prefix must reach the auth wall, a green
+    // token, and the page itself, or the phone lands on a 404.
+    #[tokio::test]
+    async fn the_board_answers_under_the_fno_prefix_mount() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (tx, _) = broadcast::channel(4);
+        let (_shutdown_tx, shutdown) = tokio::sync::watch::channel(false);
+        let hq = Arc::new(crate::web_hq::HqCache::default());
+        let fleet = serde_json::json!({"machines": [{"host": "u", "sessions": []}]});
+        let none = backlog_model::Inputs::default();
+        hq.board()
+            .await
+            .record(Ok(fleet), Err("x".into()), &none, 1, &[]);
+        hq.first.set(()).unwrap();
+        let state = AppState {
+            tx,
+            snap: Arc::new(Mutex::new(Snapshot::default())),
+            token: Arc::<str>::from("right"),
+            rundown_html: std::env::temp_dir().join("fno-web-hq-lead.html"),
+            rundown_republish: false,
+            hq,
+            writable: true,
+            invites: invite_source(None),
+            click_journal: None,
+            model: Default::default(),
+            shutdown,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router(state)).await.unwrap();
+        });
+        let ask = |path: &'static str| async move {
+            let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let req =
+                format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+            stream.write_all(req.as_bytes()).await.unwrap();
+            let mut reply = String::new();
+            stream.read_to_string(&mut reply).await.unwrap();
+            reply
+        };
+        assert!(
+            ask("/fno/backlog").await.starts_with("HTTP/1.1 401"),
+            "the prefix reaches the auth wall"
+        );
+        let reply = ask("/fno/backlog?t=right").await;
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        let reply = ask("/fno/hq/model.json?t=right").await;
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        let reply = ask("/fno/hq?t=right").await;
+        assert!(reply.contains("data-current=\"hq\""), "{reply}");
         server.abort();
     }
     fn tiny_frame() -> proto::Frame {
@@ -3379,7 +3775,7 @@ console.log("backlog page helpers: 18 cases ok");
     }
 
     /// One request over a real listener; returns the whole reply.
-    async fn raw_request(addr: std::net::SocketAddr, head: &str, body: &[u8]) -> String {
+    pub(super) async fn raw_request(addr: std::net::SocketAddr, head: &str, body: &[u8]) -> String {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
         stream.write_all(head.as_bytes()).await.unwrap();
@@ -3389,7 +3785,9 @@ console.log("backlog page helpers: 18 cases ok");
         reply
     }
 
-    async fn serve_state(state: AppState) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+    pub(super) async fn serve_state(
+        state: AppState,
+    ) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
@@ -3398,7 +3796,10 @@ console.log("backlog page helpers: 18 cases ok");
         (addr, server)
     }
 
-    fn answer_state(writable: bool, invites: Option<Vec<crate::web_invites::Invite>>) -> AppState {
+    pub(super) fn answer_state(
+        writable: bool,
+        invites: Option<Vec<crate::web_invites::Invite>>,
+    ) -> AppState {
         let (tx, _) = broadcast::channel(4);
         let (_shutdown_tx, shutdown) = tokio::sync::watch::channel(false);
         AppState {
@@ -3409,7 +3810,8 @@ console.log("backlog page helpers: 18 cases ok");
             rundown_republish: true,
             hq: Default::default(),
             writable,
-            invites: invites.map(Arc::new),
+            invites: invite_source(invites),
+            click_journal: None,
             model: Default::default(),
             shutdown,
         }
@@ -3455,46 +3857,249 @@ console.log("backlog page helpers: 18 cases ok");
         server.abort();
     }
 
-    // The invite layer covers every route, not only the answer. A listed
-    // viewer reads; an unlisted login and a request with no login through the
-    // proxy do not. With no list, a tailnet header changes nothing for reads.
+    // The read-side route table for a scoped viewer: board reads carry only
+    // the invited chain, a foreign node refuses with the reason, and the
+    // machine-wide surfaces name why they refuse.
+    fn invite(email: &str, scope: &str) -> crate::web_invites::Invite {
+        crate::web_invites::Invite {
+            email: email.into(),
+            scope: scope.into(),
+            role: crate::web_invites::Role::Viewer,
+        }
+    }
+
+    // Pin the read model the routes serve, so no test reads the real graph.
+    pub(super) async fn seed_model(
+        st: &mut AppState,
+        rows: Vec<serde_json::Value>,
+    ) -> std::sync::Arc<backlog_model::Inputs> {
+        let inputs = std::sync::Arc::new(backlog_model::fixture(rows));
+        *st.model.lock().await = Some(CachedModel {
+            version: None,
+            at: std::time::Instant::now(),
+            inputs: std::sync::Arc::clone(&inputs),
+        });
+        inputs
+    }
+
     #[tokio::test]
-    async fn web_invites_layer_gates_every_route() {
-        use crate::web_invites::{Invite, Role};
-        let list = vec![Invite {
-            email: "ann@example.com".into(),
-            scope: "*".into(),
-            role: Role::Viewer,
-        }];
-        let (addr, server) = serve_state(answer_state(true, Some(list))).await;
-        let get = |login: Option<&str>, host: String| {
-            let login = login.map_or(String::new(), |l| format!("Tailscale-User-Login: {l}\r\n"));
+    async fn scoped_invites_read_a_filtered_backlog_board() {
+        let list = vec![
+            invite("ann@example.com", "x-b1"),
+            invite("pat@example.com", "*"),
+        ];
+        let mut st = answer_state(true, Some(list));
+        seed_model(
+            &mut st,
+            vec![
+                serde_json::json!({"id": "x-b1", "status": "ready", "type": "epic"}),
+                serde_json::json!({"id": "x-kid", "status": "ready", "parent": "x-b1"}),
+                serde_json::json!({"id": "x-oth", "status": "ready"}),
+            ],
+        )
+        .await;
+        let (addr, server) = serve_state(st).await;
+        let get = |addr: std::net::SocketAddr, login: &str| {
             let head = format!(
-                "GET /hq?t=right HTTP/1.1\r\nHost: {host}\r\n{login}Connection: close\r\n\r\n"
+                "GET /backlog/model.json?t=right HTTP/1.1\r\nHost: machine.tail1.ts.net\r\nTailscale-User-Login: {login}\r\nConnection: close\r\n\r\n"
             );
             async move { raw_request(addr, &head, b"").await }
         };
-        let tailnet = "machine.tail1.ts.net".to_string();
-        let reply = get(Some("eve@example.com"), tailnet.clone()).await;
-        assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
-        let reply = get(None, tailnet.clone()).await;
-        assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
-        let reply = get(Some("ann@example.com"), tailnet).await;
+        let reply = get(addr, "ann@example.com").await;
         assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
-        let reply = get(None, format!("127.0.0.1:{}", addr.port())).await;
-        assert!(reply.starts_with("HTTP/1.1 200"), "local user: {reply}");
-        // A proxy that rewrote Host to loopback still shows a forwarding header.
-        let head = format!(
-            "GET /hq?t=right HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-Forwarded-For: 100.64.0.9\r\nConnection: close\r\n\r\n",
-            addr.port()
+        assert!(
+            reply.contains("\"x-b1\"") && reply.contains("\"x-kid\""),
+            "{reply}"
         );
-        let reply = raw_request(addr, &head, b"").await;
-        assert!(reply.starts_with("HTTP/1.1 403"), "proxied: {reply}");
-        server.abort();
-        let (addr, server) = serve_state(answer_state(true, None)).await;
-        let head = "GET /hq?t=right HTTP/1.1\r\nHost: machine.tail1.ts.net\r\nTailscale-User-Login: eve@example.com\r\nConnection: close\r\n\r\n";
-        let reply = raw_request(addr, head, b"").await;
+        assert!(!reply.contains("\"x-oth\""), "{reply}");
+        let reply = get(addr, "pat@example.com").await;
         assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        assert!(
+            reply.contains("\"x-oth\""),
+            "the star invite reads whole: {reply}"
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn scoped_invites_refuse_a_node_outside_their_invite() {
+        let list = vec![invite("ann@example.com", "x-b1")];
+        let mut st = answer_state(true, Some(list));
+        seed_model(
+            &mut st,
+            vec![
+                serde_json::json!({"id": "x-b1", "status": "ready", "type": "epic"}),
+                serde_json::json!({"id": "x-kid", "status": "ready", "parent": "x-b1"}),
+                serde_json::json!({"id": "x-oth", "status": "ready"}),
+            ],
+        )
+        .await;
+        let (addr, server) = serve_state(st).await;
+        let get = |addr: std::net::SocketAddr, path: &str| {
+            let head = format!(
+                "GET {path} HTTP/1.1\r\nHost: machine.tail1.ts.net\r\nTailscale-User-Login: ann@example.com\r\nConnection: close\r\n\r\n"
+            );
+            async move { raw_request(addr, &head, b"").await }
+        };
+        let reply = get(addr, "/backlog/node.json?t=right&id=x-oth").await;
+        assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
+        assert!(
+            reply.contains("this invite does not cover that node"),
+            "{reply}"
+        );
+        let reply = get(addr, "/backlog/node.json?t=right&id=x-kid").await;
+        assert!(
+            reply.starts_with("HTTP/1.1 200"),
+            "descendant serves: {reply}"
+        );
+        assert!(reply.contains("\"x-kid\""), "{reply}");
+        // An in-scope trace serves through the shell-out, so only the
+        // refusal runs here.
+        let reply = get(addr, "/trace/model.json?t=right&node=x-oth").await;
+        assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
+        assert!(
+            reply.contains("this invite does not cover that node"),
+            "{reply}"
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn scoped_invites_refuse_the_machine_wide_reads() {
+        let list = vec![
+            invite("ann@example.com", "x-b1"),
+            invite("pat@example.com", "*"),
+        ];
+        // A fresh page file: the serve never starts a republish render, and
+        // the star-invite control reads it back verbatim.
+        let rundown = std::env::temp_dir().join("fno-web-answer-lead.html");
+        std::fs::write(&rundown, "<html>the org chart</html>").unwrap();
+        let st = answer_state(true, Some(list));
+        let (addr, server) = serve_state(st).await;
+        let get = |addr: std::net::SocketAddr, path: &str, login: &str| {
+            let head = format!(
+                "GET {path} HTTP/1.1\r\nHost: machine.tail1.ts.net\r\nTailscale-User-Login: {login}\r\nConnection: close\r\n\r\n"
+            );
+            async move { raw_request(addr, &head, b"").await }
+        };
+        let reply = get(addr, "/rundown?t=right", "ann@example.com").await;
+        assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
+        assert!(
+            reply.contains("the rundown chart is machine-wide"),
+            "{reply}"
+        );
+        let reply = get(addr, "/hq/decisions.json?t=right", "ann@example.com").await;
+        assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
+        assert!(
+            reply.contains("the decision log is machine-wide"),
+            "{reply}"
+        );
+        let reply = get(addr, "/rundown?t=right", "pat@example.com").await;
+        assert!(reply.starts_with("HTTP/1.1 200"), "star invite: {reply}");
+        assert!(reply.contains("the org chart"), "{reply}");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn scoped_invites_read_a_filtered_hq_board() {
+        // The one section the filter's contract names (R1: one typed parse).
+        #[derive(serde::Deserialize)]
+        struct HqBody {
+            #[serde(default)]
+            machines: serde_json::Value,
+        }
+        let list = vec![
+            invite("ann@example.com", "x-hq1"),
+            invite("pat@example.com", "*"),
+        ];
+        let mut st = answer_state(true, Some(list));
+        let inputs = seed_model(
+            &mut st,
+            vec![
+                serde_json::json!({"id": "x-hq1", "status": "in_review", "pr_number": 42}),
+                serde_json::json!({"id": "x-oth", "status": "in_review", "pr_number": 43}),
+            ],
+        )
+        .await;
+        // Seed the cache and stamp read_at, so claim_refresh never starts a
+        // real fleet read inside the test.
+        st.hq.first.set(()).unwrap();
+        st.hq.board().await.record(
+            Ok(serde_json::json!({"machines": [
+                {"host": "u", "local": true, "fresh": true, "sessions": [
+                    {"name": "kara", "session_id": "976b7b64", "harness": "claude", "role": "lead"}
+                ]},
+                {"host": "mac2", "fresh": false, "age_s": 900, "sessions": [
+                    {"name": "t-two", "harness": "codex"}
+                ]}
+            ]})),
+            Err("the test seeds no questions".into()),
+            &inputs,
+            0,
+            &[],
+        );
+        let (addr, server) = serve_state(st).await;
+        let get = |addr: std::net::SocketAddr, login: &str| {
+            let head = format!(
+                "GET /hq/model.json?t=right HTTP/1.1\r\nHost: machine.tail1.ts.net\r\nTailscale-User-Login: {login}\r\nConnection: close\r\n\r\n"
+            );
+            async move { raw_request(addr, &head, b"").await }
+        };
+        let reply = get(addr, "pat@example.com").await;
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        let body = reply.split("\r\n\r\n").nth(1).unwrap_or_default();
+        let hq: HqBody = serde_json::from_str(body).unwrap();
+        assert_eq!(
+            hq.machines.as_array().map(Vec::len),
+            Some(2),
+            "star invite reads the fleet grid"
+        );
+        assert!(
+            reply.contains("\"x-oth\""),
+            "star invite reads whole: {reply}"
+        );
+        let reply = get(addr, "ann@example.com").await;
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        let body = reply.split("\r\n\r\n").nth(1).unwrap_or_default();
+        let hq: HqBody = serde_json::from_str(body).unwrap();
+        assert_eq!(
+            hq.machines,
+            serde_json::json!([]),
+            "the fleet grid drops whole"
+        );
+        assert!(reply.contains("\"x-hq1\""), "{reply}");
+        assert!(!reply.contains("\"x-oth\""), "{reply}");
+        server.abort();
+    }
+
+    // Frames have no node mapping, so the bridge feed closes the upgraded
+    // socket with the 1008 policy code and the reason in the close text.
+    #[allow(clippy::indexing_slicing)]
+    #[tokio::test]
+    async fn scoped_invites_get_a_policy_close_on_the_bridge_feed() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let list = vec![invite("ann@example.com", "x-b1")];
+        let (addr, server) = serve_state(answer_state(true, Some(list))).await;
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let head = "GET /ws?t=right HTTP/1.1\r\nHost: machine.tail1.ts.net\r\nTailscale-User-Login: ann@example.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+        stream.write_all(head.as_bytes()).await.unwrap();
+        let mut buf = Vec::new();
+        stream.read_to_end(&mut buf).await.unwrap();
+        let text = String::from_utf8_lossy(&buf);
+        assert!(text.starts_with("HTTP/1.1 101"), "{text}");
+        let frame_at = text.find("\r\n\r\n").map_or(buf.len(), |i| i + 4);
+        let frame = &buf[frame_at..];
+        assert_eq!(
+            frame.first().copied(),
+            Some(0x88),
+            "a close frame ends the feed: {text}"
+        );
+        assert!(frame.len() >= 4, "{text:?}");
+        let len = frame[1] as usize;
+        let code = u16::from_be_bytes([frame[2], frame[3]]);
+        assert_eq!(code, 1008, "policy close: {text:?}");
+        let reason = std::str::from_utf8(&frame[4..2 + len]).unwrap_or("");
+        assert!(reason.contains("machine-wide"), "{reason}");
         server.abort();
     }
 
@@ -3578,7 +4183,8 @@ console.log("backlog page helpers: 18 cases ok");
             rundown_republish: true,
             hq: Default::default(),
             writable: true,
-            invites: None,
+            invites: invite_source(None),
+            click_journal: None,
             model: Default::default(),
             shutdown,
         };
@@ -3600,7 +4206,8 @@ console.log("backlog page helpers: 18 cases ok");
         // The read-only state: no flag anywhere in the page.
         let ro_state = AppState {
             writable: false,
-            invites: None,
+            invites: invite_source(None),
+            click_journal: None,
             ..state.clone()
         };
         let ro_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

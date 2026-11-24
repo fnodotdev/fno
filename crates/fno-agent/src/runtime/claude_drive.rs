@@ -56,6 +56,17 @@ impl std::fmt::Display for DriveError {
 
 impl std::error::Error for DriveError {}
 
+/// The Claude config root a spawn would otherwise run against:
+/// `CLAUDE_CONFIG_DIR`, else `$HOME/.claude`. Reads Claude Code's OWN config
+/// location (the allowlisted read this file exists for); fno's own state
+/// never lands here. `None` when even `$HOME` is unreadable.
+pub fn ambient_claude_config_root() -> Option<PathBuf> {
+    if let Some(cfg) = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(cfg));
+    }
+    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude"))
+}
+
 /// The Claude projects (transcript) base dir.
 pub fn claude_projects_dir() -> PathBuf {
     if let Some(v) = std::env::var_os(PROJECTS_DIR_ENV) {
@@ -77,6 +88,25 @@ pub fn find_transcript(session_uuid: &str) -> Option<PathBuf> {
     find_transcript_in(&claude_projects_dir(), session_uuid)
 }
 
+/// The projects bases a transcript scan reads: the ambient root, plus the
+/// evals sandbox when it exists (a sealed eval worker pins it). The
+/// `PROJECTS_DIR_ENV` override replaces the list entirely, the same way it
+/// replaces [`claude_projects_dir`], so a caller pointing the base at a
+/// fixture never picks up an ambient sibling.
+pub fn claude_projects_dirs() -> Vec<PathBuf> {
+    if std::env::var_os(PROJECTS_DIR_ENV).is_some() {
+        return vec![claude_projects_dir()];
+    }
+    let mut dirs = vec![claude_projects_dir()];
+    if let Some(dir) = crate::spawn_seam::evals_claude_config_dir() {
+        let projects = dir.join("projects");
+        if projects.is_dir() {
+            dirs.push(projects);
+        }
+    }
+    dirs
+}
+
 /// Same discovery under the isolated account's config dir: a row the roster
 /// read from a `[[accounts.records]]` root keeps its transcripts under that
 /// root, so the ambient scan would miss it. `None` or an unknown account id
@@ -87,6 +117,16 @@ pub fn find_transcript_for_account(session_uuid: &str, account: Option<&str>) ->
         .into_iter()
         .find(|(aid, _)| aid == id)?;
     find_transcript_in(&dir.join("projects"), session_uuid)
+}
+
+/// The transcript under the ambient root, else under any isolated account's
+/// config dir: a worker on an isolated account never writes to the ambient one.
+pub fn find_transcript_any_root(session_uuid: &str) -> Option<PathBuf> {
+    find_transcript(session_uuid).or_else(|| {
+        crate::claude_roster::isolated_account_dirs()
+            .into_iter()
+            .find_map(|(_, dir)| find_transcript_in(&dir.join("projects"), session_uuid))
+    })
 }
 
 /// Same discovery under an explicit projects base, for callers that resolve
@@ -153,5 +193,36 @@ mod tests {
         assert_eq!(find_transcript("bad-uuid"), None);
         std::env::remove_var(PROJECTS_DIR_ENV);
         std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn projects_dirs_override_replaces_and_sandbox_appends() {
+        let base = tmpdir("override");
+        // SAFETY: single-key env write, restored below; the crate's other
+        // env-scoped tests hold the same contract.
+        unsafe { std::env::set_var(PROJECTS_DIR_ENV, &base) };
+        assert_eq!(claude_projects_dirs(), vec![base.clone()]);
+        unsafe { std::env::remove_var(PROJECTS_DIR_ENV) };
+        std::fs::remove_dir_all(&base).ok();
+
+        let state = tmpdir("state");
+        // SAFETY: same contract as above, for the state root.
+        let previous = std::env::var_os("FNO_STATE_DIR");
+        unsafe { std::env::set_var("FNO_STATE_DIR", &state) };
+        assert_eq!(
+            claude_projects_dirs().len(),
+            1,
+            "no sandbox on disk yet: ambient only"
+        );
+        let sandbox = state.join("evals").join("claude-config").join("projects");
+        std::fs::create_dir_all(&sandbox).unwrap();
+        let dirs = claude_projects_dirs();
+        assert_eq!(dirs.len(), 2);
+        assert_eq!(dirs.get(1), Some(&sandbox));
+        match previous {
+            Some(v) => unsafe { std::env::set_var("FNO_STATE_DIR", v) },
+            None => unsafe { std::env::remove_var("FNO_STATE_DIR") },
+        }
+        std::fs::remove_dir_all(&state).ok();
     }
 }
