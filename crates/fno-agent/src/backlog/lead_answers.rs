@@ -446,7 +446,54 @@ pub(crate) fn held_reading(scope: &str) -> Result<Value, String> {
     let (quiet, due): (Vec<Value>, Vec<Value>) = rows
         .into_iter()
         .partition(|r| r.pointer("/quiet").is_some_and(|q| !q.is_null()));
-    Ok(json!({"open": due.len(), "quiet": quiet.len(), "rows": due}))
+    let seen_file = crate::attention_arm::attention_dir()
+        .ok()
+        .map(|d| d.join("seen-held.json"));
+    let seen = seen_file
+        .as_deref()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|raw| crate::hook::prompt::parse_seen(&raw))
+        .unwrap_or_default();
+    let (shown, folded, next) = fold_reported(due, &seen, scope);
+    if let Some(path) = seen_file.as_deref().filter(|_| next != seen) {
+        crate::hook::prompt::write_seen(path, &next);
+    }
+    Ok(json!({"open": shown.len(), "quiet": quiet.len() + folded, "rows": shown}))
+}
+
+/// A due question is said once per 24h window. Rows whose window the record
+/// already holds fold into the quiet count; a lost record only repeats a
+/// question once. Other scopes' keys pass through untouched.
+fn fold_reported(
+    due: Vec<Value>,
+    seen: &std::collections::HashMap<String, i64>,
+    scope: &str,
+) -> (Vec<Value>, usize, std::collections::HashMap<String, i64>) {
+    let prefix = format!("{scope}|");
+    let mut next: std::collections::HashMap<String, i64> = seen
+        .iter()
+        .filter(|(k, _)| !k.starts_with(&prefix))
+        .map(|(k, v)| (k.clone(), *v))
+        .collect();
+    let mut shown = Vec::new();
+    let mut folded = 0;
+    for row in due {
+        let Some(qid) = row.get("question_id").and_then(Value::as_str) else {
+            shown.push(row);
+            continue;
+        };
+        let key = format!("{prefix}{qid}");
+        let window = row.get("window").and_then(Value::as_i64).unwrap_or(0);
+        let recorded = seen.get(&key).copied();
+        if recorded.is_none_or(|r| window > r) {
+            next.insert(key, window);
+            shown.push(row);
+        } else {
+            next.insert(key, recorded.unwrap_or(window));
+            folded += 1;
+        }
+    }
+    (shown, folded, next)
 }
 
 /// The held reads' typed error (rust-style R6): one seam, one enum;
@@ -611,6 +658,10 @@ pub(crate) fn held_from_pages(
                     _ => "overdue: waits (on_silence wait)".to_string(),
                 }
             });
+        let window = match state {
+            Some(crate::attention::Quiet::Due { epoch }) => Some(epoch),
+            _ => None,
+        };
         rows.push((
             epoch,
             json!({
@@ -621,6 +672,7 @@ pub(crate) fn held_from_pages(
                 "epoch": epoch,
                 "quiet": quiet,
                 "overdue": overdue,
+                "window": window,
             }),
         ));
     }
@@ -811,7 +863,7 @@ pub(crate) fn held_lines(readings: &[crate::lead_checkin::Reading]) -> Vec<Strin
     }
     let quiet = value.pointer("/quiet").and_then(Value::as_u64).unwrap_or(0);
     let quiet_line = format!(
-        "held: {quiet} quiet until their deadline or snooze (fno inbox outstanding lists them)"
+        "held: {quiet} quiet (snoozed, before their deadline, or already reported this window; fno inbox outstanding lists them)"
     );
     // This team's questions: the rows carry node, question id and ask
     // time; a row with a node names the decide command, a row with none names
@@ -971,6 +1023,23 @@ mod tests {
         };
         assert!(row_line(1), "{lines:?}");
         assert!(row_line(2), "{lines:?}");
+    }
+
+    #[test]
+    fn a_due_question_lists_once_per_window_and_other_scopes_keep_their_record() {
+        let row = |window: u64| json!({"question_id": "q-1", "window": window});
+        let other = std::collections::HashMap::from([("other|q-9".to_string(), 3)]);
+        let (shown, folded, seen) = fold_reported(vec![row(0)], &other, "lead");
+        assert_eq!((shown.len(), folded), (1, 0), "first sight lists");
+        assert_eq!(seen.get("other|q-9"), Some(&3));
+        let (shown, folded, seen) = fold_reported(vec![row(0)], &seen, "lead");
+        assert_eq!(
+            (shown.len(), folded),
+            (0, 1),
+            "same window folds into quiet"
+        );
+        let (shown, folded, _) = fold_reported(vec![row(1)], &seen, "lead");
+        assert_eq!((shown.len(), folded), (1, 0), "a newer window lists again");
     }
 
     fn texts(items: &[&str]) -> Vec<String> {
