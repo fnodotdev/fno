@@ -36,7 +36,6 @@ pub mod stop;
 pub mod subagent_worktree_guard;
 pub mod task_boundary;
 pub mod test_run_guard;
-pub mod transcript_push;
 pub mod worktree_relocation_allow;
 pub mod write_gate;
 
@@ -68,10 +67,11 @@ pub fn dispatch(args: &[String]) -> i32 {
         Some("posttooluse-bash") => refusal_streak::run(&args[1..]),
         Some("pretool") => pretool_host::run_entry(args),
         Some("rules") => crate::event_rules::run_hook(&args[1..]),
+        Some("sandbox-guest") => crate::sandbox::guest::run(&args[1..]),
+        Some("sandbox-run") => crate::sandbox::relay::run(&args[1..]),
         Some("save-session") => save_session::run(&args[1..]),
         Some("send-message-guard") => send_message_guard::run(&args[1..]),
         Some("session-state") => session_state::run(&args[1..]),
-        Some("transcript-push") => transcript_push::run(&args[1..]),
         Some("test-run-guard") => test_run_guard::run(&args[1..]),
         Some("stop") => stop::run(&args[1..]),
         Some("task-boundary") => task_boundary::run(&args[1..]),
@@ -80,7 +80,7 @@ pub fn dispatch(args: &[String]) -> i32 {
         Some("write-gate") => write_gate::run(&args[1..]),
         other => {
             eprintln!(
-                "fno-agent hook: unknown entry {other:?}; expected backlog-impostor, bg-process-guard, bin-install-guard, broad-kill-guard, diff-budget, edit-integrity, effect-guard, gate, git-protection, join-partition-guard, lead-guard, posttooluse-bash, pretool, pretooluse-bash, prompt, recursive-grep-guard, rules, save-session, send-message-guard, session-state, subagent-worktree-guard, task-boundary, test-run-guard, transcript-push, worktree-relocation-allow, write-gate or stop"
+                "fno-agent hook: unknown entry {other:?}; expected backlog-impostor, bg-process-guard, bin-install-guard, broad-kill-guard, diff-budget, edit-integrity, effect-guard, gate, git-protection, join-partition-guard, lead-guard, posttooluse-bash, pretool, pretooluse-bash, prompt, recursive-grep-guard, rules, sandbox-guest, sandbox-run, save-session, send-message-guard, session-state, subagent-worktree-guard, task-boundary, test-run-guard, worktree-relocation-allow, write-gate or stop"
             );
             2
         }

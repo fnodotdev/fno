@@ -18,7 +18,7 @@ readme = "README.md"
 keywords = ["pty", "agent", "supervisor", "terminal", "cli"]
 categories = ["command-line-utilities", "development-tools", "asynchronous"]
 publish = true
-include = ["build.rs", "codegen/**", "src/**", "Cargo.toml", "README.md", "LICENSE*"]
+include = ["build.rs", "codegen/**", "src/**", "assets/**", "Cargo.toml", "README.md", "LICENSE*"]
 
 [lib]
 name = "fno_agent"

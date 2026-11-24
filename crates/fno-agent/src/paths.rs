@@ -457,11 +457,16 @@ impl AgentsHome {
         self.remote_dir().join("devices.json")
     }
 
-    /// The directory a devcontainer sandbox mounts to reach the daemon: it holds
-    /// a hard link to `supervisor_sock()` that the daemon re-creates at
-    /// every bind, and nothing else from the home.
-    pub fn sandbox_sock_dir(&self) -> PathBuf {
-        self.root.join("sandbox-sock")
+    /// One 0600 transcript file per sandbox, written by the host relay. It
+    /// sits outside every harness store, and only display readers open it.
+    pub fn sandbox_transcripts_dir(&self) -> PathBuf {
+        self.root.join("sandbox-transcripts")
+    }
+
+    /// One folder per sandbox for its stored dirty patch and untracked
+    /// archive. The host never applies or extracts them.
+    pub fn sandbox_exports_dir(&self) -> PathBuf {
+        self.root.join("sandbox-exports")
     }
 
     /// Sidecar advisory-lock file for the supervisor-socket singleton guard
