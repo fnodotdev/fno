@@ -147,3 +147,19 @@ The flags still win: `--font`, `--font-size` and `--mode` override the config ro
 ## Mouse
 
 A click on a pane focuses it. A drag selects text, and the release copies it. The wheel scrolls the pane's history, and `[+N]` at the top right shows how many lines up the pane is. A click on a border or a gap does nothing.
+
+## Measured performance
+
+Both clients read the same mux server, so the two columns measure the clients, not the data source. One throwaway server holds 30 idle agent panes, one 10,000-line pane and one busy pane. Each cell is p50 over p90 from 20 runs. Timed rows read in milliseconds. The idle row reads in CPU percent and KB.
+
+The harness is `scripts/ops/mux-client-bench.sh` in the fno repo. Its report carries the full provenance: host, macOS and binary versions, date and world shape. Failed runs are named, never averaged in.
+
+| Metric | TUI | fno-app | How it is measured |
+|---|---|---|---|
+| Launch to first frame | pending | pending | TUI: first output byte on a fresh pty attach. fno-app: one cold offscreen `--shot` frame, wall time, png encode included. |
+| Keystroke to paint, busy pane | pending | unmeasured | TUI: a marker keystroke until its echo paints. The app needs synthetic keyboard events plus screen capture, both gated by macOS permissions. No number until a run with those grants. |
+| Switch focused agent | pending | unmeasured | TUI: `mux view` flip until the new pane paints. The app drains its control file on a 400ms poll and acks nothing, so the flip is visible only through screen capture. |
+| Scroll a 10,000-line pane | pending | unmeasured | TUI: page-up presses in scroll mode until the paint settles. The app needs synthetic scroll-wheel events plus screen capture. |
+| Idle CPU / RSS, 30 agents | pending | pending | `ps` sampling at 1s for 30s against the same world. |
+
+The unmeasured cells are honest gaps, not absences of a client. The app's input and paint are observable only through macOS accessibility and screen-recording grants. The bench holds neither grant yet. A run with them fills the cells with the same p50 over p90 shape.
