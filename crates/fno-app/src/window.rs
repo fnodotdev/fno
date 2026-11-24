@@ -478,7 +478,6 @@ impl Root {
         // than silently running the shipped default.
         let (keymap, key_warnings) = fno::ui::digest_overlay::keymap(&theme_cwd);
         fno::ui::keys::install(keymap);
-        let key_warning = key_warnings.first().map(|w| w.0.clone());
         let mut root = Root {
             main,
             link: None,
@@ -487,7 +486,7 @@ impl Root {
             panes: HashMap::new(),
             modes: Modes::default(),
             scanner: fno::ui::keys::Scanner::default(),
-            notice: key_warning.or(theme_warning),
+            notice: key_warnings.first().map(|w| w.0.clone()).or(theme_warning),
             notice_failed: false,
             notice_gen: 0,
             shot: false,
@@ -3137,7 +3136,7 @@ impl Root {
                     }
                 })
                 .await;
-            this.update(cx, |root, cx| {
+            this.update(cx, |root, _cx| {
                 root.host_states.insert(host, state);
                 root.rebuild_settings_rows(None);
             })

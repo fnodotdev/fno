@@ -573,31 +573,35 @@ fn enter_out(state: &mut SettingsState) -> Option<Event> {
     }
 }
 
+/// The Add field takes every key while it is open; Enter submits, Esc
+/// cancels. A refusal keeps the field open with the typed text.
+fn add_field_key(state: &mut SettingsState, mut field: LineField, k: &Key) -> Option<Event> {
+    match k.key {
+        "enter" => Some(Event::AddHost(field.text().to_string())),
+        "escape" => {
+            state.add_refusal = None;
+            None
+        }
+        _ => match field.edit(k.key, k.key_char) {
+            Edit::Typed => {
+                state.add_host = Some(field);
+                None
+            }
+            Edit::Close => {
+                state.add_refusal = None;
+                None
+            }
+            Edit::Submit => Some(Event::AddHost(field.text().to_string())),
+        },
+    }
+}
+
 /// One key on the open panel. `None` = consumed, repaint; `Some` = the
 /// window resolves it. An open page folds its own keys; otherwise the
 /// query, cursor and Enter resolve per the grammar.
 pub(crate) fn key(state: &mut SettingsState, k: &Key) -> Option<Event> {
-    // The Add field takes every key while it is open; Enter submits, Esc
-    // cancels. A refusal keeps the field open with the typed text.
-    if let Some(mut field) = state.add_host.take() {
-        return match k.key {
-            "enter" => Some(Event::AddHost(field.text().to_string())),
-            "escape" => {
-                state.add_refusal = None;
-                return None;
-            }
-            _ => match field.edit(k.key, k.key_char) {
-                Edit::Typed => {
-                    state.add_host = Some(field);
-                    None
-                }
-                Edit::Close => {
-                    state.add_refusal = None;
-                    None
-                }
-                Edit::Submit => Some(Event::AddHost(field.text().to_string())),
-            },
-        };
+    if let Some(field) = state.add_host.take() {
+        return add_field_key(state, field, k);
     }
     if state.page.is_some() {
         match k.key {
@@ -769,6 +773,36 @@ fn body(root: &Root, cx: &mut Context<Root>) -> Div {
     panel
 }
 
+/// The Add field renders as the input in place of its row while it is
+/// open, its refusal inline beneath.
+fn add_field_elements(state: &SettingsState, p: &Palette) -> Vec<AnyElement> {
+    let text = state
+        .add_host
+        .as_ref()
+        .map(|f| f.text().to_string())
+        .unwrap_or_default();
+    let shown = if text.is_empty() {
+        ADD_PLACEHOLDER.to_string()
+    } else {
+        text
+    };
+    let mut out = vec![div()
+        .flex_none()
+        .min_w_0()
+        .child(ui::role(div(), Role::Body, p).child(shown))
+        .into_any_element()];
+    if let Some(refusal) = state.add_refusal.as_ref() {
+        out.push(
+            ui::role(div(), Role::Hint, p)
+                .text_color(rgb(p.error))
+                .px_3()
+                .child(refusal.clone())
+                .into_any_element(),
+        );
+    }
+    out
+}
+
 /// The section rail and the filtered rows: each group under its heading,
 /// the rail jumping to a group when clicked.
 fn rows_body(root: &Root, cx: &mut Context<Root>) -> Div {
@@ -833,35 +867,8 @@ fn rows_body(root: &Root, cx: &mut Context<Root>) -> Div {
         } else {
             children.len()
         });
-        // The Add field renders as the input while it is open, its
-        // refusal inline beneath; nothing else on the row list changes.
         if row.id == "add_host" && state.add_host.is_some() {
-            let text = state
-                .add_host
-                .as_ref()
-                .map(|f| f.text().to_string())
-                .unwrap_or_default();
-            let shown = if text.is_empty() {
-                ADD_PLACEHOLDER.to_string()
-            } else {
-                text
-            };
-            children.push(
-                div()
-                    .flex_none()
-                    .min_w_0()
-                    .child(ui::role(div(), Role::Body, &p).child(shown))
-                    .into_any_element(),
-            );
-            if let Some(refusal) = state.add_refusal.as_ref() {
-                children.push(
-                    ui::role(div(), Role::Hint, &p)
-                        .text_color(rgb(p.error))
-                        .px_3()
-                        .child(refusal.clone())
-                        .into_any_element(),
-                );
-            }
+            children.extend(add_field_elements(state, &p));
             continue;
         }
         children.push(row_line(row, i == state.selected, &p, cx).into_any_element());
@@ -1031,12 +1038,12 @@ mod tests {
         let names: Vec<&str> = rows.iter().map(|(name, _)| *name).collect();
         assert_eq!(names, ["Look", "Alerts", "Machines", "Keys", "Updates"]);
         let machines = &rows.get(2).expect("machines section").1;
+        let ids: Vec<&str> = machines.iter().map(|r| r.id).collect();
         assert_eq!(
-            machines.len(),
-            1,
+            ids,
+            ["add_host"],
             "no fleet, no configured: the add row only"
         );
-        assert_eq!(machines[0].id, "add_host");
         let fresh = Machine {
             host: "m1".into(),
             local: false,
@@ -1066,16 +1073,18 @@ mod tests {
         let machines = &rows.get(2).expect("machines section").1;
         // Two fleet rows first (m1 live, m2 stale), then the configured
         // host the map does not know, then the add row.
-        assert_eq!(machines.len(), 4);
-        assert_eq!(machines[3].id, "add_host");
+        let ids: Vec<&str> = machines.iter().map(|r| r.id).collect();
+        assert_eq!(ids, ["machine", "machine", "rhost", "add_host"]);
         let words: Vec<&str> = machines.iter().map(|r| r.value.as_str()).collect();
-        assert_eq!(words[0], "0 seats live");
-        assert_eq!(words[1], "0 seats beat 1m ago");
         assert_eq!(
-            words[2],
-            "couldn't connect: could not reach nohost: no route"
+            words,
+            [
+                "0 seats live",
+                "0 seats beat 1m ago",
+                "couldn't connect: could not reach nohost: no route",
+                ""
+            ]
         );
-        assert_eq!(machines[2].id, "rhost");
     }
 
     /// AC3-EDGE: the resolved machine, not the typed text, decides a
