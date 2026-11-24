@@ -20,15 +20,23 @@ const SENDER: &str = "fno/prompt-wait";
 /// The spawner walk stops here, so a lineage loop cannot hang a pass.
 const MAX_HOPS: usize = 8;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 struct Seen {
     first_seen_ms: i64,
     notified: bool,
     /// The recipients a send reached, so a retry mails only the rest.
     told: Vec<String>,
-    /// The deny key landed; one denial per wait.
+    /// A deny key reached the worker; one denial per wait.
     denied: bool,
+    /// The denial's board task is filed.
+    boarded: bool,
+    /// The recipients the denial mail reached.
+    told_deny: Vec<String>,
+    /// The board task and every denial mail landed.
+    deny_done: bool,
+    /// Hex fingerprint of the prompt on screen. A new one is a new wait.
+    fingerprint: String,
 }
 
 /// One worker waiting on a prompt now.
@@ -40,13 +48,13 @@ pub(crate) struct Waiting {
     pub cwd: String,
     pub waiting_for: String,
     pub since_ms: i64,
-    notified: bool,
-    told: Vec<String>,
-    denied: bool,
+    seen: Seen,
     /// Grants a macOS grant screen names as missing; no key answers it.
     pub grants: Vec<&'static str>,
     /// The permission menu the screen shows, so the line names what is asked.
     pub menu: Option<crate::manifest::AnswerablePrompt>,
+    /// Fingerprint of that menu, hex, when the screen was read this pass.
+    screen_fp: Option<String>,
 }
 
 impl Waiting {
@@ -60,6 +68,12 @@ impl Waiting {
                 self.grants = missing;
             } else {
                 self.menu = crate::thread_dialog::read_menu(&screen);
+                self.screen_fp = self.menu.as_ref().map(|m| {
+                    m.fingerprint
+                        .iter()
+                        .map(|b| format!("{b:02x}"))
+                        .collect::<String>()
+                });
             }
         }
     }
@@ -71,7 +85,7 @@ impl Waiting {
     /// Past [`DENY_AFTER_MS`], or at once while the user sleeps: nothing may
     /// sit idle through the night.
     fn deny_due(&self, now: i64, asleep: bool) -> bool {
-        !self.denied && (asleep || now.saturating_sub(self.since_ms) >= DENY_AFTER_MS)
+        !self.seen.denied && (asleep || now.saturating_sub(self.since_ms) >= DENY_AFTER_MS)
     }
 
     fn minutes(&self, now: i64) -> i64 {
@@ -163,11 +177,10 @@ pub(crate) fn observe(
             cwd: row.cwd.clone().unwrap_or_default(),
             waiting_for: row.waiting_for.clone().unwrap_or_default(),
             since_ms: seen.first_seen_ms,
-            notified: seen.notified,
-            told: seen.told,
-            denied: seen.denied,
+            seen,
             grants: Vec::new(),
             menu: None,
+            screen_fp: None,
         });
     }
     if snapshot.is_known() && snapshot.warning_text().is_empty() {
@@ -261,9 +274,23 @@ fn user_asleep(w: &Waiting, now: i64) -> bool {
     crate::agents_config::user_hours_or_default(std::path::Path::new(&w.cwd)).away(now / 1000)
 }
 
-fn deny_prompt(short: &str) -> Result<String, String> {
-    crate::thread_dialog::answer_prompt(&crate::claude_roster::daemon_dir(), short, "deny")
-        .map_err(|e| e.to_string())
+/// What the deny key did. `Typed` means a key reached the worker, whatever the
+/// screen did next, so it is never typed twice. `NotTyped` leaves a retry.
+#[derive(Debug, PartialEq)]
+enum DenyOutcome {
+    Typed(Option<String>),
+    NotTyped(String),
+}
+
+fn deny_prompt(short: &str) -> DenyOutcome {
+    use crate::thread_dialog::Refusal;
+    match crate::thread_dialog::answer_prompt(&crate::claude_roster::daemon_dir(), short, "deny") {
+        Ok(_) => DenyOutcome::Typed(None),
+        Err(e @ (Refusal::StillShowing | Refusal::Unconfirmed(_))) => {
+            DenyOutcome::Typed(Some(e.to_string()))
+        }
+        Err(e) => DenyOutcome::NotTyped(e.to_string()),
+    }
 }
 
 fn run_pass_with(
@@ -272,12 +299,30 @@ fn run_pass_with(
     snapshot: &ClaudeAgentsSnapshot,
     runner: crate::burn_watch::Runner<'_>,
 ) -> Result<(), String> {
-    run_pass_denying(home, now, snapshot, runner, &user_asleep, &deny_prompt)
+    run_pass_denying(
+        home,
+        now,
+        snapshot,
+        runner,
+        &Hooks {
+            asleep: &user_asleep,
+            deny: &deny_prompt,
+            dialog: &|w: &mut Waiting| w.read_dialog(),
+        },
+    )
+}
+
+/// The three seams a pass reaches the machine through, so a test drives the
+/// pass with no screen, no config and no keys.
+struct Hooks<'a> {
+    asleep: &'a dyn Fn(&Waiting, i64) -> bool,
+    deny: &'a dyn Fn(&str) -> DenyOutcome,
+    dialog: &'a dyn Fn(&mut Waiting),
 }
 
 fn denial_notice(w: &Waiting, now: i64, asleep: bool) -> String {
     let why = if asleep {
-        "the user is asleep".to_string()
+        "the user is away".to_string()
     } else {
         format!("nobody answered in {}m", w.minutes(now))
     };
@@ -289,56 +334,107 @@ fn denial_notice(w: &Waiting, now: i64, asleep: bool) -> String {
     )
 }
 
-/// Deny every wait that is due, tell its spawner and lead, and file the item
-/// on the board once. A grant screen has no deny key and stays for a person.
-fn deny_due_waits(
+impl Waiting {
+    fn persist(&self, home: &AgentsHome) -> Result<(), String> {
+        let seen = Seen {
+            first_seen_ms: self.since_ms,
+            ..self.seen.clone()
+        };
+        state::write_json_atomic(&dir(home).join(format!("{}.json", self.short_id)), &seen)
+            .map_err(|e| e.to_string())
+    }
+
+    /// A deny often ends in a new prompt on the same worker. The screen's
+    /// fingerprint tells the two waits apart, so the new one starts clean.
+    /// True when the stored state changed.
+    fn renew(&mut self, now: i64) -> bool {
+        let Some(fp) = self.screen_fp.clone() else {
+            return false;
+        };
+        if self.seen.fingerprint == fp {
+            return false;
+        }
+        if !self.seen.fingerprint.is_empty() {
+            self.seen = Seen::default();
+            self.since_ms = now;
+        }
+        self.seen.fingerprint = fp;
+        true
+    }
+}
+
+/// Deny every wait that is due, then finish what a denial owes: one board
+/// task and one mail per recipient. Each step is recorded as it lands, so a
+/// failed step retries on the next pass and a landed one never repeats.
+fn settle_denials(
     home: &AgentsHome,
     now: i64,
     waiting: &mut [Waiting],
     runner: crate::burn_watch::Runner<'_>,
-    asleep: &dyn Fn(&Waiting, i64) -> bool,
-    deny: &dyn Fn(&str) -> Result<String, String>,
+    hooks: &Hooks<'_>,
 ) -> Result<(), String> {
-    let mut first_error = None;
-    let mut registry = None;
+    let mut first_error: Option<String> = None;
+    let mut registry: Option<Registry> = None;
     for w in waiting.iter_mut() {
-        let sleeping = asleep(w, now);
-        if !w.deny_due(now, sleeping) {
+        let sleeping = (hooks.asleep)(w, now);
+        if w.deny_due(now, sleeping) && w.grants.is_empty() {
+            match (hooks.deny)(&w.short_id) {
+                DenyOutcome::NotTyped(e) => {
+                    first_error.get_or_insert(e);
+                    continue;
+                }
+                DenyOutcome::Typed(note) => {
+                    w.seen.denied = true;
+                    if let Some(note) = note {
+                        first_error.get_or_insert(note);
+                    }
+                    if let Err(e) = w.persist(home) {
+                        first_error.get_or_insert(e);
+                    }
+                }
+            }
+        }
+        if !w.seen.denied || w.seen.deny_done {
             continue;
         }
-        w.read_dialog();
-        if !w.grants.is_empty() || deny(&w.short_id).is_err() {
-            continue;
-        }
-        w.denied = true;
-        let seen = Seen {
-            first_seen_ms: w.since_ms,
-            notified: w.notified,
-            told: w.told.clone(),
-            denied: true,
-        };
-        state::write_json_atomic(&dir(home).join(format!("{}.json", w.short_id)), &seen)
-            .map_err(|e| e.to_string())?;
         let text = denial_notice(w, now, sleeping);
-        let store = crate::provider_cap::questions_path(home);
-        let key = format!("prompt denied {}", w.short_id);
-        if let Err(e) =
-            crate::fleet_task::file_once(&store, SENDER, &key, &w.cwd, &text, None, None)
-        {
-            first_error.get_or_insert(e);
+        if !w.seen.boarded {
+            let store = crate::provider_cap::questions_path(home);
+            let key = format!("prompt denied {}", w.short_id);
+            match crate::fleet_task::file_once(&store, SENDER, &key, &w.cwd, &text, None, None) {
+                Ok(_) => w.seen.boarded = true,
+                Err(e) => {
+                    first_error.get_or_insert(e);
+                }
+            }
         }
         if registry.is_none() {
-            registry =
-                Some(state::load_registry(&home.registry_json()).map_err(|e| e.to_string())?);
-        }
-        let to = match (&registry, w.session_id.as_deref()) {
-            (Some(reg), Some(sid)) => recipients(home, reg, sid),
-            _ => Vec::new(),
-        };
-        for sid in to {
-            if let Err(e) = crate::first_check::send_notice(&mut *runner, SENDER, &sid, &text) {
-                first_error.get_or_insert(e);
+            match state::load_registry(&home.registry_json()) {
+                Ok(r) => registry = Some(r),
+                Err(e) => {
+                    first_error.get_or_insert(e.to_string());
+                }
             }
+        }
+        if let (Some(reg), Some(sid)) = (&registry, w.session_id.as_deref()) {
+            let to = recipients(home, reg, sid);
+            let pending: Vec<String> = to
+                .iter()
+                .filter(|s| !w.seen.told_deny.contains(*s))
+                .cloned()
+                .collect();
+            for sid in pending {
+                match crate::first_check::send_notice(&mut *runner, SENDER, &sid, &text) {
+                    Ok(()) => w.seen.told_deny.push(sid),
+                    Err(e) => {
+                        first_error.get_or_insert(e);
+                    }
+                }
+            }
+            w.seen.deny_done = w.seen.boarded && to.iter().all(|s| w.seen.told_deny.contains(s));
+        }
+        if let Err(e) = w.persist(home) {
+            first_error.get_or_insert(e);
         }
     }
     first_error.map_or(Ok(()), Err)
@@ -349,30 +445,29 @@ fn run_pass_denying(
     now: i64,
     snapshot: &ClaudeAgentsSnapshot,
     runner: crate::burn_watch::Runner<'_>,
-    asleep: &dyn Fn(&Waiting, i64) -> bool,
-    deny: &dyn Fn(&str) -> Result<String, String>,
+    hooks: &Hooks<'_>,
 ) -> Result<(), String> {
     let mut waiting = observe(home, now, snapshot)?;
-    let denial = deny_due_waits(home, now, &mut waiting, &mut *runner, asleep, deny);
-    waiting.retain(|w| !w.denied);
-    if !waiting.iter().any(|w| w.overdue(now) && !w.notified) {
+    for w in waiting.iter_mut() {
+        (hooks.dialog)(w);
+        if w.renew(now) {
+            w.persist(home)?;
+        }
+    }
+    let denial = settle_denials(home, now, &mut waiting, &mut *runner, hooks);
+    let owes_notice = |w: &Waiting| w.overdue(now) && !w.seen.notified && !w.seen.denied;
+    if !waiting.iter().any(owes_notice) {
         return denial;
     }
     let registry = state::load_registry(&home.registry_json()).map_err(|e| e.to_string())?;
     let mut first_error = denial.err();
-    for mut w in waiting
-        .into_iter()
-        .filter(|w| w.overdue(now) && !w.notified)
-    {
-        w.read_dialog();
-        let w = &w;
+    for w in waiting.iter_mut().filter(|w| owes_notice(w)) {
         let text = notice(w, now);
         let to = w
             .session_id
             .as_deref()
             .map(|sid| recipients(home, &registry, sid))
             .unwrap_or_default();
-        let mut told = w.told.clone();
         // With no spawner on record, one fleet task reaches the operator.
         let notified = if to.is_empty() {
             let run = format!("claude attach {}", w.short_id);
@@ -382,27 +477,23 @@ fn run_pass_denying(
                 .map_err(|e| first_error.get_or_insert(e).clone())
                 .is_ok()
         } else {
-            let pending: Vec<String> = to.iter().filter(|s| !told.contains(*s)).cloned().collect();
+            let pending: Vec<String> = to
+                .iter()
+                .filter(|s| !w.seen.told.contains(*s))
+                .cloned()
+                .collect();
             for sid in pending {
                 match crate::first_check::send_notice(&mut *runner, SENDER, &sid, &text) {
-                    Ok(()) => told.push(sid),
+                    Ok(()) => w.seen.told.push(sid),
                     Err(e) => {
                         first_error.get_or_insert(e);
                     }
                 }
             }
-            to.iter().all(|sid| told.contains(sid))
+            to.iter().all(|sid| w.seen.told.contains(sid))
         };
-        if notified || told != w.told {
-            let seen = Seen {
-                first_seen_ms: w.since_ms,
-                notified,
-                told,
-                denied: false,
-            };
-            let path = dir(home).join(format!("{}.json", w.short_id));
-            state::write_json_atomic(&path, &seen).map_err(|e| e.to_string())?;
-        }
+        w.seen.notified = notified;
+        w.persist(home)?;
     }
     first_error.map_or(Ok(()), Err)
 }
@@ -529,49 +620,116 @@ mod tests {
         assert!(!line.contains("--answer allow_once"), "{line}");
     }
 
-    #[test]
-    fn an_unanswered_prompt_is_denied_after_thirty_minutes_or_at_once_while_asleep() {
-        let temp = tempfile::tempdir().unwrap();
-        let home = AgentsHome::at(temp.path().join("agents"));
-        let snap =
-            ClaudeAgentsSnapshot::known(vec![waiting_row("30d6ff6a", "sid-x", "t-away-worker")]);
-        let typed: std::cell::RefCell<Vec<String>> = Default::default();
-        let deny = |short: &str| {
-            typed.borrow_mut().push(short.to_string());
-            Ok("3".to_string())
-        };
-        let mut mail = |_: &[String], _: &str| (0, "accepted-new-turn".into(), String::new());
-        let day = |_: &Waiting, _: i64| false;
-        let night = |_: &Waiting, _: i64| true;
-        let t0 = 1_000_000;
-        run_pass_denying(&home, t0, &snap, &mut mail, &day, &deny).unwrap();
-        run_pass_denying(&home, t0 + DENY_AFTER_MS - 1, &snap, &mut mail, &day, &deny).unwrap();
-        assert!(
-            typed.borrow().is_empty(),
-            "a daytime prompt waits for a person"
-        );
-        run_pass_denying(&home, t0 + DENY_AFTER_MS, &snap, &mut mail, &day, &deny).unwrap();
-        run_pass_denying(
-            &home,
-            t0 + DENY_AFTER_MS + 60_000,
-            &snap,
-            &mut mail,
-            &day,
-            &deny,
-        )
-        .unwrap();
-        assert_eq!(*typed.borrow(), vec!["30d6ff6a"], "one denial per wait");
-        // Asleep: the first sighting is denied at once, a second wait too.
-        let home2 = AgentsHome::at(temp.path().join("agents2"));
-        run_pass_denying(&home2, t0, &snap, &mut mail, &night, &deny).unwrap();
-        assert_eq!(typed.borrow().len(), 2, "quiet hours hold nothing");
-        let store = crate::provider_cap::questions_path(&home2);
-        assert!(
+    struct Rig {
+        home: AgentsHome,
+        typed: std::cell::RefCell<Vec<String>>,
+        outcome: std::cell::RefCell<Option<DenyOutcome>>,
+        fp: std::cell::RefCell<String>,
+        asleep: std::cell::Cell<bool>,
+        _temp: tempfile::TempDir,
+    }
+
+    impl Rig {
+        fn new() -> Self {
+            let temp = tempfile::tempdir().unwrap();
+            let home = AgentsHome::at(temp.path().join("agents"));
+            state::update_registry(&home.registry_json(), |_| {}).unwrap();
+            Rig {
+                home,
+                typed: Default::default(),
+                outcome: Default::default(),
+                fp: std::cell::RefCell::new("aa".into()),
+                asleep: Default::default(),
+                _temp: temp,
+            }
+        }
+
+        fn pass(&self, now: i64) -> Result<(), String> {
+            let snap = ClaudeAgentsSnapshot::known(vec![waiting_row(
+                "30d6ff6a",
+                "sid-x",
+                "t-away-worker",
+            )]);
+            let mut mail = |_: &[String], _: &str| (0, "accepted-new-turn".into(), String::new());
+            let asleep = |_: &Waiting, _: i64| self.asleep.get();
+            let deny = |short: &str| {
+                self.typed.borrow_mut().push(short.to_string());
+                self.outcome
+                    .borrow_mut()
+                    .take()
+                    .unwrap_or(DenyOutcome::Typed(None))
+            };
+            let dialog = |w: &mut Waiting| w.screen_fp = Some(self.fp.borrow().clone());
+            run_pass_denying(
+                &self.home,
+                now,
+                &snap,
+                &mut mail,
+                &Hooks {
+                    asleep: &asleep,
+                    deny: &deny,
+                    dialog: &dialog,
+                },
+            )
+        }
+
+        fn board_rows(&self) -> usize {
+            let store = crate::provider_cap::questions_path(&self.home);
             crate::fleet_task::open_tasks(&store)
                 .unwrap()
                 .iter()
-                .any(|t| t.key == "prompt denied 30d6ff6a"),
-            "the denied item lands on the board"
-        );
+                .filter(|t| t.key == "prompt denied 30d6ff6a")
+                .count()
+        }
+    }
+
+    #[test]
+    fn an_unanswered_prompt_is_denied_after_thirty_minutes_or_at_once_while_away() {
+        let day = Rig::new();
+        let t0 = 1_000_000;
+        day.pass(t0).unwrap();
+        day.pass(t0 + DENY_AFTER_MS - 1).unwrap();
+        assert!(day.typed.borrow().is_empty(), "a daytime prompt waits");
+        day.pass(t0 + DENY_AFTER_MS).unwrap();
+        day.pass(t0 + DENY_AFTER_MS + 60_000).unwrap();
+        assert_eq!(day.typed.borrow().len(), 1, "one denial per wait");
+        assert_eq!(day.board_rows(), 1, "the denied item lands on the board");
+
+        let night = Rig::new();
+        night.asleep.set(true);
+        night.pass(t0).unwrap();
+        assert_eq!(night.typed.borrow().len(), 1, "away holds nothing");
+    }
+
+    #[test]
+    fn a_key_that_reached_the_worker_is_never_typed_twice() {
+        let rig = Rig::new();
+        rig.asleep.set(true);
+        *rig.outcome.borrow_mut() = Some(DenyOutcome::Typed(Some("still showing".into())));
+        assert!(rig.pass(1_000_000).is_err(), "the odd screen is reported");
+        rig.pass(1_000_000 + 60_000).unwrap();
+        assert_eq!(rig.typed.borrow().len(), 1);
+        // A key that never left retries.
+        let retry = Rig::new();
+        retry.asleep.set(true);
+        *retry.outcome.borrow_mut() = Some(DenyOutcome::NotTyped("screen changed".into()));
+        assert!(retry.pass(1_000_000).is_err());
+        retry.pass(1_000_000 + 60_000).unwrap();
+        assert_eq!(retry.typed.borrow().len(), 2);
+    }
+
+    #[test]
+    fn a_new_prompt_after_a_denial_is_a_new_wait() {
+        let rig = Rig::new();
+        let t0 = 1_000_000;
+        rig.pass(t0).unwrap();
+        rig.pass(t0 + DENY_AFTER_MS).unwrap();
+        assert_eq!(rig.typed.borrow().len(), 1);
+        *rig.fp.borrow_mut() = "bb".into();
+        let t1 = t0 + DENY_AFTER_MS + 120_000;
+        rig.pass(t1).unwrap();
+        assert_eq!(rig.typed.borrow().len(), 1, "the clock starts over");
+        rig.pass(t1 + DENY_AFTER_MS).unwrap();
+        assert_eq!(rig.typed.borrow().len(), 2, "the new prompt is denied too");
     }
 }

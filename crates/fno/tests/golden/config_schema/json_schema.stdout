@@ -3905,14 +3905,22 @@
           "type": "string"
         },
         "working_hours": {
-          "additionalProperties": {
-            "items": {
-              "type": "string"
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "type": "object"
             },
-            "type": "array"
-          },
-          "title": "Working Hours",
-          "type": "object"
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Working Hours"
         }
       },
       "title": "UserBlock",

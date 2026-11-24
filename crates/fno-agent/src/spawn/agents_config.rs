@@ -1993,10 +1993,6 @@ impl UserHours {
         }
     }
 
-    fn is_set(&self) -> bool {
-        self.working.is_some() || !self.timezone.is_empty()
-    }
-
     /// True when `now_epoch` falls outside the user's working hours in their
     /// timezone (empty = the machine's local zone).
     pub fn away(&self, now_epoch: i64) -> bool {
@@ -2141,28 +2137,61 @@ pub(crate) fn parse_user_hours(content: &str, source: &str) -> Result<UserHours,
     Ok(hours)
 }
 
-/// The user's hours from the first config that sets `[user]` timezone or
-/// working hours. A bad value refuses, naming the file and line.
+/// The user's hours across the config candidates. Timezone and working
+/// hours resolve separately, each from the first file that sets it, so a
+/// project file with only a timezone does not hide the global hours. A bad
+/// value in any file refuses, naming the file and line.
 pub fn user_hours(cwd: &Path) -> Result<UserHours, String> {
+    let mut merged = UserHours::default();
     for path in config_candidates(cwd) {
         let Ok(content) = std::fs::read_to_string(&path) else {
             continue;
         };
         let hours = parse_user_hours(&content, &path.display().to_string())?;
-        if hours.is_set() {
-            return Ok(hours);
+        if merged.timezone.is_empty() {
+            merged.timezone = hours.timezone;
+        }
+        if merged.working.is_none() {
+            merged.working = hours.working;
         }
     }
-    Ok(UserHours::default())
+    Ok(merged)
 }
 
 /// The cap actor and the prompt-wait arm cannot refuse mid-beat, so a bad
-/// value reads as never away and prints its refusal.
+/// value reads as never away. The refusal is not silent: it prints, and it
+/// lands once on the board, where `fno config doctor` also names it.
 pub fn user_hours_or_default(cwd: &Path) -> UserHours {
     user_hours(cwd).unwrap_or_else(|refusal| {
         eprintln!("fno-agent: {refusal}");
+        let home = crate::paths::AgentsHome::from_env();
+        let store = crate::provider_cap::questions_path(&home);
+        let text = format!(
+            "Config refused: {refusal}. Until it is fixed the user reads as never away, so no prompt is denied for being away."
+        );
+        let _ = crate::fleet_task::file_once(
+            &store,
+            "fno/user-hours",
+            &refusal,
+            &cwd.display().to_string(),
+            &text,
+            None,
+            None,
+        );
         UserHours::default()
     })
+}
+
+/// `fno-agent user-hours`: one JSON line, `{"ok":true}` or
+/// `{"ok":false,"refusal":"<file>:<line>: ..."}`. `fno config doctor` reads it.
+pub fn run_user_hours(_args: &[String]) -> i32 {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let answer = match user_hours(&cwd) {
+        Ok(_) => serde_json::json!({"ok": true}),
+        Err(refusal) => serde_json::json!({"ok": false, "refusal": refusal}),
+    };
+    println!("{answer}");
+    0
 }
 
 /// Startup reconciliation is non-destructive by default. Operators may opt in
@@ -3184,6 +3213,12 @@ mod user_hours_tests {
         assert!(!parse_user_hours("[user]\nname = \"x\"\n", "cfg")
             .unwrap()
             .away(TUE_3AM));
+    }
+
+    #[test]
+    fn a_missing_table_leaves_the_user_never_away() {
+        let hours = parse_user_hours("[user]\ntimezone = \"UTC\"\n", "cfg").unwrap();
+        assert!(!hours.away(TUE_3AM), "a timezone alone sets no hours");
     }
 
     #[test]

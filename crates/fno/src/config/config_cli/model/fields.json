@@ -999,7 +999,7 @@
     },
     {
      "name": "working_hours",
-     "default": {}
+     "default": null
     }
    ]
   },

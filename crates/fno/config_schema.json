@@ -3789,14 +3789,22 @@
       "type": "string"
      },
      "working_hours": {
-      "additionalProperties": {
-       "items": {
-        "type": "string"
+      "anyOf": [
+       {
+        "additionalProperties": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "type": "object"
        },
-       "type": "array"
-      },
-      "title": "Working Hours",
-      "type": "object"
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Working Hours"
      }
     },
     "title": "UserBlock",
@@ -4766,11 +4774,11 @@
   {
    "path": "user.working_hours",
    "label": "Working hours",
-   "type": "dict[str, list[str]]",
-   "default": {},
+   "type": "typing.Optional[dict[str, list[str]]]",
+   "default": null,
    "wizard": "never",
    "question": "",
-   "default_source": "default",
+   "default_source": "",
    "doc": "When you are at work, as weekday lists (mon to sun) of HH:MM-HH:MM ranges under [user.working_hours]. Outside the ranges you are away, and a prompt that needs a person is denied at once instead of held. An empty list means away all day, and so does a missing weekday. With no table you are never away.",
    "edit": "editor"
   },

@@ -106,7 +106,7 @@ favorite_skills = []
 # IANA zone for working_hours, for example America/Los_Angeles. Empty (default) reads the machine's local zone.
 timezone = ""
 # When you are at work, as weekday lists (mon to sun) of HH:MM-HH:MM ranges under [user.working_hours]. Outside the ranges you are away, and a prompt that needs a person is denied at once instead of held. An empty list means away all day, and so does a missing weekday. With no table you are never away.
-working_hours = {}
+# working_hours = <unset>   # optional; no default
 
 [sandbox]
 # When a headless harness has no confinement backend: refuse before spawn (default) or explicitly warn and continue unconfined.

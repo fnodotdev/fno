@@ -45,7 +45,7 @@ The ladder, one step per tick (120s), with state in `<home>/provider-cap/return-
 2. Resume ONE canary: the first candidate by name (capped, not held, not spawn-confirmed into a successor).
 3. Hold a survive window of `canary_survive_minutes` (default 15).
 4. When the newest assistant entry postdates the resume and carries no new 429, the canary survived. `cap_unknown` or a missing member reads `unknown`. So does no turn since the resume. `unknown` blocks every further resume for that epoch, with one operator notice.
-5. In `ask` mode while the user is away, announce through `fno agent mail admin team --scope all` first. Then hold a 10-minute veto before anything else resumes. `fno agent admit provider-cap decide <lane> --answer wait` holds the rest for as long as the answer stands.
+5. In `ask` mode while the user is at work, announce through `fno agent mail admin team --scope all` first. Then hold a 10-minute veto before anything else resumes. `fno agent admit provider-cap decide <lane> --answer wait` holds the rest for as long as the answer stands.
 6. Otherwise resume the remaining candidates one per tick until the journal reads `return: complete`.
 
 A canary that hits a new 429 reopens the lane. The quota lock gains a fresh future reset, and the leave ladder owns the new strand. The watchdog never wakes on a passed window. Its verdict reads `429 window passed; return owned by provider-cap` ([fleet-watchdog.md](fleet-watchdog.md)).
