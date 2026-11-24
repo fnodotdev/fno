@@ -1,1 +1,1 @@
-{"status": "unverifiable", "reason": "'fno:code-review' is a plugin-qualified skill; footnote does not read the plugin cache layout, so availability cannot be verified. Proceeding - if the gate does go unmet, run the skill by hand"}
+{"status": "unverifiable", "reason": "'fno:code-review' is a plugin-qualified skill; the claude plugin manifest is absent or unreadable, so availability cannot be verified. Proceeding - if the gate does go unmet, run the skill by hand"}
