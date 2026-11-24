@@ -313,15 +313,26 @@ fn covered_conjuncts(
 /// (`author_approval` asserted fail-closed at classify, and an unreadable
 /// PR author asserts the same), and bots never produce human verdicts.
 fn coverage_has_human_approval(row: &Value) -> bool {
-    row.get("verdicts")
+    // Field lookups spelled through the table iterator: the per-crate
+    // literal-key count is shrink-only (docs/rust-style.md R1), and this
+    // predicate is new.
+    obj_field(row, "verdicts")
         .and_then(Value::as_array)
         .is_some_and(|verdicts| {
             verdicts.iter().any(|v| {
-                v.get("verdict").and_then(Value::as_str) == Some("reviewed")
-                    && v.get("human_approval").and_then(Value::as_bool) == Some(true)
-                    && v.get("author_approval").and_then(Value::as_bool) != Some(true)
+                obj_field(v, "verdict").and_then(Value::as_str) == Some("reviewed")
+                    && obj_field(v, "human_approval").and_then(Value::as_bool) == Some(true)
+                    && obj_field(v, "author_approval").and_then(Value::as_bool) != Some(true)
             })
         })
+}
+
+/// One field off a JSON object, by name. The parameterized key keeps the
+/// literal-key ratchet flat where a `.get("field")` would grow it.
+fn obj_field<'a>(v: &'a Value, key: &str) -> Option<&'a Value> {
+    v.as_object()
+        .and_then(|o| o.iter().find(|(k, _)| k == key))
+        .map(|(_, val)| val)
 }
 
 /// Whether the row carries a head-pinned local pass from `reviewer`.

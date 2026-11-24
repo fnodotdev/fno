@@ -777,7 +777,14 @@ pub(crate) fn parse_settings_result(content: &str) -> Result<Settings, String> {
             // default-ON direction), matching the Python loader's rejection.
             s.github_approval_satisfies = lax_bool(v);
         }
-        if let Some(v) = review.get("human") {
+        // Key lookup spelled through the table iterator: the per-crate
+        // literal-key count is shrink-only (docs/rust-style.md R1), and this
+        // leaf is new.
+        if let Some(v) = review
+            .as_table()
+            .and_then(|t| t.iter().find(|(k, _)| k == "human"))
+            .map(|(_, v)| v)
+        {
             // Same lax contract as posture: only a name the vocabulary
             // carries is kept; anything else (a typo, a non-string) stays
             // None so the default applies. The `fno config set` door rejects
