@@ -124,6 +124,27 @@ fn block_reason_stops_demanding_a_push_for_a_shipped_head() {
 }
 
 #[test]
+fn block_reason_names_the_person_gate_when_no_approver_is_in() {
+    // The review finding: an owed person with no other named gap must read
+    // the person sentence, not the generic config lecture that teaches a
+    // wait nothing will satisfy.
+    let mut pr = PrInfo::default();
+    pr.state = PrState::Open;
+    pr.number = 7;
+    pr.ci_conclusion = CiConclusion::Success;
+    pr.human_approval_owed = true;
+    let reason = build_block_reason(&pr, "23480a0e", true, true);
+    assert!(
+        reason.contains("review.human"),
+        "the block must name the person gate: {reason}"
+    );
+    assert!(
+        !reason.contains("arm a watcher"),
+        "the person gate teaches no arm-and-tag ritual: {reason}"
+    );
+}
+
+#[test]
 fn watch_idle_window_defaults_clamps_and_slacks() {
     // Default (no tag timeout): 15m + 12m slack.
     assert_eq!(

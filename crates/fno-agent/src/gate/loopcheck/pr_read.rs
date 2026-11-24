@@ -192,6 +192,11 @@ pub(super) struct PrInfo {
     /// `required_bots: []`). Recorded in loop_check events so the skip is
     /// observable, not silently absent (AC3-UI).
     pub(super) review_skipped: bool,
+    /// The person gate (review.human = always) is owed and no fresh
+    /// non-author approval is at the head: the block reason names it, so a
+    /// session blocked on the gate reads the person sentence instead of the
+    /// generic config lecture. False on every default/early-return shape.
+    pub(super) human_approval_owed: bool,
     /// Configured `config.review.reviewers` with no head-pinned attestation.
     /// The sole failing term whenever the login gate is vacuous, and the reason
     /// the block message can name real local work instead of an absent bot.
@@ -1420,6 +1425,7 @@ pub(super) fn read_pr_info(
     } else {
         None
     };
+    let human_approval_owed = !human_approval_at_head(&coverage, human_required);
     Ok(PrInfo {
         range_tiling: tiling,
         state,
@@ -1449,6 +1455,7 @@ pub(super) fn read_pr_info(
         malformed_attestations,
         posture: posture_v,
         coverage,
+        human_approval_owed,
     })
 }
 
