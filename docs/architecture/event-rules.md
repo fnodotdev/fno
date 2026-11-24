@@ -164,7 +164,7 @@ tags_file = "/absolute/path/to/judge-tags.toml"
 ```toml
 # the tag file
 "d-1a2b3c4d" = "behavioural"
-"d-5e6f7a8b" = "state"
+"d-deadbeef" = "state"
 ```
 
 Every Stop that carries a session id writes one request row to `.fno/event-rules/judge.jsonl` in the repository's main checkout. The row names the machine, the Stop key (`stop:<session>:<turn>`) and the laws the turn's prompt picked. `rules` holds at most 3 behavioural laws. `judge_dropped` counts the other behavioural laws, and `judge_state` counts the state laws. The `fnod` field reads `off`, `refused`, `down` or `up`. If the install never set `fnod.url`, the row also reads `off`. The shadow judge takes no default url, so its request row opens no connection there. The inline score at a keyword block still tries the default url. Only an `up` row keeps the reply tail, its last 4,000 characters, in `excerpt`. If fnod is absent, the row is a skip row. No later run can score it, so the report counts it as coverage lost. The file rotates after 64 MB and keeps one older copy.
