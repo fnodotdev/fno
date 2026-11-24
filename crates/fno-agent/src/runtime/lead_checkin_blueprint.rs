@@ -783,11 +783,7 @@ pub(crate) fn stop_check_reading(cwd: &Path) -> Option<BlueprintWait> {
     let rows = crate::claims::list(Some("node:"), None, false).ok()?;
     let mut running = running_blueprint_ids(&rows, &session);
     let home = crate::paths::AgentsHome::from_env();
-    for key in read_spawned_blueprints(&home, &session).ok()? {
-        if !running.contains(&key) {
-            running.push(key);
-        }
-    }
+    running.extend(read_spawned_blueprints(&home, &session).ok()?);
     let provider = std::env::var("FNO_ROUTE_PROVIDER").unwrap_or_default();
     let provider_cap = crate::spawn_gate_lanes::provider_subagents_cap(cwd, &provider);
     let ceiling = blueprint_ceiling(provider_cap);
