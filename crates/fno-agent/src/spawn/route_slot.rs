@@ -3433,7 +3433,10 @@ mod tests {
                 {"name": "bare", "harness": "claude", "model": "sonnet", "band": "low"},
             ]},
         })));
-        assert_eq!(out["candidate"]["model"], "glm");
+        assert_eq!(
+            out.pointer("/candidate/model").and_then(Value::as_str),
+            Some("glm")
+        );
         let out = resolve_slot_payload(&payload(json!({
             "lanes_raw": [], "node": {"difficulty": "medium", "priority": "p3"},
             "inventory": {"declared": true, "objective": "cheapest-that-clears",
@@ -3442,7 +3445,10 @@ mod tests {
                 {"name": "lowrow", "harness": "claude", "model": "m-low", "band": "low"},
             ]},
         })));
-        assert_eq!(out["candidate"]["model"], "m-mid");
+        assert_eq!(
+            out.pointer("/candidate/model").and_then(Value::as_str),
+            Some("m-mid")
+        );
         let out = resolve_slot_payload(&payload(json!({
             "lanes_raw": [], "node": {"difficulty": "low", "priority": "p0"},
             "inventory": {"declared": true, "objective": "cheapest-that-clears",
@@ -3451,7 +3457,10 @@ mod tests {
                 {"name": "top", "harness": "claude", "model": "m-top", "band": "high"},
             ]},
         })));
-        assert_eq!(out["candidate"]["model"], "m-top");
+        assert_eq!(
+            out.pointer("/candidate/model").and_then(Value::as_str),
+            Some("m-top")
+        );
 
         let out = resolve_slot_payload(&payload(json!({
             "lanes_raw": [], "node": {"difficulty": "low", "priority": "p2"},
