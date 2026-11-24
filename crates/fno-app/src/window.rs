@@ -90,6 +90,9 @@ pub enum Action {
     OpenAddMenu(u64),
     /// Cycle the Workspaces section's grouping: workspaces, state, machine.
     CycleGrouping,
+    /// A Machines row's click: group sessions by machine so that host's
+    /// sessions are the ones in view.
+    FocusMachine(String),
     /// Close the open context menu without acting.
     CloseWorkspaceMenu,
     /// Select a workspace, then open a shell tab in it.
@@ -1240,6 +1243,10 @@ impl Root {
                 if !self.folds.remove(&key) {
                     self.folds.insert(key);
                 }
+                record_ui_state(self, cx);
+            }
+            Action::FocusMachine(host) => {
+                self.group_by = GroupBy::Machine;
                 record_ui_state(self, cx);
             }
             Action::OpenWorkspaceMenu(id) => {

@@ -445,8 +445,9 @@ fn push_machines(out: &mut Vec<Row>, board: &Board) {
         } else {
             format!("seen {}s ago", m.age_s)
         };
+        let name = m.display_name.clone().unwrap_or_else(|| m.host.clone());
         out.push(Row::Item {
-            label: m.display_name.clone().unwrap_or_else(|| m.host.clone()),
+            label: name.clone(),
             detail: format!(
                 "{seats} seat{} · {fresh}",
                 if seats == 1 { "" } else { "s" }
@@ -460,7 +461,7 @@ fn push_machines(out: &mut Vec<Row>, board: &Board) {
             } else {
                 Mark::None
             },
-            action: None,
+            action: Some(Action::FocusMachine(name)),
         });
     }
 }
@@ -2170,5 +2171,48 @@ mod tests {
             .position(|r| matches!(r, Row::Group { title, .. } if title == "m2-mbp"));
         assert!(m2.unwrap() < remote_pos.unwrap());
         assert!(remote_pos.unwrap() < shell_pos.unwrap());
+    }
+
+    /// AC4-HP + EDGE: every Machines row carries its FocusMachine action
+    /// (the grouping switch the window runs), so a click acts on that
+    /// host; a host with no sessions still carries the action.
+    #[test]
+    fn machine_rows_carry_their_focus_actions() {
+        let layout = Layout::default();
+        let fleet = serde_json::json!({
+            "machines": [
+                {"host": "u", "local": true, "fresh": true, "sessions": []},
+                {"host": "m2-mbp", "fresh": false, "age_s": 900},
+            ]
+        });
+        let mut board = Board::default();
+        let none = fno::backlog_model::Inputs::default();
+        board.record(Ok(fleet), Err("no questions".into()), &none, 1, &[]);
+        let rows = rows(
+            &layout,
+            &board,
+            100,
+            &no_folds(),
+            GroupBy::Machine,
+            None,
+            None,
+        );
+        let acts: Vec<(String, String)> = rows
+            .iter()
+            .filter_map(|r| match r {
+                Row::Item { label, action, .. } => match action {
+                    Some(Action::FocusMachine(host)) => Some((label.clone(), host.clone())),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            acts,
+            vec![
+                ("u".to_string(), "u".to_string()),
+                ("m2-mbp".to_string(), "m2-mbp".to_string()),
+            ]
+        );
     }
 }
