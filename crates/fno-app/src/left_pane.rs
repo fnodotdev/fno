@@ -162,7 +162,14 @@ fn pr_status_marks(fact: &PrStatusFact, p: &Palette) -> Vec<(String, u32)> {
             },
             p.warn,
         )),
-        "pending" => marks.push((format!("…{}", fact.pending.max(1)), p.faint)),
+        "pending" => marks.push((
+            if fact.pending > 0 {
+                format!("…{}", fact.pending)
+            } else {
+                "…".to_string()
+            },
+            p.faint,
+        )),
         _ => {}
     }
     match fact.review_state.as_deref() {
@@ -1242,6 +1249,9 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
             let tinted = blocked && !cursor;
             let row_p = if tinted { p.on_needs() } else { p };
             let agent_name = card.as_ref().map(|_| label.clone());
+            // The sheet's lookup names the row's agent; the name tuple below
+            // moves `label`, so the listener carries its own copy.
+            let label_for_sheet = label.clone();
             let mut item = ui::row(i, cursor, &p)
                 .w(px(WIDTH))
                 .when(tinted, |d| d.bg(rgb(p.needs_fill())))
@@ -1280,7 +1290,12 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
                 item = ui::clickable(item, &p).on_click(cx.listener(
                     move |root, ev: &gpui::ClickEvent, _, cx| {
                         if openable && ev.modifiers().alt {
-                            if let Some(row) = root.layout.agents.iter().find(|r| r.name == label) {
+                            if let Some(row) = root
+                                .layout
+                                .agents
+                                .iter()
+                                .find(|r| r.name == label_for_sheet)
+                            {
                                 let binding = row.bindings.iter().rev().find(|b| b.pr.is_some());
                                 root.pr_sheet = Some(pr_sheet::PrSheet {
                                     pr: row.pr.unwrap_or(0),
@@ -1289,7 +1304,7 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
                                         .pr_status
                                         .clone()
                                         .unwrap_or_else(|| pr_fact.clone().unwrap()),
-                                    agent: label.clone(),
+                                    agent: label_for_sheet.clone(),
                                     slug: pr_sheet::slug_from_url(
                                         binding.and_then(|b| b.pr_url.as_deref()),
                                     ),
