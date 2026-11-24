@@ -398,9 +398,10 @@ fn composer_replays_the_refusal() {
 
 /// The 2026-11-09 iMac refusal: a keyless `gh` reads GitHub's anonymous
 /// 60-request bucket. It must classify as a local auth fault with no
-/// rate-limit class, so no caller writes the shared fleet hold.
+/// rate-limit class, so no caller writes the shared fleet hold. The same
+/// classifier words a 404 by the read that answered it.
 #[test]
-fn a_keyless_refusal_is_an_auth_fault_not_a_fleet_hold() {
+fn a_refusal_is_classed_by_its_cause_and_its_read() {
     let _env = crate::claims::test_env_lock()
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -414,6 +415,36 @@ fn a_keyless_refusal_is_an_auth_fault_not_a_fleet_hold() {
     std::env::remove_var("FNO_STATE_DIR");
     assert_eq!(reason.rate_limit_class, "", "no class, so no hold");
     assert!(reason.text.contains("no token here"), "{}", reason.text);
+
+    // A 404 on a read other than the PR itself names that read and stops
+    // telling the caller to check the PR number: the PR read already answered.
+    let not_found = "gh: Not Found (HTTP 404)";
+    for (path, label) in [
+        (
+            "repos/o/r/commits/abc/check-runs?per_page=100&page=1",
+            "check-runs",
+        ),
+        ("repos/o/r/commits/abc/status", "status"),
+    ] {
+        let named = rest_reason_for(&probe, Path::new("/tmp"), not_found, read_label(path));
+        assert!(
+            named.text.contains(&format!("on the {label} read")),
+            "{}",
+            named.text
+        );
+        assert!(
+            !named.text.contains("Check the PR number"),
+            "{}",
+            named.text
+        );
+    }
+    let pr = rest_reason_for(
+        &probe,
+        Path::new("/tmp"),
+        not_found,
+        read_label("repos/o/r/pulls/7"),
+    );
+    assert!(pr.text.contains("Check the PR number"), "{}", pr.text);
 }
 
 /// The pinned read: `--expect-head` turns a settled answer about another

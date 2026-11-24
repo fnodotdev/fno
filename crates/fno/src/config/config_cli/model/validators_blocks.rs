@@ -92,7 +92,7 @@ pub(super) fn register(reg: &mut Registry) {
         coerce_seconds,
     );
 
-    reg.before("BuildBlock", &["agent_freeze"], reject_non_bool);
+    reg.before("BuildBlock", &["agent_freeze", "sccache"], reject_non_bool);
 
     // SpawnProfileBlock subclasses SpawnDefaultsBlock and inherits its validator.
     reg.before("SpawnDefaultsBlock", &["harness"], keep_dict_values);
@@ -518,13 +518,14 @@ fn coerce_seconds(ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
 // build_block.py, spawn_blocks.py
 // ---------------------------------------------------------------------------
 
-fn reject_non_bool(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
+fn reject_non_bool(ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
     if v.is_boolean() {
         return Ok(v);
     }
-    Err(Fail::Value(
-        "build.agent_freeze is a TOML bool, not a string".to_string(),
-    ))
+    Err(Fail::Value(format!(
+        "build.{} is a TOML bool, not a string",
+        ctx.field_name
+    )))
 }
 
 /// `_coerce_harness_overlays` / `_coerce_by_difficulty`: a non-mapping

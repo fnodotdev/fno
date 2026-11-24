@@ -171,11 +171,16 @@ pub(crate) const STATUS_TO_RUNG: &[(&str, &str)] = &[
     ("superseded", "superseded"),
 ];
 
-/// Retired plan spellings (plan._status.STATUS_ALIASES), accepted on read.
+/// Plan spellings accepted on read, never written: the retired spellings
+/// (plan._status.STATUS_ALIASES) plus `draft`, the word a lead hand-stamps on
+/// a plan held back for re-planning. A draft doc is a bound-but-not-ready
+/// plan, so it reads as the design rung and the spawn door routes it to
+/// blueprint instead of refusing it as unreadable.
 pub(crate) const PLAN_STATUS_ALIASES: &[(&str, &str)] = &[
     ("shipped", "in_review"),
     ("archived", "superseded"),
     ("stub", "idea"),
+    ("draft", "design"),
 ];
 
 /// Rung -> derived graph status (statuses._rung_to_graph_status). NONE and
@@ -3673,6 +3678,17 @@ pub fn read_pr_bound_candidate_ids(path: &Path, pr: u64) -> Result<Vec<String>, 
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_draft_plan_doc_reads_the_design_rung() {
+        // The lead's re-plan word: a hand-stamped `status: draft` must land
+        // on the design rung (blueprint's input), never the unreadable
+        // refusal the spawn door fails closed on.
+        for spelling in ["draft", "Draft", "'draft'", "\"draft\""] {
+            assert_eq!(plan_rung_from_status(spelling), "design");
+        }
+        assert_eq!(plan_rung_from_status("drafty"), "unreadable");
+    }
 
     #[test]
     fn python_json_matches_reference_shapes() {

@@ -37,6 +37,8 @@ prefix = "fno"
 [build]
 # Agent build freeze: while set, the rustc wrapper's doors refuse an agent session's compile and test run with exit 86 and name CI as the gate; the user's own cargo and the install build still compile.
 agent_freeze = false
+# Shared compile cache: while true and sccache is installed, the rustc wrapper compiles through sccache, so a fresh worktree reuses the dependency compiles of other worktrees. The project file settles it over the global one. SCCACHE_DISABLE=1 wins over it.
+sccache = false
 
 [paths]
 # One JSONL row per finished session across every repo: run history and cost. Move it to keep history on another disk.
@@ -105,6 +107,10 @@ favorite_skills = []
 [sandbox]
 # When a headless harness has no confinement backend: refuse before spawn (default) or explicitly warn and continue unconfined.
 on_unavailable = "refuse"
+# Runs each headless worker in its own container with no mount and no network, reached only through the host relay. docker covers OrbStack and Docker Desktop. devcontainer builds the image from the default branch's .devcontainer and runs it on docker. apple refuses until it passes the sandbox journey. A project layer can raise none to a sandbox but never lower or switch a global provider.
+provider = "none"
+# The image a sandboxed worker runs. Unset builds the embedded recipe with the host rev's Linux binaries from bin-cache. Read from global config only: a project value is ignored with a notice.
+# image = <unset>   # optional; no default
 
 [blueprint]
 # Hard ceiling on the PRs one plan or decomposed epic may open; an epic's max_children and --max-prs may only tighten it, and fno-agent wave check warns on a plan that declares more.
@@ -265,6 +271,8 @@ self_review_required = true
 require_corroboration = false
 # When true (default), a non-author human GitHub APPROVED review satisfies coverage on its own - the one producer a stranger's GitHub project emits with no footnote machinery. The approver's login must differ from the PR author's (GitHub refuses an author's approval server-side; the gate asserts it, and an unreadable PR author excludes fail-closed). Set false to keep today's recorded-but-never-counted behavior. Limit: GitHub's refusal is per identity, not per human - a second account with its own token can still self-approve.
 github_approval_satisfies = true
+# The person gate (never | ui | always; default ui). never and ui keep today's behavior: nothing requires a person. always requires a person's GitHub approval of the PR head (an APPROVED review by a login that is not the PR author, fresh at the head): fno do pr status reads not ready and the merge refuses until one lands, and the review-round cap does not discharge it (the lever back off is this key). Validated at write: never, ui or always.
+# human = <unset>   # optional; no default
 # The maximum number of review rounds (default 2): a PR gets AT MOST this many reviews and never waits for a round to come back clean. Two means two, counted across the whole life of the PR. A round is one reviewed HEAD. Two verdicts at one unchanged head are one round. A cap whose size depends on how a reviewer batches its output is not a cap. A pass is a round like any verdict: it still satisfies coverage, but it refunds nothing. At this many rounds the review phase is complete: the PR merges on green CI and open findings stay in the PR conversation - nothing is filed to the backlog and no finding class holds the PR past its own budget. CI failures, lint failures and rebases are not rounds. One review stays the floor, so an unreviewed PR is still uncovered. Validated at parse: at least 1.
 max_rounds = 2
 # How many interdiff lines a rebase or fix commit may add while a verdict from the older head still counts as a review of the new one (default 100, the threshold of the attestation decision D1050 (d-608344c1)). The measure is the multiset symmetric difference of the two PR-code patches against the base, never a direct head-to-head diff, so base movement contributes nothing. UNDER the bound carries; at or over it, or with an unreadable patch on either side, the verdict is stale and a fresh round is owed. 0 disables the arm.

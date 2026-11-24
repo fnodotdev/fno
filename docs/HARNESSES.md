@@ -131,7 +131,17 @@ A launched session is adopted through the SessionStart hook file named in its ro
 
 ## Sandboxed headless workers
 
-The `[sandbox]` table sandboxes each `--as headless` spawn of claude, codex, gemini, opencode or agy in a devcontainer. The host keeps every gate and every claim. The sandbox holds the worktree and the daemon socket, never `~/.fno`, and thread, pane and cloud spawns refuse while `provider = "devcontainer"`. Setup, refusals and limits: [Sandbox a worker](https://fno.dev/docs/guides/sandbox-a-worker).
+The `[sandbox]` table runs each `--as headless` spawn of claude, codex, gemini, opencode or agy in its own container. The host keeps every gate and every claim. The container gets no mount and no network. It reaches the host only through the relay that owns its exec stream. Thread, pane and cloud spawns refuse while a provider is set.
+
+| Engine | `provider` | Today |
+|---|---|---|
+| Docker on Linux | `docker` | passes the sandbox journey in CI |
+| Podman on Linux | `podman` | passes the sandbox journey in CI |
+| OrbStack, Docker Desktop | `docker` | the same CLI; a Mac journey receipt is still owed |
+| apple/container | `apple` | refuses by name until it passes the journey |
+| a repo devcontainer | `devcontainer` | image source only, built from the default branch and run on docker |
+
+Authentication: a harness inside can only use a key the lane passes (an API-key lane, such as a route) or a credential the image carries. No host login is copied in. Claude, codex and opencode honor the proxy env. Codex runs with its own sandbox off inside, because the container is the boundary. Gemini, opencode and agy keep their transcript as the host stdout tee. Lifecycle, allowlist and recovery: [sandbox host](architecture/sandbox-host.md).
 
 ## What this means in practice
 

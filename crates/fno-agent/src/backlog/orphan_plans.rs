@@ -413,6 +413,19 @@ fn read_claims(dir: &Path) -> std::io::Result<BTreeMap<String, ClaimFiles>> {
 
 /// Classify every claimed id into exactly one verdict. Pure: no writes, no
 /// output - `run` applies and prints; tests call this directly.
+/// A plan's `created` is a local calendar day and a node's `created_at` is
+/// UTC, so a plan written the same evening sorts a day early west of UTC.
+/// One day is that skew; two or more is a reused node id.
+fn id_reused(plan_created: &str, node_created: &str) -> bool {
+    let day =
+        |text: &str| chrono::NaiveDate::parse_from_str(text.get(..10).unwrap_or(""), "%Y-%m-%d");
+    match (day(plan_created), day(node_created)) {
+        (Ok(plan), Ok(node)) => node - chrono::Duration::days(1) > plan,
+        // A date neither side can parse keeps the text comparison.
+        _ => plan_created < node_created,
+    }
+}
+
 fn classify_claims(
     rows: &[Value],
     by_id: &BTreeMap<String, ClaimFiles>,
@@ -518,7 +531,7 @@ fn classify_claims(
             .collect::<String>();
         if plan_created.len() >= 10
             && node_created.len() >= 10
-            && plan_created.as_str() < node_created.as_str()
+            && id_reused(&plan_created, &node_created)
         {
             out_rows.push((node_id.clone(), path, Verdict::IdReuse));
             continue;
@@ -643,9 +656,20 @@ mod tests {
 
     #[test]
     fn adoptable_binds_on_apply_and_reads_back_ready() {
-        let fx = fixture(&[node("x-aaaa", json!({}))]);
+        // One day between a plan's `created` and its node's `created_at` is
+        // UTC skew and still binds. Two or more is a reused node id.
+        let minted = "2026-09-02T03:11:00+00:00";
+        let fx = fixture(&[
+            node("x-aaaa", json!({})),
+            node("x-same", json!({ "created_at": minted })),
+            node("x-reuse", json!({ "created_at": minted })),
+        ]);
         let plan = plan_file(&fx.plans, "p1.md", "x-aaaa", "ready", "2026-09-02");
-        age_file(&plan, 3600);
+        let evening = plan_file(&fx.plans, "evening.md", "x-same", "ready", "2026-09-01");
+        let reused = plan_file(&fx.plans, "reused.md", "x-reuse", "ready", "2026-08-30");
+        for file in [&plan, &evening, &reused] {
+            age_file(file, 3600);
+        }
         let cfg = Config {
             plans_dir: fx.plans.clone(),
             graph: fx.graph.clone(),
@@ -660,11 +684,25 @@ mod tests {
             .iter()
             .find(|r| r.get("id").and_then(Value::as_str) == Some("x-aaaa"))
             .unwrap();
-        assert_eq!(
-            bound.get("plan_path").and_then(Value::as_str),
-            Some(plan.to_string_lossy().as_ref())
-        );
         assert_eq!(bound.get("status").and_then(Value::as_str), Some("ready"));
+        let plan_path = |id: &str| {
+            rows.iter()
+                .find(|r| r["id"].as_str() == Some(id))
+                .and_then(|r| r["plan_path"].as_str())
+                .map(str::to_string)
+        };
+        assert_eq!(
+            plan_path("x-aaaa"),
+            Some(plan.to_string_lossy().to_string())
+        );
+        assert_eq!(
+            plan_path("x-same"),
+            Some(evening.to_string_lossy().to_string())
+        );
+        assert!(
+            plan_path("x-reuse").is_none(),
+            "a plan two days before its node never binds"
+        );
     }
 
     #[test]
