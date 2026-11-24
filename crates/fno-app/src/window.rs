@@ -3640,6 +3640,9 @@ impl Root {
         // A seam drag whose release never reached the window ends here too;
         // its last crossed cell already holds on the server.
         self.seam_drag = None;
+        // A pane seam drag whose release never reached the window ends here
+        // too; the widths it last pointed at already hold on Root.
+        self.edge_drag = None;
         // A grab on a split's gap cell starts a seam drag, before any pane
         // hit test: the gap belongs to no pane's grid.
         if let Some(seam) = mouse::seam_at(x, y, self.cell(), &self.layout.panes) {

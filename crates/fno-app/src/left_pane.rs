@@ -1217,7 +1217,9 @@ fn menu_item(
     cx: &mut Context<Root>,
 ) -> AnyElement {
     let row = ui::clickable(
-        ui::row(SharedString::from(format!("{key}-{squad}")), false, p).w_full(),
+        ui::row(SharedString::from(format!("{key}-{squad}")), false, p)
+            .w_full()
+            .pr_3(),
         p,
     );
     match action {
