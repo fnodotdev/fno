@@ -3141,6 +3141,12 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
     // what pushed the beat past the 60s reader deadline under fleet load.
     // The fold, the scope compile and the idea-children pass all
     // reuse the graph rows this read produces.
+    // The beat takes `undriven_pr`, `unplanned`, `undispatched` and
+    // `blocked_child` from the board and nothing else, so it asks for no
+    // merge verdict, question liveness or needs fold. Under fleet load the
+    // per-PR gates alone held the fetch for the whole board budget, and a
+    // fetch past its deadline fails the board, blueprint and blocked_child
+    // readings together.
     let graph_rx = spawn_preflight("graph read", {
         let graph = ctx.graph.clone();
         move || crate::graph_store::read_rows(&graph).map_err(|e| e.to_string())
@@ -3170,6 +3176,7 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
                 cwd: Some(cwd),
                 budget_ms: BOARD_BUDGET_MS,
                 graph_rows: rows,
+                dispatch_only: true,
                 ..Default::default()
             }))
         }
