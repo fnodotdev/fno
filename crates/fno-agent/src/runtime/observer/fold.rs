@@ -20,6 +20,12 @@
 //! `stop_decision`, `loop_check` and `termination` rows: those hold a
 //! decision, a PR and CI state and a fingerprint, and a transcript holds
 //! none of them.
+//!
+//! The fold is the one reader behind the skill read, not the only reader of
+//! these shapes in the crate. Two others read the same shapes by string key
+//! for other outputs, and neither is fed from here: `session_backfill.rs`
+//! stamps a session row's start and end, and `correction_fold.rs` collects
+//! the session facts of a correction ruling.
 
 use crate::runtime::attended::xml_block;
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime};
