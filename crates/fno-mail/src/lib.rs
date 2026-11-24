@@ -2,6 +2,7 @@
 //! holds that rule: the manifest names only serde, serde_json and chrono.
 
 pub mod address;
+pub mod delivered;
 pub mod directory;
 pub mod envelope;
 pub mod frame;

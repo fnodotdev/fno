@@ -451,26 +451,13 @@ pub fn header_third_field(subject: Option<&str>, body: &str) -> Option<String> {
 /// one space; the law form is two physical lines. `None` when no closer
 /// reads.
 fn split_header_span(trimmed: &str) -> Option<(&str, &str)> {
-    let rest = trimmed.strip_prefix('`')?;
-    let mut from = 0;
-    while let Some(rel) = rest[from..].find('`') {
-        let close = from + rel;
-        let tail = &rest[close + 1..];
-        if tail.is_empty() || tail.starts_with(' ') {
-            return Some((&rest[..close], tail));
-        }
-        from = close + 1;
-    }
-    None
+    fno_mail::delivered::split_header_span(trimmed)
 }
 
 /// The span's fields: sender, id, and an optional subject - the law's
-/// two-field form carries none. A three-field span keeps the subject as
-/// everything after the second separator, not the third split field: it
-/// may itself carry a backtick or a " · " separator.
+/// two-field form carries none. Delegates to the one fno-mail reader.
 fn header_fields(inner: &str) -> Option<(&str, &str, Option<&str>)> {
-    let mut parts = inner.splitn(3, " · ");
-    Some((parts.next()?, parts.next()?, parts.next()))
+    fno_mail::delivered::header_fields(inner)
 }
 
 /// True when the whole line reads as a delivered-mail header: one backticked
@@ -482,28 +469,13 @@ fn header_fields(inner: &str) -> Option<(&str, &str, Option<&str>)> {
 /// may carry a backtick or " · " and must be nonempty. This is the
 /// reader's shape test and the forged-body detector.
 pub fn is_header_line(line: &str) -> bool {
-    let trimmed = line.trim();
-    let Some((inner, _tail)) = split_header_span(trimmed) else {
-        return false;
-    };
-    let Some((sender, id, subject)) = header_fields(inner) else {
-        return false;
-    };
-    let bare = sender.strip_prefix('@').unwrap_or(sender);
-    if bare.is_empty() || bare.chars().any(|c| c.is_whitespace()) {
-        return false;
-    }
-    let id_ok = match id.strip_prefix("fmail-") {
-        Some(hex) => hex.len() == 12 && hex.bytes().all(|b| b.is_ascii_hexdigit()),
-        None => id.strip_prefix("msg-").is_some_and(|rest| !rest.is_empty()),
-    };
-    id_ok && subject.map_or(true, |s| !s.trim().is_empty())
+    fno_mail::delivered::is_header_line(line)
 }
 
 /// True when any line of `body` is shaped like a delivered header. A send
 /// carrying one refuses: a body cannot forge a second message's first line.
 pub fn body_holds_header_line(body: &str) -> bool {
-    body.lines().any(is_header_line)
+    fno_mail::delivered::body_holds_header_line(body)
 }
 
 /// True when the whole line reads as a held-release fold line: one
