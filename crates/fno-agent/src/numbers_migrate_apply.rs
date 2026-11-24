@@ -651,8 +651,9 @@ fn drop_decision(conn: &Connection, from: &str) -> Result<(), MigrateError> {
 const SHARE_ATTEMPTS: usize = 5;
 
 /// Flush the shared backlog behind `graph`. A stale-row refusal took the
-/// primary's rows back for the node a peer wrote, so `again` runs over the
-/// fresh rows and the flush goes again.
+/// primary's rows back for the node a peer wrote. The sync brings the rest
+/// of the peer's writes, such as a new join on a hex key the drop must keep,
+/// then `again` runs over the fresh rows and the flush goes again.
 fn settle(
     graph: &Path,
     mut again: impl FnMut() -> Result<(), MigrateError>,
@@ -666,6 +667,7 @@ fn settle(
                     && attempt < SHARE_ATTEMPTS =>
             {
                 attempt += 1;
+                crate::backlog_share::sync(graph)?;
                 again()?;
             }
             Err(refusal) => return Err(refusal.into()),
