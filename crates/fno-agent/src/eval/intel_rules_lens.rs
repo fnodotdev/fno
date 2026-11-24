@@ -254,8 +254,10 @@ pub fn fold_judge(
             out.keyword.insert(block.data.matched_event);
         }
     }
-    // The scorable requests, in file order, and the ones a verdict names.
+    // The scorable requests, in file order, each found by its span id, and
+    // the ones a verdict names.
     let mut scorable: Vec<Request> = Vec::new();
+    let mut seats: BTreeMap<&str, usize> = BTreeMap::new();
     let mut scored: BTreeSet<String> = BTreeSet::new();
     for row in judge {
         if row.phase == "request" {
@@ -272,6 +274,7 @@ pub fn fold_judge(
                     .or_insert(0) += 1;
             }
             if !skipped {
+                seats.insert(row.span_id.as_str(), scorable.len());
                 scorable.push(Request {
                     span_id: row.span_id.clone(),
                     stop_key: row.matched_event.clone(),
@@ -281,9 +284,11 @@ pub fn fold_judge(
             }
             continue;
         }
-        let Some(request) = scorable
-            .iter()
-            .find(|held| row.judge_of.as_deref() == Some(held.span_id.as_str()))
+        let Some(request) = row
+            .judge_of
+            .as_deref()
+            .and_then(|id| seats.get(id).copied())
+            .and_then(|at| scorable.get(at))
         else {
             continue;
         };
