@@ -23,7 +23,6 @@ use super::status::project_plan_status;
 /// plan `status:` only and never writes the graph.
 const TIER1: &[(&str, &str)] = &[
     ("designed", "design"),
-    ("draft", "design"),
     ("planned", "design"),
     ("pending", "design"),
     ("ready-for-blueprint", "design"),
@@ -633,7 +632,6 @@ mod tests {
     fn tier1_synonyms_rewrite() {
         for (raw, expected) in [
             ("PENDING", "design"),
-            ("draft", "design"),
             ("designed", "design"),
             ("design-locked", "ready"),
             ("reviewing", "in_review"),
@@ -648,6 +646,17 @@ mod tests {
                 Some(expected.into())
             );
         }
+    }
+
+    /// `draft` is accepted vocabulary (an alias of the design rung), so the
+    /// sweep holds the word instead of rewriting it - the same hold a retired
+    /// spelling gets.
+    #[test]
+    fn an_accepted_draft_word_holds() {
+        assert_eq!(
+            target_status(Some(&Value::Scalar("draft".into())), None),
+            None
+        );
     }
 
     /// Neither an unlinked doc nor a link to no node row is evidence of
