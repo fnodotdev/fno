@@ -12,7 +12,9 @@
 //!
 //! Every refusal, verdict and reason string is byte-for-byte the Python
 //! module's, asserted against goldens captured from the live leg
-//! (`tests/review_capability_parity.rs`) before the leg deletes. The built-in
+//! (`tests/review_capability_parity.rs`) before the leg deletes. The skill
+//! arms moved past frozen parity once the probe read every harness's own
+//! roots; the committed goldens are the contract there. The built-in
 //! reviewer descriptors stay single-sourced in Python config
 //! (`_RESOLVABLE_REVIEWERS`) and ride the door payload; the Rust
 //! `reviewer_entry` table feeds only the invocation renderer's base spelling.

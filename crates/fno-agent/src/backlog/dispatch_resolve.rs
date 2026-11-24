@@ -267,7 +267,7 @@ fn claude_plugin_skills(home: &Path) -> ClaudePluginSkills {
     table.manifest = Some(manifest);
     let off = disabled_plugins(&home.join(".claude").join("settings.json"));
     for (key, installs) in parsed.plugins {
-        if off.iter().any(|name| *name == key) {
+        if off.contains(&key) {
             continue;
         }
         let plugin = key.split('@').next().unwrap_or(&key);
