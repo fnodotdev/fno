@@ -531,6 +531,7 @@ pub(super) fn key(root: &mut Root, key: &Key, cx: &mut Context<Root>) {
 /// sits under the columns; when a read lands with everything empty, the
 /// board area shows the designed empty state and the composer stays.
 pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
+    let p = root.palette;
     let quiet = quiet_board(&root.board);
     let column = |id: &'static str| -> Stateful<Div> {
         div()

@@ -39,7 +39,7 @@ use super::link::{Event, Layout, Link};
 use super::mouse::{self, Hit};
 use super::mux_modes::{self, MenuAct, MenuKey, Step};
 use super::palette::Palette;
-use super::{find, left_pane, mods, orchestration, settings, sheet, tabs, ui};
+use super::{find, left_pane, mods, orchestration, pane_seam, settings, sheet, tabs, ui};
 use fno::app_api::web_hq::Board;
 use fno::proto::chat_event::SessionKey;
 use fno::proto::{self, ClientMsg, Command, Frame, MouseEvent, MouseKind};

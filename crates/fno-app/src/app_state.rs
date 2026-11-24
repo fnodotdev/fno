@@ -204,10 +204,10 @@ mod tests {
         );
         std::fs::write(&path, text).unwrap();
         let state = load(&path);
-        assert_eq!(state.map(|s| s.folds), Some(HashSet::new()));
-        assert_eq!(state.map(|s| s.left_w), None);
-        assert_eq!(state.map(|s| s.board_next_w), None);
-        assert_eq!(state.map(|s| s.board_feed_w), None);
+        assert_eq!(state.as_ref().map(|s| &s.folds), Some(&HashSet::new()));
+        assert_eq!(state.as_ref().and_then(|s| s.left_w), None);
+        assert_eq!(state.as_ref().and_then(|s| s.board_next_w), None);
+        assert_eq!(state.as_ref().and_then(|s| s.board_feed_w), None);
         let _ = std::fs::remove_file(&path);
     }
 
