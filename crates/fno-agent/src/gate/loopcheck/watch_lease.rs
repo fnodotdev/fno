@@ -47,6 +47,7 @@ pub(super) fn record_build_park(parsed: &super::LoopCheckArgs) {
         "blocker": "build",
         "reason": "build",
         "expires_at_ms": crate::claims::now_ms() + BUILD_PARK_MS,
+        "lease_ms": BUILD_PARK_MS + WATCH_SLACK_MS,
         "build_cargo_pid": wait.cargo_pid,
         "build_since_ms": wait.since_ms,
         "build_holder": wait.holder,
@@ -210,17 +211,20 @@ pub(super) fn arm_failed_read_park(
     project_events: &std::path::Path,
     global_events: &std::path::Path,
 ) {
+    let lease_ms = park_ms + 2 * WATCH_SLACK_MS;
     if let Some((key, holder)) = claim_pair(manifest) {
-        if let Err(e) = crate::claims::renew(&key, &holder, park_ms + 2 * WATCH_SLACK_MS, None) {
+        if let Err(e) = crate::claims::renew(&key, &holder, lease_ms, None) {
             eprintln!("loop-check: {blocker} park could not renew {key} ({e})");
         }
     }
+    // `lease_ms` is a required field: the store refuses a row without it.
     let idle_row = serde_json::json!({
         "session_id": session_id,
         "pr": null,
         "blocker": blocker,
         "reason": blocker,
         "expires_at_ms": expires_at_ms,
+        "lease_ms": lease_ms,
         "harness": super::scan_manifest_field(manifest, "harness"),
         "cwd": cwd,
     });
