@@ -3359,6 +3359,11 @@ impl Root {
             keys::MuxAction::Rename => self.rename_open(cx),
             keys::MuxAction::RowMenu => self.row_menu_open(cx),
             keys::MuxAction::NextWaiting => self.focus_next_waiting(cx),
+            keys::MuxAction::Overlay(keys::Overlay::GoTo) => self.toggle_goto(&GoTo, window, cx),
+            keys::MuxAction::Overlay(keys::Overlay::Inbox) => self.show(MainView::Inbox, cx),
+            keys::MuxAction::Overlay(keys::Overlay::Board) => {
+                self.show(MainView::Orchestration, cx)
+            }
             keys::MuxAction::Bell => {
                 alerts::beep();
                 let name = String::from_utf8_lossy(key).escape_debug().to_string();

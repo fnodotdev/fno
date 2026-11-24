@@ -386,6 +386,19 @@ pub enum MuxAction {
     RowMenu,
     /// prefix+Z: focus the next pane whose agent waits on the user.
     NextWaiting,
+    /// A fleet overlay chord: the app's own surface for it opens.
+    Overlay(Overlay),
+}
+
+/// The app surface a mux overlay chord opens in place of the TUI overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Overlay {
+    /// The go-to palette: the selector and the navigator.
+    GoTo,
+    /// The Inbox view: questions, decisions and the activity feed.
+    Inbox,
+    /// The command center board: backlog, team and org.
+    Board,
 }
 
 /// One command-block action the wire carries.
@@ -397,7 +410,7 @@ pub enum BlockOp {
 }
 
 /// Translate one scanner event. Forward, wire commands, tab ordinals,
-/// detach and the five overlay events run app-side; every other
+/// detach, the five overlay events and the fleet overlay chords run app-side; every other
 /// client-local overlay event has no app surface yet and becomes a notice
 /// naming it, so a prefix chord never leaks into the pane.
 pub fn translate(event: fno::ui::keys::Event) -> MuxAction {
@@ -415,6 +428,13 @@ pub fn translate(event: fno::ui::keys::Event) -> MuxAction {
         Event::OpenRename => MuxAction::Rename,
         Event::OpenSidelineMenu => MuxAction::RowMenu,
         Event::FocusNextBlocked => MuxAction::NextWaiting,
+        Event::OpenSelector | Event::OpenNav => MuxAction::Overlay(Overlay::GoTo),
+        Event::OpenAnswers | Event::OpenDecisions | Event::OpenFeed | Event::FocusFeed => {
+            MuxAction::Overlay(Overlay::Inbox)
+        }
+        Event::OpenBacklogBoard | Event::OpenTeam | Event::OpenOrgView => {
+            MuxAction::Overlay(Overlay::Board)
+        }
         other => MuxAction::Notice(format!("{other:?} has no app action yet")),
     }
 }
@@ -605,10 +625,19 @@ mod tests {
             MuxAction::Input(vec![0x02])
         );
         assert_eq!(translate(Event::Bell), MuxAction::Bell);
-        assert!(matches!(
+        assert_eq!(
             translate(Event::OpenSelector),
-            MuxAction::Notice(_)
-        ));
+            MuxAction::Overlay(Overlay::GoTo)
+        );
+        assert_eq!(
+            translate(Event::OpenAnswers),
+            MuxAction::Overlay(Overlay::Inbox)
+        );
+        assert_eq!(
+            translate(Event::OpenBacklogBoard),
+            MuxAction::Overlay(Overlay::Board)
+        );
+        assert!(matches!(translate(Event::OpenReview), MuxAction::Notice(_)));
         // The five overlay events each run an app arm, never a notice.
         use fno::proto::BlockDir;
         assert_eq!(
