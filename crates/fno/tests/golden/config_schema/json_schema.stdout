@@ -742,11 +742,16 @@
       "type": "object"
     },
     "BuildBlock": {
-      "description": "Build-freeze switch (nested under 'config.build').",
+      "description": "Build switches (nested under 'config.build').",
       "properties": {
         "agent_freeze": {
           "default": false,
           "title": "Agent Freeze",
+          "type": "boolean"
+        },
+        "sccache": {
+          "default": false,
+          "title": "Sccache",
           "type": "boolean"
         }
       },

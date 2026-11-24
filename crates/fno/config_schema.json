@@ -835,11 +835,16 @@
     "type": "object"
    },
    "BuildBlock": {
-    "description": "Build-freeze switch (nested under 'config.build').",
+    "description": "Build switches (nested under 'config.build').",
     "properties": {
      "agent_freeze": {
       "default": false,
       "title": "Agent Freeze",
+      "type": "boolean"
+     },
+     "sccache": {
+      "default": false,
+      "title": "Sccache",
       "type": "boolean"
      }
     },
@@ -4415,6 +4420,17 @@
    "question": "",
    "default_source": "",
    "doc": "Agent build freeze: while set, the rustc wrapper's doors refuse an agent session's compile and test run with exit 86 and name CI as the gate; the user's own cargo and the install build still compile.",
+   "edit": "toggle"
+  },
+  {
+   "path": "build.sccache",
+   "label": "Shared compile cache",
+   "type": "bool",
+   "default": false,
+   "wizard": "never",
+   "question": "",
+   "default_source": "",
+   "doc": "Shared compile cache: while true and sccache is installed, the rustc wrapper compiles through sccache, so a fresh worktree reuses the dependency compiles of other worktrees. The project file settles it over the global one. SCCACHE_DISABLE=1 wins over it.",
    "edit": "toggle"
   },
   {

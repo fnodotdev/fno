@@ -132,13 +132,13 @@ fn seen_path() -> Option<PathBuf> {
 }
 
 /// `{id: epoch}`; a corrupt or unreadable record reads as empty.
-fn parse_seen(raw: &str) -> HashMap<String, i64> {
+pub(crate) fn parse_seen(raw: &str) -> HashMap<String, i64> {
     serde_json::from_str(raw).unwrap_or_default()
 }
 
 /// Atomic write; the temp name carries the pid so two prompts at once do
 /// not share one. A lost write only shows a question once more.
-fn write_seen(path: &std::path::Path, seen: &HashMap<String, i64>) {
+pub(crate) fn write_seen(path: &std::path::Path, seen: &HashMap<String, i64>) {
     let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
     if serde_json::to_string(seen)
         .map(|s| std::fs::write(&tmp, s))
