@@ -161,40 +161,35 @@ pub(crate) fn ask_many(
                 read_answer(reply, &q.id)
                     .ok_or_else(|| format!("reply carries no usable answers.{}", q.id))
             });
-            decide(q, answer, ms)
+            match answer {
+                Ok((label, confidence, noul)) => {
+                    let escalate = if !q.trained || confidence < q.escalate_below {
+                        Escalate::Model
+                    } else if q.irreversible {
+                        Escalate::User
+                    } else {
+                        Escalate::None
+                    };
+                    Decision {
+                        label: Some(label),
+                        noul,
+                        confidence,
+                        escalate,
+                        ms,
+                        error: None,
+                    }
+                }
+                Err(why) => Decision {
+                    label: None,
+                    noul: None,
+                    confidence: 0.0,
+                    escalate: Escalate::Model,
+                    ms,
+                    error: Some(why),
+                },
+            }
         })
         .collect()
-}
-
-/// One question's decision: its answer, or the reason it has none.
-fn decide(q: &Question, answer: Result<(String, f64, Option<f64>), String>, ms: u64) -> Decision {
-    match answer {
-        Ok((label, confidence, noul)) => {
-            let escalate = if !q.trained || confidence < q.escalate_below {
-                Escalate::Model
-            } else if q.irreversible {
-                Escalate::User
-            } else {
-                Escalate::None
-            };
-            Decision {
-                label: Some(label),
-                noul,
-                confidence,
-                escalate,
-                ms,
-                error: None,
-            }
-        }
-        Err(why) => Decision {
-            label: None,
-            noul: None,
-            confidence: 0.0,
-            escalate: Escalate::Model,
-            ms,
-            error: Some(why),
-        },
-    }
 }
 
 /// One question's answer in a kev reply: a noul score or choice
