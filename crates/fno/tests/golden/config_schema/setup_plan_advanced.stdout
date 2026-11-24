@@ -127,6 +127,15 @@
       "doc": "When a headless harness has no confinement backend: refuse before spawn (default) or explicitly warn and continue unconfined."
     },
     {
+      "path": "sandbox.provider",
+      "type": "typing.Literal['none', 'docker', 'podman', 'apple', 'devcontainer']",
+      "default": "none",
+      "tier": "advanced",
+      "question": "Run headless workers in a container sandbox, and on which engine?",
+      "default_source": "default",
+      "doc": "Runs each headless worker in its own container with no mount and no network, reached only through the host relay. docker covers OrbStack and Docker Desktop. devcontainer builds the image from the default branch's .devcontainer and runs it on docker. apple refuses until it passes the sandbox journey. A project layer can raise none to a sandbox but never lower or switch a global provider."
+    },
+    {
       "path": "blueprint.max_prs_per_epic",
       "type": "int",
       "default": 4,

@@ -60,7 +60,7 @@ Any attempt to write outside this set exits with code 2 and names the offending 
 | kill_criteria | `/blueprint` |
 | Implementation Log | `/execute` or `/target` |
 | Review Verdicts | `/review sigma` |
-| Ship Record | `/fno:ship pr create` and `/ship` |
+| Ship Record | `/fno:ship pr create` and `/fno:ship` |
 
 For the full section-ownership reference including valid/invalid transition examples, atomic-mutation contract, and greenfield/brownfield auto-detect logic, see [skills/blueprint/references/single-doc-spec.md](../../skills/blueprint/references/single-doc-spec.md).
 

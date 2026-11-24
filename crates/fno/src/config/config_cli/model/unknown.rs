@@ -18,8 +18,6 @@ const NEAR_MISS_CAP: usize = 4;
 const UNMODELED_BLOCKS: [&str; 2] = ["kanban", "providers"];
 /// Legacy spellings the loader still lifts, so they never report.
 const HONORED_LEGACY_KEYS: [&str; 1] = ["recovery.retire_grace_s"];
-/// Keys only the Rust leg reads; they work, so they never report.
-const RUST_READ_KEYS: [&str; 1] = ["sandbox.provider"];
 const RETIRED_BLOCKS: [&str; 1] = ["reach_me"];
 
 fn retired_rows(block: &str, path: &std::path::Path) -> String {
@@ -44,9 +42,7 @@ pub(super) fn unknown_key_problems(layers: &[(PathBuf, Value)]) -> Vec<String> {
             .collect();
         let mut unknown = Vec::new();
         walk(&modeled, super::ROOT, "", &mut unknown);
-        unknown.retain(|k| {
-            !HONORED_LEGACY_KEYS.contains(&k.as_str()) && !RUST_READ_KEYS.contains(&k.as_str())
-        });
+        unknown.retain(|k| !HONORED_LEGACY_KEYS.contains(&k.as_str()));
         if flat.get("attention").is_some_and(Value::is_array) {
             problems.push(retired_rows("attention", path));
         }

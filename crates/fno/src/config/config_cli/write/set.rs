@@ -526,6 +526,43 @@ mod tests {
         std::env::remove_var("FNO_CONFIG");
     }
 
+    /// The rustc wrapper reads `build.sccache` straight from the TOML.
+    /// `fno config set` takes the same key, and a miss still refuses.
+    #[test]
+    fn set_takes_the_sccache_key_and_a_miss_still_refuses() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pin = dir.path().join("config.toml");
+        // Same pin and env lock as the GitHub App keys above.
+        let _env = crate::digest_overlay::ENVIRONMENT_LOCK.lock();
+        std::env::set_var("FNO_CONFIG", &pin);
+        let results = set_values(
+            &[("build.sccache".to_string(), "true".to_string())],
+            "global",
+            None,
+        )
+        .expect("set takes build.sccache");
+        let [first] = results.as_slice() else {
+            panic!("set returned {} results, expected 1", results.len());
+        };
+        assert_eq!(first.value, Value::Bool(true));
+        let written = std::fs::read_to_string(&pin).expect("config written");
+        assert!(written.contains("sccache = true"), "{written}");
+        let missed = set_values(
+            &[("build.sccache_no_such".to_string(), "true".to_string())],
+            "global",
+            None,
+        );
+        let Err(refusal) = missed else {
+            panic!("a miss must refuse");
+        };
+        assert_eq!(
+            refusal.message,
+            "unknown config key 'build.sccache_no_such'"
+        );
+        assert_eq!(refusal.code, 1);
+        std::env::remove_var("FNO_CONFIG");
+    }
+
     /// Setup reads what the global write replaces, so a pinned row survives
     /// an added one and no row of the default global file is copied in.
     fn setup_rewrites_the_rows_the_writer_replaces(pin: &std::path::Path) {

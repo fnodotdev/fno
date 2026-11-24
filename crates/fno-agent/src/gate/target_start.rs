@@ -945,13 +945,21 @@ pub(crate) fn claim_names_current_session(holder: &str, rec: &crate::claims::Cla
         if handover_row_pid_is_ours(&entries, worker, ambient_pid) {
             return true;
         }
-        // The session-id proof: proven identity lands in session_id, an
-        // ambient-only creator is demoted to dispatched_by_session metadata.
-        // Either way a window naming THIS session was minted for it: the
-        // respawned worker whose earlier process still holds the window
-        // (measured live 2026-10-30).
-        if handover_session_id_matches(rec, own_sid.as_deref()) {
+        // The session-id proof: a beneficiary stamp naming THIS session
+        // adopts, the respawned worker whose earlier process still holds
+        // the window (measured live 2026-10-30).
+        if handover_beneficiary_is(rec, own_sid.as_deref()) {
             return true;
+        }
+        // A fresh window stores no minter metadata, and its session_id is
+        // whoever wrote it, so either id joins the launch record it names:
+        // the launcher writes it before the child exists, and only the
+        // child itself claims it, so a spawner's own id never answers
+        // there for this worker's name.
+        for sid in [own_sid.as_deref(), env_sid.as_deref()] {
+            if handover_launch_record_names_session(&home.root(), worker, rec, sid) {
+                return true;
+            }
         }
         // A launch window that outlived its launcher: the pid probe proves
         // the spawner gone (basis pid-absent) while the TTL grace still
@@ -973,25 +981,58 @@ pub(crate) fn claim_names_current_session(holder: &str, rec: &crate::claims::Cla
     matches!(own_pid, Some(p) if rec.pid == Some(p as i32)) && same_machine
 }
 
-/// The claim's recorded creating session (`session_id`, demoted to
-/// `dispatched_by_session` metadata) against this session's own id, the
-/// same fold `same_session_id` applies: exact for `ses_` ids, ASCII-case
-/// folded otherwise.
-fn handover_session_id_matches(rec: &crate::claims::ClaimRecord, own_sid: Option<&str>) -> bool {
+/// True when the window carries a beneficiary stamp naming `own_sid`: a
+/// session_id distinct from the `dispatched_by_session` minter, the pair
+/// the birth transfer and the init rebind write. Every writer of that
+/// metadata stores the minter, and a window with no metadata records
+/// whoever minted it, so neither shape proves a beneficiary here; the
+/// launch-record join decides those.
+fn handover_beneficiary_is(rec: &crate::claims::ClaimRecord, own_sid: Option<&str>) -> bool {
+    fn trimmed(s: Option<&str>) -> Option<&str> {
+        s.map(str::trim).filter(|s| !s.is_empty())
+    }
+    let (Some(recorded), Some(minter), Some(own)) = (
+        trimmed(rec.session_id.as_deref()),
+        trimmed(rec.dispatched_by_session()),
+        trimmed(own_sid),
+    ) else {
+        return false;
+    };
+    !crate::claims::same_session_id(recorded, minter)
+        && crate::claims::same_session_id(recorded, own)
+}
+
+/// The env-stamped id against the launch record the id names. The env id
+/// is inheritable (a child carries its spawner's copy) and a fresh window
+/// stores no minter metadata, so the window's recorded session counts as
+/// the beneficiary stamp only when the launch record claims the same id
+/// for a child answering to the worker's name: the launcher writes the
+/// record before the child exists, and the child session claims it, so a
+/// spawner's own id reads `launcher_session` there, never `child_session`.
+fn handover_launch_record_names_session(
+    root: &Path,
+    worker: &str,
+    rec: &crate::claims::ClaimRecord,
+    env_sid: Option<&str>,
+) -> bool {
     let recorded = rec
         .session_id
         .as_deref()
         .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            rec.dispatched_by_session()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-        });
-    let (Some(recorded), Some(own)) = (recorded, own_sid) else {
+        .filter(|s| !s.is_empty());
+    let own = env_sid.map(str::trim).filter(|s| !s.is_empty());
+    let (Some(recorded), Some(own)) = (recorded, own) else {
         return false;
     };
-    crate::claims::same_session_id(recorded, own)
+    if !crate::claims::same_session_id(recorded, own) {
+        return false;
+    }
+    crate::spawn::launch_record::claimed_edge(root, own).is_some_and(|r| {
+        r.child_session
+            .as_deref()
+            .is_some_and(|c| crate::claims::same_session_id(c, own))
+            && r.launch.name.as_deref() == Some(worker)
+    })
 }
 
 /// True when the registry rows carry a row answering to `worker` whose session
@@ -2726,23 +2767,164 @@ mod adopt_rung_tests {
         }
     }
 
+    fn seed_claimed_record(root: &Path, child: &str, worker: &str) {
+        let record = crate::spawn::launch_record::Record {
+            launch: crate::spawn::launch_record::Launch {
+                harness: "claude".into(),
+                name: Some(worker.into()),
+                node: None,
+                slot: None,
+                provider: None,
+                resume: None,
+                cwd: "/tmp/seed".into(),
+            },
+            node_basis: None,
+            launcher_session: "lead-lead".into(),
+            launcher_harness: None,
+            launcher_cwd: None,
+            launched_at_ms: 0,
+            command: String::new(),
+            launch_short_id: None,
+            child_session: Some(child.into()),
+            claimed_at_ms: Some(0),
+        };
+        let dir = root.join("launches").join("claimed");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(format!("{child}.json")),
+            serde_json::to_string(&record).unwrap(),
+        )
+        .unwrap();
+    }
+
     #[test]
-    fn a_foreign_carrier_misses_and_a_foreign_live_pid_stays_refused() {
+    fn a_handover_window_adopts_only_through_a_launch_record_naming_its_worker() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         for var in [
             "FNO_NODE_CLAIM_HOLDER",
             "FNO_WORKER_NAME",
             "TARGET_SESSION_ID",
             "CODEX_THREAD_ID",
+            "CLAUDE_CODE_SESSION_ID",
+            "FNO_AGENT_HOME",
         ] {
             std::env::remove_var(var);
         }
+        let minter = "a19c2d3e-aaaa-bbbb-cccc-000000000001";
+        let beneficiary = "a19c2d3e-aaaa-bbbb-cccc-000000000002";
+        let sibling = "a19c2d3e-aaaa-bbbb-cccc-000000000003";
+        let worker = "t-no-such-worker";
+        let holder = "spawn-handover:t-no-such-worker";
+        let home = tempfile::tempdir().unwrap();
+        std::env::set_var("FNO_AGENT_HOME", home.path());
+        // The beneficiary's record answers the worker's name; the minter's
+        // own record (it was spawned too) answers a different name.
+        seed_claimed_record(home.path(), beneficiary, worker);
+        seed_claimed_record(home.path(), minter, "lead-m");
+        let window = |session: &str| {
+            let mut rec = record(holder);
+            rec.pid_unavailable = true;
+            rec.session_id = Some(session.into());
+            rec
+        };
+        let pinned = window(beneficiary);
+        let minted_by_minter = window(minter);
+        assert!(pinned.metadata.is_empty() && minted_by_minter.metadata.is_empty());
+
+        // The join alone: it adopts only when the window's recorded session
+        // equals the env id AND the record that id names answers the worker.
+        let root = home.path();
+        assert!(handover_launch_record_names_session(
+            root,
+            worker,
+            &pinned,
+            Some(beneficiary)
+        ));
+        assert!(!handover_launch_record_names_session(
+            root,
+            worker,
+            &pinned,
+            Some(minter)
+        ));
+        assert!(!handover_launch_record_names_session(
+            root,
+            worker,
+            &minted_by_minter,
+            Some(beneficiary)
+        ));
+        assert!(!handover_launch_record_names_session(
+            root,
+            worker,
+            &minted_by_minter,
+            Some(minter)
+        ));
+        let stray = tempfile::tempdir().unwrap();
+        seed_claimed_record(stray.path(), minter, worker);
+        assert!(!handover_launch_record_names_session(
+            stray.path(),
+            worker,
+            &pinned,
+            Some(beneficiary)
+        ));
+
+        // The own-id rung adopts only a beneficiary stamp: a window naming
+        // the minter, alone or as its own dispatcher, or the minter metadata
+        // alone, refuses the minter's id.
+        let stamp = |session: Option<&str>| {
+            let mut rec = window(minter);
+            rec.session_id = session.map(Into::into);
+            rec.metadata
+                .insert("dispatched_by_session".into(), minter.into());
+            rec
+        };
+        assert!(handover_beneficiary_is(
+            &stamp(Some(beneficiary)),
+            Some(beneficiary)
+        ));
+        assert!(!handover_beneficiary_is(
+            &stamp(Some(beneficiary)),
+            Some(minter)
+        ));
+        for minted in [&minted_by_minter, &stamp(Some(minter)), &stamp(None)] {
+            assert!(!handover_beneficiary_is(minted, Some(minter)));
+        }
+
+        // Through the chain, with no registry row and two disagreeing family
+        // markers so own resolution yields nothing: the refused fleet state,
+        // where the env id and its launch record are the only proof left.
+        std::env::set_var("CODEX_THREAD_ID", sibling);
+        std::env::set_var("CLAUDE_CODE_SESSION_ID", beneficiary);
+        assert!(claim_names_current_session(holder, &pinned));
+        // A child that inherited the minter's env id refuses the window
+        // pinned to the beneficiary.
+        std::env::set_var("CLAUDE_CODE_SESSION_ID", minter);
+        assert!(!claim_names_current_session(holder, &pinned));
+        // A window whose session_id IS the minter, with no stored metadata,
+        // refuses the child carrying the minter's id: the record that id
+        // names answers another worker. With no minter record at all, the
+        // same window still refuses.
+        assert!(!claim_names_current_session(holder, &minted_by_minter));
+        std::fs::remove_file(
+            root.join("launches")
+                .join("claimed")
+                .join(format!("{minter}.json")),
+        )
+        .unwrap();
+        assert!(!claim_names_current_session(holder, &minted_by_minter));
+        // With the minter's id as the only marker, whatever the resolver
+        // makes of it, the minter-pinned window still refuses.
+        std::env::remove_var("CODEX_THREAD_ID");
+        assert!(!claim_names_current_session(holder, &minted_by_minter));
+
         // A carrier naming a DIFFERENT holder decides nothing; a foreign
         // live pid refuses.
+        std::env::remove_var("CLAUDE_CODE_SESSION_ID");
+        std::env::remove_var("CODEX_THREAD_ID");
         let mut rec = record("target-session:s-elsewhere");
         rec.pid = Some(999_999_999);
         std::env::set_var("FNO_NODE_CLAIM_HOLDER", "spawn-handover:t-other-w");
         assert!(!claim_names_current_session(&rec.holder, &rec));
         std::env::remove_var("FNO_NODE_CLAIM_HOLDER");
+        std::env::remove_var("FNO_AGENT_HOME");
     }
 }

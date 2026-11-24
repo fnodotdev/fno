@@ -37,6 +37,8 @@ prefix = "fno"
 [build]
 # Agent build freeze: while set, the rustc wrapper's doors refuse an agent session's compile and test run with exit 86 and name CI as the gate; the user's own cargo and the install build still compile.
 agent_freeze = false
+# Shared compile cache: while true and sccache is installed, the rustc wrapper compiles through sccache, so a fresh worktree reuses the dependency compiles of other worktrees. The project file settles it over the global one. SCCACHE_DISABLE=1 wins over it.
+sccache = false
 
 [paths]
 # One JSONL row per finished session across every repo: run history and cost. Move it to keep history on another disk.
@@ -105,6 +107,10 @@ favorite_skills = []
 [sandbox]
 # When a headless harness has no confinement backend: refuse before spawn (default) or explicitly warn and continue unconfined.
 on_unavailable = "refuse"
+# Runs each headless worker in its own container with no mount and no network, reached only through the host relay. docker covers OrbStack and Docker Desktop. devcontainer builds the image from the default branch's .devcontainer and runs it on docker. apple refuses until it passes the sandbox journey. A project layer can raise none to a sandbox but never lower or switch a global provider.
+provider = "none"
+# The image a sandboxed worker runs. Unset builds the embedded recipe with the host rev's Linux binaries from bin-cache. Read from global config only: a project value is ignored with a notice.
+# image = <unset>   # optional; no default
 
 [blueprint]
 # Hard ceiling on the PRs one plan or decomposed epic may open; an epic's max_children and --max-prs may only tighten it, and fno-agent wave check warns on a plan that declares more.

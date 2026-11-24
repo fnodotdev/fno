@@ -408,6 +408,7 @@ pub(crate) fn read_org_board(
         cwd: Some(cwd.to_path_buf()),
         registry: registry.cloned(),
         graph_rows: None,
+        dispatch_only: false,
     };
     let payload = crate::org_board::read_board(&opts);
     let floor = crate::agents_config::config_lookup(cwd, &["dispatch", "blueprint_floor"])
