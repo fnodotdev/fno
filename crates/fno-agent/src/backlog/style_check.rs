@@ -1061,6 +1061,9 @@ pub fn check_with_numbers(
     if surface == "pr-body" && !held.is_empty() {
         let masked = mask(text);
         for (i, line) in masked.split('\n').enumerate() {
+            if is_retarget_line(line) {
+                continue;
+            }
             violations.extend(check_node_numbers(line, i, held));
         }
     }
@@ -1070,10 +1073,21 @@ pub fn check_with_numbers(
     if matches!(surface, "pr-body" | "mail" | "markdown") && !held.is_empty() {
         let masked = mask(text);
         for (i, line) in masked.split('\n').enumerate() {
+            if is_retarget_line(line) {
+                continue;
+            }
             violations.extend(check_decision_numbers(line, i, held));
         }
     }
     violations
+}
+
+/// A Retarget closure line: the keyword and three bare tokens, the shape the
+/// closure parser binds. The number pair form has no room on it, so rules 10
+/// and 11 leave the whole line alone.
+fn is_retarget_line(line: &str) -> bool {
+    crate::runtime::org_board::pr_closure::retarget_line_rest(line)
+        .is_some_and(|rest| rest.split_whitespace().count() == 3)
 }
 
 /// Rule 10: a standalone hash whose number exists reads best with the number
@@ -2078,6 +2092,30 @@ mod tests {
             v.is_empty(),
             "pair form and unnumbered tokens stay clean: {v:?}"
         );
+        // A Retarget closure line holds three bare tokens, so the hash form
+        // stays clean there. A ruling id in the approval slot reads the same.
+        let held: std::collections::HashMap<String, String> = [
+            ("x-aaaa".to_string(), "x-5555".to_string()),
+            ("d-1a2b3c4d".to_string(), "D142".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        let v = check_with_numbers(
+            "Fixes x-5555 (x-aaaa)\n\nRetarget x-aaaa x-bbbb d-1a2b3c4d\n",
+            "pr-body",
+            None,
+            &held,
+        );
+        assert!(v.is_empty(), "a Retarget line stays clean: {v:?}");
+        // Prose that only starts with the word keeps the rule, and so does a
+        // line of more than three tokens.
+        for prose in [
+            "Retargeted to x-aaaa by the lead.\n",
+            "Retarget x-aaaa over to x-bbbb by request.\n",
+        ] {
+            let v = check_with_numbers(prose, "pr-body", None, &held);
+            assert!(v.iter().any(|x| x.rule == 10), "prose keeps rule 10: {v:?}");
+        }
     }
 
     #[test]
