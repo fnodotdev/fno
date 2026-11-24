@@ -524,10 +524,21 @@ pub fn claude_route_with(
     let record = match record_for(block, cwd, provider) {
         Some(record) => record,
         // Anthropic is a claude worker's own lane: no record, no endpoint and
-        // no key override, only the model pin `-H claude --model` sets.
+        // no key override, only the model pin `-H claude --model` sets. A
+        // bare tier alias never rides this env: the settings env reaches the
+        // API verbatim and "opus" is not a model id there, while the argv pin
+        // (`claude --model opus`) is what the CLI resolves natively. The env
+        // stamp stays for a real model id.
         None if provider.eq_ignore_ascii_case("anthropic") && !model.is_empty() => {
+            let env = if crate::model_env_scrub::TIER_ALIASES
+                .contains(&model.to_ascii_lowercase().as_str())
+            {
+                BTreeMap::new()
+            } else {
+                model_pin_env(model)
+            };
             return ClaudeRoute::Routed {
-                env: model_pin_env(model),
+                env,
                 provider: provider.to_string(),
                 notices: Vec::new(),
             };
@@ -728,6 +739,24 @@ mod tests {
                 for k in MODEL_ENV_KEYS {
                     assert_eq!(env.get(k).map(String::as_str), Some("claude-opus-5-5"));
                 }
+            }
+            ClaudeRoute::Skipped { notices } => panic!("anthropic is native: {notices:?}"),
+        }
+        // A bare tier alias never rides the env: the settings env reaches the
+        // API verbatim and "opus" is not a model id there (the 2026-11-17
+        // unrecognized_model launch death). The argv pin carries the alias and
+        // the CLI resolves it natively, so the env answer is empty.
+        match claude_route_with(
+            Some(&block),
+            Path::new("/nonexistent-fno-cwd"),
+            "anthropic",
+            "opus",
+            &RouteCtx::Peer("anthropic".to_string()),
+            &|_key: &str| None,
+        ) {
+            ClaudeRoute::Routed { env, notices, .. } => {
+                assert!(notices.is_empty(), "{notices:?}");
+                assert!(env.is_empty(), "{env:?}");
             }
             ClaudeRoute::Skipped { notices } => panic!("anthropic is native: {notices:?}"),
         }
