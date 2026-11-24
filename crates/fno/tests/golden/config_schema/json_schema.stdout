@@ -3184,8 +3184,20 @@
       "type": "object"
     },
     "SandboxBlock": {
-      "description": "Confinement fallback policy (nested under ``config.sandbox``).",
+      "description": "Sandboxed workers and the confinement fallback policy (nested under ``config.sandbox``).",
       "properties": {
+        "image": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image"
+        },
         "on_unavailable": {
           "default": "refuse",
           "enum": [
@@ -3193,6 +3205,18 @@
             "warn"
           ],
           "title": "On Unavailable",
+          "type": "string"
+        },
+        "provider": {
+          "default": "none",
+          "enum": [
+            "none",
+            "docker",
+            "podman",
+            "apple",
+            "devcontainer"
+          ],
+          "title": "Provider",
           "type": "string"
         }
       },
