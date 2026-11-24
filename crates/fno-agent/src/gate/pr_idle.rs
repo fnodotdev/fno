@@ -110,9 +110,10 @@ fn notice(slug: &str, pr: u64, age_ms: i64, level: u8) -> String {
 }
 
 /// Fold one repo's reads into its clocks and deliver every alarm that is due.
-/// `open` is the full open-PR listing, or None when it was unreadable: only a
-/// clean listing drops the clock of a PR that left it. `recipients` is the
-/// routed session list from [`route_recipients`], not every live lead.
+/// `open` is the set of PRs the pass may read, or None when the listing was
+/// unreadable: only a clean listing drops the clock of a PR that left the
+/// set. `recipients` is the routed session list from [`route_recipients`],
+/// not every live lead.
 pub(crate) fn run_repo(
     home: &AgentsHome,
     now: i64,
@@ -312,6 +313,41 @@ fn read_answer(pr: u64, stdout: &str) -> Option<Read> {
     })
 }
 
+/// One row of the open-PR listing, read once where the listing meets the
+/// alarm.
+#[derive(Deserialize)]
+struct ListedPull {
+    number: u64,
+    draft: Option<bool>,
+    body: Option<String>,
+}
+
+/// The open PRs the alarm may read: not a draft, and a body that names no
+/// merge hold. Leaving one out drops its clock, so it starts fresh when the
+/// PR returns.
+fn open_prs(pulls: Vec<Value>) -> HashSet<u64> {
+    pulls
+        .into_iter()
+        // A row that does not parse names no PR the alarm can read, so it
+        // stays out and the alarm stays quiet on it.
+        .filter_map(|p| serde_json::from_value::<ListedPull>(p).ok())
+        .filter(|p| p.draft != Some(true) && !names_merge_hold(p.body.as_deref().unwrap_or("")))
+        .map(|p| p.number)
+        .collect()
+}
+
+/// Whether a PR body names a merge hold: a line that opens with the words, or
+/// the order not to merge. A hold that lives only in a comment is not read.
+fn names_merge_hold(body: &str) -> bool {
+    let text = body.to_lowercase().replace('’', "'");
+    text.lines().any(|line| {
+        line.trim_start_matches(['#', '*', '-', '>', ' ', '\t'])
+            .starts_with("merge hold")
+    }) || ["do not merge", "do-not-merge", "don't merge"]
+        .iter()
+        .any(|order| text.contains(*order))
+}
+
 pub(crate) fn run_pass(home: &AgentsHome, now: i64) -> Result<(), String> {
     let teams: Vec<crate::territory::Team> =
         match crate::territory::live_teams(&home.registry_json()) {
@@ -341,13 +377,10 @@ pub(crate) fn run_pass(home: &AgentsHome, now: i64) -> Result<(), String> {
                 continue;
             }
         };
-        // A draft is not open for merging: leaving it out of the set drops its
-        // clock, so a PR back from draft starts a fresh one.
-        let open: HashSet<u64> = pulls
-            .iter()
-            .filter(|p| p.get("draft").and_then(Value::as_bool) != Some(true))
-            .filter_map(|p| p.get("number").and_then(Value::as_u64))
-            .collect();
+        // A draft is not open for merging, and neither is a PR whose body
+        // names a merge hold: leaving either out of the set drops its clock,
+        // so it starts a fresh one when the PR returns.
+        let open = open_prs(pulls);
         let reads: Vec<Read> = open
             .iter()
             .filter_map(|pr| status_read(root, *pr))
@@ -502,7 +535,7 @@ mod tests {
     fn a_held_or_unmeasured_read_starts_no_clock_and_never_alarms() {
         let temp = tempfile::tempdir().unwrap();
         let home = AgentsHome::at(temp.path().join("agents"));
-        let open: HashSet<u64> = [7, 8].into();
+        let open: HashSet<u64> = [7].into();
         let t0 = 1_000_000;
         // CI never measured this head: the status door reads ready, not green.
         let unmeasured = [Read {
@@ -541,6 +574,7 @@ mod tests {
             !file(&home, "o/r", 7).exists(),
             "no clock on a held or unmeasured read"
         );
+        body_hold_drops_the_clock(&home, t0);
         // A warning that holds no merge holds no alarm.
         let look_only = read_answer(7, &answer(json!([{ "code": "visual_approval" }]))).unwrap();
         assert!(look_only.ready && look_only.green && !look_only.held);
@@ -558,6 +592,57 @@ mod tests {
         assert!(
             file(&home, "o/r", 7).exists(),
             "a PR with no read keeps its clock"
+        );
+    }
+
+    /// A PR whose body names a merge hold leaves the open set the way a draft
+    /// does, loses its clock, and starts a fresh one when the words go.
+    fn body_hold_drops_the_clock(home: &AgentsHome, t0: i64) {
+        let row = |number: u64, draft: bool, body: Option<&str>| json!({"number": number, "draft": draft, "body": body});
+        let listing = |body: &str| {
+            open_prs(vec![
+                row(7, false, Some("A plain change.")),
+                row(8, false, Some(body)),
+                row(
+                    9,
+                    false,
+                    Some("Docs only. Do not merge this PR before that code merges."),
+                ),
+                row(10, true, Some("A draft.")),
+                row(
+                    11,
+                    false,
+                    Some("A merge hold in the plan frontmatter blocks dispatch."),
+                ),
+                row(12, false, None),
+            ])
+        };
+        let held_body = "## Merge hold\n\nThe merge waits for the release tag.";
+        let skipped: HashSet<u64> = [7, 11, 12].into();
+        assert_eq!(listing(held_body), skipped);
+        let stale = Seen {
+            head: "def".into(),
+            ready_since_ms: t0,
+            raised: 1,
+            ..Seen::default()
+        };
+        let path = file(home, "o/r", 8);
+        assert!(state::write_json_atomic(&path, &stale).is_ok());
+        assert_eq!(sends(home, t0, &skipped, &[]), (0, 0));
+        assert!(!path.exists(), "a body-held PR loses its clock");
+        // The author removed the words: the PR is open again, and its clock
+        // starts from zero.
+        let open_again: HashSet<u64> = [7, 8, 11, 12].into();
+        assert_eq!(listing("A plain change too."), open_again);
+        assert_eq!(
+            sends(home, t0 + RERAISE_AFTER_MS, &open_again, &[ready(8, "def")]),
+            (0, 0)
+        );
+        let seen: Seen = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            seen.ready_since_ms,
+            t0 + RERAISE_AFTER_MS,
+            "the clock starts from zero"
         );
     }
 }
