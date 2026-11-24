@@ -15857,3 +15857,4 @@ crates/fno/src/serve/web_core.rs	clippy::indexing_slicing	token: state["token"].
 crates/fno-agent/src/runtime/attention_http.rs	clippy::indexing_slicing	assert_eq!(body["click"], "https://phone.example/hq?question=q-9");
 crates/fno-agent/src/runtime/attention_http.rs	clippy::indexing_slicing	body["click"],
 crates/fno-agent/src/runtime/attention_http.rs	clippy::indexing_slicing	let actions = body["actions"].as_array().unwrap();
+crates/fno-app/src/window.rs	clippy::too_many_lines	fn new_with_link(

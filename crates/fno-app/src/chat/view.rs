@@ -414,6 +414,50 @@ fn notice_head(text: &str) -> String {
     }
 }
 
+/// A folded system-injected row: the caret head, and the full text open
+/// under it when the row is expanded.
+fn notice_fold(
+    root: &Root,
+    ix: usize,
+    content: &Content,
+    p: Palette,
+    cx: &mut Context<Root>,
+) -> AnyElement {
+    let id = ElementId::NamedInteger(SharedString::from("notice".to_string()), ix as u64);
+    let open = root.chat.conv.expanded.contains(&ix);
+    let caret = if open { "▾" } else { "▸" };
+    // The caret takes the sideline fold's treatment (default size,
+    // secondary color) so the fold reads first; the label stays
+    // small under it.
+    let head = clickable(id, Action::ToggleChat(ix), p, cx).child(
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_1()
+            .child(div().text_color(rgb(p.muted)).child(caret))
+            .child(
+                div()
+                    .text_color(rgb(p.muted))
+                    .text_xs()
+                    .line_clamp(1)
+                    .text_ellipsis()
+                    .child(notice_head(&content.text)),
+            ),
+    );
+    let mut d = div().flex().flex_col().child(head);
+    if open {
+        let hl = find::chat_ranges(root.find.as_ref(), ix, 0, content.text.len());
+        let full: AnyElement = if hl.is_empty() {
+            muted(content.text.clone(), p).into_any_element()
+        } else {
+            painted(content.text.as_str(), font(UI_FONT), p.muted, &hl, p).into_any_element()
+        };
+        d = d.child(div().ml_2().mt_1().child(full));
+    }
+    d.into_any_element()
+}
+
 /// One list row, inside the centred column.
 fn row(root: &mut Root, ix: usize, _window: &mut Window, cx: &mut Context<Root>) -> AnyElement {
     let p = root.palette;
@@ -422,41 +466,7 @@ fn row(root: &mut Root, ix: usize, _window: &mut Window, cx: &mut Context<Root>)
     };
     let id = |name: &str| ElementId::NamedInteger(SharedString::from(name.to_string()), ix as u64);
     let body: AnyElement = match item {
-        Item::User { content, .. } if item.folds_notice() => {
-            let open = root.chat.conv.expanded.contains(&ix);
-            let caret = if open { "▾" } else { "▸" };
-            // The caret takes the sideline fold's treatment (default size,
-            // secondary color) so the fold reads first; the label stays
-            // small under it.
-            let head = clickable(id("notice"), Action::ToggleChat(ix), p, cx).child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_1()
-                    .child(div().text_color(rgb(p.muted)).child(caret))
-                    .child(
-                        div()
-                            .text_color(rgb(p.muted))
-                            .text_xs()
-                            .line_clamp(1)
-                            .text_ellipsis()
-                            .child(notice_head(&content.text)),
-                    ),
-            );
-            let mut d = div().flex().flex_col().child(head);
-            if open {
-                let hl = find::chat_ranges(root.find.as_ref(), ix, 0, content.text.len());
-                let full: AnyElement = if hl.is_empty() {
-                    muted(content.text.clone(), p).into_any_element()
-                } else {
-                    painted(content.text.as_str(), font(UI_FONT), p.muted, &hl, p)
-                        .into_any_element()
-                };
-                d = d.child(div().ml_2().mt_1().child(full));
-            }
-            d.into_any_element()
-        }
+        Item::User { content, .. } if item.folds_notice() => notice_fold(root, ix, content, p, cx),
         Item::User { content, .. } => {
             let hl = find::chat_ranges(root.find.as_ref(), ix, 0, content.text.len());
             bubble(content, false, p, &hl).into_any_element()
