@@ -1016,6 +1016,13 @@ pub struct RegistryEntry {
     /// passthrough.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_source: Option<String>,
+    /// The host copy of a sandboxed worker's transcript (v46), written by
+    /// the `sandbox-run` relay under `sandbox-transcripts/`. Sandbox content:
+    /// only display readers (truth, peek) opt in, and they label it as
+    /// sandbox origin. A sandbox row never sets `transcript_path`, whose
+    /// readers trust user turns and account caps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_transcript: Option<String>,
     /// The backlog node this row WORKS (v21), mirroring Python's
     /// `AgentEntry.node`: stamped once at birth by the Python spawn seams from
     /// the spawn's resolved provenance and by the client-side ask lanes from
