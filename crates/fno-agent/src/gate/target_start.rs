@@ -988,7 +988,9 @@ pub(crate) fn claim_names_current_session(holder: &str, rec: &crate::claims::Cla
 /// whoever minted it, so neither shape proves a beneficiary here; the
 /// launch-record join decides those.
 fn handover_beneficiary_is(rec: &crate::claims::ClaimRecord, own_sid: Option<&str>) -> bool {
-    let trimmed = |s: Option<&str>| s.map(str::trim).filter(|s| !s.is_empty());
+    fn trimmed(s: Option<&str>) -> Option<&str> {
+        s.map(str::trim).filter(|s| !s.is_empty())
+    }
     let (Some(recorded), Some(minter), Some(own)) = (
         trimmed(rec.session_id.as_deref()),
         trimmed(rec.dispatched_by_session()),
