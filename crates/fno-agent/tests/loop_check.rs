@@ -597,6 +597,86 @@ fn ac1_err_gh_outage_blocks_promise() {
     );
 }
 
+/// AC1-HP (gh read park): on a harness the daemon can wake, the same failed
+/// read parks instead of blocking, and a second failed fire doubles the park.
+#[test]
+fn gh_read_failure_parks_an_idle_capable_harness() {
+    let tmp = TempDir::new().unwrap();
+    let cwd = tmp.path();
+    fs::create_dir_all(cwd.join(".fno")).unwrap();
+    isolate_settings(cwd);
+    let manifest_path = cwd.join("target-state.md");
+    let transcript_path = cwd.join("transcript.jsonl");
+    fs::write(
+        &manifest_path,
+        new_manifest("sess-park1", "2026-06-05T00:00:00Z", true),
+    )
+    .unwrap();
+    fs::write(&transcript_path, transcript_with_promise()).unwrap();
+    let mock = MockBins::failing_gh();
+    let now_ms = chrono::DateTime::parse_from_rfc3339("2026-06-05T00:30:00Z")
+        .unwrap()
+        .timestamp_millis();
+    let slack_ms = 12 * 60_000;
+
+    let fire_claude = || {
+        fire(&[
+            "loop-check",
+            "--state",
+            manifest_path.to_str().unwrap(),
+            "--transcript",
+            transcript_path.to_str().unwrap(),
+            "--cwd",
+            cwd.to_str().unwrap(),
+            "--now",
+            "2026-06-05T00:30:00Z",
+            "--author-harness",
+            "claude",
+            &format!("--gh-bin={}", mock.gh.display()),
+            &format!("--git-bin={}", mock.git.display()),
+        ])
+    };
+    let idle_expiries = || -> Vec<(String, i64)> {
+        event_text(&project_events(cwd))
+            .lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .filter(|v| v["type"] == "loop_check_watch_idle")
+            .map(|v| {
+                (
+                    v["data"]["blocker"].as_str().unwrap_or("").to_string(),
+                    v["data"]["expires_at_ms"].as_i64().unwrap_or(0),
+                )
+            })
+            .collect()
+    };
+
+    let (code, d) = fire_claude();
+    assert_eq!(code, 0);
+    assert_eq!(d.decision, "allow", "a failed read parks: {}", d.message);
+    assert!(d.message.contains("PARKED"), "{}", d.message);
+    assert!(!d.message.contains("<help"), "{}", d.message);
+    assert_eq!(
+        idle_expiries(),
+        vec![("gh_read".to_string(), now_ms + 180_000 + slack_ms)]
+    );
+    let events = event_text(&project_events(cwd));
+    let row = events
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .find(|v| v["type"] == "loop_check")
+        .expect("one loop_check row");
+    assert_eq!(row["data"]["decision"], "allow", "{events}");
+    assert_eq!(row["data"]["fp_read_failed"], true, "{events}");
+
+    let (_, d) = fire_claude();
+    assert_eq!(d.decision, "allow");
+    assert_eq!(
+        idle_expiries().last(),
+        Some(&("gh_read".to_string(), now_ms + 360_000 + slack_ms)),
+        "the second failed fire in a row doubles the park"
+    );
+}
+
 /// AC1-UI: CI red -> block, message names the failing check.
 #[test]
 fn ac1_ui_ci_red_block_names_check() {

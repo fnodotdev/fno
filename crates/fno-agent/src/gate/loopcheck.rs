@@ -2721,30 +2721,14 @@ pub(crate) fn decide_with_payload(
                         ledger_core_reset_in_s,
                         now.timestamp(),
                     ) {
-                        const QUOTA_PARK_MAX_MS: i64 = 2 * 60 * 60_000;
                         // saturating: a corrupt ledger reset must not
                         // overflow the multiply before the clamp applies.
                         let park_ms = park_s
                             .saturating_mul(1000)
                             .max(60_000)
-                            .min(QUOTA_PARK_MAX_MS);
+                            .min(watch_lease::PARK_MAX_MS);
                         let expires_at_ms =
                             now.timestamp_millis() + park_ms + watch_lease::WATCH_SLACK_MS;
-                        // A parked session keeps its node: renew the claim
-                        // lease over the window, as the build park does.
-                        if let Some((key, holder)) = watch_lease::claim_pair(&manifest_content) {
-                            let _ = crate::claims::renew(
-                                &key,
-                                &holder,
-                                park_ms + 2 * watch_lease::WATCH_SLACK_MS,
-                                None,
-                            );
-                        }
-                        // The fire row lands BEFORE the watch-idle row: a
-                        // later `loop_check` row with a non-watching intent
-                        // would mark the watch superseded
-                        // (`is_current_watch`) and the daemon would never
-                        // wake the parked session.
                         fire_row(
                             "allow",
                             if intent == Intent::Promise {
@@ -2774,25 +2758,16 @@ pub(crate) fn decide_with_payload(
                                 "rate_limit_class": "primary"
                             }),
                         );
-                        let idle_row = serde_json::json!({
-                            "session_id": session_id,
-                            "pr": null,
-                            "blocker": "quota",
-                            "reason": "quota",
-                            "expires_at_ms": expires_at_ms,
-                            "harness": scan_manifest_field(&manifest_content, "harness"),
-                            "cwd": &cwd,
-                        });
-                        if let Err(e) = fire_history::emit_to_both_checked(
+                        watch_lease::arm_failed_read_park(
+                            "quota",
+                            park_ms,
+                            expires_at_ms,
+                            &manifest_content,
+                            &session_id,
+                            &cwd,
                             &project_events,
                             &global_events,
-                            "loop_check_watch_idle",
-                            idle_row,
-                        ) {
-                            eprintln!(
-                                "loop-check: quota park not recorded ({e}); no daemon wake is armed"
-                            );
-                        }
+                        );
                         let bucket = if is_graphql_read { "GraphQL" } else { "core" };
                         let mins = park_ms / 60_000;
                         let reason = format!(
@@ -2808,6 +2783,79 @@ pub(crate) fn decide_with_payload(
                             allow_output("allow", None, &reason, this_fire, Some(fingerprint)),
                         );
                     }
+                }
+                // The origin remote is a local fact: when it is absent, every
+                // origin-resolved PR read fails with the same owner/repo
+                // refusal and no retry can clear it. Gate the wording on the
+                // read's own cause, not the remote's absence: a node whose PR
+                // row pins an owner/repo reads fine without an origin, so a
+                // network blip there must keep its ordinary retry wording.
+                let remoteless_pr = failed_read.starts_with("pr_")
+                    && failed_stderr.contains("could not resolve owner/repo");
+                let transient = read_failure_is_transient(read_err.kind, &failed_read);
+                // A transient read parks like the quota arm: a block re-woke
+                // the session into "not work for you" text on every stop. The
+                // park doubles per failed fire in a row, so an outage costs
+                // one wake per window. A permanent failure, a remoteless PR,
+                // and a harness the daemon cannot wake keep the block.
+                if transient
+                    && !remoteless_pr
+                    && harness_can_idle(author_harness.as_deref(), is_loop_run_child)
+                {
+                    let streak =
+                        fire_history::failed_read_streak(fire_rows.as_deref(), &session_id);
+                    let park_ms = watch_lease::gh_read_park_ms(streak);
+                    let expires_at_ms =
+                        now.timestamp_millis() + park_ms + watch_lease::WATCH_SLACK_MS;
+                    fire_row(
+                        "allow",
+                        if intent == Intent::Promise {
+                            "promise"
+                        } else {
+                            "none"
+                        },
+                        true,
+                        serde_json::json!({
+                            "pr_state": "unknown",
+                            "ci": "unknown",
+                            "reviewed": false
+                        }),
+                    );
+                    emit(
+                        "loop_check_gh_error",
+                        serde_json::json!({
+                            "session_id": session_id,
+                            "read": failed_read,
+                            "outcome": read_err.outcome(),
+                            "stderr_tail": failed_stderr,
+                            "waited_on": read_err.waited_on(),
+                            "elapsed_s": read_err.elapsed.map(|d| d.as_secs_f64()),
+                            "parked": true,
+                            "park_until_ms": expires_at_ms,
+                            "rate_limit_class": secondary.then_some("secondary")
+                        }),
+                    );
+                    watch_lease::arm_failed_read_park(
+                        "gh_read",
+                        park_ms,
+                        expires_at_ms,
+                        &manifest_content,
+                        &session_id,
+                        &cwd,
+                        &project_events,
+                        &global_events,
+                    );
+                    let reason = format!(
+                        "gh read '{failed_read}' {}. The session is PARKED, not blocked: \
+                         end the turn; the fno daemon re-wakes this session in ~{}m and \
+                         the gate re-reads then. Do not retry or debug the read.",
+                        read_err.outcome(),
+                        park_ms / 60_000
+                    );
+                    return (
+                        0,
+                        allow_output("allow", None, &reason, this_fire, Some(fingerprint)),
+                    );
                 }
                 emit(
                     "loop_check_gh_error",
@@ -2852,14 +2900,6 @@ pub(crate) fn decide_with_payload(
                 // through the ordinary failed-read wording: the two demand
                 // opposite operator responses, and the quota probe below must
                 // not label a killed child as a quota problem either.
-                // The origin remote is a local fact: when it is absent, every
-                // origin-resolved PR read fails with the same owner/repo
-                // refusal and no retry can clear it. Gate the wording on the
-                // read's own cause, not the remote's absence: a node whose PR
-                // row pins an owner/repo reads fine without an origin, so a
-                // network blip there must keep its ordinary retry wording.
-                let remoteless_pr = failed_read.starts_with("pr_")
-                    && failed_stderr.contains("could not resolve owner/repo");
                 let reason = if remoteless_pr {
                     remoteless_pr_read_reason(&failed_read, &failed_stderr)
                 } else if read_err.kind == ReadErrorKind::TimedOut {
@@ -2888,7 +2928,7 @@ pub(crate) fn decide_with_payload(
                 // never does.
                 let reason = if remoteless_pr {
                     reason
-                } else if read_failure_is_transient(read_err.kind, &failed_read) {
+                } else if transient {
                     format!(
                         "{reason}{}",
                         failed_read_wait_directive(&failed_read, read_err.outcome())
