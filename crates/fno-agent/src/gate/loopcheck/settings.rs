@@ -183,14 +183,6 @@ impl ReviewHuman {
             _ => None,
         }
     }
-
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Never => "never",
-            Self::Ui => "ui",
-            Self::Always => "always",
-        }
-    }
 }
 
 #[derive(Debug, Default)]
