@@ -895,6 +895,17 @@ jobs:
           bash scripts/ci/check-no-verb-wording.sh --self-test
           bash scripts/ci/check-no-verb-wording.sh
 
+      # Claude Code ships its own ship command (Claude Ship beta), so the
+      # bare spelling opens Claude's command, not fno's. Every ship command
+      # in the tree reads /fno:ship (codex $fno:ship). The self-test watches
+      # it fail first.
+      - name: Every ship command is plugin-qualified + self-test
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          bash scripts/ci/check-plugin-qualified-ship.sh --self-test
+          bash scripts/ci/check-plugin-qualified-ship.sh
+
       # A web page never swallows an error: an empty catch needs a quiet-ok
       # comment. The self-test watches it fail first.
       - name: No empty catch in the web pages

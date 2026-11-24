@@ -120,7 +120,7 @@ pub struct Target {
 
 /// One declared lane row matched by name, the lookup [`resolve_target`] and
 /// [`route_vendor`] share; `None` when no row carries the name.
-fn lane_row(route: &str, cwd: &Path) -> Option<Value> {
+pub(crate) fn lane_row(route: &str, cwd: &Path) -> Option<Value> {
     let row = crate::route_gather::run_mode(
         &json!({"mode": "lane", "match": "name", "name": route}),
         cwd,

@@ -1,15 +1,15 @@
 # ship doc
 
-Ship a research **doc** deliverable to its finish line: a cited brief written to `config.research.output_dir`, with a mechanical green from `fno doctor evals grade`. This is the second ship type that earns the `/ship` umbrella - it has a definable green, the same way `pr` does.
+Ship a research **doc** deliverable to its finish line: a cited brief written to `config.research.output_dir`, with a mechanical green from `fno doctor evals grade`. This is the second ship type that earns the `/fno:ship` umbrella - it has a definable green, the same way `pr` does.
 
 `fno doctor evals grade` makes three model-free assertions for a doc. It requires zero uncited claims and zero dead source URLs. It also requires one golden checklist item per section. No model sits in this gate. The research-verify panel is advisory and never changes the verdict.
 
-**Delivery is mandatory.** "Ship" means the brief lands in `config.research.output_dir`. This mode always delivers there before it reports anything - it never grades or reports GREEN against a brief that was not shipped to `output_dir`. `--no-deliver` (a `fno do research` flag that writes only the local research cache) is therefore rejected here: it would let `/ship doc` report a finish line that does not exist.
+**Delivery is mandatory.** "Ship" means the brief lands in `config.research.output_dir`. This mode always delivers there before it reports anything - it never grades or reports GREEN against a brief that was not shipped to `output_dir`. The `--no-deliver` flag of `fno do research` writes only the local research cache. It is therefore rejected here: it lets `/fno:ship doc` report a finish line that does not exist.
 
 ## Arguments
 
 ```
-/ship doc <topic> [--golden <discovery-*.md>] [extra fno do research flags except --no-deliver]
+/fno:ship doc <topic> [--golden <discovery-*.md>] [extra fno do research flags except --no-deliver]
 ```
 
 - **`<topic>`** (required, a plain string) -> the subject to research and ship.
@@ -20,14 +20,14 @@ Ship a research **doc** deliverable to its finish line: a cited brief written to
 If no non-flag topic argument is given (only flags, or nothing), do NOT call `fno do research` with an empty topic. Print and stop with a non-zero result:
 
 ```
-/ship doc needs a topic. usage:
-  /ship doc "<topic>" [--golden <discovery-*.md>]
+/fno:ship doc needs a topic. usage:
+  /fno:ship doc "<topic>" [--golden <discovery-*.md>]
 ```
 
 If `--no-deliver` is among the arguments, reject and stop with a non-zero result:
 
 ```
-/ship doc always delivers to config.research.output_dir; --no-deliver is not allowed.
+/fno:ship doc always delivers to config.research.output_dir; --no-deliver is not allowed.
 to retrieve sources without shipping, use `fno do research <topic> --no-deliver` directly.
 ```
 
@@ -61,7 +61,7 @@ If `--golden` was NOT given: the brief is delivered (`DoneAdvisory`) but **not e
 
 ```
 doc delivered to <output_dir>/<slug>.md (ungraded - not a green finish line).
-to assert the green, re-run with: /ship doc "<topic>" --golden <discovery-*.md>
+to assert the green, re-run with: /fno:ship doc "<topic>" --golden <discovery-*.md>
 ```
 
 ## Step 3: report

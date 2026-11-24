@@ -505,9 +505,18 @@ fn peek_one(
     };
     if !args.json {
         // `recorded_cwd`: the registry's launch-time snapshot, never a live pwd.
+        // A sandboxed worker's lines are sandbox content, and say so.
+        let origin = match session
+            .row
+            .as_ref()
+            .and_then(|r| r.sandbox_transcript.as_ref())
+        {
+            Some(_) => " origin=sandbox",
+            None => "",
+        };
         emit(
             out,
-            &format!("peer {handle}: agent={agent} short_id={short_id} recorded_cwd={cwd}"),
+            &format!("peer {handle}: agent={agent} short_id={short_id} recorded_cwd={cwd}{origin}"),
         );
     }
 

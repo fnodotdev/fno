@@ -141,6 +141,9 @@
 #      login writes there; footnote stores nothing of its own inside it.
 #      The probe touches marker files under the sandbox home for the reset
 #      check.
+#      spawn/sandbox_launch.rs names the in-container harness transcript
+#      folder (`/home/fno/.claude/projects`) the guest tails. It is a path
+#      inside the container image, never the host's ~/.claude.
 #      accounts/reconcile.rs ports reconcile-slot: it names the canonical
 #      ~/.claude slot in its sign-in remedy text, for the reason above.
 #      test_run.rs's hold-marker tests build fixture checkouts under a
@@ -356,6 +359,7 @@ crates/fno-agent/src/spawn/accounts/launch.rs
 crates/fno-agent/src/spawn/accounts/staging.rs
 crates/fno-agent/src/spawn/accounts/store.rs
 crates/fno-agent/src/spawn/project_sandbox.rs
+crates/fno-agent/src/spawn/sandbox_launch.rs
 scripts/ops/sandbox-leak-probe.sh
 # mux-demo-snapshot.sh builds its .claude paths under the throwaway demo
 # world root: the rig exports HOME=$ROOT before any of them resolve, so the

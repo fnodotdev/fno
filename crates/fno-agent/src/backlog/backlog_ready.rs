@@ -2365,6 +2365,34 @@ mod tests {
         assert!(effective_command(&clean).is_ok(), "untagged rows route");
     }
 
+    /// A plan doc whose frontmatter reads `status: draft` reads the design
+    /// rung, so the lifecycle table routes the node to blueprint instead of
+    /// refusing `plan rung "unreadable"` - the lead's re-plan door.
+    #[test]
+    fn a_draft_plan_doc_routes_to_blueprint() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = dir.path().join("plan.md");
+        std::fs::write(&plan, "---\nstatus: draft\n---\n\n# T\n").unwrap();
+        let row = serde_json::json!({
+            "id": "x-draft",
+            "plan_path": plan.display().to_string(),
+        });
+        let (command, note) = effective_command(&row).expect("a draft doc routes");
+        assert_eq!(command.as_deref(), Some("/blueprint"));
+        assert!(note.contains("plan design"), "{note}");
+
+        // The deny arm of the same guard: an unresolvable status word still
+        // fails closed, so the fix does not widen the vocabulary for junk.
+        let junk = dir.path().join("junk.md");
+        std::fs::write(&junk, "---\nstatus: zzz-not-a-word\n---\n\n# T\n").unwrap();
+        let row = serde_json::json!({
+            "id": "x-junk",
+            "plan_path": junk.display().to_string(),
+        });
+        let err = effective_command(&row).expect_err("unknown words still refuse");
+        assert!(err.contains("unreadable"), "{err}");
+    }
+
     /// The ranking-and-drain rule for outside votes: one voter set, one
     /// movement read, with and without the external records.
     #[test]

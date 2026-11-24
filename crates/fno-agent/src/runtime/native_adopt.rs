@@ -159,6 +159,7 @@ pub(crate) fn prepare_mint(
         node_basis: record.and_then(|r| r.node_basis.clone()),
         transcript_path: transcript_path.map(str::to_string),
         start_source: source.map(str::to_string),
+        sandbox_transcript: None,
         cwd: cwd.clone().unwrap_or_default(),
         project_root: cwd.unwrap_or_default(),
         claude_session_uuid: (harness.as_harness() == Harness::Claude)

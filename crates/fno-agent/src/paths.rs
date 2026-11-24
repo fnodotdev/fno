@@ -363,15 +363,6 @@ impl AgentsHome {
         self.root.join("events.jsonl")
     }
 
-    /// The transcripts journal: one `transcript_record` envelope per raw
-    /// transcript line a session's turn hook pushed over the daemon socket
-    /// (the sandboxed-session lane; the file fallback stays for sessions
-    /// whose transcript file is readable). High-volume, so it stays out of
-    /// `events.jsonl` (the operator audit log).
-    pub fn transcripts_journal(&self) -> PathBuf {
-        self.root.join("transcripts.jsonl")
-    }
-
     /// The last footprint probe answer (`footprint-cache.json`). Any real
     /// probe run writes it; readers that can serve a recent answer read it
     /// instead of re-spawning the probe child. See [`crate::spawn_gate`].
@@ -457,11 +448,16 @@ impl AgentsHome {
         self.remote_dir().join("devices.json")
     }
 
-    /// The directory a devcontainer sandbox mounts to reach the daemon: it holds
-    /// a hard link to `supervisor_sock()` that the daemon re-creates at
-    /// every bind, and nothing else from the home.
-    pub fn sandbox_sock_dir(&self) -> PathBuf {
-        self.root.join("sandbox-sock")
+    /// One 0600 transcript file per sandbox, written by the host relay. It
+    /// sits outside every harness store, and only display readers open it.
+    pub fn sandbox_transcripts_dir(&self) -> PathBuf {
+        self.root.join("sandbox-transcripts")
+    }
+
+    /// One folder per sandbox for its stored dirty patch and untracked
+    /// archive. The host never applies or extracts them.
+    pub fn sandbox_exports_dir(&self) -> PathBuf {
+        self.root.join("sandbox-exports")
     }
 
     /// Sidecar advisory-lock file for the supervisor-socket singleton guard
