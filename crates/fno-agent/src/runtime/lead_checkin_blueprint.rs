@@ -10,6 +10,8 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::Path;
 
+use crate::lead_wake::scope_members;
+
 /// The unplanned rows this team must not dispatch: node id -> the canonical
 /// scope of the live team that owns it, other than this team's own. The
 /// fold's owner read is the one instrument; an unread read is the caller's
@@ -197,13 +199,6 @@ struct Offer {
     command: String,
     near: String,
     title: String,
-}
-
-/// The node ids a scope spelling names: its comma-separated members, trimmed.
-/// A project-name scope yields names no graph row carries, which read as no
-/// root at all.
-fn scope_members(scope: &str) -> impl Iterator<Item = &str> {
-    scope.split(',').map(str::trim).filter(|s| !s.is_empty())
 }
 
 /// The command that starts one node through the lifecycle command the table
