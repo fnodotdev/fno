@@ -125,7 +125,7 @@ Paths resolve via `crates/fno-agent/src/paths.rs`. Override them under `config.p
 
 ### Ship vocabulary
 
-`/ship` is the deliverable umbrella (`/ship pr` is the PR lifecycle, `/ship doc` a research brief). The **ship phase** creates the PR. The **ship gate** stamps plan frontmatter. Loop finish lines: `DonePRGreen` (PR + CI + reviewed), `DoneUnreviewed` (green, unreviewed), `DoneAdvisory` (doc + eval-green), `DoneDelivery` (current evidence). `fno do pr merge` is the merge primitive. [skills/ship/SKILL.md](skills/ship/SKILL.md).
+`/fno:ship` is the deliverable umbrella (`/fno:ship pr` is the PR lifecycle, `/fno:ship doc` a research brief). The **ship phase** creates the PR. The **ship gate** stamps plan frontmatter. Loop finish lines: `DonePRGreen` (PR + CI + reviewed), `DoneUnreviewed` (green, unreviewed), `DoneAdvisory` (doc + eval-green), `DoneDelivery` (current evidence). `fno do pr merge` is the merge primitive. [skills/ship/SKILL.md](skills/ship/SKILL.md).
 
 ### Plan completion stamp
 

@@ -496,7 +496,7 @@ from "I never checked at all."
 
 ## Single-doc mutation (design-doc input)
 
-When the input to `/blueprint` is a path to an existing design doc (produced by `/think`), the skill mutates that doc in place rather than creating a folder plan. The doc grows through /think -> /blueprint -> /execute -> /review -> /ship; the single file is the canonical artifact.
+When the input to `/blueprint` is a path to an existing design doc (produced by `/think`), the skill mutates that doc in place rather than creating a folder plan. The doc grows through /think -> /blueprint -> /execute -> /review -> /fno:ship; the single file is the canonical artifact.
 
 ### How it works
 
