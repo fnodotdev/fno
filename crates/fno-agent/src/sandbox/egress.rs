@@ -204,13 +204,16 @@ mod tests {
         assert!(closed(mine, &[mine]), "a host-owned address is closed");
         assert!(checked_addrs("1.1.1.1", 22, &[])
             .unwrap_err()
+            .0
             .contains("port 22"));
         assert!(checked_addrs("169.254.169.254", 80, &[])
             .unwrap_err()
+            .0
             .contains("closed address"));
         assert!(checked_addrs("localhost", 443, &[]).is_err());
         assert!(checked_addrs("a\u{1b}[2J", 443, &[])
             .unwrap_err()
+            .0
             .contains("\\u{1b}"));
     }
 }

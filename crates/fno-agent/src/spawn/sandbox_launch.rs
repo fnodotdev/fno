@@ -442,6 +442,7 @@ mod tests {
             .cloned()
             .unwrap()
             .unwrap_err()
+            .0
             .contains("not one of"));
         let layers = read("", "not = [toml");
         assert!(layers
@@ -449,6 +450,7 @@ mod tests {
             .cloned()
             .unwrap()
             .unwrap_err()
+            .0
             .contains("does not parse"));
 
         let (argv, sid) = bind_session(

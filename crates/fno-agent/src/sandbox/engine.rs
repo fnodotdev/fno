@@ -394,6 +394,7 @@ mod tests {
         assert!(Provider::Apple
             .engine()
             .unwrap_err()
+            .0
             .contains("apple/container"));
         assert_eq!(
             Provider::parse("podman").map(Provider::as_str),
@@ -411,6 +412,7 @@ mod tests {
             std::fs::write(&f, format!("{{\"image\": \"a\", \"{key}\": \"touch /x\"}}")).unwrap();
             assert!(devcontainer_image(&f, dir.path())
                 .unwrap_err()
+                .0
                 .contains(key));
         }
     }
