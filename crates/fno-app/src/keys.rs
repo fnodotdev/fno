@@ -567,7 +567,7 @@ mod tests {
         assert_eq!(paste("a\nb", modes), b"\x1b[200~a\rb\x1b[201~");
     }
 
-    /// The x-85d1 regression: the key after the prefix is a text key, which
+    /// The key after the prefix is a text key, which
     /// the window receives through the input handler. That path must hand it
     /// to the scanner while a chord is in flight, and only then.
     #[test]
