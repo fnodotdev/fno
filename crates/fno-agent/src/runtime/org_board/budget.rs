@@ -218,8 +218,9 @@ pub(crate) fn run_with_timeout_accepting(
 /// Run one in-process read and await it until `deadline`. In-process work
 /// cannot be killed, so the deadline bounds the WAIT: a read still running
 /// then is abandoned on its thread, its answer drops, and the source reads
-/// as the budget kill it is. A joined read let one slow source hold the
-/// whole board past its budget.
+/// as the budget kill it is. A read that panics hands its panic back to the
+/// caller, so the join keeps reading it as a failure. A joined read let one
+/// slow source hold the whole board past its budget.
 pub(crate) fn run_in_process_until(
     deadline: Instant,
     spent_err: &str,
@@ -233,15 +234,25 @@ pub(crate) fn run_in_process_until(
     let spawned = std::thread::Builder::new()
         .name("board-source".to_string())
         .spawn(move || {
-            let _ = tx.send(read());
+            let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(read));
+            // No receiver means the wait gave up at the deadline: the
+            // answer, or the panic, has no reader.
+            drop(tx.send(answer));
         })
         .is_ok();
     if !spawned {
         return SourceRead::err("reader thread failed to spawn");
     }
     match rx.recv_timeout(bound) {
-        Ok(answer) => answer,
-        Err(_) => SourceRead::over_budget(spent_err.to_string()),
+        Ok(Ok(answer)) => answer,
+        Ok(Err(panic)) => std::panic::resume_unwind(panic),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            SourceRead::over_budget(spent_err.to_string())
+        }
+        // Only a reader that ended without an answer gets here.
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            SourceRead::err("reader ended without an answer")
+        }
     }
 }
 

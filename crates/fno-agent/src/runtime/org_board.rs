@@ -2311,6 +2311,33 @@ mod tests {
         }
     }
 
+    /// Points HOME and the agents home at one temp dir for the body's scope
+    /// and holds the lock over it. Fields drop in declaration order: the env
+    /// restores, the temp dir goes, then the lock frees.
+    struct PinnedHome {
+        _restore: EnvRestore,
+        _dir: tempfile::TempDir,
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl PinnedHome {
+        fn pin() -> Self {
+            let guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            // Pins die with the body: a later test must never read a dropped
+            // TempDir through a leaked env value.
+            let restore = EnvRestore::take(&["FNO_AGENT_HOME", "FNO_SPACES_DIR", "HOME"]);
+            let dir = tempfile::tempdir().unwrap();
+            std::env::set_var("HOME", dir.path());
+            std::env::set_var("FNO_AGENT_HOME", dir.path().join(".fno").join("agents"));
+            crate::paths::pin_test_claims_root(dir.path());
+            PinnedHome {
+                _restore: restore,
+                _dir: dir,
+                _guard: guard,
+            }
+        }
+    }
+
     #[test]
     fn the_board_answers_inside_a_tight_budget_with_every_queue_present() {
         // An isolated HOME + cwd: no graph, no claims, no lane - the degraded
@@ -2319,21 +2346,13 @@ mod tests {
         // exit 1.
         // A declared hermetic root: blocked_child's collection resolves
         // ~/.fno/agents via AgentsHome, which panics under test with no
-        // declared root (paths.rs) - this test already pins HOME, so it also
-        // pins FNO_AGENT_HOME under the same tempdir to declare one.
-        let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // Pins die with the body: a later test must never read a dropped
-        // TempDir through a leaked env value.
-        let _restore = EnvRestore::take(&["FNO_AGENT_HOME", "FNO_SPACES_DIR", "HOME"]);
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("HOME", dir.path());
-        std::env::set_var("FNO_AGENT_HOME", dir.path().join(".fno").join("agents"));
-        crate::paths::pin_test_claims_root(dir.path());
+        // declared root (paths.rs). The pin sets HOME and FNO_AGENT_HOME
+        // under one tempdir to declare one.
+        let _pin = PinnedHome::pin();
         let payload = read_board(&BoardOpts {
             budget_ms: 20_000,
             ..Default::default()
         });
-        std::env::remove_var("FNO_AGENT_HOME");
         let queues = payload.get("queues").and_then(Value::as_array).unwrap();
         assert_eq!(queues.len(), 16, "{payload}");
         assert_eq!(payload["exit_code"], 1, "{payload}");
@@ -2369,5 +2388,71 @@ mod tests {
         for (_name, s) in sources {
             assert!(s.get("ok").is_some() && s.get("truncated").is_some(), "{s}");
         }
+    }
+
+    /// A panicking in-process reader reaches the join as a panic, and the
+    /// join reads it as a failure: never as the board's own budget kill.
+    #[test]
+    fn a_panicking_in_process_reader_reads_panicked_never_a_budget_kill() {
+        let read = std::thread::scope(|s| {
+            let handle = s.spawn(|| {
+                run_in_process_until(
+                    std::time::Instant::now() + std::time::Duration::from_secs(5),
+                    "spent",
+                    || panic!("read failed"),
+                )
+            });
+            join_read(Some(handle), &Budget::new(0), "needs: reader panicked")
+        });
+        assert!(!read.over_budget, "{read:?}");
+        assert_eq!(read.error.as_deref(), Some("needs: reader panicked"));
+    }
+
+    /// One source's record under `sources`, and one queue, as `read_board`
+    /// writes them.
+    #[derive(serde::Deserialize)]
+    struct SourceVerdict {
+        error: String,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct QueueVerdict {
+        name: String,
+        error: String,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct BoardVerdict {
+        sources: std::collections::HashMap<String, SourceVerdict>,
+        queues: Vec<QueueVerdict>,
+    }
+
+    /// A dispatch-only board reads no merge verdict, no question liveness
+    /// and no needs fold. Each names why it was not read: the first two
+    /// under `sources`, the needs fold on its own queue.
+    #[test]
+    fn a_dispatch_only_board_names_the_sources_it_did_not_read() {
+        let _pin = PinnedHome::pin();
+        let payload = read_board(&BoardOpts {
+            budget_ms: 20_000,
+            dispatch_only: true,
+            ..Default::default()
+        });
+        let verdict: BoardVerdict = serde_json::from_value(payload).unwrap();
+        let not_read = "this board asked for dispatch queues only";
+        for name in ["pr_gate", "outstanding"] {
+            let error = verdict
+                .sources
+                .get(name)
+                .map(|s| s.error.as_str())
+                .unwrap_or_default();
+            assert!(error.contains(not_read), "sources.{name}: {error}");
+        }
+        let needs = verdict
+            .queues
+            .iter()
+            .find(|q| q.name == "unreachable_worker")
+            .unwrap();
+        assert!(needs.error.contains(not_read), "{}", needs.error);
     }
 }
