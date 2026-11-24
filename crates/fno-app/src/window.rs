@@ -421,9 +421,9 @@ fn wire_window(root: &mut Root, window: &mut Window, cx: &mut Context<Root>) {
     }));
 }
 
-fn grid_size(viewport: Size<Pixels>, cell: Size<Pixels>) -> (u16, u16) {
+fn grid_size(viewport: Size<Pixels>, cell: Size<Pixels>, left_w: f32) -> (u16, u16) {
     let height = viewport.height - px(ui::TITLE_H);
-    let width = viewport.width - px(left_pane::WIDTH);
+    let width = viewport.width - px(left_w);
     let rows = ((height / cell.height).floor() - 1.0).max(1.0);
     let cols = ((width / cell.width).floor() - 1.0).max(1.0);
     (
@@ -482,10 +482,10 @@ impl Root {
         Self::write_pid_file(&session);
         // A drag from an earlier run resumes where it left off; the
         // constants stand in when the state file carries no widths.
-        let left_w = left_w.unwrap_or(left_pane::WIDTH);
+        let left_w = left_w.unwrap_or(pane_seam::default_width(pane_seam::SeamKind::LeftPane));
         let board_next_w = board_next_w.unwrap_or(orchestration::NEXT_W);
         let board_feed_w = board_feed_w.unwrap_or(orchestration::QUESTIONS_W);
-        let sent_size = grid_size(window.viewport_size(), metrics.cell);
+        let sent_size = grid_size(window.viewport_size(), metrics.cell, left_w);
         let light = super::palette::appearance_is_light(window.appearance());
         let font_want = (
             metrics.font.family.to_string(),
@@ -2406,12 +2406,11 @@ impl Root {
         }
     }
 
-    /// prefix+P: the row menu of the agent in the focused pane.
+    /// prefix+P opens the focused agent's menu beside the pane's own edge.
     fn row_menu_open(&mut self, cx: &mut Context<Self>) {
-        self.row_menu = Some(mux_modes::RowMenu::open(
-            &self.layout.agents,
-            self.layout.focus,
-        ));
+        let mut menu = mux_modes::RowMenu::open(&self.layout.agents, self.layout.focus);
+        menu.anchor = Some((self.left_w + 12.0, ui::TITLE_H + 8.0));
+        self.row_menu = Some(menu);
         cx.notify();
     }
 
@@ -4274,7 +4273,7 @@ fn mono_view(view: impl IntoElement + Styled) -> gpui::AnyElement {
 
 impl Render for Root {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let size_now = grid_size(window.viewport_size(), self.metrics.cell);
+        let size_now = grid_size(window.viewport_size(), self.metrics.cell, self.left_w);
         if size_now != self.sent_size && self.link.is_some() {
             self.sent_size = size_now;
             self.send(ClientMsg::Resize {

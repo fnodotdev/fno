@@ -103,7 +103,7 @@ fn widths(root: &Root, machines: &[Machine]) -> Widths {
     let fixed = 2 + seat_w + 9 + NODE_W + if hosts { host_w } else { 0 };
     // One gap between each pair of cells, and the row's own side padding.
     let gaps = if hosts { 5.0 } else { 4.0 };
-    let rest = root.width - px(super::left_pane::WIDTH) - px(QUESTIONS_W) - px(24.0 + 24.0);
+    let rest = root.width - px(root.left_w) - px(root.board_feed_w) - px(24.0 + 24.0);
     let rest = rest - adv * fixed as f32 - px(8.0) * gaps;
     let title_w = (rest / adv).floor().max(4.0) as usize;
     Widths {
@@ -400,7 +400,8 @@ fn next_column(root: &Root) -> Div {
         out = out.child(ui::quiet("nothing queued", &p));
     }
     let fixed = 2 + NODE_W + 4;
-    let rest = root.width - px(left_pane::WIDTH) - px(NEXT_W) - px(QUESTIONS_W) - px(48.0);
+    let rest =
+        root.width - px(root.left_w) - px(root.board_next_w) - px(root.board_feed_w) - px(48.0);
     let title_w = ((rest / adv) - fixed as f32 - 24.0).floor().max(4.0) as usize;
     for row in rows.iter() {
         let id = row["id"].as_str().unwrap_or_default();
@@ -557,7 +558,7 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
         )
         .child(
             column("board-next")
-                .w(px(NEXT_W))
+                .w(px(root.board_next_w))
                 .flex_none()
                 .child(next_column(root)),
         )
@@ -571,7 +572,7 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
         )
         .child(
             column("board-feed")
-                .w(px(QUESTIONS_W))
+                .w(px(root.board_feed_w))
                 .flex_none()
                 .pr_4()
                 .child(feed(root, cx)),
