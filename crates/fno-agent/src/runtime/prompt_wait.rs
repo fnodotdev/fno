@@ -13,6 +13,9 @@ use std::path::PathBuf;
 
 /// A person answering at the keyboard clears a prompt well inside this.
 pub(crate) const PARK_AFTER_MS: i64 = 5 * 60_000;
+/// A prompt nobody answered by now is denied, never allowed: the worker gets
+/// the tool's refusal and takes a route that needs no approval.
+pub(crate) const DENY_AFTER_MS: i64 = 30 * 60_000;
 const SENDER: &str = "fno/prompt-wait";
 /// The spawner walk stops here, so a lineage loop cannot hang a pass.
 const MAX_HOPS: usize = 8;
@@ -24,6 +27,8 @@ struct Seen {
     notified: bool,
     /// The recipients a send reached, so a retry mails only the rest.
     told: Vec<String>,
+    /// The deny key landed; one denial per wait.
+    denied: bool,
 }
 
 /// One worker waiting on a prompt now.
@@ -37,6 +42,7 @@ pub(crate) struct Waiting {
     pub since_ms: i64,
     notified: bool,
     told: Vec<String>,
+    denied: bool,
     /// Grants a macOS grant screen names as missing; no key answers it.
     pub grants: Vec<&'static str>,
     /// The permission menu the screen shows, so the line names what is asked.
@@ -60,6 +66,12 @@ impl Waiting {
 
     pub(crate) fn overdue(&self, now: i64) -> bool {
         now.saturating_sub(self.since_ms) >= PARK_AFTER_MS
+    }
+
+    /// Past [`DENY_AFTER_MS`], or at once while the user sleeps: nothing may
+    /// sit idle through the night.
+    fn deny_due(&self, now: i64, asleep: bool) -> bool {
+        !self.denied && (asleep || now.saturating_sub(self.since_ms) >= DENY_AFTER_MS)
     }
 
     fn minutes(&self, now: i64) -> i64 {
@@ -153,6 +165,7 @@ pub(crate) fn observe(
             since_ms: seen.first_seen_ms,
             notified: seen.notified,
             told: seen.told,
+            denied: seen.denied,
             grants: Vec::new(),
             menu: None,
         });
@@ -242,18 +255,111 @@ pub(crate) fn run_pass(
     )
 }
 
+/// Whether the user is in `provider_cap.sleep_hours` for this worker's project.
+fn user_asleep(w: &Waiting, now: i64) -> bool {
+    let cfg = crate::agents_config::provider_cap_config(std::path::Path::new(&w.cwd));
+    crate::provider_cap::in_sleep_window(&cfg, now / 1000)
+}
+
+fn deny_prompt(short: &str) -> Result<String, String> {
+    crate::thread_dialog::answer_prompt(&crate::claude_roster::daemon_dir(), short, "deny")
+        .map_err(|e| e.to_string())
+}
+
 fn run_pass_with(
     home: &AgentsHome,
     now: i64,
     snapshot: &ClaudeAgentsSnapshot,
     runner: crate::burn_watch::Runner<'_>,
 ) -> Result<(), String> {
-    let waiting = observe(home, now, snapshot)?;
+    run_pass_denying(home, now, snapshot, runner, &user_asleep, &deny_prompt)
+}
+
+fn denial_notice(w: &Waiting, now: i64, asleep: bool) -> String {
+    let why = if asleep {
+        "the user is asleep".to_string()
+    } else {
+        format!("nobody answered in {}m", w.minutes(now))
+    };
+    format!(
+        "Worker {} on {}: its {} was denied ({why}). The worker takes a route that needs no approval, or other ready work. The item is on the board for the user.",
+        w.name,
+        crate::session_origin::this_machine(),
+        w.waiting_for
+    )
+}
+
+/// Deny every wait that is due, tell its spawner and lead, and file the item
+/// on the board once. A grant screen has no deny key and stays for a person.
+fn deny_due_waits(
+    home: &AgentsHome,
+    now: i64,
+    waiting: &mut [Waiting],
+    runner: crate::burn_watch::Runner<'_>,
+    asleep: &dyn Fn(&Waiting, i64) -> bool,
+    deny: &dyn Fn(&str) -> Result<String, String>,
+) -> Result<(), String> {
+    let mut first_error = None;
+    let mut registry = None;
+    for w in waiting.iter_mut() {
+        let sleeping = asleep(w, now);
+        if !w.deny_due(now, sleeping) {
+            continue;
+        }
+        w.read_dialog();
+        if !w.grants.is_empty() || deny(&w.short_id).is_err() {
+            continue;
+        }
+        w.denied = true;
+        let seen = Seen {
+            first_seen_ms: w.since_ms,
+            notified: w.notified,
+            told: w.told.clone(),
+            denied: true,
+        };
+        state::write_json_atomic(&dir(home).join(format!("{}.json", w.short_id)), &seen)
+            .map_err(|e| e.to_string())?;
+        let text = denial_notice(w, now, sleeping);
+        let store = crate::provider_cap::questions_path(home);
+        let key = format!("prompt denied {}", w.short_id);
+        if let Err(e) =
+            crate::fleet_task::file_once(&store, SENDER, &key, &w.cwd, &text, None, None)
+        {
+            first_error.get_or_insert(e);
+        }
+        if registry.is_none() {
+            registry =
+                Some(state::load_registry(&home.registry_json()).map_err(|e| e.to_string())?);
+        }
+        let to = match (&registry, w.session_id.as_deref()) {
+            (Some(reg), Some(sid)) => recipients(home, reg, sid),
+            _ => Vec::new(),
+        };
+        for sid in to {
+            if let Err(e) = crate::first_check::send_notice(&mut *runner, SENDER, &sid, &text) {
+                first_error.get_or_insert(e);
+            }
+        }
+    }
+    first_error.map_or(Ok(()), Err)
+}
+
+fn run_pass_denying(
+    home: &AgentsHome,
+    now: i64,
+    snapshot: &ClaudeAgentsSnapshot,
+    runner: crate::burn_watch::Runner<'_>,
+    asleep: &dyn Fn(&Waiting, i64) -> bool,
+    deny: &dyn Fn(&str) -> Result<String, String>,
+) -> Result<(), String> {
+    let mut waiting = observe(home, now, snapshot)?;
+    let denial = deny_due_waits(home, now, &mut waiting, &mut *runner, asleep, deny);
+    waiting.retain(|w| !w.denied);
     if !waiting.iter().any(|w| w.overdue(now) && !w.notified) {
-        return Ok(());
+        return denial;
     }
     let registry = state::load_registry(&home.registry_json()).map_err(|e| e.to_string())?;
-    let mut first_error = None;
+    let mut first_error = denial.err();
     for mut w in waiting
         .into_iter()
         .filter(|w| w.overdue(now) && !w.notified)
@@ -292,6 +398,7 @@ fn run_pass_with(
                 first_seen_ms: w.since_ms,
                 notified,
                 told,
+                denied: false,
             };
             let path = dir(home).join(format!("{}.json", w.short_id));
             state::write_json_atomic(&path, &seen).map_err(|e| e.to_string())?;
@@ -420,5 +527,51 @@ mod tests {
             "{line}"
         );
         assert!(!line.contains("--answer allow_once"), "{line}");
+    }
+
+    #[test]
+    fn an_unanswered_prompt_is_denied_after_thirty_minutes_or_at_once_while_asleep() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = AgentsHome::at(temp.path().join("agents"));
+        let snap =
+            ClaudeAgentsSnapshot::known(vec![waiting_row("30d6ff6a", "sid-x", "t-away-worker")]);
+        let typed: std::cell::RefCell<Vec<String>> = Default::default();
+        let deny = |short: &str| {
+            typed.borrow_mut().push(short.to_string());
+            Ok("3".to_string())
+        };
+        let mut mail = |_: &[String], _: &str| (0, "accepted-new-turn".into(), String::new());
+        let day = |_: &Waiting, _: i64| false;
+        let night = |_: &Waiting, _: i64| true;
+        let t0 = 1_000_000;
+        run_pass_denying(&home, t0, &snap, &mut mail, &day, &deny).unwrap();
+        run_pass_denying(&home, t0 + DENY_AFTER_MS - 1, &snap, &mut mail, &day, &deny).unwrap();
+        assert!(
+            typed.borrow().is_empty(),
+            "a daytime prompt waits for a person"
+        );
+        run_pass_denying(&home, t0 + DENY_AFTER_MS, &snap, &mut mail, &day, &deny).unwrap();
+        run_pass_denying(
+            &home,
+            t0 + DENY_AFTER_MS + 60_000,
+            &snap,
+            &mut mail,
+            &day,
+            &deny,
+        )
+        .unwrap();
+        assert_eq!(*typed.borrow(), vec!["30d6ff6a"], "one denial per wait");
+        // Asleep: the first sighting is denied at once, a second wait too.
+        let home2 = AgentsHome::at(temp.path().join("agents2"));
+        run_pass_denying(&home2, t0, &snap, &mut mail, &night, &deny).unwrap();
+        assert_eq!(typed.borrow().len(), 2, "quiet hours hold nothing");
+        let store = crate::provider_cap::questions_path(&home2);
+        assert!(
+            crate::fleet_task::open_tasks(&store)
+                .unwrap()
+                .iter()
+                .any(|t| t.key == "prompt denied 30d6ff6a"),
+            "the denied item lands on the board"
+        );
     }
 }
