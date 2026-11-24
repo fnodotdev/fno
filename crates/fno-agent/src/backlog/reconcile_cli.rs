@@ -12,7 +12,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use super::binding::bind_pr_rows;
+use super::binding::{bind_pr_rows, repair_docs_twin_primary, DocsTwinRepair};
 use super::closures::{
     cascade_close_contained, strandable_contained_ids, strandable_epic_ids, strandable_orphan_ids,
     sweep_close_done_epics, sweep_close_stranded_contained, sweep_reparent_stranded_orphans,
@@ -35,13 +35,13 @@ use super::supersession::{
 };
 use crate::backlog::pr_link::{repo_slug_from_url, resolve_current_repo_slug};
 use crate::backlog::workflows::{
-    apply_completion_fields, cascade_close_parents, reopen_outranks_merge, reparent_live_children,
-    rollup_from_ledger, stamp_and_graduate_plan, text_at,
+    apply_completion_fields, cascade_close_parents, live_child_ids, reopen_outranks_merge,
+    reparent_live_children, rollup_from_ledger, stamp_and_graduate_plan, text_at,
 };
 use crate::backlog_ready::node_is_open;
 use crate::graph_store::{self, read_rows, settle_blocked_by_edges};
 
-const USAGE: &str = "usage: fno-agent backlog reconcile [--dry-run|-N] [--node ID] [--json|-J] [--pr-number N] [--repo owner/repo] [--audit-contained [--apply]]";
+const USAGE: &str = "usage: fno-agent backlog reconcile [--dry-run|-N] [--node ID] [--repair-docs-twin] [--json|-J] [--pr-number N] [--repo owner/repo] [--audit-contained [--apply]]";
 
 /// The door owns the help now: the Python parser that rendered the option
 /// surface is deleted with its command. The epilog's reopen pointer survives
@@ -72,6 +72,11 @@ invocation.
 Options:
   --dry-run, -N    Report candidates only; mutate nothing (graph stays byte-identical).
   --node ID        Restrict the scan to a single node id (ab-XXXXXXXX).
+  --repair-docs-twin
+                   Demote a docs twin squatting in the node's primary PR slot
+                   back to its additional_prs row with note docs. Needs --node.
+                   Refuses every non-docs primary, and a twin-less docs primary
+                   (nothing proves the primary was docs).
   --json, -J       Emit structured JSON instead of a human summary.
   --pr-number N    Bind every node named in this merged PR's exact closure line (Fixes, or the retired Backlog-Closure: spelling) to the PR (filling an absent primary or appending to additional_prs) BEFORE the drift scan below runs, so a PR naming several nodes closes all of them in this one invocation rather than only the one node stamped at creation. All-or-nothing: an unknown, malformed, or cross-repo claim binds nothing.
   --repo OWNER/REPO  owner/repo scoping --pr-number's gh query and cross-repo claim check. Resolved from the checkout's origin remote when omitted.
@@ -93,6 +98,7 @@ struct Args {
     repo: Option<String>,
     audit_contained: bool,
     apply: bool,
+    repair_docs_twin: bool,
 }
 
 fn parse_args(tail: &[String]) -> Option<Args> {
@@ -104,6 +110,7 @@ fn parse_args(tail: &[String]) -> Option<Args> {
         repo: None,
         audit_contained: false,
         apply: false,
+        repair_docs_twin: false,
     };
     let mut index = 0;
     while index < tail.len() {
@@ -112,6 +119,7 @@ fn parse_args(tail: &[String]) -> Option<Args> {
             "--json" | "-J" => a.json_out = true,
             "--audit-contained" => a.audit_contained = true,
             "--apply" => a.apply = true,
+            "--repair-docs-twin" => a.repair_docs_twin = true,
             "--node" => {
                 index += 1;
                 a.node = tail.get(index)?.to_string().into();
@@ -152,6 +160,9 @@ pub(crate) fn run(tail: &[String]) -> i32 {
         let graph = super::settings::graph_path();
         return super::contained_audit::run(&graph, args.apply, args.json_out);
     }
+    if args.repair_docs_twin {
+        return repair_docs_twin_run(&args);
+    }
     let repo_resolved = match args.repo.clone() {
         Some(repo) => Some(repo),
         None if args.pr_number.is_some() => {
@@ -165,6 +176,53 @@ pub(crate) fn run(tail: &[String]) -> i32 {
 fn once(args: &Args) -> i32 {
     let graph_path = super::settings::graph_path();
     once_at(args, &graph_path)
+}
+
+/// The docs-twin repair: a focused action, never a sweep. It needs a node
+/// scope and demotes the twin primary under the graph lock, so the refusal
+/// or the receipt is one mutation wide, all-or-nothing like every bind.
+/// Exit 0 repaired, 4 refused, 2 usage.
+fn repair_docs_twin_run(args: &Args) -> i32 {
+    let Some(node) = args.node.as_deref() else {
+        eprintln!("--repair-docs-twin needs --node ID\n{USAGE}");
+        return 2;
+    };
+    if args.dry_run {
+        eprintln!("--repair-docs-twin runs its own graph write; drop --dry-run\n{USAGE}");
+        return 2;
+    }
+    let graph_path = super::settings::graph_path();
+    let node_id = node.to_string();
+    let outcome: std::cell::RefCell<Option<DocsTwinRepair>> = std::cell::RefCell::new(None);
+    let published = graph_store::mutate_rows(
+        &graph_path,
+        std::time::Duration::from_secs(30),
+        None,
+        None,
+        |working| {
+            let result = repair_docs_twin_primary(working, &node_id);
+            // A refusal publishes no write: Ok(false) leaves the working
+            // set unpersisted, so a refused repair moves nothing.
+            let publish = result.action == "repaired";
+            *outcome.borrow_mut() = Some(result);
+            Ok(publish)
+        },
+    );
+    if let Err(err) = published {
+        eprintln!("docs-twin repair: the graph write failed: {err}");
+        return 5;
+    }
+    let result = outcome.into_inner().expect("the mutation always sets it");
+    if result.action == "repaired" {
+        eprintln!("docs-twin repair: {}", result.detail.unwrap_or_default());
+        0
+    } else {
+        eprintln!(
+            "docs-twin repair REFUSED: {}",
+            result.detail.unwrap_or_default()
+        );
+        4
+    }
 }
 
 /// The reconcile gate: the mutual-exclusion refusal (a bad invocation is
@@ -382,7 +440,12 @@ fn once_at(args: &Args, graph_path: &Path) -> i32 {
     // The promise gate + reopen guard partition the closeable set.
     let (gated, mut promise_held, promise_warnings, reopen_expired) =
         promise_gate_leg(&sweep.closeable, &entries, args.json_out, &mut stderr_log);
-    sweep.closeable = gated;
+    // The epic-children hold partitions the gated set: a merge bound to an
+    // epic never closes it while a membership child stays open past this
+    // pass; the epic close sweep alone closes such an epic. Children whose
+    // own records close in this same pass do not hold - the shared-PR
+    // parent must still close and stamp.
+    sweep.closeable = epic_children_gate(&gated, &entries, &mut promise_held);
 
     // The rollup close paths (epic self-heal + parent cascade) hold on the
     // same plan promise, judged pre-lock (gh I/O stays outside the store
@@ -1093,13 +1156,30 @@ fn partition_and_probe(
                 None
             };
             match super::merge_state::query_pr_merge_state(pr, repo.as_deref(), cwd, true) {
-                Err(e) => owed_failures.push(json!({
-                    "successor": successor_id,
-                    "pr_number": pr.to_string(),
-                    "error": e.message,
-                    "kind": e.kind,
-                    "remedy": e.remedy_for(pr, repo.as_deref()),
-                })),
+                Err(e) => {
+                    // The incident's hint: remedy_for's not_found arm tells
+                    // the reader to repair pr_url by hand, which is how a
+                    // docs twin once won the primary slot. When the stored
+                    // primary IS the twin, the remedy names the sanctioned
+                    // repair instead of the update door.
+                    let remedy =
+                        if super::merge_evidence::primary_docs_twin_number(&successor).is_some() {
+                            format!(
+                                "the stored primary is the docs twin; run `fno \
+                             backlog reconcile --node {successor_id} \
+                             --repair-docs-twin` to demote it"
+                            )
+                        } else {
+                            e.remedy_for(pr, repo.as_deref())
+                        };
+                    owed_failures.push(json!({
+                        "successor": successor_id,
+                        "pr_number": pr.to_string(),
+                        "error": e.message,
+                        "kind": e.kind,
+                        "remedy": remedy,
+                    }))
+                }
                 Ok(state) if state.state == "MERGED" => owed_evidence.push((
                     successor_id,
                     json!({
@@ -1265,6 +1345,46 @@ fn promise_gate_leg(
     (gated, held, warnings, reopen_expired)
 }
 
+/// The epic-children hold over the gated set: a record whose node still has
+/// live membership children that this pass does not close is held open -
+/// only the epic close sweep closes such an epic. Children whose own
+/// records are in the gated set close in this same pass, so they do not
+/// hold (the shared-PR parent keeps closing and stamping). One pass over
+/// the whole gated set first, so the answer never depends on record order.
+fn epic_children_gate(
+    gated: &[MergeDriftRecord],
+    entries: &[Value],
+    held: &mut Vec<HeldRow>,
+) -> Vec<MergeDriftRecord> {
+    let closing: BTreeSet<&str> = gated.iter().map(|r| r.node_id.as_str()).collect();
+    let mut kept = Vec::new();
+    for record in gated {
+        let live_kids: Vec<String> = live_child_ids(entries, &record.node_id)
+            .into_iter()
+            .filter(|k| !closing.contains(k.as_str()))
+            .collect();
+        if live_kids.is_empty() {
+            kept.push(record.clone());
+        } else {
+            held.push((
+                record.node_id.clone(),
+                epic_children_reason(&live_kids, record.pr_number),
+                "epic_children_open".into(),
+            ));
+        }
+    }
+    kept
+}
+
+/// The epic-children hold reason: the open children, then the rule.
+fn epic_children_reason(live_kids: &[String], pr_number: i64) -> String {
+    format!(
+        "PR #{pr_number} merged, {} open child(ren) remain ({}): a merge bound to an epic never closes it while a child is open; the epic close sweep closes it once they are done",
+        live_kids.len(),
+        live_kids.join(", "),
+    )
+}
+
 /// The held-open roll, split by WHY the node stayed open.
 fn summarize_promise_held(held: &[HeldRow], dry_run: bool) -> String {
     let command = if dry_run { "Holding" } else { "Held" };
@@ -1275,6 +1395,10 @@ fn summarize_promise_held(held: &[HeldRow], dry_run: bool) -> String {
             "ship count unconfirmed, retryable read failure",
         ),
         ("reopen_held", "deliberate reopen postdates the merge"),
+        (
+            "epic_children_open",
+            "merged wave PR, epic children still open",
+        ),
     ];
     let mut order: Vec<&str> = headlines.iter().map(|(k, _)| *k).collect();
     for outcome in held.iter().map(|(_, _, o)| o.as_str()) {
@@ -1639,6 +1763,8 @@ fn close_mutator(
     result: &std::cell::RefCell<CloseResult>,
     stderr_log: &mut Vec<String>,
 ) {
+    // The gated set this pass closes, for the locked epic recheck below.
+    let closing: BTreeSet<&str> = closeable.iter().map(|r| r.node_id.as_str()).collect();
     for record in closeable {
         let Some(index) = entries
             .iter()
@@ -1672,6 +1798,21 @@ fn close_mutator(
                 record.node_id.clone(),
                 reopen_held_reason(&entries[index], record.pr_number),
                 "reopen_held".into(),
+            ));
+            continue;
+        }
+        // Locked recheck of the epic-children hold: a child landing between
+        // the scan and this transaction would re-close here. Children this
+        // pass closes do not hold (see epic_children_gate).
+        let live_kids: Vec<String> = live_child_ids(entries, &record.node_id)
+            .into_iter()
+            .filter(|k| !closing.contains(k.as_str()))
+            .collect();
+        if !live_kids.is_empty() {
+            result.borrow_mut().held_recheck.push((
+                record.node_id.clone(),
+                epic_children_reason(&live_kids, record.pr_number),
+                "epic_children_open".into(),
             ));
             continue;
         }
@@ -3252,6 +3393,200 @@ mod tests {
         assert_eq!(entries[1]["merge_status"], "merged");
     }
     #[test]
+    fn an_epics_own_merge_record_holds_while_a_child_is_open() {
+        // The epic-hold shape: the epic's own multi-wave plan PR merged
+        // wave 1 while four of its five children were still open. Neither
+        // the pre-lock gate nor the locked recheck may close the epic, and
+        // no child may move off it; once every child closes, the same
+        // record closes the epic.
+        let epic = json!({
+            "id": "x-aaaa", "status": "in_progress",
+            "plan_path": "/plans/20261120-worker-model-by-difficulty.md",
+        });
+        let kid = |id: &str, done: bool| {
+            if done {
+                json!({"id": id, "status": "done", "parent": "x-aaaa",
+                       "completed_at": "2026-11-20T00:00:00Z"})
+            } else {
+                json!({"id": id, "status": "ready", "parent": "x-aaaa"})
+            }
+        };
+        let mut entries = vec![
+            epic,
+            kid("x-bbbb", true),
+            kid("x-cccc", false),
+            kid("x-dddd", false),
+            kid("x-eeee", false),
+            kid("x-ffff", false),
+        ];
+        let record = MergeDriftRecord {
+            node_id: "x-aaaa".into(),
+            plan_path: Some("/plans/20261120-worker-model-by-difficulty.md".into()),
+            pr_number: 450,
+            pr_url: Some("https://github.com/o/r/pull/450".into()),
+            pr_state: "MERGED".into(),
+            merged_at: Some("2026-11-21T04:02:00Z".into()),
+            error: None,
+            session_id: None,
+            cwd: None,
+            merge_sha: None,
+            changed_files: vec![],
+            files_truncated: false,
+            closure_claims: vec![],
+            error_kind: None,
+            remedy: None,
+        };
+        // Pre-lock: the gate holds the epic and names the open children.
+        let mut held: Vec<HeldRow> = Vec::new();
+        let gated = epic_children_gate(&[record.clone()], &entries, &mut held);
+        assert!(gated.is_empty(), "{gated:?}");
+        assert_eq!(held.len(), 1, "{held:?}");
+        let held_row = held.first().expect("one held row");
+        assert_eq!(held_row.0, "x-aaaa");
+        assert_eq!(held_row.2, "epic_children_open");
+        assert!(held_row.1.contains("4 open child(ren)"), "{}", held_row.1);
+        assert!(held_row.1.contains("x-cccc"), "{}", held_row.1);
+        // Locked recheck: the record reaches the mutator anyway (a race
+        // between the scan and the lock) and must not close the epic or
+        // move a child off it.
+        let closeable = vec![record.clone()];
+        let sweep = Sweep {
+            closeable: Vec::new(),
+            closed_unmerged: Vec::new(),
+            failures: Vec::new(),
+            strandable_epics: Vec::new(),
+            strandable_contained: Vec::new(),
+            strandable_orphans: Vec::new(),
+            owed_evidence: Vec::new(),
+            owed_failures: Vec::new(),
+            settlement: json!({}),
+        };
+        let result = std::cell::RefCell::new(CloseResult {
+            actually_closed: Vec::new(),
+            cascade_closed: Vec::new(),
+            contained_closed: Vec::new(),
+            contained_released: Vec::new(),
+            contained_held: Vec::new(),
+            carried_stamped: Vec::new(),
+            reparented: Vec::new(),
+            supersession_unverified: Vec::new(),
+            settlement_receipts: Vec::new(),
+            contained_errors: Vec::new(),
+            held_recheck: Vec::new(),
+        });
+        let mut stderr_log = Vec::new();
+        close_mutator(
+            &mut entries,
+            &closeable,
+            &HashMap::new(),
+            &HashMap::new(),
+            &sweep,
+            &[],
+            false,
+            &Default::default(),
+            &HashMap::new(),
+            &result,
+            &mut stderr_log,
+        );
+        let result = result.into_inner();
+        assert!(
+            result.actually_closed.is_empty(),
+            "the hold path closed a node: {}",
+            result.actually_closed.len()
+        );
+        assert!(
+            result.reparented.is_empty(),
+            "the hold path moved a child: {:?}",
+            result.reparented
+        );
+        assert_eq!(result.held_recheck.len(), 1, "{:?}", result.held_recheck);
+        let recheck_row = result.held_recheck.first().expect("one recheck row");
+        assert_eq!(recheck_row.2, "epic_children_open");
+        let epic_row = entries.first().expect("epic row");
+        assert!(epic_row["completed_at"].is_null());
+        for entry in entries.iter().skip(1) {
+            assert_eq!(entry["parent"], "x-aaaa", "{entry}");
+        }
+        // Admit arm: every child closed, so the same record closes the epic.
+        for entry in entries.iter_mut().skip(1) {
+            entry["status"] = json!("done");
+            entry["completed_at"] = json!("2026-11-21T00:00:00Z");
+        }
+        let result = std::cell::RefCell::new(CloseResult {
+            actually_closed: Vec::new(),
+            cascade_closed: Vec::new(),
+            contained_closed: Vec::new(),
+            contained_released: Vec::new(),
+            contained_held: Vec::new(),
+            carried_stamped: Vec::new(),
+            reparented: Vec::new(),
+            supersession_unverified: Vec::new(),
+            settlement_receipts: Vec::new(),
+            contained_errors: Vec::new(),
+            held_recheck: Vec::new(),
+        });
+        close_mutator(
+            &mut entries,
+            &closeable,
+            &HashMap::new(),
+            &HashMap::new(),
+            &sweep,
+            &[],
+            false,
+            &Default::default(),
+            &HashMap::new(),
+            &result,
+            &mut stderr_log,
+        );
+        let result = result.into_inner();
+        assert_eq!(
+            result.actually_closed.len(),
+            1,
+            "closed {} node(s) once the children were done",
+            result.actually_closed.len()
+        );
+        assert!(result.held_recheck.is_empty(), "{:?}", result.held_recheck);
+        let epic_row = entries.first().expect("epic row");
+        assert!(!epic_row["completed_at"].is_null());
+        assert_eq!(epic_row["merge_status"], "merged");
+    }
+    #[test]
+    fn a_shared_pr_child_does_not_hold_its_parent_in_the_gate() {
+        // The shared-PR shape through the epic gate: the child's own record
+        // is in the same gated set, so it closes this pass and must not
+        // hold the parent that shares its PR.
+        let entries = vec![
+            json!({"id": "ab-par001", "status": "in_progress", "pr_number": 7}),
+            json!({"id": "ab-chil001", "status": "in_progress", "parent": "ab-par001",
+                   "pr_number": 7}),
+        ];
+        let record = |nid: &str| MergeDriftRecord {
+            node_id: nid.into(),
+            plan_path: None,
+            pr_number: 7,
+            pr_url: Some("https://github.com/o/r/pull/7".into()),
+            pr_state: "MERGED".into(),
+            merged_at: Some("2026-10-04T00:00:00Z".into()),
+            error: None,
+            session_id: None,
+            cwd: None,
+            merge_sha: None,
+            changed_files: vec![],
+            files_truncated: false,
+            closure_claims: vec![],
+            error_kind: None,
+            remedy: None,
+        };
+        let mut held: Vec<HeldRow> = Vec::new();
+        let gated = epic_children_gate(
+            &[record("ab-chil001"), record("ab-par001")],
+            &entries,
+            &mut held,
+        );
+        assert_eq!(gated.len(), 2, "{gated:?}");
+        assert!(held.is_empty(), "{held:?}");
+    }
+    #[test]
     fn a_followup_heal_persists_for_a_done_node_in_the_dry_run() {
         let mut entries = vec![json!({
             "id": "x-aaaa",
@@ -3278,5 +3613,269 @@ mod tests {
         assert_eq!(entries[0]["additional_prs"][0]["number"], 1813);
         assert_eq!(entries[0]["pr_number"], 1720);
         assert_eq!(entries[0]["merge_status"], "merged");
+    }
+
+    /// The merge_close floor, on the store: a node reading in_review whose PR
+    /// merged is closed by the sweep's own decision - scan, partition, the
+    /// same locked mutate the command persists through - with no hand reconcile
+    /// and no --pr-number scope: the record the scan built decides.
+    #[test]
+    fn the_sweep_closes_a_merged_node_and_leaves_a_closed_pr_open() {
+        let _journal = crate::merge_provenance::TestJournal::opt_in();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("graph.json");
+        let rows = vec![
+            json!({
+                "id": "x-aaaa001", "slug": "sweep-closes-merged",
+                "title": "merged node", "type": "feature", "status": "in_review",
+                "priority": "p2", "domain": "code",
+                "created_at": "2026-11-20T00:00:00Z",
+                "pr_number": 910, "pr_url": "https://github.com/o/r/pull/910",
+            }),
+            json!({
+                "id": "x-bbbb002", "slug": "closed-unmerged-control",
+                "title": "control node", "type": "feature", "status": "in_review",
+                "priority": "p2", "domain": "code",
+                "created_at": "2026-11-20T00:00:00Z",
+                "pr_number": 911, "pr_url": "https://github.com/o/r/pull/911",
+            }),
+        ];
+        graph_store::seed_rows(&path, &rows).expect("seed lands");
+        let entries = read_rows(&path).expect("read back");
+        let state = |pr: i64, state: &str, merged_at: Option<&str>| {
+            crate::backlog::merge_state::PrMergeState {
+                number: pr,
+                state: state.to_string(),
+                url: Some(format!("https://github.com/o/r/pull/{pr}")),
+                merged_at: merged_at.map(str::to_string),
+                merge_sha: None,
+                changed_files: vec![],
+                files_truncated: false,
+                body: None,
+            }
+        };
+        let stub_query = |pr: i64, _repo: Option<&str>, _cwd: Option<&str>, _files: bool| {
+            let mut s = match pr {
+                910 => state(910, "MERGED", Some("2026-11-20T00:05:00Z")),
+                _ => state(pr, "CLOSED", None),
+            };
+            // The scan records a merged PR only when its body's closure
+            // line names the node: that naming is the binding evidence.
+            s.body = Some("Fixes x-aaaa001".to_string());
+            Ok(s)
+        };
+        let records = scan_merge_drift(&entries, None, None, stub_query);
+        assert_eq!(records.len(), 2, "{records:?}");
+        let sweep = partition_and_probe(records, &entries, false, false);
+        assert_eq!(
+            sweep.closeable.len(),
+            1,
+            "closeable should hold only the merged node"
+        );
+        assert_eq!(
+            sweep.closeable.first().map(|r| r.node_id.as_str()),
+            Some("x-aaaa001")
+        );
+        assert_eq!(
+            sweep.closed_unmerged.first().map(|r| r.node_id.as_str()),
+            Some("x-bbbb002"),
+            "the CLOSED-PR control lands in closed_unmerged, left in_review"
+        );
+
+        let result = std::cell::RefCell::new(CloseResult {
+            actually_closed: Vec::new(),
+            cascade_closed: Vec::new(),
+            contained_closed: Vec::new(),
+            contained_released: Vec::new(),
+            contained_held: Vec::new(),
+            carried_stamped: Vec::new(),
+            reparented: Vec::new(),
+            supersession_unverified: Vec::new(),
+            settlement_receipts: Vec::new(),
+            contained_errors: Vec::new(),
+            held_recheck: Vec::new(),
+        });
+        let mut stderr_log = Vec::new();
+        graph_store::mutate_rows(
+            &path,
+            std::time::Duration::from_secs(60),
+            None,
+            None,
+            |rows| {
+                close_mutator(
+                    rows,
+                    &sweep.closeable,
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    &sweep,
+                    &[],
+                    false,
+                    &Default::default(),
+                    &HashMap::new(),
+                    &result,
+                    &mut stderr_log,
+                );
+                Ok(true)
+            },
+        )
+        .expect("the close persists");
+
+        let rows = read_rows(&path).expect("read back");
+        let a = rows.iter().find(|r| r["id"] == "x-aaaa001").unwrap();
+        let b = rows.iter().find(|r| r["id"] == "x-bbbb002").unwrap();
+        assert_eq!(a["status"], "done", "the merged node closed: {a}");
+        assert_eq!(a["merge_status"], "merged", "{a}");
+        assert!(a["completed_at"].is_string(), "{a}");
+        assert_eq!(b["status"], "in_review", "the control stays open: {b}");
+    }
+
+    /// The kill window the merge door's detach closes: a worker that dies
+    /// right after spawning its close leg cannot take the closer with it.
+    /// The re-invoked test binary below plays the worker. It enters its own
+    /// session first (a supervisor-spawned worker owns a process group),
+    /// spawns the leg through `run_leg`, then kills its own process group one
+    /// second in, the way a reap takes a worker down. The detached leg's
+    /// grandchild sits in a session of its own and finishes; the attached
+    /// withhold arm shares the worker's group and dies with it, proving the
+    /// detach is what carries the guarantee.
+    #[test]
+    #[cfg(unix)]
+    fn a_killed_worker_leaves_its_detached_close_leg_alive() {
+        use std::os::unix::process::ExitStatusExt;
+        use std::process::Command;
+        use std::time::{Duration, Instant};
+
+        // Child mode: the parent phase below re-invokes this test binary.
+        if std::env::var("FNO_TEST_LEG_WORKER").is_ok() {
+            worker_phase(
+                &std::env::var("FNO_TEST_LEG_STUB").expect("stub path"),
+                &std::env::var("FNO_TEST_LEG_MARKERS").expect("marker dir"),
+                std::env::var("FNO_TEST_LEG_DETACHED").is_ok_and(|v| v == "1"),
+            );
+            return;
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        let markers = dir.path().join("markers");
+        std::fs::create_dir_all(&markers).unwrap();
+        // write_exec_stub, not a bare write: a sibling test's fork can hold
+        // the write fd open and the exec dies with Text file busy.
+        let stub = crate::write_exec_stub(
+            dir.path(),
+            "close_leg_stub.sh",
+            "#!/bin/sh\nprintf started > \"$MARKER_DIR/started\"\nprintf $$ > \"$MARKER_DIR/leg-pid\"\nwhile [ ! -f \"$MARKER_DIR/release\" ]; do sleep 0.1; done\nprintf done > \"$MARKER_DIR/done\"\n",
+        );
+
+        let run_worker = |detached: bool| {
+            for m in ["started", "done", "release", "leg-pid", "worker-returned"] {
+                let _ = std::fs::remove_file(markers.join(m));
+            }
+            let exe = std::env::current_exe().expect("test exe");
+            Command::new(exe)
+                .args([
+                    // A substring filter, not --exact: the harness matches
+                    // the full module path, and the bare name is a suffix of
+                    // it, so --exact would run zero tests and exit 0.
+                    "a_killed_worker_leaves_its_detached_close_leg_alive",
+                    "--nocapture",
+                ])
+                .env("FNO_TEST_LEG_WORKER", "1")
+                .env("FNO_TEST_LEG_STUB", &stub)
+                .env("FNO_TEST_LEG_MARKERS", &markers)
+                .env("FNO_TEST_LEG_DETACHED", if detached { "1" } else { "0" })
+                .env("MARKER_DIR", &markers)
+                .env("FNO_BIN", &stub)
+                .status()
+                .expect("the worker child runs")
+        };
+        let leg_pid = |markers: &Path| -> u32 {
+            let raw = std::fs::read_to_string(markers.join("leg-pid")).expect("leg pid file");
+            raw.trim().parse().expect("leg pid parses")
+        };
+        let alive = |pid: u32| unsafe { libc::kill(pid as libc::pid_t, 0) == 0 };
+
+        // The detach arm: the worker dies, the leg still finishes. Release
+        // only after the worker is confirmed dead, so a done marker proves
+        // the grandchild ran PAST its spawner's death.
+        let status = run_worker(true);
+        assert_eq!(
+            status.signal(),
+            Some(libc::SIGKILL),
+            "the worker child must die to SIGKILL, got {status:?}"
+        );
+        assert!(
+            markers.join("started").exists(),
+            "the detached leg never launched"
+        );
+        std::fs::write(markers.join("release"), "go").unwrap();
+        let done = markers.join("done");
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while !done.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "the detached leg never finished its close"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        // The withhold arm: attached, the leg dies with the worker's group.
+        // The leg's death is read directly through its pid, never inferred
+        // from an absence.
+        let status = run_worker(false);
+        assert_eq!(
+            status.signal(),
+            Some(libc::SIGKILL),
+            "the worker child must die to SIGKILL, got {status:?}"
+        );
+        assert!(
+            !markers.join("worker-returned").exists(),
+            "the worker's group kill never landed"
+        );
+        let pid = leg_pid(&markers);
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while alive(pid) {
+            assert!(
+                Instant::now() < deadline,
+                "an attached leg must die with its worker's group; pid {pid} still alive"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(
+            !markers.join("worker-returned").exists(),
+            "the worker's group kill never landed"
+        );
+    }
+
+    /// The child half of the kill-window test. Reached as a real worker only
+    /// when the group kill fails; the success path dies inside `run_leg`.
+    #[cfg(unix)]
+    fn worker_phase(stub: &str, markers: &str, detached: bool) {
+        use std::time::Duration;
+        // Own session + group, like a supervisor-spawned worker.
+        unsafe {
+            libc::setsid();
+        }
+        let argv = vec![stub.to_string()];
+        let watchdog = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(1));
+            // A group kill, the way a reap takes a worker down.
+            unsafe {
+                libc::kill(-libc::getpid(), libc::SIGKILL);
+            }
+        });
+        let outcome = crate::gate::post_merge::ritual::run_leg(
+            &argv,
+            std::path::Path::new(markers),
+            Duration::from_secs(20),
+            detached,
+        );
+        let _ = watchdog.join();
+        // Only a failed group kill reaches this line; name it for the parent.
+        let _ = std::fs::write(
+            Path::new(markers).join("worker-returned"),
+            format!(
+                "run_leg returned: code={} timed_out={} spawn_error={:?}",
+                outcome.code, outcome.timed_out, outcome.spawn_error
+            ),
+        );
     }
 }

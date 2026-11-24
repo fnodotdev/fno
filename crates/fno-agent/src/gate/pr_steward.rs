@@ -359,7 +359,7 @@ struct StageState {
     question: Option<String>,
 }
 
-fn state_dir(cwd: &Path) -> Option<std::path::PathBuf> {
+pub(crate) fn state_dir(cwd: &Path) -> Option<std::path::PathBuf> {
     // set_file_name replaces the last component, so an FNO_PR_STATUS_CACHE_DIR
     // override lands its stage dir one level up; tests set a throwaway child.
     crate::agents_config::pr_status_cache_dir(cwd).map(|mut p| {
@@ -373,7 +373,8 @@ fn cache_file(slug: &str, pr: u64) -> String {
 }
 
 fn stage_state(dir: &Path, file: &str) -> StageState {
-    let Ok(text) = std::fs::read_to_string(dir.join(file)) else {
+    let Ok(text) = std::fs::read_to_string(crate::state_layout_home::cache_read(&dir.join(file)))
+    else {
         return StageState::default();
     };
     serde_json::from_str(&text).unwrap_or_default()

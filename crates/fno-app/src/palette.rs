@@ -2,8 +2,8 @@
 //! the active mux theme, so the app and the TUI paint the same palette.
 //!
 //! The chrome takes three surfaces that step by luminance (ground, panel,
-//! raised), three text levels (fg, muted, faint) and one hued accent. Status
-//! hues go on glyphs, never on words.
+//! raised), three text levels (fg, muted, faint) and one accent: the theme's
+//! own hue, else the ink. Status hues go on glyphs, never on words.
 
 use std::path::{Path, PathBuf};
 
@@ -108,13 +108,13 @@ fn saturation(c: u32) -> f32 {
     (hi - lo) / (1.0 - (2.0 * l - 1.0).abs())
 }
 
-/// The theme's one hue: its terminal blue, else its own hued title, border
-/// or brand, else xterm blue. A gray candidate is skipped, so a monochrome
-/// brand never makes the text white the accent.
-fn accent(t: &Theme, bg: u32) -> u32 {
-    if let Some(c) = terminal16_slot(4, t) {
-        return rgb_or(c, XTERM16[4]);
-    }
+/// The theme's accent: its own hued title, border or brand, else the ink.
+/// The terminal-16 blue is not a candidate: the footnote themes are
+/// monochrome and carry that table for terminal output only, so a blue
+/// button would be a hue the theme never chose. A gray candidate is
+/// skipped. With no hue at all the accent is `ink` (monochrome inverse
+/// fill: ink ground, base text).
+fn accent(t: &Theme, bg: u32, ink: u32) -> u32 {
     [t.title, t.border, t.brand]
         .into_iter()
         .filter_map(|c| match c {
@@ -122,7 +122,7 @@ fn accent(t: &Theme, bg: u32) -> u32 {
             _ => None,
         })
         .find(|c| saturation(*c) >= 0.3 && contrast(*c, bg) >= 3.0)
-        .unwrap_or(XTERM16[4])
+        .unwrap_or(ink)
 }
 
 /// Slots 16-231 are the 6x6x6 cube, 232-255 the 24-step gray ramp.
@@ -185,7 +185,7 @@ impl Palette {
         Palette {
             fg,
             bg,
-            accent: on_fills(accent(t, bg)),
+            accent: on_fills(accent(t, bg, fg)),
             border: mix(bg, fg, 0.12),
             ok: on_fills(rgb_or(t.ok, 0x9cc49c)),
             error: on_fills(rgb_or(t.error, 0xe1a6a3)),
@@ -209,6 +209,26 @@ impl Palette {
             Color::Indexed(i) if i < 16 => self.ansi[i as usize],
             Color::Indexed(i) => xterm256(i),
             Color::Rgb(r, g, b) => pack(r, g, b),
+        }
+    }
+
+    /// The resting fill of a row that needs the user: the panel with a fifth
+    /// of the warn hue, strong enough to read on paper as well as on the
+    /// dark ground. Text on it takes [`Palette::on_needs`].
+    pub fn needs_fill(&self) -> u32 {
+        mix(self.panel, self.warn, 0.20)
+    }
+
+    /// The palette for text laid on [`Palette::needs_fill`]: the muted and
+    /// faint levels lifted toward `fg`, to `fg` itself where 12:1 is out of
+    /// reach, so the small facts hold up on the band even when a capture
+    /// brightens it.
+    pub fn on_needs(&self) -> Palette {
+        let fill = self.needs_fill();
+        Palette {
+            muted: mix_to_contrast(self.muted, self.fg, fill, 12.0),
+            faint: mix_to_contrast(self.faint, self.fg, fill, 12.0),
+            ..*self
         }
     }
 
@@ -292,13 +312,25 @@ mod tests {
     }
 
     /// The footnote twins: three surfaces a step apart, a secondary level
-    /// that reads 4.5:1 on every one and sits well below `fg`, and a hued
-    /// accent at 3:1 on the ground.
+    /// that reads 4.5:1 on every one and sits well below `fg`, and an accent
+    /// at 3:1 on the ground. The twins are monochrome, so the accent is the ink.
     #[test]
-    fn surfaces_step_secondary_reads_and_the_accent_is_hued() {
+    fn surfaces_step_secondary_reads_and_the_accent_is_the_ink() {
         for name in ["footnote-superscript", "footnote-paper"] {
             let p = Palette::from_theme(&Theme::from_name(name).0);
             let surfaces = [p.bg, p.panel, p.raised, p.hover, p.row_fill, p.pressed];
+            let c = contrast(p.warn, p.needs_fill());
+            assert!(c >= 3.0, "{name}: warn glyph on the needs fill is {c:.2}:1");
+            let (on, fill) = (p.on_needs(), p.needs_fill());
+            for (label, c) in [("muted", on.muted), ("faint", on.faint)] {
+                let c = contrast(c, fill);
+                assert!(c >= 7.0, "{name}: {label} on the needs fill is {c:.2}:1");
+            }
+            let c = contrast(fill, p.bg);
+            assert!(
+                c >= 1.2,
+                "{name}: the needs fill steps only {c:.2}:1 off the ground"
+            );
             for s in surfaces {
                 let c = contrast(p.muted, s);
                 assert!(c >= 4.5, "{name}: muted on {s:06x} is {c:.2}:1");
@@ -312,19 +344,17 @@ mod tests {
             let step = contrast(p.fg, p.bg) / contrast(p.muted, p.bg);
             assert!(step >= 2.0, "{name}: fg over muted is only {step:.2}x");
             assert!(contrast(p.accent, p.bg) >= 3.0, "{name}");
-            assert!(saturation(p.accent) >= 0.3, "{name}");
+            assert_eq!(p.accent, p.fg, "{name}");
         }
     }
 
-    /// `terminal` has no terminal table and no hued title, border or brand:
-    /// the accent falls back to a defined hue, never the text white.
+    /// `terminal` has no hued title, border or brand, and the footnote twins'
+    /// terminal-16 blue is not an accent: both get the ink, never a blue.
     #[test]
-    fn a_theme_with_no_hued_slot_still_gets_a_hued_readable_accent() {
+    fn a_theme_with_no_hued_slot_gets_the_ink_as_accent() {
         let t = Theme::from_name("terminal").0;
-        assert!(terminal16_slot(4, &t).is_none());
         let p = Palette::from_theme(&t);
-        assert_ne!(p.accent, p.fg);
-        assert!(saturation(p.accent) >= 0.3);
+        assert_eq!(p.accent, p.fg);
         assert!(contrast(p.accent, p.bg) >= 3.0);
     }
 

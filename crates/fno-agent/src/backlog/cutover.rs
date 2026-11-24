@@ -2315,6 +2315,7 @@ pub fn run_ready(tail: &[String]) -> i32 {
         claimed,
         staleness_days,
         now_ms: crate::claims::now_ms(),
+        explain: false,
         held,
     };
     // External backends share the filters and ranking over the joined model.

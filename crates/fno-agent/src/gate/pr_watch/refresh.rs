@@ -153,9 +153,9 @@ pub(crate) fn render_plist(
     interval: i64,
 ) -> String {
     let home = dirs_home();
-    let fno_state = home.join(".fno");
-    let log_out = fno_state.join("logs/pr-watcher.out.log");
-    let log_err = fno_state.join("logs/pr-watcher.err.log");
+    let logs = crate::state_layout::logs_dir(&home.join(".fno"));
+    let log_out = logs.join("pr-watcher.out.log");
+    let log_err = logs.join("pr-watcher.err.log");
     let augmented = augment_path(
         &install_path
             .map(str::to_string)

@@ -140,6 +140,14 @@ session_cost_cents?: number | null, session_tokens?: number | null,
  */
 compaction_count?: number | null, 
 /**
+ * (v132) The raw token classes behind `session_tokens`: input, output,
+ * cache read and cache write, summed over every model the session's
+ * transcript recorded. `None` before the first measurement; never a
+ * fabricated zero. `#[serde(default)]` keeps a v104 reader
+ * wire-tolerant.
+ */
+session_input_tokens?: number | null, session_output_tokens?: number | null, session_cache_read_tokens?: number | null, session_cache_write_tokens?: number | null, 
+/**
  * (v105) The last 8 tool-activity intervals for this row, oldest
  * first: `(calls, failed)` pairs the server core samples from the
  * registry row's cumulative counts on a 5s gate. The client only

@@ -56,16 +56,24 @@ pub(crate) enum Body {
     Image(Picture),
     /// A parsed PDF. The shown page rides the image path as a [`Picture`]
     /// once its render lands; `None` until then (or when the render failed).
+    #[cfg_attr(not(feature = "pdf"), allow(dead_code))]
     Pdf(PdfState),
     Binary,
     Failed(String),
 }
 
+/// The parsed document type. A build without the `pdf` feature never
+/// constructs one: `read_pdf` answers a one-line refusal instead.
+#[cfg(feature = "pdf")]
+type PdfDoc = hayro::hayro_syntax::Pdf;
+#[cfg(not(feature = "pdf"))]
+type PdfDoc = ();
+
 /// A parsed PDF document, the page the viewer shows, and its rendered
 /// picture. The document stays parsed in memory so a page flip re-renders
 /// without re-reading the file; only the current page's bitmap is kept.
 pub(crate) struct PdfState {
-    doc: Arc<hayro::hayro_syntax::Pdf>,
+    doc: Arc<PdfDoc>,
     /// The 0-based page the viewer shows.
     page: usize,
     pages: usize,
@@ -204,6 +212,12 @@ fn sniff_pdf(path: &Path) -> bool {
     head[..n].windows(5).any(|w| w == b"%PDF-")
 }
 
+#[cfg(not(feature = "pdf"))]
+fn read_pdf(_path: &Path) -> Body {
+    Body::Failed("this build cannot show pdfs".to_string())
+}
+
+#[cfg(feature = "pdf")]
 fn read_pdf(path: &Path) -> Body {
     if std::fs::metadata(path).is_ok_and(|m| m.len() > IMAGE_CAP) {
         return Body::Failed("pdf over 32 MiB".to_string());
@@ -237,7 +251,13 @@ fn read_pdf(path: &Path) -> Body {
 /// Render page `idx` of a parsed document at `px` device pixels: one RGBA
 /// picture for the image layer. Blocking: call it off the UI loop. `None`
 /// when the page does not exist or hayro refuses it.
-fn render_page(doc: &hayro::hayro_syntax::Pdf, idx: usize, px: (u32, u32)) -> Option<Picture> {
+#[cfg(not(feature = "pdf"))]
+fn render_page(_doc: &PdfDoc, _idx: usize, _px: (u32, u32)) -> Option<Picture> {
+    None
+}
+
+#[cfg(feature = "pdf")]
+fn render_page(doc: &PdfDoc, idx: usize, px: (u32, u32)) -> Option<Picture> {
     let page = doc.pages().get(idx)?;
     let (pw, ph) = page.render_dimensions();
     if px.0 == 0 || px.1 == 0 || pw <= 0.0 || ph <= 0.0 {
@@ -1300,6 +1320,7 @@ mod tests {
 
     /// A minimal `pages`-page PDF with a runtime-computed xref, ASCII only,
     /// no compression: enough for hayro to parse and render an empty page.
+    #[cfg(feature = "pdf")]
     fn tiny_pdf(pages: usize) -> Vec<u8> {
         let kids = (0..pages)
             .map(|i| format!("{} 0 R", 3 + i))
@@ -1346,12 +1367,14 @@ mod tests {
         out
     }
 
+    #[cfg(feature = "pdf")]
     fn pdf_dir() -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("fno-pdf-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
 
+    #[cfg(feature = "pdf")]
     #[test]
     fn load_sniffs_pdf_and_maps_hayro_errors_to_one_line() {
         let dir = pdf_dir();

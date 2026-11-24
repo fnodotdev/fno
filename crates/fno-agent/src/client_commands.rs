@@ -2497,9 +2497,6 @@ fn parse_adopt_args(rest: &[String]) -> Result<String, i32> {
     let mut session_id: Option<String> = None;
     for a in expand_eq(rest) {
         match a.as_str() {
-            // Retired (d-460ea8c7): a full session id resolves from any
-            // project; the flag rides along as a silent no-op.
-            "--cross-project" => {}
             other if other.starts_with("--") => {
                 eprintln!("fno-agent: unknown adopt flag: {other}");
                 return Err(2);

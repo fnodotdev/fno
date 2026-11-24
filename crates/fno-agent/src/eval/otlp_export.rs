@@ -4,7 +4,10 @@
 //! endpoint, and a non-empty headers env (auth rides there, never in the
 //! config file). Identity fields (ids, kinds, enums) always export; free
 //! text only with `log_content`. Delivery is at-least-once keyed on
-//! `fno.row.id`, so a redelivered batch dedupes downstream.
+//! `fno.row.id`, so a redelivered batch dedupes downstream. With
+//! `forward_requests = true` the same beat also ships the masked
+//! `api_requests` rows the receiver stored, to the same endpoint under the
+//! same headers; the key unset means those rows never leave the machine.
 
 use crate::feed::FeedRow;
 use serde::{Deserialize, Serialize};
@@ -46,6 +49,7 @@ pub struct OtlpConfig {
     pub endpoint: String,
     pub headers: Vec<(String, String)>,
     pub log_content: bool,
+    pub forward_requests: bool,
     pub host: String,
 }
 
@@ -177,6 +181,10 @@ pub fn resolve(cwd: &Path) -> Resolved {
         .get("log_content")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let forward_requests =
+        crate::agents_config::config_lookup(cwd, &["telemetry", "otlp", "forward_requests"])
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
     let rest = endpoint
         .split_once("://")
         .map(|(_, r)| r)
@@ -186,15 +194,24 @@ pub fn resolve(cwd: &Path) -> Resolved {
         endpoint,
         headers,
         log_content,
+        forward_requests,
         host,
     })
 }
 
+/// sha256 over 0x1f-joined parts, hex. Both id formulas ride this so a
+/// delivered id stays stable across beats.
+fn sha_hex(parts: &[&str]) -> String {
+    let joined = parts.join("\u{1f}");
+    let digest = Sha256::digest(joined.as_bytes());
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// The stable row id: sha256 over the identity fields (kind, ts, node,
-/// session, ref, team, holder, name), 0x1f-joined, hex. Title is excluded so
-/// a title edit does not resend the row.
+/// session, ref, team, holder, name). Title is excluded so a title edit
+/// does not resend the row.
 pub(crate) fn row_id(row: &FeedRow) -> String {
-    let parts = [
+    sha_hex(&[
         row.kind.as_str(),
         row.ts.as_str(),
         row.node.as_deref().unwrap_or(""),
@@ -203,10 +220,14 @@ pub(crate) fn row_id(row: &FeedRow) -> String {
         row.team.as_deref().unwrap_or(""),
         row.holder.as_deref().unwrap_or(""),
         row.name.as_deref().unwrap_or(""),
-    ];
-    let joined = parts.join("\u{1f}");
-    let digest = Sha256::digest(joined.as_bytes());
-    digest.iter().map(|b| format!("{b:02x}")).collect()
+    ])
+}
+
+/// The stable forward id for one api_requests row, over the stored dedupe
+/// key. The `api_request` lead part keeps these digests in their own domain
+/// beside the feed ids inside the shared delivered map.
+pub(crate) fn request_row_id(dedupe_key: &str) -> String {
+    sha_hex(&["api_request", dedupe_key])
 }
 
 fn str_attr(key: &str, value: &str) -> Value {
@@ -282,6 +303,10 @@ pub(crate) fn body(rows: &[&FeedRow], log_content: bool) -> String {
         .iter()
         .map(|r| record(r, log_content, now_nanos))
         .collect();
+    logs_doc("fno.feed", records)
+}
+
+fn logs_doc(scope_name: &str, records: Vec<Value>) -> String {
     let doc = json!({
         "resourceLogs": [{
             "resource": {"attributes": [
@@ -289,12 +314,83 @@ pub(crate) fn body(rows: &[&FeedRow], log_content: bool) -> String {
                 str_attr("service.version", env!("CARGO_PKG_VERSION")),
             ]},
             "scopeLogs": [{
-                "scope": {"name": "fno.feed"},
+                "scope": {"name": scope_name},
                 "logRecords": records,
             }],
         }],
     });
     serde_json::to_string(&doc).expect("serializing an owned value never fails")
+}
+
+/// The event name one forwarded api_request record carries.
+const REQUEST_EVENT_NAME: &str = "fno.api_request";
+
+/// One forwarded api_request record. Every attribute is a field the
+/// receiver's redaction already keeps: ids, numbers, model and
+/// skill/plugin/agent names. Cost ships as a double in dollars; the token
+/// counts and identifiers stay exact.
+fn request_record(row: &crate::otel_ingest::Row, now_nanos: u128) -> Value {
+    let time_nanos = row
+        .ts
+        .as_deref()
+        .and_then(crate::event_store::parse_rfc3339_ms)
+        .map(|ms| (ms as u128) * 1_000_000)
+        .map(|n| n.to_string())
+        .unwrap_or_default();
+    let mut attrs = vec![
+        str_attr("session.id", &row.session_id),
+        str_attr("fno.row.id", &request_row_id(&row.dedupe_key)),
+        json!({
+            "key": "event.name",
+            "value": {"stringValue": REQUEST_EVENT_NAME}
+        }),
+    ];
+    for (key, value) in [
+        ("fno.model", row.model.as_deref()),
+        ("skill.name", row.skill_name.as_deref()),
+        ("plugin.name", row.plugin_name.as_deref()),
+        ("agent.name", row.agent_name.as_deref()),
+    ] {
+        if let Some(v) = value {
+            attrs.push(str_attr(key, v));
+        }
+    }
+    if let Some(micros) = row.cost_usd_micros {
+        attrs.push(json!({
+            "key": "fno.cost_usd",
+            "value": {"doubleValue": micros as f64 / 1_000_000.0}
+        }));
+    }
+    for (key, value) in [
+        ("fno.input_tokens", row.input_tokens),
+        ("fno.output_tokens", row.output_tokens),
+        ("fno.cache_read_tokens", row.cache_read_tokens),
+        ("fno.cache_creation_tokens", row.cache_creation_tokens),
+    ] {
+        if let Some(v) = value {
+            attrs.push(json!({"key": key, "value": {"intValue": v}}));
+        }
+    }
+    json!({
+        "timeUnixNano": time_nanos,
+        "observedTimeUnixNano": now_nanos.to_string(),
+        "severityNumber": 9,
+        "severityText": "INFO",
+        "eventName": REQUEST_EVENT_NAME,
+        "body": {"stringValue": REQUEST_EVENT_NAME},
+        "attributes": attrs,
+    })
+}
+
+/// The OTLP logs body for one api_requests batch, under its own scope name
+/// so a collector can tell the two sources apart.
+fn requests_body(rows: &[&crate::otel_ingest::Row]) -> String {
+    let now_nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let records: Vec<Value> = rows.iter().map(|r| request_record(r, now_nanos)).collect();
+    logs_doc("fno.api_requests", records)
 }
 
 /// What one beat remembers: the ids already delivered (never resent), the
@@ -393,7 +489,7 @@ pub(crate) fn prune(state: &mut ExportState, now_ms: i64) {
 }
 
 /// One beat's outcome for the tick row.
-pub(crate) struct BeatReport {
+pub struct BeatReport {
     pub acted: u64,
     pub skip: Option<&'static str>,
     pub detail: Vec<String>,
@@ -401,8 +497,8 @@ pub(crate) struct BeatReport {
 
 /// The rows a beat owes: dated, inside the lookback window, neither
 /// delivered nor dropped, oldest first, capped at MAX_BATCH. run_beat and
-/// `preview` share this selection, so a preview prints exactly the batch
-/// the next beat posts. The detail lines name what selection left behind.
+/// `preview` share this selection, so a preview prints exactly the feed
+/// batch the next beat posts. The detail lines name what selection left behind.
 fn select_pending<'a>(
     rows: &'a [FeedRow],
     state: &ExportState,
@@ -446,7 +542,7 @@ fn select_pending<'a>(
 /// retries next beat; a permanent 4xx drops the rows (never retried); a 2xx
 /// records delivered. Undated rows never ship: `timeUnixNano` cannot lie
 /// about them. Selection is `select_pending`, shared with `preview`.
-pub(crate) fn run_beat(
+pub fn run_beat(
     cfg: &OtlpConfig,
     home: &crate::paths::AgentsHome,
     rows: Vec<FeedRow>,
@@ -506,10 +602,12 @@ pub(crate) fn run_beat(
             result.status.unwrap_or(0)
         ));
     } else {
+        // The leg prefixes its hold so the shared status_line field names
+        // which source is held when both legs share one state file.
         let body_summary: String = result.body.chars().take(200).collect();
         state.held_error = Some(match result.status {
-            Some(code) => format!("status {code}: {body_summary}"),
-            None => format!("no status: {body_summary}"),
+            Some(code) => format!("feed: status {code}: {body_summary}"),
+            None => format!("feed: no status: {body_summary}"),
         });
         skip = Some("held");
         detail.push(format!("otlp: held {} record(s) for retry", pending.len()));
@@ -519,6 +617,7 @@ pub(crate) fn run_beat(
         home,
         &json!({
             "ts": now_rfc3339(),
+            "scope": "feed",
             "records": pending.len(),
             "status": result.status,
             "first_row_ts": pending.first().map(|(_, r)| r.ts.clone()).unwrap_or_default(),
@@ -533,9 +632,152 @@ pub(crate) fn run_beat(
     }
 }
 
-/// What the next beat would post, for `fno agent feed --otlp`: the same
-/// resolve, state and selection as run_beat, minus the post and the state
-/// write. An off or refused posture still previews, with content attrs
+/// The api_requests rows a beat owes: inside the window, neither delivered
+/// nor dropped, oldest first, capped at MAX_BATCH. The reader sorted and
+/// windowed them; this leg's own memory is the shared ExportState.
+fn select_pending_requests<'a>(
+    rows: &'a [crate::otel_ingest::Row],
+    state: &ExportState,
+    now_ms: i64,
+) -> (Vec<(String, &'a crate::otel_ingest::Row)>, Vec<String>) {
+    let mut detail: Vec<String> = Vec::new();
+    let cutoff = now_ms - LOOKBACK_S as i64 * 1000;
+    let mut undated = 0usize;
+    let mut pending: Vec<(String, &crate::otel_ingest::Row)> = Vec::new();
+    for r in rows {
+        let Some(ms) =
+            r.ts.as_deref()
+                .and_then(crate::event_store::parse_rfc3339_ms)
+        else {
+            undated += 1;
+            continue;
+        };
+        if ms < cutoff {
+            continue;
+        }
+        let id = request_row_id(&r.dedupe_key);
+        if state.delivered.contains_key(&id) || state.dropped.contains_key(&id) {
+            continue;
+        }
+        pending.push((id, r));
+    }
+    if undated > 0 {
+        detail.push(format!("otlp: {undated} undated request row(s) skipped"));
+    }
+    pending.sort_by_key(|(_, r)| {
+        r.ts.as_deref()
+            .and_then(crate::event_store::parse_rfc3339_ms)
+            .unwrap_or(i64::MAX)
+    });
+    if pending.len() > MAX_BATCH {
+        detail.push(format!(
+            "otlp: {} request row(s) beyond the batch cap wait for the next beat",
+            pending.len() - MAX_BATCH
+        ));
+        pending.truncate(MAX_BATCH);
+    }
+    (pending, detail)
+}
+
+/// The requests leg of one beat: dedupe against the shared state, post the
+/// pending window once, record the verdict. The delivery rule is the feed
+/// leg's: a hold ships nothing and retries next beat, a permanent 4xx
+/// drops, a 2xx records delivered. otel.db is read by the caller
+/// (`maybe_tick`) so tests inject rows without a sqlite fixture.
+pub fn run_requests_beat(
+    cfg: &OtlpConfig,
+    home: &crate::paths::AgentsHome,
+    rows: Vec<crate::otel_ingest::Row>,
+    poster: &mut dyn crate::attention_http::HttpPost,
+    now_ms: i64,
+) -> BeatReport {
+    let mut state = load_state(home);
+    let (pending, mut detail) = select_pending_requests(&rows, &state, now_ms);
+    if pending.is_empty() {
+        let skip = if rows.is_empty() {
+            "no_rows"
+        } else {
+            "caught_up"
+        };
+        if skip == "no_rows" {
+            detail.push(format!(
+                "otlp: nothing in the {}h window",
+                LOOKBACK_S / 3600
+            ));
+        }
+        return BeatReport {
+            acted: 0,
+            skip: Some(skip),
+            detail,
+        };
+    }
+    let payload = requests_body(&pending.iter().map(|(_, r)| *r).collect::<Vec<_>>());
+    let result = poster.post(&cfg.endpoint, &cfg.headers, &payload);
+    let mut acted: u64 = 0;
+    let mut skip: Option<&'static str> = None;
+    if result.delivered() {
+        for (id, r) in &pending {
+            state
+                .delivered
+                .insert(id.clone(), r.ts.clone().unwrap_or_default());
+        }
+        state.held_error = None;
+        acted = pending.len() as u64;
+        detail.push(format!(
+            "otlp: forwarded {} api_request record(s) to {}",
+            pending.len(),
+            cfg.host
+        ));
+    } else if result.dropped() {
+        for (id, r) in &pending {
+            state
+                .dropped
+                .insert(id.clone(), r.ts.clone().unwrap_or_default());
+        }
+        state.held_error = None;
+        acted = pending.len() as u64;
+        detail.push(format!(
+            "otlp: endpoint rejected {} api_request record(s) permanently (status {})",
+            pending.len(),
+            result.status.unwrap_or(0)
+        ));
+    } else {
+        // The leg prefixes its hold so the shared status_line field names
+        // which source is held when both legs share one state file.
+        let body_summary: String = result.body.chars().take(200).collect();
+        state.held_error = Some(match result.status {
+            Some(code) => format!("api_requests: status {code}: {body_summary}"),
+            None => format!("api_requests: no status: {body_summary}"),
+        });
+        skip = Some("held");
+        detail.push(format!(
+            "otlp: held {} api_request record(s) for retry",
+            pending.len()
+        ));
+    }
+    prune(&mut state, now_ms);
+    append_receipt(
+        home,
+        &json!({
+            "ts": now_rfc3339(),
+            "scope": "api_requests",
+            "records": pending.len(),
+            "status": result.status,
+            "first_row_ts": pending.first().map(|(_, r)| r.ts.clone().unwrap_or_default()),
+            "last_row_ts": pending.last().map(|(_, r)| r.ts.clone().unwrap_or_default()),
+        }),
+    );
+    save_state(home, &state);
+    BeatReport {
+        acted,
+        skip,
+        detail,
+    }
+}
+
+/// What the next beat would post, for `fno agent feed --otlp`:
+/// the same resolve, state and selection as run_beat, minus the post and the
+/// state write. An off or refused posture still previews, with content attrs
 /// off, so an operator sees the shape before opting in.
 pub(crate) fn preview(
     cwd: &Path,
@@ -570,9 +812,10 @@ pub(crate) fn status_line(cwd: &Path, home: &crate::paths::AgentsHome) -> String
             let last = state.last_delivered_ts.as_deref().unwrap_or("never");
             let held = state.held_error.as_deref().unwrap_or("none");
             format!(
-                "otlp export: on -> {}, content {}, last delivered {}, held: {}",
+                "otlp export: on -> {}, content {}, requests {}, last delivered {}, held: {}",
                 cfg.host,
                 if cfg.log_content { "on" } else { "off" },
+                if cfg.forward_requests { "on" } else { "off" },
                 last,
                 held
             )
@@ -679,12 +922,34 @@ pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
                 let (rows, leg_notes) = crate::feed::collect_window(&home, Some(since_s), None);
                 mark("post");
                 let mut poster = crate::attention_http::CurlPost;
-                let report = run_beat(&cfg, &home, rows, &mut poster, now);
+                let mut reports = vec![run_beat(&cfg, &home, rows, &mut poster, now)];
+                if cfg.forward_requests {
+                    mark("collect_requests");
+                    let db = home.otel_dir().join("otel.db");
+                    match crate::otel_ingest::requests_in_window(
+                        &db,
+                        now - LOOKBACK_S as i64 * 1000,
+                    ) {
+                        Ok(rows) => {
+                            mark("post_requests");
+                            reports.push(run_requests_beat(&cfg, &home, rows, &mut poster, now));
+                        }
+                        Err(e) => reports.push(BeatReport {
+                            acted: 0,
+                            skip: None,
+                            detail: vec![format!("otlp: api_requests read failed: {e}")],
+                        }),
+                    }
+                }
                 mark("emit");
                 // A store-skip note explains a thin window; it reads first.
                 let mut detail = leg_notes;
-                detail.extend(report.detail);
-                emit_tick_row(&home, report.acted, report.skip, &detail.join("; "));
+                for report in &reports {
+                    detail.extend(report.detail.clone());
+                }
+                let acted: u64 = reports.iter().map(|r| r.acted).sum();
+                let skip = reports.iter().find_map(|r| r.skip);
+                emit_tick_row(&home, acted, skip, &detail.join("; "));
             }
         }
     });

@@ -87,6 +87,11 @@ is_allowlisted() {
 
 # node-id leak pattern (applied to ALL in-scope files).
 NODE_ID_RE='\b(x-[0-9a-f]{4}|ab-[0-9a-f]{8})\b'
+# A repo that mints sequential ids leaks x-<digits> too. CI has no user
+# config, so it keeps the hex pattern.
+if [[ "$(fno config get backlog.id_mode 2>/dev/null </dev/null)" == "sequential" ]]; then
+    NODE_ID_RE='\b(x-[0-9a-f]{4}|x-[0-9]{1,7}|ab-[0-9a-f]{8})\b'
+fi
 
 # Synthetic example tokens that legitimately appear in format / command
 # examples. Literal tokens only, all obviously non-real; exempt by TOKEN so a

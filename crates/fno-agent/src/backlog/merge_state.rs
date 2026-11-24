@@ -40,7 +40,11 @@ pub(crate) struct PrMergeState {
 
 /// The production read: cache first, REST on a miss, write-back on a fresh
 /// MERGED read. Tests go through [`fresh_read`] and [`paginate_files`] with
-/// injected readers, so no test traffic reaches gh.
+/// injected readers, so no test traffic reaches gh. A recorded repo reads
+/// under the rename aliases, so a PR recorded before a repo move (the
+/// fno-web org move ships a built-in row because the old name 404s with no
+/// redirect) answers its new location, in the cache row and the gh call
+/// alike.
 pub(crate) fn query_pr_merge_state(
     pr: i64,
     repo: Option<&str>,
@@ -48,12 +52,20 @@ pub(crate) fn query_pr_merge_state(
     include_files: bool,
 ) -> Result<PrMergeState, PrReadError> {
     let cwd_path = Path::new(cwd.unwrap_or("."));
-    if let Some(row) = cached_row(pr, repo, cwd_path, include_files) {
+    let repo = repo.map(|r| pr_link::canonical_repo(cwd_path, r));
+    if let Some(row) = cached_row(pr, repo.as_deref(), cwd_path, include_files) {
         return Ok(row);
     }
-    let fresh = fresh_read(pr, repo, cwd_path, include_files, read_info, read_files)?;
+    let fresh = fresh_read(
+        pr,
+        repo.as_deref(),
+        cwd_path,
+        include_files,
+        read_info,
+        read_files,
+    )?;
     if fresh.state == "MERGED" {
-        write_cache_row(pr, repo, cwd_path, &fresh, include_files);
+        write_cache_row(pr, repo.as_deref(), cwd_path, &fresh, include_files);
     }
     Ok(fresh)
 }
@@ -208,12 +220,12 @@ pub(crate) fn read_body(
         .to_string())
 }
 
-/// The repo slug a read answers against: the explicit repo, else the
-/// checkout's own. A read with neither refuses rather than risk asking the
-/// wrong repository.
+/// The repo slug a read answers against: the explicit repo under the
+/// rename aliases, else the checkout's own. A read with neither refuses
+/// rather than risk asking the wrong repository.
 fn repo_slug_or_err(repo: Option<&str>, cwd: &Path) -> Result<String, PrReadError> {
     match repo {
-        Some(r) => Ok(r.to_string()),
+        Some(r) => Ok(pr_link::canonical_repo(cwd, r)),
         None => pr_link::resolve_current_repo_slug(cwd.to_str())
             .ok_or_else(|| PrReadError::new("could not resolve owner/repo from the checkout", "")),
     }
@@ -452,11 +464,12 @@ pub(crate) fn fetch_pr_closure_context(
     let Some(gh) = gh_executable_for_merge_state() else {
         return Err(PrReadError::new("gh CLI not found on PATH", "availability"));
     };
+    let repo = repo.map(|r| pr_link::canonical_repo(Path::new("."), r));
     let mut cmd = Command::new(gh);
     cmd.args(["pr", "view", &pr_number.to_string(), "--json"]);
     cmd.arg("number,body,url,state,mergedAt,files");
     if let Some(repo) = repo {
-        cmd.args(["--repo", repo]);
+        cmd.args(["--repo", repo.as_str()]);
     }
     let out = crate::gh_budget::output(cmd)
         .map_err(|e| PrReadError::new(format!("gh subprocess failed to launch: {e}"), ""))?;
@@ -521,6 +534,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn all_contracts_in_one_declaration() {
+        an_aliased_recorded_repo_reads_the_new_location();
+        fresh_read_refuses_a_state_outside_the_three_values();
+        files_pagination_stops_on_the_short_page_and_fails_the_cap();
+    }
+
+    fn an_aliased_recorded_repo_reads_the_new_location() {
+        // The done_means probe: a PR url recorded under the dead
+        // fnodotdev/fno-web name resolves through repo_aliases before the
+        // gh call, so the close path reads the live repo instead of 404ing.
+        let dir = tempfile::tempdir().unwrap();
+        let slug = repo_slug_or_err(Some("fnodotdev/fno-web"), dir.path()).unwrap();
+        assert_eq!(slug, "footnote-sh/fno-web");
+        // An unknown slug passes through lowercased; an aliased slug is
+        // idempotent, so an already-canonical read is unchanged.
+        assert_eq!(
+            repo_slug_or_err(Some("Some/Repo"), dir.path()).unwrap(),
+            "some/repo"
+        );
+        assert_eq!(
+            repo_slug_or_err(Some("footnote-sh/fno-web"), dir.path()).unwrap(),
+            "footnote-sh/fno-web"
+        );
+    }
+
     fn fresh_read_refuses_a_state_outside_the_three_values() {
         let err = fresh_read(
             7,
@@ -536,7 +574,6 @@ mod tests {
         assert!(msg.contains("malformed state"), "{msg}");
     }
 
-    #[test]
     fn files_pagination_stops_on_the_short_page_and_fails_the_cap() {
         let full_page: Value = (0..FILES_PAGE_SIZE)
             .map(|i| json!({"filename": format!("f{i}.rs")}))

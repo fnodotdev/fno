@@ -94,6 +94,17 @@ pub struct IntakeRequest {
     pub node: Option<String>,
     #[serde(default)]
     pub subject: Option<String>,
+    /// Who the question serves (`--audience`): internal, customers or
+    /// customer:<persona>. No default; the asker names the audience.
+    #[serde(default)]
+    pub audience: Option<String>,
+    /// The goal behind the ask (`--why`); the user's words when the ask came
+    /// from him. Required on the interactive door.
+    #[serde(default)]
+    pub why: Option<String>,
+    /// The persona jobs the question names (`--job <persona>/<job-slug>`).
+    #[serde(default)]
+    pub job: Vec<String>,
     #[serde(default)]
     pub session_id: Option<String>,
     /// The asker's harness, stamped beside the session id so the reply
@@ -462,25 +473,6 @@ fn title_of(text: &str, parsed_title: &str) -> String {
         .to_string()
 }
 
-/// `q-` + 8 hex from the OS entropy pool; a time+pid hash when it cannot be
-/// read, so a mint never fails the ask.
-fn mint_id() -> String {
-    let mut bytes = [0u8; 4];
-    let ok = std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| f.read_exact(&mut bytes))
-        .is_ok();
-    if !ok {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let mix = nanos as u64 ^ ((std::process::id() as u64) << 32);
-        bytes.copy_from_slice(&mix.to_le_bytes()[..4]);
-    }
-    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-    format!("q-{hex}")
-}
-
 /// True when the question carries retract intent and names one of `ids`.
 /// The id citation is what keeps the exemption narrow - "revoke the
 /// credentials" alone never qualifies - and mirrors the nearby tier's own
@@ -490,7 +482,7 @@ fn cites_retraction(question: &str, ids: &[String]) -> bool {
     let intent = ["retract", "repeal", "rescind", "revoke", "overturn"]
         .iter()
         .any(|w| lower.contains(w));
-    intent && ids.iter().any(|id| lower.contains(&id.to_lowercase()))
+    intent && ids.iter().any(|id| crate::numbers::names_id(&lower, id))
 }
 
 /// True when the question's closing action is the retraction of a live law
@@ -706,7 +698,7 @@ pub fn run_intake(req: &IntakeRequest, home: &AgentsHome) -> IntakeAnswer {
             let mut line = format!(
                 "outstanding: refused: a live decision already rules on '{}' ({}). It reads: \"{}\" \
 Read it: \
-fno inbox decisions {} --lane law --state live. Act on the law; do not ask {who}.",
+fno inbox decisions {} --lane user --state live. Act on the law; do not ask {who}.",
                 hit.subject,
                 hit.ids.join(", "),
                 law_text,
@@ -1135,11 +1127,24 @@ outcome; do not ask {who}. Read the record: fno inbox outstanding list."
     }
 
     let mut data = Map::new();
+    // `None` means the primary is away: the ask queues with no id.
     let qid = match &amend {
-        Some((id, _)) => id.clone(),
-        None => mint_id(),
+        Some((id, _)) => Some(id.clone()),
+        None => match crate::numbers::mint::mint_key() {
+            Ok(key) => key,
+            Err(e) => {
+                answer
+                    .lines
+                    .push(format!("outstanding: failed to record question: {e}"));
+                answer.refusal = Some("write".to_string());
+                answer.exit_code = 1;
+                return answer;
+            }
+        },
     };
-    data.insert("question_id".into(), json!(&qid));
+    if let Some(id) = &qid {
+        data.insert("question_id".into(), json!(id));
+    }
     data.insert("question".into(), json!(stored_question));
     for (key, value) in [
         ("session_id", &req.session_id),
@@ -1150,6 +1155,17 @@ outcome; do not ask {who}. Read the record: fno inbox outstanding list."
         if let Some(v) = value.as_deref().filter(|v| !v.is_empty()) {
             data.insert(key.into(), json!(v));
         }
+    }
+    // The who, why and jobs ride the stored row: the board chip, the decide
+    // carry and the answer's receipt all read them back from here.
+    if let Some(v) = req.audience.as_deref().filter(|v| !v.is_empty()) {
+        data.insert("audience".into(), json!(v));
+    }
+    if let Some(v) = req.why.as_deref().filter(|v| !v.is_empty()) {
+        data.insert("why".into(), json!(v));
+    }
+    if !req.job.is_empty() {
+        data.insert("job".into(), json!(req.job));
     }
     crate::identity::stamp_person(&mut data);
     if let Some(n) = node {
@@ -1189,7 +1205,11 @@ outcome; do not ask {who}. Read the record: fno inbox outstanding list."
         data.insert("blocks".into(), json!(req.blocks));
     }
     if !req.images.is_empty() {
-        match copy_screens(&req.images, req.screens_dir.as_deref(), &qid) {
+        let name = match &qid {
+            Some(id) => id.clone(),
+            None => format!("queued-{}", crate::claims::now_ms()),
+        };
+        match copy_screens(&req.images, req.screens_dir.as_deref(), &name) {
             Ok(copies) => {
                 data.insert("images".into(), json!(copies));
             }
@@ -1339,7 +1359,7 @@ outcome; do not ask {who}. Read the record: fno inbox outstanding list."
         "trace".into(),
         serde_json::to_value(&Trace {
             trace_id: node.unwrap_or("none").to_string(),
-            span_id: qid.clone(),
+            span_id: qid.clone().unwrap_or_default(),
             parent_span_id: parent,
             actor_session: req.session_id.clone(),
             actor_kind: actor_kind_in(home, req.session_id.as_deref(), "question"),
@@ -1355,6 +1375,28 @@ outcome; do not ask {who}. Read the record: fno inbox outstanding list."
         "source": "target",
         "data": Value::Object(data),
     });
+    let Some(qid) = qid else {
+        let queued = crate::numbers::mint::Queued::Question {
+            event,
+            journal: journal_path.clone(),
+            index: index.clone(),
+        };
+        match crate::numbers::mint::queue(&queued) {
+            Ok(()) => answer.lines.push(format!(
+                "outstanding: {}. The primary is unreachable, so this ask has no id yet. \
+The next daemon beat that reaches the primary records it under its number; do not ask again.",
+                crate::numbers::mint::QUEUED
+            )),
+            Err(e) => {
+                answer
+                    .lines
+                    .push(format!("outstanding: failed to queue question: {e}"));
+                answer.refusal = Some("write".to_string());
+                answer.exit_code = 1;
+            }
+        }
+        return answer;
+    };
     let line = match serde_json::to_string(&event) {
         Ok(l) => l,
         Err(e) => {
@@ -1378,13 +1420,8 @@ outcome; do not ask {who}. Read the record: fno inbox outstanding list."
         return answer;
     }
 
-    // The receipt's short number, minted in step with the filing so the
-    // asker leaves with it. Advisory: any failure keeps the hash in the
-    // wording, and the daemon beat mints the same key as a no-op. It mints
-    // before the recall-index write so the index-failure line names the
-    // number too.
-    let graph = crate::backlog::database_path(&crate::graph_get::default_graph_path());
-    let _ = crate::numbers::mint_now(&graph, &qid);
+    // A new ask's id is its number. An amended row can still hold a hash,
+    // so the receipt reads the number through the table.
     let shown = crate::numbers::display(&qid);
 
     // Machine-wide recall index: best-effort, reported.
@@ -1569,6 +1606,9 @@ mod tests {
             blocks: vec![],
             node: None,
             subject: None,
+            audience: None,
+            why: None,
+            job: Vec::new(),
             session_id: Some("s1".to_string()),
             harness: None,
             cwd: Some("/repo/fno".to_string()),
@@ -1633,6 +1673,7 @@ stops
 
     #[test]
     fn ac7_hp_question_file_records_context_and_object_options() {
+        let _env = crate::law_match::scope_tests::DoorEnv::new();
         let home = tmp_home("hp");
         let root = tmp_root("hp");
         let mut r = req(QUESTION_FILE, &root);
@@ -1640,8 +1681,7 @@ stops
         let answer = run_intake(&r, &home);
         assert_eq!(answer.exit_code, 0, "lines: {:?}", answer.lines);
         let qid = answer.qid.clone().unwrap();
-        assert!(qid.starts_with("q-"));
-        assert_eq!(qid.len(), 10);
+        assert!(crate::numbers::is_label_key(&qid), "{qid}");
 
         let row: Value = journal_text(&root)
             .lines()
@@ -1806,7 +1846,7 @@ stops
             subject: Some("junk-law".to_string()),
             decision: Some("a placeholder ruling".to_string()),
             ts: Some("2026-08-29T19:20:10Z".to_string()),
-            lane: Some("law".to_string()),
+            lane: Some("user".to_string()),
             authority_source: Some("operator".to_string()),
         }
     }
@@ -1893,7 +1933,7 @@ stops
         assert!(answer
             .open_id
             .as_deref()
-            .is_some_and(|id| id.starts_with("q-")));
+            .is_some_and(crate::numbers::is_label_key));
         // Nothing new recorded.
         assert_eq!(journal_text(&root).lines().count(), 1);
     }
@@ -2066,7 +2106,7 @@ stops
             subject: Some("test-subject".to_string()),
             decision: Some("stay strict".to_string()),
             ts: Some("2026-09-01T00:00:00Z".to_string()),
-            lane: Some("law".to_string()),
+            lane: Some("user".to_string()),
             authority_source: None,
         }];
         let answer = run_intake(&r, &home);
@@ -2097,7 +2137,7 @@ stops
         let answer = run_intake(&r, &tmp_home("ask-number"));
         assert_eq!(answer.exit_code, 0, "{:?}", answer.lines);
         let qid = answer.qid.clone().unwrap_or_default();
-        // The receipt names the minted number: the hex never reaches the asker.
+        // The receipt names the minted number, and the number is the key.
         let recorded = answer
             .lines
             .iter()
@@ -2117,11 +2157,7 @@ stops
                 && number[1..].bytes().all(|b| b.is_ascii_digit()),
             "the receipt names the number: {recorded}"
         );
-        assert!(
-            answer.lines.iter().all(|l| !l.contains(&qid)),
-            "the ask receipt leaked the hash: {:?}",
-            answer.lines
-        );
+        assert_eq!(number, qid, "the number is the stored question_id");
     }
 
     #[test]

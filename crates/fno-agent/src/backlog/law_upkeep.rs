@@ -131,6 +131,7 @@ fn stale_action(row: &Value, apply: bool) -> StaleAction {
 }
 
 enum QuestionOutcome {
+    /// The question's number, or `queued` while the primary is away.
     Filed(String),
     AlreadyOpen,
     Refused(String),
@@ -148,7 +149,10 @@ fn file_stale_question(
     let index = outstanding::project_log(repo_root, "questions.jsonl");
     match outstanding::read_open_questions(&index) {
         Ok(open) => {
-            if open.iter().any(|q| q.question.contains(id)) {
+            if open
+                .iter()
+                .any(|q| crate::numbers::names_id(&q.question, id))
+            {
                 return QuestionOutcome::AlreadyOpen;
             }
         }
@@ -179,6 +183,7 @@ fn file_stale_question(
     let answer = run_intake(&request, &home);
     match answer.qid {
         Some(qid) if answer.exit_code == 0 => QuestionOutcome::Filed(qid),
+        None if answer.exit_code == 0 => QuestionOutcome::Filed("queued".into()),
         _ => QuestionOutcome::Refused(answer.lines.join("; ")),
     }
 }
@@ -376,7 +381,7 @@ fn repo_root() -> Option<String> {
 /// Render the nightly law-upkeep plist. No filesystem writes.
 fn render_plist(fno_binary: &str, install_path: &str, hour: i64, workdir: Option<&str>) -> String {
     let home_s = home().display().to_string();
-    let logs = home().join(".fno").join("logs");
+    let logs = crate::state_layout::logs_dir(&home().join(".fno"));
     let esc = refresh::xml_escape;
     PLIST
         .replace("{label}", &esc(&label()))
@@ -403,7 +408,7 @@ fn install_agent(hour: i64, dry_run: bool) -> Value {
     let fno_binary = which("fno").unwrap_or_else(|| "fno".into());
     let install_path = refresh::default_agent_path(&fno_binary);
     let state = super::settings::state_dir().unwrap_or_else(home);
-    if let Err(e) = std::fs::create_dir_all(state.join("logs")) {
+    if let Err(e) = std::fs::create_dir_all(crate::state_layout::logs_dir(&home().join(".fno"))) {
         eprintln!("fno inbox decisions upkeep install: could not create the logs dir ({e})");
     }
     let workdir = repo_root();
@@ -458,7 +463,7 @@ fn status_json() -> Value {
     )
     .is_ok();
     let installed = plist_path.is_file() && loaded;
-    let log = home().join(".fno").join("logs").join("law-upkeep.out.log");
+    let log = crate::state_layout_home::read_home(&home().join(".fno"), "logs/law-upkeep.out.log");
     let age = std::fs::metadata(&log)
         .ok()
         .and_then(|m| m.modified().ok())

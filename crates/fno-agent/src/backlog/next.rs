@@ -23,6 +23,8 @@ struct Opts {
     include_ideas: bool,
     include_deferred: bool,
     mission: Option<String>,
+    /// Print each board-score term beside the pick.
+    explain: bool,
 }
 
 fn parse_opts(args: &[String]) -> Option<Opts> {
@@ -35,6 +37,7 @@ fn parse_opts(args: &[String]) -> Option<Opts> {
         include_ideas: false,
         include_deferred: false,
         mission: None,
+        explain: false,
     };
     let mut index = 0;
     while index < args.len() {
@@ -78,6 +81,7 @@ fn parse_opts(args: &[String]) -> Option<Opts> {
             "--all" | "-A" => o.all = true,
             "--ideas" | "-I" | "--include-ideas" => o.include_ideas = true,
             "--include-deferred" => o.include_deferred = true,
+            "--explain" => o.explain = true,
             _ => return None,
         }
         index += 1;
@@ -415,6 +419,7 @@ fn select_rows(
         held: held.clone(),
         staleness_days: Some(staleness_days),
         now_ms,
+        explain: o.explain,
     };
     match select(entries, &opts) {
         Ok(reply) => Ok(reply.rows),
@@ -538,7 +543,8 @@ pub fn run(args: &[String]) -> i32 {
             eprintln!("Error: graph unreadable: the prelude is empty; selection refused");
             return 1;
         };
-        project_filter = detect_project(entries, &repo_root);
+        let entry_refs: Vec<&Value> = entries.iter().collect();
+        project_filter = detect_project(&entry_refs, &repo_root);
     }
     let mut parent_target_id: Option<String> = None;
     if let Some(parent) = &o.parent {
@@ -741,6 +747,51 @@ pub fn run(args: &[String]) -> i32 {
         }
     }
     match result {
+        Some(summary) if o.explain => {
+            // One line per score term for the picked node, then the summary.
+            let id = crate::backlog::question_intake::str_field(&summary, "id")
+                .unwrap_or_default()
+                .to_string();
+            let row = entries_for_receipts
+                .iter()
+                .find(|r| crate::backlog::question_intake::str_field(r, "id") == Some(id.as_str()));
+            if let Some(row) = row {
+                // Keep these term displays in step with importance_score;
+                // the worked-example test pins the score they mirror.
+                let prio =
+                    crate::backlog::question_intake::str_field(row, "priority").unwrap_or("p2");
+                let prio_pts = match prio {
+                    "p0" => 400,
+                    "p1" => 300,
+                    "p2" => 200,
+                    "p3" => 100,
+                    _ => 200,
+                };
+                let voters = crate::backlog_ready::encounter_voters(row).len();
+                let scope_pts = crate::backlog::audience::audience_score_term(
+                    crate::backlog::question_intake::str_field(row, "audience").unwrap_or(""),
+                );
+                let open_dependents =
+                    crate::backlog_ready::dependents_fanout(&entries_for_receipts)
+                        .get(id.as_str())
+                        .copied()
+                        .unwrap_or(0);
+                let age = crate::backlog_ready::get_str(row, "created_at")
+                    .and_then(crate::backlog_ready::parse_iso_str)
+                    .map(|s| crate::backlog_ready::days_between(now_ms, s).max(0))
+                    .unwrap_or(0)
+                    .min(60);
+                eprintln!(
+                    "score: priority {prio}={prio_pts} + encounters {voters}*25={} + scope {scope_pts} + fan-out {open_dependents}*10={} + age {age}",
+                    (voters * 25).min(100),
+                    (open_dependents.max(0) * 10).min(50),
+                );
+            }
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&summary).unwrap_or_else(|_| "null".into())
+            );
+        }
         Some(summary) => println!(
             "{}",
             serde_json::to_string_pretty(&summary).unwrap_or_else(|_| "null".into())

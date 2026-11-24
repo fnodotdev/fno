@@ -45,7 +45,7 @@ After a main merge, every open PR with older CI is stale. A stale PR can prove i
 ## The decision, in order
 
 1. Read the PR facts once and reject a terminal PR or an outside pull request.
-2. Check merge consent. A per-run refusal, the live merge switch and the scoped head-grant rules retain their authority.
+2. Check merge consent. A per-run refusal, the live merge switch and the scoped head-grant rules retain their authority. The refusal binds only the session that wrote its manifest.
 3. Bind the PR to its node. An unknown binding does not manufacture consent.
 4. Respect a red main, with the existing declared-repair exception.
 5. Respect dispatch holds, per-PR holds, freezes and explicit rules.
@@ -61,6 +61,18 @@ After a main merge, every open PR with older CI is stale. A stale PR can prove i
 `fno do pr status` uses the same preview decision. Its CI verdict remains separate from `ready`: pending or unknown CI never becomes a false green. The warning list is present beside both allowed and blocked outcomes. These process demotions need no setting.
 
 The raw merge hook and operator hold-check use the native dispatch-hold reader. Missing looks, review coverage and registered reviews warn without disarming GitHub's queue. An explicit user decline still vetoes and disarms only its named head. An open look question with screens that names the PR in its title holds the merge until the user answers it. The raw hook retains its separate merge-consent and lineage checks. It no longer requires a completed external-review artifact as a permission factor.
+
+## Whose refusal binds
+
+A per-run refusal belongs to the session whose manifest carries it. Every door reads it that way. `fno do pr status` hands the owner no posture. The fold in `authority_refusal` then scopes the refusal through `merge_grant::bound_posture_for_caller`.
+
+`fno do pr merge` reads the manifest of the PR worktree itself. `manifest_posture` scopes that read through the same comparison, `merge_grant::refusal_binds`. The two doors then agree for one caller and one head.
+
+A worker that ran `--no-merge` cannot merge its own PR. Its lead merges that PR on live config, with no grant row and no manifest rewrite. A successor session after a handover reads as the lead does. The stamp of the old session does not bind it.
+
+A spawn brief that says who merges makes the worker pass that flag, because the worker must not merge. A `flag-no-merge` stamp on a lead-merged PR is then the common shape, and the stamp is true.
+
+An unattributed manifest names no session. Init writes `harness_session_id: null` for a session it cannot prove. Such a refusal cannot be scoped, so it binds every caller and fails closed. The durable-grant lane merges for a parked worker. It keeps the refusal through its node-keyed fold, which no session scopes. Against an attributed refusal, a caller with no session id reads as no session, and the refusal does not bind it.
 
 ## The head-scoped user merge grant
 

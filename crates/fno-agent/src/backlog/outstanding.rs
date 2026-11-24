@@ -58,6 +58,17 @@ pub struct Question {
     pub options: Vec<String>,
     pub blocks: Vec<String>,
     pub subject: Option<String>,
+    /// Who the question serves (`--scope`); absent on rows filed before the
+    /// stamp, so old rows render byte-identical.
+    #[serde(default)]
+    pub audience: Option<String>,
+    /// The goal behind the ask (`--why`); the user's words when the ask came
+    /// from him.
+    #[serde(default)]
+    pub why: Option<String>,
+    /// The persona jobs the question names (`--job <persona>/<job-slug>`).
+    #[serde(default)]
+    pub job: Vec<String>,
     pub live: Option<bool>,
     /// The asking machine on a copy pulled from another machine of the
     /// store; `None` (JSON null) for a question asked here.
@@ -122,12 +133,15 @@ pub struct Outstanding {
     /// Open escalation notes by slug: the rows `fno-agent needs` counts
     /// beside the questions, so both boards report one open count.
     pub escalations: Vec<String>,
+    /// Asks waiting in the outbox for a number, by title. No id answers them.
+    pub queued: Vec<String>,
 }
 
 impl Outstanding {
     pub fn empty(&self) -> bool {
         self.carveout_total == 0
             && self.questions.is_empty()
+            && self.queued.is_empty()
             && self.captures.is_empty()
             && self.lane.is_empty()
             && self.verdicts.is_empty()
@@ -197,6 +211,9 @@ impl Outstanding {
                 json!(self.questions.len() + self.escalations.len()),
             );
         }
+        if let Some(map) = out.as_object_mut().filter(|_| !self.queued.is_empty()) {
+            map.insert("queued".into(), json!(self.queued));
+        }
         out
     }
 }
@@ -239,7 +256,7 @@ fn opt_str(data: &Map<String, Value>, key: &str) -> Option<String> {
     }
 }
 
-fn str_list(data: &Map<String, Value>, key: &str) -> Vec<String> {
+pub(crate) fn str_list(data: &Map<String, Value>, key: &str) -> Vec<String> {
     data.get(key)
         .and_then(Value::as_array)
         .map(|a| {
@@ -424,6 +441,9 @@ pub fn fold_questions(raw: &str) -> Vec<Question> {
                         options: str_list(data, "options"),
                         blocks: str_list(data, "blocks"),
                         subject: opt_str(data, "subject"),
+                        audience: opt_str(data, "audience"),
+                        why: opt_str(data, "why"),
+                        job: str_list(data, "job"),
                         live: None,
                         host: opt_str(data, "origin_machine")
                             .filter(|m| *m != crate::claims::machine_id())
@@ -786,6 +806,10 @@ pub fn collect(src: &Sources, verdicts: Result<Vec<Value>, String>) -> Result<Ou
         verdicts: verdict_rows,
         verdicts_error,
         escalations: escalation_slugs(&src.root, &questions),
+        queued: crate::numbers::mint::queued_questions(&crate::backlog::database_path(&src.graph))
+            .into_iter()
+            .map(|waiting| waiting.title)
+            .collect(),
         questions,
     })
 }
@@ -947,6 +971,18 @@ pub fn render(o: &Outstanding, ctx: &RenderCtx) -> String {
         render_questions(o, ctx, &mut lines);
     }
 
+    if !o.queued.is_empty() {
+        lines.push(format!(
+            "{} {}.",
+            plural(o.queued.len() as u64, "question"),
+            crate::numbers::mint::QUEUED
+        ));
+        for title in o.queued.iter().take(RENDER_CAP) {
+            lines.push(format!("  {}", one_line(title, 100).0));
+        }
+        lines.push(String::new());
+    }
+
     if !o.verdicts.is_empty() {
         lines.push(format!(
             "{} with no ruling.",
@@ -1080,6 +1116,12 @@ fn render_questions(o: &Outstanding, ctx: &RenderCtx, lines: &mut Vec<String>) {
                 })
             });
             let mut details: Vec<String> = where_.into_iter().collect();
+            if let Some(audience) = &q.audience {
+                details.push(audience.clone());
+            }
+            if !q.job.is_empty() {
+                details.push(q.job.join(", "));
+            }
             if let Some(host) = &q.host {
                 details.push(format!("on {host}"));
             }

@@ -28,7 +28,7 @@ export PATH
 
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 
-# HOME-as-repo guard (law d-8ddaba56): a session whose cwd is $HOME outside
+# HOME-as-repo guard (law D1564): a session whose cwd is $HOME outside
 # git has no checkout to bind, and the degraded fallbacks below would write
 # at the top level of the state root. Skip: no manifest is owed when the
 # "checkout" is the machine itself.

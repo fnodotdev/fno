@@ -14,9 +14,11 @@
 use crate::harness::Harness;
 use serde_json::{json, Value};
 
-/// The NOT LANDED exit: the local send wrote its durable copy for a recipient that is not live, and could not confirm the live inject. The copy exists,
-/// so the receiver's mail owns the body and a retry would duplicate it -
-/// the daemon's pull arm reads this exit as delivered for that reason.
+/// The NOT LANDED exit: the local send wrote its durable copy but did not
+/// confirm a live inject - either the recipient is not live, or its live leg
+/// refused outright (the failed-live-leg arm). The copy exists, so the
+/// receiver's mail owns the body and a retry would duplicate it - the
+/// daemon's pull arm reads this exit as delivered for that reason.
 pub(crate) const NOT_LANDED_EXIT: i32 = 14;
 
 /// The live-lane failure reasons: the recipient WAS live and reachable but
@@ -96,13 +98,32 @@ pub(crate) fn durable_leg_story(
 }
 
 pub(crate) fn json_line(msg_id: &str, subject: Option<&str>, to: &str, status: &str) -> String {
-    json!({
+    json_line_with_hold_pass(msg_id, subject, to, status, None)
+}
+
+/// The live-delivery receipt with the hold-pass clause. `hold_pass` is the
+/// gate's `pass` reason read at receipt time (`own`, `control`): the mail
+/// reached a held recipient live, and the sender should know why. Advisory
+/// and additive: the hold may lift between the inject-time gate read and
+/// this one, and existing receipt readers match fields by name, so an
+/// absent field reads exactly as before.
+pub(crate) fn json_line_with_hold_pass(
+    msg_id: &str,
+    subject: Option<&str>,
+    to: &str,
+    status: &str,
+    hold_pass: Option<&str>,
+) -> String {
+    let mut v = json!({
         "msg_id": msg_id,
         "subject": subject,
         "to": to,
         "status": status,
-    })
-    .to_string()
+    });
+    if let (Some(p), Some(obj)) = (hold_pass, v.as_object_mut()) {
+        obj.insert("hold_pass".to_string(), json!(p));
+    }
+    v.to_string()
 }
 
 pub(crate) fn demotion(
@@ -208,6 +229,18 @@ pub(crate) fn held_for_turn(msg_id: &str, target: &str) -> String {
     )
 }
 
+/// The honest verdict for a `live-drain` owner whose live leg refused
+/// outright: nothing was injected, nothing wakes this recipient, and the
+/// durable copy sits unclaimed. The held line above reads "queued"; this one
+/// must not - an unconfirmed inject may land past the confirm window, a
+/// refusal never will. Names the recovery ladder including the resend.
+pub(crate) fn failed_live_leg(msg_id: &str, target: &str, reason: Option<&str>) -> String {
+    let why = reason.unwrap_or("no reason recorded");
+    format!(
+        "{msg_id} FAILED on the live leg ({why}) - nothing was injected and nothing will wake this recipient; the durable copy sits unclaimed\n  recover, in this order:\n    fno agent session peek {target}          # confirm nothing landed\n    fno agent session attach {target}        # drive it yourself (claude)\n    fno agent mail admin withdraw {msg_id} # retract the durable copy FIRST\n    fno agent mail send {target} '<body>'  # then re-send"
+    )
+}
+
 const PROJECT_ARM: &str = concat!(
     "mail: project inbox ",
     "{TARGET}",
@@ -231,24 +264,28 @@ const LIVE_ARM: &str = concat!(
     "{TARGET}",
     " not confirmed (",
     "{REASON}",
-    "); queued durably as recovery only - the recipient was live and reachable, so the message may still land past the confirm window or sit until the recipient drains its inbox\n  live delivery NOT confirmed - do not wait for a reply, recover:\n    fno agent peek ",
+    "); queued durably as recovery only - the recipient was live and reachable, so the message may still land past the confirm window or sit until the recipient drains its inbox\n  live delivery NOT confirmed - do not wait for a reply, recover:\n    fno agent session peek ",
     "{TARGET}",
-    "     # did it land? a busy peer may have queued it\n    fno agent resume ",
+    "     # did it land? a busy peer may have queued it\n    fno agent session resume ",
     "{TARGET}",
-    "   # wakes it (claude) or resumes it (other harnesses), then re-send\n    fno agent attach ",
+    "   # wakes it (claude) or resumes it (other harnesses)\n    fno agent session attach ",
     "{TARGET}",
-    "   # drive it yourself (claude)\n    fno agent mail withdraw <id>      # none of the above? retract it",
+    "   # drive it yourself (claude)\n    fno agent mail admin withdraw <id> # retract the queued copy FIRST\n    fno agent mail send ",
+    "{TARGET}",
+    " '<message>'  # then re-send\n  a withdraw that refuses because the recipient already claimed\n  the message is telling you it LANDED. Stop there: re-sending on\n  top of that is the double delivery this ladder exists to avoid.",
 );
 
 const PLAIN_ARM: &str = concat!(
     "{HEAD}",
-    "  live delivery NOT confirmed - do not wait for a reply, recover:\n    fno agent peek ",
+    "  live delivery NOT confirmed - do not wait for a reply, recover:\n    fno agent session peek ",
     "{TARGET}",
-    "     # did it land? a busy peer may have queued it\n    fno agent resume ",
+    "     # did it land? a busy peer may have queued it\n    fno agent session resume ",
     "{TARGET}",
-    "   # wakes it (claude) or resumes it (other harnesses), then re-send\n    fno agent attach ",
+    "   # wakes it (claude) or resumes it (other harnesses)\n    fno agent session attach ",
     "{TARGET}",
-    "   # drive it yourself (claude)\n    fno agent mail withdraw <id>      # none of the above? retract it",
+    "   # drive it yourself (claude)\n    fno agent mail admin withdraw <id> # retract the queued copy FIRST\n    fno agent mail send ",
+    "{TARGET}",
+    " '<message>'  # then re-send\n  a withdraw that refuses because the recipient already claimed\n  the message is telling you it LANDED. Stop there: re-sending on\n  top of that is the double delivery this ladder exists to avoid.",
 );
 
 pub(crate) fn warn_deferred(
@@ -457,6 +494,32 @@ mod tests {
         assert!(text.contains("fno mux pane send <pane> --raw --submit"));
         assert!(text.contains("fno agent attach t-worker"));
         assert!(text.contains("fno agent peek t-worker --grep fmail-1"));
+        // The failed-live-leg arm is the anti-held-line: FAILED with the
+        // reason, the withdraw command, and the resend door, never a
+        // verify-later hint over a failure.
+        let failed = failed_live_leg("fmail-2", "t-worker", Some("no-pane-ref"));
+        assert!(failed.contains("FAILED on the live leg (no-pane-ref)"));
+        assert!(failed.contains("fno agent mail admin withdraw fmail-2"));
+        assert!(failed.contains("fno agent mail send t-worker '<body>'"));
+        assert!(failed.contains("fno agent session peek t-worker"));
+        assert!(failed.contains("fno agent session attach t-worker"));
+        assert!(failed_live_leg("fmail-3", "t-worker", None).contains("no reason recorded"));
+        // The deferred ladders order withdraw before re-send: resume only
+        // wakes, the send rung comes last, and a claimed copy stops the
+        // reader before the re-send.
+        let live = warn_deferred("t-worker", "live", Some("not-confirmed"), None);
+        let plain = warn_deferred("t-worker", "plain", None, Some("head"));
+        for ladder in [live, plain] {
+            let w = ladder.find("mail admin withdraw").expect("withdraw rung");
+            let s = ladder.find("mail send").expect("send rung");
+            assert!(w < s, "withdraw must print before the re-send");
+            assert!(!ladder.contains("resumes it (other harnesses), then re-send"));
+            assert!(ladder.contains("retract the queued copy FIRST"));
+            assert!(ladder.contains("already claimed"));
+            assert!(ladder.contains("fno agent session peek"));
+            assert!(ladder.contains("fno agent session resume"));
+            assert!(ladder.contains("fno agent session attach"));
+        }
     }
 
     #[test]

@@ -201,11 +201,14 @@ impl Store {
         Ok(())
     }
 
-    /// Rewrite legacy keys to qualified keys. A bare number is recoverable
-    /// only when exactly one qualified twin exists; anything else is dropped,
-    /// because a same-numbered PR in another repo would inherit a parked or
+    /// Rewrite legacy keys to qualified keys, and keys recorded under a
+    /// former repo name to their canonical slug (the rename aliases), so an
+    /// old-org key lands on its canonical twin and the tick never sweeps a
+    /// dead repo. A bare number is recoverable only when exactly one
+    /// qualified twin exists; anything else is dropped, because a
+    /// same-numbered PR in another repo would inherit a parked or
     /// merge_dispatched record and stay silently suppressed forever.
-    pub(crate) fn normalize_keys(&mut self) -> Normalization {
+    pub(crate) fn normalize_keys(&mut self, aliases: &BTreeMap<String, String>) -> Normalization {
         let snapshot: Vec<(String, Value)> = self
             .data
             .iter()
@@ -214,6 +217,7 @@ impl Store {
         let mut by_number: BTreeMap<i64, std::collections::BTreeSet<String>> = BTreeMap::new();
         for (raw, _) in &snapshot {
             if let Some((slug, number)) = parse_key(raw) {
+                let slug = crate::backlog::pr_link::canonical_repo_slug(&slug, aliases);
                 by_number
                     .entry(number)
                     .or_default()
@@ -234,6 +238,7 @@ impl Store {
                 out.dropped.push(invalid(raw));
                 continue;
             };
+            let slug = crate::backlog::pr_link::canonical_repo_slug(&slug, aliases);
             let canonical = format!("{slug}#{number}");
             match rebuilt.get(&canonical).and_then(Value::as_object) {
                 Some(existing) => {
@@ -422,7 +427,7 @@ mod tests {
         )
         .unwrap();
         let mut store = Store::load(path);
-        let n = store.normalize_keys();
+        let n = store.normalize_keys(&BTreeMap::new());
         let row = store.get("a/b#7").unwrap();
         assert_eq!(row["merge_dispatched"], json!(true));
         assert_eq!(row["retries"], json!(2));
@@ -437,6 +442,40 @@ mod tests {
         assert_eq!(reason("8").as_deref(), Some("ambiguous-key"));
         assert_eq!(reason("junk").as_deref(), Some("invalid-key"));
         assert_eq!(reason("a/b#1").as_deref(), Some("invalid-entry"));
+    }
+
+    #[test]
+    fn an_aliased_key_moves_onto_its_canonical_twin() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.json");
+        std::fs::write(
+            &path,
+            json!({
+                "fnodotdev/fno-web#5": {
+                    "merge_dispatched": true, "retries": 2, "last_seen_state": "OPEN"
+                },
+                "footnote-sh/fno-web#5": {"retries": 1, "last_seen_state": "OPEN"},
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut store = Store::load(path);
+        let aliases = BTreeMap::from([(
+            "fnodotdev/fno-web".to_string(),
+            "footnote-sh/fno-web".to_string(),
+        )]);
+        let n = store.normalize_keys(&aliases);
+        let row = store.get("footnote-sh/fno-web#5").unwrap();
+        assert_eq!(row["merge_dispatched"], json!(true));
+        assert_eq!(row["retries"], json!(2), "the twins' facts merge");
+        assert!(store.get("fnodotdev/fno-web#5").is_none());
+        assert!(
+            n.normalized
+                .iter()
+                .any(|r| r["from"] == json!("fnodotdev/fno-web#5")),
+            "the rename is reported: {:?}",
+            n.normalized
+        );
     }
 
     #[test]

@@ -54,6 +54,26 @@ What the guard does not cover: an effect hidden inside a script or a raw `curl` 
 
 `fno config plugins install <git-url>` runs third-party content, so it stages before anything runs. The clone points hooks at `/dev/null` and fetches no submodules. The pack must verify on the staged tree, and it can carry only mods and layouts. Roles, skills, agents, adapters, workflows and evaluators install from a local path only. A sha256 over every file binds the consent. An attended terminal says yes, or a principal approves the `local.plugin-install` request for that digest with `fno inbox approvals decide`. A mod that runs its own program starts off, and every launch hashes the pack again and refuses on a change. The gallery lists repos and never installs one. Every row reads "not reviewed by fno". Full contract: [mods-and-layouts](architecture/mods-and-layouts.md).
 
+## The web bridge and the attention door
+
+The assets here are node data, pane frames, transcripts, answer authority, board acts, the secrets that sink rows name, and click activity. fno trusts three things: your OS user, your global config, and an absolute `.toml` pin in the process environment. It does not trust the folder it serves, a tailnet login, a revoked invitee who kept the URL, or a page on another site.
+
+- **A folder grants nothing.** `web.invites` and `attention.sinks` come from [the trusted file](architecture/attention-items.md#the-trusted-file) only.
+- **A fault grants nothing.** An unreadable file, bad TOML or a wrong type admits no invitee and no sink.
+- **A revoke is live.** The next request refuses. An answer or a look reads again before it writes.
+- **An open feed follows a revoke.** It closes in about a second.
+- **A click needs your consent.** Only your own direct local request writes a row.
+
+These limits remain:
+
+- A tool such as direnv can set `FNO_CONFIG` for a folder. Read an `.envrc` before you allow it.
+- A raw TCP or SSH forward looks like this machine. Whoever holds it and the token counts as you.
+- A read that is already in flight can finish after a revoke.
+- An open chat socket outlives the removal of its sink.
+- A cloned folder can hold invite rows that force the bridge closed at start. It cannot open it.
+- `fno config get` and the settings page show merged values, so they can show rows that grant nothing.
+- An invitee's request can start an `fno` subcommand. Its usage row names the command, never the caller.
+
 ## Code scanning dispositions
 
 CodeQL runs through advanced setup (`.github/workflows/codeql.yml` with `.github/codeql/codeql-config.yml`). The analyze job is skipped until the repository switches from default setup to advanced setup. The gate is the `CODEQL_ADVANCED_SETUP` repository variable. Between merge and the switch, default setup keeps its weekly scan and the skipped job keeps main green. Rule classes judged not to apply are excluded in the config or dismissed per alert, with the reasons below.

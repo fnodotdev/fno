@@ -511,9 +511,9 @@ fn authority_in(raw: &str) -> &'static str {
 pub fn decision_lane(row: &Value) -> &'static str {
     let facts = RowFacts::of(row);
     match authority_in(facts.authority_source.unwrap_or("")) {
-        "agent" | "role" => "coord",
+        "agent" | "role" => "agent",
         "beastmode" => "grant",
-        "operator" | "chat_attested" if facts.ts.unwrap_or("") >= LAW_LANE_CUTOVER => "law",
+        "operator" | "chat_attested" if facts.ts.unwrap_or("") >= LAW_LANE_CUTOVER => "user",
         _ => "unattributed",
     }
 }
@@ -522,7 +522,7 @@ pub fn decision_lane(row: &Value) -> &'static str {
 /// after the cutover. Beastmode is the grant lane and agent/role are
 /// coordination; neither is law.
 pub fn is_law(row: &Value) -> bool {
-    decision_lane(row) == "law"
+    decision_lane(row) == "user"
 }
 
 /// A law row that carries the user's own ruling: an operator row, or a
@@ -553,6 +553,15 @@ pub fn is_user_ruling(row: &Value) -> bool {
 
 /// Door subjects that name one PR: `merge-grant:<repo>#<n>@<sha>` and kin.
 const PR_DOOR_PREFIXES: &[&str] = &["merge-grant:", "merge-freeze:", "pr-hold:"];
+
+/// Whether the subject names one PR through a door prefix. A per-head door
+/// row is a machine contract the merge and hold gates read, never a policy
+/// law, so the record door's no-conflict gate exempts it: each head's
+/// subject is fresh by construction.
+pub fn is_pr_door_subject(subject: &str) -> bool {
+    let s = subject.trim();
+    PR_DOOR_PREFIXES.iter().any(|p| s.starts_with(p))
+}
 
 /// The repository-scoped PR a subject names, door prefix and head pin cut
 /// first. A bare PR number never proves closure.
@@ -592,6 +601,12 @@ const STANDING_ANSWERS: &[&str] = &[
     "d-b181c28f", // D3024: every Anthropic lane gets --advisor opus
     "d-8e33a5c9", // D2965: telemetry is opt-in, grades and counts only
     "d-fefe281d", // D2809: the approval passkey rule, no approve tool
+    // The same five once the migration makes the number the key.
+    "D3199",
+    "D3029",
+    "D3024",
+    "D2965",
+    "D2809",
 ];
 
 /// Whether a row with no stated expiry ends with its subject: a
@@ -602,7 +617,7 @@ pub fn expiry_defaults_to_subject(row: &Value) -> bool {
     if STANDING_ANSWERS.contains(&facts.decision_id.unwrap_or("")) {
         return false;
     }
-    decision_lane(row) == "coord" || facts.question_id.is_some_and(|q| !q.trim().is_empty())
+    decision_lane(row) == "agent" || facts.question_id.is_some_and(|q| !q.trim().is_empty())
 }
 
 /// A refused door setting (`--expiry`, `--delivery`, `--challenges`): the
@@ -1057,7 +1072,9 @@ mod scope_tests {
             "authority_source": "operator",
         });
         if let Some(scope) = scope {
-            row["scope"] = serde_json::json!(scope);
+            if let Some(map) = row.as_object_mut() {
+                map.insert("scope".into(), serde_json::json!(scope));
+            }
         }
         row
     }
@@ -1164,9 +1181,9 @@ mod proof_tests {
         let at = |authority: &str| json!({"authority_source": authority, "ts": "2027-01-01T00:00:00Z", "subject": "x-aaaa"});
         let legacy = crate::role_migration::LEGACY_ROLE_AUTHORITIES;
         for role in ["role", "agent"].into_iter().chain(legacy.iter().copied()) {
-            assert_eq!(decision_lane(&at(role)), "coord", "{role}");
+            assert_eq!(decision_lane(&at(role)), "agent", "{role}");
         }
-        assert_eq!(decision_lane(&at("operator")), "law");
+        assert_eq!(decision_lane(&at("operator")), "user");
         assert_eq!(decision_lane(&at("beastmode")), "grant");
         assert_eq!(decision_lane(&at("banana")), "unattributed");
         assert_eq!(authority_of(&at("banana")), "");

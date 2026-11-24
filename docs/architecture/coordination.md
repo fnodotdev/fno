@@ -31,7 +31,7 @@ One primitive, flat key namespace, atomic lockfiles, append-only audit trail.
 
 ### Lockfile claim store
 
-The lockfiles under the resolved claims root are the one store used by native `fno-agent claim` commands and other readers. The open direction is recorded in operator question `q-5e30ff75`.
+The lockfiles under the resolved claims root are the one store used by native `fno-agent claim` commands and other readers. The open direction is recorded in operator question `Q2975`.
 
 ### Key namespace
 
@@ -431,12 +431,13 @@ If the worker cannot create the lockfile, the claim is not mutual exclusion. Eve
 
 This is not one harness's problem. codex `workspace-write` is the visible case. A claude worker fails the same way. When a personal `~/.claude/settings.json` grants `permissions.additionalDirectories`, it looks fine on that maintainer's machine. The repository ships no such file, so a fresh clone reproduces it.
 
-**How the grant reaches the worker.** `fno.agents.writable_dirs.worker_writable_dirs()` computes the set per spawn. It passes through the `--add-dir` cell, which already maps natively for claude, codex and agy. fno never writes into a harness settings file (operator ruling `d-926a2b90`). The set is by need, never blanket, because `--add-dir` is a WRITE grant:
+**How the grant reaches the worker.** `worker_writable_dirs` in `crates/fno-agent/src/spawn/spawn_seam.rs` computes the set per spawn. It passes through the `--add-dir` cell, which already maps natively for claude, codex and agy. fno never writes into a harness settings file (operator ruling `D418`). The set is by need, never blanket, because `--add-dir` is a WRITE grant:
 
 | Directory | When |
 |---|---|
-| The state root (`fno.paths.state_dir()`, plus the config-free claims root when an override splits them) | Always. No worker functions without the claim store, the graph and the ledger. |
-| The plan directory | The directory holding this spawn's plan, never the vault above it. A worker writes its plan, not the operator's notes. |
+| The state root (config `state_dir`, plus the config-free claims root when an override splits them) | Always. No worker functions without the claim store, the graph and the ledger. |
+| The plan directory | Always. The directory holding this spawn's plan. |
+| The vault slice beside the plans dir | Only when the plans leaf is `plans` and the slice is named for the project (`project.id`, else the checkout name), and no granted root already covers it. This is where `decision-log.md` and the backlog docs live, so a worker reads a ruling without escalating. |
 | Sibling project roots | Only for a multi-repo wave, passed by the caller. |
 
 Four funnels carry it and each is tested on its own lane. Three are Python token builders: the pane builder, claude's bg/headless builder, and codex's headless builder. The fourth is the spawn seam, and it is the one that matters most. `rust_runtime` keeps only the PANE substrate in Python. Every other spawn execs the `fno-agent` binary, which builds the harness argv itself and forwards only the operator's own `--add-dir`. So the three Python builders cover exactly one reachable lane. A `--substrate bg` spawn launched a worker with no write access to the claim store. That is the substrate the shipped stage table uses for its own delivery lane.

@@ -11,6 +11,7 @@ use super::{
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
+use std::sync::Arc;
 
 /// Per-project rows rendered for the capture stream; the count stays whole.
 pub(crate) const CAPTURE_PROJECT_CAP: usize = 8;
@@ -481,8 +482,9 @@ pub(crate) struct BoardInputs {
     /// `{id, tree, branch, dirty, unpushed, idle_minutes, resumable}`.
     pub(crate) stranded: SourceRead,
     /// The graph entries (None = unreadable); one read shared with scope
-    /// compile, undispatched classify, and claimed-node lookups.
-    pub(crate) entries: Option<Vec<Value>>,
+    /// compile, undispatched classify, and claimed-node lookups. Arc so a
+    /// caller-supplied row set (the check-in beat) moves with no deep clone.
+    pub(crate) entries: Option<Arc<Vec<Value>>>,
     /// Held nodes: node -> the open question id that holds it. The
     /// ready feed has already partitioned them out; the undispatched queue
     /// reads the same map so a held node never reads as stuck work.
@@ -1009,7 +1011,7 @@ fn unheld_rows(ctx: &BoardCtx<'_>, scoping: &mut BoardScope<'_>) -> Vec<Value> {
         // is - an epic whose children all died is exactly what a lead
         // must see.
         let mut children_by_parent: HashMap<String, Vec<&Value>> = HashMap::new();
-        for entry in inputs.entries.as_deref().unwrap_or(&[]) {
+        for entry in inputs.entries.as_ref().map(|v| v.as_slice()).unwrap_or(&[]) {
             if let Some(parent) = s_str(entry, "parent") {
                 children_by_parent
                     .entry(parent.to_ascii_lowercase())
@@ -1017,7 +1019,7 @@ fn unheld_rows(ctx: &BoardCtx<'_>, scoping: &mut BoardScope<'_>) -> Vec<Value> {
                     .push(entry);
             }
         }
-        for node in inputs.entries.as_deref().unwrap_or(&[]) {
+        for node in inputs.entries.as_ref().map(|v| v.as_slice()).unwrap_or(&[]) {
             if !stamped_in_progress(node) {
                 continue;
             }
@@ -1277,7 +1279,8 @@ fn undriven_rows(
     // here on its own. Resolve it from the entries the board already holds.
     let contained_ids: HashSet<String> = inputs
         .entries
-        .as_deref()
+        .as_ref()
+        .map(|v| v.as_slice())
         .unwrap_or(&[])
         .iter()
         .filter(|e| s_str(e, "contained_in").is_some_and(|c| !c.is_empty()))
@@ -1287,7 +1290,8 @@ fn undriven_rows(
     // it is not driverless, so undriven_pr must not name it.
     let by_id: BTreeMap<String, Value> = inputs
         .entries
-        .as_deref()
+        .as_ref()
+        .map(|v| v.as_slice())
         .unwrap_or(&[])
         .iter()
         .filter_map(|e| s_str(e, "id").map(|id| (id.to_string(), e.clone())))
@@ -1371,7 +1375,12 @@ fn driven_elsewhere(ctx: &BoardCtx<'_>, node: &Value, by_id: &BTreeMap<String, V
     if shared_prs.is_empty() {
         return false;
     }
-    let entries = ctx.inputs.entries.as_deref().unwrap_or(&[]);
+    let entries = ctx
+        .inputs
+        .entries
+        .as_ref()
+        .map(|v| v.as_slice())
+        .unwrap_or(&[]);
     shared_prs.iter().any(|pr| {
         nodes_binding_pr(entries, *pr).iter().any(|other| {
             if s_str(node, "id").is_some_and(|id| id == *other) {
@@ -1578,7 +1587,8 @@ fn stranded_rows(ctx: &BoardCtx<'_>, scoping: &mut BoardScope<'_>) -> (bool, Vec
     let stranded_rows: Vec<Value> = if stranded_ok {
         let entry_by_id: HashMap<String, &Value> = inputs
             .entries
-            .as_deref()
+            .as_ref()
+            .map(|v| v.as_slice())
             .unwrap_or(&[])
             .iter()
             .filter_map(|e| s_str(e, "id").map(|id| (id.to_string(), e)))
@@ -2188,7 +2198,7 @@ mod tests {
         );
         inputs.scope_ids = None;
         inputs.role_scope = None;
-        inputs.entries = Some(vec![
+        inputs.entries = Some(Arc::new(vec![
             json!({
                 "id": "x-aaaa", "status": "in_progress", "pr_number": 2187,
             }),
@@ -2196,7 +2206,7 @@ mod tests {
                 "id": "x-bbbb", "status": "in_progress",
                 "additional_prs": [{"number": 2187, "url": "https://example.com/pr/2187"}],
             }),
-        ]);
+        ]));
         inputs.drivers = SourceRead::ok(json!([
             {"name": "t-x-bbbb-worker", "node": "x-bbbb", "token": "uuid-bbbb"},
         ]));

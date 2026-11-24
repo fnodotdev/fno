@@ -715,6 +715,18 @@ fn default_spawn(
     if !harness_flags.is_empty() {
         cmd.envs(SEALED_WORKER_ENV);
     }
+    // The pin rides every claude eval worker, sealed or not: the harness's
+    // own state writes (transcripts, history) land under the fno eval dir
+    // instead of the user's ~/.claude. Other harnesses keep their own stores,
+    // so they take no pin. Staging copies the auth and onboarding state that
+    // makes the pinned root runnable headless, and mirrors the context
+    // entries (plugin, user memory) a worker reads.
+    let is_claude = harness.is_some_and(|h| Harness::parse(h) == Harness::Claude);
+    if is_claude {
+        if let Some(dir) = crate::spawn_seam::stage_evals_claude_config() {
+            cmd.env("CLAUDE_CONFIG_DIR", &dir);
+        }
+    }
     cmd.args(&argv)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());

@@ -90,7 +90,7 @@ check_state_dir() {
 # graph never sees the marker.
 check_backlog_write() {
     local out rc
-    out="$(fno backlog idea "$MARKER" --difficulty low 2>&1)"
+    out="$(fno backlog idea "$MARKER" --audience internal --why "sandbox probe files a node" --done-means "probe node exists" --difficulty low 2>&1)"
     rc=$?
     if [[ $rc -ne 0 ]]; then
         fail "sandbox backlog write failed: $(printf '%s' "$out" | tail -1)"
@@ -107,9 +107,14 @@ check_backlog_write() {
 
 # Check 3: the live graph page never carries the marker.
 check_graph_html() {
-    local hits
-    hits="$(grep -c "$MARKER" "$REAL_HOME/.fno/cache/pages/graph.html" 2>/dev/null || true)"
-    hits="${hits:-0}"
+    local hits=0 page found
+    # The page lives in the cache home; the old spelling drains into it.
+    for page in "$REAL_HOME/Library/Caches/fno/pages/graph.html" \
+        "$REAL_HOME/.cache/fno/pages/graph.html" \
+        "$REAL_HOME/.fno/cache/pages/graph.html"; do
+        found="$(grep -c "$MARKER" "$page" 2>/dev/null || true)"
+        hits=$((hits + ${found:-0}))
+    done
     if [[ "$hits" == "0" ]]; then
         pass "live graph.html clean"
     else

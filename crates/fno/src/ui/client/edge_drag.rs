@@ -25,6 +25,12 @@ pub(crate) enum Edge {
     OrgExplorer,
     /// Sideline list above, reply dock below.
     ReplyDock,
+    /// Backlog host | persona drill column.
+    PersonaSeam,
+    /// Drilled record: board | persona column.
+    DrillBoardSeam,
+    /// Drilled record: persona column | record.
+    DrillPersonaSeam,
 }
 
 impl Edge {
@@ -36,6 +42,9 @@ impl Edge {
             "messages-part" => Self::MessagesPart,
             "org" => Self::OrgExplorer,
             "dock" => Self::ReplyDock,
+            "persona" => Self::PersonaSeam,
+            "drill-board" => Self::DrillBoardSeam,
+            "drill-persona" => Self::DrillPersonaSeam,
             _ => return None,
         })
     }
@@ -179,34 +188,124 @@ impl View {
         }
     }
 
-    /// Every edge the surface now on screen lets the operator move.
-    fn edge_geoms(&self) -> Vec<Geom> {
-        let (rows, cols) = (self.term.0 as usize, self.term.1 as usize);
-        let chrome = self.bottom_row_is_chrome() as usize;
-        if self
+    /// Every persona seam the surface now on screen lets the operator
+    /// move. The dock seam (host | persona) covers the plain dock and
+    /// the editor fold, which paints host | persona with the same held
+    /// size. A drilled record offers its own two seams instead. The
+    /// strip fold (editor sibling, no board) paints no seam at all.
+    fn persona_seam_geoms(&self) -> Vec<Geom> {
+        let Some(o) = self.persona.as_ref() else {
+            return Vec::new();
+        };
+        let folded = super::persona_overlay::sibling_pane(self).is_some();
+        if folded && self.backlog_board.is_none() {
+            return Vec::new();
+        }
+        if o.drill && !folded {
+            return self.drill_seam_geoms();
+        }
+        let docked = self.backlog_board.is_some()
+            || matches!(
+                o.home,
+                super::persona_overlay::Home::Bell
+                    | super::persona_overlay::Home::Decision
+                    | super::persona_overlay::Home::Question
+            );
+        if !docked {
+            return Vec::new();
+        }
+        let Some((top, left, h, w)) = super::persona_overlay::persona_pane_rect(self) else {
+            return Vec::new();
+        };
+        let Some(host_w) = super::persona_overlay::dock_columns(self, w).map(|(host, _)| host)
+        else {
+            return Vec::new();
+        };
+        let bounds = super::persona_overlay::seam_bounds(w);
+        vec![Self::col_geom(
+            Edge::PersonaSeam,
+            left,
+            host_w,
+            bounds,
+            (top, top + h),
+        )]
+    }
+
+    /// The drilled layout's two seams, from the same held sizes
+    /// [`super::persona_overlay::drill_widths`] feeds the paint: the
+    /// board seam measures the board column, the persona seam the
+    /// persona column. The record takes the remainder. The strip arm
+    /// (record crowded the board out) offers the persona seam alone.
+    fn drill_seam_geoms(&self) -> Vec<Geom> {
+        let Some((top, left, h, w)) = super::persona_overlay::persona_pane_rect(self) else {
+            return Vec::new();
+        };
+        let (per_w, board_w, _) = super::persona_overlay::drill_widths(self, w);
+        let span = (top, top + h);
+        let Some(board_w) = board_w else {
+            return vec![Self::col_geom(
+                Edge::DrillPersonaSeam,
+                left,
+                per_w,
+                (30, w.saturating_sub(31)),
+                span,
+            )];
+        };
+        vec![
+            Self::col_geom(
+                Edge::DrillPersonaSeam,
+                left + board_w + 1,
+                per_w,
+                (30, w.saturating_sub(board_w + 32)),
+                span,
+            ),
+            Self::col_geom(
+                Edge::DrillBoardSeam,
+                left,
+                board_w,
+                (24, w.saturating_sub(per_w + 32)),
+                span,
+            ),
+        ]
+    }
+
+    /// The messages tree and participant seams while the list claims the
+    /// surface: no detail open, no reply dock active.
+    fn messages_seam_geoms(&self) -> Option<Vec<Geom>> {
+        if !self
             .messages_board
             .as_ref()
             .is_some_and(|b| b.detail.is_none())
-            && !super::messages_reply::active(self)
+            || super::messages_reply::active(self)
         {
-            let (tree_w, part_w) = super::messages_view::split(cols, &self.edge_sizes);
-            let body = (1, rows.saturating_sub(1));
-            return vec![
-                Self::col_geom(
-                    Edge::MessagesTree,
-                    0,
-                    tree_w,
-                    super::messages_view::tree_bounds(cols),
-                    body,
-                ),
-                Self::col_geom(
-                    Edge::MessagesPart,
-                    tree_w,
-                    part_w,
-                    super::messages_view::part_bounds(cols, tree_w),
-                    body,
-                ),
-            ];
+            return None;
+        }
+        let (rows, cols) = (self.term.0 as usize, self.term.1 as usize);
+        let (tree_w, part_w) = super::messages_view::split(cols, &self.edge_sizes);
+        let body = (1, rows.saturating_sub(1));
+        Some(vec![
+            Self::col_geom(
+                Edge::MessagesTree,
+                0,
+                tree_w,
+                super::messages_view::tree_bounds(cols),
+                body,
+            ),
+            Self::col_geom(
+                Edge::MessagesPart,
+                tree_w,
+                part_w,
+                super::messages_view::part_bounds(cols, tree_w),
+                body,
+            ),
+        ])
+    }
+
+    fn edge_geoms(&self) -> Vec<Geom> {
+        let (rows, cols) = (self.term.0 as usize, self.term.1 as usize);
+        let chrome = self.bottom_row_is_chrome() as usize;
+        if let Some(seams) = self.messages_seam_geoms() {
+            return seams;
         }
         let org_here = self.org_board.is_some()
             && (self.board_full || self.sideline_view == SidelineView::Org);
@@ -225,6 +324,10 @@ impl View {
                 .into_iter()
                 .collect();
         }
+        let persona_seams = self.persona_seam_geoms();
+        if !persona_seams.is_empty() {
+            return persona_seams;
+        }
         if let Some(b) = &self.backlog_board {
             let popup = b.detail.is_some() || b.popup_open();
             let host = if self.board_full {
@@ -242,7 +345,7 @@ impl View {
                     let bounds = super::backlog_board::backlog_panes::seam_bounds(w);
                     let cur = self.edge_sizes.resolve(
                         Edge::BacklogSeam,
-                        w * 55 / 100,
+                        w * 45 / 100,
                         bounds.0,
                         bounds.1,
                     );
@@ -316,8 +419,14 @@ impl View {
         let geoms = self.edge_geoms();
         // Messages lists the tree seam first. The tree column moves it; the
         // other two columns move the seam on their right, or on their left
-        // for the thread column, which has none on its right.
+        // for the thread column, which has none on its right. A drilled
+        // record lists the persona seam first: the keyboard moves the seam
+        // on the focused column's left, so the board column reaches its
+        // own seam.
+        let drill_board = self.persona.as_ref().is_some_and(|o| o.drill)
+            && self.input_owner() == super::region_focus::RegionOwner::Board;
         let pick = match self.messages_board.as_ref().map(|b| b.col) {
+            None if drill_board => 1,
             Some(super::messages_view::Col::Tree) | None => 0,
             Some(_) => 1,
         };

@@ -12,6 +12,7 @@
 //! the cap is free).
 
 use crate::attention::AttentionItem;
+use crate::trusted_config::{Rows, TrustedFile, TrustedKey};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -53,6 +54,10 @@ pub struct Sink {
     /// The base every item's answer and view URL builds from. Absent means
     /// the sink delivers one-way (webhook adapters poll nothing).
     pub answer_base_url: Option<String>,
+    /// The HQ bridge base the notification's tap target opens:
+    /// `{view_base_url}/hq?question=<id>`. Absent keeps the `/v1` JSON
+    /// route on `answer_base_url`.
+    pub view_base_url: Option<String>,
     pub full_body: bool,
 }
 
@@ -230,10 +235,10 @@ pub fn delivery_id(sink: &str, item_id: &str, event: &str) -> String {
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Load `[[attention.sinks]]` rows: config read plus env resolution.
-pub fn load_sinks(cwd: &Path) -> (Vec<Sink>, Vec<RefusedSink>) {
-    let rows = crate::agents_config::config_lookup(cwd, &["attention", "sinks"]);
-    let Some(rows) = rows.and_then(|v| v.as_array().cloned()) else {
+/// Load `[[attention.sinks]]` rows: the trusted file plus env resolution. A
+/// project row never chooses where a secret is sent.
+pub fn load_sinks(file: &TrustedFile) -> (Vec<Sink>, Vec<RefusedSink>) {
+    let Rows::List(rows) = file.rows(TrustedKey::AttentionSinks) else {
         return (vec![], vec![]);
     };
     let mut sinks = Vec::new();
@@ -284,6 +289,13 @@ pub fn load_sinks(cwd: &Path) -> (Vec<Sink>, Vec<RefusedSink>) {
                 continue;
             }
         }
+        let view = str_of("view_base_url").filter(|u| !u.is_empty());
+        if let Some(v) = &view {
+            if let Some(reason) = loopback_reason(v) {
+                refuse(format!("view_base_url {v} is a loopback address: {reason}"));
+                continue;
+            }
+        }
         let full_body = str_of("body").as_deref() == Some("full");
         sinks.push(Sink {
             name,
@@ -292,6 +304,7 @@ pub fn load_sinks(cwd: &Path) -> (Vec<Sink>, Vec<RefusedSink>) {
             topic,
             token,
             answer_base_url: base,
+            view_base_url: view,
             full_body,
         });
     }
@@ -794,14 +807,17 @@ fn ntfy_priority(item: &AttentionItem) -> u8 {
     }
 }
 
-/// The ntfy notification for one item: at most three actions, the
-/// recommended option first as `http` actions, the view link in `click`
-/// (and a literal `view` button when a slot is free). A pin gets one
-/// `Done` action.
+/// The ntfy notification for one item: the tap target in `click` (the HQ
+/// page on `view_base_url`, else the `/v1` JSON route), answer buttons as
+/// `http` actions with the recommended option first (only with an
+/// `answer_base_url`), and a literal `Open` button when a slot is free. A
+/// pin gets one `Done` action.
 pub fn ntfy_body(item: &AttentionItem, sink: &Sink, did: &str) -> String {
-    // Without an answer_base_url there is no reachable door: the
-    // notification stays text-only, never buttons pointing at a loopback.
-    let Some(base) = sink.answer_base_url.as_deref() else {
+    // Without a reachable door there is no click: the notification stays
+    // text-only, never buttons pointing at a loopback.
+    let answer_base = sink.answer_base_url.as_deref();
+    let view_base = sink.view_base_url.as_deref();
+    if answer_base.is_none() && view_base.is_none() {
         return json!({
             "topic": sink.topic.clone().unwrap_or_default(),
             "title": push_title(&item.id, &item.title),
@@ -809,12 +825,18 @@ pub fn ntfy_body(item: &AttentionItem, sink: &Sink, did: &str) -> String {
             "priority": ntfy_priority(item),
         })
         .to_string();
+    }
+    // The page is the answer surface: a view base turns the tap into the HQ
+    // question card (every option, a words box); the `/v1` JSON route stays
+    // the fallback when no page is configured.
+    let view_link = match view_base {
+        Some(v) => format!("{}/hq?question={}", v.trim_end_matches('/'), item.id),
+        None => format!(
+            "{}/v1/attention/items/{}",
+            answer_base.unwrap_or_default().trim_end_matches('/'),
+            item.id
+        ),
     };
-    let view_url = format!(
-        "{}/v1/attention/items/{}",
-        base.trim_end_matches('/'),
-        item.id
-    );
     let message = if sink.full_body {
         push_words(&full_message(item))
     } else {
@@ -825,62 +847,67 @@ pub fn ntfy_body(item: &AttentionItem, sink: &Sink, did: &str) -> String {
         "title": push_title(&item.id, &item.title),
         "message": message,
         "priority": ntfy_priority(item),
-        "click": view_url,
+        "click": view_link,
         "actions": [],
     });
-    let actions = body["actions"].as_array_mut().expect("actions array");
-    let answer_url = format!(
-        "{}/v1/attention/items/{}/answer",
-        base.trim_end_matches('/'),
-        item.id
-    );
-    let http_action = |n: u32, label: String| {
-        // ntfy's JSON publish takes an action body as a string; an object
-        // draws 400 code 40024 and the post never reaches the phone.
-        json!({
-            "action": "http",
-            "label": label,
-            "url": answer_url,
-            "method": "POST",
-            "headers": {"Authorization": format!("Bearer {}", sink.token)},
-            "body": json!({"option": n, "idempotency_key": format!("{did}:{n}")}).to_string(),
-            "clear": true,
-        })
-    };
-    if item.kind == "pin" {
-        actions.push(json!({
-            "action": "http",
-            "label": "Done",
-            "url": answer_url,
-            "method": "POST",
-            "headers": {"Authorization": format!("Bearer {}", sink.token)},
-            "body": json!({"done": true, "idempotency_key": format!("{did}:done")}).to_string(),
-            "clear": true,
-        }));
-    } else {
-        // Recommended first, then the rest ascending.
-        let mut order: Vec<u32> = item.options.iter().map(|o| o.n).collect();
-        if let Some(rec) = &item.recommendation {
-            order.sort_by_key(|n| (*n == rec.option) == false);
-        }
-        for n in order.iter().take(3) {
-            let label = item
-                .options
-                .iter()
-                .find(|o| o.n == *n)
-                .map(|o| {
-                    let text: String = o.text.chars().take(32).collect();
-                    format!("{}. {}", o.n, text)
-                })
-                .unwrap_or_else(|| format!("option {n}"));
-            actions.push(http_action(*n, label));
+    // The http actions post the JSON answer door; a view-only sink skips
+    // them and keeps the Open button.
+    if let Some(base) = answer_base {
+        let actions = body["actions"].as_array_mut().expect("actions array");
+        let answer_url = format!(
+            "{}/v1/attention/items/{}/answer",
+            base.trim_end_matches('/'),
+            item.id
+        );
+        let http_action = |n: u32, label: String| {
+            // ntfy's JSON publish takes an action body as a string; an object
+            // draws 400 code 40024 and the post never reaches the phone.
+            json!({
+                "action": "http",
+                "label": label,
+                "url": answer_url,
+                "method": "POST",
+                "headers": {"Authorization": format!("Bearer {}", sink.token)},
+                "body": json!({"option": n, "idempotency_key": format!("{did}:{n}")}).to_string(),
+                "clear": true,
+            })
+        };
+        if item.kind == "pin" {
+            actions.push(json!({
+                "action": "http",
+                "label": "Done",
+                "url": answer_url,
+                "method": "POST",
+                "headers": {"Authorization": format!("Bearer {}", sink.token)},
+                "body": json!({"done": true, "idempotency_key": format!("{did}:done")}).to_string(),
+                "clear": true,
+            }));
+        } else {
+            // Recommended first, then the rest ascending.
+            let mut order: Vec<u32> = item.options.iter().map(|o| o.n).collect();
+            if let Some(rec) = &item.recommendation {
+                order.sort_by_key(|n| (*n == rec.option) == false);
+            }
+            for n in order.iter().take(3) {
+                let label = item
+                    .options
+                    .iter()
+                    .find(|o| o.n == *n)
+                    .map(|o| {
+                        let text: String = o.text.chars().take(32).collect();
+                        format!("{}. {}", o.n, text)
+                    })
+                    .unwrap_or_else(|| format!("option {n}"));
+                actions.push(http_action(*n, label));
+            }
         }
     }
+    let actions = body["actions"].as_array_mut().expect("actions array");
     if actions.len() < 3 {
         actions.push(json!({
             "action": "view",
             "label": "Open",
-            "url": view_url,
+            "url": view_link,
         }));
     }
     body.to_string()
@@ -1092,6 +1119,7 @@ mod tests {
             topic: None,
             token: "tok-2".to_string(),
             answer_base_url: Some("https://reach.example".to_string()),
+            view_base_url: None,
             full_body: false,
         }
     }
@@ -1104,6 +1132,7 @@ mod tests {
             topic: Some("fno-questions".to_string()),
             token: "tok-1".to_string(),
             answer_base_url: Some("https://reach.example".to_string()),
+            view_base_url: None,
             full_body: true,
         }
     }
@@ -1115,6 +1144,62 @@ mod tests {
 
     fn future() -> Instant {
         Instant::now() + std::time::Duration::from_secs(60)
+    }
+
+    // A project row picks neither where a token is posted nor who answers
+    // by chat: the push and chat loaders both read the trusted file.
+    #[test]
+    fn the_sink_loaders_read_the_trusted_file_only() {
+        struct Urls(Vec<String>);
+        impl HttpPost for Urls {
+            fn post(&mut self, url: &str, _h: &[(String, String)], _body: &str) -> PostResult {
+                self.0.push(url.to_string());
+                PostResult {
+                    status: Some(200),
+                    body: String::new(),
+                    error: None,
+                }
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let global = dir.path().join("config.toml");
+        let project = dir.path().join("checkout.toml");
+        std::fs::write(
+            &global,
+            "[[attention.sinks]]\nname = \"hook\"\ntype = \"webhook\"\nurl = \"https://global.example/hook\"\ntoken_env = \"PATH\"\n",
+        )
+        .unwrap();
+        let machine = crate::claims::machine_id();
+        std::fs::write(
+            &project,
+            format!(
+                "[[attention.sinks]]\nname = \"steal\"\ntype = \"webhook\"\nurl = \"https://clone.example/hook\"\ntoken_env = \"HOME\"\n\n[[attention.sinks]]\nname = \"tg\"\ntype = \"telegram\"\nmachine = \"{machine}\"\nchat_id = 5\nallow = [42]\ntoken_env = \"PATH\"\n"
+            ),
+        )
+        .unwrap();
+        let file = TrustedFile::Global(global);
+        assert_eq!(file.notes(TrustedKey::AttentionSinks, &[project]).len(), 1);
+        let (sinks, refused) = load_sinks(&file);
+        assert!(refused.is_empty());
+        let mut post = Urls(Vec::new());
+        tick_sinks(
+            &ready_items(),
+            &sinks,
+            dir.path(),
+            future(),
+            &mut post,
+            &Default::default(),
+            &Default::default(),
+        );
+        assert!(!post.0.is_empty(), "the global sink is posted");
+        assert!(
+            post.0
+                .iter()
+                .all(|url| url.starts_with("https://global.example")),
+            "{:?}",
+            post.0
+        );
+        assert!(crate::attention_chat::load_chat_sinks(&file).0.is_empty());
     }
 
     // The wire contract with ntfy's JSON publish: every http action body is
@@ -1166,6 +1251,74 @@ mod tests {
             .as_str()
             .expect("Done body string");
         assert!(done.contains("\"done\":true"), "{}", done);
+    }
+
+    // The tap target is the page when one is configured: click opens the HQ
+    // question card while the answer buttons still post the JSON door.
+    #[test]
+    fn click_prefers_the_hq_page_when_a_view_base_is_set() {
+        let mut sink = ntfy_sink();
+        sink.view_base_url = Some("https://phone.example".to_string());
+        let items = ready_items();
+        let item = items.first().unwrap();
+        let did = delivery_id(&sink.name, &item.id, "item.opened");
+        let body: Value = serde_json::from_str(&ntfy_body(item, &sink, &did)).unwrap();
+        assert_eq!(body["click"], "https://phone.example/hq?question=q-9");
+        let actions = body["actions"].as_array().unwrap();
+        assert_eq!(
+            actions.iter().filter(|a| a["action"] == "http").count(),
+            2,
+            "the two options still carry http answer buttons"
+        );
+        for a in actions.iter().filter(|a| a["action"] == "http") {
+            assert!(
+                a["url"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("https://reach.example/v1/attention/items/"),
+                "{}",
+                a["url"]
+            );
+        }
+    }
+
+    #[test]
+    fn click_falls_back_to_the_json_route_without_a_view_base() {
+        let sink = ntfy_sink();
+        let items = ready_items();
+        let item = items.first().unwrap();
+        let did = delivery_id(&sink.name, &item.id, "item.opened");
+        let body: Value = serde_json::from_str(&ntfy_body(item, &sink, &did)).unwrap();
+        assert_eq!(
+            body["click"],
+            "https://reach.example/v1/attention/items/q-9"
+        );
+    }
+
+    // A view-only sink (no answer_base_url) is still a live door: the page
+    // answers through /hq/answer with invites identity, so the push carries
+    // a page click and no answer buttons.
+    #[test]
+    fn a_view_only_sink_pushes_a_page_click_and_no_answer_buttons() {
+        let mut sink = ntfy_sink();
+        sink.answer_base_url = None;
+        sink.view_base_url = Some("https://phone.example".to_string());
+        let items = ready_items();
+        let item = items.first().unwrap();
+        let did = delivery_id(&sink.name, &item.id, "item.opened");
+        let body: Value = serde_json::from_str(&ntfy_body(item, &sink, &did)).unwrap();
+        assert_eq!(body["click"], "https://phone.example/hq?question=q-9");
+        let actions = body["actions"].as_array().unwrap();
+        assert!(
+            actions.iter().all(|a| a["action"] == "view"),
+            "no http answer buttons on a view-only sink, got {}",
+            serde_json::to_string(actions).unwrap()
+        );
+        assert_eq!(actions.len(), 1, "the Open button fills the free slot");
+        assert_eq!(
+            actions.first().unwrap()["url"],
+            "https://phone.example/hq?question=q-9"
+        );
     }
 
     // A permanent 4xx no longer ends the story: the dropped row for an item

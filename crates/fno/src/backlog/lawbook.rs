@@ -200,12 +200,14 @@ pub fn topic_title(slug: &str) -> String {
 
 /// The rows the book reads, in listing order. A row qualifies when its
 /// subject is free text (a topic, not a node or PR attachment), its lane is
-/// law or coordination, nothing retracted or retired it, no door subject
+/// user or agent, nothing retracted or retired it, no door subject
 /// names a live constraint, and its body is not a one-off verdict.
 pub fn standing(rows: &[DecisionRow]) -> Vec<&DecisionRow> {
     rows.iter()
         .filter(|r| {
-            if r.lane != "law" && r.lane != "coord" {
+            // Stored rows predate the user/agent rename; both spellings read
+            // as the same lane.
+            if !matches!(r.lane.as_str(), "user" | "agent" | "law" | "coord") {
                 return false;
             }
             if !is_current_lifecycle_candidate(r) {
@@ -336,7 +338,7 @@ mod tests {
     }
 
     fn law(id: &str, slug: &str, ts: &str, decision: &str) -> DecisionRow {
-        row(id, slug, slug, "", "", "law", "live", ts, decision)
+        row(id, slug, slug, "", "", "user", "live", ts, decision)
     }
 
     #[test]
@@ -354,7 +356,7 @@ mod tests {
                 "",
                 "node-ref",
                 "",
-                "law",
+                "user",
                 "live",
                 "2026-11-01T01:00:00Z",
                 "Approve the look at e7c4.",
@@ -365,7 +367,7 @@ mod tests {
                 "",
                 "",
                 "#4643",
-                "law",
+                "user",
                 "live",
                 "2026-11-01T02:00:00Z",
                 "Approved: PR 4643 at 1ea1.",
@@ -387,7 +389,7 @@ mod tests {
                 "visual approval PR 4643",
                 "",
                 "",
-                "law",
+                "user",
                 "live",
                 "2026-11-01T04:00:00Z",
                 "Approved: PR 4643 at 1ea1; merge when green.",
@@ -398,7 +400,7 @@ mod tests {
                 "merge-grant:fno#4665",
                 "",
                 "",
-                "law",
+                "user",
                 "live",
                 "2026-11-01T05:00:00Z",
                 "Grant the merge at head fbcf.",
@@ -409,7 +411,7 @@ mod tests {
                 "old-rule",
                 "",
                 "",
-                "law",
+                "user",
                 "retracted",
                 "2026-11-01T06:00:00Z",
                 "A rule someone retracted.",
@@ -420,7 +422,7 @@ mod tests {
                 "look-rolls-forward",
                 "",
                 "",
-                "coord",
+                "agent",
                 "unscoped",
                 "2026-11-01T07:00:00Z",
                 "A look approval rolls forward to every later head until merge.",
@@ -446,7 +448,7 @@ mod tests {
                 "guard-diet",
                 "",
                 "",
-                "law",
+                "user",
                 "superseded",
                 "2026-11-01T00:00:00Z",
                 "The older guard diet.",
@@ -457,7 +459,7 @@ mod tests {
                 "dead-topic",
                 "",
                 "",
-                "law",
+                "user",
                 "superseded",
                 "2026-11-01T12:00:00Z",
                 "Nothing current on this slug.",

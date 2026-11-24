@@ -50,18 +50,42 @@ pub(crate) fn valid_prefix_word(word: &str) -> bool {
 /// a number. Gated on the mode, so `wave-1` never reads as an id in a hex
 /// project. Scanners call this per token, so the config is read once per
 /// process.
-fn is_sequential_tail(prefix: &str, tail: &str) -> bool {
+pub(crate) fn is_sequential_tail(prefix: &str, tail: &str) -> bool {
     static SEQUENTIAL_PREFIX: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     (1..=7).contains(&tail.len())
         && !tail.starts_with('0')
         && tail.bytes().all(|b| b.is_ascii_digit())
         && SEQUENTIAL_PREFIX
-            .get_or_init(|| {
-                settings::node_id_sequential()
-                    .then(|| settings::node_id_prefix().trim_end_matches('-').to_string())
-            })
+            .get_or_init(super::node_ref::sequential_prefix)
             .as_deref()
             == Some(prefix)
+}
+
+/// The configured sequential id prefix (`t`), `None` in hex mode: the
+/// mode-and-prefix pair the tail gate and the pattern builders share.
+pub(crate) fn sequential_prefix() -> Option<String> {
+    settings::node_id_sequential()
+        .then(|| settings::node_id_prefix().trim_end_matches('-').to_string())
+}
+
+/// The sequential arm of the id grammar as a regex fragment
+/// (`t-[1-9][0-9]{0,6}`) for a prefix. Pure over the prefix so tests drive
+/// both modes; `sequential_id_pattern` is the production splice.
+pub(crate) fn sequential_id_pattern_for(prefix: &str) -> String {
+    format!(
+        "{}-[1-9][0-9]{{0,6}}",
+        regex::escape(prefix.trim_end_matches('-'))
+    )
+}
+
+/// `sequential_id_pattern_for` under the board config: the configured
+/// prefix when `backlog.id_mode = "sequential"`, `None` in hex mode. Regex
+/// builders splice it beside the hex arm (the capture shortcode, the
+/// plan-filename readers).
+pub(crate) fn sequential_id_pattern() -> Option<String> {
+    sequential_prefix()
+        .as_deref()
+        .map(sequential_id_pattern_for)
 }
 
 fn valid_hex_suffix(suffix: &str) -> bool {
@@ -92,6 +116,20 @@ pub fn has_node_id_prefix(s: &str) -> bool {
         return true;
     }
     s.starts_with(settings::node_id_prefix().as_str()) || s.starts_with("ab-")
+}
+
+/// The claim-store key a node reference reads under: a bare well-formed id
+/// reads its `node:` row; every other key shape passes through untouched.
+/// The one owner of that rewrite - the CLI status door and the merge-grant
+/// verdict both call it, because a bare lookup answers Free on a live row
+/// and the two readers must never disagree about the row a node claim
+/// lives in.
+pub fn claim_key_for(s: &str) -> String {
+    if is_wellformed_node_id(s) {
+        format!("node:{s}")
+    } else {
+        s.to_string()
+    }
 }
 
 /// The row's retired ids: the `aliases` list the update --to rename
@@ -233,6 +271,30 @@ impl<'a> ResolutionIndex<'a> {
     /// legacy `ab-`, dash variants. A dash-leading query refuses before any
     /// lookup, the leaked-flag contract.
     pub fn resolve(&self, query: &str) -> Option<&'a Value> {
+        self.resolve_tiers_with(query, true)
+    }
+
+    /// `resolve_twice` for a subject a row recorded at `recorded_at`. A hit
+    /// through the number tier alone must name a node that existed by then:
+    /// an all-digit hash id whose node is gone would otherwise
+    /// attach to the later node that took that display number. Either
+    /// timestamp unreadable keeps the plain answer.
+    pub fn resolve_stored_id(&self, stored: &str, recorded_at: Option<&str>) -> Option<String> {
+        let stored = stored.trim();
+        let hit = self
+            .resolve_tiers_with(stored, true)
+            .or_else(|| self.resolve_tiers_with(stored.to_lowercase().as_str(), true))?;
+        let exact = self.resolve_tiers_with(stored, false).is_some()
+            || self
+                .resolve_tiers_with(stored.to_lowercase().as_str(), false)
+                .is_some();
+        if !exact && created_after(hit, recorded_at) {
+            return None;
+        }
+        entry_id_string(hit)
+    }
+
+    fn resolve_tiers_with(&self, query: &str, number_tier: bool) -> Option<&'a Value> {
         if query.starts_with('-') {
             return None;
         }
@@ -242,9 +304,11 @@ impl<'a> ResolutionIndex<'a> {
         if let Some(e) = self.by_alias.get(query) {
             return Some(e);
         }
-        if let Some(id) = crate::numbers::resolve_node(query) {
-            if let Some(e) = self.by_id.get(id.as_str()) {
-                return Some(e);
+        if number_tier {
+            if let Some(id) = crate::numbers::resolve_node(query) {
+                if let Some(e) = self.by_id.get(id.as_str()) {
+                    return Some(e);
+                }
             }
         }
         let q_lc = query.to_lowercase();
@@ -269,9 +333,7 @@ impl<'a> ResolutionIndex<'a> {
 
     /// The id `resolve` lands on: the `resolved_once` shape over the index.
     pub fn resolve_id(&self, query: &str) -> Option<String> {
-        self.resolve(query)
-            .and_then(|e| e.get("id").and_then(Value::as_str))
-            .map(str::to_string)
+        self.resolve(query).and_then(entry_id_string)
     }
 
     /// The matcher's two-call dance over the index: the spelling, then its
@@ -279,6 +341,21 @@ impl<'a> ResolutionIndex<'a> {
     pub fn resolve_twice(&self, stripped: &str) -> Option<String> {
         self.resolve_id(stripped)
             .or_else(|| self.resolve_id(stripped.to_lowercase().as_str()))
+    }
+}
+
+fn entry_id_string(entry: &Value) -> Option<String> {
+    entry["id"].as_str().map(str::to_string)
+}
+
+/// Whether a node was created after `at`. An unreadable stamp on either side
+/// answers false: the caller keeps the plain resolution.
+fn created_after(node: &Value, at: Option<&str>) -> bool {
+    let parse = |s: &str| chrono::DateTime::parse_from_rfc3339(s).ok();
+    let created = node["created_at"].as_str().and_then(parse);
+    match (created, at.and_then(parse)) {
+        (Some(created), Some(at)) => created > at,
+        _ => false,
     }
 }
 
@@ -671,6 +748,15 @@ pub fn release_contained(entries: &mut [Value], node_id: &str) -> Result<(), Str
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_node_created_after_the_ruling_is_never_its_subject() {
+        let node = json!({"id": "x-aaaa", "created_at": "2026-10-12T16:10:19+00:00"});
+        assert!(created_after(&node, Some("2026-08-25T00:00:00Z")));
+        assert!(!created_after(&node, Some("2026-11-01T00:00:00Z")));
+        assert!(!created_after(&node, None));
+        assert!(!created_after(&node, Some("not a time")));
+    }
 
     #[test]
     fn resolvers_refuse_a_flag_shaped_token_before_the_graph() {

@@ -265,7 +265,7 @@ Config is a leaf: the schema validates types only, and the spawn seam and the re
 
 `[[routing.models]]` is the band inventory the difficulty grid reads (`fno-agent route-slot`). `model_routing.roles` is the per-role provider map spawn-env applies. They are different axes and neither seeds the other.
 
-The grid stays config-first, so an undeclared inventory routes nothing. `resolve_grid` records `grid=no-inventory-declared`, the `dispatch_spawned` receipt carries that reason, and every banded plan lands on the ambient default. Having `model_routing.roles` set does not change it. That key is exactly what makes an undeclared inventory read as working. When the inventory is undeclared, `fno config doctor` prints a `band routing inactive:` line. When the roles key is also set, the line names it as the other axis.
+The grid stays config-first, so an undeclared inventory routes nothing. `resolve_grid` records `grid=no-inventory-declared`, the `dispatch_spawned` receipt carries that reason, and every banded plan lands on the ambient default. Having `model_routing.roles` set does not change it. That key is exactly what makes an undeclared inventory read as working. When the inventory is undeclared, `fno config doctor` prints a `band routing inactive:` line. With rows declared and no profile lanes, it prints the grid readout instead. One `band routing: grid` line per command names the pick per difficulty. A `band routing: grid unreachable` line names the declared rows no probe picked. When the roles key is also set, the line names it as the other axis.
 
 One ruling is open: whether roles can seed the inventory, or whether the two keys stay separate. Until it is made, the doctor line keeps the gap visible.
 

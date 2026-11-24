@@ -25,7 +25,7 @@ const ADVANCE_TIMEOUT_SECS: u64 = 180;
 /// Headless judgment worker; matched by the outer subprocess bound.
 const JUDGMENT_TIMEOUT_SECS: u64 = 600;
 /// The reconcile leg runs above reconcile's close-probe budget, same as the
-/// merge command (`POST_MERGE_RECONCILE_TIMEOUT_S` in cli/src/fno/pr/_merge.py).
+/// merge door's close leg (`CLOSE_LEG_TIMEOUT` in gate/merge_command/mod.rs).
 const RECONCILE_TIMEOUT_SECS: u64 = 300;
 /// The mutex TTL: 15m bounds a run that finishes in 1-3 min; the TTL is the
 /// crash backstop.
@@ -34,7 +34,9 @@ const CLAIM_TTL_MS: i64 = 15 * 60 * 1000;
 const OK: &str = "ok";
 const SKIPPED: &str = "skipped";
 const FAILED: &str = "failed";
-/// Distinct from SKIPPED: the work is still owed, and a later sweep does it.
+/// Distinct from SKIPPED: the work is still owed, and a later pass does it.
+/// For the reconcile step that later pass is the daemon's merge_close arm,
+/// which closes the node within 15 minutes.
 const DEFERRED: &str = "deferred";
 
 /// One receipt line, 200-char detail cap kept from the Python `Receipt`.

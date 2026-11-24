@@ -235,6 +235,16 @@ pub fn badge(n: usize, p: &Palette) -> Div {
         .child(n.to_string())
 }
 
+/// The command key's label: the glyph on macOS, Ctrl elsewhere. New hint
+/// text spells the key through this, never a literal glyph.
+pub fn cmd_key() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "\u{2318}"
+    } else {
+        "Ctrl+"
+    }
+}
+
 /// A key hint: the keys inline in the quietest level, with no chip, so it
 /// never reads as a button.
 pub fn kbd(keys: impl Into<SharedString>, p: &Palette) -> Div {
@@ -280,6 +290,29 @@ pub fn advance(window: &gpui::Window, size: f32) -> Pixels {
     text.advance(id, px(size), '0')
         .map(|s| s.width)
         .unwrap_or(px(size * 0.6))
+}
+
+/// An age label from an RFC 3339 stamp: `12s`, `18m`, `1h`, `2d`, the same
+/// buckets the TUI's sideline uses. An absent or unparseable stamp shows
+/// nothing.
+pub fn age(stamp: &str, now: u64) -> String {
+    let Some(past) = chrono::DateTime::parse_from_rfc3339(stamp)
+        .ok()
+        .map(|t| t.timestamp())
+    else {
+        return String::new();
+    };
+    // A stamp ahead of the clock (a skewed host, a frozen demo clock) has
+    // no honest age.
+    let Some(s) = (now as i64).checked_sub(past).filter(|s| *s >= 0) else {
+        return String::new();
+    };
+    match s {
+        0..=59 => format!("{s}s"),
+        60..=3599 => format!("{}m", s / 60),
+        3600..=172_799 => format!("{}h", s / 3600),
+        _ => format!("{}d", s / 86_400),
+    }
 }
 
 /// What a typed key did to a one-line field.
@@ -361,5 +394,23 @@ mod tests {
         // A cut text keeps its cell count, with the ellipsis in the last.
         assert_eq!(cut("Keep the mail store", 8), "Keep th…");
         assert_eq!(cut("short", 8), "short");
+    }
+
+    #[test]
+    fn an_age_label_buckets_whole_units_and_buries_a_bad_stamp() {
+        let t0 = "2026-11-19T18:00:00Z";
+        let epoch = |stamp: &str| {
+            chrono::DateTime::parse_from_rfc3339(stamp)
+                .unwrap()
+                .timestamp() as u64
+        };
+        let now = epoch(t0);
+        assert_eq!(age(t0, now), "0s");
+        assert_eq!(age(t0, now + 60), "1m");
+        assert_eq!(age(t0, now + 3600), "1h");
+        assert_eq!(age(t0, now + 2 * 86_400), "2d");
+        assert_eq!(age("not a stamp", now), "");
+        // A stamp ahead of the clock has no honest age.
+        assert_eq!(age(t0, now - 1), "");
     }
 }

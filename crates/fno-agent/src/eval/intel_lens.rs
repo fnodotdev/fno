@@ -95,7 +95,7 @@ fn cites_law(row: &Value, law_ids: &HashSet<String>) -> bool {
         .any(|id| law_ids.contains(&id.to_lowercase()))
 }
 
-/// Every `d-<8 hex>` id in `text`, case-preserved.
+/// Every decision id in `text`, case-preserved: `D142`, or `d-<8 hex>`.
 pub(crate) fn extract_decision_ids(text: &str) -> Vec<String> {
     let bytes = text.as_bytes();
     let mut out = Vec::new();
@@ -111,6 +111,11 @@ pub(crate) fn extract_decision_ids(text: &str) -> Vec<String> {
             i += 1;
         }
     }
+    out.extend(
+        text.split(|c: char| !c.is_ascii_alphanumeric())
+            .filter(|word| crate::numbers::is_label_key(word))
+            .map(str::to_string),
+    );
     out
 }
 

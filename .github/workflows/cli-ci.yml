@@ -887,6 +887,16 @@ jobs:
           echo "parity-diag: projection carries newest source (ui) = $(fno doctor event schema-projection 2>/dev/null | grep -c '\"ui\"') (fresh=1, stale=0)"
           bash scripts/check-event-schema-parity.sh
 
+      - name: Config schema golden parity
+        # The goldens under crates/fno/tests/golden/config_schema/ have one
+        # comparator: config_schema_parity.rs, which renders with the
+        # crate-built fno binary. No shard tests the fno crate itself, so
+        # the comparator never ran and a schema PR could leave the setup
+        # plan goldens stale until a local regen happened to catch it. The
+        # bin is warm from the schema-parity build above; only the test
+        # target compiles here.
+        run: cargo test --locked --manifest-path crates/fno/Cargo.toml --test config_schema_parity
+
       - name: Preflight receipt-scope parity
         # Runs HERE, not only in the smoke registry. The guard's own subject is
         # a Rust file (verify_evidence.rs), so this leg rides the cargo job that

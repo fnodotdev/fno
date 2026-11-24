@@ -30,6 +30,12 @@ pub struct Meter {
     pub cost_cents: Option<u64>,
     pub tokens: Option<u64>,
     pub compactions: Option<u64>,
+    /// The token classes behind `tokens`, as the seat's machine serves them.
+    /// `None` when its mux is older than the breakdown; never a zero.
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cache_read_tokens: Option<u64>,
+    pub cache_write_tokens: Option<u64>,
 }
 
 /// The look of one session's card, as its own machine's mux serves it: the
@@ -126,7 +132,9 @@ mod tests {
         };
         write(
             r#"{"at": 1000, "by_session": {"s1": "fno"},
-                "meters": {"s1": {"cost_cents": 42, "tokens": 9000, "compactions": null}},
+                "meters": {"s1": {"cost_cents": 42, "tokens": 9000, "compactions": null,
+                    "input_tokens": 100, "output_tokens": 40,
+                    "cache_read_tokens": 8700, "cache_write_tokens": 861}},
                 "cards": {"s1": {"badge": "working", "seen": false, "context_pct": 40,
                     "pr": 7, "build": null, "activity": [[1, 0]],
                     "bindings": [{"node": "x-1", "pr": 7, "pr_count": 2,
@@ -142,6 +150,10 @@ mod tests {
                 cost_cents: Some(42),
                 tokens: Some(9000),
                 compactions: None,
+                input_tokens: Some(100),
+                output_tokens: Some(40),
+                cache_read_tokens: Some(8700),
+                cache_write_tokens: Some(861),
             }
         );
         let card = fresh.cards.get("s1").expect("a filed card");

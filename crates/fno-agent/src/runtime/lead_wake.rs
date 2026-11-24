@@ -35,6 +35,31 @@ pub const WAKE_AFTER_SECS: i64 = 60;
 /// (lead-cf20 retro, w7 05:53:57).
 pub const WAKE_BEFORE_SECS: i64 = 300;
 
+/// A parked lead still takes one beat a day: the slow heartbeat that
+/// re-stamps the park, drains mail, and bounds every fail-closed read.
+pub const PARK_HEARTBEAT_SECS: i64 = 86_400;
+
+/// The park stamp's question-id cap. A scope's open questions number in the
+/// tens; the cap keeps a runaway board from ballooning every beat row.
+const PARK_IDS_CAP: usize = 64;
+
+/// The held park one team's last beat stamped: the open question ids the
+/// beat saw. A park whose set still matches the live pages keeps the lead
+/// asleep; a moved set lifts it.
+pub(crate) struct ParkState {
+    pub ids: Vec<String>,
+}
+
+/// The recheck verdict for one parked scope. `Unreadable` keeps sleeping:
+/// the recheck runs every arm tick, so a stale attention index must not
+/// page the operator through the second-lapse ladder - the daily heartbeat
+/// bounds the stall instead.
+pub(crate) enum ParkVerdict {
+    Held,
+    Lifted,
+    Unreadable,
+}
+
 /// The mail sender name the wake and the operator notice carry.
 const SENDER: &str = "fno-lead-wake";
 
@@ -42,10 +67,14 @@ const SENDER: &str = "fno-lead-wake";
 const SCOPE_CAP: usize = 48;
 
 /// One overdue lead and whether the operator lane rides this wake.
+/// `park_beat` marks the daily heartbeat of a still-parked lead: the wake
+/// text carries the held-park marker, so the wake meter leaves the
+/// re-park turn out of its machine count.
 pub(crate) struct WakePlan<'a> {
     pub lead: &'a Team,
     pub idle_secs: i64,
     pub operator: bool,
+    pub park_beat: bool,
 }
 
 fn scope_members(scope: &str) -> impl Iterator<Item = &str> {
@@ -60,12 +89,22 @@ fn scope_members(scope: &str) -> impl Iterator<Item = &str> {
 /// next miss. A receipt newer than the beat with a whole further beat gone
 /// by is the second missed beat in a row: the plan re-arms once, with the
 /// operator lane riding it.
+///
+/// A scope whose last beat stamped a held park skips the cadence wake
+/// while its stamped question set still matches the live pages: every row
+/// waits on an owner question, so a full check-in beat would read "no
+/// change". The park lifts on a moved set - a question answered
+/// or a new one asked - or at the daily heartbeat, whichever lands first.
+/// A parked scope still rides the same receipt ladder, so one lift wake
+/// per lapse holds and a missed lift escalates exactly like a missed beat.
 pub(crate) fn plan_wakes<'a>(
     teams: &'a [Team],
     beats: &BTreeMap<String, Option<i64>>,
     wakes: &BTreeMap<String, i64>,
+    parks: &BTreeMap<String, ParkState>,
     beat_secs: i64,
     now: i64,
+    recheck: &mut dyn FnMut(&str, &ParkState) -> ParkVerdict,
 ) -> Vec<WakePlan<'a>> {
     // The wake fires BEFORE the beat deadline: five minutes early by
     // default, floored at half the beat so a short beat still gets a real
@@ -78,8 +117,23 @@ pub(crate) fn plan_wakes<'a>(
             continue;
         };
         let idle_secs = now - last;
-        if idle_secs < wake_line {
-            continue;
+        // The parked gate. Held and unreadable keep sleeping inside the
+        // heartbeat window; Lifted and the past-heartbeat case fall through
+        // to the receipt ladder with the normal wake text, except the
+        // heartbeat itself, whose text carries the held-park marker.
+        let park_beat;
+        match parks.get(&team.scope) {
+            Some(state) if idle_secs < PARK_HEARTBEAT_SECS => match recheck(&team.scope, state) {
+                ParkVerdict::Lifted => park_beat = false,
+                _ => continue,
+            },
+            Some(_) => park_beat = true,
+            None => {
+                if idle_secs < wake_line {
+                    continue;
+                }
+                park_beat = false;
+            }
         }
         let second_line = last + 2 * beat_secs + WAKE_AFTER_SECS;
         let receipt = wakes.get(&team.scope).copied();
@@ -107,6 +161,7 @@ pub(crate) fn plan_wakes<'a>(
             lead: team,
             idle_secs,
             operator,
+            park_beat,
         });
     }
     out
@@ -131,6 +186,20 @@ pub(crate) fn wake_text(idle_secs: i64, beat_secs: i64) -> String {
          A second missed beat in a row tells the operator.",
         mins(idle_secs),
         mins(beat_secs),
+    )
+}
+
+/// The daily heartbeat of a still-parked lead. The literal marker is the
+/// wake meter's exclusion key (eval/wake_meter.rs), so the re-park turn
+/// stays out of the machine count: a permanently parked lead whose only
+/// turns are these heartbeats must not read "wake ratio over 3 to 1".
+pub(crate) fn park_beat_text(idle_secs: i64) -> String {
+    format!(
+        "Automatic lead-wake from the fno daemon (held-park heartbeat, {}m since \
+         the last beat): every row in scope still waits on a question, so the \
+         cadence wake sleeps. Run your check-in to re-stamp the park or start \
+         work: fno agent hq checkin.",
+        mins(idle_secs),
     )
 }
 
@@ -231,7 +300,13 @@ fn resume_resting_goal(
     lead_session: &str,
     roots: &BTreeMap<String, String>,
 ) -> Option<String> {
-    let root = roots.get(&plan.lead.holder).filter(|r| !r.is_empty())?;
+    let root = plan
+        .lead
+        .holder_session
+        .as_deref()
+        .and_then(|sid| roots.get(sid))
+        .or_else(|| roots.get(&plan.lead.holder))
+        .filter(|r| !r.is_empty())?;
     let manifest_path = crate::paths::space_dir(Path::new(root))
         .join("leads")
         .join(format!("{}.md", plan.lead.scope));
@@ -287,7 +362,12 @@ fn act_on_plan(
     let mut acted = 0u64;
     let mut notes: Vec<String> = Vec::new();
     let lead_session = plan.lead.holder_session.clone().unwrap_or_default();
-    if !lead_session.is_empty() && deliver(&lead_session, &wake_text(plan.idle_secs, beat_secs)) {
+    let text = if plan.park_beat {
+        park_beat_text(plan.idle_secs)
+    } else {
+        wake_text(plan.idle_secs, beat_secs)
+    };
+    if !lead_session.is_empty() && deliver(&lead_session, &text) {
         acted += 1;
         notes.push(format!("woke {}", plan.lead.holder));
         if let Some(note) = resume_resting_goal(home, &plan, &lead_session, roots) {
@@ -378,6 +458,8 @@ pub(crate) fn run_pass(home: &AgentsHome, config_cwd: &Path) -> Result<Outcome, 
     // repo and an epic-list scope misses and keeps the holder-cwd fold.
     let workspace_roots = crate::territory::workspace_paths(config_cwd);
     let mut beats: BTreeMap<String, Option<i64>> = BTreeMap::new();
+    // scope -> the held park the last beat stamped, when it stamped one.
+    let mut parks: BTreeMap<String, ParkState> = BTreeMap::new();
     // scope -> the journal the beat was read from, so the receipt can say
     // where the beat came from and a miskeyed read is visible in the log.
     let mut beat_journals: BTreeMap<String, Option<String>> = BTreeMap::new();
@@ -399,6 +481,26 @@ pub(crate) fn run_pass(home: &AgentsHome, config_cwd: &Path) -> Result<Outcome, 
             .and_then(|r| r.get("ts").and_then(Value::as_str))
             .and_then(parse_ts);
         beats.insert(team.scope.clone(), ts);
+        if let Some(data) = beat
+            .as_ref()
+            .and_then(|b| b.row.as_ref())
+            .and_then(|r| r.pointer("/data"))
+            .and_then(Value::as_object)
+        {
+            // The row's data deserializes once through the check-in's typed
+            // mirror, so the arm reads the stamp through the same shape the
+            // beat wrote it with.
+            let view = crate::runtime::lead_checkin::de::BeatData::snapshot(data);
+            if view.held_park == Some(true) {
+                let ids: Vec<String> = view
+                    .held_park_qs
+                    .unwrap_or_default()
+                    .into_iter()
+                    .take(PARK_IDS_CAP)
+                    .collect();
+                parks.insert(team.scope.clone(), ParkState { ids });
+            }
+        }
         beat_journals.insert(
             team.scope.clone(),
             beat.and_then(|b| b.journal)
@@ -406,7 +508,25 @@ pub(crate) fn run_pass(home: &AgentsHome, config_cwd: &Path) -> Result<Outcome, 
         );
     }
     let wakes = wake_receipts(&crate::tick_ledger::journals(home), &teams);
-    let plans = plan_wakes(&teams, &beats, &wakes, beat_secs, now);
+    // The park recheck reads the same attention pages the beat's held
+    // reading read, so the arm's verdict and the stamp share one source. A
+    // set moved in either direction - a question answered or a new one
+    // asked - lifts the park; an identical set keeps the lead asleep.
+    let mut recheck = |scope: &str, park: &ParkState| -> ParkVerdict {
+        match crate::lead_answers::held_open_ids(scope) {
+            Err(_) => ParkVerdict::Unreadable,
+            Ok(ids) => {
+                let moved = ids.iter().any(|id| !park.ids.contains(id))
+                    || park.ids.iter().any(|id| !ids.contains(id));
+                if moved {
+                    ParkVerdict::Lifted
+                } else {
+                    ParkVerdict::Held
+                }
+            }
+        }
+    };
+    let plans = plan_wakes(&teams, &beats, &wakes, &parks, beat_secs, now, &mut recheck);
     let mut acted = 0u64;
     let mut notes: Vec<String> = Vec::new();
     let mut skip_reason: Option<String> = None;
@@ -427,13 +547,28 @@ pub(crate) fn run_pass(home: &AgentsHome, config_cwd: &Path) -> Result<Outcome, 
                 loaded
                     .entries
                     .into_iter()
-                    .map(|e| {
+                    .flat_map(|e| {
                         let member = e
                             .role_scope
                             .as_deref()
                             .and_then(|s| scope_members(s).next());
                         let root = journal_root(&e, member, &workspace_roots);
-                        (e.name, root)
+                        // Keyed on the session id (law d-e952ed19); a row
+                        // with no id keeps the name key, the legacy shape.
+                        let sid = crate::territory::row_session_id(&e).to_string();
+                        if sid.is_empty() {
+                            return vec![(e.name.clone(), root)];
+                        }
+                        // A row whose id came from the Rust-only session_id
+                        // field keeps its name key too: the beat team's
+                        // holder_session reads only harness_session_id, so
+                        // the resume lookup falls back to the name.
+                        let harness = e.harness_session_id.as_deref().unwrap_or("");
+                        if harness.is_empty() {
+                            vec![(sid.clone(), root.clone()), (e.name.clone(), root)]
+                        } else {
+                            vec![(sid, root)]
+                        }
                     })
                     .collect()
             })
@@ -629,15 +764,26 @@ mod tests {
     }
 
     #[test]
-    fn the_operator_lane_waits_for_a_second_missed_beat_in_a_row() {
+    fn the_wake_ladder_and_the_parked_gate_walk_together() {
         let teams = vec![team("x-aaa", 2, "candor", "s-l2a")];
         let beat = 3300;
         let now = 1_000_000_000;
         let last = now - 4000;
         let second_line = last + 2 * beat + 60;
         let beats = BTreeMap::from([("x-aaa".to_string(), Some(last))]);
+        let no_parks: BTreeMap<String, ParkState> = BTreeMap::new();
+        let mut unplanned =
+            |_scope: &str, _park: &ParkState| -> ParkVerdict { panic!("no park to recheck") };
         // First lapse: no receipt yet, the lead is woken alone.
-        let plans = plan_wakes(&teams, &beats, &BTreeMap::new(), beat, now);
+        let plans = plan_wakes(
+            &teams,
+            &beats,
+            &BTreeMap::new(),
+            &no_parks,
+            beat,
+            now,
+            &mut unplanned,
+        );
         assert_eq!(plans.len(), 1);
         assert!(
             !plans.first().expect("the first lapse plans").operator,
@@ -645,7 +791,15 @@ mod tests {
         );
         // Woken once, still inside the second beat's grace: suppressed.
         let wakes = BTreeMap::from([("x-aaa".to_string(), last + 400)]);
-        let plans = plan_wakes(&teams, &beats, &wakes, beat, last + 4000);
+        let plans = plan_wakes(
+            &teams,
+            &beats,
+            &wakes,
+            &no_parks,
+            beat,
+            last + 4000,
+            &mut unplanned,
+        );
         assert!(
             plans.is_empty(),
             "the second beat is not missed before its own grace passes"
@@ -653,7 +807,15 @@ mod tests {
         // A full further beat with no fresh check-in: the second missed
         // beat in a row. The plan re-arms once and carries the operator.
         let later = second_line + 300;
-        let plans = plan_wakes(&teams, &beats, &wakes, beat, later);
+        let plans = plan_wakes(
+            &teams,
+            &beats,
+            &wakes,
+            &no_parks,
+            beat,
+            later,
+            &mut unplanned,
+        );
         assert_eq!(
             plans.len(),
             1,
@@ -665,11 +827,125 @@ mod tests {
         );
         // The escalation's own receipt holds every later pass.
         let wakes = BTreeMap::from([("x-aaa".to_string(), later)]);
-        let plans = plan_wakes(&teams, &beats, &wakes, beat, later + 9000);
+        let plans = plan_wakes(
+            &teams,
+            &beats,
+            &wakes,
+            &no_parks,
+            beat,
+            later + 9000,
+            &mut unplanned,
+        );
         assert!(
             plans.is_empty(),
             "one operator notice per lapse; a fresh check-in re-arms"
         );
+        // The parked gate walks the same map: a held park sleeps inside the
+        // heartbeat window, an unreadable recheck also sleeps (fail-closed),
+        // a moved set lifts in either direction, the lift's receipt holds
+        // the next pass, and the daily heartbeat plans with the marker.
+        let parks = BTreeMap::from([(
+            "x-aaa".to_string(),
+            ParkState {
+                ids: vec!["q-1".to_string(), "q-2".to_string()],
+            },
+        )]);
+        let mut held = |_scope: &str, park: &ParkState| -> ParkVerdict {
+            assert!(park.ids.contains(&"q-1".to_string()));
+            ParkVerdict::Held
+        };
+        let plans = plan_wakes(
+            &teams,
+            &beats,
+            &BTreeMap::new(),
+            &parks,
+            beat,
+            now,
+            &mut held,
+        );
+        assert!(
+            plans.is_empty(),
+            "a held park takes no cadence wake while the set stands"
+        );
+        let mut unreadable =
+            |_scope: &str, _park: &ParkState| -> ParkVerdict { ParkVerdict::Unreadable };
+        let plans = plan_wakes(
+            &teams,
+            &beats,
+            &BTreeMap::new(),
+            &parks,
+            beat,
+            now,
+            &mut unreadable,
+        );
+        assert!(
+            plans.is_empty(),
+            "a stale attention read must not page a parked lead every tick"
+        );
+        let mut lifted = |scope: &str, park: &ParkState| -> ParkVerdict {
+            assert_eq!(scope, "x-aaa");
+            assert!(park.ids.contains(&"q-2".to_string()));
+            ParkVerdict::Lifted
+        };
+        let plans = plan_wakes(
+            &teams,
+            &beats,
+            &BTreeMap::new(),
+            &parks,
+            beat,
+            now,
+            &mut lifted,
+        );
+        assert_eq!(plans.len(), 1, "the lift wake plans in the same pass");
+        assert!(
+            !plans.first().expect("the lift plans").park_beat,
+            "a lift wake carries the normal wake text, not the heartbeat"
+        );
+        let last = beats.get("x-aaa").copied().flatten().expect("beat ts");
+        let wakes = BTreeMap::from([("x-aaa".to_string(), last + 400)]);
+        let plans = plan_wakes(&teams, &beats, &wakes, &parks, beat, now + 900, &mut lifted);
+        assert!(
+            plans.is_empty(),
+            "one lift wake per lapse; the receipt holds the next pass"
+        );
+        // A set that grew lifts too: the parked premise "nothing changed"
+        // no longer holds in either direction.
+        let mut grew = |_scope: &str, park: &ParkState| -> ParkVerdict {
+            assert_eq!(park.ids.len(), 2);
+            ParkVerdict::Lifted
+        };
+        let plans = plan_wakes(
+            &teams,
+            &beats,
+            &BTreeMap::new(),
+            &parks,
+            beat,
+            now,
+            &mut grew,
+        );
+        assert_eq!(plans.len(), 1, "a moved set lifts the park");
+        // Past the heartbeat window the parked lead plans again, and the
+        // wake carries the held-park marker the wake meter excludes.
+        let later = now + PARK_HEARTBEAT_SECS + 600;
+        let plans = plan_wakes(
+            &teams,
+            &beats,
+            &BTreeMap::new(),
+            &parks,
+            beat,
+            later,
+            &mut held,
+        );
+        assert_eq!(plans.len(), 1, "the daily heartbeat wakes a parked lead");
+        assert!(
+            plans.first().expect("the heartbeat plans").park_beat,
+            "the heartbeat wake carries the held-park marker"
+        );
+        assert!(
+            !plans.first().expect("the heartbeat plans").operator,
+            "a heartbeat is a first lapse; the operator lane never rides it"
+        );
+        assert!(park_beat_text(PARK_HEARTBEAT_SECS).contains("held-park heartbeat"));
     }
 
     fn write_beat_manifest(path: &Path, scope: &str, harness: &str, session: &str) {

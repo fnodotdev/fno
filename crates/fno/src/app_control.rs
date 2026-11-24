@@ -41,6 +41,9 @@ pub enum AppCommand {
     Focus { agent: String },
     /// Switch the active view (the kebab spelling mirrors MainView).
     View { view: String },
+    /// Answer the pending ask-the-user question with option `option`
+    /// (1 is the first row of the strip).
+    Answer { option: usize },
     /// Quit through the same save-on-quit path the red close button rides.
     Quit,
 }

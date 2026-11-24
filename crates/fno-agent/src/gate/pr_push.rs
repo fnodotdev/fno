@@ -264,8 +264,9 @@ pub(crate) fn gh_api_pages_conditional(
 }
 
 /// The head's check runs plus StatusContexts, in the `bucket`/`link` shape
-/// [`crate::check_supersession::latest_per_name`] speaks. REST: `gh pr
-/// checks` is GraphQL and the quota broker routes it away unconditionally.
+/// [`crate::check_supersession::latest_per_name`] speaks. REST: the shape
+/// `gh pr checks` answers is GraphQL, so this read walks the REST endpoints
+/// directly instead of paying the graphql bucket.
 /// MAY BE EMPTY: a commit GitHub holds no checks for (never pushed, or not
 /// yet registered) is a legitimate answer, not an error. Callers that need
 /// the old fail-closed-on-empty shape use [`read_checks`].

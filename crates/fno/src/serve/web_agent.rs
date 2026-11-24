@@ -97,7 +97,7 @@ impl Default for InstallArgs {
         InstallArgs {
             bin: None,
             port: 8722,
-            attention_port: crate::attention_api::DEFAULT_ATTENTION_PORT,
+            attention_port: crate::web_core::DEFAULT_ATTENTION_PORT,
             json: false,
         }
     }
@@ -106,6 +106,16 @@ impl Default for InstallArgs {
 /// `mux web install-agent [flags]`: render, write, bootstrap.
 pub fn install(args: &InstallArgs) -> i32 {
     let agents_dir = launch_agents_dir();
+    if cfg!(target_os = "macos") {
+        // launchd creates no missing parent for the paths the plist names.
+        let logs = crate::state_layout::home_of(&home().join(".fno"), "logs");
+        if let Err(e) = std::fs::create_dir_all(&logs) {
+            eprintln!(
+                "fno mux web install-agent: could not create {} ({e})",
+                logs.display()
+            );
+        }
+    }
     let receipt = install_agent(
         &agents_dir,
         args.bin.as_deref(),
@@ -197,7 +207,7 @@ fn default_agent_path(fno_binary: &str) -> String {
 /// Render the web-bridge LaunchAgent plist. No filesystem writes.
 fn render_plist(fno_binary: &str, web_port: u16, attention_port: u16, label: &str) -> String {
     let home = home();
-    let logs = home.join(".fno").join("logs");
+    let logs = crate::state_layout::home_of(&home.join(".fno"), "logs");
     let esc = xml_escape;
     PLIST
         .replace("{label}", &esc(label))
@@ -566,7 +576,7 @@ mod tests {
             InstallArgs {
                 bin: None,
                 port: 9000,
-                attention_port: crate::attention_api::DEFAULT_ATTENTION_PORT,
+                attention_port: crate::web_core::DEFAULT_ATTENTION_PORT,
                 json: true,
             }
         );

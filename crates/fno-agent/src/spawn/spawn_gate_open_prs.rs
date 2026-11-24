@@ -23,7 +23,11 @@ pub(crate) fn open_pr_term(open: Option<usize>, cap: u32) -> Option<String> {
 
 /// Only a seat that starts new delivery work counts: its seed is the target
 /// command and its node has no PR yet.
-fn is_new_target_seat(input: &GateInput, node_has_pr: impl Fn(&str) -> bool) -> bool {
+fn is_new_target_seat(
+    input: &GateInput,
+    node: Option<&str>,
+    node_has_pr: impl Fn(&str) -> bool,
+) -> bool {
     // The `execute` phase also holds fix, tdd and do seats; only the target
     // command opens new delivery work.
     let command = input
@@ -35,12 +39,12 @@ fn is_new_target_seat(input: &GateInput, node_has_pr: impl Fn(&str) -> bool) -> 
     if command != Some("target") {
         return false;
     }
-    !input.node.as_deref().is_some_and(node_has_pr)
+    !node.is_some_and(node_has_pr)
 }
 
-fn node_has_pr(node: &str) -> bool {
+fn node_has_pr_at(graph: &Path, node: &str) -> bool {
     let rows = crate::graph_store::read_rows_where(
-        &crate::graph_get::default_graph_path(),
+        graph,
         &crate::backlog::RowQuery {
             filter: crate::backlog::api::NodeFilter {
                 id_in: Some([node.to_string()].into_iter().collect()),
@@ -54,6 +58,10 @@ fn node_has_pr(node: &str) -> bool {
         let set = |key: &str| row.get(key).is_some_and(|v| !v.is_null() && v != "");
         set("pr_number") || set("pr_url")
     })
+}
+
+fn node_has_pr(node: &str) -> bool {
+    node_has_pr_at(&crate::graph_get::default_graph_path(), node)
 }
 
 /// The open PR count plus each open PR's head branch.
@@ -71,11 +79,12 @@ impl OpenPrs {
         }
     }
 
-    /// Branches are `feature/<node>-<slug>`; the trailing dash keeps `x-1`
-    /// from matching `x-1d`.
+    /// Any open head naming the node id segment carries it: `feat/x-1-slug`,
+    /// `feature/x-1-slug` and `bugfix/x-1-slug` all hold node x-1. The
+    /// trailing dash keeps `x-1` from matching `x-1d`.
     fn holds_node(&self, node: &str) -> bool {
-        let prefix = format!("feature/{node}-");
-        self.heads.iter().any(|h| h.starts_with(&prefix))
+        let needle = format!("{node}-");
+        self.heads.iter().any(|h| h.contains(&needle))
     }
 }
 
@@ -110,7 +119,15 @@ fn gate_with(
     count: impl Fn(&Path) -> Result<OpenPrs, String>,
 ) -> Result<(), Refusal> {
     let cap = crate::agents_config::max_open_prs(config_cwd);
-    if cap == 0 || !is_new_target_seat(input, has_pr) {
+    // The node the seat works: the spawn's --node, or the command slot of
+    // its prompt-first seed. Both exemption legs read this one resolution.
+    let node = input.node.clone().or_else(|| {
+        input
+            .seed
+            .as_deref()
+            .and_then(crate::backlog::node_seed::scan_seed_node)
+    });
+    if cap == 0 || !is_new_target_seat(input, node.as_deref(), has_pr) {
         return Ok(());
     }
     let prs = match count(config_cwd) {
@@ -123,7 +140,7 @@ fn gate_with(
             None
         }
     };
-    if let (Some(prs), Some(node)) = (&prs, input.node.as_deref()) {
+    if let (Some(prs), Some(node)) = (&prs, node.as_deref()) {
         if prs.holds_node(node) {
             return Ok(());
         }
@@ -144,7 +161,7 @@ fn gate_with(
             "reason": "open_pr_cap",
             "open_prs": open,
             "max_open_prs": cap,
-            "remedy": "merge or close open PRs; a spawn for a node that already holds an open PR (graph pr link, or an open feature/<node>-* branch) is exempt",
+            "remedy": "merge or close open PRs; a spawn for a node that already holds an open PR (graph pr link, or an open branch naming <node>-) is exempt",
         }),
     )
     .ev("axis", serde_json::json!("open_prs")))
@@ -240,10 +257,65 @@ mod tests {
             }
         };
         let seat = input("/fno:target x-77", Some("x-77"));
-        let held = open(&["feature/x-77-mux-adds-remote-host"]);
+        // No feature/ head: only the segment match admits these.
+        let held = open(&["feat/x-77-copy-menu", "bugfix/x-77-deskew"]);
         assert!(gate_with(td.path(), &seat, |_| false, held).is_ok());
         let other = open(&["feature/x-77b-other", "feature/x-1-a"]);
         assert!(gate_with(td.path(), &seat, |_| false, other).is_err());
+    }
+
+    #[test]
+    fn a_prompt_first_seed_names_the_exempt_node_without_a_flag() {
+        let td = tempfile::tempdir().unwrap();
+        let over = |_: &Path| Ok(OpenPrs::counted(36));
+        // The node rides the seed's command slot; the gate resolves it
+        // through the seed scanner, whose node-id shape wants the full
+        // x-<4 hex> form, and the graph leg exempts the seat.
+        assert!(gate_with(
+            td.path(),
+            &input("/fno:target x-7777", None),
+            |node| node == "x-7777",
+            over
+        )
+        .is_ok());
+        // A seed whose command slot names no node stays a new-work seat.
+        let refusal = gate_with(
+            td.path(),
+            &input("/fno:target \"polish the mux\"", None),
+            |_| false,
+            over,
+        )
+        .unwrap_err();
+        assert_eq!(refusal.exit_code, EXIT_OPEN_PR_CAP);
+    }
+
+    #[test]
+    fn the_graph_leg_reads_the_real_row_store() {
+        let td = tempfile::tempdir().unwrap();
+        let graph = td.path().join("graph.json");
+        let row = serde_json::json!({
+            "id": "x-9999",
+            "slug": "copy-menu",
+            "status": "in_review",
+            "title": "copy menu",
+            "pr_number": 522,
+            "pr_url": "https://github.com/fnodotdev/fno/pull/522"
+        });
+        crate::graph_store::seed_rows(&graph, &[row]).expect("seed rows");
+        assert!(node_has_pr_at(&graph, "x-9999"), "the linked PR reads");
+        assert!(
+            !node_has_pr_at(&graph, "x-8888"),
+            "an unlinked node reads false"
+        );
+        // Over cap, the exemption through the real reader passes the seat.
+        let over = |_: &Path| Ok(OpenPrs::counted(36));
+        assert!(gate_with(
+            td.path(),
+            &input("/fno:target x-9999", Some("x-9999")),
+            |node| node_has_pr_at(&graph, node),
+            over
+        )
+        .is_ok());
     }
 
     #[test]

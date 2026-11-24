@@ -4,6 +4,8 @@ Every door that takes a decision id also takes its short number: `D142`, `d142` 
 
 A ruling stated in chat dies with the context. Weeks later, the operator asks, "there was this thing we discussed, what happened with that?" This page explains recording, storage, and current-law queries.
 
+Every ruling names who it serves: `--audience internal | customers | customer:<persona>` (no default). It carries the goal behind the ask (`--why`, the user's own words for a user-sourced ask). When the scope names personas, the ruling adds the persona job (`--job <persona>/<job-slug>`). An answer carries its question's scope and why. The receipt names the carry. Unsure? `--audience ask` stores `audience?`.
+
 ## The command
 
 ```bash
@@ -63,15 +65,18 @@ A lead can **challenge** a live decision: `fno inbox outstanding ask --challenge
 
 Every write door also checks for a near live ruling before it records. A near ruling shares six or more topic words with the new decision. Those words are also half of the shorter text, or more. In that case the door refuses until the writer names each near ruling. `--supersedes <id>` retires it, and `--keep <id>` keeps it. The user's own board answer is the ruling, so it is never refused. Near a live ruling it prints that ruling as a warning line and records itself as superseding it. A `--keep <id>` on the answer keeps that ruling instead.
 
+The standing door (`fno inbox decisions set`) records conflict resolutions only. When the subject carries no live law and the call names no `--supersedes`, nothing conflicts. The door refuses and names the plain channel. `fno inbox decide` records the ruling instead. `--expiry never` makes a plain decision standing. A store that does not exist yet counts as no live law. The refusal holds on a fresh install, and the plain decision door bootstraps the store. A store that exists but reads damaged proves nothing. The gate skips, and the write never blocks on a broken read. A PR door subject (`merge-grant:`, `merge-freeze:` lift, `pr-hold:`) keeps the old path. It is a per-head machine contract the merge gates read, not a policy law. A ruling with no subject still records: the conflict read is per subject, and a subjectless row has none to read.
+
 ## Which field a reader can trust
 
-A row is quoted far more often than it is read in the list, and a quoted row carries no lane column. So provenance has to survive on the row itself. Five fields. `decided_by` is the one fact about who ran the command, and `user_sig` is the one fact about which user key stands behind the row.
+A row is quoted far more often than it is read in the list, and a quoted row carries no lane column. So provenance has to survive on the row itself. Six fields. `decided_by` is the one fact about who ran the command, and `user_sig` is the one fact about which user key stands behind the row.
 
 | Field | Who writes it | What it means |
 |---|---|---|
 | `decided_by` | stamped from the ambient session, always, when one resolves | who recorded the ruling. This is the field to trust. It cannot be typed. |
 | `attested_by` | only a caller with no session identity AND a terminal on stdin | a name a person stood behind, rather than a handle a process stamped |
 | `relayed_by` | filled from `--decided-by` when the caller is not the decider | a name the caller supplied for someone else. A claim, not a stamp. |
+| `session_provenance` | every decide door, when the caller resolves as a session | the full session id, the harness, the transcript path, and the user turn the row answers. `fno inbox decisions <subject> --provenance` prints it. |
 | `user_cert` | the decision, retract and restore doors, on a machine with a user certificate | the certificate: a user name and user key bound to this machine's key, signed by that user key |
 | `user_sig` | the same doors, beside `user_cert` | the machine key's signature over the row except `subject`. A certified reader binds a wide row only when it verifies under its own user key. |
 
@@ -87,6 +92,12 @@ State 3 exists because state 2 used to be everything that was not state 1. That 
 
 Say the residual limit out loud, because it is narrower than the rule it satisfies. A tty is OBTAINABLE: `script -q /dev/null <cmd>` reports one from a context with no person in it, measured on this machine. So the terminal raises the cost of forging decision and does not prevent it. Forging decision through this command takes one deliberate act, a wrapped tty, which is also the cost at `fno inbox decisions set`. It does not happen by accident.
 
+### Session provenance
+
+A `decided_by` handle is the first eight chars of the session id. The row also records the rest. If the caller resolves as a session, the row also carries `session_provenance`. The field holds the full session id, the harness, the transcript path, and the id of the user turn the row answers. The turn is the last real user turn the transcript held at write time. A relayed ruling stores the relaying session and the user turn it quotes. The turn pointer is pinned at write time because a transcript only grows. A later read cannot recover which turn the ruling came from.
+
+`fno inbox decisions <subject-or-id> --provenance` prints the block. It prints `session:`, `harness:`, `transcript:`, and `turn:` with the quoted excerpt. The transcript line prints the stored path. With no stored path, it resolves from the stored session at read time. An unresolvable session prints `(unresolved - not-found)`. A row without the field prints nothing, so old rows read as they always did.
+
 ### Chat-origin probe
 
 On 2026-08-24, Claude Code 2.1.241 emitted a real `UserPromptSubmit` payload for a disposable sentinel. The positive classifier matched `hook_event_name`, `prompt`, `session_id`, `transcript_path`, `cwd`, `permission_mode`, and the extra `prompt_id`. Its redacted shape digest was `03b48a08fb318830886b5dc8ac822ab7ca881a9c78da147efe3eb4f3ed17f329`. The verdict was `origin_provenance: not_exposed`. The payload carried no harness-authenticated human-origin discriminator. A disposable pane did not confirm live delivery of the separate mail sentinel, so no mail payload is claimed as empirical evidence. The permission-gated fallback that once stood on this finding is retired (`skills/decide/LIMITATIONS.md`). It refused a headless session and was waved through by an attended chat, which is the shape a mail injection arrives in. Recording is one user-invoked step now. The row says `chat_attested`, which claims a chat approval and never a human origin.
@@ -99,7 +110,7 @@ The split closes that without deleting the honest case. An agent relaying a real
 
 ## Looking one up
 
-A decision id is a lookup key. `fno backlog decisions d-1a2b3c4d` returns that decision whatever subject it was filed under, and `--json` says `matched_by: "decision_id"` so a machine reader is never confused about which key answered.
+A decision id is a lookup key. A new decision's id is its number, `D<n>`. A row from before that keeps its hash until the migration runs. `fno backlog decisions D142` returns that decision whatever subject it was filed under, and `--json` says `matched_by: "decision_id"` so a machine reader is never confused about which key answered.
 
 A subject is matched exactly, casefolded, and never guessed. There is no alias table. The checked-in repository catalog that declared one is deleted. So `handoff` no longer reaches `target-self-handoff`, and the honest answer is `none`. Do not add a fuzzy matcher in its place. A miss is a statement about the query. A wrong guess is a statement about the world, and that is the worse failure.
 
@@ -215,7 +226,7 @@ The command is idempotent by decision id, so a second run adds nothing.
 
 ## Lifecycle and standing decision
 
-The index remains append-only. A retraction is a new `decision_retracted` event, never an edit or delete: `fno backlog decide-retract d-1a2b3c4d --reason "the decision no longer applies"`. The command resolves the target first, refuses a blank reason or unknown id, and requires the operator lane to retract an operator law. A session retracts a `chat_attested` decision with `--quote "<the user's words>"`, and the quote rides the retraction event. `fno inbox decisions restore <id>` undoes a decision retraction. It re-records the row under a new id with `supersedes: <id>` and `restores: <retraction id>`, so every reader sees the old id superseded by a live successor. The same lane rule applies: a session restores only its own kind. If the project journal is durable but the recall-index append fails, the command names `fno backlog decide-reindex` and never recommends retrying the retraction.
+The index remains append-only. A retraction is a new `decision_retracted` event, never an edit or delete: `fno backlog decide-retract D142 --reason "the decision no longer applies"`. The command resolves the target first, refuses a blank reason or unknown id, and requires the operator lane to retract an operator law. A session retracts a `chat_attested` decision with `--quote "<the user's words>"`, and the quote rides the retraction event. `fno inbox decisions restore <id>` undoes a decision retraction. It re-records the row under a new id with `supersedes: <id>` and `restores: <retraction id>`, so every reader sees the old id superseded by a live successor. The same lane rule applies: a session restores only its own kind. If the project journal is durable but the recall-index append fails, the command names `fno backlog decide-reindex` and never recommends retrying the retraction.
 
 Every row carries a derived lifecycle: `live`, `expired`, `superseded`, `retracted`, `unknown`, or `unscoped`. Human output leads with that marker, and JSON includes `lifecycle`, reason, and any positive closure evidence. `--state live|expired|superseded|retracted|unscoped|all` filters the same projection. If a coord row is stamped to a node, it expires only after that node's graph entry has positive closure evidence. If a repository-scoped PR row exists, it expires only after its exact graph binding is marked merged. A failed graph read makes the lifecycle `unknown`. The command names the unread graph on stderr, and every state filter keeps the row. Missing or ambiguous closure evidence is `unscoped`. Neither `unknown` nor `unscoped` is live. Decision does not expire because a node or PR closes.
 
@@ -255,7 +266,7 @@ The review-coverage gate is the reference consumer. Its merge predicate, its `fn
 
 The standing query reaches a reader who goes looking. The failure this hook closes is the session that never looks. Measured on the live set: 11 decisions govern review under 10 subjects, and two of those subjects are bare node ids. The same three rulings were re-derived twice in one day while agents rebuilt rules a live decision already carried. So the governing decisions are put at the decision point, not behind a search.
 
-Two hooks reach the reader. `hooks/rules-dispatch.sh` runs `fno-agent hook rules --event prompt` on `UserPromptSubmit` and `--event pre-tool` on `PreToolUse`. Claude matches `Edit|Write|Bash|Skill`, and codex matches `Edit|Write|Bash`. A Skill call is the skill event. Each fire asks `fno::rules::decide` (`docs/architecture/event-rules.md`) and prints a deny, the governing rules as `additionalContext`, or nothing. The stage read `fno inbox decisions stage` answers the same question for `scripts/validate-plan.sh`: it builds a skill event from the payload and renders the decision fires under `## Law governing <stage>`. The command is a nested group on the `fno` front, because D1101 (d-fe66560a) bars new top-level commands. The stage block lists every fired decision: summarized under the 2000-byte cap, then one short id line per decision the cap cut.
+Two hooks reach the reader. `hooks/rules-dispatch.sh` runs `fno-agent hook rules --event prompt` on `UserPromptSubmit` and `--event pre-tool` on `PreToolUse`. Claude matches `Edit|Write|Bash|Skill`, and codex matches `Edit|Write|Bash`. A Skill call is the skill event. Each fire asks `fno::rules::decide` (`docs/architecture/event-rules.md`) and prints a deny, the governing rules as `additionalContext`, or nothing. The stage read `fno inbox decisions stage` answers the same question for `scripts/validate-plan.sh`: it builds a skill event from the payload and renders the decision fires under `## Law governing <stage>`. The command is a nested group on the `fno` front, because D1101 bars new top-level commands. The stage block lists every fired decision: summarized under the 2000-byte cap, then one short id line per decision the cap cut.
 
 A decision recorded with `--paths` becomes a pre-tool rule on `Edit` and `Write` of a matching file. An inform rule prints once per session at a pre-tool event, keyed by rule id in `rules-seen/<session>.json`. A changed decision is a new id by supersede, so no second key is needed.
 
@@ -305,7 +316,7 @@ A decision id is a citable fact too. A worker once named a deletion-offset rulin
 
 ## The chat-law trade, measured
 
-The one-step door (`fno inbox decisions set`) has no staged proposal, no content hash, and no resume path (ruling D1045 (d-e1eec854)). The old ceremony was deleted because it refused the honest headless path at the last step. An attended chat approved the same enactment without reading the hash.
+The one-step door (`fno inbox decisions set`) has no staged proposal, no content hash, and no resume path (ruling D1045). The old ceremony was deleted because it refused the honest headless path at the last step. An attended chat approved the same enactment without reading the hash.
 
 The cost of that trade, measured rather than assumed: `require_marked_caller` answers `chat_attested` off `resolve_self_identity`, which walks process ancestry. The door is not "a mail-injected slash command". It is ANY process descended from a harness session. That includes an agent's own Bash call with no user-shaped text anywhere. The narrower mail shape is the one that cannot be detected. Across every transcript in this machine's claude project directory, 2173 user turns carrying an `<fno_mail>` envelope were recorded with `promptSource: "typed"` and 2439 with `origin: {"kind": "human"}`. `fno agent mail send --raw` strips the envelope that is the one remaining marker. The door is the standing LANE and never the `operator` VALUE: `_resolve_decider` still refuses an `operator` claim from a resolved session. The asymmetry buys honesty. A session can mint and retract its own kind of decision row. It can never retire an `operator` row, by retraction or by supersession.
 

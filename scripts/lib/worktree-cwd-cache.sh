@@ -30,7 +30,9 @@ wt_cwd_cache_file() {
     # Cache home, env-then-platform only (hot path: no fno fork, D1839).
     local dir="${FNO_CWD_CACHE_DIR:-}"
     if [[ -z "$dir" ]]; then
-        if [[ "$(uname -s)" == "Darwin" ]]; then
+        if [[ -n "${FNO_CACHE_HOME:-}" ]]; then
+            dir="${FNO_CACHE_HOME/#\~/$HOME}"
+        elif [[ "$(uname -s)" == "Darwin" ]]; then
             dir="$HOME/Library/Caches/fno"
         else
             dir="${XDG_CACHE_HOME:-$HOME/.cache}/fno"

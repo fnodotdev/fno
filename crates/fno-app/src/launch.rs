@@ -6,7 +6,6 @@
 //! close and reopen on the root.
 
 use std::cell::Cell;
-use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui::{
@@ -19,6 +18,7 @@ use super::chat::field::{Field, FieldState};
 use super::keys::Key;
 use super::link::Layout;
 use super::palette::Palette;
+use super::skills::{self, Skill};
 use super::ui::{self, Role};
 use super::window::Root;
 use fno::app_api::client::agent_launcher::{
@@ -32,7 +32,7 @@ use fno::proto::{AgentLaunchRequest, AgentLaunchUpdate, AgentRow, LaunchState};
 /// workers. Shell runs a local shell command in a new terminal pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
-    Agent,
+    Worker,
     Lead,
     Shell,
 }
@@ -40,7 +40,7 @@ pub enum Kind {
 impl Kind {
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Kind::Agent => "agent",
+            Kind::Worker => "worker",
             Kind::Lead => "lead",
             Kind::Shell => "shell",
         }
@@ -49,7 +49,7 @@ impl Kind {
     /// The one dim line under the pick: why this kind, from the HQ guide.
     fn why(self) -> &'static str {
         match self {
-            Kind::Agent => "An agent runs one task. Pick it when one session can finish the work.",
+            Kind::Worker => "A worker runs one task. Pick it when one worker can finish the work.",
             Kind::Lead => "A lead hands a stream of tasks to workers. Pick the epics it covers.",
             Kind::Shell => "A shell command runs in a new terminal pane on this machine.",
         }
@@ -57,16 +57,16 @@ impl Kind {
 
     pub(crate) fn placeholder(self) -> &'static str {
         match self {
-            Kind::Agent => "the task, as one message",
+            Kind::Worker => "the task, as one message",
             Kind::Lead => "filter the epics, ⏎ picks the top match",
             Kind::Shell => "the shell command",
         }
     }
 
-    /// The kind a cmd-digit picks, in the header's order: agent, lead, shell.
+    /// The kind a cmd-digit picks, in the header's order: worker, lead, shell.
     pub(crate) fn from_index(n: u8) -> Option<Kind> {
         match n {
-            1 => Some(Kind::Agent),
+            1 => Some(Kind::Worker),
             2 => Some(Kind::Lead),
             3 => Some(Kind::Shell),
             _ => None,
@@ -103,7 +103,7 @@ impl Row {
     /// carries no model, effort or worktree picks, and the task row wraps.
     fn next(self, back: bool, kind: Kind) -> Row {
         let chain: &[Row] = match kind {
-            Kind::Agent => &[
+            Kind::Worker => &[
                 Row::Kind,
                 Row::Harness,
                 Row::Project,
@@ -202,10 +202,12 @@ pub struct Launch {
     effort: Option<String>,
     /// True when the launch lands in a worktree instead of the main checkout.
     worktree: bool,
-    /// The picked project's slash skills, read at open and on a harness
-    /// step. Claude only: the other harnesses have no listing surface, so
-    /// their prompts autocomplete nothing.
-    skills: Vec<String>,
+    /// The picked harness's skills, read from its dirs at open and on a
+    /// harness or project step. A harness with no known on-disk layout
+    /// lists none, so its prompt autocompletes nothing.
+    skills: Vec<Skill>,
+    /// The popover's selected row and Esc state.
+    pick: skills::Pick,
     harnesses: Vec<HarnessRow>,
     projects: Vec<String>,
     pub draft: Draft,
@@ -222,7 +224,7 @@ impl Launch {
     /// A fresh panel: no picks yet, the catalog read once.
     pub fn fresh() -> Self {
         let mut launch = Launch {
-            kind: Kind::Agent,
+            kind: Kind::Worker,
             harness: String::new(),
             project: String::new(),
             gone: false,
@@ -232,6 +234,7 @@ impl Launch {
             effort: None,
             worktree: false,
             skills: Vec::new(),
+            pick: skills::Pick::default(),
             harnesses: Vec::new(),
             projects: Vec::new(),
             draft: Draft::default(),
@@ -297,6 +300,19 @@ impl Launch {
 
     /// Open (or re-open) the panel: a fresh attempt's phase, the task row
     /// focused, and `kind` set when the opener named one.
+    /// Preset the project row to one workspace's canonical cwd, so a New
+    /// worker pick from a workspace header starts there. The cwd stays a
+    /// candidate: refresh_projects re-adds the workspaces' cwds anyway.
+    pub(crate) fn preset_project(&mut self, cwd: &str) {
+        if cwd.is_empty() {
+            return;
+        }
+        self.project = cwd.to_string();
+        if !self.projects.iter().any(|p| p == cwd) {
+            self.projects.push(cwd.to_string());
+        }
+    }
+
     pub(crate) fn open(&mut self, kind: Option<Kind>) {
         if let Some(k) = kind {
             self.kind = k;
@@ -318,6 +334,12 @@ impl Launch {
         };
     }
 
+    /// The shot's harness pick, with the skills reread for it.
+    pub(crate) fn set_harness_for_shot(&mut self, harness: String) {
+        self.harness = harness;
+        self.refresh_skills();
+    }
+
     /// One kind pick lands, the kind row's flip or a cmd-digit: the
     /// derived caches follow the new kind.
     pub(crate) fn set_kind(&mut self, kind: Kind) {
@@ -326,11 +348,11 @@ impl Launch {
         self.refresh_epics();
     }
 
-    /// Read the picked project's skill names for the completion list. A
-    /// claude pick lists both roots; anything else carries none.
+    /// Read the picked harness's skills for the completion list: claude
+    /// lists project, user and plugin skills, codex its own root.
     pub(crate) fn refresh_skills(&mut self) {
-        self.skills = if self.kind == Kind::Agent && self.harness == "claude" {
-            skill_names(&self.project)
+        self.skills = if self.kind == Kind::Worker {
+            skills::list(&self.harness, &self.project)
         } else {
             Vec::new()
         };
@@ -537,42 +559,58 @@ impl Launch {
         self.worktree = !self.worktree;
     }
 
-    /// The `/query` the draft leads with, if it does.
-    fn skill_query(&self) -> Option<&str> {
-        self.draft
-            .text()
-            .strip_prefix('/')
-            .filter(|q| !q.contains(char::is_whitespace))
-    }
-
-    /// The skills matching the draft's leading `/query`, name order. Only
-    /// the agent kind on claude lists any: the door verifies one name at a
-    /// time and nothing lists them, so every other pick autocompletes
-    /// nothing.
-    pub(crate) fn skill_completions(&self) -> Vec<String> {
-        if self.kind != Kind::Agent || self.harness != "claude" {
-            return Vec::new();
-        }
-        let Some(q) = self.skill_query() else {
-            return Vec::new();
-        };
-        let needle = q.to_lowercase();
-        self.skills
+    /// The known project whose basename is `base`.
+    pub(crate) fn project_for_base(&self, base: &str) -> Option<String> {
+        self.projects
             .iter()
-            .filter(|s| s.to_lowercase().contains(&needle))
-            .take(4)
+            .find(|p| p.rsplit('/').next() == Some(base))
             .cloned()
-            .collect()
     }
 
-    /// Tab fills the top match as `/name ` and keeps the row on the task.
-    /// False when nothing shows, so tab keeps moving rows.
-    pub(crate) fn complete_skill(&mut self) -> bool {
-        let Some(first) = self.skill_completions().into_iter().next() else {
+    /// The popover for the draft, worker kind only.
+    pub(crate) fn skill_view(&self) -> Option<skills::View> {
+        if self.kind != Kind::Worker {
+            return None;
+        }
+        skills::view(&self.skills, &self.harness, self.draft.text(), &self.pick)
+    }
+
+    /// The skills the popover shows, grouped by source.
+    pub(crate) fn skill_completions(&self) -> Vec<Skill> {
+        self.skill_view().map(|v| v.rows).unwrap_or_default()
+    }
+
+    /// Up or down moves the popover's row. False when none shows, so the
+    /// key keeps moving the caret.
+    pub(crate) fn skill_step(&mut self, down: bool) -> bool {
+        let Some(v) = self.skill_view() else {
             return false;
         };
+        self.pick.step(self.draft.text(), down, v.rows.len());
+        true
+    }
+
+    /// Esc closes the popover until the draft changes. False when none shows.
+    pub(crate) fn skill_close(&mut self) -> bool {
+        if self.skill_view().is_none() {
+            return false;
+        }
+        self.pick.close(self.draft.text());
+        true
+    }
+
+    /// Tab fills the selected row as `<sigil>name ` and keeps the row on
+    /// the task. False when nothing shows, so tab keeps moving rows.
+    pub(crate) fn complete_skill(&mut self) -> bool {
+        let Some(v) = self.skill_view() else {
+            return false;
+        };
+        let (Some(row), Some(sigil)) = (v.rows.get(v.sel), skills::sigil(&self.harness)) else {
+            return false;
+        };
+        let text = format!("{sigil}{} ", row.name);
         self.draft.select_all();
-        self.draft.replace_selection(&format!("/{first} "));
+        self.draft.replace_selection(&text);
         true
     }
 
@@ -668,9 +706,9 @@ impl Launch {
         match self.row {
             Row::Kind => {
                 let next = match self.kind {
-                    Kind::Agent => Kind::Lead,
+                    Kind::Worker => Kind::Lead,
                     Kind::Lead => Kind::Shell,
-                    Kind::Shell => Kind::Agent,
+                    Kind::Shell => Kind::Worker,
                 };
                 self.set_kind(next);
                 KeyOut::Taken
@@ -822,7 +860,7 @@ pub(super) fn render(root: &Root, window: &Window, cx: &mut Context<Root>) -> Di
                     div()
                         .flex_1()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child("New session"),
+                        .child("New worker"),
                 )
                 .child(ui::kbd("esc", &p)),
         )
@@ -831,18 +869,18 @@ pub(super) fn render(root: &Root, window: &Window, cx: &mut Context<Root>) -> Di
                 .flex()
                 .flex_row()
                 .gap(px(4.0))
-                .child(segment(Kind::Agent, l.kind == Kind::Agent, &p, cx))
+                .child(segment(Kind::Worker, l.kind == Kind::Worker, &p, cx))
                 .child(segment(Kind::Lead, l.kind == Kind::Lead, &p, cx))
                 .child(segment(Kind::Shell, l.kind == Kind::Shell, &p, cx)),
         )
         .child(ui::text(l.kind.why(), Role::Meta, &p))
         .child(harness_row(l, &p, cx))
         .child(project_row(l, &p, cx))
-        .when(l.kind == Kind::Agent, |d| {
+        .when(l.kind == Kind::Worker, |d| {
             d.child(axis_picker_rows(l, &p, cx))
         })
         .child(task_box(root, window, cx))
-        .children(skill_hints(l, &p))
+        .children(skill_hints(root))
         .children(epic_list(l, &p))
         .children(phase_line(l, &p))
         .child(
@@ -901,36 +939,6 @@ pub(crate) fn shell_command(draft: &Draft) -> Option<String> {
     let text = draft.text().trim();
     let rest = text.strip_prefix('!')?.trim();
     (!rest.is_empty()).then(|| rest.to_string())
-}
-
-/// The skill dir names under the two roots Claude Code reads: the user's
-/// `~/.claude/skills` and the picked project's `.claude/skills`. A dir
-/// without a SKILL.md is not a skill. Missing roots read as none; the
-/// read is best-effort and never a submit blocker.
-fn skill_names(project: &str) -> Vec<String> {
-    let mut roots = Vec::new();
-    if let Some(home) = std::env::var_os("HOME") {
-        roots.push(PathBuf::from(home).join(".claude/skills"));
-    }
-    if !project.is_empty() {
-        roots.push(PathBuf::from(project).join(".claude/skills"));
-    }
-    let mut out = Vec::new();
-    for root in roots {
-        let Ok(entries) = std::fs::read_dir(&root) else {
-            continue;
-        };
-        for e in entries.flatten() {
-            if e.path().join("SKILL.md").is_file() {
-                if let Some(name) = e.file_name().to_str() {
-                    out.push(name.to_string());
-                }
-            }
-        }
-    }
-    out.sort();
-    out.dedup();
-    out
 }
 
 /// The project row's display path: home becomes `~`, and a long path
@@ -1022,7 +1030,7 @@ fn picker_row(
     .child(ui::clamp(value, Role::Name, p))
 }
 
-/// The agent kind's three launch-axis pickers: model, effort, worktree.
+/// The worker kind's three launch-axis pickers: model, effort, worktree.
 fn axis_picker_rows(l: &Launch, p: &Palette, cx: &mut Context<Root>) -> Div {
     div()
         .child(picker_row(
@@ -1059,20 +1067,137 @@ fn axis_picker_rows(l: &Launch, p: &Palette, cx: &mut Context<Root>) -> Div {
         ))
 }
 
-/// The agent kind's skill matches under the task box; tab fills the top
-/// one. None show unless the draft leads with a `/` and the picked
-/// harness lists skills.
-fn skill_hints(l: &Launch, p: &Palette) -> Option<Div> {
-    let rows = l.skill_completions();
-    if rows.is_empty() {
-        return None;
-    }
-    Some(
-        div().flex().flex_col().px_2().gap(px(2.0)).children(
-            rows.into_iter()
-                .map(|s| ui::text(format!("/{s}"), Role::Hint, p)),
-        ),
+/// The worker kind's skill popover above the task box; tab fills the
+/// selected row. None shows unless the draft leads with the harness's
+/// sigil and the harness lists skills.
+pub(crate) fn skill_hints(root: &Root) -> Option<gpui::AnyElement> {
+    let l = &root.launch.state;
+    skill_popover(
+        l.skill_view()?,
+        root.adv,
+        l.composer.get().size.width,
+        px(560.0),
+        false,
+        &root.palette,
     )
+}
+
+/// The popover card, shared by the start and chat composers. It floats
+/// above its parent, which must be `relative`. Rows group by source, the
+/// typed prefix is bold, the descriptions share one column and end in an
+/// ellipsis, and the footer counts the matches left out.
+pub(crate) fn skill_popover(
+    v: skills::View,
+    adv: Pixels,
+    seen: Pixels,
+    fallback: Pixels,
+    above: bool,
+    p: &Palette,
+) -> Option<gpui::AnyElement> {
+    let skills::View {
+        rows,
+        more,
+        sel,
+        query,
+    } = v;
+    let width = rows.iter().map(|s| s.name.chars().count()).max()? + 2;
+    // The card's width is known once it has painted once; the first frame
+    // takes the caller's guess. The chrome is monospace, so a count of
+    // cells is an exact width and the cut lands on an ellipsis.
+    let card = if seen > px(0.0) { seen } else { fallback };
+    let hint_adv = adv * (ui::SMALL / ui::BODY);
+    let room = ((card - px(40.0) - adv * width as f32) / hint_adv)
+        .floor()
+        .max(8.0) as usize;
+    let mut col = div().flex().flex_col().gap(px(1.0));
+    let mut group = None;
+    for (i, s) in rows.into_iter().enumerate() {
+        if group != Some(s.source) {
+            group = Some(s.source);
+            col = col.child(
+                div()
+                    .px_2()
+                    .pt_1()
+                    .child(ui::text(s.source.label(), Role::Label, p)),
+            );
+        }
+        let (pre, mid, post) = skills::split_match(&s.name, &query);
+        let row = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .px_2()
+            .py(px(2.0))
+            .rounded(px(4.0))
+            .when(i == sel, |d| d.bg(rgb(p.row_fill)))
+            .child(
+                div()
+                    .flex_none()
+                    .w(adv * width as f32)
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .flex()
+                    .flex_row()
+                    .text_color(rgb(p.fg))
+                    .child(pre)
+                    .child(div().font_weight(FontWeight::BOLD).child(mid))
+                    .child(post),
+            )
+            .child(
+                ui::role(div(), Role::Hint, p)
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .child(ui::cut(&s.description, room)),
+            );
+        col = col.child(row);
+    }
+    let foot = div()
+        .flex()
+        .flex_row()
+        .justify_between()
+        .px_2()
+        .pt_1()
+        .border_t_1()
+        .border_color(rgb(p.border))
+        .child(ui::text(
+            if more > 0 {
+                format!("{more} more matches")
+            } else {
+                String::new()
+            },
+            Role::Hint,
+            p,
+        ))
+        .child(ui::text("tab inserts · esc closes", Role::Hint, p));
+    let card = div()
+        .absolute()
+        .left_0()
+        .right_0()
+        .flex()
+        .flex_col()
+        .gap(px(2.0))
+        .p_1()
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(rgb(p.border))
+        .bg(rgb(p.raised))
+        .child(col)
+        .child(foot);
+    // Above the composer in the chat, where the bar sits at the bottom of
+    // the pane. Below it in the start view, where the card sits near the
+    // top and a full list would cover the toolbar. The deferred layer
+    // paints over the rows that follow the card.
+    Some(if above {
+        card.bottom(gpui::relative(1.0))
+            .mb(px(6.0))
+            .into_any_element()
+    } else {
+        gpui::deferred(card.top(gpui::relative(1.0)).mt(px(6.0)))
+            .with_priority(1)
+            .into_any_element()
+    })
 }
 
 /// The lead kind's epic picker under the filter box: up to six matches,
@@ -1200,9 +1325,9 @@ mod tests {
     }
 
     #[test]
-    fn an_agent_submit_sends_bare_text() {
+    fn a_worker_submit_sends_bare_text() {
         let mut l = Launch::fresh();
-        l.kind = Kind::Agent;
+        l.kind = Kind::Worker;
         l.harness = "claude".into();
         l.project = "/w".into();
         l.draft.replace_selection("fix the crash");
@@ -1215,9 +1340,9 @@ mod tests {
         // next() is pure: the result must be assigned back, or the walk
         // never moves.
         let mut l = Launch::fresh();
-        // Agent: the full chain wraps task -> kind.
+        // Worker: the full chain wraps task -> kind.
         l.row = Row::Task;
-        l.row = l.row.next(false, Kind::Agent);
+        l.row = l.row.next(false, Kind::Worker);
         assert_eq!(l.row, Row::Kind);
         // Shell: kind -> project -> task, no harness or axes.
         l.row = Row::Kind;
@@ -1278,7 +1403,7 @@ mod tests {
     #[test]
     fn the_request_carries_the_picked_axes_and_the_worktree_flip() {
         let mut l = Launch::fresh();
-        l.kind = Kind::Agent;
+        l.kind = Kind::Worker;
         l.harness = "claude".into();
         l.project = "/w".into();
         l.model = Some("opus".into());
@@ -1295,11 +1420,11 @@ mod tests {
     #[test]
     fn the_agent_task_box_autocompletes_the_harness_s_skills() {
         let mut l = Launch::fresh();
-        l.kind = Kind::Agent;
+        l.kind = Kind::Worker;
         l.harness = "claude".into();
-        l.skills = vec!["target".into(), "think".into()];
+        l.skills = vec![sk("target"), sk("think")];
         l.draft.replace_selection("/ta");
-        assert_eq!(l.skill_completions(), vec!["target".to_string()]);
+        assert_eq!(l.skill_completions(), vec![sk("target")]);
         assert!(l.complete_skill());
         assert_eq!(l.draft.text(), "/target ");
     }
@@ -1353,12 +1478,34 @@ mod tests {
         );
     }
 
+    fn sk(name: &str) -> Skill {
+        Skill {
+            source: skills::Source::User,
+            name: name.into(),
+            description: String::new(),
+        }
+    }
+
     #[test]
-    fn the_completions_leave_the_other_harnesses_and_kinds_alone() {
+    fn codex_completes_with_the_dollar_sigil_and_ignores_the_slash() {
         let mut l = Launch::fresh();
         l.harness = "codex".into();
-        l.skills = vec!["target".into()];
+        l.skills = vec![sk("target")];
         l.draft.replace_selection("/ta");
+        assert!(l.skill_completions().is_empty());
+        l.draft.select_all();
+        l.draft.replace_selection("$ta");
+        assert!(l.complete_skill());
+        assert_eq!(l.draft.text(), "$target ");
+    }
+
+    #[test]
+    fn the_completions_leave_the_other_kinds_alone() {
+        let mut l = Launch::fresh();
+        l.harness = "claude".into();
+        l.skills = vec![sk("target")];
+        l.draft.replace_selection("/ta");
+        l.kind = Kind::Shell;
         assert!(l.skill_completions().is_empty());
         assert!(!l.complete_skill());
         // A lead on claude stays silent: no listing surface, no matches.
@@ -1369,7 +1516,7 @@ mod tests {
 
     #[test]
     fn cmd_digits_one_two_three_map_to_the_three_kinds() {
-        assert_eq!(Kind::from_index(1), Some(Kind::Agent));
+        assert_eq!(Kind::from_index(1), Some(Kind::Worker));
         assert_eq!(Kind::from_index(2), Some(Kind::Lead));
         assert_eq!(Kind::from_index(3), Some(Kind::Shell));
         assert_eq!(Kind::from_index(4), None);

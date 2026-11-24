@@ -25,7 +25,7 @@ Write the user doc for the change this session just built (D2707).
 
 1. Load /fno-doc-writing and /asd-ste100.
 2. Pick the page type and whether it is a new page or an edit to a live page.
-3. Work in an fno-web worktree, never a shared checkout. Create a docs branch docs/<node-or-topic>.
+3. Work in an fno-web worktree (`footnote-sh/fno-web`), never a shared checkout. Create a docs branch docs/<node-or-topic>.
 4. Write the page in fno-sh-docs/ following fno-doc-writing's page types.
 5. Stamp it: `fno do docs bind <page> --nav <nav-group>`. Add --release <tag> when the derived tag is wrong for this window.
 6. Rerun the gate: `fno do docs gate --apply`.

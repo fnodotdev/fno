@@ -41,7 +41,7 @@ mail-receipt	door: mail receipt read transport
 mail-record	door: origin-record leaf mail send and reply call
 mail-remote	door: cross-host relay, binary-direct like mail-inject
 mail-teach	door: mail teaching transport
-mail-threads	door: mail thread reads, unregistered like team-fold
+mail-threads	door: mail thread reads, unregistered
 node-bind	table door under review_doors::dispatch
 wake-context	table door under review_doors::dispatch
 org-fold	table door under review_doors::dispatch; fold and claims cannot disagree about a held node
@@ -101,3 +101,4 @@ visual	table door under review_doors::dispatch; critique prep
 wave	door: the wave dispatcher (fno-agent wave ready)
 worked-nodes	door: one payload in, one receipt out, one verdict
 worker-wake	door: the Stop hook's wake transport; starts nothing, never lazy-starts
+pr-cite-check	gate: the review lane runs the cite check on customers-scope nodes; no operator surface names it

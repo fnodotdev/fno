@@ -295,6 +295,7 @@ fn insert_row(
     row: &BTreeMap<String, Value>,
 ) -> Result<(), MigrateError> {
     let names: Vec<&String> = row.keys().collect();
+    // A row that cannot go back is named, never counted as restored.
     let sql = format!(
         "INSERT OR IGNORE INTO \"{table}\" ({}) VALUES ({})",
         names
@@ -307,9 +308,7 @@ fn insert_row(
             .collect::<Vec<_>>()
             .join(", ")
     );
-    conn.execute(&sql, params_from_iter(row.values().map(cell_sql)))
-        .map(drop)
-        .map_err(MigrateError::from)
+    changed(conn.execute(&sql, params_from_iter(row.values().map(cell_sql)))?)
 }
 
 fn has_column(conn: &Connection, table: &str, column: &str) -> bool {
@@ -741,6 +740,30 @@ fn mint_fresh(graph_db: &Path, keys: &[String]) -> Result<(), MigrateError> {
     }
 }
 
+/// The hex-to-number pairs a previous apply wrote into `fno_id_map`. A run
+/// whose own map comes up empty still needs them: the first apply retires
+/// every hex this machine holds, so a second project's apply would otherwise
+/// return before its vault step and leave that project's pages on their
+/// hashes for good.
+/// The hex-to-number pairs `fno_id_map` holds.
+type StoredPairs = BTreeMap<String, String>;
+
+fn stored_map(db: &Path) -> Result<StoredPairs, MigrateError> {
+    let conn = Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let present: bool = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'fno_id_map')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !present {
+        return Ok(BTreeMap::new());
+    }
+    let mut stmt = conn.prepare("SELECT hex, label FROM fno_id_map")?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    rows.collect::<Result<StoredPairs, _>>()
+        .map_err(MigrateError::from)
+}
+
 /// `--apply [--json]`.
 pub(crate) fn apply(json_out: bool) -> i32 {
     let graph = crate::graph_get::default_graph_path();
@@ -775,6 +798,21 @@ pub(crate) fn apply(json_out: bool) -> i32 {
     if map.refuses() || !map.fresh.is_empty() {
         eprintln!("migrate ids: the map refuses; run --dry-run for the keys it cannot carry");
         return 1;
+    }
+    // The pairs a previous apply stored join the map, so this run also
+    // rewrites what still cites a retired hex: a second project's apply
+    // carries nothing fresh, and the stores the map already covered read
+    // back unchanged.
+    match stored_map(&graph_db) {
+        Ok(stored) => {
+            for (hex, label) in stored {
+                map.mapped.entry(hex).or_insert(label);
+            }
+        }
+        Err(error) => {
+            eprintln!("migrate ids: {error}");
+            return 1;
+        }
     }
     if map.mapped.is_empty() {
         println!("migrate ids: no hex key is left to retire");
@@ -941,11 +979,14 @@ fn undo_all(entries: Vec<Undo>) -> Vec<String> {
     let mut left = Vec::new();
     let mut moved: BTreeMap<PathBuf, Vec<String>> = BTreeMap::new();
     for entry in entries.into_iter().rev() {
-        if let Undo::Moved { graph, to, .. } = &entry {
-            moved.entry(graph.clone()).or_default().push(to.clone());
-        }
         if let Err(reason) = undo_one(&entry) {
             left.push(format!("{entry:?}: {reason}"));
+            continue;
+        }
+        // Only a move that went back loses its numbered row: one a later
+        // write changed is the sole copy of that decision.
+        if let Undo::Moved { graph, to, .. } = entry {
+            moved.entry(graph).or_default().push(to);
         }
     }
     // The second half of each move back: the number's row goes once the
@@ -1085,6 +1126,13 @@ fn undo_one(entry: &Undo) -> Result<(), MigrateError> {
             if sha_hex(&now) != *after {
                 return changed(0);
             }
+            // A page written at the old name since apply is a later write.
+            if to != from && from.exists() {
+                return Err(MigrateError::RenameTaken {
+                    from: to.clone(),
+                    to: from.clone(),
+                });
+            }
             let text = std::fs::read_to_string(backup)?;
             write_atomic(from, &text)?;
             if to != from {
@@ -1211,6 +1259,30 @@ mod tests {
                 "r2d2:d-0000c001"
             ]
         );
+
+        // A moved decision that changed after apply stays under its number.
+        let graph = dir.path().join("board").join("graph.json");
+        std::fs::create_dir_all(dir.path().join("board")).unwrap();
+        let board = crate::backlog::open(&graph).unwrap();
+        let event = json!({"ts": "2026-11-21T00:00:00Z", "type": "operator_decision",
+            "source": "test", "data": {"decision_id": "D7", "decision": "edited after apply"}});
+        crate::backlog::decisions::insert_event(&board, &event).unwrap();
+        let left = undo_all(vec![Undo::Moved {
+            graph,
+            from: "d-0000c007".into(),
+            to: "D7".into(),
+            before: "{}".into(),
+            after: "what apply wrote".into(),
+        }]);
+        assert_eq!(left.len(), 1, "{left:?}");
+        let kept: i64 = board
+            .query_row(
+                "SELECT count(*) FROM decisions WHERE event_id = 'D7'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kept, 1, "rollback deleted a decision it could not restore");
     }
 
     #[test]
@@ -1237,5 +1309,157 @@ mod tests {
             "question_id: q-0000beef\n"
         );
         assert!(!moved.exists());
+
+        // A page written at the old name after apply is never overwritten.
+        std::fs::write(&moved, "apply wrote this").unwrap();
+        std::fs::write(&page, "written after apply").unwrap();
+        let backup = dir.path().join("before.md");
+        std::fs::write(&backup, "before apply").unwrap();
+        let left = undo_all(vec![Undo::File {
+            from: page.clone(),
+            to: moved.clone(),
+            backup,
+            after: sha_hex(b"apply wrote this"),
+        }]);
+        assert_eq!(left.len(), 1, "{left:?}");
+        assert_eq!(
+            std::fs::read_to_string(&page).unwrap(),
+            "written after apply"
+        );
+        assert!(moved.exists());
+    }
+
+    /// The child of the two-project test: the real command twice, each run
+    /// against the seeded store its env names, never a live one. The parent
+    /// hands over project-a's env and cwd; the second run moves to the
+    /// sibling project the way an operator would.
+    #[test]
+    #[ignore = "spawned with a seeded FNO_HOME by the two-project vault test"]
+    fn migrate_ids_two_project_apply_child() {
+        let code = super::super::run(&["--apply".to_string()]);
+        eprintln!("child: apply from project-a exited {code}");
+        assert_eq!(code, 0);
+        // The backup dir stamps at second resolution; keep the two applies
+        // in distinct dirs.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let sibling = std::env::current_dir()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("project-b");
+        std::env::set_var("FNO_CONFIG", sibling.join(".fno/config.toml"));
+        std::env::set_current_dir(&sibling).unwrap();
+        let code = super::super::run(&["--apply".to_string()]);
+        eprintln!("child: apply from project-b exited {code}");
+        assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn a_second_apply_from_another_project_rewrites_that_projects_vault() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("fno-home");
+        let (proj_a, proj_b) = (root.path().join("project-a"), root.path().join("project-b"));
+        let (vault_a, vault_b) = (root.path().join("vault-a"), root.path().join("vault-b"));
+        for (proj, vault) in [(&proj_a, &vault_a), (&proj_b, &vault_b)] {
+            std::fs::create_dir_all(proj.join(".fno")).unwrap();
+            std::fs::create_dir_all(vault).unwrap();
+            std::fs::write(
+                proj.join(".fno/config.toml"),
+                format!(
+                    "[obsidian]\nenabled = true\nvault = \"{}\"\n",
+                    vault.display()
+                ),
+            )
+            .unwrap();
+        }
+        let conn = super::super::super::open_write_at(&home.join("db").join("graph.db")).unwrap();
+        for key in ["d-0000feed", "q-0000beef"] {
+            mint_local(&conn, key, "local", "h").unwrap();
+        }
+        drop(conn);
+        // The backlog schema comes up with the store, so the decision index
+        // the command reads finds its tables.
+        drop(crate::backlog::open(&home.join("graph.json")).unwrap());
+        let keyed_page = "ruled by q-0000beef@mac2, see d-0000feed\n";
+        std::fs::write(vault_a.join("q-0000beef.md"), keyed_page).unwrap();
+        std::fs::write(vault_a.join("ruling.md"), "d-0000feed holds it\n").unwrap();
+        std::fs::write(vault_b.join("q-0000beef.md"), keyed_page).unwrap();
+        std::fs::write(vault_b.join("notes.md"), "see d-0000feed for the ruling\n").unwrap();
+
+        // The child carries its own FNO_HOME, HOME, FNO_CONFIG, spaces dir,
+        // events journal and agents home, so no ambient or shared-sandbox
+        // store is ever a candidate. FNO_AGENT_HOME is the load-bearing pin:
+        // the attention projection the beat sweeps reads the question
+        // journals beside the agents home's parent dir, and the CI job
+        // exports FNO_AGENT_HOME into a per-runner sandbox whose journals
+        // concurrent fixture tests append to. HOME pins the fallback the
+        // same way. The filter names the full test path: --exact matches
+        // nothing on a bare function name, and a child that ran nothing
+        // still exits 0.
+        let exe = std::env::current_exe().unwrap();
+        let mut cmd = std::process::Command::new(&exe);
+        cmd.args([
+            "--exact",
+            "numbers::migrate::apply::tests::migrate_ids_two_project_apply_child",
+            "--ignored",
+        ])
+        .env("FNO_HOME", &home)
+        .env("HOME", root.path())
+        .env("FNO_AGENT_HOME", root.path().join("agent-home"))
+        .env("FNO_CONFIG", proj_a.join(".fno/config.toml"))
+        .env("FNO_SPACES_DIR", root.path().join("spaces"))
+        .env("FNO_EVENTS_PATH", root.path().join("events.jsonl"))
+        .env_remove("FNO_STATE_DIR")
+        .current_dir(&proj_a);
+        let out = crate::bounded_cmd::output_with_timeout_result(cmd, 600).unwrap();
+        assert!(
+            out.status.success(),
+            "the two-project child failed:\n-- child stdout --\n{}\n-- child stderr --\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&out.stdout).contains("1 passed"),
+            "the child matched no test:\n{}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+
+        let db = home.join("db").join("graph.db");
+        let stored = stored_map(&db).unwrap();
+        assert_eq!(stored.len(), 2, "{stored:?}");
+        let d_label = stored.get("d-0000feed").unwrap();
+        let q_label = stored.get("q-0000beef").unwrap();
+        for (vault, plain) in [(&vault_a, "ruling.md"), (&vault_b, "notes.md")] {
+            let moved = vault.join(format!("{q_label}.md"));
+            let page = std::fs::read_to_string(&moved).unwrap();
+            assert!(page.contains(d_label) && page.contains(q_label), "{page:?}");
+            assert!(!page.contains("d-0000feed") && !page.contains("q-0000beef"));
+            assert!(!vault.join("q-0000beef.md").exists());
+            let other = std::fs::read_to_string(vault.join(plain)).unwrap();
+            assert!(other.contains(d_label), "{other:?}");
+            assert!(!other.contains("d-0000feed"));
+        }
+
+        // The second run's undo log: one file entry per changed page.
+        let backups = home.join("db").join("backups");
+        let mut dirs: Vec<std::path::PathBuf> = std::fs::read_dir(&backups)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .collect();
+        dirs.sort();
+        assert_eq!(dirs.len(), 2, "one backup dir per apply: {dirs:?}");
+        let undo = std::fs::read_to_string(dirs.last().unwrap().join("undo.jsonl")).unwrap();
+        let entries: Vec<Value> = undo
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(entries.len(), 2, "two pages changed: {undo:?}");
+        for entry in &entries {
+            assert_eq!(entry["op"].as_str(), Some("file"), "{entry:?}");
+            let to = PathBuf::from(entry["to"].as_str().unwrap());
+            assert!(to.starts_with(&vault_b), "{to:?}");
+            assert!(to.is_file(), "{to:?}");
+        }
     }
 }

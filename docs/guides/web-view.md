@@ -22,7 +22,7 @@ The bridge also serves the backlog as JSON through the same token. `/backlog/mod
 
 The **rundown** page serves `rundown.html` (`/role` and `term.html` stay as the one-release aliases). If it is older than five minutes, the bridge re-renders it.
 
-The **hq** page (`/hq`) shows what waits on you and every machine of the fleet. It reads `/hq/model.json` every 60 seconds while the tab is visible. Questions group by the machine that asked them, each with the command that answers it. The old `/command` URLs redirect to `/hq` and keep the query string. The page offers no write control. When a read fails, the page names the failure and keeps what it can show.
+The **hq** page (`/hq`) shows what waits on you and every machine of the fleet. It reads `/hq/model.json` every 60 seconds while the tab is visible. Questions group by the machine that asked them. The old `/command` URLs redirect to `/hq` and keep the query string. A question opens a drawer that answers in place: a button per option, a words box, and `Done` on a pin. Over a tailnet the page identifies you by your tailscale login. To read, you need a `[[web.invites]]` row. To answer, that row needs the `editor` role or higher. An invite whose `scope` names one node keeps that viewer to that node's chain. The board reads carry only those nodes. A node outside the invite refuses with the reason. The machine-wide reads refuse a scoped viewer outright. These are the org chart, the decision log, and the live bridge feed. With no list set, the token rule and the local user keep working. A tailnet answer then gets refused. [Invite and revoke](#invite-and-revoke) says where the rows live. A `/hq?question=<id>` link opens that question's card straight away. The board also answers under a `/fno` path prefix. A tailscale route that maps a subpath reaches the same routes. When a read fails, the page names the failure and keeps what it can show.
 
 The header holds two tabs. Synapse draws the fleet as a map above what waits on you. Group by Projects, Machines or Subway, and the page remembers the choice. Drag to pan, scroll to zoom, and click a star to open its seat. A screen 640 px wide or less opens on Table. Table lists every seat: machine, lead, seat, harness, model, state, alive time, last message age, node with its title, and PR. Click a column head to sort by it. The filter box matches seat, node, title, model and session id. The state pills in the header and a chip per machine hide or show seats. Click a row, or press Enter on it, to open the seat's drawer. The drawer heads with the node title and its id, status, priority, difficulty and project. Then it shows the node description. The session section lists id, handle, harness, model and alive time. It adds status with its age and progress, memory, user turns, context, epic and working dir. It shows the last message and the last prompt the seat received. Claude and codex seats publish both. Any other harness, and a machine whose daemon predates them, reads `not published`. Under Open, every row with a link has two buttons. Open opens the target. Copy copies that same link with the bridge token removed, never a command. A toast says `Link copied`. On plain http off loopback the browser gives no clipboard. The toast then says `Copy failed`, and the row shows the link selected for a manual copy. The PR row opens the PR on GitHub. The backlog row opens the node on the backlog page. Attach and peek show the session name and say the mux link comes later. With `obsidian.enabled` on, a plan in the vault opens through an `obsidian://` link. Any other plan gives a plain `file://` link with no Obsidian label, and so does a plan folder, because Obsidian opens only a note. A browser does not open a `file://` link from a served page, so Open on that row shows a notice and selects the link for a manual copy. Each machine card shows one row per provider lane. At its cap, the spawn cap row says `at cap`. A machine with `fleet.name` set shows that name, with the host beside it. Escape or the close button shuts the drawer.
 
@@ -76,10 +76,55 @@ The bridge binds to loopback by default. This default is deliberate. It does not
 To reach the view from a phone, use one of these three methods.
 
 - **A private network such as tailscale.** Bind to the host's private address, not every interface. Run `fno mux serve --web --bind <tailscale-ip>`. Then open the printed URL. Only the private network can reach the port, and it authenticates the connection.
-- **An SSH tunnel.** Leave the bind address on loopback. Forward the port with `ssh -L 8722:127.0.0.1:8722 <host>`. Then open `http://127.0.0.1:8722/?t=<token>` on the local machine. Keep the token: a URL without it fails the check and shows no pane. The backlog writes keep working over a tunnel, because the bridge itself is still bound to loopback.
+- **An SSH tunnel.** Leave the bind address on loopback. Forward the port with `ssh -L 8722:127.0.0.1:8722 <host>`. Then open `http://127.0.0.1:8722/?t=<token>` on the local machine. Keep the token: a URL without it fails the check and shows no pane. The backlog writes keep working over a tunnel, because the bridge itself is still bound to loopback. Whoever uses the tunnel counts as you: invites do not apply, and their clicks record as yours.
 - **A reverse proxy you already run.** Terminate TLS at the proxy. The bridge does no TLS of its own.
 
 CAUTION: Do not use `--bind 0.0.0.0`. It opens the port on every interface, including your LAN, where no private network authenticates the caller. The token is the only guard, and the URL carries it. A wide bind also puts the backlog page back into read-only mode: the write routes refuse everything that does not arrive on loopback.
+
+## Invite and revoke
+
+An invite is a `[[web.invites]]` row in your global config, `~/.fno/config.toml`. The bridge never takes an invite from the folder it serves, so a cloned repository cannot invite anyone. When `FNO_CONFIG` names an absolute `.toml` file, that file holds the rows instead.
+
+```toml
+[[web.invites]]
+email = "ann@example.com"
+scope = "*"        # or one node id
+role = "editor"    # viewer, commenter, editor or owner
+```
+
+`fno config set` replaces the whole list, so include every row you keep:
+
+```bash
+fno config set web.invites '[{"email":"ann@example.com","scope":"*","role":"editor"}]'
+```
+
+You can also edit the file. The bridge reads it again on each request, so a change needs no restart.
+
+To revoke a login, write the list without that row. The next request from that login gets 403. An open live feed closes in about a second. A response already in flight can finish.
+
+To revoke everyone, run `fno config unset web.invites`. The running bridge then refuses every proxied request, and you still get in from this machine. CAUTION: A bridge started later finds no list and uses the token rule. Anyone who has that bridge's new URL can then read through your proxy. To keep the gate on across restarts, keep one row, for example your own login.
+
+If the bridge cannot read or parse the file, it admits no invitee. You still get in from this machine, and the bridge prints the fault at start.
+
+### Move invites out of a project file
+
+`fno config set --local` refuses `web.invites`. An older project file can still hold rows. The bridge checks for them once, at start:
+
+- With the same rows as your global list, nothing changes. The bridge prints one notice.
+- With any other rows, the bridge holds closed. It refuses every proxied request and names the file.
+
+To end a hold:
+
+1. Read the project rows, and decide which ones you still want.
+2. Write your full global list with `fno config set web.invites '<json list>'`.
+3. In each folder the notice names, run `fno config unset web.invites --local`. A linked worktree can also name its main checkout.
+4. Restart the bridge once, in the folder it started in. A hold lasts until then. A later revoke needs no restart.
+
+When `FNO_CONFIG` pins a file, the bridge does not check project files.
+
+### Which clicks are recorded
+
+The pages record only your own clicks. That means a direct request on this machine, with the token, from the bridge's own page. A click from an invitee or any other proxied caller records nothing. A bridge on a wide bind records no click at all. An SSH tunnel reaches the bridge as this machine, so it counts as you. [Telemetry](../telemetry.md) says what a row holds.
 
 ## Share one pane with someone on another network
 

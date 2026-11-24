@@ -72,6 +72,23 @@ pub(crate) struct CheckRunTail {
     pub(crate) advisory: Option<bool>,
 }
 
+/// The row shape `read_checks_rows` builds, cut to the hold gate's fields:
+/// the verdict bucket and the workflow file that keys the aggregate.
+#[derive(Deserialize, Default)]
+pub(crate) struct RowTail {
+    #[serde(default, deserialize_with = "opt_string")]
+    pub(crate) bucket: Option<String>,
+    #[serde(default, deserialize_with = "opt_string")]
+    pub(crate) workflow: Option<String>,
+}
+
+/// One element of the issue-labels read (`repos/<slug>/issues/<n>/labels`).
+#[derive(Deserialize, Default)]
+pub(crate) struct LabelTail {
+    #[serde(default, deserialize_with = "opt_string")]
+    pub(crate) name: Option<String>,
+}
+
 /// One legacy StatusContext row.
 #[derive(Deserialize, Default)]
 pub(crate) struct StatusRowTail {

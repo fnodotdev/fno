@@ -13,7 +13,11 @@ digest=$(printf '%s\n' "$matches" | LC_ALL=C sort | shasum -a 256 | awk '{print 
 # reserve gate is deleted, so its caller rows leave the inventory; the
 # remaining rows are documentation and the enforcement-boundary checks
 # below still hold.
-expected_digest="6bce1f50f45b820aa21f64660bed39502ef16202c6003f258dc95a574a79d5d1"
+# Re-pinned 2026-11-20: six scripts/ops rows classify
+# operator-one-shot, one loopcheck argv row left when the commits read moved
+# to the REST commits endpoint, and the proxy boundary pin migrated to
+# run_proxy_main.
+expected_digest="dd58a466f573d0ed4c2e29b6c6e0b9ee305399b9baeb8cc846a2e3ea2f7b0b70"
 
 if [[ "${1:-}" == "--print-digest" ]]; then
   printf 'classified_graphql_callers=%s digest=%s\n' "$classified" "$digest"
@@ -40,7 +44,11 @@ fi
 # reports "a named enforcement boundary is missing" for a boundary that is
 # present and working, which is a false red nobody can act on. Match the
 # assignment and the callee, or the binary name, and let formatting move.
-if ! grep -q 'crate::gh_proxy::protect(&mut command)' crates/fno/src/cli/bootstrap.rs \
+# The proxy boundary migrated with the pr port: the front door's old
+# protect() call in cli/bootstrap.rs is gone; today plain gh reaches the
+# broker through the shim chain (setup wrapper() execs `<fno> gh`, the gh
+# door routes it into run_proxy_main), so the pin is the proxy's own entry.
+if ! grep -q 'pub fn run_proxy_main' crates/fno-agent/src/gate/pr_status/proxy.rs \
     || ! grep -q '"fno-gh-coverage"' crates/fno-agent/src/gate/finalize.rs \
     || ! grep -q '"fno-gh-loopcheck"' crates/fno-agent/src/gate/loopcheck/args.rs; then
   echo "direct-graphql-pr-read: a named enforcement boundary is missing" >&2

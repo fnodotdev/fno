@@ -195,6 +195,19 @@ pub enum ClientMsg {
     /// the spawn door, never an argv element.
     AgentLaunch(crate::agent_launch::AgentLaunchRequest),
     PaneInput(pane_input::PaneInputRequest),
+    /// (v132) The desktop app's chat composer reports a live draft on the
+    /// pane its session shows in. The draft rides app-local state and only
+    /// reaches the pane at send (a paste, then Enter), so while the user
+    /// types, the pane composer sits empty and no pane keystroke witness
+    /// exists: a live mail inject would land a turn over text the user is
+    /// still composing. Each composer edit re-opens the pane's USER draft
+    /// arm (the latch pane keystrokes open) and the coalesced
+    /// `operator_typing` witness row, so a live inject refuses and queues
+    /// durable until the draft submits or expires. Same read-only gate as
+    /// [`ClientMsg::Input`].
+    DraftHint {
+        pane: u64,
+    },
     /// (v116) A passive client names itself and the pane it watches, right
     /// after `Attach`. Ignored from a non-passive client. The tag lasts as
     /// long as the connection.

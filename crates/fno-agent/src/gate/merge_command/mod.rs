@@ -410,7 +410,7 @@ pub fn run_flow(argv: &[String], cwd: &Path, authority: &str, timeout_s: u64) ->
 
     // Posture: which auto-merge posture to hand the owner. The durable-grant
     // arm replaces the manifest for a parked worker; everything else rides
-    // the manifest fields as written.
+    // the manifest fields as written, scoped to the caller by `manifest_posture`.
     let approved_field = manifest_field(&repo, "auto_merge_approved").unwrap_or_default();
     let mut posture_source = manifest_field(&repo, "auto_merge_source")
         .unwrap_or_default()
@@ -443,13 +443,15 @@ pub fn run_flow(argv: &[String], cwd: &Path, authority: &str, timeout_s: u64) ->
         // switch and the floor.
         posture_approved = Some(true);
         posture_source = "durable-grant".to_string();
-    } else if approved_field.is_empty() {
-        // No manifest, or a manifest predating the field: the live config
-        // decides on its own. A manual merge outside a target session is
-        // legitimate.
-        posture_approved = None;
     } else {
-        posture_approved = Some(approved_true(&approved_field));
+        let (approved, source) = manifest_posture(
+            &approved_field,
+            &posture_source,
+            manifest_field(&repo, "harness_session_id").as_deref(),
+            &crate::claims::ambient_session_candidates(),
+        );
+        posture_approved = approved;
+        posture_source = source;
     }
 
     // (2) gh must be installed.
@@ -625,11 +627,132 @@ fn do_merge(
     // head those guards read. The second pass is the price of that window,
     // not an oversight: do not fold it into one pass.
     let receipt = authorized_merge(pr, repo, &ask, false, timeout_s);
-    emit_authorized_outcome(flow, pr, &receipt, &strategy)
+    let code = emit_authorized_outcome(flow, pr, &receipt, &strategy);
+    if crate::backlog::row_facts::str_field(&receipt, "outcome") == Some("merged") {
+        record_folded_pr(flow, pr, repo);
+    }
+    code
+}
+
+/// Record a PR merged into the node's PR branch on that node, best-effort.
+/// A merged PR whose base is not the default branch stacks on the open PR
+/// whose head is that base branch; the bind read names the node that
+/// carries it. The record never rolls the merge back: every miss names
+/// itself on the flow, and the merge receipt stays authoritative.
+fn record_folded_pr(flow: &mut FlowResult, pr: i64, repo: &Path) {
+    let run = crate::stacked_base_stamp::runner("git", "gh");
+    let slug = match crate::pr_list::origin_slug(repo, None) {
+        Ok(slug) => slug,
+        Err(_) => {
+            flow.lines.push((
+                true,
+                "pr-merge: fold not recorded: the origin slug is unreadable\n".to_string(),
+            ));
+            return;
+        }
+    };
+    let facts = run(&["gh", "api", &format!("repos/{slug}/pulls/{pr}")], repo)
+        .filter(|r| r.ok)
+        .and_then(|r| serde_json::from_str::<Value>(&r.stdout).ok())
+        .unwrap_or(Value::Null);
+    let base = crate::backlog::row_facts::str_field(&facts, "baseRefName")
+        .unwrap_or_default()
+        .to_string();
+    if base.is_empty() {
+        flow.lines.push((
+            true,
+            format!("pr-merge: fold not recorded: PR #{pr}'s base ref is unreadable\n"),
+        ));
+        return;
+    }
+    let default = crate::gate_probes::default_branch_cached(repo, &slug, &run);
+    if base == default.unwrap_or_default() {
+        // No stack: the normal merge records no fold, silently.
+        return;
+    }
+    let owner = slug.split('/').next().unwrap_or_default();
+    let head = format!("{}:{}", owner, crate::claims::encode_key(&base));
+    let endpoint = format!("repos/{slug}/pulls?state=open&head={head}");
+    let stacked = run(&["gh", "api", &endpoint], repo)
+        .filter(|r| r.ok)
+        .and_then(|r| serde_json::from_str::<Value>(&r.stdout).ok())
+        .unwrap_or(Value::Null);
+    let bound_pr = stacked
+        .as_array()
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.pointer("/number").and_then(Value::as_u64));
+    let bound_pr = match fold_target(&base, None, bound_pr) {
+        FoldTarget::Bind(bound_pr) => bound_pr,
+        FoldTarget::UnreadableBase => {
+            flow.lines.push((
+                true,
+                "pr-merge: fold not recorded: the base ref is unreadable\n".to_string(),
+            ));
+            return;
+        }
+        FoldTarget::NoStack => {
+            flow.lines.push((
+                true,
+                format!("pr-merge: fold not recorded: no open PR heads {base}\n"),
+            ));
+            return;
+        }
+        // No stack: the normal merge records no fold, silently.
+        FoldTarget::DefaultBranch => return,
+    };
+    let bound = crate::authorized_merge::pr_bound_entry(repo, bound_pr);
+    let Some(node_id) = bound
+        .as_ref()
+        .and_then(|row| crate::backlog::row_facts::str_field(row, "id"))
+    else {
+        flow.lines.push((
+            true,
+            format!("pr-merge: fold not recorded: PR #{bound_pr} binds no node\n"),
+        ));
+        return;
+    };
+    let store = crate::backlog::api::Store::new(&crate::backlog::settings::graph_path());
+    match crate::backlog::api::pull_request_record(
+        &store,
+        node_id,
+        pr,
+        Some(&format!("https://github.com/{slug}/pull/{pr}")),
+        Some("folded"),
+        Some("merged"),
+    ) {
+        Ok(payload) if payload.success => {}
+        Ok(_) => {}
+        Err(err) => flow
+            .lines
+            .push((true, format!("pr-merge: fold not recorded: {}\n", err.0))),
+    }
+}
+
+/// The stacked PR a fold record binds to, or the reason none happens: an
+/// unreadable base, the default branch (no stack), or no open PR heading
+/// the base branch.
+#[derive(Debug)]
+enum FoldTarget {
+    Bind(u64),
+    UnreadableBase,
+    DefaultBranch,
+    NoStack,
+}
+
+fn fold_target(base: &str, default: Option<&str>, stacked_first: Option<u64>) -> FoldTarget {
+    if base.is_empty() {
+        return FoldTarget::UnreadableBase;
+    }
+    if base == default.unwrap_or_default() {
+        return FoldTarget::DefaultBranch;
+    }
+    match stacked_first {
+        Some(n) => FoldTarget::Bind(n),
+        None => FoldTarget::NoStack,
+    }
 }
 
 /// Close the nodes a merged PR's closure line names, in this process, so a
-/// node never waits on the watcher tick or the arm beat. The leg is detached
 /// (own session): a killed worker cannot take the closer with it. A failed
 /// or timed-out leg is named on stderr with the manual command; the arm and
 /// the watcher still sweep it later, so this never changes the merge exit.
@@ -654,7 +777,7 @@ fn close_merged_nodes(flow: &mut FlowResult, pr: i64, repo: &Path) {
         flow.lines.push((
             true,
             format!(
-                "pr-merge: node close did not finish (exit {}); run `fno backlog reconcile --pr-number {pr}`\n",
+                "pr-merge: node close did not finish (exit {}); run `fno backlog reconcile --pr-number {pr}`, or let the daemon's merge_close arm close the node within 15 minutes\n",
                 run.code
             ),
         ));
@@ -862,6 +985,32 @@ fn is_pr_number(raw: &str) -> bool {
 /// not silently move that gate.
 fn approved_true(value: &str) -> bool {
     matches!(value.trim().to_lowercase().as_str(), "true" | "yes" | "1")
+}
+
+/// The posture `fno do pr merge` hands the owner from the manifest it read.
+/// A refusal binds only the session that wrote it, the rule the owner's own
+/// fold applies to a status read (`merge_grant::refusal_binds`). Another
+/// session's `--no-merge` is that session's dispatch brief, so it hands no
+/// posture and the caller's own gates decide: a lead merges the green PR of a
+/// worker that ran with the flag. A permit reaches the owner for every caller.
+/// A refusal on an unattributed manifest binds every caller.
+fn manifest_posture(
+    approved_field: &str,
+    source: &str,
+    manifest_session: Option<&str>,
+    caller_sessions: &[String],
+) -> (Option<bool>, String) {
+    // No manifest, or a manifest predating the field: the live config
+    // decides on its own. A manual merge outside a target session is
+    // legitimate.
+    if approved_field.is_empty() {
+        return (None, String::new());
+    }
+    let approved = approved_true(approved_field);
+    if !approved && !crate::merge_grant::refusal_binds(manifest_session, caller_sessions) {
+        return (None, String::new());
+    }
+    (Some(approved), source.to_string())
 }
 
 fn manifest_field(repo: &Path, field: &str) -> Option<String> {
@@ -1306,18 +1455,12 @@ mod hop_client_bin_tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let daemon = dir.path().join("fno-agent-daemon");
         touch(&daemon);
+        // No sibling beside the daemon: the hop has no target.
+        assert_eq!(hop_client_bin(&daemon), None);
         let client = dir.path().join("fno-agent");
         touch(&client);
         assert_eq!(hop_client_bin(&daemon), Some(client));
         assert!(is_daemon_exe(&daemon));
-    }
-
-    #[test]
-    fn a_daemon_caller_without_the_client_sibling_hops_nowhere() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let daemon = dir.path().join("fno-agent-daemon");
-        touch(&daemon);
-        assert_eq!(hop_client_bin(&daemon), None);
     }
 }
 
@@ -1372,6 +1515,60 @@ mod merge_door_build_tests {
         assert_eq!(
             build["dirty"].as_bool(),
             Some(env!("FNO_AGENT_GIT_DIRTY") == "1")
+        );
+    }
+}
+
+#[cfg(test)]
+mod manifest_posture_tests {
+    use super::manifest_posture;
+
+    /// The session whose run stamped the manifest with `--no-merge`. The run
+    /// has ended, and `harness_session_id` is the line it left behind.
+    const STAMPING_SESSION: &str = "aaaa1111-2222-3333-4444-555566667777";
+    const ANOTHER_SESSION: &str = "bbbb2222-3333-4444-5555-666677778888";
+
+    #[test]
+    fn a_manifest_hands_its_posture_only_to_the_callers_it_binds() {
+        // A `flag-no-merge` stamp: (manifest session, caller sessions) and
+        // the posture handed to that caller.
+        let rows: [(Option<&str>, &[&str], (Option<bool>, &str)); 4] = [
+            // Another session's `--no-merge` is that session's brief.
+            (Some(STAMPING_SESSION), &[ANOTHER_SESSION], (None, "")),
+            // A person at a terminal carries no session id.
+            (Some(STAMPING_SESSION), &[], (None, "")),
+            // The session that wrote the stamp keeps its own refusal.
+            (
+                Some(STAMPING_SESSION),
+                &[STAMPING_SESSION],
+                (Some(false), "flag-no-merge"),
+            ),
+            // An unattributed refusal binds every caller.
+            (None, &[ANOTHER_SESSION], (Some(false), "flag-no-merge")),
+        ];
+        for (manifest_session, callers, (approved, source)) in rows {
+            let callers: Vec<String> = callers.iter().map(|s| s.to_string()).collect();
+            assert_eq!(
+                manifest_posture("false", "flag-no-merge", manifest_session, &callers),
+                (approved, source.to_string()),
+                "stamp from {manifest_session:?}, caller {callers:?}"
+            );
+        }
+
+        // A permit reaches the owner for every caller.
+        assert_eq!(
+            manifest_posture(
+                "true",
+                "config",
+                Some(STAMPING_SESSION),
+                &[ANOTHER_SESSION.to_string()]
+            ),
+            (Some(true), "config".to_string())
+        );
+        // No manifest, or one that predates the field: live config decides.
+        assert_eq!(
+            manifest_posture("", "", None, &[ANOTHER_SESSION.to_string()]),
+            (None, String::new())
         );
     }
 }

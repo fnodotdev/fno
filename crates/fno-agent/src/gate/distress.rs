@@ -491,6 +491,20 @@ pub(crate) fn read_stopping_turn(transcript_path: &Path) -> Option<TurnRead> {
     })
 }
 
+/// The ids one session's rows can carry: the run id a caller hands in and
+/// the harness session id. The stop hook's scan files a help under the
+/// harness id and loop-check's under the manifest's run id, so a dedup keyed
+/// on one of the two reads the other scan as a new event.
+fn session_runs<'a>(run: &'a str, harness_session: Option<&'a str>) -> Vec<&'a str> {
+    let mut runs = vec![run];
+    if let Some(harness) = harness_session.map(str::trim).filter(|h| !h.is_empty()) {
+        if !runs.contains(&harness) {
+            runs.push(harness);
+        }
+    }
+    runs
+}
+
 /// True when the project log already carries a `blocked` row for this run
 /// with this class on this turn. The stop hook re-fires on every turn end,
 /// so without this a session whose stopping turn still carries the same
@@ -499,11 +513,11 @@ pub(crate) fn read_stopping_turn(transcript_path: &Path) -> Option<TurnRead> {
 /// class recurred.
 fn blocked_distress_already_emitted(
     project_events: &Path,
-    run: &str,
+    runs: &[&str],
     class: HelpClass,
     turn_key: &str,
 ) -> bool {
-    blocked_rows_for(project_events, run, |v| {
+    blocked_rows_for(project_events, runs, |v| {
         v.pointer("/data/class").and_then(|x| x.as_str()) == Some(class.as_str())
             && v.pointer("/data/turn").and_then(|x| x.as_str()) == Some(turn_key)
     })
@@ -512,13 +526,18 @@ fn blocked_distress_already_emitted(
     .is_some()
 }
 
-/// Every committed `blocked` row for this run, narrowed by a predicate on
-/// the parsed envelope. Committed rows, not journal bytes: the store commit
+/// Every committed `blocked` row for one session, narrowed by a predicate on
+/// the parsed envelope. `runs` holds every id the session files under.
+/// Committed rows, not journal bytes: the store commit
 /// is the write boundary, so the dedup reads what a reader would see.
 /// Import first: pre-cutover bytes beside the journal are part of the
 /// history the dedup must see, and a read on an absent store is an honest
 /// no.
-fn blocked_rows_for(project_events: &Path, run: &str, pred: impl Fn(&Value) -> bool) -> Vec<Value> {
+fn blocked_rows_for(
+    project_events: &Path,
+    runs: &[&str],
+    pred: impl Fn(&Value) -> bool,
+) -> Vec<Value> {
     let _ = crate::event_store::import_all(project_events);
     let Ok(rows) = crate::event_store::query_events(
         project_events,
@@ -531,7 +550,11 @@ fn blocked_rows_for(project_events: &Path, run: &str, pred: impl Fn(&Value) -> b
     };
     rows.iter()
         .filter_map(|r| serde_json::from_str::<Value>(&r.line).ok())
-        .filter(|v| v.get("run").and_then(|x| x.as_str()) == Some(run))
+        .filter(|v| {
+            v.get("run")
+                .and_then(|x| x.as_str())
+                .is_some_and(|filed| runs.contains(&filed))
+        })
         .filter(|v| pred(v))
         .collect()
 }
@@ -624,6 +647,7 @@ pub(crate) fn emit_help_distress_blocked(
         harness,
         distress,
         turn_key,
+        harness_session,
     ) else {
         return None;
     };
@@ -662,6 +686,7 @@ pub(crate) fn emit_help_distress_blocked(
     crate::help_router::route_emitted_distress(
         cwd,
         run,
+        harness_session,
         node,
         distress.class,
         &distress.reason,
@@ -675,7 +700,8 @@ pub(crate) fn emit_help_distress_blocked(
 /// Append the deduped `blocked` envelope to both logs. Returns the rung the
 /// row was written at (None = duplicate, or the durable append failed and
 /// no push may ride it - AC1-FR ordering, same as the emit CLI: a push with
-/// no durable record is the receipt-can-lie shape).
+/// no durable record is the receipt-can-lie shape). The dedup and the rung
+/// count rows filed under either of the session's ids.
 fn append_blocked_event(
     project_events: &Path,
     global_events: &Path,
@@ -684,17 +710,19 @@ fn append_blocked_event(
     harness: Option<&str>,
     distress: &HelpDistress,
     turn_key: &str,
+    harness_session: Option<&str>,
 ) -> Option<u64> {
     let cap = |s: &str| -> String { s.chars().take(BLOCKED_DATA_STR_CAP).collect() };
     let reason = cap(&distress.reason);
-    // Dedup key is run + class + turn (F4): a re-fire on the same turn
+    // Dedup key is session + class + turn (F4): a re-fire on the same turn
     // writes nothing; a new turn with the same class writes a row and the
     // rung count climbs. The stored row carries the CAPPED reason and the
     // capped turn key, so the comparison joins on stored values.
-    if blocked_distress_already_emitted(project_events, run, distress.class, turn_key) {
+    let runs = session_runs(run, harness_session);
+    if blocked_distress_already_emitted(project_events, &runs, distress.class, turn_key) {
         return None;
     }
-    let rung = blocked_rows_for(project_events, run, |v| {
+    let rung = blocked_rows_for(project_events, &runs, |v| {
         v.pointer("/data/class").and_then(|x| x.as_str()) == Some(distress.class.as_str())
     })
     .len() as u64;
@@ -1008,7 +1036,8 @@ mod tests {
             Some("x-aaaa"),
             Some("codex"),
             &d,
-            "turn-1"
+            "turn-1",
+            None,
         )
         .is_some());
         let rows: Vec<serde_json::Value> = crate::events::committed_journal_text(&project)
@@ -1039,7 +1068,8 @@ mod tests {
             Some("x-aaaa"),
             Some("codex"),
             &d,
-            "turn-1"
+            "turn-1",
+            None,
         )
         .is_none());
         assert_eq!(
@@ -1056,7 +1086,8 @@ mod tests {
             Some("x-aaaa"),
             Some("codex"),
             &d,
-            "turn-2"
+            "turn-2",
+            None,
         )
         .is_some());
         assert_eq!(
@@ -1081,7 +1112,8 @@ mod tests {
             class: HelpClass::Unclassified,
         };
         assert!(
-            append_blocked_event(&project, &global, "run-a", None, None, &d2, "turn-1").is_some()
+            append_blocked_event(&project, &global, "run-a", None, None, &d2, "turn-1", None,)
+                .is_some()
         );
         let rows: Vec<serde_json::Value> = crate::events::committed_journal_text(&project)
             .lines()
@@ -1351,7 +1383,8 @@ mod tests {
             None,
             None,
             &mk("wall a"),
-            "turn-1"
+            "turn-1",
+            None,
         )
         .is_some());
         assert!(append_blocked_event(
@@ -1361,7 +1394,8 @@ mod tests {
             None,
             None,
             &mk("wall a, reworded"),
-            "turn-1"
+            "turn-1",
+            None,
         )
         .is_none());
         assert!(append_blocked_event(
@@ -1371,7 +1405,8 @@ mod tests {
             None,
             None,
             &mk("wall b"),
-            "turn-2"
+            "turn-2",
+            None,
         )
         .is_some());
         let rows: Vec<serde_json::Value> = crate::events::committed_journal_text(&project)
@@ -1380,6 +1415,72 @@ mod tests {
             .collect();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[1]["data"]["rung"], 1);
+    }
+
+    /// One session files a help under two ids: the stop hook's scan uses the
+    /// harness session id and loop-check's the manifest's run id. The same
+    /// turn under either id is one event, and the rung counts both.
+    #[test]
+    fn a_help_filed_under_either_session_id_is_one_event() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        // A closure cannot tie its returned `&str` to its `&Path` argument.
+        fn utf8(path: &Path) -> &str {
+            path.to_str().unwrap()
+        }
+        let _spaces =
+            crate::claims::EnvVarGuard::set("FNO_SPACES_DIR", utf8(&tmp.path().join("spaces")));
+        let _agents =
+            crate::claims::EnvVarGuard::set("FNO_AGENT_HOME", utf8(&tmp.path().join("agents")));
+        let project = tmp.path().join("events.jsonl");
+        let global = tmp.path().join("global.jsonl");
+        let harness_session = "harness-two-ids";
+        let emit = |run: &str, turn: &str| {
+            let d = HelpDistress {
+                reason: "ci pending".to_string(),
+                evidence: None,
+                kind: DistressKind::Help,
+                class: HelpClass::Wait,
+            };
+            emit_help_distress_blocked(
+                &project,
+                &global,
+                tmp.path(),
+                run,
+                None,
+                None,
+                &d,
+                turn,
+                Some(harness_session),
+            )
+        };
+        assert_eq!(
+            emit(harness_session, "turn-1"),
+            Some(0),
+            "the stop hook files the help"
+        );
+        assert_eq!(
+            emit("manifest-run-id", "turn-1"),
+            None,
+            "loop-check's read of the same turn writes nothing"
+        );
+        assert_eq!(
+            emit(harness_session, "turn-2"),
+            Some(1),
+            "a new turn climbs the rung"
+        );
+        assert_eq!(
+            emit("manifest-run-id", "turn-3"),
+            Some(2),
+            "the rung counts rows filed under either id"
+        );
+        let rows = crate::events::committed_journal_text(&project)
+            .lines()
+            .filter(|l| l.contains("\"type\":\"blocked\""))
+            .count();
+        assert_eq!(rows, 3, "one row per turn");
     }
 
     #[test]

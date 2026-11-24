@@ -203,8 +203,7 @@ These choices belong to the user. Nothing moves until they are made.
    - `docs/architecture/megawalk-pipeline.md`: design of a deleted walker.
    - `docs/architecture/megaspec.md`: no megaspec skill exists.
    - The "Bounded-Iteration Pattern Incorporation" page under `docs/architecture/`: it describes two skills that `skills/` does not hold.
-3. Two unplaced pages need an owner's call:
+3. One unplaced page needs an owner's call:
    - `docs/backlog-current-state.md`: mixes node-field rules for users with a migration runbook for maintainers.
-   - `docs/comment-prose-reading-list.md`: a ranked function list with no named reader and no generator found.
 4. Whether architecture notes appear on the public website at all. This design keeps them off the user nav. The exception is 18 pages there that the map tags with a user stage.
 5. Whether `docs/state-root-inventory.md` stays at the docs root. It has 19 citing files, so the map keeps it in place.

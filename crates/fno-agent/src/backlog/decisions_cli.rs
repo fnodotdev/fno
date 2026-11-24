@@ -14,7 +14,7 @@ use super::node_ref::{is_wellformed_node_id, ResolutionIndex};
 
 const LABEL: &str = "backlog decisions";
 
-const USAGE: &str = "usage: fno backlog decisions [subject] [--limit N] [--lane law|coord|grant|unattributed] [--state live|retired|expired|superseded|retracted|unscoped|all] [--review-list] [--log] [--output PATH] [--format markdown|json] [--json|-J]";
+const USAGE: &str = "usage: fno backlog decisions [subject] [--limit N] [--lane user|agent|grant|unattributed] [--state live|retired|expired|superseded|retracted|unscoped|all] [--review-list] [--log] [--provenance] [--output PATH] [--format markdown|json] [--json|-J]";
 
 /// The state filter's closed set, the deleted Python command's own ValueError
 /// text. A bad `--state` rides the read-failure exit (1), not usage (2):
@@ -47,6 +47,9 @@ const REGISTERED_TEST_PROBES: &[(&str, &str)] = &[(
 /// command classified.
 fn looks_like_decision_id(token: &str) -> bool {
     let token = token.trim();
+    if crate::numbers::is_label_key(token) {
+        return true;
+    }
     let Some(rest) = token.strip_prefix("d-") else {
         return false;
     };
@@ -64,6 +67,7 @@ struct Options {
     state: Option<String>,
     review_list: bool,
     log: bool,
+    provenance: bool,
     output: Option<String>,
     format: Option<String>,
     json: bool,
@@ -79,6 +83,7 @@ impl Default for Options {
             state: None,
             review_list: false,
             log: false,
+            provenance: false,
             output: None,
             format: None,
             json: false,
@@ -127,6 +132,12 @@ fn parse_options(argv: &[String]) -> Result<Options, String> {
                     return Err(format!("{flag} takes no value"));
                 }
                 opts.log = true;
+            }
+            "--provenance" => {
+                if inline.is_some() {
+                    return Err(format!("{flag} takes no value"));
+                }
+                opts.provenance = true;
             }
             "--output" => opts.output = Some(value()?),
             "--format" => opts.format = Some(value()?),
@@ -236,7 +247,7 @@ fn read_entries_soft_at(graph: &Path) -> Option<Vec<Value>> {
 /// handed in, so a test seam scopes the whole answer.
 fn soft_entries_at(graph: &Path, subject: &str, lane: Option<&str>) -> Option<Vec<Value>> {
     let subject = subject.trim();
-    if lane.is_some_and(|l| l != "coord") && is_wellformed_node_id(subject) {
+    if lane.is_some_and(|l| l != "coord" && l != "agent") && is_wellformed_node_id(subject) {
         if let Ok(Some(row)) = crate::graph_store::read_one(graph, subject) {
             return Some(vec![row]);
         }
@@ -245,7 +256,7 @@ fn soft_entries_at(graph: &Path, subject: &str, lane: Option<&str>) -> Option<Ve
     // node spelling: the resolution tiers cannot answer it, so the full
     // graph read below resolves nothing the exact match does not (measured:
     // the full read was most of the subject-query cost).
-    if lane.is_some_and(|l| l != "coord") && subject.contains(':') {
+    if lane.is_some_and(|l| l != "coord" && l != "agent") && subject.contains(':') {
         return None;
     }
     read_entries_soft_at(graph)
@@ -526,7 +537,9 @@ impl<'a> Matcher<'a> {
         }
     }
 
-    fn matches(&self, recorded: &str) -> bool {
+    /// `recorded_at` is the row's own timestamp: a number-spelled subject
+    /// never names a node created after the ruling.
+    fn matches(&self, recorded: &str, recorded_at: Option<&str>) -> bool {
         if recorded.trim().to_lowercase() == self.want {
             return true;
         }
@@ -534,14 +547,11 @@ impl<'a> Matcher<'a> {
             return false;
         };
         let mut cache = self.cache.borrow_mut();
-        if !cache.contains_key(recorded) {
-            let resolved = self.index.resolve_id(recorded).or_else(|| {
-                self.index
-                    .resolve_id(recorded.trim().to_lowercase().as_str())
-            });
-            cache.insert(recorded.to_string(), resolved);
-        }
-        cache.get(recorded).and_then(|r| r.as_deref()) == Some(node.as_str())
+        let key = format!("{recorded}\u{0}{}", recorded_at.unwrap_or(""));
+        let resolved = cache
+            .entry(key)
+            .or_insert_with(|| self.index.resolve_stored_id(recorded, recorded_at));
+        resolved.as_deref() == Some(node.as_str())
     }
 }
 /// The listing read, `list_decisions` verbatim: store rows flattened and
@@ -764,7 +774,10 @@ pub(crate) fn list_core_over(
             let hash = crate::numbers::resolve('d', s)?;
             looks_like_decision_id(&hash).then_some(hash)
         })
-        .unwrap_or_default();
+        .unwrap_or_default()
+        // The mint stores label keys with an uppercase D; the row side of the
+        // comparison below lowercases, so the key side must too.
+        .to_lowercase();
 
     let numbers = crate::numbers::labels();
     let mut out: Vec<Value> = Vec::new();
@@ -773,7 +786,9 @@ pub(crate) fn list_core_over(
         if let Some(_subject) = subject {
             let mut keep = !want_id.is_empty() && id_of(row).to_lowercase() == want_id;
             if !keep {
-                keep = matcher.as_ref().is_some_and(|m| m.matches(subject_of(row)));
+                keep = matcher
+                    .as_ref()
+                    .is_some_and(|m| m.matches(subject_of(row), Some(rows_str(row, "ts"))));
             }
             if !keep {
                 continue;
@@ -804,7 +819,7 @@ pub(crate) fn list_core_over(
             row["lifecycle_reason"] = json!("graduated to enforced artifact");
             row["lifecycle_evidence"] = retirement;
             "retired".to_string()
-        } else if lane_derived == "coord"
+        } else if lane_derived == "agent"
             || crate::decision_index::expiry_defaults_to_subject(&row)
             || row.get("expiry_ref").is_some_and(Value::is_object)
         {
@@ -828,7 +843,13 @@ pub(crate) fn list_core_over(
                     }
                     expiry_lc
                 }
-                (_, None) if lane_derived == "coord" || lane_derived == "unattributed" => {
+                // A row that names an audience is scoped by it; with no
+                // derivable closure key and no stated expiry it is a standing
+                // ruling, so it reads live like the user-lane rows below.
+                (_, None)
+                    if (lane_derived == "agent" || lane_derived == "unattributed")
+                        && rows_str(&row, "audience").is_empty() =>
+                {
                     "unscoped".to_string()
                 }
                 (_, None) => {
@@ -909,7 +930,7 @@ pub(crate) fn list_core_over(
 /// damaged index refuses to guess.
 fn current_law_core(subject: &str, entries: &mut Option<Vec<Value>>) -> Result<Value, CoreError> {
     let canonical = subject.trim().to_string();
-    let out = list_core(Some(&canonical), Some("law"), Some("live"), entries, false)?;
+    let out = list_core(Some(&canonical), Some("user"), Some("live"), entries, false)?;
     current_law_verdict(&out, &canonical)
 }
 
@@ -1062,7 +1083,10 @@ pub(crate) fn near_miss_subjects(
     for row in rows {
         let recorded = subject_of(row);
         let folded = recorded.trim().to_lowercase();
-        if folded.is_empty() || folded == want || matcher.matches(recorded) {
+        if folded.is_empty()
+            || folded == want
+            || matcher.matches(recorded, Some(rows_str(row, "ts")))
+        {
             continue;
         }
         if want.contains(&folded) || folded.contains(&want) {
@@ -1084,7 +1108,7 @@ pub fn run(argv: &[String]) -> i32 {
     if argv.first().map(String::as_str) == Some("share") {
         return run_share(argv.get(1..).unwrap_or(&[]));
     }
-    let opts = match parse_options(argv) {
+    let mut opts = match parse_options(argv) {
         Ok(o) => o,
         Err(m) if m == "__help__" => {
             println!("{USAGE}");
@@ -1119,10 +1143,20 @@ pub fn run(argv: &[String]) -> i32 {
         return crate::decision_log::run_log();
     }
 
+    // The old spellings are aliases for one release: normalize before any
+    // filter runs, so --lane law reads the same rows --lane user does.
     if let Some(lane) = opts.lane.as_deref() {
-        if !matches!(lane, "law" | "coord" | "grant" | "unattributed") {
-            eprintln!("{LABEL}: --lane must be law, coord, grant, or unattributed");
-            return 2;
+        let canonical = match lane {
+            "user" | "agent" | "grant" | "unattributed" => lane,
+            "law" => "user",
+            "coord" => "agent",
+            _ => {
+                eprintln!("{LABEL}: --lane must be user, agent, grant, or unattributed (law and coord are accepted aliases for one release)");
+                return 2;
+            }
+        };
+        if lane != canonical {
+            opts.lane = Some(canonical.to_string());
         }
     }
 
@@ -1151,7 +1185,7 @@ pub fn run(argv: &[String]) -> i32 {
     // Standing law rides only the plain law-lane live read; it re-derives
     // through the same pipeline, so the two answers cannot disagree.
     let standing_law = if subject.is_some()
-        && opts.lane.as_deref() == Some("law")
+        && matches!(opts.lane.as_deref(), Some("user") | Some("law"))
         && opts.state.as_deref() == Some("live")
     {
         match current_law_core(subject.as_deref().unwrap(), &mut entries) {
@@ -1307,6 +1341,7 @@ pub fn run(argv: &[String]) -> i32 {
         opts.state.as_deref(),
         &near,
         entries.as_deref(),
+        opts.provenance,
     );
     0
 }
@@ -1317,7 +1352,7 @@ pub fn run(argv: &[String]) -> i32 {
 fn run_share(args: &[String]) -> i32 {
     let json = args.iter().any(|a| a == "--json" || a == "-J");
     let mut entries: Option<Vec<Value>> = None;
-    let out = match list_core(None, Some("law"), Some("all"), &mut entries, false) {
+    let out = match list_core(None, Some("user"), Some("all"), &mut entries, false) {
         Ok(out) => out,
         Err(CoreError::Read(reason)) | Err(CoreError::ValueError(reason)) => {
             eprintln!("{LABEL}: cannot read the decision index: {reason}");
@@ -1807,7 +1842,8 @@ fn render_markdown(report: &Value) -> String {
             .and_then(Value::as_array)
             .unwrap_or(&empty)
         {
-            let scope = match row.get("scope").and_then(Value::as_str) {
+            let scope = match crate::backlog::audience::stored_audience(row).and_then(Value::as_str)
+            {
                 Some(s) if !s.is_empty() => s.to_string(),
                 _ => "project:fno".to_string(),
             };
@@ -1825,6 +1861,58 @@ fn render_markdown(report: &Value) -> String {
     let joined = lines.join("\n");
     format!("{}\n", joined.trim_end())
 }
+/// The provenance lines one decision row renders under `--provenance`: the
+/// stored session triple, the transcript resolved from the stored session
+/// when the stored path is absent (the way the node provenance read
+/// resolves), and the user turn the row quotes. Empty for a row that
+/// carries no session provenance, so rows written before the field existed
+/// read exactly as they always did.
+fn provenance_lines(row: &Value) -> Vec<String> {
+    let Some(sp) = row.pointer("/session_provenance").filter(|v| v.is_object()) else {
+        return Vec::new();
+    };
+    let mut lines = Vec::new();
+    lines.push(format!("    session:  {}", rows_str(sp, "session_id")));
+    let harness = rows_str(sp, "harness");
+    lines.push(format!(
+        "    harness:  {}",
+        if harness.is_empty() {
+            "(unknown)"
+        } else {
+            harness
+        }
+    ));
+    let stored = rows_str(sp, "transcript");
+    if stored.is_empty() {
+        let session = rows_str(sp, "session_id");
+        let resolved = if session.is_empty() {
+            None
+        } else {
+            match harness {
+                "claude" => crate::claude_drive::find_transcript(session),
+                "codex" => crate::codex_store::codex_rollout_path(None, session),
+                _ => None,
+            }
+        };
+        match resolved {
+            Some(p) => lines.push(format!("    transcript: {}", p.display())),
+            None => lines.push("    transcript: (unresolved - not-found)".to_string()),
+        }
+    } else {
+        lines.push(format!("    transcript: {stored}"));
+    }
+    let turn = rows_str(sp, "turn_id");
+    if !turn.is_empty() {
+        let excerpt = rows_str(sp, "turn_excerpt");
+        if excerpt.is_empty() {
+            lines.push(format!("    turn:     {turn}"));
+        } else {
+            lines.push(format!("    turn:     {turn}  quoted: {excerpt}"));
+        }
+    }
+    lines
+}
+
 fn render_human(
     payload: &Value,
     standing_law: Option<&Value>,
@@ -1834,6 +1922,7 @@ fn render_human(
     state: Option<&str>,
     near: &[(String, usize)],
     entries: Option<&[Value]>,
+    provenance_on: bool,
 ) {
     if let Some(standing) = standing_law {
         let canonical = rows_str(standing, "canonical_subject");
@@ -1986,10 +2075,10 @@ fn render_human(
             String::new()
         };
         let lane_derived = rows_str(d, "lane");
-        let lane_marker = if lane_derived == "law" {
-            "LAW"
-        } else {
-            lane_derived
+        let lane_marker = match lane_derived {
+            "user" | "law" => "USER",
+            "agent" | "coord" => "AGENT",
+            other => other,
         };
         let lifecycle = if rows_str(d, "lifecycle").is_empty() {
             "LIVE".to_string()
@@ -2030,6 +2119,11 @@ fn render_human(
                 "    relayed: {} (a name this caller supplied, not a stamped one)",
                 python_str(d.get("relayed_by").unwrap_or(&Value::Null)),
             );
+        }
+        if provenance_on {
+            for line in provenance_lines(d) {
+                println!("{line}");
+            }
         }
         if crate::backlog_ready::truthy(d.get("rationale")) {
             println!(
@@ -2146,7 +2240,7 @@ fn render_filtered_empty(
         .join(", ");
     let filters: Vec<&str> = [lane, state].into_iter().flatten().collect();
     let filter_label = filters.join(" ");
-    let hint = if lane == Some("law") && counts.get("unattributed").copied().unwrap_or(0) > 0 {
+    let hint = if lane == Some("user") && counts.get("unattributed").copied().unwrap_or(0) > 0 {
         " The unattributed ones are pre-cutover, recorded before authority was \
          an earned value."
     } else {
@@ -2317,9 +2411,9 @@ mod tests {
                 "d-cccc0003",
             ]
         );
-        assert_eq!(lane_of(&out, "d-aaaa0001"), "law");
+        assert_eq!(lane_of(&out, "d-aaaa0001"), "user");
         assert_eq!(lifecycle_of(&out, "d-aaaa0001"), "live");
-        assert_eq!(lane_of(&out, "d-bbbb0002"), "coord");
+        assert_eq!(lane_of(&out, "d-bbbb0002"), "agent");
         // The fixture passes Some(empty) entries so the run never consults
         // the ambient machine graph: the coord row resolves to nothing and
         // reads unscoped. The UNKNOWN degrade has its own env-guarded test.
@@ -2394,6 +2488,129 @@ mod tests {
     }
 
     #[test]
+    fn an_audience_bearing_topic_ruling_reads_live() {
+        let text = [
+            envelope(
+                "d-gggg0007",
+                "2026-09-22T00:00:00Z",
+                "role",
+                "release:test-topic",
+                ",\"audience\":\"internal\"",
+            ),
+            envelope(
+                "d-hhhh0008",
+                "2026-09-22T00:00:00Z",
+                "role",
+                "release:test-topic",
+                "",
+            ),
+        ]
+        .join("\n");
+        let (rows, damaged) = rows_from_jsonl(&text);
+        assert_eq!(damaged, 0);
+        // Some(empty): the derivation never consults the ambient machine
+        // graph, so a topic subject derives no closure key for either row.
+        let entries: Option<Vec<Value>> = Some(Vec::new());
+        let out = list_core_over(
+            &rows,
+            0,
+            GraphEntries {
+                graph: entries.as_deref(),
+                unread: None,
+            },
+            None,
+            None,
+            None,
+            true,
+        );
+        // The D3665 shape: role authority on a topic subject with a named
+        // audience is a standing ruling, so it reads live, not unscoped.
+        assert_eq!(lane_of(&out, "d-gggg0007"), "agent");
+        assert_eq!(lifecycle_of(&out, "d-gggg0007"), "live");
+        // The same shape with no named audience stays unscoped.
+        assert_eq!(lane_of(&out, "d-hhhh0008"), "agent");
+        assert_eq!(lifecycle_of(&out, "d-hhhh0008"), "unscoped");
+    }
+
+    #[test]
+    fn the_number_query_matches_label_keys_in_any_case() {
+        let lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = TempDir::new().unwrap();
+        let db_dir = dir.path().join("db");
+        std::fs::create_dir_all(&db_dir).unwrap();
+        {
+            // The store the listing resolves numbers through: under
+            // FNO_STATE_DIR the anchor walks to db/, so seed the db twin.
+            let conn = rusqlite::Connection::open(db_dir.join("graph.db")).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS fno_numbers (\
+                 kind TEXT NOT NULL, num INTEGER NOT NULL, key TEXT NOT NULL, \
+                 store TEXT NOT NULL, host TEXT NOT NULL, created_at INTEGER NOT NULL, \
+                 PRIMARY KEY (store, kind, num), UNIQUE (store, key));",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO fno_numbers (kind, num, key, store, host, created_at) \
+                 VALUES ('d', 3665, 'D3665', 'local', 'test', 0)",
+                [],
+            )
+            .unwrap();
+        }
+        let saved_home = std::env::var_os("FNO_HOME");
+        std::env::set_var("FNO_HOME", dir.path());
+        let saved_state = std::env::var_os("FNO_STATE_DIR");
+        std::env::set_var("FNO_STATE_DIR", dir.path());
+        let text = [
+            envelope("D3665", "2026-09-22T00:00:00Z", "role", "release:topic", ""),
+            envelope(
+                "d-1a2b3c4d",
+                "2026-09-23T00:00:00Z",
+                "operator",
+                "topic-hash",
+                "",
+            ),
+        ]
+        .join("\n");
+        let (rows, damaged) = rows_from_jsonl(&text);
+        assert_eq!(damaged, 0);
+        let entries: Option<Vec<Value>> = Some(Vec::new());
+        let kept = |subject: &str| -> Vec<String> {
+            let out = list_core_over(
+                &rows,
+                0,
+                GraphEntries {
+                    graph: entries.as_deref(),
+                    unread: None,
+                },
+                Some(subject),
+                None,
+                None,
+                true,
+            );
+            out.rows.iter().map(|r| id_of(r).to_string()).collect()
+        };
+        let kept_upper = kept("D3665");
+        let kept_lower = kept("d3665");
+        match saved_home {
+            Some(v) => std::env::set_var("FNO_HOME", v),
+            None => std::env::remove_var("FNO_HOME"),
+        }
+        match saved_state {
+            Some(v) => std::env::set_var("FNO_STATE_DIR", v),
+            None => std::env::remove_var("FNO_STATE_DIR"),
+        }
+        drop(lock);
+        // The mint stores the label key uppercase; the query matches it in
+        // either case, and the unheld number keeps nothing.
+        assert!(kept_upper.iter().any(|id| id == "D3665"), "{kept_upper:?}");
+        assert!(kept_lower.iter().any(|id| id == "D3665"), "{kept_lower:?}");
+        assert!(!kept_upper.iter().any(|id| id == "d-1a2b3c4d"));
+        assert!(kept("D9999").is_empty());
+    }
+
+    #[test]
     fn current_law_reads_conflict_and_none() {
         let entries: Option<Vec<Value>> = None;
         let text = [
@@ -2423,7 +2640,7 @@ mod tests {
                 unread: None,
             },
             Some("topic-a"),
-            Some("law"),
+            Some("user"),
             Some("live"),
             true,
         );
@@ -2451,7 +2668,7 @@ mod tests {
                 unread: None,
             },
             Some("topic-a"),
-            Some("law"),
+            Some("user"),
             Some("live"),
             true,
         );
@@ -2489,5 +2706,92 @@ mod tests {
             .map(|r| r["reason"].as_str().unwrap_or("").to_string())
             .collect();
         assert_eq!(reasons, ["body form", "legacy fm form"], "{res}");
+    }
+
+    /// A row carrying session provenance renders the session triple, the
+    /// stored transcript path, and the turn it quotes; a row without the
+    /// field renders nothing, so old rows read as they always did.
+    #[test]
+    fn provenance_lines_render_the_session_triple_and_the_turn() {
+        let row = serde_json::json!({
+            "decision_id": "d-prov0001",
+            "subject": "x-prov",
+            "decision": "Ruling.",
+            "session_provenance": {
+                "session_id": "4d2c3d68-7d5c-4c1e-9a51-2f8e0a9b1c3d",
+                "harness": "claude",
+                "transcript": "/store/-repo/4d2c3d68-7d5c-4c1e-9a51-2f8e0a9b1c3d.jsonl",
+                "turn_id": "u-ruling",
+                "turn_excerpt": "the docs gate reads the #NNN form",
+                "turn_ts": "2026-11-20T10:01:00.000Z",
+            },
+        });
+        let lines = provenance_lines(&row);
+        assert_eq!(
+            lines,
+            vec![
+                "    session:  4d2c3d68-7d5c-4c1e-9a51-2f8e0a9b1c3d".to_string(),
+                "    harness:  claude".to_string(),
+                "    transcript: /store/-repo/4d2c3d68-7d5c-4c1e-9a51-2f8e0a9b1c3d.jsonl"
+                    .to_string(),
+                "    turn:     u-ruling  quoted: the docs gate reads the #NNN form".to_string(),
+            ]
+        );
+        // A row without the field renders nothing (the old-row shape).
+        let bare = serde_json::json!({"decision_id": "d-prov0002", "subject": "x-prov"});
+        assert!(provenance_lines(&bare).is_empty());
+    }
+
+    /// A stored session without a transcript path resolves the transcript
+    /// from the stored session id at read time, the way the node
+    /// provenance read does; a session nothing resolves prints the named
+    /// unknown.
+    #[test]
+    fn a_stored_session_without_a_path_resolves_at_read_time() {
+        let _env_lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let config = tempfile::tempdir().unwrap();
+        let projects = config.path().join("projects").join("-repo");
+        std::fs::create_dir_all(&projects).unwrap();
+        let session = "4d2c3d68-7d5c-4c1e-9a51-2f8e0a9b1c3d";
+        let planted = projects.join(format!("{session}.jsonl"));
+        std::fs::write(&planted, "{}\n").unwrap();
+        let _cfg =
+            crate::claims::EnvVarGuard::set("CLAUDE_CONFIG_DIR", config.path().to_str().unwrap());
+        let row = serde_json::json!({
+            "decision_id": "d-prov0003",
+            "subject": "x-prov",
+            "session_provenance": {
+                "session_id": session,
+                "harness": "claude",
+            },
+        });
+        let lines = provenance_lines(&row);
+        // Three lines: the fixture carries no turn, so the render adds no
+        // turn line behind session, harness and transcript.
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.ends_with(&format!("{session}.jsonl"))),
+            "{lines:?}"
+        );
+        // An unresolvable session names the unknown instead of guessing.
+        let lost = serde_json::json!({
+            "decision_id": "d-prov0004",
+            "subject": "x-prov",
+            "session_provenance": {
+                "session_id": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+                "harness": "claude",
+            },
+        });
+        let lines = provenance_lines(&lost);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("transcript: (unresolved - not-found)")),
+            "{lines:?}"
+        );
     }
 }

@@ -159,10 +159,21 @@ pub(crate) fn render(root: &Root, window: &Window, cx: &mut Context<Root>) -> gp
                 .w(px(CARD))
                 .font_family(ui::MONO)
                 .text_size(px(ui::BODY))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .justify_center()
+                        .child(crate::first_run::mark_playing(p, root.shot)),
+                )
                 .children(header_row(&facts, &p))
                 .child(card(root, window, cx))
                 .children(recent(&rows, &p, cx))
-                .child(hints(root, &p)),
+                .child(if root.first_run {
+                    crate::first_run::key_card(&p)
+                } else {
+                    hints(root, &p)
+                }),
         )
 }
 
@@ -201,8 +212,8 @@ fn card(root: &Root, window: &Window, cx: &mut Context<Root>) -> Stateful<gpui::
     let at = l.composer.clone();
     let base = base_name(l.project());
     let placeholder: SharedString = match l.kind {
-        Kind::Agent if !base.is_empty() => {
-            format!("Describe the work. Enter starts an agent in {base}.").into()
+        Kind::Worker if !base.is_empty() => {
+            format!("Describe the work. Enter starts a worker in {base}.").into()
         }
         // The card carries no epic list: an empty draft starts the lead
         // with no scope, and the modal picks epics.
@@ -248,6 +259,7 @@ fn card(root: &Root, window: &Window, cx: &mut Context<Root>) -> Stateful<gpui::
         .child(text);
     div()
         .id("start-card")
+        .relative()
         .flex()
         .flex_col()
         .gap(px(6.0))
@@ -257,6 +269,7 @@ fn card(root: &Root, window: &Window, cx: &mut Context<Root>) -> Stateful<gpui::
         .border_1()
         .border_color(rgb(p.border))
         .bg(rgb(p.raised))
+        .children(launch::skill_hints(root))
         .child(field)
         .child(chips(root, &p, cx))
         .children(launch::phase_line(l, &p))
@@ -275,9 +288,9 @@ fn chips(root: &Root, p: &Palette, cx: &mut Context<Root>) -> gpui::Div {
             chip("start-chip-kind", l.kind.label().to_string(), p).on_click(cx.listener(
                 |root, _, _, cx| {
                     let next = match root.launch.state.kind {
-                        Kind::Agent => Kind::Lead,
+                        Kind::Worker => Kind::Lead,
                         Kind::Lead => Kind::Shell,
-                        Kind::Shell => Kind::Agent,
+                        Kind::Shell => Kind::Worker,
                     };
                     root.launch.state.set_kind(next);
                     cx.notify();

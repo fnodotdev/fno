@@ -1656,6 +1656,20 @@ fn first_line(s: &str) -> &str {
     s.lines().next().unwrap_or("").trim()
 }
 
+/// Undo the fold a conflicting push left in progress in a PR's worktree.
+/// The door leaves the conflict for its caller to resolve, and the heal is
+/// not that caller: a conflicted tree refuses every later push and heal,
+/// so it sat until a person undid it by hand. `None` when no merge stays
+/// in progress, else the reason one does. The result is git's own: a
+/// refusal reads `Some`, never a silent success.
+fn abort_fold(git: &str, wt: &std::path::Path, timeout: std::time::Duration) -> Option<String> {
+    match run(git, &["merge", "--abort"], wt, timeout) {
+        Ok((true, _, _)) => None,
+        Ok((false, _, err)) => Some(first_line(&err).to_string()),
+        Err(e) => Some(first_line(&e).to_string()),
+    }
+}
+
 /// A binary through the bin-dir seam when set (the same resolution the
 /// remedies use), so a test can stub `fno` without mutating PATH.
 fn seam_bin(a: &Args, name: &str) -> String {
@@ -2056,10 +2070,11 @@ fn journal_hold_keys(path: &std::path::Path) -> Vec<String> {
 }
 
 /// PRs whose conflicting-trigger refresh already concluded in the last 24
-/// hours, out of the `pr_heal_pr` journal: a real push (`rebased`) or a
-/// push that moved nothing (`skip_rebase_noop`). A still-conflicting
-/// rebase is deliberately absent: the owner may resolve and need the
-/// retry, so it spends the per-run budget instead. Rows filter on `root`,
+/// hours, out of the `pr_heal_pr` journal: a real push (`rebased`), a
+/// push that moved nothing (`skip_rebase_noop`), or a fold that
+/// conflicted (`skip_fold_conflict`). A conflict counts because the
+/// owner settles it by hand: a retry from here folds the same conflict
+/// again. Rows filter on `root`,
 /// so one checkout's PR 12 never caps another's, and on the 24-hour
 /// window. The drive loop's one store read per run; the conflicting
 /// trigger's per-PR cap filters it per PR.
@@ -2085,7 +2100,7 @@ fn journal_refreshed_prs(path: &std::path::Path, root: &str) -> std::collections
         .filter(|row| {
             matches!(
                 row.pointer("/data/action").and_then(Value::as_str),
-                Some("rebased") | Some("skip_rebase_noop")
+                Some("rebased") | Some("skip_rebase_noop") | Some("skip_fold_conflict")
             )
         })
         .filter_map(|row| {
@@ -2776,7 +2791,7 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
             // holder is next to merge, so its refresh never ages out.
             if trigger == "conflicting" && !slot_holds_this_pr && refreshed_prs_24h.contains(&pr) {
                 println!(
-                    "skip rebase_cap: PR {pr} was rebased within the last 24h; the owner resolves it"
+                    "skip rebase_cap: PR {pr} was refreshed within the last 24h; the owner resolves it"
                 );
                 bump(&mut counts, "skip_rebase_cap");
                 receipt(
@@ -2840,14 +2855,21 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
                     continue;
                 }
                 Ok((false, _, err)) if is_fold_conflict(&err) => {
-                    // A conflict spends the per-run budget, never the 24h
-                    // cap: the owner may resolve and need the retry this
-                    // tick, and the journal cannot tell a resolved tree
-                    // from a stuck one.
+                    // A conflict spends the per-run budget and the 24h cap:
+                    // the owner settles it by hand, and a retry from here
+                    // would fold the same conflict again.
                     rebased_this_run += 1;
                     let files = conflict_files(&err);
+                    // The door leaves the conflicted fold in progress for
+                    // its caller. The heal is not that caller, so it undoes
+                    // the fold and hands the PR's tree back as found.
+                    let undo = abort_fold(&a.git_bin, wt, remedy_timeout(a));
+                    let left = match &undo {
+                        None => "the fold is undone and the worktree is as found".to_string(),
+                        Some(why) => format!("the fold is not undone ({why})"),
+                    };
                     println!(
-                        "skip fold_conflict: PR {pr} conflicts folding origin/main by merge; the owner decides"
+                        "skip fold_conflict: PR {pr} conflicts folding origin/main by merge; {left}; the owner decides"
                     );
                     bump(&mut counts, "skip_fold_conflict");
                     receipt(&pr, "skip_fold_conflict", &files);
@@ -2867,7 +2889,15 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
                     // The command's own door rides in its stderr; quoting it keeps the question on the integrate leg.
                     let seg = err.split("). ").nth(1);
                     let door = seg.unwrap_or("resolve by hand, then re-run `fno do pr push`");
-                    let text = format!("heal: {key} onto origin/main{at}. {door}");
+                    let text = match undo {
+                        None => format!(
+                            "heal: {key} onto origin/main{at}. The heal undid its fold, so the worktree is as found. \
+                             `fno do pr push --pr {pr}` folds it again and leaves the conflict for you. {door}"
+                        ),
+                        Some(why) => format!(
+                            "heal: {key} onto origin/main{at}. The heal could not undo its fold ({why}). {door}"
+                        ),
+                    };
                     let run = format!("fno do pr push --pr {pr}");
                     if file_task(a, &key, &text, &run, &head_ref) {
                         println!("escalated: PR {pr} fold conflict is now a fleet task");

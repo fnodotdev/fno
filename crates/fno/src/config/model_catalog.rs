@@ -1,6 +1,6 @@
 //! The models.dev catalog: the whole-model universe behind the composer's
 //! `more` rows. The cache is the fetched api.json bytes under
-//! `<state>/cache/models-dev.json`. A parse into a typed subset (provider
+//! `models-dev.json` in the cache class. A parse into a typed subset (provider
 //! id, name, env, api, npm; model id + name) gives the reach rows their
 //! model names. The fetch never blocks the list: the composer spawns
 //! `refresh` in the background whenever the cache is stale and reads
@@ -310,7 +310,12 @@ pub fn state_dir() -> PathBuf {
 
 /// The cache file: the raw api.json bytes.
 pub fn cache_path(state: &Path) -> PathBuf {
-    state.join("cache").join("models-dev.json")
+    crate::state_layout::home_of(state, "cache/models-dev.json")
+}
+
+/// Where to read the catalog: the cache home, else the pre-move copy.
+fn read_path(state: &Path) -> PathBuf {
+    crate::state_layout::read_home(state, "cache/models-dev.json")
 }
 
 /// True when the cache is missing or older than 24 hours.
@@ -333,7 +338,7 @@ pub fn needs_refresh(mtime: Option<SystemTime>, now: SystemTime) -> bool {
 /// tokio runtime, so the fetch falls back to a detached thread with its own
 /// single-thread runtime instead of panicking.
 pub fn refresh_if_stale(state: &Path) {
-    let mtime = std::fs::metadata(cache_path(state))
+    let mtime = std::fs::metadata(read_path(state))
         .and_then(|m| m.modified())
         .ok();
     if !needs_refresh(mtime, std::time::SystemTime::now()) {
@@ -364,7 +369,7 @@ pub fn refresh_if_stale(state: &Path) {
 /// fetch or parse deletes the tmp file and keeps the old cache. The composer
 /// spawns this in the background; it never blocks the picker.
 pub async fn refresh(state: &Path) -> Result<(), String> {
-    let dir = state.join("cache");
+    let dir = crate::state_layout::home_of(state, "cache");
     // A fresh install has no cache/ dir; curl would fail on the tmp path on
     // every open and the catalog would never populate.
     if let Err(e) = std::fs::create_dir_all(&dir) {
@@ -429,7 +434,7 @@ pub fn parse(text: &str) -> Result<Catalog, String> {
 /// reason names the cache path, so an offline first run names the one thing
 /// that would fix it.
 pub fn load(state: &Path) -> Result<Catalog, String> {
-    let path = cache_path(state);
+    let path = read_path(state);
     let text = std::fs::read_to_string(&path).map_err(|_| {
         format!(
             "model catalog not fetched yet; reopen to retry ({})",

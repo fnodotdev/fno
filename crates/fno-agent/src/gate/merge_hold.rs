@@ -798,6 +798,14 @@ fn release_hold(
         )
         .to_string();
     }
+    // A readable plan with no dispatch_hold key keeps its hold on the node
+    // row: release there, the way hold_read falls through to the node field.
+    // The node arm checks evidence against the node's own hold fields. An
+    // unreadable plan skips this: its INVALID hold read parks the node
+    // either way, so the plan arm's error below stands.
+    if read_frontmatter(&probe).is_some_and(|fm| !fm.contains_key("dispatch_hold")) {
+        return release_node_hold(entry, node_id, graph, evidence, decisions_jsonl);
+    }
     let (hold_reason, hold_when, hold_set_by) = existing_hold_fields(&probe);
     if let Some(refusal) = release_evidence_refusal(
         node_id,
@@ -923,10 +931,17 @@ fn release_node_hold(
 /// `question:<qid>` instead of at the node.
 fn named_question_ids(hold_text: &str) -> Vec<String> {
     static QID: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let re = QID.get_or_init(|| regex::Regex::new(r"(?i)\bq-[0-9a-z]{1,}\b").expect("static"));
+    let re = QID.get_or_init(|| {
+        regex::Regex::new(r"(?i:\bq-[0-9a-z]{1,}\b)|\b[DQ][0-9]{1,7}\b").expect("static")
+    });
     let mut ids: Vec<String> = Vec::new();
     for cap in re.captures_iter(hold_text) {
-        let id = cap[0].to_lowercase();
+        let found = &cap[0];
+        let id = if crate::numbers::is_label_key(found) {
+            found.to_string()
+        } else {
+            found.to_lowercase()
+        };
         if !ids.contains(&id) {
             ids.push(id);
         }
@@ -951,7 +966,9 @@ fn release_evidence_refusal(
     graph: &Path,
     decisions_jsonl: &Path,
 ) -> Option<Value> {
-    let qids = named_question_ids(hold_text);
+    let mut qids = named_question_ids(hold_text);
+    // A number can cite a decision ("per D12") or be plain words ("Q3").
+    qids.retain(|id| crate::numbers::mint::names_question(graph, id));
     if !set_by.eq_ignore_ascii_case("user") && qids.is_empty() {
         return None;
     }
@@ -1205,6 +1222,29 @@ mod tests {
         let r: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(r["outcome"], "refused", "{r}");
         assert_eq!(r["exit_code"], 5, "{r}");
+
+        // A hold only the node row carries, behind a plan with no block,
+        // releases through the node arm, never the plan-edit arm.
+        let hold = json!({
+            "reason": "condition R",
+            "release_when": "when W",
+            "review_on": "2026-12-01",
+            "set_by": "team",
+        });
+        let fx = fixture(json!({"dispatch_hold": hold}));
+        let r = release_with_decisions(&fx.graph, "d-any", &decisions);
+        assert_eq!(r.pointer("/outcome"), Some(&json!("released")), "{r}");
+        assert_eq!(r.pointer("/plan"), Some(&Value::Null), "{r}");
+        assert_eq!(hold_entry(&fx).pointer("/dispatch_hold"), None);
+        assert_eq!(std::fs::read_to_string(&fx.plan).unwrap(), PLAN_BODY);
+
+        // An unreadable plan keeps the error: its INVALID hold read parks
+        // the node either way, so a "released" receipt would lie.
+        let broken = fixture(json!({"dispatch_hold": hold}));
+        std::fs::write(&broken.plan, "---\nclaims: t-0001\nno closing fence\n").unwrap();
+        let r = release_with_decisions(&broken.graph, "d-any", &decisions);
+        assert_eq!(r.pointer("/outcome"), Some(&json!("error")), "{r}");
+        assert_eq!(r.pointer("/exit_code"), Some(&json!(3)), "{r}");
     }
 
     // --- the per-child exemption ---

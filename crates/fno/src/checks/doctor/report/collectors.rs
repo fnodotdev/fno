@@ -888,7 +888,7 @@ struct SinkAnswerBase {
 /// state, the bridge marker liveness, and every configured
 /// `[[attention.sinks]]` row's `answer_base_url` probed with one bounded
 /// GET (the answer buttons are the thing a dead bridge takes down). Sink
-/// rows come from the global config (`setup_messaging::sink_rows`), where
+/// rows come from the trusted file (`setup_messaging::sink_rows`), where
 /// setup writes them.
 fn web_bridge_report() -> Value {
     let label = crate::setup_services::web_bridge_label();
@@ -951,7 +951,7 @@ fn bridge_marker_report() -> (bool, BridgeDetail) {
             },
         );
     };
-    let Ok(marker) = serde_json::from_value::<crate::web::BridgeMarker>(state.clone()) else {
+    let Ok(marker) = serde_json::from_value::<crate::web_core::BridgeMarker>(state.clone()) else {
         return (
             false,
             BridgeDetail {
@@ -960,7 +960,7 @@ fn bridge_marker_report() -> (bool, BridgeDetail) {
             },
         );
     };
-    if !crate::web::recorded_pid_is_live(&state) {
+    if !crate::web_core::recorded_pid_is_live(&state) {
         return (
             false,
             BridgeDetail {

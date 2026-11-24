@@ -428,6 +428,8 @@ fn render_one(
         "search": search,
         "search_keys": crate::search_query::keys_json(),
         "search_as_of": inputs.read_at,
+        "id_sequential": crate::backlog::id_mode::facts().sequential,
+        "id_prefix": crate::backlog::id_mode::facts().prefix.clone(),
         "search_names": !inputs
             .errors
             .iter()
@@ -444,7 +446,10 @@ fn render_one(
         payload = to_public_payload(payload);
     }
     Ok((
-        snapshot_page(&crate::web::house(crate::web::BACKLOG_PAGE), &payload)?,
+        snapshot_page(
+            &crate::web_core::house(crate::web_core::BACKLOG_PAGE),
+            &payload,
+        )?,
         count,
     ))
 }

@@ -372,6 +372,16 @@ impl<'a> Marks<'a> {
             ("cost_cents", json!(meter.and_then(|m| m.cost_cents))),
             ("tokens", json!(meter.and_then(|m| m.tokens))),
             ("compactions", json!(meter.and_then(|m| m.compactions))),
+            ("input_tokens", json!(meter.and_then(|m| m.input_tokens))),
+            ("output_tokens", json!(meter.and_then(|m| m.output_tokens))),
+            (
+                "cache_read_tokens",
+                json!(meter.and_then(|m| m.cache_read_tokens)),
+            ),
+            (
+                "cache_write_tokens",
+                json!(meter.and_then(|m| m.cache_write_tokens)),
+            ),
             ("badge", json!(card.and_then(|c| c.badge.as_deref()))),
             ("seen", json!(card.and_then(|c| c.seen))),
             // `card_pr`, not `pr`: the row's own `pr` is the claim join's

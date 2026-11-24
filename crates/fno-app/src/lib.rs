@@ -3,28 +3,34 @@
 //! terminal emulator of its own.
 
 mod alerts;
+mod answer;
 mod app_state;
 mod boxdraw;
 mod chat;
 mod control;
 mod find;
+mod first_run;
 mod goto;
 mod grid;
 mod hq;
+mod inbox;
 pub mod keys;
 pub(crate) mod launch;
 mod left_pane;
 pub mod link;
 mod mods;
 mod mouse;
+mod mux_modes;
 mod orchestration;
 pub mod palette;
 mod settings;
 mod sheet;
 mod shot;
+mod skills;
 mod start;
 mod tabs;
 mod ui;
+mod update;
 mod window;
 
 use std::path::{Path, PathBuf};
@@ -79,6 +85,8 @@ pub struct ShotOptions {
     pub theme: String,
     /// View to render (default: the command center board).
     pub mode: Option<MainView>,
+    /// Open the answer sheet on the newest question once the board lands.
+    pub sheet: bool,
     /// The empty-pane state: the chat pane shows its start view no matter
     /// what the world's focus carries. The start-view shots set it.
     pub empty_chat: bool,
@@ -87,8 +95,49 @@ pub struct ShotOptions {
     pub cmd: bool,
     /// The find bar state the frame paints over the chat view.
     pub find: Option<FindShot>,
+    /// Window-relative logical x,y the frame clicks through a posted
+    /// mouse event before the capture: the proof frame for real
+    /// interaction on the running demo window.
+    pub tap: Option<(f64, f64)>,
+    /// The overlay the frame opens through its real code path.
+    pub ui: Option<UiShot>,
+    /// Text the frame's composer holds.
+    pub draft: Option<String>,
+    /// Harness the start composer shows picked.
+    pub harness: Option<String>,
+    /// The first-run state the frame paints.
+    pub first_run: Option<FirstRunShot>,
     /// The Settings panel state the frame paints.
     pub settings: Option<SettingsShot>,
+    /// The update card the frame paints.
+    pub update: Option<UpdateShot>,
+}
+
+/// The --shot-update values.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum UpdateShot {
+    /// A staged build is ready: the Restart card.
+    Ready,
+    /// The first launch of a new build: the release notes card.
+    Notes,
+}
+
+/// The `--shot-ui` states.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum UiShot {
+    RowMenu,
+    RowMenuNode,
+    TabRename,
+    Scrolled,
+}
+
+/// The --shot-first-run values.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FirstRunShot {
+    /// The empty start view on a first launch: splash mark and key card.
+    KeyCard,
+    /// No mux server answers: the offer to start one.
+    NoServer,
 }
 
 /// The --shot-settings values.
@@ -250,7 +299,14 @@ pub fn run(opts: Options) -> i32 {
             font_size: opts.font_size.unwrap_or(13.0),
             empty_chat: shot.empty_chat,
             cmd: shot.cmd,
+            tap: shot.tap,
+            ui: shot.ui,
+            sheet: shot.sheet,
+            draft: shot.draft,
+            harness: shot.harness,
+            first_run: shot.first_run,
             settings: shot.settings,
+            update: shot.update,
         });
     }
     if let Some(home) = std::env::var_os("HOME").and_then(|h| h.into_string().ok()) {

@@ -42,8 +42,9 @@ A mod declares exactly one render path:
 | `feed` | One fno read from a fixed list. `fno config plugins open` draws its JSON rows as a table. No pack program runs. | on |
 | `run` | The pack's own argv, from the pack directory. | off, until switched on |
 | `native` | Nothing. It names a view the mux paints itself, such as `backlog-board`. | on, and stays on |
+| `view` | Nothing. A pack-relative JSON file of blocks; its live blocks read through the host's reader. | on |
 
-Verify checks each mod and layout. The id is one safe path component, and the mod has one render path. A feed starts with a listed read, such as `fno backlog board` or `fno-agent review-summary`, and carries no `--output` or `--fix` flag. The list is `FEED_READS` in `crates/fno-agent/src/spawn/plugins/ui.rs`. A feed starts on, so it must not write state on every redraw. A command outside the list belongs in a `run` mod, which starts off. Mod and layout ids share one id space, because a switch is keyed by id. The `preview` is a PNG under 2 MiB and 4096 pixels a side. The `recipe` exists. Both files sit inside the pack directory. A layout binds exactly one `anchor` slot, every tree leaf names a slot, and every `mod` binding names a mod of the same pack.
+Verify checks each mod and layout. The id is one safe path component, and the mod has one render path. A feed starts with a listed read, such as `fno backlog board` or `fno-agent review-summary`, and carries no `--output` or `--fix` flag. The list is `FEED_READS` in `crates/fno-proto/src/pack.rs`. A feed starts on, so it must not write state on every redraw. A command outside the list belongs in a `run` mod, which starts off. Mod and layout ids share one id space, because a switch is keyed by id. The `preview` is a PNG under 2 MiB and 4096 pixels a side. The `recipe` exists. Both files sit inside the pack directory. A layout binds exactly one `anchor` slot, every tree leaf names a slot, and every `mod` binding names a mod of the same pack.
 
 A pack that declares no mods or layouts keeps the digest it had before these fields existed.
 
@@ -92,3 +93,39 @@ The server reads the switches with `fno config plugins -J ls` before it builds t
 A mux restart does not reopen a mod pane. A mod pane returns only when its keeper re-adopts it. A lost keeper leaves a shell. Whole-window `layout apply` has no mod slot yet.
 
 Native mods list and preview, and their views open from the mux as before.
+
+## Hosted users
+
+A hosted user is an invitee on the owner's web bridge. The bridge runs `fno mux serve --web` behind `tailscale serve`, and a `[[web.invites]]` row in the owner's [trusted file](attention-items.md#the-trusted-file) names the login. A mod, a layout or the served folder cannot add that row. A revoke stops the next view read and the next look write, with no restart. The owner at their own machine is the login `local`. A bridge with no invite list knows no login, so it shows no personal views and refuses a look change.
+
+A hosted user's views are personal. They are not packs, and nothing installs them. Each one is a `view` document in the store, kept per login and per project:
+
+`<state root>/mux/web-mine/<login key>/<project>.json`
+
+The login key is the first 16 hex digits of the SHA-256 of the lowercased login, so no email lands in a path. A file holds `look`, `views` and `history`. Each write moves the prior look and views onto `history`, and the file keeps the newest three. A file that does not parse draws no views. The page names the parse error, and a look write answers 409 and leaves the file as it is. The owner writes the file by hand for now.
+
+`/hq` draws the caller's views in a Mine section, from `GET /hq/mine.json`. A login with no views sees no section. On the bridge, a live block never starts a process. `crates/fno/src/serve/web_mine.rs::hosted_read` answers a closed table from the rows the bridge already holds:
+
+| Live argv | Answers |
+|---|---|
+| `fno backlog get <id>` or `fno backlog get <id> --json` | The graph row as one object, when its `project` is the file's project and the caller's invite covers it |
+| `fno backlog list` or `fno backlog list --json` | `{rows, total, showing, hidden}` over the rows of that project the caller's invite covers |
+
+An invite whose scope is `*`, the node, or an ancestor of the node covers that node. Any other argv, an extra flag, or a node outside the invite answers nothing. The block then keeps its declared rows, and the page names the refused read. A hosted row is the raw graph row: the computed keys of the CLI `get` (`_number`, `_reading`, `_resolved_cwd`, `children`) are absent. A local feed keeps its own reader, which runs the read as a process.
+
+`POST /hq/mine/look` with `{"project", "look"}` stores the look. A look is a pick from closed sets. `theme` is auto, light or dark. `density` is comfortable or compact. `accent` is ink, blue, green or violet from the house tokens. A value outside the set, or an unknown field, answers 400. Raw CSS is not a choice, because a `url()` in CSS can send data off the page. The accent tints the Mine frame only, since hue carries state everywhere else. The page applies the look of the first project file, and a change posts to that file.
+
+What a hosted user can change, and what never changes:
+
+| Surface | A hosted user can change it | How |
+|---|---|---|
+| Look | yes | Theme, density and accent from the closed sets above. |
+| Panels | yes | Views in their own Mine section. |
+| Layout | not yet | Order and hiding of the page's sections, for that login. |
+| Page defaults | not yet | Default filter, sort and the node the page opens on, inside the invite scope. |
+| Skills and rules | no | They change what agents do on the owner's account for everyone in the project. |
+| Gates | never | Review, merge, CI, loop-check, effect approvals. A view is data, and no gate reads it. |
+| Auth | never | Invites, roles, scope, bind, token. The invite gate runs before any view is read. |
+| Billing and accounts | never | Accounts, routes, models, budgets. |
+| Other users' state | never | Another login's views, and nodes outside the caller's invite. |
+| Telemetry consent | never | Only `fno doctor telemetry on` at a terminal writes it. |

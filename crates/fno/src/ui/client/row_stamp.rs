@@ -160,6 +160,14 @@ impl View {
         }
     }
 
+    /// Whether the transient toast will paint this frame: `notice`
+    /// set. The dock and drill surfaces read this to yield the row the
+    /// toast owns (below the tab bar) instead of painting a pane header
+    /// under it.
+    pub(super) fn notice_live(&self) -> bool {
+        self.notice.is_some()
+    }
+
     /// The transient notice, right-aligned, clipped to the strip.
     ///
     /// The notice is an overlay, not a row: a cut tail keeps the `…`
@@ -227,6 +235,20 @@ pub(super) fn paint_notice_overlay(
     overlay: Option<(usize, String)>,
 ) {
     if let Some((start, text)) = overlay {
+        // One cleared blank before the toast and a clear to the row's
+        // end after it: pane text never touches, shows through, or
+        // leaves a partial glyph right of the run.
+        let head = start.saturating_sub(1);
+        for idx in head..cols {
+            if let Some(cell) = cells.get_mut(idx) {
+                *cell = Cell {
+                    c: ' ',
+                    fg: Color::Default,
+                    bg: Color::Default,
+                    flags: 0,
+                };
+            }
+        }
         for (i, ch) in text.chars().enumerate() {
             let idx = start + i;
             if idx < cols {
@@ -239,6 +261,19 @@ pub(super) fn paint_notice_overlay(
             }
         }
     }
+}
+
+/// The transient notice rides one row below the tab bar: the bar's own
+/// right edge clipped it, per the lead look. The wrapper slices the row
+/// off the full buffer so the caller stays one line.
+pub(super) fn paint_notice_below_tab_bar(
+    cells: &mut [Cell],
+    cols: usize,
+    overlay: Option<(usize, String)>,
+) {
+    let bar_cells = super::TAB_BAR_ROWS as usize * cols;
+    let (_, notice_row) = cells.split_at_mut(bar_cells);
+    paint_notice_overlay(notice_row, cols, overlay);
 }
 
 /// Paint a row-scoped outcome stamp: right-aligned INVERSE on the row, the

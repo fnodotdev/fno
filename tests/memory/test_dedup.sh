@@ -21,11 +21,13 @@ CAND_A='{"type":"project","name":"dedup_test_one","description":"dedup test fixt
 
 # Case 1: new entry
 bash "$WRITE" --memory-dir "$WORK" --session-id sid-001 --candidate "$CAND_A" \
+    --evidence "sid-001:10" \
     >/dev/null 2>&1 || fail "case1 write failed"
 ENTRY="$WORK/project_dedup_test_one.md"
 [[ -f "$ENTRY" ]] || fail "case1 entry not written"
 grep -q '^auto_generated: true$' "$ENTRY" || fail "case1 auto_generated missing"
 grep -q '^source_session: sid-001$' "$ENTRY" || fail "case1 source_session missing"
+grep -q '^evidence: sid-001:10$' "$ENTRY" || fail "case1 evidence pointer missing"
 grep -q '^- \[dedup_test_one\]' "$WORK/MEMORY.md" || fail "case1 MEMORY.md not updated"
 pass "case1 new entry"
 
@@ -37,6 +39,7 @@ sleep 1  # ensure mtime granularity wouldn't false-positive
 # Case 2: identical match - rc=2 means "intentional dedup" (rc=1 is reserved
 # for real errors like invalid JSON or missing args).
 bash "$WRITE" --memory-dir "$WORK" --session-id sid-002 --candidate "$CAND_A" \
+    --evidence "sid-002:11" \
     >/dev/null 2>&1
 RC=$?
 [[ "$RC" == "2" ]] || fail "case2 expected rc=2 (dedup), got rc=$RC"
@@ -60,10 +63,14 @@ else
 fi
 bash "$WRITE" --memory-dir "$WORK" --session-id sid-003 --candidate "$CAND_B" \
     --source-sha256 "$SHA_BEFORE" \
+    --evidence "sid-003:20" \
     >/dev/null 2>&1 || fail "case3 update failed"
 grep -q '^Body A\.' "$ENTRY" || fail "case3 original body not preserved"
 grep -q '^## Session sid-003 update$' "$ENTRY" || fail "case3 stanza missing"
 grep -q '^Body B\.' "$ENTRY" || fail "case3 updated body not appended"
+# The creation pointer survives the update untouched: the stanza carries the
+# updating session, the frontmatter keeps the entry's original evidence.
+grep -q '^evidence: sid-001:10$' "$ENTRY" || fail "case3 original evidence pointer clobbered"
 # MEMORY.md should still have ONE line for this entry.
 LINE_COUNT=$(grep -c '^- \[dedup_test_one\]' "$WORK/MEMORY.md")
 [[ "$LINE_COUNT" == "1" ]] || fail "case3 MEMORY.md duplicated: $LINE_COUNT lines"
@@ -75,11 +82,41 @@ CAND_C='{"type":"project","name":"dedup_test_one","description":"dedup test upda
 PRE_CASE4=$(cat "$ENTRY")
 RC=0
 bash "$WRITE" --memory-dir "$WORK" --session-id sid-004 --candidate "$CAND_C" \
+    --evidence "sid-004:21" \
     >/dev/null 2>&1 || RC=$?
 [[ "$RC" == "3" ]] || fail "case4 expected rc=3 (staged), got rc=$RC"
 [[ "$(cat "$ENTRY")" == "$PRE_CASE4" ]] || fail "case4 live entry mutated despite missing --source-sha256"
 [[ -f "$WORK/.staged/project_dedup_test_one.md" ]] || fail "case4 staged file not written"
 pass "case4 update without --source-sha256 is staged, not written"
+
+# Case 5: a LEGACY auto entry written before evidence existed carries no
+# evidence line. An update to it must converge: the updater's pointer is
+# inserted into the existing frontmatter, so entries still being
+# touched become readable by use-tracked retirement.
+LEGACY="$WORK/project_dedup_test_legacy.md"
+cat > "$LEGACY" <<MEM
+---
+name: dedup_test_legacy
+description: legacy fixture
+type: project
+auto_generated: true
+source_session: sid-old
+created_at: 2026-01-01T00:00:00Z
+---
+Legacy body.
+MEM
+if command -v sha256sum >/dev/null 2>&1; then
+    SHA_LEGACY=$(sha256sum "$LEGACY" | awk '{print $1}')
+else
+    SHA_LEGACY=$(shasum -a 256 "$LEGACY" | awk '{print $1}')
+fi
+CAND_D='{"type":"project","name":"dedup_test_legacy","description":"legacy converged","body":"Legacy body updated.\n"}'
+bash "$WRITE" --memory-dir "$WORK" --session-id sid-005 --candidate "$CAND_D" \
+    --source-sha256 "$SHA_LEGACY" --evidence "sid-005:30" \
+    >/dev/null 2>&1 || fail "case5 legacy update failed"
+grep -q '^evidence: sid-005:30$' "$LEGACY" || fail "case5 evidence not inserted into legacy frontmatter"
+grep -q '^Legacy body\.$' "$LEGACY" || fail "case5 legacy body not preserved"
+pass "case5 legacy entry converges: evidence inserted on update"
 
 rm -rf "$WORK"
 echo "PASS: dedup three-path coverage"

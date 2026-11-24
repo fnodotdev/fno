@@ -426,6 +426,13 @@ pub(crate) fn probe_pass_in(
         .keys()
         .filter(|qid| !closed.contains(*qid))
         .filter(|qid| crate::numbers::canonical(qid) == qid.as_str())
+        // A numbered copy has no host tail, so its origin marks it a peer's.
+        .filter(|qid| {
+            asked
+                .get(qid.as_str())
+                .and_then(|row| row.pointer("/origin_machine"))
+                .is_none()
+        })
         .collect();
     qids.sort();
     let cache_path = cache_path_for(home);

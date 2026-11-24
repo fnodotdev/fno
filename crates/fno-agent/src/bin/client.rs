@@ -51,8 +51,6 @@ const ALL_CLIENT_ACTIONS: &[&str] = &[
     "component-verdict",
     "provider-cap",
     "source-pin",
-    "team-orphans",
-    "team-fold",
     "detect",
     "digest",
     "distress-scan",
@@ -70,7 +68,6 @@ const ALL_CLIENT_ACTIONS: &[&str] = &[
     "lead-checkin",
     "lead-escalation-text",
     "lead-history",
-    "term-ledger",
     "route-slot",
     "list",
     "logs",
@@ -155,6 +152,16 @@ fn main() {
     run_evals_and_watch_doors(&args);
     // A spawn is admitted in process (spawn_seam) before run() parses it.
     let mut spawn_timing = fno_agent::spawn_seam::SpawnTiming::for_spawn(&args);
+    // The schedule arm answers before admission: a trigger flag or an
+    // action like --list-scheduled carries its own grammar, and the strict
+    // admission would demand a spawn name no such request carries.
+    if args.first().map(String::as_str) == Some("spawn") {
+        let home = AgentsHome::from_env();
+        let rest = args.get(1..).unwrap_or(&[]);
+        if let Some(code) = fno_agent::spawn::spawn_schedule::front_door(&home, rest) {
+            fno_agent::usage_events::exit_cli(code);
+        }
+    }
     let args = match fno_agent::spawn_seam::admit_spawn(args) {
         Ok(args) => args,
         Err(code) => fno_agent::usage_events::exit_cli(code),
@@ -1147,6 +1154,7 @@ fn hold_daemon_spawn_gate(
                 flags: daemon_gate_flags,
                 seed: daemon_gate_seed.clone(),
                 route_provider: daemon_gate_route_provider.clone(),
+                node: fno_agent::spawn_gate::gate_node_from_params(params),
                 ..fno_agent::spawn_promote::gate_input(lease.promotion.as_ref())
             },
         );
@@ -2013,6 +2021,7 @@ fn run_spawn_gate(
                 flags,
                 seed: fno_agent::spawn_phase::params_seed(&params),
                 route_provider: fno_agent::claude_adopt::gate_route_provider(&params),
+                node: fno_agent::spawn_gate::gate_node_from_params(&params),
                 account: params
                     .get("account")
                     .and_then(Value::as_str)
@@ -3668,7 +3677,7 @@ const VALUE_FLAGS: &[&str] = &[
 /// boundary calls spawn-owned ([`fno_agent::spawn_bare::spawn_owned`],
 /// the same predicate that refuses it after the prompt) must parse in the
 /// equals form, never ride the harness argv. A scalar owned flag
-/// ([`SCALAR_OWNED_FLAGS`] plus the retiring `--succeed` alias) folds to its
+/// ([`SCALAR_OWNED_FLAGS`]) folds to its
 /// bare form on `=true` and drops on `=false`; any other value refuses.
 ///
 /// The hand-off dry-run incident: `--dry-run=true` reached the unowned-passthrough arm
@@ -3715,10 +3724,7 @@ fn normalize_value_flags(command: &str, rest: &[String]) -> Result<Vec<String>, 
                 // so the parse can never disagree with the refusal that
                 // guards the same flag after the prompt.
                 if command == "spawn" && fno_agent::spawn_bare::spawn_owned(&tok) {
-                    if fno_agent::spawn_bare::SCALAR_OWNED_FLAGS.contains(&flag)
-                        // retired-ok: the fold reads the retiring alias so its equals form parses like the space form; insert_role_flag prints the deprecation notice and --hand-off is the replacement.
-                        || flag == "--succeed"
-                    {
+                    if fno_agent::spawn_bare::SCALAR_OWNED_FLAGS.contains(&flag) {
                         match value.as_str() {
                             "true" => normalized.push(flag.to_string()),
                             "false" => {}
@@ -4095,10 +4101,6 @@ fn parse_switch_flag(
         }
         "--force" | "-F" => {
             params.insert("force".into(), Value::Bool(true));
-        }
-        "--cross-project" if command == "rm" || command == "stop" => {
-            // Retired (d-460ea8c7): the store heal is machine-wide;
-            // accepted as a silent no-op for one release.
         }
         "--dry-run" if command == "spawn" => {
             // Plan the spawn and print it; launch, register and settle nothing.

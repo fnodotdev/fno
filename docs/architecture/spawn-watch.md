@@ -29,6 +29,8 @@ The watch finds the worker row by its harness session id once one is known. Befo
 
 Four minutes after the call, a launch with no first turn mails its caller once, from `fno-spawn-watch`. The line names the stage and the reading that proves it, for example `spawn quiet-otter: no first turn 4m after the call. Stuck at harness boot: worker row quiet-otter exists (Spawning) with no harness session id.` With the 60-second tick, the mail lands by 5 minutes. When that launch later reaches its first turn, one follow-up names the latency. A failed send retries on the next pass.
 
+The watch finds the transcript under the ambient config root, then under every isolated account root. A worker on an isolated account writes only under its own root, so an ambient-only scan reads it as "no transcript yet". When the first turn is stamped before the stuck notice went out, the follow-up names both times and says the worker was running.
+
 The gate answers inside the same bound. Its queue gives up after 240 seconds with the spawn's place and reason. When the gate refuses a spawn, the caller holds the refusal, so the gate closes that launch's watch and removes its pending record. The watch sends no second word about it.
 
 ## The measurement

@@ -297,6 +297,37 @@ else
     fail "AC6g: Should warn about missing scope classification"
 fi
 
+# --- Stale source-root build must not shadow a newer PATH binary ---
+echo "--- Binary resolution: stale build ---"
+STALE_ROOT="$TMPDIR_BASE/stale-root"
+STALE_PATHBIN="$TMPDIR_BASE/stale-pathbin"
+mkdir -p "$STALE_ROOT/crates/fno-agent/target/release" "$STALE_PATHBIN"
+printf '#!/bin/sh\n' > "$STALE_ROOT/crates/fno-agent/target/release/fno-agent"
+printf '#!/bin/sh\n' > "$STALE_PATHBIN/fno-agent"
+chmod +x "$STALE_ROOT/crates/fno-agent/target/release/fno-agent" "$STALE_PATHBIN/fno-agent"
+touch -t 202001010000 "$STALE_ROOT/crates/fno-agent/target/release/fno-agent"
+RESOLVER="$TMPDIR_BASE/resolver.sh"
+{
+    echo "_fno_source_root() { printf '%s' \"$STALE_ROOT\"; }"
+    awk '/^_resolve_bin\(\) \{/,/^\}/; /^resolve_agents_bin\(\) \{/,/^\}/' "$VALIDATE"
+    echo 'resolve_agents_bin'
+} > "$RESOLVER"
+STALE_ERR="$TMPDIR_BASE/stale.err"
+PICKED=$(env -u FNO_AGENT_BIN PATH="$STALE_PATHBIN:/usr/bin:/bin" bash "$RESOLVER" 2>"$STALE_ERR")
+if [[ "$PICKED" == "$STALE_PATHBIN/fno-agent" ]] && grep -q "skipping stale build" "$STALE_ERR"; then
+    pass "stale: a source build older than the PATH binary is skipped and named"
+else
+    fail "stale: picked '$PICKED', stderr: $(cat "$STALE_ERR")"
+fi
+touch "$STALE_ROOT/crates/fno-agent/target/release/fno-agent"
+touch -t 202001010000 "$STALE_PATHBIN/fno-agent"
+PICKED=$(env -u FNO_AGENT_BIN PATH="$STALE_PATHBIN:/usr/bin:/bin" bash "$RESOLVER" 2>/dev/null)
+if [[ "$PICKED" == "$STALE_ROOT/crates/fno-agent/target/release/fno-agent" ]]; then
+    pass "stale: a source build newer than the PATH binary still wins"
+else
+    fail "stale: fresh build should win, picked '$PICKED'"
+fi
+
 # --- AC7: Single-doc semantic contract ---
 echo ""
 echo "--- AC7: Single-doc Semantic Contract ---"

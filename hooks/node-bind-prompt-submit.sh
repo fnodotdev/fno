@@ -7,7 +7,7 @@
 # shared bound and relays its one line. The bind holds no claim; the explicit
 # door is `fno do target start <id> --steps`. Every failure exits 0 and prints
 # nothing (AC17): a hook that fails closed on the first prompt would block the
-# session (law d-bad5a42f: nothing optional on the foreground path).
+# session (law D1838: nothing optional on the foreground path).
 # SILENT unless the door binds or lists: UserPromptSubmit exit-0 stdout is
 # added to model context, so per-prompt chatter is context cost.
 #

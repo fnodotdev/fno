@@ -30,6 +30,10 @@ Every placement flag needs `--as pane`. Without it the spawn refuses and names t
 
 `--agent` names an agent definition the launched session runs under. claude takes `fno:<name>` on every lane and also resolves a bare name. opencode takes it on the pane lane only. An unknown name exits 1 before launch. The launched main thread gets the agent body but not its `skills:` list, so footnote's agents carry no `skills:` list. An agent that needs a skill loads it from its body with the Skill tool. codex, agy and gemini refuse the flag, and the codex refusal names the `.codex/agents/<role>.toml` role and the `spawn_agent` `agent_type` that replaces it.
 
+## Harness args
+
+Everything after the prompt is harness argv, never parsed. A spawn-owned flag there refuses and prints the corrected line. Before the prompt, an unowned flag passes only in the `--flag=value` form. The space form refuses and names the legal positions. The `+flag` spelling is the short form. `+flag` and `+flag=value` fold to their `--` spelling before the boundary reads the line. `fno agent spawn --name w claude fix the bug +model=opus` rides `--model=opus` as harness argv with no `--` typing. A token that is not flag-shaped never folds: `+1`, a lone `+`, and a quoted phrase stay prompt text. The payload after `--` or `--argv` stays byte-exact, with nothing folding there. When the fold is not enough, `--harness-arg <value>` pushes a token verbatim.
+
 ## Credentials
 
 `--account` pins ONE worker to a registered claude account. The daemon-wide active `~/.claude` slot stays untouched. An account with its own config_dir sets `CLAUDE_CONFIG_DIR`, which bills right. A managed account that IS the active occupant rides the shared slot. Any other managed account is refused, with a pointer to config-dir registration: the setup-token env lane bills the wrong account. claude only, fail-closed.
@@ -51,6 +55,14 @@ Every placement flag needs `--as pane`. Without it the spawn refuses and names t
 `--take-over "<why>"` is the door for the case `--hand-off` refuses. A lead whose own team contains the target scope moves that sub-team to the spawned colleague in one write. It proves nothing about the holder's state. The value is the reason. It is required, journaled as `team_succession_taken_over`, and mailed to the old lead by name. The caller keeps its own seat. Guards: the flag needs `--promote` and never combines with `--hand-off`. The colleague carries a fresh person name: `--name <Name>`, or `--name redraw` to take the machine's draw. An equal territory reads as your own team and names `--hand-off`. An unrelated lead is refused. A user ruling staged on spawn still forbids it.
 
 `--dry-run` plans the spawn and prints the plan: the drawn name, the role scope and whether it is a hand-off. It launches nothing, writes no registry row and settles no promotion. The name draw stays pending, so the next real hand-off offers the same name. Run `fno agent spawn --promote <scope> --hand-off --dry-run` to see the successor's drawn name before you commit to the hand-off.
+
+## Scheduling
+
+`--when <time>` queues the spawn for the daemon to fire through the normal gate at that time. The row, not a worker, is what a schedule creates: `--list-scheduled` shows rows with both zones, force, node, grace and the last gate reading; `--cancel-scheduled <id>` drops one row and names the list command on an unknown id. Time input accepts local, a named IANA zone, PT/ET/CT/MT, UTC (`20:00Z`) and RFC 3339. A past bare `HH:MM` rolls to tomorrow and the echo says so. A DST-ambiguous wall clock refuses naming both UTC candidates.
+
+`--every <interval>` re-queues the row after each fire (`hourly`, `daily`, `weekly`, `30m`, `2h`). `--on <command>` polls the command each arm pass in the row's cwd under the 60s bound. The row fires when the command exits 0. An `--on` row's grace counts from creation (7 days default).
+
+`--grace <duration>` bounds the retry: a refused fire retries every 5 minutes inside the grace (60 minutes default for a timed row), then the row reads `missed` and one mail goes to the scheduler. `--force` recorded at schedule time skips at fire time exactly what `spawn --force` skips now (seat caps, `--at` placement anchor aside), and never lifts the memory or disk axis. Rows due in one minute fire in live node priority order. A pending row holds the daemon's idle exit, never drift retirement. The gate is `config.schedule.enabled` (default true).
 
 ## Misc
 

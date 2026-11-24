@@ -1482,6 +1482,7 @@ fn handle_ready(state: &StoreState, params: &Value) -> Result<Value, StoreError>
             state.graph.parent().unwrap_or(Path::new("")),
             Path::new(repo_root.as_deref().unwrap_or(".")),
         ),
+        explain: false,
     };
     // Borrowed in both arms: a deep clone of the owned graph per ready call
     // would re-spend most of the cache just saved.
@@ -2837,10 +2838,15 @@ fn roll_settled_status(entries: &mut [Value], idx: usize) {
     } else {
         "idea"
     };
-    entries[idx]
-        .as_object_mut()
-        .expect("row is an object")
-        .insert("status".into(), Value::String(status.into()));
+    {
+        let Some(obj) = entries.get_mut(idx).and_then(Value::as_object_mut) else {
+            return;
+        };
+        obj.insert("status".into(), Value::String(status.into()));
+        // Rank is per-column: a pin that survives the column move pins a
+        // lane it no longer lives in. The move clears it.
+        obj.insert("rank".into(), Value::Null);
+    }
 }
 
 pub(crate) fn session_reap_open(
@@ -3487,6 +3493,22 @@ fn api_mutation(
         "pull_request_attach" => {
             let input: api::PullRequestInput = input_of(params, "input")?;
             let payload = api::pull_request_attach(store, id.unwrap_or_default(), input)?;
+            Ok(json!({
+                "success": payload.success,
+                "node": payload.node.map(|n| n.to_json()),
+                "version": payload.version,
+            }))
+        }
+        "pull_request_record" => {
+            let input: api::PullRequestInput = input_of(params, "input")?;
+            let payload = api::pull_request_record(
+                store,
+                id.unwrap_or_default(),
+                input.number,
+                input.url.as_deref(),
+                input.note.as_deref(),
+                input.merge_status.as_deref(),
+            )?;
             Ok(json!({
                 "success": payload.success,
                 "node": payload.node.map(|n| n.to_json()),

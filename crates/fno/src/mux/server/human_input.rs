@@ -222,6 +222,68 @@ fn typing_row(
     })
 }
 
+/// The fields of a witness row the arm rule reads, parsed at the boundary
+/// (R1): the resolution of the pane bind and the harness session it bound.
+#[derive(serde::Deserialize, Default)]
+struct SubmitArmFields {
+    #[serde(default)]
+    data: SubmitArmData,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct SubmitArmData {
+    #[serde(default)]
+    resolution: Option<String>,
+    #[serde(default)]
+    harness_session: Option<String>,
+}
+
+/// The session a submit's witness row arms, or None: only a resolved bind
+/// (registry row or portal row, `resolution: "ok"`) carries an address,
+/// and an empty one arms nothing. Pure so the row rule is testable without
+/// a server fixture.
+pub(super) fn arm_session_from_row(event: &serde_json::Value) -> Option<String> {
+    let fields: SubmitArmFields = serde_json::from_value(event.clone()).ok()?;
+    if fields.data.resolution.as_deref() != Some("ok") {
+        return None;
+    }
+    fields.data.harness_session.filter(|s| !s.is_empty())
+}
+
+/// Fire-and-forget conversation arm for one resolved submit: a detached
+/// `fno-agent mail-hold --session <id>` (the bare door's default action is
+/// the conversation arm), so the hold is live from the Enter instead of
+/// from the harness prompt hook, which for a queued prompt fires minutes
+/// after the witness expired (the 2026-11-19 interrupt: 72 of 81 witnessed
+/// submits sat in stretches with no hold). A one-shot thread spawns and
+/// waits the child, so the keystroke path never blocks and no zombie is
+/// left behind. A failed spawn is silent: the hook-side arm still covers
+/// the session, and no hold is worse than a late hold.
+fn spawn_conversation_arm(bin: std::path::PathBuf, harness_session: String) {
+    std::thread::spawn(move || {
+        let mut command = std::process::Command::new(bin);
+        command
+            .args(["mail-hold", "--session", &harness_session])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        if let Ok(mut child) = command.spawn() {
+            // Fire-and-forget: the wait only reaps the child so the server
+            // holds no zombie; the exit status names nothing we act on.
+            let _status = child.wait();
+        }
+    });
+}
+
+#[cfg(test)]
+#[path = "tests/submit_arm_tests.rs"]
+mod submit_arm_tests;
+
 impl Core {
     /// Node id for a `human_touch` event on `pane`: the pane's `FNO_NODE`
     /// provenance, or a node-shaped owning-squad cwd basename. Missing
@@ -281,9 +343,14 @@ impl Core {
     /// hand-started harness in a shell pane) writes `via: shell`,
     /// `resolution: unresolved`: the submit still counts, no transcript can
     /// join it. A failed append bumps `touch_emit_failures` and never
-    /// touches the keystroke path.
+    /// touches the keystroke path. A resolved submit also fires the
+    /// conversation arm ([`Self::spawn_conversation_arm`]) so the hold is
+    /// live from the Enter.
     pub(super) fn witness_submit(&self, pane: u64) {
         let event = self.witness_row(pane, "operator_submit");
+        if let Some(sid) = arm_session_from_row(&event) {
+            spawn_conversation_arm(crate::digest_overlay::fno_agent_bin(), sid);
+        }
         crate::pane_send_audit::queue_agents_event(
             &crate::pane_send_audit::pane_send_audit_events_path(),
             event,
@@ -374,13 +441,16 @@ impl Core {
 
     /// The tail of the `CoreMsg::Input` arm, one call from `handle_msg` so
     /// server.rs only shrinks: touch telemetry, the typing witness and the
-    /// submit witness. The mux arms no hold - a keystroke only witnesses a
-    /// human Enter (or a live draft, `operator_typing`), and the
-    /// conversation hold is armed by the harness prompt hook. A keystroke
-    /// here is past the relay guard - PaneSend and relay writes never reach
-    /// this - and past the reply classifier: terminal-generated loopback
-    /// (focus reports, query replies, mouse encodings) is not steering, so
-    /// a viewed row witnesses nothing.
+    /// submit witness. A keystroke only witnesses a human Enter (or a live
+    /// draft, `operator_typing`), and a resolved submit also arms the
+    /// conversation hold through the bare `mail-hold` door
+    /// ([`Self::spawn_conversation_arm`]): the harness prompt hook stays the
+    /// re-arm path, but it fires late for a prompt the harness queued
+    /// mid-answer, so Enter-time arming is what keeps a live chat covered.
+    /// A keystroke here is past the relay guard - PaneSend and relay writes
+    /// never reach this - and past the reply classifier: terminal-generated
+    /// loopback (focus reports, query replies, mouse encodings) is not
+    /// steering, so a viewed row witnesses nothing.
     pub(super) fn input_tail(&mut self, focus: u64, bytes: &[u8]) {
         self.input_tail_at(focus, bytes, Instant::now());
     }
@@ -406,6 +476,34 @@ impl Core {
         }
         if submit {
             self.witness_submit(focus);
+        }
+    }
+
+    /// The desktop app's live draft on `pane` (a [`ClientMsg::DraftHint`]):
+    /// the same latch a keystroke opens, and the same coalesced C11
+    /// witness, with no bytes to write. The app's composer holds the text
+    /// locally until its send, so this hint is the only proof the pane's
+    /// session has unsent operator words pending; the submit clears the
+    /// latch the send's own Enter opens. The burst map is shared with real
+    /// typing on purpose: a hint inside a live keystroke burst adds no
+    /// second witness row.
+    pub(super) fn draft_hint(&mut self, id: u64, pane: u64) {
+        self.draft_hint_at(id, pane, Instant::now());
+    }
+
+    /// `draft_hint` with the clock supplied: the hold verdict is one
+    /// comparison on the caller's instant, so the tests drive it instead
+    /// of sleeping out a real hold window on a loaded machine.
+    pub(super) fn draft_hint_at(&mut self, id: u64, pane: u64, now: Instant) {
+        // A hint arms only a pane its sender actually views: the same rule
+        // the app's PaneInput write passes, so a stray or hostile pane id
+        // cannot hold mail off a pane nobody is drafting into.
+        if !self.pane_visible_to(id, pane) {
+            return;
+        }
+        self.composer.note_user_input(pane, now, false);
+        if touch_coalesce(&mut self.touch_last_emit, pane, now) {
+            self.witness_typing(pane);
         }
     }
 }
@@ -518,6 +616,44 @@ mod tests {
             ..Default::default()
         }];
         core
+    }
+
+    /// The client each hint test attaches: it views the squad tab that
+    /// holds `witness_test_core`'s leaf, so its DraftHint passes the
+    /// visibility gate and arms the pane.
+    fn hint_client() -> crate::server::Client {
+        crate::server::Client {
+            id: 1,
+            reliable_tx: tokio::sync::mpsc::channel(1).0,
+            dirty: Default::default(),
+            notify: Arc::new(tokio::sync::Notify::new()),
+            synced_modes: Default::default(),
+            view: (1, 1),
+            visible: Default::default(),
+            dims: (24, 80),
+            passive: false,
+            last_press: None,
+        }
+    }
+
+    /// The hint tests witness rows, so each takes the journal env under
+    /// the shared guard and gets a fresh temp dir. Returns `(guard, dir)`;
+    /// the caller drops the guard and removes the dir at the end.
+    fn hint_journal_env(tag: &str) -> (std::sync::MutexGuard<'static, ()>, std::path::PathBuf) {
+        let guard = crate::pane_send_audit::FNO_AGENT_HOME_GUARD
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let dir = std::env::temp_dir().join(format!(
+            "fno-hint-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::env::set_var("FNO_AGENT_HOME", &dir);
+        (guard, dir)
     }
 
     fn journal_submits(dir: &Path) -> Vec<serde_json::Value> {
@@ -960,6 +1096,113 @@ mod tests {
         assert_eq!(
             data["harness_session"], "dddddddd-1112-2222-3333-444455556666",
             "the thread's harness_session joins the portal seat"
+        );
+
+        std::env::remove_var("FNO_AGENT_HOME");
+        drop(guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The app-chat replay: a draft hint arms the pane, a live
+    /// mail send refuses at the guard (queues durable, types nothing), and
+    /// the app's own Enter - riding PaneInput, whose Ok arm clears the
+    /// latch - releases it.
+    #[test]
+    fn a_draft_hint_holds_mail_until_the_app_enter_releases_it() {
+        // The hint witnesses like a keystroke burst, so the journal write
+        // needs the same env isolation even though the test asserts no row.
+        let (guard, dir) = hint_journal_env("hold");
+        let mut core = witness_test_core(7);
+        core.clients.push(hint_client());
+        let t0 = Instant::now();
+        core.draft_hint_at(1, 7, t0);
+        assert!(
+            core.composer.user_hold(7, t0 + Duration::from_secs(14)),
+            "the draft hint arms the pane's USER hold"
+        );
+        let refused = core.pane_send_gated(7, b"queued mail\r", true, None, Ok(Vec::new()), true);
+        assert!(
+            matches!(
+                refused,
+                crate::proto::ServerMsg::Err {
+                    code: crate::proto::err_code::TARGET_NOT_IDLE,
+                    ..
+                }
+            ),
+            "a live send into the draft queues durable instead of typing: {refused:?}"
+        );
+        // pane_input's Ok arm on the app's paste+Enter chunk.
+        let enter_at = t0 + Duration::from_millis(500);
+        core.composer.note_user_input(7, enter_at, true);
+        assert!(
+            !core.composer.user_hold(7, enter_at),
+            "the app's own Enter ends the draft"
+        );
+        let after = core.pane_send_gated(7, b"queued mail\r", true, None, Ok(Vec::new()), true);
+        assert!(
+            !matches!(
+                after,
+                crate::proto::ServerMsg::Err {
+                    code: crate::proto::err_code::TARGET_NOT_IDLE,
+                    ..
+                }
+            ),
+            "the released pane no longer refuses at the guard: {after:?}"
+        );
+
+        std::env::remove_var("FNO_AGENT_HOME");
+        drop(guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_draft_hint_arms_only_a_pane_its_client_views() {
+        let (guard, dir) = hint_journal_env("visibility");
+        let mut core = witness_test_core(7);
+        core.clients.push(hint_client());
+        let t0 = Instant::now();
+        core.draft_hint_at(1, 7, t0);
+        assert!(
+            core.composer.user_hold(7, t0),
+            "a pane the client views arms on its hint"
+        );
+        core.draft_hint_at(1, 99, t0);
+        assert!(
+            !core.composer.user_hold(99, t0),
+            "a pane outside the client's view does not arm"
+        );
+        core.draft_hint_at(42, 8, t0);
+        assert!(
+            !core.composer.user_hold(8, t0),
+            "an unknown client arms nothing"
+        );
+
+        std::env::remove_var("FNO_AGENT_HOME");
+        drop(guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The hint's C11 witness rides the same 5s burst map as keystrokes:
+    /// one `operator_typing` row per window, never one per keystroke.
+    #[test]
+    fn a_draft_hint_writes_one_coalesced_typing_row_per_window() {
+        let (guard, dir) = hint_journal_env("witness");
+        let mut core = witness_test_core(7);
+        core.clients.push(hint_client());
+        let t0 = Instant::now();
+        core.draft_hint_at(1, 7, t0);
+        core.draft_hint_at(1, 7, t0 + Duration::from_secs(1));
+        let rows = journal_rows(&dir, "operator_typing");
+        assert_eq!(
+            rows.len(),
+            1,
+            "hints inside one burst window coalesce to one row"
+        );
+        core.draft_hint_at(1, 7, t0 + Duration::from_secs(6));
+        assert_eq!(
+            journal_rows(&dir, "operator_typing").len(),
+            2,
+            "a hint in a fresh window re-witnesses"
         );
 
         std::env::remove_var("FNO_AGENT_HOME");

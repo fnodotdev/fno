@@ -94,6 +94,10 @@ fn agent_hit_resolves_pane_then_attach_then_notice() {
     // A live paneless row with NO attach id reaches BY NAME - the Follow
     // and Locate tiers (the dedicated pane tails or explains).
     let orphan = AgentRow {
+        session_input_tokens: None,
+        session_output_tokens: None,
+        session_cache_read_tokens: None,
+        session_cache_write_tokens: None,
         harness: None,
         model: None,
         route: None,
@@ -132,6 +136,10 @@ fn agent_hit_resolves_pane_then_attach_then_notice() {
         (AgentNoPaneReason::UnsupportedHarness, "unsupported harness"),
     ] {
         let dead = AgentRow {
+            session_input_tokens: None,
+            session_output_tokens: None,
+            session_cache_read_tokens: None,
+            session_cache_write_tokens: None,
             portal: None,
             harness: None,
             model: None,
@@ -215,6 +223,10 @@ fn agent_hit_resumes_a_resumable_paneless_row() {
     // session, attaching is the cheaper truth, and resuming a live row
     // would mint a second writer (the LivePaneless warning).
     let attachable = AgentRow {
+        session_input_tokens: None,
+        session_output_tokens: None,
+        session_cache_read_tokens: None,
+        session_cache_write_tokens: None,
         portal: None,
         harness: None,
         model: None,

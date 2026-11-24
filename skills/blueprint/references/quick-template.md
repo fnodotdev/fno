@@ -85,6 +85,8 @@ no index is present, the first line says so.]
 
 ## Context
 
+[Serves: <scope> / <the node's why, quoted from the user's words when the ask came from him> / done-means: <acceptance a merge check can read>. Copy this line from the bound node when one is bound, so the plan opens with who it serves and the goal it came from.]
+
 [Problem statement in 2-5 sentences. Include:
 - What's broken or what needs to be built
 - Root cause if this is a bug
@@ -107,7 +109,7 @@ no index is present, the first line says so.]
 
 - [One checkable sentence the user asked for]
 - assumes: [a fact you took as given; the user can correct it]
-- leaves out: [a part of the ask this plan does not build] - ruling: [d-xxxxxxxx or question q-xxxx]
+- leaves out: [a part of the ask this plan does not build] - ruling: [D<n>, or Q<n> for an older question]
 
 ## Consumers
 
@@ -251,7 +253,7 @@ consolidation:
   #                              # after intake: fno backlog defer <id> -K wont_do
   #                              # -R "rejected by <this node> in <plan path>".
   decisions_acknowledged: []     # one per graph.decisions row:
-  #  - decision_id: d-XXXXXXXX
+  #  - decision_id: D<n>
   #    reason: <why this ruling does not close this work>
   # outcome: absorb - the other node is a wave of THIS deliverable. After
   # intake run: fno backlog supersede <this-node> --replaces <id> --cause "..." --surface <path> --reason "..." --covers "..."
@@ -276,7 +278,7 @@ consolidation:
 #                                 # references/answerer-enumeration.md.
 surface:
   question: "Which nodes need dispatch?"   # ONE line, phrased as a question
-  ruling: d-XXXXXXXX                       # optional: the live law the question is quoted from
+  ruling: D<n>                             # optional: the live law the question is quoted from
   sweep: "rg -n 'plan_path' crates/fno-agent/src/lead_board.rs"  # the exact command run; must return the control below
   control: crates/fno-agent/src/lead_board.rs build_board  # an answerer known BEFORE the sweep ran
   answerers:

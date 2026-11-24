@@ -398,6 +398,13 @@ pub const STEPS: &[Step] = &[
         effect: "pick BlueBubbles (iMessage), Telegram or Discord; each open question posts there and a reply in its thread answers it",
     },
     Step {
+        id: "attention-remote",
+        layer: Layer::Global,
+        kind: Kind::Approve,
+        question: "Set up the remote phone answer path (ntfy push + the HQ page over tailscale)?",
+        effect: "writes the ntfy sink row with view_base_url, the web.invites owner row and the tailscale serve route, then prints the subscribe and HQ links; the bridge under launchd (web-bridge-agent) is what the phone answers through",
+    },
+    Step {
         id: "machine-tools",
         layer: Layer::Global,
         kind: Kind::Report,
@@ -2319,7 +2326,7 @@ pub(crate) fn list_json() -> serde_json::Value {
                 "effect": s.effect,
             });
             if s.id == "messaging" {
-                match crate::setup_messaging::sink_rows() {
+                match crate::setup_messaging::sink_rows().map_err(|fault| fault.to_string()) {
                     Ok(rows) => {
                         let me = crate::setup_messaging::machine();
                         v["channels"] = crate::setup_messaging::channel_states(&rows, &me)
@@ -2379,6 +2386,71 @@ fn step_messaging(exe: &Path, prompting: bool, picked: Option<&[&str]>, rep: &mu
     for message in out.needs_human {
         rep.rows
             .push(row("needs_human", "messaging_unfinished", message.clone()));
+        rep.needs_human.push(message);
+    }
+}
+
+/// The `attention-remote` step: the phone answer path. Reads the current
+/// sinks and invites rows, walks the prompts, writes through the validated
+/// config doors, and folds into the report like every other step. Rows it
+/// cannot read stop the step, because each write replaces a whole list.
+fn step_attention_remote(exe: &Path, prompting: bool, rep: &mut Report) {
+    use crate::trusted_config::{TrustedFile, TrustedKey};
+    if !prompting {
+        // The skip line writes nothing, so rows it cannot read count as none.
+        let rows = crate::setup_messaging::sink_rows().unwrap_or_default();
+        rep.skipped
+            .push(crate::setup_attention_remote::summary_line(&rows));
+        return;
+    }
+    let file = TrustedFile::from_env();
+    let read = |key| crate::setup_messaging::rows_to_rewrite(&file, key);
+    let (rows, invites) = match (
+        read(TrustedKey::AttentionSinks),
+        read(TrustedKey::WebInvites),
+    ) {
+        (Ok(rows), Ok(invites)) => (rows, invites),
+        (Err(fault), _) | (_, Err(fault)) => {
+            let message = format!("attention-remote: nothing written: {fault}");
+            rep.rows.push(row(
+                "needs_human",
+                "attention_remote_unfinished",
+                message.clone(),
+            ));
+            rep.needs_human.push(message);
+            return;
+        }
+    };
+    let set_sinks = |value: &str| {
+        config_set(exe, &[("attention.sinks", value)], false)
+            .map_err(crate::setup_attention_remote::RemoteError::Config)
+    };
+    let set_invites = |value: &str| {
+        config_set(exe, &[("web.invites", value)], false)
+            .map_err(crate::setup_attention_remote::RemoteError::Config)
+    };
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    let mut tailscale = crate::setup_attention_remote::CmdTailscale;
+    let out = crate::setup_attention_remote::step(
+        rows,
+        invites,
+        &mut crate::setup_messaging::TermAsk::new(),
+        &set_sinks,
+        &set_invites,
+        &mut tailscale,
+        &home,
+    );
+    rep.done.extend(out.done);
+    rep.skipped.extend(out.skipped);
+    rep.paths.extend(out.paths);
+    for message in out.needs_human {
+        rep.rows.push(row(
+            "needs_human",
+            "attention_remote_unfinished",
+            message.clone(),
+        ));
         rep.needs_human.push(message);
     }
 }
@@ -2530,6 +2602,7 @@ pub(crate) fn apply_wizard_pending(
             "daemon-agent" => step_daemon_agent(&mut rep, &mut loaded),
             "projects" => step_projects(exe, root, &mut rep),
             "messaging" => step_messaging(exe, true, Some(&[p.value.as_str()]), &mut rep),
+            "attention-remote" => step_attention_remote(exe, true, &mut rep),
             "usage-report" => step_usage_report(&mut rep),
             "claude-auto-mode" => step_claude_auto_mode(&mut rep),
             _ => rep.skipped.push(format!("{}: no runner", p.id)),
@@ -2908,6 +2981,7 @@ pub fn run(tail: &[OsString]) -> i32 {
             (Layer::Global, "render-path") => step_render_path(&exe, &mut rep),
             (Layer::Global, "review-merge") => step_review_merge(&mut rep),
             (Layer::Global, "messaging") => step_messaging(&exe, prompting, None, &mut rep),
+            (Layer::Global, "attention-remote") => step_attention_remote(&exe, prompting, &mut rep),
             (Layer::Global, "machine-tools") => step_machine_tools(&mut rep),
             (Layer::Global, "permission-rules") => step_permission_rules(&mut rep),
             (Layer::Global, "claude-auto-mode") => step_claude_auto_mode(&mut rep),

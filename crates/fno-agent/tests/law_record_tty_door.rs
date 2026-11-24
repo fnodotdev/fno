@@ -57,7 +57,7 @@ fn record_request(subject: &str, decision: &str) -> String {
     // it: these tests prove the transport, not the wording.
     json!({
         "mode": "record",
-        "argv": [subject, decision, "--rationale", "Prove the transport, not the wording.", "--scope", "internal"],
+        "argv": [subject, decision, "--rationale", "Prove the transport, not the wording.", "--audience", "internal", "--why", "Prove the transport, not the wording."],
         "stdin": "",
     })
     .to_string()
@@ -65,6 +65,29 @@ fn record_request(subject: &str, decision: &str) -> String {
 
 fn history_request(subject: &str) -> String {
     json!({"mode": "history", "argv": [subject]}).to_string()
+}
+
+/// A live same-subject seed: the record door is conflict-only, so each
+/// attended record lands as an auto-supersession of this row. The seed's
+/// reach names the fixture's project scope, which is what the door's
+/// scope-equal filter compares, and its old ts keeps it off the first row
+/// of a newest-first listing.
+fn seed_live_law(fixture: &Fixture, subject: &str, id: &str) {
+    let store = fixture.root().join(".fno").join("decisions.jsonl");
+    let row = json!({
+        "ts": "2026-08-29T19:00:00Z",
+        "type": "operator_decision",
+        "source": "test",
+        "data": {
+            "decision_id": id,
+            "subject": subject,
+            "decision": "The law this record supersedes.",
+            "authority_source": "chat_attested",
+            "reach": "project:lawtty",
+        },
+    })
+    .to_string();
+    std::fs::write(&store, format!("{row}\n")).expect("writes");
 }
 
 /// The decisions listing: its rows carry the authority columns the history
@@ -148,6 +171,7 @@ fn field<'a>(row: &'a Value, key: &str) -> &'a Value {
 #[test]
 fn a_terminal_set_records_under_operator_authority() {
     let fixture = Fixture::new();
+    seed_live_law(&fixture, "tty-door", "d-bedded01");
     let (code, output) = spawn_attended(
         &fixture,
         &record_request("tty-door", "A real terminal is the operator proof."),
@@ -180,6 +204,7 @@ fn a_terminal_set_records_under_operator_authority() {
         .iter()
         .find(|r| {
             field(r, "decision_id") == &json!(lowered)
+                || field(r, "decision_id") == &json!(shown)
                 || field(r, "_number") == &json!(shown)
                 || field(r, "number") == &json!(shown)
         })
@@ -194,6 +219,7 @@ fn a_terminal_set_records_under_operator_authority() {
 #[test]
 fn a_payload_read_from_the_terminal_rides_argv_attended() {
     let fixture = Fixture::new();
+    seed_live_law(&fixture, "payload-door", "d-feedface");
     let (code, output) = spawn_attended(
         &fixture,
         &json!({
@@ -204,8 +230,10 @@ fn a_payload_read_from_the_terminal_rides_argv_attended() {
                 "-",
                 "--rationale",
                 "Prove the payload rides argv attended.",
-                "--scope",
+                "--audience",
                 "internal",
+                "--why",
+                "Prove the payload rides argv attended.",
             ],
             "stdin": "The terminal fed the decision text.",
         })

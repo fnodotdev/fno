@@ -253,7 +253,7 @@ test('delivered sender and message buttons resolve the canonical session and thr
   if (!await malformed.find({ type: 'Text', text: /legacy header/ })) throw new Error('malformed header text was not preserved')
   await malformed.unmount()
 
-  // The law form (user law d-b720d23c): a two-field header renders the same
+  // The law form (user law D1899): a two-field header renders the same
   // sender and id buttons, with no subject text beside them.
   const lawForm = await $.ui.mount(userMessage(`\`@old-label · ${MESSAGE_ID}\`\nlaw form body`, 'user-law-form'))
   await lawForm.press({ key: `mail-message-user-law-form-${MESSAGE_ID}` })

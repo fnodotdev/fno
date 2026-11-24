@@ -74,16 +74,32 @@ fn docs_value(body: &str) -> Option<String> {
         .map(String::from)
 }
 
-/// True when a value points at a doc: a `#<n>` PR ref, a URL, or a path or
-/// markdown file name. A bare word such as `owed` or `todo` points at none.
+/// Strip the punctuation a sentence puts around a token: `(next.mdx),`.
+fn trim_token(t: &str) -> &str {
+    t.trim_matches(|c: char| {
+        matches!(
+            c,
+            '(' | ')' | '[' | ']' | ',' | ';' | ':' | '.' | '"' | '\''
+        )
+    })
+}
+
+/// True when a value points at a doc: a `#<n>` PR ref, `PR <n>`, a URL, or a
+/// path or markdown file name. Trailing punctuation never hides the doc. A
+/// bare word such as `owed` or `todo` points at none.
 fn value_points_at_doc(value: &str) -> bool {
-    value.split_whitespace().any(|t| {
+    let tokens: Vec<&str> = value.split_whitespace().map(trim_token).collect();
+    tokens.iter().enumerate().any(|(i, t)| {
         t.contains("://")
             || t.ends_with(".md")
             || t.ends_with(".mdx")
             || t.split('#')
                 .skip(1)
                 .any(|n| n.chars().next().is_some_and(|c| c.is_ascii_digit()))
+            || (t.eq_ignore_ascii_case("pr")
+                && tokens
+                    .get(i + 1)
+                    .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit())))
     })
 }
 
@@ -101,6 +117,51 @@ pub fn body_names_doc(body: &str) -> bool {
         Some(reason) => !reason.trim().is_empty(),
         None => value_points_at_doc(&value),
     }
+}
+
+/// The PR a `Docs:` line names, with its number and the repo slug
+/// canonicalized against the rename aliases (None for a same-repo PR or
+/// `PR <n>`). None when the line escapes with a reason, names a
+/// `.md`/`.mdx` path, or names no PR. Without a readable alias store the
+/// verbatim slug stands.
+pub fn docs_pr_ref(body: &str, cwd: Option<&Path>) -> Option<(Option<String>, i64)> {
+    let value = docs_value(body)?;
+    if value == "none" || value.starts_with("none,") {
+        return None;
+    }
+    let mut prev_pr = false;
+    for token in value.split_whitespace() {
+        let t = trim_token(token);
+        if t.eq_ignore_ascii_case("pr") {
+            prev_pr = true;
+            continue;
+        }
+        if let Some((prefix, n)) = t.rsplit_once('#') {
+            if !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) && n.parse::<i64>().is_ok() {
+                let slug = canonical_slug((!prefix.is_empty()).then(|| prefix.to_string()), cwd);
+                return Some((slug, n.parse().unwrap_or_default()));
+            }
+        }
+        if prev_pr && !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()) {
+            return Some((None, t.parse().unwrap_or_default()));
+        }
+        if t.contains("://") {
+            let slug = crate::backlog::pr_link::repo_slug_from_url(Some(t));
+            let number = crate::backlog::pr_link::pr_number_from_url(Some(t));
+            if let (Some(slug), Some(number)) = (slug, number) {
+                return Some((canonical_slug(Some(slug), cwd), number));
+            }
+        }
+    }
+    None
+}
+
+/// The slug under the rename aliases, read from the caller's config and
+/// cache rows; a miss keeps the verbatim slug.
+fn canonical_slug(slug: Option<String>, cwd: Option<&Path>) -> Option<String> {
+    let s = slug?;
+    let aliases = crate::backlog::pr_link::aliases_with_probe(cwd, None, std::iter::empty());
+    Some(crate::backlog::pr_link::canonical_repo_slug(&s, &aliases))
 }
 
 /// The missing-doc text: the touched files, the two accepted body forms,
@@ -181,6 +242,54 @@ mod tests {
     }
 
     #[test]
+    fn docs_pr_ref_names_the_url_repo_the_hash_ref_and_the_bare_pr() {
+        // AC2-HP: the slug canonicalizes against the rename aliases, so a
+        // token written under the repo's old name returns the canonical
+        // repo. The hash ref, the full url, the comma annotation and
+        // PR <n> all name a PR. AC2-EDGE: the reasoned none, the bare none,
+        // a file path and no line name none.
+        let dir = tempfile::tempdir().unwrap();
+        let fno = dir.path().join(".fno");
+        std::fs::create_dir_all(&fno).unwrap();
+        std::fs::write(
+            fno.join("config.toml"),
+            "[repo_aliases]\n\"fnodotdev/fno-web\" = \"footnote-sh/fno-web\"\n",
+        )
+        .unwrap();
+        let cwd = Some(dir.path());
+        assert_eq!(
+            docs_pr_ref("Docs: fnodotdev/fno-web#244", cwd),
+            Some((Some("footnote-sh/fno-web".to_string()), 244))
+        );
+        assert_eq!(
+            docs_pr_ref("Docs: https://github.com/fnodotdev/fno-web/pull/9", cwd),
+            Some((Some("footnote-sh/fno-web".to_string()), 9))
+        );
+        // A token under the canonical name passes through, and a slug with
+        // no alias row keeps its verbatim lowercased form.
+        assert_eq!(
+            docs_pr_ref("Docs: fno-web#45", cwd),
+            Some((Some("fno-web".to_string()), 45))
+        );
+        assert_eq!(
+            docs_pr_ref(
+                "Docs: fnodotdev/fno-web#244 docs/guides/manage-backlog.next.mdx",
+                cwd
+            ),
+            Some((Some("footnote-sh/fno-web".to_string()), 244))
+        );
+        assert_eq!(
+            docs_pr_ref("Docs: fno-web#244, merged", cwd),
+            Some((Some("fno-web".to_string()), 244))
+        );
+        assert_eq!(docs_pr_ref("Docs: PR 45", cwd), Some((None, 45)));
+        assert_eq!(docs_pr_ref("Docs: none, no user surface", cwd), None);
+        assert_eq!(docs_pr_ref("Docs: none\n", cwd), None);
+        assert_eq!(docs_pr_ref("Docs: docs/x.next.mdx", cwd), None);
+        assert_eq!(docs_pr_ref("no Docs line", cwd), None);
+    }
+
+    #[test]
     fn a_docs_line_passes_only_with_a_doc_or_a_reasoned_none() {
         // A doc reference passes; none without a reason does not.
         assert!(body_names_doc("## Summary\n\nfixes x\nDocs: fno-web#45\n"));
@@ -193,6 +302,13 @@ mod tests {
         assert!(body_names_doc(
             "Docs: https://github.com/o/fno-web/pull/9\n"
         ));
+        // Punctuation around the doc token never hides it; `PR <n>` names a PR.
+        assert!(body_names_doc("Docs: docs/next.mdx,\n"));
+        assert!(body_names_doc("Docs: (docs/next.mdx)\n"));
+        assert!(body_names_doc("Docs: fno-web#244, merged\n"));
+        assert!(body_names_doc("Docs: PR 244\n"));
+        assert!(body_names_doc("Docs: see pr 244.\n"));
+        assert!(!body_names_doc("Docs: PR owed\n"));
         // The lowercase spelling carries the same meaning.
         assert!(body_names_doc("docs: docs/reference/pr.mdx\n"));
         assert!(body_names_doc(

@@ -420,7 +420,9 @@ pub(super) fn lane_heal(session_id: &str) -> (String, Option<String>, Option<Val
 
 /// Python `wake_and_deliver`: revive via the native resume door with the
 /// wrapped body as the waking message. The reason tokens are the door's own.
-pub(super) fn wake_and_deliver(
+/// The fleet-incident clear rides this same door to wake the loops its
+/// `loops` hold parked (gate/fleet_incident.rs `deliver_resume`).
+pub(crate) fn wake_and_deliver(
     session_uuid: &str,
     wrapped: &str,
     cwd: Option<&str>,
@@ -627,22 +629,6 @@ pub(super) fn resolve_pane_entry(
     None
 }
 
-// Keeper-thread row check (cli.py _row_hosts_keeper_thread twin)
-
-pub(super) fn row_hosts_keeper_thread(session_id: &str) -> bool {
-    let registry = AgentsHome::shared_registry_json();
-    let Ok(rows) = crate::client_commands::load_registry_entries(&registry) else {
-        return false;
-    };
-    for row in rows.iter() {
-        if opt_str_field(row, "harness_session_id").as_deref() == Some(session_id) {
-            let sock = opt_str_field(row, "messaging_socket_path").unwrap_or_default();
-            return sock.contains("mux/threads/");
-        }
-    }
-    false
-}
-
 // Reachability verdict off the shared probe (dispatch.py recipient_live twin)
 
 pub(super) fn family1_probe_reachable(handle: &str) -> bool {
@@ -809,6 +795,7 @@ pub(super) fn deliver_live(
         sender_entry,
         reason_out,
         family1_state,
+        true,
     )
     .0
 }
@@ -885,7 +872,9 @@ fn pane_raw_send(row: &Value, turn: &TurnText) -> bool {
 }
 
 /// `deliver_live` plus the fallback receipt status (empty when the chosen
-/// lane answered alone).
+/// lane answered alone). `steer` carries the caller's absorb posture to the
+/// claude switchboard lane: true types one line the recipient absorbs
+/// mid-turn, false keeps the multi-line form the harness queue parks.
 pub(super) fn deliver_live_lane(
     row: &Value,
     turn: &TurnText,
@@ -893,6 +882,7 @@ pub(super) fn deliver_live_lane(
     sender_entry: Option<&Value>,
     reason_out: &mut Vec<String>,
     _family1_state: &str,
+    steer: bool,
 ) -> (DeliveryState, String) {
     // Bus-only bounds EVERY live transport below, this fn's first gate.
     let policy = crate::mail_hold::gate(
@@ -908,6 +898,7 @@ pub(super) fn deliver_live_lane(
         row,
         from_name,
         sender_entry,
+        steer,
     };
     let target = live_target(row);
     // The order is `mail::lane::LADDER`'s; the match gives each kind its adapter.
@@ -940,6 +931,8 @@ struct LiveCtx<'a> {
     row: &'a Value,
     from_name: &'a str,
     sender_entry: Option<&'a Value>,
+    /// The caller's absorb posture; only the claude switchboard lane reads it.
+    steer: bool,
 }
 
 /// The registry row flattened to the shape `mail::lane` selects on.
@@ -1028,6 +1021,7 @@ impl Lane for CodexThreadLane<'_> {
             row,
             from_name,
             sender_entry,
+            ..
         } = self.0;
         let delivered = switchboard_exchange(
             &str_field(row, "name"),
@@ -1114,9 +1108,15 @@ impl Lane for ClaudeSwitchboardLane<'_> {
 
     /// The control.sock rung parks a turn on any new line, and every row
     /// this lane serves has no pane (the pane lane runs first), so the
-    /// paneless law's one line rules (d-5641722b).
+    /// paneless law's one line rules (d-5641722b). The caller's steer=false
+    /// opts into the parked multi-line form the harness queue holds until a
+    /// turn boundary - the name lane's own posture before the law.
     fn newline_rule(&self) -> NewlineRule {
-        NewlineRule::OneLine
+        if self.0.steer {
+            NewlineRule::OneLine
+        } else {
+            NewlineRule::Verbatim
+        }
     }
 
     fn deliver(&self, turn: &TurnText, t: &Target, reason_out: &mut Vec<String>) -> DeliveryState {
@@ -1125,6 +1125,7 @@ impl Lane for ClaudeSwitchboardLane<'_> {
             row,
             from_name,
             sender_entry,
+            ..
         } = self.0;
         // The switchboard fast lane: the daemon probes B's worker socket, so a
         // claude peer that is NOT a live stream thread answers delivered=false and
@@ -1789,6 +1790,7 @@ pub(super) fn dispatch_send_locked(
                 sender_row.as_ref(),
                 &mut live_reasons,
                 &family1_state,
+                true,
             );
             if !fallback.is_empty() {
                 fallback_receipt = Some(fallback);
@@ -2256,5 +2258,33 @@ mod mail_addr_fallback_tests {
             || panic!("only the pane lane falls back to the raw door"),
         );
         assert_eq!(state.reason(), Some("pane-not-ready"));
+        // The live-drain verdict rows: a named never-lands refusal fails the
+        // send; a busy recipient (`not-injectable`), an unconfirmed inject
+        // or a missing reason holds for the turn boundary.
+        assert!(!crate::mail_cli::send::verify::live_drain_holds(Some(
+            "no-pane-ref"
+        )));
+        assert!(!crate::mail_cli::send::verify::live_drain_holds(Some(
+            "stage-failed"
+        )));
+        assert!(!crate::mail_cli::send::verify::live_drain_holds(Some(
+            "no-lane"
+        )));
+        assert!(!crate::mail_cli::send::verify::live_drain_holds(Some(
+            "no-recipient"
+        )));
+        assert!(!crate::mail_cli::send::verify::live_drain_holds(Some(
+            "turn-parse-failed"
+        )));
+        assert!(crate::mail_cli::send::verify::live_drain_holds(None));
+        assert!(crate::mail_cli::send::verify::live_drain_holds(Some(
+            "not-injectable"
+        )));
+        assert!(crate::mail_cli::send::verify::live_drain_holds(Some(
+            "not-confirmed;waited-3s"
+        )));
+        assert!(crate::mail_cli::send::verify::live_drain_holds(Some(
+            "mux-send-failed-2"
+        )));
     }
 }

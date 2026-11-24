@@ -104,7 +104,12 @@ translate positional words into the equivalent flag:
      "write a spec for this idea before claiming it" rather than
      proposing dependency edges or claim ordering. Run `/blueprint` against
      the idea's title + details, then `fno backlog intake <plan_path>`
-     to flip the node to `status: ready`.
+     to flip the node to `status: ready`. Scoping gates the flip: a
+     customer node names its `customer:<persona>` and every node carries
+     `done-means` before the move to ready (the blueprint and a target
+     start refuse the same way), so set them with
+     `fno backlog update <id> done_means=...` when the flip is
+     part of the pass.
 
    If `candidates` is empty AND `ideas` is empty, print "no pending
    nodes to triage" and exit. Done. If `candidates` is empty but
@@ -350,6 +355,6 @@ A row with `source_kind: external_request` holds visitor text from the public bo
 - `fno backlog triage` (canonical) — the v2 CLI sub-app; source in
   the native `fno backlog triage` door
 - `crates/fno-agent/src/backlog/graph_store.rs` - `mutate_rows` entry point
-- `~/.fno/cache/pages/graph.md` — the kanban view that reflects applied changes
+- `<cache home>/pages/graph.md`: the kanban view that reflects applied changes
 - `crates/fno-agent/src/backlog/triage_health.rs` — threshold evaluation,
   notification dispatch, history append/read, trend summary

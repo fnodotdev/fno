@@ -471,6 +471,7 @@ pub(crate) fn run_clear_cmd(args: &[String]) -> i32 {
         cap: crate::question_intake::QUESTION_CAP,
         provenance,
         closed_by: crate::outstanding::session_id(&cwd),
+        closed_via_succession: None,
         caller: None,
         home: Some(home.clone()),
         journal_path: crate::paths::events_path(&cwd),
@@ -1284,12 +1285,16 @@ fn run_ask(args: &[String]) -> i32 {
     let mut blocks: Vec<String> = Vec::new();
     let mut node: Option<String> = None;
     let mut subject: Option<String> = None;
+    let mut audience: Option<String> = None;
+    let mut why: Option<String> = None;
+    let mut jobs: Vec<String> = Vec::new();
     let mut images: Vec<PathBuf> = Vec::new();
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
             "-h" | "--help" => {
-                println!("usage: fno inbox outstanding ask [QUESTION] [--question-file <path>|-|template] [--ask <action>] [--option <choice>]... [--blocks <node>]... [--node <id>] [--subject <subject>] [--challenges <decision-id>] [--image <path>]...");
+                println!("usage: fno inbox outstanding ask [QUESTION] [--audience internal|customers|customer:<persona>] [--why s] [--question-file <path>|-|template] [--ask <action>] [--option <choice>]... [--blocks <node>]... [--node <id>] [--subject <subject>] [--challenges <decision-id>] [--image <path>]...");
+                println!("  ask files at one stage: --audience (the record's audience when no --node carries it) and --why are required at the ask itself; there is no later scoping stage.");
                 return 0;
             }
             "--question-file" => match args.get(index + 1) {
@@ -1349,6 +1354,36 @@ fn run_ask(args: &[String]) -> i32 {
                 }
                 None => {
                     eprintln!("outstanding: --subject needs a value");
+                    return 2;
+                }
+            },
+            "--audience" => match args.get(index + 1) {
+                Some(value) => {
+                    audience = Some(value.clone());
+                    index += 1;
+                }
+                None => {
+                    eprintln!("outstanding: --audience needs a value");
+                    return 2;
+                }
+            },
+            "--why" => match args.get(index + 1) {
+                Some(value) => {
+                    why = Some(value.clone());
+                    index += 1;
+                }
+                None => {
+                    eprintln!("outstanding: --why needs a value");
+                    return 2;
+                }
+            },
+            "--job" => match args.get(index + 1) {
+                Some(value) => {
+                    jobs.push(value.clone());
+                    index += 1;
+                }
+                None => {
+                    eprintln!("outstanding: --job needs a value");
                     return 2;
                 }
             },
@@ -1439,6 +1474,9 @@ fn run_ask(args: &[String]) -> i32 {
         blocks,
         node,
         subject,
+        audience,
+        why,
+        job: jobs,
         images,
     };
     file_ask(filing, &cwd).0
@@ -1463,6 +1501,54 @@ fn challenge_subject(spec: &str) -> Result<String, crate::decision_index::SpecEr
 }
 
 /// One parsed `fno inbox outstanding ask`.
+/// The inputs of one generated question file. The intake refuses flag-only
+/// options (they carry no What happens next), so an in-process asker that
+/// knows its context writes the sections itself.
+pub(crate) struct QuestionFile<'a> {
+    pub question: &'a str,
+    pub options: &'a [(&'a str, &'a str)],
+    pub blocked_because: &'a str,
+    pub rationale: &'a str,
+    pub downside: &'a str,
+    pub recommend: usize,
+    pub recommend_why: &'a str,
+    pub not_thought_through: &'a str,
+    pub tried: &'a str,
+    pub evidence: &'a str,
+    pub reversible: &'static str,
+    pub meanwhile: &'a str,
+}
+
+/// Render the file the intake validator accepts: frontmatter recommend,
+/// numbered options with their what-happens-next, then the readiness
+/// sections in the template's order.
+pub(crate) fn question_file_text(f: QuestionFile) -> String {
+    let mut out = format!(
+        "---\nrecommend: {}\n\n{}\n\n## Options\n",
+        f.recommend, f.question
+    );
+    for (i, (choice, next)) in f.options.iter().enumerate() {
+        out.push_str(&format!(
+            "{}. {choice}.\n    What happens next: {next}\n",
+            i + 1
+        ));
+    }
+    out.push_str(&format!(
+        "\n## Blocked because\n{}\n\n## Why these options\n{}\n\n## Downside\n{}\n\n## Recommendation\nOption {}, {}.\n\n## Not thought through\n{}\n\n## Tried\n{}\n\n## Evidence\n{}\n\n## Reversible\n{}\n\n## Meanwhile\n{}\n",
+        f.blocked_because,
+        f.rationale,
+        f.downside,
+        f.recommend,
+        f.recommend_why,
+        f.not_thought_through,
+        f.tried,
+        f.evidence,
+        f.reversible,
+        f.meanwhile,
+    ));
+    out
+}
+
 pub(crate) struct AskFiling {
     pub text: String,
     pub template: bool,
@@ -1471,6 +1557,9 @@ pub(crate) struct AskFiling {
     pub blocks: Vec<String>,
     pub node: Option<String>,
     pub subject: Option<String>,
+    pub audience: Option<String>,
+    pub why: Option<String>,
+    pub job: Vec<String>,
     pub images: Vec<PathBuf>,
 }
 
@@ -1486,6 +1575,9 @@ pub(crate) fn file_ask(filing: AskFiling, cwd: &Path) -> (i32, Option<String>) {
         blocks,
         node,
         subject,
+        audience,
+        why,
+        job,
         images,
     } = filing;
     let cwd = cwd.to_path_buf();
@@ -1522,6 +1614,81 @@ pub(crate) fn file_ask(filing: AskFiling, cwd: &Path) -> (i32, Option<String>) {
         .flatten();
     let wake_node = node.clone();
     let wake_question = text.clone();
+    // Who and why have no default on a question either. A --node ask carries
+    // the node's audience when the asker passed no --audience; template mode
+    // records nothing and skips the checks the way it skips the law gates.
+    if template {
+        let request = crate::question_intake::IntakeRequest {
+            question: text,
+            template: true,
+            ask,
+            options,
+            blocks,
+            node,
+            subject,
+            audience: None,
+            why: None,
+            job: Vec::new(),
+            session_id: session,
+            harness: ident.harness.clone(),
+            cwd: Some(cwd.to_string_lossy().into_owned()),
+            asker,
+            laws: Vec::new(),
+            rung: None,
+            storage_root: crate::outstanding::storage_root(&cwd),
+            index_path: Some(crate::provider_cap::questions_path(&home)),
+            journal_path: Some(crate::paths::events_path(&cwd)),
+            display_name: Some(who),
+            render_cap: None,
+            op: None,
+            event: None,
+            screens_dir: None,
+            images,
+        };
+        let answer = crate::question_intake::run_intake(&request, &home);
+        return (answer.exit_code, None);
+    }
+    let node_scope = audience.clone().or_else(|| {
+        node.as_deref().and_then(|nid| {
+            let graph = crate::backlog::settings::graph_path();
+            crate::graph_store::read_rows(&graph).ok().and_then(|rows| {
+                rows.iter()
+                    .find(|r| crate::backlog::question_intake::str_field(r, "id") == Some(nid))
+                    .and_then(|r| crate::backlog::question_intake::str_field(r, "audience"))
+                    .map(String::from)
+            })
+        })
+    });
+    let project_id = crate::backlog::law_match::resolve_project(
+        Some(&cwd),
+        &crate::backlog::law_match::settings_sources(),
+    )
+    .unwrap_or_else(|_| "fno".into());
+    let ask_scope: String = if node_scope.as_deref() == Some("ask") {
+        "audience?".to_string()
+    } else {
+        match crate::backlog::audience::parse_audience(node_scope.as_deref(), &project_id) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("ask: refused. {}. Nothing was asked.", e.0);
+                return (2, None);
+            }
+        }
+    };
+    if why.as_deref().map(str::trim).unwrap_or("").is_empty() {
+        eprintln!(
+            "ask: refused. --why is required: the goal behind the ask, quoted from the user's words when the ask came from him. Nothing was asked."
+        );
+        return (2, None);
+    }
+    // A job names its persona's file: the same refusal the node and decision
+    // doors run, so a typo'd job never lands on the question board.
+    if ask_scope != "audience?" {
+        if let Err(e) = crate::backlog::audience::validate_job(&ask_scope, &job, &project_id) {
+            eprintln!("ask: refused. {}. Nothing was asked.", e.0);
+            return (2, None);
+        }
+    }
     let request = crate::question_intake::IntakeRequest {
         question: text,
         template,
@@ -1530,6 +1697,9 @@ pub(crate) fn file_ask(filing: AskFiling, cwd: &Path) -> (i32, Option<String>) {
         blocks,
         node,
         subject,
+        audience: Some(ask_scope.clone()),
+        why,
+        job,
         session_id: session,
         harness: ident.harness.clone(),
         cwd: Some(cwd.to_string_lossy().into_owned()),
@@ -1605,6 +1775,10 @@ pub(crate) fn file_ask(filing: AskFiling, cwd: &Path) -> (i32, Option<String>) {
             );
             println!("{}", crate::question_ladder::push_line(qid, &payload));
         }
+    } else if !template {
+        // A queued ask has no id to wake or notify with; stdout says so in
+        // the number's place.
+        println!("{}", crate::numbers::mint::QUEUED);
     }
     (0, answer.qid)
 }

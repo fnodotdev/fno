@@ -130,7 +130,7 @@ while IFS= read -r rline; do
   if [[ ${#rtok[@]} -ne 3 ]]; then continue; fi
   if [[ "${rtok[0]}" =~ ^${node_id_re}$ && "${rtok[1]}" =~ ^${node_id_re}$ \
        && "${rtok[0]}" != "${rtok[1]}" \
-       && "${rtok[2]}" =~ ^((fmail|msg)-[0-9a-f]{6,}|d-[0-9a-f]{8})$ ]]; then
+       && "${rtok[2]}" =~ ^((fmail|msg)-[0-9a-f]{6,}|d-[0-9a-f]{8}|D[0-9]{1,7})$ ]]; then
     retarget_from="${rtok[0]}"
     retarget_to="${rtok[1]}"
     retarget_approval="${rtok[2]}"

@@ -42,9 +42,9 @@ ceremony you need:
 
 | Goal | Command |
 |------|---------|
-| Capture an idea, minimal ceremony | `fno backlog idea "title" --difficulty medium --details "why"` |
-| Add a fuller node (type/size/blockers/parent) | `fno backlog add "title" --difficulty medium --priority p2 --details "..."` |
-| Create one auto-scoped to the current git repo (carries source provenance) | `fno backlog new "title" --difficulty medium` |
+| Capture an idea, minimal ceremony | `fno backlog idea "title" --audience internal --why "the goal" --done-means "what done reads as" --difficulty medium --details "why"` |
+| Add a fuller node (type/size/blockers/parent) | `fno backlog add "title" --audience internal --why "the goal" --done-means "what done reads as" --difficulty medium --priority p2 --details "..."` |
+| Create one auto-scoped to the current git repo (carries source provenance) | `fno backlog new "title" --audience internal --why "the goal" --done-means "what done reads as" --difficulty medium` |
 | Pull an existing plan file in as a node | `fno backlog intake path/to/plan.md` |
 
 Differences:
@@ -89,7 +89,7 @@ fno backlog update <id> tags+=<tag>            # add one tag, e.g. area:mail (se
 The operator form (`field=value`, `field+=value`, `field-=value`) covers every field. `fno backlog update --help` lists them by kind.
 
 
-`<id>` resolves by canonical id (`ab-1a2b3c4d`), title-derived slug (`dashless-spawn`), or bare hex (`1a2b3c4d`). A display number (`x-15`) resolves when the number table carries it. A number no store holds refuses with both forms named, so a typed token never acts on a different node.
+`<id>` resolves by canonical id (`ab-1a2b3c4d`), title-derived slug (`dashless-spawn`), or bare hex (`1a2b3c4d`). A display number (`x-15`) resolves through the number table. With `backlog.id_mode` set to `sequential`, `x-15` is the id itself, and the shell id checks accept that shape. A number no store holds refuses with both forms named, so a typed token never acts on a different node.
 
 When a PR opens outside the Footnote PR path, acquire the owner claim with `fno agent claim acquire node:<id> --holder <worker>`, then record the primary PR with `fno backlog update <id> pr_number=<n>`. The claim lockfile is the owner source, and the update receipt reports its owner, PR, and status. `--add-pr` records only an additional PR and can leave a ready node offered for dispatch. Without a claim lockfile, the owner reads as `unknown`.
 
@@ -129,8 +129,23 @@ A repeat `fno backlog note` on a node with no encounter from the same session en
 ```bash
 fno backlog encounter <id> --evidence "cost two wrong diagnoses before I found the real seam."
 fno backlog encounter <id> --operator --evidence "the operator hit the same seam."
-fno backlog idea "title" --evidence "hit this while doing something else."
-fno backlog add "title" --evidence "hit this while doing something else."
+fno backlog idea "title" --audience internal --why "the goal" --done-means "what done reads as" --evidence "hit this while doing something else."
+
+Every filing door names who it serves (`--audience internal`, `customers` or
+`customer:<persona>`, no default) and the goal behind the ask (`--why`,
+the user's words when the ask came from him). The facts stage: the coarse
+audience and the why file the node, and `--done-means` (the acceptance a merge
+check can read) plus a customer node's `customer:<persona>` become required
+when the node is scoped - the move to ready, a blueprint, or target start all
+refuse until both are set (`fno backlog update <id> done_means=...`).
+At filing an agent has seen a symptom, not who it hurts, so nothing forces a
+guessed persona or acceptance onto the board score. A `--parent` create carries the
+parent's scope and the receipt says so. Unsure? Pass `--audience ask`: the row
+stores `audience?`, one question goes to the lead with the node linked, and
+`fno backlog next` holds it until a scope lands. Never guess the audience.
+`fno backlog update <id> audience=<new>` refuses a change with no `why=` on the
+same call and appends the move to the node's `audience_history`.
+fno backlog add "title" --audience internal --why "the goal" --done-means "what done reads as" --evidence "hit this while doing something else."
 fno backlog demand                 # the divergence table
 fno backlog demand --json          # the same rows, for a groom pass or a lead
 ```
@@ -279,7 +294,7 @@ A child is open: not done, not superseded, not deferred. Children are direct. A 
 
 Every write that sets a parent meets the refusal: `update parent=`, `idea --parent`, `contain`, `decompose`, the rollup role auto-link, and the api node_create. A hand-up is exempt. That write moves the live children of a closing node to the nearest live ancestor. It moves existing work and adds none. If the role's single epic is full, a titled `idea` with no `--parent` meets the same refusal. The auto-link sets the parent in the same write. The filer re-runs with `--parent <new epic>`.
 
-The refusal names the epic, its open count, the cap, and the next step. Run `fno backlog idea "EPIC: <theme>" --type epic` to start a new small epic, then point the write at the new epic id. If a lead leads the full epic, it adds the new epic to its own role: `fno agent hq promote <its handle> --scope <each epic it holds> --scope <new-epic-id>`. That works for an epic the lead's own session created. Any other epic needs a grant the user makes in chat, or a role that contains both. The user says it, you record their exact words with `fno inbox decisions set 'role-grant:<new-epic-id>' '<your handle>' --rationale 'user in chat: <their words>'`, and the next check-in stamps the role.
+The refusal names the epic, its open count, the cap, and the next step. Run `fno backlog idea "EPIC: <theme>" --audience internal --why "the goal" --done-means "what done reads as" --type epic` to start a new small epic, then point the write at the new epic id. If a lead leads the full epic, it adds the new epic to its own role: `fno agent hq promote <its handle> --scope <each epic it holds> --scope <new-epic-id>`. That works for an epic the lead's own session created. Any other epic needs a grant the user makes in chat, or a role that contains both. The user says it, you record their exact words with `fno inbox decisions set 'role-grant:<new-epic-id>' '<your handle>' --rationale 'user in chat: <their words>'`, and the next check-in stamps the role.
 
 The same count reads before any write, on the `epics:` line of `fno agent hq checkin`. `19/15 full` means the next open child is refused at the current cap. `19/- (cap unset)` means no cap is configured, which is the OSS default. `fno agent hq --nodes --json` carries the list per role as `epics` and `epic_cap`.
 
@@ -287,7 +302,7 @@ The same count reads before any write, on the `epics:` line of `fno agent hq che
 
 Machine-filed, unplanned idea rows use `backlog.max_open_ideas` in each nearest-epic scope. Rows without an epic use `project:<project>`. The default is 25. Every measured epic scope held nine or fewer ideas. A fresh install can accept a readable first batch. `0` turns the cap off. Rows with a plan, epic type, decompose group, or `source_kind = operator_request` are not capped. A refusal reports the count, cap, oldest rows, and fold path (`--wave-of`). It suggests an epic parent or closing stale ideas. Setting this key prints the Python loader's unknown-key warning until the config model carries it. Rust still reads the key at the publication seams.
 
-A wave note (`fno backlog idea --wave-of <node>`) folds a finding onto a live node and mints no id. Nothing acts on it, so it stays open until someone records where it went. `fno backlog find` searches its text. `fno backlog list wave-notes` lists the undisposed notes on closed hosts, with each note's `ts`. `--all` adds notes on hosts that closed before 2026-11-01. Nobody triaged those older notes, so they stay out of the working list. `fno backlog note dispose <host> <note-ts> --absorbed <pr>` or `--refiled <node>` records the outcome, and the note stays on its host. `fno backlog done` and `fno backlog reconcile` name a closing host's undisposed notes on stderr. They never refuse a close over them, because a merged PR has nothing left to stop. A `done` with completion flags (`--pr`, `--note`) and a `supersede` print no line. `find --fts` does not read wave text. The list still holds every such note.
+A wave note folds a finding onto a live node and mints no id. File one with `fno backlog idea --wave-of <node>`, which takes the same --scope/--why/--done-means flags. Nothing acts on it, so it stays open until someone records where it went. `fno backlog find` searches its text. `fno backlog list wave-notes` lists the undisposed notes on closed hosts, with each note's `ts`. `--all` adds notes on hosts that closed before 2026-11-01. Nobody triaged those older notes, so they stay out of the working list. `fno backlog note dispose <host> <note-ts> --absorbed <pr>` or `--refiled <node>` records the outcome, and the note stays on its host. `fno backlog done` and `fno backlog reconcile` name a closing host's undisposed notes on stderr. They never refuse a close over them, because a merged PR has nothing left to stop. A `done` with completion flags (`--pr`, `--note`) and a `supersede` print no line. `find --fts` does not read wave text. The list still holds every such note.
 
 ## Finding work by meaning: find --fts
 
@@ -329,7 +344,7 @@ Origin is where the decision to think about this was made; affinity is asserted 
 The two paths fail in opposite directions on purpose. Ambient capture that resolves nothing files the node anyway with a null origin, because provenance must never block a filing. An explicit `--source-node` that does not resolve **refuses the command** and writes nothing, because silently dropping an assertion would leave a node looking organically filed.
 
 ```bash
-fno backlog idea "follow-up" --source-node x-aaaa    # or a slug, or bare hex
+fno backlog idea "follow-up" --audience customers --why "the goal" --done-means "what done reads as" --source-node <id>    # or a slug, or bare hex
 fno backlog update <id> source_node_id=null           # clear it
 ```
 
@@ -337,7 +352,7 @@ fno backlog update <id> source_node_id=null           # clear it
 
 ```bash
 fno backlog update x-aaaa related=x-bbbb,x-cccc   # sets both directions
-fno backlog idea "co-delivered work" --related x-bbbb
+fno backlog idea "co-delivered work" --audience customers --why "the goal" --done-means "what done reads as" --related <id>
 fno backlog update x-aaaa related=null            # clears both sides
 ```
 
@@ -455,7 +470,7 @@ Press prefix+V to cycle the left sideline between agents, backlog and org. The b
 
 ### A local HTML file
 
-The daemon writes the board page to `~/.fno/cache/pages/graph.html` with no setup. The page looks like this:
+The daemon writes the board page to `pages/graph.html` in the [cache home](path-config.md#cache-and-logs-homes) with no setup. The page looks like this:
 
 ![The HTML backlog page: a search bar and filters above kanban columns, with a node's fields, details, parent and sessions open in the side panel](images/backlog-html-page.png)
 
@@ -493,7 +508,7 @@ Like `render_targets`, the renderer reads `backlog.render_default` from the glob
 
 The path must be absolute or start with `~/`. A row with an unknown key, an empty scope, or a duplicate path skips with a warning. A row that names a graph state file skips too.
 
-Do not point a row at the state root, for example `~/.fno/graph.html`. The daemon already writes the canonical page under `~/.fno/cache/pages/`, so a state-root row only adds a stray file.
+Do not point a row at the state root, for example `~/.fno/graph.html`. The daemon already writes the canonical page under `pages/` in the cache home, so a state-root row only adds a stray file.
 
 `fno backlog admin render-views` runs one render pass now. It writes `graph.md` and every configured board target. It is the same pass the daemon runs.
 
@@ -522,6 +537,8 @@ The PR-keyed outcome columns measure only merged nodes that carry a PR number on
 The coverage block reports what share of records carry each lane axis and a measured cost. A record whose last execute session carries no harness lands in the `unattributed` bucket, sorted last, never dropped. Provider reads `unrecorded` without a ledger row. Model reads `unknown` without a session or ledger value. One axis going missing never hides a record.
 
 `--kind-depth` splits the kind by the node's merge commit on the default branch. Depth 2 appends the conventional type: fix, feat, docs, refactor, other. Depth 3 appends the type-surface pair. The surface reads rust for crates/ and Cargo.lock, python for cli/ with its tests, and ui for the web pages and the mux-server lane. docs covers a commit whose every changed path is docs or markdown. Support paths (scripts, skills, hooks, the root tests/) carry no vote. Anything else reads mixed. A node with no in-repo PR, or whose diff read fails, reads unknown at deeper depths - an unmeasured part groups visibly instead of guessing. A node with a blueprint session row also credits that session's lane with the node's downstream outcome under a blueprint kind, beside its target cell. The planning lane then shows up in the same fold at every depth. Its cost is its own session's ledger row, not the node's whole bill. The coverage block counts the population once: credit records never double it. The default depth stays 1. The plain by-lane read keeps its cell shape, and the blueprint kind is the one addition at that depth. The router rides the same read. `--propose --stage <command>` folds one verdict per candidate lane per kind, names the contradicted seat decisions, and writes nothing to config. The stage takes target or blueprint. A blueprint proposal comes only from the blueprint seat decision's model families.
+
+The by-lane read also folds a by-lead view. One cell per stored team title counts the window's nodes, merges, measured spend and the distinct holder names. `holding_lead` is stamped at close and reads the lead that held the node's scope at `completed_at`. A node with no stamp or no title groups under `unknown`, and the unknown group prints too so the unattributed share stays visible.
 
 The plain read, `fno backlog calibration --json`, emits four keys. `nodes` and `aggregate` cover done nodes with a `cost_sessions` row. The aggregate groups by domain, filed difficulty and planned size. `revisions` covers every done node with a `difficulty_history`, and counts per domain and filed band how many nodes ended above or below it. `friction_since` names the journal's first friction row. A node created before that row had no recorder, so its `smooth` reads null. A friction row or a re-estimate still marks it rough. The aggregate counts smooth only among its `measured_count` nodes. The blueprint's difficulty step reads the `revisions` row. `--since` requires `--by-lane`. `--kind-depth` requires `--by-lane`. `--json` gives the machine shape and `--domain` filters by domain.
 
@@ -558,6 +575,8 @@ fno backlog maintain --repo-moved fnodotdev/fno=fnodotdev/fno-workshop --apply
 ```
 
 Without `--min-number`, the pass moves every stored url naming the old slug to the new one. It covers open and closed rows alike. A closed row left behind collides with the new repo's first PR. It rewrites primary and `additional_prs` slots. Url-less rows whose cwd still resolves to the moved repo get filled. Dry run by default. `--json` reports candidates and applied rows. After it runs, every PR read binds by repo plus number. A url naming another repo never binds. A located ref outranks a bare number. Two bare rows naming one number refuse rather than guess.
+
+The maintain pass also carries a one-shot attribution backfill. `fno backlog maintain --lead-backfill` stamps every done node that lacks the field. The derivation reads only the canonical `lead_checkin` journal rows, so the lead that held the node's scope at `completed_at` gets the credit. The live holder is never a credit here. A node closed under a predecessor stays with the predecessor even after a succession. A node whose scope or journal history does not resolve stamps `unknown`, never a guess. An epic also records every distinct holder over its life. The stamp is insert-only. A rerun never overwrites an existing one. Dry run by default. `--apply` writes. `--json` reports candidates and applied nodes. It runs alone, like `--repo-moved`.
 
 A UTC-day claim, not the scheduler, enforces once-a-day, so a double-fire or a manual run on a day that already groomed is a no-op (`already-ran`, zero subprocesses).
 That makes the cadence boring to install:

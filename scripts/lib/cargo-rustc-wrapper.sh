@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# The generated state-dir stub (STATE_DIR etc.), so the fallback-writer log
-# path never hardcodes $HOME/.fno. REPO_ROOT is preset from this file's own
+# The generated state-dir stub (STATE_DIR etc.), so no state path here
+# hardcodes $HOME/.fno. REPO_ROOT is preset from this file's own
 # location so the stub's git rev-parse subshell never runs on the hot path.
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 # shellcheck source=scripts/lib/paths.sh
@@ -174,7 +174,7 @@ esac
 # An env-less cargo build lands in the fallback base ~/.cargo/build (the
 # tracked .cargo/config.toml's build-dir template). The wrapper is the one
 # door every such compile passes, so it names the offender: once per cargo,
-# one tab-separated line in ~/.fno/logs/cargo-fallback-writers.log naming
+# one tab-separated line in cargo-fallback-writers.log of the logs home naming
 # the cargo pid and argv, the parent pid and argv, the cwd and the manifest
 # dir. The compiler always runs.
 name_fallback_writer() {
@@ -196,8 +196,10 @@ name_fallback_writer() {
     if ! ( set -o noclobber; : >"$marker" ) 2>/dev/null; then
         return 0
     fi
+    # The stub above always names the default root, whose logs are the state home's.
+    local log
+    log="$(fno_state_home)/logs/cargo-fallback-writers.log"
     {
-        local log="$STATE_DIR/logs/cargo-fallback-writers.log"
         mkdir -p "$(dirname "$log")"
         local cargo_argv parent_pid parent_argv
         cargo_argv="$(ps -o command= -p "$PPID" 2>/dev/null || true)"
@@ -210,7 +212,7 @@ name_fallback_writer() {
             tail -n 500 "$log" >"$log.tmp" && mv "$log.tmp" "$log"
         fi
     } 2>/dev/null || true
-    echo 'cargo-rustc-wrapper: CARGO_BUILD_BUILD_DIR is unset, so this build lands in the fallback base ~/.cargo/build; logged to ~/.fno/logs/cargo-fallback-writers.log. To use the fno base in this shell: export CARGO_BUILD_BUILD_DIR="$(fno config build-dir)"' >&2
+    echo 'cargo-rustc-wrapper: CARGO_BUILD_BUILD_DIR is unset, so this build lands in the fallback base ~/.cargo/build; logged to '"$log"'. To use the fno base in this shell: export CARGO_BUILD_BUILD_DIR="$(fno config build-dir)"' >&2
 }
 
 case " $* " in

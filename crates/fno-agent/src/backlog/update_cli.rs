@@ -78,10 +78,15 @@ struct UpdateArgs {
     /// carry the int gate as a raw token the PR block validates.
     pr_number: Option<String>,
     pr_url: Option<String>,
+    audience: Option<String>,
+    why: Option<String>,
+    done_means: Option<String>,
+    job: Option<String>,
     repo: Option<String>,
     add_pr: Option<String>,
     add_pr_url: Option<String>,
     add_pr_note: Option<String>,
+    add_pr_status: Option<String>,
     remove_pr: Option<String>,
     /// `--to <new-id>`: the in-place node-id rename through
     /// `reid_cli::reid_write`. One operation per call.
@@ -109,6 +114,10 @@ struct UpdateArgs {
 impl UpdateArgs {
     fn parse(tail: &[String]) -> ParsedUpdate {
         let mut a = UpdateArgs {
+            audience: None,
+            why: None,
+            done_means: None,
+            job: None,
             task_id: String::new(),
             help: false,
             title: None,
@@ -152,6 +161,7 @@ impl UpdateArgs {
             add_pr: None,
             add_pr_url: None,
             add_pr_note: None,
+            add_pr_status: None,
             remove_pr: None,
             reid_to: None,
             door: Vec::new(),
@@ -255,6 +265,7 @@ impl UpdateArgs {
                 "--repo" => take_value!(a.repo),
                 "--add-pr-url" => take_value!(a.add_pr_url),
                 "--add-pr-note" => take_value!(a.add_pr_note),
+                "--add-pr-status" => take_value!(a.add_pr_status),
                 "--to" => take_value!(a.reid_to),
                 other => {
                     if let Some(op) = update_ops::parse_op_token(raw) {
@@ -428,6 +439,10 @@ fn lower_op(
             }
         },
         ("has_brief", update_ops::Op::Set) => a.has_brief = Some(value),
+        ("audience", update_ops::Op::Set) => a.audience = Some(value),
+        ("why", update_ops::Op::Set) => a.why = Some(value),
+        ("done_means", update_ops::Op::Set) => a.done_means = Some(value),
+        ("job", update_ops::Op::Set) => a.job = Some(value),
         _ => {} // check() refused every field outside OP_FIELDS at parse
     }
     Ok(())
@@ -534,6 +549,7 @@ fn run_external_bind_with(
         && args.repo.is_none()
         && args.add_pr_url.is_none()
         && args.add_pr_note.is_none()
+        && args.add_pr_status.is_none()
         && args
             .ops
             .iter()
@@ -595,6 +611,7 @@ fn run_reid(args: &UpdateArgs, new_id: &str) -> i32 {
         (args.repo.is_some(), "--repo"),
         (args.add_pr_url.is_some(), "--add-pr-url"),
         (args.add_pr_note.is_some(), "--add-pr-note"),
+        (args.add_pr_status.is_some(), "--add-pr-status"),
         (!args.door.is_empty(), "--status/--leave/--set"),
     ] {
         if set {
@@ -638,6 +655,7 @@ fn run_door_relay(args: &UpdateArgs) -> i32 {
     note("--repo", args.repo.is_some(), &mut legacy);
     note("--add-pr-url", args.add_pr_url.is_some(), &mut legacy);
     note("--add-pr-note", args.add_pr_note.is_some(), &mut legacy);
+    note("--add-pr-status", args.add_pr_status.is_some(), &mut legacy);
     if !legacy.is_empty() {
         legacy.sort_unstable();
         eprintln!(
@@ -777,6 +795,7 @@ fn run_native(args: &UpdateArgs) -> Result<(), Refusal> {
 /// The PR links a wave-5 call resolves before the lock: the derived values
 /// the mutator stores plus the clearing flag the receipts need. All empty
 /// for a call without PR flags.
+#[derive(Debug)]
 struct DerivedPr {
     pr_number: Option<i64>,
     pr_url: Option<String>,
@@ -800,6 +819,7 @@ fn derive_pr_links(
         || args.add_pr.is_some()
         || args.add_pr_url.is_some()
         || args.add_pr_note.is_some()
+        || args.add_pr_status.is_some()
         || args.remove_pr.is_some();
     if !pr_flags {
         return Ok(DerivedPr {
@@ -822,6 +842,22 @@ fn derive_pr_links(
             }
         }
     }
+    if args.add_pr.is_none()
+        && (args.add_pr_url.is_some() || args.add_pr_note.is_some() || args.add_pr_status.is_some())
+    {
+        return Err(refused(
+            "Error: --add-pr-url, --add-pr-note and --add-pr-status require additional_prs+=",
+            2,
+        ));
+    }
+    if let Some(status) = args.add_pr_status.as_deref() {
+        if !matches!(status.trim(), "merged" | "open" | "closed") {
+            return Err(refused(
+                "Error: --add-pr-status takes merged, open or closed",
+                2,
+            ));
+        }
+    }
     // The node as it stands now, for cwd and current-PR reads (the Python
     // `_node_before_update` cache, read eagerly here).
     let pre_node: Option<Value> = {
@@ -840,12 +876,6 @@ fn derive_pr_links(
         .as_deref()
         .is_some_and(|v| v.to_lowercase() == "null");
 
-    if args.add_pr.is_none() && (args.add_pr_url.is_some() || args.add_pr_note.is_some()) {
-        return Err(refused(
-            "Error: --add-pr-url and --add-pr-note require additional_prs+=",
-            2,
-        ));
-    }
     if args.repo.is_some() {
         if args.pr_url.is_some() && !clearing_url {
             return Err(refused(
@@ -1087,17 +1117,14 @@ fn write_update(
     linked_size: Option<&str>,
     pr: &DerivedPr,
 ) -> Result<(), Refusal> {
-    const ATTEMPTS: usize = 3;
+    const ATTEMPTS: usize = 5;
     for attempt in 0..ATTEMPTS {
-        // The version anchors BEFORE the row read: a commit that lands between
-        // the two makes this attempt's base_version stale, so the store
-        // refuses and the retry converges. The reverse order would publish
-        // the stale snapshot over the concurrent commit as a no-conflict
-        // write - a lost update.
-        let base_version = graph_store::base_version(graph)
+        // One read transaction returns the version stamp and the rows, so the
+        // plan and its pre-image come from the same instant. A write by another
+        // session to a row this update does not touch no longer refuses it.
+        let (base_version, snapshot) = graph_store::read_snapshot(graph)
             .map_err(|e| refused(format!("graph read failed: {e}"), 1))?;
-        let rows = graph_store::read_rows(graph)
-            .map_err(|e| refused(format!("graph read failed: {e}"), 1))?;
+        let rows = snapshot.rows.clone();
         let planned = plan_mutation(
             graph,
             rows,
@@ -1118,16 +1145,25 @@ fn write_update(
                 repaint_old_parent,
                 details_counts,
             } => {
-                match graph_store::locked_mutate(
-                    graph,
-                    MutateInput {
-                        entries: working,
-                        canonical_path: None,
-                        base_version,
-                        plan_rungs: Some(rungs),
-                    },
-                    LOCK_TIMEOUT,
-                ) {
+                // The first attempt keeps the whole-graph version check, so an
+                // uncontended update lands exactly as it always did. Only a
+                // retry after a conflict publishes over its snapshot, and not
+                // a parent or type change: its cycle and epic-depth checks
+                // read rows the write does not touch.
+                let reads_other_rows =
+                    attempt == 0 || reparents_or_retypes(&snapshot.rows, &working, &node_id);
+                let input = MutateInput {
+                    entries: working,
+                    canonical_path: None,
+                    base_version,
+                    plan_rungs: Some(rungs),
+                };
+                let published = if reads_other_rows {
+                    graph_store::locked_mutate(graph, input, LOCK_TIMEOUT)
+                } else {
+                    graph_store::locked_mutate_snapshot(graph, input, snapshot, LOCK_TIMEOUT)
+                };
+                match published {
                     Ok(_) => {
                         // The dispatch-brief warning echoes once, after the
                         // write lands and before the receipt - the shape the
@@ -1220,6 +1256,22 @@ fn write_update(
     unreachable!("every loop arm returns")
 }
 
+/// True when the planned row's `parent` or `type` differs from the snapshot's.
+fn reparents_or_retypes(before: &[Value], after: &[Value], node_id: &str) -> bool {
+    let find = |rows: &[Value]| {
+        rows.iter()
+            .find(|r| RowFacts::id_of(r) == Some(node_id))
+            .cloned()
+    };
+    let (Some(old), Some(new)) = (find(before), find(after)) else {
+        return true;
+    };
+    let (Some(old), Some(new)) = (RowFacts::of(&old), RowFacts::of(&new)) else {
+        return true;
+    };
+    old.parent().value() != new.parent().value() || old.kind().value() != new.kind().value()
+}
+
 enum MutationPlan {
     Applied {
         working: Vec<Value>,
@@ -1298,6 +1350,31 @@ fn plan_mutation(
         })
         .collect();
     recompute_statuses_with_plan_rungs(&mut rows, Some(&rungs));
+
+    // The scoping gate (D3526): a plan bind that lands ready IS the move to
+    // ready, so the field-operator path gates the same transition the patch
+    // door gates. The pre-image row (`node`) carries the stored status this
+    // call started from; only the transition refuses, an already-ready row
+    // takes ordinary writes ungated, and containers stay exempt: their ready
+    // comes from the children rollup, never from a scoping fact of their own.
+    let old_status_ready =
+        RowFacts::of(&node).and_then(|facts| facts.status().as_str()) == Some("ready");
+    let new_status = rows
+        .get(idx)
+        .and_then(RowFacts::of)
+        .and_then(|facts| facts.status().as_str())
+        .unwrap_or("");
+    if new_status == "ready"
+        && !old_status_ready
+        && super::patch::container_children_summary(&rows, &node_id).is_none()
+    {
+        if let Some(msg) = rows
+            .get(idx)
+            .and_then(|row| crate::backlog::audience::scoping_refusal(row, "the move to ready"))
+        {
+            return Err(refused(format!("Error: {msg}"), 1));
+        }
+    }
 
     Ok(MutationPlan::Applied {
         working: rows,
@@ -1611,6 +1688,124 @@ fn apply_mutators(
     if let Some(v) = &args.has_brief {
         let obj = rows[idx].as_object_mut().expect("row is an object");
         obj.insert("has_brief".into(), Value::Bool(v.to_lowercase() == "true"));
+    }
+    // -- Who, why and done-means. scope= validates through the audience
+    // parser (no default, persona file must exist); `null` clears why or
+    // done_means but never scope (a node always names who it serves).
+    if let Some(v) = &args.audience {
+        if v.to_lowercase() == "null" {
+            return Err(refused(
+                "Error: audience= null refuses: a node always names who it serves. Pass an audience.",
+                1,
+            ));
+        }
+        // A change carries its reason: audience= with no why= on the same
+        // call refuses, and the move appends one history entry.
+        if args.why.as_deref().map(str::trim).unwrap_or("").is_empty() {
+            return Err(refused(
+                "Error: audience= refuses a change with no why=: pass why=<the reason the customer changed> on the same update.",
+                1,
+            ));
+        }
+        let project = args
+            .project
+            .clone()
+            .or_else(|| {
+                rows.get(idx)
+                    .and_then(|row| crate::backlog::question_intake::str_field(row, "project"))
+                    .map(String::from)
+            })
+            .unwrap_or_else(|| "fno".into());
+        if let Err(e) = crate::backlog::audience::parse_audience(Some(v), &project) {
+            return Err(refused(format!("Error: {}", e.0), 1));
+        }
+        {
+            // The change keeps its history: one {from, to, at, by, why} entry
+            // per move, so a customer change is never silent. The old value
+            // reads before the mutable borrow below.
+            let old = rows
+                .get(idx)
+                .and_then(|row| crate::backlog::question_intake::str_field(row, "audience"))
+                .unwrap_or("")
+                .to_string();
+            let obj = rows
+                .get_mut(idx)
+                .and_then(Value::as_object_mut)
+                .expect("row is an object");
+            let now = crate::claims::now_ms();
+            let at = chrono::DateTime::from_timestamp(now / 1000, 0)
+                .map(|dt| dt.to_rfc3339())
+                .unwrap_or_default();
+            let entry = json!({
+                "from": old,
+                "to": v,
+                "at": at,
+                "by": crate::outstanding::session_id(&std::env::current_dir().unwrap_or_default())
+                    .unwrap_or_else(|| "unknown".into()),
+                "why": args.why.clone().unwrap_or_default(),
+            });
+            let history = obj
+                .entry("audience_history".to_string())
+                .or_insert_with(|| Value::Array(Vec::new()));
+            if let Some(arr) = history.as_array_mut() {
+                arr.push(entry);
+            }
+            obj.insert("audience".into(), json!(v));
+        }
+    }
+    for (field, slot) in [("why", &args.why), ("done_means", &args.done_means)] {
+        // A scope change consumes the why= value as the history entry's
+        // reason; it never also rewrites the node's goal, which the change
+        // did not touch.
+        if field == "why" && args.audience.is_some() {
+            continue;
+        }
+        if let Some(v) = slot {
+            rows.get_mut(idx)
+                .and_then(Value::as_object_mut)
+                .expect("row is an object")
+                .insert(
+                    field.into(),
+                    if v.to_lowercase() == "null" {
+                        Value::Null
+                    } else {
+                        json!(v)
+                    },
+                );
+        }
+    }
+    // The job= op replaces the whole job list; every named persona must
+    // carry the job heading, validated against the row's audience.
+    if let Some(raw) = &args.job {
+        let jobs: Vec<String> = raw
+            .split(',')
+            .map(|j| j.trim().to_string())
+            .filter(|j| !j.is_empty())
+            .collect();
+        let audience_now = rows
+            .get(idx)
+            .and_then(|row| crate::backlog::question_intake::str_field(row, "audience"))
+            .unwrap_or_default();
+        let job_project = args
+            .project
+            .clone()
+            .or_else(|| {
+                rows.get(idx)
+                    .and_then(|row| crate::backlog::question_intake::str_field(row, "project"))
+                    .map(String::from)
+            })
+            .unwrap_or_else(|| "fno".into());
+        if audience_now != "audience?" {
+            if let Err(e) =
+                crate::backlog::audience::validate_job(&audience_now, &jobs, &job_project)
+            {
+                return Err(refused(format!("Error: {}", e.0), 1));
+            }
+        }
+        rows.get_mut(idx)
+            .and_then(Value::as_object_mut)
+            .expect("row is an object")
+            .insert("job".into(), json!(jobs));
     }
     // -- U7: the plan binding, directly after has_brief in cmd_update's
     // order. 'null' clears; the one-plan-one-node conflict refuses naming
@@ -1933,12 +2128,15 @@ fn apply_mutators(
             if let Some(note) = &args.add_pr_note {
                 entry.insert("note".into(), json!(note));
             }
+            if let Some(status) = &args.add_pr_status {
+                entry.insert("merge_status".into(), json!(status.trim()));
+            }
             let mut replaced = false;
             for item in list.iter_mut() {
                 let Some(map) = item.as_object_mut() else {
                     continue;
                 };
-                if map.get("number").and_then(Value::as_i64) == Some(num) {
+                if crate::backlog::row_facts::int_field_in(map, "number") == Some(num) {
                     for (k, val) in entry.clone() {
                         map.insert(k, val);
                     }
@@ -2444,6 +2642,46 @@ mod tests {
     use super::*;
 
     #[test]
+    fn add_pr_status_requires_the_add_op_and_a_known_word() {
+        // AC5: --add-pr-status rides additional_prs+=; alone, or with a word
+        // outside merged|open|closed, the derive refuses before any write.
+        let argv: Vec<String> = ["x-aaaa1111", "--add-pr-status", "merged"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let args = match UpdateArgs::parse(&argv) {
+            ParsedUpdate::Args(args) => args,
+            ParsedUpdate::Refusal { message, .. } => panic!("parse refused: {message}"),
+        };
+        let err = derive_pr_links(&args, None, Path::new(".")).unwrap_err();
+        assert!(
+            err.message.contains("require additional_prs+="),
+            "{}",
+            err.message
+        );
+        let argv: Vec<String> = [
+            "x-aaaa1111",
+            "additional_prs+=244",
+            "--add-pr-status",
+            "exploded",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let args = match UpdateArgs::parse(&argv) {
+            ParsedUpdate::Args(args) => args,
+            ParsedUpdate::Refusal { message, .. } => panic!("parse refused: {message}"),
+        };
+        let err = derive_pr_links(&args, None, Path::new(".")).unwrap_err();
+        assert!(
+            err.message
+                .contains("--add-pr-status takes merged, open or closed"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
     fn an_unknown_flag_refuses_with_the_retired_message() {
         let retired: Vec<String> = ["x-aaaa1111", "--completed", "yes"]
             .iter()
@@ -2487,6 +2725,49 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn an_audience_token_reaches_the_audience_field() {
+        let argv: Vec<String> = [
+            "x-aaaa1111",
+            "audience=internal",
+            "why=the customer changed",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let args = match UpdateArgs::parse(&argv) {
+            ParsedUpdate::Args(a) => a,
+            ParsedUpdate::Refusal { message, .. } => panic!("audience= must parse: {message}"),
+        };
+        assert_eq!(args.audience.as_deref(), Some("internal"));
+        // The apply path on a node with an empty audience stores the value.
+        let mut rows = vec![serde_json::json!({
+            "id": "x-aaaa1111", "slug": "aaaa1111", "title": "t",
+            "project": "fno", "audience": ""
+        })];
+        let pr = DerivedPr {
+            pr_number: None,
+            pr_url: None,
+            add_pr_url: None,
+            clearing_number: false,
+        };
+        apply_mutators(&mut rows, 0, &args, None, false, None, None, &pr)
+            .unwrap_or_else(|_| panic!("audience=internal must apply"));
+        let stored = serde_json::Value::Array(rows);
+        assert_eq!(
+            stored.pointer("/0/audience"),
+            Some(&serde_json::json!("internal"))
+        );
+        assert_eq!(
+            stored.pointer("/0/audience_history/0/from"),
+            Some(&serde_json::json!(""))
+        );
+        assert_eq!(
+            stored.pointer("/0/audience_history/0/to"),
+            Some(&serde_json::json!("internal"))
+        );
     }
 
     #[test]
