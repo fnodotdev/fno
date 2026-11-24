@@ -216,12 +216,15 @@ pub(crate) fn asked_line(menu: &AnswerablePrompt) -> Option<String> {
             && !matches!(low.as_str(), "bash command" | "bash" | "command")
             && l.chars().any(char::is_alphanumeric)
     })?;
-    let redacted = cut(line, 80)
+    // Redact every whole token first, then cut: a secret that straddles the
+    // cut would otherwise leave its head behind as a short, unflagged token.
+    let clean: String = line.chars().filter(|c| !c.is_control()).collect();
+    let redacted = clean
         .split_whitespace()
         .map(redact_token)
         .collect::<Vec<_>>()
         .join(" ");
-    Some(format!("'{}'", redacted.replace('\'', "\"")))
+    Some(format!("'{}'", cut(&redacted, 80).replace('\'', "\"")))
 }
 
 /// Answer the permission menu a thread shows: read it, choose the key from
@@ -497,6 +500,18 @@ mod tests {
         let err = answer_prompt(t.dir.path(), "a1b2c3d4", "allow_once").unwrap_err();
         assert_eq!(err, Refusal::StillShowing);
         assert_eq!(t.typed(), b"1");
+    }
+
+    #[test]
+    fn a_secret_that_straddles_the_cut_leaves_no_head_behind() {
+        let secret = "q9Zk3Lm7Xv2Bn8Wc4Rt6Yh1Jd5Fg0";
+        let pad = "a".repeat(74);
+        let s = format!(
+            "Bash command\n  {pad} {secret} tail\n\n Do you want to proceed?\n 1. Yes\n 2. No"
+        );
+        let line = asked_line(&read_menu(&s).unwrap()).unwrap();
+        assert!(!line.contains("q9Zk"), "{line}");
+        assert!(line.contains("[reda"), "{line}");
     }
 
     #[test]
