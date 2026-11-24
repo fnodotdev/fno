@@ -410,9 +410,9 @@ pub enum BlockOp {
 }
 
 /// Translate one scanner event. Forward, wire commands, tab ordinals,
-/// detach, the five overlay events and the fleet overlay chords run app-side; every other
-/// client-local overlay event has no app surface yet and becomes a notice
-/// naming it, so a prefix chord never leaks into the pane.
+/// detach, the five overlay events and the fleet overlay chords run app-side;
+/// every other client-local overlay event has no app surface yet and becomes
+/// a notice naming it, so a prefix chord never leaks into the pane.
 pub fn translate(event: fno::ui::keys::Event) -> MuxAction {
     use fno::ui::keys::Event;
     match event {
