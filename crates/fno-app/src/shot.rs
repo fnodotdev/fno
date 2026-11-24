@@ -36,11 +36,9 @@ pub fn run(opts: ShotOptions) -> i32 {
     // reads the cwd's project slug, and the pin dir would slug one dir
     // off the world's seed.
     let pinned = opts.chat.as_deref().and_then(crate::chat::resolve_key);
-    if let Err(e) = theme_pin(&opts.theme) {
-        eprintln!("fno-app --shot: {e}");
+    let (Some(session), Some(_pin)) = (shot_session(&opts), theme_pin(&opts.theme)) else {
         return 2;
-    }
-    let session = shot_session(&opts);
+    };
     let mode = opts.mode.unwrap_or(MainView::Orchestration);
     let find = opts.find;
     let out = opts.out.clone();
@@ -193,7 +191,9 @@ pub fn run(opts: ShotOptions) -> i32 {
             if code != 0 {
                 eprintln!("fno-app --shot: the capture failed");
                 // Exit non-zero so the door reads a real failure; the
-                // quit path would return 0 and hide it.
+                // quit path would return 0 and hide it. exit skips the
+                // guard's drop, so the pin dir goes first.
+                remove_pin_dir(&pin_dir());
                 cx.update(|app| app.quit()).ok();
                 std::process::exit(1);
             }
@@ -220,34 +220,67 @@ fn shot_window_options() -> WindowOptions {
     }
 }
 
-/// Write the `[mux] theme` pin the ladder reads, in a temp dir the
-/// process then chdirs into. A pin beats the system appearance, so the
-/// shot paints the asked twin on any host.
-fn theme_pin(theme: &str) -> std::io::Result<()> {
-    let pin_dir = std::env::temp_dir().join(format!("fno-shot-pin-{}", std::process::id()));
-    std::fs::remove_dir_all(&pin_dir).ok();
-    std::fs::create_dir_all(pin_dir.join(".fno"))?;
+/// This process's theme-pin dir.
+fn pin_dir() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("fno-shot-pin-{}", std::process::id()))
+}
+
+/// Delete the pin dir. Unix removes a directory the process still sits in.
+fn remove_pin_dir(dir: &std::path::Path) {
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// Deletes the pin dir when the shot run returns.
+struct PinGuard(std::path::PathBuf);
+
+impl Drop for PinGuard {
+    fn drop(&mut self) {
+        remove_pin_dir(&self.0);
+    }
+}
+
+/// Write the `[mux] theme` pin the ladder reads into `dir`.
+fn write_pin(dir: &std::path::Path, theme: &str) -> std::io::Result<()> {
+    std::fs::remove_dir_all(dir).ok();
+    std::fs::create_dir_all(dir.join(".fno"))?;
     let name = if theme == "light" {
         THEME_LIGHT
     } else {
         THEME_DARK
     };
     let pin = format!("[mux]\ntheme = \"{name}\"\n");
-    std::fs::write(pin_dir.join(".fno/config.toml"), pin)?;
-    std::env::set_current_dir(&pin_dir)
+    std::fs::write(dir.join(".fno/config.toml"), pin)
 }
 
-/// The session the frame attaches to. The no-server frame must not meet a
-/// real server, so an unnamed one attaches to a session no mux was ever
-/// started for.
-fn shot_session(opts: &ShotOptions) -> String {
-    opts.session.clone().unwrap_or_else(|| {
-        if opts.first_run == Some(crate::FirstRunShot::NoServer) {
-            format!("shot-no-server-{}", std::process::id())
-        } else {
-            "default".to_string()
-        }
-    })
+/// Write the pin in a temp dir the process then chdirs into. A pin beats
+/// the system appearance, so the shot paints the asked twin on any host.
+/// The guard removes the dir when the run ends. A failure prints and
+/// reads `None`.
+fn theme_pin(theme: &str) -> Option<PinGuard> {
+    let dir = pin_dir();
+    let guard = PinGuard(dir.clone());
+    let set = write_pin(&dir, theme).and_then(|()| std::env::set_current_dir(&dir));
+    if let Err(e) = set {
+        eprintln!("fno-app --shot: {e}");
+        return None;
+    }
+    Some(guard)
+}
+
+/// The session the frame attaches to, or `None` when the caller named
+/// none. The no-server frame must not meet a real server, so it attaches
+/// to a session no mux was ever started for. Any other frame needs a
+/// named throwaway world: falling back to `default` attached the shot to
+/// the user's live mux and left a space there.
+fn shot_session(opts: &ShotOptions) -> Option<String> {
+    let session = opts.session.clone().or_else(|| {
+        (opts.first_run == Some(crate::FirstRunShot::NoServer))
+            .then(|| format!("shot-no-server-{}", std::process::id()))
+    });
+    if session.is_none() {
+        eprintln!("fno-app --shot: needs --session <name> of a throwaway world; the default session is the user's live mux");
+    }
+    session
 }
 
 /// The pre-warm: connect the link and drain events until the world's
@@ -721,4 +754,19 @@ unsafe fn shot_window_id() -> Option<(u32, f64, usize, *mut objc::runtime::Objec
     let occl: usize = msg_send![w, occlusionState];
     let scale: f64 = msg_send![w, backingScaleFactor];
     Some((num as u32, scale, occl, w))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pin_dir_holds_the_theme_and_the_guard_removes_it() {
+        let dir = std::env::temp_dir().join(format!("fno-shot-pin-test-{}", std::process::id()));
+        write_pin(&dir, "light").unwrap();
+        let cfg = std::fs::read_to_string(dir.join(".fno/config.toml")).unwrap();
+        assert!(cfg.contains(THEME_LIGHT));
+        drop(PinGuard(dir.clone()));
+        assert!(!dir.exists());
+    }
 }

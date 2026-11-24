@@ -74,7 +74,8 @@ pub struct ShotOptions {
     /// Hold the composited window up for a foreign capturer instead of
     /// capturing. Diagnostic; the shot door never sets it.
     pub hold: bool,
-    /// The mux session to attach (the demo world names its own).
+    /// The mux session to attach. Required: the demo world names its own,
+    /// and a shot never falls back to the user's default session.
     pub session: Option<String>,
     /// A claude session id, or `newest`: what --shot-mode chat renders.
     pub chat: Option<String>,

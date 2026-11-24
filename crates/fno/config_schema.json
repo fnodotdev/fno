@@ -835,11 +835,16 @@
     "type": "object"
    },
    "BuildBlock": {
-    "description": "Build-freeze switch (nested under 'config.build').",
+    "description": "Build switches (nested under 'config.build').",
     "properties": {
      "agent_freeze": {
       "default": false,
       "title": "Agent Freeze",
+      "type": "boolean"
+     },
+     "sccache": {
+      "default": false,
+      "title": "Sccache",
       "type": "boolean"
      }
     },
@@ -2924,6 +2929,23 @@
       "title": "Github Approval Satisfies",
       "type": "boolean"
      },
+     "human": {
+      "anyOf": [
+       {
+        "enum": [
+         "never",
+         "ui",
+         "always"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Human"
+     },
      "max_rounds": {
       "default": 2,
       "minimum": 1,
@@ -3101,7 +3123,7 @@
     "type": "object"
    },
    "SandboxBlock": {
-    "description": "Confinement fallback policy (nested under ``config.sandbox``).",
+    "description": "Sandboxed workers and the confinement fallback policy (nested under ``config.sandbox``).",
     "properties": {
      "on_unavailable": {
       "default": "refuse",
@@ -3111,6 +3133,30 @@
       ],
       "title": "On Unavailable",
       "type": "string"
+     },
+     "provider": {
+      "default": "none",
+      "enum": [
+       "none",
+       "docker",
+       "podman",
+       "apple",
+       "devcontainer"
+      ],
+      "title": "Provider",
+      "type": "string"
+     },
+     "image": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Image"
      }
     },
     "title": "SandboxBlock",
@@ -4394,6 +4440,17 @@
    "edit": "toggle"
   },
   {
+   "path": "build.sccache",
+   "label": "Shared compile cache",
+   "type": "bool",
+   "default": false,
+   "wizard": "never",
+   "question": "",
+   "default_source": "",
+   "doc": "Shared compile cache: while true and sccache is installed, the rustc wrapper compiles through sccache, so a fresh worktree reuses the dependency compiles of other worktrees. The project file settles it over the global one. SCCACHE_DISABLE=1 wins over it.",
+   "edit": "toggle"
+  },
+  {
    "path": "paths.ledger_json",
    "label": "Run history and cost file",
    "type": "str (optional)",
@@ -4710,6 +4767,50 @@
      "doc": ""
     }
    ]
+  },
+  {
+   "path": "sandbox.provider",
+   "label": "Sandboxed worker engine",
+   "type": "typing.Literal['none', 'docker', 'podman', 'apple', 'devcontainer']",
+   "default": "none",
+   "wizard": "advanced",
+   "question": "Run headless workers in a container sandbox, and on which engine?",
+   "default_source": "default",
+   "doc": "Runs each headless worker in its own container with no mount and no network, reached only through the host relay. docker covers OrbStack and Docker Desktop. devcontainer builds the image from the default branch's .devcontainer and runs it on docker. apple refuses until it passes the sandbox journey. A project layer can raise none to a sandbox but never lower or switch a global provider.",
+   "edit": "cycle",
+   "choices": [
+    {
+     "value": "none",
+     "doc": ""
+    },
+    {
+     "value": "docker",
+     "doc": ""
+    },
+    {
+     "value": "podman",
+     "doc": ""
+    },
+    {
+     "value": "apple",
+     "doc": ""
+    },
+    {
+     "value": "devcontainer",
+     "doc": ""
+    }
+   ]
+  },
+  {
+   "path": "sandbox.image",
+   "label": "Sandbox image",
+   "type": "typing.Optional[str]",
+   "default": null,
+   "wizard": "never",
+   "question": "",
+   "default_source": "",
+   "doc": "The image a sandboxed worker runs. Unset builds the embedded recipe with the host rev's Linux binaries from bin-cache. Read from global config only: a project value is ignored with a notice.",
+   "edit": "editor"
   },
   {
    "path": "blueprint.max_prs_per_epic",
@@ -5424,6 +5525,17 @@
    "default_source": "",
    "doc": "When true (default), a non-author human GitHub APPROVED review satisfies coverage on its own - the one producer a stranger's GitHub project emits with no footnote machinery. The approver's login must differ from the PR author's (GitHub refuses an author's approval server-side; the gate asserts it, and an unreadable PR author excludes fail-closed). Set false to keep today's recorded-but-never-counted behavior. Limit: GitHub's refusal is per identity, not per human - a second account with its own token can still self-approve.",
    "edit": "toggle"
+  },
+  {
+   "path": "review.human",
+   "label": "Human approval required",
+   "type": "string",
+   "default": null,
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "",
+   "doc": "The person gate (never | ui | always; default ui). never and ui keep today's behavior: nothing requires a person. always requires a person's GitHub approval of the PR head (an APPROVED review by a login that is not the PR author, fresh at the head): fno do pr status reads not ready and the merge refuses until one lands, and the review-round cap does not discharge it (the lever back off is this key). Validated at write: never, ui or always.",
+   "edit": "editor"
   },
   {
    "path": "review.max_rounds",

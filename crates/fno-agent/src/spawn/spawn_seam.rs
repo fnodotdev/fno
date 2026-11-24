@@ -119,6 +119,7 @@ pub fn admit_spawn(args: Vec<String>) -> Result<Vec<String>, i32> {
             .map(|r| r.entries)
             .unwrap_or_default();
     let mut names: HashSet<String> = entries.iter().map(|e| e.name.clone()).collect();
+    names.extend(handover_worker_names(None));
     let mut args = args;
     if let Some(line) = resume_route_pin(&mut args, &entries) {
         eprintln!("{line}");
@@ -306,6 +307,22 @@ fn resume_route_refusal(
         quote(row_harness),
         route_or_model,
     )
+}
+
+/// Worker names that a live `spawn-handover:<name>` window claim holds on a
+/// node. The name reservation below dies with its client and the registry row
+/// lands seconds later, so a second spawn in that gap reads the name free and
+/// writes the same holder on its own node. The window claim outlives both.
+pub(crate) fn handover_worker_names(root: Option<&Path>) -> HashSet<String> {
+    crate::claims::list(Some("node:"), root, false)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|r| {
+            r.holder
+                .strip_prefix(crate::spawn_guard::HANDOVER_HOLDER_PREFIX)
+        })
+        .map(str::to_string)
+        .collect()
 }
 
 /// Reserve a worker name while this spawn client runs. The registry holds no
@@ -788,6 +805,16 @@ mod tests {
         child.wait().unwrap();
         let _ = crate::claims::acquire("spawn-name:t-gone", "spawn-cli:2", rival(dead));
         assert_eq!(reserve_name("t-gone", Some(tmp.path())), Ok(()));
+        // The node's window claim outlives that client: its worker name
+        // stays taken, so a sibling spawn mints the next suffix.
+        let window = crate::claims::AcquireOpts {
+            pid_unavailable: true,
+            ttl_ms: Some(900_000),
+            root: Some(tmp.path().to_path_buf()),
+            ..Default::default()
+        };
+        let _ = crate::claims::acquire("node:x-win", "spawn-handover:t-gone", window);
+        assert!(handover_worker_names(Some(tmp.path())).contains("t-gone"));
     }
 
     #[test]

@@ -12,7 +12,9 @@
 //!
 //! Every refusal, verdict and reason string is byte-for-byte the Python
 //! module's, asserted against goldens captured from the live leg
-//! (`tests/review_capability_parity.rs`) before the leg deletes. The built-in
+//! (`tests/review_capability_parity.rs`) before the leg deletes. The skill
+//! arms moved past frozen parity once the probe read every harness's own
+//! roots; the committed goldens are the contract there. The built-in
 //! reviewer descriptors stay single-sourced in Python config
 //! (`_RESOLVABLE_REVIEWERS`) and ride the door payload; the Rust
 //! `reviewer_entry` table feeds only the invocation renderer's base spelling.
@@ -978,7 +980,7 @@ fn lit(v: bool) -> &'static str {
 // ── the door ──────────────────────────────────────────────────────────
 
 const USAGE: &str =
-    "usage: fno-agent review-level capability <reviewers|github-apps|invocation|skill-presence>";
+    "usage: fno-agent review-level capability <reviewers|github-apps|invocation|skill-presence|skill-list>";
 
 fn read_stdin_json() -> Result<Value, String> {
     let mut text = String::new();
@@ -1145,6 +1147,40 @@ fn action_skill_presence(args: &[String]) -> (String, String, i32) {
     )
 }
 
+/// The one-listing-per-harness door: every skill name the harness can run,
+/// plugin skills included, as one JSON object. The fno side of "fno lists
+/// the skills each harness can run".
+fn action_skill_list(args: &[String]) -> (String, String, i32) {
+    let mut harness: Option<String> = None;
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--harness" => harness = it.next().cloned(),
+            other => {
+                return (String::new(), format!("unknown flag: {other}\n"), 2);
+            }
+        }
+    }
+    let Some(harness) = harness.filter(|value| !value.is_empty()) else {
+        return (
+            String::new(),
+            "usage: capability skill-list --harness H\n".to_string(),
+            2,
+        );
+    };
+    let skills = crate::backlog::dispatch_resolve::skills_for_harness(&harness);
+    let rows: Vec<String> = skills.iter().map(|skill| esc(skill)).collect();
+    (
+        format!(
+            "{{\"harness\": {}, \"skills\": [{}]}}",
+            esc(&harness),
+            rows.join(", ")
+        ),
+        String::new(),
+        0,
+    )
+}
+
 /// The `review-level capability <action>` door: one JSON object on stdout,
 /// exit 0 unless the action refuses. Routed by `review_doors::dispatch`
 /// before the level parser, so no valid level call changes.
@@ -1182,6 +1218,16 @@ pub fn run(args: &[String]) -> i32 {
         }
         "skill-presence" => {
             let (out, err, code) = action_skill_presence(&args[1..]);
+            if !err.is_empty() {
+                eprint!("{err}");
+            }
+            if !out.is_empty() {
+                println!("{out}");
+            }
+            code
+        }
+        "skill-list" => {
+            let (out, err, code) = action_skill_list(args.get(1..).unwrap_or(&[]));
             if !err.is_empty() {
                 eprint!("{err}");
             }

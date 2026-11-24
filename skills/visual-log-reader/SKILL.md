@@ -54,7 +54,21 @@ Wake off the :00 and :30 marks, where the fleet's other crons fire: the minute m
 6. Tell the worker and the lead with `fno backlog note <node> "Visual Log: <Approve|Change> at PR <pr> head <head 10>. <note>"`. The note mails the node's live holder and the epic's lead. When it exits 3 (no live holder), mail the PR author's lead by name. Keep the note text verbatim. A lead reads every Change note back with `fno backlog find --notes "Visual Log: Change"` before a look ruling.
 7. Write the ack: `db_write` a merge on `acks/<viewer id>` that sets `rows.<key>` to `{state: "recorded", detail: "", at: <now ISO>}`.
 
-A beat with no new tap writes nothing and mails nobody.
+A beat with no new tap and no new board verdict writes nothing and mails nobody.
+
+## The board leg
+
+A lead's review board stores one row per verdict at `verdicts/<entry id>`: `{at, by, entry, head, node, pr, verdict, note, reader_ack, lead_ack}`. A tap on it sends no mail by itself. Each beat the reader runs this leg after the taps:
+
+1. Run `fno backlog find --notes "Review board:"`. A lead posts `Review board: <slug>` once on its epic. Take the newest slug for each epic.
+2. For each slug, read `verdicts` (`db_list`). Pick each row with no `reader_ack`, or a `reader_ack.at` older than the row's `at`.
+3. A board with no `config/approvers` doc takes its owner as the approver (`db_whoami` on the board names the owner). A row from any other viewer gets `reader_ack` state `refused`.
+4. Check the head as in tap step 4. A board row has no `repo` field, so take the repo from the row's node (`fno backlog get <node>`). A moved head gets `reader_ack` state `stale`, and no note.
+5. Run `fno backlog find --notes "Board verdict:"`. If a note already names the same PR, head and slug, skip the note. A board the reader can read but not write then never mails twice.
+6. Note it: `fno backlog note <node> "Board verdict: <Approve|Change> at PR <pr> head <head 10> on <slug>. <note>"`. The note mails the node's live holder and the epic's lead. Record no decision. The lead's own beat read of the board stays the backstop.
+7. Write `reader_ack` as `{state, detail, at: <now ISO>}` onto `verdicts/<entry id>` with a merge `db_write`. The state is `recorded` after the note, or the `refused` or `stale` state from step 3 or 4.
+
+A board that refuses the read gets one line in the beat report: `Review board unreadable: <slug> (<first line of the error>)`. Write nothing and mail nobody for it. The lead's own beat read is then its only reader.
 
 ## Where the data lives
 

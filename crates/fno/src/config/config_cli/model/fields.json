@@ -28,7 +28,8 @@
     {
      "name": "build",
      "default": {
-      "agent_freeze": false
+      "agent_freeze": false,
+      "sccache": false
      }
     },
     {
@@ -847,6 +848,10 @@
     {
      "name": "agent_freeze",
      "default": false
+    },
+    {
+     "name": "sccache",
+     "default": false
     }
    ]
   },
@@ -998,6 +1003,14 @@
     {
      "name": "on_unavailable",
      "default": "refuse"
+    },
+    {
+     "name": "provider",
+     "default": "none"
+    },
+    {
+     "name": "image",
+     "default": null
     }
    ]
   },
@@ -1206,6 +1219,10 @@
    "fields": [
     {
      "name": "posture",
+     "default": null
+    },
+    {
+     "name": "human",
      "default": null
     },
     {
@@ -3557,6 +3574,8 @@
   "user.favorite_skills",
   "join.sandbox",
   "sandbox.on_unavailable",
+  "sandbox.provider",
+  "sandbox.image",
   "obsidian.enabled",
   "obsidian.vault",
   "project.id",
@@ -3583,6 +3602,7 @@
   "batch.max_nodes",
   "batch.max_loc",
   "build.agent_freeze",
+  "build.sccache",
   "post_merge.parking_lot_path",
   "post_merge.maintainer_marker",
   "post_merge.enabled",
@@ -3623,6 +3643,7 @@
   "review.self_review_required",
   "review.require_corroboration",
   "review.github_approval_satisfies",
+  "review.human",
   "review.max_rounds",
   "review.carry_interdiff_lines",
   "review.invocation_ttl_minutes",

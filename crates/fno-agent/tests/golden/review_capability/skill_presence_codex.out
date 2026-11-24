@@ -1,1 +1,1 @@
-{"status": "unverifiable", "reason": "needs a resolvable skill; footnote only knows Claude's skill roots and this is harness=codex. Proceeding - if the gate does go unmet, run the skill by hand"}
+{"status": "unverifiable", "reason": "no skill root exists on this host (looked for <TMP>/skill_presence_codex/home/.codex/skills), so availability cannot be verified. Proceeding - if the gate does go unmet, run the skill by hand"}

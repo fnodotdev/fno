@@ -10,6 +10,9 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::Path;
 
+use crate::lead_wake::scope_members;
+use crate::state::RegistryEntry;
+
 /// The unplanned rows this team must not dispatch: node id -> the canonical
 /// scope of the live team that owns it, other than this team's own. The
 /// fold's owner read is the one instrument; an unread read is the caller's
@@ -145,7 +148,7 @@ pub(crate) fn seat_leads(
         let mut cur = Some(*row);
         let mut seat: Option<&str> = None;
         while let Some(id) = cur {
-            if id == scope || owned.contains_key(id) {
+            if scope_members(scope).any(|m| m == id) || owned.contains_key(id) {
                 break;
             }
             let Some(e) = by_id.get(id) else {
@@ -188,26 +191,91 @@ struct OfferMeta {
     archived_at: Option<Value>,
 }
 
-/// One printed offer: the node, how it sits near the scope, its title.
+/// One printed offer: the node, the lifecycle command that starts it
+/// (`/blueprint` or `/target`), how it sits near the scope, its title.
 #[derive(Serialize, Deserialize, Default)]
 #[serde(default)]
 struct Offer {
     id: String,
+    command: String,
     near: String,
     title: String,
 }
 
-/// One offer candidate's sort key: hops to a shared ancestor, audience miss,
-/// domain miss, priority, the shared ancestor, then the node id and title.
-type OfferKey<'a> = (usize, bool, bool, String, String, &'a str, String);
+/// The command that starts one node through the lifecycle command the table
+/// answered. The pick and the offer line build theirs here, so they cannot
+/// drift. `labelled` puts the `start` word before a blueprint command, the
+/// form the pick line prints.
+pub(crate) fn start_command(command: &str, id: &str, labelled: bool) -> String {
+    match (command == "/target", labelled) {
+        (true, _) => format!("fno agent spawn \"/fno:target {id}\""),
+        (false, true) => format!("start /fno:blueprint subagent {id}"),
+        (false, false) => format!("/fno:blueprint subagent {id}"),
+    }
+}
 
-/// Planless high or L nodes outside this scope that the lifecycle table
-/// routes to /blueprint, nearest the scope first. A drained scope with free
-/// blueprint slots offers these instead of a bare "no unplanned node" beat.
-/// Nearness is the hop count to a shared ancestor on the parent chains; the
-/// scope's audience or domain wins a tie, then priority and id. Nodes a live
-/// team owns, rows this scope already queues, claimed and user-only rows
-/// never print.
+/// True when the row is open work no state parks: an offerable status, no
+/// lock and no archive stamp. The offer walk and the scope-root routing read
+/// the same three fields.
+fn open_unparked(row: &Value) -> bool {
+    let status = crate::lead_checkin::s_str(row, "status").unwrap_or("");
+    let locked = crate::lead_checkin::s_str(row, "locked_by").is_some_and(|l| !l.is_empty());
+    let archived = OfferMeta::deserialize(row)
+        .unwrap_or_default()
+        .archived_at
+        .is_some_and(|v| !v.is_null() && v != Value::Bool(false));
+    OFFERABLE_STATUSES.contains(&status) && !locked && !archived
+}
+
+/// The node and then its ancestors, nearest first. A parent cycle ends the walk.
+fn chain(by_id: &HashMap<&str, &Value>, start: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = Some(start.to_string());
+    while let Some(id) = cur {
+        if out.contains(&id) {
+            break;
+        }
+        cur = by_id
+            .get(id.as_str())
+            .and_then(|e| crate::lead_checkin::s_str(e, "parent"))
+            .map(str::to_string);
+        out.push(id);
+    }
+    out
+}
+
+/// The fewest hops between a node and a scope: up from the node to an
+/// ancestor, then down to the member that shares it. A node that shares no
+/// ancestor with any member is farthest.
+fn nearest(path: &[String], members: &[Vec<String>]) -> (usize, String) {
+    members
+        .iter()
+        .flat_map(|member| {
+            path.iter().enumerate().filter_map(|(i, a)| {
+                member
+                    .iter()
+                    .position(|m| m == a)
+                    .map(|j| (i + j, a.clone()))
+            })
+        })
+        .min()
+        .unwrap_or((usize::MAX, String::new()))
+}
+
+/// One offer candidate's sort key: hops to a shared ancestor, audience miss,
+/// domain miss, priority, the shared ancestor, the node id, the title, then
+/// the lifecycle command that starts it.
+type OfferKey<'a> = (usize, bool, bool, String, String, &'a str, String, String);
+
+/// Open planless nodes outside this scope that the lifecycle table starts: a
+/// node that owes a plan takes a blueprint, an idea that owes none goes
+/// straight to a target. A drained scope with free blueprint slots offers these
+/// instead of a bare "no unplanned node" beat. Nearness is the hop count to
+/// an ancestor shared with any member of the scope; the scope's audience or
+/// domain wins a tie, then priority and id. The scope's own nodes (its
+/// members, their ancestors and their children), nodes a live team owns, rows
+/// this scope already queues, claimed and user-only rows never print. Each
+/// offer carries the command that starts it.
 pub(crate) fn adjacent_offers(
     scope: &str,
     entries: &[Value],
@@ -224,21 +292,6 @@ pub(crate) fn adjacent_offers(
         .iter()
         .filter_map(|e| s_str(e, "id").map(|id| (id, e)))
         .collect();
-    let chain = |start: &str| -> Vec<String> {
-        let mut out: Vec<String> = Vec::new();
-        let mut cur = Some(start.to_string());
-        while let Some(id) = cur {
-            if out.contains(&id) {
-                break;
-            }
-            cur = by_id
-                .get(id.as_str())
-                .and_then(|e| s_str(e, "parent"))
-                .map(str::to_string);
-            out.push(id);
-        }
-        out
-    };
     let audience = |row: &Value| -> Option<String> {
         OfferMeta::deserialize(row)
             .unwrap_or_default()
@@ -246,42 +299,45 @@ pub(crate) fn adjacent_offers(
             .into_iter()
             .find(|t| t.starts_with("audience:"))
     };
-    let mine = chain(scope);
-    let me = by_id.get(scope).copied();
+    // A scope is several node ids, and each member keeps its own chain, so a
+    // hop count runs from that member up to the shared ancestor.
+    let members: Vec<Vec<String>> = scope_members(scope).map(|m| chain(&by_id, m)).collect();
+    let own: std::collections::HashSet<&str> =
+        members.iter().flatten().map(String::as_str).collect();
+    let is_member = |id: &str| scope_members(scope).any(|m| m == id);
+    let me = scope_members(scope).find_map(|m| by_id.get(m)).copied();
     let my_audience = me.and_then(audience);
     let my_domain = me.and_then(|m| s_str(m, "domain"));
+    let routed = |row: &Value| {
+        crate::backlog_ready::effective_command_with_floor(row, floor)
+            .ok()
+            .and_then(|(command, _)| command)
+    };
     let mut ranked: Vec<OfferKey> = Vec::new();
     for row in entries {
         let Some(id) = s_str(row, "id") else { continue };
-        let open = s_str(row, "status").is_some_and(|s| OFFERABLE_STATUSES.contains(&s));
-        let locked = s_str(row, "locked_by").is_some_and(|l| !l.is_empty());
-        let archived = OfferMeta::deserialize(row)
-            .unwrap_or_default()
-            .archived_at
-            .is_some_and(|v| !v.is_null() && v != Value::Bool(false));
-        if !open
-            || locked
-            || archived
+        if !open_unparked(row)
             || queued.contains(id)
             || other_owned.contains_key(id)
-            || mine.iter().any(|m| m == id)
+            || own.contains(id)
         {
             continue;
         }
-        let high = s_str(row, "difficulty") == Some("high")
-            || s_str(row, "size").is_some_and(|z| z.eq_ignore_ascii_case("l"));
-        let routes = matches!(
-            crate::backlog_ready::effective_command_with_floor(row, floor),
-            Ok((Some(c), _)) if c == "/blueprint"
-        );
-        if !high || !routes {
+        // The table decides the command. Only an idea takes a target.
+        let idea = s_str(row, "status") == Some("idea");
+        let command = routed(row);
+        let offerable = command.as_deref() == Some("/blueprint")
+            || (idea && command.as_deref() == Some("/target"));
+        if !offerable {
             continue;
         }
-        let (distance, via) = chain(id)
-            .iter()
-            .enumerate()
-            .find_map(|(i, a)| mine.iter().position(|m| m == a).map(|j| (i + j, a.clone())))
-            .unwrap_or((usize::MAX, String::new()));
+        let path = chain(&by_id, id);
+        // A row whose chain names a scope member is the scope's own child. It
+        // rides its epic, so an outside offer never names it.
+        if path.iter().any(|a| is_member(a)) {
+            continue;
+        }
+        let (distance, via) = nearest(&path, &members);
         ranked.push((
             distance,
             my_audience.is_none() || audience(row) != my_audience,
@@ -290,13 +346,14 @@ pub(crate) fn adjacent_offers(
             via,
             id,
             s_str(row, "title").unwrap_or("").to_string(),
+            command.unwrap_or_default(),
         ));
     }
     ranked.sort();
     ranked
         .into_iter()
         .take(limit)
-        .map(|(distance, _, _, _, via, id, title)| {
+        .map(|(distance, _, _, _, via, id, title, command)| {
             let near = if distance == usize::MAX {
                 "no shared ancestor".to_string()
             } else {
@@ -304,6 +361,7 @@ pub(crate) fn adjacent_offers(
             };
             serde_json::to_value(Offer {
                 id: id.to_string(),
+                command,
                 near,
                 title,
             })
@@ -348,6 +406,7 @@ pub(crate) fn r_blueprint(
     cwd: &Path,
     session_id: Option<String>,
     claims: Result<Vec<String>, String>,
+    spawned: usize,
     slots: Result<usize, String>,
     floor: &str,
     other_owned: &Result<HashMap<String, String>, String>,
@@ -362,7 +421,7 @@ pub(crate) fn r_blueprint(
     let holders = claims?;
     let other_owned = other_owned.as_ref().map_err(Clone::clone)?;
     let holder = format!("blueprint-session:{session_id}");
-    let running = holders.iter().filter(|h| **h == holder).count();
+    let running = holders.iter().filter(|h| **h == holder).count() + spawned;
     let board = board.as_ref()?;
     let rows = crate::lead_checkin::board_queue(board, "unplanned")?
         .get("rows")
@@ -399,7 +458,28 @@ pub(crate) fn r_blueprint(
         .collect();
     let mut idle: Vec<Value> = Vec::new();
     let mut idea_routed = 0;
-    for row in idea_rows {
+    // The scope's own roots sit above every queue, so an open planless root
+    // with no child reaches no list of its own. It routes after the idea
+    // children, the board's children-before-epics order. A root the idea rows
+    // already carry is no second start.
+    let idea_ids: std::collections::HashSet<&str> = idea_rows
+        .iter()
+        .filter_map(|r| crate::lead_checkin::s_str(r, "id"))
+        .collect();
+    let roots: Vec<Value> = scope_members(scope)
+        .filter_map(|root| {
+            entries
+                .iter()
+                .find(|e| crate::lead_checkin::s_str(e, "id") == Some(root))
+        })
+        .filter(|row| {
+            !idea_ids.contains(crate::lead_checkin::s_str(row, "id").unwrap_or(""))
+                && open_unparked(row)
+                && crate::lead_checkin::s_str(row, "plan_path").is_none_or(str::is_empty)
+        })
+        .cloned()
+        .collect();
+    for row in idea_rows.iter().chain(roots.iter()) {
         let Some(id) = crate::lead_checkin::s_str(row, "id") else {
             continue;
         };
@@ -567,8 +647,8 @@ pub(crate) fn r_blueprint(
     if drained && offers.is_empty() {
         skips.push(json!({
             "id": null,
-            "reason": "no offer: no planless high or L node in intake, triage, ready or next \
-                       outside this scope routes to /blueprint (idea-status nodes need triage first)"
+            "reason": "no offer: no open planless node outside this scope routes to a \
+                       blueprint or a target start"
         }));
     }
     // Open, planless rows: the unplanned queue and the idea children, read
@@ -641,8 +721,10 @@ pub(crate) fn render_lines(bp: &Value) -> Vec<String> {
     for offer in ids("offers") {
         let o = Offer::deserialize(&offer).unwrap_or_default();
         lines.push(format!(
-            "  offer: /fno:blueprint subagent {} ({}, outside this scope): {}",
-            o.id, o.near, o.title,
+            "  offer: {} ({}, outside this scope): {}",
+            start_command(&o.command, &o.id, false),
+            o.near,
+            o.title,
         ));
     }
     for id in ids("target_ready") {
@@ -713,14 +795,70 @@ pub(crate) fn running_blueprint_ids(
         .collect()
 }
 
-/// Read the ceiling state live. `None` when the session id or the claims
-/// listing is unreadable: an unmeasured ceiling never converts an
-/// actionable row into a waiting one.
+/// Keys of the live workers `session` spawned whose payload opens with
+/// `/fno:blueprint`. A spawned planner joins the spawn's `spawn-handover:`
+/// claim, so no `blueprint-session:` holder names its lead; the registry row's
+/// owner is the only edge back. The key is the node id the payload names, else
+/// the worker's session id, so a plan-path payload still counts once.
+pub(crate) fn spawned_blueprint_keys(
+    entries: &[RegistryEntry],
+    session: &str,
+    terminal: &std::collections::HashSet<String>,
+) -> Vec<String> {
+    let mut keys: Vec<String> = Vec::new();
+    for e in entries {
+        // A finished planner can sit idle and unreaped: the same capacity
+        // read the slot share uses keeps it from filling a blueprint slot.
+        if e.role_level.is_some()
+            || !crate::spawn_gate::status_is_liveish(&e.status)
+            || !crate::cap_liveness::holds_capacity(e, terminal)
+            || e.current_owner_session() != Some(session)
+        {
+            continue;
+        }
+        let mut tokens = e.spawn_payload.as_deref().unwrap_or("").split_whitespace();
+        let is_blueprint = tokens
+            .next()
+            .and_then(crate::provider::parse_command_token)
+            .is_some_and(|(command, _)| command == "blueprint");
+        if !is_blueprint {
+            continue;
+        }
+        let node = tokens.find(|t| !t.starts_with('-') && !t.contains('/') && t.contains('-'));
+        let key = node
+            .map(str::to_string)
+            .or_else(|| e.harness_session_id.clone())
+            .unwrap_or_else(|| e.name.clone());
+        if !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    keys
+}
+
+/// `spawned_blueprint_keys` over a loaded registry, with the terminal-run
+/// keys the slot share reads. The caller loads the registry, so an unreadable
+/// one is its own named error, never a silent 0.
+pub(crate) fn spawned_in_registry(
+    registry: &crate::state::Registry,
+    home: &crate::paths::AgentsHome,
+    session: &str,
+) -> Vec<String> {
+    let terminal = crate::terminal_run::read_keys(&home.terminal_runs_dir());
+    spawned_blueprint_keys(&registry.entries, session, &terminal)
+}
+
+/// Read the ceiling state live. `None` when the session id, the claims
+/// listing or the registry is unreadable: an unmeasured ceiling never
+/// converts an actionable row into a waiting one.
 pub(crate) fn stop_check_reading(cwd: &Path) -> Option<BlueprintWait> {
     let (session, _) = crate::claims::resolve_identity();
     let session = session?;
     let rows = crate::claims::list(Some("node:"), None, false).ok()?;
-    let running = running_blueprint_ids(&rows, &session);
+    let mut running = running_blueprint_ids(&rows, &session);
+    let home = crate::paths::AgentsHome::from_env();
+    let registry = crate::state::load_registry(&home.registry_json()).ok()?;
+    running.extend(spawned_in_registry(&registry, &home, &session));
     let provider = std::env::var("FNO_ROUTE_PROVIDER").unwrap_or_default();
     let provider_cap = crate::spawn_gate_lanes::provider_subagents_cap(cwd, &provider);
     let ceiling = blueprint_ceiling(provider_cap);
@@ -781,6 +919,7 @@ mod tests {
             board,
             session_id,
             holders,
+            0,
             slots,
             floor,
             Ok(HashMap::new()),
@@ -788,17 +927,20 @@ mod tests {
             vec![],
             &[],
             &[],
+            "",
         )
     }
 
     /// The same call with the owner map named, for the deeper-team filter,
-    /// and the idea-children count named, for the epic-heavy line.
+    /// and the idea-children count named, for the epic-heavy line. `scope` is
+    /// the scope spelling the reading sees, so a test can name roots.
     fn blueprint_reading_owned(
         dir: &std::path::Path,
         config_toml: &str,
         board: Value,
         session_id: Option<&str>,
         holders: Vec<String>,
+        spawned: usize,
         slots: Result<usize, String>,
         floor: &str,
         other_owned: Result<HashMap<String, String>, String>,
@@ -806,6 +948,7 @@ mod tests {
         seat_leads: Vec<SeatScope>,
         idea_rows: &[Value],
         entries: &[Value],
+        scope: &str,
     ) -> Result<Value, String> {
         // The FNO_CONFIG pin below is the SOLE config candidate for every
         // concurrent reader, so it must not interleave with another test's
@@ -828,13 +971,14 @@ mod tests {
             dir,
             session_id.map(str::to_string),
             Ok(holders),
+            spawned,
             slots,
             floor,
             &other_owned,
             &idea_children,
             idea_rows,
             &seat_leads,
-            "",
+            scope,
             entries,
         );
         match prior_provider {
@@ -868,6 +1012,7 @@ mod tests {
             board,
             Some("sess-1"),
             vec![],
+            0,
             Ok(4),
             "high",
             Ok(HashMap::new()),
@@ -878,6 +1023,7 @@ mod tests {
             }],
             &[],
             &[],
+            "",
         )
         .unwrap();
         assert_eq!(
@@ -899,9 +1045,84 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A p2 planned node in scope prints its plan-ready line and counts in
+    /// `plans ready`, so the beat names work the board's p2 rows used to hide.
+    fn a_p2_plan_in_scope_prints_plan_ready() {
+        let dir = std::env::temp_dir().join(format!("fno-bp-p2plan-{}", std::process::id()));
+        let board = json!({"queues": [
+            {"name": "unplanned", "status": "ok", "count": 0, "rows": []},
+            {"name": "undispatched", "status": "ok", "count": 1,
+             "rows": [{"id": "x-p2", "priority": "p2", "title": "a p2 plan"}]},
+        ]});
+        let reading =
+            blueprint_reading(&dir, "", board, Some("sess-1"), vec![], Ok(4), "high").unwrap();
+        let lines = render_lines(&reading);
+        assert!(
+            lines.iter().any(|l| l.contains("plans ready 1 /")),
+            "{lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("plan-ready") && l.contains("x-p2")),
+            "{lines:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A blueprint this lead spawned plans on its own worker session, so the
+    /// registry owner edge fills the slot; a plan-path payload counts once by
+    /// worker, another lead's planner and a target worker count for nothing.
+    fn a_spawned_blueprint_fills_a_slot() {
+        let live = |name: &str, payload: &str, owner: &str| RegistryEntry {
+            name: name.to_string(),
+            status: crate::AgentStatus::Live,
+            spawn_payload: Some(payload.to_string()),
+            spawned_by_session: Some(owner.to_string()),
+            harness_session_id: Some(format!("{name}-sid")),
+            ..Default::default()
+        };
+        let entries = vec![
+            live("w1", "/fno:blueprint x-1", "lead"),
+            live("w2", "/fno:blueprint subagent plans/p.md", "lead"),
+            live("w3", "/fno:blueprint x-1", "lead"),
+            live("w4", "/fno:blueprint x-4", "other"),
+            live("w5", "/fno:target x-5", "lead"),
+        ];
+        let terminal = std::collections::HashSet::new();
+        let keys = spawned_blueprint_keys(&entries, "lead", &terminal);
+        assert_eq!(keys, vec!["x-1".to_string(), "w2-sid".to_string()]);
+        let dir = std::env::temp_dir().join(format!("fno-bp-spawned-{}", std::process::id()));
+        let reading = blueprint_reading_owned(
+            &dir,
+            "",
+            unplanned_board(&[], Some(0)),
+            Some("lead"),
+            vec!["blueprint-session:lead".to_string()],
+            keys.len(),
+            Ok(4),
+            "high",
+            Ok(HashMap::new()),
+            Ok(0),
+            vec![],
+            &[],
+            &[],
+            "",
+        )
+        .unwrap();
+        let lines = render_lines(&reading);
+        assert!(
+            lines.iter().any(|l| l.contains("running 3 of")),
+            "{lines:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The seat legs: the L0 integration, the pure walk, and the rendered
     /// line, so the seat surface adds no test declarations to G3.
     fn l0_seat_legs() {
+        a_p2_plan_in_scope_prints_plan_ready();
+        a_spawned_blueprint_fills_a_slot();
         an_l0_beat_seats_a_leadless_epics_children();
         the_seat_walk_keys_on_leadless_epics_and_the_level();
         the_seat_lead_line_names_scope_lane_and_payload();
@@ -932,6 +1153,15 @@ mod tests {
                 children: vec!["x-c1".to_string(), "x-c2".to_string()],
             }]
         );
+        // A scope is several ids. A member of it is never seated under.
+        let seats = seat_leads(
+            "x-mine,x-e1",
+            Some(1),
+            &entries,
+            Some(&folded),
+            Some(&board),
+        );
+        assert!(seats.is_empty(), "{seats:?}");
         assert!(seat_leads("x-mine", Some(2), &entries, Some(&folded), None).is_empty());
         assert!(seat_leads("x-mine", None, &entries, Some(&folded), None).is_empty());
     }
@@ -1025,7 +1255,9 @@ mod tests {
     /// line would have seated a duplicate worker in another lead's territory.
     /// The row skips naming the team that owns it. A drained scope's offer
     /// line honors the same owner map, and also drops claimed, low-difficulty
-    /// and already-queued rows, then ranks the rest nearest first.
+    /// and already-queued rows, then ranks the rest nearest first. The last
+    /// two cases keep their own names as helper functions: the test-audit
+    /// scope of this path admits no new declaration.
     #[test]
     fn a_child_of_a_deeper_live_team_never_prints_as_start_target_ready_or_offer() {
         let dir = std::env::temp_dir().join(format!("fno-bp-owned-{}", std::process::id()));
@@ -1038,6 +1270,7 @@ mod tests {
             ),
             Some("sess-1"),
             vec![],
+            0,
             Ok(4),
             "high",
             Ok(HashMap::from([
@@ -1048,6 +1281,7 @@ mod tests {
             vec![],
             &[],
             &[],
+            "",
         )
         .unwrap();
         assert_eq!(reading["target_ready"], json!(["x-mine"]), "{reading}");
@@ -1101,6 +1335,7 @@ mod tests {
                 unplanned_board(&[], Some(0)),
                 Some("sess-1"),
                 vec![],
+                0,
                 Ok(4),
                 "high",
                 Ok(owned.clone()),
@@ -1108,6 +1343,7 @@ mod tests {
                 vec![],
                 std::slice::from_ref(&user_only),
                 graph,
+                "",
             )
             .unwrap()
         };
@@ -1129,6 +1365,145 @@ mod tests {
             "{reading}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+        a_multi_root_scope_never_offers_its_own_subtree();
+        an_open_planless_scope_root_routes_like_an_idea_child();
+    }
+
+    /// A scope spelled with several members is not one node id. The offer
+    /// walk drops the scope's own roots, their ancestors and their children,
+    /// counts hops from the member that shares the ancestor, names a sibling
+    /// with that ancestor, and names an idea of lower difficulty with the
+    /// target that starts it.
+    fn a_multi_root_scope_never_offers_its_own_subtree() {
+        let entries = vec![
+            json!({"id": "x-parent", "status": "idea", "difficulty": "high", "title": "above"}),
+            json!({"id": "x-a-2", "parent": "x-parent", "status": "done", "title": "above a"}),
+            json!({"id": "x-a-1", "parent": "x-a-2", "status": "done", "title": "above a"}),
+            json!({"id": "x-root-a", "parent": "x-a-1", "type": "epic", "status": "idea",
+                "difficulty": "high", "title": "own a"}),
+            json!({"id": "x-b-parent", "status": "done", "title": "above b"}),
+            json!({"id": "x-root-b", "parent": "x-b-parent", "type": "epic", "status": "idea",
+                "difficulty": "medium", "title": "own b"}),
+            json!({"id": "x-b-sib", "parent": "x-b-parent", "status": "idea", "difficulty": "high",
+                "title": "sibling of b"}),
+            json!({"id": "x-b-kid", "parent": "x-root-b", "status": "idea",
+                "difficulty": "medium", "title": "inside b"}),
+            json!({"id": "x-b-grand", "parent": "x-b-kid", "status": "idea",
+                "difficulty": "high", "title": "deeper in b"}),
+            json!({"id": "x-sib", "parent": "x-parent", "status": "idea", "difficulty": "high",
+                "title": "sibling"}),
+            json!({"id": "x-out-hi", "status": "idea", "difficulty": "high", "title": "out high"}),
+            json!({"id": "x-out-mid", "status": "idea", "difficulty": "medium",
+                "title": "out mid"}),
+            json!({"id": "x-out-ready", "status": "ready", "difficulty": "medium",
+                "title": "out ready"}),
+            json!({"id": "x-pq", "status": "idea", "difficulty": "medium",
+                "tags": ["premise-question"], "title": "premise open"}),
+        ];
+        let owned = HashMap::new();
+        let walk = |limit: usize| {
+            adjacent_offers(
+                "x-root-a,x-root-b",
+                &entries,
+                &owned,
+                &std::collections::HashSet::new(),
+                "high",
+                limit,
+            )
+        };
+        // The first member's chain is long. Hops still count from the member
+        // that shares the ancestor, so the sibling of the second member leads.
+        let offers = walk(3);
+        assert_eq!(
+            offers,
+            vec![
+                json!({"id": "x-b-sib", "command": "/blueprint",
+                    "near": "shares x-b-parent", "title": "sibling of b"}),
+                json!({"id": "x-sib", "command": "/blueprint",
+                    "near": "shares x-parent", "title": "sibling"}),
+                json!({"id": "x-out-hi", "command": "/blueprint",
+                    "near": "no shared ancestor", "title": "out high"}),
+            ],
+            "{offers:?}"
+        );
+        // The table decides the command, not the difficulty band: a medium
+        // idea with an open premise question owes a plan.
+        let offers = walk(5);
+        let last = json!({"id": "x-pq", "command": "/blueprint", "near": "no shared ancestor",
+            "title": "premise open"});
+        assert_eq!(offers.last(), Some(&last), "{offers:?}");
+        let lines = render_lines(&json!({"offers": offers}));
+        for line in [
+            "  offer: fno agent spawn \"/fno:target x-out-mid\" \
+             (no shared ancestor, outside this scope): out mid",
+            "  offer: /fno:blueprint subagent x-pq \
+             (no shared ancestor, outside this scope): premise open",
+        ] {
+            assert!(lines.iter().any(|l| l == line), "{lines:?}");
+        }
+    }
+
+    /// An open planless root of the scope routes like an idea child: high
+    /// owes a blueprint, medium goes to a target. A closed root, a root with
+    /// a plan and a locked root print no line. A root the idea rows already
+    /// carry prints once.
+    fn an_open_planless_scope_root_routes_like_an_idea_child() {
+        let dir = std::env::temp_dir().join(format!("fno-bp-roots-{}", std::process::id()));
+        let entries = vec![
+            json!({"id": "x-r-hi", "type": "epic", "status": "idea", "difficulty": "high"}),
+            json!({"id": "x-r-mid", "type": "epic", "status": "idea", "difficulty": "medium",
+                "parent": "x-r-hi"}),
+            json!({"id": "x-r-low", "type": "epic", "status": "idea", "difficulty": "medium"}),
+            json!({"id": "x-r-done", "type": "epic", "status": "done", "difficulty": "high"}),
+            json!({"id": "x-r-plan", "type": "epic", "status": "idea", "difficulty": "high",
+                "plan_path": "/plans/x-r-plan.md"}),
+            json!({"id": "x-r-lock", "type": "epic", "status": "idea", "difficulty": "high",
+                "locked_by": "sess-9"}),
+        ];
+        let idea_rows = [
+            json!({"id": "x-r-mid", "parent": "x-r-hi", "status": "idea",
+            "difficulty": "medium"}),
+        ];
+        let reading = blueprint_reading_owned(
+            &dir,
+            "",
+            unplanned_board(&[], Some(0)),
+            Some("sess-1"),
+            vec![],
+            0,
+            Ok(4),
+            "high",
+            Ok(HashMap::new()),
+            Ok(0),
+            vec![],
+            &idea_rows,
+            &entries,
+            "x-r-hi,x-r-mid,x-r-low,x-r-done,x-r-plan,x-r-lock",
+        )
+        .unwrap();
+        let lines = render_lines(&reading);
+        for line in [
+            "  start /fno:blueprint subagent x-r-hi",
+            "  target-ready: fno agent spawn \"/fno:target x-r-mid\"",
+            "  target-ready: fno agent spawn \"/fno:target x-r-low\"",
+        ] {
+            assert!(lines.iter().any(|l| l == line), "{lines:?}");
+        }
+        assert_eq!(
+            lines.iter().filter(|l| l.contains("x-r-mid")).count(),
+            1,
+            "{lines:?}"
+        );
+        for parked in ["x-r-done", "x-r-plan", "x-r-lock"] {
+            assert!(lines.iter().all(|l| !l.contains(parked)), "{lines:?}");
+        }
+        assert!(
+            lines
+                .iter()
+                .all(|l| !l.contains("offer:") && !l.contains("skip")),
+            "{lines:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// An unread owner read is the reading's error, never an empty filter:
@@ -1142,6 +1517,7 @@ mod tests {
             unplanned_board(&[("x-1", "low")], Some(0)),
             Some("sess-1"),
             vec![],
+            0,
             Ok(4),
             "high",
             Err("a live team's scope does not compile: e-x: unknown".to_string()),
@@ -1149,6 +1525,7 @@ mod tests {
             vec![],
             &[],
             &[],
+            "",
         );
         assert!(reading.is_err());
         let _ = std::fs::remove_dir_all(&dir);

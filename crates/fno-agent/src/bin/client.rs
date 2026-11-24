@@ -1619,7 +1619,7 @@ fn client_spawn(
     )?;
     if seed.sandboxed {
         if let Err((code, reason)) = fno_agent::sandbox_launch::arm(home, &seed.cwd) {
-            eprintln!("fno-agent spawn: [sandbox] devcontainer refused: {reason}");
+            eprintln!("fno-agent spawn: [sandbox] refused: {reason}");
             if let Some(g) = gate_guard.as_mut() {
                 g.release();
             }

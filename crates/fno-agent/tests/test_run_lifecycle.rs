@@ -1078,9 +1078,11 @@ fn a_second_cargo_waits_until_the_building_cargo_exits() {
 
 /// The compile door (law D3323): an agent-origin `cargo build` pid refuses
 /// with exit 86 and the declared form named; a declared build admits and
-/// journals once per cargo; a human-origin cargo (no FNO_AGENT_SELF) is
-/// never gated (D1746); and a `cargo test` subcommand passes the compile
-/// door untouched, because the run door owns test refusals.
+/// journals once per cargo; a declared check or clippy refuses under the
+/// why too, because the why admits the shot build only; a human-origin
+/// cargo (no FNO_AGENT_SELF) is never gated (D1746); and a `cargo test`
+/// subcommand passes the compile door untouched, because the run door owns
+/// test refusals.
 #[test]
 fn agent_compile_refusal_declared_why_and_human_lane_at_the_compile_door() {
     let root = std::fs::canonicalize(tmp_claims_root("agent-compile")).unwrap();
@@ -1191,6 +1193,32 @@ fn agent_compile_refusal_declared_why_and_human_lane_at_the_compile_door() {
         "the declared note is said once per cargo: {:?}",
         String::from_utf8_lossy(&ok2.stderr)
     );
+
+    // check and clippy refuse under a declared why: the why admits the
+    // shot build only (the declared lane the compile door keeps).
+    for sub in ["check", "clippy"] {
+        let mut cargo_sub = Command::new(&shim_path).arg(sub).spawn().unwrap();
+        wait_visible(cargo_sub.id(), sub);
+        let out = build_admit(&root, cargo_sub.id(), &tree)
+            .env("FNO_BUILD_WHY", "mux shots")
+            .env("FNO_EVENTS_PATH", &journal)
+            .env("FNO_AGENT_HOME", &home)
+            .output()
+            .expect("run the declared non-build refusal");
+        assert_eq!(
+            out.status.code(),
+            Some(86),
+            "{sub} refuses under a declared why: {:?}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("gh api --allow-escape-sequences repos/fnodotdev/fno/actions/jobs/"),
+            "the refusal names the CI log command: {stderr}"
+        );
+        let _ = cargo_sub.kill();
+        let _ = cargo_sub.wait();
+    }
 
     // Human lane: same shim, no FNO_AGENT_SELF, never gated (D1746).
     let human = build_admit(&root, cargo_build.id(), &tree)
