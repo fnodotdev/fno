@@ -39,7 +39,7 @@ use super::link::{Event, Layout, Link};
 use super::mouse::{self, Hit};
 use super::mux_modes::{self, MenuAct, MenuKey, Step};
 use super::palette::Palette;
-use super::{find, left_pane, mods, orchestration, settings, sheet, tabs, ui};
+use super::{find, left_pane, mods, orchestration, pr_sheet, settings, sheet, tabs, ui};
 use fno::app_api::web_hq::Board;
 use fno::proto::chat_event::SessionKey;
 use fno::proto::{self, ClientMsg, Command, Frame, MouseEvent, MouseKind};
@@ -319,6 +319,9 @@ pub struct Root {
     pub(super) picking: bool,
     /// The key sheet (cmd-/) covers the window.
     pub(super) sheet: bool,
+    /// The read-only PR sheet: one agent row's PR facts. Alt-click on a row
+    /// with a PR opens it; esc, q or a click outside closes.
+    pub(super) pr_sheet: Option<pr_sheet::PrSheet>,
     /// The answer sheet: the one question it holds, the choice the user
     /// picked, and the typed draft. Esc and Later close; Answer submits the
     /// typed words, else the pick.
@@ -517,6 +520,7 @@ impl Root {
             pinned,
             picking: false,
             sheet: false,
+            pr_sheet: None,
             answer: None,
             question_toast: None,
             question_toast_gen: 0,
@@ -1939,7 +1943,8 @@ impl Root {
                 Event::Frame(id, frame) => {
                     newest.insert(id, frame);
                 }
-                Event::Layout(l) => {
+                Event::Layout(mut l) => {
+                    pr_sheet::demo_stamp(&mut l.agents);
                     self.layout = l;
                     self.launch.state.refresh_projects(&self.layout);
                     self.steer_launch(cx);
@@ -2895,6 +2900,23 @@ impl Root {
     /// The open sheet takes every key first: esc or `q` closes it, and a
     /// cmd key closes it and runs. ⌘/ never gets here; its action toggles.
     fn chord(&mut self, key: &Key, cx: &mut Context<Self>) -> bool {
+        // The PR sheet takes the keys the same way the key sheet does:
+        // esc or q closes, a cmd key closes and runs, and `o` opens the PR
+        // behind the same gate the server's OpenLink events pass.
+        if let Some(sheet) = self.pr_sheet.as_ref() {
+            if key.cmd || matches!(key.key, "escape" | "q") {
+                self.pr_sheet = None;
+                cx.notify();
+            } else if key.key == "o" {
+                if let Some(url) = sheet.url.as_deref() {
+                    if fno::link::is_openable(url) {
+                        cx.open_url(url);
+                    }
+                }
+                return true;
+            }
+            return true;
+        }
         if !self.sheet {
             return false;
         }
@@ -2933,6 +2955,11 @@ impl Root {
 
     pub(super) fn close_sheet(&mut self, cx: &mut Context<Self>) {
         self.sheet = false;
+        cx.notify();
+    }
+
+    pub(super) fn close_pr_sheet(&mut self, cx: &mut Context<Self>) {
+        self.pr_sheet = None;
         cx.notify();
     }
 
@@ -4310,6 +4337,13 @@ impl Root {
             d.child(launch::render(self, window, cx))
         })
         .when(self.sheet, |d| d.child(sheet::render(self, cx)))
+        .when(self.pr_sheet.is_some(), |d| {
+            d.children(
+                self.pr_sheet
+                    .as_ref()
+                    .map(|s| pr_sheet::render(s, self, cx)),
+            )
+        })
         .when(self.answer.is_some(), |d| d.child(answer::render(self, cx)))
         .when(self.goto.is_some(), |d| d.child(goto::render(self, cx)))
         .children(self.row_menu.as_ref().map(|m| m.view(self, cx)))
