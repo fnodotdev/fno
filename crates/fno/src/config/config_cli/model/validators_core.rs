@@ -47,6 +47,9 @@ const EXTERNAL_REVIEWER_VOCABULARY: [&str; 4] = ["gemini", "codex", "coderabbit"
 
 const RENDER_PROJECTIONS: [&str; 3] = ["backlog", "roadmap", "local"];
 
+/// The `review.human` vocabulary, sorted.
+const HUMAN_VALUES: [&str; 3] = ["always", "never", "ui"];
+
 const DEFAULT_POST_MERGE_MODEL: &str = "claude-opus-5";
 
 pub(super) fn register(reg: &mut Registry) {
@@ -98,6 +101,7 @@ pub(super) fn register(reg: &mut Registry) {
     reg.before("CrossModelBlock", &["enabled"], coerce_affirmative);
     reg.after("WordCapBlock", &["mail", "encounter"], cap_is_positive);
     reg.before("ReviewBlock", &["posture"], validate_posture);
+    reg.before("ReviewBlock", &["human"], validate_human);
     reg.before(
         "ReviewBlock",
         &["github_apps", "required_bots"],
@@ -605,6 +609,27 @@ fn validate_posture(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
         }
         _ => Err(Fail::Value(format!(
             "review.posture must be a posture name or be unset, got {}",
+            py_repr(&v)
+        ))),
+    }
+}
+
+fn validate_human(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
+    match &v {
+        Value::Null => Ok(Value::Null),
+        Value::String(s) => {
+            let stripped = py_strip(s);
+            if HUMAN_VALUES.contains(&stripped) {
+                return Ok(Value::String(stripped.to_string()));
+            }
+            Err(Fail::Value(format!(
+                "review.human {} is not one of {}",
+                py_repr(&v),
+                repr_list(&HUMAN_VALUES)
+            )))
+        }
+        _ => Err(Fail::Value(format!(
+            "review.human must be never, ui or always, or be unset, got {}",
             py_repr(&v)
         ))),
     }

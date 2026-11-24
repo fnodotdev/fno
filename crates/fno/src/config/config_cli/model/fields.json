@@ -1209,6 +1209,10 @@
      "default": null
     },
     {
+     "name": "human",
+     "default": null
+    },
+    {
      "name": "github_apps",
      "default": null
     },
