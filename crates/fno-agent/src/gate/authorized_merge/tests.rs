@@ -1342,6 +1342,18 @@ fn hold_probe_fails_closed_on_every_non_success() {
             "dispatch hold state unreadable; refusing to assume unheld".to_string()
         )
     );
+    // The blocked_by hold rides the same polarity: an open blocker holds the
+    // PR, a closed or missing one lets it merge.
+    let waits = vec![("x-1".to_string(), "x-2".to_string())];
+    let open = vec![json!({"id": "x-2", "status": "in_progress"})];
+    let closed =
+        vec![json!({"id": "x-2", "status": "done", "completed_at": "2026-11-24T00:00:00Z"})];
+    match blocked_by_verdict(9, &waits, &open) {
+        ProbeOutcome::Refused(reason) => assert!(reason.contains("x-1 waits on x-2"), "{reason}"),
+        other => panic!("an open blocker must hold: {other:?}"),
+    }
+    assert_eq!(blocked_by_verdict(9, &waits, &closed), ProbeOutcome::Clear);
+    assert_eq!(blocked_by_verdict(9, &waits, &[]), ProbeOutcome::Clear);
 }
 
 #[test]
@@ -2450,24 +2462,4 @@ fn pin_graph_env(tmp: &Path) -> (std::sync::MutexGuard<'static, ()>, GraphEnvRes
     let prior_home = std::env::var_os("FNO_HOME");
     std::env::set_var("FNO_HOME", tmp);
     (lock, GraphEnvRestore(prior_spaces, prior_home))
-}
-
-#[test]
-fn a_pr_waits_on_an_open_blocker_and_merges_once_it_closes() {
-    let waits = vec![("x-1".to_string(), "x-2".to_string())];
-    let open = vec![json!({"id": "x-2", "status": "in_progress"})];
-    let closed =
-        vec![json!({"id": "x-2", "status": "done", "completed_at": "2026-11-24T00:00:00Z"})];
-    match blocked_by_verdict(9, &waits, &open) {
-        ProbeOutcome::Refused(reason) => assert!(reason.contains("x-1 waits on x-2"), "{reason}"),
-        other => panic!("an open blocker must hold: {other:?}"),
-    }
-    assert!(matches!(
-        blocked_by_verdict(9, &waits, &closed),
-        ProbeOutcome::Clear
-    ));
-    assert!(matches!(
-        blocked_by_verdict(9, &waits, &[]),
-        ProbeOutcome::Clear
-    ));
 }
