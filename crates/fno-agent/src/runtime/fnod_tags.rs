@@ -59,17 +59,23 @@ mod tests {
     fn a_law_reads_its_tag_and_nothing_else_is_judged() {
         let dir = tempfile::TempDir::new().unwrap();
         std::fs::create_dir_all(dir.path().join(".fno")).unwrap();
-        assert_eq!(Tags::read(dir.path()).get("d-03c304bb"), Tag::Untagged);
+        let absent = "d-absent01";
+        assert_eq!(Tags::read(dir.path()).get(absent), Tag::Untagged);
         std::fs::write(
             dir.path().join(".fno/config.toml"),
             "[fnod.judge.tags]\nd-03c304bb = \"behavioural\"\nd-2d9ee096 = \"state\"\nd-bad00001 = \"behaviour\"\n",
         )
         .unwrap();
         let tags = Tags::read(dir.path());
-        assert_eq!(tags.get("d-03c304bb"), Tag::Behavioural);
-        assert_eq!(tags.get("d-2d9ee096"), Tag::State);
-        assert_eq!(tags.get("d-bad00001"), Tag::Untagged);
-        assert_eq!(tags.get("d-absent01"), Tag::Untagged);
+        let cases = [
+            ("d-03c304bb", Tag::Behavioural),
+            ("d-2d9ee096", Tag::State),
+            ("d-bad00001", Tag::Untagged),
+            ("d-absent01", Tag::Untagged),
+        ];
+        for (id, tag) in cases {
+            assert_eq!(tags.get(id), tag, "{id}");
+        }
         assert_eq!(Tag::State.as_str(), "state");
     }
 }
