@@ -10,6 +10,16 @@
 //! I/O (plan-file reads, gh PR fetches, transcript reads) stays at the
 //! [`super`] command layer or behind the injected readers, so the functions
 //! here are testable without touching disk or the network.
+//!
+//! The fold also reads what a session invoked: one row per skill, typed
+//! command, subagent and goal, with its node, its start and end timestamps
+//! and its outcome ([`invocations_from_transcript`]). The rows are a
+//! read-time view of the transcript and are written nowhere. They stand in
+//! for one half of the loop's provenance, the half that says which session
+//! ran what, for which node and for how long. They do not stand in for the
+//! `stop_decision`, `loop_check` and `termination` rows: those hold a
+//! decision, a PR and CI state and a fingerprint, and a transcript holds
+//! none of them.
 
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime};
 use serde_json::{json, Map, Value};
