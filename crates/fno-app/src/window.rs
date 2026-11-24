@@ -448,6 +448,9 @@ impl Root {
     /// The shot path's constructor: `prewarmed` hands a link already
     /// connected and drained to the world's first layout, so the one
     /// frame gpui paints synchronously at open carries the world's data.
+    // One 83-line struct literal: the length is Root's field count, not
+    // logic. An extraction would pass thirteen locals to save nothing.
+    #[allow(clippy::too_many_lines)]
     fn new_with_link(
         session: String,
         main: MainView,

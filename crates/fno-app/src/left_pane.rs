@@ -785,15 +785,17 @@ fn agent_cells(
         .flex_row()
         .gap(small * COL_GAP as f32);
     for (slot, w) in cols {
-        if *slot == IDENTITY_SLOT && pr_fact.is_some() {
-            line = line.child(pr_identity_cell(
-                pr_fact.unwrap(),
-                facts.get(*slot).cloned().flatten().as_deref(),
-                *w,
-                p,
-                small,
-            ));
-            continue;
+        if *slot == IDENTITY_SLOT {
+            if let Some(fact) = pr_fact {
+                line = line.child(pr_identity_cell(
+                    fact,
+                    facts.get(*slot).cloned().flatten().as_deref(),
+                    *w,
+                    p,
+                    small,
+                ));
+                continue;
+            }
         }
         line = line.child(ui::cell(
             facts.get(*slot).cloned().flatten().unwrap_or_default(),
@@ -1299,40 +1301,47 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
                 None => plain_cells(item, &label, &detail, mark, &p, adv),
             };
             item = agent_menu_on_right_click(item, agent_name, cx);
-            if let Some(action) = action {
-                // On click: a press that leaves the row before release
-                // does nothing. A click is the user's own pick, so the
-                // launch's borrowed cursor retires with it. Alt-click on a
-                // row whose agent carries a PR fact opens its read-only
-                // sheet; a plain click keeps the row's own action.
-                let openable = pr_fact.is_some();
-                let pr_fact = pr_fact.clone();
-                let pr_num = pr;
-                let pr_url = pr_url.clone();
-                item = ui::clickable(item, &p).on_click(cx.listener(
-                    move |root, ev: &gpui::ClickEvent, _, cx| {
-                        if openable && ev.modifiers().alt {
-                            if let Some(num) = pr_num {
-                                root.pr_sheet = Some(pr_sheet::PrSheet {
-                                    pr: num,
-                                    url: pr_url.clone(),
-                                    fact: pr_fact.clone().unwrap_or_default(),
-                                    agent: label_for_sheet.clone(),
-                                    slug: pr_sheet::slug_from_url(pr_url.as_deref()),
-                                });
-                                cx.notify();
-                            }
-                            return;
-                        }
-                        root.launch.show = None;
-                        root.launch.show_task = None;
-                        root.act(action.clone(), cx)
-                    },
-                ));
-            }
+            item = row_click_action(item, &p, cx, pr_fact, pr, pr_url, label_for_sheet, action);
             item
         }
     }
+}
+
+/// A row's click: a press that leaves the row before release does
+/// nothing; a plain click keeps the row's own action. Alt-click on a row
+/// whose agent carries a PR fact opens its read-only sheet instead.
+fn row_click_action(
+    item: Stateful<Div>,
+    p: &Palette,
+    cx: &mut Context<Root>,
+    pr_fact: Option<PrStatusFact>,
+    pr: Option<u64>,
+    pr_url: Option<String>,
+    label_for_sheet: String,
+    action: Option<Action>,
+) -> Stateful<Div> {
+    let Some(action) = action else {
+        return item;
+    };
+    let openable = pr_fact.is_some();
+    ui::clickable(item, &p).on_click(cx.listener(move |root, ev: &gpui::ClickEvent, _, cx| {
+        if openable && ev.modifiers().alt {
+            if let Some(num) = pr {
+                root.pr_sheet = Some(pr_sheet::PrSheet {
+                    pr: num,
+                    url: pr_url.clone(),
+                    fact: pr_fact.clone().unwrap_or_default(),
+                    agent: label_for_sheet.clone(),
+                    slug: pr_sheet::slug_from_url(pr_url.as_deref()),
+                });
+                cx.notify();
+            }
+            return;
+        }
+        root.launch.show = None;
+        root.launch.show_task = None;
+        root.act(action.clone(), cx)
+    }))
 }
 
 /// A right-click on an agent row opens that agent's menu at the pointer.
