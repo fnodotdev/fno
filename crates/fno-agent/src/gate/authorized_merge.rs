@@ -3414,16 +3414,13 @@ fn blocked_by_probe(cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
     };
     let mut waits: Vec<(String, String)> = Vec::new();
     for row in &bound {
-        let Some(owner) = RowFacts::id_of(row) else {
+        let Some(facts_row) = RowFacts::of(row) else {
             continue;
         };
-        for blocker in row
-            .get("blocked_by")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-        {
+        let Some(owner) = facts_row.id().as_str() else {
+            continue;
+        };
+        for blocker in facts_row.blocked_by().str_items() {
             waits.push((owner.to_string(), blocker.to_string()));
         }
     }
