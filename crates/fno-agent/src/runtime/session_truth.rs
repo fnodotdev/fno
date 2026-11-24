@@ -1503,7 +1503,18 @@ fn payload_for_session<C: CursorAccess>(
         "reachability": reachability,
         "basis": reach_basis,
         "falsifier_error": Value::Null,
+        "origin": sandbox_transcript(session).map(|_| "sandbox"),
     })
+}
+
+/// The host copy of a sandboxed row's transcript, when it is there.
+fn sandbox_transcript(session: &TruthSession) -> Option<PathBuf> {
+    session
+        .row
+        .as_ref()
+        .and_then(|r| r.sandbox_transcript.as_deref())
+        .map(PathBuf::from)
+        .filter(|p| p.exists())
 }
 
 /// The last `n` rendered turns of one session, oldest first, resolved the
@@ -1725,6 +1736,11 @@ fn transcript_for<C: CursorAccess>(
 ) -> Option<PathBuf> {
     if let Some(path) = session.transcript_path.as_ref().filter(|p| p.exists()) {
         return Some(path.clone());
+    }
+    // A sandboxed worker's host copy. Display readers only: this function
+    // feeds truth, peek and list, which label it as sandbox origin.
+    if let Some(path) = sandbox_transcript(session) {
+        return Some(path);
     }
     match session.agent.as_str().as_harness() {
         Harness::Claude | Harness::Codex if !session.session_id.is_empty() => {
