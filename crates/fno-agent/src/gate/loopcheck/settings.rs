@@ -782,7 +782,7 @@ pub(crate) fn parse_settings_result(content: &str) -> Result<Settings, String> {
         // leaf is new.
         if let Some(v) = review
             .as_table()
-            .and_then(|t| t.iter().find(|(k, _)| k == "human"))
+            .and_then(|t| t.iter().find(|(k, _)| *k == "human"))
             .map(|(_, v)| v)
         {
             // Same lax contract as posture: only a name the vocabulary

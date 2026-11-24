@@ -331,7 +331,7 @@ fn coverage_has_human_approval(row: &Value) -> bool {
 /// literal-key ratchet flat, which a literal-key read would not.
 fn obj_field<'a>(v: &'a Value, key: &str) -> Option<&'a Value> {
     v.as_object()
-        .and_then(|o| o.iter().find(|(k, _)| k == key))
+        .and_then(|o| o.iter().find(|(k, _)| *k == key))
         .map(|(_, val)| val)
 }
 
