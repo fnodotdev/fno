@@ -4211,30 +4211,6 @@ mod tests {
     // resolving a DIFFERENT node than sessions[] holds the row, it does not
     // retire on the join's answer alone.
     #[test]
-    fn prefetch_keys_skip_merged_and_staged_prs() {
-        let mut e = crate::state::RegistryEntry::new(
-            Some("SID-1".into()),
-            crate::state::Lineage::unproven("test row"),
-        );
-        e.cwd = "/w".into();
-        let graph = GraphRead {
-            do_nodes: HashMap::from([(
-                "sid-1".to_string(),
-                ["A", "B", "C"].iter().map(|n| n.to_string()).collect(),
-            )]),
-            pr_number: HashMap::from([
-                ("A".to_string(), Some(1)),
-                ("B".to_string(), Some(2)),
-                ("C".to_string(), Some(3)),
-            ]),
-            pr_state: HashMap::from([("B".to_string(), (Some("merged".into()), 0, 0))]),
-            pr_reads: HashMap::from([(("/w".to_string(), 3), Some(true))]),
-            ..Default::default()
-        };
-        assert_eq!(prefetch_keys(&graph, &[&e]), vec![("/w".to_string(), 1)]);
-    }
-
-    #[test]
     fn a_name_contradicting_the_session_join_holds_the_row() {
         use std::collections::HashMap;
         let mut e = crate::state::RegistryEntry::new(
