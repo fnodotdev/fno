@@ -298,8 +298,6 @@ fn read_label(path: &str) -> &'static str {
     let path = path.split('?').next().unwrap_or(path);
     if path.contains("/check-runs") {
         "check-runs"
-    } else if path.contains("/actions/runs") {
-        "runs"
     } else if path.ends_with("/status") {
         "status"
     } else {

@@ -428,7 +428,6 @@ fn a_not_found_names_the_read_that_failed() {
             "check-runs",
         ),
         ("repos/o/r/commits/abc/status", "status"),
-        ("repos/o/r/actions/runs?head_sha=abc", "runs"),
     ] {
         let reason = rest_reason_for(&probe, Path::new("/tmp"), stderr, read_label(path));
         assert!(
