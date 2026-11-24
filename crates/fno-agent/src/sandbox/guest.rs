@@ -433,17 +433,18 @@ fn exec(args: &[String]) -> i32 {
 
 /// The HTTP proxy: `CONNECT host:port` tunnels, an absolute-form request is
 /// re-sent in origin form. Each becomes one connect frame; the host checks it.
-fn serve_proxy(shared: &Shared, conn: TcpStream) {
-    conn.set_read_timeout(Some(Duration::from_secs(30))).ok();
-    let Ok(mut write_half) = conn.try_clone() else {
-        return;
-    };
-    let mut reader = BufReader::new(conn);
+/// One proxied request's target: host, port, and the rewritten request
+/// head for plain HTTP (`None` for CONNECT).
+type Target = (String, u16, Option<Vec<u8>>);
+
+/// Read the request head and name its target. `None` after a refusal the
+/// client has already been sent, or a closed connection.
+fn read_target(reader: &mut BufReader<TcpStream>, write_half: &mut TcpStream) -> Option<Target> {
     let mut head = Vec::new();
     loop {
         let mut line = Vec::new();
         match reader.read_until(b'\n', &mut line) {
-            Ok(0) | Err(_) => return,
+            Ok(0) | Err(_) => return None,
             Ok(_) => {}
         }
         let end = line == b"\r\n" || line == b"\n";
@@ -460,18 +461,47 @@ fn serve_proxy(shared: &Shared, conn: TcpStream) {
         parts.next().unwrap_or(""),
         parts.next().unwrap_or("HTTP/1.1"),
     );
-    let (host, port, preamble) = if method.eq_ignore_ascii_case("CONNECT") {
+    if method.eq_ignore_ascii_case("CONNECT") {
         let (h, p) = split_host_port(target, 443);
-        (h, p, None)
-    } else if let Some(rest) = target.strip_prefix("http://") {
+        return Some((h, p, None));
+    }
+    if let Some(rest) = target.strip_prefix("http://") {
         let (authority, path) = rest.split_once('/').map_or((rest, ""), |(a, p)| (a, p));
         let (h, p) = split_host_port(authority, 80);
         let rewritten = text.replacen(first, &format!("{method} /{path} {version}"), 1);
-        (h, p, Some(rewritten.into_bytes()))
-    } else {
-        write_half
-            .write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
-            .ok();
+        return Some((h, p, Some(rewritten.into_bytes())));
+    }
+    write_half
+        .write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+        .ok();
+    None
+}
+
+/// Client bytes (anything buffered first) to the host, then the close.
+fn pump_out(shared: &Shared, mut reader: BufReader<TcpStream>, stream: u32) {
+    reader.get_ref().set_read_timeout(None).ok();
+    let mut buf = vec![0u8; CHUNK];
+    loop {
+        match reader.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                let bytes = buf.get(..n).unwrap_or_default().to_vec();
+                if shared.out.send(GuestFrame::Data { stream, bytes }).is_err() {
+                    break;
+                }
+            }
+        }
+    }
+    shared.out.send(GuestFrame::Close { stream }).ok();
+}
+
+fn serve_proxy(shared: &Shared, conn: TcpStream) {
+    conn.set_read_timeout(Some(Duration::from_secs(30))).ok();
+    let Ok(mut write_half) = conn.try_clone() else {
+        return;
+    };
+    let mut reader = BufReader::new(conn);
+    let Some((host, port, preamble)) = read_target(&mut reader, &mut write_half) else {
         return;
     };
     let stream = shared.id();
@@ -529,27 +559,7 @@ fn serve_proxy(shared: &Shared, conn: TcpStream) {
         }
         write_half.shutdown(std::net::Shutdown::Both).ok();
     });
-    // Outbound: client bytes (anything buffered first) to the host.
-    reader.get_ref().set_read_timeout(None).ok();
-    let mut buf = vec![0u8; CHUNK];
-    loop {
-        match reader.read(&mut buf) {
-            Ok(0) | Err(_) => break,
-            Ok(n) => {
-                if shared
-                    .out
-                    .send(GuestFrame::Data {
-                        stream,
-                        bytes: buf.get(..n).unwrap_or_default().to_vec(),
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        }
-    }
-    shared.out.send(GuestFrame::Close { stream }).ok();
+    pump_out(shared, reader, stream);
 }
 
 fn split_host_port(authority: &str, default: u16) -> (String, u16) {
