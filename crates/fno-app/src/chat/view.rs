@@ -395,14 +395,32 @@ fn row(root: &mut Root, ix: usize, _window: &mut Window, cx: &mut Context<Root>)
     };
     let id = |name: &str| ElementId::NamedInteger(SharedString::from(name.to_string()), ix as u64);
     let body: AnyElement = match item {
-        Item::User {
-            content,
-            meta: true,
-        } => muted(content.text.clone(), p)
-            .text_xs()
-            .line_clamp(1)
-            .text_ellipsis()
-            .into_any_element(),
+        Item::User { content, .. } if item.folds_notice() => {
+            let open = root.chat.conv.expanded.contains(&ix);
+            let caret = if open { "▾" } else { "▸" };
+            // The head is the raw first line: the Meta lane carries task
+            // notifications, AGENTS.md preambles and hook output alike, so
+            // no friendly label can name them all.
+            let head_line = content.text.lines().next().unwrap_or_default();
+            let head = clickable(id("notice"), Action::ToggleChat(ix), p, cx)
+                .text_color(rgb(p.muted))
+                .text_xs()
+                .line_clamp(1)
+                .text_ellipsis()
+                .child(format!("{caret} {head_line}"));
+            let mut d = div().flex().flex_col().child(head);
+            if open {
+                let hl = find::chat_ranges(root.find.as_ref(), ix, 0, content.text.len());
+                let full: AnyElement = if hl.is_empty() {
+                    muted(content.text.clone(), p).into_any_element()
+                } else {
+                    painted(content.text.as_str(), font(UI_FONT), p.muted, &hl, p)
+                        .into_any_element()
+                };
+                d = d.child(div().ml_2().mt_1().child(full));
+            }
+            d.into_any_element()
+        }
         Item::User { content, .. } => {
             let hl = find::chat_ranges(root.find.as_ref(), ix, 0, content.text.len());
             bubble(content, false, p, &hl).into_any_element()
@@ -475,6 +493,12 @@ fn row(root: &mut Root, ix: usize, _window: &mut Window, cx: &mut Context<Root>)
         div()
             .flex()
             .flex_col()
+            // A definite width basis: bubble() measures itself at w_full,
+            // and under a shrink-wrapped parent that resolve lands on
+            // max-content, the one-line box the comments in bubble() warn
+            // about.
+            .w_full()
+            .min_w_0()
             .children(author(root, ix))
             .child(body),
     )
