@@ -30,7 +30,7 @@ The owner shares the page with the user's organization at Contributor level. A V
 
 ## Review boards
 
-A lead with a review board (D3482) registers it once with `fno backlog note <epic> "Review board: <slug>"`. Post it again when the board moves to a new slug. The reader runs `fno backlog find --notes "Review board:"` each beat, reads each slug's `verdicts`, and turns a new row into a `Board verdict:` note on the row's node. That note mails the node's holder and the epic's lead. A board the reader's account cannot read is reported by slug and never noted, so your own beat read is its only reader. Read the verdict notes back with `fno backlog find --notes "Board verdict:"`.
+A lead with a review board (D3482) registers it once with `fno backlog note <epic> "Review board: <slug>"`. If the board moves to a new slug, post it again. The reader runs `fno backlog find --notes "Review board:"` each beat, reads each slug's `verdicts`, and turns a new row into a `Board verdict:` note on the row's node. That note mails the node's holder and the epic's lead. A board the reader's account cannot read is reported by slug and never noted, so your own beat read is its only reader. Read the verdict notes back with `fno backlog find --notes "Board verdict:"`.
 
 ## Add an entry
 
