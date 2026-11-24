@@ -3119,11 +3119,17 @@ impl Root {
             let state = cx
                 .background_executor()
                 .spawn(async move {
-                    let rt = tokio::runtime::Builder::new_current_thread()
+                    // A runtime that cannot start is the probe's failure,
+                    // not a panic: the row reads it, like a dead ssh hop.
+                    match tokio::runtime::Builder::new_current_thread()
                         .enable_all()
                         .build()
-                        .expect("probe runtime");
-                    rt.block_on(fno::app_api::client::remote_hosts::probe(&host))
+                    {
+                        Ok(rt) => rt.block_on(fno::app_api::client::remote_hosts::probe(&host)),
+                        Err(e) => fno::app_api::client::remote_hosts::HostState::Unreachable(
+                            format!("ssh did not start: {e}"),
+                        ),
+                    }
                 })
                 .await;
             this.update(cx, |root, cx| {

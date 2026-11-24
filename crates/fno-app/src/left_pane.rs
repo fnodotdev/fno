@@ -440,11 +440,13 @@ fn push_machines(out: &mut Vec<Row>, board: &Board) {
         .unwrap_or_default()
     {
         let seats: usize = m.leads.iter().map(|l| l.seats.len()).sum();
-        let fresh = if m.fresh {
-            "live".to_string()
-        } else {
-            format!("seen {}s ago", m.age_s)
-        };
+        // The door's beat word: the same stale fact reads the same in the
+        // pane and in Settings.
+        let fresh = fno::app_api::client::remote_hosts::state_word(
+            Some((m.fresh, m.age_s)),
+            &fno::app_api::client::remote_hosts::HostState::Checking,
+        )
+        .0;
         let name = m.display_name.clone().unwrap_or_else(|| m.host.clone());
         out.push(Row::Item {
             label: name.clone(),
