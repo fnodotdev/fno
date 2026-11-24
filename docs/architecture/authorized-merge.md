@@ -271,3 +271,7 @@ The merge owner (`authorized_merge::run`, via `crates/fno-agent/src/gate/merge_p
 When reconcile closes a node whose PR merged with no fno record anywhere, it writes `merged_outside_fno` with `merged_at` and `merge_sha`. No record means the user in the GitHub UI or another machine. The Rust close also stamps `closed_by: {session, actor_kind}` on the node row, and the daemon close adds `path: reconcile`. The close sweep and the detached finalize run with no ambient session. Their launcher stamps `FNO_ACTOR_KIND=sweep` on the child, so their rows read `sweep`, not `user`.
 
 GitHub alone cannot tell a fleet merge from a user merge while both share one token. The query that answers the node's own record is `jq 'select(.type=="decision_span" and .data.pr==N)' <repo>/.fno/events.jsonl`. A GitHub App identity for fleet merges is the standing question that will make GitHub itself show the difference.
+
+## A PR waits on its node's open blockers
+
+A PR whose bound node carries an open `blocked_by` entry does not merge. The `blocked_by` probe reads the nodes the PR binds to, then the status of each blocker. An open blocker holds the PR as `blocked_by` in `fno do pr status` and in every merge door. When the blocker closes (done, or superseded and verified), the hold lifts. It needs no decision row, no question and no operator release. A blocker the graph no longer holds reads closed. An unreadable graph holds. Use a `pr-hold` row only for a judgment hold, such as a user look.
