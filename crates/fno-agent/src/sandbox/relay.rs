@@ -15,6 +15,7 @@
 //! Argv carries env key names only. The values come from this process's own
 //! env, set by the lane, and cross to the guest over exec stdin.
 
+use super::{Refusal, Res};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{IpAddr, TcpStream};
@@ -85,7 +86,7 @@ impl Args {
         v
     }
 
-    pub fn parse(args: &[String]) -> Result<Self, String> {
+    pub fn parse(args: &[String]) -> Res<Self> {
         let mut a = Args::default();
         let mut it = args.iter();
         while let Some(flag) = it.next() {
@@ -108,14 +109,14 @@ impl Args {
                 "--transcript-dir" => a.transcript_dir = Some(val),
                 "--set" => a.set.push(val),
                 "--unset" => a.unset.push(val),
-                other => return Err(format!("unknown flag {other}")),
+                other => return Err(Refusal(format!("unknown flag {other}"))),
             }
         }
         if !super::valid_id(&a.id) {
-            return Err(format!(
+            return Err(Refusal(format!(
                 "--id {} is not a sandbox id",
                 super::escape(&a.id, 80)
-            ));
+            )));
         }
         if a.argv.is_empty() {
             return Err("no harness command after --".into());
@@ -145,10 +146,7 @@ pub fn run(args: &[String]) -> i32 {
 /// the work path, `--settings` points at the guest copy, host `--add-dir`
 /// grants drop, and any other host path refuses by name. Returns the argv
 /// and the settings file to send.
-pub fn rewrite_argv(
-    argv: &[String],
-    worktree: &Path,
-) -> Result<(Vec<String>, Option<PathBuf>), String> {
+pub fn rewrite_argv(argv: &[String], worktree: &Path) -> Res<(Vec<String>, Option<PathBuf>)> {
     let canonical = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
     let wt = canonical(worktree);
     let inside = |a: &str| -> Option<String> {
@@ -168,12 +166,16 @@ pub fn rewrite_argv(
     };
     let host = |a: &str| Path::new(a).is_absolute() && Path::new(a).exists();
     // The harness resolves on the container's PATH.
-    let mut out = vec![Path::new(&argv[0])
+    let Some((prog, rest)) = argv.split_first() else {
+        return Err("no harness command".into());
+    };
+    let name = Path::new(prog)
         .file_name()
-        .map_or_else(|| argv[0].clone(), |n| n.to_string_lossy().into_owned())];
+        .map_or_else(|| prog.clone(), |n| n.to_string_lossy().into_owned());
+    let codex = name == "codex";
+    let mut out = vec![name];
     let mut settings = None;
-    let codex = out[0] == "codex";
-    let mut it = argv[1..].iter();
+    let mut it = rest.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             // Codex's own bwrap sandbox cannot start in a container with no
@@ -202,10 +204,10 @@ pub fn rewrite_argv(
             _ => match inside(a) {
                 Some(p) => out.push(p),
                 None if host(a) => {
-                    return Err(format!(
+                    return Err(Refusal(format!(
                     "the command names {}, a host path outside the worktree the sandbox cannot see",
                     super::escape(a, 200)
-                ))
+                )))
                 }
                 None => out.push(a.clone()),
             },
@@ -218,7 +220,7 @@ fn home() -> crate::paths::AgentsHome {
     crate::paths::AgentsHome::from_env()
 }
 
-fn lifecycle(a: &Args) -> Result<i32, String> {
+fn lifecycle(a: &Args) -> Res<i32> {
     let provider = Provider::parse(&a.provider)
         .ok_or_else(|| format!("unknown provider {}", super::escape(&a.provider, 40)))?;
     let engine = provider.engine()?;
@@ -249,25 +251,7 @@ fn lifecycle(a: &Args) -> Result<i32, String> {
         Some(f) => Some(std::fs::read(f).map_err(|e| format!("{}: {e}", f.display()))?),
         None => None,
     };
-    let mut env: Vec<(String, Option<String>)> = a
-        .set
-        .iter()
-        .filter_map(|k| std::env::var(k).ok().map(|v| (k.clone(), Some(v))))
-        .collect();
-    env.extend(a.unset.iter().map(|k| (k.clone(), None)));
-    let proxy = format!("http://{PROXY_ADDR}");
-    for k in [
-        "HTTPS_PROXY",
-        "HTTP_PROXY",
-        "https_proxy",
-        "http_proxy",
-        "ALL_PROXY",
-    ] {
-        env.push((k.into(), Some(proxy.clone())));
-    }
-    env.push(("NO_PROXY".into(), Some(String::new())));
-    env.push(("FNO_SUPERVISOR_SOCKET".into(), Some(CONTAINER_SOCK.into())));
-    env.push(("FNO_AGENT_SANDBOXED".into(), Some(a.id.clone())));
+    let env = guest_env(a);
 
     let mut guest = engine
         .exec_piped(&a.id, &["fno-agent", "hook", "sandbox-guest"])
@@ -284,40 +268,8 @@ fn lifecycle(a: &Args) -> Result<i32, String> {
         .exec_out(&a.id, &["fno-agent", "hook", "sandbox-guest", "probe"])
         .map_err(|e| format!("the guest did not answer a status frame: {e}"))?;
 
-    eprintln!(
-        "fno sandbox {}: {} on {} image {}, clone of {}{}",
-        a.id,
-        a.harness,
-        engine.bin,
-        super::escape(&image, 120),
-        &intake.base[..intake.base.len().min(12)],
-        if intake.excluded_dirty.is_empty() {
-            String::new()
-        } else {
-            format!(
-                "; dirty host paths not carried: {}",
-                intake.excluded_dirty.join(", ")
-            )
-        }
-    );
-    if let Some(sid) = &a.session {
-        let params = json!({
-            "harness": a.harness,
-            "session_id": sid,
-            "source": "startup",
-            "agent_self": a.name,
-            "cwd": a.cwd,
-            "sandbox_transcript": transcript_path,
-        });
-        let method = format!("agent.{}", crate::session_report::SESSION_REPORT_COMMAND);
-        let sock = crate::client::client_sock(&home);
-        if crate::protocol::blocking_call(&sock, &method, params, DAEMON_BOUND).is_none() {
-            eprintln!(
-                "fno sandbox {}: the daemon took no start report; the row may be missing",
-                a.id
-            );
-        }
-    }
+    banner(a, engine.bin, &image, &intake);
+    start_report(a, &home, &transcript_path);
     let mut harness_argv = vec![
         "fno-agent".to_string(),
         "hook".into(),
@@ -331,11 +283,11 @@ fn lifecycle(a: &Args) -> Result<i32, String> {
         .status()
         .map_err(|e| format!("run the harness: {e}"))?;
 
-    let _ = tx.send(HostFrame::Shutdown);
-    let _ = flushed.recv_timeout(FLUSH_BOUND);
+    tx.send(HostFrame::Shutdown).ok();
+    flushed.recv_timeout(FLUSH_BOUND).ok();
     drop(tx);
-    let _ = guest.kill();
-    let _ = guest.wait();
+    guest.kill().ok();
+    guest.wait().ok();
 
     match super::repo::export(&engine, &a.id, &a.id, &intake.base, &a.cwd, &store_dir) {
         Ok(out) => {
@@ -356,6 +308,73 @@ fn lifecycle(a: &Args) -> Result<i32, String> {
     Ok(exit_code(status))
 }
 
+/// The env the guest hands the harness: the lane's set and unset keys with
+/// their values from this process, the proxy, and the pinned socket.
+fn guest_env(a: &Args) -> Vec<(String, Option<String>)> {
+    let mut env: Vec<(String, Option<String>)> = a
+        .set
+        .iter()
+        .filter_map(|k| std::env::var(k).ok().map(|v| (k.clone(), Some(v))))
+        .collect();
+    env.extend(a.unset.iter().map(|k| (k.clone(), None)));
+    let proxy = format!("http://{PROXY_ADDR}");
+    for k in [
+        "HTTPS_PROXY",
+        "HTTP_PROXY",
+        "https_proxy",
+        "http_proxy",
+        "ALL_PROXY",
+    ] {
+        env.push((k.into(), Some(proxy.clone())));
+    }
+    env.push(("NO_PROXY".into(), Some(String::new())));
+    env.push(("FNO_SUPERVISOR_SOCKET".into(), Some(CONTAINER_SOCK.into())));
+    env.push(("FNO_AGENT_SANDBOXED".into(), Some(a.id.clone())));
+    env
+}
+
+fn banner(a: &Args, engine: &str, image: &str, intake: &super::repo::Intake) {
+    eprintln!(
+        "fno sandbox {}: {} on {} image {}, clone of {}{}",
+        a.id,
+        a.harness,
+        engine,
+        super::escape(image, 120),
+        &intake.base[..intake.base.len().min(12)],
+        if intake.excluded_dirty.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "; dirty host paths not carried: {}",
+                intake.excluded_dirty.join(", ")
+            )
+        }
+    );
+}
+
+/// The host-side start report: the row exists, and names its sandbox
+/// transcript, whether or not the image carries the plugin's hooks.
+fn start_report(a: &Args, home: &crate::paths::AgentsHome, transcript_path: &Path) {
+    if let Some(sid) = &a.session {
+        let params = json!({
+            "harness": a.harness,
+            "session_id": sid,
+            "source": "startup",
+            "agent_self": a.name,
+            "cwd": a.cwd,
+            "sandbox_transcript": transcript_path,
+        });
+        let method = format!("agent.{}", crate::session_report::SESSION_REPORT_COMMAND);
+        let sock = crate::client::client_sock(home);
+        if crate::protocol::blocking_call(&sock, &method, params, DAEMON_BOUND).is_none() {
+            eprintln!(
+                "fno sandbox {}: the daemon took no start report; the row may be missing",
+                a.id
+            );
+        }
+    }
+}
+
 /// Remove the container when the lifecycle bails before the export. A run
 /// that reached the export decides for itself.
 struct Sandbox {
@@ -367,7 +386,7 @@ struct Sandbox {
 impl Drop for Sandbox {
     fn drop(&mut self) {
         if !self.kept {
-            let _ = self.engine.remove(&self.id);
+            self.engine.remove(&self.id).ok();
         }
     }
 }
@@ -403,9 +422,25 @@ fn receipt(id: &str, out: &super::repo::Export, transcript: &Path) {
     );
 }
 
+/// The export record a sweep needs to export a container whose wrapper died.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Meta {
+    id: String,
+    provider: String,
+    cwd: PathBuf,
+    base: String,
+}
+
 fn write_meta(dir: &Path, a: &Args, base: &str) {
-    let meta = json!({"id": a.id, "provider": a.provider, "cwd": a.cwd, "base": base});
-    let _ = std::fs::write(dir.join("meta.json"), meta.to_string());
+    let meta = Meta {
+        id: a.id.clone(),
+        provider: a.provider.clone(),
+        cwd: a.cwd.clone(),
+        base: base.to_string(),
+    };
+    if let Ok(body) = serde_json::to_string(&meta) {
+        std::fs::write(dir.join("meta.json"), body).ok();
+    }
 }
 
 /// Export, then remove, every labelled container whose wrapper is dead. A
@@ -418,21 +453,14 @@ fn sweep(engine: &Engine, home: &crate::paths::AgentsHome) {
             continue;
         }
         let dir = home.sandbox_exports_dir().join(&name);
-        let meta: Option<Value> = std::fs::read_to_string(dir.join("meta.json"))
+        let meta: Option<Meta> = std::fs::read_to_string(dir.join("meta.json"))
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok());
-        let (Some(base), Some(cwd)) = (
-            meta.as_ref()
-                .and_then(|m| m.get("base"))
-                .and_then(Value::as_str),
-            meta.as_ref()
-                .and_then(|m| m.get("cwd"))
-                .and_then(Value::as_str),
-        ) else {
+        let Some(meta) = meta else {
             eprintln!("fno sandbox sweep: {name} has no export record; kept");
             continue;
         };
-        match super::repo::export(engine, &name, &name, base, Path::new(cwd), &dir) {
+        match super::repo::export(engine, &name, &name, &meta.base, &meta.cwd, &dir) {
             Ok(out) => {
                 eprintln!("fno sandbox sweep: {name} exported after its wrapper died");
                 receipt(
@@ -440,14 +468,14 @@ fn sweep(engine: &Engine, home: &crate::paths::AgentsHome) {
                     &out,
                     &home.sandbox_transcripts_dir().join(format!("{name}.jsonl")),
                 );
-                let _ = engine.remove(&name);
+                engine.remove(&name).ok();
             }
             Err(e) => eprintln!("fno sandbox sweep: {name} kept, export failed: {e}"),
         }
     }
 }
 
-fn resolve_image(engine: &Engine, provider: Provider, a: &Args) -> Result<String, String> {
+fn resolve_image(engine: &Engine, provider: Provider, a: &Args) -> Res<String> {
     if provider == Provider::Devcontainer {
         return devcontainer_image(engine, &a.cwd);
     }
@@ -478,7 +506,7 @@ fn resolve_image(engine: &Engine, provider: Provider, a: &Args) -> Result<String
 /// Linux binaries for `rev` and the engine's arch from bin-cache, checked
 /// by sha256. A dev or dirty rev has none; set `[sandbox] image` to an image
 /// built from the recipe with a local binary directory.
-fn fetch_binaries(engine: &Engine, rev: &str, bin: &Path) -> Result<(), String> {
+fn fetch_binaries(engine: &Engine, rev: &str, bin: &Path) -> Res<()> {
     use sha2::{Digest as _, Sha256};
     let arch = engine
         .call(&["version", "--format", "{{.Server.Arch}}"])
@@ -487,24 +515,24 @@ fn fetch_binaries(engine: &Engine, rev: &str, bin: &Path) -> Result<(), String> 
         "amd64" | "x86_64" => "linux-x64",
         "arm64" | "aarch64" => "linux-arm64",
         other => {
-            return Err(format!(
+            return Err(Refusal(format!(
                 "no Linux build for engine arch {}",
                 super::escape(other, 20)
-            ))
+            )))
         }
     };
     let url = format!("https://github.com/fnodotdev/fno/releases/download/bin-cache/fno-bin-{rev}-{platform}.tar.gz");
     std::fs::create_dir_all(bin).map_err(|e| format!("{}: {e}", bin.display()))?;
     let tarball = bin.join("fno.tar.gz");
-    let curl = |u: &str, to: &Path| -> Result<(), String> {
+    let curl = |u: &str, to: &Path| -> Res<()> {
         let mut c = std::process::Command::new("curl");
         c.args(["-fsSL", "--max-time", "120", "-o"]).arg(to).arg(u);
         match crate::bounded_cmd::output_with_timeout_result(c, 150) {
             Ok(o) if o.status.success() => Ok(()),
-            _ => Err(format!(
+            _ => Err(Refusal(format!(
                 "bin-cache has no {platform} build for rev {rev}; build an image from the sandbox recipe \
                  with a local binary directory and set [sandbox] image to it"
-            )),
+            ))),
         }
     };
     curl(&format!("{url}.sha256"), &bin.join("sha256"))?;
@@ -514,16 +542,16 @@ fn fetch_binaries(engine: &Engine, rev: &str, bin: &Path) -> Result<(), String> 
     let bytes = std::fs::read(&tarball).map_err(|e| format!("{}: {e}", tarball.display()))?;
     let got = format!("{:x}", Sha256::digest(&bytes));
     if got != want {
-        return Err(format!(
+        return Err(Refusal(format!(
             "bin-cache sha256 mismatch for {platform} rev {rev}"
-        ));
+        )));
     }
     let mut c = std::process::Command::new("tar");
     c.arg("-xzf").arg(&tarball).arg("-C").arg(bin);
     let ok =
         crate::bounded_cmd::output_with_timeout_result(c, 120).is_ok_and(|o| o.status.success());
-    let _ = std::fs::remove_file(&tarball);
-    let _ = std::fs::remove_file(bin.join("sha256"));
+    std::fs::remove_file(&tarball).ok();
+    std::fs::remove_file(bin.join("sha256")).ok();
     if ok {
         Ok(())
     } else {
@@ -537,21 +565,21 @@ fn stage_plugin(rev: &str, into: &Path) {
     let Some(stage) = dirs_home().map(|h| h.join(".fno/install/plugin-stage/fno")) else {
         return;
     };
+    #[derive(serde::Deserialize)]
+    struct Stamp {
+        source_head: Option<String>,
+    }
     let head = std::fs::read_to_string(stage.join(".fno-stage.json"))
         .ok()
-        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-        .and_then(|v| {
-            v.get("source_head")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        });
+        .and_then(|s| serde_json::from_str::<Stamp>(&s).ok())
+        .and_then(|v| v.source_head);
     if head
         .as_deref()
         .is_some_and(|h| h.starts_with(rev) || rev.starts_with(h))
     {
         let mut c = std::process::Command::new("cp");
         c.arg("-R").arg(format!("{}/.", stage.display())).arg(into);
-        let _ = crate::bounded_cmd::output_with_timeout_result(c, 120);
+        crate::bounded_cmd::output_with_timeout_result(c, 120).ok();
     } else {
         eprintln!("fno sandbox: no plugin stage matches rev {rev}; the image carries no plugin");
     }
@@ -563,16 +591,16 @@ fn dirs_home() -> Option<PathBuf> {
 
 /// The devcontainer image source, read from the default-branch commit in a
 /// clean export folder, never the worktree.
-fn devcontainer_image(engine: &Engine, cwd: &Path) -> Result<String, String> {
-    let git = |args: &[&str]| -> Result<String, String> {
+fn devcontainer_image(engine: &Engine, cwd: &Path) -> Res<String> {
+    let git = |args: &[&str]| -> Res<String> {
         let mut c = std::process::Command::new("git");
         c.arg("-C").arg(cwd).args(args);
         match crate::bounded_cmd::output_with_timeout_result(c, 120) {
             Ok(o) if o.status.success() => {
                 Ok(String::from_utf8_lossy(&o.stdout).trim().to_string())
             }
-            Ok(o) => Err(String::from_utf8_lossy(&o.stderr).trim().to_string()),
-            Err(e) => Err(e.to_string()),
+            Ok(o) => Err(String::from_utf8_lossy(&o.stderr).trim().into()),
+            Err(e) => Err(e.to_string().into()),
         }
     };
     let branch = git(&["rev-parse", "--verify", "-q", "refs/remotes/origin/HEAD"])
@@ -615,7 +643,7 @@ fn start_relay(
     guest: &mut Child,
     a: &Args,
     mut store: Store,
-) -> Result<(Sender<HostFrame>, mpsc::Receiver<()>), String> {
+) -> Res<(Sender<HostFrame>, mpsc::Receiver<()>)> {
     let mut stdin = guest.stdin.take().ok_or("the guest has no stdin")?;
     let mut stdout = guest.stdout.take().ok_or("the guest has no stdout")?;
     let (tx, rx) = mpsc::channel::<HostFrame>();
@@ -650,7 +678,7 @@ fn start_relay(
                 if store.capped() {
                     eprintln!("fno sandbox: the transcript reached its size cap and was cut");
                 }
-                let _ = flush_tx.send(());
+                flush_tx.send(()).ok();
             }
             Ok(Some(frame)) => ctx.handle(frame),
             Ok(None) => return,
@@ -677,17 +705,20 @@ struct Ctx {
 }
 
 impl Ctx {
-    fn reply(&self, req: u32, answer: Result<Value, String>) {
+    fn reply(&self, req: u32, answer: Res<Value>) {
         let (ok, body) = match answer {
             Ok(v) => (true, v.to_string()),
-            Err(e) => (false, e),
+            Err(e) => (false, e.0),
         };
-        let _ = self.tx.send(HostFrame::Reply { req, ok, body });
+        self.tx.send(HostFrame::Reply { req, ok, body }).ok();
     }
 
-    fn daemon(&self, method: &str, params: Value) -> Result<Value, String> {
-        crate::protocol::blocking_call(&self.sock, method, params, DAEMON_BOUND)
-            .ok_or_else(|| format!("the host daemon refused or did not answer {method}"))
+    fn daemon(&self, method: &str, params: Value) -> Res<Value> {
+        crate::protocol::blocking_call(&self.sock, method, params, DAEMON_BOUND).ok_or_else(|| {
+            Refusal(format!(
+                "the host daemon refused or did not answer {method}"
+            ))
+        })
     }
 
     /// One guest frame. Every param the daemon reads is built here from the
@@ -733,7 +764,7 @@ impl Ctx {
                 std::thread::spawn(move || me.connect(stream, &host, port));
             }
             GuestFrame::Data { stream, bytes } => {
-                let mut streams = self.streams.lock().unwrap();
+                let mut streams = self.streams.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(s) = streams.get_mut(&stream) {
                     if s.write_all(&bytes).is_err() {
                         streams.remove(&stream);
@@ -741,8 +772,13 @@ impl Ctx {
                 }
             }
             GuestFrame::Close { stream } => {
-                if let Some(s) = self.streams.lock().unwrap().remove(&stream) {
-                    let _ = s.shutdown(std::net::Shutdown::Write);
+                if let Some(s) = self
+                    .streams
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&stream)
+                {
+                    s.shutdown(std::net::Shutdown::Write).ok();
                 }
             }
             GuestFrame::Transcript { .. } | GuestFrame::Flushed => {}
@@ -753,23 +789,30 @@ impl Ctx {
         let conn = match super::egress::dial(host, port, &self.owned) {
             Ok(c) => c,
             Err(reason) => {
-                let _ = self.tx.send(HostFrame::Connected {
-                    stream,
-                    ok: false,
-                    reason,
-                });
+                self.tx
+                    .send(HostFrame::Connected {
+                        stream,
+                        ok: false,
+                        reason: reason.0,
+                    })
+                    .ok();
                 return;
             }
         };
         let Ok(mut reader) = conn.try_clone() else {
             return;
         };
-        self.streams.lock().unwrap().insert(stream, conn);
-        let _ = self.tx.send(HostFrame::Connected {
-            stream,
-            ok: true,
-            reason: String::new(),
-        });
+        self.streams
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(stream, conn);
+        self.tx
+            .send(HostFrame::Connected {
+                stream,
+                ok: true,
+                reason: String::new(),
+            })
+            .ok();
         let mut buf = vec![0u8; CHUNK];
         loop {
             match reader.read(&mut buf) {
@@ -777,7 +820,7 @@ impl Ctx {
                 Ok(n) => {
                     let frame = HostFrame::Data {
                         stream,
-                        bytes: buf[..n].to_vec(),
+                        bytes: buf.get(..n).unwrap_or_default().to_vec(),
                     };
                     if self.tx.send(frame).is_err() {
                         break;
@@ -785,8 +828,11 @@ impl Ctx {
                 }
             }
         }
-        let _ = self.tx.send(HostFrame::Close { stream });
-        self.streams.lock().unwrap().remove(&stream);
+        self.tx.send(HostFrame::Close { stream }).ok();
+        self.streams
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&stream);
     }
 }
 
@@ -818,7 +864,7 @@ mod tests {
             ..Args::default()
         };
         let argv = a.to_argv("fno-agent");
-        assert_eq!(Args::parse(&argv[3..]).unwrap(), a);
+        assert_eq!(Args::parse(argv.get(3..).unwrap()).unwrap(), a);
         let sub = wt.path().join("src");
         std::fs::create_dir_all(&sub).unwrap();
         let (out, file) = rewrite_argv(
@@ -851,7 +897,7 @@ mod tests {
         assert_eq!(file.as_deref(), Some(settings.as_path()));
         let err =
             rewrite_argv(&["codex".into(), settings.display().to_string()], wt.path()).unwrap_err();
-        assert!(err.contains("host path"), "{err}");
+        assert!(err.0.contains("host path"), "{err}");
         let codex = ["/x/codex", "exec", "--sandbox", "workspace-write", "-C"]
             .map(String::from)
             .into_iter()

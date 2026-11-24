@@ -161,15 +161,26 @@ impl<'a> Body<'a> {
         Ok(head)
     }
     fn u8(&mut self) -> Result<u8, WireError> {
-        Ok(self.take(1)?[0])
+        self.take(1)?
+            .first()
+            .copied()
+            .ok_or(WireError::Malformed(self.kind))
     }
     fn u16(&mut self) -> Result<u16, WireError> {
-        let b = self.take(2)?;
-        Ok(u16::from_be_bytes([b[0], b[1]]))
+        let kind = self.kind;
+        let b: [u8; 2] = self
+            .take(2)?
+            .try_into()
+            .map_err(|_| WireError::Malformed(kind))?;
+        Ok(u16::from_be_bytes(b))
     }
     fn u32(&mut self) -> Result<u32, WireError> {
-        let b = self.take(4)?;
-        Ok(u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+        let kind = self.kind;
+        let b: [u8; 4] = self
+            .take(4)?
+            .try_into()
+            .map_err(|_| WireError::Malformed(kind))?;
+        Ok(u32::from_be_bytes(b))
     }
     fn u64(&mut self) -> Result<u64, WireError> {
         let mut a = [0u8; 8];
@@ -253,7 +264,7 @@ fn read_raw<R: Read>(r: &mut R) -> Result<Option<(u8, Vec<u8>)>, WireError> {
     let mut hdr = [0u8; 5];
     let mut got = 0;
     while got < hdr.len() {
-        match r.read(&mut hdr[got..])? {
+        match r.read(hdr.get_mut(got..).unwrap_or_default())? {
             0 if got == 0 => return Ok(None),
             0 => return Err(WireError::Io(io::ErrorKind::UnexpectedEof.into())),
             n => got += n,

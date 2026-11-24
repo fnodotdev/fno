@@ -4,6 +4,7 @@
 //! No host branch moves. Dirty and untracked work is stored as a patch and
 //! an archive the host never applies or extracts.
 
+use super::{Refusal, Res};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -15,18 +16,18 @@ const OUT_DIR: &str = "/tmp/fno-out";
 /// The most one export file may be once it is on the host.
 pub const EXPORT_CAP: u64 = 256 * 1024 * 1024;
 
-fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
+fn git(dir: &Path, args: &[&str]) -> Res<String> {
     let mut c = Command::new("git");
     c.arg("-C").arg(dir).args(args);
     let out = crate::bounded_cmd::output_with_timeout_result(c, 300)
         .map_err(|e| format!("git {}: {e}", args.first().copied().unwrap_or("")))?;
     if !out.status.success() {
-        return Err(format!(
+        return Err(Refusal(format!(
             "git {} exited {}: {}",
             args.first().copied().unwrap_or(""),
             out.status.code().unwrap_or(-1),
             String::from_utf8_lossy(&out.stderr).trim()
-        ));
+        )));
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
@@ -40,12 +41,7 @@ pub struct Intake {
 
 /// Bundle committed HEAD of `worktree`, copy it in, and clone it at the work
 /// path. The receipt names the dirty host paths the clone does not carry.
-pub fn clone_in(
-    engine: &Engine,
-    name: &str,
-    worktree: &Path,
-    scratch: &Path,
-) -> Result<Intake, String> {
+pub fn clone_in(engine: &Engine, name: &str, worktree: &Path, scratch: &Path) -> Res<Intake> {
     let base = git(worktree, &["rev-parse", "HEAD"])?;
     let status = git(
         worktree,
@@ -95,7 +91,7 @@ pub fn export(
     base: &str,
     worktree: &Path,
     store: &Path,
-) -> Result<Export, String> {
+) -> Res<Export> {
     if !base.bytes().all(|b| b.is_ascii_hexdigit()) || !super::valid_id(id) {
         return Err("refusing an export with an unchecked base or id".into());
     }
@@ -110,7 +106,7 @@ pub fn export(
     let listed = String::from_utf8_lossy(&listed.stdout).into_owned();
     std::fs::create_dir_all(store).map_err(|e| format!("{}: {e}", store.display()))?;
     let mut out = Export::default();
-    let take = |file: &str| -> Result<Option<PathBuf>, String> {
+    let take = |file: &str| -> Res<Option<PathBuf>> {
         if !listed.lines().any(|l| l.trim() == file) {
             return Ok(None);
         }
@@ -118,8 +114,8 @@ pub fn export(
         engine.copy_out(name, &format!("{OUT_DIR}/{file}"), &host)?;
         let len = std::fs::metadata(&host).map(|m| m.len()).unwrap_or(0);
         if len > EXPORT_CAP {
-            let _ = std::fs::remove_file(&host);
-            return Err(format!("{file} is {len} bytes, over the {EXPORT_CAP}-byte export cap; the container is kept"));
+            std::fs::remove_file(&host).ok();
+            return Err(Refusal(format!("{file} is {len} bytes, over the {EXPORT_CAP}-byte export cap; the container is kept")));
         }
         Ok((len > 0).then_some(host))
     };
@@ -148,7 +144,7 @@ pub fn export(
             ],
         )?;
         out.head = Some(git(worktree, &["rev-parse", &refname])?);
-        let _ = std::fs::remove_file(&bundle);
+        std::fs::remove_file(&bundle).ok();
     }
     Ok(out)
 }

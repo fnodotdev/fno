@@ -21,6 +21,33 @@ pub mod repo;
 pub mod transcript;
 pub mod wire;
 
+/// Why the sandbox refused a step. Every refusal names what it refused and
+/// why, and no failure falls back to a host launch.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct Refusal(pub String);
+
+impl From<String> for Refusal {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for Refusal {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl From<Refusal> for String {
+    fn from(r: Refusal) -> Self {
+        r.0
+    }
+}
+
+/// A sandbox step's result.
+pub type Res<T> = Result<T, Refusal>;
+
 /// The pinned client socket inside the container. `FNO_SUPERVISOR_SOCKET`
 /// points here, so a client inside needs no change.
 pub const CONTAINER_SOCK: &str = "/tmp/fno/supervisor.sock";
@@ -50,7 +77,7 @@ pub fn mint_id(name: &str) -> String {
     let base = base.trim_matches('-');
     let base = if base.is_empty() { "worker" } else { base };
     let mut b = [0u8; 4];
-    let _ = getrandom::fill(&mut b);
+    getrandom::fill(&mut b).ok();
     format!("{base}-{:08x}", u32::from_be_bytes(b))
 }
 

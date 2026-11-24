@@ -3,6 +3,7 @@
 //! has no passing receipt for no network, exec stdio and dropped privileges
 //! together, so it refuses by name.
 
+use super::{Refusal, Res};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -38,12 +39,18 @@ impl Provider {
     }
 
     pub fn as_str(self) -> &'static str {
-        Self::VALUES[self as usize]
+        match self {
+            Self::None => "none",
+            Self::Docker => "docker",
+            Self::Podman => "podman",
+            Self::Apple => "apple",
+            Self::Devcontainer => "devcontainer",
+        }
     }
 
     /// The engine that runs this provider, or the refusal that names why
     /// none can.
-    pub fn engine(self) -> Result<Engine, String> {
+    pub fn engine(self) -> Res<Engine> {
         match self {
             Self::None => Err("[sandbox] provider = \"none\" runs no sandbox".into()),
             Self::Docker | Self::Devcontainer => Ok(Engine { bin: "docker" }),
@@ -71,30 +78,30 @@ impl Engine {
 
     /// One bounded call. A non-zero exit is an error naming the call and the
     /// engine's own stderr, escaped.
-    pub fn call(&self, args: &[&str]) -> Result<Output, String> {
+    pub fn call(&self, args: &[&str]) -> Res<Output> {
         self.call_bounded(args, CALL_BOUND_S)
     }
 
-    fn call_bounded(&self, args: &[&str], secs: u64) -> Result<Output, String> {
+    fn call_bounded(&self, args: &[&str], secs: u64) -> Res<Output> {
         let what = format!("{} {}", self.bin, args.first().copied().unwrap_or(""));
         let out = crate::bounded_cmd::output_with_timeout_result(self.cmd(args), secs)
             .map_err(|e| format!("{what}: {e}"))?;
         if out.status.success() {
             Ok(out)
         } else {
-            Err(format!(
+            Err(Refusal(format!(
                 "{what} exited {}: {}",
                 out.status
                     .code()
                     .map_or("by signal".into(), |c| c.to_string()),
                 super::escape(String::from_utf8_lossy(&out.stderr).trim(), 400)
-            ))
+            )))
         }
     }
 
     /// The engine answers at all. Run before anything else so a missing
     /// engine refuses by name, never falls back to the host.
-    pub fn probe(&self) -> Result<(), String> {
+    pub fn probe(&self) -> Res<()> {
         self.call(&["version", "--format", "{{.Server.Version}}"])
             .map(|_| ())
     }
@@ -110,7 +117,7 @@ impl Engine {
         dockerfile: &Path,
         context: &Path,
         args: &[(&str, String)],
-    ) -> Result<(), String> {
+    ) -> Res<()> {
         let mut argv: Vec<String> = vec!["build".into(), "-t".into(), tag.into(), "-f".into()];
         argv.push(dockerfile.display().to_string());
         for (k, v) in args {
@@ -125,7 +132,7 @@ impl Engine {
     /// Start the container: non-root, no network, no capabilities, no new
     /// privileges, no bind, no host home and no engine socket. It idles until
     /// the relay execs into it.
-    pub fn start(&self, name: &str, image: &str) -> Result<(), String> {
+    pub fn start(&self, name: &str, image: &str) -> Res<()> {
         let label = format!("{LABEL}={name}");
         let pid = format!("{LABEL_PID}={}", std::process::id());
         let args = run_argv(name, image, &label, &pid);
@@ -151,25 +158,25 @@ impl Engine {
     }
 
     /// One command inside, its output kept.
-    pub fn exec_out(&self, name: &str, argv: &[&str]) -> Result<Output, String> {
+    pub fn exec_out(&self, name: &str, argv: &[&str]) -> Res<Output> {
         let mut args = vec!["exec", "-w", super::CONTAINER_WORK, name];
         args.extend_from_slice(argv);
         self.call(&args)
     }
 
-    pub fn copy_in(&self, name: &str, host: &Path, inside: &str) -> Result<(), String> {
+    pub fn copy_in(&self, name: &str, host: &Path, inside: &str) -> Res<()> {
         let dest = format!("{name}:{inside}");
         self.call(&["cp", &host.display().to_string(), &dest])
             .map(|_| ())
     }
 
-    pub fn copy_out(&self, name: &str, inside: &str, host: &Path) -> Result<(), String> {
+    pub fn copy_out(&self, name: &str, inside: &str, host: &Path) -> Res<()> {
         let src = format!("{name}:{inside}");
         self.call(&["cp", &src, &host.display().to_string()])
             .map(|_| ())
     }
 
-    pub fn remove(&self, name: &str) -> Result<(), String> {
+    pub fn remove(&self, name: &str) -> Res<()> {
         self.call(&["rm", "-f", name]).map(|_| ())
     }
 
@@ -242,46 +249,61 @@ pub enum DevcontainerImage {
 
 /// Read a devcontainer.json exported from the default branch. JSONC line and
 /// block comments are stripped; a refused key refuses by name.
-pub fn devcontainer_image(file: &Path, root: &Path) -> Result<DevcontainerImage, String> {
+/// The devcontainer.json fields the sandbox reads. The refused keys are kept
+/// as raw values only so their presence refuses.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DevcontainerFile {
+    image: Option<String>,
+    build: Option<DevcontainerBuild>,
+    docker_file: Option<String>,
+    docker_compose_file: Option<serde_json::Value>,
+    initialize_command: Option<serde_json::Value>,
+}
+
+#[derive(serde::Deserialize)]
+struct DevcontainerBuild {
+    dockerfile: Option<String>,
+    context: Option<String>,
+}
+
+pub fn devcontainer_image(file: &Path, root: &Path) -> Res<DevcontainerImage> {
     let raw = std::fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?;
-    let doc: serde_json::Value =
+    let doc: DevcontainerFile =
         serde_json::from_str(&strip_jsonc(&raw)).map_err(|e| format!("{}: {e}", file.display()))?;
-    for key in REFUSED_KEYS {
-        if doc.get(key).is_some() {
-            return Err(format!(
-                "{} sets `{key}`, which the sandbox refuses: it runs on the host",
-                file.display()
-            ));
-        }
+    let present = [
+        doc.docker_compose_file.is_some(),
+        doc.initialize_command.is_some(),
+    ];
+    if let Some((key, _)) = REFUSED_KEYS.iter().zip(present).find(|(_, set)| *set) {
+        return Err(Refusal(format!(
+            "{} sets `{key}`, which the sandbox refuses: it runs on the host",
+            file.display()
+        )));
     }
     let dir = file.parent().unwrap_or(Path::new("."));
-    if let Some(image) = doc.get("image").and_then(|v| v.as_str()) {
-        return Ok(DevcontainerImage::Pull(image.to_string()));
+    if let Some(image) = doc.image {
+        return Ok(DevcontainerImage::Pull(image));
     }
-    let build = doc.get("build");
-    let dockerfile = build
-        .and_then(|b| b.get("dockerfile"))
-        .or_else(|| doc.get("dockerFile"))
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            format!(
-                "{} names neither `image` nor `build.dockerfile`",
-                file.display()
-            )
-        })?;
-    let context = build
-        .and_then(|b| b.get("context"))
-        .and_then(|v| v.as_str())
-        .unwrap_or(".");
+    let (dockerfile, context) = match doc.build {
+        Some(b) => (b.dockerfile.or(doc.docker_file), b.context),
+        None => (doc.docker_file, None),
+    };
+    let dockerfile = dockerfile.ok_or_else(|| {
+        format!(
+            "{} names neither `image` nor `build.dockerfile`",
+            file.display()
+        )
+    })?;
+    let context = context.unwrap_or_else(|| ".".to_string());
     let (dockerfile, context) = (dir.join(dockerfile), dir.join(context));
-    // The export folder is the boundary: a `..` path out of it refuses.
     // The export folder is the boundary: a path that climbs out refuses.
     let inside = |p: &Path| lexical(p).starts_with(lexical(root));
     if !inside(&dockerfile) || !inside(&context) {
-        return Err(format!(
+        return Err(Refusal(format!(
             "{} points its build outside the repository",
             file.display()
-        ));
+        )));
     }
     Ok(DevcontainerImage::Build {
         dockerfile,

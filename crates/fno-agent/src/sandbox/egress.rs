@@ -8,6 +8,7 @@
 //! closed address in an answer refuses the whole answer, so a rebinding name
 //! that mixes a public and a private address gets nothing.
 
+use super::{Refusal, Res};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
@@ -102,36 +103,41 @@ pub fn host_addresses() -> Vec<IpAddr> {
 
 /// Resolve `host:port` once and check the whole answer. The error names the
 /// reason and never echoes guest text unescaped.
-pub fn checked_addrs(host: &str, port: u16, owned: &[IpAddr]) -> Result<Vec<SocketAddr>, String> {
+pub fn checked_addrs(host: &str, port: u16, owned: &[IpAddr]) -> Res<Vec<SocketAddr>> {
     if !PORTS.contains(&port) {
-        return Err(format!("port {port} is closed; the proxy dials 80 and 443"));
+        return Err(Refusal(format!(
+            "port {port} is closed; the proxy dials 80 and 443"
+        )));
     }
     if host.is_empty() || host.len() > 253 || !host.bytes().all(|b| b.is_ascii_graphic()) {
-        return Err(format!(
+        return Err(Refusal(format!(
             "host {} is not a name the proxy resolves",
             host.escape_debug()
-        ));
+        )));
     }
     let addrs: Vec<SocketAddr> = (host, port)
         .to_socket_addrs()
         .map_err(|e| format!("resolve {}: {e}", host.escape_debug()))?
         .collect();
     if addrs.is_empty() {
-        return Err(format!("resolve {}: no address", host.escape_debug()));
+        return Err(Refusal(format!(
+            "resolve {}: no address",
+            host.escape_debug()
+        )));
     }
     if let Some(bad) = addrs.iter().find(|a| closed(a.ip(), owned)) {
-        return Err(format!(
+        return Err(Refusal(format!(
             "{} resolves to {}, a closed address; the whole answer is refused",
             host.escape_debug(),
             bad.ip()
-        ));
+        )));
     }
     Ok(addrs)
 }
 
 /// Dial the first checked address that answers. The socket connects to the
 /// address that passed the check, never to a fresh resolve of the name.
-pub fn dial(host: &str, port: u16, owned: &[IpAddr]) -> Result<TcpStream, String> {
+pub fn dial(host: &str, port: u16, owned: &[IpAddr]) -> Res<TcpStream> {
     let addrs = checked_addrs(host, port, owned)?;
     let mut last = String::new();
     for a in &addrs {
@@ -140,7 +146,7 @@ pub fn dial(host: &str, port: u16, owned: &[IpAddr]) -> Result<TcpStream, String
             Err(e) => last = format!("{a}: {e}"),
         }
     }
-    Err(format!("dial {}: {last}", host.escape_debug()))
+    Err(Refusal(format!("dial {}: {last}", host.escape_debug())))
 }
 
 #[cfg(test)]

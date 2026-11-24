@@ -8,6 +8,7 @@
 //! that owns its exec stream, which stamps identity and forwards five typed
 //! frames. The host client keeps every gate and every claim.
 
+use crate::sandbox::{Refusal, Res};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -33,7 +34,7 @@ pub struct SandboxPlan {
 }
 
 /// One config layer's `[sandbox]` values, or the reason it refuses.
-fn layer(path: &Path) -> Result<Option<(Option<String>, Option<String>)>, String> {
+fn layer(path: &Path) -> Res<Option<(Option<String>, Option<String>)>> {
     let Ok(body) = std::fs::read_to_string(path) else {
         return Ok(None);
     };
@@ -49,23 +50,28 @@ fn layer(path: &Path) -> Result<Option<(Option<String>, Option<String>)>, String
     let sb = sb
         .as_table()
         .ok_or_else(|| format!("{}: [sandbox] is not a table", path.display()))?;
-    let text = |key: &str| -> Result<Option<String>, String> {
+    let text = |key: &str| -> Res<Option<String>> {
         match sb.get(key) {
             None => Ok(None),
             Some(v) => v
                 .as_str()
                 .map(|s| Some(s.trim().to_string()))
-                .ok_or_else(|| format!("{}: sandbox.{key} must be a string", path.display())),
+                .ok_or_else(|| {
+                    Refusal(format!(
+                        "{}: sandbox.{key} must be a string",
+                        path.display()
+                    ))
+                }),
         }
     };
     let provider = text("provider")?;
     if let Some(p) = &provider {
         if Provider::parse(p).is_none() {
-            return Err(format!(
+            return Err(Refusal(format!(
                 "{}: sandbox.provider = {p:?} is not one of {}",
                 path.display(),
                 Provider::VALUES.join(", ")
-            ));
+            )));
         }
     }
     Ok(Some((provider, text("image")?)))
@@ -83,7 +89,7 @@ pub struct Policy {
 /// sandbox. A project layer cannot lower or switch a provider the global
 /// config sets. `image` reads from global config only. An unparsable layer or
 /// an unknown value refuses.
-pub fn policy(cwd: &Path) -> Result<Policy, String> {
+pub fn policy(cwd: &Path) -> Res<Policy> {
     let candidates = crate::agents_config::config_candidates(cwd);
     let global = crate::agents_config::global_config_path();
     let mut notices = Vec::new();
@@ -135,7 +141,7 @@ pub fn policy(cwd: &Path) -> Result<Policy, String> {
 }
 
 /// The plan the daemon answers for one worktree.
-pub fn plan_for(cwd: &Path) -> Result<SandboxPlan, String> {
+pub fn plan_for(cwd: &Path) -> Res<SandboxPlan> {
     let p = policy(cwd)?;
     let mut env = BTreeMap::new();
     if p.provider != Provider::None {
@@ -214,7 +220,7 @@ pub fn arm(home: &crate::paths::AgentsHome, cwd: &Path) -> Result<(), (i32, Stri
             ),
         )
     })?;
-    let local = policy(cwd).map_err(|e| (2, e))?;
+    let local = policy(cwd).map_err(|e| (2, e.0))?;
     if plan.provider != local.provider.as_str() {
         return Err((
             2,
@@ -227,7 +233,7 @@ pub fn arm(home: &crate::paths::AgentsHome, cwd: &Path) -> Result<(), (i32, Stri
             ),
         ));
     }
-    let _ = ACTIVE.set((plan, cwd.to_path_buf()));
+    ACTIVE.set((plan, cwd.to_path_buf())).ok();
     Ok(())
 }
 
@@ -276,7 +282,7 @@ pub fn sandboxed(cmd: Command) -> Command {
         }
     }
     if harness.is_empty() {
-        harness = Path::new(&argv[0])
+        harness = Path::new(argv.first().map(String::as_str).unwrap_or_default())
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
@@ -299,8 +305,8 @@ pub fn sandboxed(cmd: Command) -> Command {
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| "fno-agent".to_string());
     let wrapped = args.to_argv(&exe);
-    let mut out = Command::new(&wrapped[0]);
-    out.args(&wrapped[1..]);
+    let mut out = Command::new(&exe);
+    out.args(wrapped.get(1..).unwrap_or(&[]));
     for (k, v) in cmd.get_envs() {
         match v {
             Some(v) => {
@@ -329,7 +335,7 @@ fn bind_session(harness: &str, mut argv: Vec<String>) -> (Vec<String>, Option<St
         return (argv, sid);
     }
     let mut b = [0u8; 16];
-    let _ = getrandom::fill(&mut b);
+    getrandom::fill(&mut b).ok();
     b[6] = (b[6] & 0x0f) | 0x40;
     b[8] = (b[8] & 0x3f) | 0x80;
     let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
@@ -390,13 +396,23 @@ mod tests {
             "[sandbox]\nprovider = \"none\"\n",
         );
         assert_eq!(
-            layers[1].clone().unwrap(),
+            layers.get(1).cloned().unwrap().unwrap(),
             Some((Some("docker".into()), Some("img".into())))
         );
         let layers = read("", "[sandbox]\nprovider = \"nope\"\n");
-        assert!(layers[0].clone().unwrap_err().contains("not one of"));
+        assert!(layers
+            .first()
+            .cloned()
+            .unwrap()
+            .unwrap_err()
+            .contains("not one of"));
         let layers = read("", "not = [toml");
-        assert!(layers[0].clone().unwrap_err().contains("does not parse"));
+        assert!(layers
+            .first()
+            .cloned()
+            .unwrap()
+            .unwrap_err()
+            .contains("does not parse"));
 
         let (argv, sid) = bind_session(
             "claude",

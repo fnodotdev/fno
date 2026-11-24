@@ -72,7 +72,8 @@ impl Store {
             self.len += bytes.len() as u64;
             return Ok(());
         }
-        self.file.write_all(&bytes[..room as usize])?;
+        self.file
+            .write_all(bytes.get(..room as usize).unwrap_or(bytes))?;
         self.len += room;
         // The marker starts a line of its own even when the cut fell mid-line.
         self.file.write_all(b"\n")?;

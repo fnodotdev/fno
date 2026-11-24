@@ -8,6 +8,7 @@
 //! env to `sandbox-guest exec` once. On stream EOF it kills the harness
 //! process group: a killed host exec client does not kill guest processes.
 
+use super::{Refusal, Res};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -52,14 +53,20 @@ impl Shared {
     fn ask(&self, make: impl FnOnce(u32) -> GuestFrame) -> (bool, String) {
         let req = self.id();
         let (tx, rx) = mpsc::channel();
-        self.replies.lock().unwrap().insert(req, tx);
+        self.replies
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(req, tx);
         if self.out.send(make(req)).is_err() {
             return (false, "the relay stream is closed".into());
         }
         let answer = rx
             .recv_timeout(REPLY_BOUND)
             .unwrap_or((false, "the host did not answer in 15s".into()));
-        self.replies.lock().unwrap().remove(&req);
+        self.replies
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&req);
         answer
     }
 }
@@ -110,13 +117,37 @@ fn serve() -> i32 {
             ..Launch::default()
         }),
     });
-    let listener = match bind_socket(Path::new(CONTAINER_SOCK)) {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("sandbox-guest: listen {CONTAINER_SOCK}: {e}");
-            return 2;
+    if let Err(e) = start_listeners(&shared) {
+        eprintln!("sandbox-guest: {e}");
+        return 2;
+    }
+    let tail = Arc::new(Mutex::new(Tail::new(transcript_dir.map(PathBuf::from))));
+    {
+        let (shared, tail) = (shared.clone(), tail.clone());
+        std::thread::spawn(move || loop {
+            std::thread::sleep(TAIL_EVERY);
+            tail.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .pump(&shared.out);
+        });
+    }
+    read_host(&mut stdin, &shared, &tail);
+    // Stream EOF: the host is gone, so the harness goes with it.
+    if let Some(pid) = shared.launch.lock().unwrap_or_else(|e| e.into_inner()).pid {
+        // SAFETY: plain kill(2) on the process group the launcher made.
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
         }
-    };
+    }
+    // The listener threads hold senders, so the writer never drains to an
+    // end; the host is gone, so nothing is left to write to.
+    0
+}
+
+/// The pinned client socket and the proxy, each on its own accept thread.
+fn start_listeners(shared: &Arc<Shared>) -> Res<()> {
+    let listener = bind_socket(Path::new(CONTAINER_SOCK))
+        .map_err(|e| format!("listen {CONTAINER_SOCK}: {e}"))?;
     {
         let shared = shared.clone();
         std::thread::spawn(move || {
@@ -138,39 +169,58 @@ fn serve() -> i32 {
         }
         Err(e) => eprintln!("sandbox-guest: proxy {PROXY_ADDR}: {e}; the worker has no egress"),
     }
-    let tail = Arc::new(Mutex::new(Tail::new(transcript_dir.map(PathBuf::from))));
-    {
-        let (shared, tail) = (shared.clone(), tail.clone());
-        std::thread::spawn(move || loop {
-            std::thread::sleep(TAIL_EVERY);
-            tail.lock().unwrap().pump(&shared.out);
-        });
-    }
+    Ok(())
+}
+
+/// Host frames until the relay stream ends.
+fn read_host(stdin: &mut impl Read, shared: &Shared, tail: &Mutex<Tail>) {
     loop {
-        match HostFrame::read(&mut stdin) {
+        match HostFrame::read(stdin) {
             Ok(Some(HostFrame::Reply { req, ok, body })) => {
-                if let Some(tx) = shared.replies.lock().unwrap().remove(&req) {
-                    let _ = tx.send((ok, body));
+                if let Some(tx) = shared
+                    .replies
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&req)
+                {
+                    tx.send((ok, body)).ok();
                 }
             }
             Ok(Some(HostFrame::Connected { stream, ok, reason })) => {
-                if let Some(tx) = shared.connects.lock().unwrap().remove(&stream) {
-                    let _ = tx.send((ok, reason));
+                if let Some(tx) = shared
+                    .connects
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&stream)
+                {
+                    tx.send((ok, reason)).ok();
                 }
             }
             Ok(Some(HostFrame::Data { stream, bytes })) => {
-                if let Some(tx) = shared.streams.lock().unwrap().get(&stream) {
-                    let _ = tx.send(Some(bytes));
+                if let Some(tx) = shared
+                    .streams
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get(&stream)
+                {
+                    tx.send(Some(bytes)).ok();
                 }
             }
             Ok(Some(HostFrame::Close { stream })) => {
-                if let Some(tx) = shared.streams.lock().unwrap().remove(&stream) {
-                    let _ = tx.send(None);
+                if let Some(tx) = shared
+                    .streams
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&stream)
+                {
+                    tx.send(None).ok();
                 }
             }
             Ok(Some(HostFrame::Shutdown)) => {
-                tail.lock().unwrap().pump(&shared.out);
-                let _ = shared.out.send(GuestFrame::Flushed);
+                tail.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .pump(&shared.out);
+                shared.out.send(GuestFrame::Flushed).ok();
             }
             Ok(Some(HostFrame::Hello { .. })) => {
                 eprintln!("sandbox-guest: a second hello is ignored");
@@ -182,16 +232,6 @@ fn serve() -> i32 {
             }
         }
     }
-    // Stream EOF: the host is gone, so the harness goes with it.
-    if let Some(pid) = shared.launch.lock().unwrap().pid {
-        // SAFETY: plain kill(2) on the process group the launcher made.
-        unsafe {
-            libc::kill(-pid, libc::SIGKILL);
-        }
-    }
-    // The listener threads hold senders, so the writer never drains to an
-    // end; the host is gone, so nothing is left to write to.
-    0
 }
 
 fn write_frames(rx: Receiver<GuestFrame>) {
@@ -208,7 +248,7 @@ fn write_private(path: &Path, body: &[u8]) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let _ = std::fs::remove_file(path);
+    std::fs::remove_file(path).ok();
     std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -223,7 +263,7 @@ fn bind_socket(path: &Path) -> std::io::Result<UnixListener> {
         std::fs::create_dir_all(dir)?;
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
     }
-    let _ = std::fs::remove_file(path);
+    std::fs::remove_file(path).ok();
     let l = UnixListener::bind(path)?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     Ok(l)
@@ -241,26 +281,28 @@ fn read_request(conn: &mut UnixStream) -> Option<Value> {
     serde_json::from_slice(&body).ok()
 }
 
-fn write_response(conn: &mut UnixStream, id: u64, answer: Result<Value, String>) {
+fn write_response(conn: &mut UnixStream, id: u64, answer: Res<Value>) {
     let reply = match answer {
         Ok(result) => json!({"id": id, "result": result}),
-        Err(message) => json!({"id": id, "error": {"code": "invalid_params", "message": message}}),
+        Err(message) => {
+            json!({"id": id, "error": {"code": "invalid_params", "message": message.0}})
+        }
     };
     let body = serde_json::to_vec(&reply).unwrap_or_default();
-    let _ = conn.write_all(&(body.len() as u32).to_le_bytes());
-    let _ = conn.write_all(&body);
+    conn.write_all(&(body.len() as u32).to_le_bytes()).ok();
+    conn.write_all(&body).ok();
 }
 
 /// One client request: translate to a frame, or refuse it here.
 fn serve_client(shared: &Shared, mut conn: UnixStream) {
-    let _ = conn.set_read_timeout(Some(REPLY_BOUND));
+    conn.set_read_timeout(Some(REPLY_BOUND)).ok();
     let Some(req) = read_request(&mut conn) else {
         return;
     };
-    let id = req.get("id").and_then(Value::as_u64).unwrap_or(0);
-    let method = req.get("method").and_then(Value::as_str).unwrap_or("");
-    let params = req.get("params").cloned().unwrap_or(Value::Null);
-    let answer = match method {
+    let Ok(crate::protocol::Request { id, method, params }) = serde_json::from_value(req) else {
+        return;
+    };
+    let answer = match method.as_str() {
         "agent.status" => relay(shared.ask(|req| GuestFrame::Status { req })),
         "agent.report" => match params
             .get("state")
@@ -285,32 +327,32 @@ fn serve_client(shared: &Shared, mut conn: UnixStream) {
             relay(shared.ask(|req| GuestFrame::SessionReport { req, source }))
         }
         LAUNCH_METHOD => launch(shared, &params),
-        other => Err(format!(
+        other => Err(Refusal(format!(
             "the sandbox refuses `{}`: a sandboxed worker may call agent.status, \
              agent.report and agent.session-report only",
             other.escape_debug()
-        )),
+        ))),
     };
     write_response(&mut conn, id, answer);
 }
 
-fn relay((ok, body): (bool, String)) -> Result<Value, String> {
+fn relay((ok, body): (bool, String)) -> Res<Value> {
     if ok {
         Ok(serde_json::from_str(&body).unwrap_or(Value::String(body)))
     } else {
-        Err(body)
+        Err(Refusal(body))
     }
 }
 
 /// The launch env, handed once to the launcher that names its own pid.
-fn launch(shared: &Shared, params: &Value) -> Result<Value, String> {
+fn launch(shared: &Shared, params: &Value) -> Res<Value> {
     let pid = params
         .get("pid")
         .and_then(Value::as_i64)
         .and_then(|p| i32::try_from(p).ok())
         .filter(|p| *p > 1)
         .ok_or("the launch request names no pid")?;
-    let mut launch = shared.launch.lock().unwrap();
+    let mut launch = shared.launch.lock().unwrap_or_else(|e| e.into_inner());
     if launch.handed {
         return Err("the launch env was already handed out".into());
     }
@@ -345,13 +387,13 @@ fn probe() -> i32 {
 fn exec(args: &[String]) -> i32 {
     use std::os::unix::process::CommandExt as _;
     let argv = match args.first().map(String::as_str) {
-        Some("--") => &args[1..],
+        Some("--") => args.get(1..).unwrap_or(&[]),
         _ => args,
     };
-    if argv.is_empty() {
+    let Some((prog, rest)) = argv.split_first() else {
         eprintln!("sandbox-guest exec: no command");
         return 2;
-    }
+    };
     // SAFETY: setsid in a single-threaded process before exec.
     unsafe {
         libc::setsid();
@@ -371,8 +413,8 @@ fn exec(args: &[String]) -> i32 {
         eprintln!("sandbox-guest exec: the guest handed no launch env");
         return 84;
     };
-    let mut cmd = std::process::Command::new(&argv[0]);
-    cmd.args(&argv[1..]);
+    let mut cmd = std::process::Command::new(prog);
+    cmd.args(rest);
     for pair in env {
         match (pair.get(0).and_then(Value::as_str), pair.get(1)) {
             (Some(k), Some(Value::String(v))) => {
@@ -385,14 +427,14 @@ fn exec(args: &[String]) -> i32 {
         }
     }
     let err = cmd.exec();
-    eprintln!("sandbox-guest exec: {}: {err}", argv[0]);
+    eprintln!("sandbox-guest exec: {prog}: {err}");
     127
 }
 
 /// The HTTP proxy: `CONNECT host:port` tunnels, an absolute-form request is
 /// re-sent in origin form. Each becomes one connect frame; the host checks it.
 fn serve_proxy(shared: &Shared, conn: TcpStream) {
-    let _ = conn.set_read_timeout(Some(Duration::from_secs(30)));
+    conn.set_read_timeout(Some(Duration::from_secs(30))).ok();
     let Ok(mut write_half) = conn.try_clone() else {
         return;
     };
@@ -427,34 +469,54 @@ fn serve_proxy(shared: &Shared, conn: TcpStream) {
         let rewritten = text.replacen(first, &format!("{verb} /{path} {version}"), 1);
         (h, p, Some(rewritten.into_bytes()))
     } else {
-        let _ = write_half.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n");
+        write_half
+            .write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+            .ok();
         return;
     };
     let stream = shared.id();
     let (ctx, crx) = mpsc::channel();
-    shared.connects.lock().unwrap().insert(stream, ctx);
+    shared
+        .connects
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(stream, ctx);
     let (dtx, drx) = mpsc::channel();
-    shared.streams.lock().unwrap().insert(stream, dtx);
-    let _ = shared.out.send(GuestFrame::Connect { stream, host, port });
+    shared
+        .streams
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(stream, dtx);
+    shared
+        .out
+        .send(GuestFrame::Connect { stream, host, port })
+        .ok();
     let (ok, reason) = crx
         .recv_timeout(REPLY_BOUND)
         .unwrap_or((false, "the host did not answer the connect".into()));
     if !ok {
-        shared.streams.lock().unwrap().remove(&stream);
+        shared
+            .streams
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&stream);
         let body = format!("fno sandbox proxy refused: {reason}\n");
-        let _ = write!(
+        write!(
             write_half,
             "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}",
             body.len()
-        );
+        )
+        .ok();
         return;
     }
     match preamble {
         None => {
-            let _ = write_half.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n");
+            write_half
+                .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
+                .ok();
         }
         Some(bytes) => {
-            let _ = shared.out.send(GuestFrame::Data { stream, bytes });
+            shared.out.send(GuestFrame::Data { stream, bytes }).ok();
         }
     }
     // Inbound: host data to the client until the host closes.
@@ -465,10 +527,10 @@ fn serve_proxy(shared: &Shared, conn: TcpStream) {
                 _ => break,
             }
         }
-        let _ = write_half.shutdown(std::net::Shutdown::Both);
+        write_half.shutdown(std::net::Shutdown::Both).ok();
     });
     // Outbound: client bytes (anything buffered first) to the host.
-    let _ = reader.get_ref().set_read_timeout(None);
+    reader.get_ref().set_read_timeout(None).ok();
     let mut buf = vec![0u8; CHUNK];
     loop {
         match reader.read(&mut buf) {
@@ -478,7 +540,7 @@ fn serve_proxy(shared: &Shared, conn: TcpStream) {
                     .out
                     .send(GuestFrame::Data {
                         stream,
-                        bytes: buf[..n].to_vec(),
+                        bytes: buf.get(..n).unwrap_or_default().to_vec(),
                     })
                     .is_err()
                 {
@@ -487,7 +549,7 @@ fn serve_proxy(shared: &Shared, conn: TcpStream) {
             }
         }
     }
-    let _ = shared.out.send(GuestFrame::Close { stream });
+    shared.out.send(GuestFrame::Close { stream }).ok();
 }
 
 fn split_host_port(authority: &str, default: u16) -> (String, u16) {
@@ -545,7 +607,7 @@ impl Tail {
                 Ok(n) => {
                     let frame = GuestFrame::Transcript {
                         offset: self.offset,
-                        bytes: buf[..n].to_vec(),
+                        bytes: buf.get(..n).unwrap_or_default().to_vec(),
                     };
                     if out.send(frame).is_err() {
                         return;
