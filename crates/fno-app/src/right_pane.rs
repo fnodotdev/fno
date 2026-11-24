@@ -40,17 +40,6 @@ pub enum Card {
 }
 
 impl Card {
-    pub fn id(&self) -> String {
-        match self {
-            Card::PullRequest => "fno.pr".into(),
-            Card::Changes => "fno.changes".into(),
-            Card::Context => "fno.context".into(),
-            Card::Outputs => "fno.outputs".into(),
-            Card::Questions => "fno.questions".into(),
-            Card::View(target) => target.clone(),
-        }
-    }
-
     fn from_id(id: &str) -> Card {
         match id {
             "fno.pr" => Card::PullRequest,
@@ -111,15 +100,6 @@ pub struct Panel {
     reading: bool,
     /// The "+ panel" list is open.
     adding: bool,
-}
-
-impl Panel {
-    pub fn new(saved: Saved) -> Self {
-        Panel {
-            saved,
-            ..Panel::default()
-        }
-    }
 }
 
 /// What a panel click, or ⌥⌘B, does.
