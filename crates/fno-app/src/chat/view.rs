@@ -422,11 +422,19 @@ fn row(root: &mut Root, ix: usize, _window: &mut Window, cx: &mut Context<Root>)
                 );
             }
             for (mi, t) in turns.iter().enumerate() {
+                // One id per (band row, mail position): a band of several
+                // mails must never carry duplicate element ids.
+                let mail_id = ((ix as u64) << 32) | mi as u64;
                 let body_open = conv.mail_open.contains(&(ix, mi));
                 let summary =
                     super::model::first_words(super::model::body_without_header(&t.content.text));
-                let folded = clickable(id("mail"), Action::ToggleMailBody(ix, mi), p, cx)
-                    .child(format!("MAIL {} · {}", t.sender, summary));
+                let folded = clickable(
+                    ElementId::NamedInteger("mail".into(), mail_id),
+                    Action::ToggleMailBody(ix, mi),
+                    p,
+                    cx,
+                )
+                .child(format!("MAIL {} · {}", t.sender, summary));
                 let mut card = div().flex().flex_col();
                 if body_open {
                     let when = t.at_ms.and_then(clock).unwrap_or_else(|| "·".to_string());
@@ -452,9 +460,8 @@ fn row(root: &mut Root, ix: usize, _window: &mut Window, cx: &mut Context<Root>)
                                     .child(body_without_header(&t.content.text)),
                             )
                             .child(
-                                button(
-                                    "mail-reply",
-                                    "Reply",
+                                clickable(
+                                    ElementId::NamedInteger("mail-reply".into(), mail_id),
                                     Action::ReplyMail {
                                         sender: t.sender.clone(),
                                         id: t.id.clone(),
@@ -462,7 +469,8 @@ fn row(root: &mut Root, ix: usize, _window: &mut Window, cx: &mut Context<Root>)
                                     p,
                                     cx,
                                 )
-                                .text_color(rgb(p.accent)),
+                                .text_color(rgb(p.accent))
+                                .child("Reply"),
                             ),
                     );
                 }
