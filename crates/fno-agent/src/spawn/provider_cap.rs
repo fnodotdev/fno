@@ -1833,13 +1833,34 @@ pub struct LeaveDeps {
 }
 
 /// The move destinations when no fallback grid is configured: the route
-/// lanes `[provider_cap] destinations` names, in order. Each lane template
-/// carries its own harness, model and effort.
+/// lanes `[provider_cap] destinations` names, in order. A vendor-backed lane
+/// goes out as `--route <lane>`; a harness-native row declares no route, so
+/// spawn refuses it there and it goes out as its own harness and model.
 fn configured_destinations(cfg: &ProviderCapConfig) -> Vec<(String, Vec<String>)> {
+    let cwd = std::env::current_dir().unwrap_or_default();
     cfg.destinations
         .iter()
-        .map(|route| (route.clone(), vec!["--route".to_string(), route.clone()]))
+        .map(|name| {
+            let row = crate::spawn_route::lane_row(name, &cwd);
+            (name.clone(), destination_flags(name, row.as_ref()))
+        })
         .collect()
+}
+
+/// The spawn flags for one named destination lane row.
+fn destination_flags(name: &str, row: Option<&Value>) -> Vec<String> {
+    let field = |k: &str| {
+        row.and_then(|r| r.get(k))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    };
+    let (harness, model) = (field("harness"), field("model"));
+    if field("vendor").is_empty() && !harness.is_empty() && !model.is_empty() {
+        return vec!["-H".into(), harness, format!("--model={model}")];
+    }
+    vec!["--route".to_string(), name.to_string()]
 }
 
 fn alert_marker(home: &AgentsHome, lane: &str) -> PathBuf {
@@ -2877,6 +2898,22 @@ mod tests {
             confirmed_pos < stopped_pos,
             "spawn-confirmed before stopped"
         );
+    }
+
+    #[test]
+    fn a_native_destination_row_resolves_to_harness_and_model_not_route() {
+        let native =
+            json!({"found": true, "vendor": "", "harness": "codex", "model": "gpt-6-luna"});
+        assert_eq!(
+            destination_flags("codex-luna", Some(&native)),
+            ["-H", "codex", "--model=gpt-6-luna"]
+        );
+        let routed = json!({"found": true, "vendor": "zai", "harness": "claude", "model": "glm"});
+        assert_eq!(
+            destination_flags("zai-flash", Some(&routed)),
+            ["--route", "zai-flash"]
+        );
+        assert_eq!(destination_flags("nope", None), ["--route", "nope"]);
     }
 
     /// Triage on a measured strand: important work moves to the configured
