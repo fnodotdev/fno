@@ -509,6 +509,11 @@ fn push_grouped(
             None => bands.push((key, vec![a])),
         }
     }
+    if group_by == GroupBy::Machine {
+        for name in idle_machines(board, &bands) {
+            bands.push((name, Vec::new()));
+        }
+    }
     for (title, members) in &bands {
         let open = !folds.contains(title.as_str());
         out.push(Row::Group {
@@ -543,6 +548,22 @@ fn push_grouped(
             push_machine_shells(out, layout, used, title, &local);
         }
     }
+}
+
+/// Fleet machines no agent joined. The Machine grouping still names them,
+/// so a click on an idle host's row lands on its empty band, never on
+/// nothing.
+fn idle_machines(board: &Board, bands: &[(String, Vec<&AgentRow>)]) -> Vec<String> {
+    board
+        .fleet()
+        .map(|f| {
+            f.machines
+                .iter()
+                .map(|m| m.display_name.clone().unwrap_or_else(|| m.host.clone()))
+                .filter(|name| bands.iter().all(|(k, _)| k != name))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The local machine's own word: the Machines section's name for itself.
@@ -2216,5 +2237,15 @@ mod tests {
                 ("m2-mbp".to_string(), "m2-mbp".to_string()),
             ]
         );
+        // Neither machine has a session, and both bands still render:
+        // the switch never lands on a vanished host.
+        let bands: Vec<&str> = rows
+            .iter()
+            .filter_map(|r| match r {
+                Row::Group { title, .. } => Some(title.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(bands, ["u", "m2-mbp"]);
     }
 }
