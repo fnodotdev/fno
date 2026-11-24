@@ -163,11 +163,13 @@ pub struct Judge {
     pub scored: usize,
     pub skipped: usize,
     pub pending: usize,
+    /// Skipped requests by the fnod state their row read.
+    pub skipped_by: BTreeMap<String, usize>,
     /// (machine, day) to its counts.
     pub coverage: BTreeMap<(String, String), Covered>,
     /// The judge's label (a question id or a D number) to its verdicts.
     pub verdicts: BTreeMap<String, Verdicts>,
-    /// Every scored `is_ask` pass's `fnod_ms`, sorted.
+    /// Every scored `is_ask` pass's `fnod_ms`, in file order.
     pub ms: Vec<f64>,
     /// Stop keys where the keyword ask lint blocked, and where the judge
     /// read an ask.
@@ -264,6 +266,11 @@ pub fn fold_judge(
             counted.requests += 1;
             counted.skipped += usize::from(skipped);
             out.skipped += usize::from(skipped);
+            if skipped {
+                *out.skipped_by
+                    .entry(row.fnod.clone().unwrap_or_else(|| "none".to_string()))
+                    .or_insert(0) += 1;
+            }
             if !skipped {
                 scorable.push(Request {
                     span_id: row.span_id.clone(),
@@ -324,8 +331,16 @@ pub fn fold_judge(
     out.both = out.keyword.intersection(&out.judge_ask).count();
     out.keyword_only = out.keyword.len() - out.both;
     out.judge_only = out.judge_ask.len() - out.both;
-    out.ms.sort_by(f64::total_cmp);
     out
+}
+
+/// A count map as `key n` pairs, two spaces between.
+fn tallies(counts: &BTreeMap<String, usize>) -> String {
+    counts
+        .iter()
+        .map(|(key, n)| format!("{key} {n}"))
+        .collect::<Vec<_>>()
+        .join("  ")
 }
 
 /// The judge section, one line per string. `untagged` is the count of live
@@ -346,13 +361,14 @@ pub fn judge_lines(j: &Judge, days: u64, untagged: Option<usize>) -> Vec<String>
             counted.requests, counted.scored, counted.skipped
         ));
     }
+    if !j.skipped_by.is_empty() {
+        out.push(format!(
+            "  skipped while fnod was: {}",
+            tallies(&j.skipped_by)
+        ));
+    }
     for (label, verdicts) in &j.verdicts {
-        let counts: Vec<String> = verdicts
-            .counts
-            .iter()
-            .map(|(verdict, n)| format!("{verdict} {n}"))
-            .collect();
-        out.push(format!("  judge:{label}: {}", counts.join("  ")));
+        out.push(format!("  judge:{label}: {}", tallies(&verdicts.counts)));
         if verdicts.labeled > 0 {
             out.push(format!(
                 "    labeled {}, wrong {}",
@@ -363,8 +379,8 @@ pub fn judge_lines(j: &Judge, days: u64, untagged: Option<usize>) -> Vec<String>
     if !j.ms.is_empty() {
         out.push(format!(
             "  fnod_ms p50 {} p90 {}",
-            nearest_rank(&j.ms, 50),
-            nearest_rank(&j.ms, 90)
+            crate::scoreboard_provider::percentile(&j.ms, 50).unwrap_or(0.0),
+            crate::scoreboard_provider::percentile(&j.ms, 90).unwrap_or(0.0)
         ));
     }
     out.push(format!(
@@ -377,14 +393,6 @@ pub fn judge_lines(j: &Judge, days: u64, untagged: Option<usize>) -> Vec<String>
         None => "untagged laws: the decision store is unreadable".to_string(),
     });
     out
-}
-
-/// The value at `share` percent of a sorted list, by nearest rank.
-fn nearest_rank(sorted: &[f64], share: usize) -> f64 {
-    sorted
-        .get((sorted.len() - 1) * share / 100)
-        .copied()
-        .unwrap_or(0.0)
 }
 
 /// The judge file's rows inside the window.
@@ -706,11 +714,11 @@ mod tests {
                 "session": "s", "matched_event": key, "machine": machine, "fnod": fnod,
                 "excerpt": "done"})
         };
-        let verdict = |judge: &str, value: &str, id: &str, key: &str| {
+        let verdict = |judge: &str, value: &str, id: &str, key: &str, ms: i64| {
             json!({"ts": "2026-11-24T10:00:00Z", "phase": "verdict",
                 "span_id": format!("s-v-{id}-{judge}"),
                 "judge_of": id, "judge": judge, "verdict": value, "matched_event": key,
-                "fnod_ms": 600})
+                "fnod_ms": ms})
         };
         let judge = vec![
             request("iMac2D2", "2026-11-24", "down", "stop:a:1", "s-r1"),
@@ -719,10 +727,10 @@ mod tests {
             request("m2-mbp", "2026-11-24", "up", "stop:b:2", "s-r3"),
             request("m2-mbp", "2026-11-24", "up", "stop:b:3", "s-r5"),
             request("m2-mbp", "2026-11-24", "up", "stop:b:4", "s-r6"),
-            verdict("is_ask", "yes", "s-r2", "stop:b:1"),
-            verdict("D3241", "obeys", "s-r2", "stop:b:1"),
-            verdict("is_ask", "no", "s-r3", "stop:b:2"),
-            verdict("is_ask", "yes", "s-r5", "stop:b:3"),
+            verdict("is_ask", "yes", "s-r2", "stop:b:1", 900),
+            verdict("D3241", "obeys", "s-r2", "stop:b:1", 600),
+            verdict("is_ask", "no", "s-r3", "stop:b:2", 300),
+            verdict("is_ask", "yes", "s-r5", "stop:b:3", 600),
         ];
         let block = |key: &str| {
             (
@@ -745,7 +753,7 @@ mod tests {
         );
         assert_eq!((j.requests, j.scored, j.skipped, j.pending), (6, 3, 2, 1));
         assert_eq!((j.both, j.keyword_only, j.judge_only), (1, 1, 1));
-        assert_eq!(j.ms, vec![600.0; 3]);
+        assert_eq!(j.ms, vec![900.0, 300.0, 600.0]);
         let marked: Vec<String> = j
             .sample
             .iter()
@@ -760,9 +768,10 @@ mod tests {
             "iMac2D2 2026-11-24: 1 requests, 0 scored, 1 skipped, 0 pending",
             "m2-mbp 2026-11-23: 1 requests, 0 scored, 1 skipped, 0 pending",
             "m2-mbp 2026-11-24: 4 requests, 3 scored, 0 skipped, 1 pending",
+            "skipped while fnod was: down 2",
             "judge:is_ask: no 1  yes 2\n    labeled 1, wrong 1",
             "judge:D3241: obeys 1\n    labeled 1, wrong 0",
-            "fnod_ms p50 600 p90 600",
+            "fnod_ms p50 600 p90 900",
             "ask pair by stop key: both 1, keyword-only 1, judge-only 1",
             "untagged laws: 4 (tag them in the file fnod.judge.tags_file names)",
         ] {
