@@ -603,10 +603,8 @@ mod tests {
     #[test]
     fn codex_and_opencode_bare_names_resolve_from_their_roots() {
         let tmp = TempDir::new().unwrap();
-        let codex_root = write_skill(
-            &tmp.path().join("home").join(".codex").join("skills"),
-            "review",
-        );
+        let codex_root = tmp.path().join("home").join(".codex").join("skills");
+        write_skill(&codex_root, "review");
         let (status, _) = skill_presence_in(
             "review",
             "codex",
@@ -651,12 +649,14 @@ mod tests {
     #[test]
     fn the_listing_unions_roots_and_plugins() {
         let tmp = TempDir::new().unwrap();
-        let root_a = write_skill(&tmp.path().join("a"), "target");
-        let root_b = write_skill(&tmp.path().join("b"), "think");
+        let root_a = tmp.path().join("a");
+        let root_b = tmp.path().join("b");
+        write_skill(&root_a, "target");
+        write_skill(&root_b, "think");
         let mut plugins = ClaudePluginSkills::default();
         plugins
             .skills
-            .insert("fno:review".to_string(), root_a.clone());
+            .insert("fno:review".to_string(), root_a.join("target"));
         let listing = skills_for_harness_in(&[root_a, root_b], &plugins);
         assert_eq!(listing, vec!["fno:review", "target", "think"]);
     }
