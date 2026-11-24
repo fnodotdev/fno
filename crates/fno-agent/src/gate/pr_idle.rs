@@ -54,6 +54,10 @@ pub(crate) struct Read {
     pub head: String,
     pub ready: bool,
     pub green: bool,
+    /// The alarm stays quiet though `ready` reads true: the decision warns
+    /// that nobody reviewed the head, or that the merge walk holds on the
+    /// `Docs:` line.
+    pub held: bool,
 }
 
 fn dir(home: &AgentsHome) -> PathBuf {
@@ -124,7 +128,7 @@ pub(crate) fn run_repo(
     let mut first_error = None;
     for read in reads {
         let path = file(home, slug, read.pr);
-        if !read.ready || !read.green {
+        if !read.ready || !read.green || read.held {
             let _ = std::fs::remove_file(&path);
             continue;
         }
@@ -251,6 +255,16 @@ pub(crate) fn route_recipients(
     out
 }
 
+/// The decision warnings that hold the alarm though `ready` reads true: the
+/// merge walk holds the first, and review law holds the two coverage codes,
+/// which the merge walk only warns on.
+fn warning_holds(code: &str) -> bool {
+    matches!(
+        code,
+        "docs_line_missing" | "review_coverage_uncovered" | "review_coverage_unknown"
+    )
+}
+
 /// The status door's verdict for one PR, or None when the door did not answer.
 fn status_read(root: &Path, pr: u64) -> Option<Read> {
     let payload = json!({"cwd": root.display().to_string(), "pr": pr});
@@ -258,18 +272,43 @@ fn status_read(root: &Path, pr: u64) -> Option<Read> {
     if code > 3 {
         return None;
     }
+    read_answer(pr, &stdout)
+}
+
+/// One door answer as the alarm reads it. `held` comes from the decision's
+/// own warnings, which `ready` leaves alone.
+fn read_answer(pr: u64, stdout: &str) -> Option<Read> {
     #[derive(Deserialize)]
     struct Answer {
         head: String,
         ready: bool,
         green: bool,
+        merge_decision: Option<Decision>,
     }
+    #[derive(Deserialize)]
+    struct Decision {
+        #[serde(default)]
+        warnings: Vec<DecisionWarning>,
+    }
+    #[derive(Deserialize)]
+    struct DecisionWarning {
+        code: String,
+    }
+    // An answer that does not parse is no read, and the alarm stays quiet on
+    // the PR.
     let answer: Answer = serde_json::from_str(stdout.trim()).ok()?;
+    // A ready answer that carries no decision is no proof of review, so it
+    // holds as well.
+    let held = answer.ready
+        && answer
+            .merge_decision
+            .is_none_or(|d| d.warnings.iter().any(|w| warning_holds(&w.code)));
     Some(Read {
         pr,
         head: answer.head,
         ready: answer.ready,
         green: answer.green,
+        held,
     })
 }
 
@@ -367,7 +406,42 @@ mod tests {
             head: head.into(),
             ready: true,
             green: true,
+            held: false,
         }
+    }
+
+    /// The door's answer for a ready and green head that carries these
+    /// warnings.
+    fn answer(warnings: Value) -> String {
+        json!({"head": "abc", "ready": true, "green": true, "merge_decision": {"warnings": warnings}})
+            .to_string()
+    }
+
+    /// One pass of [`run_repo`] over these reads: how many lead mails and
+    /// phone notices it sent.
+    fn sends(home: &AgentsHome, now: i64, open: &HashSet<u64>, reads: &[Read]) -> (usize, u32) {
+        let mail: RefCell<Vec<(String, String)>> = Default::default();
+        let mut deliver = |argv: &[String], _: &str| {
+            mail.borrow_mut().push((argv[8].clone(), argv[9].clone()));
+            (0, "accepted-new-turn".into(), String::new())
+        };
+        let phones: RefCell<u32> = Default::default();
+        let mut phone = |_: &str, _: &str, _: Option<&str>| {
+            *phones.borrow_mut() += 1;
+            true
+        };
+        run_repo(
+            home,
+            now,
+            "o/r",
+            Some(open),
+            reads,
+            &["lead-a".to_string()],
+            &mut deliver,
+            &mut phone,
+        )
+        .unwrap();
+        (mail.into_inner().len(), phones.into_inner())
     }
 
     #[test]
@@ -425,41 +499,65 @@ mod tests {
     }
 
     #[test]
-    fn a_ready_but_not_green_read_starts_no_clock_and_never_alarms() {
+    fn a_held_or_unmeasured_read_starts_no_clock_and_never_alarms() {
         let temp = tempfile::tempdir().unwrap();
         let home = AgentsHome::at(temp.path().join("agents"));
-        let mut quiet = |_: &[String], _: &str| (0, "accepted-new-turn".into(), String::new());
-        let phones: RefCell<u32> = Default::default();
-        let mut phone = |_: &str, _: &str, _: Option<&str>| {
-            *phones.borrow_mut() += 1;
-            true
-        };
-        let open: HashSet<u64> = [7].into();
+        let open: HashSet<u64> = [7, 8].into();
+        let t0 = 1_000_000;
         // CI never measured this head: the status door reads ready, not green.
-        let queued = [Read {
+        let unmeasured = [Read {
             green: false,
             ..ready(7, "abc")
         }];
-        let mut pass = |now: i64| {
-            run_repo(
-                &home,
-                now,
-                "o/r",
-                Some(&open),
-                &queued,
-                &["lead-a".to_string()],
-                &mut quiet,
-                &mut phone,
-            )
-            .unwrap()
-        };
-        pass(1_000_000);
-        pass(1_000_000 + RAISE_AFTER_MS);
-        pass(1_000_000 + RAISE_AFTER_MS + 60_000);
+        // Ready and green, and held all the same: the merge walk holds on the
+        // Docs line, or nobody reviewed the head.
+        let held: Vec<Read> = [
+            "docs_line_missing",
+            "review_coverage_uncovered",
+            "review_coverage_unknown",
+        ]
+        .iter()
+        .map(|code| read_answer(7, &answer(json!([{ "code": code }]))).unwrap())
+        .collect();
+        // A ready answer that carries no decision is no proof of review.
+        let undecided = [read_answer(
+            7,
+            &json!({"head": "abc", "ready": true, "green": true}).to_string(),
+        )
+        .unwrap()];
+        assert!(
+            held.iter()
+                .chain(&undecided)
+                .all(|r| r.held && r.ready && r.green),
+            "{held:?}"
+        );
+        for now in [t0, t0 + RAISE_AFTER_MS, t0 + RAISE_AFTER_MS + 60_000] {
+            assert_eq!(sends(&home, now, &open, &unmeasured), (0, 0));
+            for read in held.iter().chain(&undecided) {
+                assert_eq!(sends(&home, now, &open, std::slice::from_ref(read)), (0, 0));
+            }
+        }
         assert!(
             !file(&home, "o/r", 7).exists(),
-            "no clock starts on an unmeasured head"
+            "no clock on a held or unmeasured read"
         );
-        assert_eq!(*phones.borrow(), 0, "no alarm without green");
+        // A warning that holds no merge holds no alarm.
+        let look_only = read_answer(7, &answer(json!([{ "code": "visual_approval" }]))).unwrap();
+        assert!(look_only.ready && look_only.green && !look_only.held);
+        // An answer with no head is no read, and a PR with no read keeps its
+        // clock.
+        let headless = json!({"pr": "7", "verdict": "unknown", "green": false, "settled": false, "ready": false});
+        assert!(read_answer(7, &headless.to_string()).is_none());
+        let clock = Seen {
+            head: "abc".into(),
+            ready_since_ms: t0,
+            ..Seen::default()
+        };
+        assert!(state::write_json_atomic(&file(&home, "o/r", 7), &clock).is_ok());
+        assert_eq!(sends(&home, t0, &open, &[]), (0, 0));
+        assert!(
+            file(&home, "o/r", 7).exists(),
+            "a PR with no read keeps its clock"
+        );
     }
 }
