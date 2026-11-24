@@ -12,10 +12,12 @@ mod find;
 mod first_run;
 mod goto;
 mod grid;
+mod hosts;
 mod hq;
 mod inbox;
 pub mod keys;
 pub(crate) mod launch;
+mod left_footer;
 mod left_pane;
 pub mod link;
 mod mods;
@@ -23,6 +25,7 @@ mod mouse;
 mod mux_modes;
 mod orchestration;
 pub mod palette;
+mod right_pane;
 mod settings;
 mod sheet;
 mod shot;
@@ -87,6 +90,8 @@ pub struct ShotOptions {
     pub mode: Option<MainView>,
     /// Open the answer sheet on the newest question once the board lands.
     pub sheet: bool,
+    /// Open the connect-a-host step once the board lands. Shot-only.
+    pub hosts: bool,
     /// The empty-pane state: the chat pane shows its start view no matter
     /// what the world's focus carries. The start-view shots set it.
     pub empty_chat: bool,
@@ -278,7 +283,12 @@ fn widened_path(path: &str, home: &str) -> String {
     dirs.join(":")
 }
 
-/// Run the app (or the headless probe) and return the process exit code.
+/// The footer draws the computer mark instead of the globe: the icon
+/// variant shot door.
+pub fn set_computer_icon() {
+    left_footer::draw_computer(true);
+}
+
 /// Run the app (or the headless probe) and return the process exit code.
 pub fn run(opts: Options) -> i32 {
     if let Some(shot) = opts.shot {
@@ -306,6 +316,7 @@ pub fn run(opts: Options) -> i32 {
             harness: shot.harness,
             first_run: shot.first_run,
             settings: shot.settings,
+            hosts: shot.hosts,
             update: shot.update,
         });
     }

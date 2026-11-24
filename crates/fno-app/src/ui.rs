@@ -307,6 +307,11 @@ pub fn age(stamp: &str, now: u64) -> String {
     let Some(s) = (now as i64).checked_sub(past).filter(|s| *s >= 0) else {
         return String::new();
     };
+    age_secs(s as u64)
+}
+
+/// The same buckets from a plain seconds count.
+pub fn age_secs(s: u64) -> String {
     match s {
         0..=59 => format!("{s}s"),
         60..=3599 => format!("{}m", s / 60),
@@ -412,5 +417,9 @@ mod tests {
         assert_eq!(age("not a stamp", now), "");
         // A stamp ahead of the clock has no honest age.
         assert_eq!(age(t0, now - 1), "");
+        // The seconds twin buckets the same way.
+        assert_eq!(age_secs(45), "45s");
+        assert_eq!(age_secs(3_600), "1h");
+        assert_eq!(age_secs(349_973), "4d");
     }
 }

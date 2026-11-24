@@ -38,7 +38,7 @@ fn base_name(path: &str) -> String {
 /// title optionally first). The tail is always last when the cwd exists, so
 /// the branch is the segment before it. A segment with a space is a title,
 /// never a branch: git refs hold no spaces.
-fn branch_of<'a>(a: &'a AgentRow, base: &str) -> Option<&'a str> {
+pub(super) fn branch_of<'a>(a: &'a AgentRow, base: &str) -> Option<&'a str> {
     // Walked from the right: the tail (the cwd basename) is always last
     // when the cwd exists, and the branch is the segment before it. A
     // segment with a space is a title, never a branch: git refs hold no
