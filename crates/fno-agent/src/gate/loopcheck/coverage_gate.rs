@@ -1304,58 +1304,39 @@ mod findings_open_tests {
             covered_conjuncts(&row, "", false, false),
             (false, "uncovered")
         );
-    }
-}
-
-#[cfg(test)]
-mod human_gate_tests {
-    use super::*;
-
-    fn covered_row(verdicts: Value) -> Value {
-        serde_json::json!({
-            "coverage": "covered",
-            "review_state": "reviewed",
-            "head_sha": "h1",
-            "verdicts": verdicts,
-        })
-    }
-
-    fn human_verdict(author: bool, verdict_word: &str) -> Value {
-        serde_json::json!({
-            "name": "bob",
-            "verdict": verdict_word,
-            "human_approval": true,
-            "author_approval": author,
-        })
-    }
-
-    #[test]
-    fn always_without_a_person_names_the_owed_word() {
+        // The person gate rides this declaration (G3 is shrink-only): with
+        // review.human = always the row conjunct reads the owed word from
+        // the same verdicts the coverage row already classifies, fail-closed
+        // on authorship, and a stale approval never satisfies.
+        let covered_row = |verdicts: Value| {
+            serde_json::json!({
+                "coverage": "covered",
+                "review_state": "reviewed",
+                "head_sha": "h1",
+                "verdicts": verdicts,
+            })
+        };
+        let verdict = |author: bool, verdict_word: &str| {
+            serde_json::json!({
+                "name": "bob",
+                "verdict": verdict_word,
+                "human_approval": true,
+                "author_approval": author,
+            })
+        };
         let row = covered_row(json!([]));
         assert_eq!(
             covered_conjuncts(&row, "h1", false, true),
             (false, "human_approval_owed")
         );
-    }
-
-    #[test]
-    fn always_with_a_non_author_fresh_approval_is_covered() {
-        let row = covered_row(json!([human_verdict(false, "reviewed")]));
+        let row = covered_row(json!([verdict(false, "reviewed")]));
         assert_eq!(covered_conjuncts(&row, "h1", false, true), (true, ""));
-    }
-
-    #[test]
-    fn an_author_approval_never_satisfies_always() {
-        let row = covered_row(json!([human_verdict(true, "reviewed")]));
+        let row = covered_row(json!([verdict(true, "reviewed")]));
         assert_eq!(
             covered_conjuncts(&row, "h1", false, true),
             (false, "human_approval_owed")
         );
-    }
-
-    #[test]
-    fn a_stale_approval_never_satisfies_always() {
-        let row = covered_row(json!([human_verdict(false, "stale")]));
+        let row = covered_row(json!([verdict(false, "stale")]));
         assert_eq!(
             covered_conjuncts(&row, "h1", false, true),
             (false, "human_approval_owed")

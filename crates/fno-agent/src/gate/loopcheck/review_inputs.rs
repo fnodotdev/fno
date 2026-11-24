@@ -317,24 +317,18 @@ mod tests {
 
         let inputs = resolve_review_inputs(temp.path(), None, None, None, Some(&global), None);
         assert_eq!(inputs.settings.team_cost_cap_usd, Some(Ok(10.0)));
-    }
-
-    #[test]
-    fn human_always_resolves_and_lights_the_lane_on_a_stock_install() {
-        let temp = tempfile::tempdir().unwrap();
-        let local_dir = temp.path().join(".fno");
-        std::fs::create_dir_all(&local_dir).unwrap();
+        // The person gate rides this declaration (G3 is shrink-only): on a
+        // stock install with review.human = always, human_required resolves
+        // and the lane lights so the stock-install skip cannot bypass the
+        // gate, while lane_configured stays keyed to the login/local lanes
+        // (the self-review floor's stock-install predicate reads it).
         std::fs::write(
             temp.path().join(".fno/config.toml"),
             "[review]\nhuman = \"always\"\n",
         )
         .unwrap();
-
         let inputs = resolve_review_inputs(temp.path(), None, None, None, None, None);
         assert!(inputs.human_required, "always resolves human_required");
-        // lane_configured stays keyed to the login/local lanes: the
-        // self-review floor's stock-install predicate reads it, and the
-        // person gate rides beside it in the lane predicate instead.
         assert!(!inputs.lane_configured);
         assert!(
             crate::pr_status::reviews::review_lane(temp.path(), 0, None),
