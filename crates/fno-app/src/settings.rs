@@ -409,10 +409,7 @@ fn machine_rows(
     rows
 }
 
-/// Why the Add field refuses a host; the field paints it inline.
-#[derive(Debug, PartialEq)]
-pub(crate) struct Refusal(pub String);
-
+/// The door's parse refusal is already the line the Add field paints.
 impl From<String> for Refusal {
     fn from(why: String) -> Self {
         Refusal(why)
@@ -979,8 +976,9 @@ pub(crate) fn mono_fonts(window: &Window) -> Vec<String> {
         .collect()
 }
 
-/// Why a settings write failed: the CLI's first line, painted under the row.
-#[derive(Debug)]
+/// Why a settings write or an Add Host entry failed: one line, painted
+/// under the row or the field.
+#[derive(Debug, PartialEq)]
 pub(crate) struct Refusal(pub String);
 
 /// One settings write through the in-process config door: the same
