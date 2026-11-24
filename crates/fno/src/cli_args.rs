@@ -53,7 +53,8 @@ pub struct MuxParsed {
 /// later mux wave consumes.
 #[derive(Debug, PartialEq, Eq, Subcommand)]
 pub enum MuxCmd {
-    /// `mux server [--server <n>] [--session <n>]`
+    /// `mux server [--server <n>]`: run the mux server for a session; `--session`
+    /// is the deprecated `--server` spelling and warns.
     Server(ServerArgs),
     /// `mux attach <name>`
     Attach { name: String },
@@ -112,51 +113,50 @@ pub enum MuxCmd {
     },
     /// `mux command <selector> --text <native-command> --proof <kind>`
     Command(MuxCommandArgs),
-    /// `mux serve --web|--stop|--status ...`: the read-only web bridge
-    /// `--web`, `--stop` or `--status` is required; the flags are
-    /// the bridge's own (parse_web_args keeps them exact).
-    /// `mux serve --share --pane <id> [--steer] [--tunnel]` shows one masked
-    /// pane to viewers the driver admits (parse_share_args).
+    /// `mux serve --web` opens one session read-only in a browser; `--stop`
+    /// ends it, `--status` reads its state.
+    /// `mux serve --share --pane <id> [--steer] [--tunnel]` shares one masked
+    /// pane with viewers you admit.
     /// `mux serve --observe --pane <id> [--name <label>]` watches one masked
-    /// pane read-only in this terminal, over `ssh -t` (parse_observe_args).
+    /// pane read-only in this terminal.
     /// `mux serve --link <key> [--host <host>]` opens one session live, with
-    /// input, in this terminal; `--host` dials its machine (parse_link_args).
+    /// input, in this terminal; `--host` dials its machine.
     #[command(disable_help_flag = true)]
     Serve(MuxTail),
-    /// `mux web reap [--json]`: the bridge marker's corpse sweep. A bare
-    /// `mux web` refuses: clap requires the `reap` operation.
+    /// `mux web reap [--json]` removes the web-serve records of servers that
+    /// are gone. A bare `mux web` refuses: name the operation.
     Web {
         #[command(subcommand)]
         op: WebOp,
     },
-    /// `mux pane <command> ...`: the v4 pane script API (nothing under
-    /// `mux pane` ever forwards to Python).
+    /// `mux pane <command> ...`: the pane commands for scripts and agents:
+    /// list, read, run, send, wait, kill, claim, release, split, break, focus.
     Pane {
         #[command(subcommand)]
         op: PaneOp,
     },
-    /// `mux block pipe|annotate ...`: the block porcelain. A bare
-    /// `mux block` refuses: clap requires the operation word.
+    /// `mux block pipe|annotate ...`: the block commands. A bare
+    /// `mux block` refuses: name the operation.
     Block {
         #[command(subcommand)]
         op: BlockOp,
     },
-    /// `mux tab ls|create|rename|join|move|close ...`: the
-    /// layout-tab script commands.
+    /// `mux tab ls|create|rename|join|move|close ...`: list and arrange tabs
+    /// in the session.
     Tab {
         #[command(subcommand)]
         op: TabOp,
     },
-    /// `mux layout get|apply|graft ...`: nested layout trees and specs.
-    /// The [`MuxCommon`] flags ride the group too, so a flag before the
-    /// operation word still resolves it (`mux layout --json apply ...`).
+    /// `mux layout get|apply|graft ...`: read, apply, and graft nested layout
+    /// trees. The shared flags (`--server`, `--json`) may sit before the
+    /// operation word (`mux layout --json apply ...`).
     Layout {
         #[command(flatten)]
         common: MuxCommon,
         #[command(subcommand)]
         op: LayoutOp,
     },
-    /// `mux where <fno_id-or-tab>`: resolve an fno session id to its
+    /// `mux where <fno_id-or-tab>`: resolve an fno session id or tab to its
     /// location. The selector is required; a bare `mux where`
     /// refuses.
     #[command(disable_help_flag = true)]
@@ -173,14 +173,13 @@ pub enum MuxCmd {
     /// (v75, hidden). The selector is required.
     #[command(hide = true, disable_help_flag = true)]
     RetireSession(MuxTailReq),
-    /// `mux view <selector> [--url] [--fzf] [--json]`: point the
-    /// operator's view at the pane hosting an agent. The selector is
-    /// required; `-h` inside the tail stays the family's.
+    /// `mux view <selector> [--url] [--fzf] [--json]`: point your view at
+    /// the pane hosting an agent. The selector is required.
     #[command(disable_help_flag = true)]
     View(MuxTailReq),
-    /// `mux workspace prune|restore|origin ...`: workspace-store maintenance
-    /// A bare `mux workspace` refuses: clap requires the
-    /// operation word.
+    /// `mux workspace prune|restore|origin ...`: prune, restore, or read the
+    /// workspace store. A bare `mux workspace` refuses: name the
+    /// operation.
     Workspace {
         #[command(subcommand)]
         op: WorkspaceOp,
