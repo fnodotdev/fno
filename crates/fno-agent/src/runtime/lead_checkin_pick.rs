@@ -19,14 +19,10 @@ fn ids(bp: &Value, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn target(id: &str) -> String {
-    format!("fno agent spawn \"/fno:target {id}\"")
-}
-
 /// Every node id the beat still names as startable, in offer order, with
-/// the command that starts it: a blueprint start, then target-ready, then
-/// plan-ready, then a batch's contain command. An idle child offers nothing:
-/// its owner is usually the lead's own epic.
+/// the command that starts it: a blueprint start, then an adjacent offer,
+/// then target-ready, then plan-ready, then a batch's contain command. An
+/// idle child offers nothing: its owner is usually the lead's own epic.
 fn offers(bp: &Value) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
     // Seat entries are typed on read (the blueprint's own SeatScope shape):
@@ -49,11 +45,25 @@ fn offers(bp: &Value) -> Vec<(String, String)> {
         ));
     }
     for id in ids(bp, "starts") {
-        out.push((id.clone(), format!("start /fno:blueprint subagent {id}")));
+        out.push((
+            id.clone(),
+            crate::lead_checkin_blueprint::start_command("/blueprint", &id),
+        ));
+    }
+    for o in bp["offers"].as_array().into_iter().flatten() {
+        if let (Some(command), Some(id)) = (o["command"].as_str(), o["id"].as_str()) {
+            out.push((
+                id.to_string(),
+                crate::lead_checkin_blueprint::start_command(command, id),
+            ));
+        }
     }
     for key in ["target_ready", "plan_ready"] {
         for id in ids(bp, key) {
-            out.push((id.clone(), target(&id)));
+            out.push((
+                id.clone(),
+                crate::lead_checkin_blueprint::start_command("/target", &id),
+            ));
         }
     }
     for g in bp["batch"].as_array().into_iter().flatten() {
@@ -182,5 +192,33 @@ mod tests {
         assert_eq!(*at(&answered, "reactive"), false);
         assert_eq!(*at(&answered, "pick"), "planned it");
         a_seat_entry_offers_the_seat_command_first();
+    }
+
+    /// A drained beat's offer is the pick: the pick names the offered node
+    /// with the command that starts it. With no offer the pick stays null.
+    #[test]
+    fn a_drained_beats_offer_is_the_pick() {
+        let reading = json!({
+            "starts": [],
+            "offers": [{"id": "x-out", "command": "/target"}],
+            "target_ready": [],
+            "plan_ready": [],
+            "skips": [],
+        });
+        let mut data = Map::new();
+        annotate(&mut data, Some(&reading), None, None);
+        assert_eq!(
+            *at(&data, "pick_offered"),
+            "fno agent spawn \"/fno:target x-out\""
+        );
+        assert_eq!(*at(&data, "pick_node"), "x-out");
+
+        let mut none = Map::new();
+        annotate(&mut none, Some(&bp(&[])), None, None);
+        assert!(at(&none, "pick_offered").is_null());
+        assert_eq!(
+            lines(&none),
+            vec!["pick: none offered (nothing startable in scope)".to_string()]
+        );
     }
 }
