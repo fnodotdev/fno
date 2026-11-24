@@ -1227,7 +1227,7 @@ pub fn run(args: &[String]) -> i32 {
             code
         }
         "skill-list" => {
-            let (out, err, code) = action_skill_list(&args[1..]);
+            let (out, err, code) = action_skill_list(args.get(1..).unwrap_or(&[]));
             if !err.is_empty() {
                 eprint!("{err}");
             }
