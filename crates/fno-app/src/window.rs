@@ -432,6 +432,44 @@ fn grid_size(viewport: Size<Pixels>, cell: Size<Pixels>, left_w: f32) -> (u16, u
     )
 }
 
+/// Everything a new window installs before its first paint: the key layer
+/// (config.mux.prefix, [mux.keys] - the same loader the terminal client
+/// uses; a refused rebind surfaces as the startup notice rather than
+/// silently running the shipped default), the appearance-resolved palette,
+/// and the grid size the opened-with widths imply.
+struct WindowPrelude {
+    sent_size: (u16, u16),
+    light: bool,
+    palette: Palette,
+    theme_warning: Option<String>,
+    key_warning: Option<String>,
+    font_want: (String, f32),
+    theme_cwd: std::path::PathBuf,
+}
+
+fn window_prelude(left_w: f32, metrics: &Metrics, window: &Window) -> WindowPrelude {
+    let sent_size = grid_size(window.viewport_size(), metrics.cell, left_w);
+    let light = super::palette::appearance_is_light(window.appearance());
+    let font_want = (
+        metrics.font.family.to_string(),
+        f32::from(metrics.font_size),
+    );
+    let theme_cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());
+    let (palette, theme_warning) = super::palette::for_appearance(light, &theme_cwd);
+    let (keymap, key_warnings) = fno::ui::digest_overlay::keymap(&theme_cwd);
+    fno::ui::keys::install(keymap);
+    let key_warning = key_warnings.first().map(|w| w.0.clone());
+    WindowPrelude {
+        sent_size,
+        light,
+        palette,
+        theme_warning,
+        key_warning,
+        font_want,
+        theme_cwd,
+    }
+}
+
 impl Root {
     fn new(
         session: String,
@@ -485,21 +523,7 @@ impl Root {
         let left_w = left_w.unwrap_or(pane_seam::default_width(pane_seam::SeamKind::LeftPane));
         let board_next_w = board_next_w.unwrap_or(orchestration::NEXT_W);
         let board_feed_w = board_feed_w.unwrap_or(orchestration::QUESTIONS_W);
-        let sent_size = grid_size(window.viewport_size(), metrics.cell, left_w);
-        let light = super::palette::appearance_is_light(window.appearance());
-        let font_want = (
-            metrics.font.family.to_string(),
-            f32::from(metrics.font_size),
-        );
-        let theme_cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());
-        let (palette, theme_warning) = super::palette::for_appearance(light, &theme_cwd);
-        // The key layer (config.mux.prefix, [mux.keys]), installed before the
-        // scanner reads its first keystroke - the same loader the terminal
-        // client uses. A refused rebind surfaces as the startup notice rather
-        // than silently running the shipped default.
-        let (keymap, key_warnings) = fno::ui::digest_overlay::keymap(&theme_cwd);
-        fno::ui::keys::install(keymap);
-        let key_warning = key_warnings.first().map(|w| w.0.clone());
+        let prelude = window_prelude(left_w, &metrics, window);
         let mut root = Root {
             main,
             link: None,
@@ -508,7 +532,7 @@ impl Root {
             panes: HashMap::new(),
             modes: Modes::default(),
             scanner: fno::ui::keys::Scanner::default(),
-            notice: key_warning.or(theme_warning),
+            notice: prelude.key_warning.or(prelude.theme_warning),
             notice_failed: false,
             notice_gen: 0,
             shot: false,
@@ -517,9 +541,9 @@ impl Root {
             offer: None,
             first_run: false,
             metrics,
-            palette,
+            palette: prelude.palette,
             focus: cx.focus_handle(),
-            sent_size,
+            sent_size: prelude.sent_size,
             board: Board::default(),
             poller: None,
             area: Rc::new(Cell::new(Bounds::default())),
@@ -539,8 +563,8 @@ impl Root {
             squad_field: None,
             workspace_menu: None,
             workspace_confirm: None,
-            light,
-            theme_cwd: theme_cwd.clone(),
+            light: prelude.light,
+            theme_cwd: prelude.theme_cwd,
             session: session.clone(),
             ext: mods::Page::default(),
             adv: px(ui::BODY * 0.6),
@@ -566,7 +590,7 @@ impl Root {
             peek: None,
             launch: launch::Panel::default(),
             settings: None,
-            font_want,
+            font_want: prelude.font_want,
             preedit: None,
             _reader: None,
             _chat: None,
@@ -587,7 +611,7 @@ impl Root {
             window_active: window.is_window_active(),
         };
         wire_window(&mut root, window, cx);
-        Self::attach_link(&mut root, &session, sent_size, prewarmed, cx);
+        Self::attach_link(&mut root, &session, prelude.sent_size, prewarmed, cx);
         root.wire_alerts(cx);
         root.start_board_poll(cx);
         root.start_plugins(cx);
@@ -3683,6 +3707,26 @@ impl Root {
         }
     }
 
+    /// The left pane and its drag seam: one flex row child of the page.
+    fn left_with_seam(&mut self, window: &Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let now = fno::app_api::digest_overlay::now_secs();
+        let left = left_pane::render(self, now, self.adv, window, cx).text_size(px(ui::BODY));
+        div()
+            .flex()
+            .flex_row()
+            .flex_none()
+            .child(left)
+            .child(
+                pane_seam::seam(pane_seam::SeamKind::LeftPane, &self.palette).on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|root, ev, _, cx| {
+                        root.seam_down(pane_seam::SeamKind::LeftPane, ev, cx)
+                    }),
+                ),
+            )
+            .into_any_element()
+    }
+
     /// A seam's mouse-down: the second click of a double-click resets the
     /// pane to its default; the first starts or restarts a drag.
     pub(super) fn seam_down(
@@ -4311,8 +4355,6 @@ impl Render for Root {
                 .into_any_element(),
             _ => main,
         };
-        let now = fno::app_api::digest_overlay::now_secs();
-        let left = left_pane::render(self, now, self.adv, window, cx).text_size(px(ui::BODY));
         let strip = tabs::render(self, cx)
             .font_family(ui::MONO)
             .text_size(px(ui::BODY));
@@ -4368,15 +4410,7 @@ impl Render for Root {
             .text_color(rgb(self.palette.fg))
             .font_family(self.metrics.font.family.clone())
             .text_size(self.metrics.font_size)
-            .child(left)
-            .child(
-                pane_seam::seam(pane_seam::SeamKind::LeftPane, &self.palette).on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|root, ev, _, cx| {
-                        root.seam_down(pane_seam::SeamKind::LeftPane, ev, cx)
-                    }),
-                ),
-            )
+            .child(self.left_with_seam(window, cx))
             .child(
                 div()
                     .relative()
