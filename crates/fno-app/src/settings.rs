@@ -24,11 +24,16 @@ use super::keys::{Key, SHEET};
 use super::palette::Palette;
 use super::ui::{self, Edit, LineField, Role};
 use super::window::Root;
+use std::collections::HashMap;
+
 use fno::app_api::client::org_seats::Machine;
+use fno::app_api::client::remote_hosts::{fold_host, state_word, HostState};
 use fno::ui::theme::THEME_NAMES;
 
 /// The five sections, in panel order.
 pub(super) const SECTIONS: [&str; 5] = ["Look", "Alerts", "Machines", "Keys", "Updates"];
+/// The Add field's placeholder when its text is empty: the door's forms.
+const ADD_PLACEHOLDER: &str = "e.g. host, 192.168.1.20 or user@host";
 
 /// One selectable value on a choice page.
 #[derive(Debug, Clone, PartialEq)]
@@ -84,6 +89,10 @@ pub(crate) enum Outcome {
 /// rows, an open choice page, and the last refusal under its row.
 pub(crate) struct SettingsState {
     pub query: LineField,
+    /// The Machines Add field while it is open, its inline refusal, and
+    /// the host states the probes returned (mirrored from the Root map).
+    pub add_host: Option<LineField>,
+    pub add_refusal: Option<String>,
     pub selected: usize,
     pub page: Option<(String, Vec<Choice>, usize)>,
     pub note: Option<String>,
@@ -118,14 +127,26 @@ pub(crate) fn build_rows(
     cwd: &Path,
     machines: &[Machine],
     fonts: &[String],
+    host_states: &HashMap<String, HostState>,
 ) -> Vec<SectionRows> {
     vec![
         ("Look", look_rows(config, cwd, fonts)),
         ("Alerts", alerts_rows(config)),
-        ("Machines", machine_rows(machines)),
+        ("Machines", machine_rows(machines, config, host_states)),
         ("Keys", key_rows()),
         ("Updates", updates_rows()),
     ]
+}
+
+/// The configured remote hosts, from the raw global dict: the door's
+/// `mux.remote_hosts` list, exactly what the mux TUI reads.
+pub(crate) fn configured_hosts(config: Option<&Value>) -> Vec<String> {
+    raw_value(config, "mux.remote_hosts")
+        .and_then(|v| v.as_array().map(|a| a.to_owned()))
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect()
 }
 
 /// Whether a Look row's decider is the project-local file: the app writes
@@ -321,28 +342,91 @@ fn alerts_rows(config: Option<&Value>) -> Vec<Row> {
     ]
 }
 
-/// The Machines section: one locked row per fleet machine.
-fn machine_rows(machines: &[Machine]) -> Vec<Row> {
-    machines
+/// The Machines section: the fleet's hosts, then the configured hosts the
+/// fleet map does not know yet, then the Add affordance. State words come
+/// from the door: the beat words for map machines, the probe's word and
+/// its why for configured hosts.
+fn machine_rows(
+    machines: &[Machine],
+    config: Option<&Value>,
+    host_states: &HashMap<String, HostState>,
+) -> Vec<Row> {
+    let mut rows: Vec<Row> = machines
         .iter()
         .map(|m| {
             let seats: usize = m.leads.iter().map(|l| l.seats.len()).sum();
             let name = m.display_name.clone().unwrap_or_else(|| m.host.clone());
-            let fresh = if m.fresh {
-                "live".to_string()
-            } else {
-                format!("seen {}s ago", m.age_s)
-            };
+            let (word, _) = state_word(Some((m.fresh, m.age_s)), &HostState::Checking);
             Row {
                 id: "machine",
                 label: name,
-                value: format!("{seats} seat{} {fresh}", if seats == 1 { "" } else { "s" }),
+                value: format!("{seats} seat{} {word}", if seats == 1 { "" } else { "s" }),
                 mode: Mode::Locked {
-                    reason: "add or connect a host from the mux".into(),
+                    reason: "read from the fleet map".into(),
                 },
             }
         })
-        .collect()
+        .collect();
+    let configured = configured_hosts(config);
+    let bands: Vec<&str> = machines.iter().map(|m| m.host.as_str()).collect();
+    let mut unlisted: Vec<&String> = configured
+        .iter()
+        .filter(|h| fold_host(h, &bands).is_none())
+        .collect();
+    unlisted.sort();
+    for host in unlisted {
+        let band = machines
+            .iter()
+            .find(|m| fold_host(host, &[m.host.as_str()]).is_some())
+            .map(|m| (m.fresh, m.age_s));
+        let state = host_states
+            .get(host)
+            .cloned()
+            .unwrap_or(HostState::Checking);
+        let (word, detail) = state_word(band, &state);
+        let value = match word.as_str() {
+            // A failed host says why, in the row, one line.
+            "couldn't connect" => format!("{word}: {detail}"),
+            _ => word,
+        };
+        rows.push(Row {
+            id: "rhost",
+            label: host.clone(),
+            value,
+            mode: Mode::Locked {
+                reason: "probed over ssh".into(),
+            },
+        });
+    }
+    rows.push(Row {
+        id: "add_host",
+        label: "+ add a host".into(),
+        value: String::new(),
+        mode: Mode::Locked {
+            reason: "press enter to open the field".into(),
+        },
+    });
+    rows
+}
+
+/// The Add field's verdict: the door's parse and dedup in one place. The
+/// resolved name, or the refusal the field paints inline. Configured
+/// hosts and fleet-map hosts both block a duplicate; the refusal names
+/// the row that matched.
+pub(crate) fn add_host_verdict(
+    input: &str,
+    configured: &[String],
+    fleet_hosts: &[&str],
+) -> Result<String, String> {
+    let name = parse_host(input)?;
+    let configured: Vec<&str> = configured.iter().map(String::as_str).collect();
+    if let Some(row) = fold_host(&name, &configured) {
+        return Err(format!("{name} is already listed here as {row}"));
+    }
+    if let Some(row) = fold_host(&name, fleet_hosts) {
+        return Err(format!("{name} is already on the fleet map as {row}"));
+    }
+    Ok(name)
 }
 
 /// The Keys section: the key sheet's table, read-only in place.
@@ -438,12 +522,31 @@ pub(crate) fn resolve_enter(rows: &[SectionRows], q: &str, sel: usize) -> Outcom
 #[derive(Debug, PartialEq)]
 pub(crate) enum Event {
     Close,
-    Set { id: String, value: String },
-    Unset { id: String },
+    Set {
+        id: String,
+        value: String,
+    },
+    Unset {
+        id: String,
+    },
+    /// The Machines Add field's submit: the raw typed text, resolved
+    /// through the door before anything persists.
+    AddHost(String),
 }
 
 /// What Enter resolves on the panel's current selection, as an Event.
 fn enter_out(state: &mut SettingsState) -> Option<Event> {
+    // Enter on the Add row opens the field; the row's other semantics
+    // resolve as today.
+    let on_add_row = visible(&state.rows, state.query.text())
+        .get(state.selected)
+        .map(|(_, r)| r.id == "add_host")
+        .unwrap_or(false);
+    if on_add_row {
+        state.add_host = Some(ui::LineField::new(256));
+        state.add_refusal = None;
+        return None;
+    }
     match resolve_enter(&state.rows, state.query.text(), state.selected) {
         Outcome::Set { id, value } => Some(Event::Set {
             id: id.to_string(),
@@ -465,6 +568,28 @@ fn enter_out(state: &mut SettingsState) -> Option<Event> {
 /// window resolves it. An open page folds its own keys; otherwise the
 /// query, cursor and Enter resolve per the grammar.
 pub(crate) fn key(state: &mut SettingsState, k: &Key) -> Option<Event> {
+    // The Add field takes every key while it is open; Enter submits, Esc
+    // cancels. A refusal keeps the field open with the typed text.
+    if let Some(mut field) = state.add_host.take() {
+        return match k.key {
+            "enter" => Some(Event::AddHost(field.text().to_string())),
+            "escape" => {
+                state.add_refusal = None;
+                return None;
+            }
+            _ => match field.edit(k.key, k.key_char) {
+                Edit::Typed => {
+                    state.add_host = Some(field);
+                    None
+                }
+                Edit::Close => {
+                    state.add_refusal = None;
+                    None
+                }
+                Edit::Submit => Some(Event::AddHost(field.text().to_string())),
+            },
+        };
+    }
     if state.page.is_some() {
         match k.key {
             "enter" => {
@@ -699,6 +824,37 @@ fn rows_body(root: &Root, cx: &mut Context<Root>) -> Div {
         } else {
             children.len()
         });
+        // The Add field renders as the input while it is open, its
+        // refusal inline beneath; nothing else on the row list changes.
+        if row.id == "add_host" && state.add_host.is_some() {
+            let text = state
+                .add_host
+                .as_ref()
+                .map(|f| f.text().to_string())
+                .unwrap_or_default();
+            let shown = if text.is_empty() {
+                ADD_PLACEHOLDER.to_string()
+            } else {
+                text
+            };
+            children.push(
+                div()
+                    .flex_none()
+                    .min_w_0()
+                    .child(ui::role(div(), Role::Body, &p).child(shown))
+                    .into_any_element(),
+            );
+            if let Some(refusal) = state.add_refusal.as_ref() {
+                children.push(
+                    ui::role(div(), Role::Hint, &p)
+                        .text_color(rgb(p.error))
+                        .px_3()
+                        .child(refusal.clone())
+                        .into_any_element(),
+                );
+            }
+            continue;
+        }
         children.push(row_line(row, i == state.selected, &p, cx).into_any_element());
     }
     if state.follow.replace(false) {
@@ -856,16 +1012,23 @@ mod tests {
         serde_json::json!({"mux": mux, "app": app})
     }
 
-    /// The five sections build in order, and a locked Machines row names
-    /// its reason.
+    /// The five sections build in order, and the Machines section names
+    /// each host's state: the fleet's beat words, a configured host's
+    /// probe word, and a failed host's why in the row.
     #[test]
-    fn five_sections_and_a_locked_reason() {
-        let rows = build_rows(Some(&cfg(&[])), Path::new("/"), &[], &[]);
+    fn five_sections_and_machine_state_words() {
+        let rows = build_rows(Some(&cfg(&[])), Path::new("/"), &[], &[], &HashMap::new());
         let names: Vec<&str> = rows.iter().map(|(name, _)| *name).collect();
         assert_eq!(names, ["Look", "Alerts", "Machines", "Keys", "Updates"]);
         let machines = &rows.get(2).expect("machines section").1;
-        assert_eq!(machines.len(), 0, "no fleet, no rows");
-        let m = Machine {
+        assert_eq!(machines.len(), 0, "no fleet, no configured, no rows");
+        let fresh = Machine {
+            host: "m1".into(),
+            local: false,
+            fresh: true,
+            ..Machine::default()
+        };
+        let stale = Machine {
             host: "m2".into(),
             local: false,
             fresh: false,
@@ -873,26 +1036,151 @@ mod tests {
             leads: Vec::new(),
             ..Machine::default()
         };
-        let rows = build_rows(Some(&cfg(&[])), Path::new("/"), &[m], &[]);
+        let mut states = HashMap::new();
+        states.insert(
+            "nohost".to_string(),
+            HostState::Unreachable("could not reach nohost: no route".into()),
+        );
+        let rows = build_rows(
+            Some(&cfg(&[("mux.remote_hosts", serde_json::json!(["nohost"]))])),
+            Path::new("/"),
+            &[fresh, stale],
+            &[],
+            &states,
+        );
         let machines = &rows.get(2).expect("machines section").1;
-        assert_eq!(machines.len(), 1);
+        // Two fleet rows first (m1 live, m2 stale), then the configured
+        // host the map does not know, then no add row in this build.
+        assert_eq!(machines.len(), 3);
+        let words: Vec<&str> = machines.iter().map(|r| r.value.as_str()).collect();
+        assert_eq!(words[0], "0 seats live");
+        assert_eq!(words[1], "0 seats beat 1m ago");
         assert_eq!(
-            machines.first().expect("one machine").mode,
-            Mode::Locked {
-                reason: "add or connect a host from the mux".into()
-            }
+            words[2],
+            "couldn't connect: could not reach nohost: no route"
+        );
+        assert_eq!(machines[2].id, "rhost");
+    }
+
+    /// AC3-EDGE: the resolved machine, not the typed text, decides a
+    /// duplicate; the refusal names the row that matched, and a fresh
+    /// name resolves.
+    #[test]
+    fn add_host_verdict_refuses_duplicates_and_resolves_fresh_names() {
+        let configured = vec!["linux1".to_string()];
+        let fleet = vec!["mac2.local"];
+        assert_eq!(
+            add_host_verdict("user@LINUX1", &configured, &fleet),
+            Err("user@linux1 is already listed here as linux1".to_string())
         );
         assert_eq!(
-            machines.first().expect("one machine").value,
-            "0 seats seen 42s ago"
+            add_host_verdict("192.168.1.20", &configured, &fleet),
+            Ok("192.168.1.20".to_string())
         );
+        assert_eq!(
+            add_host_verdict("user@mac2.local:22", &configured, &fleet),
+            Err("user@mac2.local:22 is already on the fleet map as mac2.local".to_string())
+        );
+        // Junk still refuses with the parse reason, not a dedup line.
+        assert!(add_host_verdict("-oProxyCommand=x", &configured, &fleet).is_err());
+    }
+
+    /// The Add row opens the field, the field takes keys, Enter submits
+    /// through the event, Esc closes; a refusal reopens the field with the
+    /// typed text (the window's half reads it from submit_add_host).
+    #[test]
+    fn the_add_row_and_field_flow() {
+        let rows = build_rows(Some(&cfg(&[])), Path::new("/"), &[], &[], &HashMap::new());
+        let mut st = SettingsState {
+            query: ui::LineField::new(64),
+            add_host: None,
+            add_refusal: None,
+            selected: 0,
+            page: None,
+            note: None,
+            rows,
+            fonts: Vec::new(),
+            scroll: gpui::ScrollHandle::new(),
+            follow: Cell::new(false),
+        };
+        // Enter on the add row (the last row of the Machines section)
+        // opens the field.
+        st.jump_to_section(2);
+        let add_at = visible(&st.rows, "")
+            .iter()
+            .position(|(_, r)| r.id == "add_host")
+            .expect("add row present");
+        st.selected = add_at;
+        assert_eq!(enter_out(&mut st), None, "opening the field emits nothing");
+        assert!(st.add_host.is_some(), "the field is open");
+        // Typing lands in the field, not the query.
+        st.add_host
+            .as_mut()
+            .expect("open")
+            .edit("a", Some("user@linux1"));
+        assert_eq!(st.add_host.as_ref().expect("open").text(), "user@linux1");
+        assert_eq!(st.query.text(), "");
+        // Enter submits as the AddHost event.
+        assert_eq!(
+            key(
+                &mut st,
+                &Key {
+                    key: "enter",
+                    ..Key::default()
+                }
+            ),
+            Some(Event::AddHost("user@linux1".into()))
+        );
+        assert!(st.add_host.is_none(), "the field closed on submit");
+        // Esc cancels a reopened field.
+        st.add_host = Some(ui::LineField::seeded("x", 256));
+        assert_eq!(
+            key(
+                &mut st,
+                &Key {
+                    key: "escape",
+                    ..Key::default()
+                }
+            ),
+            None
+        );
+        assert!(st.add_host.is_none());
+    }
+
+    /// A configured host that folds into a fleet machine gets no second
+    /// row: the map's beat words already carry it.
+    #[test]
+    fn a_host_the_map_knows_stays_one_row() {
+        let m = Machine {
+            host: "linux1.tail1.ts.net".into(),
+            local: false,
+            fresh: true,
+            ..Machine::default()
+        };
+        let rows = build_rows(
+            Some(&cfg(&[(
+                "mux.remote_hosts",
+                serde_json::json!(["user@linux1:22"]),
+            )])),
+            Path::new("/"),
+            &[m],
+            &[],
+            &HashMap::new(),
+        );
+        let machines = &rows.get(2).expect("machines section").1;
+        assert_eq!(
+            machines.len(),
+            1,
+            "fold_host folds user@linux1:22 into linux1"
+        );
+        assert_eq!(machines.first().expect("one row").id, "machine");
     }
 
     /// A write shows at once: the toggle flips in place, so a second Enter
     /// reads the new value.
     #[test]
     fn a_write_shows_before_it_lands() {
-        let mut rows = build_rows(Some(&cfg(&[])), Path::new("/"), &[], &[]);
+        let mut rows = build_rows(Some(&cfg(&[])), Path::new("/"), &[], &[], &HashMap::new());
         apply_local(&mut rows, "app.alert_sound", "false");
         let out = resolve_enter(&rows, "play", 0);
         assert!(matches!(out, Outcome::Set { ref value, .. } if value == "true"));
@@ -901,7 +1189,7 @@ mod tests {
     /// The filter matches a label, the dotted key, and the section name.
     #[test]
     fn filter_matches_label_key_and_section() {
-        let rows = build_rows(Some(&cfg(&[])), Path::new("/"), &[], &[]);
+        let rows = build_rows(Some(&cfg(&[])), Path::new("/"), &[], &[], &HashMap::new());
         let hits = visible(&rows, "notification").len();
         assert_eq!(hits, 1, "notification matches the notification row");
         assert_eq!(visible(&rows, "sound").len(), 1);
@@ -923,6 +1211,7 @@ mod tests {
             Path::new("/"),
             &[],
             &[],
+            &HashMap::new(),
         );
         let out = resolve_enter(&rows, "", 4);
         assert_eq!(
@@ -942,9 +1231,11 @@ mod tests {
     /// numbered options.
     #[test]
     fn the_panel_key_flow() {
-        let rows = build_rows(Some(&cfg(&[])), Path::new("/"), &[], &[]);
+        let rows = build_rows(Some(&cfg(&[])), Path::new("/"), &[], &[], &HashMap::new());
         let mut st = SettingsState {
             query: ui::LineField::new(64),
+            add_host: None,
+            add_refusal: None,
             selected: 0,
             page: None,
             note: None,

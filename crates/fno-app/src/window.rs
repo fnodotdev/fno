@@ -361,6 +361,9 @@ pub struct Root {
     pub(super) launch: launch::Panel,
     /// The Settings panel (cmd-,): rows, query, page; None while closed.
     pub(super) settings: Option<settings::SettingsState>,
+    /// The remote-hosts probe states the door filled: the configured name
+    /// to its newest HostState. Lives on the Root so it survives the panel.
+    host_states: HashMap<String, fno::app_api::client::remote_hosts::HostState>,
     /// The font face and size the terminal metrics should carry: the
     /// launch values, then a Settings write. Render moves the real
     /// `metrics` onto it, where the text system can measure.
@@ -534,6 +537,7 @@ impl Root {
             peek: None,
             launch: launch::Panel::default(),
             settings: None,
+            host_states: HashMap::new(),
             font_want,
             preedit: None,
             _reader: None,
@@ -2994,9 +2998,18 @@ impl Root {
             .fleet()
             .map(|f| f.machines.clone())
             .unwrap_or_default();
-        let rows = settings::build_rows(config.as_ref(), &self.theme_cwd, &machines, &fonts);
+        let rows = settings::build_rows(
+            config.as_ref(),
+            &self.theme_cwd,
+            &machines,
+            &fonts,
+            &self.host_states,
+        );
+        self.kick_host_probes(cx);
         self.settings = Some(settings::SettingsState {
             query: ui::LineField::new(64),
+            add_host: None,
+            add_refusal: None,
             selected: 0,
             page: None,
             note: None,
@@ -3011,6 +3024,108 @@ impl Root {
     pub(super) fn close_settings(&mut self, cx: &mut Context<Self>) {
         self.settings = None;
         cx.notify();
+    }
+
+    /// Fire one bounded ssh probe per configured host that has no state
+    /// yet (fire-once per panel open, like the TUI's `started` flag), on
+    /// detached background tasks; each result repaints the Machines rows.
+    fn kick_host_probes(&mut self, cx: &mut Context<Self>) {
+        let config = crate::global_config_raw();
+        let mut names: Vec<String> = settings::configured_hosts(config.as_ref())
+            .into_iter()
+            .filter(|n| !self.host_states.contains_key(n))
+            .collect();
+        names.sort();
+        names.dedup();
+        for name in names {
+            self.host_states.insert(
+                name.clone(),
+                fno::app_api::client::remote_hosts::HostState::Checking,
+            );
+            self.spawn_probe(name, cx);
+        }
+    }
+
+    /// The Machines Add field's submit: the door's verdict (parse + dedup)
+    /// decides. A refusal keeps the field open with the typed text and
+    /// paints inline. A valid host lands the row as checking at once, then
+    /// the write and the probe resolve it.
+    fn submit_add_host(&mut self, text: String, cx: &mut Context<Self>) {
+        let fleet_hosts: Vec<String> = self
+            .board
+            .fleet()
+            .map(|f| f.machines.iter().map(|m| m.host.clone()).collect())
+            .unwrap_or_default();
+        let configured = settings::configured_hosts(crate::global_config_raw().as_ref());
+        let fleet_refs: Vec<&str> = fleet_hosts.iter().map(String::as_str).collect();
+        match settings::add_host_verdict(&text, &configured, &fleet_refs) {
+            Err(refusal) => {
+                if let Some(st) = self.settings.as_mut() {
+                    st.add_host = Some(ui::LineField::seeded(&text, 256));
+                    st.add_refusal = Some(refusal);
+                }
+                cx.notify();
+            }
+            Ok(name) => {
+                // Optimistic row: checking now; the write and the probe
+                // resolve it.
+                self.host_states.insert(
+                    name.clone(),
+                    fno::app_api::client::remote_hosts::HostState::Checking,
+                );
+                let mut list = configured.clone();
+                list.push(name.clone());
+                let json = serde_json::to_string(&list).unwrap_or_else(|_| format!("[\"{name}\"]"));
+                let name2 = name.clone();
+                cx.spawn(async move |this, cx| {
+                    let out = cx
+                        .background_executor()
+                        .spawn(async move {
+                            settings::bounded_write(true, "mux.remote_hosts", Some(&json))
+                        })
+                        .await;
+                    this.update(cx, |root, cx| {
+                        if let Err(settings::Refusal(msg)) = out {
+                            root.say(
+                                format!("{name2}: added this session; save failed: {msg}"),
+                                cx,
+                            );
+                        }
+                    })
+                    .ok();
+                })
+                .detach();
+                self.spawn_probe(name, cx);
+                self.rebuild_settings_rows(None);
+                cx.notify();
+            }
+        }
+    }
+
+    /// One bounded ssh probe on a detached background task; its result
+    /// repaints the Machines rows. The --probe precedent: a short-lived
+    /// current-thread runtime per bounded run, so GPUI never rides a tokio
+    /// reactor.
+    fn spawn_probe(&mut self, name: String, cx: &mut Context<Self>) {
+        let host = name.clone();
+        cx.spawn(async move |this, cx| {
+            let state = cx
+                .background_executor()
+                .spawn(async move {
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .expect("probe runtime");
+                    rt.block_on(fno::app_api::client::remote_hosts::probe(&host))
+                })
+                .await;
+            this.update(cx, |root, cx| {
+                root.host_states.insert(host, state);
+                root.rebuild_settings_rows(None);
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// One resolved settings write: spawn the bounded CLI door on a
@@ -3049,7 +3164,13 @@ impl Root {
         if let Some(st) = self.settings.as_mut() {
             let config = crate::global_config_raw();
             st.note = note;
-            st.rows = settings::build_rows(config.as_ref(), &self.theme_cwd, &machines, &st.fonts);
+            st.rows = settings::build_rows(
+                config.as_ref(),
+                &self.theme_cwd,
+                &machines,
+                &st.fonts,
+                &self.host_states,
+            );
         }
     }
 
@@ -3304,6 +3425,7 @@ impl Root {
             Some(settings::Event::Unset { id }) => {
                 self.spawn_settings_write(false, id, String::new(), cx)
             }
+            Some(settings::Event::AddHost(text)) => self.submit_add_host(text, cx),
             None => {}
         }
         true
