@@ -1575,7 +1575,7 @@ mod tests {
             "d-behav001 = \"behavioural\"\nd-state001 = \"state\"\n",
         )
         .unwrap();
-        let tags = format!("[fnod.judge]\ntags_file = \"{file}\"\n");
+        let tags = format!("[fnod.judge]\ntags_file = \"{}\"\n", file.display());
 
         // fnod listens: the row keeps the tail and the behavioural law once.
         let (url, _listener) = crate::fnod::tests::serve_once("{}", std::time::Duration::ZERO);
@@ -1592,7 +1592,10 @@ mod tests {
         );
         assert!(fires.is_empty(), "the judge changes no Stop answer");
         let [row] = <[JudgeRow; 1]>::try_from(judge_rows(&rig.journal)).unwrap();
-        assert_eq!((row.phase.as_str(), row.fnod.as_deref()), ("request", "up"));
+        assert_eq!(
+            (row.phase.as_str(), row.fnod.as_deref()),
+            ("request", Some("up"))
+        );
         assert_eq!(row.rules, vec!["d-behav001"]);
         assert_eq!((row.judge_state, row.judge_dropped), (1, 0));
         assert_eq!(row.excerpt.as_deref(), Some("wave 1 merged clean"));

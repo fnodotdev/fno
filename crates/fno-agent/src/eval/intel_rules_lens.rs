@@ -447,7 +447,7 @@ fn untagged_count(cwd: &Path, laws: &[Law]) -> usize {
 /// law the store no longer holds is not asked. A pass fnod fails whole
 /// writes no row, so the request waits for the next run and a down server
 /// costs no verdict. Answers how many requests were scored.
-pub fn score(
+fn score(
     cwd: &Path,
     journal: &Path,
     judge: &[crate::event_rules::JudgeRow],

@@ -66,7 +66,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             dir.path().join(".fno/config.toml"),
-            format!("[fnod.judge]\ntags_file = \"{file}\"\n"),
+            format!("[fnod.judge]\ntags_file = \"{}\"\n", file.display()),
         )
         .unwrap();
         let tags = Tags::read(dir.path());
