@@ -114,6 +114,9 @@ async fn sweep_once() {
         apply_read(key, fact);
     }
     gc_facts();
+    if let (Ok(wanted), Ok(mut attempts)) = (wanted().lock(), attempts().lock()) {
+        gc_attempts(&wanted, &mut attempts);
+    }
 }
 
 /// Which keys this tick refreshes: missing facts first, then the stales,
@@ -158,6 +161,13 @@ fn apply_read(key: Key, fact: Option<PrStatusFact>) {
             map.insert(key, fact);
         }
     }
+}
+
+/// Drop attempt stamps whose key left the wanted set, so the stamp map
+/// tracks the live rows instead of every key the daemon ever saw. Free so
+/// the bound tests without a door.
+fn gc_attempts(wanted: &HashSet<Key>, attempts: &mut HashMap<Key, Instant>) {
+    attempts.retain(|k, _| wanted.contains(k));
 }
 
 /// Keep the map bounded: when over [`FACTS_CAP`], drop the stalest facts.
@@ -393,5 +403,18 @@ mod tests {
         let map = facts().lock().unwrap();
         assert_eq!(map.get(&key).map(|f| f.verdict.as_str()), Some("green"));
         assert!(attempts().lock().unwrap().contains_key(&key));
+    }
+
+    #[test]
+    fn an_attempt_stamp_dies_when_its_key_leaves_the_wanted_set() {
+        let keep = ("a".to_string(), 1);
+        let gone = ("b".to_string(), 2);
+        let mut attempts = HashMap::new();
+        attempts.insert(keep.clone(), Instant::now());
+        attempts.insert(gone.clone(), Instant::now());
+        let wanted: HashSet<Key> = [keep.clone()].into_iter().collect();
+        gc_attempts(&wanted, &mut attempts);
+        assert!(attempts.contains_key(&keep));
+        assert!(!attempts.contains_key(&gone));
     }
 }
