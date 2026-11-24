@@ -33,7 +33,13 @@ Traps a fresh agent re-hits because no lint, guard or refusal catches them yet. 
 
 AC9 delivery sentinel (echoed verbatim by a fresh worker, asserted by unit test): `kdc-delivery-sentinel-1932`.
 
-No entries today.
+### Run the scoped test-delta before a push that adds a test
+
+The guards workflow runs test-delta with `--scopes docs/test-audit/scopes.tsv`. Without it a test passes that scope G3 refuses: cap 0, and a `path_regex` that matches `plan`, `lead`, `review` and `pr_` anywhere.
+
+specimens: `docs/test-audit/scopes.tsv:8`, `crates/fno-agent/src/gate/pr_push.rs:1624`
+graduates-to: The push and create doors run no scoped test-delta, so a G3 over-cap fails only in CI
+added: 2026-11-24
 
 ## Repository
 

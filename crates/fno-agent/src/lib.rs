@@ -73,6 +73,7 @@ pub mod paths;
 pub mod paths_cli;
 pub mod protocol;
 pub mod remote;
+pub mod sandbox;
 pub mod single_flight;
 pub mod spawn;
 pub mod text_or_file;
@@ -969,10 +970,11 @@ mod tests {
             }
         }
 
-        // The allowed files: production binary repair (install_verify), seven
+        // The allowed files: production binary repair (install_verify), eight
         // production dir modes (paths, fleet_incident, chats, the
         // session-state pin dir, the mcp sidecar's socket-parent tightening,
-        // the daemon's sandbox socket dir, the saved-sessions dir),
+        // the sandbox guest's socket dir, the sandbox transcript dir, the
+        // saved-sessions dir),
         // two dir-mode
         // restores in tests (claims, operator_turns); the bin test target
         // cannot see a cfg(test) lib fn (client_tests); and the plan writer's
@@ -990,7 +992,8 @@ mod tests {
             ("gate/fleet_incident.rs", 1),
             ("runtime/chats.rs", 1),
             ("runtime/mcp/sidecar.rs", 1),
-            ("runtime/daemon/sandbox_host.rs", 1),
+            ("sandbox/guest.rs", 1),
+            ("sandbox/transcript.rs", 1),
             ("runtime/hook/save_session.rs", 1),
             ("runtime/state_layout_move.rs", 1),
             ("runtime/state_layout.rs", 1),

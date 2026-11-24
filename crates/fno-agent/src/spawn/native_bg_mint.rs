@@ -568,6 +568,7 @@ fn prepare_row(
         pid: None,
         transcript_path: transcript.map(|p| p.display().to_string()),
         start_source: Some(START_SOURCE.into()),
+        sandbox_transcript: None,
         cwd: cwd.clone(),
         project_root: cwd,
         claude_session_uuid: row.session_id.clone().filter(|s| !s.is_empty()),

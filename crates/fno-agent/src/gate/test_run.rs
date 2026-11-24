@@ -244,8 +244,10 @@ fn refuses_frozen_build(worktree: &Path) -> bool {
 /// seven worktrees. A human-typed call is never refused (D1746), and `fno
 /// doctor update`'s install build is the user's fno loading (law
 /// d-829648bb). A live `test:priority` grant lifts the test refusal only:
-/// it grants tests, not compiles.
-const AGENT_COMPILE_LINE: &str = "[cargo build] an agent session compiles nothing on this machine: cargo build, check and clippy refuse here. CI builds the pushed head: commit, push with `fno do pr push`. A build this turn genuinely needs (mux shots, a bug repro) declares itself: prefix the command with `FNO_BUILD_WHY=\"<why>\"` and it runs, journalled.";
+/// it grants tests, not compiles. The declared why covers the shot build
+/// only: a declared check or clippy refuses like an undeclared one, and the
+/// refusal names the CI log read.
+const AGENT_COMPILE_LINE: &str = "[cargo build] an agent session compiles nothing on this machine: cargo build, check and clippy refuse here. CI builds the pushed head: commit, push with `fno do pr push`; read a failed CI job's logs with `gh api --allow-escape-sequences repos/fnodotdev/fno/actions/jobs/<id>/logs`. Only the shot build declares itself (mux shots, a bug repro): `FNO_BUILD_WHY=\"<why>\" cargo build` runs, journalled; check and clippy admit under no why.";
 
 /// The cargo subcommands the compile door refuses for an agent session, in
 /// the forms cargo --list advertises (`build, b`, `check, c`).
@@ -341,11 +343,13 @@ fn compile_verdict(cargo_pid: u32) -> CompileVerdict {
         return CompileVerdict::Admit;
     };
     match declared_build_why() {
-        Some(why) => CompileVerdict::Declared {
+        // The why admits the shot build only (D3323): check and clippy are
+        // the compile-confidence shapes the why exists to refuse.
+        Some(why) if matches!(sub, "build" | "b") => CompileVerdict::Declared {
             subcommand: sub,
             why,
         },
-        None => CompileVerdict::Refused { subcommand: sub },
+        _ => CompileVerdict::Refused { subcommand: sub },
     }
 }
 

@@ -63,6 +63,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_AGENT_RETIRE_INTERVAL_SECS` | rs | Global test/tuning override for the retirement sweep's interval; the result clamps under grace/3 so a row never retires outside its own grace window. |
 | `FNO_AGENT_ROW_PENDING` | rs | unclear: crates/fno-agent/src/runtime/register.rs:83 |
 | `FNO_AGENT_RUNNER_BIN` | rs | Overrides the binary the detached `mail-hold --run-parked` runner execs (mail_hold.rs runner_bin); empty falls through to the process's own executable. A test suite that parks through the real gate pins a stub here so no detached runner escapes the sandbox. |
+| `FNO_AGENT_SANDBOXED` | rs | The sandbox id, set by the host relay on the harness inside a sandbox. A spawn that reads it refuses: a sandboxed worker never spawns a peer (spawn/sandbox_launch.rs `check`). |
 | `FNO_AGENT_SELF` | rs | the registry rows and the mux name the session's self handle |
 | `FNO_AGENT_SELF_SHORT_ID` | rs | The driven agent's short id, stamped by the PTY worker; the write gate matches it against open drive-authority windows so an operator drive scopes to that one session. |
 | `FNO_AGENT_SESSION` | rs | unclear: crates/fno-agent/src/runtime/registry_commands.rs:195 |
@@ -79,7 +80,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_BG` | rs | unclear: crates/fno-agent/src/gate/target_init.rs:591 |
 | `FNO_BIN` | rs | Overrides the Python fno porcelain path at the Rust/Python seam. |
 | `FNO_BOARD_SCOPE` | rs | unclear: crates/fno/src/ui/backlog_view.rs:333 |
-| `FNO_BUILD_WHY` | rs | The declared reason an agent session's cargo build, check or clippy carries (mux shots, a bug repro). The compile door reads it, admits the build, and journals one row under it. Absent or whitespace-only refuses with the compile line. |
+| `FNO_BUILD_WHY` | rs | The declared reason an agent session's cargo build carries (mux shots, an otherwise unshippable bug repro). The compile door reads it, admits only the build, and journals one row under it. check and clippy refuse with or without it; absent or whitespace-only refuses with the compile line. |
 | `FNO_BUS_DIR` | rs | The mail bus dir pin, the top rung of the one ladder: the mail readers (crates/fno-agent/src/runtime/mail_paths.rs) and the dir door (`fno-agent state path dir bus`, crates/fno-agent/src/runtime/state_path.rs) resolve it before `config.paths.bus_dir` and the layout fold. |
 | `FNO_BUS_LOCK_TIMEOUT_SECS` | rs | Overrides the bus-append door's sidecar-lock wait; test escape hatch for the contended-lock refusal. |
 | `FNO_BUS_MAX_BYTES` | rs | Size cap the bus-append door rotates the live log at; malformed degrades to 5 MB. |
@@ -287,7 +288,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_STORE_KEEPER_RSS_KB` | rs | Store keeper resident-memory bound in KiB for the watchdog's over-bound reap verdict; overrides the 2 GiB default. |
 | `FNO_STYLE_ENFORCE` | rs | Zero disables the mail style gate and the encounter prose check at their readers (send vet_body, send_raw, team, pane-prepare, encounter_cli.rs:115); any other value enforces. |
 | `FNO_SUBAGENT_LIVE_SECONDS` | rs | Positive seconds a sidechain transcript counts as active on mtime (default 600); the Rust check-in held-subagents reading reads it directly (subagent_hold.rs), and the `fno agent fleet top --subagents` scan (agents_top.rs) reads it through the same `live_threshold`. |
-| `FNO_SUPERVISOR_SOCKET` | rs | Pins the daemon socket a client connects to. A devcontainer spawn sets it inside the sandbox to the mounted socket directory. Set, the client never forks a daemon of its own, and the transcript-push hook posts. Unset, the client uses the agents home socket and the hook posts nothing. |
+| `FNO_SUPERVISOR_SOCKET` | rs | Pins the daemon socket a client connects to. Inside a sandbox the relay sets it to the guest's socket (`/tmp/fno/supervisor.sock`), which forwards only status, report and session report. Set, the client never forks a daemon of its own. Unset, the client uses the agents home socket. |
 | `FNO_SYNC_EVENTS_SCHEMA` | rs | Regenerate-on-build escape for the tracked events-schema copies: unset or any value but `1` keeps the build checking them (drift fails the build); `1` restores writing so a drift can be regenerated and committed. |
 | `FNO_TASK_CONTEXT_FILE` | rs | Absolute path to the executing attempt's bound task-context binding; a declared value gates `fno do target init`, embeds into written handoff receipts, and rides spawn payloads (rendered natively). |
 | `FNO_TEST_BOOT_EPOCH_MS` | rs | Test seam: pins the host boot epoch in ms, so fixtures that fabricate pre-boot transcript history keep it quiet under the awake-idle clamp instead of reading fresh from a young boot. |

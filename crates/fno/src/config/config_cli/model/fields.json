@@ -998,6 +998,14 @@
     {
      "name": "on_unavailable",
      "default": "refuse"
+    },
+    {
+     "name": "provider",
+     "default": "none"
+    },
+    {
+     "name": "image",
+     "default": null
     }
    ]
   },
@@ -3557,6 +3565,8 @@
   "user.favorite_skills",
   "join.sandbox",
   "sandbox.on_unavailable",
+  "sandbox.provider",
+  "sandbox.image",
   "obsidian.enabled",
   "obsidian.vault",
   "project.id",
