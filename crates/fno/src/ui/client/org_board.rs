@@ -24,7 +24,7 @@ pub(crate) enum OrgMsg {
     /// The sideline machine layer's own fleet read.
     Machines(Result<serde_json::Value, String>),
     /// One configured remote host's ssh probe landed.
-    HostProbe(String, super::remote_hosts::HostState),
+    HostProbe(String, super::remote_hosts::door::HostState),
     /// This machine's own tailnet DNS name, or None when `tailscale`
     /// answered with nothing usable.
     OwnHost(Option<String>),
