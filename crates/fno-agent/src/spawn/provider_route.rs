@@ -482,8 +482,15 @@ pub fn claude_route(
 }
 
 /// The model pin every claude route carries: each model key names the
-/// model, and a `[1m]` model widens the auto-compact window to match.
+/// model, and a `[1m]` model widens the auto-compact window to match. A
+/// bare tier alias answers an empty pin: the settings env reaches the API
+/// verbatim and "opus" is not a model id there, while the argv pin is what
+/// the CLI resolves natively - on the native lane and behind a record whose
+/// endpoint is Anthropic's own alike.
 fn model_pin_env(model: &str) -> BTreeMap<String, String> {
+    if crate::model_env_scrub::TIER_ALIASES.contains(&model.to_ascii_lowercase().as_str()) {
+        return BTreeMap::new();
+    }
     let mut env: BTreeMap<String, String> = MODEL_ENV_KEYS
         .iter()
         .map(|k| (k.to_string(), model.to_string()))
@@ -525,20 +532,11 @@ pub fn claude_route_with(
         Some(record) => record,
         // Anthropic is a claude worker's own lane: no record, no endpoint and
         // no key override, only the model pin `-H claude --model` sets. A
-        // bare tier alias never rides this env: the settings env reaches the
-        // API verbatim and "opus" is not a model id there, while the argv pin
-        // (`claude --model opus`) is what the CLI resolves natively. The env
-        // stamp stays for a real model id.
+        // bare tier alias rides nothing here (model_pin_env answers empty for
+        // one); the argv pin carries it.
         None if provider.eq_ignore_ascii_case("anthropic") && !model.is_empty() => {
-            let env = if crate::model_env_scrub::TIER_ALIASES
-                .contains(&model.to_ascii_lowercase().as_str())
-            {
-                BTreeMap::new()
-            } else {
-                model_pin_env(model)
-            };
             return ClaudeRoute::Routed {
-                env,
+                env: model_pin_env(model),
                 provider: provider.to_string(),
                 notices: Vec::new(),
             };

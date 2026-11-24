@@ -265,14 +265,22 @@ fn happy_on_path() -> bool {
 /// `inject_route_model_argv` (mux_spawn.py:466-488): pin the route's model on
 /// argv ahead of every settings rung. An argv that already names a model is
 /// caller intent and wins; the token lands flags-first, where it can never sit
-/// inside a `--` seed fence.
-fn inject_route_model_argv(argv: Vec<String>, route_env: &BTreeMap<String, String>) -> Vec<String> {
+/// inside a `--` seed fence. A route whose env carries no model (a bare tier
+/// alias answers an empty pin) still pins the route's own model token, so the
+/// CLI resolves the alias natively.
+fn inject_route_model_argv(
+    argv: Vec<String>,
+    route_env: &BTreeMap<String, String>,
+    route_model: Option<&str>,
+) -> Vec<String> {
     if argv.first().map(String::as_str) != Some("claude") {
         return argv;
     }
     let model = route_env
         .get("ANTHROPIC_MODEL")
         .map(|s| s.trim())
+        .filter(|m| !m.is_empty())
+        .or_else(|| route_model.map(str::trim).filter(|m| !m.is_empty()))
         .unwrap_or_default();
     if model.is_empty()
         || argv
@@ -366,7 +374,7 @@ pub(crate) fn make_claude_plan(ctx: &PaneContext) -> Result<ArmPlan, PaneRefusal
     // The model pin runs before the happy wrap so happy forwards it like any
     // other claude option (mux_spawn.py:3545-3550).
     if let Some(route) = &route {
-        argv = inject_route_model_argv(argv, &route.env);
+        argv = inject_route_model_argv(argv, &route.env, Some(&route.model));
     }
     if happy {
         let env = &route
