@@ -373,7 +373,7 @@ pub fn judge_lines(j: &Judge, days: u64, untagged: Option<usize>) -> Vec<String>
     ));
     out.push(match untagged {
         Some(0) => "untagged laws: 0".to_string(),
-        Some(n) => format!("untagged laws: {n} (tag them under [fnod.judge.tags])"),
+        Some(n) => format!("untagged laws: {n} (tag them in the file fnod.judge.tags_file names)"),
         None => "untagged laws: the decision store is unreadable".to_string(),
     });
     out
@@ -764,7 +764,7 @@ mod tests {
             "judge:D3241: obeys 1\n    labeled 1, wrong 0",
             "fnod_ms p50 600 p90 600",
             "ask pair by stop key: both 1, keyword-only 1, judge-only 1",
-            "untagged laws: 4 (tag them under [fnod.judge.tags])",
+            "untagged laws: 4 (tag them in the file fnod.judge.tags_file names)",
         ] {
             assert!(text.contains(wanted), "missing {wanted:?} in:\n{text}");
         }

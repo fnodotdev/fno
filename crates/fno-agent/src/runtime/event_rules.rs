@@ -1576,7 +1576,13 @@ mod tests {
         // Another session's pick, and a pre-tool fire, are not this turn's.
         rig.seed(fire("d-theirs1", "prompt", "ses_other111"));
         rig.seed(fire("d-pretool1", "pre-tool", SESSION));
-        let tags = "[fnod.judge.tags]\nd-behav001 = \"behavioural\"\nd-state001 = \"state\"\n";
+        let file = rig.cwd.join("judge-tags.toml");
+        std::fs::write(
+            &file,
+            "d-behav001 = \"behavioural\"\nd-state001 = \"state\"\n",
+        )
+        .unwrap();
+        let tags = format!("[fnod.judge]\ntags_file = \"{file}\"\n");
 
         // fnod listens: the row keeps the tail and the behavioural law once.
         let (url, _listener) = crate::fnod::tests::serve_once("{}", std::time::Duration::ZERO);

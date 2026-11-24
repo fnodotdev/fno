@@ -1,8 +1,9 @@
-//! Where a decision's judge tag lives: `[fnod.judge.tags]` in fno config,
-//! one `behavioural` or `state` per decision id. The shadow judge asks fnod
-//! only about a behavioural law, one whose obedience the reply text alone
-//! can show. A state law (merge, push, install) needs a world read that a
-//! transcript judge cannot make. An untagged law is never judged.
+//! Where a decision's judge tag lives: a TOML file of one `behavioural` or
+//! `state` per decision id, its path in `fnod.judge.tags_file` in fno
+//! config. The shadow judge asks fnod only about a behavioural law, one
+//! whose obedience the reply text alone can show. A state law (merge, push,
+//! install) needs a world read that a transcript judge cannot make. An
+//! untagged law is never judged.
 
 use std::path::Path;
 use toml::Value;
@@ -25,15 +26,20 @@ impl Tag {
 }
 
 /// The tag table, read once per Stop.
-#[derive(Debug, Default)]
 pub(crate) struct Tags(Value);
 
 impl Tags {
-    /// The `[fnod.judge.tags]` table, merged across the config files. A
-    /// missing table tags nothing.
+    /// The file `fnod.judge.tags_file` names. The table is a file of its
+    /// own, so a few hundred laws add no parse to any other config read. No
+    /// key, an unreadable file or a damaged line tags nothing, which fails
+    /// toward never judged.
     pub(crate) fn read(cwd: &Path) -> Self {
+        let named = crate::agents_config::config_value_deep(cwd, &["fnod", "judge", "tags_file"])
+            .and_then(|value| value.as_str().map(str::to_string));
         Tags(
-            crate::agents_config::config_value_deep(cwd, &["fnod", "judge", "tags"])
+            named
+                .and_then(|path| std::fs::read_to_string(path).ok())
+                .and_then(|text| toml::from_str::<Value>(&text).ok())
                 .unwrap_or_else(|| Value::Table(Default::default())),
         )
     }
@@ -59,11 +65,18 @@ mod tests {
     fn a_law_reads_its_tag_and_nothing_else_is_judged() {
         let dir = tempfile::TempDir::new().unwrap();
         std::fs::create_dir_all(dir.path().join(".fno")).unwrap();
-        let absent = "d-absent01";
-        assert_eq!(Tags::read(dir.path()).get(absent), Tag::Untagged);
+        // No file is named: nothing is judged.
+        let law = "d-03c304bb";
+        assert_eq!(Tags::read(dir.path()).get(law), Tag::Untagged);
+        let file = dir.path().join("judge-tags.toml");
+        std::fs::write(
+            &file,
+            "d-03c304bb = \"behavioural\"\nd-2d9ee096 = \"state\"\nd-bad00001 = \"behaviour\"\n",
+        )
+        .unwrap();
         std::fs::write(
             dir.path().join(".fno/config.toml"),
-            "[fnod.judge.tags]\nd-03c304bb = \"behavioural\"\nd-2d9ee096 = \"state\"\nd-bad00001 = \"behaviour\"\n",
+            format!("[fnod.judge]\ntags_file = \"{file}\"\n"),
         )
         .unwrap();
         let tags = Tags::read(dir.path());
@@ -77,5 +90,8 @@ mod tests {
             assert_eq!(tags.get(id), tag, "{id}");
         }
         assert_eq!(Tag::State.as_str(), "state");
+        // A damaged file tags nothing, which fails toward never judged.
+        std::fs::write(&file, "d-03c304bb = \n").unwrap();
+        assert_eq!(Tags::read(dir.path()).get(law), Tag::Untagged);
     }
 }

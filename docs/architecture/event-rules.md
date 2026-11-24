@@ -153,10 +153,16 @@ A choice question also takes `[fnod.questions.<id>.criteria]`, one line per labe
 
 The shadow judge asks fnod about a Stop reply after the fact. `rule_obeyed` asks whether the reply obeyed the behavioural laws its prompt picked. `is_ask` asks whether the reply is an ask. The judge is a pilot. It blocks nothing, it changes no Stop answer, and a failure costs one verdict.
 
-A law takes one tag in fno config, under `[fnod.judge.tags]`, keyed by decision id. `behavioural` means the reply text alone can show obedience, as a read call before a claim does. `state` means obedience needs a world read, as a merge does. A law with no tag is never judged, and the lens counts it as untagged.
+A law takes one tag in a tag file: one line per decision id, set to `behavioural` or `state`. `fnod.judge.tags_file` in fno config holds the file's absolute path. `behavioural` means the reply text alone can show obedience, as a read call before a claim does. `state` means obedience needs a world read, as a merge does. A law with no tag is never judged, and the lens counts it as untagged. The table is a file of its own, so some hundred laws add no parse to the other config reads.
 
 ```toml
-[fnod.judge.tags]
+# fno config
+[fnod.judge]
+tags_file = "/absolute/path/to/judge-tags.toml"
+```
+
+```toml
+# the tag file
 "d-1a2b3c4d" = "behavioural"
 "d-5e6f7a8b" = "state"
 ```
