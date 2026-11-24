@@ -1031,7 +1031,12 @@ mod tests {
         let names: Vec<&str> = rows.iter().map(|(name, _)| *name).collect();
         assert_eq!(names, ["Look", "Alerts", "Machines", "Keys", "Updates"]);
         let machines = &rows.get(2).expect("machines section").1;
-        assert_eq!(machines.len(), 0, "no fleet, no configured, no rows");
+        assert_eq!(
+            machines.len(),
+            1,
+            "no fleet, no configured: the add row only"
+        );
+        assert_eq!(machines[0].id, "add_host");
         let fresh = Machine {
             host: "m1".into(),
             local: false,
@@ -1060,8 +1065,9 @@ mod tests {
         );
         let machines = &rows.get(2).expect("machines section").1;
         // Two fleet rows first (m1 live, m2 stale), then the configured
-        // host the map does not know, then no add row in this build.
-        assert_eq!(machines.len(), 3);
+        // host the map does not know, then the add row.
+        assert_eq!(machines.len(), 4);
+        assert_eq!(machines[3].id, "add_host");
         let words: Vec<&str> = machines.iter().map(|r| r.value.as_str()).collect();
         assert_eq!(words[0], "0 seats live");
         assert_eq!(words[1], "0 seats beat 1m ago");
@@ -1082,7 +1088,7 @@ mod tests {
         assert_eq!(
             add_host_verdict("user@LINUX1", &configured, &fleet),
             Err(Refusal(
-                "user@linux1 is already listed here as linux1".to_string()
+                "user@LINUX1 is already listed here as linux1".to_string()
             ))
         );
         assert_eq!(
@@ -1182,12 +1188,12 @@ mod tests {
             &HashMap::new(),
         );
         let machines = &rows.get(2).expect("machines section").1;
+        let ids: Vec<&str> = machines.iter().map(|r| r.id).collect();
         assert_eq!(
-            machines.len(),
-            1,
-            "fold_host folds user@linux1:22 into linux1"
+            ids,
+            ["machine", "add_host"],
+            "fold_host folds user@linux1:22 into linux1: one machine row, then the add row"
         );
-        assert_eq!(machines.first().expect("one row").id, "machine");
     }
 
     /// A write shows at once: the toggle flips in place, so a second Enter
