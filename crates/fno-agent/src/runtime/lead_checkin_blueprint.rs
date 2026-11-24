@@ -239,9 +239,10 @@ type OfferKey<'a> = (usize, bool, bool, String, String, &'a str, String);
 /// to a target. A drained scope with free blueprint slots offers these
 /// instead of a bare "no unplanned node" beat. Nearness is the hop count to
 /// an ancestor shared with any member of the scope; the scope's audience or
-/// domain wins a tie, then priority and id. Nodes on the scope's own chain,
-/// nodes a live team owns, rows this scope already queues, claimed and
-/// user-only rows never print. Each offer carries the command that starts it.
+/// domain wins a tie, then priority and id. The scope's own nodes (its
+/// members, their ancestors and their children), nodes a live team owns, rows
+/// this scope already queues, claimed and user-only rows never print. Each
+/// offer carries the command that starts it.
 pub(crate) fn adjacent_offers(
     scope: &str,
     entries: &[Value],
@@ -316,7 +317,16 @@ pub(crate) fn adjacent_offers(
         if !offerable {
             continue;
         }
-        let (distance, via) = chain(id)
+        let path = chain(id);
+        // A row whose chain names a scope member is the scope's own child. It
+        // rides its epic, so an outside offer never names it.
+        if path
+            .iter()
+            .any(|a| scope_members(scope).any(|m| m == a.as_str()))
+        {
+            continue;
+        }
+        let (distance, via) = path
             .iter()
             .enumerate()
             .find_map(|(i, a)| mine.iter().position(|m| m == a).map(|j| (i + j, a.clone())))
@@ -444,7 +454,12 @@ pub(crate) fn r_blueprint(
     let mut idea_routed = 0;
     // The scope's own roots sit above every queue, so an open planless root
     // with no child reaches no list of its own. It routes after the idea
-    // children, the board's children-before-epics order.
+    // children, the board's children-before-epics order. A root the idea rows
+    // already carry is no second start.
+    let idea_ids: std::collections::HashSet<&str> = idea_rows
+        .iter()
+        .filter_map(|r| crate::lead_checkin::s_str(r, "id"))
+        .collect();
     let roots: Vec<Value> = scope_members(scope)
         .filter_map(|root| {
             entries
@@ -452,7 +467,8 @@ pub(crate) fn r_blueprint(
                 .find(|e| crate::lead_checkin::s_str(e, "id") == Some(root))
         })
         .filter(|row| {
-            open_unparked(row)
+            !idea_ids.contains(crate::lead_checkin::s_str(row, "id").unwrap_or(""))
+                && open_unparked(row)
                 && crate::lead_checkin::s_str(row, "plan_path").is_none_or(str::is_empty)
         })
         .cloned()
@@ -1198,35 +1214,42 @@ mod tests {
     }
 
     /// A scope spelled with several members is not one node id. The offer
-    /// walk drops the scope's own roots, and names an idea of lower
-    /// difficulty with the target that starts it.
+    /// walk drops the scope's own roots, their ancestor and their children,
+    /// names a sibling with the ancestor it shares, and names an idea of
+    /// lower difficulty with the target that starts it.
     #[test]
-    fn a_multi_root_scope_never_offers_its_own_roots() {
+    fn a_multi_root_scope_never_offers_its_own_subtree() {
         let entries = vec![
-            json!({"id": "x-root-a", "type": "epic", "status": "idea", "difficulty": "high",
-                "title": "own a"}),
+            json!({"id": "x-parent", "status": "idea", "difficulty": "high", "title": "above"}),
+            json!({"id": "x-root-a", "parent": "x-parent", "type": "epic", "status": "idea",
+                "difficulty": "high", "title": "own a"}),
             json!({"id": "x-root-b", "type": "epic", "status": "idea", "difficulty": "medium",
                 "title": "own b"}),
             json!({"id": "x-b-kid", "parent": "x-root-b", "status": "idea",
                 "difficulty": "medium", "title": "inside b"}),
+            json!({"id": "x-b-grand", "parent": "x-b-kid", "status": "idea",
+                "difficulty": "high", "title": "deeper in b"}),
+            json!({"id": "x-sib", "parent": "x-parent", "status": "idea", "difficulty": "high",
+                "title": "sibling"}),
             json!({"id": "x-out-hi", "status": "idea", "difficulty": "high", "title": "out high"}),
             json!({"id": "x-out-mid", "status": "idea", "difficulty": "medium",
                 "title": "out mid"}),
             json!({"id": "x-out-ready", "status": "ready", "difficulty": "medium",
                 "title": "out ready"}),
         ];
-        let queued = std::collections::HashSet::from(["x-b-kid"]);
         let offers = adjacent_offers(
             "x-root-a,x-root-b",
             &entries,
             &HashMap::new(),
-            &queued,
+            &std::collections::HashSet::new(),
             "high",
             3,
         );
         assert_eq!(
             offers,
             vec![
+                json!({"id": "x-sib", "command": "/blueprint",
+                    "near": "shares x-parent", "title": "sibling"}),
                 json!({"id": "x-out-hi", "command": "/blueprint",
                     "near": "no shared ancestor", "title": "out high"}),
                 json!({"id": "x-out-mid", "command": "/target",
@@ -1265,7 +1288,8 @@ mod tests {
 
     /// An open planless root of the scope routes like an idea child: high
     /// owes a blueprint, medium goes to a target. A closed root, a root with
-    /// a plan and a locked root are not unplanned work.
+    /// a plan and a locked root are not unplanned work. A root the idea rows
+    /// already carry prints once.
     #[test]
     fn an_open_planless_scope_root_routes_like_an_idea_child() {
         let dir = std::env::temp_dir().join(format!("fno-bp-roots-{}", std::process::id()));
@@ -1289,7 +1313,10 @@ mod tests {
             Ok(HashMap::new()),
             Ok(0),
             vec![],
-            &[],
+            &[
+                json!({"id": "x-r-mid", "parent": "x-r-hi", "status": "idea",
+                "difficulty": "medium"}),
+            ],
             &entries,
             "x-r-hi,x-r-mid,x-r-done,x-r-plan,x-r-lock",
         )
