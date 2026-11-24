@@ -15,8 +15,7 @@ on:
       - crates/fno/config_schema.json
       - tests/sandbox/**
       - .github/workflows/sandbox-e2e.yml
-  push:
-    branches: ["feature/x-a666-*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
