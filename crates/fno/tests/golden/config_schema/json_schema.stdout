@@ -2947,6 +2947,23 @@
           "title": "Hold Ttl Minutes",
           "type": "integer"
         },
+        "human": {
+          "anyOf": [
+            {
+              "enum": [
+                "never",
+                "ui",
+                "always"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Human"
+        },
         "invocation_ttl_minutes": {
           "default": 15,
           "minimum": 1,
