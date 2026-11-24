@@ -1,18 +1,22 @@
 //! The idle-PR alarm: a PR that sits green, mergeable and review-covered with
 //! nobody merging it. The owning worker merges by law; this arm is the
 //! backstop for the worker that left and the lead that swept only its wave.
-//! Each pass lists every open PR of every registry repo and reads each
-//! non-draft one through the status door, so a read rides the shared status
-//! cache and the account poller instead of new GitHub calls. The status
-//! `ready` verdict is the merge gate's own answer, so a held, uncovered or
-//! visual-approval PR never reads ready; `green` keeps an unmeasured head
-//! out, because ready stays true while CI sits queued (unmeasured CI warns,
-//! never blocks). The first ready-and-green sighting of a head starts the
-//! clock under `pr-idle/<repo>-<pr>.json`. At 2 hours mail goes to the live
-//! lead whose scope names the PR repo's project, else - when no live scope
-//! covers the repo - to the live workers registered in the repo, and the
-//! operator gets a phone notice; at 6 hours both are raised again. A new
-//! head, a not-ready or not-green read, or a closed PR resets it.
+//! Each pass lists every open PR of every registry repo. It skips drafts
+//! and PRs whose body names a merge hold. It reads each other PR through
+//! the status door, so a read rides the shared status cache and the account
+//! poller instead of new GitHub calls. The status `ready` verdict answers
+//! one question only: does the merge decision list a blocker. Missing review
+//! coverage and a missing `Docs:` line are warnings there, though the merge
+//! door holds on the Docs line and review law holds on coverage. The alarm
+//! reads those warnings itself and stays quiet while one stands. `green`
+//! keeps an unmeasured head out, because ready stays true while CI sits
+//! queued (unmeasured CI warns, never blocks). The first clear sighting of a
+//! head starts the clock under `pr-idle/<repo>-<pr>.json`. At 2 hours mail
+//! goes to the live lead whose scope names the PR repo's project, else -
+//! when no live scope covers the repo - to the live workers registered in
+//! the repo, and the operator gets a phone notice; at 6 hours both are
+//! raised again. A new head, a read that is held, not ready or not green, a
+//! closed PR or a PR its body holds resets it.
 //! Contract: docs/architecture/pr-heal.md, "The idle-PR alarm".
 
 use crate::paths::AgentsHome;
@@ -55,7 +59,7 @@ pub(crate) struct Read {
     pub ready: bool,
     pub green: bool,
     /// The alarm stays quiet though `ready` reads true: the decision warns
-    /// that nobody reviewed the head, or that the merge walk holds on the
+    /// that nobody reviewed the head, or that the merge door holds on the
     /// `Docs:` line.
     pub held: bool,
 }
@@ -257,8 +261,8 @@ pub(crate) fn route_recipients(
 }
 
 /// The decision warnings that hold the alarm though `ready` reads true: the
-/// merge walk holds the first, and review law holds the two coverage codes,
-/// which the merge walk only warns on.
+/// merge door holds the first, and review law holds the two coverage codes,
+/// which the merge door only warns on.
 fn warning_holds(code: &str) -> bool {
     matches!(
         code,
