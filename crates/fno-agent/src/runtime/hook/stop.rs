@@ -2011,6 +2011,34 @@ mod tests {
             arbitrate_continuation("target", &bare, "fno_id: node-42\n"),
             GoalArbitration::None
         );
+        // A Claude `/goal` lives in the transcript: an unmet latest row owns
+        // continuation, a met one (achieved or manually cleared) does not.
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("t.jsonl");
+        let row = |met: bool| {
+            format!(
+                "{{\"type\":\"attachment\",\"attachment\":{{\"type\":\"goal_status\",\"met\":{met},\"condition\":\"ship x\"}}}}\n"
+            )
+        };
+        let claude = || {
+            collect_fire(
+                "s",
+                &transcript.display().to_string(),
+                None,
+                String::new(),
+                None,
+            )
+        };
+        std::fs::write(&transcript, row(false)).unwrap();
+        assert_eq!(
+            arbitrate_continuation("target", &claude(), "fno_id: node-42\n"),
+            GoalArbitration::Delegated
+        );
+        std::fs::write(&transcript, row(false) + &row(true)).unwrap();
+        assert_eq!(
+            arbitrate_continuation("target", &claude(), "fno_id: node-42\n"),
+            GoalArbitration::None
+        );
     }
 
     #[test]

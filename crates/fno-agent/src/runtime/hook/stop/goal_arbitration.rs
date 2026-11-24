@@ -130,7 +130,37 @@ pub(super) fn arbitrate_continuation(driver: &str, fire: &Fire, manifest: &str) 
         Ok(goal) => goal,
         Err(reason) => return GoalArbitration::Refusal(reason),
     };
+    // Claude keeps `/goal` in the transcript only, never the Stop payload.
+    let goal = goal.or_else(|| {
+        let objective = (driver == "target")
+            .then(|| transcript_goal(&fire.transcript_path))
+            .flatten()?;
+        Some(GoalTruth {
+            objective,
+            status: "active".into(),
+            continuation_owner: expected_continuation_owner(driver, manifest)?,
+        })
+    });
     arbitrate_goal_truth(driver, manifest, goal)
+}
+
+/// The condition of the active Claude `/goal`: the transcript tail's latest
+/// `goal_status` attachment, when it reads neither met nor failed. A manual
+/// clear writes `met: true`. A set row older than the tail reads as no goal.
+fn transcript_goal(transcript: &Path) -> Option<String> {
+    let latest = crate::loopcheck::intent::read_tail_lines(transcript, 4 << 20)
+        .into_iter()
+        .rev()
+        .filter(|line| line.contains("\"goal_status\""))
+        .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
+        .find_map(|row| {
+            row.get("attachment")
+                .filter(|a| a["type"] == "goal_status")
+                .cloned()
+        })?;
+    (latest["met"] == false && latest["failed"] != true)
+        .then(|| latest["condition"].as_str().map(str::to_string))
+        .flatten()
 }
 
 pub(super) fn arbitrate_codex_continuation(
