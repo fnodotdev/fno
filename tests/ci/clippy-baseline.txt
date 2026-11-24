@@ -4709,7 +4709,7 @@ crates/fno-agent/src/gate/pr_status.rs	clippy::indexing_slicing	steps[failed_at 
 crates/fno-agent/src/gate/pr_status.rs	clippy::let_underscore_must_use	let _ = f.write_all(json!({"ts": ts, "log": log}).to_string().as_bytes());
 crates/fno-agent/src/gate/pr_status.rs	clippy::let_underscore_must_use	let _ = std::fs::create_dir_all(parent);
 crates/fno-agent/src/gate/pr_status.rs	clippy::too_many_lines	pub(crate) fn read_pr<P: GhProbe>(
-crates/fno-agent/src/gate/pr_status.rs	clippy::too_many_lines	pub(crate) fn rest_reason<P: GhProbe>(probe: &P, cwd: &Path, stderr: &str) -> RestReason {
+crates/fno-agent/src/gate/pr_status.rs	clippy::too_many_lines	pub(crate) fn rest_reason_for<P: GhProbe>(
 crates/fno-agent/src/gate/pr_status.rs	clippy::too_many_lines	pub(crate) fn status_payload<P: GhProbe>(
 crates/fno-agent/src/gate/pr_status.rs	clippy::unwrap_used	.get_or_init(|| Regex::new(r"^smoke: (?:pass|fail)\\s+\\d+(?:\\.\\d+)?s\\s+(.+?)\\s*$").unwrap());
 crates/fno-agent/src/gate/pr_status.rs	clippy::unwrap_used	.get_or_init(|| Regex::new(r"step failed, stopping \\(?fail-fast\\)?:\\s*(.+?)\\s*$").unwrap());
