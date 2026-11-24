@@ -81,7 +81,6 @@ pub(crate) fn parse_args(args: &[String]) -> Result<LoopCheckArgs, String> {
     let mut driver = "target".to_string();
     let mut harness: Option<String> = None;
     let mut harness_session: Option<String> = None;
-    let mut continuation_owner = "loop_check".to_string();
     let mut fno_bin = super::loopcheck_fno_bin();
     // Env-as-default like the two bin overrides, so the real shell shim can be
     // driven end to end against a wedged child at a test bound without the
@@ -91,11 +90,9 @@ pub(crate) fn parse_args(args: &[String]) -> Result<LoopCheckArgs, String> {
         .and_then(|v| v.parse::<u64>().ok());
 
     // Skip the "loop-check" command itself if present
-    let args = if args.first().map(|s| s.as_str()) == Some("loop-check") {
-        &args[1..]
-    } else {
-        args
-    };
+    let args = args
+        .strip_prefix(&["loop-check".to_string()])
+        .unwrap_or(args);
 
     let mut i = 0;
     while i < args.len() {
@@ -142,8 +139,6 @@ pub(crate) fn parse_args(args: &[String]) -> Result<LoopCheckArgs, String> {
             harness = Some(val);
         } else if let Some(val) = try_flag_value(arg, "--harness-session", args, &mut i) {
             harness_session = Some(val);
-        } else if let Some(val) = try_flag_value(arg, "--continuation-owner", args, &mut i) {
-            continuation_owner = val;
         } else if arg == "--hook-input-stdin" {
             // Bare boolean flag (no value): try_flag_value would consume the
             // next token as a value, so it is matched directly.
@@ -186,8 +181,16 @@ pub(crate) fn parse_args(args: &[String]) -> Result<LoopCheckArgs, String> {
         read_timeout_ms,
         harness,
         harness_session,
-        continuation_owner,
+        continuation_owner: flag_value(args, "--continuation-owner")
+            .unwrap_or_else(|| "loop_check".to_string()),
     })
+}
+
+/// The value of `flag` in either form, wherever it sits in `args`.
+fn flag_value(args: &[String], flag: &str) -> Option<String> {
+    args.iter()
+        .enumerate()
+        .find_map(|(mut i, arg)| try_flag_value(arg, flag, args, &mut i))
 }
 
 pub(crate) fn try_flag_value(

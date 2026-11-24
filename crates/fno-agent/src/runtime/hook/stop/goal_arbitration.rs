@@ -153,11 +153,16 @@ fn transcript_goal(transcript: &Path) -> Option<String> {
         .rev()
         .filter(|line| line.contains("\"goal_status\""))
         .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
-        .map(|row| row["attachment"].clone())
-        .find(|attachment| attachment["type"] == "goal_status")?;
-    (latest["met"] == false && latest["failed"] != true)
-        .then(|| latest["condition"].as_str().map(str::to_string))
-        .flatten()
+        .filter_map(|row| row.pointer("/attachment").cloned())
+        .find(|a| a.pointer("/type").and_then(Value::as_str) == Some("goal_status"))?;
+    let flag = |key: &str| latest.pointer(key).and_then(Value::as_bool);
+    if flag("/met") != Some(false) || flag("/failed") == Some(true) {
+        return None;
+    }
+    latest
+        .pointer("/condition")
+        .and_then(Value::as_str)
+        .map(str::to_string)
 }
 
 pub(super) fn arbitrate_codex_continuation(

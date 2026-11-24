@@ -211,7 +211,9 @@ pub(super) fn arm_failed_read_park(
     global_events: &std::path::Path,
 ) {
     if let Some((key, holder)) = claim_pair(manifest) {
-        let _ = crate::claims::renew(&key, &holder, park_ms + 2 * WATCH_SLACK_MS, None);
+        if let Err(e) = crate::claims::renew(&key, &holder, park_ms + 2 * WATCH_SLACK_MS, None) {
+            eprintln!("loop-check: {blocker} park could not renew {key} ({e})");
+        }
     }
     let idle_row = serde_json::json!({
         "session_id": session_id,

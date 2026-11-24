@@ -546,6 +546,8 @@ fn out_of_band_merged_pr_done() {
 }
 
 /// AC1-ERR: gh outage never passes a promise -> block + loop_check_gh_error.
+/// On a harness the daemon can wake, the same failed read parks instead, and
+/// a second failed fire in a row doubles the park.
 #[test]
 fn ac1_err_gh_outage_blocks_promise() {
     let tmp = TempDir::new().unwrap();
@@ -564,21 +566,25 @@ fn ac1_err_gh_outage_blocks_promise() {
     fs::write(&transcript_path, transcript_with_promise()).unwrap();
 
     let mock = MockBins::failing_gh();
+    let fire_as = |harness: &str| {
+        fire(&[
+            "loop-check",
+            "--state",
+            manifest_path.to_str().unwrap(),
+            "--transcript",
+            transcript_path.to_str().unwrap(),
+            "--cwd",
+            cwd.to_str().unwrap(),
+            "--now",
+            "2026-06-05T00:30:00Z",
+            "--author-harness",
+            harness,
+            &format!("--gh-bin={}", mock.gh.display()),
+            &format!("--git-bin={}", mock.git.display()),
+        ])
+    };
 
-    let (code, d) = fire(&[
-        "loop-check",
-        "--state",
-        manifest_path.to_str().unwrap(),
-        "--transcript",
-        transcript_path.to_str().unwrap(),
-        "--cwd",
-        cwd.to_str().unwrap(),
-        "--now",
-        "2026-06-05T00:30:00Z",
-        &format!("--gh-bin={}", mock.gh.display()),
-        &format!("--git-bin={}", mock.git.display()),
-    ]);
-
+    let (code, d) = fire_as("none");
     assert_eq!(code, 0, "exit code must be 0 even when blocking");
     assert_eq!(d.decision, "block");
     assert!(d.termination_reason.is_none(), "no termination on block");
@@ -595,85 +601,57 @@ fn ac1_err_gh_outage_blocks_promise() {
         !events.contains("\"termination\""),
         "no termination event on gh failure"
     );
-}
 
-/// AC1-HP (gh read park): on a harness the daemon can wake, the same failed
-/// read parks instead of blocking, and a second failed fire doubles the park.
-#[test]
-fn gh_read_failure_parks_an_idle_capable_harness() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path();
-    fs::create_dir_all(cwd.join(".fno")).unwrap();
-    isolate_settings(cwd);
-    let manifest_path = cwd.join("target-state.md");
-    let transcript_path = cwd.join("transcript.jsonl");
+    // A fresh claude session on the same failed read parks.
     fs::write(
         &manifest_path,
         new_manifest("sess-park1", "2026-06-05T00:00:00Z", true),
     )
     .unwrap();
-    fs::write(&transcript_path, transcript_with_promise()).unwrap();
-    let mock = MockBins::failing_gh();
+    let rows = |kind: &str| -> Vec<serde_json::Value> {
+        event_text(&events_path)
+            .lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .filter(|v| v.pointer("/type").and_then(|t| t.as_str()) == Some(kind))
+            .filter_map(|v| v.pointer("/data").cloned())
+            .filter(|d| d.pointer("/session_id").and_then(|s| s.as_str()) == Some("sess-park1"))
+            .collect()
+    };
+    let expiry = |row: &serde_json::Value| {
+        let blocker = row.pointer("/blocker").and_then(|b| b.as_str());
+        (
+            blocker.map(str::to_string),
+            row.pointer("/expires_at_ms").and_then(|e| e.as_i64()),
+        )
+    };
     let now_ms = chrono::DateTime::parse_from_rfc3339("2026-06-05T00:30:00Z")
         .unwrap()
         .timestamp_millis();
     let slack_ms = 12 * 60_000;
+    let park = |ms: i64| (Some("gh_read".to_string()), Some(now_ms + ms + slack_ms));
 
-    let fire_claude = || {
-        fire(&[
-            "loop-check",
-            "--state",
-            manifest_path.to_str().unwrap(),
-            "--transcript",
-            transcript_path.to_str().unwrap(),
-            "--cwd",
-            cwd.to_str().unwrap(),
-            "--now",
-            "2026-06-05T00:30:00Z",
-            "--author-harness",
-            "claude",
-            &format!("--gh-bin={}", mock.gh.display()),
-            &format!("--git-bin={}", mock.git.display()),
-        ])
-    };
-    let idle_expiries = || -> Vec<(String, i64)> {
-        event_text(&project_events(cwd))
-            .lines()
-            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
-            .filter(|v| v["type"] == "loop_check_watch_idle")
-            .map(|v| {
-                (
-                    v["data"]["blocker"].as_str().unwrap_or("").to_string(),
-                    v["data"]["expires_at_ms"].as_i64().unwrap_or(0),
-                )
-            })
-            .collect()
-    };
-
-    let (code, d) = fire_claude();
-    assert_eq!(code, 0);
+    let (_, d) = fire_as("claude");
     assert_eq!(d.decision, "allow", "a failed read parks: {}", d.message);
-    assert!(d.message.contains("PARKED"), "{}", d.message);
-    assert!(!d.message.contains("<help"), "{}", d.message);
-    assert_eq!(
-        idle_expiries(),
-        vec![("gh_read".to_string(), now_ms + 180_000 + slack_ms)]
+    assert!(
+        d.message.contains("PARKED") && !d.message.contains("<help"),
+        "{}",
+        d.message
     );
-    let events = event_text(&project_events(cwd));
-    let row = events
-        .lines()
-        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
-        .find(|v| v["type"] == "loop_check")
-        .expect("one loop_check row");
-    assert_eq!(row["data"]["decision"], "allow", "{events}");
-    assert_eq!(row["data"]["fp_read_failed"], true, "{events}");
+    let idle: Vec<_> = rows("loop_check_watch_idle").iter().map(expiry).collect();
+    assert_eq!(idle, vec![park(180_000)]);
+    let fired = rows("loop_check");
+    assert_eq!(fired.len(), 1, "{fired:?}");
+    let field = |key: &str| fired.first().and_then(|r| r.pointer(key)).cloned();
+    assert_eq!(field("/decision"), Some("allow".into()));
+    assert_eq!(field("/fp_read_failed"), Some(true.into()));
 
-    let (_, d) = fire_claude();
+    let (_, d) = fire_as("claude");
     assert_eq!(d.decision, "allow");
+    let idle: Vec<_> = rows("loop_check_watch_idle").iter().map(expiry).collect();
     assert_eq!(
-        idle_expiries().last(),
-        Some(&("gh_read".to_string(), now_ms + 360_000 + slack_ms)),
-        "the second failed fire in a row doubles the park"
+        idle.last(),
+        Some(&park(360_000)),
+        "the second failed fire doubles the park"
     );
 }
 
@@ -1085,59 +1063,9 @@ fn corrupt_manifest_allows_exit() {
     );
 }
 
-/// AC5/AC6: a goal-owned no-intent stop is allowed, but a goal-owned
-/// promise still meets every done read.
-#[test]
-fn goal_owner_allows_plain_continuation_but_not_a_false_done() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path();
-    fs::create_dir_all(cwd.join(".fno")).unwrap();
-    isolate_settings(cwd);
-    let manifest_path = cwd.join("target-state.md");
-    let transcript_path = cwd.join("transcript.jsonl");
-    let mock = MockBins::no_pr();
-    // One session per fire: a second fire on one session reaches the mute
-    // probe's done read, not Step 5.
-    let fire_as = |transcript: String, owner: &str| {
-        let session = format!("sess-goal-{owner}-{}", transcript.len());
-        let manifest = new_manifest(&session, "2026-06-05T00:00:00Z", true);
-        fs::write(&manifest_path, manifest).unwrap();
-        fs::write(&transcript_path, transcript).unwrap();
-        fire(&[
-            "loop-check",
-            "--state",
-            manifest_path.to_str().unwrap(),
-            "--transcript",
-            transcript_path.to_str().unwrap(),
-            "--cwd",
-            cwd.to_str().unwrap(),
-            "--now",
-            "2026-06-05T00:30:00Z",
-            "--continuation-owner",
-            owner,
-            &format!("--gh-bin={}", mock.gh.display()),
-            &format!("--git-bin={}", mock.git.display()),
-        ])
-        .1
-    };
-    let nagged = fire_as(transcript_empty(), "loop_check");
-    assert_eq!(nagged.decision, "block");
-    assert!(
-        nagged.message.contains("continue working"),
-        "{}",
-        nagged.message
-    );
-    let owned = fire_as(transcript_empty(), "goal");
-    assert_eq!(owned.decision, "allow", "{}", owned.message);
-    assert!(
-        owned.fingerprint.is_some(),
-        "the fingerprint is still recorded"
-    );
-    let false_done = fire_as(transcript_with_promise(), "goal");
-    assert_eq!(false_done.decision, "block", "{}", false_done.message);
-}
-
-/// Events are appended to BOTH project and global paths.
+/// Events are appended to BOTH project and global paths. The same no-intent
+/// stop blocks for the loop, but a goal owner allows it; a goal-owned promise
+/// still meets every done read.
 #[test]
 fn events_appended_to_both_project_and_global() {
     let tmp = TempDir::new().unwrap();
@@ -1160,7 +1088,7 @@ fn events_appended_to_both_project_and_global() {
 
     let mock = MockBins::no_pr();
 
-    let _ = fire(&[
+    let (_, nagged) = fire(&[
         "loop-check",
         "--state",
         manifest_path.to_str().unwrap(),
@@ -1189,6 +1117,44 @@ fn events_appended_to_both_project_and_global() {
         !proj_events.is_empty() && !glob_events.is_empty(),
         "both event files must have content"
     );
+    assert_eq!(nagged.decision, "block");
+    assert!(
+        nagged.message.contains("continue working"),
+        "{}",
+        nagged.message
+    );
+
+    // One session per goal fire: a second fire on one session reaches the
+    // mute probe's done read, not Step 5.
+    let goal_fire = |session: &str, transcript: String| {
+        let manifest = new_manifest(session, "2026-06-05T00:00:00Z", true);
+        fs::write(&manifest_path, manifest).unwrap();
+        fs::write(&transcript_path, transcript).unwrap();
+        fire(&[
+            "loop-check",
+            "--state",
+            manifest_path.to_str().unwrap(),
+            "--transcript",
+            transcript_path.to_str().unwrap(),
+            "--cwd",
+            cwd.to_str().unwrap(),
+            "--now",
+            "2026-06-05T00:30:00Z",
+            "--continuation-owner",
+            "goal",
+            &format!("--gh-bin={}", mock.gh.display()),
+            &format!("--git-bin={}", mock.git.display()),
+        ])
+        .1
+    };
+    let owned = goal_fire("sess-goal-a", transcript_empty());
+    assert_eq!(owned.decision, "allow", "{}", owned.message);
+    assert!(
+        owned.fingerprint.is_some(),
+        "the fingerprint is still recorded"
+    );
+    let false_done = goal_fire("sess-goal-b", transcript_with_promise());
+    assert_eq!(false_done.decision, "block", "{}", false_done.message);
 }
 
 /// AC5-ERR: CLI misuse (no --state flag) -> exit code 2 from parse_args

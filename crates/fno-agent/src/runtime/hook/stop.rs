@@ -2205,8 +2205,8 @@ mod tests {
         let owners: Vec<Value> = text
             .lines()
             .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-            .filter(|v| v["type"] == "stop_decision")
-            .map(|v| v["data"]["continuation_owner"].clone())
+            .filter(|v| v.pointer("/type").and_then(Value::as_str) == Some("stop_decision"))
+            .filter_map(|v| v.pointer("/data/continuation_owner").cloned())
             .collect();
         assert_eq!(owners, vec![Value::from("goal")], "journal: {text}");
         match saved_home {

@@ -2802,8 +2802,10 @@ pub(crate) fn decide_with_payload(
                     let park_ms = watch_lease::gh_read_park_ms(streak);
                     let expires_at_ms =
                         now.timestamp_millis() + park_ms + watch_lease::WATCH_SLACK_MS;
-                    gh_error["parked"] = true.into();
-                    gh_error["park_until_ms"] = expires_at_ms.into();
+                    if let Some(row) = gh_error.as_object_mut() {
+                        row.insert("parked".into(), true.into());
+                        row.insert("park_until_ms".into(), expires_at_ms.into());
+                    }
                     emit("loop_check_gh_error", gh_error);
                     failed_fire_row("allow");
                     watch_lease::arm_failed_read_park(
