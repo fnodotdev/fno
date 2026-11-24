@@ -1186,6 +1186,14 @@ if os.environ.get("FNO_DEMO_FLATPINS"):
 # hold the row menu's arm writes, sentry takes mail only (the register
 # door's bus-only capability), and eval-once is a headless one-shot that
 # paints no row.
+# The board's reply session: a registry name the requests fold resolves,
+# headless so no sideline row shifts.
+agents += [
+    thread("t-board-worker", "claude", "idle")
+    | {"inside_leg": {"state": "working", "seq": 1, "received_at": now},
+       "substrate": "headless",
+       "harness_session_id": "2222bbbb-2222-4bbb-9bbb-bbbbbbbbbb2"},
+]
 if os.environ.get("FNO_DEMO_HOLDS"):
     live = {"inside_leg": {"state": "working", "seq": 1, "received_at": now}}
     hold_dir = os.path.join(os.path.dirname(db), "mail", "mail-hold")
