@@ -2476,15 +2476,17 @@ fn answer_thread_prompt(
             ))
         }
     };
-    let key = match contract.permission_response_keys("claude", answer, "permission_prompt") {
-        Ok(mut k) if !k.is_empty() => k.remove(0),
-        _ => {
-            return Some(AskOutcome::err(
-                format!("ask --answer: claude refuses action {answer:?}"),
-                2,
-            ))
-        }
-    };
+    // The contract names which actions claude takes. Its pinned digits are
+    // not typed: the number comes from the menu on screen.
+    if contract
+        .permission_response_keys("claude", answer, "permission_prompt")
+        .is_err()
+    {
+        return Some(AskOutcome::err(
+            format!("ask --answer: claude refuses action {answer:?}"),
+            2,
+        ));
+    }
     let registry = load_registry(&home.registry_json()).ok()?;
     let entry = registry.find_name_session_or_short_id(name)?;
     if entry.harness_kind() != Harness::Claude {
@@ -2517,48 +2519,64 @@ fn answer_thread_prompt(
             2,
         ));
     }
-    let daemon_dir = crate::claude_roster::daemon_dir();
-    if let Ok(screen) = crate::thread_dialog::read_thread(&daemon_dir, &short) {
-        if let crate::thread_dialog::Dialog::Grant(missing) =
-            crate::thread_dialog::classify(&screen)
-        {
-            return Some(AskOutcome::err(
-                format!(
-                    "ask --answer: {} ({})",
-                    crate::thread_dialog::grant_remedy(&missing),
-                    py_repr(name)
-                ),
-                3,
-            ));
-        }
-    }
-    match crate::mail_inject::answer_permission_via_control_sock_in(
-        &daemon_dir,
+    Some(answer_shown_prompt(
+        home,
+        name,
         &short,
-        &key,
-        crate::mail_inject::default_enter_delay_ms(crate::mail_inject::MailInjectHarness::Claude),
-    ) {
-        Ok(()) => {
+        answer,
+        &crate::claude_roster::daemon_dir(),
+        caller,
+    ))
+}
+
+/// The answer once a permission wait is known: a grant screen is refused with
+/// its remedy, every other dialog goes through the menu reader. The key comes
+/// from the menu on screen, is typed only while that menu still shows, and is
+/// reported answered only after the prompt is seen to close.
+fn answer_shown_prompt(
+    home: &AgentsHome,
+    name: &str,
+    short: &str,
+    answer: &str,
+    daemon_dir: &Path,
+    caller: &AnswerCaller,
+) -> AskOutcome {
+    match crate::thread_dialog::answer_prompt(daemon_dir, short, answer) {
+        Ok(key) => {
             emit_event(
                 &home.events_jsonl(),
                 "agent_prompt_answered",
                 &[
                     ("name", name.into()),
                     ("answer", answer.into()),
-                    ("short_id", short.clone().into()),
+                    ("short_id", short.into()),
                     ("caller", caller.stamp().into()),
                 ],
             );
-            Some(AskOutcome {
-                stdout: format!("answered: {answer} (key {key}) typed to claude thread {short}\n"),
+            AskOutcome {
+                stdout: format!(
+                    "answered: {answer} (key {key}) typed to claude thread {short}, and the prompt closed\n"
+                ),
                 stderr: String::new(),
                 exit_code: 0,
-            })
+            }
         }
-        Err(reason) => Some(AskOutcome::err(
-            format!("ask --answer: the claude control socket refused the answer: {reason}"),
-            12,
-        )),
+        Err(refusal) => AskOutcome::err(
+            format!(
+                "ask --answer: {} for {}: {refusal}",
+                if matches!(
+                    refusal,
+                    crate::thread_dialog::Refusal::Unconfirmed(_)
+                        | crate::thread_dialog::Refusal::StillShowing
+                ) {
+                    "not confirmed"
+                } else {
+                    "refused, no key was typed"
+                },
+                py_repr(name)
+            ),
+            refusal.exit_code(),
+        ),
     }
 }
 
@@ -4425,6 +4443,57 @@ mod tests {
             .unwrap();
         assert_eq!(state.endpoint, "/tmp/control.sock");
         assert_eq!(state.incarnation, "42:99:a1b2c3d4");
+    }
+
+    const TWO: &str = "Bash command\n  ls\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No";
+    const OTHER: &str = "Bash command\n  pwd\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No";
+
+    fn answered_events(home: &AgentsHome) -> usize {
+        crate::event_store::journal_text(&home.events_jsonl(), &["agent_prompt_answered"])
+            .lines()
+            .count()
+    }
+
+    #[test]
+    fn the_answer_door_reports_each_refusal_with_zero_keys_and_no_answered_event() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = AgentsHome::at(tmp.path().join("agents"));
+        std::fs::create_dir_all(home.root()).unwrap();
+
+        let none = crate::thread_dialog::fake::serve("a1b2c3d4", &["working..."]);
+        let human = AnswerCaller::human();
+        let out = answer_shown_prompt(&home, "w", "a1b2c3d4", "deny", none.dir.path(), &human);
+        assert_eq!(out.exit_code, 2, "{}", out.stderr);
+        assert!(none.typed().is_empty());
+
+        let unreadable = tempfile::tempdir().unwrap();
+        let out = answer_shown_prompt(&home, "w", "a1b2c3d4", "deny", unreadable.path(), &human);
+        assert_eq!(out.exit_code, 12, "{}", out.stderr);
+
+        let moved = crate::thread_dialog::fake::serve("a1b2c3d4", &[TWO, OTHER]);
+        let out = answer_shown_prompt(&home, "w", "a1b2c3d4", "deny", moved.dir.path(), &human);
+        assert_eq!(out.exit_code, 2, "{}", out.stderr);
+        assert!(out.stderr.contains("no key was typed"), "{}", out.stderr);
+        assert!(moved.typed().is_empty());
+
+        let stuck = crate::thread_dialog::fake::serve("a1b2c3d4", &[TWO]);
+        let out = answer_shown_prompt(&home, "w", "a1b2c3d4", "deny", stuck.dir.path(), &human);
+        assert_eq!(out.exit_code, 12, "{}", out.stderr);
+        assert_eq!(stuck.typed(), b"2");
+        assert_eq!(answered_events(&home), 0);
+    }
+
+    #[test]
+    fn the_answer_door_reports_success_only_after_the_prompt_closed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = AgentsHome::at(tmp.path().join("agents"));
+        std::fs::create_dir_all(home.root()).unwrap();
+        let ok = crate::thread_dialog::fake::serve("a1b2c3d4", &[TWO, TWO, "done\n\n ❯ "]);
+        let human = AnswerCaller::human();
+        let out = answer_shown_prompt(&home, "w", "a1b2c3d4", "allow_once", ok.dir.path(), &human);
+        assert_eq!(out.exit_code, 0, "{}", out.stderr);
+        assert_eq!(ok.typed(), b"1");
+        assert_eq!(answered_events(&home), 1);
     }
 
     #[test]
