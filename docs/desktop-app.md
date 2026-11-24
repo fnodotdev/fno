@@ -61,7 +61,7 @@ The title bar has a fixed height that no `--font-size` changes. On the left it n
 
 ## Chat mode
 
-Chat shows the conversation of the agent in the focused pane. The app reads it from the mux server's chat stream, which serves claude, codex and opencode sessions in one event shape. A header line names the agent, its node, its state and its cost. The conversation sits in a centred column. Each turn opens with its author and the time it began. Your turns sit on the right in a bubble.
+Chat shows the conversation of the agent in the focused pane. The app reads it from the mux server's chat stream, which serves claude, codex, opencode, pi and omp sessions in one event shape. A header line names the agent, its node, its state and its cost. The conversation sits in a centred column. Each turn opens with its author and the time it began. Your turns sit on the right in a bubble.
 
 The agent's text renders as markdown: headings, bold, italic, strikethrough, quotes and tables. Inline code uses the terminal font, and so do code blocks. Bullet, numbered and task lists keep their markers. A link shows in the accent colour, and a click opens it. Images in your turns, in tool output and in markdown draw inline. An image too big for the stream shows its size instead.
 
