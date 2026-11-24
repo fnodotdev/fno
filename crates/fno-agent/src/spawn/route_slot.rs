@@ -567,6 +567,7 @@ pub(crate) fn grid_leg(payload: &Value, _rung_base: &str, chain: &mut Vec<Value>
         .and_then(|n| n.difficulty.as_deref())
         .map(|s| s.trim().to_lowercase())
         .unwrap_or_default();
+    let difficulty_explicit = !band_raw.is_empty();
     let band = if BAND_RANK_KEYS.contains(&band_raw.as_str()) {
         band_raw
     } else {
@@ -603,7 +604,7 @@ pub(crate) fn grid_leg(payload: &Value, _rung_base: &str, chain: &mut Vec<Value>
     // names no difficulty, and p0 still raises a weaker band.
     let mut candidate_band = if prio == "p0" {
         "high".to_string()
-    } else if prio == "p3" && band_raw.is_empty() {
+    } else if prio == "p3" && !difficulty_explicit {
         "low".to_string()
     } else {
         band.clone()
