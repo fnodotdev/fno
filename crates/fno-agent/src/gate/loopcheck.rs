@@ -315,7 +315,7 @@ use settings::{
     PeerEntry,
 };
 pub(crate) use settings::{
-    ledger_file_rows, scan_manifest_field, session_cost_from_ledger, Settings,
+    ledger_file_rows, scan_manifest_field, session_cost_from_ledger, ReviewHuman, Settings,
 };
 #[cfg(test)]
 use settings::{MALFORMED_REVIEWERS_SENTINEL, UNPARSEABLE_SETTINGS_SENTINEL};
@@ -1723,6 +1723,7 @@ pub(crate) fn decide_with_payload(
             &repo_slug,
             manifest.harness_session_id.as_deref(),
             settings.github_approval_satisfies.unwrap_or(true),
+            settings.human == Some(ReviewHuman::Always),
             settings.max_rounds.unwrap_or(2).max(1),
             carry_interdiff_lines_resolved(&settings),
             Some(&resolve_posture_config(&settings)),
@@ -2987,6 +2988,10 @@ fn run_done(
     repo_slug: &str,
     author_session: Option<&str>,
     github_approval_satisfies: bool,
+    // config.review.human = always: a person's GitHub approval is owed at the
+    // head, so the loop's reviewed conjunct ANDs the satisfier and the
+    // external review read stays on even with no login lane configured.
+    human_required: bool,
     max_rounds: i64,
     carry_interdiff_lines: usize,
     posture: Option<&PostureConfig>,
@@ -3026,6 +3031,7 @@ fn run_done(
             selector,
             None,
             github_approval_satisfies,
+            human_required,
             max_rounds,
             carry_interdiff_lines,
             posture,
