@@ -10,6 +10,7 @@
 pub mod claude;
 pub mod codex;
 pub mod opencode;
+pub mod pi;
 
 use crate::harness::{AsHarness, Harness};
 use crate::proto::chat_event::{ChatBody, ChatEvent, SessionKey, SourceRef};
@@ -42,7 +43,7 @@ pub(crate) fn image_from_base64(
 
 #[derive(Debug, thiserror::Error)]
 pub enum ChatReadError {
-    #[error("chat events: harness {0:?} has no reader (claude, codex and opencode do)")]
+    #[error("chat events: harness {0:?} has no reader (claude, codex, opencode, pi and omp do)")]
     UnsupportedHarness(String),
     #[error("chat events: no {harness} transcript for session {session_id:?}")]
     NotFound { harness: String, session_id: String },
@@ -143,6 +144,22 @@ impl SessionReader {
                     path,
                     offset: 0,
                     mapper,
+                }
+            }
+            // pi has no subagents, so a subagent key never resolves.
+            "pi" | "omp" => {
+                let found = crate::transcript_tail::find_transcripts_in(
+                    &roots.transcripts,
+                    &[&key.session_id],
+                );
+                let path = found.get(&key.session_id).cloned().ok_or_else(not_found)?;
+                if key.subagent.is_some() {
+                    return Err(not_found());
+                }
+                Source::Lines {
+                    path,
+                    offset: 0,
+                    mapper: Box::new(pi::PiMapper::default()),
                 }
             }
             "opencode" => Source::Store(opencode::StoreTail::open(&roots.opencode_stores, key)?),
