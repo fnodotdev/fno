@@ -3376,8 +3376,10 @@ impl Root {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.notice = None;
         match overlay {
             keys::Overlay::GoTo => {
+                cx.notify();
                 if self.goto.is_none() {
                     self.toggle_goto(&GoTo, window, cx);
                 }
@@ -3390,6 +3392,7 @@ impl Root {
                     _ => MainView::Orchestration,
                 };
                 self.show(view, cx);
+                cx.notify();
             }
         }
     }
