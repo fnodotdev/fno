@@ -128,6 +128,8 @@ pub enum Action {
     },
     /// Drop the reply banner; the composer returns to the session.
     MailReplyCancel,
+    /// Open the Mail panel in the right pane.
+    OpenMail,
     /// Open the sheet of one chat tool call.
     OpenSheet(usize),
     CloseSheet,
@@ -185,6 +187,7 @@ fn click_id(action: &Action) -> &'static str {
         Action::ToggleMailBody(..) => "toggle_mail_body",
         Action::ReplyMail { .. } => "reply_mail",
         Action::MailReplyCancel => "mail_reply_cancel",
+        Action::OpenMail => "open_mail",
         Action::OpenSheet(_) => "open_sheet",
         Action::CloseSheet => "close_sheet",
         Action::Copy(_) => "copy",
@@ -317,6 +320,9 @@ pub struct Root {
     /// The mail card's reply target: the composer answers this message
     /// until cancelled or sent.
     pub(super) mail_reply: Option<(String, String)>,
+    /// The user's unread mail rows from the poller; `None` when the read
+    /// broke and the badge hides.
+    pub(super) mail_unread: Option<Vec<fno::app_api::mail_door::UnreadRow>>,
     /// The persisted fold keys (workspace cwds, or names when the cwd is
     /// empty); absence means open.
     pub(super) folds: HashSet<String>,
@@ -578,6 +584,7 @@ impl Root {
             board_draft: Default::default(),
             mail: None,
             mail_reply: None,
+            mail_unread: None,
             folds,
             group_by,
             squad_field: None,
@@ -1256,6 +1263,10 @@ impl Root {
             }
             Action::MailReplyCancel => {
                 self.mail_reply = None;
+            }
+            Action::OpenMail => {
+                self.right.mode = right_pane::Mode::Mail;
+                self.right.saved.open = true;
             }
             Action::OpenSheet(i) => self.chat.sheet = Some(i),
             Action::CloseSheet => self.chat.sheet = None,
@@ -1948,6 +1959,9 @@ impl Root {
                     false => MailState::Refused(text.clone()),
                 });
                 self.say(text, cx);
+            }
+            Reply::MailUnread(rows) => {
+                self.mail_unread = rows;
             }
         }
         cx.notify();

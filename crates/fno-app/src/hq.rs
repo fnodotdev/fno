@@ -32,6 +32,9 @@ pub enum Reply {
     /// The composer's send verdict: the porcelain's own line, or why the
     /// send never left.
     Mailed { ok: bool, text: String },
+    /// The user's unread rows, `None` when the read broke: the badge hides
+    /// on a broken read rather than showing a lying zero.
+    MailUnread(Option<Vec<fno::app_api::mail_door::UnreadRow>>),
 }
 
 /// The machine the app runs on, then its first lead: who the composer's
@@ -114,6 +117,18 @@ impl Poller {
                                 backlog = Some((read_back, Instant::now()));
                             }
                             if out.send(Reply::Board(Box::new(board.clone()))).is_err() {
+                                return;
+                            }
+                            // The user's unread mail rides the same beat; a
+                            // broken read sends None and the badge hides.
+                            let unread = fno::app_api::mail_door::unread(None).await;
+                            if out
+                                .send(Reply::MailUnread(match unread {
+                                    Ok(rows) => Some(rows),
+                                    Err(_) => None,
+                                }))
+                                .is_err()
+                            {
                                 return;
                             }
                         }
