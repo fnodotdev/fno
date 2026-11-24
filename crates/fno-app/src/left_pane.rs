@@ -13,6 +13,7 @@ use gpui::{
 use super::app_state::GroupBy;
 use super::link::Layout;
 use super::palette::Palette;
+use super::pr_sheet;
 use super::ui;
 use super::window::{Action, MainView, Root};
 use fno::app_api::client::agent_group::{click_command, RowClick};
@@ -21,7 +22,7 @@ use fno::app_api::client::card_line::{binding_suffix, card_facts, CardFacts};
 use fno::app_api::client::header_band::section_rollup;
 use fno::app_api::lattice::{lattice_glyph, status_long, LatticeState};
 use fno::app_api::web_hq::Board;
-use fno::proto::{AgentRow, Command, PaneMeta, SquadMeta};
+use fno::proto::{AgentRow, Command, PaneMeta, PrStatusFact, SquadMeta};
 
 pub const WIDTH: f32 = 320.0;
 
@@ -99,6 +100,10 @@ pub enum Row {
         detail: String,
         /// The node and PR an agent works on.
         identity: Option<String>,
+        /// The agent's PR status fact (the serve's sweep projection);
+        /// `None` on non-agent rows. The identity cell renders its verdict
+        /// and review tokens.
+        pr_fact: Option<PrStatusFact>,
         /// The mux card's served facts; `None` for anything but an agent.
         card: Option<CardFacts>,
         /// An agent's lattice state; `None` for shells, machines, questions.
@@ -137,6 +142,68 @@ pub(super) fn agent_identity(a: &AgentRow) -> Option<String> {
     out.push_str(&binding_suffix(a));
     Some(out)
 }
+
+/// The PR status tokens the identity cell wears before the `#N · node`
+/// text, in the app's shape-carries-state + palette-reinforces idiom: the
+/// checks verdict first (`✓`, `✗N` with the fail count, `…N` with the
+/// pending count), the review mark after (`r✓` reviewed, `r✗` any other
+/// named state). An unknown or missing verdict carries no token, and an
+/// unknown review word is a state the row treats as not-good (`r✗`), never
+/// as reviewed.
+fn pr_status_marks(fact: &PrStatusFact, p: &Palette) -> Vec<(String, u32)> {
+    let mut marks = Vec::new();
+    match fact.verdict.as_str() {
+        "green" => marks.push(("✓".to_string(), p.ok)),
+        "red" => marks.push((
+            if fact.fail > 0 {
+                format!("✗{}", fact.fail)
+            } else {
+                "✗".to_string()
+            },
+            p.warn,
+        )),
+        "pending" => marks.push((format!("…{}", fact.pending.max(1)), p.faint)),
+        _ => {}
+    }
+    match fact.review_state.as_deref() {
+        Some("reviewed") => marks.push(("r✓".to_string(), p.ok)),
+        Some("") | None => {}
+        Some(_) => marks.push(("r✗".to_string(), p.warn)),
+    }
+    marks
+}
+
+/// The identity cell when a PR fact exists: the tokens, one space, then the
+/// `#N · node` text cut to what the column leaves. Width math mirrors
+/// `ui::cell` (fixed `chars` budget, overflow hidden), so the column
+/// never grows for the tokens.
+fn pr_identity_cell(
+    fact: &PrStatusFact,
+    identity: Option<&str>,
+    chars: usize,
+    p: &Palette,
+    adv: Pixels,
+) -> Div {
+    let marks = pr_status_marks(fact, p);
+    let marks_w: usize = marks.iter().map(|(t, _)| t.chars().count()).sum();
+    let mut inner = div().flex().flex_row();
+    for (token, color) in marks {
+        inner = inner.child(
+            ui::role(div(), ui::Role::Fact, p)
+                .text_color(rgb(color))
+                .child(token),
+        );
+    }
+    let rest_w = chars.saturating_sub(marks_w + usize::from(marks_w > 0));
+    inner.child(ui::text(
+        ui::cut(identity.unwrap_or_default(), rest_w),
+        ui::Role::Fact,
+        p,
+    ))
+}
+
+/// The identity slot's index in [`slots`]: the last column.
+const IDENTITY_SLOT: usize = 5;
 
 /// One agent row's click action: the sideline click command as an app
 /// Action. The go-to palette sends the same thing, so a click and a goto
@@ -208,6 +275,7 @@ fn shell_item(p: &PaneMeta) -> Row {
         label: p.label.clone(),
         detail: cwd,
         identity: None,
+        pr_fact: None,
         card: None,
         state: None,
         question: false,
@@ -233,6 +301,7 @@ fn agent_item(
         label,
         detail: agent_status_word(a),
         identity: agent_identity(a),
+        pr_fact: a.pr_status.clone(),
         card: Some(card_facts(a, now_secs)),
         state: Some(state),
         question: false,
@@ -411,6 +480,7 @@ fn push_questions(out: &mut Vec<Row>, board: &Board) {
         label: qlabel,
         detail: qdetail,
         identity: None,
+        pr_fact: None,
         card: None,
         state: None,
         question: false,
@@ -452,6 +522,7 @@ fn push_machines(out: &mut Vec<Row>, board: &Board) {
                 if seats == 1 { "" } else { "s" }
             ),
             identity: None,
+            pr_fact: None,
             card: None,
             state: None,
             question: false,
@@ -674,6 +745,7 @@ fn agent_cells(
     item: Stateful<Div>,
     card: &CardFacts,
     identity: Option<&str>,
+    pr_fact: Option<&PrStatusFact>,
     (label, name_w, weight): (String, usize, FontWeight),
     cols: &[(usize, usize)],
     p: &Palette,
@@ -688,6 +760,16 @@ fn agent_cells(
         .flex_row()
         .gap(small * COL_GAP as f32);
     for (slot, w) in cols {
+        if *slot == IDENTITY_SLOT && pr_fact.is_some() {
+            line = line.child(pr_identity_cell(
+                pr_fact.unwrap(),
+                facts.get(*slot).cloned().flatten().as_deref(),
+                *w,
+                p,
+                small,
+            ));
+            continue;
+        }
         line = line.child(ui::cell(
             facts.get(*slot).cloned().flatten().unwrap_or_default(),
             *w,
@@ -782,6 +864,7 @@ fn agent_row(
     item: Stateful<Div>,
     mut card: CardFacts,
     identity: Option<&str>,
+    pr_fact: Option<&PrStatusFact>,
     name: (String, usize, FontWeight),
     badge: Option<usize>,
     grid: &Grid,
@@ -790,18 +873,20 @@ fn agent_row(
     if badge.is_some() {
         card.activity = None;
     }
-    agent_cells(item, &card, identity, name, &grid.cols, p, grid.adv)
-        .relative()
-        .children(badge.map(|n| {
-            div()
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .right(px(12.0))
-                .flex()
-                .items_center()
-                .child(ui::badge(n, &p))
-        }))
+    agent_cells(
+        item, &card, identity, pr_fact, name, &grid.cols, p, grid.adv,
+    )
+    .relative()
+    .children(badge.map(|n| {
+        div()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .right(px(12.0))
+            .flex()
+            .items_center()
+            .child(ui::badge(n, &p))
+    }))
 }
 
 /// A workspace or group header row: a hairline above it and an 8px gap,
@@ -1142,6 +1227,7 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
             label,
             detail,
             identity,
+            pr_fact,
             card,
             state,
             question,
@@ -1169,7 +1255,16 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
                 Some(card) => {
                     let badge = grid.badges.get(i).copied().flatten();
                     let name = (label, grid.name_w, weight);
-                    agent_row(item, card, identity.as_deref(), name, badge, grid, &row_p)
+                    agent_row(
+                        item,
+                        card,
+                        identity.as_deref(),
+                        pr_fact.as_ref(),
+                        name,
+                        badge,
+                        grid,
+                        &row_p,
+                    )
                 }
                 None => plain_cells(item, &label, &detail, mark, &p, adv),
             };
@@ -1177,12 +1272,37 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
             if let Some(action) = action {
                 // On click: a press that leaves the row before release
                 // does nothing. A click is the user's own pick, so the
-                // launch's borrowed cursor retires with it.
-                item = ui::clickable(item, &p).on_click(cx.listener(move |root, _, _, cx| {
-                    root.launch.show = None;
-                    root.launch.show_task = None;
-                    root.act(action.clone(), cx)
-                }));
+                // launch's borrowed cursor retires with it. Alt-click on a
+                // row whose agent carries a PR fact opens its read-only
+                // sheet; a plain click keeps the row's own action.
+                let openable = pr_fact.is_some();
+                let pr_fact = pr_fact.clone();
+                item = ui::clickable(item, &p).on_click(cx.listener(
+                    move |root, ev: &gpui::ClickEvent, _, cx| {
+                        if openable && ev.modifiers().alt {
+                            if let Some(row) = root.layout.agents.iter().find(|r| r.name == label) {
+                                let binding = row.bindings.iter().rev().find(|b| b.pr.is_some());
+                                root.pr_sheet = Some(pr_sheet::PrSheet {
+                                    pr: row.pr.unwrap_or(0),
+                                    url: binding.and_then(|b| b.pr_url.clone()),
+                                    fact: row
+                                        .pr_status
+                                        .clone()
+                                        .unwrap_or_else(|| pr_fact.clone().unwrap()),
+                                    agent: label.clone(),
+                                    slug: pr_sheet::slug_from_url(
+                                        binding.and_then(|b| b.pr_url.as_deref()),
+                                    ),
+                                });
+                                cx.notify();
+                                return;
+                            }
+                        }
+                        root.launch.show = None;
+                        root.launch.show_task = None;
+                        root.act(action.clone(), cx)
+                    },
+                ));
             }
             item
         }
