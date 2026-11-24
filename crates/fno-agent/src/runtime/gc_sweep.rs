@@ -897,18 +897,11 @@ pub(crate) fn gh_pr_is_open(pr: u64, cwd: &str) -> Option<bool> {
 
 /// Workers that read distinct PRs at once. Each read is a `gh api` call
 /// bounded at 30s, so a serial pass over a dozen held rows ran for minutes.
-const PR_PREFETCH_WORKERS: usize = 8;
+const PR_PREFETCH_WORKERS: usize = 16;
 
-/// Read every `(cwd, pr)` the open-PR keep will ask about before pass 1, in
-/// parallel, and seed the pass cache with the answers. The keys are the PRs
-/// of unmerged nodes a staged row's session drives, so a row that never
-/// reaches the keep pays no read. A key the graph read already staged is
-/// skipped. A miss later in the pass still resolves lazily.
-fn prefetch_open_pr_reads(
-    graph: &GraphRead,
-    rows: &[&state::RegistryEntry],
-    cache: &std::cell::RefCell<HashMap<(String, u64), Option<bool>>>,
-) {
+/// The `(cwd, pr)` pairs the open-PR keep can ask about: the PR of every
+/// unmerged node a row's session drives, minus keys the graph read staged.
+fn prefetch_keys(graph: &GraphRead, rows: &[&state::RegistryEntry]) -> Vec<(String, u64)> {
     let mut keys: std::collections::BTreeSet<(String, u64)> = std::collections::BTreeSet::new();
     for e in rows {
         let sid = e
@@ -935,10 +928,23 @@ fn prefetch_open_pr_reads(
             }
         }
     }
+    keys.into_iter().collect()
+}
+
+/// Read every `(cwd, pr)` the open-PR keep will ask about before pass 1, in
+/// parallel, and seed the pass cache with the answers. The keys are the PRs
+/// of unmerged nodes a staged row's session drives, so a row that never
+/// reaches the keep pays no read. A key the graph read already staged is
+/// skipped. A miss later in the pass still resolves lazily.
+fn prefetch_open_pr_reads(
+    graph: &GraphRead,
+    rows: &[&state::RegistryEntry],
+    cache: &std::cell::RefCell<HashMap<(String, u64), Option<bool>>>,
+) {
+    let keys = prefetch_keys(graph, rows);
     if keys.len() < 2 {
         return;
     }
-    let keys: Vec<(String, u64)> = keys.into_iter().collect();
     let next = std::sync::atomic::AtomicUsize::new(0);
     let answers: std::sync::Mutex<Vec<((String, u64), Option<bool>)>> =
         std::sync::Mutex::new(Vec::with_capacity(keys.len()));
@@ -4204,6 +4210,30 @@ mod tests {
     // The cross-check runs even when the reverse join answers: a name
     // resolving a DIFFERENT node than sessions[] holds the row, it does not
     // retire on the join's answer alone.
+    #[test]
+    fn prefetch_keys_skip_merged_and_staged_prs() {
+        let mut e = crate::state::RegistryEntry::new(
+            Some("SID-1".into()),
+            crate::state::Lineage::unproven("test row"),
+        );
+        e.cwd = "/w".into();
+        let graph = GraphRead {
+            do_nodes: HashMap::from([(
+                "sid-1".to_string(),
+                ["A", "B", "C"].iter().map(|n| n.to_string()).collect(),
+            )]),
+            pr_number: HashMap::from([
+                ("A".to_string(), Some(1)),
+                ("B".to_string(), Some(2)),
+                ("C".to_string(), Some(3)),
+            ]),
+            pr_state: HashMap::from([("B".to_string(), (Some("merged".into()), 0, 0))]),
+            pr_reads: HashMap::from([(("/w".to_string(), 3), Some(true))]),
+            ..Default::default()
+        };
+        assert_eq!(prefetch_keys(&graph, &[&e]), vec![("/w".to_string(), 1)]);
+    }
+
     #[test]
     fn a_name_contradicting_the_session_join_holds_the_row() {
         use std::collections::HashMap;
