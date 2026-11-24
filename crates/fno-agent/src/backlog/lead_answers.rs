@@ -485,7 +485,13 @@ fn fold_reported(
         let key = format!("{prefix}{qid}");
         let window = row.get("window").and_then(Value::as_i64).unwrap_or(0);
         let recorded = seen.get(&key).copied();
-        if recorded.is_none_or(|r| window > r) {
+        // A take-recommended default is a work order, not news: it lists
+        // until the lead records it, whatever session reads the beat.
+        let work_order = row
+            .get("overdue")
+            .and_then(Value::as_str)
+            .is_some_and(|o| o.starts_with("overdue: take"));
+        if work_order || recorded.is_none_or(|r| window > r) {
             next.insert(key, window);
             shown.push(row);
         } else {
@@ -1040,6 +1046,13 @@ mod tests {
         );
         let (shown, folded, _) = fold_reported(vec![row(1)], &seen, "lead");
         assert_eq!((shown.len(), folded), (1, 0), "a newer window lists again");
+        let order = json!({"question_id": "q-1", "window": 0, "overdue": "overdue: take option 2 and record it"});
+        let (shown, folded, _) = fold_reported(vec![order], &seen, "lead");
+        assert_eq!(
+            (shown.len(), folded),
+            (1, 0),
+            "a default to take always lists"
+        );
     }
 
     fn texts(items: &[&str]) -> Vec<String> {
