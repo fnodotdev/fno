@@ -366,7 +366,9 @@ if [[ "$HAS_SCCACHE" -eq 1 ]]; then
             server="${reason#stall }"
             # The server ran no compile for the whole window, so stopping it
             # loses no work. One wrapper per server pid stops it; the next
-            # client or the daemon's machine-watch tick starts a fresh one.
+            # client starts a fresh one. No daemon starts a server: a server
+            # keeps the configuration of the process that starts it, and only
+            # this wrapper exports the fleet cache dir, cap and idle timeout.
             # The marker goes stale after an hour, so a later server that
             # reuses the pid can be stopped again.
             stopped="${TMPDIR:-/tmp}/fno-sccache-stopped.$server"

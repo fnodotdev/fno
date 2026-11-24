@@ -526,8 +526,8 @@ mod tests {
         std::env::remove_var("FNO_CONFIG");
     }
 
-    /// The rustc wrapper and the daemon read `build.sccache` straight from the
-    /// TOML. `fno config set` takes the same key, and a miss still refuses.
+    /// The rustc wrapper reads `build.sccache` straight from the TOML.
+    /// `fno config set` takes the same key, and a miss still refuses.
     #[test]
     fn set_takes_the_sccache_key_and_a_miss_still_refuses() {
         let dir = tempfile::tempdir().expect("tempdir");
