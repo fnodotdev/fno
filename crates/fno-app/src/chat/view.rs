@@ -387,6 +387,29 @@ fn bubble(content: &Content, pending: bool, p: Palette, hl: &[(Range<usize>, boo
     div().w_full().flex().flex_row().justify_end().child(body)
 }
 
+/// The folded head of a system-injected row. A task-notification block
+/// names itself in its `<summary>` (HTML-escaped, all fleet blocks carry
+/// one); any other injected row keeps its raw first line.
+fn notice_head(text: &str) -> String {
+    let trimmed = text.trim_start();
+    if !trimmed.starts_with("<task-notification>") {
+        return trimmed.lines().next().unwrap_or_default().to_string();
+    }
+    let at = trimmed
+        .find("<summary>")
+        .map(|at| &trimmed[at + "<summary>".len()..])
+        .and_then(|rest| rest.find("</summary>").map(|end| rest[..end].trim()));
+    match at {
+        Some(s) if !s.is_empty() => s
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace("&amp;", "&"),
+        _ => "Task notification".to_string(),
+    }
+}
+
 /// One list row, inside the centred column.
 fn row(root: &mut Root, ix: usize, _window: &mut Window, cx: &mut Context<Root>) -> AnyElement {
     let p = root.palette;
@@ -398,16 +421,25 @@ fn row(root: &mut Root, ix: usize, _window: &mut Window, cx: &mut Context<Root>)
         Item::User { content, .. } if item.folds_notice() => {
             let open = root.chat.conv.expanded.contains(&ix);
             let caret = if open { "▾" } else { "▸" };
-            // The head is the raw first line: the Meta lane carries task
-            // notifications, AGENTS.md preambles and hook output alike, so
-            // no friendly label can name them all.
-            let head_line = content.text.lines().next().unwrap_or_default();
-            let head = clickable(id("notice"), Action::ToggleChat(ix), p, cx)
-                .text_color(rgb(p.muted))
-                .text_xs()
-                .line_clamp(1)
-                .text_ellipsis()
-                .child(format!("{caret} {head_line}"));
+            // The caret takes the sideline fold's treatment (default size,
+            // secondary color) so the fold reads first; the label stays
+            // small under it.
+            let head = clickable(id("notice"), Action::ToggleChat(ix), p, cx).child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_1()
+                    .child(div().text_color(rgb(p.muted)).child(caret))
+                    .child(
+                        div()
+                            .text_color(rgb(p.muted))
+                            .text_xs()
+                            .line_clamp(1)
+                            .text_ellipsis()
+                            .child(notice_head(&content.text)),
+                    ),
+            );
             let mut d = div().flex().flex_col().child(head);
             if open {
                 let hl = find::chat_ranges(root.find.as_ref(), ix, 0, content.text.len());
