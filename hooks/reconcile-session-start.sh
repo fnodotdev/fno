@@ -17,7 +17,7 @@ export PATH
 REPO_ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# HOME-as-repo guard (law d-8ddaba56): when the cwd is $HOME outside git, the
+# HOME-as-repo guard (law D1564): when the cwd is $HOME outside git, the
 # pwd fallback makes <repo>/.fno IS the state root, and the sweep would write
 # result stamps at the top level of the state root. Skip the repo-space work:
 # the sweep belongs to a checkout, and the state root is not one.

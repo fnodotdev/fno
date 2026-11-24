@@ -8880,7 +8880,7 @@ fn exit_with_notice(notice: String) -> i32 {
 mod compositor;
 
 #[path = "client/server_spawn.rs"]
-mod server_spawn;
+pub(crate) mod server_spawn;
 use self::server_spawn::spawn_server;
 
 use compositor::Compositor;

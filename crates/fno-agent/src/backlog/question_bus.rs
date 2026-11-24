@@ -746,9 +746,13 @@ fn record_to_answer(record: &Value) -> crate::attention_file::FileAnswer {
     crate::attention_file::FileAnswer::Words(data["words"].as_str().unwrap_or_default().to_string())
 }
 
-/// A copy's local id: the origin's id with its host, so a fixed id two
-/// machines both use (`provider-cap:<lane>`) stays two questions here.
+/// A copy's local id. A number is one question on every machine, so it
+/// stands alone. Any other id takes its host, so a fixed id two machines
+/// both use (`provider-cap:<lane>`) stays two questions here.
 pub(crate) fn copy_id(qid: &str, host: &str) -> String {
+    if crate::numbers::is_label_key(qid) {
+        return qid.to_string();
+    }
     format!("{qid}@{host}")
 }
 
@@ -780,6 +784,12 @@ FROM fleet_question WHERE machine_id != ?"
         }
         let remote_climbs: usize = text(5).parse().unwrap_or(0);
         let local_copy = local.asked.get(&id);
+        // A number has no host tail: a peer's row under the number of a
+        // question asked here never amends or closes it.
+        if local_copy.is_some_and(|row| is_own(row, &me.machine)) {
+            seen.insert(id);
+            continue;
+        }
         let stale = local_copy.is_some_and(|copy| climbs(copy) < remote_climbs);
         // A copy whose bytes never landed here retries: one small record
         // read per beat, and it stops once every shot exists locally.

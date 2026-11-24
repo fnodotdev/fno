@@ -4,9 +4,10 @@
 //! label, a path or free text.
 //!
 //! The emitters are the mux TUI client, the desktop app (`fno-app`), and the
-//! web bridge on behalf of a served page (the phone surface). A click the
-//! caller never resolved to a control ships nothing, so telemetry fails open
-//! and never blocks input: the writers ignore [`click`]'s outcome.
+//! web bridge for a page the user opened on this machine. A proxied caller is
+//! someone else and records nothing. A click the caller never resolved to a
+//! control ships nothing, so telemetry fails open and never blocks input:
+//! the writers ignore [`click`]'s outcome.
 
 /// An id is a code constant, so its charset is narrower than the journal's
 /// identifier gate: lowercase words joined by `_`, digits allowed, at most
@@ -33,15 +34,19 @@ pub fn envelope(screen: &str, control: &str) -> serde_json::Value {
 /// failed write lands nowhere and tells nobody: clicks are a count signal,
 /// not an audit trail.
 pub fn click(screen: &str, control: &str) {
+    if let Some(journal) = crate::cli_usage::agents_journal() {
+        click_into(&journal, screen, control);
+    }
+}
+
+/// [`click`] into a journal the caller names.
+pub(crate) fn click_into(journal: &std::path::Path, screen: &str, control: &str) {
     if !id_ok(screen) || !id_ok(control) {
         return;
     }
-    let Some(journal) = crate::cli_usage::agents_journal() else {
-        return;
-    };
     let row = envelope(screen, control);
     drop(crate::event_store::append_envelope(
-        &journal,
+        journal,
         &row.to_string(),
         None,
     ));

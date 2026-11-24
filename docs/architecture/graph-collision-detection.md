@@ -147,7 +147,7 @@ against ship history; the user opens a follow-up node instead.
   candidate against the existing plan) - opt-in via a future flag.
 - **Cross-project collisions** - today's mechanism is project-scoped
   because the graph is project-scoped.
-- **Kanban edge rendering** - showing "these two cards have a connecting edge" in `~/.fno/cache/pages/graph.md` requires extending the renderer.
+- **Kanban edge rendering** - showing "these two cards have a connecting edge" in `<cache home>/pages/graph.md` requires extending the renderer.
 - **Time-bounded collision tolerance** - "plans more than 60 days old
   don't count" risks papering over real conflicts; skipped.
 

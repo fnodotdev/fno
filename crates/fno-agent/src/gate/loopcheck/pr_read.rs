@@ -192,6 +192,11 @@ pub(super) struct PrInfo {
     /// `required_bots: []`). Recorded in loop_check events so the skip is
     /// observable, not silently absent (AC3-UI).
     pub(super) review_skipped: bool,
+    /// The person gate (review.human = always) is owed and no fresh
+    /// non-author approval is at the head: the block reason names it, so a
+    /// session blocked on the gate reads the person sentence instead of the
+    /// generic config lecture. False on every default/early-return shape.
+    pub(super) human_approval_owed: bool,
     /// Configured `config.review.reviewers` with no head-pinned attestation.
     /// The sole failing term whenever the login gate is vacuous, and the reason
     /// the block message can name real local work instead of an absent bot.
@@ -219,12 +224,12 @@ pub(super) struct PrInfo {
     pub(super) range_tiling: RangeTiling,
 }
 
-/// The node's numbered PR rows: (number, merge_status, history-marked, url).
-/// The one collection every store-side PR row rule reads, so the live/terminal
-/// and reopen-age rules cannot drift between them.
+/// The node's numbered PR rows: (number, merge_status, history-marked, url,
+/// note). The one collection every store-side PR row rule reads, so the
+/// live/terminal and reopen-age rules cannot drift between them.
 fn numbered_pr_rows(
     node: &crate::backlog::model::Node,
-) -> Vec<(i64, Option<&str>, bool, Option<&str>)> {
+) -> Vec<(i64, Option<&str>, bool, Option<&str>, Option<&str>)> {
     node.primary_pr
         .iter()
         .chain(node.additional_prs.iter().flatten())
@@ -235,6 +240,7 @@ fn numbered_pr_rows(
                     pr.merge_status.as_deref(),
                     pr.extras.get("history").and_then(Value::as_bool) == Some(true),
                     pr.url.as_deref(),
+                    pr.note.as_deref(),
                 )
             })
         })
@@ -277,6 +283,9 @@ fn terminal_stamp(status: &Option<&str>) -> bool {
 /// whose PR lives in another repo (the 2026-11-11 cutover moved workers to
 /// fnodotdev/fno while their worktrees still originated fno-workshop) must
 /// never have the gate read the ambient origin's same-number PR instead.
+/// A docs-note row (the twin `record_docs_pr` files from a PR body's
+/// `Docs:` line) is never the target: the gate's head check compares
+/// against this checkout's HEAD, which a docs repo's commit cannot share.
 /// None on every fail-open shape the selector documents.
 pub(super) fn manifest_node_pr_target(
     cwd: &Path,
@@ -289,6 +298,17 @@ pub(super) fn manifest_node_pr_target(
         _ => return None,
     };
     let mut rows = numbered_pr_rows(&node);
+    // The docs twin sinks first, whatever its number or stamp: the note
+    // `record_docs_pr` stamps on the PR a `Docs:` line names marks an
+    // ANCILLARY PR in the docs repo, whose head lives in another commit
+    // graph and can never equal this checkout's HEAD. A twin that won the
+    // selection rendered block_reason's push demand against a PR this
+    // session does not owe - including the shape where the twin is the ONLY
+    // numbered row (the code PR exists but is unrecorded), which then
+    // fail-opens to the ambient origin's branch-resolved read: the session's
+    // own repo. A first-class docs session's row carries no such note, so
+    // its pin is untouched.
+    rows.retain(|(_, _, _, _, note)| !crate::backlog::merge_evidence::note_is_docs(*note));
     // Newest first, then a stable pass that lifts non-terminal rows above
     // stamped ones. The stamps ride the writers' own spelling, which is
     // lowercase today but GitHub-adjacent prose elsewhere, so the compare is
@@ -300,14 +320,14 @@ pub(super) fn manifest_node_pr_target(
     let terminal = terminal_stamp;
     let max_terminal = rows
         .iter()
-        .filter(|(_, status, _, _)| terminal(status))
-        .map(|(number, _, _, _)| *number)
+        .filter(|(_, status, ..)| terminal(status))
+        .map(|(number, ..)| *number)
         .max();
     rows.sort_by(|a, b| b.0.cmp(&a.0));
     // Key 0 = live, 1 = settled (stamped, or age-gated history), 2 = an
     // explicitly marked history row. A marked row sinks below even the
     // stamped rows: state, not number order, decides for it.
-    rows.sort_by_key(|(number, status, history, _)| {
+    rows.sort_by_key(|(number, status, history, ..)| {
         if *history {
             2
         } else if terminal(status) || max_terminal.is_some_and(|bound| *number <= bound) {
@@ -317,13 +337,58 @@ pub(super) fn manifest_node_pr_target(
         }
     });
     rows.first()
-        .map(|(number, _, _, url)| (number.to_string(), repo_slug_from_row_url(*url)))
+        .map(|(number, .., url, _)| (number.to_string(), repo_slug_from_row_url(*url)))
 }
 
 /// The PR row url's `owner/repo`, the slug every PR read must pin. A bare
 /// number or a non-GitHub url answers None and keeps the ambient origin.
 fn repo_slug_from_row_url(url: Option<&str>) -> Option<String> {
     crate::backlog::pr_link::repo_slug_from_url(url)
+}
+
+/// The repo the session node's PR rows record for `pr`: the url slug of the
+/// numbered row naming that number, one distinct slug only. A cross-repo
+/// `additional_prs` row pins its own repo, so the split docs PR reads in
+/// fno-web; a number no row names keeps the ambient origin, so the node's
+/// recorded repo never answers for an unrelated same-number PR. The
+/// node-level pin ([`session_node_pr_target`]) answers the node's newest
+/// PR and is wrong for any other number: applied to
+/// `fno do pr status 485` in the split-node worktree it asked
+/// footnote-sh/fno-web for PR 485 (no such PR there, gh 404) because the
+/// node's only numbered row is its fno-web docs PR.
+pub(crate) fn session_node_pr_repo(cwd: &Path, pr: u64) -> Option<String> {
+    let node_id = session_node_id(cwd)?;
+    let store = crate::backlog::api::Store::new(&crate::graph_get::graph_path_for(cwd));
+    let node = match crate::backlog::api::node(&store, &node_id) {
+        Ok(Some(n)) => n,
+        _ => return None,
+    };
+    let rows: Vec<_> = numbered_pr_rows(&node)
+        .into_iter()
+        .map(|(number, status, history, url, _)| (number, status, history, url))
+        .collect();
+    pr_repo_from_rows(&rows, pr)
+}
+
+/// The pure half of [`session_node_pr_repo`]: the url slug of the numbered
+/// row naming `pr`. One distinct located slug answers; none, or two rows
+/// naming one number in two repos, keeps the ambient origin rather than
+/// guess.
+pub(super) fn pr_repo_from_rows(
+    rows: &[(i64, Option<&str>, bool, Option<&str>)],
+    pr: u64,
+) -> Option<String> {
+    let mut slugs: Vec<String> = rows
+        .iter()
+        .filter(|(number, ..)| *number > 0 && *number as u64 == pr)
+        .filter_map(|(.., url)| repo_slug_from_row_url(*url))
+        .collect();
+    slugs.sort();
+    slugs.dedup();
+    match slugs.as_slice() {
+        [one] => Some(one.clone()),
+        _ => None,
+    }
 }
 
 /// The target-session manifest's node id for the checkout at `cwd`: the
@@ -410,18 +475,18 @@ pub(super) fn node_done_terminal(cwd: &Path, node_id: Option<&str>) -> Option<Do
     let terminal = terminal_stamp;
     let max_terminal = rows
         .iter()
-        .filter(|(_, status, _, _)| terminal(status))
-        .map(|(number, _, _, _)| *number)
+        .filter(|(_, status, ..)| terminal(status))
+        .map(|(number, ..)| *number)
         .max();
-    let has_live = rows.iter().any(|(number, status, history, _)| {
+    let has_live = rows.iter().any(|(number, status, history, ..)| {
         !history && !terminal(status) && !max_terminal.is_some_and(|bound| *number <= bound)
     });
     if has_live {
         return None;
     }
     rows.iter()
-        .filter(|(_, status, _, _)| status.is_some_and(|s| s.eq_ignore_ascii_case("merged")))
-        .map(|(number, _, _, _)| *number)
+        .filter(|(_, status, ..)| status.is_some_and(|s| s.eq_ignore_ascii_case("merged")))
+        .map(|(number, ..)| *number)
         .max()
         .map(DoneNodeTerminal::Merged)
 }
@@ -457,6 +522,18 @@ pub(super) fn live_fixes_pr(
     }
     let found: Value = serde_json::from_slice(&out.stdout).ok()?;
     pick_live_fixes_pr(&found, node_id, closed).map(|n| n.to_string())
+}
+
+/// The person-gate satisfier over the in-hand coverage verdicts
+/// (review.human = always): a fresh non-author human approval. Mirrors the
+/// classify contract it reads: `verdict == Reviewed` already encodes
+/// freshness at the head, and the author's own approval (or an unreadable PR
+/// author, which asserts the same) never satisfies.
+fn human_approval_at_head(coverage: &CoverageReport, human_required: bool) -> bool {
+    !human_required
+        || coverage.verdicts.iter().any(|v| {
+            v.human_approval && !v.author_approval && v.verdict == CoverageVerdict::Reviewed
+        })
 }
 
 /// The newest open or merged search hit, other than the closed PR, whose
@@ -506,6 +583,12 @@ pub(super) fn read_pr_info(
     pr_selector: Option<&str>,
     prefetched_pr_json: Option<Value>,
     github_approval_satisfies: bool,
+    // config.review.human = always: a person's GitHub approval is owed at the
+    // head. Keeps the external review read on (the human axis populates only
+    // from review objects, so a skipped read would hold the gate forever with
+    // no named cause) and ANDs the satisfier into the loop's reviewed
+    // conjunct, so DonePRGreen cannot fire while pr status reads not ready.
+    human_required: bool,
     max_rounds: i64,
     // The resolved `review.carry_interdiff_lines` (law d-608344c1): how many
     // interdiff lines a rebase or fix may add and still carry an attestation.
@@ -813,7 +896,7 @@ pub(super) fn read_pr_info(
     // (fixes a fail-open the sigma review caught). `reviewers` is empty for
     // every pre- config, so `reviewers_all_attested` is vacuously true
     // there and this changes nothing for them.
-    let login_gate_active = !required_bots.is_empty() || optional_lane_configured;
+    let login_gate_active = !required_bots.is_empty() || optional_lane_configured || human_required;
     let login_skipped = no_external || !login_gate_active;
     // One scan feeds both the gate and its explanation, so the two cannot
     // disagree the way the decision and the message did on PR #618.
@@ -972,7 +1055,9 @@ pub(super) fn read_pr_info(
         }
         (
             "none".to_string(),
-            reviewers_ok && !blockers_withhold(&blockers, tiling.rounds_exhausted),
+            reviewers_ok
+                && human_approval_at_head(&coverage, human_required)
+                && !blockers_withhold(&blockers, tiling.rounds_exhausted),
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -1246,12 +1331,14 @@ pub(super) fn read_pr_info(
             &info.stale_bots,
             &coverage,
         );
-        // Locked Decision 1, same conjunct as the solo lane arm: the pass
-        // condition is disposition-complete, withheld below the cap only.
+        // Locked Decision 1, same conjunct as the skip arm's shared satisfier
+        // (`human_approval_at_head`): the pass condition is
+        // disposition-complete, withheld below the cap only.
         let blockers = disposition_blockers(&events_text, &head_branch, head_sha);
         let reviewed = (info.all_required_passed() || local_recovery || tiling.rounds_exhausted)
             && unaddressed.is_empty()
             && reviewers_ok
+            && human_approval_at_head(&coverage, human_required)
             && !blockers_withhold(&blockers, tiling.rounds_exhausted);
         (
             activity_ts,
@@ -1338,6 +1425,7 @@ pub(super) fn read_pr_info(
     } else {
         None
     };
+    let human_approval_owed = !human_approval_at_head(&coverage, human_required);
     Ok(PrInfo {
         range_tiling: tiling,
         state,
@@ -1367,6 +1455,7 @@ pub(super) fn read_pr_info(
         malformed_attestations,
         posture: posture_v,
         coverage,
+        human_approval_owed,
     })
 }
 

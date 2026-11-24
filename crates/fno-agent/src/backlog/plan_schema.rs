@@ -46,7 +46,7 @@ fn is_legacy_id_literal(v: &str) -> bool {
 
 /// `^d-[0-9a-f]{4,32}$`, case-insensitive (plan/_decision_shape.py), or the
 /// display number form (`D3478`, `d-142`): the dual-read wave accepts both
-/// beside each other; writers still write the hash.
+/// beside each other. Writers write the number.
 fn looks_like_decision_id(token: &str) -> bool {
     let re = regex::Regex::new(r"(?i)^d-[0-9a-f]{4,32}$").unwrap();
     re.is_match(token.trim()) || crate::numbers::reads_as_number(token.trim())

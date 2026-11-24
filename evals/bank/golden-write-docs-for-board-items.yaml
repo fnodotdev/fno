@@ -1,0 +1,34 @@
+# Mined from a real correction row; `fno-agent evals candidates` finds it.
+id: golden-write-docs-for-board-items
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  The user pastes a triage board and says: "wait i meant for us to write docs for these:
+
+  Updated board (triage complete)
+
+  | Item |
+  |------|
+  | daemon graph rescan bounds |
+  | doctor reclaim doors |
+  | backlog display numbers |"
+
+  Do what the repo's rules say to do with this ask. Do not implement the items and do not change any other file.
+grade:
+  - kind: exit
+    command: "find docs/architecture -maxdepth 1 -name '*rescan*.md' 2>/dev/null | grep -q ."
+  - kind: exit
+    command: "find docs/architecture -maxdepth 1 -name '*reclaim*.md' 2>/dev/null | grep -q ."
+  - kind: exit
+    command: "find docs/architecture -maxdepth 1 -name '*display*.md' 2>/dev/null | grep -q ."
+timeout_minutes: 20
+tags: [golden]
+golden:
+  source: {kind: correction, ref: "corr:17aee0006e2743b8"}
+  quote: "wait i meant for us to write docs for these:\n\nUpdated board (triage complete)\n\n┌───…"
+  expected: "One architecture doc file per board item under docs/architecture/, written to disk."
+  rule: "skills/ship-docs/SKILL.md: docs for features are architecture docs and files on disk are the proof (completion contract); skills/ship-docs/references/architecture-docs.md sets the default path docs/architecture/{feature}.md, one file per feature."
+  failure_type: skipped-step
+  cost: rework
+  outcome: failed

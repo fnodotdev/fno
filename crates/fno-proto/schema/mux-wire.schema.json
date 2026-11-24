@@ -580,8 +580,41 @@
           "description": "(v23) True once the operator has focused this pane while it was\n`Done` (server-side `Core.seen`, keyed by `pane_id`; a watch-only row\nwith no `pane_id` is always false - it cannot be focused). Consumed at\nthe client's `pane_state` fold to distinguish a seen-Done (`Idle`) from\nan unseen-Done (`DoneUnseen`, surfaced). `#[serde(default)]` keeps a\nv22 reader wire-tolerant (defaults false, degrading to the\npre-feature `done == unseen`).",
           "type": "boolean"
         },
+        "session_cache_read_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "session_cache_write_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "session_cost_cents": {
           "description": "(v102) The daemon-served running session cost, in integer cents, and\nthe raw token sum behind it. Priced through the models.dev catalog by\nthe reconcile sweep; `None` before the first measurement or when any\ntoken kind with a nonzero count has no catalog rate (unpriced, never a\nguess). `#[serde(default)]` keeps a v98 reader wire-tolerant.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "session_input_tokens": {
+          "description": "(v132) The raw token classes behind `session_tokens`: input, output,\ncache read and cache write, summed over every model the session's\ntranscript recorded. `None` before the first measurement; never a\nfabricated zero. `#[serde(default)]` keeps a v104 reader\nwire-tolerant.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "session_output_tokens": {
           "format": "uint64",
           "minimum": 0,
           "type": [
@@ -2044,6 +2077,29 @@
           },
           "required": [
             "PaneInput"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "(v132) The desktop app's chat composer reports a live draft on the\npane its session shows in. The draft rides app-local state and only\nreaches the pane at send (a paste, then Enter), so while the user\ntypes, the pane composer sits empty and no pane keystroke witness\nexists: a live mail inject would land a turn over text the user is\nstill composing. Each composer edit re-opens the pane's USER draft\narm (the latch pane keystrokes open) and the coalesced\n`operator_typing` witness row, so a live inject refuses and queues\ndurable until the draft submits or expires. Same read-only gate as\n[`ClientMsg::Input`].",
+          "properties": {
+            "DraftHint": {
+              "properties": {
+                "pane": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "pane"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "DraftHint"
           ],
           "type": "object"
         },
@@ -7546,7 +7602,7 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "min_compat_proto": 58,
-  "proto_version": 131,
+  "proto_version": 133,
   "roots": {
     "ClientMsg": {
       "$ref": "#/$defs/ClientMsg"

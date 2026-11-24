@@ -17,7 +17,7 @@ At 7ed2466c8c: 533 Python declarations and 9,301 Rust, 9,834 total. At 325d7e4dd
 
 One contract, one keeper. The burden sits on the test. A deletion owes no per-test evidence.
 
-Decision D2147 (d-e016ab8e) adds these rules:
+Decision D2147 adds these rules:
 
 - Measure collected cases and CI job minutes, not declarations. A fold that keeps every row counts as zero.
 - A parametrize table keeps at most three rows per contract: the happy path, the refusal and one edge.
@@ -38,7 +38,7 @@ Decision D2147 (d-e016ab8e) adds these rules:
 
 ## Campaigns
 
-Four groups, G1 to G4, one PR each (ruling d-9f158122). G1 runs first and rebuilds the map. G2 to G4 then run together. The map (`campaign-map.tsv`) is the scope contract: a group edits only files its key names, plus its own ledger. Each group re-baselines on the origin/main it starts from.
+Four groups, G1 to G4, one PR each (ruling D2992). G1 runs first and rebuilds the map. G2 to G4 then run together. The map (`campaign-map.tsv`) is the scope contract: a group edits only files its key names, plus its own ledger. Each group re-baselines on the origin/main it starts from.
 
 The path rule lives in one place, [`scopes.tsv`](scopes.tsv). It classes each `*.py` and `crates/*.rs` file with a declaration. A file belongs to the first row whose path regex matches. The order is G4 (`^crates/fno/`), G1 (any `.py` file outside `cli/src/fno/`), G3 (the orchestration words), G1 (the graph words), then G2 (every other `crates/fno-agent` path). A file no row matches stays unmapped, like `cli/src/fno/paths_testing.py`.
 

@@ -340,6 +340,7 @@ mod tests {
             stale_bots: vec![],
             unaddressed_findings: vec![],
             review_skipped: false,
+            human_approval_owed: false,
             unattested_reviewers: vec![],
             malformed_attestations: 0,
             posture: None,

@@ -550,6 +550,12 @@ pub(crate) fn message(watch: &Watch) -> String {
             watch.node
         );
     }
+    if watch.blocker == "gh_read" {
+        return format!(
+            "Automatic wake from the fno daemon for node {}. The stop gate's GitHub read failed and parked this session; it re-reads on this wake. Continue your work, or end the turn the way you meant to.",
+            watch.node
+        );
+    }
     let task = watch.task_id.as_deref().unwrap_or("missing; do not guess");
     let blocker = match watch.reason.as_deref() {
         Some(blocker @ ("ci" | "review" | "merge_slot" | "merge_hold" | "local")) => blocker,

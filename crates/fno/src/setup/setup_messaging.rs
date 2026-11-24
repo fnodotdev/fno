@@ -9,6 +9,7 @@
 //! The attention arm on this machine delivers each open question to the
 //! channel and reads replies back (`fno-agent` `attention_chat`).
 
+use crate::trusted_config::{Fault, TrustedFile, TrustedKey};
 use serde_json::{json, Value};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -52,19 +53,20 @@ pub fn channel_states(rows: &[Value], machine: &str) -> Vec<(&'static str, bool)
         .collect()
 }
 
-/// The `attention.sinks` rows of the global config, as JSON. A missing
-/// file is no rows; an unreadable one is an error, never "unconfigured".
-pub fn sink_rows() -> Result<Vec<Value>, String> {
-    let global = crate::config_defaults::global_config_path();
-    let map = crate::config_defaults::read_flat(&global)
-        .map_err(|e| format!("cannot read {}: {e}", global.display()))?;
-    Ok(map
-        .and_then(|map| map.get("attention.sinks").cloned())
-        .map(|v| match crate::setup_run::toml_as_json(&v) {
-            Value::Array(a) => a,
-            _ => Vec::new(),
-        })
-        .unwrap_or_default())
+/// The `attention.sinks` rows of the trusted file, as JSON. A missing file
+/// is no rows; an unreadable one is an error, never "unconfigured".
+pub fn sink_rows() -> Result<Vec<Value>, Fault> {
+    rows_to_rewrite(&TrustedFile::from_env(), TrustedKey::AttentionSinks)
+}
+
+/// The rows of `key` in the file `fno config set` writes. Setup replaces the
+/// whole list, so it reads that file and no other.
+pub(crate) fn rows_to_rewrite(file: &TrustedFile, key: TrustedKey) -> Result<Vec<Value>, Fault> {
+    Ok(file
+        .rows_to_rewrite(key)?
+        .iter()
+        .map(crate::setup_run::toml_as_json)
+        .collect())
 }
 
 /// A row's id as text, string or integer, as the runtime loader reads it.
@@ -535,6 +537,10 @@ mod tests {
     /// message reaches each channel's own send endpoint.
     #[test]
     fn ac12_messaging_lists_unconfigured_channels_and_sends_one_test_message() {
+        // The list reads the trusted file, so another test's pin must not move it.
+        let _env = crate::digest_overlay::ENVIRONMENT_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let list = crate::setup_run::list_json();
         let row = list
             .as_array()

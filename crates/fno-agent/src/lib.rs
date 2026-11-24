@@ -73,9 +73,11 @@ pub mod paths;
 pub mod paths_cli;
 pub mod protocol;
 pub mod remote;
+pub mod sandbox;
 pub mod single_flight;
 pub mod spawn;
 pub mod text_or_file;
+pub mod trusted_config;
 pub mod version;
 
 pub mod eval;
@@ -147,56 +149,59 @@ use gate::{cancel_sentinel, completion_output, merge_architect, test_run_journal
 pub use runtime::{
     acp_stdio, agent_ref, agents_seam, agents_top, agy_hooks, agy_transcript, arm_repair,
     arm_watch, attach, attention, attention_arm, attention_chat, attention_file, attention_http,
-    attention_reply, attention_route, board_render_arm, burn_watch, cargo_build_dirs, chats,
-    claim_cli, claim_commands, claim_lanes_cli, claim_queue, claim_store, claims, claims_root,
-    claude_adopt, claude_attach, claude_drive, claude_records, claude_resume, claude_roster,
-    claude_sessions, claude_stream_entry, claude_supervisor, claude_transcript_paths, claude_vault,
-    codex_converge, codex_fake_daemon, codex_inject, codex_store, codex_thread, codex_watch,
-    compaction, consult, context_run, context_window, convert, cutover, daemon, daemon_predecessor,
-    discovered_sessions, disk_floor, disk_report, drift, event_rules, event_store, events,
-    events_limits, first_check, fleet_beacon, fleet_load, fleet_state, fleet_task, fleet_workspace,
-    footnote_harness, footnote_transcript, footprint_cause, frames, gc, gc_claude_stop,
-    gc_inventory, gc_native, gc_open_pr_guard, gc_sweep, gc_verify, grok_store, harness_beat,
-    harness_daemon, harness_reader, heal, heal_pid, heal_sweep, hook, identity, inbox_peers,
-    install_drift, interrupt_classify, keep_mark, lead_checkin, lead_checkin_blueprint,
-    lead_checkin_lineup, lead_checkin_machine, lead_checkin_orders, lead_escalation, lead_goal,
-    lead_history, lead_hygiene, lead_lifecycle, lead_mail, lead_ops, lead_pushback, lead_reads,
-    lead_rebind, lead_settle, lead_soul, lead_state, lead_term, lead_termination,
-    lead_verdict_inputs, lead_wake, lead_wake_triggers, lease_heartbeat, ledger_axes, link_dial,
-    liveness_cmd, liveness_sweep, lock_queue, logs, logs_args, logs_client, loop_lead,
-    loop_runtime, loop_target, loops_pause, machine_load, machine_mail, machine_sample,
-    machine_watch, mail_arm, mail_backfill, mail_bus, mail_carrier, mail_cli, mail_control_drain,
-    mail_envelope, mail_header, mail_hold, mail_inject, mail_notify_self, mail_paths, mail_receipt,
-    mail_remote, mail_teach, mail_threads, manifest, manifest_lookup, mcp, native_adopt,
-    notice_route, notify_dispatch, nudge, observer, opencode_serve, opencode_transcript,
-    opencode_turn, operator_notice, operator_turns, operator_witness, org_board, org_fold,
-    org_remote, org_rivals, orphan_reap, orphans, osc, page_relief, pane_claim, pane_identity,
-    pane_keeper, pane_loop, pane_rebind, pane_relaunch, pane_stop, peek, pending_session_row,
-    pi_transcript, process_owner, process_probe, project, provenance, question_stamp, quiet_retire,
-    readiness, reap_release, reap_render, receipt, reclaim, recovery_sweep, reentry, register,
-    registry_commands, registry_commit, registry_guard, registry_json, registry_read,
-    registry_store, removals, rename, reserve, restart_run, resume_args, resume_gate, resume_pin,
-    resume_receipt, resume_wake, rev_front, revival_check, revive_proof, rm_receipt, rm_tombstone,
-    roles, roster_reap, run_import, run_outcome, run_state, scrape, scratch, screen,
-    session_activity, session_backfill, session_join, session_names_fold, session_start_bytes,
-    session_truth, silence_sweep, slot_cutover, source_pin, stale_spaces, stalls, state,
-    state_layout, state_layout_sqlite, state_path, state_root_drift, status_fanout, status_render,
-    status_sinks, stream_worker, stuck_work, subscribe, succession_txn, supervisor, sync_canonical,
-    synthetic_tail, system_sender, task_context, team_alarm, team_identity, team_names, team_read,
-    team_reap, team_rescope, team_settle, team_spend, team_split, team_widen, terminal_stop,
-    territory, tool_activity, tracker, transcript_activity, transcript_resolve, transcript_turns,
-    truth_cli, truth_probe, update_journal, visual_log_reader, visual_screen, wait, wake_name,
-    wake_read, watch, watch_expiry, watchdog, whoami, worker_wake, worktree, worktree_reapable,
-    write_queue,
+    attention_reply, attention_route, battery_save, board_render_arm, burn_watch, cargo_build_dirs,
+    chats, claim_cli, claim_commands, claim_lanes_cli, claim_queue, claim_store, claims,
+    claims_root, claude_adopt, claude_attach, claude_drive, claude_records, claude_resume,
+    claude_roster, claude_sessions, claude_stream_entry, claude_supervisor,
+    claude_transcript_paths, claude_vault, codex_converge, codex_fake_daemon, codex_inject,
+    codex_store, codex_thread, codex_watch, compaction, consult, context_run, context_window,
+    convert, cutover, daemon, daemon_predecessor, discovered_sessions, disk_floor, disk_report,
+    drift, event_rules, event_store, events, events_limits, first_check, fleet_beacon, fleet_load,
+    fleet_state, fleet_task, fleet_workspace, footnote_harness, footnote_transcript,
+    footprint_cause, frames, gc, gc_claude_stop, gc_inventory, gc_native, gc_open_pr_guard,
+    gc_sweep, gc_verify, grok_store, harness_beat, harness_daemon, harness_reader, heal, heal_pid,
+    heal_sweep, hook, identity, inbox_peers, install_drift, interrupt_classify, keep_mark,
+    lead_checkin, lead_checkin_blueprint, lead_checkin_lineup, lead_checkin_machine,
+    lead_checkin_orders, lead_escalation, lead_goal, lead_history, lead_hygiene, lead_lifecycle,
+    lead_mail, lead_ops, lead_pushback, lead_reads, lead_rebind, lead_settle, lead_soul,
+    lead_state, lead_term, lead_termination, lead_verdict_inputs, lead_wake, lead_wake_triggers,
+    lease_heartbeat, ledger_axes, link_dial, liveness_cmd, liveness_sweep, lock_queue, logs,
+    logs_args, logs_client, loop_lead, loop_runtime, loop_target, loops_pause, machine_load,
+    machine_mail, machine_sample, machine_watch, mail_arm, mail_backfill, mail_bus, mail_carrier,
+    mail_cli, mail_control_drain, mail_envelope, mail_header, mail_hold, mail_inject,
+    mail_notify_self, mail_paths, mail_receipt, mail_remote, mail_teach, mail_threads, manifest,
+    manifest_lookup, mcp, native_adopt, notice_route, notify_dispatch, nudge, observer,
+    opencode_serve, opencode_transcript, opencode_turn, operator_notice, operator_turns,
+    operator_witness, org_board, org_fold, org_remote, org_rivals, orphan_reap, orphans, osc,
+    page_relief, pane_claim, pane_identity, pane_keeper, pane_loop, pane_rebind, pane_relaunch,
+    pane_stop, peek, pending_session_row, pi_transcript, process_owner, process_probe, project,
+    provenance, question_stamp, quiet_retire, readiness, reap_release, reap_render, receipt,
+    reclaim, recovery_sweep, reentry, register, registry_commands, registry_commit, registry_guard,
+    registry_json, registry_read, registry_store, removals, rename, reserve, restart_run,
+    resume_args, resume_gate, resume_pin, resume_receipt, resume_wake, rev_front, revival_check,
+    revive_proof, rm_receipt, rm_tombstone, roles, roster_reap, run_import, run_outcome, run_state,
+    scrape, scratch, screen, session_activity, session_backfill, session_join, session_names_fold,
+    session_start_bytes, session_truth, silence_sweep, slot_cutover, source_pin, stale_spaces,
+    stalls, state, state_layout, state_layout_sqlite, state_path, state_root_drift, status_fanout,
+    status_render, status_sinks, stream_worker, stuck_work, subscribe, succession_txn, supervisor,
+    sync_canonical, synthetic_tail, system_sender, task_context, team_alarm, team_identity,
+    team_names, team_read, team_reap, team_rescope, team_settle, team_spend, team_split,
+    team_widen, terminal_stop, territory, tool_activity, tracker, transcript_activity,
+    transcript_resolve, transcript_turns, truth_cli, truth_probe, update_journal,
+    visual_log_reader, visual_screen, wait, wake_name, wake_read, watch, watch_expiry, watchdog,
+    whoami, worker_wake, worktree, worktree_reapable, write_queue,
 };
 pub(crate) use runtime::{
     adopt_carry, adopt_identity, agents_event, attended, cargo_builds, cargo_orphans,
-    claude_restart_watch, fnod, footprint_cache, keeper_revival, lead_checkin_batch,
+    claude_restart_watch, fnod, fnod_tags, footprint_cache, keeper_revival, lead_checkin_batch,
     lead_checkin_beat_budget, lead_checkin_pick, ledger_register, ledger_workers,
     opencode_permission, prompt_wait, reap_evidence, resume_reroute, resume_route, retired_lead,
-    served_liveness, session_receipt, thread_dialog, thread_permission,
+    served_liveness, session_receipt, shot_save, thread_dialog, thread_permission,
 };
-use runtime::{agent_lock, boot_revival, codex_thread_entry, repo_identity, state_layout_merge};
+use runtime::{
+    agent_lock, boot_revival, codex_thread_entry, repo_identity, state_layout_class,
+    state_layout_home, state_layout_merge, state_layout_move, state_layout_undo,
+};
 pub use spawn::reader_route;
 pub use spawn::{
     accounts, agents_config, agy_ask, agy_launch, ask_project, capability_leaves, capacity,
@@ -965,15 +970,18 @@ mod tests {
             }
         }
 
-        // The allowed files: production binary repair (install_verify), seven
+        // The allowed files: production binary repair (install_verify), eight
         // production dir modes (paths, fleet_incident, chats, the
         // session-state pin dir, the mcp sidecar's socket-parent tightening,
-        // the daemon's sandbox socket dir, the saved-sessions dir),
+        // the sandbox guest's socket dir, the sandbox transcript dir, the
+        // saved-sessions dir),
         // two dir-mode
         // restores in tests (claims, operator_turns); the bin test target
         // cannot see a cfg(test) lib fn (client_tests); and the plan writer's
         // production mode-preserve on its atomic plan-file replace
-        // (plan_doc/codec).
+        // (plan_doc/codec); the state-root mover's staging dir, private
+        // from its create (state_layout_move); and that copy's test,
+        // which only chmods data files (state_layout).
         const ALLOWED: &[(&str, usize)] = &[
             ("gate/install_verify.rs", 1),
             ("paths.rs", 1),
@@ -984,8 +992,11 @@ mod tests {
             ("gate/fleet_incident.rs", 1),
             ("runtime/chats.rs", 1),
             ("runtime/mcp/sidecar.rs", 1),
-            ("runtime/daemon/sandbox_host.rs", 1),
+            ("sandbox/guest.rs", 1),
+            ("sandbox/transcript.rs", 1),
             ("runtime/hook/save_session.rs", 1),
+            ("runtime/state_layout_move.rs", 1),
+            ("runtime/state_layout.rs", 1),
         ];
         let allowed_counts: std::collections::HashMap<&str, usize> =
             ALLOWED.iter().copied().collect();

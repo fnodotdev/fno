@@ -9,7 +9,7 @@ use crate::accounts::staging;
 use crate::harness::{AsHarness, Harness};
 use crate::provider_route::{ClaudeRoute, RouteCtx};
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// The reads a launch env needs from outside the process.
 pub struct Sources<'a> {
@@ -236,7 +236,13 @@ pub fn launch_env(
         }
         "managed" => match identity_mismatch(record, &root, &accounts.records, src) {
             Some(receipt) => Err(unavailable(receipt)),
-            None => Ok(BTreeMap::new()),
+            // The clear marker, not an empty map: a cutover child must lose a
+            // stale parent CLAUDE_CONFIG_DIR, or it rides a dir that is not
+            // the shared slot it is being cut over to.
+            None => Ok(BTreeMap::from([(
+                "CLAUDE_CONFIG_DIR".to_string(),
+                String::new(),
+            )])),
         },
         _ => env_for_api_key(record, repo_root.unwrap_or(cwd), src),
     }
@@ -260,13 +266,6 @@ pub(crate) fn login_present(dir: &Path, slot: &dyn SlotProbe) -> bool {
     binding::keychain_service(dir)
         .and_then(|service| slot.keychain(&service).ok().flatten())
         .is_some_and(|blob| !blob.trim().is_empty())
-}
-
-fn home_slot() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_default()
-        .join(".claude")
 }
 
 /// The env overlay for a claude `--account <id>` launch, or the refusal
@@ -365,9 +364,18 @@ pub fn overlay(
                 if let Some(receipt) = identity_mismatch(record, &root, &accounts.records, src) {
                     return Err(receipt);
                 }
-                // Pinned rather than empty, so a stale parent CLAUDE_CONFIG_DIR
-                // cannot leak through and bill another account.
-                return Ok(made(dir_env(home_slot().as_path()), "managed-active"));
+                // Cleared, not pinned: claude names its macOS keychain item by
+                // whether CLAUDE_CONFIG_DIR is SET, not by which dir it names,
+                // so even the default dir lands in the hashed
+                // `Claude Code-credentials-<hash>` slot and never sees the
+                // operator's /login into the shared item. The empty value is
+                // the clear marker (the env_lines convention), and it keeps
+                // the old leak guard: a stale parent CLAUDE_CONFIG_DIR dies at
+                // the apply site instead of billing another account.
+                return Ok(made(
+                    BTreeMap::from([("CLAUDE_CONFIG_DIR".to_string(), String::new())]),
+                    "managed-active",
+                ));
             }
             Err(format!(
                 "account '{account_id}' is managed and not the active ~/.claude \
@@ -383,5 +391,60 @@ pub fn overlay(
         _ => env_for_api_key(record, cwd, src)
             .map(|env| made(env, "api-key"))
             .map_err(|e| format!("account '{account_id}' env is unresolvable: {}", e.message)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::claude_vault::ExternalFailure;
+
+    /// A probe that reads nothing: every slot read answers absent, so the
+    /// binding answers UNKNOWN (unbound-principal) and never MISMATCH.
+    struct AbsentProbe;
+    impl crate::accounts::binding::SlotProbe for AbsentProbe {
+        fn keychain(&self, _service: &str) -> Result<Option<String>, ExternalFailure> {
+            Ok(None)
+        }
+        fn profile(
+            &self,
+            _bearer: &str,
+        ) -> Result<crate::claude_vault::Principal, ExternalFailure> {
+            Err(ExternalFailure::Unavailable)
+        }
+    }
+
+    #[test]
+    fn a_managed_active_overlay_clears_the_config_dir() {
+        let tmp = std::env::temp_dir().join(format!("xd13b-overlay-{}", std::process::id()));
+        let config_dir = tmp.join(".fno");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("config.toml"),
+            "[[accounts.records]]\nid = \"xd13b-makers\"\nname = \"x\"\nharness = \"claude\"\nauth = \"managed\"\n",
+        )
+        .unwrap();
+        let providers = tmp.join("providers");
+        std::fs::create_dir_all(&providers).unwrap();
+        std::fs::write(providers.join(".active-claude"), "xd13b-makers").unwrap();
+
+        let probe = AbsentProbe;
+        let no_secret = |_item: &str| -> Option<String> { None };
+        let no_env = |_key: &str| -> Option<String> { None };
+        let src = Sources {
+            slot: &probe,
+            secret: &no_secret,
+            env_get: &no_env,
+        };
+        let got = overlay("xd13b-makers", Some(&tmp), Some(&providers), &tmp, &src)
+            .expect("the managed-active overlay resolves");
+        assert_eq!(got.lane, "managed-active");
+        assert_eq!(
+            got.env.get("CLAUDE_CONFIG_DIR").map(String::as_str),
+            Some("")
+        );
+        assert_eq!(got.env.len(), 1);
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

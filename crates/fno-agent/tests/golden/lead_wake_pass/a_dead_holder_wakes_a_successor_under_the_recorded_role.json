@@ -17,7 +17,7 @@
      "lead_spawned_successor",
      {
       "holder": "lead-x",
-      "old_session_id": "11111111-2222-3333-4444-555555555555",
+      "old_session_id": "<SESSION>",
       "scope": "epic-x",
       "trigger": "mail"
      }
@@ -58,6 +58,7 @@
     ]
    },
    "unread_calls": [
+    "<SESSION>",
     "aa11bb22",
     "epic-x",
     "lead-x"

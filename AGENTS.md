@@ -33,7 +33,13 @@ Traps a fresh agent re-hits because no lint, guard or refusal catches them yet. 
 
 AC9 delivery sentinel (echoed verbatim by a fresh worker, asserted by unit test): `kdc-delivery-sentinel-1932`.
 
-No entries today.
+### Run the scoped test-delta before a push that adds a test
+
+The guards workflow runs test-delta with `--scopes docs/test-audit/scopes.tsv`. Without it a test passes that scope G3 refuses: cap 0, and a `path_regex` that matches `plan`, `lead`, `review` and `pr_` anywhere.
+
+specimens: `docs/test-audit/scopes.tsv:8`, `crates/fno-agent/src/gate/pr_push.rs:1624`
+graduates-to: The push and create doors run no scoped test-delta, so a G3 over-cap fails only in CI
+added: 2026-11-24
 
 ## Repository
 
@@ -125,7 +131,7 @@ Paths resolve via `crates/fno-agent/src/paths.rs`. Override them under `config.p
 
 ### Ship vocabulary
 
-`/ship` is the deliverable umbrella (`/ship pr` is the PR lifecycle, `/ship doc` a research brief). The **ship phase** creates the PR. The **ship gate** stamps plan frontmatter. Loop finish lines: `DonePRGreen` (PR + CI + reviewed), `DoneUnreviewed` (green, unreviewed), `DoneAdvisory` (doc + eval-green), `DoneDelivery` (current evidence). `fno do pr merge` is the merge primitive. [skills/ship/SKILL.md](skills/ship/SKILL.md).
+`/fno:ship` is the deliverable umbrella (`/fno:ship pr` is the PR lifecycle, `/fno:ship doc` a research brief). The **ship phase** creates the PR. The **ship gate** stamps plan frontmatter. Loop finish lines: `DonePRGreen` (PR + CI + reviewed), `DoneUnreviewed` (green, unreviewed), `DoneAdvisory` (doc + eval-green), `DoneDelivery` (current evidence). `fno do pr merge` is the merge primitive. [skills/ship/SKILL.md](skills/ship/SKILL.md).
 
 ### Plan completion stamp
 
@@ -162,7 +168,7 @@ Bug in plan -> fix inline, note in SUMMARY.md. Minor enhancement (<15 min) -> im
 - **Pane keeper** - every pane's pty master lives in a keeper, not the server. A fresh server re-adopts the same pid; kill-server refuses an unkept pane. `fno mux pane keeper list` reads survivors. The page answers why, not the daemon. [pane-keeper](docs/architecture/pane-keeper.md).
 - **watchdog** - transcript-truth wake/reroute/reap; dry run, `--apply`/`--apply-all`. [fleet-watchdog](docs/architecture/fleet-watchdog.md)
 - **`fno doctor`** - compares deployed `fno` with local source. Reports lag. `--fix` runs `fno doctor update`. [installed-fno-staleness](docs/architecture/installed-fno-staleness.md).
-- **`fno doctor footprint`** - measures sustained fleet CPU and process count; the demoted load average decides nothing. See [machine footprint](docs/architecture/machine-footprint.md).
+- **`fno doctor footprint`** - measures sustained fleet CPU, process count and spawn rate; the demoted load average decides nothing. See [machine footprint](docs/architecture/machine-footprint.md).
 - **Accounts + rotation** - `fno config accounts`: records, failover, lockout, routing, combos. Five axes, never confuse them: harness (`-H`), provider (vendor, `-P`), model (`-m`), effort (`--effort`), account (`--account`). `opencode` is legally both harness and provider. Never infer the axis from a value. Defined in [axis-vocabulary](docs/architecture/axis-vocabulary.md).
 - **[Stage table](docs/architecture/role-based-model-routing.md)** (per-stage axis) - `config.agents.profiles.<command>` overlays `agents.defaults`, reaches autonomous dispatch. `dispatch.harness` is deprecated. `route`=vendor/model (`--route`) beside `provider`=harness (`provider` is the config key name, not the axis. It holds a harness value.)
 - **Curated CLI menu** - `fno doctor lint menu-caps` caps the first three levels of `fno` and `fno-agent`. A root holds 13 commands. Levels two and three hold 12. Hidden commands count. Over-cap groups sit in shrink-only `scripts/ci/menu-caps-debt.tsv`. Group actions are arguments not leaves.

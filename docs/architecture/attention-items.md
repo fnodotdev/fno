@@ -30,7 +30,7 @@ The context fields: `asker`, `node`, `blocked_because`, `options_rationale`, `re
 
 ## Who asks: the ladder, by default
 
-A worker's question goes to its lead first. Only a lead files to the user's board, after it tries the answer itself (decision D2625 (d-0b7be63a)). `fno inbox outstanding ask` places the row on a rung: the node's lead, its higher-up, or the least-loaded lead. The holder gets one wake. The holder answers with `fno inbox outstanding clear <qid> --authority role`, or climbs with `fno inbox outstanding climb <qid> --evidence "<what it checked>"`. Each climb adds one `via` hop. A row shows on the user's board at the user rung. A lead-rung row shows there 10 minutes after it reached its holder with no answer. So nothing a lead ignores is lost. A lead's own ask, or an ask with no live lead, starts at the user rung.
+A worker's question goes to its lead first. Only a lead files to the user's board, after it tries the answer itself (decision D2625). `fno inbox outstanding ask` places the row on a rung: the node's lead, its higher-up, or the least-loaded lead. The holder gets one wake. The holder answers with `fno inbox outstanding clear <qid> --authority role`, or climbs with `fno inbox outstanding climb <qid> --evidence "<what it checked>"`. Each climb adds one `via` hop. A row shows on the user's board at the user rung. A lead-rung row shows there 10 minutes after it reached its holder with no answer. So nothing a lead ignores is lost. A lead's own ask, or an ask with no live lead, starts at the user rung.
 
 The knob is `questions.route` in `.fno/config.toml`:
 
@@ -172,7 +172,7 @@ The close runs two ways: the daemon sweep every hour, and the bell's Questions-t
 
 ## Question pages
 
-One page per question. The page name is `<ask date>-<question id>-<slug>-<node>.md`, for example `20260922-q-aaaaaaaa-wont-do-deferral-kind-x-bbbb.md`. When the frontmatter `question_id` is the id inside the file name, the file is a page. A sync client's `q-1 (conflicted copy)` is ignored. Closed pages move to `done/<id>.md` (`<id>-2.md`, `-3.md`, ... when the name is taken). A lost close renames onto the one lost copy the id already has instead of minting a new `-N`. The arm drains duplicate lost copies at up to 200 a beat and keeps the newest.
+One page per question. The page name is `<ask date>-<question id>-<slug>-<node>.md`, for example `20260922-D3104-wont-do-deferral-kind-x-bbbb.md`. When the frontmatter `question_id` is the id inside the file name, the file is a page. A sync client's `q-1 (conflicted copy)` is ignored. Closed pages move to `done/<id>.md` (`<id>-2.md`, `-3.md`, ... when the name is taken). A lost close renames onto the one lost copy the id already has instead of minting a new `-N`. The arm drains duplicate lost copies at up to 200 a beat and keeps the newest.
 
 Frontmatter carries `question_id`, `kind`, `status`, `title`, `ask`, `recommend`, `aliases`, `asked_at`, `created`, `updated`, and `project`. It also carries the routing facts `harness_session_id`, `session_name`, `harness`, `model`, `node`, `blocks`, `epic`, `role`, and `lead`. The delivery stamp `arm` (16 hex over the machine id and the agents home) rides beside them. Each option also renders a letter column (`a`, `b`, `c`, ...), and `answer` holds the typed cell. A close adds `answered_at` and `recorded_by`. An unmeasured asker fact reads `unknown` and an absent routing fact reads `none`, never a blank key. The renderer escapes `<` and `>` in every text field it writes, and the answer reader unescapes them. An unescaped `<stage>` reads as an open HTML tag and eats every checkbox on the page.
 
@@ -206,7 +206,7 @@ Read it with `fno inbox outstanding judge --report --since 24h`. `agreement` com
 
 ## Config keys
 
-The md config row is retired. There are two keys: `attention.enabled` (default true), the kill switch, and the `[[attention.sinks]]` rows above. A `[[attention]]` or `[[reach_me]]` row still in config.toml is ignored. The tick detail names the retired row once per beat.
+The md config row is retired. There are two keys: `attention.enabled` (default true), the kill switch, and the `[[attention.sinks]]` rows above. The sink rows come from [the trusted file](#the-trusted-file) only. A `[[attention]]` or `[[reach_me]]` row still in config.toml is ignored. The tick detail names the retired row once per beat.
 
 ## Answer lanes
 
@@ -227,7 +227,7 @@ What a file answer can do: close the question, reach the asker, unblock the node
 
 `fno mux serve --attention-api` serves the contract's three paths on `127.0.0.1`, with its own router and port. `--attention-port` sets the port, default 8724. The endpoint runs beside the read-only web bridge, never inside it. `GET /v1/attention/items` lists the projection with `state`, `kind`, `ready` and `project` filters. `GET /v1/attention/items/{id}` returns one item. `POST /v1/attention/items/{id}/answer` records an answer. Remote reach is the user's own tunnel, `tailscale serve` on its own port. fno never binds a public address. The fleet read a paired phone makes goes through a different door, with per-device keys: [the remote door](remote-door.md).
 
-Every path requires a bearer token that matches a configured sink's `token_env` value. The token identifies the sink, never a person. A refused request lands no row. The statuses are `401` for a bad token, `404` for an unknown id, and `409` for a closed item. `422` covers a bad shape, an out-of-range option, `done` on a question, and more than one choice.
+A write or a chat read requires a bearer token that matches the `token_env` value of a sink in [the trusted file](#the-trusted-file). `GET /v1` requires it too. The token identifies the sink, never a person. A refused request lands no row. The statuses are `401` for a bad token, `404` for an unknown id, and `409` for a closed item. `422` covers a bad shape, an out-of-range option, `done` on a question, and more than one choice.
 
 The door also serves `GET /v1`, a version document that lists every `/v1` route, and `GET /v1/chat/{harness}/{session_id}`, a WebSocket of one worker's chat events. Both take the same sink token. [chat-event-stream](chat-event-stream.md#the-app-route) has the frame shape and the two auth forms.
 
@@ -241,11 +241,17 @@ The row carries `sink: command_page`, `authority: sink`, `email`, `person` and `
 
 The refusals come in this order, and none starts a process. A bridge not bound to loopback gets 403. A bad token gets 401. An Origin that differs from Host gets 403. A bad body gets 400, an unknown question 404, and a failed invite check 403. The door refuses the rest with exit 2, and the route returns that line with 409. A second click on an answered question gets that 409, because the question is no longer open. It lands no second row.
 
-Identity comes from `Tailscale-User-Login` and counts only on a loopback bind behind `tailscale serve`. On a wide bind any client can send the header, so the bridge treats a wide bind as having no identity. `[[web.invites]]` rows in config.toml (`email`, `scope`, `role`) name who can do what. Roles rank viewer, commenter, editor, owner. Answering needs editor. A scope is `*` or a node id, and a node id covers that node and every node under it. When the list is set, a layer on the router checks every route for at least viewer. With no list, reads keep the token rule, the user on the local machine still answers, and a tailnet answer gets 403 naming `web.invites`.
+Identity comes from `Tailscale-User-Login` and counts only on a loopback bind behind `tailscale serve`. On a wide bind any client can send the header, so the bridge treats a wide bind as having no identity. `[[web.invites]]` rows in [the trusted file](#the-trusted-file) (`email`, `scope`, `role`) name who can do what. The route reads them again after its last wait, so a revoke during the request lands no answer. Roles rank viewer, commenter, editor, owner. Answering needs editor. A scope is `*` or a node id, and a node id covers that node and every node under it. When the list is set, a layer on the router checks every route for at least viewer. With no list, reads keep the token rule, the user on the local machine still answers, and a tailnet answer gets 403 naming `web.invites`. After a process sees a list or a config fault, no list means nobody until a restart.
+
+## The trusted file
+
+`web.invites` and `attention.sinks` grant access, so one file holds both. `crates/fno-agent/src/trusted_config.rs` names it. An absolute `.toml` `FNO_CONFIG` is that file. Otherwise it is the global config that `fno config set` writes. A relative or non-TOML pin names no file, and then neither key grants anything.
+
+A project `.fno/config.toml` never grants either key, and `fno config set --local` refuses both. A reader opens a project file only to report rows it ignores. The report names the key and the file, never a URL, a sender or a token name. For project sink rows, the report shows in three places: the arm's tick detail, `fno config doctor` and the attention API's start. Such sinks stop, and their buttons get 401. To move a row, write the full list with `fno config set attention.sinks '<json list>'`. Then run `fno config unset attention.sinks --local` in that folder.
 
 ## The ntfy and webhook sinks
 
-Sinks are `[[attention.sinks]]` rows in config.toml, read by the arm's beat beside the pages. An ntfy row carries `name`, `type = "ntfy"`, `url`, `topic`, `token_env`, and optionally `answer_base_url`, `view_base_url` and `body`. The `url` is the server root. The body mode is `"title-only"` by default, because anyone who knows a public topic reads it. `"full"` adds the recommendation and the downside. A webhook row carries the same shape with `type = "webhook"` and the adapter's URL.
+Sinks are `[[attention.sinks]]` rows in [the trusted file](#the-trusted-file), read by the arm's beat beside the pages. An ntfy row carries `name`, `type = "ntfy"`, `url`, `topic`, `token_env`, and optionally `answer_base_url`, `view_base_url` and `body`. The `url` is the server root. The body mode is `"title-only"` by default, because anyone who knows a public topic reads it. `"full"` adds the recommendation and the downside. A webhook row carries the same shape with `type = "webhook"` and the adapter's URL.
 
 A sink's `token_env` resolves from the process env first, then from `~/.fno/.env`. A daemon that launchd starts never sees a var the user exported in a shell, so the file is the reliable place for a token.
 
@@ -259,7 +265,7 @@ A webhook sink receives the `Delivery` body. The body carries `delivery_id`, `ev
 
 ## Chat channels
 
-A chat channel sends each open question to one chat as one message. A reply in that message's thread answers it. The channels are Telegram, Discord, and iMessage through a BlueBubbles server. Each one is off until its row exists in config.toml. Keep the row's secret in `~/.fno/.env`, so the daemon reads it. `fno config setup run --only messaging` walks each channel, writes its row and its secret, and sends one test message. Setup also offers this step, and a skip prints the same command.
+A chat channel sends each open question to one chat as one message. A reply in that message's thread answers it. The channels are Telegram, Discord, and iMessage through a BlueBubbles server. Each one is off until its row exists in [the trusted file](#the-trusted-file). A project row never names who can answer. Keep the row's secret in `~/.fno/.env`, so the daemon reads it. `fno config setup run --only messaging` walks each channel, writes its row and its secret, and sends one test message. Setup also offers this step, and a skip prints the same command.
 
 A chat row is an `[[attention.sinks]]` row with `type` set to `telegram`, `discord` or `bluebubbles`. Every row carries `name`, `type`, `machine`, `token_env` and `allow`. Telegram adds `chat_id`. Discord adds `channel_id`. BlueBubbles adds `url` and `chat_guid`, and its `token_env` names the server password. A loopback `url` is legal for BlueBubbles, because the server runs on the same Mac.
 
@@ -295,4 +301,4 @@ A standing question is not news. Three rules keep each surface from repeating it
 
 A question with no `deadline` gets one a day after it was asked, with `on_silence: wait`. `quiet_from` in `attention.rs` returns `Snoozed`, `BeforeDeadline` or `Due`. A `Due` question counts whole 24h windows past its deadline, so a `wait` question surfaces once per window.
 
-The per-turn hook keeps one `seen.json` for the user, beside `items.json`. A turn lists only questions not yet shown, or whose window is newer than the recorded one. Otherwise it prints one count line. The check-in `held:` line lists due rows and counts the quiet ones. `fno inbox outstanding` still lists every open question, with a `(snoozed until <date>)` or `(quiet until <date>)` suffix.
+The per-turn hook keeps one `seen.json` for the user, beside `items.json`. A turn lists only questions not yet shown, or whose window is newer than the recorded one. Otherwise it prints one count line. The check-in `held:` line keeps its own record, `seen-held.json`, keyed by scope and question id. It lists a due row once per 24h window and counts every other row as quiet. A row that says `overdue: take option N` lists every beat, because it is a work order. `fno inbox outstanding` still lists every open question, with a `(snoozed until <date>)` or `(quiet until <date>)` suffix.

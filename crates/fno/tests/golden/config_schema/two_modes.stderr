@@ -1,2 +1,1 @@
 error: pick at most one of --json-schema / --markdown / --wizard-plan / --toml
-cli usage: the cli_command row did not land: refusing to open the live store /Users/bb16/.fno/agents/events.db from a feature-worktree build (<ROOT>/crates/fno/target/debug/fno, worktree <ROOT>): this build's store code would run its open-time schema and import steps on the operator's store. Run the deployed binary (fno doctor update), or point this checkout at its own store.

@@ -194,7 +194,7 @@ pub(crate) fn list_at<'a>(row: &'a Value, key: &str) -> Vec<&'a str> {
 
 /// Ids of the owner's live membership children; contained children never
 /// count (the _live_child_ids twin).
-fn live_child_ids(entries: &[Value], owner_id: &str) -> Vec<String> {
+pub(crate) fn live_child_ids(entries: &[Value], owner_id: &str) -> Vec<String> {
     let mut live = Vec::new();
     for e in entries {
         if !e.is_object() {

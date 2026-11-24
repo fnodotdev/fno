@@ -369,11 +369,12 @@ pub(crate) fn run_wait(payload: &Value) -> (i32, String, String) {
     let sleeper = |s: f64| std::thread::sleep(std::time::Duration::from_secs_f64(s));
     let start = Instant::now();
     let clock = move || start.elapsed().as_secs_f64();
-    // The session node's PR repo pins every PR read: a node whose pr_url
-    // names another repo must never be answered from the ambient origin's
-    // same-number PR (the cutover shape: repo A checkout, repo B node).
+    // The session node's PR repo pins every PR read: the repo the node's
+    // rows record for THIS pr, so a cross-repo additional_prs row pins its
+    // own repo and a number no row names keeps the ambient origin (the
+    // cutover shape: repo A checkout, repo B node).
     let slug_override: Option<String> =
-        crate::gate::loopcheck::pr_read::session_node_pr_target(cwd).1;
+        crate::gate::loopcheck::pr_read::session_node_pr_repo(cwd, pr);
     if until == "review" {
         // The slug resolves once, not per tick; an unresolvable slug retries
         // per tick, so a transient failure never wedges the wait. The node
@@ -566,8 +567,48 @@ fn red_is_stale(latest: &[Value], runs: &[Value]) -> bool {
         })
 }
 
+/// Whether every failed row is the ci-required aggregate itself: the row is
+/// keyed by its workflow file, not the job display name.
+fn hold_only_red(latest: &[Value]) -> bool {
+    let failed: Vec<crate::pr_status::de::RowTail> = latest
+        .iter()
+        .map(crate::lenient_de::parse::<crate::pr_status::de::RowTail>)
+        .filter(|row| row.bucket.as_deref() == Some("fail"))
+        .collect();
+    !failed.is_empty()
+        && failed.iter().all(|row| {
+            row.workflow
+                .as_deref()
+                .unwrap_or("")
+                .ends_with("/ci-required.yml")
+        })
+}
+
+/// Whether the pull request carries the `pr-hold` label, the same read the
+/// ci-required job itself makes. A failed or unreadable read answers false,
+/// so the cancel keeps running: an unreadable label state must not disable
+/// the fail-fast cancel.
+fn pr_hold_label_live(gh_bin: &str, cwd: &Path, pr: u64) -> bool {
+    let raw = crate::pr_push::gh_api(
+        gh_bin,
+        cwd,
+        &format!("repos/{{owner}}/{{repo}}/issues/{pr}/labels"),
+        &[],
+    );
+    let raw = match raw {
+        Ok(raw) => raw,
+        Err(_) => return false,
+    };
+    let labels: Vec<crate::pr_status::de::LabelTail> =
+        serde_json::from_str(&raw).unwrap_or_default();
+    labels.iter().any(|l| l.name.as_deref() == Some("pr-hold"))
+}
+
 /// Cancel the Actions runs still testing a red `head`, one line per run;
-/// None when the live rows show the red belongs to an earlier attempt.
+/// None when the live rows show the red belongs to an earlier attempt, or
+/// when the red is the pr-hold label speaking through the ci-required
+/// aggregate with no real failing row beside it - a red no commit on this
+/// branch heals, so the wait keeps polling until the hold releases.
 /// A failed read or cancel is printed, never hidden. The cancel lands one
 /// `ci_wait_cancel` row naming its cause: the failing checks, the head,
 /// the PR, and each run's result.
@@ -615,6 +656,17 @@ pub(crate) fn cancel_in_flight(
     // in-flight read lives in `cancellable_rows`.
     let rows = crate::pr_status::cancellable_rows(rows);
     let latest = crate::check_supersession::latest_per_name(&Value::Array(rows));
+    // The hold-only shape: the aggregate is red because the pr-hold label
+    // is live, and no row beside it failed. The red is the hold itself, the
+    // same class as an outside hold's red one filter up, so cancel nothing
+    // and keep polling until the hold releases; the reruns a cancel bought
+    // would red again on the same label. A real failing row beside the
+    // hold, or a label read that answers empty, cancels as today.
+    if hold_only_red(latest.as_array().map(Vec::as_slice).unwrap_or(&[]))
+        && pr_hold_label_live(gh_bin, cwd, pr)
+    {
+        return None;
+    }
     // An unreadable runs listing proves nothing stale: the law's cancel runs.
     let listing: Vec<Value> = crate::pr_push::gh_api_pages_conditional(
         gh_bin,
@@ -929,41 +981,76 @@ mod tests {
         assert!(stderr.contains("expected aaaaaaaa1234"), "{stderr}");
     }
 
-    /// A fake gh: one live failing check (node-closure completed after its
-    /// run started), one run in flight, and a cancel POST answering ok.
-    fn cancel_stub_gh(dir: &std::path::Path) -> std::path::PathBuf {
-        crate::write_exec_stub(
-            dir,
-            "gh",
-            r#"#!/bin/sh
+    /// A fake gh for the cancel read: failing row 201 - the ci-required
+    /// aggregate when `ci_only`, node-closure otherwise - one live
+    /// rust-ci run, and the labels answer the parameter picks.
+    /// `extra_fail` adds a real failing row beside the aggregate red.
+    fn hold_gate_stub(
+        dir: &std::path::Path,
+        labels: &str,
+        ci_only: bool,
+        extra_fail: bool,
+    ) -> std::path::PathBuf {
+        let (extra_checks, extra_runs) = if extra_fail {
+            (
+                r#"{"id":203,"name":"node-closure","status":"completed","conclusion":"failure","started_at":"2026-11-01T03:00:00Z","completed_at":"2026-11-01T03:05:00Z","html_url":"https://github.com/o/r/actions/runs/303/job/3","check_suite":{"id":13}},"#,
+                r#"{"id":303,"name":"node-closure","status":"completed","conclusion":"failure","created_at":"2026-11-01T03:00:00Z","run_started_at":"2026-11-01T03:00:00Z","check_suite_id":13,"path":".github/workflows/node-closure.yml"},"#,
+            )
+        } else {
+            ("", "")
+        };
+        let (row_name, row_path) = if ci_only {
+            (
+                "wait for every run at the head",
+                ".github/workflows/ci-required.yml",
+            )
+        } else {
+            ("node-closure", ".github/workflows/node-closure.yml")
+        };
+        let script = r#"#!/bin/sh
 for a in "$@"; do case "$a" in
   *check-runs*)
     echo '{"check_runs":[
-      {"id":201,"name":"node-closure","status":"completed","conclusion":"failure","started_at":"2026-11-01T03:00:00Z","completed_at":"2026-11-01T03:05:00Z","html_url":"https://github.com/o/r/actions/runs/301/job/1","check_suite":{"id":11}},
+      @EXTRA_CHECKS@
+      {"id":201,"name":"@ROW_NAME@","status":"completed","conclusion":"failure","started_at":"2026-11-01T03:00:00Z","completed_at":"2026-11-01T03:05:00Z","html_url":"https://github.com/o/r/actions/runs/301/job/1","check_suite":{"id":11}},
       {"id":202,"name":"rust-ci","status":"in_progress","conclusion":null,"started_at":"2026-11-01T03:06:00Z","completed_at":null,"html_url":"https://github.com/o/r/actions/runs/302/job/2","check_suite":{"id":12}}]}'
     exit 0 ;;
   *head_sha=*)
-    echo '{"total_count":2,"workflow_runs":[{"id":301,"name":"cli-ci","status":"completed","conclusion":"failure","created_at":"2026-11-01T03:00:00Z","run_started_at":"2026-11-01T03:00:00Z"},{"id":302,"name":"rust-ci","status":"in_progress","conclusion":null,"created_at":"2026-11-01T03:06:00Z","run_started_at":"2026-11-01T03:06:00Z"}]}'
+    echo '{"total_count":2,"workflow_runs":[
+      @EXTRA_RUNS@
+      {"id":301,"name":"@ROW_NAME@","status":"completed","conclusion":"failure","created_at":"2026-11-01T03:00:00Z","run_started_at":"2026-11-01T03:00:00Z","check_suite_id":11,"path":"@ROW_PATH@"},
+      {"id":302,"name":"rust-ci","status":"in_progress","conclusion":null,"created_at":"2026-11-01T03:06:00Z","run_started_at":"2026-11-01T03:06:00Z","check_suite_id":12,"path":".github/workflows/rust-ci.yml"}]}'
     exit 0 ;;
   *commits/*/status*)
     echo '{"statuses":[]}'
+    exit 0 ;;
+  *issues/*/labels*)
+    echo '@LABELS@'
     exit 0 ;;
   *cancel*)
     exit 0 ;;
 esac; done
 echo '{}'
 exit 1
-"#,
-        )
+"#
+        .replace("@EXTRA_CHECKS@", extra_checks)
+        .replace("@EXTRA_RUNS@", extra_runs)
+        .replace("@ROW_NAME@", row_name)
+        .replace("@ROW_PATH@", row_path)
+        .replace("@LABELS@", labels);
+        crate::write_exec_stub(dir, "gh", &script)
     }
 
-    /// A journaled cancel: one `ci_wait_cancel` row names the PR, the head,
-    /// the failing checks that caused it, and each run's result. The stderr
-    /// lines reach one session; the journal is the record the rest of the
-    /// fleet reads.
+    /// The cancel surface at its owner boundary. A hold-only red - the
+    /// ci-required aggregate failing on the pr-hold label with no real row
+    /// beside it - cancels nothing and journals nothing; None keeps the
+    /// wait polling. The same red without the label, a real failing row
+    /// beside the hold, and a plain red all cancel, and the journal names
+    /// the cause: the failing checks, the head, the PR, and each run's
+    /// result. The stderr lines reach one session; the journal is the
+    /// record the rest of the fleet reads.
     #[test]
-    fn a_cancel_journals_a_row_that_names_its_cause() {
-        let dir = tempfile::tempdir().unwrap();
+    fn a_cancel_journals_its_cause_and_a_hold_only_red_cancels_nothing() {
         let home = tempfile::tempdir().unwrap();
         let _lock = crate::claims::test_env_lock()
             .lock()
@@ -973,17 +1060,27 @@ exit 1
         std::fs::create_dir_all(&agents).unwrap();
         let _home =
             crate::claims::EnvVarGuard::set(crate::paths::HOME_ENV, agents.to_str().unwrap());
-        let gh = cancel_stub_gh(dir.path());
+        let journal = home.path().join("events.jsonl");
+        let query =
+            crate::event_store::EventQuery::of_types(&["ci_wait_cancel", "ci_cancel_intent"]);
+        // Withhold: the only failed row is the aggregate and the pr-hold
+        // label is live. No cancel POST, no journal row.
+        let dir = tempfile::tempdir().unwrap();
+        let gh = hold_gate_stub(dir.path(), r#"[{"name":"pr-hold"}]"#, true, false);
+        let lines = cancel_in_flight(gh.to_str().unwrap(), dir.path(), 4254, "abc123");
+        assert!(lines.is_none(), "{lines:?}");
+        assert!(!journal.exists(), "the hold-only red wrote no cancel row");
+        // Journal: a plain red (a real failing row, no label) cancels and
+        // the row names its cause. The store lands the row: read it back
+        // through the sanctioned reader instead of the flat file the store
+        // replaces.
+        let dir = tempfile::tempdir().unwrap();
+        let gh = hold_gate_stub(dir.path(), "[]", false, false);
         let lines = cancel_in_flight(gh.to_str().unwrap(), dir.path(), 4254, "abc123").unwrap();
         assert!(
             lines.iter().all(|l| l.contains("cancelled run 302")),
             "{lines:?}"
         );
-        // The store lands the row: read it back through the sanctioned
-        // reader instead of the flat file the store replaces.
-        let journal = home.path().join("events.jsonl");
-        let query =
-            crate::event_store::EventQuery::of_types(&["ci_wait_cancel", "ci_cancel_intent"]);
         let text = crate::event_store::journal_text_checked(&journal, &query).unwrap();
         let rows: Vec<Value> = text
             .lines()
@@ -1010,6 +1107,25 @@ exit 1
         assert!(
             row["data"].get("session_id").is_some(),
             "the row carries the session field: {row}"
+        );
+
+        // Admit, label absent: the aggregate red with no label cancels.
+        let dir = tempfile::tempdir().unwrap();
+        let gh = hold_gate_stub(dir.path(), "[]", true, false);
+        let lines = cancel_in_flight(gh.to_str().unwrap(), dir.path(), 4254, "abc123").unwrap();
+        assert!(
+            lines.iter().all(|l| l.contains("cancelled run 302")),
+            "{lines:?}"
+        );
+
+        // Admit, real row beside the hold: a node-closure failure beside
+        // the aggregate red cancels even with the label live.
+        let dir = tempfile::tempdir().unwrap();
+        let gh = hold_gate_stub(dir.path(), r#"[{"name":"pr-hold"}]"#, true, true);
+        let lines = cancel_in_flight(gh.to_str().unwrap(), dir.path(), 4254, "abc123").unwrap();
+        assert!(
+            lines.iter().all(|l| l.contains("cancelled run 302")),
+            "{lines:?}"
         );
     }
 

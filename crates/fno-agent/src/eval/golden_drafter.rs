@@ -1,17 +1,19 @@
-//! Fills the golden drafts and opens one PR a day for a person to review.
+//! Fills the golden drafts and ships them in one batch PR, never one PR a day.
 //!
 //! `evals_drafts` writes a draft per typed correction with every answer field
 //! empty. This pass hands the oldest open drafts to a bounded one-shot model
 //! call. The daemon, not the model, decides what ships: a reply is kept only
 //! when its YAML loads as a golden bank task and its own grade passes each
-//! good fixture case and fails each bad one. Kept drafts go into one PR on
-//! `evals/golden-drafts-<date>`. A person still reviews and merges it.
+//! good fixture case and fails each bad one. A kept golden stages into
+//! `<dir>/pending` and waits there; the batch PR on `evals/golden-drafts`
+//! opens when `BATCH_SIZE` goldens are staged or the oldest has waited
+//! `BATCH_MAX_AGE_DAYS` days, and while that PR is open every new batch
+//! pushes onto it. A person still reviews and merges it.
 //! `.drafted` in the drafts folder is the pass's memory: one line per handled
 //! hash, so a `no_case` or unproved draft is never retried.
 
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -21,6 +23,13 @@ use crate::reader_route::ReaderRoute;
 const DEFAULT_MAX_PER_DAY: usize = 5;
 const SPAWN_TIMEOUT_S: u64 = 300;
 const MODEL: &str = "sonnet";
+
+/// The batch PR opens at this many staged goldens.
+const BATCH_SIZE: usize = 10;
+/// Or when the oldest staged golden has waited this many days.
+const BATCH_MAX_AGE_DAYS: u64 = 14;
+/// The rolling branch every batch PR uses.
+const BATCH_BRANCH: &str = "evals/golden-drafts";
 
 type Spawn<'a> =
     &'a dyn Fn(&str, &str, &Path, u64, &ReaderRoute) -> Result<(i32, String, String), String>;
@@ -154,18 +163,87 @@ pub(crate) fn max_per_day(repo: &Path) -> usize {
     }
 }
 
-/// One daily pass. Returns the counts for the log.
+/// Stage a kept golden for the next batch: bank bytes under
+/// `<dir>/pending/bank/<id>.yaml`, fixture bytes under
+/// `<dir>/pending/fixtures/<id>.yaml`. Their mtimes are the kept-at
+/// timestamps, and `create_new` refuses a duplicate staged id so a second
+/// keep can never silently overwrite the first.
+fn stage(dir: &Path, id: &str, bank: &str, fixture: &str) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let bank_dir = dir.join("pending").join("bank");
+    let fix_dir = dir.join("pending").join("fixtures");
+    std::fs::create_dir_all(&bank_dir)?;
+    std::fs::create_dir_all(&fix_dir)?;
+    let bank_path = bank_dir.join(format!("{id}.yaml"));
+    let fix_path = fix_dir.join(format!("{id}.yaml"));
+    let staged = (|| -> std::io::Result<()> {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&bank_path)?;
+        f.write_all(bank.as_bytes())?;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&fix_path)?;
+        f.write_all(fixture.as_bytes())?;
+        Ok(())
+    })();
+    if staged.is_err() {
+        // A half-staged golden would refuse every later pass as already
+        // staged while its twin never lands: drop both halves so the draft
+        // can stage fresh.
+        let _ = std::fs::remove_file(&bank_path);
+        let _ = std::fs::remove_file(&fix_path);
+    }
+    staged
+}
+
+/// The staged batch: (file name, kept-at) pairs, oldest keep first.
+fn pending_files(dir: &Path) -> Vec<(String, std::time::SystemTime)> {
+    let bank = dir.join("pending").join("bank");
+    let mut found: Vec<(std::time::SystemTime, String)> = std::fs::read_dir(&bank)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "yaml"))
+        .filter_map(|p| {
+            let name = p.file_name()?.to_string_lossy().into_owned();
+            let at = std::fs::metadata(&p).and_then(|m| m.modified()).ok()?;
+            Some((at, name))
+        })
+        .collect();
+    found.sort();
+    found.into_iter().map(|(at, name)| (name, at)).collect()
+}
+
+/// True when the oldest staged golden has waited BATCH_MAX_AGE_DAYS.
+fn pending_stale(pending: &[(String, std::time::SystemTime)], now: std::time::SystemTime) -> bool {
+    let Some((_, oldest)) = pending.first() else {
+        return false;
+    };
+    let bound = std::time::Duration::from_secs(BATCH_MAX_AGE_DAYS * 24 * 60 * 60);
+    now.duration_since(*oldest)
+        .map(|d| d >= bound)
+        .unwrap_or(false)
+}
+
+/// One daily pass. Kept goldens stage into `<dir>/pending` and ship in
+/// batches through `open` (bank_pr::ship): the batch PR opens at BATCH_SIZE
+/// staged goldens or when the oldest has waited BATCH_MAX_AGE_DAYS days,
+/// and an open batch PR takes every new batch as a push. Returns the counts
+/// for the log.
 pub(crate) fn fill(
     dir: &Path,
     repo: &Path,
-    day: DateTime<Utc>,
+    now: std::time::SystemTime,
     max: usize,
     spawn: Spawn,
     open: Open,
 ) -> Result<Value, String> {
     let route = crate::reader_route::resolve(repo, "golden-drafter", None, MODEL);
     let (mut kept, mut dropped) = (Vec::new(), 0u64);
-    let mut edits: Vec<(PathBuf, Vec<u8>)> = Vec::new();
     for (hash, path) in open_drafts(dir).into_iter().take(max) {
         let draft = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
         let reply = spawn(
@@ -196,17 +274,24 @@ pub(crate) fn fill(
             continue;
         }
         match validate(repo, &reply) {
-            Ok(id) => {
-                edits.push((
-                    PathBuf::from(format!("evals/bank/{id}.yaml")),
-                    reply.bank.into_bytes(),
-                ));
-                edits.push((
-                    PathBuf::from(format!("evals/fixtures/metrics/{id}.yaml")),
-                    reply.fixture.into_bytes(),
-                ));
-                kept.push((hash, path, id));
-            }
+            Ok(id) => match stage(dir, &id, &reply.bank, &reply.fixture) {
+                Ok(()) => {
+                    record(dir, &hash, &format!("kept {id}"), &path);
+                    kept.push(id);
+                }
+                // The id is already staged from another draft and can never
+                // ship twice: refuse this one instead of retrying it daily.
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    record(
+                        dir,
+                        &hash,
+                        &format!("refused: {id} is already staged"),
+                        &path,
+                    );
+                    dropped += 1;
+                }
+                Err(e) => return Err(format!("stage {id}: {e}")),
+            },
             Err(why) => {
                 let note = if why.starts_with("grade unproved") {
                     format!("grade_unproved: {why}")
@@ -218,22 +303,44 @@ pub(crate) fn fill(
             }
         }
     }
-    if kept.is_empty() {
-        return Ok(json!({"kept": 0, "dropped": dropped}));
+    let pending = pending_files(dir);
+    if pending.is_empty() {
+        return Ok(json!({"kept": kept.len(), "dropped": dropped}));
     }
-    let branch = format!("evals/golden-drafts-{}", day.format("%Y-%m-%d"));
-    let title = format!(
-        "Add {} golden eval task(s) drafted from corrections",
-        kept.len()
-    );
-    let list: String = kept
+    let mut edits: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+    for (name, _) in &pending {
+        let bank = dir.join("pending").join("bank").join(name);
+        let fix = dir.join("pending").join("fixtures").join(name);
+        let bytes = std::fs::read(&bank).map_err(|e| format!("pending {}: {e}", bank.display()))?;
+        let fix_bytes =
+            std::fs::read(&fix).map_err(|e| format!("pending {}: {e}", fix.display()))?;
+        edits.push((PathBuf::from(format!("evals/bank/{name}")), bytes));
+        edits.push((
+            PathBuf::from(format!("evals/fixtures/metrics/{name}")),
+            fix_bytes,
+        ));
+    }
+    let title = "Golden eval tasks drafted from corrections";
+    let list: String = pending
         .iter()
-        .map(|(_, _, id)| format!("- `{id}`\n"))
+        .map(|(name, _)| format!("- `{}`\n", name.trim_end_matches(".yaml")))
         .collect();
     let body = format!("The daemon drafted these from typed user corrections. Each loaded as a golden, passed its 3 good fixture cases and failed its 3 bad ones. Read the prompt, the rule and the grade before you merge.\n\n{list}");
-    let url = open(&branch, &title, &body, &edits)?;
-    for (hash, path, _) in &kept {
-        record(dir, hash, &format!("pr {url}"), path);
+    // Below threshold with nothing stale: this pass only stages, and an open
+    // batch PR takes the batch only at the next one.
+    if pending.len() < BATCH_SIZE && !pending_stale(&pending, now) {
+        return Ok(json!({
+            "kept": kept.len(),
+            "dropped": dropped,
+            "waiting": pending.len(),
+        }));
+    }
+    let url = open(BATCH_BRANCH, title, &body, &edits)?;
+    // Shipped: clear the stage. A refusal above leaves it intact for the
+    // next pass.
+    for (name, _) in &pending {
+        let _ = std::fs::remove_file(dir.join("pending").join("bank").join(name));
+        let _ = std::fs::remove_file(dir.join("pending").join("fixtures").join(name));
     }
     Ok(json!({"kept": kept.len(), "dropped": dropped, "pr": url}))
 }
@@ -266,92 +373,22 @@ fn spawn_reader(
 /// The daemon's daily entry, called after the drafts pass.
 pub(crate) fn daily(dir: &Path) {
     let Some(repo) = bank_repo() else { return };
-    // `open` returns an open PR on the day's branch without pushing to it, so
-    // a second batch that day would be recorded as shipped and lost.
-    let branch = format!("evals/golden-drafts-{}", Utc::now().format("%Y-%m-%d"));
-    if matches!(crate::bank_pr::existing_pr(&repo, &branch), Ok(Some(_))) {
-        return;
-    }
-    let max = max_per_day(&repo);
     let open = |branch: &str, title: &str, body: &str, edits: &[(PathBuf, Vec<u8>)]| {
-        crate::bank_pr::open(&repo, branch, title, body, edits)
+        crate::bank_pr::ship(&repo, branch, title, body, edits).map_err(|e| e.to_string())
     };
-    match fill(dir, &repo, Utc::now(), max, &spawn_reader, &open) {
+    match fill(
+        dir,
+        &repo,
+        std::time::SystemTime::now(),
+        max_per_day(&repo),
+        &spawn_reader,
+        &open,
+    ) {
         Ok(v) => eprintln!("golden drafter: {v}"),
         Err(e) => eprintln!("golden drafter: {e}"),
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::cell::RefCell;
-
-    const BANK: &str = "id: golden-demo\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: reply.md\n  - kind: exit\n    command: \"grep -q yes reply.md\"\ntimeout_minutes: 5\ntags: [golden]\ngolden:\n  source: {kind: correction, ref: \"c:1\"}\n  quote: q\n  expected: e\n  rule: r\n  failure_type: evasive-answer\n  cost: trust\n  outcome: failed\n";
-
-    fn fixture(bad_passes: bool) -> String {
-        let bad = if bad_passes { "yes" } else { "nope" };
-        format!("cases:\n  - {{id: g1, label: good, files: {{\"reply.md\": \"yes\\n\"}}}}\n  - {{id: g2, label: good, files: {{\"reply.md\": \"yes 2\\n\"}}}}\n  - {{id: g3, label: good, files: {{\"reply.md\": \"yes 3\\n\"}}}}\n  - {{id: b1, label: bad, files: {{\"reply.md\": \"{bad}\\n\"}}}}\n  - {{id: b2, label: bad, files: {{\"reply.md\": \"no\\n\"}}}}\n  - {{id: b3, label: bad, files: {{}}}}\n")
-    }
-
-    fn repo_with_catalog() -> tempfile::TempDir {
-        let repo = tempfile::tempdir().unwrap();
-        let bank_dir = repo.path().join("evals").join("bank");
-        std::fs::create_dir_all(&bank_dir).unwrap();
-        std::fs::write(
-            bank_dir.join("failure-types.yaml"),
-            "cost_order: [trust]\ntypes:\n  - {id: evasive-answer, cost: trust, description: d}\n",
-        )
-        .unwrap();
-        repo
-    }
-
-    #[test]
-    fn no_case_and_unproved_replies_are_recorded_and_the_rest_ship_in_one_pr() {
-        let repo = repo_with_catalog();
-        let dir = tempfile::tempdir().unwrap();
-        for h in ["aaa", "bbb", "ccc"] {
-            std::fs::write(dir.path().join(format!("{h}.yaml")), "id: x\n").unwrap();
-            std::thread::sleep(std::time::Duration::from_millis(15));
-        }
-        let calls = RefCell::new(0);
-        let spawn = |name: &str, _: &str, _: &Path, _: u64, _: &ReaderRoute| {
-            *calls.borrow_mut() += 1;
-            let reply = match name {
-                "golden-drafter-aaa" => {
-                    json!({"verdict": "case", "bank": BANK, "fixture": fixture(false)})
-                }
-                "golden-drafter-bbb" => json!({"verdict": "no_case", "reason": "no repo rule"}),
-                _ => {
-                    json!({"verdict": "case", "bank": BANK.replace("golden-demo", "golden-demo2"), "fixture": fixture(true)})
-                }
-            };
-            Ok((0, format!("sure: {reply}"), String::new()))
-        };
-        let seen: RefCell<Vec<PathBuf>> = RefCell::new(Vec::new());
-        let open = |_: &str, _: &str, _: &str, edits: &[(PathBuf, Vec<u8>)]| {
-            seen.borrow_mut()
-                .extend(edits.iter().map(|(p, _)| p.clone()));
-            Ok("https://example/pr/1".to_string())
-        };
-        let out = fill(dir.path(), repo.path(), Utc::now(), 5, &spawn, &open).unwrap();
-        assert_eq!(out["kept"], 1, "{out}");
-        let files: Vec<String> = seen
-            .borrow()
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect();
-        assert_eq!(
-            files,
-            [
-                "evals/bank/golden-demo.yaml",
-                "evals/fixtures/metrics/golden-demo.yaml"
-            ]
-        );
-        let handled = std::fs::read_to_string(dir.path().join(".drafted")).unwrap();
-        assert_eq!(handled.lines().count(), 3, "{handled}");
-        assert!(handled.contains("ccc\tgrade_unproved"), "{handled}");
-        assert!(handled.contains("bbb\tno_case"), "{handled}");
-        assert!(open_drafts(dir.path()).is_empty());
-    }
-}
+#[path = "../golden_drafter_tests.rs"]
+mod golden_drafter_tests;

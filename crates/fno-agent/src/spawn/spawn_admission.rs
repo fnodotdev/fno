@@ -92,6 +92,11 @@ const SPAWN_VALUE_FLAGS_EXTRA: &[&str] = &[
     "--prompt-file",
     "--mux-session",
     "--spawned-by",
+    "--when",
+    "--every",
+    "--on",
+    "--grace",
+    "--cancel-scheduled",
 ];
 
 pub(crate) const HARNESS_FLAGS: &[&str] = &["--harness", "-H"];
@@ -1398,6 +1403,50 @@ mod tests {
             None => std::env::remove_var("FNO_STATE_DIR"),
         }
         let (rewritten, profile) = outcome.unwrap();
+        assert_eq!(rewritten, argv);
+        assert_eq!(profile, None);
+    }
+
+    /// A plan doc hand-stamped `status: draft` reads the design rung, so a
+    /// `/fno:blueprint` payload on the node admits instead of refusing
+    /// `plan rung "unreadable"` - the lead's re-plan door through --node.
+    #[test]
+    fn a_draft_plan_node_passes_a_blueprint_payload() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let plan = dir.path().join("plan.md");
+        std::fs::write(
+            &plan,
+            "---\nstatus: draft\nkind: plan\n---\n\n## Execution Strategy\n\none wave.\n",
+        )
+        .unwrap();
+        let entries = vec![serde_json::json!({
+            "id": "x-eeee", "slug": "x-eeee", "title": "the replan", "type": "feature",
+            "status": "ready", "priority": "p2", "project": "proj", "domain": "code",
+            "created_at": "2026-09-07T00:00:00Z",
+            "plan_path": plan.display().to_string(),
+        })];
+        crate::graph_store::seed_rows(&dir.path().join("graph.json"), &entries).unwrap();
+        let prior = std::env::var_os("FNO_STATE_DIR");
+        std::env::set_var("FNO_STATE_DIR", dir.path());
+        let argv: Vec<String> = [
+            "spawn",
+            "--node",
+            "x-eeee",
+            "--message",
+            "/fno:blueprint x-eeee re-plan the stale draft",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let outcome = node_seed_rewrite(&argv);
+        match prior {
+            Some(v) => std::env::set_var("FNO_STATE_DIR", v),
+            None => std::env::remove_var("FNO_STATE_DIR"),
+        }
+        let (rewritten, profile) = outcome.expect("a draft-plan node admits a blueprint payload");
         assert_eq!(rewritten, argv);
         assert_eq!(profile, None);
     }

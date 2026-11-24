@@ -36,6 +36,19 @@ pub(crate) fn install() -> DaemonAgentReceipt {
     let daemon_bin = resolve_daemon_binary();
     let agents_dir = launch_agents_dir();
     let agents_home = fno_agents_home();
+    if cfg!(target_os = "macos") && !daemon_bin.is_empty() {
+        // The logs dir must exist before launchd's first write; launchd does
+        // not create missing StandardOutPath parents.
+        let logs = crate::state_layout::home_of(&home().join(".fno"), "logs");
+        if let Err(e) = std::fs::create_dir_all(&logs) {
+            return DaemonAgentReceipt {
+                status: "failed".to_string(),
+                detail: format!("create {}: {e}", logs.display()),
+                plist: None,
+                label: None,
+            };
+        }
+    }
     install_into(&agents_dir, &daemon_bin, &agents_home)
 }
 
@@ -74,17 +87,6 @@ pub(crate) fn install_into(
                 label: None,
             };
         }
-    }
-    // The logs dir must exist before launchd's first write; launchd does
-    // not create missing StandardOutPath parents.
-    let logs = home().join(".fno").join("logs");
-    if let Err(e) = std::fs::create_dir_all(&logs) {
-        return DaemonAgentReceipt {
-            status: "failed".to_string(),
-            detail: format!("create {}: {e}", logs.display()),
-            plist: None,
-            label: None,
-        };
     }
     match write_if_changed(&plist_path, &rendered) {
         Ok(false) => {
@@ -216,7 +218,7 @@ fn xml_escape(value: &str) -> String {
 /// Render the daemon LaunchAgent plist. No filesystem writes.
 fn render_plist(daemon_bin: &str, agents_home: &str, label: &str) -> String {
     let home = home();
-    let logs = home.join(".fno").join("logs");
+    let logs = crate::state_layout::home_of(&home.join(".fno"), "logs");
     let esc = xml_escape;
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>

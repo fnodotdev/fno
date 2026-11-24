@@ -252,6 +252,12 @@ fn tilde_key(k: &Key, n: u8) -> Vec<u8> {
     }
 }
 
+/// The scanner holds a prefix, a chord candidate or a tab number: the next
+/// keystroke, text included, belongs to it.
+pub fn chord_in_flight(scanner: &fno::ui::keys::Scanner) -> bool {
+    scanner.prefix_pending() || scanner.chord_pending() || scanner.digits_pending()
+}
+
 /// True for a key that types text: the window leaves it to the platform
 /// input handler, so dead keys, option-compose and IME compose before the
 /// text reaches the pane. Ctrl, cmd and named keys are encoded here.
@@ -559,6 +565,31 @@ mod tests {
         assert_eq!(paste("a\nb", modes), b"a\rb");
         modes.apply(b"\x1b[?2004h");
         assert_eq!(paste("a\nb", modes), b"\x1b[200~a\rb\x1b[201~");
+    }
+
+    /// The key after the prefix is a text key, which
+    /// the window receives through the input handler. That path must hand it
+    /// to the scanner while a chord is in flight, and only then.
+    #[test]
+    fn a_text_key_after_the_prefix_belongs_to_the_scanner() {
+        use fno::ui::keys::{Event, Scanner};
+        use std::time::Instant;
+        let mut scanner = Scanner::default();
+        assert!(!chord_in_flight(&scanner), "plain typing stays pane input");
+        scanner.scan(&[0x02], Instant::now());
+        assert!(chord_in_flight(&scanner), "the prefix claims the next key");
+        let events = scanner.scan(b"c", Instant::now());
+        assert!(
+            matches!(events.as_slice(), [Event::Cmd(_)]),
+            "prefix+c runs a command, got {events:?}"
+        );
+        assert!(!chord_in_flight(&scanner), "the chord resolved");
+        scanner.scan(&[0x02], Instant::now());
+        scanner.scan(b"3", Instant::now());
+        assert!(
+            chord_in_flight(&scanner),
+            "a held tab number still owns the next key"
+        );
     }
 
     /// The app_prefix contract: the shared scanner claims the prefix before

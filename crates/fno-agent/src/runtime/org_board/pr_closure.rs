@@ -130,7 +130,9 @@ pub(crate) struct Retarget {
 
 /// The rest of `line` after a `retarget` keyword, mirroring
 /// `closure_line_rest`: keyword + colon or whitespace, glued text is prose.
-fn retarget_line_rest(line: &str) -> Option<&str> {
+/// The style checker reads the same grammar to leave a well-formed line
+/// alone.
+pub(crate) fn retarget_line_rest(line: &str) -> Option<&str> {
     let kw = "retarget";
     if line.len() >= kw.len()
         && line
@@ -162,8 +164,8 @@ pub(crate) fn retarget_with(
     resolve: &dyn Fn(&str) -> Option<String>,
 ) -> Option<Retarget> {
     let id_re = regex::Regex::new(&format!("^{NODE_ID_BODY}$")).expect("static regex");
-    let approval_re =
-        regex::Regex::new(r"^((fmail|msg)-[0-9a-f]{6,}|d-[0-9a-f]{8})$").expect("static regex");
+    let approval_re = regex::Regex::new(r"^((fmail|msg)-[0-9a-f]{6,}|d-[0-9a-f]{8}|D[0-9]{1,7})$")
+        .expect("static regex");
     let mut last: Option<Retarget> = None;
     for line in body.lines() {
         let Some(rest) = retarget_line_rest(line) else {

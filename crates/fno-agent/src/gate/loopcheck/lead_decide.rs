@@ -817,6 +817,7 @@ mod stale_team_doc_tests {
             read_timeout_ms: None,
             harness: None,
             harness_session: None,
+            continuation_owner: "loop_check".into(),
         };
         super::stopgate_stamp_fire(0, std::time::Instant::now() + Duration::from_secs(50), 0);
         let (code, out) = lead_decide(&parsed, None);

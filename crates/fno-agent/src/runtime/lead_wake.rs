@@ -77,7 +77,9 @@ pub(crate) struct WakePlan<'a> {
     pub park_beat: bool,
 }
 
-fn scope_members(scope: &str) -> impl Iterator<Item = &str> {
+/// The node ids a scope spelling names: its comma-separated members, trimmed.
+/// A project-name scope yields names no graph row carries.
+pub(crate) fn scope_members(scope: &str) -> impl Iterator<Item = &str> {
     scope.split(',').map(str::trim).filter(|s| !s.is_empty())
 }
 
@@ -300,7 +302,13 @@ fn resume_resting_goal(
     lead_session: &str,
     roots: &BTreeMap<String, String>,
 ) -> Option<String> {
-    let root = roots.get(&plan.lead.holder).filter(|r| !r.is_empty())?;
+    let root = plan
+        .lead
+        .holder_session
+        .as_deref()
+        .and_then(|sid| roots.get(sid))
+        .or_else(|| roots.get(&plan.lead.holder))
+        .filter(|r| !r.is_empty())?;
     let manifest_path = crate::paths::space_dir(Path::new(root))
         .join("leads")
         .join(format!("{}.md", plan.lead.scope));
@@ -541,13 +549,28 @@ pub(crate) fn run_pass(home: &AgentsHome, config_cwd: &Path) -> Result<Outcome, 
                 loaded
                     .entries
                     .into_iter()
-                    .map(|e| {
+                    .flat_map(|e| {
                         let member = e
                             .role_scope
                             .as_deref()
                             .and_then(|s| scope_members(s).next());
                         let root = journal_root(&e, member, &workspace_roots);
-                        (e.name, root)
+                        // Keyed on the session id (law d-e952ed19); a row
+                        // with no id keeps the name key, the legacy shape.
+                        let sid = crate::territory::row_session_id(&e).to_string();
+                        if sid.is_empty() {
+                            return vec![(e.name.clone(), root)];
+                        }
+                        // A row whose id came from the Rust-only session_id
+                        // field keeps its name key too: the beat team's
+                        // holder_session reads only harness_session_id, so
+                        // the resume lookup falls back to the name.
+                        let harness = e.harness_session_id.as_deref().unwrap_or("");
+                        if harness.is_empty() {
+                            vec![(sid.clone(), root.clone()), (e.name.clone(), root)]
+                        } else {
+                            vec![(sid, root)]
+                        }
                     })
                     .collect()
             })

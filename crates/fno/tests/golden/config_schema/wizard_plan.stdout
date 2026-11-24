@@ -127,6 +127,15 @@
       "doc": "When a headless harness has no confinement backend: refuse before spawn (default) or explicitly warn and continue unconfined."
     },
     {
+      "path": "sandbox.provider",
+      "type": "typing.Literal['none', 'docker', 'podman', 'apple', 'devcontainer']",
+      "default": "none",
+      "tier": "advanced",
+      "question": "Run headless workers in a container sandbox, and on which engine?",
+      "default_source": "default",
+      "doc": "Runs each headless worker in its own container with no mount and no network, reached only through the host relay. docker covers OrbStack and Docker Desktop. devcontainer builds the image from the default branch's .devcontainer and runs it on docker. apple refuses until it passes the sandbox journey. A project layer can raise none to a sandbox but never lower or switch a global provider."
+    },
+    {
       "path": "blueprint.max_prs_per_epic",
       "type": "int",
       "default": 4,
@@ -424,6 +433,15 @@
       "doc": "Export event titles as log text (default off: only the event kind)."
     },
     {
+      "path": "telemetry.otlp.forward_requests",
+      "type": "bool",
+      "default": false,
+      "tier": "advanced",
+      "question": "",
+      "default_source": "",
+      "doc": "Also forward the masked api_request records from otel.db through the export arm (needs telemetry.otlp.enabled)."
+    },
+    {
       "path": "telemetry.eval_events.enabled",
       "type": "bool",
       "default": false,
@@ -511,7 +529,16 @@
       "tier": "advanced",
       "question": "",
       "default_source": "",
-      "doc": "Push sinks for open questions: a list of tables with name, type (ntfy or webhook), url, topic, token_env, answer_base_url and body (title-only or full)."
+      "doc": "Push sinks for open questions: a list of tables with name, type (ntfy or webhook), url, topic, token_env, answer_base_url and body (title-only or full). Read from the global config only: a project file grants none."
+    },
+    {
+      "path": "web.invites",
+      "type": "list[dict[str, Any]]",
+      "default": [],
+      "tier": "advanced",
+      "question": "",
+      "default_source": "",
+      "doc": "Who can read and answer on the web bridge over a tailnet: a list of tables with email, scope (* or a node id) and role (viewer, commenter, editor, owner). Read from the global config only: a project file invites nobody. A change applies without a restart."
     },
     {
       "path": "research.output_dir",
@@ -647,6 +674,15 @@
       "question": "",
       "default_source": "",
       "doc": "When true (default), a non-author human GitHub APPROVED review satisfies coverage on its own - the one producer a stranger's GitHub project emits with no footnote machinery. The approver's login must differ from the PR author's (GitHub refuses an author's approval server-side; the gate asserts it, and an unreadable PR author excludes fail-closed). Set false to keep today's recorded-but-never-counted behavior. Limit: GitHub's refusal is per identity, not per human - a second account with its own token can still self-approve."
+    },
+    {
+      "path": "review.human",
+      "type": "string",
+      "default": null,
+      "tier": "advanced",
+      "question": "",
+      "default_source": "",
+      "doc": "The person gate (never | ui | always; default ui). never and ui keep today's behavior: nothing requires a person. always requires a person's GitHub approval of the PR head (an APPROVED review by a login that is not the PR author, fresh at the head): fno do pr status reads not ready and the merge refuses until one lands, and the review-round cap does not discharge it (the lever back off is this key). Validated at write: never, ui or always."
     },
     {
       "path": "review.max_rounds",
@@ -1907,6 +1943,24 @@
       "question": "",
       "default_source": "default",
       "doc": "The Dock badge showing the count of blocked agents in fno-app (default on)."
+    },
+    {
+      "path": "app.font",
+      "type": "str",
+      "default": "SF Mono",
+      "tier": "advanced",
+      "question": "",
+      "default_source": "default",
+      "doc": "The terminal pane font family. fno-app's Settings page paints it as a choice page over the installed monospaced families; a name the text system cannot resolve falls back to the platform mono at launch. The chrome (labels, lists, title bar) stays SF Mono."
+    },
+    {
+      "path": "app.font_size",
+      "type": "float",
+      "default": 13.0,
+      "tier": "advanced",
+      "question": "",
+      "default_source": "default",
+      "doc": "The terminal pane font size in points, bounded 8 to 32. fno-app's Settings page cycles it through 11, 12, 13, 14, 15, 16 and 18, and the panes re-measure their cells live."
     },
     {
       "path": "mux.attach_digest",

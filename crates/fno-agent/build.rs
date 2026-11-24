@@ -52,6 +52,7 @@ fn main() {
     sync_module_copy("glob");
     sync_module_copy("lenient_de");
     sync_module_copy("legacy_env");
+    sync_module_copy("trusted_config");
     sync_module_copy("spawn/harness");
     sync_model_reach();
     sync_registry_schema();

@@ -69,12 +69,17 @@ pub(crate) fn meters(rows: &[AgentRow]) -> BTreeMap<String, serde_json::Value> {
                 .filter(|s| !s.is_empty())?;
             (row.session_cost_cents.is_some()
                 || row.session_tokens.is_some()
-                || row.compaction_count.is_some())
+                || row.compaction_count.is_some()
+                || row.session_input_tokens.is_some())
             .then(|| {
                 let meter = serde_json::json!({
                     "cost_cents": row.session_cost_cents,
                     "tokens": row.session_tokens,
                     "compactions": row.compaction_count,
+                    "input_tokens": row.session_input_tokens,
+                    "output_tokens": row.session_output_tokens,
+                    "cache_read_tokens": row.session_cache_read_tokens,
+                    "cache_write_tokens": row.session_cache_write_tokens,
                 });
                 (session.to_string(), meter)
             })
@@ -209,7 +214,9 @@ mod tests {
             counts,
             BTreeMap::from([(
                 "s1".to_string(),
-                serde_json::json!({"cost_cents": 42, "tokens": 9000, "compactions": null}),
+                serde_json::json!({"cost_cents": 42, "tokens": 9000, "compactions": null,
+                    "input_tokens": null, "output_tokens": null,
+                    "cache_read_tokens": null, "cache_write_tokens": null}),
             )]),
             "only a session with a reading files a meter"
         );
@@ -239,7 +246,9 @@ mod tests {
             serde_json::json!({
                 "at": 1000,
                 "by_session": {"s1": "fno"},
-                "meters": {"s1": {"cost_cents": 42, "tokens": 9000, "compactions": null}},
+                "meters": {"s1": {"cost_cents": 42, "tokens": 9000, "compactions": null,
+                    "input_tokens": null, "output_tokens": null,
+                    "cache_read_tokens": null, "cache_write_tokens": null}},
                 "cards": {"s1": {
                     "badge": "working", "seen": false, "context_pct": 40,
                     "pr": 7, "build": null, "activity": [[1, 0], [3, 1]],

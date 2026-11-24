@@ -23,6 +23,7 @@ use crate::attention_file::FileAnswer;
 use crate::attention_http::{
     delivery_id, record_sink_health, Deliveries, DeliveryRow, PostResult, RefusedSink,
 };
+use crate::trusted_config::{Rows, TrustedFile, TrustedKey};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Instant;
@@ -176,13 +177,16 @@ pub fn transport_for<'a>(
     }
 }
 
-/// Load the chat rows of `[[attention.sinks]]` for this machine. Returns
+/// Load the chat rows of `[[attention.sinks]]` for this machine from the
+/// trusted file, so a project row never names who may answer. Returns
 /// the sinks, the refused rows and one detail line per row that names
 /// another machine.
-pub fn load_chat_sinks(cwd: &Path) -> (Vec<ChatSink>, Vec<RefusedSink>, Vec<String>) {
-    let rows = crate::agents_config::config_lookup(cwd, &["attention", "sinks"])
-        .and_then(|v| v.as_array().cloned())
-        .unwrap_or_default()
+pub fn load_chat_sinks(file: &TrustedFile) -> (Vec<ChatSink>, Vec<RefusedSink>, Vec<String>) {
+    let rows = match file.rows(TrustedKey::AttentionSinks) {
+        Rows::List(rows) => rows,
+        Rows::Absent | Rows::Invalid(_) => Vec::new(),
+    };
+    let rows = rows
         .iter()
         .filter_map(|r| serde_json::to_value(r).ok())
         .collect::<Vec<_>>();

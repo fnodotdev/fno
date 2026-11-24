@@ -372,16 +372,12 @@ else
   echo "setup-worktree: could not resolve git-common-dir; salvage-ref hook not installed" >&2
 fi
 
-# Salvage remote mirror: ON by default for every fno worktree. The
-# founding case loses work only while commits live on one disk; pushing HEAD
-# to refs/fno/salvage/<worktree> at commit time closes that window. With
-# extensions.worktreeConfig on this lands in THIS worktree's own config;
-# `git config --local --unset fno.salvageRemoteMirror` opts back out (e.g. an
-# air-gapped clone).
-if git -C "$WORKTREE" config --local fno.salvageRemoteMirror true 2>/dev/null; then
-  echo "setup-worktree: salvage mirror: on (refs/fno/salvage/$(basename "$WORKTREE") on origin)"
-else
-  echo "setup-worktree: salvage mirror not set (git config failed); commits stay local-only" >&2
-fi
+# Salvage remote mirror: stays OFF. The local salvage ref above already
+# makes a commit gc-proof offline, while the mirror publishes worktree
+# commits to origin, so it is opt-in only and setup never sets the key.
+# To turn the mirror on for one worktree by hand, run
+# `git config --local fno.salvageRemoteMirror true` in it (with
+# extensions.worktreeConfig on, that lands in this worktree's own config).
+echo "setup-worktree: salvage mirror not enabled by setup (stays off unless you opt in by hand)"
 
 echo "setup-worktree: linked shared state from $CANONICAL into $WORKTREE"

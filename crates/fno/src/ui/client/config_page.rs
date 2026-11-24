@@ -13,7 +13,8 @@
 
 use super::*;
 use crate::config::config_cli;
-use crate::config::config_schema::{setting_specs, EditMode};
+use crate::config::config_schema::{setting_specs, EditMode, SettingSpec};
+use crate::trusted_config::{Fault, TrustedFile, TrustedKey};
 use setting_list::{Choice, ListEvent, RowMode, SettingList, SettingRow};
 
 /// The tab's state: the list (query, page, note) over the loaded rows.
@@ -221,9 +222,13 @@ fn compute_rows() -> Vec<SettingRow> {
     let target_pos = resolved_ladder
         .iter()
         .position(|p| *p == config_cli::resolve_path(&target));
+    let trusted = TrustedFile::from_env();
     let rows: Vec<SettingRow> = setting_specs()
         .into_iter()
         .map(|spec| {
+            if let Some(key) = trusted_key(&spec.key) {
+                return trusted_row(spec, key, &trusted);
+            }
             let live = config_cli::raw_get(&merged, &spec.key).cloned();
             let effective = live.unwrap_or_else(|| spec.default.clone());
             let mut mode = match spec.edit {
@@ -279,6 +284,41 @@ fn compute_rows() -> Vec<SettingRow> {
     // the top level (the user's look on the frames asked for one collapsed
     // "Paths" row; State Dir stays top level, it is the state_dir leaf).
     fold_paths(rows)
+}
+
+/// The row of a key that grants access. It shows the file a save replaces,
+/// never the merged view: a save would turn that view's project rows into
+/// grants. Rows that cannot be read lock it.
+fn trusted_row(spec: SettingSpec, key: TrustedKey, file: &TrustedFile) -> SettingRow {
+    let (mode, raw) = match granted_text(key, file) {
+        Ok(raw) => (RowMode::Editor, raw),
+        Err(fault) => (
+            RowMode::Locked {
+                reason: fault.to_string(),
+            },
+            String::new(),
+        ),
+    };
+    SettingRow {
+        label: row_label(&spec.key, &spec.label),
+        display: row_display(&spec.key, &raw),
+        id: spec.key,
+        value: raw,
+        detail: spec.doc,
+        mode,
+    }
+}
+
+/// The list a save of `key` replaces, as the row and its editor seed spell it.
+fn granted_text(key: TrustedKey, file: &TrustedFile) -> Result<String, Fault> {
+    crate::setup_messaging::rows_to_rewrite(file, key)
+        .map(|rows| value_text(&serde_json::Value::Array(rows)))
+}
+
+/// True when `id` grants access and its list is no longer the one `seed` was
+/// read from. A save would then undo what changed, such as a revoke.
+fn changed_since(id: &str, seed: &str, file: &TrustedFile) -> bool {
+    trusted_key(id).is_some_and(|key| granted_text(key, file).ok().as_deref() != Some(seed))
 }
 
 /// The painted value for one row: the generic unset paint, or the path
@@ -635,16 +675,28 @@ async fn set_key(
     reload_rows();
 }
 
-/// Clear one key through the same door (`fno config unset`, project scope).
+/// Clear one key through the same door (`fno config unset`), in the file
+/// [`write_value`] writes: a revoke must remove the row that grants.
 async fn unset_key(id: &str) {
-    record_write(id, config_set::spawn_scoped(id, None, true).await.err());
+    let local = !machine_only(id);
+    record_write(id, config_set::spawn_scoped(id, None, local).await.err());
     reload_rows();
 }
 
-/// The one write door: `fno config set`, project scope, except the global
-/// host list, which belongs to the user file.
+/// A key that belongs to the user file: the host list, and the keys that
+/// grant access, which a project file cannot set.
+fn machine_only(id: &str) -> bool {
+    id == "mux.remote_hosts" || trusted_key(id).is_some()
+}
+
+fn trusted_key(id: &str) -> Option<TrustedKey> {
+    TrustedKey::ALL.into_iter().find(|key| key.dotted() == id)
+}
+
+/// The one write door: `fno config set`, project scope, except a
+/// [`machine_only`] key.
 async fn write_value(id: &str, value: &str) -> Option<String> {
-    let result = if id == "mux.remote_hosts" {
+    let result = if machine_only(id) {
         config_set::spawn_config_set_global(id, value).await
     } else {
         config_set::spawn_config_set(id, value).await
@@ -754,12 +806,61 @@ async fn edit_value(
     if text.is_empty() || text == seed {
         return;
     }
+    if changed_since(id, seed, &TrustedFile::from_env()) {
+        let message = "the list changed while you edited, so nothing was saved; edit it again";
+        record_write(id, Some(message.to_string()));
+        reload_rows();
+        return;
+    }
     set_key(view, id, &text, sock_w).await;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The editor saves a trusted key to the global file, so it opens on that
+    /// file's rows and refuses to save over a list that changed since.
+    #[test]
+    fn a_trusted_row_edits_the_global_list_only() {
+        let _env = crate::digest_overlay::ENVIRONMENT_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().expect("temp dir");
+        let checkout = dir.path().join("checkout");
+        std::fs::create_dir_all(checkout.join(".fno")).expect("checkout");
+        let global = dir.path().join("config.toml");
+        let row = |who: &str| format!("[[web.invites]]\nemail = \"{who}\"\nrole = \"owner\"\n");
+        std::fs::write(&global, row("kept@example.com")).expect("global seeded");
+        std::fs::write(checkout.join(".fno/config.toml"), row("clone@example.com"))
+            .expect("project seeded");
+        let names = ["FNO_CONFIG", "FNO_GLOBAL_SETTINGS_PATH", "FNO_REPO_ROOT"];
+        let saved = names.map(std::env::var_os);
+        std::env::remove_var("FNO_CONFIG");
+        std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", &global);
+        std::env::set_var("FNO_REPO_ROOT", &checkout);
+        let rows = compute_rows();
+        let file = TrustedFile::from_env();
+        for (name, value) in names.into_iter().zip(saved) {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+        let seed = rows
+            .iter()
+            .find(|r| r.id == "web.invites")
+            .map(|r| r.value.clone())
+            .expect("the invites row");
+        assert!(seed.contains("kept@example.com"), "{seed}");
+        assert!(!seed.contains("clone@example.com"), "{seed}");
+        assert!(!changed_since("web.invites", &seed, &file));
+        std::fs::write(&global, "").expect("revoked");
+        assert!(
+            changed_since("web.invites", &seed, &file),
+            "a revoke stands"
+        );
+    }
 
     /// A long default sketch keeps both ends inside the column, and a key
     /// with no default says so instead of the empty word "default".

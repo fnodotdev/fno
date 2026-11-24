@@ -236,14 +236,24 @@ _plan_node_id() {
 # -<prefix>-<hex>.md rule the plan-path resolver applies.
 # A name that only mentions an id mid-slug is not a filename-encoded id.
 _plan_filename_node_id() {
-    local base
+    local base id
     base=$(basename "$1")
-    printf '%s' "$base" | awk '
+    id=$(printf '%s' "$base" | awk '
         match($0, /-[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}\.md$/) {
             print substr($0, RSTART + 1, RLENGTH - 4)
             exit
         }
-    '
+    ')
+    if [[ -z "$id" && "$base" =~ -([a-z][a-z0-9]{0,7}-[0-9]{1,7})\.md$ ]]; then
+        local numbered="${BASH_REMATCH[1]}"
+        if _ids_sequential; then id="$numbered"; fi
+    fi
+    printf '%s' "$id"
+}
+
+# backlog.id_mode, read only after the hex shape failed. No fno reads as hex.
+_ids_sequential() {
+    [[ "$(fno config get backlog.id_mode 2>/dev/null </dev/null)" == "sequential" ]]
 }
 
 # Is this string one of the two id shapes a graph can hold? The canonical
@@ -251,8 +261,11 @@ _plan_filename_node_id() {
 # mint produced both bind. A bare all-hex word stays out (the letter-led
 # git-hash shape is not an id; ERE has no lookahead, so two tests).
 _is_node_id_sh() {
-    [[ "$1" =~ ^[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}$ ]] \
-        && [[ ! "$1" =~ ^[0-9a-f]+$ ]]
+    if [[ "$1" =~ ^[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}$ ]] \
+        && [[ ! "$1" =~ ^[0-9a-f]+$ ]]; then
+        return 0
+    fi
+    [[ "$1" =~ ^[a-z][a-z0-9]{0,7}-[0-9]{1,7}$ ]] && _ids_sequential
 }
 
 # The parse-door read for the gate-record keys, one plan-cli parse per file.
@@ -339,39 +352,49 @@ _resolve_acked_forms() {
     done
 }
 
+# Pick a binary: an explicit executable override, a source-root build, then
+# PATH. A source-root build older than the PATH binary is skipped, so a
+# forgotten `cargo build` cannot shadow a newer install; the skip names both
+# paths on stderr. Args: override, source root, crate dir, binary name.
+_resolve_bin() {
+    local override="$1" source_root="$2" crate="$3" name="$4"
+    local on_path="" profile="" built=""
+    if [[ -n "$override" && -x "$override" ]]; then
+        printf '%s' "$override"
+        return 0
+    fi
+    on_path=$(command -v "$name" 2>/dev/null || true)
+    if [[ -n "$source_root" ]]; then
+        for profile in release debug; do
+            built="$source_root/crates/$crate/target/$profile/$name"
+            [[ -x "$built" ]] || continue
+            if [[ -n "$on_path" && "$on_path" -nt "$built" ]]; then
+                echo "validate-plan: skipping stale build $built (older than $on_path); using $on_path" >&2
+                continue
+            fi
+            printf '%s' "$built"
+            return 0
+        done
+    fi
+    if [[ -n "$on_path" ]]; then
+        printf '%s' "$on_path"
+    fi
+    return 0
+}
+
 # Echo the fno-agent binary the Rust-backed checks shell out to, resolved
 # with the stop hook's order: an explicit executable $FNO_AGENT_BIN, a build
 # under the source root, then PATH. Empty means no binary: callers warn NOT
 # CHECKED rather than pass.
 resolve_agents_bin() {
-    local source_root=""
-    source_root=$(_fno_source_root)
-    if [[ -n "${FNO_AGENT_BIN:-}" && -x "${FNO_AGENT_BIN}" ]]; then
-        printf '%s' "$FNO_AGENT_BIN"
-    elif [[ -n "$source_root" && -x "$source_root/crates/fno-agent/target/release/fno-agent" ]]; then
-        printf '%s' "$source_root/crates/fno-agent/target/release/fno-agent"
-    elif [[ -n "$source_root" && -x "$source_root/crates/fno-agent/target/debug/fno-agent" ]]; then
-        printf '%s' "$source_root/crates/fno-agent/target/debug/fno-agent"
-    elif command -v fno-agent >/dev/null 2>&1; then
-        command -v fno-agent
-    fi
+    _resolve_bin "${FNO_AGENT_BIN:-}" "$(_fno_source_root)" fno-agent fno-agent
 }
 
 # Echo the native fno front binary: an explicit executable $FNO_BIN, a build
 # under the source root, then PATH. The law stage read lives here
 # (`fno inbox decisions stage`); empty means the caller warns NOT CHECKED.
 resolve_front_bin() {
-    local source_root=""
-    source_root=$(_fno_source_root)
-    if [[ -n "${FNO_BIN:-}" && -x "${FNO_BIN}" ]]; then
-        printf '%s' "$FNO_BIN"
-    elif [[ -n "$source_root" && -x "$source_root/crates/fno/target/release/fno" ]]; then
-        printf '%s' "$source_root/crates/fno/target/release/fno"
-    elif [[ -n "$source_root" && -x "$source_root/crates/fno/target/debug/fno" ]]; then
-        printf '%s' "$source_root/crates/fno/target/debug/fno"
-    elif command -v fno >/dev/null 2>&1; then
-        command -v fno
-    fi
+    _resolve_bin "${FNO_BIN:-}" "$(_fno_source_root)" fno fno
 }
 
 _semantic_validate() {
@@ -1151,7 +1174,7 @@ check_consolidation_file() {
                 local -a stage_laws=()
                 local s_line
                 while IFS= read -r s_line; do
-                    if [[ "$s_line" =~ ^-[[:space:]](d-[0-9a-f]{8})[[:space:]]\((.+)\): ]]; then
+                    if [[ "$s_line" =~ ^-[[:space:]](d-[0-9a-f]{8}|D[0-9]{1,7})[[:space:]]\((.+)\): ]]; then
                         stage_laws+=("${BASH_REMATCH[1]}"$'\t'"${BASH_REMATCH[2]}")
                     fi
                 done <<< "$stage_context"

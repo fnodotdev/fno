@@ -901,7 +901,7 @@ Dispatch a fire-and-forget autonomous ``/target`` (or ``dispatch_command``) work
 
     Returns the spawn receipt's LAUNCH IDENTITY: the claude short_id, or for a
     codex thread the FULL harness_session_id (codex has no short id; a head-8
-    slice is refused by shape - ruling d-513d9d22). Raises SpawnAlreadyRunning
+    slice is refused by shape - ruling D757). Raises SpawnAlreadyRunning
     on a name-collision (a peer beat us in the boot window),
     DispatchResolveError on an unresolvable harness/substrate/command (caught
     non-fatally by the caller), and SpawnError otherwise.

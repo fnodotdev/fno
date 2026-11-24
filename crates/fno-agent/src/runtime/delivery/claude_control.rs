@@ -93,24 +93,70 @@ pub fn deliver_via_control_sock_in(
     ))
 }
 
-/// Type one permission-response key over the attach transport: the wire form
-/// of `claude attach` + pressing the picker key. Post-attach the
-/// `control.sock` is a raw keystroke pipe, so the key plus a separate CR
-/// answers a showing prompt without a TTY. No transcript confirm: the picker
-/// closes on the key and prints nothing a message confirm could grep for.
-pub fn answer_permission_via_control_sock_in(
+/// Why a checked key was not typed.
+#[derive(Debug, PartialEq, Eq)]
+pub enum TypeRefusal {
+    /// The redraw read on the typing connection no longer matches what the
+    /// caller chose the key from. No byte was written.
+    Changed,
+    /// The roster, socket or attach step failed before any byte was written,
+    /// or the write itself failed.
+    Wire(&'static str),
+}
+
+/// Type one permission-response key on the SAME attach that read the screen.
+/// The redraw is read first and handed to `same`; only a `true` answer lets
+/// the key out, so a prompt that moved on between the caller's read and this
+/// attach never receives a key chosen for another menu. A digit selects its
+/// option and closes the picker by itself, so no CR follows: a CR sent after
+/// the menu closed would confirm whatever prompt came next.
+pub fn type_key_if_screen_unchanged(
     daemon_dir: &Path,
     session: &str,
     key: &str,
-    enter_delay_ms: u64,
-) -> Result<(), &'static str> {
+    same: impl FnOnce(&str) -> bool,
+) -> Result<(), TypeRefusal> {
+    use std::io::Write as _;
     if key.is_empty() || key.chars().any(|c| c.is_control()) {
-        return Err("unsafe-text");
+        return Err(TypeRefusal::Wire("unsafe-text"));
     }
-    let mut transport = attach_worker(daemon_dir, session)?;
-    transport.send_line(key).map_err(|_| "io-error")?;
-    std::thread::sleep(Duration::from_millis(enter_delay_ms));
-    transport.send_line("\r").map_err(|_| "io-error")
+    let roster = ClaudeRoster::load(&daemon_dir.join("roster.json"))
+        .map_err(|_| TypeRefusal::Wire(NOT_INJECTABLE))?;
+    let worker = roster
+        .find(session)
+        .ok_or(TypeRefusal::Wire(NOT_INJECTABLE))?;
+    let sock = worker
+        .resolve_control_sock()
+        .ok_or(TypeRefusal::Wire(NOT_INJECTABLE))?;
+    let stream =
+        std::os::unix::net::UnixStream::connect(sock).map_err(|_| TypeRefusal::Wire("io-error"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_millis(400)))
+        .map_err(|_| TypeRefusal::Wire("io-error"))?;
+    let writer = stream
+        .try_clone()
+        .map_err(|_| TypeRefusal::Wire("io-error"))?;
+    let mut typer = stream
+        .try_clone()
+        .map_err(|_| TypeRefusal::Wire("io-error"))?;
+    let (_, mut frames) = crate::claude_attach::attach_for_frames(
+        writer,
+        stream,
+        &AttachRequest::for_frame_stream(
+            worker.short_id().to_string(),
+            read_control_key_in(daemon_dir),
+        ),
+    )
+    .map_err(|_| TypeRefusal::Wire("attach-failed"))?;
+    let mut grid = crate::screen::TerminalGrid::with_default_size();
+    drain_frames(&mut frames, &mut grid).map_err(|_| TypeRefusal::Wire("io-error"))?;
+    if !same(&grid.snapshot().text) {
+        return Err(TypeRefusal::Changed);
+    }
+    typer
+        .write_all(key.as_bytes())
+        .and_then(|()| typer.flush())
+        .map_err(|_| TypeRefusal::Wire("io-error"))
 }
 
 /// Press Esc in a claude session: the key that interrupts a running turn.
@@ -230,6 +276,15 @@ pub(crate) fn read_screen(
     )
     .map_err(|e| e.to_string())?;
     let mut grid = crate::screen::TerminalGrid::with_default_size();
+    drain_frames(&mut frames, &mut grid).map_err(|e| e.to_string())?;
+    Ok(grid.snapshot().text)
+}
+
+/// Feed the redraw frames into `grid` until the read window closes.
+fn drain_frames(
+    frames: &mut impl std::io::Read,
+    grid: &mut crate::screen::TerminalGrid,
+) -> std::io::Result<()> {
     let (start, mut total) = (std::time::Instant::now(), 0usize);
     let mut buf = [0u8; 8192];
     while start.elapsed() < READ_WINDOW && total < MAX_BYTES {
@@ -249,10 +304,10 @@ pub(crate) fn read_screen(
                     break;
                 }
             }
-            Err(e) => return Err(e.to_string()),
+            Err(e) => return Err(e),
         }
     }
-    Ok(grid.snapshot().text)
+    Ok(())
 }
 
 /// Whether the worker behind `endpoint` answers the attach handshake: the

@@ -1048,6 +1048,23 @@ impl MessagesBoard {
         if self.filter == ListFilter::Broadcasts && rows.is_empty() {
             lines.extend(TLine::meta("(no broadcast groups)").wrap(wrap_w));
         }
+        // The You row is a standing affordance, never content: an empty
+        // board is one where no row but You paints. The line belongs to the
+        // Agents tab: an empty Archive tab reads empty by design, not
+        // because no mail was ever imported.
+        let only_you = rows.iter().all(|r| matches!(r, TreeRow::Asks { .. }));
+        if self.snapshot.projection.is_some()
+            && self.filter == ListFilter::All
+            && self.list_tab == ListTab::Agents
+            && only_you
+        {
+            lines.extend(
+                TLine::meta(
+                    "No mail yet. Import past sessions: fno mail admin backfill --all --apply",
+                )
+                .wrap(wrap_w),
+            );
+        }
         lines.push(TLine::meta(""));
         for (i, row) in rows.iter().enumerate() {
             let mut line = match row {

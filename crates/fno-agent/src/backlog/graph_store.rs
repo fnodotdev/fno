@@ -171,11 +171,16 @@ pub(crate) const STATUS_TO_RUNG: &[(&str, &str)] = &[
     ("superseded", "superseded"),
 ];
 
-/// Retired plan spellings (plan._status.STATUS_ALIASES), accepted on read.
+/// Plan spellings accepted on read, never written: the retired spellings
+/// (plan._status.STATUS_ALIASES) plus `draft`, the word a lead hand-stamps on
+/// a plan held back for re-planning. A draft doc is a bound-but-not-ready
+/// plan, so it reads as the design rung and the spawn door routes it to
+/// blueprint instead of refusing it as unreadable.
 pub(crate) const PLAN_STATUS_ALIASES: &[(&str, &str)] = &[
     ("shipped", "in_review"),
     ("archived", "superseded"),
     ("stub", "idea"),
+    ("draft", "design"),
 ];
 
 /// Rung -> derived graph status (statuses._rung_to_graph_status). NONE and
@@ -3405,32 +3410,6 @@ pub fn read_pr_rows(path: &Path, pr: Option<i64>) -> Result<Vec<Value>, StoreErr
     Ok(rows)
 }
 
-/// The node ids whose extras tags name `tag`, SQL-side via json_each: the
-/// rare nodes a lane search needs, with their project, without materializing
-/// any row body. Ordered by store order so a caller's "first match" walk
-/// stays deterministic.
-pub fn read_ids_with_tag(
-    path: &Path,
-    tag: &str,
-) -> Result<Vec<(String, Option<String>)>, StoreError> {
-    let connection = crate::backlog::read_connection(path).map_err(StoreError::Db)?;
-    let mut statement = connection
-        .prepare(
-            "SELECT id, project FROM nodes
-             WHERE EXISTS (SELECT 1 FROM json_each(extras, '$.tags') WHERE value = ?1)
-             ORDER BY ordinal, id",
-        )
-        .map_err(|error| StoreError::Db(error.into()))?;
-    let rows = statement
-        .query_map(rusqlite::params![tag], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
-        })
-        .map_err(|error| StoreError::Db(error.into()))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| StoreError::Db(error.into()))?;
-    Ok(rows)
-}
-
 /// A strict rows read for consumers whose boundary contract needs unreadable
 /// stores to remain unknown, never an empty list.
 pub fn read_rows_strict(path: &Path) -> Result<Vec<Value>, StoreError> {
@@ -3699,6 +3678,17 @@ pub fn read_pr_bound_candidate_ids(path: &Path, pr: u64) -> Result<Vec<String>, 
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_draft_plan_doc_reads_the_design_rung() {
+        // The lead's re-plan word: a hand-stamped `status: draft` must land
+        // on the design rung (blueprint's input), never the unreadable
+        // refusal the spawn door fails closed on.
+        for spelling in ["draft", "Draft", "'draft'", "\"draft\""] {
+            assert_eq!(plan_rung_from_status(spelling), "design");
+        }
+        assert_eq!(plan_rung_from_status("drafty"), "unreadable");
+    }
 
     #[test]
     fn python_json_matches_reference_shapes() {

@@ -7,7 +7,11 @@ use super::*;
 use serde_json::json;
 use std::path::PathBuf;
 
-const NODE: &str = "ab-grantunit1";
+/// A well-formed node id: the fixture shape decides whether the verdict's
+/// claim read exercises the bare-id to `node:` rewrite, so this stays
+/// hex-suffixed. The non-hex fixture ids this const once held were exactly
+/// how the bare-id claim lookup hid from this suite.
+const NODE: &str = "ab-cafe12";
 const PR: i64 = 42;
 
 fn receipt(approved: bool, source: &str, at: &str) -> Value {
@@ -95,16 +99,6 @@ fn verdict_rows() {
         json!(true)
     );
 
-    let entries = vec![node_with(
-        NODE,
-        PR,
-        vec![do_row(
-            Some(receipt(true, "config", "2026-08-24T12:00:00Z")),
-            "w1",
-        )],
-    )];
-    assert_eq!(verdict(&entries, &stale_claims(), &live).state, GRANTED);
-
     let v = verdict(&entries, &stale_claims(), &below_floor);
     assert_eq!(v.state, HELD);
     assert!(v.reason.contains("below the merge floor"), "{}", v.reason);
@@ -172,6 +166,51 @@ fn verdict_rows() {
         ],
     )];
     assert_eq!(verdict(&entries, &stale_claims(), &live).state, UNKNOWN);
+
+    // The real claim store: a live holder never transfers. The verdict read
+    // the bare graph id while the store keys node claims `node:<id>`, so a
+    // live holder answered Free and merge execution transferred while the
+    // worker still drove the node. Through the real store (acquire, then
+    // the production closure over `claims::status`): no claim grants, a
+    // live claim reads held/live, and the read agrees with the prefixed
+    // row `fno agent claim status` prints.
+    {
+        let _env_lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let temp = tempfile::TempDir::new().unwrap();
+        let _root = EnvRestore::set("FNO_CLAIMS_ROOT", temp.path().to_path_buf());
+        let entries = vec![node_with(
+            NODE,
+            PR,
+            vec![do_row(
+                Some(receipt(true, "config", "2026-08-24T12:00:00Z")),
+                "w1",
+            )],
+        )];
+        let read = |k: &str| claim_status(k, None).0;
+        assert_eq!(
+            verdict_for_pr(&entries, PR, None, &read, &live).state,
+            GRANTED,
+            "no claim on the node grants"
+        );
+        let opts = crate::claims::AcquireOpts {
+            pid: Some(std::process::id()),
+            // The audit event lands in the fixture, never the checkout.
+            events_dir: Some(temp.path().to_path_buf()),
+            ..Default::default()
+        };
+        match crate::claims::acquire(&format!("node:{NODE}"), "worker-a", opts) {
+            crate::claims::AcquireOutcome::Acquired(_) => {}
+            other => panic!("expected a fresh acquire, got {other:?}"),
+        }
+        let v = verdict_for_pr(&entries, PR, None, &read, &live);
+        assert_eq!(v.state, HELD, "{}", v.reason);
+        assert_eq!(v.claim_state.as_deref(), Some("live"));
+        let (state, rec) = claim_status(&format!("node:{NODE}"), None);
+        assert_eq!(state, Live);
+        assert_eq!(rec.expect("the live record").holder, "worker-a");
+    }
 }
 
 // --- AC9-EDGE: newest explicit receipt wins, by recorded_at not row order -
@@ -210,15 +249,15 @@ fn drain(entries: &[Value], claims: &dyn Fn(&str) -> ClaimState) -> Value {
 #[test]
 fn queue_rows() {
     let entries = vec![
-        queue_node("ab-grantone", 1, json!({})),
-        queue_node("ab-grantlive", 2, json!({})),
+        queue_node("ab-1001", 1, json!({})),
+        queue_node("ab-2002", 2, json!({})),
         queue_node("ab-grantsup", 3, json!({"status": "superseded"})),
         queue_node("ab-grantmerged", 4, json!({"merge_status": "merged"})),
         json!({"id": "ab-grantless", "title": "t", "pr_number": 5,
                "pr_url": "https://github.com/owner/repo/pull/5",
                "cwd": "/checkouts/one", "sessions": [do_row(None, "w1")]}),
     ];
-    let claims = claims_of(vec![("ab-grantone", Free), ("ab-grantlive", Live)]);
+    let claims = claims_of(vec![("node:ab-1001", Free), ("node:ab-2002", Live)]);
     let out = drain(&entries, &claims);
     assert_eq!(out["candidates"], json!(2), "{out}");
     assert_eq!(out["verdicts"]["granted"], json!(1), "{out}");
@@ -226,7 +265,7 @@ fn queue_rows() {
     let queue = out["queue"].as_array().expect("queue is an array");
     assert_eq!(queue.len(), 1, "{out}");
     let row = &queue[0];
-    assert_eq!(row["node_id"], json!("ab-grantone"));
+    assert_eq!(row["node_id"], json!("ab-1001"));
     assert_eq!(row["pr"], json!(1));
     assert_eq!(row["repo_slug"], json!("owner/repo"));
     assert_eq!(row["cwd"], json!("/checkouts/one"));
@@ -278,13 +317,17 @@ fn queue_rows() {
     assert_eq!(queue[0]["pr"], json!(2), "{out}");
 
     let entries = vec![
-        queue_node("ab-one", 1, json!({})),
-        queue_node("ab-two", 2, json!({})),
-        queue_node("ab-three", 3, json!({})),
+        queue_node("ab-3001", 1, json!({})),
+        queue_node("ab-3002", 2, json!({})),
+        queue_node("ab-3003", 3, json!({})),
     ];
     let roots = std::cell::Cell::new(0usize);
     let configs = std::cell::Cell::new(0usize);
-    let claims = claims_of(vec![("ab-one", Free), ("ab-two", Free), ("ab-three", Free)]);
+    let claims = claims_of(vec![
+        ("node:ab-3001", Free),
+        ("node:ab-3002", Free),
+        ("node:ab-3003", Free),
+    ]);
     let out = queue_from_entries(
         &entries,
         &claims,
@@ -303,14 +346,14 @@ fn queue_rows() {
     assert_eq!(configs.get(), 1, "cfg_of runs once per checkout");
 
     let entries = vec![
-        queue_node("ab-rot1", 1, json!({})),
-        queue_node("ab-rot2", 2, json!({})),
-        queue_node("ab-rot3", 3, json!({})),
+        queue_node("ab-4001", 1, json!({})),
+        queue_node("ab-4002", 2, json!({})),
+        queue_node("ab-4003", 3, json!({})),
     ];
     let claims = claims_of(vec![
-        ("ab-rot1", Free),
-        ("ab-rot2", Free),
-        ("ab-rot3", Free),
+        ("node:ab-4001", Free),
+        ("node:ab-4002", Free),
+        ("node:ab-4003", Free),
     ]);
     let order = |rotate: u64| -> Vec<i64> {
         let out = queue_from_entries(&entries, &claims, &root_from_cwd, &|_p| live(), rotate);
@@ -742,4 +785,7 @@ fn a_bound_refusal_binds_only_the_session_that_wrote_it() {
     // An unattributed manifest cannot be scoped: it binds every caller,
     // fail closed.
     assert!(refusal_binds(None, &[]));
+    // Init writes a session it could not prove as the literal `null`. That
+    // manifest is unattributed the same way, so it binds a named caller.
+    assert!(refusal_binds(Some("null"), &mine));
 }

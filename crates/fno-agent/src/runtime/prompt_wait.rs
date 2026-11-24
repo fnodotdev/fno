@@ -39,6 +39,8 @@ pub(crate) struct Waiting {
     told: Vec<String>,
     /// Grants a macOS grant screen names as missing; no key answers it.
     pub grants: Vec<&'static str>,
+    /// The permission menu the screen shows, so the line names what is asked.
+    pub menu: Option<crate::manifest::AnswerablePrompt>,
 }
 
 impl Waiting {
@@ -50,6 +52,8 @@ impl Waiting {
                 crate::thread_dialog::classify(&screen)
             {
                 self.grants = missing;
+            } else {
+                self.menu = crate::thread_dialog::read_menu(&screen);
             }
         }
     }
@@ -74,13 +78,20 @@ impl Waiting {
                 self.short_id
             );
         }
+        let shown = match &self.menu {
+            Some(m) => format!(
+                " asks {} with options {}",
+                crate::thread_dialog::asked_line(m).unwrap_or_else(|| "'(no command line)'".into()),
+                crate::thread_dialog::numbered(m)
+            ),
+            None => String::new(),
+        };
         format!(
-            "WAITING ON APPROVAL: {} (claude thread {}) {} for {}m - answer with: fno agent ask {} --answer allow_once (TTY form: claude attach {})",
+            "WAITING ON APPROVAL: {} (claude thread {}) {} for {}m{shown} - a person answers at: claude attach {}",
             self.name,
             self.short_id,
             self.waiting_for,
             self.minutes(now),
-            self.short_id,
             self.short_id
         )
     }
@@ -143,6 +154,7 @@ pub(crate) fn observe(
             notified: seen.notified,
             told: seen.told,
             grants: Vec::new(),
+            menu: None,
         });
     }
     if snapshot.is_known() && snapshot.warning_text().is_empty() {
@@ -389,6 +401,14 @@ mod tests {
             ClaudeAgentsSnapshot::known(vec![waiting_row("30d6ff6a", "sid", "t-grant-worker")]);
         let mut w = observe(&home, 1_000_000, &snap).unwrap().remove(0);
         assert!(w.line(1_000_000).starts_with("WAITING ON APPROVAL"));
+        // The approval line names a person, not an answer command: a worker
+        // reading the bell cannot answer someone else's prompt.
+        let approval = w.line(1_000_000);
+        assert!(!approval.contains("--answer"), "{approval}");
+        assert!(
+            approval.contains("a person answers at: claude attach"),
+            "{approval}"
+        );
         w.grants = vec!["Accessibility", "Screen Recording"];
         let line = w.line(1_000_000);
         assert!(

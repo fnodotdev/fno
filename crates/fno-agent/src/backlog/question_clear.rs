@@ -14,6 +14,7 @@ mod tests {
             cap: 2000,
             provenance: json!({"decided_by": "test-agent", "authority_source": "operator"}),
             closed_by: Some("test-agent".to_string()),
+            closed_via_succession: None,
             caller: Some(ClearCaller::default()),
             home: Some(crate::paths::AgentsHome::at(tmp.path().join("fno/agents"))),
             journal_path: tmp.path().join("project/events.jsonl"),
@@ -108,7 +109,9 @@ mod tests {
         let result = run_clear(&req);
 
         assert_eq!(result.exit_code, 0, "{:?}", result.lines);
-        assert!(result.lines[0].starts_with("outstanding: closed q-open (decision d-"));
+        // The fixed-id question takes D1, and its answer takes the same number.
+        let receipt = result.lines.first().map(String::as_str).unwrap_or_default();
+        assert!(receipt.starts_with("outstanding: closed q-open (decision D1 "));
         assert!(result.lines[0].ends_with(" recorded)"));
         assert!(result
             .lines
@@ -594,6 +597,130 @@ mod tests {
     }
 
     #[test]
+    fn a_successor_closes_a_rung_question_and_names_the_predecessor() {
+        // the rung names the predecessor term (the session id and
+        // name it held at ask time); the rung scope's CURRENT holder is the
+        // closer, and the registry's predecessor_session_ids records the
+        // succession. The close lands, and the close event names the
+        // predecessor as provenance.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = request(&tmp, "q-succ", Some("C: do as asked"));
+        req.provenance = json!({"decided_by": "01a0cbdd", "authority_source": "role"});
+        req.closed_by = Some("00000000-0000-4000-8000-000000000002".to_string());
+        let mut ask = ask_from("q-succ", "49a80492", "which lane?");
+        let data = ask
+            .pointer_mut("/data")
+            .and_then(Value::as_object_mut)
+            .expect("ask carries data");
+        data.insert(
+            "rung".into(),
+            json!({
+                "level": "lead",
+                "holder_session": "00000000-0000-4000-8000-000000000001",
+                "holder_name": "rowan",
+                "scope": "epic-x",
+            }),
+        );
+        seed_question(&req, &ask);
+        let row = json!({
+            "name": "lenore",
+            "cwd": "/tmp",
+            "status": "busy",
+            "created_at": "2026-11-21T00:00:00Z",
+            "role_level": 2,
+            "role_scope": "epic-x",
+            "role_grantor": "human",
+            "harness_session_id": "00000000-0000-4000-8000-000000000002",
+            "predecessor_session_ids": ["00000000-0000-4000-8000-000000000001"],
+        });
+        let home = req.home.as_ref().unwrap();
+        std::fs::create_dir_all(
+            home.registry_json()
+                .parent()
+                .expect("registry path has a parent"),
+        )
+        .unwrap();
+        crate::registry_store::seed_raw(
+            &home.registry_json(),
+            serde_json::json!({"schema_version": 11, "agents": [row]}).to_string(),
+        );
+        let result = run_clear(&req);
+        assert_eq!(result.exit_code, 0, "{:?}", result.lines);
+        let closes = rows(&req.journal_path, &["operator_question_closed"]);
+        assert_eq!(closes.len(), 1);
+        let close = closes.first().expect("one close row");
+        assert_eq!(
+            close.pointer("/data/closed_via_succession/predecessor_name"),
+            Some(&json!("rowan"))
+        );
+        assert_eq!(
+            close.pointer("/data/closed_via_succession/predecessor_session"),
+            Some(&json!("00000000-0000-4000-8000-000000000001"))
+        );
+    }
+
+    #[test]
+    fn a_rung_close_refuses_without_a_recorded_predecessor() {
+        // The negative arm: the closer holds the rung scope's current role
+        // but the registry records no predecessor term. Succession is a
+        // recorded fact, never an inference from a shared name or role, so
+        // the clear refuses.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = request(&tmp, "q-nosucc", Some("C: do as asked"));
+        req.provenance = json!({"decided_by": "01a0cbdd", "authority_source": "role"});
+        req.closed_by = Some("00000000-0000-4000-8000-000000000002".to_string());
+        let mut ask = ask_from("q-nosucc", "49a80492", "which lane?");
+        let data = ask
+            .pointer_mut("/data")
+            .and_then(Value::as_object_mut)
+            .expect("ask carries data");
+        data.insert(
+            "rung".into(),
+            json!({
+                "level": "lead",
+                "holder_session": "00000000-0000-4000-8000-000000000001",
+                "holder_name": "rowan",
+                "scope": "epic-x",
+            }),
+        );
+        seed_question(&req, &ask);
+        let row = json!({
+            "name": "lenore",
+            "cwd": "/tmp",
+            "status": "busy",
+            "created_at": "2026-11-21T00:00:00Z",
+            "role_level": 2,
+            "role_scope": "epic-x",
+            "role_grantor": "human",
+            "harness_session_id": "00000000-0000-4000-8000-000000000002",
+            "predecessor_session_ids": [],
+        });
+        let home = req.home.as_ref().unwrap();
+        std::fs::create_dir_all(
+            home.registry_json()
+                .parent()
+                .expect("registry path has a parent"),
+        )
+        .unwrap();
+        crate::registry_store::seed_raw(
+            &home.registry_json(),
+            serde_json::json!({"schema_version": 11, "agents": [row]}).to_string(),
+        );
+        let result = run_clear(&req);
+        assert_eq!(result.exit_code, 3, "{:?}", result.lines);
+        assert!(
+            result
+                .lines
+                .first()
+                .is_some_and(|line| line.contains("refused")),
+            "{:?}",
+            result.lines
+        );
+        let closes = rows(&req.journal_path, &["operator_question_closed"]);
+        assert!(closes.is_empty(), "nothing closed: {:?}", closes);
+    }
+
+    #[test]
     fn a_recorded_answer_close_folds_a_peer_copy_to_its_origin() {
         let tmp = tempfile::tempdir().unwrap();
         let journal = tmp.path().join("events.jsonl");
@@ -1002,6 +1129,16 @@ pub struct ClearCaller {
     pub asker_gone: Option<fn(&str) -> bool>,
 }
 
+/// The predecessor term a question's rung named, when the closer is that
+/// term's successor. Provenance on the close event: the ruling
+/// reads under the successor, and names who it succeeded.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SucceededRung {
+    pub predecessor_name: String,
+    pub predecessor_session: String,
+    pub scope: String,
+}
+
 #[derive(Deserialize)]
 pub struct ClearRequest {
     pub ids: Vec<String>,
@@ -1013,6 +1150,11 @@ pub struct ClearRequest {
     pub provenance: Value,
     #[serde(default)]
     pub closed_by: Option<String>,
+    /// The succession provenance when the closer succeeded the rung's
+    /// original holder: the predecessor term the rung named.
+    /// Resolved at the gate in-process; never on the wire.
+    #[serde(skip)]
+    pub closed_via_succession: Option<SucceededRung>,
     /// Caller facts resolved in-process. The binary transport never sets it;
     /// `None` means run_clear resolves from the process itself.
     #[serde(skip)]
@@ -1248,6 +1390,47 @@ fn lead_may_withdraw(
         })
 }
 
+/// Whether the closer is the CURRENT holder of the rung's scope and the
+/// rung names a predecessor term of that holder. The registry's
+/// `predecessor_session_ids` is the recorded succession: a same-name
+/// stranger or an unrecorded handover never reads as succession. Returns
+/// the provenance the close event stamps.
+fn rung_succeeded(
+    rung: &Value,
+    closed_by: Option<&str>,
+    home: Option<&crate::paths::AgentsHome>,
+) -> Option<SucceededRung> {
+    let rung_holder = rung["holder_session"].as_str()?;
+    let scope = rung["scope"].as_str().filter(|s| !s.is_empty())?;
+    let closed_by = closed_by.filter(|s| !s.is_empty())?;
+    let home = home
+        .cloned()
+        .unwrap_or_else(crate::paths::AgentsHome::from_env);
+    let registry = crate::state::load_registry(&home.registry_json()).ok()?;
+    let canon = crate::territory::canonical_scope(scope);
+    let holder_row = registry.entries.iter().find(|row| {
+        row.role_scope
+            .as_deref()
+            .is_some_and(|s| crate::territory::canonical_scope(s) == canon)
+            && !crate::lead_state::is_terminal(row)
+    })?;
+    if crate::territory::row_session_id(holder_row) != closed_by {
+        return None;
+    }
+    if !holder_row
+        .predecessor_session_ids
+        .iter()
+        .any(|p| p == rung_holder)
+    {
+        return None;
+    }
+    Some(SucceededRung {
+        predecessor_name: rung["holder_name"].as_str().unwrap_or("").to_string(),
+        predecessor_session: rung_holder.to_string(),
+        scope: canon,
+    })
+}
+
 /// Whether `handle` holds a live team: the team-name store binds by session
 /// id (law d-e952ed19), so the holder's canonical handle is what compares.
 /// Pure, so tests drive it without a registry.
@@ -1407,6 +1590,9 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
         // A scope lead's moot withdrawal names its ruling in --answer and
         // closes as coordination: no decision row, no answer mail.
         let mut lead_reason: Option<String> = None;
+        // The succession provenance when the closer succeeded the rung's
+        // original holder; stamped on the close event in every close arm.
+        let mut succession: Option<SucceededRung> = None;
         // The reconciliation lane: a live user-kind decision
         // answering this question turns the close into bookkeeping. An
         // agent may finish it, and a bare close records the answer, not a
@@ -1460,11 +1646,22 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                     superseded_by.is_some() || decided.is_some(),
                 );
             let user_lane = user_answered.is_some() && !lead_withdraw;
-            // The rung holder answers the row the ladder placed on it, unless
-            // the class is one only the user rules.
+            // The rung holder answers the row the ladder placed on it,
+            // unless the class is one only the user rules. A successor of
+            // the rung's original holder answers too: the current
+            // holder of the rung's scope, closing a rung that names a
+            // recorded predecessor term.
+            let rung = question_event.pointer("/data/rung").unwrap_or(&Value::Null);
             let holds_rung = !lead_withdraw
-                && crate::question_ladder::holder(&question_event["data"])
-                    .is_some_and(|holder| req.closed_by.as_deref() == Some(holder));
+                && match crate::question_ladder::holder(&question_event["data"]) {
+                    Some(holder) if req.closed_by.as_deref() == Some(holder) => true,
+                    Some(_) => {
+                        succession =
+                            rung_succeeded(rung, req.closed_by.as_deref(), req.home.as_ref());
+                        succession.is_some()
+                    }
+                    None => false,
+                };
             let denied = denied_class(question_event);
             if holds_rung && req.answer.is_some() && !user_lane {
                 if let Some(class) = denied {
@@ -1647,8 +1844,13 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                         .as_str()
                         .unwrap_or_default()
                         .to_string();
-                    if let Err(error) = api::decision_record(&Store::new(&req.graph), event.clone())
-                    {
+                    let written = if id.is_empty() {
+                        let after = queued_retraction(req, question_event, &text);
+                        queue_answer(req, event.clone(), after)
+                    } else {
+                        api::decision_record(&Store::new(&req.graph), event.clone()).map(drop)
+                    };
+                    if let Err(error) = written {
                         answer.exit_code = 1;
                         answer.lines.push(format!(
                             "outstanding: nothing was written for {shown} (decision record failed: {})",
@@ -1669,44 +1871,56 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                     (event, line, id, false)
                 }
             };
-            if let Err(error) = append_decision_mirror(&req.journal_path, &line, &decision_id) {
-                answer.exit_code = 1;
-                answer.lines.push(format!(
-                    "outstanding: decision {decision_id} is recorded; its project journal mirror failed ({error}); rerun the same clear to finish"
-                ));
-                break;
+            // A queued answer is mirrored by the drain that numbers it.
+            let queued = decision_id.is_empty();
+            if !queued {
+                if let Err(error) = append_decision_mirror(&req.journal_path, &line, &decision_id) {
+                    answer.exit_code = 1;
+                    answer.lines.push(format!(
+                        "outstanding: decision {decision_id} is recorded; its project journal mirror failed ({error}); rerun the same clear to finish"
+                    ));
+                    break;
+                }
+                if let Err(error) = append_decision_mirror(&req.decisions_path, &line, &decision_id)
+                {
+                    answer.exit_code = 1;
+                    answer.lines.push(format!(
+                        "outstanding: decision {decision_id} is recorded; its decision index mirror failed ({error}); rerun the same clear to finish"
+                    ));
+                    break;
+                }
             }
-            if let Err(error) = append_decision_mirror(&req.decisions_path, &line, &decision_id) {
-                answer.exit_code = 1;
-                answer.lines.push(format!(
-                    "outstanding: decision {decision_id} is recorded; its decision index mirror failed ({error}); rerun the same clear to finish"
-                ));
-                break;
-            }
+            let named = if queued {
+                crate::numbers::mint::QUEUED.to_string()
+            } else {
+                format!("decision {decision_id}")
+            };
             let node = question_event
                 .get("data")
                 .and_then(|data| data.get("node"))
                 .and_then(Value::as_str)
                 .map(str::to_string);
-            let (close, close_line) = close_event(req, qid, Some(&text), None);
+            let (close, close_line) = close_event(req, qid, Some(&text), None, succession.as_ref());
             if let Err(error) = append_close(&req.journal_path, &close_line, qid) {
                 answer.exit_code = 1;
                 answer.lines.push(format!(
-                    "outstanding: decision {decision_id} is recorded; the close did not land ({error}); rerun the same clear to finish"
+                    "outstanding: {named}: the answer is kept; the close did not land ({error}); rerun the same clear to finish"
                 ));
                 break;
             }
             if let Err(error) = crate::provider_cap::append_questions_row(&req.index_path, &close) {
                 answer.exit_code = 1;
                 answer.lines.push(format!(
-                    "outstanding: decision {decision_id} and project close are recorded; the index close did not land ({error}); rerun the same clear to finish"
+                    "outstanding: {named}: the answer and project close are kept; the index close did not land ({error}); rerun the same clear to finish"
                 ));
                 break;
             }
             let label = if was_resumed { "resumed" } else { "recorded" };
-            answer.lines.push(format!(
-                "outstanding: closed {shown} (decision {decision_id} {label})"
-            ));
+            answer.lines.push(if queued {
+                format!("outstanding: closed {shown} ({named})")
+            } else {
+                format!("outstanding: closed {shown} ({named} {label})")
+            });
             // The page closes in this step. The arm's later beat finds it
             // already answered; a lost beat no longer leaves it open.
             let vault = crate::paths::canonical_repo_root(&req.repo_root)
@@ -1740,7 +1954,11 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                     ));
                 }
                 if operator_can_grant(req) {
-                    answer.lines.push(if merge_answer_grants(question_event, &text) {
+                    answer.lines.push(if queued {
+                        format!(
+                            "outstanding: the answer at {subject} binds nothing until the primary numbers it"
+                        )
+                    } else if merge_answer_grants(question_event, &text) {
                         format!(
                             "outstanding: operator merge grant recorded at {subject} (binds this head only)"
                         )
@@ -1757,7 +1975,11 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                 .or_else(|| retraction_fallback(question_event))
                 .filter(|_| operator_can_grant(req))
             {
-                if retraction_answer_grants(question_event, &text, stamped) {
+                if queued {
+                    answer.lines.push(format!(
+                        "outstanding: the answer at {subject} retracts nothing until the primary numbers it"
+                    ));
+                } else if retraction_answer_grants(question_event, &text, stamped) {
                     // The validate gate decides, first pass or resumed
                     // repair alike: a live target writes now, an already
                     // retired target receipts its refusal, and a partial
@@ -1777,8 +1999,8 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             }
             answer.closed.push(ClosedQuestion {
                 qid: qid.clone(),
-                decision_id: Some(decision_id.clone()),
-                decision_event: Some(event),
+                decision_id: (!queued).then(|| decision_id.clone()),
+                decision_event: (!queued).then_some(event),
                 node,
             });
             if was_resumed {
@@ -1830,7 +2052,8 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string();
-            let (close, close_line) = close_event(req, qid, Some(answer_text), None);
+            let (close, close_line) =
+                close_event(req, qid, Some(answer_text), None, succession.as_ref());
             if let Err(error) = append_close(&req.journal_path, &close_line, qid) {
                 answer.exit_code = 1;
                 answer.lines.push(format!(
@@ -1871,7 +2094,8 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             } else {
                 "withdrawn"
             };
-            let (close, close_line) = close_event(req, qid, None, Some(withdrawn_reason));
+            let (close, close_line) =
+                close_event(req, qid, None, Some(withdrawn_reason), succession.as_ref());
             if let Err(error) = append_close(&req.journal_path, &close_line, qid) {
                 answer.exit_code = 1;
                 answer.lines.push(format!(
@@ -2011,15 +2235,39 @@ pub(crate) fn append_decision_mirror(
         .map_err(|e| e.to_string())
 }
 
+/// Hold an answer the primary could not number. The question still closes
+/// now; the drain writes the decision.
+fn queue_answer(
+    req: &ClearRequest,
+    event: Value,
+    after: crate::numbers::mint::After,
+) -> Result<(), api::ApiError> {
+    let queued = crate::numbers::mint::Queued::Decision {
+        event,
+        journal: req.journal_path.clone(),
+        index: req.decisions_path.clone(),
+        graph: req.graph.clone(),
+        sign: false,
+        after,
+    };
+    crate::numbers::mint::queue(&queued).map_err(|e| api::ApiError(e.to_string()))
+}
+
 /// Record one built decision event everywhere the door writes it: the graph
 /// store, the project journal, and the decisions index. The caller owns the
-/// error text. Returns the decision id.
+/// error text. Returns the decision id, empty when the answer queued.
 pub(crate) fn record_decision_row(req: &ClearRequest, event: Value) -> Result<String, String> {
     let line = serde_json::to_string(&event).map_err(|e| e.to_string())?;
     let id = event["data"]["decision_id"]
         .as_str()
         .unwrap_or_default()
         .to_string();
+    if id.is_empty() {
+        let after = crate::numbers::mint::After::Nothing;
+        return queue_answer(req, event, after)
+            .map(|()| id)
+            .map_err(|e| e.0);
+    }
     api::decision_record(&Store::new(&req.graph), event).map_err(|e| e.0)?;
     append_decision_mirror(&req.journal_path, &line, &id)?;
     append_decision_mirror(&req.decisions_path, &line, &id)?;
@@ -2135,10 +2383,12 @@ pub(crate) fn make_decision(
             .unwrap_or_else(|| format!("question:{qid}")),
     };
     let mut decision = Map::new();
-    let mut id_bytes = [0u8; 4];
-    getrandom::fill(&mut id_bytes).expect("OS CSPRNG unavailable");
-    let did = format!("d-{}", hex(&id_bytes));
-    decision.insert("decision_id".into(), json!(&did));
+    // The answer takes its question's number. With the primary away it has
+    // no id, and the caller queues it.
+    let did = crate::numbers::mint::answer_key(&req.graph, qid).map_err(|e| e.to_string())?;
+    if let Some(id) = &did {
+        decision.insert("decision_id".into(), json!(id));
+    }
     // The answer span: the decision row IS the span, span_id = decision_id,
     // parented at the question it answers, traced to the question's node.
     let actor_kind = actor_kind_from_authority(
@@ -2150,7 +2400,7 @@ pub(crate) fn make_decision(
         "trace".into(),
         serde_json::to_value(&Trace {
             trace_id: node.unwrap_or("none").to_string(),
-            span_id: did,
+            span_id: did.unwrap_or_default(),
             parent_span_id: Some(qid.to_string()),
             // actor_session carries a canonical harness session only: a
             // user-kind decision's decided_by is an attested human name, not
@@ -2360,6 +2610,11 @@ fn retraction_subject(question_event: &Value) -> Option<(String, String)> {
         .strip_prefix(LAW_RETRACT_SUBJECT)?
         .strip_prefix(':')?
         .trim();
+    // The stamped subject is lowercased; a number key is uppercase.
+    let number = id.to_ascii_uppercase();
+    if crate::numbers::is_label_key(&number) {
+        return Some((subject.to_string(), number));
+    }
     let hex = id.strip_prefix("d-")?;
     if hex.is_empty() || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
@@ -2382,7 +2637,21 @@ fn retraction_fallback(question_event: &Value) -> Option<(String, String)> {
     }
     let (rows, _) = crate::law_match::all_decision_rows().ok()?;
     let retired = crate::decision_index::retirement_map(&rows);
+    let is_live = |id: &str| {
+        rows.iter()
+            .filter(|r| !crate::law_match::is_retraction_row(r))
+            .find(|r| crate::law_match::row_id(r).eq_ignore_ascii_case(id))
+            .is_some_and(|row| {
+                crate::decision_index::is_law(row) && !retired.contains_key(&id.to_lowercase())
+            })
+    };
     let mut cited: Vec<String> = Vec::new();
+    for word in lower.split(|c: char| !c.is_ascii_alphanumeric()) {
+        let id = word.to_ascii_uppercase();
+        if crate::numbers::is_label_key(&id) && !cited.contains(&id) && is_live(&id) {
+            cited.push(id);
+        }
+    }
     let mut from = 0usize;
     while let Some(pos) = lower[from..].find("d-") {
         let abs = from + pos + 2;
@@ -2396,19 +2665,7 @@ fn retraction_fallback(question_event: &Value) -> Option<(String, String)> {
         // from reading as a decision).
         if (4..=8).contains(&hex.len()) {
             let id = format!("d-{hex}");
-            let live = rows
-                .iter()
-                .filter(|r| !crate::law_match::is_retraction_row(r))
-                .find(|r| {
-                    r.get("decision_id")
-                        .and_then(Value::as_str)
-                        .map(|v| v.eq_ignore_ascii_case(&id))
-                        == Some(true)
-                })
-                .is_some_and(|row| {
-                    crate::decision_index::is_law(row) && !retired.contains_key(&id)
-                });
-            if live && !cited.contains(&id) {
+            if !cited.contains(&id) && is_live(&id) {
                 cited.push(id);
             }
         }
@@ -2521,6 +2778,36 @@ fn validate_live_law_target(target_id: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// The retraction a queued answer owes once it has its number.
+fn queued_retraction(
+    req: &ClearRequest,
+    question_event: &Value,
+    text: &str,
+) -> crate::numbers::mint::After {
+    let stamped = retraction_subject(question_event).is_some();
+    retraction_subject(question_event)
+        .or_else(|| retraction_fallback(question_event))
+        .filter(|_| operator_can_grant(req))
+        .filter(|_| retraction_answer_grants(question_event, text, stamped))
+        .map_or(crate::numbers::mint::After::Nothing, |(subject, target)| {
+            crate::numbers::mint::After::Retract { subject, target }
+        })
+}
+
+/// The drain's half of [`queued_retraction`]: the same gate and write, now
+/// that the answer is recorded. The migration can have renamed the target.
+pub(crate) fn after_retraction(qid: &str, subject: &str, target: &str, reason: &str) {
+    let target = crate::numbers::resolve('d', target).unwrap_or_else(|| target.to_string());
+    let mut answer = ClearAnswer::new();
+    match validate_live_law_target(&target) {
+        Err(error) => answer.lines.push(format!("outstanding: {error}")),
+        Ok(()) => perform_retraction(&mut answer, qid, subject, &target, reason),
+    }
+    for line in &answer.lines {
+        eprintln!("{line}");
+    }
 }
 
 /// The board answer's retraction: write through the shared writer, receipt
@@ -2667,6 +2954,7 @@ fn close_event(
     qid: &str,
     answer: Option<&str>,
     withdrawn_reason: Option<&str>,
+    succession: Option<&SucceededRung>,
 ) -> (Value, String) {
     close_event_for(
         &req.journal_path,
@@ -2675,6 +2963,7 @@ fn close_event(
         withdrawn_reason,
         req.closed_by.as_deref(),
         req.cap,
+        succession,
     )
 }
 
@@ -2685,6 +2974,7 @@ fn close_event_for(
     withdrawn_reason: Option<&str>,
     closed_by: Option<&str>,
     cap: usize,
+    succession: Option<&SucceededRung>,
 ) -> (Value, String) {
     if let Some((event, line)) =
         crate::event_store::journal_text(journal, &["operator_question_closed"])
@@ -2709,6 +2999,18 @@ fn close_event_for(
     }
     if let Some(closed_by) = closed_by {
         data["closed_by"] = json!(closed_by);
+    }
+    if let Some(succession) = succession {
+        if let Some(map) = data.as_object_mut() {
+            map.insert(
+                "closed_via_succession".into(),
+                json!({
+                    "predecessor_name": succession.predecessor_name,
+                    "predecessor_session": succession.predecessor_session,
+                    "scope": succession.scope,
+                }),
+            );
+        }
     }
     let event = json!({
         "ts": chrono::Utc::now().to_rfc3339(),
@@ -2770,7 +3072,7 @@ pub(crate) fn close_with_recorded_answer(
         return Ok(AnsweredClose::Peer(host.to_string()));
     }
     let (close, close_line) =
-        close_event_for(journal_path, qid, Some(answer), None, closed_by, cap);
+        close_event_for(journal_path, qid, Some(answer), None, closed_by, cap, None);
     append_close(journal_path, &close_line, qid)?;
     crate::provider_cap::append_questions_row(index_path, &close)?;
     Ok(AnsweredClose::Closed)
@@ -2807,8 +3109,4 @@ pub(crate) fn chat_answer_line(qid: &str) -> String {
 
 fn cut(text: &str, cap: usize) -> String {
     text.chars().take(cap).collect()
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }

@@ -204,7 +204,12 @@ pub(crate) fn handle_session_report(
             "no session id in the payload or --session-id",
         );
     };
-    let transcript_path = payload_field(p, "transcript_path").map(String::from);
+    // The sandbox relay names its host copy here. A sandbox row never gets
+    // `transcript_path`: that field's readers trust user turns.
+    let sandbox_transcript = str_field(p, "sandbox_transcript");
+    let transcript_path = payload_field(p, "transcript_path")
+        .map(String::from)
+        .filter(|_| sandbox_transcript.is_none());
     let source = payload_field(p, "source")
         .map(String::from)
         .or_else(|| str_field(p, "source"));
@@ -434,6 +439,9 @@ pub(crate) fn handle_session_report(
                 if let Some(tp) = &transcript_path {
                     entry.transcript_path = Some(tp.clone());
                 }
+                if sandbox_transcript.is_some() {
+                    entry.sandbox_transcript = sandbox_transcript.clone();
+                }
                 if let Some(src) = &source {
                     entry.start_source = Some(src.clone());
                 }
@@ -458,6 +466,7 @@ pub(crate) fn handle_session_report(
                     entry.name = crate::native_adopt::unique_name(&r.entries, &entry.name);
                     // The report that mints the row is its first report.
                     entry.last_report_at = Some(now_stamp.clone());
+                    entry.sandbox_transcript = sandbox_transcript.clone();
                     crate::node_bind::bind_adopted_node(&mut entry);
                     row_name = Some(entry.name.clone());
                     r.entries.push(entry);
@@ -709,6 +718,9 @@ pub(crate) fn handle_session_report(
         }
         if let Some(tp) = &transcript_path {
             entry.transcript_path = Some(tp.clone());
+        }
+        if sandbox_transcript.is_some() {
+            entry.sandbox_transcript = sandbox_transcript.clone();
         }
         if let Some(src) = &source {
             entry.start_source = Some(src.clone());
@@ -1628,17 +1640,11 @@ fn record_branch_question(
     if seen.contains(&needle) {
         return;
     }
-    let mut id_bytes = [0u8; 4];
-    if getrandom::fill(&mut id_bytes).is_err() {
-        return;
-    }
-    let hex: String = id_bytes.iter().map(|x| format!("{x:02x}")).collect();
     let event = json!({
         "ts": crate::daemon::now_rfc3339_like(),
         "type": "operator_question",
         "source": "hook",
         "data": {
-            "question_id": format!("q-{hex}"),
             "question": format!(
                 "{needle} Branch {name} ({harness}) forked live session \
                  {predecessor} into {successor}. Should it inherit the node \
@@ -1651,11 +1657,11 @@ fn record_branch_question(
             "options": ["inherit node and claim", "start clean"],
         },
     });
-    let _ = crate::question_intake::append_question_event(
-        &event,
-        &branch_question_journal(home),
-        &index,
-    );
+    if let Err(error) =
+        crate::numbers::mint::file_question(event, branch_question_journal(home), index)
+    {
+        eprintln!("session-report: the branch question was not recorded: {error}");
+    }
 }
 
 /// The project journal a question records into: the repo's space journal

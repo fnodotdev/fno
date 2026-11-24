@@ -80,11 +80,11 @@ fn manifest_fields(
     )
 }
 
-/// The models.dev price cache beside the sessions root.
+/// The models.dev price cache of the state root that holds the sessions.
 fn price_cache() -> PathBuf {
     transcript::sessions_root()
         .parent()
-        .map(|p| p.join("cache").join("models-dev.json"))
+        .map(|root| crate::state_layout_home::read_home(root, "cache/models-dev.json"))
         .unwrap_or_default()
 }
 
@@ -515,7 +515,7 @@ pub fn maybe_run_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i3
     if entry.harness_name() != "footnote" {
         return None;
     }
-    if let Some(code) = thread::maybe_ask_host(entry, params) {
+    if let Some(code) = thread::maybe_ask_host(home, entry, params) {
         return Some(code);
     }
     // A pane row binds the TUI's session id as `harness_session_id` and keeps

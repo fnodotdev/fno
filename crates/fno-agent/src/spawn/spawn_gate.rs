@@ -1267,10 +1267,7 @@ pub fn state_root_grant_gate(
     substrate: &str,
     roots: &[String],
 ) -> Result<(), Refusal> {
-    let sock = crate::paths::AgentsHome::from_env_opt()
-        .as_ref()
-        .map(crate::client::client_sock);
-    state_root_grant_gate_decide(harness, substrate, roots, sock.as_deref()).inspect_err(|r| {
+    state_root_grant_gate_decide(harness, substrate, roots).inspect_err(|r| {
         eprintln!("{}", verdict_line(r));
     })
 }
@@ -1279,7 +1276,6 @@ fn state_root_grant_gate_decide(
     harness: &str,
     substrate: &str,
     roots: &[String],
-    sock: Option<&Path>,
 ) -> Result<(), Refusal> {
     if roots.is_empty() {
         return Ok(());
@@ -1304,30 +1300,6 @@ fn state_root_grant_gate_decide(
         }
     };
     let stance = contract.state_root_stance(harness, substrate);
-    if let Err(reason) = crate::daemon::sandbox_host::socket_carrier_ok(stance, sock) {
-        // A `socket` carrier is verified, not taken on faith. A declaration
-        // whose socket answers nobody hides the exact mute-worker harm R3
-        // exists for: a worker that edits code and cannot claim, mail, spawn,
-        // or report that it cannot.
-        eprintln!(
-            "spawn-gate: refused: the {harness}/{substrate} lane declares carrier \
-             `socket`, but the supervisor socket does not answer ({reason})"
-        );
-        eprintln!(
-            "  start the daemon, or mount/forward it and point \
-             FNO_SUPERVISOR_SOCKET at the mounted path."
-        );
-        return Err(Refusal::code(EXIT_STATE_ROOT_UNGRANTED)
-            .ev("reason", serde_json::json!("state-root-carrier-muted"))
-            .ev("harness", serde_json::json!(harness))
-            .ev("substrate", serde_json::json!(substrate))
-            .ev(
-                "remedy",
-                serde_json::json!(
-                    "start the daemon, or mount/forward it and point FNO_SUPERVISOR_SOCKET at the mounted path"
-                ),
-            ));
-    }
     if stance.is_some() {
         return Ok(());
     }
@@ -1383,6 +1355,15 @@ pub struct GateInput {
     /// An explicit `--session-phase` label.
     pub session_phase: Option<String>,
     pub background_job: bool,
+}
+
+/// The spawn's node from its params, trimmed. An absent or blank key answers
+/// None: the overlay writes `""` when no node is bound, and a blank node in
+/// the open-PR branch scan would match every hyphenated head.
+pub fn gate_node_from_params(params: &Value) -> Option<String> {
+    crate::spawn_gate_command::opt_str_of(params, "node")
+        .map(|node| node.trim().to_string())
+        .filter(|node| !node.is_empty())
 }
 
 pub type NodeOccupancy = Result<BTreeMap<String, Vec<String>>, String>;
@@ -3159,6 +3140,32 @@ pub fn qos_demote_bg_worker(config_cwd: &Path, job_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gate_node_from_params_reads_a_set_node_and_drops_a_blank_one() {
+        assert_eq!(gate_node_from_params(&serde_json::json!({})), None);
+        assert_eq!(
+            gate_node_from_params(&serde_json::json!({"node": ""})),
+            None
+        );
+        assert_eq!(
+            gate_node_from_params(&serde_json::json!({"node": "  "})),
+            None
+        );
+        assert_eq!(
+            gate_node_from_params(&serde_json::json!({"node": 5})),
+            None,
+            "a non-string node is not a node"
+        );
+        assert_eq!(
+            gate_node_from_params(&serde_json::json!({"node": "x-8888"})),
+            Some("x-8888".to_string())
+        );
+        assert_eq!(
+            gate_node_from_params(&serde_json::json!({"node": " x-7777 "})),
+            Some("x-7777".to_string())
+        );
+    }
 
     #[test]
     fn a_spawn_preflight_names_a_missing_cwd_over_the_binary() {

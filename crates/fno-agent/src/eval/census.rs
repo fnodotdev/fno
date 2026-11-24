@@ -963,6 +963,24 @@ pub async fn run_command(args: &[String]) -> i32 {
             .collect();
         return crate::orphans::run(&rest);
     }
+    // `fno doctor footprint --spawn-rate`: the spawn-rate reading the
+    // sustained-CPU meter cannot see. The window sleeps between the two
+    // table reads, so this arm is a doctor-shaped one-shot; the spawn gate
+    // never reads it.
+    if args.iter().any(|arg| arg == "--spawn-rate") {
+        let json_flag = args.iter().any(|arg| arg == "--json" || arg == "-J");
+        let secs = args
+            .iter()
+            .position(|arg| arg == "--secs")
+            .and_then(|i| args.get(i + 1))
+            .and_then(|v| v.parse::<u64>().ok());
+        let alarm = args
+            .iter()
+            .position(|arg| arg == "--spawn-rate-alarm")
+            .and_then(|i| args.get(i + 1))
+            .and_then(|v| v.parse::<f64>().ok());
+        return crate::footprint_cause::spawn_rate_command(json_flag, secs, alarm);
+    }
     // `fno agent top`: the worker table, the census of live runs.
     if args.first().map(String::as_str) == Some("--workers") {
         return crate::agents_top::run(&args[1..]);

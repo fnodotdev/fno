@@ -635,6 +635,11 @@ pub trait Probes {
     fn merge_freeze(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
         ProbeOutcome::Clear
     }
+    /// The bound node's open `blocked_by` edge. Default `Clear` keeps an impl
+    /// that does not read the graph inert.
+    fn blocked_by(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
+        ProbeOutcome::Clear
+    }
     /// The rule engine's read of this merge: a block verdict holds with
     /// blocker `rule`. Default `Clear` keeps an impl that does not read
     /// rule sources inert.
@@ -1313,6 +1318,9 @@ pub fn preview_walk<P: Probes>(probes: &P, request: &Request, facts: &PrFacts) -
     if let Some(reason) = probes.pr_hold(cwd, facts).fail_closed() {
         blockers.push(Blocker::held("pr_hold", reason));
     }
+    if let Some(reason) = probes.blocked_by(cwd, facts).fail_closed() {
+        blockers.push(Blocker::held("blocked_by", reason));
+    }
     if let Some(reason) = probes.merge_freeze(cwd, facts).fail_closed() {
         blockers.push(Blocker::held("merge_freeze", reason));
     }
@@ -1729,6 +1737,7 @@ fn authority_hold<P: Probes>(probes: &P, cwd: &Path, facts: &PrFacts) -> Option<
         .dispatch_hold(cwd, facts)
         .fail_closed()
         .or_else(|| probes.pr_hold(cwd, facts).fail_closed())
+        .or_else(|| probes.blocked_by(cwd, facts).fail_closed())
         .or_else(|| probes.merge_freeze(cwd, facts).fail_closed())
         .or_else(|| probes.rules(cwd, facts).fail_closed())
         .map(|reason| Outcome::Held {
@@ -2398,6 +2407,11 @@ impl Probes for RealProbes {
     fn pr_hold(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
         let _step = step_timer::step("pr_hold");
         crate::pr_admission::pr_hold(cwd, facts)
+    }
+
+    fn blocked_by(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
+        let _step = step_timer::step("blocked_by");
+        blocked_by_probe(cwd, facts)
     }
 
     fn merge_freeze(&self, _cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
@@ -3241,51 +3255,16 @@ pub(crate) fn pr_bound_index(
 
 /// The main-repair exemption probe over the live graph: `None` when this
 /// PR's node carries the [`MAIN_REPAIR_TAG`], else the repair-lane sentence.
+/// The slice already carries tags and status on every row, so one read
+/// answers both the bound-node exemption and the lane sentence.
 fn main_repair_hold_probe(cwd: &Path, facts: &PrFacts) -> Option<String> {
     let graph_path = crate::org_board::scope::graph_json_path(cwd);
-    let Some(mut entries) = node_binding_entries(&graph_path, facts) else {
+    let Some(entries) = node_binding_entries(&graph_path, facts) else {
         return Some(format!(
             "the graph is unreadable; tag the repair node: \
              fno backlog update <node> tags+={MAIN_REPAIR_TAG}"
         ));
     };
-    // The lane search reads only the tagged nodes: the SQL-side tag read
-    // names them without materializing the graph, and a narrow id read
-    // brings their full rows in. Unreadable tag rows read as no lane, the
-    // sentence names it.
-    let lanes = match crate::graph_store::read_ids_with_tag(&graph_path, MAIN_REPAIR_TAG) {
-        Err(e) => {
-            return Some(format!(
-                "the graph is unreadable ({}); tag the repair node: \
-                 fno backlog update <node> tags+={MAIN_REPAIR_TAG}",
-                e
-            ))
-        }
-        Ok(lanes) => lanes,
-    };
-    let fresh: Vec<String> = lanes
-        .iter()
-        .filter(|(id, _)| {
-            !entries
-                .iter()
-                .any(|e| RowFacts::id_of(e) == Some(id.as_str()))
-        })
-        .map(|(id, _)| id.clone())
-        .collect();
-    if !fresh.is_empty() {
-        if let Ok(tagged) = crate::graph_store::read_rows_where(
-            &graph_path,
-            &crate::backlog::RowQuery {
-                filter: crate::backlog::api::NodeFilter {
-                    id_in: Some(fresh),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-        ) {
-            entries.extend(tagged);
-        }
-    }
     main_repair_hold_from_entries(&entries, facts)
 }
 
@@ -3355,17 +3334,21 @@ fn node_binding_probe(cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
 }
 
 /// The graph slice the binding decision reads, without materializing every
-/// node body: the light (id, cwd, project) projection the project detection
-/// walks, the nodes whose pull_requests rows name this PR (the SQL-narrowed
-/// read the grant ops share), and the exact-id rows the head ref and the
-/// closure line name. The union answers every question the full read
-/// answered for this PR; the rest of the store never enters the decision.
+/// node body: the light (id, cwd, project, tags, status) projection the
+/// project detection and the tag reads walk, the nodes whose pull_requests
+/// rows name this PR (the SQL-narrowed read the grant ops share), and the
+/// exact-id rows the head ref and the closure line name. tags and status
+/// ride on the projection because callers look rows up by id with a
+/// first-match find: the row they land on must answer the tag and done
+/// questions, or a tagged node reads as a tag-less twin of itself. The
+/// union answers every question the full read answered for this PR; the
+/// rest of the store never enters the decision.
 fn node_binding_entries(graph_path: &Path, facts: &PrFacts) -> Option<Vec<Value>> {
     let mut projection = crate::graph_store::read_rows_where(
         graph_path,
         &crate::backlog::RowQuery {
             fields: Some(
-                ["id", "cwd", "project"]
+                ["id", "cwd", "project", "tags", "status"]
                     .iter()
                     .map(|s| s.to_string())
                     .collect(),
@@ -3374,6 +3357,14 @@ fn node_binding_entries(graph_path: &Path, facts: &PrFacts) -> Option<Vec<Value>
         },
     )
     .ok()?;
+    let mut carriers = bound_node_rows(graph_path, facts)?;
+    projection.append(&mut carriers);
+    Some(projection)
+}
+
+/// Full rows of every node the PR binds to: the nodes whose pull_requests
+/// rows name it, plus the exact ids its head ref and closure line name.
+fn bound_node_rows(graph_path: &Path, facts: &PrFacts) -> Option<Vec<Value>> {
     let mut carriers =
         crate::backlog::read_pr_entries(graph_path, Some(facts.number as i64)).ok()?;
     let mut named = crate::backlog::node_branch::node_ids(&facts.head_ref);
@@ -3408,8 +3399,72 @@ fn node_binding_entries(graph_path: &Path, facts: &PrFacts) -> Option<Vec<Value>
         });
         carriers.append(&mut rows);
     }
-    projection.append(&mut carriers);
-    Some(projection)
+    Some(carriers)
+}
+
+/// A PR whose bound node waits on an open `blocked_by` node does not merge.
+/// The edge is the whole hold: no decision row, no question. It lifts when
+/// the blocker closes, so the verdict is `Held`, never `Refused`.
+fn blocked_by_probe(cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
+    let graph_path = crate::org_board::scope::graph_json_path(cwd);
+    let Some(bound) = bound_node_rows(&graph_path, facts) else {
+        return ProbeOutcome::Inconclusive(
+            "blocked_by: graph unreadable; refusing to assume unblocked".to_string(),
+        );
+    };
+    let mut waits: Vec<(String, String)> = Vec::new();
+    for row in &bound {
+        let Some(facts_row) = RowFacts::of(row) else {
+            continue;
+        };
+        let Some(owner) = facts_row.id().as_str() else {
+            continue;
+        };
+        for blocker in facts_row.blocked_by().str_items() {
+            waits.push((owner.to_string(), blocker.to_string()));
+        }
+    }
+    if waits.is_empty() {
+        return ProbeOutcome::Clear;
+    }
+    let ids: Vec<String> = waits.iter().map(|(_, b)| b.clone()).collect();
+    let Ok(rows) = crate::graph_store::read_rows_where(
+        &graph_path,
+        &crate::backlog::RowQuery {
+            filter: crate::backlog::api::NodeFilter {
+                id_in: Some(ids),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    ) else {
+        return ProbeOutcome::Inconclusive(
+            "blocked_by: graph unreadable; refusing to assume unblocked".to_string(),
+        );
+    };
+    blocked_by_verdict(facts.number, &waits, &rows)
+}
+
+/// The pure half of [`blocked_by_probe`]. A blocker the graph no longer
+/// holds reads closed: nothing is left to wait for.
+fn blocked_by_verdict(pr: u64, waits: &[(String, String)], rows: &[Value]) -> ProbeOutcome {
+    let open: Vec<String> = waits
+        .iter()
+        .filter(|(_, blocker)| {
+            rows.iter().any(|row| {
+                RowFacts::id_of(row) == Some(blocker.as_str())
+                    && crate::backlog_ready::node_is_open(row)
+            })
+        })
+        .map(|(owner, blocker)| format!("{owner} waits on {blocker}"))
+        .collect();
+    if open.is_empty() {
+        return ProbeOutcome::Clear;
+    }
+    ProbeOutcome::Refused(format!(
+        "blocked_by: PR {pr} waits on an open node ({}); it merges once the blocker closes",
+        open.join(", ")
+    ))
 }
 
 /// The binding decision over already-read graph entries: the pure half of

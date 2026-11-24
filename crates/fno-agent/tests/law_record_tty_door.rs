@@ -204,6 +204,7 @@ fn a_terminal_set_records_under_operator_authority() {
         .iter()
         .find(|r| {
             field(r, "decision_id") == &json!(lowered)
+                || field(r, "decision_id") == &json!(shown)
                 || field(r, "_number") == &json!(shown)
                 || field(r, "number") == &json!(shown)
         })

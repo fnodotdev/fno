@@ -44,7 +44,7 @@ const HELP_ROWS: &[(&str, &str)] = &[
     ("sync-canonical --pr-number <n>", "Post-merge canonical-checkout sync; exactly-once per merge SHA via a marker + single-flight lock; fail-open. exit 0 no-op/skipped/synced, non-zero on a failed sync_command or a dirty canonical checkout on touched paths."),
     ("publish-review <args>...", "Post a review verdict to GitHub as config.review.bot_identity (--pr-number N; --verdict defaults to the newest head-pinned attestation; --dry-run/-N). exit 0 posted, 1 skipped|refused|failed, 2 no attestation to default from."),
     ("rebase [--base B] [--continue]", "Rebase the current branch via the conflict-delegation protocol. Two-phase: exit 42 means the caller must invoke the conflict-resolver agent, then call back --continue."),
-    ("push [flags]", "The one guarded push: fetch, rebase onto origin/main, optionally preflight, push exactly once to the PR head the upstream names, print one receipt with the remote ref. Exit 0 pushed (ci=settled|bypassed|red-cancel), 1 preflight red, 2 a live run in flight, 3 a refusal, 4 a read error, 127 binary missing."),
+    ("push [flags]", "The one guarded push: fetch, merge origin/main only into a conflicting or behind-blocked PR (never a rebase), optionally preflight, push exactly once to the PR head the upstream names, print one receipt with the remote ref. Exit 0 pushed (ci=settled|bypassed|red-cancel), 1 preflight red, 2 a live run in flight, 3 a refusal, 4 a read error, 127 binary missing."),
     ("create [flags]", "Duplicate-guarded create; exit 3 refuses a twin (--not-duplicate <pr>)."),
     ("ritual [<pr>] [--autonomous]", "Mechanical core of the post-merge ritual as one idempotent sequence with a per-leg receipt line. Hidden: the `fno do pr merged` skill is the attended front door."),
     ("closure-trailer [<node>] [--extra ID]...", "Print the exact `Fixes` closure line for NODE plus its contained_in descendants. Prints nothing (exit 0) when NODE is unresolvable or nothing well-formed remains. Exit 4 means the graph read itself failed."),
@@ -335,15 +335,28 @@ fn dispatch(sub: &str, tail: &[String]) -> i32 {
         }
         "info" => {
             let cwd = current_cwd_string();
-            let node_repo =
-                crate::gate::loopcheck::pr_read::session_node_pr_target(std::path::Path::new(&cwd))
-                    .1;
+            // The pin answers the operand's number when one is named (the
+            // repo the session node's rows record for it), else the node's
+            // own newest PR repo.
+            let operand = pr_operand(tail);
+            let node_repo = match operand {
+                Some(pr) => crate::gate::loopcheck::pr_read::session_node_pr_repo(
+                    std::path::Path::new(&cwd),
+                    pr,
+                ),
+                None => {
+                    crate::gate::loopcheck::pr_read::session_node_pr_target(std::path::Path::new(
+                        &cwd,
+                    ))
+                    .1
+                }
+            };
             let mut ask = json!({
                 "op": "status-pr-info",
                 "cwd": cwd,
                 "repo": option_value(tail, "--repo").or(node_repo),
             });
-            if let Some(pr) = pr_operand(tail) {
+            if let Some(pr) = operand {
                 ask["pr"] = json!(pr);
             }
             let answer = crate::pr_info::run_op(&ask);

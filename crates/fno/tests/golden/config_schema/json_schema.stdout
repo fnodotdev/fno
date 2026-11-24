@@ -742,11 +742,16 @@
       "type": "object"
     },
     "BuildBlock": {
-      "description": "Build-freeze switch (nested under 'config.build').",
+      "description": "Build switches (nested under 'config.build').",
       "properties": {
         "agent_freeze": {
           "default": false,
           "title": "Agent Freeze",
+          "type": "boolean"
+        },
+        "sccache": {
+          "default": false,
+          "title": "Sccache",
           "type": "boolean"
         }
       },
@@ -2942,6 +2947,23 @@
           "title": "Hold Ttl Minutes",
           "type": "integer"
         },
+        "human": {
+          "anyOf": [
+            {
+              "enum": [
+                "never",
+                "ui",
+                "always"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Human"
+        },
         "invocation_ttl_minutes": {
           "default": 15,
           "minimum": 1,
@@ -3179,8 +3201,20 @@
       "type": "object"
     },
     "SandboxBlock": {
-      "description": "Confinement fallback policy (nested under ``config.sandbox``).",
+      "description": "Sandboxed workers and the confinement fallback policy (nested under ``config.sandbox``).",
       "properties": {
+        "image": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image"
+        },
         "on_unavailable": {
           "default": "refuse",
           "enum": [
@@ -3188,6 +3222,18 @@
             "warn"
           ],
           "title": "On Unavailable",
+          "type": "string"
+        },
+        "provider": {
+          "default": "none",
+          "enum": [
+            "none",
+            "docker",
+            "podman",
+            "apple",
+            "devcontainer"
+          ],
+          "title": "Provider",
           "type": "string"
         }
       },

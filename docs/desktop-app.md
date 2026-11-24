@@ -20,9 +20,21 @@ The `codesign -s -` step gives the binary an ad-hoc signature. No developer acco
 
 Each app release ships `fno-app-macos.tar.gz` on its own `fno-app-v<version>` release. The bundle holds a universal binary, so it runs on Apple silicon and Intel Macs, macOS 11 or later. It holds `fno-app.app`, signed with a Developer ID, notarized and stapled, so it opens with no prompt. If the release was built without the notary secrets, the bundle is Developer ID signed but not notarized, so Gatekeeper asks once. If it was built without the certificate secrets, the bundle is ad-hoc signed instead. Then Gatekeeper asks once. Clear the prompt with `xattr -d com.apple.quarantine fno-app.app`. The app runs the `fno` and `fno-agent` it finds beside itself, then on `PATH`, so install fno first.
 
+## Updates
+
+The app checks the `fno-app-v*` release feed at launch and every 6 hours after, until it stages a build. It downloads the newest stable release in the background and proves it before it offers it. Four proofs must pass. The sha256 file must match. `codesign --verify --deep --strict` must pass. The Team ID must equal the running app's Team ID. The new binary must name the release version. A build that fails any proof is dropped, and the app tries again at the next check.
+
+The check needs a Team ID. An ad-hoc signed or unsigned app has none, so it never checks for updates and never installs one. Install a new build of such an app by hand.
+
+When a build is ready, a card appears at the bottom left: `fno-app <version> is ready`, with Restart and Later. Restart quits the app, swaps the staged bundle in place of the running one, and opens it. If the swap fails, the old bundle stays in place and opens again. Later hides the card. The app offers the same build again at the next check.
+
+The first launch of the new build shows the release notes once, in the same card. The notes come from the `## <version>` section of `crates/fno-app/CHANGELOG.md`, which the release workflow reads. A version with no section gets the one-line default.
+
+A dev build run outside a `.app` bundle never checks for updates. Staged builds live in `~/Library/Application Support/fno-app/update/`.
+
 ## Versions
 
-The app has its own version line, starting at 0.0.1, separate from fno. `sync-version.sh` never stamps it. To release the app, bump `version` in `crates/fno-app/Cargo.toml` and push a `fno-app-v<version>` tag. The `release-app` workflow builds that tag and publishes it.
+The app has its own version line, starting at 0.0.1, separate from fno. `sync-version.sh` never stamps it. To release the app, add a `## <version>` section to `crates/fno-app/CHANGELOG.md`, set `version` in `crates/fno-app/Cargo.toml` and push a `fno-app-v<version>` tag. The `release-app` workflow builds that tag and publishes it.
 
 The app never reads that version to judge compatibility. It reads the wire version the mux server stamps in its `.ver` file. The app needs wire v131 or newer. A server below that, or one with no stamp, makes the app stop with one line. The line names both versions. Run `fno update`, then `fno agent restart --mux`.
 
@@ -53,7 +65,7 @@ Chat shows the conversation of the agent in the focused pane. The app reads it f
 
 The agent's text renders as markdown: headings, bold, italic, strikethrough, quotes and tables. Inline code uses the terminal font, and so do code blocks. Bullet, numbered and task lists keep their markers. A link shows in the accent colour, and a click opens it. Images in your turns, in tool output and in markdown draw inline. An image too big for the stream shows its size instead.
 
-Thinking takes one line, and a click opens its text. Each tool call takes one muted line with its state: … while it runs, ✓ for a success, ✗ for a failure. A click opens the call's sheet with its input and output in the terminal font, each with a Copy button. Output past 20,000 characters is cut, and the sheet says how many were cut. Escape, Close or a click outside closes the sheet. A kind the app does not know shows as one plain line. New turns append as the agent writes them. The view follows them while it is scrolled to the bottom.
+Thinking takes one line, and a click opens its text. System-injected rows, a task notification for example, fold the same way: one muted caret line, and a click opens the full text. Each tool call takes one muted line with its state: … while it runs, ✓ for a success, ✗ for a failure. A click opens the call's sheet with its input and output in the terminal font, each with a Copy button. Output past 20,000 characters is cut, and the sheet says how many were cut. Escape, Close or a click outside closes the sheet. A kind the app does not know shows as one plain line. New turns append as the agent writes them. The view follows them while it is scrolled to the bottom.
 
 Focus another pane to read its agent. The app keeps each conversation it read, so focusing back resumes where it left off. A pane with no agent session says so. A session with no turns yet says so after 2 seconds. With `--chat <pin>`, the view stays on that session whatever has focus.
 
@@ -120,3 +132,19 @@ The flags still win: `--font`, `--font-size` and `--mode` override the config ro
 ## Mouse
 
 A click on a pane focuses it. A drag selects text, and the release copies it. The wheel scrolls the pane's history, and `[+N]` at the top right shows how many lines up the pane is. A click on a border or a gap does nothing.
+
+## Measured performance
+
+Both clients read the same mux server, so the two columns measure the clients, not the data source. One throwaway server holds 30 idle agent panes, one 10,000-line pane and one busy pane. Each cell is p50 over p90 from 20 runs. Timed rows read in milliseconds. The idle row reads in CPU percent and KB.
+
+The harness is `scripts/ops/mux-client-bench.sh` in the fno repo. Its report carries the full provenance: host, macOS and binary versions, date and world shape. Failed runs are named, never averaged in.
+
+| Metric | TUI | fno-app | How it is measured |
+|---|---|---|---|
+| Launch to first frame | pending | pending | TUI: first output byte on a fresh pty attach. fno-app: one cold offscreen `--shot` frame, wall time, png encode included. |
+| Keystroke to paint, busy pane | pending | unmeasured | TUI: a marker keystroke until its echo paints. The app needs synthetic keyboard events plus screen capture, both gated by macOS permissions. No number until a run with those grants. |
+| Switch focused agent | pending | unmeasured | TUI: `mux view` flip until the new pane paints. The app drains its control file on a 400ms poll and acks nothing, so the flip is visible only through screen capture. |
+| Scroll a 10,000-line pane | pending | unmeasured | TUI: page-up presses in scroll mode until the paint settles. The app needs synthetic scroll-wheel events plus screen capture. |
+| Idle CPU / RSS, 30 agents | pending | pending | `ps` sampling at 1s for 30s against the same world. |
+
+The unmeasured cells are honest gaps, not absences of a client. The app's input and paint are observable only through macOS accessibility and screen-recording grants. The bench holds neither grant yet. A run with them fills the cells with the same p50 over p90 shape.

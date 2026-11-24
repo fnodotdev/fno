@@ -114,6 +114,8 @@ fn collect_status(root: Option<&Path>) -> Vec<SpawnerStatus> {
         gate_with_master(root, |s| block_enabled(s, "post_merge", true));
     let (pr_watch_armed, pr_watch_rank) =
         gate_with_master(root, |s| block_enabled(s, "pr_watch", false));
+    let (schedule_armed, schedule_rank) =
+        gate_with_master(root, |s| block_enabled(s, "schedule", true));
     let (recovery_armed, recovery_rank) = gate_with_master(root, |s| {
         block_enabled(s, "recovery", true)
             && root
@@ -182,6 +184,13 @@ fn collect_status(root: Option<&Path>) -> Vec<SpawnerStatus> {
             "config.pr_watch.enabled",
             pr_watch_armed,
             pr_watch_rank,
+        ),
+        row(
+            "scheduled spawn (daemon fires a queued spawn at a time or condition)",
+            "daemon tick at the row's time or condition",
+            "config.schedule.enabled",
+            schedule_armed,
+            schedule_rank,
         ),
         row(
             "recovery sweep (crash respawn)",

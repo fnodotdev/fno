@@ -119,6 +119,16 @@ pub fn find_transcript_for_account(session_uuid: &str, account: Option<&str>) ->
     find_transcript_in(&dir.join("projects"), session_uuid)
 }
 
+/// The transcript under the ambient root, else under any isolated account's
+/// config dir: a worker on an isolated account never writes to the ambient one.
+pub fn find_transcript_any_root(session_uuid: &str) -> Option<PathBuf> {
+    find_transcript(session_uuid).or_else(|| {
+        crate::claude_roster::isolated_account_dirs()
+            .into_iter()
+            .find_map(|(_, dir)| find_transcript_in(&dir.join("projects"), session_uuid))
+    })
+}
+
 /// Same discovery under an explicit projects base, for callers that resolve
 /// the root themselves (tests, or the cap actor's injected scan).
 pub fn find_transcript_in(base: &Path, session_uuid: &str) -> Option<PathBuf> {

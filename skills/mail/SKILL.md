@@ -48,7 +48,7 @@ happens when that misses, and it is recovery, not delivery.**
 - `msg-<id> accepted-new-turn` or `accepted-steer` - the recipient's own turn record holds the envelope id. It does not prove the recipient acted on it.
 - `msg-<id> parked` or `injected` - the bytes reached the recipient, but no turn took them yet. Peek before you resend: a resend reaches it twice.
 - `msg-<id> queued (durable)` - live delivery was not confirmed. This is durable fallback, not delivery.
-- the send command re-checks the recipient after a settle window. The receipt then ends `landed (...)`, `queued, not landed yet`, or a `NOT LANDED` block. `queued, not landed yet` means a live recipient drains it at its next turn boundary. That send exits 0, so do not re-send. NOT LANDED names the recovery and verify commands for that substrate and exits non-zero (14).
+- the send command re-checks the recipient after a settle window. The receipt then ends `landed (...)`, `queued, not landed yet`, `FAILED on the live leg`, or a `NOT LANDED` block. `queued, not landed yet` means the inject went out unconfirmed. A live recipient drains it at its next turn boundary. That send exits 0, so do not re-send. `FAILED on the live leg` means the live leg hit a never-lands refusal (`no-pane-ref`, `no-lane`, `no-recipient`, `stage-failed`, `turn-parse-failed`). Nothing landed, nothing will drain it unprompted. That receipt names peek, attach, withdraw, and the resend, and exits non-zero (14). NOT LANDED names the recovery and verify commands for that substrate and exits non-zero (14).
 
 The recipient's own `unread` / `ack` / `drain-self` commands exist to consume that
 fallback queue, which is why they read like a mailbox. They are the recovery
@@ -64,9 +64,13 @@ re-send is how you double-deliver. Check first, then act:
 
 ```bash
 fno agent session peek <short-id>     # did the turn actually land? is it alive?
-fno agent session resume <short-id>   # wakes it (claude) or resumes it (other harnesses), then re-send
+fno agent session resume <short-id>   # wakes it (claude) or resumes it (other harnesses)
 fno agent session attach <short-id>   # drive it yourself (claude)
+fno agent mail admin withdraw <id>    # retract the queued copy FIRST
+fno agent mail send <short-id> '<body>'  # then re-send
 ```
+
+A withdraw that refuses because the copy was already claimed means it landed: stop there.
 
 Address a peer by its full session id: the `from_session=` value on the `<fno_mail>` envelope, or the id `fno agent session list` shows. The head-8 short form is a display handle. Under UUIDv7 it is a ~66-second clock bucket. Two workers started in the same minute share one, so a send or reply addressed to the short form can refuse as ambiguous. `resume` / `attach` accept the id that names the session in the registry, and `send` can reach a live session that never registered. If a handle mails but will not resume, `fno agent session list` / `top` will show whether it has a row.
 

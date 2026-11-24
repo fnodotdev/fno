@@ -1386,6 +1386,10 @@ mod tests {
         assert!(refuse_bp(&ready).is_some());
         let design = facts(Some(&today), Some("design"));
         assert!(super::plan_fresh_for_facts("blueprint", &design).is_none());
+        // The lead's hand-stamped re-plan word admits blueprint the same way
+        // a design doc does; only `ready` is the target door's input.
+        let draft = facts(Some(&today), Some("draft"));
+        assert!(super::plan_fresh_for_facts("blueprint", &draft).is_none());
         let undated = facts(None, None);
         assert!(super::plan_fresh_for_facts("think", &undated).is_none());
     }
