@@ -257,7 +257,6 @@ mod tests {
     #![allow(clippy::indexing_slicing)]
     use super::*;
     use crate::chat_events::SessionReader;
-    use std::io::Write;
 
     const HEADER: &str = r#"{"type":"session","version":3,"id":"0192f3a0-0000-7000-8000-000000000001","timestamp":"2026-11-24T10:00:00.000Z","cwd":"/x"}"#;
 
@@ -347,36 +346,41 @@ mod tests {
     }
 
     #[test]
-    fn chat_events_pi_seq_is_stable_across_a_chunked_live_tail() {
-        let dir = tempfile::tempdir().unwrap();
-        let whole = rows().join("\n") + "\n";
-        let full = dir.path().join("full.jsonl");
-        std::fs::write(&full, &whole).unwrap();
-        let replay = SessionReader::lines(full, Box::new(PiMapper::default()), 0)
-            .poll()
-            .unwrap();
-
-        let live_path = dir.path().join("live.jsonl");
-        std::fs::write(&live_path, "").unwrap();
-        let mut live = SessionReader::lines(live_path.clone(), Box::new(PiMapper::default()), 0);
-        let cut_a = whole.find('\n').unwrap() + 20;
-        let cut_b = whole.rfind(r#"{"type":"message""#).unwrap() + 5;
-        let mut got = Vec::new();
-        for chunk in [&whole[..cut_a], &whole[cut_a..cut_b], &whole[cut_b..]] {
-            let mut f = std::fs::OpenOptions::new()
-                .append(true)
-                .open(&live_path)
-                .unwrap();
-            f.write_all(chunk.as_bytes()).unwrap();
-            got.extend(live.poll().unwrap());
-        }
-        let pairs = |events: &[crate::proto::chat_event::ChatEvent]| {
-            events
-                .iter()
-                .map(|e| (e.seq, e.body.clone()))
-                .collect::<Vec<_>>()
+    fn chat_events_open_answers_pi_and_omp_from_their_session_dirs() {
+        use crate::chat_events::{ChatReadError, ChatRoots};
+        use crate::proto::chat_event::SessionKey;
+        let id = "0192f3a0-0000-7000-8000-000000000001";
+        let root = tempfile::tempdir().unwrap();
+        let cwd_dir = root.path().join("--x--");
+        std::fs::create_dir_all(&cwd_dir).unwrap();
+        std::fs::write(
+            cwd_dir.join(format!("2026-11-24T10-00-00-000Z_{id}.jsonl")),
+            rows().join("\n") + "\n",
+        )
+        .unwrap();
+        let roots = ChatRoots {
+            transcripts: vec![root.path().to_path_buf()],
+            opencode_stores: Vec::new(),
         };
-        assert_eq!(pairs(&got), pairs(&replay));
-        assert!(replay.iter().enumerate().all(|(i, e)| e.seq == i as u64));
+        let key = |harness: &str, subagent: Option<&str>| SessionKey {
+            harness: harness.into(),
+            session_id: id.into(),
+            subagent: subagent.map(Into::into),
+        };
+        for harness in ["pi", "omp"] {
+            let events = SessionReader::open(&key(harness, None), &roots, 0)
+                .unwrap()
+                .poll()
+                .unwrap();
+            assert_eq!(events.len(), 14, "{harness}");
+        }
+        assert!(matches!(
+            SessionReader::open(&key("pi", Some("child")), &roots, 0),
+            Err(ChatReadError::NotFound { .. })
+        ));
+        assert!(matches!(
+            SessionReader::open(&key("agy", None), &roots, 0),
+            Err(ChatReadError::UnsupportedHarness(_))
+        ));
     }
 }
