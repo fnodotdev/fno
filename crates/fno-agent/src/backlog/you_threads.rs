@@ -942,6 +942,28 @@ pub(crate) struct YouInputs<'a> {
     pub capture_dir: PathBuf,
 }
 
+/// The registry's display-name join, typed once (R1): session id to name.
+/// Rows missing either field drop out.
+fn registry_names(registry: &[Value]) -> std::collections::HashMap<String, String> {
+    registry
+        .iter()
+        .filter_map(|reg| {
+            let row: RegistryName = serde_json::from_value(reg.clone()).ok()?;
+            (!row.harness_session_id.is_empty() && !row.name.is_empty())
+                .then(|| (row.harness_session_id, row.name))
+        })
+        .collect()
+}
+
+/// The two registry fields the display-name joins read.
+#[derive(serde::Deserialize, Default)]
+struct RegistryName {
+    #[serde(default)]
+    harness_session_id: String,
+    #[serde(default)]
+    name: String,
+}
+
 /// One You row per session whose transcript carries typed turns inside the
 /// window, newest first: every registry-named claude session, plus every
 /// capture-dir session (`*.scan.json` names the transcript) the registry
@@ -965,17 +987,7 @@ pub(crate) fn project_you(inputs: &YouInputs) -> Vec<Value> {
         .unwrap_or(0);
     // Display names from the registry across every harness, keyed by session
     // id; the capture-dir leg falls back to the id's first eight chars.
-    let names: BTreeMap<&str, &str> = inputs
-        .registry
-        .iter()
-        .filter_map(|reg| {
-            let sid = reg.get("harness_session_id")?.as_str()?;
-            let name = reg.get("name")?.as_str()?;
-            (!sid.is_empty() && !name.is_empty())
-                .then(|| (sid, name))
-                .or(None)
-        })
-        .collect();
+    let names = registry_names(inputs.registry);
     // The walk list: registry claude rows first (the shape the Me rows have
     // always read), then capture-dir sessions the registry missed.
     let mut sessions: Vec<(String, PathBuf)> = Vec::new();
@@ -1334,22 +1346,14 @@ pub(crate) fn ask_turns_since(
     // Display names from the registry, keyed by session id: a turn's name is
     // the session's registry handle, or empty when none stands - the id
     // never reads as a name.
-    let names: std::collections::HashMap<&str, &str> = inputs
-        .registry
-        .iter()
-        .filter_map(|reg| {
-            let sid = reg.get("harness_session_id")?.as_str()?;
-            let name = reg.get("name")?.as_str()?;
-            (!sid.is_empty() && !name.is_empty()).then(|| (sid, name))
-        })
-        .collect();
+    let names = registry_names(inputs.registry);
     let mut turns: Vec<AskTurn> = Vec::new();
     for (sid, path, project) in since_transcripts(&inputs.projects_dir, codex_dir, since_epoch) {
         let acked = crate::operator_turns::read_acked_turn_ids(
             &crate::operator_turns::ledger_path(&inputs.capture_dir, &sid),
         )
         .unwrap_or_default();
-        let turn_name = names.get(sid.as_str()).copied().unwrap_or("").to_string();
+        let turn_name = names.get(sid.as_str()).cloned().unwrap_or_default();
         let mut asked = false;
         for item in store.advance(&path, &sid, &bus) {
             let after_question = std::mem::replace(&mut asked, ends_on_question(&item));
