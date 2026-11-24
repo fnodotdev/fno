@@ -74,12 +74,12 @@ fn docs_value(body: &str) -> Option<String> {
         .map(String::from)
 }
 
-/// Strip the punctuation a sentence puts around a token: `(next.mdx),`.
+/// Strip the punctuation and the backticks around a token: ``(`next.mdx`),``.
 fn trim_token(t: &str) -> &str {
     t.trim_matches(|c: char| {
         matches!(
             c,
-            '(' | ')' | '[' | ']' | ',' | ';' | ':' | '.' | '"' | '\''
+            '`' | '(' | ')' | '[' | ']' | ',' | ';' | ':' | '.' | '"' | '\''
         )
     })
 }
@@ -283,6 +283,10 @@ mod tests {
             Some((Some("fno-web".to_string()), 244))
         );
         assert_eq!(docs_pr_ref("Docs: PR 45", cwd), Some((None, 45)));
+        assert_eq!(
+            docs_pr_ref("Docs: `fno-web#45`", cwd),
+            Some((Some("fno-web".to_string()), 45))
+        );
         assert_eq!(docs_pr_ref("Docs: none, no user surface", cwd), None);
         assert_eq!(docs_pr_ref("Docs: none\n", cwd), None);
         assert_eq!(docs_pr_ref("Docs: docs/x.next.mdx", cwd), None);
@@ -309,6 +313,12 @@ mod tests {
         assert!(body_names_doc("Docs: PR 244\n"));
         assert!(body_names_doc("Docs: see pr 244.\n"));
         assert!(!body_names_doc("Docs: PR owed\n"));
+        // Backticks around a path or a PR ref never hide the doc either.
+        assert!(body_names_doc("Docs: `docs/next.mdx`\n"));
+        assert!(body_names_doc(
+            "Docs: `docs/a.md` and `docs/b.md`, both updated in this PR\n"
+        ));
+        assert!(!body_names_doc("Docs: `owed`\n"));
         // The lowercase spelling carries the same meaning.
         assert!(body_names_doc("docs: docs/reference/pr.mdx\n"));
         assert!(body_names_doc(

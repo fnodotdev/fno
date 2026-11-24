@@ -28,7 +28,8 @@
     {
      "name": "build",
      "default": {
-      "agent_freeze": false
+      "agent_freeze": false,
+      "sccache": false
      }
     },
     {
@@ -846,6 +847,10 @@
    "fields": [
     {
      "name": "agent_freeze",
+     "default": false
+    },
+    {
+     "name": "sccache",
      "default": false
     }
    ]
@@ -3593,6 +3598,7 @@
   "batch.max_nodes",
   "batch.max_loc",
   "build.agent_freeze",
+  "build.sccache",
   "post_merge.parking_lot_path",
   "post_merge.maintainer_marker",
   "post_merge.enabled",

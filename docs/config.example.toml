@@ -37,6 +37,8 @@ prefix = "fno"
 [build]
 # Agent build freeze: while set, the rustc wrapper's doors refuse an agent session's compile and test run with exit 86 and name CI as the gate; the user's own cargo and the install build still compile.
 agent_freeze = false
+# Shared compile cache: while true and sccache is installed, the rustc wrapper compiles through sccache, so a fresh worktree reuses the dependency compiles of other worktrees. The project file settles it over the global one. SCCACHE_DISABLE=1 wins over it.
+sccache = false
 
 [paths]
 # One JSONL row per finished session across every repo: run history and cost. Move it to keep history on another disk.
