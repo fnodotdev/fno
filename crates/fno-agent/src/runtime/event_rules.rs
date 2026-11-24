@@ -1049,8 +1049,6 @@ fn write_fire_span(
     }
 }
 
-// ── the per-session cursor ──────────────────────────────────────────────────
-
 // ── the shadow judge's request row ───────────────────────────────────────────
 
 /// How many behavioural laws one request row keeps. The cap keeps one pass
@@ -1062,6 +1060,52 @@ const JUDGE_TAIL_CHARS: usize = 4_000;
 /// per Stop never grows without end.
 const JUDGE_ROTATE_BYTES: u64 = 64 * 1024 * 1024;
 
+/// One row of the judge file. A request is written at each Stop. The
+/// scorer appends a verdict for each question it answers about a request.
+#[derive(Debug, Deserialize)]
+pub struct JudgeRow {
+    pub ts: String,
+    /// `request` or `verdict`.
+    pub phase: String,
+    pub span_id: String,
+    #[serde(default)]
+    pub session: String,
+    /// The Stop turn's key, `stop:<session>:<turn>`.
+    pub matched_event: String,
+    #[serde(default)]
+    pub machine: String,
+    /// `off`, `refused`, `down` or `up`, on a request.
+    #[serde(default)]
+    pub fnod: Option<String>,
+    /// The behavioural laws a request keeps, at most [`JUDGE_RULE_CAP`].
+    #[serde(default)]
+    pub rules: Vec<String>,
+    #[serde(default)]
+    pub judge_dropped: usize,
+    #[serde(default)]
+    pub judge_state: usize,
+    /// The reply tail, on a request written while fnod listens.
+    #[serde(default)]
+    pub excerpt: Option<String>,
+    /// The request a verdict answers, and the label it judged under.
+    #[serde(default)]
+    pub judge_of: Option<String>,
+    #[serde(default)]
+    pub judge: Option<String>,
+    #[serde(default)]
+    pub verdict: Option<String>,
+    #[serde(default)]
+    pub escalate: Option<String>,
+    #[serde(default)]
+    pub trained: Option<bool>,
+    #[serde(default)]
+    pub fnod_error: Option<String>,
+    #[serde(default)]
+    pub fnod_ms: Option<f64>,
+    #[serde(default)]
+    pub fnod_is_ask: Option<f64>,
+}
+
 /// The shadow judge's request row, one per Stop: the behavioural laws this
 /// turn's prompt picked, how many state laws it picked, whether fnod
 /// listens here, and the reply tail when it does. The scorer
@@ -1069,10 +1113,13 @@ const JUDGE_ROTATE_BYTES: u64 = 64 * 1024 * 1024;
 /// path, so Stop itself asks fnod nothing. Best-effort: a lost row costs a
 /// verdict and nothing else.
 fn write_judge_request(journal: &Path, ctx: &Ctx) {
-    let tags = crate::fnod_tags::Tags::read(ctx.cwd);
+    // Read on the first picked law only: a Stop that picked none pays no
+    // config read.
+    let mut tags: Option<crate::fnod_tags::Tags> = None;
     let mut rules: Vec<String> = Vec::new();
     let (mut state, mut dropped) = (0usize, 0usize);
     for law in picked_laws(journal, ctx) {
+        let tags = tags.get_or_insert_with(|| crate::fnod_tags::Tags::read(ctx.cwd));
         match tags.get(&law) {
             crate::fnod_tags::Tag::Behavioural => {
                 if rules.len() < JUDGE_RULE_CAP {
@@ -1095,7 +1142,15 @@ fn write_judge_request(journal: &Path, ctx: &Ctx) {
     } else {
         "down"
     };
-    let mut row = json!({
+    let tail = (fnod == "up").then(|| {
+        let skip = ctx
+            .last_message
+            .chars()
+            .count()
+            .saturating_sub(JUDGE_TAIL_CHARS);
+        ctx.last_message.chars().skip(skip).collect::<String>()
+    });
+    let row = json!({
         "ts": crate::events::now_rfc3339(),
         "phase": "request",
         "span_id": crate::decision_trace::new_span_id(),
@@ -1106,16 +1161,29 @@ fn write_judge_request(journal: &Path, ctx: &Ctx) {
         "rules": rules,
         "judge_dropped": dropped,
         "judge_state": state,
+        "excerpt": tail,
     });
-    if fnod == "up" {
-        let skip = ctx
-            .last_message
-            .chars()
-            .count()
-            .saturating_sub(JUDGE_TAIL_CHARS);
-        row["excerpt"] = json!(ctx.last_message.chars().skip(skip).collect::<String>());
-    }
     append_judge_rows(journal, std::slice::from_ref(&row));
+}
+
+/// A rule fire span as `rules_source` writes it: the fields the pick reads.
+#[derive(Deserialize)]
+struct FireSpan {
+    data: FireData,
+}
+
+#[derive(Deserialize)]
+struct FireData {
+    span_kind: String,
+    event: String,
+    law: Option<String>,
+    #[serde(default)]
+    trace: FireTrace,
+}
+
+#[derive(Deserialize)]
+struct FireTrace {
+    actor_session: Option<String>,
 }
 
 /// The laws the prompt and skill hooks picked for this turn: this
@@ -1129,19 +1197,19 @@ fn picked_laws(journal: &Path, ctx: &Ctx) -> Vec<String> {
     };
     let mut laws: Vec<String> = Vec::new();
     for row in crate::event_store::query_events(journal, &query).unwrap_or_default() {
-        let Ok(v) = serde_json::from_str::<Value>(&row.line) else {
+        let Ok(fire) = serde_json::from_str::<FireSpan>(&row.line) else {
             continue;
         };
-        let data = &v["data"];
-        if data["span_kind"] != "rule"
-            || !matches!(data["event"].as_str(), Some("prompt" | "skill"))
-            || data["trace"]["actor_session"].as_str() != Some(ctx.session_id.as_str())
+        let fire = fire.data;
+        if fire.span_kind != "rule"
+            || !matches!(fire.event.as_str(), "prompt" | "skill")
+            || fire.trace.actor_session.as_deref() != Some(ctx.session_id.as_str())
         {
             continue;
         }
-        if let Some(law) = data["law"].as_str() {
-            if !laws.iter().any(|held| held.as_str() == law) {
-                laws.push(law.to_string());
+        if let Some(law) = fire.law {
+            if !laws.iter().any(|held| held == &law) {
+                laws.push(law);
             }
         }
     }
@@ -1160,13 +1228,13 @@ fn state_dir(journal: &Path) -> PathBuf {
 
 /// The judge rows, oldest first: the rotated copy, then the live file. A
 /// damaged line is skipped.
-pub fn judge_rows(journal: &Path) -> Vec<Value> {
+pub fn judge_rows(journal: &Path) -> Vec<JudgeRow> {
     let live = state_dir(journal).join("judge.jsonl");
     [live.with_extension("jsonl.1"), live]
         .into_iter()
         .filter_map(|path| std::fs::read_to_string(path).ok())
         .flat_map(|text| text.lines().map(str::to_string).collect::<Vec<_>>())
-        .filter_map(|line| serde_json::from_str(line).ok())
+        .filter_map(|line| serde_json::from_str::<JudgeRow>(&line).ok())
         .collect()
 }
 
@@ -1195,6 +1263,8 @@ pub fn append_judge_rows(journal: &Path, rows: &[Value]) {
         }
     }
 }
+
+// ── the per-session cursor ──────────────────────────────────────────────────
 
 /// Where this session's engine left off: the seq and ts of the newest
 /// journal row it processed. Session-keyed files in a subfolder, per the
@@ -1522,21 +1592,14 @@ mod tests {
             &rig.payload("wave 1 merged clean"),
         );
         assert!(fires.is_empty(), "the judge changes no Stop answer");
-        let rows = judge_rows(&rig.journal);
-        assert_eq!(rows.len(), 1, "{rows:?}");
-        let row = &rows[0];
-        assert_eq!(row["phase"], "request");
-        assert_eq!(row["fnod"], "up");
-        assert_eq!(row["rules"], json!(["d-behav001"]));
-        assert_eq!(
-            (row["judge_state"].as_u64(), row["judge_dropped"].as_u64()),
-            (Some(1), Some(0))
-        );
-        assert_eq!(row["excerpt"], "wave 1 merged clean");
-        let stop_key = format!("stop:{}:", rig.session);
-        assert!(row["matched_event"]
-            .as_str()
-            .is_some_and(|key| key.starts_with(&stop_key)));
+        let [row] = <[JudgeRow; 1]>::try_from(judge_rows(&rig.journal)).unwrap();
+        assert_eq!((row.phase.as_str(), row.fnod.as_deref()), ("request", "up"));
+        assert_eq!(row.rules, vec!["d-behav001"]);
+        assert_eq!((row.judge_state, row.judge_dropped), (1, 0));
+        assert_eq!(row.excerpt.as_deref(), Some("wave 1 merged clean"));
+        assert!(row
+            .matched_event
+            .starts_with(&format!("stop:{}:", rig.session)));
 
         // fnod is absent: the row says down and keeps no tail.
         let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1554,10 +1617,10 @@ mod tests {
             &rig.payload("Still working."),
         );
         let rows = judge_rows(&rig.journal);
-        assert_eq!(rows.len(), 2, "{rows:?}");
-        assert_eq!(rows[1]["fnod"], "down");
-        assert!(rows[1]["excerpt"].is_null(), "{}", rows[1]);
-        assert_eq!(rows[1]["rules"], json!(["d-behav001"]));
+        let [_, row] = <[JudgeRow; 2]>::try_from(rows).unwrap();
+        assert_eq!(row.fnod.as_deref(), Some("down"));
+        assert!(row.excerpt.is_none(), "{row:?}");
+        assert_eq!(row.rules, vec!["d-behav001"]);
     }
 
     fn stop_stamp_binds_the_question_to_the_asking_session_leg() {

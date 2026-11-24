@@ -523,22 +523,25 @@ pub(crate) mod tests {
             ],
         );
         let sent: Value = serde_json::from_str(&server.join().unwrap()).unwrap();
-        assert_eq!(sent["state"]["message"], "Read the PR status, then merged.");
+        assert_eq!(
+            sent.pointer("/state/message"),
+            Some(&json!("Read the PR status, then merged."))
+        );
         assert_eq!(
             sent.pointer("/questions/d-03c304bb/instructions"),
             Some(&json!(
                 "Did the reply obey the decision D3241 in state.rules?"
             ))
         );
-        assert_eq!(ds.len(), 2);
+        let [is_ask, law] = <[Decision; 2]>::try_from(ds).unwrap();
         assert_eq!(
-            (ds[0].label.as_deref(), ds[0].noul),
+            (is_ask.label.as_deref(), is_ask.noul),
             (Some("yes"), Some(0.8))
         );
-        assert_eq!(ds[0].escalate, Escalate::None);
-        assert_eq!(ds[1].label.as_deref(), Some("obeys"));
+        assert_eq!(is_ask.escalate, Escalate::None);
+        assert_eq!(law.label.as_deref(), Some("obeys"));
         assert_eq!(
-            ds[1].escalate,
+            law.escalate,
             Escalate::Model,
             "an untrained question never acts alone"
         );
@@ -551,10 +554,11 @@ pub(crate) mod tests {
             &[Question::shipped("is_ask"), rule_question("d-1", "D1")],
         );
         server.join().unwrap();
-        assert_eq!(ds[0].label.as_deref(), Some("no"));
-        assert!(ds[1].label.is_none());
+        let [is_ask, law] = <[Decision; 2]>::try_from(ds).unwrap();
+        assert_eq!(is_ask.label.as_deref(), Some("no"));
+        assert!(law.label.is_none());
         assert_eq!(
-            ds[1].error.as_deref(),
+            law.error.as_deref(),
             Some("reply carries no usable answers.d-1")
         );
 
