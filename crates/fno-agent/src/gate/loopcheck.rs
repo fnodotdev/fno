@@ -2563,6 +2563,16 @@ pub(crate) fn decide_with_payload(
             Err(read_err) => {
                 let failed_read = read_err.read.clone();
                 let failed_stderr = read_err.stderr_tail.clone();
+                // Every failed-read fire row: fp_read_failed, PR state unknown.
+                let failed_fire_row = |decision: &str| {
+                    let name = if intent == Intent::Promise {
+                        "promise"
+                    } else {
+                        "none"
+                    };
+                    let unknown = serde_json::json!({"pr_state": "unknown", "ci": "unknown", "reviewed": false});
+                    fire_row(decision, name, true, unknown);
+                };
                 // An unauthenticated gh cannot recover inside the loop - no
                 // fire logs in - so the block-and-retry below would re-wake
                 // the session on every stop until a cap, each wake failing
@@ -2590,20 +2600,7 @@ pub(crate) fn decide_with_payload(
                         }),
                     );
                     term_row("HeldOnQuestion", &reason);
-                    fire_row(
-                        "allow",
-                        if intent == Intent::Promise {
-                            "promise"
-                        } else {
-                            "none"
-                        },
-                        true,
-                        serde_json::json!({
-                            "pr_state": "unknown",
-                            "ci": "unknown",
-                            "reviewed": false
-                        }),
-                    );
+                    failed_fire_row("allow");
                     return terminal("allow", Some(TerminationReason::HeldOnQuestion), &reason);
                 }
                 // US4 (locked decision 6, REVERSES the wedge's behavior): a
@@ -2729,20 +2726,7 @@ pub(crate) fn decide_with_payload(
                             .min(watch_lease::PARK_MAX_MS);
                         let expires_at_ms =
                             now.timestamp_millis() + park_ms + watch_lease::WATCH_SLACK_MS;
-                        fire_row(
-                            "allow",
-                            if intent == Intent::Promise {
-                                "promise"
-                            } else {
-                                "none"
-                            },
-                            true,
-                            serde_json::json!({
-                                "pr_state": "unknown",
-                                "ci": "unknown",
-                                "reviewed": false
-                            }),
-                        );
+                        failed_fire_row("allow");
                         emit(
                             "loop_check_gh_error",
                             serde_json::json!({
@@ -2793,6 +2777,17 @@ pub(crate) fn decide_with_payload(
                 let remoteless_pr = failed_read.starts_with("pr_")
                     && failed_stderr.contains("could not resolve owner/repo");
                 let transient = read_failure_is_transient(read_err.kind, &failed_read);
+                let mut gh_error = serde_json::json!({
+                    "session_id": session_id,
+                    "read": failed_read,
+                    "outcome": read_err.outcome(),
+                    "stderr_tail": failed_stderr,
+                    "waited_on": read_err.waited_on(),
+                    "elapsed_s": read_err.elapsed.map(|d| d.as_secs_f64()),
+                    "graphql_remaining": quota.as_ref().map(|q| q.remaining),
+                    "graphql_reset": quota.as_ref().map(|q| q.reset_epoch),
+                    "rate_limit_class": secondary.then_some("secondary")
+                });
                 // A transient read parks like the quota arm: a block re-woke
                 // the session into "not work for you" text on every stop. The
                 // park doubles per failed fire in a row, so an outage costs
@@ -2807,34 +2802,10 @@ pub(crate) fn decide_with_payload(
                     let park_ms = watch_lease::gh_read_park_ms(streak);
                     let expires_at_ms =
                         now.timestamp_millis() + park_ms + watch_lease::WATCH_SLACK_MS;
-                    fire_row(
-                        "allow",
-                        if intent == Intent::Promise {
-                            "promise"
-                        } else {
-                            "none"
-                        },
-                        true,
-                        serde_json::json!({
-                            "pr_state": "unknown",
-                            "ci": "unknown",
-                            "reviewed": false
-                        }),
-                    );
-                    emit(
-                        "loop_check_gh_error",
-                        serde_json::json!({
-                            "session_id": session_id,
-                            "read": failed_read,
-                            "outcome": read_err.outcome(),
-                            "stderr_tail": failed_stderr,
-                            "waited_on": read_err.waited_on(),
-                            "elapsed_s": read_err.elapsed.map(|d| d.as_secs_f64()),
-                            "parked": true,
-                            "park_until_ms": expires_at_ms,
-                            "rate_limit_class": secondary.then_some("secondary")
-                        }),
-                    );
+                    gh_error["parked"] = true.into();
+                    gh_error["park_until_ms"] = expires_at_ms.into();
+                    emit("loop_check_gh_error", gh_error);
+                    failed_fire_row("allow");
                     watch_lease::arm_failed_read_park(
                         "gh_read",
                         park_ms,
@@ -2857,34 +2828,8 @@ pub(crate) fn decide_with_payload(
                         allow_output("allow", None, &reason, this_fire, Some(fingerprint)),
                     );
                 }
-                emit(
-                    "loop_check_gh_error",
-                    serde_json::json!({
-                        "session_id": session_id,
-                        "read": failed_read,
-                        "outcome": read_err.outcome(),
-                        "stderr_tail": failed_stderr,
-                        "waited_on": read_err.waited_on(),
-                        "elapsed_s": read_err.elapsed.map(|d| d.as_secs_f64()),
-                        "graphql_remaining": quota.as_ref().map(|q| q.remaining),
-                        "graphql_reset": quota.as_ref().map(|q| q.reset_epoch),
-                        "rate_limit_class": secondary.then_some("secondary")
-                    }),
-                );
-                fire_row(
-                    "block",
-                    if intent == Intent::Promise {
-                        "promise"
-                    } else {
-                        "none"
-                    },
-                    true,
-                    serde_json::json!({
-                        "pr_state": "unknown",
-                        "ci": "unknown",
-                        "reviewed": false
-                    }),
-                );
+                emit("loop_check_gh_error", gh_error);
+                failed_fire_row("block");
                 // Checked BEFORE the primary-quota branch and independent of
                 // it: a secondary (burst/concurrency) refusal can fire with
                 // the primary quota reading thousands remaining (measured
