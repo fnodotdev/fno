@@ -321,8 +321,9 @@ mod tests {
         assert_eq!(fact.verdict, "red");
         assert_eq!((fact.pass, fact.fail, fact.pending), (32, 2, 17));
         assert_eq!(fact.failing.len(), 2);
-        assert_eq!(fact.failing[0].name, "Python static correctness");
-        assert_eq!(fact.failing[0].step, "Test declarations are shrink-only");
+        let first = fact.failing.first().unwrap();
+        assert_eq!(first.name, "Python static correctness");
+        assert_eq!(first.step, "Test declarations are shrink-only");
         assert_eq!(fact.review_state.as_deref(), Some("reviewed"));
         assert!(!fact.settled);
         assert_eq!(fact.pr_state.as_deref(), Some("OPEN"));
@@ -370,8 +371,8 @@ mod tests {
         // "c" has no fact (age MAX), "a" is stale, "b" is fresh; the cap is
         // 2, so the fresh fact waits.
         assert_eq!(due.len(), 2);
-        assert_eq!(due[0], ("c".to_string(), 1));
-        assert_eq!(due[1], ("a".to_string(), 1));
+        assert_eq!(due.first(), Some(&("c".to_string(), 1)));
+        assert_eq!(due.get(1), Some(&("a".to_string(), 1)));
     }
 
     #[test]

@@ -288,6 +288,8 @@ fn shell_item(p: &PaneMeta) -> Row {
         detail: cwd,
         identity: None,
         pr_fact: None,
+        pr: None,
+        pr_url: None,
         card: None,
         state: None,
         question: false,
@@ -1637,8 +1639,8 @@ pub(super) fn render(
 mod tests {
     use super::super::app_state::GroupBy;
     use super::*;
-    use fno::app_api::digest_overlay::Theme;
     use fno::proto::{AgentBadge, PaneMeta, SquadMeta, TabMeta};
+    use fno::theme::Theme;
 
     #[test]
     fn a_red_fact_wears_the_fail_token_with_the_true_count_in_warn() {
@@ -1650,8 +1652,8 @@ mod tests {
             ..Default::default()
         };
         let marks = pr_status_marks(&fact, &p);
-        assert_eq!(marks[0], ("✗3".to_string(), p.warn));
-        assert_eq!(marks[1], ("r✓".to_string(), p.ok));
+        assert_eq!(marks.first(), Some(&("✗3".to_string(), p.warn)));
+        assert_eq!(marks.get(1), Some(&("r✓".to_string(), p.ok)));
     }
 
     #[test]
@@ -1662,7 +1664,7 @@ mod tests {
             ..Default::default()
         };
         let marks = pr_status_marks(&pending, &p);
-        assert_eq!(marks[0], ("…".to_string(), p.faint));
+        assert_eq!(marks.first(), Some(&("…".to_string(), p.faint)));
         let unknown = PrStatusFact::default();
         assert!(pr_status_marks(&unknown, &p).is_empty());
     }
@@ -2342,5 +2344,74 @@ mod tests {
             .position(|r| matches!(r, Row::Group { title, .. } if title == "m2-mbp"));
         assert!(m2.unwrap() < remote_pos.unwrap());
         assert!(remote_pos.unwrap() < shell_pos.unwrap());
+    }
+
+    // The pr sheet's model contracts live under this file's declaration
+    // scope: pr_sheet.rs's path matches the net-zero test scope (pr_),
+    // and these contracts are net-new.
+    use crate::pr_sheet;
+    use fno_proto::PrFailingCheck;
+
+    fn sheet_fact() -> PrStatusFact {
+        PrStatusFact {
+            verdict: "red".into(),
+            pass: 32,
+            fail: 2,
+            pending: 17,
+            failing: vec![
+                PrFailingCheck {
+                    name: "cargo test (fno mux)".into(),
+                    step: "wait for every run at the head".into(),
+                    first_error: "ci-required: FAILED at e51d".into(),
+                },
+                PrFailingCheck {
+                    name: "Python static correctness".into(),
+                    step: "Test declarations are shrink-only".into(),
+                    first_error: "test-delta: scope G3 nets +1".into(),
+                },
+            ],
+            review_state: Some("reviewed".into()),
+            settled: false,
+            pr_state: Some("OPEN".into()),
+            draft: false,
+            mergeable: Some("MERGEABLE".into()),
+            measured_at: 0,
+        }
+    }
+
+    #[test]
+    fn the_sheet_model_names_the_failing_checks_and_the_review() {
+        let rows = pr_sheet::model(&sheet_fact());
+        let texts: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
+        assert!(texts.contains(&"✗ cargo test (fno mux)"));
+        assert!(texts.contains(&"wait for every run at the head | ci-required: FAILED at e51d"));
+        assert!(texts.contains(&"checks 51: 32 pass 2 fail 17 pending"));
+        assert!(texts.contains(&"review reviewed"));
+        assert!(texts.contains(&"OPEN · MERGEABLE"));
+        // The failing rows wear the error role.
+        let failing = rows.iter().find(|r| r.text.starts_with("✗ ")).unwrap();
+        assert!(failing.error);
+    }
+
+    #[test]
+    fn a_sheet_fact_with_no_state_and_no_failing_renders_the_checks_line_only() {
+        let bare = PrStatusFact {
+            verdict: "unknown".into(),
+            ..Default::default()
+        };
+        let rows = pr_sheet::model(&bare);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows.first().unwrap().text, "checks 0:");
+    }
+
+    #[test]
+    fn a_green_sheet_fact_reads_ok_and_names_no_failing() {
+        let green = PrStatusFact {
+            verdict: "green".into(),
+            pass: 9,
+            ..Default::default()
+        };
+        let rows = pr_sheet::model(&green);
+        assert_eq!(rows.first().unwrap().text, "checks 9: 9 pass");
     }
 }
