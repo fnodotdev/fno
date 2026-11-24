@@ -56,6 +56,10 @@ pub(crate) struct LoopCheckArgs {
     /// so every existing caller keeps its exact behavior.
     pub(super) harness: Option<String>,
     pub(super) harness_session: Option<String>,
+    /// Who owns plain continuation (`--continuation-owner`): `loop_check`
+    /// (default) or `goal`, when a provider goal does. A goal-owned no-intent
+    /// stop is allowed; every done read still runs.
+    pub(super) continuation_owner: String,
 }
 
 pub(crate) fn parse_args(args: &[String]) -> Result<LoopCheckArgs, String> {
@@ -77,6 +81,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<LoopCheckArgs, String> {
     let mut driver = "target".to_string();
     let mut harness: Option<String> = None;
     let mut harness_session: Option<String> = None;
+    let mut continuation_owner = "loop_check".to_string();
     let mut fno_bin = super::loopcheck_fno_bin();
     // Env-as-default like the two bin overrides, so the real shell shim can be
     // driven end to end against a wedged child at a test bound without the
@@ -137,6 +142,8 @@ pub(crate) fn parse_args(args: &[String]) -> Result<LoopCheckArgs, String> {
             harness = Some(val);
         } else if let Some(val) = try_flag_value(arg, "--harness-session", args, &mut i) {
             harness_session = Some(val);
+        } else if let Some(val) = try_flag_value(arg, "--continuation-owner", args, &mut i) {
+            continuation_owner = val;
         } else if arg == "--hook-input-stdin" {
             // Bare boolean flag (no value): try_flag_value would consume the
             // next token as a value, so it is matched directly.
@@ -179,6 +186,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<LoopCheckArgs, String> {
         read_timeout_ms,
         harness,
         harness_session,
+        continuation_owner,
     })
 }
 
