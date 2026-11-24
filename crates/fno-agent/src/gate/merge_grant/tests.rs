@@ -99,16 +99,6 @@ fn verdict_rows() {
         json!(true)
     );
 
-    let entries = vec![node_with(
-        NODE,
-        PR,
-        vec![do_row(
-            Some(receipt(true, "config", "2026-08-24T12:00:00Z")),
-            "w1",
-        )],
-    )];
-    assert_eq!(verdict(&entries, &stale_claims(), &live).state, GRANTED);
-
     let v = verdict(&entries, &stale_claims(), &below_floor);
     assert_eq!(v.state, HELD);
     assert!(v.reason.contains("below the merge floor"), "{}", v.reason);

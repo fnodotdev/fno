@@ -1455,18 +1455,12 @@ mod hop_client_bin_tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let daemon = dir.path().join("fno-agent-daemon");
         touch(&daemon);
+        // No sibling beside the daemon: the hop has no target.
+        assert_eq!(hop_client_bin(&daemon), None);
         let client = dir.path().join("fno-agent");
         touch(&client);
         assert_eq!(hop_client_bin(&daemon), Some(client));
         assert!(is_daemon_exe(&daemon));
-    }
-
-    #[test]
-    fn a_daemon_caller_without_the_client_sibling_hops_nowhere() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let daemon = dir.path().join("fno-agent-daemon");
-        touch(&daemon);
-        assert_eq!(hop_client_bin(&daemon), None);
     }
 }
 
@@ -1534,39 +1528,34 @@ mod manifest_posture_tests {
     const STAMPING_SESSION: &str = "aaaa1111-2222-3333-4444-555566667777";
     const ANOTHER_SESSION: &str = "bbbb2222-3333-4444-5555-666677778888";
 
-    fn refused(manifest_session: Option<&str>, caller_sessions: &[&str]) -> (Option<bool>, String) {
-        let caller: Vec<String> = caller_sessions.iter().map(|s| s.to_string()).collect();
-        manifest_posture("false", "flag-no-merge", manifest_session, &caller)
-    }
-
     #[test]
-    fn a_stale_sessions_stamp_does_not_refuse_another_sessions_merge() {
-        assert_eq!(
-            refused(Some(STAMPING_SESSION), &[ANOTHER_SESSION]),
-            (None, String::new())
-        );
-        // A person at a terminal carries no session id.
-        assert_eq!(refused(Some(STAMPING_SESSION), &[]), (None, String::new()));
-    }
+    fn a_manifest_hands_its_posture_only_to_the_callers_it_binds() {
+        // A `flag-no-merge` stamp: (manifest session, caller sessions) and
+        // the posture handed to that caller.
+        let rows: [(Option<&str>, &[&str], (Option<bool>, &str)); 4] = [
+            // Another session's `--no-merge` is that session's brief.
+            (Some(STAMPING_SESSION), &[ANOTHER_SESSION], (None, "")),
+            // A person at a terminal carries no session id.
+            (Some(STAMPING_SESSION), &[], (None, "")),
+            // The session that wrote the stamp keeps its own refusal.
+            (
+                Some(STAMPING_SESSION),
+                &[STAMPING_SESSION],
+                (Some(false), "flag-no-merge"),
+            ),
+            // An unattributed refusal binds every caller.
+            (None, &[ANOTHER_SESSION], (Some(false), "flag-no-merge")),
+        ];
+        for (manifest_session, callers, (approved, source)) in rows {
+            let callers: Vec<String> = callers.iter().map(|s| s.to_string()).collect();
+            assert_eq!(
+                manifest_posture("false", "flag-no-merge", manifest_session, &callers),
+                (approved, source.to_string()),
+                "stamp from {manifest_session:?}, caller {callers:?}"
+            );
+        }
 
-    #[test]
-    fn the_stamping_sessions_own_merge_still_refuses() {
-        assert_eq!(
-            refused(Some(STAMPING_SESSION), &[STAMPING_SESSION]),
-            (Some(false), "flag-no-merge".to_string())
-        );
-    }
-
-    #[test]
-    fn an_unattributed_refusal_binds_every_caller() {
-        assert_eq!(
-            refused(None, &[ANOTHER_SESSION]),
-            (Some(false), "flag-no-merge".to_string())
-        );
-    }
-
-    #[test]
-    fn a_permit_and_an_empty_field_pass_through_to_the_owner() {
+        // A permit reaches the owner for every caller.
         assert_eq!(
             manifest_posture(
                 "true",
