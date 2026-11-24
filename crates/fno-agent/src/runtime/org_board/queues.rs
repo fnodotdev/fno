@@ -2091,6 +2091,53 @@ mod tests {
             .unwrap_or_default()
     }
 
+    fn queue_field(board: &Value, name: &str, field: &str) -> String {
+        board["queues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|q| q["name"] == name)
+            .and_then(|q| q[field].as_str())
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    /// The check-in reads `undriven_pr`, `unplanned`, `undispatched` and
+    /// `blocked_child` from a board that asked for no merge verdict, no
+    /// question liveness and no needs fold. Those four take none of the
+    /// three, so they stay `ok` when the three read not-read.
+    #[test]
+    fn a_dispatch_only_board_keeps_the_check_in_queues_ok() {
+        let cause = "not-read: this board asked for dispatch queues only";
+        let not_read = SourceRead::over_budget(cause.to_string());
+        let mut inputs = pr_board_inputs(json!([]), json!([]));
+        inputs.outstanding = not_read.clone();
+        inputs.needs = not_read.clone();
+        inputs.pr_gates = not_read;
+        let board = build_board(&inputs);
+        for name in ["undriven_pr", "unplanned", "undispatched", "blocked_child"] {
+            assert_eq!(
+                queue_field(&board, name, "status"),
+                "ok",
+                "queue {name}: {}",
+                queue_field(&board, name, "error")
+            );
+        }
+        // The control: each not-read source reaches its own consumer by name.
+        for name in ["operator_question", "unreachable_worker"] {
+            assert_eq!(
+                queue_field(&board, name, "status"),
+                "over_budget",
+                "queue {name}"
+            );
+            assert!(
+                queue_field(&board, name, "error").contains(cause),
+                "queue {name}: {}",
+                queue_field(&board, name, "error")
+            );
+        }
+    }
+
     #[test]
     fn a_cross_territory_mergeable_pr_stays_visible_as_out_of_scope() {
         let inputs = pr_board_inputs(
