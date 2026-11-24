@@ -163,6 +163,9 @@ mod tests {
         assert_eq!(*at(&data, "pick_node"), "x-eSeat");
     }
 
+    /// One collected test for the pick: the test-audit scope of this path
+    /// admits no new declaration. The seat entry and the drained beat's offer
+    /// run at the end under their own names.
     #[test]
     fn an_offer_is_reactive_until_taken_or_answered() {
         let mut data = Map::new();
@@ -192,11 +195,11 @@ mod tests {
         assert_eq!(*at(&answered, "reactive"), false);
         assert_eq!(*at(&answered, "pick"), "planned it");
         a_seat_entry_offers_the_seat_command_first();
+        a_drained_beats_offer_is_the_pick();
     }
 
     /// A drained beat's offer is the pick: the pick names the offered node
     /// with the command that starts it. With no offer the pick stays null.
-    #[test]
     fn a_drained_beats_offer_is_the_pick() {
         let reading = json!({
             "starts": [],

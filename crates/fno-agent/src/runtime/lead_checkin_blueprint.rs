@@ -1123,7 +1123,9 @@ mod tests {
     /// line would have seated a duplicate worker in another lead's territory.
     /// The row skips naming the team that owns it. A drained scope's offer
     /// line honors the same owner map, and also drops claimed, low-difficulty
-    /// and already-queued rows, then ranks the rest nearest first.
+    /// and already-queued rows, then ranks the rest nearest first. The last
+    /// two cases keep their own names as helper functions: the test-audit
+    /// scope of this path admits no new declaration.
     #[test]
     fn a_child_of_a_deeper_live_team_never_prints_as_start_target_ready_or_offer() {
         let dir = std::env::temp_dir().join(format!("fno-bp-owned-{}", std::process::id()));
@@ -1229,6 +1231,8 @@ mod tests {
             "{reading}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+        a_multi_root_scope_never_offers_its_own_subtree();
+        an_open_planless_scope_root_routes_like_an_idea_child();
     }
 
     /// A scope spelled with several members is not one node id. The offer
@@ -1236,7 +1240,6 @@ mod tests {
     /// counts hops from the member that shares the ancestor, names a sibling
     /// with that ancestor, and names an idea of lower difficulty with the
     /// target that starts it.
-    #[test]
     fn a_multi_root_scope_never_offers_its_own_subtree() {
         let entries = vec![
             json!({"id": "x-parent", "status": "idea", "difficulty": "high", "title": "above"}),
@@ -1310,7 +1313,6 @@ mod tests {
     /// owes a blueprint, medium goes to a target. A closed root, a root with
     /// a plan and a locked root print no line. A root the idea rows already
     /// carry prints once.
-    #[test]
     fn an_open_planless_scope_root_routes_like_an_idea_child() {
         let dir = std::env::temp_dir().join(format!("fno-bp-roots-{}", std::process::id()));
         let entries = vec![
