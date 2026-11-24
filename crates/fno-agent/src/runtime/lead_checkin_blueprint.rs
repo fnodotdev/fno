@@ -442,7 +442,22 @@ pub(crate) fn r_blueprint(
         .collect();
     let mut idle: Vec<Value> = Vec::new();
     let mut idea_routed = 0;
-    for row in idea_rows {
+    // The scope's own roots sit above every queue, so an open planless root
+    // with no child reaches no list of its own. It routes after the idea
+    // children, the board's children-before-epics order.
+    let roots: Vec<Value> = scope_members(scope)
+        .filter_map(|root| {
+            entries
+                .iter()
+                .find(|e| crate::lead_checkin::s_str(e, "id") == Some(root))
+        })
+        .filter(|row| {
+            open_unparked(row)
+                && crate::lead_checkin::s_str(row, "plan_path").is_none_or(str::is_empty)
+        })
+        .cloned()
+        .collect();
+    for row in idea_rows.iter().chain(roots.iter()) {
         let Some(id) = crate::lead_checkin::s_str(row, "id") else {
             continue;
         };
@@ -833,11 +848,13 @@ mod tests {
             vec![],
             &[],
             &[],
+            "",
         )
     }
 
     /// The same call with the owner map named, for the deeper-team filter,
-    /// and the idea-children count named, for the epic-heavy line.
+    /// and the idea-children count named, for the epic-heavy line. `scope` is
+    /// the scope spelling the reading sees, so a test can name roots.
     fn blueprint_reading_owned(
         dir: &std::path::Path,
         config_toml: &str,
@@ -851,6 +868,7 @@ mod tests {
         seat_leads: Vec<SeatScope>,
         idea_rows: &[Value],
         entries: &[Value],
+        scope: &str,
     ) -> Result<Value, String> {
         // The FNO_CONFIG pin below is the SOLE config candidate for every
         // concurrent reader, so it must not interleave with another test's
@@ -879,7 +897,7 @@ mod tests {
             &idea_children,
             idea_rows,
             &seat_leads,
-            "",
+            scope,
             entries,
         );
         match prior_provider {
@@ -923,6 +941,7 @@ mod tests {
             }],
             &[],
             &[],
+            "",
         )
         .unwrap();
         assert_eq!(
@@ -1093,6 +1112,7 @@ mod tests {
             vec![],
             &[],
             &[],
+            "",
         )
         .unwrap();
         assert_eq!(reading["target_ready"], json!(["x-mine"]), "{reading}");
@@ -1153,6 +1173,7 @@ mod tests {
                 vec![],
                 std::slice::from_ref(&user_only),
                 graph,
+                "",
             )
             .unwrap()
         };
@@ -1242,6 +1263,55 @@ mod tests {
         assert!(seats.is_empty(), "{seats:?}");
     }
 
+    /// An open planless root of the scope routes like an idea child: high
+    /// owes a blueprint, medium goes to a target. A closed root, a root with
+    /// a plan and a locked root are not unplanned work.
+    #[test]
+    fn an_open_planless_scope_root_routes_like_an_idea_child() {
+        let dir = std::env::temp_dir().join(format!("fno-bp-roots-{}", std::process::id()));
+        let entries = vec![
+            json!({"id": "x-r-hi", "type": "epic", "status": "idea", "difficulty": "high"}),
+            json!({"id": "x-r-mid", "type": "epic", "status": "idea", "difficulty": "medium"}),
+            json!({"id": "x-r-done", "type": "epic", "status": "done", "difficulty": "high"}),
+            json!({"id": "x-r-plan", "type": "epic", "status": "idea", "difficulty": "high",
+                "plan_path": "/plans/x-r-plan.md"}),
+            json!({"id": "x-r-lock", "type": "epic", "status": "idea", "difficulty": "high",
+                "locked_by": "sess-9"}),
+        ];
+        let reading = blueprint_reading_owned(
+            &dir,
+            "",
+            unplanned_board(&[], Some(0)),
+            Some("sess-1"),
+            vec![],
+            Ok(4),
+            "high",
+            Ok(HashMap::new()),
+            Ok(0),
+            vec![],
+            &[],
+            &entries,
+            "x-r-hi,x-r-mid,x-r-done,x-r-plan,x-r-lock",
+        )
+        .unwrap();
+        assert_eq!(reading["starts"], json!(["x-r-hi"]), "{reading}");
+        assert_eq!(reading["target_ready"], json!(["x-r-mid"]), "{reading}");
+        assert_eq!(reading["offers"], json!([]), "{reading}");
+        let skipped: Vec<&str> = reading["skips"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|s| s["id"].as_str())
+            .collect();
+        assert!(
+            !skipped.contains(&"x-r-done")
+                && !skipped.contains(&"x-r-plan")
+                && !skipped.contains(&"x-r-lock"),
+            "{reading}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// An unread owner read is the reading's error, never an empty filter:
     /// an empty map would print a foreign team's nodes as dispatchable.
     #[test]
@@ -1260,6 +1330,7 @@ mod tests {
             vec![],
             &[],
             &[],
+            "",
         );
         assert!(reading.is_err());
         let _ = std::fs::remove_dir_all(&dir);
