@@ -416,6 +416,41 @@ fn a_keyless_refusal_is_an_auth_fault_not_a_fleet_hold() {
     assert!(reason.text.contains("no token here"), "{}", reason.text);
 }
 
+/// A 404 on a read other than the PR itself must name that read and stop
+/// telling the caller to check the PR number: the PR read already answered.
+#[test]
+fn a_not_found_names_the_read_that_failed() {
+    let probe = FakeGh::refusing(r#"{"resources":{"core":{"remaining":4000,"reset":1}}}"#);
+    let stderr = "gh: Not Found (HTTP 404)";
+    for (path, label) in [
+        (
+            "repos/o/r/commits/abc/check-runs?per_page=100&page=1",
+            "check-runs",
+        ),
+        ("repos/o/r/commits/abc/status", "status"),
+        ("repos/o/r/actions/runs?head_sha=abc", "runs"),
+    ] {
+        let reason = rest_reason_for(&probe, Path::new("/tmp"), stderr, read_label(path));
+        assert!(
+            reason.text.contains(&format!("on the {label} read")),
+            "{}",
+            reason.text
+        );
+        assert!(
+            !reason.text.contains("Check the PR number"),
+            "{}",
+            reason.text
+        );
+    }
+    let pr = rest_reason_for(
+        &probe,
+        Path::new("/tmp"),
+        stderr,
+        read_label("repos/o/r/pulls/7"),
+    );
+    assert!(pr.text.contains("Check the PR number"), "{}", pr.text);
+}
+
 /// The pinned read: `--expect-head` turns a settled answer about another
 /// head into a refusal that names the mismatch. A merged PR kept answering
 /// settled for a watcher armed on a later push; the pin is the refusal.
