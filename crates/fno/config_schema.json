@@ -90,7 +90,7 @@
     "type": "object"
    },
    "ProviderCapBlock": {
-    "description": "Provider usage-cap actor settings (nested under 'config.provider_cap').\n\nA provider's usage cap arms this actor, independent of recovery.watchdog. It alone decides whether a cap may move sessions. A malformed value reads as its default.\n\nKnobs:\n  enabled                - arm the actor (default on).\n  mode                   - park (default), triage, ask or auto.\n  destinations           - route lanes a moving member tries, in order.\n  min_wait_minutes       - a reset closer than this is waited out.\n  sleep_hours            - HH:MM-HH:MM window in which ask mode moves without a question.\n  sleep_timezone         - IANA zone for sleep_hours (empty = local).\n  canary_survive_minutes - minutes a canary lives before parked members resume.\n  quorum                 - members on one lane needed to open a cap.",
+    "description": "Provider usage-cap actor settings (nested under 'config.provider_cap').\n\nA provider's usage cap arms this actor, independent of recovery.watchdog. It alone decides whether a cap may move sessions. A malformed value reads as its default.\n\nKnobs:\n  enabled                - arm the actor (default on).\n  mode                   - park (default), triage, ask or auto.\n  destinations           - route lanes a moving member tries, in order.\n  min_wait_minutes       - a reset closer than this is waited out.\n  canary_survive_minutes - minutes a canary lives before parked members resume.\n  quorum                 - members on one lane needed to open a cap.",
     "properties": {
      "enabled": {
       "default": true,
@@ -121,16 +121,6 @@
       "minimum": 0,
       "title": "Min Wait Minutes",
       "type": "integer"
-     },
-     "sleep_hours": {
-      "default": "",
-      "title": "Sleep Hours",
-      "type": "string"
-     },
-     "sleep_timezone": {
-      "default": "",
-      "title": "Sleep Timezone",
-      "type": "string"
      },
      "canary_survive_minutes": {
       "default": 15,
@@ -3792,6 +3782,21 @@
       "default": "",
       "title": "Name",
       "type": "string"
+     },
+     "timezone": {
+      "default": "",
+      "title": "Timezone",
+      "type": "string"
+     },
+     "working_hours": {
+      "additionalProperties": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "title": "Working Hours",
+      "type": "object"
      }
     },
     "title": "UserBlock",
@@ -4745,6 +4750,28 @@
    "question": "Which of the shipped skills are your favorites?",
    "default_source": "",
    "doc": "The do-wizard interview records the person's favorite skills here. Record-only today: no runtime reader consumes the list yet.",
+   "edit": "editor"
+  },
+  {
+   "path": "user.timezone",
+   "label": "Timezone",
+   "type": "str",
+   "default": "",
+   "wizard": "never",
+   "question": "",
+   "default_source": "default",
+   "doc": "IANA zone for working_hours, for example America/Los_Angeles. Empty (default) reads the machine's local zone.",
+   "edit": "editor"
+  },
+  {
+   "path": "user.working_hours",
+   "label": "Working hours",
+   "type": "dict[str, list[str]]",
+   "default": {},
+   "wizard": "never",
+   "question": "",
+   "default_source": "default",
+   "doc": "When you are at work, as weekday lists (mon to sun) of HH:MM-HH:MM ranges under [user.working_hours]. Outside the ranges you are away, and a prompt that needs a person is denied at once instead of held. An empty list means away all day, and so does a missing weekday. With no table you are never away.",
    "edit": "editor"
   },
   {
@@ -8187,7 +8214,7 @@
    "wizard": "never",
    "question": "",
    "default_source": "default",
-   "doc": "What a capped lane does with its members: park (default; alert the leads, move nothing, resume after the reset) | triage (a member on a p0 or p1 node, or with an open PR, moves to destinations; the rest park) | ask (nothing moves until an operator answers; inside sleep_hours it moves without a question) | auto (every member moves without a question).",
+   "doc": "What a capped lane does with its members: park (default; alert the leads, move nothing, resume after the reset) | triage (a member on a p0 or p1 node, or with an open PR, moves to destinations; the rest park) | ask (nothing moves until an operator answers; while you are away it moves without a question) | auto (every member moves without a question).",
    "edit": "cycle",
    "choices": [
     {
@@ -8228,28 +8255,6 @@
    "question": "",
    "default_source": "default",
    "doc": "A reset closer than this many minutes is waited out and never moved (default 30).",
-   "edit": "editor"
-  },
-  {
-   "path": "provider_cap.sleep_hours",
-   "label": "Sleep hours",
-   "type": "str",
-   "default": "",
-   "wizard": "never",
-   "question": "",
-   "default_source": "default",
-   "doc": "Window as HH:MM-HH:MM, read in sleep_timezone. In ask mode a cap inside the window moves members without a question. Empty (default) means never asleep.",
-   "edit": "editor"
-  },
-  {
-   "path": "provider_cap.sleep_timezone",
-   "label": "Sleep hours timezone",
-   "type": "str",
-   "default": "",
-   "wizard": "never",
-   "question": "",
-   "default_source": "default",
-   "doc": "IANA zone for sleep_hours, for example America/Los_Angeles. Empty (default) reads the machine's local zone.",
    "edit": "editor"
   },
   {

@@ -1884,9 +1884,9 @@ pub struct ProviderCapConfig {
     pub destinations: Vec<String>,
     /// A reset closer than this is waited out, never migrated (wave 3).
     pub min_wait_minutes: u64,
-    /// "HH:MM-HH:MM" in `sleep_timezone` (empty = local); empty = never asleep.
-    pub sleep_hours: String,
-    pub sleep_timezone: String,
+    /// When the user is away, from `[user]`. A cap inside an away window moves
+    /// members without a question in ask mode.
+    pub user_hours: UserHours,
     pub canary_survive_minutes: u64,
     /// `recovery.provider_outage_reset_grace_seconds` (default and floor 120):
     /// how long after the reset the return ladder waits before resuming the
@@ -1904,8 +1904,7 @@ impl Default for ProviderCapConfig {
             mode: "park".to_string(),
             destinations: Vec::new(),
             min_wait_minutes: 30,
-            sleep_hours: String::new(),
-            sleep_timezone: String::new(),
+            user_hours: UserHours::default(),
             canary_survive_minutes: 15,
             reset_grace_seconds: 120,
             quorum: 2,
@@ -1948,12 +1947,7 @@ pub fn provider_cap_config(cwd: &Path) -> ProviderCapConfig {
             })
             .unwrap_or_default(),
         min_wait_minutes: as_u64(value("min_wait_minutes"), defaults.min_wait_minutes),
-        sleep_hours: value("sleep_hours")
-            .and_then(|v| v.as_str().map(|s| s.trim().to_string()))
-            .unwrap_or_default(),
-        sleep_timezone: value("sleep_timezone")
-            .and_then(|v| v.as_str().map(|s| s.trim().to_string()))
-            .unwrap_or_default(),
+        user_hours: user_hours_or_default(cwd),
         canary_survive_minutes: as_u64(
             value("canary_survive_minutes"),
             defaults.canary_survive_minutes,
@@ -1973,6 +1967,202 @@ pub fn provider_cap_config(cwd: &Path) -> ProviderCapConfig {
             .unwrap_or(defaults.quorum),
     };
     cfg
+}
+
+// --- [user] timezone and [user.working_hours]: when the user is away. ---
+
+const WEEKDAYS: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+
+/// A calendar's working hours: a timezone and per-weekday `HH:MM-HH:MM`
+/// ranges. Outside every range, and on a day with an empty list, the user is
+/// away. With no `[user.working_hours]` table the user is never away.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct UserHours {
+    timezone: String,
+    /// Minutes-of-day ranges per weekday, Monday first; `None` when unset.
+    working: Option<[Vec<(u32, u32)>; 7]>,
+}
+
+impl UserHours {
+    /// The user is away on every day: an empty list for each weekday.
+    #[cfg(test)]
+    pub(crate) fn always_away() -> Self {
+        Self {
+            timezone: String::new(),
+            working: Some(Default::default()),
+        }
+    }
+
+    fn is_set(&self) -> bool {
+        self.working.is_some() || !self.timezone.is_empty()
+    }
+
+    /// True when `now_epoch` falls outside the user's working hours in their
+    /// timezone (empty = the machine's local zone).
+    pub fn away(&self, now_epoch: i64) -> bool {
+        let Some(days) = &self.working else {
+            return false;
+        };
+        let Some((weekday, minutes)) = local_weekday_minutes(&self.timezone, now_epoch) else {
+            return false;
+        };
+        !days[weekday]
+            .iter()
+            .any(|(start, end)| minutes >= *start && minutes < *end)
+    }
+}
+
+fn local_weekday_minutes(timezone: &str, now_epoch: i64) -> Option<(usize, u32)> {
+    use chrono::{Datelike, Local, TimeZone, Timelike};
+    if timezone.is_empty() {
+        let dt = Local.timestamp_opt(now_epoch, 0).single()?;
+        let day = dt.weekday().num_days_from_monday() as usize;
+        return Some((day, dt.hour() * 60 + dt.minute()));
+    }
+    let tz: chrono_tz::Tz = timezone.parse().ok()?;
+    let dt = tz.timestamp_opt(now_epoch, 0).single()?;
+    let day = dt.weekday().num_days_from_monday() as usize;
+    Some((day, dt.hour() * 60 + dt.minute()))
+}
+
+/// The 1-based line of `key` under `[section]`, else the section header's
+/// line, else 1.
+fn config_line(content: &str, section: &str, key: &str) -> usize {
+    let header = format!("[{section}]");
+    let mut in_section = false;
+    let mut header_line = None;
+    for (i, raw) in content.lines().enumerate() {
+        let line = raw.trim();
+        if line.starts_with('[') {
+            in_section = line == header;
+            if in_section {
+                header_line = Some(i + 1);
+            }
+            continue;
+        }
+        if in_section {
+            if let Some(rest) = line.strip_prefix(key) {
+                if rest.trim_start().starts_with('=') {
+                    return i + 1;
+                }
+            }
+        }
+    }
+    header_line.unwrap_or(1)
+}
+
+/// `HH:MM-HH:MM` as minutes of the day. `24:00` ends a range at midnight; a
+/// range never crosses midnight, so the end is after the start.
+fn parse_hours_range(spec: &str) -> Option<(u32, u32)> {
+    let minute_of = |part: &str| -> Option<u32> {
+        let (h, m) = part.trim().split_once(':')?;
+        let digits = |t: &str| t.len() == 2 && t.bytes().all(|b| b.is_ascii_digit());
+        if !digits(h) || !digits(m) {
+            return None;
+        }
+        let (h, m): (u32, u32) = (h.parse().ok()?, m.parse().ok()?);
+        (m < 60 && (h < 24 || (h == 24 && m == 0))).then_some(h * 60 + m)
+    };
+    let (a, b) = spec.split_once('-')?;
+    let (start, end) = (minute_of(a)?, minute_of(b)?);
+    (start < end).then_some((start, end))
+}
+
+/// Parse `[user]` out of one config file's text. A bad value is an error that
+/// names the file and line.
+pub(crate) fn parse_user_hours(content: &str, source: &str) -> Result<UserHours, String> {
+    let Some(table) = parse_config(content) else {
+        return Ok(UserHours::default());
+    };
+    let Some(user) = table.get("user").and_then(|v| v.as_table()) else {
+        return Ok(UserHours::default());
+    };
+    let refuse = |section: &str, key: &str, what: String| {
+        format!(
+            "{source}:{}: {section}.{key}: {what}",
+            config_line(content, section, key)
+        )
+    };
+    let mut hours = UserHours::default();
+    if let Some(value) = user.get("timezone") {
+        let zone = value.as_str().unwrap_or("<not a string>");
+        if value.as_str().is_none() || (!zone.is_empty() && zone.parse::<chrono_tz::Tz>().is_err())
+        {
+            return Err(refuse(
+                "user",
+                "timezone",
+                format!("{zone:?} is not an IANA zone such as America/Los_Angeles"),
+            ));
+        }
+        hours.timezone = zone.to_string();
+    }
+    let Some(working) = user.get("working_hours") else {
+        return Ok(hours);
+    };
+    let Some(working) = working.as_table() else {
+        return Err(refuse(
+            "user",
+            "working_hours",
+            "must be a table of weekday lists".into(),
+        ));
+    };
+    let section = "user.working_hours";
+    let mut days: [Vec<(u32, u32)>; 7] = Default::default();
+    for (key, value) in working {
+        let Some(day) = WEEKDAYS.iter().position(|d| d == key) else {
+            return Err(refuse(
+                section,
+                key,
+                format!("is not a weekday; use {}", WEEKDAYS.join(", ")),
+            ));
+        };
+        let Some(list) = value.as_array() else {
+            return Err(refuse(
+                section,
+                key,
+                "must be a list of \"HH:MM-HH:MM\" strings".into(),
+            ));
+        };
+        for item in list {
+            let spec = item.as_str().unwrap_or("<not a string>");
+            let Some(range) = parse_hours_range(spec) else {
+                return Err(refuse(
+                    section,
+                    key,
+                    format!(
+                        "{spec:?} is not HH:MM-HH:MM with the start before the end (24:00 ends a day)"
+                    ),
+                ));
+            };
+            days[day].push(range);
+        }
+    }
+    hours.working = Some(days);
+    Ok(hours)
+}
+
+/// The user's hours from the first config that sets `[user]` timezone or
+/// working hours. A bad value refuses, naming the file and line.
+pub fn user_hours(cwd: &Path) -> Result<UserHours, String> {
+    for path in config_candidates(cwd) {
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let hours = parse_user_hours(&content, &path.display().to_string())?;
+        if hours.is_set() {
+            return Ok(hours);
+        }
+    }
+    Ok(UserHours::default())
+}
+
+/// The cap actor and the prompt-wait arm cannot refuse mid-beat, so a bad
+/// value reads as never away and prints its refusal.
+pub fn user_hours_or_default(cwd: &Path) -> UserHours {
+    user_hours(cwd).unwrap_or_else(|refusal| {
+        eprintln!("fno-agent: {refusal}");
+        UserHours::default()
+    })
 }
 
 /// Startup reconciliation is non-destructive by default. Operators may opt in
@@ -2971,5 +3161,49 @@ mod tests {
             "crates/fno-app/Cargo.toml",
             &paths
         ));
+    }
+}
+
+#[cfg(test)]
+mod user_hours_tests {
+    use super::*;
+
+    const TUE_NOON: i64 = 1_795_521_600;
+    const TUE_3AM: i64 = 1_795_489_200;
+    const WED_NOON: i64 = 1_795_608_000;
+
+    #[test]
+    fn working_hours_mark_the_user_away_outside_them_and_on_an_empty_day() {
+        let toml = "[user]\ntimezone = \"UTC\"\n\n[user.working_hours]\ntue = [\"09:00-12:30\", \"13:30-24:00\"]\nwed = []\n";
+        let hours = parse_user_hours(toml, "cfg").unwrap();
+        assert!(!hours.away(TUE_NOON), "inside the morning range");
+        assert!(hours.away(TUE_3AM), "before the first range");
+        assert!(hours.away(WED_NOON), "an empty list is away all day");
+        let mon = TUE_NOON - 86_400;
+        assert!(hours.away(mon), "a day with no key reads as an empty list");
+        assert!(!parse_user_hours("[user]\nname = \"x\"\n", "cfg")
+            .unwrap()
+            .away(TUE_3AM));
+    }
+
+    #[test]
+    fn a_bad_value_refuses_naming_the_file_and_line() {
+        let bad_range = "[user]\ntimezone = \"UTC\"\n\n[user.working_hours]\nmon = [\"09:00-17:00\"]\ntue = [\"9-5\"]\n";
+        let err = parse_user_hours(bad_range, "cfg.toml").unwrap_err();
+        assert!(
+            err.starts_with("cfg.toml:6: user.working_hours.tue:"),
+            "{err}"
+        );
+        let bad_zone = "[user]\nname = \"x\"\ntimezone = \"Mars/Base\"\n";
+        let err = parse_user_hours(bad_zone, "cfg.toml").unwrap_err();
+        assert!(err.starts_with("cfg.toml:3: user.timezone:"), "{err}");
+        let bad_day = "[user.working_hours]\nfunday = []\n";
+        let err = parse_user_hours(bad_day, "cfg.toml").unwrap_err();
+        assert!(
+            err.contains("cfg.toml:2:") && err.contains("not a weekday"),
+            "{err}"
+        );
+        let backwards = "[user.working_hours]\nmon = [\"17:00-09:00\"]\n";
+        assert!(parse_user_hours(backwards, "cfg.toml").is_err());
     }
 }

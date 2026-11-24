@@ -255,10 +255,10 @@ pub(crate) fn run_pass(
     )
 }
 
-/// Whether the user is in `provider_cap.sleep_hours` for this worker's project.
+/// Whether the user is away: outside `[user.working_hours]` for this worker's
+/// project.
 fn user_asleep(w: &Waiting, now: i64) -> bool {
-    let cfg = crate::agents_config::provider_cap_config(std::path::Path::new(&w.cwd));
-    crate::provider_cap::in_sleep_window(&cfg, now / 1000)
+    crate::agents_config::user_hours_or_default(std::path::Path::new(&w.cwd)).away(now / 1000)
 }
 
 fn deny_prompt(short: &str) -> Result<String, String> {
