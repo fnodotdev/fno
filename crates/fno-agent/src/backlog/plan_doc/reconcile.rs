@@ -646,13 +646,8 @@ mod tests {
                 Some(expected.into())
             );
         }
-    }
-
-    /// `draft` is accepted vocabulary (an alias of the design rung), so the
-    /// sweep holds the word instead of rewriting it - the same hold a retired
-    /// spelling gets.
-    #[test]
-    fn an_accepted_draft_word_holds() {
+        // `draft` is accepted vocabulary (an alias of the design rung), so
+        // the sweep holds it, the same hold a retired spelling gets.
         assert_eq!(
             target_status(Some(&Value::Scalar("draft".into())), None),
             None
