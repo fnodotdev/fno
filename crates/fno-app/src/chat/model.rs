@@ -186,6 +186,64 @@ impl Ask {
     }
 }
 
+/// One delivered mail turn the stream classified: the sender and msg id
+/// ride the origin, the body rides the content.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MailTurn {
+    pub sender: String,
+    pub id: String,
+    pub content: Content,
+    /// When the turn landed, for the open card's header line.
+    pub at_ms: Option<i64>,
+}
+
+/// The mail body without its delivered header line: the open card's body
+/// and the summary cut read past the header, never paint it.
+pub(crate) fn body_without_header(text: &str) -> &str {
+    let (first, rest) = text.split_once('\n').unwrap_or((text, ""));
+    if fno_mail::delivered::is_header_line(first) {
+        rest
+    } else {
+        text
+    }
+}
+
+/// The first words of a mail body, for its folded one-line card. Bodies are
+/// capped by the sender, so the open state never needs scrolling.
+pub(crate) fn first_words(text: &str) -> String {
+    let line = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+    let cut: String = line.chars().take(64).collect();
+    cut.trim_end().to_string()
+}
+
+/// The band's closed line, the x-82f1 wording: "12 messages from workers:
+/// atticus 5, t-board 4, +2 more". Two senders named, the rest counted.
+pub fn band_line(turns: &[MailTurn]) -> String {
+    let mut senders: Vec<(String, usize)> = Vec::new();
+    for t in turns {
+        match senders.iter_mut().find(|(s, _)| *s == t.sender) {
+            Some((_, n)) => *n += 1,
+            None => senders.push((t.sender.clone(), 1)),
+        }
+    }
+    let mails: usize = senders.iter().map(|(_, n)| n).sum();
+    let mails_word = if mails == 1 { "message" } else { "messages" };
+    senders.sort_by(|a, b| b.1.cmp(&a.1));
+    let named: Vec<String> = senders
+        .iter()
+        .take(2)
+        .map(|(s, n)| format!("{s} {n}"))
+        .collect();
+    let mut line = format!("{mails} {mails_word} from workers");
+    if !named.is_empty() {
+        line.push_str(&format!(": {}", named.join(", ")));
+        if senders.len() > 2 {
+            line.push_str(&format!(", +{} more", senders.len() - 2));
+        }
+    }
+    line
+}
+
 /// One row of the conversation.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Item {
@@ -198,6 +256,12 @@ pub enum Item {
     User {
         content: Content,
         meta: bool,
+    },
+    /// Runs of delivered mail turns between typed turns fold into one band,
+    /// the same shape the mux You thread ships. A run of one renders as the
+    /// card alone.
+    MailBand {
+        turns: Vec<MailTurn>,
     },
     Text {
         part: String,
@@ -276,6 +340,10 @@ pub struct Conversation {
     pub events: u64,
     /// Thinking rows the user opened, by index.
     pub expanded: HashSet<usize>,
+    /// Mail bands the user expanded, by row index.
+    pub band_open: HashSet<usize>,
+    /// Mail bodies the user opened, by (band row, turn position).
+    pub mail_open: HashSet<(usize, usize)>,
     /// When each row began, in unix ms, for rows whose first event said.
     pub began: HashMap<usize, i64>,
 }
@@ -324,6 +392,18 @@ impl Conversation {
             })?;
         *slot = Some(said);
         Some(i)
+    }
+
+    /// Fold a mail turn into the trailing band, opening a new one when the
+    /// previous row is not a band: any non-mail row between two mails splits
+    /// the band, the same gap rule the mux You thread folds by.
+    fn mail_band_push(&mut self, turn: MailTurn) -> usize {
+        if let Some(Item::MailBand { turns }) = self.items.last_mut() {
+            turns.push(turn);
+            return self.items.len() - 1;
+        }
+        self.items.push(Item::MailBand { turns: vec![turn] });
+        self.items.len() - 1
     }
 
     /// Fold one event. Returns the index of the row it added or changed.
@@ -375,11 +455,29 @@ impl Conversation {
 
     fn fold(&mut self, event: ChatEvent) -> Option<usize> {
         self.events = event.seq + 1;
+        let at_ms = event.at_ms;
         let item = match event.body {
-            ChatBody::UserMessage { origin, parts, .. } => Item::User {
-                content: Content::of(&parts),
-                meta: origin == UserOrigin::Meta,
-            },
+            ChatBody::UserMessage { origin, parts, .. } => {
+                let content = Content::of(&parts);
+                match origin {
+                    UserOrigin::Mail { sender, id } => {
+                        return Some(self.mail_band_push(MailTurn {
+                            sender,
+                            id,
+                            content,
+                            at_ms,
+                        }));
+                    }
+                    UserOrigin::Meta => Item::User {
+                        content,
+                        meta: true,
+                    },
+                    UserOrigin::Typed => Item::User {
+                        content,
+                        meta: false,
+                    },
+                }
+            }
             ChatBody::TextStarted { part } => text_item(part, String::new(), false, false),
             ChatBody::ThinkingStarted { part, redacted } => {
                 text_item(part, String::new(), true, redacted)
@@ -496,6 +594,41 @@ mod tests {
     #![allow(clippy::indexing_slicing)]
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn mail_runs_fold_into_one_band_and_a_typed_turn_splits_it() {
+        let mail = |id: &str, sender: &str, body: &str| json!({"kind": "user_message", "id": format!("u-{id}"), "origin": {"mail": {"sender": sender, "id": id}}, "parts": [{"type": "text", "text": body}]});
+        let typed = |text: &str| json!({"kind": "user_message", "id": format!("u-{text}"), "origin": "typed", "parts": [{"type": "text", "text": text}]});
+        let bodies = [
+            mail(
+                "fmail-1a2b3c4d5e6f",
+                "zenobia",
+                "`@zenobia · fmail-1a2b3c4d5e6f`\nline one\nline two",
+            ),
+            mail("fmail-2b3c4d5e6f7a", "zenobia", "second"),
+            mail("fmail-3c4d5e6f7a8b", "candor", "third"),
+            typed("thanks, on it"),
+            mail("fmail-4d5e6f7a8b9c", "zenobia", "after the typed turn"),
+        ];
+        let mut conv = Conversation::default();
+        for (seq, body) in bodies.into_iter().enumerate() {
+            let line =
+                json!({"seq": seq as u64, "source": {"type": "line", "offset": seq}, "body": body});
+            conv.push(serde_json::from_value(line).unwrap());
+        }
+        assert_eq!(conv.items.len(), 3);
+        let Item::MailBand { turns } = &conv.items[0] else {
+            panic!("first row must be a band");
+        };
+        assert_eq!(turns.len(), 3);
+        assert_eq!(
+            band_line(turns),
+            "3 messages from workers: zenobia 2, candor 1"
+        );
+        assert_eq!(first_words("line one\nline two"), "line one");
+        assert!(matches!(&conv.items[1], Item::User { meta: false, .. }));
+        assert!(matches!(&conv.items[2], Item::MailBand { turns } if turns.len() == 1));
+    }
 
     #[test]
     fn a_question_opens_then_closes_in_place() {

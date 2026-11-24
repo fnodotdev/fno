@@ -101,6 +101,40 @@ fn verdict(ok: bool, stdout: &str, stderr: &str, target: &str) -> MailVerdict {
     }
 }
 
+/// The reply argv: `fno agents mail reply --to <id> -- <body>`. The reply
+/// routes by the answered message's lane, so the id is the only address.
+fn reply_argv(id: &str, body: &str) -> Vec<OsString> {
+    let mut out = vec![fno_bin().into_os_string()];
+    for part in ["agents", "mail", "reply", "--to", id, "--", body] {
+        out.push(OsString::from(part));
+    }
+    out
+}
+
+/// Run one reply through the porcelain, bounded: the same sanitize and
+/// bounds as [`send`], with the msg id instead of a target for the receipt.
+pub async fn reply(id: &str, body: &str) -> MailVerdict {
+    let body = match crate::mux::server::agent_actions::sanitize_mail_text(body) {
+        Ok(body) => body,
+        Err(why) => return MailVerdict::Refused(why),
+    };
+    let mut parts = reply_argv(id, &body);
+    let bin = parts.remove(0);
+    let mut command = Command::new(bin);
+    command.args(&parts).stdin(Stdio::null()).kill_on_drop(true);
+    let run = crate::sessions::process_admission::tokio_output(&mut command);
+    match tokio::time::timeout(MAIL_TIMEOUT, run).await {
+        Err(_) => MailVerdict::Refused("reply: timed out".into()),
+        Ok(Err(e)) => MailVerdict::Refused(format!("reply: {e}")),
+        Ok(Ok(o)) => verdict(
+            o.status.success(),
+            &String::from_utf8_lossy(&o.stdout),
+            &String::from_utf8_lossy(&o.stderr),
+            &format!("reply {id}"),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

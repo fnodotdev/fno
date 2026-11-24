@@ -407,6 +407,69 @@ fn row(root: &mut Root, ix: usize, _window: &mut Window, cx: &mut Context<Root>)
             let hl = find::chat_ranges(root.find.as_ref(), ix, 0, content.text.len());
             bubble(content, false, p, &hl).into_any_element()
         }
+        Item::MailBand { turns } => {
+            let conv = &root.chat.conv;
+            let open = conv.band_open.contains(&ix);
+            let mut d = div().flex().flex_col().gap_1();
+            // A run of one renders as the card alone; a longer run shows the
+            // x-82f1 count line first, expandable.
+            if turns.len() > 1 {
+                let marker = if open { "▾" } else { "▸" };
+                d = d.child(
+                    clickable(id("mailband"), Action::ToggleMailBand(ix), p, cx)
+                        .text_color(rgb(p.muted))
+                        .child(format!("{marker} {}", super::model::band_line(turns))),
+                );
+            }
+            for (mi, t) in turns.iter().enumerate() {
+                let body_open = conv.mail_open.contains(&(ix, mi));
+                let summary =
+                    super::model::first_words(super::model::body_without_header(&t.content.text));
+                let folded = clickable(id("mail"), Action::ToggleMailBody(ix, mi), p, cx)
+                    .child(format!("MAIL {} · {}", t.sender, summary));
+                let mut card = div().flex().flex_col();
+                if body_open {
+                    let when = t.at_ms.and_then(clock).unwrap_or_else(|| "·".to_string());
+                    // The x-79a5 form: flat card, the colored left border is
+                    // the only stripe, never a rounded box.
+                    card = card.child(
+                        div()
+                            .mt_1()
+                            .border_l_2()
+                            .border_color(rgb(p.accent))
+                            .pl_3()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_color(rgb(p.muted))
+                                    .child(format!("{} · {} · {}", t.sender, when, t.id)),
+                            )
+                            .child(
+                                div()
+                                    .text_color(rgb(p.fg))
+                                    .child(body_without_header(&t.content.text)),
+                            )
+                            .child(
+                                button(
+                                    "mail-reply",
+                                    "Reply",
+                                    Action::ReplyMail {
+                                        sender: t.sender.clone(),
+                                        id: t.id.clone(),
+                                    },
+                                    p,
+                                    cx,
+                                )
+                                .text_color(rgb(p.accent)),
+                            ),
+                    );
+                }
+                d = d.child(folded.child(card));
+            }
+            d.into_any_element()
+        }
         Item::Text { .. } => {
             markdown(ix, item.blocks().unwrap_or_default(), p.fg, root).into_any_element()
         }
@@ -558,7 +621,7 @@ fn speaker(items: &[Item], ix: usize) -> Option<bool> {
         Item::Text { .. } | Item::Thinking { .. } | Item::Tool { .. } | Item::Question { .. } => {
             Some(false)
         }
-        Item::User { meta: true, .. } | Item::Line(_) => None,
+        Item::User { meta: true, .. } | Item::MailBand { .. } | Item::Line(_) => None,
     };
     let me = side(items.get(ix)?)?;
     let before = items.get(..ix)?.iter().rev().find_map(side);
@@ -1016,6 +1079,36 @@ fn composer(root: &Root, window: &Window, cx: &mut Context<Root>) -> Option<Div>
                 .gap_1()
                 .text_color(rgb(p.muted))
                 .child(format!("[img {} KB]", att.bytes.len() / 1024)),
+        );
+    }
+    // The reply banner: the composer answers this message until sent or
+    // cancelled.
+    if let Some((sender, id)) = root.mail_reply.as_ref() {
+        bar = bar.child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .border_l_2()
+                .border_color(rgb(p.accent))
+                .pl_2()
+                .child(
+                    div()
+                        .flex_1()
+                        .text_color(rgb(p.muted))
+                        .child(format!("replying to {sender} · {id}")),
+                )
+                .child(
+                    button(
+                        "mail-reply-cancel",
+                        "Cancel",
+                        Action::MailReplyCancel,
+                        p,
+                        cx,
+                    )
+                    .text_color(rgb(p.muted)),
+                ),
         );
     }
     if let Some(pop) = root.chat.skill_view().and_then(|v| {

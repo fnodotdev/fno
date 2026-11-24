@@ -117,6 +117,17 @@ pub enum Action {
     ToggleKeySheet,
     /// Open or close one chat thinking row.
     ToggleChat(usize),
+    /// Open or close one chat mail band.
+    ToggleMailBand(usize),
+    /// Open or close one mail body inside a band.
+    ToggleMailBody(usize, usize),
+    /// The mail card's Reply: the composer answers the named message.
+    ReplyMail {
+        sender: String,
+        id: String,
+    },
+    /// Drop the reply banner; the composer returns to the session.
+    MailReplyCancel,
     /// Open the sheet of one chat tool call.
     OpenSheet(usize),
     CloseSheet,
@@ -170,6 +181,10 @@ fn click_id(action: &Action) -> &'static str {
         Action::NewShell(_) => "new_shell",
         Action::ToggleKeySheet => "toggle_key_sheet",
         Action::ToggleChat(_) => "toggle_chat",
+        Action::ToggleMailBand(_) => "toggle_mail_band",
+        Action::ToggleMailBody(..) => "toggle_mail_body",
+        Action::ReplyMail { .. } => "reply_mail",
+        Action::MailReplyCancel => "mail_reply_cancel",
         Action::OpenSheet(_) => "open_sheet",
         Action::CloseSheet => "close_sheet",
         Action::Copy(_) => "copy",
@@ -299,6 +314,9 @@ pub struct Root {
     /// The composer's draft and its send state.
     pub(super) board_draft: Draft,
     pub(super) mail: Option<MailState>,
+    /// The mail card's reply target: the composer answers this message
+    /// until cancelled or sent.
+    pub(super) mail_reply: Option<(String, String)>,
     /// The persisted fold keys (workspace cwds, or names when the cwd is
     /// empty); absence means open.
     pub(super) folds: HashSet<String>,
@@ -559,6 +577,7 @@ impl Root {
             answers: HashMap::new(),
             board_draft: Default::default(),
             mail: None,
+            mail_reply: None,
             folds,
             group_by,
             squad_field: None,
@@ -1218,6 +1237,26 @@ impl Root {
                 }
                 self.chat.list.splice(i..i + 1, 1);
             }
+            Action::ToggleMailBand(i) => {
+                let open = &mut self.chat.conv.band_open;
+                if !open.remove(&i) {
+                    open.insert(i);
+                }
+                self.chat.list.splice(i..i + 1, 1);
+            }
+            Action::ToggleMailBody(b, m) => {
+                let open = &mut self.chat.conv.mail_open;
+                if !open.remove(&(b, m)) {
+                    open.insert((b, m));
+                }
+                self.chat.list.splice(b..b + 1, 1);
+            }
+            Action::ReplyMail { sender, id } => {
+                self.mail_reply = Some((sender, id));
+            }
+            Action::MailReplyCancel => {
+                self.mail_reply = None;
+            }
             Action::OpenSheet(i) => self.chat.sheet = Some(i),
             Action::CloseSheet => self.chat.sheet = None,
             Action::Copy(text) => {
@@ -1598,6 +1637,21 @@ impl Root {
         }
         let attach_now = self.chat.draft.attachment().cloned();
         if self.chat.draft.text().trim().is_empty() && attach_now.is_none() {
+            return;
+        }
+        // A reply banner routes the draft through the mail reply door: the
+        // message id is the address, the pane path never runs.
+        if let Some((_sender, reply_id)) = self.mail_reply.take() {
+            let text = self.chat.draft.take();
+            let sent = match &self.poller {
+                Some(poller) => poller.mail_reply(&reply_id, text),
+                None => false,
+            };
+            self.mail = Some(if sent {
+                MailState::Sending
+            } else {
+                MailState::Refused("no board poll: cannot reply".into())
+            });
             return;
         }
         let target = self

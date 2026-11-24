@@ -39,6 +39,9 @@ fno = { path = "../fno", default-features = false, features = ["app"] }
 # The pack UI contract: the app parses view files with the same type the
 # manifest parses, so the app and the CLI read one spelling.
 fno-proto = { path = "../fno-proto" }
+# The mail protocol core: the card summary strips the delivered header with
+# the one shared header reader, never a second copy.
+fno-mail = { path = "../fno-mail" }
 clap = { version = "4", features = ["derive"] }
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 serde_json = "1"

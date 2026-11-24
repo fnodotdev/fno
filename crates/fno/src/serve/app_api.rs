@@ -39,7 +39,7 @@ pub mod proto {
 }
 
 pub mod mail_door {
-    pub use crate::serve::mail_door::{send, MailVerdict, FROM};
+    pub use crate::serve::mail_door::{reply, send, MailVerdict, FROM};
 }
 
 pub mod splash {

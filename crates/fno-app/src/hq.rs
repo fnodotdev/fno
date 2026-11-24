@@ -45,6 +45,7 @@ enum Ask {
     Refresh,
     Answer { id: String, pick: AnswerPick },
     Mail { text: String },
+    MailReply { id: String, text: String },
 }
 
 /// Read the fleet and the questions, and the backlog unless `backlog` is
@@ -163,6 +164,26 @@ impl Poller {
                                 }
                                 true
                             }
+                            Ok(Some(Ask::MailReply { id, text })) => {
+                                let reply = match fno::app_api::mail_door::reply(&id, &text).await {
+                                    fno::app_api::mail_door::MailVerdict::Sent(receipt) => {
+                                        Reply::Mailed {
+                                            ok: true,
+                                            text: receipt,
+                                        }
+                                    }
+                                    fno::app_api::mail_door::MailVerdict::Refused(reason) => {
+                                        Reply::Mailed {
+                                            ok: false,
+                                            text: reason,
+                                        }
+                                    }
+                                };
+                                if out.send(reply).is_err() {
+                                    return;
+                                }
+                                true
+                            }
                             // An inactive window reads nothing until it returns.
                             Err(_) => awake.load(Ordering::Relaxed),
                         };
@@ -208,5 +229,16 @@ impl Poller {
     /// receipt that never lands.
     pub fn mail(&self, text: String) -> bool {
         self.asks.send(Ask::Mail { text }).is_ok()
+    }
+
+    /// Route one card reply through the reply door, off the UI thread. Same
+    /// refusal posture as [`Poller::mail`].
+    pub fn mail_reply(&self, id: &str, text: String) -> bool {
+        self.asks
+            .send(Ask::MailReply {
+                id: id.to_string(),
+                text,
+            })
+            .is_ok()
     }
 }
