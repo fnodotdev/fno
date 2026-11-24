@@ -409,6 +409,56 @@ fn machine_rows(
     rows
 }
 
+/// The row a Machines section leads with until the fleet map first
+/// answers, so the section never reads as empty.
+fn reading_row() -> Row {
+    Row {
+        id: "reading",
+        label: "reading the fleet…".into(),
+        value: String::new(),
+        mode: Mode::Locked {
+            reason: "the fleet map has not answered yet".into(),
+        },
+    }
+}
+
+/// A built panel's Machines section, led by the reading row when the
+/// fleet has not been read.
+pub(crate) fn lead_with_reading(rows: &mut [SectionRows]) {
+    if let Some((_, section)) = rows.get_mut(MACHINES_SECTION) {
+        section.insert(0, reading_row());
+    }
+}
+
+/// Repaint the Machines section from a fresh fleet read. Only this
+/// section is rebuilt, so an in-flight edit elsewhere stands, and the
+/// cursor keeps its row by name when the rows shift.
+pub(crate) fn refresh_machines(
+    state: &mut SettingsState,
+    machines: &[Machine],
+    config: Option<&Value>,
+    host_states: &HashMap<String, HostState>,
+    fleet_read: bool,
+) {
+    let kept = visible(&state.rows, state.query.text())
+        .get(state.selected)
+        .map(|(_, r)| (r.id, r.label.clone()));
+    if let Some((_, section)) = state.rows.get_mut(MACHINES_SECTION) {
+        *section = machine_rows(machines, config, host_states);
+        if !fleet_read {
+            section.insert(0, reading_row());
+        }
+    }
+    if let Some((id, label)) = kept {
+        let at = visible(&state.rows, state.query.text())
+            .iter()
+            .position(|(_, r)| r.id == id && r.label == label);
+        if let Some(i) = at {
+            state.selected = i;
+        }
+    }
+}
+
 /// The door's parse refusal is already the line the Add field paints.
 impl From<String> for Refusal {
     fn from(why: String) -> Self {
@@ -911,7 +961,13 @@ fn row_line(row: &Row, selected: bool, p: &Palette, cx: &mut Context<Root>) -> D
         Mode::Cycle { .. } => (" ".to_string(), format!("< {} >", row.value)),
         Mode::Page { .. } => ("›".to_string(), row.value.clone()),
     };
-    let label_role = if locked { Role::Hint } else { Role::Name };
+    // A locked row reads muted, but the selection fill would swallow a
+    // muted label: the selected row keeps its name legible.
+    let label_role = if locked && !selected {
+        Role::Hint
+    } else {
+        Role::Name
+    };
     let line = ui::row(ElementId::Name(row.label.clone().into()), selected, p)
         .child(ui::text(glyph, Role::Meta, p))
         .child(ui::role(div(), label_role, p).child(row.label.clone()))
@@ -1176,6 +1232,58 @@ mod tests {
         assert!(st.add_host.is_none());
     }
 
+    /// AC2-EDGE: before the fleet's first read the section leads with the
+    /// reading row and never reads as empty. A read that lands repaints
+    /// the section, and the cursor keeps its row by name as rows shift.
+    #[test]
+    fn the_machines_section_reads_then_follows_the_fleet() {
+        let mut rows = build_rows(Some(&cfg(&[])), Path::new("/"), &[], &[], &HashMap::new());
+        lead_with_reading(&mut rows);
+        let ids: Vec<&str> = rows
+            .get(2)
+            .expect("machines section")
+            .1
+            .iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(ids, ["reading", "add_host"]);
+        let mut st = SettingsState {
+            query: ui::LineField::new(64),
+            add_host: None,
+            add_refusal: None,
+            selected: 0,
+            page: None,
+            note: None,
+            rows,
+            fonts: Vec::new(),
+            scroll: gpui::ScrollHandle::new(),
+            follow: Cell::new(false),
+        };
+        let add_at = visible(&st.rows, "")
+            .iter()
+            .position(|(_, r)| r.id == "add_host")
+            .expect("add row present");
+        st.selected = add_at;
+        let fresh = Machine {
+            host: "m1".into(),
+            local: false,
+            fresh: true,
+            ..Machine::default()
+        };
+        refresh_machines(&mut st, &[fresh], Some(&cfg(&[])), &HashMap::new(), true);
+        let ids: Vec<&str> = st
+            .rows
+            .get(2)
+            .expect("machines section")
+            .1
+            .iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(ids, ["machine", "add_host"]);
+        let on = visible(&st.rows, "").get(st.selected).map(|(_, r)| r.id);
+        assert_eq!(on, Some("add_host"), "the cursor stays on the add row");
+    }
+
     /// A configured host that folds into a fleet machine gets no second
     /// row: the map's beat words already carry it.
     #[test]
@@ -1343,5 +1451,33 @@ pub(crate) fn apply_shot(state: &mut SettingsState, shot: crate::SettingsShot) {
                 },
             );
         }
+        crate::SettingsShot::Machines => state.jump_to_section(MACHINES_SECTION),
+        crate::SettingsShot::Add | crate::SettingsShot::AddRefused => {
+            state.jump_to_section(MACHINES_SECTION);
+            if let Some(i) = visible(&state.rows, "")
+                .iter()
+                .position(|(_, r)| r.id == "add_host")
+            {
+                state.selected = i;
+            }
+            let _ = key(
+                state,
+                &Key {
+                    key: "enter",
+                    ..Key::default()
+                },
+            );
+            if let Some(field) = state.add_host.as_mut() {
+                field.edit("a", Some(SHOT_ADD_TYPED));
+            }
+        }
     }
 }
+
+/// The Machines section's index in SECTIONS.
+const MACHINES_SECTION: usize = 2;
+/// The host the Add shot types through the real field.
+const SHOT_ADD_TYPED: &str = "user@linux2:2200";
+/// The host the refusal shot submits: it names the listed `linux1` in other
+/// casing, so the refusal is the door's resolved-machine dedup.
+pub(crate) const SHOT_ADD_DUPLICATE: &str = "user@LINUX1";

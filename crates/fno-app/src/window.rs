@@ -1821,6 +1821,7 @@ impl Root {
                     }
                 }
                 self.board = *board;
+                self.follow_fleet();
                 // A question the read no longer lists needs no answer state;
                 // a refusal stays so the row keeps its reason.
                 let open: Vec<&str> = self
@@ -3011,13 +3012,16 @@ impl Root {
             .fleet()
             .map(|f| f.machines.clone())
             .unwrap_or_default();
-        let rows = settings::build_rows(
+        let mut rows = settings::build_rows(
             config.as_ref(),
             &self.theme_cwd,
             &machines,
             &fonts,
             &self.host_states,
         );
+        if !self.board.read_yet() {
+            settings::lead_with_reading(&mut rows);
+        }
         self.kick_host_probes(cx);
         self.settings = Some(settings::SettingsState {
             query: ui::LineField::new(64),
@@ -3183,6 +3187,7 @@ impl Root {
             .fleet()
             .map(|f| f.machines.clone())
             .unwrap_or_default();
+        let read = self.board.read_yet();
         if let Some(st) = self.settings.as_mut() {
             let config = crate::global_config_raw();
             st.note = note;
@@ -3193,6 +3198,25 @@ impl Root {
                 &st.fonts,
                 &self.host_states,
             );
+            if !read {
+                settings::lead_with_reading(&mut st.rows);
+            }
+        }
+    }
+
+    /// A board read landed: an open panel repaints its Machines section
+    /// from the new fleet, so a host going stale shows while the panel
+    /// stays open.
+    fn follow_fleet(&mut self) {
+        let machines = self
+            .board
+            .fleet()
+            .map(|f| f.machines.clone())
+            .unwrap_or_default();
+        let read = self.board.read_yet();
+        if let Some(st) = self.settings.as_mut() {
+            let config = crate::global_config_raw();
+            settings::refresh_machines(st, &machines, config.as_ref(), &self.host_states, read);
         }
     }
 
@@ -4693,6 +4717,43 @@ pub fn run(
     });
 }
 
+/// The --shot-settings script on a built root: the panel opens through
+/// its real path, then the script drives it; the refusal shot submits
+/// through the same door a typed Enter reaches.
+fn apply_settings_shot(
+    root: &gpui::Entity<Root>,
+    shot: crate::SettingsShot,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let fonts = settings::mono_fonts(window);
+    // The demo world pins its theme in a project file; the panel's
+    // rows read the global file alone, so the Theme row stays editable.
+    root.update(cx, |root, cx| {
+        root.theme_cwd = PathBuf::from("/");
+        // A shot never reaches ssh: each configured host answers no
+        // route, so the failed row reads the same on every run.
+        for name in settings::configured_hosts(crate::global_config_raw().as_ref()) {
+            let why = format!("could not reach {name}: no route");
+            root.host_states.insert(
+                name,
+                fno::app_api::client::remote_hosts::HostState::Unreachable(why),
+            );
+        }
+        root.open_settings_with(fonts, cx)
+    });
+    root.update(cx, |root, _| {
+        if let Some(st) = root.settings.as_mut() {
+            settings::apply_shot(st, shot);
+        }
+    });
+    if shot == crate::SettingsShot::AddRefused {
+        root.update(cx, |root, cx| {
+            root.submit_add_host(settings::SHOT_ADD_DUPLICATE.to_string(), cx)
+        });
+    }
+}
+
 /// The shot path's root builder: the same metrics run() derives, with
 /// the caller's warmed link adopted so the one frame the window paints
 /// synchronously at open carries the world's data. The link was already
@@ -4792,18 +4853,7 @@ pub(super) fn root_for_shot(
         });
     }
     if let Some(shot) = settings {
-        let fonts = settings::mono_fonts(window);
-        // The demo world pins its theme in a project file; the panel's
-        // rows read the global file alone, so the Theme row stays editable.
-        root.update(cx, |root, cx| {
-            root.theme_cwd = PathBuf::from("/");
-            root.open_settings_with(fonts, cx)
-        });
-        root.update(cx, |root, _| {
-            if let Some(st) = root.settings.as_mut() {
-                settings::apply_shot(st, shot);
-            }
-        });
+        apply_settings_shot(&root, shot, window, cx);
     }
     // The shot window never activates, and the board poll pauses while
     // the window is inactive; the shot needs every feed settled before

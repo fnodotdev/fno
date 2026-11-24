@@ -149,6 +149,12 @@ pub enum SettingsShot {
     Filter,
     /// The panel with the Theme choice page open through real Enter.
     Page,
+    /// The panel on its Machines section, each configured host answered.
+    Machines,
+    /// The Machines Add field open with a new host typed through the field.
+    Add,
+    /// The Add field submitted with a host already listed: the inline refusal.
+    AddRefused,
 }
 
 /// The find-bar states `--shot-find` paints.
