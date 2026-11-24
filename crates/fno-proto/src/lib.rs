@@ -437,7 +437,9 @@ fn default_true() -> bool {
 /// floor stays 58.
 /// v133: `AgentRow` adds the four token classes behind `session_tokens`
 /// (serde default); floor stays 58.
-pub const PROTO_VERSION: u32 = 133;
+/// v134: `AgentRow.pr_status` (serde default), the serve's bounded pr-status
+/// sweep projection; floor stays 58.
+pub const PROTO_VERSION: u32 = 134;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -1577,6 +1579,61 @@ pub struct AgentRow {
     /// when the cwd sits in no git repo or the server has not resolved it yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_root: Option<String>,
+    /// (v134) The PR's CI and review fact, composed by the serve's bounded
+    /// pr-status sweep from the shared `fno do pr status` door. `None` = no
+    /// fact yet: no PR, a failed read, or gh absent. Never a fabricated
+    /// verdict. `#[serde(default)]` keeps a v133 reader wire-tolerant
+    /// (defaults None, which paints no mark).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_status: Option<PrStatusFact>,
+}
+
+/// (v134) One failing check the sweep's projection carries. The door's own
+/// field names (`check`, `step`, `first_error`), parsed once. `first_error`
+/// is the log's first error line, already truncated by the door's detail cap.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct PrFailingCheck {
+    pub name: String,
+    pub step: String,
+    pub first_error: String,
+}
+
+/// (v134) One PR's CI and review rollup: the sweep's projection of one
+/// `fno do pr status` JSON line (the door's own field names, parsed once
+/// per read). The renderer ages the mark from `measured_at` and never
+/// invents a verdict the door did not print.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct PrStatusFact {
+    /// The door's verdict word: green | red | pending | unknown.
+    pub verdict: String,
+    /// The checks rollup counts; 0 where the door printed none.
+    pub pass: u32,
+    pub fail: u32,
+    pub pending: u32,
+    /// The failing checks, loudest first, capped at 3 by the sweep (the
+    /// sheet's cap, not the door's).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failing: Vec<PrFailingCheck>,
+    /// The review-coverage word (e.g. "reviewed"); None when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_state: Option<String>,
+    /// Whether the verdict was settled at read time.
+    #[serde(default)]
+    pub settled: bool,
+    /// pr_state / draft / mergeable from the same JSON line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_state: Option<String>,
+    #[serde(default)]
+    pub draft: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mergeable: Option<String>,
+    /// The read's epoch second; the renderer ages the mark.
+    #[serde(default)]
+    pub measured_at: u64,
 }
 
 /// (v76, ) One row of the `fno mux rows` receipt: the facts a row-set
