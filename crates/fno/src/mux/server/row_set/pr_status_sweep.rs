@@ -301,8 +301,8 @@ fn cut(text: String) -> String {
 mod tests {
     use super::*;
 
-    /// The shape of a real door line (PR 566, read 2026-11-24), trimmed to
-    /// the fields this module reads.
+    /// The shape of a real door line, read 2026-11-24, trimmed to the
+    /// fields this module reads.
     fn red_line() -> DoorLine {
         serde_json::from_str(
             r#"{"pr":"566","verdict":"red","settled":false,"pr_state":"OPEN","draft":false,
