@@ -27,7 +27,7 @@ use super::window::Root;
 use std::collections::HashMap;
 
 use fno::app_api::client::org_seats::Machine;
-use fno::app_api::client::remote_hosts::{fold_host, state_word, HostState};
+use fno::app_api::client::remote_hosts::{fold_host, parse_host, state_word, HostState};
 use fno::ui::theme::THEME_NAMES;
 
 /// The five sections, in panel order.
@@ -409,6 +409,16 @@ fn machine_rows(
     rows
 }
 
+/// Why the Add field refuses a host; the field paints it inline.
+#[derive(Debug, PartialEq)]
+pub(crate) struct Refusal(pub String);
+
+impl From<String> for Refusal {
+    fn from(why: String) -> Self {
+        Refusal(why)
+    }
+}
+
 /// The Add field's verdict: the door's parse and dedup in one place. The
 /// resolved name, or the refusal the field paints inline. Configured
 /// hosts and fleet-map hosts both block a duplicate; the refusal names
@@ -417,14 +427,16 @@ pub(crate) fn add_host_verdict(
     input: &str,
     configured: &[String],
     fleet_hosts: &[&str],
-) -> Result<String, String> {
+) -> Result<String, Refusal> {
     let name = parse_host(input)?;
     let configured: Vec<&str> = configured.iter().map(String::as_str).collect();
     if let Some(row) = fold_host(&name, &configured) {
-        return Err(format!("{name} is already listed here as {row}"));
+        return Err(Refusal(format!("{name} is already listed here as {row}")));
     }
     if let Some(row) = fold_host(&name, fleet_hosts) {
-        return Err(format!("{name} is already on the fleet map as {row}"));
+        return Err(Refusal(format!(
+            "{name} is already on the fleet map as {row}"
+        )));
     }
     Ok(name)
 }
@@ -1071,7 +1083,9 @@ mod tests {
         let fleet = vec!["mac2.local"];
         assert_eq!(
             add_host_verdict("user@LINUX1", &configured, &fleet),
-            Err("user@linux1 is already listed here as linux1".to_string())
+            Err(Refusal(
+                "user@linux1 is already listed here as linux1".to_string()
+            ))
         );
         assert_eq!(
             add_host_verdict("192.168.1.20", &configured, &fleet),
@@ -1079,7 +1093,9 @@ mod tests {
         );
         assert_eq!(
             add_host_verdict("user@mac2.local:22", &configured, &fleet),
-            Err("user@mac2.local:22 is already on the fleet map as mac2.local".to_string())
+            Err(Refusal(
+                "user@mac2.local:22 is already on the fleet map as mac2.local".to_string()
+            ))
         );
         // Junk still refuses with the parse reason, not a dedup line.
         assert!(add_host_verdict("-oProxyCommand=x", &configured, &fleet).is_err());

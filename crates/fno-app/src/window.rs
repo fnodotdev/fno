@@ -159,6 +159,7 @@ fn click_id(action: &Action) -> &'static str {
         Action::NewWorkspace => "new_workspace",
         Action::ToggleWorkspace(_) => "toggle_workspace",
         Action::ToggleElsewhere => "toggle_elsewhere",
+        Action::FocusMachine(_) => "focus_machine",
         Action::OpenWorkspaceMenu(_) => "open_workspace_menu",
         Action::OpenAddMenu(_) => "open_add_menu",
         Action::CycleGrouping => "cycle_grouping",
@@ -1153,6 +1154,7 @@ impl Root {
             Action::NewWorkspace
             | Action::ToggleWorkspace(_)
             | Action::ToggleElsewhere
+            | Action::FocusMachine(_)
             | Action::OpenWorkspaceMenu(_)
             | Action::OpenAddMenu(_)
             | Action::CycleGrouping
@@ -1245,7 +1247,7 @@ impl Root {
                 }
                 record_ui_state(self, cx);
             }
-            Action::FocusMachine(host) => {
+            Action::FocusMachine(_) => {
                 self.group_by = GroupBy::Machine;
                 record_ui_state(self, cx);
             }
@@ -3069,7 +3071,7 @@ impl Root {
             Err(refusal) => {
                 if let Some(st) = self.settings.as_mut() {
                     st.add_host = Some(ui::LineField::seeded(&text, 256));
-                    st.add_refusal = Some(refusal);
+                    st.add_refusal = Some(refusal.0);
                 }
                 cx.notify();
             }
@@ -3116,6 +3118,7 @@ impl Root {
     fn spawn_probe(&mut self, name: String, cx: &mut Context<Self>) {
         let host = name.clone();
         cx.spawn(async move |this, cx| {
+            let probe_host = host.clone();
             let state = cx
                 .background_executor()
                 .spawn(async move {
@@ -3125,7 +3128,9 @@ impl Root {
                         .enable_all()
                         .build()
                     {
-                        Ok(rt) => rt.block_on(fno::app_api::client::remote_hosts::probe(&host)),
+                        Ok(rt) => {
+                            rt.block_on(fno::app_api::client::remote_hosts::probe(&probe_host))
+                        }
                         Err(e) => fno::app_api::client::remote_hosts::HostState::Unreachable(
                             format!("ssh did not start: {e}"),
                         ),
