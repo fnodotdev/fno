@@ -722,11 +722,18 @@ pub(crate) fn running_blueprint_ids(
 /// claim, so no `blueprint-session:` holder names its lead; the registry row's
 /// owner is the only edge back. The key is the node id the payload names, else
 /// the worker's session id, so a plan-path payload still counts once.
-pub(crate) fn spawned_blueprint_keys(entries: &[RegistryEntry], session: &str) -> Vec<String> {
+pub(crate) fn spawned_blueprint_keys(
+    entries: &[RegistryEntry],
+    session: &str,
+    terminal: &std::collections::HashSet<String>,
+) -> Vec<String> {
     let mut keys: Vec<String> = Vec::new();
     for e in entries {
+        // A finished planner can sit idle and unreaped: the same capacity
+        // read the slot share uses keeps it from filling a blueprint slot.
         if e.role_level.is_some()
             || !crate::spawn_gate::status_is_liveish(&e.status)
+            || !crate::cap_liveness::holds_capacity(e, terminal)
             || e.current_owner_session() != Some(session)
         {
             continue;
@@ -754,12 +761,17 @@ pub(crate) fn spawned_blueprint_keys(entries: &[RegistryEntry], session: &str) -
 /// `spawned_blueprint_keys` over the registry file; an unreadable registry is
 /// an error the reading names, never a silent 0.
 pub(crate) fn read_spawned_blueprints(
-    registry_path: &Path,
+    home: &crate::paths::AgentsHome,
     session: &str,
 ) -> Result<Vec<String>, String> {
-    let registry = crate::state::load_registry(registry_path)
+    let registry = crate::state::load_registry(&home.registry_json())
         .map_err(|e| format!("fno registry unreadable: {e}"))?;
-    Ok(spawned_blueprint_keys(&registry.entries, session))
+    let terminal = crate::terminal_run::read_keys(&home.terminal_runs_dir());
+    Ok(spawned_blueprint_keys(
+        &registry.entries,
+        session,
+        &terminal,
+    ))
 }
 
 /// Read the ceiling state live. `None` when the session id, the claims
@@ -771,7 +783,7 @@ pub(crate) fn stop_check_reading(cwd: &Path) -> Option<BlueprintWait> {
     let rows = crate::claims::list(Some("node:"), None, false).ok()?;
     let mut running = running_blueprint_ids(&rows, &session);
     let home = crate::paths::AgentsHome::from_env();
-    for key in read_spawned_blueprints(&home.registry_json(), &session).ok()? {
+    for key in read_spawned_blueprints(&home, &session).ok()? {
         if !running.contains(&key) {
             running.push(key);
         }
@@ -1029,8 +1041,9 @@ mod tests {
             live("w4", "/fno:blueprint x-4", "other"),
             live("w5", "/fno:target x-5", "lead"),
         ];
+        let mut terminal = std::collections::HashSet::new();
         assert_eq!(
-            spawned_blueprint_keys(&entries, "lead"),
+            spawned_blueprint_keys(&entries, "lead", &terminal),
             vec!["x-1".to_string(), "w2-sid".to_string()]
         );
         let dir = std::env::temp_dir().join(format!("fno-bp-spawned-{}", std::process::id()));
@@ -1040,7 +1053,7 @@ mod tests {
             unplanned_board(&[], Some(0)),
             Some("lead"),
             vec!["blueprint-session:lead".to_string()],
-            Ok(spawned_blueprint_keys(&entries, "lead")),
+            Ok(spawned_blueprint_keys(&entries, "lead", &terminal)),
             Ok(4),
             "high",
             Ok(HashMap::new()),

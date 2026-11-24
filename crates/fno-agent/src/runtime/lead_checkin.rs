@@ -1422,10 +1422,9 @@ fn collect_readings(
                 .map(|rows| rows.iter().map(|r| r.holder.clone()).collect());
             let home = crate::paths::AgentsHome::from_env();
             let spawned = match session_id.as_deref() {
-                Some(session) => crate::lead_checkin_blueprint::read_spawned_blueprints(
-                    &home.registry_json(),
-                    session,
-                ),
+                Some(session) => {
+                    crate::lead_checkin_blueprint::read_spawned_blueprints(&home, session)
+                }
                 None => Ok(Vec::new()),
             };
             let slots = crate::spawn_gate_lanes::share_reading(
