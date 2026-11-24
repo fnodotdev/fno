@@ -3,6 +3,17 @@
 //! with its provenance; the router is the follow-through, so a distress
 //! is never again a row the world admires and nobody acts on.
 //!
+//! One session carries two ids: the harness session id and, under a
+//! manifest, a run id. The stop hook files a help under the first and
+//! loop-check under the second, while the records a route reads (the claim
+//! holder, a team holder) carry the first. The router takes both.
+//!
+//! A route ends in a row the sweep leaves alone. A holder that is the
+//! sender records `holder-self`. A fired timer records `fired` with the leg
+//! that landed, and a proven read records `read`. A holder the records
+//! cannot name takes the lead ladder, so the user page is never its first
+//! stop.
+//!
 //! Route vocabulary: in-session classes block at the stop hook (wave 3);
 //! off-session classes mail through burn_watch::wake_with_text (wrapped
 //! mail, never --raw); timer classes fire from the daemon arm; the
@@ -78,11 +89,14 @@ pub(crate) const STUCK_TEXT: &str = "consult one planner subagent";
 /// Execute the route for a just-emitted distress row. Called from
 /// `emit_help_distress_blocked` after the row lands, so every emitter path
 /// (loopcheck inline scan, stop-hook every-fire scan, distress-scan CLI)
-/// routes without a second implementation. Best-effort throughout: a
-/// routing failure logs one stderr note and never changes the verdict.
+/// routes without a second implementation. `harness_session` is the
+/// sender's harness session id, the one a route compares and skips by; `run`
+/// alone may be a manifest's run id. Best-effort throughout: a routing
+/// failure logs one stderr note and never changes the verdict.
 pub(crate) fn route_emitted_distress(
     cwd: &Path,
     run: &str,
+    harness_session: Option<&str>,
     node: Option<&str>,
     class: HelpClass,
     reason: &str,
@@ -111,7 +125,8 @@ pub(crate) fn route_emitted_distress(
         }
         Route::Timer { backoff_secs } => {
             // The row's `to` is the wake target the sweep fires at, so it
-            // names the emitting session, not the literal word "self".
+            // names the emitting session by the id a wake resolves, not by
+            // the literal word "self".
             emit_help_route(
                 cwd,
                 run,
@@ -120,7 +135,7 @@ pub(crate) fn route_emitted_distress(
                 reason,
                 rung,
                 "timer",
-                run,
+                sender_id(run, harness_session),
                 None,
                 Some(backoff_secs),
                 0,
@@ -129,10 +144,30 @@ pub(crate) fn route_emitted_distress(
         }
         Route::OffSession { to, text } => {
             deliver_off_session(
-                cwd, run, node, class, reason, evidence, rung, to, &text, turn_key,
+                cwd,
+                run,
+                harness_session,
+                node,
+                class,
+                reason,
+                evidence,
+                rung,
+                to,
+                &text,
+                turn_key,
             );
         }
     }
+}
+
+/// The id a route addresses the sender by: the harness session id, else the
+/// run id. The claim and team records carry the first, and a route compares
+/// by it.
+fn sender_id<'a>(run: &'a str, harness_session: Option<&'a str>) -> &'a str {
+    harness_session
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(run)
 }
 
 /// A live decision row names this node: the lead already ruled on the
@@ -160,31 +195,66 @@ fn ruled_in_store(rows: Vec<Value>, node: &str) -> bool {
     !crate::backlog::decisions_cli::live_rows_over(rows, &mut entries, node).is_empty()
 }
 
-/// Resolve and deliver one off-session route. The provenance states follow
-/// Q10: queued (durable receipt, no live lane), handed (a live lane took
-/// it), read (proven in the recipient transcript at the sweep). An
-/// unresolvable recipient re-routes as a Question one rung up, never a
-/// silent skip; a route that climbs past every lead rung files on the user
-/// page. A live ruling on the node holds the lead legs (see
-/// `node_ruled`).
+/// A live ruling on the node holds the lead legs: the escalation was
+/// answered, and re-emitting the help must not re-ask it. True when the
+/// route is over and its `ruled` row is written.
 #[allow(clippy::too_many_arguments)]
-fn deliver_off_session(
+fn route_held_by_ruling(
     cwd: &Path,
     run: &str,
     node: Option<&str>,
     class: HelpClass,
     reason: &str,
-    evidence: Option<&str>,
     rung: u64,
     to: Recipient,
+    turn_key: &str,
+) -> bool {
+    if !matches!(to, Recipient::Lead | Recipient::Ladder) || !node_ruled(node) {
+        return false;
+    }
+    emit_help_route(
+        cwd,
+        run,
+        node,
+        class,
+        reason,
+        rung,
+        "ruled",
+        "decision-store",
+        None,
+        None,
+        0,
+        turn_key,
+    );
+    true
+}
+
+/// Resolve and deliver one off-session route. The provenance states follow
+/// Q10: queued (durable receipt, no live lane), handed (a live lane took
+/// it), read (proven in the recipient transcript at the sweep). An
+/// unresolvable recipient never skips the leads: a holder the records
+/// cannot name takes the ladder from its first rung, and a route that
+/// climbs past every lead rung files on the user page. A live ruling on
+/// the node holds the lead legs (see `route_held_by_ruling`). A holder that
+/// is the sender is no recipient: the route records `holder-self` and sends
+/// nothing.
+#[allow(clippy::too_many_arguments)]
+fn deliver_off_session(
+    cwd: &Path,
+    run: &str,
+    harness_session: Option<&str>,
+    node: Option<&str>,
+    class: HelpClass,
+    reason: &str,
+    evidence: Option<&str>,
+    rung: u64,
+    mut to: Recipient,
     text: &str,
     turn_key: &str,
 ) {
-    // A live ruling on the node holds the lead legs: the escalation was
-    // answered, and re-emitting the help must not re-ask it. A holder or
-    // evidence-holder leg is an operational ask no ruling answers, so it
-    // still routes.
-    if matches!(to, Recipient::Lead | Recipient::Ladder) && node_ruled(node) {
+    // A live holder that reports its own node held has nobody to mail, and
+    // a mail to itself comes back as a resume typed over its own turn.
+    if to == Recipient::Holder && holder_is_sender(node, run, harness_session) {
         emit_help_route(
             cwd,
             run,
@@ -192,8 +262,8 @@ fn deliver_off_session(
             class,
             reason,
             rung,
-            "ruled",
-            "decision-store",
+            "holder-self",
+            "self",
             None,
             None,
             0,
@@ -201,12 +271,20 @@ fn deliver_off_session(
         );
         return;
     }
+    // A holder or evidence-holder leg is an operational ask no ruling
+    // answers, so it still routes.
+    if route_held_by_ruling(cwd, run, node, class, reason, rung, to, turn_key) {
+        return;
+    }
+    // The ladder skips the sender by the id a team's holder record carries,
+    // the harness session id. A manifest's run id never matches it.
+    let from = sender_id(run, harness_session);
     let mut ladder_pos: u64 = 0;
     loop {
-        let target = resolve_recipient(to, node, run, evidence, ladder_pos, cwd);
+        let target = resolve_recipient(to, node, from, evidence, ladder_pos, cwd);
         match target {
             Target::Session(sid) => {
-                let body = route_body(text, node, reason, evidence);
+                let body = route_body(run, class, turn_key, text, node, reason, evidence);
                 let (delivered, leg) = wake(&sid, &body);
                 // A durable receipt is the bus: queued, not failed. The
                 // DND the recipient armed only delays a bus poll, so the
@@ -238,9 +316,18 @@ fn deliver_off_session(
                 );
                 return;
             }
-            Target::Unresolved => {
+            Target::Unresolved => match unresolved_step(to, ladder_pos) {
+                // A holder the records cannot name is no rung, so the route
+                // takes the ladder from its first rung.
+                UnresolvedStep::TakeLadder => {
+                    to = Recipient::Ladder;
+                    if route_held_by_ruling(cwd, run, node, class, reason, rung, to, turn_key) {
+                        return;
+                    }
+                }
                 // Never a skip: climb one rung and try again.
-                if ladder_pos >= LADDER_TOP {
+                UnresolvedStep::Climb => ladder_pos += 1,
+                UnresolvedStep::Page => {
                     file_user_question(
                         cwd,
                         run,
@@ -254,8 +341,7 @@ fn deliver_off_session(
                     );
                     return;
                 }
-                ladder_pos += 1;
-            }
+            },
         }
     }
 }
@@ -265,8 +351,18 @@ fn deliver_off_session(
 const LADDER_TOP: u64 = 2;
 
 /// The mail body: the route text, the node, and the evidence receipt, so
-/// the recipient can act without opening the row.
-fn route_body(text: &str, node: Option<&str>, reason: &str, evidence: Option<&str>) -> String {
+/// the recipient can act without opening the row. The last line is the
+/// read proof: it lands in the recipient's transcript with the mail, where
+/// the sweep looks for it.
+fn route_body(
+    run: &str,
+    class: HelpClass,
+    turn_key: &str,
+    text: &str,
+    node: Option<&str>,
+    reason: &str,
+    evidence: Option<&str>,
+) -> String {
     let mut body = format!("help-router: {text}");
     if let Some(n) = node {
         body.push_str(&format!(" (node {n}"));
@@ -280,13 +376,60 @@ fn route_body(text: &str, node: Option<&str>, reason: &str, evidence: Option<&st
     if let Some(ev) = evidence.filter(|e| !e.trim().is_empty()) {
         body.push_str(&format!("\nevidence: {ev}"));
     }
+    body.push_str(&format!(
+        "\nread-proof: {}",
+        read_proof(run, class, turn_key)
+    ));
     body
+}
+
+/// The text the sweep takes as proof that a recipient read one route. It
+/// names the route and not only its sender, so the proof of an earlier route
+/// never reads a later one.
+fn read_proof(run: &str, class: HelpClass, turn_key: &str) -> String {
+    format!("{SENDER}|{run}|{}|{turn_key}", class.as_str())
+}
+
+/// Whether the node's holder is the sender.
+fn holder_is_sender(node: Option<&str>, run: &str, harness_session: Option<&str>) -> bool {
+    holder_session(node).is_some_and(|sid| is_sender(&sid, run, harness_session))
+}
+
+/// Whether `sid` names the sender. Both ids have to match: the holder and
+/// team records carry the harness session id, and a row may carry the
+/// manifest's run id instead.
+fn is_sender(sid: &str, run: &str, harness_session: Option<&str>) -> bool {
+    let sid = sid.trim();
+    !sid.is_empty() && (sid == run.trim() || harness_session.is_some_and(|h| h.trim() == sid))
 }
 
 enum Target {
     Session(String),
     UserPage,
     Unresolved,
+}
+
+/// What the route loop does with a recipient that did not resolve at a
+/// ladder position.
+#[derive(Debug, PartialEq)]
+enum UnresolvedStep {
+    /// A direct recipient the records cannot name is no rung: take the
+    /// ladder from its first rung, so a lead hears it before the user does.
+    TakeLadder,
+    /// Climb one rung and try again.
+    Climb,
+    /// No rung is left: the user page.
+    Page,
+}
+
+fn unresolved_step(to: Recipient, ladder_pos: u64) -> UnresolvedStep {
+    if ladder_pos == 0 && matches!(to, Recipient::Holder | Recipient::EvidenceHolder) {
+        UnresolvedStep::TakeLadder
+    } else if ladder_pos >= LADDER_TOP {
+        UnresolvedStep::Page
+    } else {
+        UnresolvedStep::Climb
+    }
 }
 
 fn resolve_recipient(
@@ -377,10 +520,27 @@ fn holder_from_evidence(evidence: &str) -> Option<String> {
     Some(token.trim_end_matches(&[',', ';', ':'][..]).to_string())
 }
 
+/// A test's stand-in for the `fno` children a route step runs, so a unit
+/// test answers them itself and no mail or resume reaches a live session.
+#[cfg(test)]
+static STUBBED_RUN: std::sync::Mutex<Option<fn(&[String], &str) -> (i32, String, String)>> =
+    std::sync::Mutex::new(None);
+
+/// One `fno` child through the shared bounded runner.
+fn run_fno(argv: &[String], cwd: &str) -> (i32, String, String) {
+    #[cfg(test)]
+    let answer = *STUBBED_RUN.lock().unwrap_or_else(|e| e.into_inner());
+    #[cfg(test)]
+    if let Some(answer) = answer {
+        return answer(argv, cwd);
+    }
+    burn_watch::run_command(argv, cwd)
+}
+
 /// One wake over the shared runner: mail, resume fallback on a durable
 /// receipt. The bool answers "a live lane took it" (handed).
 fn wake(sid: &str, text: &str) -> (bool, &'static str) {
-    let runner: burn_watch::Runner = &mut burn_watch::run_command;
+    let runner: burn_watch::Runner = &mut run_fno;
     let (delivered, leg) = burn_watch::wake_with_text(sid, false, text, SENDER, runner);
     (delivered, leg)
 }
@@ -412,8 +572,7 @@ fn file_user_question(
         "ask".to_string(),
         q,
     ];
-    let runner: burn_watch::Runner = &mut burn_watch::run_command;
-    let (code, _, _) = runner(&args, &cwd.to_string_lossy());
+    let (code, _, _) = run_fno(&args, &cwd.to_string_lossy());
     if code != 0 {
         eprintln!("help-router: user-page filing failed (non-fatal) for run {run}");
     }
@@ -439,9 +598,9 @@ fn parse_ts(raw: &str) -> Option<i64> {
         .map(|value| value.timestamp())
 }
 
-/// One newest route row: fire a past-due timer, or climb a question lease
-/// that handed without a read inside the window. Rows already climbed or
-/// read are skipped by their route kind.
+/// One newest route row: fire a past-due timer, record a proven read, or
+/// climb a lease that passed without one. Rows already fired, read, ruled
+/// or climbed are skipped by their route kind.
 fn act_on_route_row(home: &crate::paths::AgentsHome, config_cwd: &Path, row: &Value, now: i64) {
     let kind = row
         .pointer("/data/route")
@@ -474,14 +633,18 @@ fn act_on_route_row(home: &crate::paths::AgentsHome, config_cwd: &Path, row: &Va
             if delivery != "queued" && delivery != "handed" {
                 return;
             }
-            if delivery == "handed" && recipient_has_read(to, run) {
+            // A proven read retires the row for good, so no later sweep
+            // climbs it once the proof leaves the transcript tail. A queued
+            // route counts too: the bus delivers it into the same transcript.
+            if recipient_has_read(to, &route_key(row)) {
+                follow_up(home, row, "read", row_ladder(row), None);
                 return;
             }
             if now >= row_ts(row) + LEASE_SECS {
                 // The ruling check runs at climb time: a ruling recorded
                 // mid-lease still holds the climb the moment it fires.
                 if node_ruled(row.pointer("/node").and_then(Value::as_str)) {
-                    mark_ruled(home, row, run);
+                    follow_up(home, row, "ruled", row_ladder(row), None);
                     return;
                 }
                 climb(home, config_cwd, row, run);
@@ -492,14 +655,25 @@ fn act_on_route_row(home: &crate::paths::AgentsHome, config_cwd: &Path, row: &Va
 }
 
 /// The read proof (Q10): the recipient transcript grew around the mail.
-/// Bounded tail search for the sender name; a transcript the reader cannot
+/// Bounded tail search for the route's proof; a transcript the reader cannot
 /// resolve simply never proves a read, and the lease decides.
-fn recipient_has_read(to: &str, run: &str) -> bool {
-    let Some(path) = crate::claude_drive::find_transcript(to) else {
+fn recipient_has_read(to: &str, key: &RouteKey<'_>) -> bool {
+    let Some(path) = recipient_transcript(to) else {
         return false;
     };
-    let marker = format!("{SENDER}|{run}");
+    let marker = read_proof(key.run, key.class, key.turn);
     tail_contains(&path, &marker, 256 * 1024)
+}
+
+/// The recipient's transcript: the Claude projects store under every
+/// account root, else the codex rollout. An id outside the uuid shape names
+/// neither, and a harness that keeps no per-session file proves no read.
+fn recipient_transcript(to: &str) -> Option<PathBuf> {
+    if !fno_mail::session::is_uuid_shape(to) {
+        return None;
+    }
+    crate::claude_drive::find_transcript_any_root(to)
+        .or_else(|| crate::codex_store::codex_rollout_path(None, to))
 }
 
 /// The bounded tail check the read proof uses: the last `cap` bytes of the
@@ -524,44 +698,30 @@ fn tail_contains(path: &std::path::PathBuf, marker: &str, cap: u64) -> bool {
 }
 
 /// The lease fired: climb one rung from the row's stored ladder position
-/// and mail the next owner, marking this row climbed.
+/// and mail the next owner. The climbed row lands first and on the row's
+/// own key, so one lease climbs once. A failed write leaves the row
+/// eligible, and the next tick tries again.
 fn climb(home: &crate::paths::AgentsHome, config_cwd: &Path, row: &Value, run: &str) {
-    let node = row.get("node").and_then(Value::as_str).map(str::to_string);
-    let class = HelpClass::parse(
-        row.pointer("/data/class")
-            .and_then(Value::as_str)
-            .unwrap_or(""),
-    );
+    let key = route_key(row);
     let to_sid = row
         .pointer("/data/to")
         .and_then(Value::as_str)
         .unwrap_or("");
-    let pos = row
-        .pointer("/data/ladder")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let next = pos + 1;
+    // A holder the route addressed directly sits before the ladder, so its
+    // climb starts at the ladder's first rung. A ladder rung climbs one step.
+    let next = if holder_session(key.node).as_deref() == Some(to_sid) {
+        0
+    } else {
+        row_ladder(row) + 1
+    };
     let body = format!(
         "help-router: a question climbed the ladder (run {run}, class {}). The holder never read the delivery; a ruling is owed.",
-        class.as_str()
+        key.class.as_str()
     );
-    let global_row = json!({
-        "ts": crate::loopcheck::now_rfc3339_utc(),
-        "v": 1,
-        "type": "help_route",
-        "source": "help-router",
-        "run": run,
-        "data": {"class": class.as_str(), "route": "climbed", "to": to_sid, "ladder": next, "turn": row.pointer("/data/turn").and_then(Value::as_str).unwrap_or("")},
-    });
-    let written = crate::claims::append_event_line(
-        &home.events_jsonl(),
-        &global_row,
-        std::time::Duration::from_secs(2),
-    );
-    if written.is_err() {
+    if !follow_up(home, row, "climbed", next, None) {
         return; // no durable climb row: a double climb beats a silent one
     }
-    match ladder_at(node.as_deref(), to_sid, next, config_cwd) {
+    match ladder_at(key.node, to_sid, next, config_cwd) {
         Target::Session(sid) => {
             let _ = wake(&sid, &body);
         }
@@ -569,93 +729,144 @@ fn climb(home: &crate::paths::AgentsHome, config_cwd: &Path, row: &Value, run: &
             file_user_question(
                 config_cwd,
                 run,
-                node.as_deref(),
-                class,
+                key.node,
+                key.class,
                 "question lease expired on every rung",
                 None,
                 0,
                 next,
-                row.pointer("/data/turn")
-                    .and_then(Value::as_str)
-                    .unwrap_or(""),
+                key.turn,
             );
         }
     }
 }
 
-/// The store holds the ruling: one `ruled` row retires the off-session row
-/// under the sweep's newest-wins key, so the lease never climbs it. Same
-/// append shape as `climb`; a failed write keeps the climb eligible, and
-/// the next tick re-checks the store.
-fn mark_ruled(home: &crate::paths::AgentsHome, row: &Value, run: &str) {
-    let node = row
-        .pointer("/node")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    let class = HelpClass::parse(
-        row.pointer("/data/class")
+/// What a sweep-side row copies from the row it follows. The sweep's key
+/// is run, node, class and turn, so a follow-up that drops one of them
+/// never supersedes its row.
+struct RouteKey<'a> {
+    run: &'a str,
+    node: Option<&'a str>,
+    class: HelpClass,
+    turn: &'a str,
+}
+
+fn route_key(row: &Value) -> RouteKey<'_> {
+    RouteKey {
+        run: row.pointer("/run").and_then(Value::as_str).unwrap_or(""),
+        node: row
+            .pointer("/node")
+            .and_then(Value::as_str)
+            .filter(|n| !n.is_empty()),
+        class: HelpClass::parse(
+            row.pointer("/data/class")
+                .and_then(Value::as_str)
+                .unwrap_or(""),
+        ),
+        turn: row
+            .pointer("/data/turn")
             .and_then(Value::as_str)
             .unwrap_or(""),
-    );
-    let to_sid = row
-        .pointer("/data/to")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let mut ruled = json!({
+    }
+}
+
+/// The ladder position a row stored.
+fn row_ladder(row: &Value) -> u64 {
+    row.pointer("/data/ladder")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+}
+
+/// One sweep-side route row, on the same key as the row it follows.
+fn follow_up_row(
+    key: &RouteKey<'_>,
+    route: &str,
+    to: &str,
+    ladder: u64,
+    delivery: Option<(&str, &str)>,
+) -> Value {
+    let mut data = json!({
+        "class": key.class.as_str(),
+        "route": route,
+        "to": to,
+        "ladder": ladder,
+        "turn": key.turn,
+    });
+    if let Some((kind, leg)) = delivery {
+        if let Some(obj) = data.as_object_mut() {
+            obj.insert("delivery".to_string(), json!(kind));
+            obj.insert("leg".to_string(), json!(leg));
+        }
+    }
+    let mut row = json!({
         "ts": crate::loopcheck::now_rfc3339_utc(),
         "v": 1,
         "type": "help_route",
         "source": "help-router",
-        "run": run,
-        "data": {
-            "class": class.as_str(),
-            "route": "ruled",
-            "to": to_sid,
-            "ladder": row
-                .pointer("/data/ladder")
-                .and_then(Value::as_u64)
-                .unwrap_or(0),
-            "turn": row
-                .pointer("/data/turn")
-                .and_then(Value::as_str)
-                .unwrap_or(""),
-        },
+        "run": key.run,
+        "data": data,
     });
-    if !node.is_empty() {
-        if let Some(obj) = ruled.as_object_mut() {
+    if let Some(node) = key.node {
+        if let Some(obj) = row.as_object_mut() {
             obj.insert("node".to_string(), json!(node));
         }
     }
-    if let Err(error) = crate::claims::append_event_line(
+    row
+}
+
+/// Write the row that follows `row` in the journal the sweep reads, so it
+/// supersedes `row` there: `read`, `ruled`, `climbed` or `fired`. Everything
+/// but `route`, `ladder` and `delivery` copies from `row`. False when
+/// nothing landed: the row it failed to retire stays eligible, and the next
+/// tick tries again.
+fn follow_up(
+    home: &crate::paths::AgentsHome,
+    row: &Value,
+    route: &str,
+    ladder: u64,
+    delivery: Option<(&str, &str)>,
+) -> bool {
+    let key = route_key(row);
+    let to_sid = row
+        .pointer("/data/to")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    match crate::claims::append_event_line(
         &home.events_jsonl(),
-        &ruled,
+        &follow_up_row(&key, route, to_sid, ladder, delivery),
         std::time::Duration::from_secs(2),
     ) {
-        eprintln!("help-router: ruled row write failed (non-fatal): {error}");
+        Ok(()) => true,
+        Err(error) => {
+            eprintln!("help-router: {route} row write failed (non-fatal): {error}");
+            false
+        }
     }
 }
 
 /// The wait elapsed: wake the session with the timer's resolution. A
-/// budget-class timer is the terminal route's resume leg: the
-/// body names the resume, not a wait re-check.
+/// budget-class timer is the terminal route's resume leg: the body names
+/// the resume, not a wait re-check. One wake retires the timer with its leg,
+/// landed or not. A retry would queue a second mail for a session that
+/// cannot be woken, so a lost wake is a row and never a second ask.
 fn fire_timer(home: &crate::paths::AgentsHome, row: &Value, run: &str) {
     let to = row
         .pointer("/data/to")
         .and_then(Value::as_str)
         .unwrap_or(run);
-    let _ = home;
     let body = if row.pointer("/data/class").and_then(Value::as_str) == Some("budget") {
         "help-router: your budget resume is due. The run was cut on its budget cap; resume from the resume receipt with the same cap. If the resumed run trips the cap again, the route asks the lead instead of you."
     } else {
         "help-router: your wait backoff elapsed. Re-check the condition you were waiting on; if it cleared, carry on, else re-emit <help class=\"wait\"> with fresh evidence."
     };
-    let _ = wake(to, body);
+    let (delivered, leg) = wake(to, body);
+    let kind = if delivered { "handed" } else { "queued" };
+    follow_up(home, row, "fired", 0, Some((kind, leg)));
 }
 
 /// The `help_route` follow-up event: one row per route step, so a failed
-/// step is visible and the sweep has its memory. Mirrors to the global log
-/// (the daemon sweep reads there; sessions have project logs everywhere).
+/// step is visible and the sweep has its memory. Mirrors to the journal
+/// the daemon sweep reads (sessions keep project logs of their own).
 #[allow(clippy::too_many_arguments)]
 fn emit_help_route(
     cwd: &Path,
@@ -706,9 +917,14 @@ fn emit_help_route(
     if let Err(error) = crate::claims::append_event_line(&project, &env, line_timeout) {
         eprintln!("help-router: route row write failed (non-fatal): {error}");
     }
-    let global = crate::loopcheck::default_global_events_path();
-    if project != global {
-        let _ = crate::claims::append_event_line(&global, &env, line_timeout);
+    let sweep_journal = crate::paths::AgentsHome::from_env_opt().map(|home| home.events_jsonl());
+    if let Some(global) = sweep_journal.filter(|global| *global != project) {
+        if let Err(error) = crate::claims::append_event_line(&global, &env, line_timeout) {
+            eprintln!(
+                "help-router: route row mirror to {} failed (non-fatal): {error}",
+                global.display()
+            );
+        }
     }
 }
 
@@ -796,17 +1012,16 @@ fn sweep(home: &crate::paths::AgentsHome, config_cwd: &Path) {
     }
 }
 
+/// The sweep key: the four fields `route_key` reads, so a follow-up row
+/// lands on the key of the row it follows.
 fn row_key(row: &Value) -> String {
+    let key = route_key(row);
     format!(
         "{}|{}|{}|{}",
-        row.get("run").and_then(Value::as_str).unwrap_or(""),
-        row.get("node").and_then(Value::as_str).unwrap_or(""),
-        row.pointer("/data/class")
-            .and_then(Value::as_str)
-            .unwrap_or(""),
-        row.pointer("/data/turn")
-            .and_then(Value::as_str)
-            .unwrap_or(""),
+        key.run,
+        key.node.unwrap_or(""),
+        key.class.as_str(),
+        key.turn
     )
 }
 
@@ -960,6 +1175,564 @@ mod tests {
         assert!(
             !journal.contains("\"route\":\"climbed\""),
             "climbed a ruled escalation: {journal}"
+        );
+    }
+
+    /// A test's stand-in for the `fno` children a route step runs, so a
+    /// unit test answers them itself and no mail or resume reaches a live
+    /// session. Installed for one test; every child it answers is recorded.
+    struct StubbedRun;
+
+    static RUN_CALLS: std::sync::Mutex<Vec<Vec<String>>> = std::sync::Mutex::new(Vec::new());
+
+    impl StubbedRun {
+        fn install(answer: fn(&[String], &str) -> (i32, String, String)) -> Self {
+            *STUBBED_RUN.lock().unwrap_or_else(|e| e.into_inner()) = Some(answer);
+            RUN_CALLS.lock().unwrap_or_else(|e| e.into_inner()).clear();
+            Self
+        }
+    }
+
+    impl Drop for StubbedRun {
+        fn drop(&mut self) {
+            *STUBBED_RUN.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }
+    }
+
+    /// How many recorded children mention `token`. A child another test
+    /// runs inside this test's stub window is not this test's.
+    fn calls_mentioning(token: &str) -> usize {
+        RUN_CALLS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .filter(|argv| argv.join(" ").contains(token))
+            .count()
+    }
+
+    fn record(argv: &[String]) {
+        RUN_CALLS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(argv.to_vec());
+    }
+
+    /// The mail reached its recipient.
+    fn reached(argv: &[String], _cwd: &str) -> (i32, String, String) {
+        record(argv);
+        (0, "injected".to_string(), String::new())
+    }
+
+    /// A durable queue, then a resume that fails: the wake did not land.
+    fn durable_then_failed(argv: &[String], _cwd: &str) -> (i32, String, String) {
+        record(argv);
+        if argv.iter().any(|arg| arg == "send") {
+            (0, "queued (durable)".to_string(), String::new())
+        } else {
+            (1, String::new(), String::new())
+        }
+    }
+
+    fn journal_row(home: &crate::paths::AgentsHome, row: &Value) {
+        crate::claims::append_event_line(
+            &home.events_jsonl(),
+            row,
+            std::time::Duration::from_secs(2),
+        )
+        .expect("route row lands");
+    }
+
+    fn journal_text(home: &crate::paths::AgentsHome) -> String {
+        crate::event_store::journal_text(&home.events_jsonl(), &["help_route"])
+    }
+
+    /// Every root a route step resolves, pinned under one temp dir: the
+    /// state root, the spaces, the agents home the sweep reads, the claims
+    /// and the transcript base. A failing assertion writes nothing outside.
+    struct PinnedRoots {
+        _home: crate::claims::EnvVarGuard,
+        _spaces: crate::claims::EnvVarGuard,
+        _agents: crate::claims::EnvVarGuard,
+        _claims: crate::claims::EnvVarGuard,
+        _projects: crate::claims::EnvVarGuard,
+    }
+
+    impl PinnedRoots {
+        /// Pin under `dir` and name the agents home the sweep reads.
+        fn under(dir: &Path) -> (Self, crate::paths::AgentsHome) {
+            let at = |rel: &str| dir.join(rel).to_string_lossy().into_owned();
+            (
+                Self {
+                    _home: crate::claims::EnvVarGuard::set("FNO_HOME", &dir.to_string_lossy()),
+                    _spaces: crate::claims::EnvVarGuard::set("FNO_SPACES_DIR", &at("spaces")),
+                    _agents: crate::claims::EnvVarGuard::set("FNO_AGENT_HOME", &at("agents")),
+                    _claims: crate::claims::EnvVarGuard::set("FNO_CLAIMS_ROOT", &at("claims")),
+                    _projects: crate::claims::EnvVarGuard::set(
+                        crate::claude_drive::PROJECTS_DIR_ENV,
+                        &at("projects"),
+                    ),
+                },
+                crate::paths::AgentsHome::at(dir.join("agents")),
+            )
+        }
+    }
+
+    /// A route row written `secs` ago.
+    fn aged_row(secs: i64, run: &str, node: &str, data: Value) -> Value {
+        let ts = (chrono::Utc::now() - chrono::Duration::seconds(secs)).to_rfc3339();
+        json!({
+            "ts": ts,
+            "v": 1,
+            "type": "help_route",
+            "source": "help-router",
+            "run": run,
+            "node": node,
+            "data": data,
+        })
+    }
+
+    /// A due timer wakes its session once. The `fired` row takes the
+    /// timer's key, so the next sweep leaves the timer alone.
+    #[test]
+    fn a_due_timer_fires_once_and_records_its_leg() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (_roots, home) = PinnedRoots::under(dir.path());
+        let _stub = StubbedRun::install(reached);
+        journal_row(
+            &home,
+            &aged_row(
+                600,
+                "run-timer-once",
+                "x-timer",
+                json!({"class": "wait", "route": "timer", "to": "run-timer-once", "backoff_secs": 300, "turn": "turn-once"}),
+            ),
+        );
+        sweep(&home, dir.path());
+        sweep(&home, dir.path());
+        let rows = journal_text(&home);
+        assert_eq!(
+            rows.matches("\"route\":\"fired\"").count(),
+            1,
+            "one fired row for one timer: {rows}"
+        );
+        assert!(
+            rows.contains("\"delivery\":\"handed\"") && rows.contains("\"leg\":\"mail\""),
+            "the fired row names the leg that landed: {rows}"
+        );
+        assert_eq!(
+            calls_mentioning("run-timer-once"),
+            1,
+            "two sweeps, one wake"
+        );
+    }
+
+    /// A wake that does not land retires the timer after one try, with the
+    /// leg that did not take. A session that cannot be woken is not asked a
+    /// second time.
+    #[test]
+    fn a_failed_timer_wake_retires_after_one_try() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (_roots, home) = PinnedRoots::under(dir.path());
+        let _stub = StubbedRun::install(durable_then_failed);
+        journal_row(
+            &home,
+            &aged_row(
+                600,
+                "run-timer-lost",
+                "x-timer",
+                json!({"class": "wait", "route": "timer", "to": "run-timer-lost", "backoff_secs": 300, "turn": "turn-lost"}),
+            ),
+        );
+        sweep(&home, dir.path());
+        sweep(&home, dir.path());
+        let rows = journal_text(&home);
+        assert_eq!(
+            rows.matches("\"route\":\"fired\"").count(),
+            1,
+            "one fired row for one timer: {rows}"
+        );
+        assert!(
+            rows.contains("\"delivery\":\"queued\"") && rows.contains("\"leg\":\"resume\""),
+            "the fired row names the leg that did not take: {rows}"
+        );
+        assert_eq!(
+            calls_mentioning("run-timer-lost"),
+            2,
+            "two sweeps, and one try runs a mail and a resume"
+        );
+    }
+
+    /// The read proof, admit arm: a delivered route whose recipient
+    /// transcript holds its proof records `read`, and no sweep climbs it
+    /// afterwards. A queued route counts the same as a handed one.
+    #[test]
+    fn a_proven_read_records_read_and_never_climbs() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (_roots, home) = PinnedRoots::under(dir.path());
+        let projects = dir.path().join("projects").join("one");
+        std::fs::create_dir_all(&projects).expect("projects dir");
+        let recipient = "11111111-2222-4333-8444-555555555555";
+        let run = "run-read-proof";
+        let proofs = ["turn-read", "turn-queued"]
+            .iter()
+            .map(|turn| {
+                format!(
+                    "mail read: {}\n",
+                    read_proof(run, HelpClass::Question, turn)
+                )
+            })
+            .collect::<String>();
+        std::fs::write(projects.join(format!("{recipient}.jsonl")), proofs)
+            .expect("recipient transcript");
+        let route = |turn: &str, delivery: &str| json!({"class": "question", "route": "off-session", "to": recipient, "delivery": delivery, "leg": "mail", "ladder": 0, "turn": turn});
+        let _stub = StubbedRun::install(reached);
+        let handed = route("turn-read", "handed");
+        let queued = route("turn-queued", "queued");
+        journal_row(&home, &aged_row(3600, run, "x-read", handed));
+        journal_row(&home, &aged_row(3600, run, "x-read", queued));
+        sweep(&home, dir.path());
+        sweep(&home, dir.path());
+        let rows = journal_text(&home);
+        assert_eq!(
+            rows.matches("\"route\":\"read\"").count(),
+            2,
+            "one read row per read route: {rows}"
+        );
+        assert!(
+            !rows.contains("\"route\":\"climbed\""),
+            "climbed a route the recipient read: {rows}"
+        );
+        assert_eq!(calls_mentioning(run), 0, "a read route starts no child");
+    }
+
+    /// The read proof, withhold arm: the same handed route climbs once its
+    /// lease passes while its own proof is missing from the recipient's
+    /// transcript. The climbed row keeps the node, so it takes the row's key
+    /// and the next sweep leaves it alone.
+    #[test]
+    fn an_unread_route_climbs_once_on_its_own_key() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (_roots, home) = PinnedRoots::under(dir.path());
+        let _stub = StubbedRun::install(reached);
+        let unread = "22222222-2222-4333-8444-555555555555";
+        // The recipient read an earlier route from this sender. That proof
+        // sits in its transcript and must not read this route.
+        let projects = dir.path().join("projects").join("one");
+        std::fs::create_dir_all(&projects).expect("projects dir");
+        let earlier = read_proof("run-climb-once", HelpClass::EnvDenied, "turn-earlier");
+        std::fs::write(
+            projects.join(format!("{unread}.jsonl")),
+            format!("mail read: {earlier}\n"),
+        )
+        .expect("recipient transcript");
+        journal_row(
+            &home,
+            &aged_row(
+                3600,
+                "run-climb-once",
+                "x-climb",
+                json!({"class": "env-denied", "route": "off-session", "to": unread, "delivery": "handed", "leg": "mail", "ladder": 0, "turn": "turn-climb"}),
+            ),
+        );
+        sweep(&home, dir.path());
+        sweep(&home, dir.path());
+        let rows = journal_text(&home);
+        assert_eq!(
+            rows.matches("\"route\":\"climbed\"").count(),
+            1,
+            "one climb for one lease: {rows}"
+        );
+        assert!(
+            rows.lines()
+                .filter(|line| line.contains("\"route\":\"climbed\""))
+                .all(|line| line.contains("\"node\":\"x-climb\"")),
+            "the climbed row dropped its node: {rows}"
+        );
+        assert_eq!(
+            calls_mentioning("run-climb-once"),
+            1,
+            "the second sweep climbed again"
+        );
+    }
+
+    /// A holder the route addressed directly and never read the delivery
+    /// hands the route to the ladder's first rung, the node lead, and not to
+    /// the rung above it.
+    #[test]
+    fn an_unread_holder_hands_the_route_to_the_ladders_first_rung() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (_roots, home) = PinnedRoots::under(dir.path());
+        std::fs::create_dir_all(dir.path().join("claims")).expect("claims root");
+        let holder = "harness-silent-holder";
+        let acquired = crate::claims::acquire(
+            "node:x-silent-holder",
+            "target-session:harness-silent-holder",
+            crate::claims::AcquireOpts {
+                pid: Some(std::process::id()),
+                identity: Some((holder.to_string(), "claude".to_string())),
+                root: None,
+                events_dir: Some(dir.path().join("claim-events")),
+                ..Default::default()
+            },
+        );
+        assert!(
+            matches!(acquired, crate::claims::AcquireOutcome::Acquired(_)),
+            "the claim was not acquired: {acquired:?}"
+        );
+        let _stub = StubbedRun::install(reached);
+        journal_row(
+            &home,
+            &aged_row(
+                3600,
+                "run-holder-unread",
+                "x-silent-holder",
+                json!({"class": "held", "route": "off-session", "to": holder, "delivery": "handed", "leg": "mail", "ladder": 0, "turn": "turn-holder"}),
+            ),
+        );
+        sweep(&home, dir.path());
+        let rows = journal_text(&home);
+        assert_eq!(
+            rows.matches("\"route\":\"climbed\"").count(),
+            1,
+            "one climb for one lease: {rows}"
+        );
+        let filings = RUN_CALLS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .map(|argv| argv.join(" "))
+            .collect::<Vec<String>>();
+        assert_eq!(
+            filings.len(),
+            1,
+            "the climb ran an unexpected child: {filings:?}"
+        );
+        assert!(
+            filings
+                .iter()
+                .all(|filing| filing.contains("ladder rung 0")),
+            "the climb skipped the ladder's first rung: {filings:?}"
+        );
+    }
+
+    /// A codex thread keeps no Claude transcript. Its rollout holds the mail,
+    /// so the proof search reads that and the route records `read`.
+    #[test]
+    fn a_codex_recipient_proves_a_read_from_its_rollout() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (_roots, home) = PinnedRoots::under(dir.path());
+        let _codex = crate::claims::EnvVarGuard::set(
+            "CODEX_HOME",
+            &dir.path().join("codex").to_string_lossy(),
+        );
+        let sessions = dir.path().join("codex").join("sessions");
+        std::fs::create_dir_all(&sessions).expect("codex sessions");
+        let recipient = "01a1fca9-28cc-7bd2-8d82-72796e1e2942";
+        let run = "run-codex-read";
+        std::fs::write(
+            sessions.join(format!("rollout-{recipient}.jsonl")),
+            format!(
+                "mail read: {}\n",
+                read_proof(run, HelpClass::Question, "turn-codex")
+            ),
+        )
+        .expect("codex rollout");
+        let _stub = StubbedRun::install(reached);
+        journal_row(
+            &home,
+            &aged_row(
+                3600,
+                run,
+                "x-codex",
+                json!({"class": "question", "route": "off-session", "to": recipient, "delivery": "handed", "leg": "mail", "ladder": 0, "turn": "turn-codex"}),
+            ),
+        );
+        sweep(&home, dir.path());
+        let rows = journal_text(&home);
+        assert!(
+            rows.contains("\"route\":\"read\""),
+            "no read row for a codex recipient: {rows}"
+        );
+        assert!(
+            !rows.contains("\"route\":\"climbed\""),
+            "climbed a route the codex recipient read: {rows}"
+        );
+        assert_eq!(calls_mentioning(run), 0, "a read route starts no child");
+    }
+
+    /// A timer route lands in the journal the sweep reads. The mirror went
+    /// to another store, so no wait timer ever fired. The wake target is the
+    /// harness session id, not the run id the row is filed under.
+    #[test]
+    fn an_emitted_timer_lands_in_the_journal_the_sweep_reads() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (_roots, home) = PinnedRoots::under(dir.path());
+        route_emitted_distress(
+            dir.path(),
+            "run-mirror",
+            Some("harness-mirror"),
+            Some("x-mirror"),
+            HelpClass::Wait,
+            "ci pending",
+            None,
+            0,
+            "turn-mirror",
+        );
+        let rows = journal_text(&home);
+        assert!(
+            rows.contains("\"route\":\"timer\"") && rows.contains("\"turn\":\"turn-mirror\""),
+            "no timer row in the sweep's journal: {rows}"
+        );
+        assert!(
+            rows.contains("\"to\":\"harness-mirror\""),
+            "the wake target is not the harness session id: {rows}"
+        );
+    }
+
+    /// A holder's own held help is no recipient. Under either of the
+    /// sender's ids it records `holder-self` and starts no child, so it
+    /// mails itself nothing and resumes itself never.
+    #[test]
+    fn a_holders_own_held_help_sends_nothing_to_itself() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (_roots, home) = PinnedRoots::under(dir.path());
+        std::fs::create_dir_all(dir.path().join("claims")).expect("claims root");
+        let holder = "harness-own-holder";
+        let acquired = crate::claims::acquire(
+            "node:x-own-holder",
+            "target-session:harness-own-holder",
+            crate::claims::AcquireOpts {
+                pid: Some(std::process::id()),
+                identity: Some((holder.to_string(), "claude".to_string())),
+                root: None,
+                events_dir: Some(dir.path().join("claim-events")),
+                ..Default::default()
+            },
+        );
+        assert!(
+            matches!(acquired, crate::claims::AcquireOutcome::Acquired(_)),
+            "the claim was not acquired: {acquired:?}"
+        );
+        let _stub = StubbedRun::install(reached);
+        let node = Some("x-own-holder");
+        // Loop-check files under the manifest's run id and names the harness id.
+        route_emitted_distress(
+            dir.path(),
+            "run-own-holder",
+            Some(holder),
+            node,
+            HelpClass::Held,
+            "parked by the lead",
+            None,
+            0,
+            "turn-own-a",
+        );
+        // The stop hook files under the harness id.
+        route_emitted_distress(
+            dir.path(),
+            holder,
+            Some(holder),
+            node,
+            HelpClass::Held,
+            "parked by the lead",
+            None,
+            1,
+            "turn-own-b",
+        );
+        let self_mail = calls_mentioning(holder) + calls_mentioning("run-own-holder");
+        assert_eq!(self_mail, 0, "the holder mailed or resumed itself");
+        let rows = journal_text(&home);
+        assert_eq!(
+            rows.matches("\"route\":\"holder-self\"").count(),
+            2,
+            "one holder-self row per help: {rows}"
+        );
+        assert!(
+            !rows.contains("\"route\":\"off-session\""),
+            "routed the holder to itself: {rows}"
+        );
+        // No claim names a holder for this node. The route takes the ladder
+        // from its first rung, and an empty ladder files from that rung.
+        route_emitted_distress(
+            dir.path(),
+            "run-no-holder",
+            Some("harness-no-sender"),
+            Some("x-no-holder"),
+            HelpClass::Held,
+            "claim held",
+            None,
+            0,
+            "turn-own-c",
+        );
+        assert_eq!(
+            calls_mentioning("x-no-holder"),
+            1,
+            "one filing for the unreachable holder"
+        );
+        let filings = RUN_CALLS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .filter(|argv| argv.join(" ").contains("x-no-holder"))
+            .map(|argv| argv.join(" "))
+            .collect::<Vec<String>>();
+        assert!(
+            filings
+                .iter()
+                .all(|filing| filing.contains("ladder rung 0")),
+            "the route skipped the ladder and filed from its top: {filings:?}"
+        );
+    }
+
+    /// An unreachable holder takes the lead ladder like any other help, so
+    /// the user page is never its first stop. A lead recipient climbs one
+    /// rung, and the top rung files.
+    #[test]
+    fn an_unreachable_holder_takes_the_ladder_before_the_user_page() {
+        assert_eq!(
+            unresolved_step(Recipient::Holder, 0),
+            UnresolvedStep::TakeLadder
+        );
+        assert_eq!(
+            unresolved_step(Recipient::EvidenceHolder, 0),
+            UnresolvedStep::TakeLadder
+        );
+        assert_eq!(
+            unresolved_step(Recipient::Lead, 0),
+            UnresolvedStep::Climb,
+            "a lead recipient climbs instead of starting over"
+        );
+        assert_eq!(
+            unresolved_step(Recipient::Ladder, LADDER_TOP - 1),
+            UnresolvedStep::Climb
+        );
+        assert_eq!(
+            unresolved_step(Recipient::Ladder, LADDER_TOP),
+            UnresolvedStep::Page
         );
     }
 
