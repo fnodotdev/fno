@@ -449,6 +449,7 @@ impl Core {
                                 updated_at: a.updated_at,
                                 pr,
                                 pr_session_short,
+                                pr_status: pr_status_sweep::row_fact(&a.cwd, pr),
                                 tail: self.compose_tail(a),
                                 role_level: a.role_level,
                                 role_scope: a.role_scope.clone(),
@@ -568,6 +569,7 @@ impl Core {
                                 updated_at: None,
                                 pr: None,
                                 pr_session_short: None,
+                                pr_status: None,
                                 tail: None,
                                 // A bare shell pane has no registry entry, so
                                 // no team and no reachability probe either.
@@ -679,6 +681,7 @@ impl Core {
                         updated_at: a.updated_at,
                         pr,
                         pr_session_short,
+                        pr_status: pr_status_sweep::row_fact(&a.cwd, pr),
                         tail: self.compose_tail(a),
                         role_level: a.role_level,
                         role_scope: a.role_scope.clone(),
@@ -784,6 +787,7 @@ impl Core {
                         updated_at: a.updated_at,
                         pr,
                         pr_session_short,
+                        pr_status: pr_status_sweep::row_fact(&a.cwd, pr),
                         tail: self.compose_tail(a),
                         role_level: a.role_level,
                         role_scope: a.role_scope.clone(),
@@ -969,6 +973,7 @@ impl Core {
                 updated_at: None,
                 pr: None,
                 pr_session_short: None,
+                pr_status: None,
                 tail: None,
                 // An external-daemon row is not an fno-registry worker: no
                 // team, and its liveness lives in its own daemon, so no
