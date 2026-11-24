@@ -149,6 +149,44 @@ instructions = "Does this message ask the user for a decision?"
 
 A choice question also takes `[fnod.questions.<id>.criteria]`, one line per label. An edit to `instructions` or `criteria` changes the wording, so the question reads untrained and escalates to the model. The is_ask span carries `fnod_question`, `fnod_trained`, `fnod_escalate` and `fnod_confidence`.
 
+### The shadow judge
+
+The shadow judge asks fnod about a Stop reply after the fact. `rule_obeyed` asks whether the reply obeyed the behavioural laws its prompt picked. `is_ask` asks whether the reply is an ask. The judge is a pilot. It blocks nothing, it changes no Stop answer, and a failure costs one verdict.
+
+A law takes one tag in fno config, under `[fnod.judge.tags]`, keyed by decision id. `behavioural` means the reply text alone can show obedience, as a read call before a claim does. `state` means obedience needs a world read, as a merge does. A law with no tag is never judged, and the lens counts it as untagged.
+
+```toml
+[fnod.judge.tags]
+"d-1a2b3c4d" = "behavioural"
+"d-5e6f7a8b" = "state"
+```
+
+Every Stop that carries a session id writes one request row to `.fno/event-rules/judge.jsonl` in the repository's main checkout. The row names the machine, the Stop key (`stop:<session>:<turn>`) and the laws the turn's prompt picked: at most 3 behavioural laws in `rules`, the other behavioural laws counted in `judge_dropped`, and the state laws counted in `judge_state`. The `fnod` field reads `off`, `refused`, `down` or `up`. Only an `up` row keeps the reply tail, its last 4,000 characters, in `excerpt`. A row written while fnod is absent is a skip row: no later run can score it, so the report counts it as coverage lost. The file rotates after 64 MB and keeps one older copy.
+
+Stop makes no fnod call. The kev README reports 721 ms for a pass of the 4B model on an M5 (five questions, new text) and 136 ms when the text comes from the cache. The visitor Stop fixture is held at p90 300 ms (`tests/hook_latency.rs`). Scoring thus runs off the Stop path. `fno-agent intel --lens rules --score` first asks fnod about the request rows that carry no verdict. One pass per request asks `is_ask` and one `rule_obeyed` question per law, and the state carries each law's text. A pass is bounded at 10 seconds, one run scores at most 2,000 requests, and three failed passes in a row end the run. A pass that fnod fails whole writes no row, so the request waits for the next run. Each answer lands as one verdict row. It names its request in `judge_of` and carries `verdict`, `confidence`, `escalate`, `trained` and `fnod_ms`. An answer the reply skips carries `fnod_error` and reads `error`.
+
+The lens prints the judge section after the rule table:
+
+| Line | What it reads |
+|---|---|
+| `judge rows (days N)` | Requests, scored, skipped and pending in the window. |
+| `<machine> <day>` | The same four counts for one machine and day. Coverage reads here. |
+| `judge:<label>` | Verdict counts for one question. A law prints as its D number. `labeled` and `wrong` follow when a labels file marks its verdict rows. |
+| `fnod_ms p50 .. p90 ..` | The cost of one pass. |
+| `ask pair by stop key` | Stops where both the keyword lint blocked and fnod read an ask, where only the lint blocked (`keyword-only`), and where only fnod read an ask (`judge-only`). |
+| `untagged laws` | Live laws with no tag. |
+
+A labels file marks a verdict row as it marks a fire, by `span_id`. A `false` verdict means the judge was wrong. The `sample judge` block lists the verdicts no file marks, each with the reply tail the judge read, so a labeling pass has its next rows.
+
+Two numbers sit near each other. The table's `fnod_no` is the inline score at the block. It reads the last 16,000 characters of the message, and it is missing when fnod did not listen at that moment. The ask pair is the batch pass on the last 4,000 characters. A filed ask counts as `judge-only`, because the lint allows it.
+
+For the readout, run `--score` at least once a day of the pilot. Then read the section with `--days 7`:
+
+1. Read the coverage lines. fnod `off`, `refused` or `down` for more than one day means the week is short. Say so, and recommend nothing.
+2. Read the ask pair for the keyword lint. `keyword-only` counts false-block candidates. `judge-only` counts asks the lint let through, filed asks among them.
+3. Label a sample of verdict rows, then read `labeled` and `wrong` for each judge. The rule question stays untrained until a student trains on its rows, so its verdicts read near chance before that.
+4. Pick one word: `replace` the lint with the judge, `keep both`, or `drop` the judge. Name the `fnod_ms` p50 as the cost per Stop, because an inline judge would add one pass to each Stop.
+
 ## The tier-1 scorer: BM25 stays
 
 The tier-1 ranked match was measured against an embedding scorer before either got more code (the rule-engine wiring plan, 2026-10-29). The case set: 72 cases over the 12 measured tier-1 decisions. 36 prompts name a decision that must rank. 36 are real node titles from unrelated work, where none must rank. Pool: the 170 live decisions. Both scorers answer top-3.
