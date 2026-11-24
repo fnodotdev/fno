@@ -45,6 +45,11 @@ fn closed_v6(ip: Ipv6Addr) -> bool {
         let v4 = Ipv4Addr::new((s[6] >> 8) as u8, s[6] as u8, (s[7] >> 8) as u8, s[7] as u8);
         return closed_v4(v4);
     }
+    // The local-use NAT64 prefix 64:ff9b:1::/48 (RFC 8215) maps to whatever
+    // the local translator chooses, so all of it is closed.
+    if s[0] == 0x64 && s[1] == 0xff9b && s[2] == 1 {
+        return true;
+    }
     ip.is_loopback()
         || ip.is_unspecified()
         || ip.is_multicast()
@@ -179,6 +184,7 @@ mod tests {
             "::ffff:127.0.0.1",
             "::ffff:169.254.169.254",
             "64:ff9b::a00:1",
+            "64:ff9b:1::101:101",
             "2001:db8::1",
             "ff02::1",
         ];

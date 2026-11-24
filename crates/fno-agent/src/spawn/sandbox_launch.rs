@@ -92,6 +92,7 @@ pub struct Policy {
 pub fn policy(cwd: &Path) -> Res<Policy> {
     let candidates = crate::agents_config::config_candidates(cwd);
     let global = crate::agents_config::global_config_path();
+    let pinned = std::env::var_os("FNO_CONFIG").is_some_and(|v| !v.is_empty());
     let mut notices = Vec::new();
     let (mut g_provider, mut g_image) = (None, None);
     let mut projects: Vec<(PathBuf, Option<String>, Option<String>)> = Vec::new();
@@ -100,7 +101,7 @@ pub fn policy(cwd: &Path) -> Res<Policy> {
             continue;
         };
         // A pinned FNO_CONFIG is the one layer, and reads as global.
-        if Some(path) == global.as_ref() || candidates.len() == 1 {
+        if Some(path) == global.as_ref() || pinned {
             (g_provider, g_image) = (provider, image);
         } else {
             projects.push((path.clone(), provider, image));

@@ -112,7 +112,20 @@ pub fn export(
         }
         let host = store.join(file);
         engine.copy_out(name, &format!("{OUT_DIR}/{file}"), &host)?;
-        let len = std::fs::metadata(&host).map(|m| m.len()).unwrap_or(0);
+        // The container wrote this file: a link or a folder in its place
+        // never stays in the host store.
+        let meta = std::fs::symlink_metadata(&host).map_err(|e| format!("{file}: {e}"))?;
+        if !meta.file_type().is_file() {
+            if meta.is_dir() {
+                std::fs::remove_dir_all(&host).ok();
+            } else {
+                std::fs::remove_file(&host).ok();
+            }
+            return Err(Refusal(format!(
+                "{file} is not a plain file; the container is kept"
+            )));
+        }
+        let len = meta.len();
         if len > EXPORT_CAP {
             std::fs::remove_file(&host).ok();
             return Err(Refusal(format!("{file} is {len} bytes, over the {EXPORT_CAP}-byte export cap; the container is kept")));

@@ -34,6 +34,8 @@ use super::wire::{GuestFrame, HostFrame, CHUNK};
 use super::{CONTAINER_SETTINGS, CONTAINER_SOCK, CONTAINER_WORK, PROXY_ADDR};
 
 const DAEMON_BOUND: Duration = Duration::from_secs(10);
+/// How long one proxied stream may block on a peer that stops reading.
+const PEER_WRITE_BOUND: Duration = Duration::from_secs(30);
 const FLUSH_BOUND: Duration = Duration::from_secs(20);
 const REFUSED: i32 = 84;
 
@@ -799,6 +801,9 @@ impl Ctx {
                 return;
             }
         };
+        // Data frames write on the guest-stream thread, so a peer that stops
+        // reading costs this stream, never every frame behind it.
+        conn.set_write_timeout(Some(PEER_WRITE_BOUND)).ok();
         let Ok(mut reader) = conn.try_clone() else {
             return;
         };
