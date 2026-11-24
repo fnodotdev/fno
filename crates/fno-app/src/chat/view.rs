@@ -393,7 +393,11 @@ fn bubble(content: &Content, pending: bool, p: Palette, hl: &[(Range<usize>, boo
 fn notice_head(text: &str) -> String {
     let trimmed = text.trim_start();
     if !trimmed.starts_with("<task-notification>") {
-        return trimmed.lines().next().unwrap_or_default().to_string();
+        let first = trimmed.lines().next().unwrap_or_default();
+        if first.is_empty() {
+            return "System notice".to_string();
+        }
+        return first.to_string();
     }
     let at = trimmed
         .find("<summary>")
