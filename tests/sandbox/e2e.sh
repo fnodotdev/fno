@@ -277,11 +277,11 @@ file="$FNO_AGENT_HOME/sandbox-transcripts/$id.jsonl"
 got_sha="$(sha256sum "$file" 2>/dev/null | awk '{print $1}')"
 required "transcript bytes match" test -n "$want" -a "$want" = "$got_sha"
 required "transcript file is 0600" test "$(stat -c %a "$file" 2>/dev/null)" = 600
-row="$(jq -c '.agents[]? | select(.name | startswith("e2e-worker"))' "$FNO_AGENT_HOME/registry.json" 2>/dev/null | head -1)"
+# The registry lives in the graph store; the list command is its reader.
+row="$("$BIN/fno-agent" list --all 2>/dev/null | jq -c '.agents[]? | select(.name | startswith("e2e-worker"))' | head -1)"
 required "the sandboxed spawn keeps its row" test -n "$row"
 if [ -z "$row" ]; then
-  echo "  registry rows: $(jq -c '[.agents[]?.name]' "$FNO_AGENT_HOME/registry.json" 2>&1 | head -c 600)"
-  echo "  registry keys: $(jq -c 'keys' "$FNO_AGENT_HOME/registry.json" 2>&1 | head -c 300)"
+  echo "  listed rows: $("$BIN/fno-agent" list --all 2>&1 | jq -c '[.agents[]?.name]' 2>&1 | head -c 600)"
 fi
 required "the row names sandbox_transcript" test "$(jq -r '.sandbox_transcript // ""' <<<"$row")" = "$file"
 # AC4-FORGE: the trusted field never names sandbox content.
