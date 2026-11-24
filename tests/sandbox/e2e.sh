@@ -87,11 +87,14 @@ def call(method, params):
     n = struct.unpack("<I", rx(4))[0]
     return json.loads(rx(n))
 
-# Required: the three allowed ops reach the host.
+# Required: the allowed ops reach the host.
 r = call("agent.status", {})
 say("required", "status", "ok" if r.get("result", {}).get("sandboxed") else "fail")
 r = call("agent.report", {"state": "working", "session_id": "someone-else", "seq": 1})
 say("required", "report", "ok" if "result" in r else "fail:" + json.dumps(r))
+# A forged name and session cross nowhere: the host builds the report itself.
+r = call("agent.session-report", {"source": "startup", "name": "someone-else", "session_id": "forged"})
+say("required", "session-report", "ok" if "result" in r else "fail:" + json.dumps(r))
 
 # Forbidden: every other op, and fields naming another session or an argv.
 for method, params in [
@@ -274,7 +277,7 @@ file="$FNO_AGENT_HOME/sandbox-transcripts/$id.jsonl"
 got_sha="$(sha256sum "$file" 2>/dev/null | awk '{print $1}')"
 required "transcript bytes match" test -n "$want" -a "$want" = "$got_sha"
 required "transcript file is 0600" test "$(stat -c %a "$file" 2>/dev/null)" = 600
-row="$(jq -c '.agents[]? | select(.name == "e2e-worker")' "$FNO_AGENT_HOME/registry.json" 2>/dev/null | head -1)"
+row="$(jq -c '.agents[]? | select(.name | startswith("e2e-worker"))' "$FNO_AGENT_HOME/registry.json" 2>/dev/null | head -1)"
 required "the sandboxed spawn keeps its row" test -n "$row"
 required "the row names sandbox_transcript" test "$(jq -r '.sandbox_transcript // ""' <<<"$row")" = "$file"
 # AC4-FORGE: the trusted field never names sandbox content.
