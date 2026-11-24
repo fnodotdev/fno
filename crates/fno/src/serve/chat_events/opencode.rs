@@ -339,7 +339,7 @@ fn map_part(part_id: &str, message_id: &str, role: &str, part: Part) -> (Vec<Cha
                 let origin = if synthetic || injected_text(&text) {
                     UserOrigin::Meta
                 } else {
-                    UserOrigin::Typed
+                    super::typed_or_mail(&text)
                 };
                 vec![ChatBody::UserMessage {
                     id: message_id.to_string(),
@@ -796,7 +796,7 @@ fn map_v2_message(row: &V2Row) -> (Vec<ChatBody>, bool) {
             let origin = if injected_text(&data.text) {
                 UserOrigin::Meta
             } else {
-                UserOrigin::Typed
+                super::typed_or_mail(&data.text)
             };
             let mut parts = vec![ContentPart::Text { text: data.text }];
             if let Some(files) = data.files.as_ref().and_then(Value::as_array) {
@@ -1171,6 +1171,31 @@ mod tests {
     #![allow(clippy::indexing_slicing)]
     use super::*;
     use crate::chat_events::{ChatRoots, SessionReader};
+
+    #[test]
+    fn a_header_led_opencode_text_part_maps_as_mail() {
+        let header_text = "`@zenobia · fmail-1a2b3c4d5e6f`\nline one";
+        let part = Part::Text {
+            text: header_text.to_string(),
+            synthetic: false,
+            time: None,
+        };
+        let (bodies, final_) = map_part("prt_x", "msg_x", "user", part);
+        assert!(final_);
+        assert_eq!(
+            bodies,
+            vec![ChatBody::UserMessage {
+                id: "msg_x".to_string(),
+                origin: UserOrigin::Mail {
+                    sender: "zenobia".into(),
+                    id: "fmail-1a2b3c4d5e6f".into()
+                },
+                parts: vec![ContentPart::Text {
+                    text: header_text.to_string()
+                }],
+            }]
+        );
+    }
 
     fn fixture(path: &Path) -> Connection {
         let conn = Connection::open(path).unwrap();

@@ -252,7 +252,7 @@ impl ClaudeMapper {
                 origin: if row.is_meta || injected {
                     UserOrigin::Meta
                 } else {
-                    UserOrigin::Typed
+                    super::typed_or_mail(super::first_text(&parts))
                 },
                 parts,
             },
@@ -447,6 +447,44 @@ mod tests {
     #![allow(clippy::indexing_slicing)]
     use super::*;
     use crate::chat_events::SessionReader;
+
+    #[test]
+    fn a_header_led_user_row_maps_as_mail_and_plain_rows_stay_typed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sid-mail.jsonl");
+        let rows = [
+            r#"{"type":"user","uuid":"m1","message":{"role":"user","content":[{"type":"text","text":"`@zenobia · fmail-1a2b3c4d5e6f`\nline one\nline two"}]}}"#,
+            r#"{"type":"user","uuid":"t1","message":{"role":"user","content":"plain words"}}"#,
+            r#"{"type":"user","uuid":"m2","message":{"role":"user","content":[{"type":"text","text":"`@zenobia · msg-9 · held ping`"}]}}"#,
+            r#"{"type":"user","uuid":"t2","message":{"role":"user","content":[{"type":"text","text":"intro\n`@zenobia · fmail-1a2b3c4d5e6f` never opens the turn"}]}}"#,
+        ];
+        std::fs::write(&path, rows.join("\n") + "\n").unwrap();
+        let events = SessionReader::lines(path.clone(), Box::new(ClaudeMapper::new(&path)), 0)
+            .poll()
+            .unwrap();
+        let origins: Vec<UserOrigin> = events
+            .iter()
+            .filter_map(|e| match &e.body {
+                ChatBody::UserMessage { origin, .. } => Some(origin.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            origins,
+            vec![
+                UserOrigin::Mail {
+                    sender: "zenobia".into(),
+                    id: "fmail-1a2b3c4d5e6f".into()
+                },
+                UserOrigin::Typed,
+                UserOrigin::Mail {
+                    sender: "zenobia".into(),
+                    id: "msg-9".into()
+                },
+                UserOrigin::Typed,
+            ]
+        );
+    }
 
     #[test]
     fn chat_events_claude_fixture_maps_every_kind_in_file_order() {

@@ -12,7 +12,7 @@ pub mod codex;
 pub mod opencode;
 
 use crate::harness::{AsHarness, Harness};
-use crate::proto::chat_event::{ChatBody, ChatEvent, SessionKey, SourceRef};
+use crate::proto::chat_event::{ChatBody, ChatEvent, SessionKey, SourceRef, UserOrigin};
 use crate::proto::{read_msg_sync, write_msg_sync, ClientMsg, ProtoError, ServerMsg};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -243,6 +243,31 @@ pub(crate) fn iso_ms(text: Option<&str>) -> Option<i64> {
 pub(crate) fn injected_text(text: &str) -> bool {
     let text = text.trim_start();
     text.starts_with('<') || text.starts_with("# AGENTS.md instructions")
+}
+
+/// The origin for a non-meta user text turn: a header-led turn is delivered
+/// mail from the named sender, anything else a person typed. The stream
+/// knows mail turns here, once, so no client re-derives the header test.
+pub(crate) fn typed_or_mail(text: &str) -> UserOrigin {
+    let first = text.lines().next().unwrap_or("");
+    match fno_mail::delivered::header_of(first) {
+        Some(fields) => UserOrigin::Mail {
+            sender: fields.sender,
+            id: fields.id,
+        },
+        None => UserOrigin::Typed,
+    }
+}
+
+/// The first text part's text, for origin classification on a parts list.
+pub(crate) fn first_text(parts: &[ContentPart]) -> &str {
+    parts
+        .iter()
+        .find_map(|p| match p {
+            ContentPart::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .unwrap_or("")
 }
 
 pub const IDLE_POLL: std::time::Duration = std::time::Duration::from_millis(250);

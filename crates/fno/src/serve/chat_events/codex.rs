@@ -197,7 +197,7 @@ impl CodexMapper {
                             origin: if injected {
                                 UserOrigin::Meta
                             } else {
-                                UserOrigin::Typed
+                                super::typed_or_mail(super::first_text(&parts))
                             },
                             parts,
                         }]
@@ -353,6 +353,38 @@ mod tests {
     #![allow(clippy::indexing_slicing)]
     use super::*;
     use crate::chat_events::SessionReader;
+
+    #[test]
+    fn a_header_led_codex_user_message_maps_as_mail() {
+        let rows = [
+            r#"{"timestamp":"2026-11-10T16:01:23.963Z","type":"session_meta","payload":{"id":"s"}}"#,
+            r##"{"timestamp":"2026-11-10T16:01:25Z","type":"response_item","payload":{"type":"message","id":"m1","role":"user","content":[{"type":"input_text","text":"`@zenobia · fmail-1a2b3c4d5e6f`\nline one"}]}}"##,
+            r##"{"timestamp":"2026-11-10T16:01:25Z","type":"response_item","payload":{"type":"message","id":"m2","role":"user","content":[{"type":"input_text","text":"plain words"}]}}"##,
+        ];
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        std::fs::write(&path, rows.join("\n") + "\n").unwrap();
+        let events = SessionReader::lines(path.clone(), Box::new(CodexMapper::new(&path)), 0)
+            .poll()
+            .unwrap();
+        let origins: Vec<UserOrigin> = events
+            .iter()
+            .filter_map(|e| match &e.body {
+                ChatBody::UserMessage { origin, .. } => Some(origin.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            origins,
+            vec![
+                UserOrigin::Mail {
+                    sender: "zenobia".into(),
+                    id: "fmail-1a2b3c4d5e6f".into()
+                },
+                UserOrigin::Typed,
+            ]
+        );
+    }
 
     #[test]
     fn chat_events_codex_fixture_reads_each_item_once() {

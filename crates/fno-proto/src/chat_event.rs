@@ -51,7 +51,7 @@ pub struct ChatEvent {
     pub body: ChatBody,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
@@ -60,6 +60,15 @@ pub enum UserOrigin {
     Typed,
     /// Harness-injected text: meta rows, hook output, AGENTS.md context.
     Meta,
+    /// A delivered mail turn: the stream classified the backtick header
+    /// line, so every client paints the sender without re-deriving it.
+    Mail {
+        /// The sender without its `@`.
+        sender: String,
+        /// The message id the card's Reply answers (`fmail-…`, legacy
+        /// `msg-…` kept).
+        id: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
