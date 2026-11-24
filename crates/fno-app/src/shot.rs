@@ -35,18 +35,8 @@ pub fn run(opts: ShotOptions) -> i32 {
     // reads the cwd's project slug, and the pin dir would slug one dir
     // off the world's seed.
     let pinned = opts.chat.as_deref().and_then(crate::chat::resolve_key);
-    let Some(session) = shot_session(&opts) else {
-        eprintln!(
-            "fno-app --shot: needs --session <name> of a throwaway world; the default session is the user's live mux"
-        );
+    let (Some(session), Some(_pin)) = (shot_session(&opts), theme_pin(&opts.theme)) else {
         return 2;
-    };
-    let _pin = match theme_pin(&opts.theme) {
-        Ok(pin) => pin,
-        Err(e) => {
-            eprintln!("fno-app --shot: {e}");
-            return 2;
-        }
     };
     let mode = opts.mode.unwrap_or(MainView::Orchestration);
     let find = opts.find;
@@ -262,13 +252,17 @@ fn write_pin(dir: &std::path::Path, theme: &str) -> std::io::Result<()> {
 
 /// Write the pin in a temp dir the process then chdirs into. A pin beats
 /// the system appearance, so the shot paints the asked twin on any host.
-/// The guard removes the dir when the run ends.
-fn theme_pin(theme: &str) -> std::io::Result<PinGuard> {
+/// The guard removes the dir when the run ends. A failure prints and
+/// reads `None`.
+fn theme_pin(theme: &str) -> Option<PinGuard> {
     let dir = pin_dir();
     let guard = PinGuard(dir.clone());
-    write_pin(&dir, theme)?;
-    std::env::set_current_dir(&dir)?;
-    Ok(guard)
+    let set = write_pin(&dir, theme).and_then(|()| std::env::set_current_dir(&dir));
+    if let Err(e) = set {
+        eprintln!("fno-app --shot: {e}");
+        return None;
+    }
+    Some(guard)
 }
 
 /// The session the frame attaches to, or `None` when the caller named
@@ -277,10 +271,14 @@ fn theme_pin(theme: &str) -> std::io::Result<PinGuard> {
 /// named throwaway world: falling back to `default` attached the shot to
 /// the user's live mux and left a space there.
 fn shot_session(opts: &ShotOptions) -> Option<String> {
-    opts.session.clone().or_else(|| {
+    let session = opts.session.clone().or_else(|| {
         (opts.first_run == Some(crate::FirstRunShot::NoServer))
             .then(|| format!("shot-no-server-{}", std::process::id()))
-    })
+    });
+    if session.is_none() {
+        eprintln!("fno-app --shot: needs --session <name> of a throwaway world; the default session is the user's live mux");
+    }
+    session
 }
 
 /// The pre-warm: connect the link and drain events until the world's
