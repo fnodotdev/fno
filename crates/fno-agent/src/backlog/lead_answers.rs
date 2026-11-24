@@ -1037,9 +1037,9 @@ mod tests {
         };
         assert!(row_line(1), "{lines:?}");
         assert!(row_line(2), "{lines:?}");
+        a_due_question_lists_once_per_window_and_other_scopes_keep_their_record();
     }
 
-    #[test]
     fn a_due_question_lists_once_per_window_and_other_scopes_keep_their_record() {
         let row = |window: u64| json!({"question_id": "q-1", "window": window});
         let other = std::collections::HashMap::from([("other|q-9".to_string(), 3)]);
