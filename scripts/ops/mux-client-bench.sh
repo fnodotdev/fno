@@ -104,7 +104,6 @@ done
 
 needs_app=false
 case ",$METRICS," in *,launch,*|*,idle,*) needs_app=true;; esac
-$needs_app && [ -x "$APP_BIN" ] || true
 if $needs_app && [ ! -x "$APP_BIN" ]; then
   die "fno-app binary not runnable: $APP_BIN (launch/idle need it)"
 fi
@@ -289,12 +288,13 @@ EOF
     esac
   done
   # fno-app: cold offscreen shot; the wall time is start to first painted
-  # frame plus one png encode (labeled in the report).
+  # frame plus one png encode (labeled in the report). The shot is an
+  # app-surface call: it runs under the temp HOME like open and close.
   local t0 t1 png
   png="$ROOT/app-launch.png"
   for i in $(seq 1 "$RUNS"); do
     t0="$(now_ms)"
-    if "$APP_BIN" --session "$SESSION" --shot --shot-out "$png" >/dev/null 2>&1; then
+    if app_env "$APP_BIN" --session "$SESSION" --shot --shot-out "$png" >/dev/null 2>&1; then
       t1="$(now_ms)"
       record launch app "$i" "$((t1 - t0))"
     else
@@ -444,12 +444,31 @@ expect {
   eof { puts "RESULT FAIL eof_first_paint"; exit 0 }
 }
 sleep 0.3
+# Freshness: capture the newest epoch line visible before the flip (the
+# busy pane streams in the background; equal-length epoch strings compare
+# correctly as strings). The post-flip match must be strictly newer, so a
+# buffered pre-flip line can never read as an instant switch.
+set pre ""
+set timeout 2
+expect {
+  -re {[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]} { set pre $expect_out(0,string) }
+  timeout {}
+}
+set timeout $env(BENCH_TIMEOUT)
 set t0 [clock milliseconds]
 exec $env(BENCH_FNO) mux view $env(BENCH_BUSY_ID) --server $env(BENCH_SESSION)
+set got ""
 expect {
-  -re {[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]} {}
+  -re {[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]} { set got $expect_out(0,string) }
   timeout { puts "RESULT FAIL timeout_busy_never_painted"; exit 0 }
   eof { puts "RESULT FAIL eof_after_flip"; exit 0 }
+}
+while {$pre != "" && $got <= $pre} {
+  expect {
+    -re {[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]} { set got $expect_out(0,string) }
+    timeout { puts "RESULT FAIL timeout_no_fresher_epoch"; exit 0 }
+    eof { puts "RESULT FAIL eof_no_fresher_epoch"; exit 0 }
+  }
 }
 set t1 [clock milliseconds]
 catch {exec kill -9 [exp_pid]}
@@ -554,8 +573,11 @@ write_report() {
     echo ""
     echo "- date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "- host: $(uname -srm) | macos $(sw_vers -productVersion 2>/dev/null || echo '?')"
-    echo "- fno: $("$FNO_BIN" --version 2>/dev/null | head -1) ($FNO_BIN)"
-    echo "- fno-app: $("$APP_BIN" --version 2>/dev/null | head -1) ($APP_BIN)"
+    local fno_ver app_ver
+    fno_ver="$("$FNO_BIN" --version 2>/dev/null | head -1)"
+    app_ver="$("$APP_BIN" --version 2>/dev/null | head -1)"
+    echo "- fno: ${fno_ver:-unavailable} ($FNO_BIN)"
+    echo "- fno-app: ${app_ver:-unavailable} ($APP_BIN)"
     echo "- world: $AGENTS idle panes + one 10000-line pane + one busy pane; panes $PANE_SIZE; server $SESSION"
     echo "- runs: $RUNS per timed cell; idle sampled 1s cadence for ${IDLE_SECS}s"
     echo "- methods: launch/tui = first pty output byte; launch/app = cold --shot wall incl. one png encode; scroll = keystroke to a 2s quiet window minus fixed budgets; switch = mux view flip to the busy pane's first streamed epoch line; keypaint = marker keystroke to its painted echo; idle = ps argv-keyed sampling (TUI and server share the name fno)"
