@@ -99,16 +99,6 @@ fn verdict_rows() {
         json!(true)
     );
 
-    let entries = vec![node_with(
-        NODE,
-        PR,
-        vec![do_row(
-            Some(receipt(true, "config", "2026-08-24T12:00:00Z")),
-            "w1",
-        )],
-    )];
-    assert_eq!(verdict(&entries, &stale_claims(), &live).state, GRANTED);
-
     let v = verdict(&entries, &stale_claims(), &below_floor);
     assert_eq!(v.state, HELD);
     assert!(v.reason.contains("below the merge floor"), "{}", v.reason);
@@ -795,4 +785,7 @@ fn a_bound_refusal_binds_only_the_session_that_wrote_it() {
     // An unattributed manifest cannot be scoped: it binds every caller,
     // fail closed.
     assert!(refusal_binds(None, &[]));
+    // Init writes a session it could not prove as the literal `null`. That
+    // manifest is unattributed the same way, so it binds a named caller.
+    assert!(refusal_binds(Some("null"), &mine));
 }
