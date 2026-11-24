@@ -667,7 +667,7 @@ mod tests {
     }
 
     #[test]
-    fn rule_lens_counts_fires_and_reads_labels_as_a_false_rate() {
+    fn rule_lens_counts_fires_reads_judge_rows_and_scores_pending_ones() {
         let rows = vec![
             span(1, "chat_ask_unfiled", "s-1", "aaaa0001", Some("Which one?")),
             span(2, "chat_ask_unfiled", "s-2", "aaaa0001", None),
@@ -696,6 +696,8 @@ mod tests {
         assert_eq!(chat.sample[1].evidence.as_deref(), Some("Which one?"));
         assert_eq!(fold(&rows, &labels, 30 * DAY_MS, None)[0].sample.len(), 3);
         assert!(parse_labels("{\"span_id\":\"s-1\",\"verdict\":\"maybe\"}").is_err());
+        judge_leg();
+        scorer_leg();
     }
 
     /// The judge rows of a window, as the file holds them.
@@ -705,11 +707,11 @@ mod tests {
             .collect()
     }
 
-    /// The judge section reads coverage per machine and day, verdict counts
-    /// per judge with the labeled share a labels file calls wrong, and the
-    /// ask pair beside the keyword lint. With no row it names the window.
-    #[test]
-    fn judge_rows_fold_into_coverage_verdicts_and_the_ask_pair() {
+    /// The judge leg of the owner test: the section reads coverage per
+    /// machine and day, verdict counts per judge with the labeled share a
+    /// labels file calls wrong, and the ask pair beside the keyword lint.
+    /// With no row it names the window.
+    fn judge_leg() {
         assert_eq!(
             judge_lines(&fold_judge(&[], &[], &HashMap::new()), 7, None),
             vec!["judge rows: no judge rows in 7 days"]
@@ -787,11 +789,11 @@ mod tests {
             .contains("untagged laws: 0"));
     }
 
-    /// The scorer asks fnod once per request, in one pass, and every verdict
-    /// row names its request. A scored request is left alone on the next run,
-    /// and a request fnod failed whole stays pending.
-    #[test]
-    fn the_scorer_asks_fnod_once_per_request_and_names_it() {
+    /// The scorer leg of the owner test: it asks fnod once per request, in
+    /// one pass, and every verdict row names its request. A scored request
+    /// is left alone on the next run, and a request fnod failed whole stays
+    /// pending.
+    fn scorer_leg() {
         let dir = tempfile::TempDir::new().unwrap();
         std::fs::create_dir_all(dir.path().join(".fno")).unwrap();
         let config = |url: &str| {
