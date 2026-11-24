@@ -233,12 +233,8 @@ fn pin_dir() -> std::path::PathBuf {
     std::env::temp_dir().join(format!("fno-shot-pin-{}", std::process::id()))
 }
 
-/// Leave the pin dir, then delete it. The process may be chdir'd inside
-/// it, so the cwd moves out first.
+/// Delete the pin dir. Unix removes a directory the process still sits in.
 fn remove_pin_dir(dir: &std::path::Path) {
-    if std::env::current_dir().is_ok_and(|cwd| cwd.starts_with(dir)) {
-        std::env::set_current_dir(std::env::temp_dir()).ok();
-    }
     std::fs::remove_dir_all(dir).ok();
 }
 
