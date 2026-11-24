@@ -33,7 +33,7 @@ use fno::ui::theme::THEME_NAMES;
 /// The five sections, in panel order.
 pub(super) const SECTIONS: [&str; 5] = ["Look", "Alerts", "Machines", "Keys", "Updates"];
 /// The Add field's placeholder when its text is empty: the door's forms.
-const ADD_PLACEHOLDER: &str = "e.g. host, 192.168.1.20 or user@host";
+const ADD_PLACEHOLDER: &str = "user@host:port";
 
 /// One selectable value on a choice page.
 #[derive(Debug, Clone, PartialEq)]
@@ -385,8 +385,16 @@ fn machine_rows(
             .unwrap_or(HostState::Checking);
         let (word, detail) = state_word(band, &state);
         let value = match word.as_str() {
-            // A failed host says why, in the row, one line.
-            "couldn't connect" => format!("{word}: {detail}"),
+            // A failed host says why, in the row, one line. The row's own
+            // label is the host, so the probe's "could not reach <host>:"
+            // lead-in drops and the reason stands alone.
+            "couldn't connect" => {
+                let lead = format!("could not reach {host}: ");
+                format!(
+                    "can't reach: {}",
+                    detail.strip_prefix(&lead).unwrap_or(&detail)
+                )
+            }
             _ => word,
         };
         rows.push(Row {
@@ -755,6 +763,11 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
     } else {
         "Type to filter · Enter to select · Esc to clear"
     };
+    // The rows scroll under the panel's height: a line cut at the foot
+    // says so until the list reaches its end.
+    let more = state.page.is_none()
+        && state.scroll.max_offset().height > px(0.0)
+        && -state.scroll.offset().y + px(1.0) < state.scroll.max_offset().height;
     let panel = div()
         .id("settings-panel")
         .flex()
@@ -771,7 +784,14 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
         .text_size(px(ui::BODY))
         .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(body(root, cx))
-        .child(ui::role(div(), Role::Hint, &p).pt(px(10.0)).child(footer));
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .pt(px(10.0))
+                .child(ui::role(div(), Role::Hint, &p).flex_1().child(footer))
+                .children(more.then(|| ui::role(div(), Role::Hint, &p).child("↓ more"))),
+        );
 
     div()
         .absolute()
@@ -823,33 +843,59 @@ fn body(root: &Root, cx: &mut Context<Root>) -> Div {
     panel
 }
 
-/// The Add field renders as the input in place of its row while it is
-/// open, its refusal inline beneath.
+/// The Add field renders in place of its row while it is open: a raised,
+/// bordered input in the host-name column (the find bar's field look) with
+/// a caret, the refusal inline beneath it, and the keys that finish it.
 fn add_field_elements(state: &SettingsState, p: &Palette) -> Vec<AnyElement> {
     let text = state
         .add_host
         .as_ref()
         .map(|f| f.text().to_string())
         .unwrap_or_default();
-    let shown = if text.is_empty() {
-        ADD_PLACEHOLDER.to_string()
+    let typed = if text.is_empty() {
+        div()
+            .flex()
+            .flex_row()
+            .child(div().text_color(rgb(p.fg)).child("▏"))
+            .child(div().text_color(rgb(p.faint)).child(ADD_PLACEHOLDER))
     } else {
-        text
+        div().text_color(rgb(p.fg)).child(format!("{text}▏"))
     };
-    let mut out = vec![div()
-        .flex_none()
+    let field = div()
+        .flex_1()
         .min_w_0()
-        .child(ui::role(div(), Role::Body, p).child(shown))
-        .into_any_element()];
+        .px_2()
+        .rounded(px(4.0))
+        .border_1()
+        // The hairline token vanishes on the light panel; the muted text
+        // color keeps the field's edge visible in both themes.
+        .border_color(rgb(p.muted))
+        .bg(rgb(p.raised))
+        .child(typed);
+    // Each line sits in the same row frame as the rows above it, so the
+    // field and its notes start in the host-name column.
+    let line = |id: &'static str, child: AnyElement| -> AnyElement {
+        ui::row(ElementId::Name(id.into()), false, p)
+            .child(ui::text(" ", Role::Meta, p))
+            .child(child)
+            .into_any_element()
+    };
+    let mut out = vec![line("add-host-field", field.into_any_element())];
     if let Some(refusal) = state.add_refusal.as_ref() {
-        out.push(
+        out.push(line(
+            "add-host-refusal",
             ui::role(div(), Role::Hint, p)
                 .text_color(rgb(p.error))
-                .px_3()
                 .child(refusal.clone())
                 .into_any_element(),
-        );
+        ));
     }
+    out.push(line(
+        "add-host-keys",
+        ui::role(div(), Role::Hint, p)
+            .child("Enter to add · Esc to cancel")
+            .into_any_element(),
+    ));
     out
 }
 
@@ -1137,7 +1183,7 @@ mod tests {
             [
                 "0 seats live",
                 "0 seats beat 1m ago",
-                "couldn't connect: could not reach nohost: no route",
+                "can't reach: no route",
                 ""
             ]
         );
@@ -1467,17 +1513,12 @@ pub(crate) fn apply_shot(state: &mut SettingsState, shot: crate::SettingsShot) {
                     ..Key::default()
                 },
             );
-            if let Some(field) = state.add_host.as_mut() {
-                field.edit("a", Some(SHOT_ADD_TYPED));
-            }
         }
     }
 }
 
 /// The Machines section's index in SECTIONS.
 const MACHINES_SECTION: usize = 2;
-/// The host the Add shot types through the real field.
-const SHOT_ADD_TYPED: &str = "user@linux2:2200";
 /// The host the refusal shot submits: it names the listed `linux1` in other
 /// casing, so the refusal is the door's resolved-machine dedup.
 pub(crate) const SHOT_ADD_DUPLICATE: &str = "user@LINUX1";

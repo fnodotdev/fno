@@ -151,7 +151,7 @@ pub enum SettingsShot {
     Page,
     /// The panel on its Machines section, each configured host answered.
     Machines,
-    /// The Machines Add field open with a new host typed through the field.
+    /// The Machines Add field open and empty: its placeholder and keys.
     Add,
     /// The Add field submitted with a host already listed: the inline refusal.
     AddRefused,

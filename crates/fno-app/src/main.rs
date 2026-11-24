@@ -59,7 +59,7 @@ struct Args {
     /// Settings-panel state --shot paints: `panel` opens the panel,
     /// `filter` types `alert` through the real field, `page` opens the
     /// Theme choice page through real Enter, `machines` rests on the
-    /// Machines section, `add` opens its Add field with a host typed, and
+    /// Machines section, `add` opens its empty Add field, and
     /// `add-refused` submits a host the section already lists.
     #[arg(long = "shot-settings", value_enum)]
     shot_settings: Option<ShotSettings>,
@@ -179,7 +179,7 @@ enum ShotSettings {
     Page,
     /// The Machines section, each configured host answered.
     Machines,
-    /// The Machines Add field open with a host typed.
+    /// The Machines Add field open and empty: its placeholder and keys.
     Add,
     /// The Add field refusing a host already listed.
     AddRefused,
