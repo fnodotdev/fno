@@ -212,6 +212,7 @@ required "a refused set writes nothing" test "$before" = "$(cat "$FNO_CONFIG")"
 got="$("$BIN/fno" config get sandbox.provider 2> "$WORK/get.err")"
 required "config get reads the provider" test "$got" = "$ENGINE"
 required "config get warns nothing" test ! -s "$WORK/get.err"
+if [ -s "$WORK/get.err" ]; then sed 's/^/  config get stderr: /' "$WORK/get.err"; fi
 
 repo="$WORK/repo"
 git init -q -b main "$repo"

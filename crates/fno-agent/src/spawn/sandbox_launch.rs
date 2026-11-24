@@ -204,22 +204,31 @@ static ACTIVE: OnceLock<(SandboxPlan, PathBuf)> = OnceLock::new();
 /// a different answer refuses rather than launch under the wrong one.
 pub fn arm(home: &crate::paths::AgentsHome, cwd: &Path) -> Result<(), (i32, String)> {
     let sock = crate::client::client_sock(home);
-    let plan: SandboxPlan = crate::protocol::blocking_call(
+    let reply = crate::protocol::blocking_response(
         &sock,
         &format!("agent.{SANDBOX_PLAN_COMMAND}"),
         serde_json::json!({ "worktree": cwd.to_string_lossy() }),
         std::time::Duration::from_secs(5),
     )
-    .and_then(|v| serde_json::from_value(v).ok())
-    .ok_or_else(|| {
+    .map_err(|e| {
         (
             13,
             format!(
-                "the daemon at {} answered no sandbox plan; start it with `fno-agent status`",
+                "no daemon answered at {} ({e}); start it with `fno-agent status`",
                 sock.display()
             ),
         )
     })?;
+    let plan: SandboxPlan = match reply.payload {
+        crate::protocol::ResponsePayload::Ok(v) => serde_json::from_value(v)
+            .map_err(|e| (13, format!("the daemon's sandbox plan does not parse: {e}")))?,
+        crate::protocol::ResponsePayload::Err(e) => {
+            return Err((
+                2,
+                format!("the daemon refused the sandbox plan: {}", e.message),
+            ))
+        }
+    };
     let local = policy(cwd).map_err(|e| (2, e.0))?;
     if plan.provider != local.provider.as_str() {
         return Err((
