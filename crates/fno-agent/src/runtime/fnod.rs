@@ -4,11 +4,11 @@
 //! rule's answer, so a missing server, a timeout or a malformed reply costs
 //! the answer and nothing else.
 //!
-//! [`ask`] is the one client. Its [`Decision`] says who acts next: nobody
-//! (fnod is sure), the model (fnod failed, is unsure, or was asked a
-//! question it was never trained on), or the user (only for an act the
-//! caller marked irreversible, and only once fnod is sure). Unsure never
-//! goes straight to the user.
+//! [`ask`] is the client, and [`ask_many`] is the same pass with several
+//! questions. A [`Decision`] says who acts next: nobody (fnod is sure), the
+//! model (fnod failed, is unsure, or was asked a question it was never
+//! trained on), or the user (only for an act the caller marked irreversible,
+//! and only once fnod is sure). Unsure never goes straight to the user.
 
 use serde_json::{json, Map, Value};
 use std::path::Path;
@@ -19,6 +19,12 @@ const DEFAULT_URL: &str = "http://127.0.0.1:8008";
 const DEFAULT_TIMEOUT_MS: u64 = 500;
 /// Asks sit at the end of a message, so a long one keeps its tail.
 const MAX_MESSAGE_CHARS: usize = 16_000;
+/// How long the batch scorer waits for one pass. Scoring runs off the Stop
+/// path, where a slow model costs coverage and never a Stop's latency.
+pub(crate) const SCORE_TIMEOUT_MS: u64 = 10_000;
+/// The connect that tells a listening fnod from a closed port. A closed
+/// loopback port refuses at once; the bound only matters for a hung one.
+const LISTEN_MS: u64 = 50;
 
 /// One question for fnod: the wire form kev reads (`type`, `instructions`,
 /// and `criteria` for a choice), where it was trained, and the caller's bar.
@@ -112,6 +118,22 @@ pub(crate) struct Decision {
 /// Ask fnod one question about `state`. Never fails: an off, refused,
 /// slow or malformed server answers `escalate: Model` with the reason.
 pub(crate) fn ask(url: &str, timeout: Duration, state: Value, q: &Question) -> Decision {
+    let mut answers = ask_many(url, timeout, state, std::slice::from_ref(q));
+    answers
+        .pop()
+        .expect("ask_many answers one decision per question")
+}
+
+/// Ask fnod several questions about one `state` in a single pass, and
+/// answer one [`Decision`] per question, in order. Each fails on its own: an
+/// off, refused, slow or malformed server fails every one, and a reply that
+/// skips a question fails only that one. All share the pass's `ms`.
+pub(crate) fn ask_many(
+    url: &str,
+    timeout: Duration,
+    state: Value,
+    questions: &[Question],
+) -> Vec<Decision> {
     let start = Instant::now();
     let reply = if url.trim().is_empty() {
         Err("off".to_string())
@@ -120,21 +142,33 @@ pub(crate) fn ask(url: &str, timeout: Duration, state: Value, q: &Question) -> D
         // the machine.
         Err(format!("fnod.url {url} is not loopback; refused"))
     } else {
-        let mut questions = Map::new();
-        questions.insert(q.id.clone(), q.wire.clone());
-        let body = json!({"state": state, "questions": questions});
+        let asked: Map<String, Value> = questions
+            .iter()
+            .map(|q| (q.id.clone(), q.wire.clone()))
+            .collect();
+        let body = json!({"state": state, "questions": asked});
         crate::opencode_serve::http_json(url, "POST", "/v1/systemone", Some(&body), None, timeout)
             .and_then(|(status, text)| match status {
                 200 => serde_json::from_str::<Value>(&text).map_err(|e| format!("reply: {e}")),
                 _ => Err(format!("HTTP {status}")),
             })
-            .and_then(|reply| {
-                read_answer(&reply, &q.id)
-                    .ok_or_else(|| format!("reply carries no usable answers.{}", q.id))
-            })
     };
     let ms = start.elapsed().as_millis() as u64;
-    match reply {
+    questions
+        .iter()
+        .map(|q| {
+            let answer = reply.as_ref().map_err(|why| why.clone()).and_then(|reply| {
+                read_answer(reply, &q.id)
+                    .ok_or_else(|| format!("reply carries no usable answers.{}", q.id))
+            });
+            decide(q, answer, ms)
+        })
+        .collect()
+}
+
+/// One question's decision: its answer, or the reason it has none.
+fn decide(q: &Question, answer: Result<(String, f64, Option<f64>), String>, ms: u64) -> Decision {
+    match answer {
         Ok((label, confidence, noul)) => {
             let escalate = if !q.trained || confidence < q.escalate_below {
                 Escalate::Model
@@ -242,6 +276,45 @@ pub(crate) fn loopback(url: &str) -> bool {
         let addrs: Vec<_> = addrs.collect();
         !addrs.is_empty() && addrs.iter().all(|a| a.ip().is_loopback())
     })
+}
+
+/// Whether the server at `url` accepts a connection now. One loopback
+/// connect with a short bound, so a Stop that finds fnod absent pays
+/// microseconds for knowing it.
+pub(crate) fn listening(url: &str) -> bool {
+    let authority = url
+        .strip_prefix("http://")
+        .unwrap_or_default()
+        .trim_end_matches('/');
+    std::net::ToSocketAddrs::to_socket_addrs(authority).is_ok_and(|addrs| {
+        addrs.take(1).any(|a| {
+            std::net::TcpStream::connect_timeout(&a, Duration::from_millis(LISTEN_MS)).is_ok()
+        })
+    })
+}
+
+/// The `rule_obeyed` question about one law, for the shadow judge. The
+/// law's label rides in the instruction and its text in the state, so the
+/// frame of the question stays fixed for training. No student has trained
+/// on it, so it always escalates to the model. Flip `trained` here when one
+/// does.
+pub(crate) fn rule_question(law: &str, label: &str) -> Question {
+    let mut wire = crate::intel_corpus::question("rule_obeyed");
+    if let Some(obj) = wire.as_object_mut() {
+        obj.insert(
+            "instructions".to_string(),
+            json!(format!(
+                "Did the reply obey the decision {label} in state.rules?"
+            )),
+        );
+    }
+    Question {
+        id: law.to_string(),
+        wire,
+        trained: false,
+        escalate_below: 0.0,
+        irreversible: false,
+    }
 }
 
 fn tail(text: &str, max: usize) -> &str {
@@ -434,5 +507,74 @@ pub(crate) mod tests {
 
         // A long message keeps its tail, cut on a char boundary.
         assert_eq!(tail(&format!("{}é?", "x".repeat(20)), 3), "xé?");
+    }
+
+    /// One pass, several questions: each id gets its own decision, an
+    /// untrained question escalates however sure it reads, a reply that
+    /// skips an id fails only that id, and a slow server fails every one
+    /// inside the bound.
+    #[test]
+    fn one_pass_answers_each_question_and_fails_each_on_its_own() {
+        let wait = Duration::from_secs(2);
+        let reply = r#"{"answers":{"is_ask":{"type":"noul","noul":0.8},"d-03c304bb":{"type":"choice","choice":"obeys","probabilities":{"obeys":0.9,"breaks":0.05,"not_applicable":0.05}}}}"#;
+        let (url, server) = serve_once(reply, Duration::ZERO);
+        let ds = ask_many(
+            &url,
+            wait,
+            json!({"message": "Read the PR status, then merged."}),
+            &[
+                Question::shipped("is_ask"),
+                rule_question("d-03c304bb", "D3241"),
+            ],
+        );
+        let sent: Value = serde_json::from_str(&server.join().unwrap()).unwrap();
+        assert_eq!(sent["state"]["message"], "Read the PR status, then merged.");
+        assert_eq!(
+            sent.pointer("/questions/d-03c304bb/instructions"),
+            Some(&json!(
+                "Did the reply obey the decision D3241 in state.rules?"
+            ))
+        );
+        assert_eq!(ds.len(), 2);
+        assert_eq!(
+            (ds[0].label.as_deref(), ds[0].noul),
+            (Some("yes"), Some(0.8))
+        );
+        assert_eq!(ds[0].escalate, Escalate::None);
+        assert_eq!(ds[1].label.as_deref(), Some("obeys"));
+        assert_eq!(
+            ds[1].escalate,
+            Escalate::Model,
+            "an untrained question never acts alone"
+        );
+
+        let (url, server) = serve_once(r#"{"answers":{"is_ask":{"noul":0.2}}}"#, Duration::ZERO);
+        let ds = ask_many(
+            &url,
+            wait,
+            json!({}),
+            &[Question::shipped("is_ask"), rule_question("d-1", "D1")],
+        );
+        server.join().unwrap();
+        assert_eq!(ds[0].label.as_deref(), Some("no"));
+        assert!(ds[1].label.is_none());
+        assert_eq!(
+            ds[1].error.as_deref(),
+            Some("reply carries no usable answers.d-1")
+        );
+
+        let (url, server) = serve_once("{}", Duration::from_millis(600));
+        let started = Instant::now();
+        let ds = ask_many(
+            &url,
+            Duration::from_millis(100),
+            json!({}),
+            &[Question::shipped("is_ask"), rule_question("d-1", "D1")],
+        );
+        assert!(started.elapsed() < Duration::from_millis(500));
+        assert!(ds
+            .iter()
+            .all(|d| d.error.is_some() && d.escalate == Escalate::Model));
+        server.join().ok();
     }
 }
