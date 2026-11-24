@@ -3970,7 +3970,7 @@ impl EntityInputHandler for Root {
         &mut self,
         range: Option<Range<usize>>,
         text: &str,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         // The palette's query owns the keyboard while it shows.
@@ -3999,6 +3999,13 @@ impl EntityInputHandler for Root {
         }
         self.set_preedit(None, cx);
         if self.main != MainView::Terminal || text.is_empty() {
+            return;
+        }
+        // A prefix chord mid-flight owns the next text key: `c`, `%`, `d` and
+        // the tab digits arrive here, not through on_key, so they must reach
+        // the scanner or the prefix claims nothing.
+        if keys::chord_in_flight(&self.scanner) {
+            self.mux_key(text.as_bytes().to_vec(), window, cx);
             return;
         }
         if self.notice.take().is_some() {
