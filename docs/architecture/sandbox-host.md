@@ -12,7 +12,7 @@ image = "my/image:1"  # global config only; unset builds the embedded recipe
 
 `none` launches every worker on the host, as before. Any other value sandboxes each `--as headless` spawn of claude, codex, gemini, opencode or agy. `docker` covers OrbStack and Docker Desktop on a Mac and Docker on Linux. `devcontainer` reads `.devcontainer/devcontainer.json` from the default branch as an image source and runs it on docker. `apple` refuses by name: apple/container has no passing journey yet. `fno config set sandbox.provider <value>` writes the key, and an unknown value refuses and names the legal ones.
 
-The layer rule keeps a repository from turning the sandbox off. Any layer can raise `none` to a sandbox. A project layer cannot lower or switch a provider that global config sets; the spawn prints a notice and keeps the global one. `image` is read from global config only. An unparsable layer or an unknown value refuses the spawn. A sandboxed spawn on a pane or thread substrate refuses with exit 2, because it would run on the host.
+The layer rule keeps a repository from turning the sandbox off. Any layer can raise `none` to a sandbox. A project layer cannot lower or switch a provider that global config sets. The spawn prints a notice and keeps the global one. `image` is read from global config only. An unparsable layer or an unknown value refuses the spawn. A sandboxed spawn on a pane or thread substrate refuses with exit 2, because that spawn runs on the host.
 
 ## The lifecycle
 
@@ -20,9 +20,9 @@ The lane hands its composed command to `fno-agent hook sandbox-run`. That wrappe
 
 1. Resolve the image. A devcontainer is exported from the default-branch commit to a clean folder, never read from the worktree.
 2. Start a container labelled `dev.fno.sandbox=<id>` as uid 1000, with `--network none`, `--cap-drop ALL`, `--security-opt no-new-privileges` and no bind.
-3. Start the guest (`fno-agent hook sandbox-guest`) with `engine exec -i`, and prove it with one status round trip before any harness starts.
+3. Start the guest (`fno-agent hook sandbox-guest`) with `engine exec -i`. One status round trip proves it before any harness starts.
 4. Bundle committed HEAD on the host and clone it at `/work`. The receipt names the dirty host paths the clone does not carry.
-5. Rewrite the harness argv. Worktree paths move to `/work`, route `--settings` content crosses stdin to a guest copy, host `--add-dir` grants drop, and any other host path refuses by name. Codex runs with its own sandbox off, because bwrap cannot start without user namespaces; the container is the boundary.
+5. Rewrite the harness argv. Worktree paths move to `/work`. Route `--settings` content crosses stdin to a guest copy. Host `--add-dir` grants drop. Any other host path refuses by name. Codex runs with its own sandbox off, because bwrap cannot start without user namespaces. The container is the boundary.
 6. Run the harness on a second `exec`, with its stdin, stdout, stderr and exit code passed through.
 7. Export a commit bundle, a dirty patch and an archive of untracked files.
 8. Fetch the bundle into `refs/sandbox/<id>/head` with hooks off and object checks on. No host branch moves. The receipt prints the inspect command.
@@ -32,7 +32,7 @@ At the next spawn the wrapper sweeps labelled containers whose wrapper pid is de
 
 To read a worker's work, run `git log -p refs/sandbox/<id>/head`. The dirty patch and the untracked archive sit in `<agents home>/sandbox-exports/<id>/`. The host never applies or extracts them.
 
-## What the sandbox may ask the host
+## What the sandbox can ask the host
 
 The guest listens at `FNO_SUPERVISOR_SOCKET` (`/tmp/fno/supervisor.sock` inside), so a client inside needs no change. It turns each request into one typed frame. Everything else is refused inside, by name, and never crosses the stream.
 
@@ -56,7 +56,7 @@ The guest tails the harness file (claude and codex) and flushes to EOF after the
 
 ## The recipe
 
-`fno-agent` embeds `crates/fno-agent/assets/sandbox/Dockerfile`. With no `image` set, the wrapper builds `fno-sandbox:<rev>` from it with the Linux binaries for the host rev and engine arch from bin-cache, checked by sha256. It copies in the staged plugin whose source head matches that rev. A dev or dirty rev has no bin-cache asset: build an image from the recipe with a local `bin/` directory and set `image` to it. CI does exactly that with binaries built from the PR head.
+`fno-agent` embeds `crates/fno-agent/assets/sandbox/Dockerfile`. With no `image` set, the wrapper builds `fno-sandbox:<rev>` from it. The Linux binaries for the host rev and engine arch come from bin-cache, checked by sha256. It copies in the staged plugin whose source head matches that rev. A dev or dirty rev has no bin-cache asset: build an image from the recipe with a local `bin/` directory and set `image` to it. CI does exactly that with binaries built from the PR head.
 
 ## Refused devcontainer keys
 
@@ -64,7 +64,7 @@ The guest tails the harness file (claude and codex) and flushes to EOF after the
 
 ## What it does not protect
 
-The threat model and its residuals live in [security posture](../security-posture.md). In short: a person who checks out a sandbox ref runs untrusted code, the sandbox can still send out its own key and source through a public host, and an engine or kernel escape is out of scope.
+The threat model and its residuals live in [security posture](../security-posture.md). In short, a sandbox ref is untrusted code. The sandbox can still send its own key and source out through a public host. Engine and kernel escapes are out of scope.
 
 ## Proof
 
