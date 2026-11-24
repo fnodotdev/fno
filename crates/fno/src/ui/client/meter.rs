@@ -343,31 +343,13 @@ fn window_part(window: &serde_json::Value, limit: Option<u64>) -> Option<String>
             "{label} {:.0}%",
             used as f64 / limit as f64 * 100.0
         )),
-        None => Some(format!("{label} {}", human_tokens(used))),
-    }
-}
-
-/// 40000 -> "40k tok"; 1_100_000 -> "1.1M tok".
-fn human_tokens(used: u64) -> String {
-    let unit_value = |value: f64, unit: &str| {
-        if value >= 10.0 {
-            format!("{value:.0}{unit} tok")
-        } else {
-            format!("{value:.1}{unit} tok")
-        }
-    };
-    if used >= 1_000_000 {
-        unit_value(used as f64 / 1_000_000.0, "M")
-    } else if used >= 1_000 {
-        unit_value(used as f64 / 1_000.0, "k")
-    } else {
-        format!("{used} tok")
+        None => Some(format!("{label} {}", super::row_meter::token_cell(used))),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{capacity_segment, human_tokens, parse_macmon_sample};
+    use super::{capacity_segment, parse_macmon_sample};
     use serde_json::json;
 
     #[test]
@@ -421,11 +403,7 @@ mod tests {
             full.contains("10 working · 5 leads · this machine cap 14 (ceiling 23), CPU-bound"),
             "{full}"
         );
-        assert!(line.contains("zai 5h 62%, wk 1.1M tok"), "{line}");
-        // The formatter's other shapes, pinned on the same rendered line's
-        // contract: k-form tokens and a raw sub-k count.
-        assert_eq!(human_tokens(40_000), "40k tok");
-        assert_eq!(human_tokens(900), "900 tok");
+        assert!(line.contains("zai 5h 62%, wk 1.1M tk"), "{line}");
         // A metered account shows its month spend instead of windows.
         assert!(line.contains("claude $12.50 this month"), "{line}");
         assert!(!line.contains("hidden"), "{line}");

@@ -757,6 +757,7 @@ fn registry_schema_fields() {
         spawned_by_harness: Some("value".into()),
         spawned_by_cwd: Some("value".into()),
         lineage_kind: Some("value".into()),
+        command_code: Some("value".into()),
         lineage_reason: Some("value".into()),
         adopted_by_session: Some("value".into()),
         resolved_sandbox: Some("value".into()),

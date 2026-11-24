@@ -383,7 +383,7 @@ mod tests {
 
     #[test]
     fn whole_columns_drop_from_the_right_and_never_reorder() {
-        // opus, ~$44.97, 41%, 12.3k tok, up 2h.
+        // opus, ~$44.97, 41%, 12.3k tk, up 2h.
         let widths = [4, 7, 3, 9, 5];
         // 4 + 2 + 7 + 2 + 3 = 18 fits; the tokens would need 11 more.
         assert_eq!(fit(&widths, 18, 2), 3);

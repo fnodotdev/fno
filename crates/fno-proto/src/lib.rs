@@ -437,7 +437,10 @@ fn default_true() -> bool {
 /// floor stays 58.
 /// v133: `AgentRow` adds the four token classes behind `session_tokens`
 /// (serde default); floor stays 58.
-pub const PROTO_VERSION: u32 = 133;
+/// v134: `AgentRow.command_code` (serde default), the row's dispatch
+/// command code the sideline renders as a mark instead of parsing the
+/// name; floor stays 58.
+pub const PROTO_VERSION: u32 = 134;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -1490,6 +1493,14 @@ pub struct AgentRow {
     /// (v82) Served CHILD/PEER word; `child` nests, `peer`/absent renders flat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lineage_kind: Option<String>,
+    /// (v134) The row's dispatch command code, the code the name grammar
+    /// parses off the row's name (`t`, `bp`, `r`, `th`, `f`), stamped on the
+    /// registry row by the liveness sweep. The sideline renders the mark
+    /// glyph from this served fact instead of parsing the name string.
+    /// `None` on a name the grammar cannot parse (a bare pane, a shell).
+    /// Additive: `#[serde(default)]` keeps a v133 reader wire-tolerant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_code: Option<String>,
     /// (v84) The registry NAME of the row `spawned_by_session` points at,
     /// derived once per row set server-side (agents_view::merge_rows).
     /// `None` when the edge names no row in the set or the id is claimed
@@ -3486,7 +3497,7 @@ mod tests {
         // re-assert the same literal, which caught nothing a single pin does
         // not and turned every bump into a three-file edit; they now assert
         // only their own wire shapes.
-        assert_eq!(PROTO_VERSION, 133);
+        assert_eq!(PROTO_VERSION, 134);
         // v64 added `PanePlacement.portal` and `AgentRow.portal`.
         // Both are additive `#[serde(default)]` fields, so the floor does NOT
         // move with them - a v63 client still attaches. Pinned beside the

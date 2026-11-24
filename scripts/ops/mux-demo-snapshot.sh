@@ -1175,11 +1175,11 @@ if os.environ.get("FNO_DEMO_FLATPINS"):
     agents += [
         lead("atlas", "demo-sid-atlas"),
         worker("atlas-w1", "demo-sid-atlas", "demo-sid-atlas-w1"),
-        lead("orion", "demo-sid-orion"),
+        lead("orion", "demo-sid-orion") | {"command_code": "t"},
         worker("orion-w1", "demo-sid-orion", "demo-sid-orion-w1"),
         worker("orion-w2", "demo-sid-orion", "demo-sid-orion-w2"),
         lead("vega", "demo-sid-vega"),
-        worker("vega-w1", "demo-sid-vega", "demo-sid-vega-w1"),
+        worker("vega-w1", "demo-sid-vega", "demo-sid-vega-w1") | {"command_code": "bp"},
     ]
 # --holds adds the hold fixture: keeper carries a live conversation hold
 # (the fno-mail hold record), sentinel carries the user-set do-not-disturb

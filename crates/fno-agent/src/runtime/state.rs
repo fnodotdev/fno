@@ -1342,6 +1342,15 @@ pub struct RegistryEntry {
     /// readers that cannot call fno-agent can still render the edge.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lineage_kind: Option<String>,
+    /// The row's dispatch command code (schema v46): the code the name
+    /// grammar parses off the row's own name (`t`, `bp`, `r`, `th`, `f`),
+    /// stamped by `spawn_edge::stamp_command_codes` beside `lineage_kind`.
+    /// The sideline renders the mark from this field instead of parsing
+    /// the name, which is what lets a worker name eventually drop the `t-`
+    /// prefix: readers that render never re-derive it, and a name the
+    /// grammar cannot parse (a bare pane, a shell) carries no code at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_code: Option<String>,
     /// Why a mint with no parent session could not name one (schema v33):
     /// a daemon mint reads the parent edge from the spawn REQUEST, so an
     /// edge-less request stamps its reason instead of a silent null, and an

@@ -363,7 +363,7 @@ fn card_frame_paints_identity_then_model_and_metrics_on_distinct_lines() {
     assert!(text.contains("one message"), "{text:?}");
     assert!(text.contains("26%"), "{text:?}");
     assert!(
-        text.contains("▁▁▁▁▃▅█▁ · 26% · 3c · 12.3k tok · one message"),
+        text.contains("▁▁▁▁▃▅█▁ · 26% · 3c · 12.3k tk · one message"),
         "the compact metrics line matches its display contract: {text:?}"
     );
     assert!(text.contains("3c") && text.contains("~$0.42"), "{text:?}");
@@ -394,7 +394,7 @@ fn card_frame_paints_identity_then_model_and_metrics_on_distinct_lines() {
         matches!(cells[0], card_line::MetricCell::Hidden),
         "activity stays blank until two intervals land, it never fakes a line"
     );
-    assert!(matches!(&cells[3], card_line::MetricCell::Value(v) if v == "999 tok"));
+    assert!(matches!(&cells[3], card_line::MetricCell::Value(v) if v == "999 tk"));
     // Cost left the metrics line (it rides line 2, served-only): a promoted
     // lead's session_cost_cents never reach this line at all.
     // A codex row keeps the populated-paint contract off its unreportable
@@ -412,7 +412,7 @@ fn card_frame_paints_identity_then_model_and_metrics_on_distinct_lines() {
         "codex never reports context or compactions"
     );
     assert!(hidden(&cells[0]));
-    assert!(matches!(&cells[3], card_line::MetricCell::Value(v) if v == "500 tok"));
+    assert!(matches!(&cells[3], card_line::MetricCell::Value(v) if v == "500 tk"));
 }
 
 #[test]
@@ -586,6 +586,35 @@ fn card_slug_drops_node_and_model_and_the_node_taps_open() {
         frame.cells[row * cols + glyph_at].fg,
         "PR number is visually separate from the lane signal"
     );
+}
+
+#[test]
+fn a_stamped_command_code_paints_the_mark_and_drops_the_token() {
+    // The command glyph leads the painted label and the stamped command
+    // drops from it; the name string keeps the token for every reader that
+    // still parses it. An unstamped row paints whole (the fixture bar:
+    // `agent_row` leaves the code None, and every assertion above holds).
+    let mut a = agent_row("t-x-5316-opus", 5, Some(AgentBadge::Working), false);
+    a.command_code = Some("t".into());
+    assert_eq!(card_line::command_lead(&a), "◉ ");
+    assert_eq!(
+        card_line::strip_command_code(&a.name, a.command_code.as_deref()),
+        "x-5316-opus"
+    );
+    // The source-prefixed form drops only the command token; a foreign word
+    // that merely starts the same never drops.
+    a.name = "kg-t-x-1-slug".into();
+    assert_eq!(
+        card_line::strip_command_code(&a.name, a.command_code.as_deref()),
+        "kg-x-1-slug"
+    );
+    a.command_code = Some("th".into());
+    assert_eq!(
+        card_line::strip_command_code(&a.name, a.command_code.as_deref()),
+        "kg-t-x-1-slug",
+        "the stamp names the token; nothing else drops"
+    );
+    assert_eq!(card_line::command_mark("th"), 't', "letter fallback");
 }
 
 #[test]

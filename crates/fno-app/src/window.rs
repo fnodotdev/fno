@@ -472,6 +472,56 @@ impl Root {
         let (keymap, key_warnings) = fno::ui::digest_overlay::keymap(&theme_cwd);
         fno::ui::keys::install(keymap);
         let key_warning = key_warnings.first().map(|w| w.0.clone());
+        let mut root = Self::rooted(
+            session.clone(),
+            main,
+            pinned,
+            folds,
+            group_by,
+            metrics,
+            sent_size,
+            light,
+            palette,
+            key_warning.or(theme_warning),
+            font_want,
+            theme_cwd.clone(),
+            window,
+            cx,
+        );
+        wire_window(&mut root, window, cx);
+        Self::attach_link(&mut root, &session, sent_size, prewarmed, cx);
+        root.wire_alerts(cx);
+        root.start_board_poll(cx);
+        root.start_plugins(cx);
+        // The control channel: the drain loop applies rows through the
+        // same paths clicks ride (focus, view switch, quit).
+        crate::control::spawn_poll(session.clone(), cx);
+        // `--mode mods` opens on the view without a switch, so read here.
+        if root.main == MainView::Mods {
+            root.ext.read();
+        }
+        root
+    }
+
+    /// The constructor's senses poured into Root's field list, one place
+    /// for the default row so new_with_link stays a call chain.
+    #[allow(clippy::too_many_arguments)]
+    fn rooted(
+        session: String,
+        main: MainView,
+        pinned: Option<SessionKey>,
+        folds: HashSet<String>,
+        group_by: GroupBy,
+        metrics: Metrics,
+        sent_size: (u16, u16),
+        light: bool,
+        palette: Palette,
+        notice: Option<String>,
+        font_want: (String, f32),
+        theme_cwd: PathBuf,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> Root {
         let mut root = Root {
             main,
             link: None,
@@ -480,7 +530,7 @@ impl Root {
             panes: HashMap::new(),
             modes: Modes::default(),
             scanner: fno::ui::keys::Scanner::default(),
-            notice: key_warning.or(theme_warning),
+            notice,
             notice_failed: false,
             notice_gen: 0,
             shot: false,
@@ -554,18 +604,6 @@ impl Root {
             // first read happens here.
             window_active: window.is_window_active(),
         };
-        wire_window(&mut root, window, cx);
-        Self::attach_link(&mut root, &session, sent_size, prewarmed, cx);
-        root.wire_alerts(cx);
-        root.start_board_poll(cx);
-        root.start_plugins(cx);
-        // The control channel: the drain loop applies rows through the
-        // same paths clicks ride (focus, view switch, quit).
-        crate::control::spawn_poll(session.clone(), cx);
-        // `--mode mods` opens on the view without a switch, so read here.
-        if root.main == MainView::Mods {
-            root.ext.read();
-        }
         root
     }
 

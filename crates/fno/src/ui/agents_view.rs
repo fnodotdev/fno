@@ -175,6 +175,10 @@ pub struct RegistryAgent {
     /// The served CHILD/PEER word for this row's spawn edge, read from the
     /// registry row. `None` (a pre-v32 row) renders flat like a peer.
     pub lineage_kind: Option<String>,
+    /// The row's dispatch command code (the name grammar's own parse),
+    /// read from the registry row (schema v46). `None` = the name parses to
+    /// no code (a bare pane, a shell) or the row predates the stamp.
+    pub command_code: Option<String>,
     /// The registry NAME of the row `spawned_by_session` points at, derived
     /// once per row set in [`merge_rows`]. `None` when the edge names a
     /// session no row holds, or two rows claim the same id: an ambiguous
@@ -2242,6 +2246,13 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(str::to_string);
+        // A typed read (R1): indexing answers Null on an absent key, and a
+        // non-string stamp deserializes to None the same tolerant way, so
+        // the read never invents a code from a malformed row.
+        let command_code = serde_json::from_value::<Option<String>>(row["command_code"].clone())
+            .ok()
+            .flatten()
+            .filter(|s| !s.is_empty());
         let lineage_reason = row
             .get("lineage_reason")
             .and_then(|v| v.as_str())
@@ -2378,6 +2389,7 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
             role_title,
             spawned_by_session,
             lineage_kind,
+            command_code,
             spawned_by_name: None,
             lineage_reason,
             liveness,
