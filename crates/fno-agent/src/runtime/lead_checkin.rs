@@ -1423,9 +1423,12 @@ fn collect_readings(
             let home = crate::paths::AgentsHome::from_env();
             let spawned = match session_id.as_deref() {
                 Some(session) => {
-                    crate::lead_checkin_blueprint::read_spawned_blueprints(&home, session)
+                    let registry = crate::state::load_registry(&home.registry_json())
+                        .map_err(|e| format!("fno registry unreadable: {e}"))?;
+                    crate::lead_checkin_blueprint::spawned_in_registry(&registry, &home, session)
+                        .len()
                 }
-                None => Ok(Vec::new()),
+                None => 0,
             };
             let slots = crate::spawn_gate_lanes::share_reading(
                 &home.registry_json(),

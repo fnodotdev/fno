@@ -350,7 +350,7 @@ pub(crate) fn r_blueprint(
     cwd: &Path,
     session_id: Option<String>,
     claims: Result<Vec<String>, String>,
-    spawned: &Result<Vec<String>, String>,
+    spawned: usize,
     slots: Result<usize, String>,
     floor: &str,
     other_owned: &Result<HashMap<String, String>, String>,
@@ -365,8 +365,7 @@ pub(crate) fn r_blueprint(
     let holders = claims?;
     let other_owned = other_owned.as_ref().map_err(Clone::clone)?;
     let holder = format!("blueprint-session:{session_id}");
-    let spawned = spawned.as_ref().map_err(Clone::clone)?;
-    let running = holders.iter().filter(|h| **h == holder).count() + spawned.len();
+    let running = holders.iter().filter(|h| **h == holder).count() + spawned;
     let board = board.as_ref()?;
     let rows = crate::lead_checkin::board_queue(board, "unplanned")?
         .get("rows")
@@ -758,20 +757,16 @@ pub(crate) fn spawned_blueprint_keys(
     keys
 }
 
-/// `spawned_blueprint_keys` over the registry file; an unreadable registry is
-/// an error the reading names, never a silent 0.
-pub(crate) fn read_spawned_blueprints(
+/// `spawned_blueprint_keys` over a loaded registry, with the terminal-run
+/// keys the slot share reads. The caller loads the registry, so an unreadable
+/// one is its own named error, never a silent 0.
+pub(crate) fn spawned_in_registry(
+    registry: &crate::state::Registry,
     home: &crate::paths::AgentsHome,
     session: &str,
-) -> Result<Vec<String>, String> {
-    let registry = crate::state::load_registry(&home.registry_json())
-        .map_err(|e| format!("fno registry unreadable: {e}"))?;
+) -> Vec<String> {
     let terminal = crate::terminal_run::read_keys(&home.terminal_runs_dir());
-    Ok(spawned_blueprint_keys(
-        &registry.entries,
-        session,
-        &terminal,
-    ))
+    spawned_blueprint_keys(&registry.entries, session, &terminal)
 }
 
 /// Read the ceiling state live. `None` when the session id, the claims
@@ -783,7 +778,8 @@ pub(crate) fn stop_check_reading(cwd: &Path) -> Option<BlueprintWait> {
     let rows = crate::claims::list(Some("node:"), None, false).ok()?;
     let mut running = running_blueprint_ids(&rows, &session);
     let home = crate::paths::AgentsHome::from_env();
-    running.extend(read_spawned_blueprints(&home, &session).ok()?);
+    let registry = crate::state::load_registry(&home.registry_json()).ok()?;
+    running.extend(spawned_in_registry(&registry, &home, &session));
     let provider = std::env::var("FNO_ROUTE_PROVIDER").unwrap_or_default();
     let provider_cap = crate::spawn_gate_lanes::provider_subagents_cap(cwd, &provider);
     let ceiling = blueprint_ceiling(provider_cap);
@@ -844,6 +840,7 @@ mod tests {
             board,
             session_id,
             holders,
+            0,
             slots,
             floor,
             Ok(HashMap::new()),
@@ -862,39 +859,7 @@ mod tests {
         board: Value,
         session_id: Option<&str>,
         holders: Vec<String>,
-        slots: Result<usize, String>,
-        floor: &str,
-        other_owned: Result<HashMap<String, String>, String>,
-        idea_children: Result<usize, String>,
-        seat_leads: Vec<SeatScope>,
-        idea_rows: &[Value],
-        entries: &[Value],
-    ) -> Result<Value, String> {
-        blueprint_reading_spawned(
-            dir,
-            config_toml,
-            board,
-            session_id,
-            holders,
-            Ok(Vec::new()),
-            slots,
-            floor,
-            other_owned,
-            idea_children,
-            seat_leads,
-            idea_rows,
-            entries,
-        )
-    }
-
-    /// The full call, with the registry's spawned-blueprint keys named.
-    fn blueprint_reading_spawned(
-        dir: &std::path::Path,
-        config_toml: &str,
-        board: Value,
-        session_id: Option<&str>,
-        holders: Vec<String>,
-        spawned: Result<Vec<String>, String>,
+        spawned: usize,
         slots: Result<usize, String>,
         floor: &str,
         other_owned: Result<HashMap<String, String>, String>,
@@ -924,7 +889,7 @@ mod tests {
             dir,
             session_id.map(str::to_string),
             Ok(holders),
-            &spawned,
+            spawned,
             slots,
             floor,
             &other_owned,
@@ -965,6 +930,7 @@ mod tests {
             board,
             Some("sess-1"),
             vec![],
+            0,
             Ok(4),
             "high",
             Ok(HashMap::new()),
@@ -1037,19 +1003,17 @@ mod tests {
             live("w4", "/fno:blueprint x-4", "other"),
             live("w5", "/fno:target x-5", "lead"),
         ];
-        let mut terminal = std::collections::HashSet::new();
-        assert_eq!(
-            spawned_blueprint_keys(&entries, "lead", &terminal),
-            vec!["x-1".to_string(), "w2-sid".to_string()]
-        );
+        let terminal = std::collections::HashSet::new();
+        let keys = spawned_blueprint_keys(&entries, "lead", &terminal);
+        assert_eq!(keys, vec!["x-1".to_string(), "w2-sid".to_string()]);
         let dir = std::env::temp_dir().join(format!("fno-bp-spawned-{}", std::process::id()));
-        let reading = blueprint_reading_spawned(
+        let reading = blueprint_reading_owned(
             &dir,
             "",
             unplanned_board(&[], Some(0)),
             Some("lead"),
             vec!["blueprint-session:lead".to_string()],
-            Ok(spawned_blueprint_keys(&entries, "lead", &terminal)),
+            keys.len(),
             Ok(4),
             "high",
             Ok(HashMap::new()),
@@ -1060,22 +1024,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(reading["running"], 3, "{reading}");
-        let unreadable = blueprint_reading_spawned(
-            &dir,
-            "",
-            unplanned_board(&[("x-1", "high")], Some(0)),
-            Some("lead"),
-            vec![],
-            Err("fno registry unreadable: gone".to_string()),
-            Ok(4),
-            "high",
-            Ok(HashMap::new()),
-            Ok(0),
-            vec![],
-            &[],
-            &[],
-        );
-        assert_eq!(unreadable, Err("fno registry unreadable: gone".to_string()));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1220,6 +1168,7 @@ mod tests {
             ),
             Some("sess-1"),
             vec![],
+            0,
             Ok(4),
             "high",
             Ok(HashMap::from([
@@ -1283,6 +1232,7 @@ mod tests {
                 unplanned_board(&[], Some(0)),
                 Some("sess-1"),
                 vec![],
+                0,
                 Ok(4),
                 "high",
                 Ok(owned.clone()),
@@ -1324,6 +1274,7 @@ mod tests {
             unplanned_board(&[("x-1", "low")], Some(0)),
             Some("sess-1"),
             vec![],
+            0,
             Ok(4),
             "high",
             Err("a live team's scope does not compile: e-x: unknown".to_string()),
