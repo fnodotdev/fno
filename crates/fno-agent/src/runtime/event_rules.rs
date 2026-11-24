@@ -1174,7 +1174,7 @@ struct FireData {
     trace: FireTrace,
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 struct FireTrace {
     actor_session: Option<String>,
 }
