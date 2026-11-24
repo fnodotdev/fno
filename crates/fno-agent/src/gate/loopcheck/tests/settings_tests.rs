@@ -44,7 +44,6 @@ fn parse_manifest_harness_session_id_null_sentinel_is_none() {
 }
 
 #[test]
-#[test]
 fn review_human_parses_the_vocabulary_and_degrades_a_typo_to_the_default() {
     // Only the three vocabulary words are kept; a typo stays None so the
     // default (today's behavior) applies, matching posture's lax contract.
