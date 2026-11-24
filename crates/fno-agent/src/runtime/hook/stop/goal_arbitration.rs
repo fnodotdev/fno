@@ -153,11 +153,8 @@ fn transcript_goal(transcript: &Path) -> Option<String> {
         .rev()
         .filter(|line| line.contains("\"goal_status\""))
         .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
-        .find_map(|row| {
-            row.get("attachment")
-                .filter(|a| a["type"] == "goal_status")
-                .cloned()
-        })?;
+        .map(|row| row["attachment"].clone())
+        .find(|attachment| attachment["type"] == "goal_status")?;
     (latest["met"] == false && latest["failed"] != true)
         .then(|| latest["condition"].as_str().map(str::to_string))
         .flatten()
