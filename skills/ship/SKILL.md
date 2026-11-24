@@ -14,7 +14,7 @@ metadata:
 
 # Ship
 
-**One command for delivering anything.** `/ship <type>` drives a deliverable to its finish line, dispatching on the *deliverable type* the way `/target` dispatches on task type. `pr` only names the code branch. `/ship` names the whole family.
+**One command for delivering anything.** `/fno:ship <type>` drives a deliverable to its finish line, dispatching on the *deliverable type* the way `/target` dispatches on task type. `pr` only names the code branch. `/fno:ship` names the whole family.
 
 | Type | Finish line (the mechanical "green") | What runs |
 |------|--------------------------------------|-----------|
@@ -25,11 +25,11 @@ Before `pr create`, run `/fno:review <size> --comment` (Codex `$fno:review`) on 
 
 ## The membership test (load-bearing)
 
-A thing is a ship type ONLY if it has a definable **green** - a finish line readable mechanically. `pr` and `doc` both do. An ongoing *area* (`budget`, `community`) has no crisp green: it never "finishes", so it is not a deliverable. Admitting areas would make `/ship` mean "do stuff", which is exactly what `/target` already is. Route areas through `/target`. Types with a plausible-but-unwired green (`gtm` / launch) are post-MVP and rejected until each has a defined green.
+A thing is a ship type only with a definable **green** - a finish line readable mechanically. `pr` and `doc` both do. An ongoing *area* (`budget`, `community`) has no crisp green: it never "finishes", so it is not a deliverable. Admitting areas makes `/fno:ship` mean "do stuff", which is exactly what `/target` already is. Route areas through `/target`. Types with a plausible-but-unwired green (`gtm` / launch) are post-MVP and rejected until each has a defined green.
 
 ## Vocabulary: "ship" the command vs the ship phase/gate
 
-`/ship` (this command) = drive a deliverable to its finish line. It is distinct from the *ship phase* and *ship gate* inside `/target`, from the `DonePRGreen`/`DoneAdvisory` termination reasons, from `fno do pr merge`, and from `/ship-docs` (which generates documentation and is NOT a ship type). The single canonical disambiguation lives in `AGENTS.md` -> "Ship vocabulary"; read it if the overlap is confusing.
+`/fno:ship` (this command) = drive a deliverable to its finish line. It is distinct from the *ship phase* and *ship gate* inside `/target`, and from the `DonePRGreen`/`DoneAdvisory` termination reasons. It is also distinct from `fno do pr merge` and from `/fno:ship-docs`, which generates documentation and is NOT a ship type. When the overlap is confusing, read the canonical disambiguation in `AGENTS.md` -> "Ship vocabulary".
 
 One owner decides every merge. `fno do pr merge` asks it, and so do `fno do pr verify --kind merged` and the `fno-agent finalize` queue arm. It answers merge or arm for one exact head, and it never emits an unpinned request. See [authorized-merge](../../docs/architecture/authorized-merge.md).
 
@@ -44,7 +44,7 @@ This is a **router**, not a monolith. Parse the first argument token:
 - **no argument** -> do NOT default and do NOT guess. Print the menu and stop with a non-zero result:
 
   ```
-  /ship needs a type. valid types:
+  /fno:ship needs a type. valid types:
     pr     drive a PR through its lifecycle (create | check | merged)
     doc    ship a research brief to output_dir and grade it
   ```
