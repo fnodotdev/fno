@@ -17,7 +17,23 @@ You must run the loop only against plans you have read or trust the author of. S
 - **Plans from the footnote repository's `examples/` folder:** reviewed and safe.
 - **Plans from random contributors, bug reports, gists, or untrusted sources:** read them carefully before running. The loop will execute them with your credentials.
 
-The devcontainer sandbox is shared-state protection, not a security boundary. It keeps a headless worker from writing shared state, and it does not contain a malicious plan. Multi-tenant isolation remains out of scope.
+## What a sandboxed worker cannot do
+
+`[sandbox] provider` runs each headless worker in a container with no mount and no network ([sandbox host](architecture/sandbox-host.md)). The attacker in that model is the sandboxed process: it controls its container and forges every byte it sends. The host user, the daemon, the fno binary and the engine are trusted.
+
+- It cannot see the host login, keychain, home, engine socket or another spawn's route key. Nothing is mounted, and keys cross exec stdin to this sandbox only.
+- It cannot spawn, ask, stop, remove, rename, mail or list other workers. The guest refuses every op but status, report and session report, and the host stamps who sent them.
+- It cannot write the host worktree or `.git`. Its commits land under `refs/sandbox/<id>/head`, fetched with hooks off. No host branch moves, and the host never applies its dirty work.
+- It cannot reach host loopback, the LAN, a tailnet, cloud metadata or a host-owned address. The proxy refuses every private range and every port but 80 and 443.
+- It cannot turn the sandbox off from a project file. A project layer can only raise the sandbox.
+- Its transcript cannot become a user turn, a law witness, operator capture or an account cap. Only display readers read it, labelled as sandbox origin.
+
+What remains:
+
+- A person who checks out a sandbox ref runs untrusted code. Read it first.
+- The sandbox can send its own key and the source out through a public host.
+- Transcript prose can still mislead a person who reads it.
+- Engine and kernel escapes, multi-tenant isolation and resource quotas are out of scope.
 
 ## What the loop WILL do, given a plan
 
