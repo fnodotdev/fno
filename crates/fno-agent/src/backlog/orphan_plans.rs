@@ -413,6 +413,19 @@ fn read_claims(dir: &Path) -> std::io::Result<BTreeMap<String, ClaimFiles>> {
 
 /// Classify every claimed id into exactly one verdict. Pure: no writes, no
 /// output - `run` applies and prints; tests call this directly.
+/// A plan's `created` is a local calendar day and a node's `created_at` is
+/// UTC, so a plan written the same evening sorts a day early west of UTC.
+/// One day is that skew; two or more is a reused node id.
+fn id_reused(plan_created: &str, node_created: &str) -> bool {
+    let day =
+        |text: &str| chrono::NaiveDate::parse_from_str(text.get(..10).unwrap_or(""), "%Y-%m-%d");
+    match (day(plan_created), day(node_created)) {
+        (Ok(plan), Ok(node)) => node - chrono::Duration::days(1) > plan,
+        // A date neither side can parse keeps the text comparison.
+        _ => plan_created < node_created,
+    }
+}
+
 fn classify_claims(
     rows: &[Value],
     by_id: &BTreeMap<String, ClaimFiles>,
@@ -518,7 +531,7 @@ fn classify_claims(
             .collect::<String>();
         if plan_created.len() >= 10
             && node_created.len() >= 10
-            && plan_created.as_str() < node_created.as_str()
+            && id_reused(&plan_created, &node_created)
         {
             out_rows.push((node_id.clone(), path, Verdict::IdReuse));
             continue;
@@ -665,6 +678,46 @@ mod tests {
             Some(plan.to_string_lossy().as_ref())
         );
         assert_eq!(bound.get("status").and_then(Value::as_str), Some("ready"));
+    }
+
+    /// A plan's `created` is a local calendar day and a node's `created_at`
+    /// is UTC. A plan written the same evening sorts a day early west of UTC
+    /// and must still bind; a plan two or more days early is a reused id.
+    #[test]
+    fn an_evening_plan_binds_and_a_plan_two_days_early_still_reads_reuse() {
+        let minted = "2026-09-02T03:11:00+00:00";
+        let fx = fixture(&[
+            node("x-same", json!({ "created_at": minted })),
+            node("x-reuse", json!({ "created_at": minted })),
+        ]);
+        let same_night = plan_file(&fx.plans, "same.md", "x-same", "ready", "2026-09-01");
+        let reused = plan_file(&fx.plans, "reuse.md", "x-reuse", "ready", "2026-08-30");
+        age_file(&same_night, 3600);
+        age_file(&reused, 3600);
+        let cfg = Config {
+            plans_dir: fx.plans.clone(),
+            graph: fx.graph.clone(),
+            graph_overridden: true,
+            apply: true,
+            as_json: false,
+            claims_root: Some(fx.claims.path().to_path_buf()),
+        };
+        assert_eq!(run(&cfg), 0);
+        let rows = graph_store::read_rows(&fx.graph).unwrap();
+        let plan_path = |id: &str| {
+            rows.iter()
+                .find(|r| r["id"].as_str() == Some(id))
+                .map(|r| r["plan_path"].clone())
+                .unwrap_or(Value::Null)
+        };
+        assert_eq!(
+            plan_path("x-same"),
+            json!(same_night.to_string_lossy().to_string())
+        );
+        assert!(
+            plan_path("x-reuse").is_null(),
+            "a plan two days before its node never binds"
+        );
     }
 
     #[test]
