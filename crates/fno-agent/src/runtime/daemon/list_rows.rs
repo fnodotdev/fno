@@ -469,6 +469,10 @@ where
                     "pid": e.pid,
                     "pid_start_time": e.pid_start_time,
                     "log_path": log_path,
+                    // The harness transcript, and a sandboxed worker's host copy
+                    // (sandbox origin). A sandbox row carries only the second.
+                    "transcript_path": e.transcript_path,
+                    "sandbox_transcript": e.sandbox_transcript,
                     // The mux hosting ref ({session, pane_id}) for a pane-hosted row,
                     // else null. A pane row's short_id is empty, so this is the only
                     // key that says where such a worker actually lives; without it a

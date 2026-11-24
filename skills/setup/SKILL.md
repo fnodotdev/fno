@@ -70,7 +70,7 @@ After the report, check the repo this setup serves for the judge's three vision 
 
 ## The keys the wizard does not ask
 
-For the advanced config tier and the post-merge parking lot, `fno config setup plan --advanced` and `fno config setup post-merge` remain the commands. The `[sandbox]` key is also set by hand: `provider = "devcontainer"` sandboxes each `--as headless` worker in a devcontainer. The guide: [Sandbox a worker](https://fno.dev/docs/guides/sandbox-a-worker).
+For the advanced config tier and the post-merge parking lot, `fno config setup plan --advanced` and `fno config setup post-merge` remain the commands. The `[sandbox]` key is also set by hand. `provider = "docker"`, `podman` or `devcontainer` runs each headless worker in a container with no mount or network. The contract: `docs/architecture/sandbox-host.md`. The guide: [Sandbox a worker](https://fno.dev/docs/guides/sandbox-a-worker).
 
 ## Known Limitations and Deferred Work
 
