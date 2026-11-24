@@ -47,14 +47,14 @@ fn offers(bp: &Value) -> Vec<(String, String)> {
     for id in ids(bp, "starts") {
         out.push((
             id.clone(),
-            crate::lead_checkin_blueprint::start_command("/blueprint", &id),
+            crate::lead_checkin_blueprint::start_command("/blueprint", &id, true),
         ));
     }
     for o in bp["offers"].as_array().into_iter().flatten() {
         if let (Some(command), Some(id)) = (o["command"].as_str(), o["id"].as_str()) {
             out.push((
                 id.to_string(),
-                crate::lead_checkin_blueprint::start_command(command, id),
+                crate::lead_checkin_blueprint::start_command(command, id, true),
             ));
         }
     }
@@ -62,7 +62,7 @@ fn offers(bp: &Value) -> Vec<(String, String)> {
         for id in ids(bp, key) {
             out.push((
                 id.clone(),
-                crate::lead_checkin_blueprint::start_command("/target", &id),
+                crate::lead_checkin_blueprint::start_command("/target", &id, false),
             ));
         }
     }
@@ -212,6 +212,21 @@ mod tests {
             "fno agent spawn \"/fno:target x-out\""
         );
         assert_eq!(*at(&data, "pick_node"), "x-out");
+
+        // A blueprint offer keeps the `start` word the pick line prints.
+        let mut plan = Map::new();
+        let reading = json!({
+            "starts": [],
+            "offers": [{"id": "x-plan", "command": "/blueprint"}],
+            "target_ready": [],
+            "plan_ready": [],
+            "skips": [],
+        });
+        annotate(&mut plan, Some(&reading), None, None);
+        assert_eq!(
+            *at(&plan, "pick_offered"),
+            "start /fno:blueprint subagent x-plan"
+        );
 
         let mut none = Map::new();
         annotate(&mut none, Some(&bp(&[])), None, None);

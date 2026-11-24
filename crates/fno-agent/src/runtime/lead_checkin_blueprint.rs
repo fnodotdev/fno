@@ -208,12 +208,13 @@ fn scope_members(scope: &str) -> impl Iterator<Item = &str> {
 
 /// The command that starts one node through the lifecycle command the table
 /// answered. The pick and the offer line build theirs here, so they cannot
-/// drift.
-pub(crate) fn start_command(command: &str, id: &str) -> String {
-    if command == "/target" {
-        format!("fno agent spawn \"/fno:target {id}\"")
-    } else {
-        format!("start /fno:blueprint subagent {id}")
+/// drift. `labelled` puts the `start` word before a blueprint command, the
+/// form the pick line prints.
+pub(crate) fn start_command(command: &str, id: &str, labelled: bool) -> String {
+    match (command == "/target", labelled) {
+        (true, _) => format!("fno agent spawn \"/fno:target {id}\""),
+        (false, true) => format!("start /fno:blueprint subagent {id}"),
+        (false, false) => format!("/fno:blueprint subagent {id}"),
     }
 }
 
@@ -235,8 +236,8 @@ fn open_unparked(row: &Value) -> bool {
 type OfferKey<'a> = (usize, bool, bool, String, String, &'a str, String);
 
 /// Open planless nodes outside this scope that the lifecycle table starts: a
-/// high or L node owes a blueprint, an idea of lower difficulty goes straight
-/// to a target. A drained scope with free blueprint slots offers these
+/// node that owes a plan takes a blueprint, an idea that owes none goes
+/// straight to a target. A drained scope with free blueprint slots offers these
 /// instead of a bare "no unplanned node" beat. Nearness is the hop count to
 /// an ancestor shared with any member of the scope; the scope's audience or
 /// domain wins a tie, then priority and id. The scope's own nodes (its
@@ -308,11 +309,12 @@ pub(crate) fn adjacent_offers(
         {
             continue;
         }
-        let high = s_str(row, "difficulty") == Some("high")
-            || s_str(row, "size").is_some_and(|z| z.eq_ignore_ascii_case("l"));
+        // The table decides: a node that owes a plan takes the blueprint
+        // command. An idea that owes none goes straight to a target. Any
+        // other row is no offer.
         let idea = s_str(row, "status") == Some("idea");
         let command = routed(row);
-        let offerable = matches!(command.as_deref(), Some("/blueprint") if high)
+        let offerable = command.as_deref() == Some("/blueprint")
             || (idea && command.as_deref() == Some("/target"));
         if !offerable {
             continue;
@@ -716,7 +718,7 @@ pub(crate) fn render_lines(bp: &Value) -> Vec<String> {
         let o = Offer::deserialize(&offer).unwrap_or_default();
         lines.push(format!(
             "  offer: {} ({}, outside this scope): {}",
-            start_command(&o.command, &o.id),
+            start_command(&o.command, &o.id, false),
             o.near,
             o.title,
         ));
@@ -1236,15 +1238,21 @@ mod tests {
                 "title": "out mid"}),
             json!({"id": "x-out-ready", "status": "ready", "difficulty": "medium",
                 "title": "out ready"}),
+            json!({"id": "x-pq", "status": "idea", "difficulty": "medium",
+                "tags": ["premise-question"], "title": "premise open"}),
         ];
-        let offers = adjacent_offers(
-            "x-root-a,x-root-b",
-            &entries,
-            &HashMap::new(),
-            &std::collections::HashSet::new(),
-            "high",
-            3,
-        );
+        let owned = HashMap::new();
+        let walk = |limit: usize| {
+            adjacent_offers(
+                "x-root-a,x-root-b",
+                &entries,
+                &owned,
+                &std::collections::HashSet::new(),
+                "high",
+                limit,
+            )
+        };
+        let offers = walk(3);
         assert_eq!(
             offers,
             vec![
@@ -1257,13 +1265,24 @@ mod tests {
             ],
             "{offers:?}"
         );
-        let lines = render_lines(&json!({"offers": offers}));
-        assert!(
-            lines.iter().any(|l| l
-                == "  offer: fno agent spawn \"/fno:target x-out-mid\" \
-                 (no shared ancestor, outside this scope): out mid"),
-            "{lines:?}"
+        // The table decides the command, not the difficulty band: a medium
+        // idea with an open premise question owes a plan.
+        let offers = walk(5);
+        assert_eq!(
+            offers[3],
+            json!({"id": "x-pq", "command": "/blueprint", "near": "no shared ancestor",
+                "title": "premise open"}),
+            "{offers:?}"
         );
+        let lines = render_lines(&json!({"offers": offers}));
+        for line in [
+            "  offer: fno agent spawn \"/fno:target x-out-mid\" \
+             (no shared ancestor, outside this scope): out mid",
+            "  offer: /fno:blueprint subagent x-pq \
+             (no shared ancestor, outside this scope): premise open",
+        ] {
+            assert!(lines.iter().any(|l| l == line), "{lines:?}");
+        }
     }
 
     /// The seat walk stops at any member of a multi-root scope, so a lead
