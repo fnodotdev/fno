@@ -557,58 +557,6 @@ pub(crate) fn build_calibration(
 
 // ── skill-outcome attribution ─────────────────────────────────────────
 
-/// `_PHASE_TO_SKILL`: /target's phase names route to skill ids; "do" is the
-/// retired spelling whose key stays until the ledger rows age out.
-const PHASE_TO_SKILL: [(&str, &str); 8] = [
-    ("think", "fno:think"),
-    ("plan", "fno:blueprint"),
-    ("do", "fno:do"),
-    ("execute", "fno:execute"),
-    ("review", "fno:review"),
-    ("docs", "fno:ship-docs"),
-    ("ship", "fno:ship"),
-    ("external", "fno:ship"),
-];
-
-/// `_skills_from_transcript`: the `input.skill` id of each Skill tool_use
-/// block (duplicates kept).
-pub(crate) fn skills_from_transcript(lines: &[&str]) -> Vec<String> {
-    let mut found = Vec::new();
-    for line in lines {
-        let line = line.trim();
-        if line.is_empty() || !line.contains(crate::observer::SKILL_USE_MARKER) {
-            continue;
-        }
-        let Ok(obj) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        let Some(content) = obj
-            .get("message")
-            .and_then(|m| m.get("content"))
-            .and_then(Value::as_array)
-        else {
-            continue;
-        };
-        for block in content {
-            let is_skill = block.get("type").and_then(Value::as_str) == Some("tool_use")
-                && block.get("name").and_then(Value::as_str) == Some("Skill");
-            if !is_skill {
-                continue;
-            }
-            if let Some(skill) = block
-                .get("input")
-                .and_then(|i| i.get("skill"))
-                .and_then(Value::as_str)
-            {
-                if !skill.is_empty() {
-                    found.push(skill.to_string());
-                }
-            }
-        }
-    }
-    found
-}
-
 /// `_default_read_transcript`: the session transcript across all project
 /// dirs, split into lines; None when it does not resolve.
 pub(crate) fn read_transcript(session_id: &str) -> Option<Vec<String>> {
@@ -643,11 +591,6 @@ fn is_uuid(s: &str) -> bool {
             8 | 13 | 18 | 23 => *b == b'-',
             _ => b.is_ascii_hexdigit(),
         })
-}
-
-/// The transcript lines as `&str` slices for the scanners.
-pub(crate) fn line_slices(lines: &[String]) -> Vec<&str> {
-    lines.iter().map(String::as_str).collect()
 }
 
 /// `_PHASE_TO_SKILL_DIR`: the ledger phase and the skill directory are
@@ -729,53 +672,11 @@ pub(crate) fn default_skill_version(skill_id: &str, ts_raw: Option<&Value>) -> S
     best.unwrap_or_else(|| "unknown".to_string())
 }
 
-/// `_extract_skill_runs`: (distinct skill ids, method) for one row.
+/// `_extract_skill_runs`: (distinct skill ids, method) for one row. The
+/// observer fold is the one transcript reader, so this keeps the scoreboard's
+/// call shape and reads nothing of its own.
 pub(crate) fn extract_skill_runs(row: &Value) -> (Vec<String>, &'static str) {
-    let uuid_re_match = |s: &str| is_uuid(s);
-    let sessions: Vec<&str> = row
-        .get("sessions")
-        .and_then(Value::as_array)
-        .map(|list| {
-            list.iter()
-                .filter_map(Value::as_str)
-                .filter(|s| uuid_re_match(s))
-                .collect()
-        })
-        .unwrap_or_default();
-    let mut found: Vec<String> = Vec::new();
-    for sid in sessions {
-        if let Some(lines) = read_transcript(sid) {
-            found.extend(skills_from_transcript(&line_slices(&lines)));
-        }
-    }
-    if !found.is_empty() {
-        found.sort();
-        found.dedup();
-        return (found, "transcript");
-    }
-    let phases: BTreeSet<&str> = row
-        .get("phases_completed")
-        .and_then(Value::as_array)
-        .map(|list| {
-            list.iter()
-                .filter_map(Value::as_str)
-                .filter(|p| PHASE_TO_SKILL.iter().any(|(phase, _)| phase == p))
-                .collect()
-        })
-        .unwrap_or_default();
-    if !phases.is_empty() {
-        let proxy: Vec<String> = phases
-            .into_iter()
-            .filter_map(|p| {
-                PHASE_TO_SKILL
-                    .iter()
-                    .find(|(phase, _)| *phase == p)
-                    .map(|(_, skill)| skill.to_string())
-            })
-            .collect();
-        return (proxy, "phase-proxy");
-    }
-    (Vec::new(), "unattributed")
+    crate::observer::extract_skill_runs(row, &crate::observer::default_read_transcript)
 }
 
 /// `_new_skill_bucket`.
