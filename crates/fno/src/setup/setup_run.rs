@@ -1035,7 +1035,7 @@ fn step_merge_queue(_exe: &Path, root: &Path, rep: &mut Report) {
         // never probes more than the config it already read.
         rep.needs_human.push(
             "merge-queue: enabling GitHub's merge queue is a repo-admin \
-ruleset change; the exact command lives in docs/architecture/authorized-merge.md"
+ruleset change; see the Merge queue reference in the fno docs for the ruleset command"
                 .into(),
         );
         return;

@@ -17,8 +17,6 @@ name: main-binaries
 # forever. The pack marker is the fno-bin-<rev>-pack-<pack rev>.txt asset.
 
 on:
-  merge_group:
-    types: [checks_requested]
   push:
     branches: [main]
     paths:

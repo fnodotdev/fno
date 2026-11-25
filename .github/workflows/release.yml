@@ -44,8 +44,6 @@ name: release
 # the tap is skipped, and the GitHub Release is created as a draft.
 
 on:
-  merge_group:
-    types: [checks_requested]
   schedule:
     # Daily; the channel input is absent on schedule, which resolves to
     # nightly. The nightly publish then dispatches the day's rc candidate.

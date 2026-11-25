@@ -8,8 +8,6 @@ name: CodeQL
 # only, never pull requests: CI slots are the bottleneck, and a PR-time
 # upload would collide with the default-setup scanner.
 on:
-  merge_group:
-    types: [checks_requested]
   push:
     branches: [main]
   schedule:
