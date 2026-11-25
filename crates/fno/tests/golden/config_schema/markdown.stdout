@@ -54,7 +54,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `backlog.maintain.budget_seconds` | int | `300` | advanced | Wall-clock budget (seconds) for one `fno backlog maintain` pass; a short run exits 4 with a partial receipt naming the leg it stopped in. |
 | `backlog.maintain.validity_days` | int | `60` | advanced | Age (days) before a stale idea enters the validity sweep. |
 | `backlog.maintain.validity_batch_size` | int | `25` | advanced | Oldest-first validity-sweep batch size (clamped to 100). |
-| `backlog.id_prefix` | str (optional) | _(none)_ | always | Prefix for minted node IDs (<=7 chars; not cv-/fu-/tgt-). |
+| `backlog.id_prefix` | str (optional) | _(none)_ | always | Prefix for minted node IDs (<=7 chars; not cv-/fu-/tgt-). Unset defaults to x; legacy ab- ids stay resolvable. |
 | `backlog.id_hex_width` | int | `8` | advanced | Hex width of minted node IDs (4-8). |
 | `backlog.id_mode` | typing.Literal['hex', 'sequential'] | `hex` | never | How a new node id is minted: hex (default) or sequential (<prefix>-1, -2, ...). Sequential refuses a prefix another project uses. |
 | `backlog.staleness_days` | int | `21` | advanced | Age (days) before an unmoved ready node is quarantined from selection. |

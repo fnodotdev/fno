@@ -136,7 +136,7 @@ These are real keys in `config.toml`. Run `fno config get <key>` to read any of 
 | `config.review.external_reviewers` | Which reviewer(s) `pr check` waits on (e.g. `gemini`, `codex`) | `[]` |
 | `config.auto_merge.enabled` | Let `target` merge a PR itself once review passes | `false` |
 | `config.target.defaults.max_iterations` | How many times `target` retries before stopping | `40` |
-| `config.backlog.id_prefix` | The prefix for minted backlog node ids (e.g. `fno-a3f9`); unset falls back to `ab-` | none |
+| `config.backlog.id_prefix` | The prefix for minted backlog node ids (e.g. `fno-a3f9`); unset defaults to `x` | `x` |
 | `config.obsidian.enabled` + `.vault` | Store plans and design docs in an Obsidian vault | `false` |
 | `config.project.vision` | One line: what this codebase is and why (project-scoped) | none |
 
