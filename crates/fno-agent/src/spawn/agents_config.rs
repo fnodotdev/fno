@@ -2191,12 +2191,21 @@ pub fn user_hours_or_default(cwd: &Path) -> UserHours {
             eprintln!("fno-agent: {refusal}");
             if let Some(store) = &store {
                 let text = format!(
-                    "Config refused: {refusal}. Until it is fixed the user reads as never away. A parked prompt is denied after 30 minutes, not at once while the user is away."
+                    "Config refused: {refusal}. Until it is fixed the working hours are ignored. A parked prompt is denied after 30 minutes, not at once while the user is away. An explicit away override still holds."
                 );
                 let _ = crate::fleet_task::file_once(store, LANE, KEY, "", &text, None, None);
             }
-            UserHours::default()
+            degraded_hours(read_away_until(crate::provider_cap::now_epoch_secs()))
         }
+    }
+}
+
+/// What a refused config leaves: no working hours, but an explicit one-off
+/// away still holds.
+fn degraded_hours(away_until: Option<i64>) -> UserHours {
+    UserHours {
+        away_until,
+        ..UserHours::default()
     }
 }
 
@@ -2273,19 +2282,23 @@ fn away_state_path() -> Option<PathBuf> {
 /// The epoch the override runs to, when one is set and still ahead of `now`.
 /// An expired file is deleted on the way, so the override ends by itself.
 fn read_away_until(now: i64) -> Option<i64> {
-    let path = away_state_path()?;
-    let until = std::fs::read_to_string(&path)
+    read_away_until_at(&away_state_path()?, now)
+}
+
+/// An expired file is removed only if it still holds the text that read as
+/// expired, so a fresh `away` written meanwhile survives.
+fn read_away_until_at(path: &Path, now: i64) -> Option<i64> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let until = serde_json::from_str::<serde_json::Value>(&text)
         .ok()
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|v| v.get("until_epoch").and_then(serde_json::Value::as_i64));
-    match until {
-        Some(until) if until > now => Some(until),
-        Some(_) => {
-            let _ = std::fs::remove_file(&path);
-            None
-        }
-        None => None,
+        .and_then(|v| v.get("until_epoch").and_then(serde_json::Value::as_i64))?;
+    if until > now {
+        return Some(until);
     }
+    if std::fs::read_to_string(path).is_ok_and(|again| again == text) {
+        let _ = std::fs::remove_file(path);
+    }
+    None
 }
 
 fn next_clock<Z: chrono::TimeZone>(zone: &Z, now: i64, at: chrono::NaiveTime) -> Option<i64> {
@@ -2327,7 +2340,10 @@ pub(crate) fn parse_away_until(spec: &str, timezone: &str, now: i64) -> Result<i
             Some('h') => 3600,
             _ => 86_400,
         };
-        now + count * unit
+        count
+            .checked_mul(unit)
+            .and_then(|span| now.checked_add(span))
+            .ok_or_else(|| format!("{spec:?} is too far away"))?
     } else if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(spec) {
         dt.timestamp()
     } else {
@@ -2375,7 +2391,7 @@ fn write_away(until: i64, now: i64) -> Result<(), String> {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
     let body = serde_json::json!({"until_epoch": until, "set_epoch": now});
-    std::fs::write(&path, format!("{body}\n")).map_err(|e| e.to_string())
+    crate::state::write_json_atomic(&path, &body).map_err(|e| e.to_string())
 }
 
 /// Startup reconciliation is non-destructive by default. Operators may opt in
@@ -3439,5 +3455,32 @@ mod user_hours_tests {
         assert_eq!(at("2026-11-25 12:00").unwrap(), TUE_NOON + 86_400);
         assert!(at("yesterday").is_err());
         assert!(at("-5m").is_err(), "a time in the past is refused");
+    }
+
+    #[test]
+    fn a_refused_config_still_honors_an_explicit_away() {
+        let hours = degraded_hours(Some(TUE_NOON + 3600));
+        assert!(hours.away(TUE_NOON));
+        assert!(!hours.away(TUE_NOON + 3600));
+        assert!(!degraded_hours(None).away(TUE_NOON));
+    }
+
+    #[test]
+    fn an_expired_away_is_removed_and_a_fresh_one_survives() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("user-away.json");
+        std::fs::write(&path, "{\"until_epoch\": 100}\n").unwrap();
+        assert_eq!(read_away_until_at(&path, 50), Some(100));
+        assert_eq!(read_away_until_at(&path, 200), None);
+        assert!(!path.exists(), "expired state is cleared");
+        std::fs::write(&path, "{\"until_epoch\": 9000}\n").unwrap();
+        assert_eq!(read_away_until_at(&path, 200), Some(9000));
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn an_away_length_too_large_to_add_is_refused() {
+        assert!(parse_away_until("9223372036854775807h", "UTC", TUE_NOON).is_err());
+        assert!(parse_away_until("9223372036854775807d", "UTC", TUE_NOON).is_err());
     }
 }

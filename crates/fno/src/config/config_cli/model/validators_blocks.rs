@@ -24,6 +24,7 @@ const MATCH_KEYS: [&str; 14] = [
 
 pub(super) fn register(reg: &mut Registry) {
     reg.before("UserBlock", &["working_hours"], check_working_hours);
+    reg.before("UserBlock", &["timezone"], check_timezone);
     reg.model_before("AttentionBlock", ignore_retired_rows);
 
     reg.before("DispatchBlock", &["auto_merge"], coerce_auto_merge);
@@ -325,6 +326,30 @@ fn check_working_hours(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
                 )));
             }
         }
+    }
+    Ok(v)
+}
+
+/// `[user] timezone`: an IANA name or empty. Where the system zone database
+/// exists, an unknown name is refused here instead of at the next load.
+fn check_timezone(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
+    let Value::String(name) = &v else {
+        return Ok(v);
+    };
+    let name = name.trim();
+    if name.is_empty() || name.eq_ignore_ascii_case("utc") {
+        return Ok(v);
+    }
+    let shaped = !name.starts_with('/')
+        && !name.contains("..")
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'_' | b'-' | b'+'));
+    let db = std::path::Path::new("/usr/share/zoneinfo");
+    if !shaped || (db.is_dir() && !db.join(name).is_file()) {
+        return Err(Fail::Value(format!(
+            "timezone {name:?} is not an IANA zone name such as America/Los_Angeles"
+        )));
     }
     Ok(v)
 }

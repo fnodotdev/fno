@@ -71,23 +71,21 @@ pub fn run(_args: &[String]) -> i32 {
 
 const GUARD: &str = "worktree-relocation-allow";
 
-/// The file a routine tool call touches, and whether it writes. Reads of any
-/// non-secret file and edits inside the worker's own folders never need a
-/// person: the user ruled that routine work raises no prompt.
-fn file_target(payload: &Payload) -> Option<(&str, bool)> {
+/// The file a routine tool call touches. Reads and edits inside the worker's
+/// own folders never need a person: the user ruled that routine work raises
+/// no prompt. Everything else keeps its prompt.
+fn file_target(payload: &Payload) -> Option<&str> {
     let input = &payload.tool_input;
-    let (raw, write) = match payload.tool_name.as_str() {
-        "Write" | "Edit" | "MultiEdit" => (input.file_path.as_str(), true),
-        "NotebookEdit" => (input.notebook_path.as_str(), true),
-        "Read" => (input.file_path.as_str(), false),
+    let raw = match payload.tool_name.as_str() {
+        "Write" | "Edit" | "MultiEdit" | "Read" => input.file_path.as_str(),
+        "NotebookEdit" => input.notebook_path.as_str(),
         _ => return None,
     };
-    (!raw.is_empty()).then_some((raw, write))
+    (!raw.is_empty()).then_some(raw)
 }
 
-/// Names a routine call never clears: git internals (hooks run code), the
-/// harness's own settings, ssh and cloud credentials, env files, keys, and
-/// fno's config. A prompt stays for each.
+/// Names a routine call never clears, compared without case. A prompt stays
+/// for each.
 fn blocked_name(path: &Path) -> bool {
     const DIRS: [&str; 5] = [".git", ".claude", ".ssh", ".aws", ".gnupg"];
     const FILES: [&str; 6] = [
@@ -98,15 +96,15 @@ fn blocked_name(path: &Path) -> bool {
         "settings.local.json",
         "authorized_keys",
     ];
-    if path
-        .components()
-        .any(|c| DIRS.iter().any(|d| c.as_os_str() == *d))
-    {
+    if path.components().any(|c| {
+        let part = c.as_os_str().to_string_lossy().to_lowercase();
+        DIRS.contains(&part.as_str())
+    }) {
         return true;
     }
     let name = path
         .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
+        .map(|n| n.to_string_lossy().to_lowercase())
         .unwrap_or_default();
     name.starts_with(".env")
         || name.starts_with("id_rsa")
@@ -140,13 +138,13 @@ fn worktree_root(cwd: &Path) -> Option<PathBuf> {
     })
 }
 
-fn write_roots(cwd: &Path) -> Vec<PathBuf> {
+/// The folders a worker's routine file work may touch: its own worktree, its
+/// job tmp and its project's plan folder.
+fn work_roots(cwd: &Path) -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = worktree_root(cwd).into_iter().collect();
     if let Some(job) = std::env::var_os("CLAUDE_JOB_DIR") {
         roots.push(PathBuf::from(job));
     }
-    roots.extend(crate::paths_cli::state_dir_absolute(cwd).ok());
-    roots.push(crate::paths_cli::state_root_for_worktrees(cwd));
     roots.extend(crate::paths_cli::plans_dir_for(cwd));
     roots
         .into_iter()
@@ -154,16 +152,29 @@ fn write_roots(cwd: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-fn under_roots(path: &Path, roots: &[PathBuf]) -> bool {
-    roots
+/// The root `path` sits strictly inside, when it is a plain file path: no
+/// link at any step from the root down, a missing leaf included.
+fn root_without_links<'a>(path: &Path, roots: &'a [PathBuf]) -> Option<&'a PathBuf> {
+    let root = roots
         .iter()
-        .any(|root| path != root.as_path() && path.starts_with(root))
+        .find(|root| path != root.as_path() && path.starts_with(root))?;
+    let rest = path.strip_prefix(root).ok()?;
+    let mut step = root.clone();
+    for part in rest.components() {
+        step.push(part);
+        let linked = std::fs::symlink_metadata(&step)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false);
+        if linked {
+            return None;
+        }
+    }
+    Some(root)
 }
 
-/// True for a Read of a non-secret file, or an edit strictly inside the
-/// worker's worktree, its job tmp, the fno state folders or the plan vault.
+/// True for a Read or an edit strictly inside the worker's own folders.
 fn file_work_allowed(payload: &Payload, cwd: &Path) -> bool {
-    let Some((raw, write)) = file_target(payload) else {
+    let Some(raw) = file_target(payload) else {
         return false;
     };
     let Some(path) = real_path(raw, cwd) else {
@@ -172,7 +183,7 @@ fn file_work_allowed(payload: &Payload, cwd: &Path) -> bool {
     if blocked_name(&path) {
         return false;
     }
-    !write || under_roots(&path, &write_roots(cwd))
+    root_without_links(&path, &work_roots(cwd)).is_some()
 }
 
 /// The `path` of an EnterWorktree call, the only shape that relocates. The
@@ -320,38 +331,42 @@ mod tests {
     }
 
     #[test]
-    fn routine_file_work_is_allowed_and_secrets_and_outsiders_keep_the_prompt() {
+    fn file_work_is_allowed_only_inside_the_workers_own_folders() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap();
-        let roots = vec![root.join("worktrees/repo/node")];
-        std::fs::create_dir_all(&roots[0]).unwrap();
-        let inside = roots[0].join("src/lib.rs");
-        assert!(under_roots(&inside, &roots), "a file in the worktree");
-        assert!(!under_roots(&roots[0], &roots), "the root itself");
-        assert!(!under_roots(&root.join("elsewhere/x.rs"), &roots));
-        for blocked in [
-            ".git/hooks/pre-commit",
-            ".claude/settings.json",
-            "deploy/.env.production",
-            "keys/server.pem",
-            "home/.ssh/config",
-            ".fno/config.toml",
-        ] {
-            assert!(blocked_name(Path::new(blocked)), "{blocked}");
-        }
+        let wt = root.join("worktrees/repo/node");
+        std::fs::create_dir_all(wt.join("src")).unwrap();
+        let roots = vec![wt.clone()];
+        assert!(root_without_links(&wt.join("src/lib.rs"), &roots).is_some());
+        assert!(root_without_links(&wt, &roots).is_none(), "the root itself");
+        assert!(root_without_links(&root.join("elsewhere/x.rs"), &roots).is_none());
         assert!(!blocked_name(Path::new("src/runtime/prompt_wait.rs")));
+        for name in [".GIT/index", ".Claude/x", "a/.ENV.local", "k/SERVER.PEM"] {
+            assert!(blocked_name(Path::new(name)), "{name}");
+        }
         let write: Payload = serde_json::from_value(
             json!({"tool_name": "Write", "tool_input": {"file_path": "a.rs"}}),
         )
         .unwrap();
-        assert_eq!(file_target(&write), Some(("a.rs", true)));
-        let read: Payload = serde_json::from_value(
-            json!({"tool_name": "Read", "tool_input": {"file_path": "a.rs"}}),
-        )
-        .unwrap();
-        assert_eq!(file_target(&read), Some(("a.rs", false)));
+        assert_eq!(file_target(&write), Some("a.rs"));
         let bash: Payload =
             serde_json::from_value(json!({"tool_name": "Bash", "tool_input": {}})).unwrap();
         assert_eq!(file_target(&bash), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_inside_the_worktree_never_counts_as_a_plain_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let wt = root.join("worktrees/repo/node");
+        std::fs::create_dir_all(&wt).unwrap();
+        let roots = vec![wt.clone()];
+        std::os::unix::fs::symlink(root.join("nowhere"), wt.join("dangling")).unwrap();
+        assert!(root_without_links(&wt.join("dangling"), &roots).is_none());
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, wt.join("dir")).unwrap();
+        assert!(root_without_links(&wt.join("dir/new.txt"), &roots).is_none());
     }
 }

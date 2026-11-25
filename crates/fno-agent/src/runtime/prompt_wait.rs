@@ -43,6 +43,12 @@ struct Seen {
     deny_done: bool,
     /// The one `--raw` follow-up turn went out after the denial.
     followed_up: bool,
+    /// The deny key took cleanly, so the screen is safe to type at after.
+    deny_clean: bool,
+    /// This wait's denial count for the node and action; 0 until counted.
+    follow_count: u32,
+    /// Follow-up sends that failed, so a bad lane stops retrying.
+    follow_attempts: u8,
     /// Hex fingerprint of the prompt on screen. A new one is a new wait.
     fingerprint: String,
 }
@@ -313,6 +319,11 @@ fn run_pass_with(
         snapshot,
         runner,
         &Hooks {
+            menu_showing: &|short: &str| {
+                crate::thread_dialog::read_thread(&crate::claude_roster::daemon_dir(), short)
+                    .map(|screen| crate::thread_dialog::read_menu(&screen).is_some())
+                    .unwrap_or(true)
+            },
             asleep: &user_asleep,
             deny: &deny_prompt,
             dialog: &|w: &mut Waiting| w.read_dialog(),
@@ -323,6 +334,9 @@ fn run_pass_with(
 /// The three seams a pass reaches the machine through, so a test drives the
 /// pass with no screen, no config and no keys.
 struct Hooks<'a> {
+    /// True while a permission menu is on the worker's screen, or the screen
+    /// cannot be read.
+    menu_showing: &'a dyn Fn(&str) -> bool,
     asleep: &'a dyn Fn(&Waiting, i64) -> bool,
     deny: &'a dyn Fn(&str) -> DenyOutcome,
     dialog: &'a dyn Fn(&mut Waiting),
@@ -355,7 +369,11 @@ impl Waiting {
     /// A finished denial followed by another sighting is a new wait, even
     /// when the re-asked prompt shows the same screen. True when it reset.
     fn reset_after_denial(&mut self, now: i64) -> bool {
-        if !(self.seen.denied && self.seen.deny_done && now > self.seen.denied_at_ms) {
+        if !self.seen.denied || now <= self.seen.denied_at_ms {
+            return false;
+        }
+        let settled = self.seen.deny_done && (self.seen.followed_up || !self.seen.deny_clean);
+        if !settled && now - self.seen.denied_at_ms < DENIAL_SETTLE_MS {
             return false;
         }
         self.seen = Seen::default();
@@ -385,6 +403,9 @@ impl Waiting {
 /// The same action denied this many times for one node stops the follow-up
 /// turns: the worker would only re-ask it.
 const REPEAT_DENIALS: u32 = 2;
+/// A denial still owing a board task, a mail or a follow-up turn gets this
+/// long to finish before a new sighting restarts the wait.
+const DENIAL_SETTLE_MS: i64 = 10 * 60_000;
 /// A denial older than this no longer counts toward a repeat.
 const REPEAT_WINDOW_MS: i64 = 24 * 3_600_000;
 
@@ -405,10 +426,15 @@ fn denial_count(home: &AgentsHome, node: &str, action: &str, now: i64) -> Result
         })
         .collect();
     let path = dir.join(format!("{safe}.json"));
-    let mut seen: std::collections::BTreeMap<String, (u32, i64)> = std::fs::read(&path)
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default();
+    let mut seen: std::collections::BTreeMap<String, (u32, i64)> = match std::fs::read(&path) {
+        Ok(bytes) => match serde_json::from_slice(&bytes) {
+            Ok(map) => map,
+            // A counter that cannot be read reads as at the limit, so a
+            // damaged file never lets follow-ups go out again.
+            Err(_) => return Ok(REPEAT_DENIALS),
+        },
+        Err(_) => Default::default(),
+    };
     seen.retain(|_, (_, first)| now - *first <= REPEAT_WINDOW_MS);
     let entry = seen.entry(action.to_string()).or_insert((0, now));
     entry.0 += 1;
@@ -485,6 +511,7 @@ fn settle_denials(
                 DenyOutcome::Typed(note) => {
                     w.seen.denied = true;
                     w.seen.denied_at_ms = now;
+                    w.seen.deny_clean = note.is_none();
                     if let Some(note) = note {
                         first_error.get_or_insert(note);
                     }
@@ -494,11 +521,10 @@ fn settle_denials(
                 }
             }
         }
-        if w.seen.denied && !w.seen.followed_up {
+        if w.seen.denied && w.seen.deny_clean && !w.seen.followed_up {
             // Claude's rejection result tells the model to stop and wait for
             // the user, so a denied worker idles. One typed command turn
-            // sends it back to work.
-            w.seen.followed_up = true;
+            // sends it back to work, and only onto an idle prompt line.
             load_once(home, &mut registry, &mut first_error);
             let node = registry
                 .as_ref()
@@ -509,17 +535,27 @@ fn settle_denials(
                         .find(|e| is_session(e, sid))
                         .and_then(|e| e.node.clone())
                 });
-            if let Some(node) = node {
-                let action = w.screen_fp.clone().unwrap_or_else(|| w.waiting_for.clone());
-                match denial_count(home, &node, &action, now) {
-                    Ok(count) if count >= REPEAT_DENIALS => {
+            match node {
+                None => w.seen.followed_up = true,
+                Some(node) => {
+                    let action = w.screen_fp.clone().unwrap_or_else(|| w.waiting_for.clone());
+                    if w.seen.follow_count == 0 {
+                        match denial_count(home, &node, &action, now) {
+                            Ok(count) => w.seen.follow_count = count,
+                            Err(e) => {
+                                first_error.get_or_insert(e);
+                            }
+                        }
+                    }
+                    let count = w.seen.follow_count;
+                    if count >= REPEAT_DENIALS {
                         let store = crate::provider_cap::questions_path(home);
                         let key = format!("prompt repeated {node} {action}");
                         let text = format!(
                             "Node {node}: worker {} hit the same {} {count} times and was denied each time. No more follow-up turns go out. The worker stays idle until a person decides.",
                             w.name, w.waiting_for
                         );
-                        if let Err(e) = crate::fleet_task::file_once(
+                        match crate::fleet_task::file_once(
                             &store,
                             SENDER,
                             &key,
@@ -528,22 +564,25 @@ fn settle_denials(
                             None,
                             Some(&node),
                         ) {
-                            first_error.get_or_insert(e);
+                            Ok(_) => w.seen.followed_up = true,
+                            Err(e) => {
+                                first_error.get_or_insert(e);
+                            }
                         }
-                    }
-                    Ok(_) => {
+                    } else if count >= 1 && !(hooks.menu_showing)(&w.short_id) {
                         let argv = follow_up_argv(w, &node);
                         let (code, _out, err) = runner(&argv, "");
-                        if code != 0 {
+                        if code == 0 {
+                            w.seen.followed_up = true;
+                        } else {
+                            w.seen.follow_attempts += 1;
+                            w.seen.followed_up = w.seen.follow_attempts >= 3;
                             first_error.get_or_insert(format!(
                                 "follow-up turn to {} failed: {}",
                                 w.name,
                                 err.trim()
                             ));
                         }
-                    }
-                    Err(e) => {
-                        first_error.get_or_insert(e);
                     }
                 }
             }
@@ -783,6 +822,8 @@ mod tests {
         fp: std::cell::RefCell<String>,
         asleep: std::cell::Cell<bool>,
         sent: std::cell::RefCell<Vec<Vec<String>>>,
+        menu_up: std::cell::Cell<bool>,
+        fail_raw: std::cell::Cell<u8>,
         _temp: tempfile::TempDir,
     }
 
@@ -806,6 +847,8 @@ mod tests {
                 fp: std::cell::RefCell::new("aa".into()),
                 asleep: Default::default(),
                 sent: Default::default(),
+                menu_up: Default::default(),
+                fail_raw: Default::default(),
                 _temp: temp,
             }
         }
@@ -818,8 +861,13 @@ mod tests {
             )]);
             let mut mail = |argv: &[String], _: &str| {
                 self.sent.borrow_mut().push(argv.to_vec());
+                if argv.contains(&"--raw".to_string()) && self.fail_raw.get() > 0 {
+                    self.fail_raw.set(self.fail_raw.get() - 1);
+                    return (1, String::new(), "lane down".to_string());
+                }
                 (0, "accepted-new-turn".into(), String::new())
             };
+            let menu_showing = |_: &str| self.menu_up.get();
             let asleep = |_: &Waiting, _: i64| self.asleep.get();
             let deny = |short: &str| {
                 self.typed.borrow_mut().push(short.to_string());
@@ -835,6 +883,7 @@ mod tests {
                 &snap,
                 &mut mail,
                 &Hooks {
+                    menu_showing: &menu_showing,
                     asleep: &asleep,
                     deny: &deny,
                     dialog: &dialog,
@@ -962,5 +1011,57 @@ mod tests {
         assert_eq!(denial_count(&home, "x-1", "other", 60_000).unwrap(), 1);
         let later = REPEAT_WINDOW_MS + 120_000;
         assert_eq!(denial_count(&home, "x-1", "fp", later).unwrap(), 1);
+    }
+
+    fn raw_sends(rig: &Rig) -> usize {
+        let raw = "--raw".to_string();
+        rig.sent
+            .borrow()
+            .iter()
+            .filter(|a| a.contains(&raw))
+            .count()
+    }
+
+    #[test]
+    fn no_follow_up_goes_out_when_the_deny_key_did_not_take_cleanly() {
+        let rig = Rig::new();
+        rig.asleep.set(true);
+        *rig.outcome.borrow_mut() = Some(DenyOutcome::Typed(Some("still showing".into())));
+        assert!(rig.pass(1_000_000).is_err());
+        assert_eq!(raw_sends(&rig), 0);
+    }
+
+    #[test]
+    fn the_follow_up_waits_for_a_screen_with_no_menu() {
+        let rig = Rig::new();
+        rig.asleep.set(true);
+        rig.menu_up.set(true);
+        rig.pass(1_000_000).unwrap();
+        assert_eq!(raw_sends(&rig), 0, "a live menu gets no typed line");
+        rig.menu_up.set(false);
+        rig.pass(1_000_000 + 60_000).unwrap();
+        assert_eq!(raw_sends(&rig), 1);
+        assert_eq!(rig.typed.borrow().len(), 1, "the wait did not restart");
+    }
+
+    #[test]
+    fn a_failed_follow_up_send_is_tried_again() {
+        let rig = Rig::new();
+        rig.asleep.set(true);
+        rig.fail_raw.set(1);
+        assert!(rig.pass(1_000_000).is_err());
+        rig.pass(1_000_000 + 60_000).unwrap();
+        assert_eq!(raw_sends(&rig), 2, "the second send landed");
+        assert_eq!(rig.typed.borrow().len(), 1, "no second denial");
+    }
+
+    #[test]
+    fn an_unreadable_denial_counter_reads_as_at_the_limit() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = AgentsHome::at(temp.path().join("agents"));
+        let dir = home.root().join("prompt-denials");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("x-1.json"), "not json").unwrap();
+        assert_eq!(denial_count(&home, "x-1", "fp", 0).unwrap(), REPEAT_DENIALS);
     }
 }
