@@ -295,7 +295,7 @@ mod tests {
             ts: "2026-09-01T00:00:00Z".into(),
             kind: "node_created".into(),
             node: Some(node.into()),
-            harness: harness.map(str::to_string),
+            harness: harness.map(Into::into),
             ..Default::default()
         }
     }

@@ -20,9 +20,9 @@ fn feed_item(node: Option<&str>, sid: Option<&str>) -> crate::feed_overlay::Feed
     crate::feed_overlay::FeedItem {
         ts: "2026-09-02T18:27:06Z".into(),
         kind: "pr_created".into(),
-        node: node.map(str::to_string),
+        node: node.map(Into::into),
         cwd: None,
-        session_id: sid.map(str::to_string),
+        session_id: sid.map(Into::into),
         harness: None,
         title: "PR 1395".into(),
         r#ref: Some("1395".into()),
@@ -40,7 +40,7 @@ fn feed_item(node: Option<&str>, sid: Option<&str>) -> crate::feed_overlay::Feed
         url: None,
         lead: None,
         lead_current: false,
-        area: String::new(),
+        area: Default::default(),
         cursor: String::new(),
     }
 }
@@ -69,7 +69,7 @@ fn reaped_item(sid: &str, resume: &str) -> crate::feed_overlay::FeedItem {
         url: None,
         lead: None,
         lead_current: false,
-        area: String::new(),
+        area: Default::default(),
         cursor: String::new(),
     }
 }

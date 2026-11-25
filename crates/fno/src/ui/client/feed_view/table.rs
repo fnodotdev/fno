@@ -61,16 +61,16 @@ impl Col {
     pub(crate) fn value(self, it: &FeedItem) -> String {
         match self {
             Col::Time => local_day(&it.ts),
-            Col::Area => it.area.clone(),
+            Col::Area => it.area.to_string(),
             Col::Harness => it
                 .harness
                 .as_deref()
                 .unwrap_or_default()
                 .to_ascii_lowercase(),
             Col::Kind => super::display_kind(&it.kind).to_string(),
-            Col::Node => it.node.clone().unwrap_or_default(),
-            Col::Session => it.session_id.clone().unwrap_or_default(),
-            Col::Lead => it.lead.clone().unwrap_or_default(),
+            Col::Node => it.node.as_deref().unwrap_or_default().to_string(),
+            Col::Session => it.session_id.as_deref().unwrap_or_default().to_string(),
+            Col::Lead => it.lead.as_deref().unwrap_or_default().to_string(),
             Col::Summary => it.title.lines().next().unwrap_or_default().to_string(),
         }
     }
@@ -353,7 +353,7 @@ fn group_of(it: &FeedItem, group: Group) -> (String, String) {
     let label = match group {
         Group::None => String::new(),
         Group::LeadOrEpic if super::in_teams_band(&it.kind, &it.team) => TEAMS.to_string(),
-        Group::LeadOrEpic => it.owner.clone().unwrap_or_else(|| OTHER.to_string()),
+        Group::LeadOrEpic => it.owner.as_deref().unwrap_or(OTHER).to_string(),
         Group::Col(c) => {
             let v = c.value(it);
             if v.is_empty() {
@@ -442,10 +442,10 @@ mod tests {
             ts: format!("2026-09-0{}T1{}:00:00Z", 1 + i % 3, i),
             kind: kind.into(),
             area: area.into(),
-            harness: h.map(str::to_string),
-            node: node.map(str::to_string),
-            session_id: (i % 2 == 0).then(|| format!("s-{i:04}")),
-            lead: (i % 3 != 0).then(|| format!("lead-{}", i % 3)),
+            harness: h.map(Into::into),
+            node: node.map(Into::into),
+            session_id: (i % 2 == 0).then(|| format!("s-{i:04}").into()),
+            lead: (i % 3 != 0).then(|| format!("lead-{}", i % 3).into()),
             title: if i == 4 {
                 String::new()
             } else {

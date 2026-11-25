@@ -214,7 +214,7 @@ impl ValueWidths {
 
 /// True when a row renders in the teams band: a team kind, or a removal
 /// that names the team it held.
-fn in_teams_band(kind: &str, team: &Option<String>) -> bool {
+fn in_teams_band(kind: &str, team: &Option<crate::feed_overlay::IStr>) -> bool {
     kind == "team_granted" || kind == "team_vacated" || (kind == "session_reaped" && team.is_some())
 }
 
@@ -1628,7 +1628,7 @@ pub(crate) async fn feed_keys(
                 ModalKey::Byte(b'b') => {
                     let launch = view.feed_detail.as_ref().and_then(|m| {
                         feed_detail::plan_node(&m.item)
-                            .map(|node| (node.to_owned(), m.item.cwd.clone()))
+                            .map(|node| (node.to_owned(), crate::feed_overlay::owned(&m.item.cwd)))
                     });
                     if let Some((node, cwd)) = launch {
                         if super::sideline::show_composer(view, sock_w).await? {
@@ -1695,8 +1695,7 @@ pub(crate) async fn feed_keys(
                 }
                 ModalKey::Byte(0x09) => {
                     let f = view.feed.as_mut().unwrap();
-                    let items = f.win.items.clone();
-                    if let Some(next) = search::complete(&f.query_text, &items) {
+                    if let Some(next) = search::complete(&f.query_text, &f.win.items) {
                         f.query_text = next;
                     }
                     f.bar_debounce = Some(Instant::now());
