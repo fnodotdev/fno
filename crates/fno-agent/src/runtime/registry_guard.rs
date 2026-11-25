@@ -29,7 +29,6 @@ use std::ffi::OsStr;
 use std::path::Path;
 
 use crate::state::RegistryEntry;
-use crate::AgentStatus;
 
 /// The row-loss override, shared verbatim with the Python mirror.
 pub const ROW_LOSS_OVERRIDE_ENV: &str = "FNO_REGISTRY_ALLOW_ROW_LOSS";
@@ -154,6 +153,7 @@ fn same_path(a: &Path, b: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::AgentStatus;
     use std::path::PathBuf;
 
     fn inputs(target: &Path, loss: LiveLoss) -> GuardInputs<'_> {
