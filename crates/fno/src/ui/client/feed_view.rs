@@ -138,6 +138,7 @@ pub(crate) fn open_overlay(prior: Option<FeedOverlay>, gen: u64) -> FeedOverlay 
 /// Rebuild the slot list from the rows, the query and the view. Every
 /// change to any of the three calls this, and nothing else writes `slots`.
 pub(crate) fn reslot(f: &mut FeedOverlay) {
+    let started = Instant::now();
     let ctx = crate::feed_overlay::EventCtx::from_rows(&[], &[]);
     let query = match &f.parsed {
         Some(Ok(parsed)) => Some(parsed),
@@ -150,6 +151,17 @@ pub(crate) fn reslot(f: &mut FeedOverlay) {
     f.matched = matched;
     f.widths = ValueWidths::of(&f.win.items);
     f.sel = f.sel.min(f.slots.len().saturating_sub(1));
+    // A re-slot runs on the UI thread over every held row, so its cost is
+    // the view-change budget; client.log keeps one line per call.
+    crate::mux_log::client(
+        "info",
+        &format!(
+            "feed reslot rows={} slots={} ms={}",
+            f.win.items.len(),
+            f.slots.len(),
+            started.elapsed().as_millis()
+        ),
+    );
 }
 
 /// The narrowest the summary column gets before node and the other
