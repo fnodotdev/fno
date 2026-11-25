@@ -354,12 +354,9 @@ pub fn message_id_from_uri(s: &str) -> Option<&str> {
 /// hex digits (the hash form) or 1 to 7 decimal digits (the number form).
 /// A longer hex run, or a number mixed with hex letters, names no id.
 fn mail_id_len(chars: &[char], start: usize) -> Option<usize> {
-    let run = chars
-        .get(start..)?
-        .iter()
-        .take_while(|c| c.is_ascii_hexdigit())
-        .count();
-    let digits = chars[start..start + run].iter().all(|c| c.is_ascii_digit());
+    let tail = chars.get(start..)?;
+    let run = tail.iter().take_while(|c| c.is_ascii_hexdigit()).count();
+    let digits = tail.iter().take(run).all(|c| c.is_ascii_digit());
     (run == 12 || ((1..=7).contains(&run) && digits)).then_some(run)
 }
 
