@@ -260,26 +260,17 @@ write_atomic() {
 }
 
 # Sidecar bookkeeping. The retirement pass
-# (scripts/memory/retire-unread-pass.sh) reads .reads.jsonl: an update
-# event keeps a revisited entry alive, and a recreated (previously
-# archived) name starts at zero reads. Fail open: bookkeeping never fails
-# the write. Dedup stays a sidecar no-op - identical content re-derived by
-# a pass is not a consumer read.
+# (scripts/memory/retire-unread-pass.sh) reads .reads.jsonl and counts a
+# line as use only when its ts is not older than the entry's own
+# created_at, so stale ghosts of a prior life of that name never protect
+# a recreated entry. An update event keeps a revisited entry alive. Fail
+# open: bookkeeping never fails the write. Dedup stays a sidecar no-op -
+# identical content re-derived by a pass is not a consumer read.
 record_sidecar() {
     local fname="$1" kind="$2" sid="$3"
     printf '{"file":"%s","ts":"%s","kind":"%s","session":"%s"}\n' \
         "${fname//\"/}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$kind" "${sid//\"/}" \
         >> "$MEMORY_DIR/.reads.jsonl" 2>/dev/null || true
-}
-clear_sidecar() {
-    local fname="$1"
-    local sc="$MEMORY_DIR/.reads.jsonl"
-    [[ -f "$sc" ]] || return 0
-    local tmp
-    tmp=$(mktemp "$(dirname "$sc")/.tmp.reads.XXXXXX") || return 0
-    grep -vF "{\"file\":\"$fname\"" "$sc" > "$tmp" 2>/dev/null || true
-    mv "$tmp" "$sc" 2>/dev/null || rm -f "$tmp"
-    return 0
 }
 
 frontmatter_for_new() {
@@ -435,7 +426,6 @@ fi
 fm=$(frontmatter_for_new)
 write_atomic "$TARGET" "${fm}
 ${ENTRY_BODY}"
-clear_sidecar "$FILENAME"
 log "wrote: $FILENAME"
 # Gate artifact + event for the new-file path.
 PRIOR_ENTRIES=0

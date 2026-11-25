@@ -5,7 +5,9 @@
 #   skip when created_at is missing or unparsable (never archive unknown age);
 #   skip when now - created_at < --probation-days (default 30);
 #   skip when the sidecar (.reads.jsonl) carries any line naming the entry
-#     (reads and writer update lines both count as use);
+#     whose ts is not older than the entry's own created_at (reads and
+#     writer update lines both count as use; lines predating the entry are
+#     stale ghosts of a prior life of that name);
 #   otherwise MOVE to .archived/ (timestamp-suffixed when the name is taken;
 #     never delete or overwrite) and prune the entry's line from MEMORY.md -
 #     the writer-owned index only; operator-curated CLAUDE.md and
@@ -56,14 +58,6 @@ SIDECAR="$MEM_DIR/.reads.jsonl"
 
 TMPD="$(mktemp -d -t retire-unread-XXXXXX)" || exit 0
 trap 'rm -rf "$TMPD"' EXIT
-USE_LIST="$TMPD/use.txt"
-: > "$USE_LIST"
-if [[ -f "$SIDECAR" ]]; then
-    # Any line naming the entry counts as use; only the filename field is
-    # read, so a truncated jsonl tail can never archive an entry wrongly.
-    grep -o '"file":"[^"]*"' "$SIDECAR" 2>/dev/null \
-        | sed 's/^"file":"//;s/"$//' | sort -u > "$USE_LIST" || true
-fi
 
 now_epoch="$(date +%s)"
 moved=0
@@ -112,8 +106,21 @@ for ENTRY in "$MEM_DIR"/*.md; do
     [[ -n "${EP:-}" && "$EP" =~ ^[0-9]+$ ]] || continue
     AGE_DAYS=$(( (now_epoch - EP) / 86400 ))
     [[ "$AGE_DAYS" -ge "$PROBATION_DAYS" ]] || continue
-    # Zero recorded use: no read line and no writer update line.
-    grep -qxF "$FNAME" "$USE_LIST" && continue
+    # Zero recorded use, read against the live sidecar (no start-of-pass
+    # snapshot: a read landing while the pass runs still protects the
+    # entry). ISO-8601 UTC timestamps compare correctly as strings, so a
+    # line counts only when its ts is at least the entry's created_at;
+    # lines predating the entry are stale ghosts of a recreated name.
+    if [[ -f "$SIDECAR" ]] && awk -v pat="\"file\":\"$FNAME\"" -v since="$CREATED" '
+        !found && index($0, pat) {
+            if (match($0, /"ts":"[^"]*"/)) {
+                ts = substr($0, RSTART + 6, RLENGTH - 7)
+                if (ts >= since) found = 1
+            }
+        }
+        END { if (!found) exit 1 }' "$SIDECAR"; then
+        continue
+    fi
 
     if [[ "$DRY_RUN" == "1" ]]; then
         would_move+="$FNAME"$'\n'
@@ -149,6 +156,11 @@ fi
 if [[ "$moved" -gt 0 ]]; then
     # Prune the writer-owned index once, surgically: drop lines whose link
     # form names a moved entry, keep every other line byte-for-byte.
+    if [[ "$moved" -eq 1 ]]; then
+        WORD="entry"
+    else
+        WORD="entries"
+    fi
     INDEX="$MEM_DIR/MEMORY.md"
     if [[ -f "$INDEX" && -s "$prune_patterns" ]]; then
         tmp="$(mktemp "$MEM_DIR/.tmp.retire.XXXXXX")" || tmp=""
@@ -161,7 +173,7 @@ if [[ "$moved" -gt 0 ]]; then
             fi
         fi
     fi
-    printf 'memory-retire: archived %s unread auto entries: %s\n' \
-        "$moved" "${moved_names% }"
+    printf 'memory-retire: archived %s unread auto %s: %s\n' \
+        "$moved" "$WORD" "${moved_names% }"
 fi
 exit 0

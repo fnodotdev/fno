@@ -126,19 +126,31 @@ read_feed "$MEM/ARCHIVE-INDEX.md"
 [[ "$(sidecar_lines)" == "$((BASE + 2))" ]] || fail "an index read appended a line"
 pass "AC3: index reads silent"
 
-# ── AC11b: writer clears stale lines on a recreated name ──────────────
-log "AC11b: writer new-file path clears stale sidecar lines"
-printf '{"file":"project_writer_test.md","ts":"2026-01-01T00:00:00Z","kind":"read","session":"ghost"}\n' >> "$MEM/.reads.jsonl"
+# ── AC11b: a recreated name does not inherit stale use ────────────────
+log "AC11b: sidecar lines predating created_at are not use"
+GHOST="$CLAUDE_CONFIG_DIR/projects/-ghost-test/memory"
+mkdir -p "$GHOST"
+{
+    printf -- '---\nname: ghosted\ndescription: fixture\ntype: project\nauto_generated: true\nsource_session: s\ncreated_at: %s\n---\nBody of ghosted.\n' "$iso_new"
+} > "$GHOST/project_ghosted.md"
+# Two ghost lines from a prior life of this name, predating the recreated
+# entry's created_at. Stale lines must not protect the new entry.
+printf '{"file":"project_ghosted.md","ts":"2025-01-01T00:00:00Z","kind":"read","session":"prior"}\n' >> "$GHOST/.reads.jsonl"
+printf '{"file":"project_ghosted.md","ts":"2025-06-01T00:00:00Z","kind":"update","session":"prior"}\n' >> "$GHOST/.reads.jsonl"
+bash "$RETIREE" --memory-dir "$GHOST" --probation-days 0 >/dev/null 2>&1 \
+    || fail "ghost-filter pass run failed"
+[[ -f "$GHOST/.archived/project_ghosted.md" ]] \
+    || fail "stale ghost lines protected a recreated zero-read entry"
+grep -q "Body of ghosted" "$GHOST/.archived/project_ghosted.md" \
+    || fail "ghosted copy lost its body"
+pass "AC11b: stale lines do not protect a recreated name"
+
+# ── AC11a: writer update path appends one update line ─────────────────
+log "AC11a: writer update appends one update line"
 bash "$WRITER" --memory-dir "$MEM" --session-id sid-w1 \
     --evidence "sid-w1:1" \
     --candidate '{"type":"project","name":"writer_test","description":"sidecar bookkeeping fixture","body":"Body one."}' \
     >/dev/null 2>&1 || fail "writer new-file call failed"
-grep -q 'project_writer_test.md' "$MEM/.reads.jsonl" \
-    && fail "stale line for a recreated name survived the new-file write"
-pass "AC11b: stale lines cleared on recreate"
-
-# ── AC11a: writer update path appends one update line ─────────────────
-log "AC11a: writer update appends one update line"
 SHA=$(sha256sum "$MEM/project_writer_test.md" 2>/dev/null | awk '{print $1}' \
     || shasum -a 256 "$MEM/project_writer_test.md" | awk '{print $1}')
 BEFORE="$(sidecar_lines)"
