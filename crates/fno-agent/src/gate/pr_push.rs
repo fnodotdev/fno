@@ -671,6 +671,10 @@ pub(crate) struct PushCtx {
     /// The origin branch the push lands on, from [`push_target`]. `None`
     /// resolves it at push time (heal's caller).
     pub remote_branch: Option<String>,
+    /// A commit to push in place of local HEAD: a sandbox's exported head.
+    /// Set only with `remote_branch`. The push then runs with hooks off and
+    /// sets no upstream, because the host branch never moves.
+    pub source: Option<String>,
 }
 
 /// What a push decision ended as. `ci` names why the push went out:
@@ -722,15 +726,23 @@ fn log_records(log: &str) -> impl Iterator<Item = (&str, &str)> {
 /// the command derives it from `@{u}`). Empty `head` skips the read: a branch
 /// with no upstream has nothing in flight anywhere.
 pub(crate) fn guarded_push(ctx: &PushCtx, head: &str) -> PushOutcome {
-    let branch = run_labeled(
-        "pr-push",
-        &ctx.git_bin,
-        &["rev-parse", "--abbrev-ref", "HEAD"],
-        &ctx.cwd,
-        READ_TIMEOUT,
-    )
-    .map(|(_, out, _)| out.trim().to_string())
-    .unwrap_or_default();
+    let branch = match (&ctx.source, &ctx.remote_branch) {
+        (Some(_), Some(target)) => target.clone(),
+        (Some(_), None) => {
+            return PushOutcome::PushFailed(
+                "a bound source needs a bound remote branch; nothing pushed".into(),
+            )
+        }
+        _ => run_labeled(
+            "pr-push",
+            &ctx.git_bin,
+            &["rev-parse", "--abbrev-ref", "HEAD"],
+            &ctx.cwd,
+            READ_TIMEOUT,
+        )
+        .map(|(_, out, _)| out.trim().to_string())
+        .unwrap_or_default(),
+    };
     if PROTECTED.contains(&branch.as_str()) {
         return PushOutcome::PushFailed(format!(
             "refusing to push the protected branch '{branch}'"
@@ -787,11 +799,24 @@ pub(crate) fn guarded_push(ctx: &PushCtx, head: &str) -> PushOutcome {
     // born off origin/main carries exactly that tracking), and the create
     // path has no upstream at all. `--set-upstream origin HEAD:<target>`
     // covers both and pins correct tracking on the first push.
-    let refspec = format!("HEAD:{target}");
+    let refspec = match &ctx.source {
+        Some(sha) => format!("{sha}:refs/heads/{target}"),
+        None => format!("HEAD:{target}"),
+    };
     // The lease flag rides after the positionals: git's option parser
     // accepts it there, and the `push --set-upstream origin HEAD:<target>`
     // prefix stays byte-identical for `a_first_push_sets_the_upstream`.
-    let mut push_args: Vec<&str> = vec!["push", "--set-upstream", "origin", refspec.as_str()];
+    let mut push_args: Vec<&str> = if ctx.source.is_some() {
+        vec![
+            "-c",
+            "core.hooksPath=/dev/null",
+            "push",
+            "origin",
+            refspec.as_str(),
+        ]
+    } else {
+        vec!["push", "--set-upstream", "origin", refspec.as_str()]
+    };
     let lease_flag;
     if let Some(sha) = &ctx.lease {
         lease_flag = format!("--force-with-lease=refs/heads/{target}:{sha}");
@@ -805,15 +830,18 @@ pub(crate) fn guarded_push(ctx: &PushCtx, head: &str) -> PushOutcome {
     }
     stamp_push(ctx);
     PushOutcome::Pushed {
-        sha: run_labeled(
-            "pr-push",
-            &ctx.git_bin,
-            &["rev-parse", "--short", "HEAD"],
-            &ctx.cwd,
-            READ_TIMEOUT,
-        )
-        .map(|(_, out, _)| out.trim().to_string())
-        .unwrap_or_default(),
+        sha: match &ctx.source {
+            Some(sha) => sha.chars().take(12).collect(),
+            None => run_labeled(
+                "pr-push",
+                &ctx.git_bin,
+                &["rev-parse", "--short", "HEAD"],
+                &ctx.cwd,
+                READ_TIMEOUT,
+            )
+            .map(|(_, out, _)| out.trim().to_string())
+            .unwrap_or_default(),
+        },
         ci,
         remote_branch: target,
     }
@@ -1494,6 +1522,7 @@ pub fn run_push(argv: &[String]) -> i32 {
             force: false,
             lease: None,
             remote_branch: None,
+            source: None,
         };
         return match in_flight(&ctx, probe_branch, &head) {
             Ok(Some(flight)) => print_in_flight(
@@ -1797,6 +1826,7 @@ pub fn run_push(argv: &[String]) -> i32 {
         force: a.force,
         lease,
         remote_branch: Some(target.clone()),
+        source: None,
     };
 
     // (7) Read the in-flight state before preflight: a doomed push must not
@@ -1913,6 +1943,7 @@ mod tests {
             force: true,
             lease: None,
             remote_branch: None,
+            source: None,
         };
         let failed = match guarded_push(&ctx, "") {
             PushOutcome::PushFailed(msg) => msg,
@@ -2011,6 +2042,7 @@ exit 1
             force: false,
             lease: None,
             remote_branch: None,
+            source: None,
         }
     }
 
