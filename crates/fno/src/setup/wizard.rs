@@ -930,7 +930,7 @@ fn screen_keys(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outcome
 /// never enters state; only the public App id rides the proposal, which
 /// apply writes through the locked config writer. Default off.
 fn screen_github_app(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outcome {
-    let flow = crate::setup::github_app_flow;
+    use crate::setup::github_app_flow as flow;
     if !stops {
         return Outcome::Forward;
     }
@@ -1741,10 +1741,10 @@ pub fn pending(state: &State) -> Vec<Proposal> {
     if let Some(Answer::Text(app_id)) = state.answers.get("github-app") {
         rows.push(Proposal {
             id: "github-app",
-            key: "github.app_id",
+            key: "github.app_id".into(),
             value: app_id.clone(),
             scope: "global",
-            reason: "the fleet App this run created",
+            reason: "the fleet App this run created".into(),
             source: "wizard",
         });
     }
