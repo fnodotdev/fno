@@ -91,5 +91,6 @@ codex	SessionStart	session-start-using-fno.sh	wait	-
 codex	SessionStart	codex-app-server-nudge-session-start.sh	wait	-
 codex	SessionStart	operator-capture-nudge.sh	wait	-
 claude	PostToolUse	ask-push.sh	wait	-
+claude	PostToolUse	push-receipt.sh	wait	-
 claude	PreToolUse	read-count-hook.sh	wait	-
 claude	SessionStart	retire-unread-pass.sh	wait	-
