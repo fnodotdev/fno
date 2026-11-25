@@ -2008,9 +2008,11 @@ impl UserHours {
         let Some((weekday, minutes)) = local_weekday_minutes(&self.timezone, now_epoch) else {
             return false;
         };
-        !days[weekday]
-            .iter()
-            .any(|(start, end)| minutes >= *start && minutes < *end)
+        !days.get(weekday).is_some_and(|ranges| {
+            ranges
+                .iter()
+                .any(|(start, end)| minutes >= *start && minutes < *end)
+        })
     }
 }
 
@@ -2070,23 +2072,62 @@ fn parse_hours_range(spec: &str) -> Option<(u32, u32)> {
     (start < end).then_some((start, end))
 }
 
+/// A refused `[user]` value: the file, the line and what is wrong.
+#[derive(Debug)]
+pub struct Refused(pub String);
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<String> for Refused {
+    fn from(text: String) -> Self {
+        Self(text)
+    }
+}
+
+impl From<&str> for Refused {
+    fn from(text: &str) -> Self {
+        Self(text.to_string())
+    }
+}
+
+#[derive(serde::Deserialize, Default)]
+struct RawConfig {
+    user: Option<toml::Value>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct RawUser {
+    timezone: Option<toml::Value>,
+    working_hours: Option<toml::Value>,
+}
+
+#[derive(serde::Deserialize)]
+struct AwayFile {
+    until_epoch: i64,
+}
+
 /// Parse `[user]` out of one config file's text. A bad value is an error that
 /// names the file and line.
-pub(crate) fn parse_user_hours(content: &str, source: &str) -> Result<UserHours, String> {
-    let Some(table) = parse_config(content) else {
-        return Ok(UserHours::default());
-    };
-    let Some(user) = table.get("user").and_then(|v| v.as_table()) else {
+pub(crate) fn parse_user_hours(content: &str, source: &str) -> Result<UserHours, Refused> {
+    let Some(user) = toml::from_str::<RawConfig>(content)
+        .ok()
+        .and_then(|raw| raw.user)
+        .and_then(|v| v.try_into::<RawUser>().ok())
+    else {
         return Ok(UserHours::default());
     };
     let refuse = |section: &str, key: &str, what: String| {
-        format!(
+        Refused(format!(
             "{source}:{}: {section}.{key}: {what}",
             config_line(content, section, key)
-        )
+        ))
     };
     let mut hours = UserHours::default();
-    if let Some(value) = user.get("timezone") {
+    if let Some(value) = user.timezone.as_ref() {
         let zone = value.as_str().unwrap_or("<not a string>");
         if value.as_str().is_none() || (!zone.is_empty() && zone.parse::<chrono_tz::Tz>().is_err())
         {
@@ -2098,7 +2139,7 @@ pub(crate) fn parse_user_hours(content: &str, source: &str) -> Result<UserHours,
         }
         hours.timezone = zone.to_string();
     }
-    let Some(working) = user.get("working_hours") else {
+    let Some(working) = user.working_hours.as_ref() else {
         return Ok(hours);
     };
     let Some(working) = working.as_table() else {
@@ -2136,7 +2177,9 @@ pub(crate) fn parse_user_hours(content: &str, source: &str) -> Result<UserHours,
                     ),
                 ));
             };
-            days[day].push(range);
+            if let Some(slot) = days.get_mut(day) {
+                slot.push(range);
+            }
         }
     }
     hours.working = Some(days);
@@ -2147,7 +2190,7 @@ pub(crate) fn parse_user_hours(content: &str, source: &str) -> Result<UserHours,
 /// hours resolve separately, each from the first file that sets it, so a
 /// project file with only a timezone does not hide the global hours. A bad
 /// value in any file refuses, naming the file and line.
-pub fn user_hours(cwd: &Path) -> Result<UserHours, String> {
+pub fn user_hours(cwd: &Path) -> Result<UserHours, Refused> {
     let mut merged = UserHours::default();
     for path in config_candidates(cwd) {
         let Ok(content) = std::fs::read_to_string(&path) else {
@@ -2176,14 +2219,15 @@ pub fn user_hours_or_default(cwd: &Path) -> UserHours {
     match user_hours(cwd) {
         Ok(hours) => {
             if let Some(store) = &store {
-                let _ = crate::fleet_task::close(
+                crate::fleet_task::close(
                     store,
                     LANE,
                     KEY,
                     "",
                     "the config reads clean",
                     "fno-agent",
-                );
+                )
+                .ok();
             }
             hours
         }
@@ -2193,7 +2237,7 @@ pub fn user_hours_or_default(cwd: &Path) -> UserHours {
                 let text = format!(
                     "Config refused: {refusal}. Until it is fixed the working hours are ignored. A parked prompt is denied after 30 minutes, not at once while the user is away. An explicit away override still holds."
                 );
-                let _ = crate::fleet_task::file_once(store, LANE, KEY, "", &text, None, None);
+                crate::fleet_task::file_once(store, LANE, KEY, "", &text, None, None).ok();
             }
             degraded_hours(read_away_until(crate::provider_cap::now_epoch_secs()))
         }
@@ -2220,7 +2264,7 @@ pub fn run_user_hours(args: &[String]) -> i32 {
         None => {
             let answer = match user_hours(&cwd) {
                 Ok(_) => serde_json::json!({"ok": true}),
-                Err(refusal) => serde_json::json!({"ok": false, "refusal": refusal}),
+                Err(refusal) => serde_json::json!({"ok": false, "refusal": refusal.0}),
             };
             println!("{answer}");
             0
@@ -2253,7 +2297,7 @@ pub fn run_user_hours(args: &[String]) -> i32 {
         }
         Some("back") => {
             if let Some(path) = away_state_path() {
-                let _ = std::fs::remove_file(path);
+                std::fs::remove_file(path).ok();
             }
             println!("back: the away override is cleared");
             0
@@ -2290,9 +2334,7 @@ fn read_away_until(now: i64) -> Option<i64> {
 /// `away` replace it.
 fn read_away_until_at(path: &Path, now: i64) -> Option<i64> {
     let text = std::fs::read_to_string(path).ok()?;
-    let until = serde_json::from_str::<serde_json::Value>(&text)
-        .ok()
-        .and_then(|v| v.get("until_epoch").and_then(serde_json::Value::as_i64))?;
+    let until = serde_json::from_str::<AwayFile>(&text).ok()?.until_epoch;
     (until > now).then_some(until)
 }
 
@@ -2318,7 +2360,7 @@ fn next_clock<Z: chrono::TimeZone>(zone: &Z, now: i64, at: chrono::NaiveTime) ->
 /// `2026-11-25T09:00`), or an RFC 3339 time with an offset. Clock and stamp
 /// forms read in `timezone` (empty = the machine's zone). The result is
 /// always after `now`.
-pub(crate) fn parse_away_until(spec: &str, timezone: &str, now: i64) -> Result<i64, String> {
+pub(crate) fn parse_away_until(spec: &str, timezone: &str, now: i64) -> Result<i64, Refused> {
     use chrono::{NaiveDateTime, NaiveTime, TimeZone};
     let spec = spec.trim();
     let refuse = || {
@@ -2375,18 +2417,18 @@ pub(crate) fn parse_away_until(spec: &str, timezone: &str, now: i64) -> Result<i
         found.ok_or_else(refuse)?
     };
     if epoch <= now {
-        return Err(format!("{spec:?} is not in the future"));
+        return Err(format!("{spec:?} is not in the future").into());
     }
     Ok(epoch)
 }
 
-fn write_away(until: i64, now: i64) -> Result<(), String> {
+fn write_away(until: i64, now: i64) -> Result<(), Refused> {
     let path = away_state_path().ok_or("no agents home to hold the away state")?;
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(dir).map_err(|e| Refused(e.to_string()))?;
     }
     let body = serde_json::json!({"until_epoch": until, "set_epoch": now});
-    crate::state::write_json_atomic(&path, &body).map_err(|e| e.to_string())
+    crate::state::write_json_atomic(&path, &body).map_err(|e| Refused(e.to_string()))
 }
 
 /// Startup reconciliation is non-destructive by default. Operators may opt in
@@ -3413,16 +3455,22 @@ mod user_hours_tests {
     #[test]
     fn a_bad_value_refuses_naming_the_file_and_line() {
         let bad_range = "[user]\ntimezone = \"UTC\"\n\n[user.working_hours]\nmon = [\"09:00-17:00\"]\ntue = [\"9-5\"]\n";
-        let err = parse_user_hours(bad_range, "cfg.toml").unwrap_err();
+        let err = parse_user_hours(bad_range, "cfg.toml")
+            .unwrap_err()
+            .to_string();
         assert!(
             err.starts_with("cfg.toml:6: user.working_hours.tue:"),
             "{err}"
         );
         let bad_zone = "[user]\nname = \"x\"\ntimezone = \"Mars/Base\"\n";
-        let err = parse_user_hours(bad_zone, "cfg.toml").unwrap_err();
+        let err = parse_user_hours(bad_zone, "cfg.toml")
+            .unwrap_err()
+            .to_string();
         assert!(err.starts_with("cfg.toml:3: user.timezone:"), "{err}");
         let bad_day = "[user.working_hours]\nfunday = []\n";
-        let err = parse_user_hours(bad_day, "cfg.toml").unwrap_err();
+        let err = parse_user_hours(bad_day, "cfg.toml")
+            .unwrap_err()
+            .to_string();
         assert!(
             err.contains("cfg.toml:2:") && err.contains("not a weekday"),
             "{err}"

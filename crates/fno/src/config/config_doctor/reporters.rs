@@ -827,16 +827,23 @@ fn def_named<'a>(schema: &'a Value, name: &str) -> &'a Value {
 /// Name a refused `[user]` timezone or `[user.working_hours]` value, with its
 /// file and line. Silent when the hours read clean or the binary is absent.
 pub fn user_hours(out: &mut String) {
+    #[derive(serde::Deserialize)]
+    struct Answer {
+        ok: bool,
+        #[serde(default)]
+        refusal: String,
+    }
     let Ok(answer) = agents_call(&["user-hours"], None) else {
         return;
     };
-    if answer.get("ok").and_then(Value::as_bool) != Some(false) {
+    let Ok(Answer { ok: false, refusal }) = serde_json::from_value(answer) else {
         return;
-    }
-    let refusal = answer
-        .get("refusal")
-        .and_then(Value::as_str)
-        .unwrap_or("unreadable");
+    };
+    let refusal = if refusal.is_empty() {
+        "unreadable"
+    } else {
+        &refusal
+    };
     out.push_str(&format!("user hours refused: {refusal}\n"));
 }
 

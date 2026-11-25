@@ -210,6 +210,16 @@ pub(crate) fn observe(
 }
 
 /// A row names its session in either id field, the way burn-watch reads it.
+/// A prompt-wait step failed. The text is what the daemon logs.
+#[derive(Debug)]
+struct WaitError(String);
+
+impl From<String> for WaitError {
+    fn from(text: String) -> Self {
+        Self(text)
+    }
+}
+
 fn is_session(r: &crate::state::RegistryEntry, sid: &str) -> bool {
     r.harness_session_id.as_deref() == Some(sid) || r.session_id.as_deref() == Some(sid)
 }
@@ -327,6 +337,7 @@ fn run_pass_with(
             dialog: &|w: &mut Waiting| w.read_dialog(),
         },
     )
+    .map_err(|e| e.0)
 }
 
 /// The three seams a pass reaches the machine through, so a test drives the
@@ -354,13 +365,13 @@ fn denial_notice(w: &Waiting, now: i64, asleep: bool) -> String {
 }
 
 impl Waiting {
-    fn persist(&self, home: &AgentsHome) -> Result<(), String> {
+    fn persist(&self, home: &AgentsHome) -> Result<(), WaitError> {
         let seen = Seen {
             first_seen_ms: self.since_ms,
             ..self.seen.clone()
         };
         state::write_json_atomic(&dir(home).join(format!("{}.json", self.short_id)), &seen)
-            .map_err(|e| e.to_string())
+            .map_err(|e| WaitError(e.to_string()))
     }
 
     /// A finished denial followed by another sighting is a new wait, even
@@ -409,7 +420,7 @@ const REPEAT_WINDOW_MS: i64 = 24 * 3_600_000;
 /// Count one more denial of `action` for `node` and return the total inside
 /// the window. Kept per node under the agents home, outside `prompt-wait/`,
 /// whose files the watch deletes when a wait ends.
-fn denial_count(home: &AgentsHome, node: &str, action: &str, now: i64) -> Result<u32, String> {
+fn denial_count(home: &AgentsHome, node: &str, action: &str, now: i64) -> Result<u32, WaitError> {
     let dir = home.root().join("prompt-denials");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let safe: String = node
@@ -481,13 +492,99 @@ fn follow_up_argv(w: &Waiting, node: &str) -> Vec<String> {
 /// Deny every wait that is due, then finish what a denial owes: one board
 /// task and one mail per recipient. Each step is recorded as it lands, so a
 /// failed step retries on the next pass and a landed one never repeats.
+/// One `--raw` turn after a denial, so the idle worker restarts its node. It
+/// waits for an idle prompt line, and the repeat guard stops a loop.
+fn follow_up(
+    home: &AgentsHome,
+    now: i64,
+    w: &mut Waiting,
+    runner: crate::burn_watch::Runner<'_>,
+    hooks: &Hooks<'_>,
+    registry: &mut Option<Registry>,
+    first_error: &mut Option<String>,
+) {
+    if !w.seen.denied || w.seen.followed_up {
+        return;
+    }
+    // Claude's rejection result tells the model to stop and wait for
+    // the user, so a denied worker idles. One typed command turn
+    // sends it back to work, and only onto an idle prompt line.
+    load_once(home, registry, first_error);
+    let node = registry
+        .as_ref()
+        .zip(w.session_id.as_deref())
+        .and_then(|(reg, sid)| {
+            reg.entries
+                .iter()
+                .find(|e| is_session(e, sid))
+                .and_then(|e| e.node.clone())
+        });
+    match node {
+        // A registry that loaded and holds no node leaves nothing to
+        // restart. A registry that failed to load stays pending.
+        None if registry.is_some() => w.seen.followed_up = true,
+        None => {}
+        Some(node) => {
+            let action = w.screen_fp.clone().unwrap_or_else(|| w.waiting_for.clone());
+            if w.seen.follow_count == 0 {
+                match denial_count(home, &node, &action, now) {
+                    Ok(count) => w.seen.follow_count = count,
+                    Err(e) => {
+                        first_error.get_or_insert(e.0);
+                    }
+                }
+            }
+            let count = w.seen.follow_count;
+            if count >= REPEAT_DENIALS {
+                let store = crate::provider_cap::questions_path(home);
+                let key = format!("prompt repeated {node} {action}");
+                let text = format!(
+                            "Node {node}: worker {} hit the same {} {count} times and was denied each time. No more follow-up turns go out. The worker stays idle until a person decides.",
+                            w.name, w.waiting_for
+                        );
+                match crate::fleet_task::file_once(
+                    &store,
+                    SENDER,
+                    &key,
+                    &w.cwd,
+                    &text,
+                    None,
+                    Some(&node),
+                ) {
+                    Ok(_) => w.seen.followed_up = true,
+                    Err(e) => {
+                        first_error.get_or_insert(e);
+                    }
+                }
+            } else if count >= 1 && (hooks.at_idle)(&w.short_id) {
+                let argv = follow_up_argv(w, &node);
+                let (code, _out, err) = runner(&argv, "");
+                if code == 0 {
+                    w.seen.followed_up = true;
+                } else {
+                    w.seen.follow_attempts += 1;
+                    w.seen.followed_up = w.seen.follow_attempts >= 3;
+                    first_error.get_or_insert(format!(
+                        "follow-up turn to {} failed: {}",
+                        w.name,
+                        err.trim()
+                    ));
+                }
+            }
+        }
+    }
+    if let Err(e) = w.persist(home) {
+        first_error.get_or_insert(e.0);
+    }
+}
+
 fn settle_denials(
     home: &AgentsHome,
     now: i64,
     waiting: &mut [Waiting],
     runner: crate::burn_watch::Runner<'_>,
     hooks: &Hooks<'_>,
-) -> Result<(), String> {
+) -> Result<(), WaitError> {
     let mut first_error: Option<String> = None;
     let mut registry: Option<Registry> = None;
     for w in waiting.iter_mut() {
@@ -500,7 +597,7 @@ fn settle_denials(
                         first_error.get_or_insert(e);
                         w.seen.reported = Some(prompt);
                         if let Err(e) = w.persist(home) {
-                            first_error.get_or_insert(e);
+                            first_error.get_or_insert(e.0);
                         }
                     }
                     continue;
@@ -512,83 +609,20 @@ fn settle_denials(
                         first_error.get_or_insert(note);
                     }
                     if let Err(e) = w.persist(home) {
-                        first_error.get_or_insert(e);
+                        first_error.get_or_insert(e.0);
                     }
                 }
             }
         }
-        if w.seen.denied && !w.seen.followed_up {
-            // Claude's rejection result tells the model to stop and wait for
-            // the user, so a denied worker idles. One typed command turn
-            // sends it back to work, and only onto an idle prompt line.
-            load_once(home, &mut registry, &mut first_error);
-            let node = registry
-                .as_ref()
-                .zip(w.session_id.as_deref())
-                .and_then(|(reg, sid)| {
-                    reg.entries
-                        .iter()
-                        .find(|e| is_session(e, sid))
-                        .and_then(|e| e.node.clone())
-                });
-            match node {
-                // A registry that loaded and holds no node leaves nothing to
-                // restart. A registry that failed to load stays pending.
-                None if registry.is_some() => w.seen.followed_up = true,
-                None => {}
-                Some(node) => {
-                    let action = w.screen_fp.clone().unwrap_or_else(|| w.waiting_for.clone());
-                    if w.seen.follow_count == 0 {
-                        match denial_count(home, &node, &action, now) {
-                            Ok(count) => w.seen.follow_count = count,
-                            Err(e) => {
-                                first_error.get_or_insert(e);
-                            }
-                        }
-                    }
-                    let count = w.seen.follow_count;
-                    if count >= REPEAT_DENIALS {
-                        let store = crate::provider_cap::questions_path(home);
-                        let key = format!("prompt repeated {node} {action}");
-                        let text = format!(
-                            "Node {node}: worker {} hit the same {} {count} times and was denied each time. No more follow-up turns go out. The worker stays idle until a person decides.",
-                            w.name, w.waiting_for
-                        );
-                        match crate::fleet_task::file_once(
-                            &store,
-                            SENDER,
-                            &key,
-                            &w.cwd,
-                            &text,
-                            None,
-                            Some(&node),
-                        ) {
-                            Ok(_) => w.seen.followed_up = true,
-                            Err(e) => {
-                                first_error.get_or_insert(e);
-                            }
-                        }
-                    } else if count >= 1 && (hooks.at_idle)(&w.short_id) {
-                        let argv = follow_up_argv(w, &node);
-                        let (code, _out, err) = runner(&argv, "");
-                        if code == 0 {
-                            w.seen.followed_up = true;
-                        } else {
-                            w.seen.follow_attempts += 1;
-                            w.seen.followed_up = w.seen.follow_attempts >= 3;
-                            first_error.get_or_insert(format!(
-                                "follow-up turn to {} failed: {}",
-                                w.name,
-                                err.trim()
-                            ));
-                        }
-                    }
-                }
-            }
-            if let Err(e) = w.persist(home) {
-                first_error.get_or_insert(e);
-            }
-        }
+        follow_up(
+            home,
+            now,
+            w,
+            &mut *runner,
+            hooks,
+            &mut registry,
+            &mut first_error,
+        );
         if !w.seen.denied || w.seen.deny_done {
             continue;
         }
@@ -622,10 +656,10 @@ fn settle_denials(
             w.seen.deny_done = w.seen.boarded && to.iter().all(|s| w.seen.told_deny.contains(s));
         }
         if let Err(e) = w.persist(home) {
-            first_error.get_or_insert(e);
+            first_error.get_or_insert(e.0);
         }
     }
-    first_error.map_or(Ok(()), Err)
+    first_error.map_or(Ok(()), |e| Err(WaitError(e)))
 }
 
 fn run_pass_denying(
@@ -634,7 +668,7 @@ fn run_pass_denying(
     snapshot: &ClaudeAgentsSnapshot,
     runner: crate::burn_watch::Runner<'_>,
     hooks: &Hooks<'_>,
-) -> Result<(), String> {
+) -> Result<(), WaitError> {
     let mut waiting = observe(home, now, snapshot)?;
     for w in waiting.iter_mut() {
         let mut changed = w.reset_after_denial(now);
@@ -654,7 +688,7 @@ fn run_pass_denying(
         return denial;
     }
     let registry = state::load_registry(&home.registry_json()).map_err(|e| e.to_string())?;
-    let mut first_error = denial.err();
+    let mut first_error = denial.err().map(|e| e.0);
     for w in waiting.iter_mut().filter(|w| owes_notice(w)) {
         let text = notice(w, now);
         let to = w
@@ -689,7 +723,7 @@ fn run_pass_denying(
         w.seen.notified = notified;
         w.persist(home)?;
     }
-    first_error.map_or(Ok(()), Err)
+    first_error.map_or(Ok(()), |e| Err(WaitError(e)))
 }
 
 #[cfg(test)]
@@ -852,7 +886,7 @@ mod tests {
             }
         }
 
-        fn pass(&self, now: i64) -> Result<(), String> {
+        fn pass(&self, now: i64) -> Result<(), WaitError> {
             let snap = ClaudeAgentsSnapshot::known(vec![waiting_row(
                 "30d6ff6a",
                 "sid-x",
@@ -972,7 +1006,7 @@ mod tests {
             .filter(|a| a.contains(&"--raw".into()))
             .collect();
         assert_eq!(raw.len(), 1, "one follow-up per denial");
-        let line = raw[0].last().unwrap();
+        let line = raw.first().and_then(|a| a.last()).unwrap();
         assert!(line.starts_with("/fno:target x-77 "), "{line}");
         assert!(line.contains("route that needs no approval"), "{line}");
     }
