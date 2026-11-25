@@ -353,7 +353,7 @@ mod tests {
             "No pushes at night",
         )];
         let data = rescope_data("d-aaaa0001", "global", &rows, &op).expect("rescopes");
-        assert_eq!(data.get(de::DECISION_ID), Some(&json!("d-aaaa0001")));
+        assert_eq!(data.get(de::TARGET), Some(&json!("d-aaaa0001")));
         assert_eq!(data.get(de::REACH), Some(&json!("global")));
         assert_eq!(data.get(de::PRIOR_REACH), Some(&json!("project:demo")));
 
