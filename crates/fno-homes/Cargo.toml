@@ -1,0 +1,14 @@
+[package]
+name = "fno-homes"
+# Internal only: both binaries link it as a path dep, so it never versions
+# on its own and never publishes.
+version = "0.1.0"
+edition = "2021"
+# MSRV: matches the floor the fleet pins (fno-mail, fno-agent). The code is
+# plain std; the pin keeps an older toolchain warned instead of confused.
+rust-version = "1.89"
+description = "The one class-home resolver shared by the fno front door and the fno-agent daemon."
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
