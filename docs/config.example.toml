@@ -127,7 +127,7 @@ max_prs_per_epic = 4
 default_diff_budget = 300
 
 [backlog]
-# Prefix for minted node IDs (<=7 chars; not cv-/fu-/tgt-).
+# Prefix for minted node IDs (<=7 chars; not cv-/fu-/tgt-). Unset defaults to x; legacy ab- ids stay resolvable.
 # id_prefix = <unset>   # optional; no default
 # Hex width of minted node IDs (4-8).
 id_hex_width = 8
@@ -277,7 +277,7 @@ self_review_required = true
 require_corroboration = false
 # When true (default), a non-author human GitHub APPROVED review satisfies coverage on its own - the one producer a stranger's GitHub project emits with no footnote machinery. The approver's login must differ from the PR author's (GitHub refuses an author's approval server-side; the gate asserts it, and an unreadable PR author excludes fail-closed). Set false to keep today's recorded-but-never-counted behavior. Limit: GitHub's refusal is per identity, not per human - a second account with its own token can still self-approve.
 github_approval_satisfies = true
-# The person gate (never | ui | always; default ui). never and ui keep today's behavior: nothing requires a person. always requires a person's GitHub approval of the PR head (an APPROVED review by a login that is not the PR author, fresh at the head): fno do pr status reads not ready and the merge refuses until one lands, and the review-round cap does not discharge it (the lever back off is this key). Validated at write: never, ui or always.
+# The person gate (never | ui | always). never = no person is owed. ui = a non-author person's GitHub approval of the PR head is owed; a person can give it from the terminal (`fno mux app approve <pr>`, or `--repo <owner/name>` outside the checkout) or on the PR's GitHub page. always = the same approval owed on GitHub. In both owed values fno do pr status reads not ready and the merge refuses until one lands (an APPROVED review by a login that is not the PR author, fresh at the head), and the review-round cap does not discharge it (the lever back off is this key). With no key set, no person is owed (today's stock-install behavior). GitHub refuses an author's approval of their own PR, so the approving identity must differ from the author identity. Validated at write: never, ui or always.
 # human = <unset>   # optional; no default
 # The maximum number of review rounds (default 2): a PR gets AT MOST this many reviews and never waits for a round to come back clean. Two means two, counted across the whole life of the PR. A round is one reviewed HEAD. Two verdicts at one unchanged head are one round. A cap whose size depends on how a reviewer batches its output is not a cap. A pass is a round like any verdict: it still satisfies coverage, but it refunds nothing. At this many rounds the review phase is complete: the PR merges on green CI and open findings stay in the PR conversation - nothing is filed to the backlog and no finding class holds the PR past its own budget. CI failures, lint failures and rebases are not rounds. One review stays the floor, so an unreviewed PR is still uncovered. Validated at parse: at least 1.
 max_rounds = 2

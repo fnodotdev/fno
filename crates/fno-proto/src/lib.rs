@@ -437,15 +437,17 @@ fn default_true() -> bool {
 /// floor stays 58.
 /// v133: `AgentRow` adds the four token classes behind `session_tokens`
 /// (serde default); floor stays 58.
-/// v134: `ControlCommand::ThreadPane.origin` and
+/// v134: `Command::NewSquad.project` and `SquadMeta.project` (serde default),
+/// the explicit project id a workspace was made for; floor stays 58.
+/// v135: `ControlCommand::ThreadPane.origin` and
 /// `AgentLaunchRequest.open_as` (serde default), the pre-birth placement
 /// check and the composer's typed placement. `ClientMsg::ShellRun` and
 /// `ServerMsg::ShellRun` carry the composer's one-shot run; floor stays 58.
-pub const PROTO_VERSION: u32 = 134;
+pub const PROTO_VERSION: u32 = 135;
 
 /// The first server that answers a thread placement check and reads a typed
 /// launch placement.
-pub const LAUNCH_PLACEMENT_PROTO: u32 = 134;
+pub const LAUNCH_PLACEMENT_PROTO: u32 = 135;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -2041,6 +2043,10 @@ pub enum Command {
     NewSquad {
         name: String,
         origin: Option<String>,
+        // The config project id the workspace is made for; the server keeps
+        // it beside the origins, so the link never rests on folder equality.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project: Option<String>,
     },
     /// (v114) Move a session into workspace `squad` by hand. The server pins
     /// `(harness, harness_session_id)` on that workspace's stored row, so the
@@ -2639,6 +2645,10 @@ pub struct SquadMeta {
     pub id: u64,
     pub name: String,
     pub canonical_cwd: String,
+    // The explicit project id this workspace was made for, when it was made
+    // from a config project. Absent for a workspace the operator named by hand.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
     pub tabs: Vec<TabMeta>,
     pub active_tab: usize,
     /// (v19) Total live pane count across ALL the squad's tabs - the
@@ -3123,6 +3133,7 @@ mod tests {
                     id: 1,
                     name: "footnote".into(),
                     canonical_cwd: "/code/footnote/footnote".into(),
+                    project: None,
                     tabs: vec![
                         TabMeta {
                             id: 7,

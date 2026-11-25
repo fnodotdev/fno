@@ -47,8 +47,11 @@ impl Compositor {
     }
 
     pub(super) fn draw(&mut self, frame: &Frame) -> std::io::Result<()> {
+        let started = std::time::Instant::now();
         let placed = image_layer::take();
-        self.draw_to(&mut std::io::stdout().lock(), frame, placed)
+        let drawn = self.draw_to(&mut std::io::stdout().lock(), frame, placed);
+        crate::paint_stats::record_draw(started);
+        drawn
     }
 
     /// The frame, then the image layer. While the placement's rect still

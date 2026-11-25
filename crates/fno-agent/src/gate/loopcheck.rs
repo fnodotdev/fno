@@ -1723,7 +1723,7 @@ pub(crate) fn decide_with_payload(
             &repo_slug,
             manifest.harness_session_id.as_deref(),
             settings.github_approval_satisfies.unwrap_or(true),
-            settings.human == Some(ReviewHuman::Always),
+            ReviewHuman::owed(settings.human),
             settings.max_rounds.unwrap_or(2).max(1),
             carry_interdiff_lines_resolved(&settings),
             Some(&resolve_posture_config(&settings)),

@@ -1370,6 +1370,10 @@ impl Root {
     /// launch), then the panel's in-place refusals, then the door. The
     /// draft stays until the verdict lands.
     fn submit_launch(&mut self, cx: &mut Context<Self>) {
+        if let Some(path) = launch::typed_project(&self.launch.state.draft) {
+            self.add_project_path(path, cx);
+            return;
+        }
         if let Some(cmd) = launch::shell_command(&self.launch.state.draft) {
             self.run_shell_from_composer(cmd, cx);
             return;
@@ -2466,10 +2470,9 @@ impl Root {
     /// The composer's add-project row: register the picked folder in the
     /// config off the UI loop, then open a workspace for it unless one already
     /// roots there.
-    pub(super) fn add_picked_project(&mut self, cx: &mut Context<Self>) {
-        let Some(path) = self.launch.state.unlisted_project().map(str::to_string) else {
-            return;
-        };
+    pub(super) fn add_project_path(&mut self, path: String, cx: &mut Context<Self>) {
+        let typed =
+            launch::typed_project(&self.launch.state.draft).as_deref() == Some(path.as_str());
         let rooted = self.layout.squads.iter().any(|s| s.canonical_cwd == path);
         cx.spawn(async move |this, cx| {
             let added = cx
@@ -2481,10 +2484,16 @@ impl Root {
                 .await;
             this.update(cx, |root, cx| match added {
                 Ok(project) => {
+                    // A refused add leaves the typed path in place to fix.
+                    if typed {
+                        root.launch.state.draft.select_all();
+                        root.launch.state.draft.replace_selection("");
+                    }
                     if !rooted {
                         root.send(ClientMsg::Command(Command::NewSquad {
                             name: project.name.clone(),
                             origin: Some(project.path.clone()),
+                            project: Some(project.id.clone()),
                         }));
                     }
                     root.launch.state.refresh_config();
@@ -2737,7 +2746,9 @@ impl Root {
                 }
             }
             "enter" => self.launch.state.draft.replace_selection("\n"),
-            "tab" if self.launch.state.complete_skill() => {}
+            "tab"
+                if self.launch.state.complete_skill()
+                    || self.launch.state.complete_typed_path() => {}
             "escape" if self.launch.state.skill_close() => {}
             "up" | "down" if self.launch.state.skill_step(key.key == "down") => {}
             "backspace" => self.launch.state.draft.backspace(),
@@ -3202,7 +3213,11 @@ impl Root {
                         }
                         self.send(ClientMsg::Command(Command::RenameSquad { squad: id, name }))
                     }
-                    None => self.send(ClientMsg::Command(Command::NewSquad { name, origin: None })),
+                    None => self.send(ClientMsg::Command(Command::NewSquad {
+                        name,
+                        origin: None,
+                        project: None,
+                    })),
                 }
             }
             "escape" => self.squad_field = None,

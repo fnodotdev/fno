@@ -1529,6 +1529,7 @@ mod tests {
             id,
             name: name.into(),
             canonical_cwd: "/r".into(),
+            project: None,
             tabs,
             active_tab: 0,
             panes: 0,
