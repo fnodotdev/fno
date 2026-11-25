@@ -14,8 +14,8 @@ use crate::cli_args::{AppOp, AppView};
 /// and this group's guide lives behind the `fno whoami guide app` topic,
 /// so the refusal is the one self-teaching surface.
 pub fn bare_usage() -> String {
-    "fno mux app: an operation word is required: open, show, focus, answer, shot, state or close. \
-     The full guide prints at `fno whoami guide app`."
+    "fno mux app: an operation word is required: open, show, focus, answer, approve, shot, state \
+     or close. The full guide prints at `fno whoami guide app`."
         .to_string()
 }
 
@@ -83,6 +83,7 @@ pub fn run(op: AppOp) -> i32 {
         AppOp::Show(args) => show(args.view, &args.common),
         AppOp::Focus(args) => focus(&args.agent, &args.common),
         AppOp::Answer(args) => answer(args.option, &args.common),
+        AppOp::Approve(args) => approve(&args.pr, args.repo.as_deref()),
         AppOp::Shot(args) => shot(&args),
         AppOp::State { json } => state(json.json),
         AppOp::Close { common } => close(&common),
@@ -208,9 +209,49 @@ fn answer(option: u32, common: &crate::cli_args::MuxCommon) -> i32 {
     }
 }
 
+/// `mux app approve <pr> [--repo <slug>]`: post the person's GitHub APPROVED
+/// review, the satisfier of config.review.human = ui. The verb shells to the
+/// gh CLI as the locally authenticated person, so GitHub's own rules hold:
+/// an author cannot approve their own PR, and the refusal prints verbatim.
+/// No macOS gate and no live-app check: the action is a GitHub review post,
+/// not an app action, and the person may approve with the app closed.
+fn approve(pr: &u64, repo: Option<&str>) -> i32 {
+    let mut cmd = std::process::Command::new("gh");
+    cmd.arg("pr")
+        .arg("review")
+        .arg(pr.to_string())
+        .arg("--approve");
+    if let Some(slug) = repo {
+        cmd.arg("--repo").arg(slug);
+    }
+    match cmd.output() {
+        Ok(out) if out.status.success() => {
+            println!("approved pr {pr} via gh");
+            0
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let stderr = stderr.trim();
+            if !stderr.is_empty() {
+                eprintln!("fno mux app approve: gh refused: {stderr}");
+            } else {
+                eprintln!(
+                    "fno mux app approve: gh refused with no message (exit {})",
+                    out.status.code().unwrap_or(-1)
+                );
+            }
+            1
+        }
+        Err(e) => {
+            eprintln!("fno mux app approve: gh is unavailable: {e}");
+            1
+        }
+    }
+}
+
 /// The pid of a live app instance for the session, from the app's own
 /// pid file. `None` when the file is absent or its pid is dead; the
-/// dead-pid file is cleaned up so the next open can write a fresh one.
+/// dead-pid file is cleaned up so the next open can write another one.
 fn running_app_pid(session: &str) -> Option<u32> {
     let mut path = crate::app_control::support_dir()?;
     path.push(format!("fno-app-{session}.pid"));
@@ -790,10 +831,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bare_usage_names_the_seven_commands() {
+    fn bare_usage_names_the_eight_commands() {
         let line = bare_usage();
         assert!(
-            line.contains("open, show, focus, answer, shot, state or close"),
+            line.contains("open, show, focus, answer, approve, shot, state or close"),
             "{line}"
         );
         assert!(line.contains("fno whoami guide app"), "{line}");
