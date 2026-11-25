@@ -28,6 +28,7 @@ use goal_arbitration::{
 
 mod cannot_claim;
 mod lead_turn;
+mod sandboxed;
 
 /// Consecutive checker-unavailable fires tolerated for an active session
 /// before a loud give-up allow (the shim's `MAX_UNAVAIL_RETRIES`).
@@ -122,7 +123,7 @@ pub fn run(args: &[String]) -> i32 {
     // Inside a sandbox there is no host state to decide from: the one host
     // decision answers through the relay, and a broken relay blocks.
     if std::env::var_os("FNO_AGENT_SANDBOXED").is_some() && sandbox.is_none() {
-        return sandboxed_stop(&session_id, last_assistant_message.as_deref());
+        return sandboxed::sandboxed_stop(&session_id, last_assistant_message.as_deref());
     }
     if let Some(id) = &sandbox {
         if let Err(e) = crate::sandbox::bind_origin(id, &cwd, sandbox_dirty) {
@@ -266,66 +267,6 @@ pub fn run(args: &[String]) -> i32 {
     }
 }
 
-/// The Stop of a sandboxed worker: send loop stop through the pinned socket
-/// and pass the host decision's exit and output through unchanged. Any
-/// failure to reach the host blocks and names itself; it never allows.
-fn sandboxed_stop(session_id: &str, message: Option<&str>) -> i32 {
-    let sock = std::env::var_os("FNO_SUPERVISOR_SOCKET")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(crate::sandbox::CONTAINER_SOCK));
-    let params = serde_json::json!({
-        "op": "loop-stop",
-        "message": message.unwrap_or_default(),
-    });
-    let reply = crate::protocol::blocking_response(
-        &sock,
-        crate::sandbox::ops::OP_METHOD,
-        params,
-        std::time::Duration::from_secs(900),
-    );
-    let answer = match reply.map(|r| r.payload) {
-        Ok(crate::protocol::ResponsePayload::Ok(v)) => v,
-        Ok(crate::protocol::ResponsePayload::Err(e)) => {
-            return emit_block_for_harness(
-                session_id,
-                &format!(
-                    "target stop-hook: the host refused loop stop for this sandbox: {}. \
-                     Fix what it names and stop again.",
-                    e.message
-                ),
-            )
-        }
-        Err(e) => {
-            return emit_block_for_harness(
-                session_id,
-                &format!(
-                    "target stop-hook: the sandbox relay did not answer loop stop ({e}); \
-                     this stop blocks until the host decides."
-                ),
-            )
-        }
-    };
-    #[derive(serde::Deserialize)]
-    struct Decided {
-        exit: i32,
-        #[serde(default)]
-        stdout: String,
-        #[serde(default)]
-        stderr: String,
-    }
-    match serde_json::from_value::<Decided>(answer) {
-        Ok(d) => {
-            eprint!("{}", d.stderr);
-            print!("{}", d.stdout);
-            d.exit
-        }
-        Err(e) => emit_block_for_harness(
-            session_id,
-            &format!("target stop-hook: the host's loop stop answer does not parse ({e})"),
-        ),
-    }
-}
-
 /// The needs-input stamp decision for one Stop fire, pure so the promise
 /// gate is unit-testable without a harness fire. The fold (`qids`) is
 /// already asker-bound (`stop_open_questions(_, _, Some(session))`): a
@@ -438,6 +379,7 @@ fn run_owned(
     // HERE - to its predecessor's manifest - until init, the very thing the
     // silent allow starved, writes its own.
     if !state_is_pending
+        && crate::sandbox::origin().is_none()
         && manifest_names_foreign_session(&manifest, &fire.transcript_path.display().to_string())
     {
         emit_stop_decision(
