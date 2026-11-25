@@ -10530,6 +10530,11 @@ impl Core {
                             ReentrySpawnRequest::FocusHeld { pid } => {
                                 self.command(id, Command::FocusPane(pid));
                             }
+                            ReentrySpawnRequest::ReviveSeat { pid } => {
+                                if let Some(verdict) = self.reentry_verdict.take() {
+                                    self.finish_seat_revive(id, pid, verdict);
+                                }
+                            }
                         }
                         self.reentry_verdict = None;
                     }
