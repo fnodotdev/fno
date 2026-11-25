@@ -14,6 +14,29 @@ const SOCK: &str = "/tmp/fno/supervisor.sock";
 /// A push, a PR create or the Stop decision can take minutes on the host.
 const BOUND: Duration = Duration::from_secs(900);
 
+/// Why the door refused or the host answered with an error. The text names
+/// the command or the op.
+#[derive(Debug)]
+pub struct Refused(pub String);
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<String> for Refused {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for Refused {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
 /// `Some(exit code)` when this process is sandboxed, after answering the
 /// command; `None` on the host.
 pub fn run(args: &[OsString]) -> Option<i32> {
@@ -64,7 +87,7 @@ fn flag<'a>(words: &[&'a str], flag: &str) -> Option<&'a str> {
 /// The text a command carries: `--body-file <path>` (`-` is stdin), else
 /// the positional words after `skip` leading ones, flags and their values
 /// dropped.
-fn text(words: &[&str], skip: usize, valued: &[&str]) -> Result<String, String> {
+fn text(words: &[&str], skip: usize, valued: &[&str]) -> Result<String, Refused> {
     if let Some(path) = flag(words, "--body-file") {
         let mut s = String::new();
         if path == "-" {
@@ -100,7 +123,7 @@ fn refused(words: &[&str]) -> String {
 }
 
 /// The op for one command line, or the refusal that names it.
-pub fn op_for(words: &[&str]) -> Result<Value, String> {
+pub fn op_for(words: &[&str]) -> Result<Value, Refused> {
     let w = |i: usize| words.get(i).copied().unwrap_or_default();
     let group = match w(0) {
         "agents" => "agent",
@@ -160,12 +183,12 @@ pub fn op_for(words: &[&str]) -> Result<Value, String> {
             "comment": w(3).parse::<u64>().map_err(|_| "fno do pr reply <comment id> <text>".to_string())?,
             "text": text(words, 4, &[])?,
         }),
-        _ => return Err(refused(words)),
+        _ => return Err(Refused(refused(words))),
     };
     Ok(op)
 }
 
-fn call(op: &Value) -> Result<Value, String> {
+fn call(op: &Value) -> Result<Value, Refused> {
     let sock = std::env::var_os("FNO_SUPERVISOR_SOCKET").unwrap_or_else(|| SOCK.into());
     let mut s = std::os::unix::net::UnixStream::connect(&sock)
         .map_err(|e| format!("the guest socket {}: {e}", sock.to_string_lossy()))?;
@@ -184,11 +207,22 @@ fn call(op: &Value) -> Result<Value, String> {
     }
     let mut buf = vec![0u8; n];
     s.read_exact(&mut buf).map_err(|e| format!("reply: {e}"))?;
-    let reply: Value = serde_json::from_slice(&buf).map_err(|e| format!("reply: {e}"))?;
-    if let Some(msg) = reply.pointer("/error/message").and_then(Value::as_str) {
-        return Err(msg.to_string());
+    #[derive(serde::Deserialize)]
+    struct Reply {
+        #[serde(default)]
+        result: Option<Value>,
+        #[serde(default)]
+        error: Option<ErrorBody>,
     }
-    Ok(reply.get("result").cloned().unwrap_or(Value::Null))
+    #[derive(serde::Deserialize)]
+    struct ErrorBody {
+        message: String,
+    }
+    let reply: Reply = serde_json::from_slice(&buf).map_err(|e| format!("reply: {e}"))?;
+    if let Some(e) = reply.error {
+        return Err(Refused(e.message));
+    }
+    Ok(reply.result.unwrap_or(Value::Null))
 }
 
 #[cfg(test)]
@@ -222,7 +256,7 @@ mod tests {
             "config set sandbox.provider none",
         ] {
             let err = op(refused).unwrap_err();
-            assert!(err.contains("lead does"), "{refused}: {err}");
+            assert!(err.0.contains("lead does"), "{refused}: {err}");
         }
     }
 }

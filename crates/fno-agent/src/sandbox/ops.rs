@@ -322,17 +322,40 @@ fn node_get(b: &Bound) -> Res<Value> {
         serde_json::from_str(out.get(start..).unwrap_or_default())
             .map_err(|e| Refusal(format!("fno backlog get {id}: {e}")))
     };
+    #[derive(serde::Deserialize)]
+    struct Parent {
+        #[serde(default)]
+        parent: Option<String>,
+    }
     let got = read(node)?;
-    let parent = got
-        .get("parent")
-        .and_then(Value::as_str)
-        .filter(|p| !p.is_empty())
-        .map(str::to_string);
+    let parent = serde_json::from_value::<Parent>(got.clone())
+        .ok()
+        .and_then(|p| p.parent)
+        .filter(|p| !p.is_empty());
     let parent = match parent {
         Some(p) => read(&p).ok(),
         None => None,
     };
     Ok(json!({ "node": got, "parent": parent }))
+}
+
+/// One review comment as the host hands it in: GitHub content, not authority.
+#[derive(serde::Deserialize, serde::Serialize)]
+struct Comment {
+    id: u64,
+    #[serde(default)]
+    user: Option<Login>,
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    line: Option<u64>,
+    #[serde(default)]
+    body: String,
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+struct Login {
+    login: String,
 }
 
 fn target_start(b: &Bound) -> Res<Value> {
@@ -577,19 +600,8 @@ fn pr_comments(b: &Bound) -> Res<Value> {
     let pr = pr_number(b)?;
     let path = format!("repos/{{owner}}/{{repo}}/pulls/{pr}/comments?per_page=100");
     let out = host(b, "gh", &["api", &path])?;
-    let rows: Vec<Value> = serde_json::from_str::<Vec<Value>>(&out)
-        .unwrap_or_default()
-        .iter()
-        .map(|c| {
-            json!({
-                "id": c.get("id"),
-                "author": c.pointer("/user/login"),
-                "path": c.get("path"),
-                "line": c.get("line"),
-                "body": c.get("body"),
-            })
-        })
-        .collect();
+    let rows: Vec<Comment> = serde_json::from_str(&out)
+        .map_err(|e| Refusal(format!("the PR {pr} comments do not parse: {e}")))?;
     Ok(json!({ "pr": pr, "comments": rows, "origin": "github" }))
 }
 

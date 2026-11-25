@@ -285,14 +285,25 @@ fn sandboxed_stop(session_id: &str, message: Option<&str>) -> i32 {
             )
         }
     };
-    let text = |k: &str| answer.get(k).and_then(Value::as_str).unwrap_or_default();
-    eprint!("{}", text("stderr"));
-    print!("{}", text("stdout"));
-    answer
-        .get("exit")
-        .and_then(Value::as_i64)
-        .and_then(|c| i32::try_from(c).ok())
-        .unwrap_or(2)
+    #[derive(serde::Deserialize)]
+    struct Decided {
+        exit: i32,
+        #[serde(default)]
+        stdout: String,
+        #[serde(default)]
+        stderr: String,
+    }
+    match serde_json::from_value::<Decided>(answer) {
+        Ok(d) => {
+            eprint!("{}", d.stderr);
+            print!("{}", d.stdout);
+            d.exit
+        }
+        Err(e) => emit_block_for_harness(
+            session_id,
+            &format!("target stop-hook: the host's loop stop answer does not parse ({e})"),
+        ),
+    }
 }
 
 /// The needs-input stamp decision for one Stop fire, pure so the promise

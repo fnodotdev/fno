@@ -1030,7 +1030,7 @@ mod tests {
             harness: "codex".into(),
             provider: "docker".into(),
             cwd: wt.path().to_path_buf(),
-            node: Some("x-8d47".into()),
+            node: Some("x-aaaa".into()),
             from: Some("lead".into()),
             engine_host: Some("ssh://runner@localhost".into()),
             set: vec!["ROUTE_KEY".into()],
