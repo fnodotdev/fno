@@ -98,7 +98,7 @@ Dispatch `release.yml` on your fork with `dry_run=true` for any channel. The reh
 
 ### First-time setup (one-time)
 
-- [x] Publish the real crates. `fno` and `fno-agent` are at 0.0.17, `fno-proto` at 0.2.0 and `fno-mail` at 0.1.0 on crates.io (`cargo search fno`). The release job publishes all four in the order `fno-proto`, `fno-mail`, `fno`, `fno-agent`, and the approval click is the owner's yes. The `cargo` row of `install-channels` expects pass.
+- [x] Publish the real crates. `fno` and `fno-agent` are at 0.0.17, `fno-proto` at 0.2.0 and `fno-mail` at 0.1.0 on crates.io (`cargo search fno`). The release job publishes all four, `fno-proto` first and `fno-agent` last. The approval click is the owner's yes. The `cargo` row of `install-channels` expects pass.
 - [x] Set the `release` environment secret `CARGO_REGISTRY_TOKEN` for crates.io.
 - [ ] Replace the `release` environment secret `HOMEBREW_TAP_TOKEN` with a fine-grained PAT that has Contents read and write on `fnodotdev/homebrew-fno`. The secret set on 2026-11-11 never pushed. The v0.0.17 tap leg failed with `fatal: Authentication failed`, and every earlier bump landed by hand. The tap repo is public, so a clone works with any token, and only the push proves write access. `scripts/release/bump-homebrew-tap.sh` now probes the token first and names a rejected token apart from one that lacks write. After the swap, run the `homebrew-tap` workflow once to prove the CI leg.
 - [x] fno.sh channel: wired and served at `https://fno.sh`. Every stable publish attaches `scripts/install/fno.sh` as a release asset. `releases/latest/download/fno.sh` therefore always names the newest stable's script. The published copy is byte-identical to that tag's tree.
