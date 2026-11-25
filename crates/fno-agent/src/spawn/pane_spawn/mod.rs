@@ -422,6 +422,14 @@ pub fn run_pane_spawn(home: &AgentsHome, params: &Value, name: &str, _args: &[St
             return EXIT_REFUSAL;
         }
     };
+    // The pane door answers every harness arm itself, before the seed
+    // path's first sandbox leg ever runs: judge the launch dir's policy
+    // here. A required provider sandboxes only --as headless, so a pane
+    // on one refuses instead of opening.
+    if let Err((code, reason)) = crate::sandbox_launch::check(&ctx.cwd, &ctx.provider, "pane") {
+        eprintln!("fno-agent spawn: {reason}");
+        return code;
+    }
     if let Some(line) = pane_refusal_for(&ctx.provider) {
         eprintln!("{line}");
         return EXIT_REFUSAL;
