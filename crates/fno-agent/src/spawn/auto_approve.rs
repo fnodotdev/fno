@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 /// The allow and ask rule lists a spawn adds to its settings file.
 #[derive(Default, Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Rules {
+pub struct Rules {
     pub allow: Vec<String>,
     pub ask: Vec<String>,
 }
