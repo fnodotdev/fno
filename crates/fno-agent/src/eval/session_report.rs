@@ -313,8 +313,10 @@ pub(crate) fn handle_session_report(
     }
 
     // A spawned session is joined at birth, so its preamble carriers fire.
+    // The `spawn` word is the law read's strongest cause: fleet work from
+    // birth (user law D2402).
     if launch_record.is_some() || agent_self.is_some() {
-        let _ = crate::join_marker::write_marker(home.root(), &harness, &session_id);
+        let _ = crate::join_marker::write_marker(home.root(), &harness, &session_id, "spawn");
     }
 
     // A headless one-shot touches no row: not a mint, and not a stamp on an
