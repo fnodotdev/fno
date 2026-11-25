@@ -235,7 +235,7 @@ fn write_trace(
     evidence: &mut TranscriptEvidence,
 ) -> Result<bool, String> {
     let id = trace_id(kind, key, data);
-    let dir = state.join("evals/traces");
+    let dir = crate::evals::state_evals_dir(state).join("traces");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(format!("{id}.json"));
     if path.exists() {
@@ -341,7 +341,7 @@ fn routed_around(data: &Value, evidence: &mut TranscriptEvidence) -> bool {
 }
 
 fn pass(state: &Path, journal: &Path, repo: &Path, prs: &[Value]) -> Result<Value, String> {
-    let dir = state.join("evals/traces");
+    let dir = crate::evals::state_evals_dir(state).join("traces");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let lock = std::fs::OpenOptions::new()
         .create(true)
@@ -471,7 +471,7 @@ pub fn run(args: &[String]) -> i32 {
 }
 
 fn import_seed(state: &Path, log: &Path) -> Result<usize, String> {
-    let dir = state.join("evals/traces");
+    let dir = crate::evals::state_evals_dir(state).join("traces");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let seed = dir.join("seed-s2.log");
     if !seed.exists() {
@@ -673,12 +673,13 @@ mod tests {
     }
 
     fn traces(state: &Path) -> Vec<Value> {
-        let mut rows: Vec<_> = std::fs::read_dir(state.join("evals/traces"))
-            .unwrap()
-            .map(|e| e.unwrap().path())
-            .filter(|p| p.extension().is_some_and(|x| x == "json"))
-            .map(|p| serde_json::from_slice::<Value>(&std::fs::read(p).unwrap()).unwrap())
-            .collect();
+        let mut rows: Vec<_> =
+            std::fs::read_dir(crate::evals::state_evals_dir(state).join("traces"))
+                .unwrap()
+                .map(|e| e.unwrap().path())
+                .filter(|p| p.extension().is_some_and(|x| x == "json"))
+                .map(|p| serde_json::from_slice::<Value>(&std::fs::read(p).unwrap()).unwrap())
+                .collect();
         rows.sort_by_key(|r| r["signal_kind"].to_string());
         rows
     }
@@ -742,9 +743,8 @@ mod tests {
             .unwrap();
         assert_eq!(missing["tool_calls"]["basis"], "unmeasured");
         assert!(missing["tool_calls"]["reason"].is_string());
-        let path = tmp
-            .path()
-            .join("evals/traces")
+        let path = crate::evals::state_evals_dir(tmp.path())
+            .join("traces")
             .join(format!("{}.json", found["id"].as_str().unwrap()));
         let mut labeled = found.clone();
         labeled["right_action"] = json!({"value":"run the check","basis":"user_set"});

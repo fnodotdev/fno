@@ -580,15 +580,14 @@ fn discover() -> Vec<Item> {
         );
     }
 
-    let opencode_manifest = std::fs::read_dir(home.join(".fno"))
-        .into_iter()
-        .flatten()
-        .flatten()
-        .any(|e| {
-            e.file_name()
-                .to_string_lossy()
-                .starts_with("opencode-install-")
-        });
+    let fno = home.join(".fno");
+    let entries = |dir: std::path::PathBuf| std::fs::read_dir(dir).into_iter().flatten().flatten();
+    let opencode_manifest = entries(fno.clone()).any(|e| {
+        e.file_name()
+            .to_string_lossy()
+            .starts_with("opencode-install-")
+    }) || entries(fno.join("install/opencode"))
+        .any(|e| e.file_name().to_string_lossy().ends_with(".json"));
     if opencode_manifest && on_path("fno-agent").is_some() {
         add(
             "OpenCode plugin files".into(),

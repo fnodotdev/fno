@@ -16,7 +16,7 @@
 //! env, set by the lane, and cross to the guest over exec stdin.
 
 use super::{Refusal, Res};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::net::{IpAddr, TcpStream};
 use std::path::{Path, PathBuf};
@@ -40,7 +40,7 @@ const FLUSH_BOUND: Duration = Duration::from_secs(20);
 const REFUSED: i32 = 84;
 
 /// The parsed `sandbox-run` argv.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Args {
     pub id: String,
     pub name: String,
@@ -52,6 +52,13 @@ pub struct Args {
     pub set: Vec<String>,
     pub unset: Vec<String>,
     pub transcript_dir: Option<String>,
+    /// The node a target spawn carries (`FNO_NODE`). The host binds its
+    /// worktree, branch, claim and plan before the clone.
+    pub node: Option<String>,
+    /// The spawner (`FNO_AGENT_FROM`), the only mail recipient.
+    pub from: Option<String>,
+    /// `sandbox.host`: a remote engine on the user's own VM.
+    pub engine_host: Option<String>,
     pub argv: Vec<String>,
 }
 
@@ -76,6 +83,15 @@ impl Args {
         }
         if let Some(d) = &self.transcript_dir {
             push("--transcript-dir", d);
+        }
+        if let Some(n) = &self.node {
+            push("--node", n);
+        }
+        if let Some(f) = &self.from {
+            push("--from", f);
+        }
+        if let Some(h) = &self.engine_host {
+            push("--engine-host", h);
         }
         for k in &self.set {
             push("--set", k);
@@ -109,6 +125,9 @@ impl Args {
                 "--cwd" => a.cwd = PathBuf::from(val),
                 "--session" => a.session = Some(val),
                 "--transcript-dir" => a.transcript_dir = Some(val),
+                "--node" => a.node = Some(val),
+                "--from" => a.from = Some(val),
+                "--engine-host" => a.engine_host = Some(val),
                 "--set" => a.set.push(val),
                 "--unset" => a.unset.push(val),
                 other => return Err(Refusal(format!("unknown flag {other}"))),
@@ -122,6 +141,21 @@ impl Args {
         }
         if a.argv.is_empty() {
             return Err("no harness command after --".into());
+        }
+        if let Some(n) = &a.node {
+            let ok = n.len() <= 40
+                && n.split_once('-').is_some_and(|(p, h)| {
+                    !p.is_empty()
+                        && p.bytes().all(|b| b.is_ascii_lowercase())
+                        && !h.is_empty()
+                        && h.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                });
+            if !ok {
+                return Err(Refusal(format!(
+                    "--node {} is not a node id",
+                    super::escape(n, 40)
+                )));
+            }
         }
         Ok(a)
     }
@@ -225,12 +259,28 @@ fn home() -> crate::paths::AgentsHome {
 fn lifecycle(a: &Args) -> Res<i32> {
     let provider = Provider::parse(&a.provider)
         .ok_or_else(|| format!("unknown provider {}", super::escape(&a.provider, 40)))?;
-    let engine = provider.engine()?;
+    let mut engine = provider.engine()?;
+    if let Some(h) = &a.engine_host {
+        super::engine::SshHost::parse(h)?.preflight()?;
+        engine = engine.on(Some(super::leak_host(h.clone())));
+    }
     engine.probe()?;
     let (argv, settings_file) = rewrite_argv(&a.argv, &a.cwd)?;
     let home = home();
     sweep(&engine, &home);
     let image = resolve_image(&engine, provider, a)?;
+    let binding = bind_target(a)?;
+    let bound_args;
+    let a = match &binding {
+        Some(t) => {
+            bound_args = Args {
+                cwd: t.worktree.clone(),
+                ..a.clone()
+            };
+            &bound_args
+        }
+        None => a,
+    };
     let scratch = tempfile::tempdir().map_err(|e| format!("scratch dir: {e}"))?;
     let store_dir = home.sandbox_exports_dir().join(&a.id);
     std::fs::create_dir_all(&store_dir).map_err(|e| format!("{}: {e}", store_dir.display()))?;
@@ -259,7 +309,15 @@ fn lifecycle(a: &Args) -> Res<i32> {
         .exec_piped(&a.id, &["fno-agent", "hook", "sandbox-guest"])
         .spawn()
         .map_err(|e| format!("start the guest: {e}"))?;
-    let (tx, flushed) = start_relay(&mut guest, a, transcript)?;
+    let bound = bound_for(
+        a,
+        binding.as_ref(),
+        &intake,
+        &store_dir,
+        &transcript_path,
+        engine,
+    );
+    let (tx, flushed) = start_relay(&mut guest, a, transcript, bound)?;
     tx.send(HostFrame::Hello {
         env,
         settings,
@@ -291,9 +349,50 @@ fn lifecycle(a: &Args) -> Res<i32> {
     guest.kill().ok();
     guest.wait().ok();
 
-    match super::repo::export(&engine, &a.id, &a.id, &intake.base, &a.cwd, &store_dir) {
+    finish(&mut sandbox, a, &intake, &store_dir, &transcript_path);
+    Ok(exit_code(status))
+}
+
+/// The host side every op answers from, fixed at launch.
+fn bound_for(
+    a: &Args,
+    binding: Option<&Target>,
+    intake: &super::repo::Intake,
+    store_dir: &Path,
+    transcript_path: &Path,
+    engine: super::engine::Engine,
+) -> Arc<super::ops::Bound> {
+    Arc::new(super::ops::Bound {
+        id: a.id.clone(),
+        name: a.name.clone(),
+        harness: a.harness.clone(),
+        session: a.session.clone(),
+        from: a.from.clone(),
+        node: a.node.clone(),
+        branch: binding.and_then(|t| t.branch.clone()),
+        worktree: a.cwd.clone(),
+        plan: binding.and_then(|t| t.plan.clone()),
+        base: intake.base.clone(),
+        store: store_dir.to_path_buf(),
+        transcript: transcript_path.to_path_buf(),
+        engine,
+        export: Mutex::new(()),
+    })
+}
+
+/// Export the sandbox's work and remove the container; a failed export
+/// keeps the container with its work.
+fn finish(
+    sandbox: &mut Sandbox,
+    a: &Args,
+    intake: &super::repo::Intake,
+    store_dir: &Path,
+    transcript_path: &Path,
+) {
+    let engine = sandbox.engine;
+    match super::repo::export(&engine, &a.id, &a.id, &intake.base, &a.cwd, store_dir) {
         Ok(out) => {
-            receipt(&a.id, &out, &transcript_path);
+            receipt(&a.id, &out, transcript_path);
             if let Err(e) = sandbox.engine.remove(&a.id) {
                 eprintln!("fno sandbox {}: remove failed, container kept: {e}", a.id);
             }
@@ -307,7 +406,76 @@ fn lifecycle(a: &Args) -> Res<i32> {
             );
         }
     }
-    Ok(exit_code(status))
+}
+
+/// What the host bound for a target spawn before the clone.
+struct Target {
+    worktree: PathBuf,
+    branch: Option<String>,
+    plan: Option<PathBuf>,
+}
+
+/// A spawn that carries a node gets the normal host start: a worktree off
+/// the default branch, the node claim held for the sandbox session, and the
+/// manifest. It runs on the host with a host-built argv, before any sandbox
+/// content exists. A spawn with no node binds nothing.
+fn bind_target(a: &Args) -> Res<Option<Target>> {
+    let Some(node) = &a.node else {
+        return Ok(None);
+    };
+    let mut c = std::process::Command::new(super::ops::sibling("fno"));
+    c.args(["do", "target", "start", node, "--no-merge"])
+        .current_dir(&a.cwd)
+        .env_remove("FNO_AGENT_SANDBOXED");
+    // The manifest names the sandbox's session, never an identity the
+    // spawning shell carried: the host Stop resolves its owner by this id.
+    crate::claims::stamp_command_env(
+        &mut c,
+        Some(a.name.as_str()),
+        &a.harness,
+        a.session.as_deref(),
+    );
+    if let (Some(sid), "claude") = (&a.session, a.harness.as_str()) {
+        c.env("CLAUDE_CODE_SESSION_ID", sid);
+    }
+    let out = crate::bounded_cmd::output_with_timeout_result(c, 600)
+        .map_err(|e| format!("fno do target start {node}: {e}"))?;
+    let receipt = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    if !out.status.success() {
+        return Err(Refusal(format!(
+            "the host could not start node {node} for the sandbox (exit {}): {}",
+            out.status.code().unwrap_or(-1),
+            super::escape(receipt.trim(), 600)
+        )));
+    }
+    let worktree = super::ops::receipt_worktree(&receipt).ok_or_else(|| {
+        format!("fno do target start {node} printed no worktree= line; the sandbox binds nothing")
+    })?;
+    let mut g = std::process::Command::new("git");
+    g.arg("-C")
+        .arg(&worktree)
+        .args(["rev-parse", "--abbrev-ref", "HEAD"]);
+    let branch = crate::bounded_cmd::output_with_timeout_result(g, 60)
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|b| !b.is_empty() && b != "HEAD");
+    let plan = super::ops::manifest_plan(&worktree);
+    eprintln!(
+        "fno sandbox {}: bound node {node}, branch {}, host worktree {}",
+        a.id,
+        branch.as_deref().unwrap_or("?"),
+        worktree.display()
+    );
+    Ok(Some(Target {
+        worktree,
+        branch,
+        plan,
+    }))
 }
 
 /// The env the guest hands the harness: the lane's set and unset keys with
@@ -431,6 +599,12 @@ struct Meta {
     provider: String,
     cwd: PathBuf,
     base: String,
+    /// The node a target spawn bound; its `cwd` is then a host worktree
+    /// that holds none of the sandbox's work.
+    #[serde(default)]
+    node: Option<String>,
+    #[serde(default)]
+    host: Option<String>,
 }
 
 fn write_meta(dir: &Path, a: &Args, base: &str) {
@@ -439,6 +613,8 @@ fn write_meta(dir: &Path, a: &Args, base: &str) {
         provider: a.provider.clone(),
         cwd: a.cwd.clone(),
         base: base.to_string(),
+        node: a.node.clone(),
+        host: a.engine_host.clone(),
     };
     if let Ok(body) = serde_json::to_string(&meta) {
         std::fs::write(dir.join("meta.json"), body).ok();
@@ -645,6 +821,7 @@ fn start_relay(
     guest: &mut Child,
     a: &Args,
     mut store: Store,
+    bound: Arc<super::ops::Bound>,
 ) -> Res<(Sender<HostFrame>, mpsc::Receiver<()>)> {
     let mut stdin = guest.stdin.take().ok_or("the guest has no stdin")?;
     let mut stdout = guest.stdout.take().ok_or("the guest has no stdout")?;
@@ -665,9 +842,17 @@ fn start_relay(
         cwd: a.cwd.display().to_string(),
         seq: AtomicU64::new(1),
         streams: Mutex::default(),
-        owned: super::egress::host_addresses(),
+        owned: {
+            let mut owned = super::egress::host_addresses();
+            if let Some(h) = &a.engine_host {
+                owned.extend(super::egress::remote_addresses(h));
+            }
+            owned
+        },
         sock: crate::client::client_sock(&home()),
         transcript: store.path().display().to_string(),
+        bound,
+        seen: Mutex::default(),
     });
     std::thread::spawn(move || loop {
         match GuestFrame::read(&mut stdout) {
@@ -704,6 +889,9 @@ struct Ctx {
     owned: Vec<IpAddr>,
     sock: PathBuf,
     transcript: String,
+    bound: Arc<super::ops::Bound>,
+    /// Op sequence numbers already taken: a replayed write never runs twice.
+    seen: Mutex<HashSet<u64>>,
 }
 
 impl Ctx {
@@ -783,6 +971,28 @@ impl Ctx {
                     s.shutdown(std::net::Shutdown::Write).ok();
                 }
             }
+            GuestFrame::Op { req, seq, op } => {
+                let fresh = self
+                    .seen
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(seq);
+                if !fresh {
+                    let answer = Err(Refusal(format!(
+                        "op {} seq {seq} already ran; a replay never runs twice",
+                        op.name()
+                    )));
+                    self.reply(req, answer);
+                    return;
+                }
+                // Every op runs off the reader thread, so transcript and
+                // proxy frames never wait behind a push or a gh call.
+                let me = self.clone();
+                std::thread::spawn(move || {
+                    let answer = super::ops::handle(&me.bound, &op);
+                    me.reply(req, answer);
+                });
+            }
             GuestFrame::Transcript { .. } | GuestFrame::Flushed => {}
         }
     }
@@ -860,6 +1070,9 @@ mod tests {
             harness: "codex".into(),
             provider: "docker".into(),
             cwd: wt.path().to_path_buf(),
+            node: Some("x-aaaa".into()),
+            from: Some("lead".into()),
+            engine_host: Some("ssh://runner@localhost".into()),
             set: vec!["ROUTE_KEY".into()],
             argv: vec![
                 "/opt/bin/codex".into(),
@@ -920,5 +1133,7 @@ mod tests {
             ]
         );
         assert!(Args::parse(&["--id".into(), "../x".into(), "--".into(), "c".into()]).is_err());
+        let bad_node = ["--id", "w-1", "--node", "x-1 --force", "--", "c"].map(String::from);
+        assert!(Args::parse(&bad_node).is_err());
     }
 }

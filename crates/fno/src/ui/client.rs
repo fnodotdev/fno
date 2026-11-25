@@ -807,10 +807,9 @@ pub(crate) struct View {
     /// Pending escape bytes in answer-overlay mode (same split-arrow safety as
     /// [`View::sel_esc`]).
     ans_esc: Vec<u8>,
-    /// The activity feed panel on the right edge, `e`
-    /// toggle; the fold's rows newest first. `None` closed. The panel's
-    /// width/drag/hover state and behavior live in `feed_view`.
+    /// The activity feed panel (`feed_view`), `None` closed; a close parks it.
     feed: Option<feed_view::FeedOverlay>,
+    feed_parked: Option<feed_view::FeedOverlay>,
     /// The client-local input owner among the visible regions. Written by
     /// explicit clicks and focus gestures (region_focus), read normalized
     /// through `input_owner`.
@@ -1570,6 +1569,7 @@ impl View {
             answers: None,
             ans_esc: Vec::new(),
             feed: None,
+            feed_parked: None,
             region_owner: region_focus::RegionOwner::Pane,
             feed_detail: None,
             viewer: Default::default(),
@@ -8573,8 +8573,8 @@ async fn selector_keys(
                 // cmd/cwd - NOT a registry entry. Arming the command there would shell
                 // `fno-agent` on a label that could collide with an unrelated
                 // agent's name and stop the wrong one. Pane-hosted rows are managed
-                // via their tab (CloseTab); only the paneless rows - the bg/headless
-                // agents that today linger until GC - are the gap this closes.
+                // via their tab (CloseTab); only the paneless rows - the bg agents and the
+                // watched headless runs that today linger until GC - are the gap this closes.
                 //
                 // An EXTERNAL row (claude-daemon roster or a persisted external
                 // tombstone) routes by stable `attach_id` to the

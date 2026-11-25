@@ -31,7 +31,7 @@ A pack install drops five skills: agent, mail, dnd, fno-me and lead. Their rows 
 | `fno:blueprint` | There is no plan, or a ruling changed the plan (amend). | A plan path and a node. |
 | `fno:execute` | The plan declares waves. | Executed tasks and `SUMMARY.md`. |
 | `fno:review` | Before the PR, on the final head. | Findings and the head-pinned attestation. |
-| `fno:persona-new-user` | A user or lead wants a change on the new-user surface read as a first-day user. User-invoked. | One verdict file under `~/.fno/evals/personas/new-user/`. |
+| `fno:persona-new-user` | A user or lead wants a change on the new-user surface read as a first-day user. User-invoked. | One verdict file under `~/.fno/db/evals/personas/new-user/`. |
 | `fno:persona-review` | A user or lead calls a persona check on one artifact. | The findings file beside the artifact. |
 | `fno:ship` | PR create, check, and merged. | The PR URL and the review state. |
 | `fno:fno-app` | The work touches the fno-app desktop app, or the task needs an app frame or an offscreen shot. | The app's pid or a png at `--out`. |

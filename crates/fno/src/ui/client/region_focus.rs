@@ -235,6 +235,12 @@ pub(super) async fn mouse_pre_pass(
             feed_detail::mouse(view, rep, sock_w).await?;
             continue;
         }
+        // An open feed picker sits over the panel and owns the pointer the
+        // same way.
+        if view.feed.as_ref().is_some_and(|f| f.picker.is_some()) {
+            feed_view::picker_mouse(view, rep);
+            continue;
+        }
         // The questions view paints next and owns every cell it covers: off
         // the chip, a click reaches no pane and no sideline row under it.
         if view.question_detail.is_some() {
@@ -1068,6 +1074,7 @@ pub(super) async fn apply_hit(
         // Inspect first: the deep link is the view's own action, not the
         // click path that opened it.
         ChromeHit::OpenFeedDetail(item) => feed_detail::open_into(view, item),
+        ChromeHit::Feed(hit) => feed_view::apply_hit(view, hit),
         // The questions detail overlay: opens on the clicked question.
         ChromeHit::OpenQuestionDetail(id) => view.open_detail_on(&id),
         ChromeHit::OpenNode(id) => node_link::open(view, id).await,

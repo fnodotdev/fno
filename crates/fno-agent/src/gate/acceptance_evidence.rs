@@ -309,6 +309,63 @@ fn keep_last_on_char_boundary(s: &mut String, cap: usize) -> Option<usize> {
     Some(total)
 }
 
+/// The first words a probe can start with that read host state or the
+/// network with a host credential.
+const HOST_PROBE_WORDS: [&str; 5] = ["gh", "fno", "fno-agent", "curl", "ssh"];
+
+/// One probe for a sandbox-origin decision. The host checkout holds none of
+/// the sandbox's work, so the probe runs inside the container, never here.
+/// A probe that needs host state blocks with its name: run inside, it has no
+/// credential, and run here, it would read the host checkout.
+fn run_probe_inside(
+    cmd: &str,
+    origin: &crate::sandbox::Origin,
+    timeout: std::time::Duration,
+) -> ProbeOutcome {
+    let first = cmd.split_whitespace().next().unwrap_or_default();
+    if HOST_PROBE_WORDS.contains(&first) {
+        return ProbeOutcome::Blocked {
+            kind: "sandbox",
+            why: format!(
+                "`{first}` reads host state, which a sandboxed run cannot answer; \
+                 the lead or an outside reviewer checks it"
+            ),
+        };
+    }
+    let engine = match crate::sandbox::engine::Provider::parse(&origin.provider)
+        .ok_or_else(|| format!("unknown provider {}", origin.provider))
+        .and_then(|p| p.engine().map_err(|e| e.0))
+    {
+        Ok(e) => e.on(origin.host),
+        Err(why) => {
+            return ProbeOutcome::Blocked {
+                kind: "sandbox",
+                why,
+            }
+        }
+    };
+    let script = format!("set -o pipefail 2>/dev/null; {cmd}");
+    match engine.exec_raw(
+        &origin.id,
+        &["bash", "-c", &script],
+        timeout.as_secs().max(1),
+    ) {
+        Ok(out) if out.status.success() && !out.stdout.is_empty() => ProbeOutcome::Pass {
+            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        },
+        Ok(out) if out.status.success() => ProbeOutcome::Skip,
+        Ok(out) => ProbeOutcome::Fail {
+            code: out.status.code(),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        },
+        Err(e) => ProbeOutcome::Blocked {
+            kind: "sandbox",
+            why: format!("the probe could not run inside sandbox {}: {e}", origin.id),
+        },
+    }
+}
+
 /// Run one probe under a native timeout.
 ///
 /// Two things here are load-bearing rather than defensive. stderr is drained by
@@ -688,7 +745,10 @@ pub(crate) fn evaluate_done_probes(
         .map(|c| ("project", c))
         .chain(plan_probes.iter().map(|c| ("plan", c)))
     {
-        let outcome = run_probe(cmd, cwd, timeout);
+        let outcome = match crate::sandbox::origin() {
+            Some(origin) => run_probe_inside(cmd, origin, timeout),
+            None => run_probe(cmd, cwd, timeout),
+        };
         // Keyed by the BARE command: cli/src/fno/scoreboard/fold.py joins this
         // map back to the plan's frontmatter by exact command string, so the
         // source label belongs in the failure reason - which is what the

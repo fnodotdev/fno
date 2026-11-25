@@ -8,6 +8,8 @@
 //! - [`repo`]: the clone inside, and the bundle back to `refs/sandbox/<id>/`.
 //! - [`egress`]: the host half of the proxy, private ranges closed.
 //! - [`transcript`]: the one host file per sandbox.
+//! - [`ops`]: the loop ops a sandboxed target worker asks the host for.
+//! - [`github`]: guest text made inert before the host posts it.
 //!
 //! The relay stamps identity; the guest never does. The host never checks
 //! out, extracts or executes sandbox-written content, and no failure falls
@@ -15,11 +17,111 @@
 
 pub mod egress;
 pub mod engine;
+pub mod github;
 pub mod guest;
+pub mod ops;
 pub mod relay;
 pub mod repo;
 pub mod transcript;
 pub mod wire;
+
+/// The sandbox a host Stop decision runs for. `hook stop --sandbox <id>`
+/// sets it once, after the export record proves the id names a sandbox of
+/// this worktree. Readers that would take host HEAD or the host tree read
+/// the sandbox head and the export's dirty reading instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Origin {
+    pub id: String,
+    /// `refs/sandbox/<id>/head`, or `None` when the worker has no commit.
+    pub head: Option<String>,
+    pub dirty: bool,
+    /// The engine that runs it, from the export record.
+    pub provider: String,
+    pub host: Option<&'static str>,
+}
+
+static ORIGIN: std::sync::OnceLock<Origin> = std::sync::OnceLock::new();
+
+/// The sandbox this process decides for, if any.
+pub fn origin() -> Option<&'static Origin> {
+    ORIGIN.get()
+}
+
+/// The sandbox whose export record names `cwd` as its clone source, if any.
+pub fn clone_source_of(cwd: &std::path::Path) -> Option<String> {
+    if let Some(o) = origin() {
+        return Some(o.id.clone());
+    }
+    #[derive(serde::Deserialize)]
+    struct Meta {
+        id: String,
+        cwd: std::path::PathBuf,
+        #[serde(default)]
+        node: Option<String>,
+    }
+    let canon = |p: &std::path::Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let want = canon(cwd);
+    let dir = crate::paths::AgentsHome::from_env().sandbox_exports_dir();
+    std::fs::read_dir(dir).ok()?.flatten().find_map(|e| {
+        let meta: Meta =
+            serde_json::from_str(&std::fs::read_to_string(e.path().join("meta.json")).ok()?)
+                .ok()?;
+        // Only a target spawn's bound worktree: a plain spawn's clone
+        // source is the caller's own checkout, which keeps its rescue.
+        (meta.node.is_some() && canon(&meta.cwd) == want).then_some(meta.id)
+    })
+}
+
+/// Bind this process to sandbox `id` for worktree `cwd`. Refuses an id with
+/// no export record, or one whose record names another worktree.
+pub fn bind_origin(id: &str, cwd: &std::path::Path, dirty: bool) -> Res<&'static Origin> {
+    if !valid_id(id) {
+        return Err(Refusal(format!("{} is not a sandbox id", escape(id, 80))));
+    }
+    let home = crate::paths::AgentsHome::from_env();
+    let meta = home.sandbox_exports_dir().join(id).join("meta.json");
+    #[derive(serde::Deserialize)]
+    struct Meta {
+        cwd: std::path::PathBuf,
+        provider: String,
+        #[serde(default)]
+        host: Option<String>,
+    }
+    let recorded: Meta = std::fs::read_to_string(&meta)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .ok_or_else(|| format!("sandbox {id} has no export record at {}", meta.display()))?;
+    let canon = |p: &std::path::Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    if canon(&recorded.cwd) != canon(cwd) {
+        return Err(Refusal(format!(
+            "sandbox {id} was cloned from {}, not {}",
+            recorded.cwd.display(),
+            cwd.display()
+        )));
+    }
+    let refname = format!("refs/sandbox/{id}/head");
+    let mut c = std::process::Command::new("git");
+    c.arg("-C")
+        .arg(cwd)
+        .args(["rev-parse", "--verify", "-q", &refname]);
+    let head = crate::bounded_cmd::output_with_timeout_result(c, 60)
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|h| !h.is_empty());
+    ORIGIN
+        .set(Origin {
+            id: id.to_string(),
+            head,
+            dirty,
+            provider: recorded.provider,
+            host: recorded.host.map(leak_host),
+        })
+        .ok();
+    ORIGIN
+        .get()
+        .ok_or_else(|| "the sandbox origin did not bind".into())
+}
 
 /// Why the sandbox refused a step. Every refusal names what it refused and
 /// why, and no failure falls back to a host launch.
@@ -64,6 +166,14 @@ pub const LAUNCH_METHOD: &str = "sandbox.launch";
 /// beside it so a sweep can tell a live one from a leftover.
 pub const LABEL: &str = "dev.fno.sandbox";
 pub const LABEL_PID: &str = "dev.fno.sandbox.pid";
+
+/// A checked engine host, kept for the life of the process so [`Engine`]
+/// stays `Copy`. One process binds one host.
+///
+/// [`Engine`]: engine::Engine
+pub fn leak_host(host: String) -> &'static str {
+    Box::leak(host.into_boxed_str())
+}
 
 /// A host-minted sandbox id: `<spawn name, cleaned>-<8 hex>`. Only
 /// `[a-z0-9-]`, so it is safe in a ref, a container name and a path.

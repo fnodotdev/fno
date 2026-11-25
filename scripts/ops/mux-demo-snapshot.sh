@@ -82,6 +82,9 @@ FNO_DEMO_HOLDS=""
 FNO_DEMO_DND=""
 THEME_ARG=""
 FNO_DEMO_SORT=""
+# --feed-view <json> seeds the activity feed's saved table view (sort, group,
+# filters, folded groups), the shape `view_store::FeedViewPref` reads.
+FNO_DEMO_FEED_VIEW=""
 FNO_DEMO_LAYOUT=""
 FNO_DEMO_LEAD_NESTING=""
 # --second-workspace adds `notes` (open), `archive` (folded by hand) and `ledger`
@@ -105,6 +108,8 @@ for a in "$@"; do
     WEB_PORT="$a"
   elif [ "$PREV" = "--sort" ]; then
     FNO_DEMO_SORT="$a"
+  elif [ "$PREV" = "--feed-view" ]; then
+    FNO_DEMO_FEED_VIEW="$a"
   elif [ "$PREV" = "--layout" ]; then
     FNO_DEMO_LAYOUT="$a"
   elif [ "$PREV" = "--install-card" ]; then
@@ -122,7 +127,7 @@ for a in "$@"; do
     # dark and only the selection bar would invert.
     THEME_ARG="$a"
     ARGS+=("$a")
-  elif [ "$a" = "--window-size" ] || [ "$a" = "--group" ] || [ "$a" = "--web-port" ] || [ "$a" = "--sort" ] || [ "$a" = "--layout" ] || [ "$a" = "--install-card" ] || [ "$a" = "--app-theme" ] || [ "$a" = "--app-mode" ] || [ "$a" = "--mod-pane" ]; then
+  elif [ "$a" = "--window-size" ] || [ "$a" = "--group" ] || [ "$a" = "--web-port" ] || [ "$a" = "--sort" ] || [ "$a" = "--feed-view" ] || [ "$a" = "--layout" ] || [ "$a" = "--install-card" ] || [ "$a" = "--app-theme" ] || [ "$a" = "--app-mode" ] || [ "$a" = "--mod-pane" ]; then
     :
   elif [ "$a" = "--second-workspace" ]; then
     export FNO_DEMO_SECOND_WS=1
@@ -1547,19 +1552,47 @@ if [ -n "${FNO_DEMO_FLATPINS:-}" ]; then
   done
 fi
 
+# Feed rows across a day and a half, so the activity feed's time column
+# shows order and its harness, node and area columns carry real values:
+# spawns land in the agents journal, stalls in the main store journal. Both
+# ride the frozen clock, so a reshoot paints the same stamps.
+python3 - "$ROOT" "$FNO_AGENT_HOME" "${IDS[@]}" <<'PY'
+import json, os, sys, datetime
+root, agents_home, ids = sys.argv[1], sys.argv[2], sys.argv[3:]
+now = datetime.datetime.fromtimestamp(int(os.environ["FNO_DEMO_EPOCH"]), datetime.timezone.utc)
+def ts(mins):
+    return (now - datetime.timedelta(minutes=mins)).strftime("%Y-%m-%dT%H:%M:%SZ")
+names = ["archer", "reviewer", "scout", "scribe", "planner", "wren"]
+harnesses = ["claude", "codex", "opencode"]
+os.makedirs(agents_home, exist_ok=True)
+with open(f"{agents_home}/events.jsonl", "a") as f:
+    for i in range(18):
+        f.write(json.dumps({"type": "agent_spawned", "ts": ts(30 + i * 97), "data": {
+            "name": names[i % len(names)], "harness": harnesses[i % 3],
+            "node": ids[i % len(ids)] if ids else None, "substrate": "pane"}}) + "\n")
+with open(f"{root}/.fno/events.jsonl", "a") as f:
+    for i in range(6):
+        f.write(json.dumps({"type": "worker_silent", "ts": ts(55 + i * 241), "data": {
+            "handle": names[(i + 2) % len(names)], "age_s": 600 + i * 120,
+            "harness": harnesses[(i + 1) % 3],
+            "node": ids[(i + 3) % len(ids)] if ids else None}}) + "\n")
+PY
+
 # --sort <column>:<direction> (for example age:descending) sets the
 # sideline's sort column, the way the sort control persists it.
 # --lead-nesting turns on the group-by-lead toggle the same way.
-if [ -n "${FNO_DEMO_SORT:-}" ] || [ -n "${FNO_DEMO_LEAD_NESTING:-}" ]; then
-  python3 - "$FNO_AGENT_HOME/mux-view.json" "${FNO_DEMO_SORT:-}" "${FNO_DEMO_LEAD_NESTING:-}" <<'PY'
+if [ -n "${FNO_DEMO_SORT:-}" ] || [ -n "${FNO_DEMO_LEAD_NESTING:-}" ] || [ -n "${FNO_DEMO_FEED_VIEW:-}" ]; then
+  python3 - "$FNO_AGENT_HOME/mux-view.json" "${FNO_DEMO_SORT:-}" "${FNO_DEMO_LEAD_NESTING:-}" "${FNO_DEMO_FEED_VIEW:-}" <<'PY'
 import json, os, sys
-path, spec, nesting = sys.argv[1:4]
+path, spec, nesting, feed_view = sys.argv[1:5]
 data = json.load(open(path)) if os.path.exists(path) else {}
 if spec:
     column, direction = spec.split(":")
     data["sort"] = {"column": column, "direction": direction}
 if nesting:
     data["group_by_lead"] = True
+if feed_view:
+    data["feed_view"] = json.loads(feed_view)
 json.dump(data, open(path, "w"))
 PY
 fi

@@ -39,11 +39,11 @@ One file per install. These belong at the root.
 | `config.toml`, `.lock` | `paths.config_toml()` | permanent |
 | `settings.yaml`, `.lock` | `fno/config/__init__.py` loader | permanent |
 | `decisions.jsonl` | `crates/fno-agent/src/backlog/decisions_cli.rs` | permanent; stays at the root because the routed store keys this journal family there (the same anchor rule the retired `events.jsonl` keeps) |
-| `questions.jsonl` | `paths.questions_jsonl()`, written by `fno inbox outstanding` | permanent; a question does not expire; stays at the root because the routed store keys this journal family there (the same anchor rule the retired `events.jsonl` keeps) |
+| `questions.jsonl` | `paths.questions_jsonl()`, written by `fno inbox outstanding` | permanent; a question does not expire. The name stays at the root because the routed store keys this journal family there, but the file retires like `events.jsonl`: the migration imports it into `db/questions.db` once and parks it |
 | `decisions.jsonl.corrupt` | `decide/__init__.py::_compact_index` | permanent; the only copy of a row whose source journal is gone |
 | `decisions.jsonl.compact` | `decide/__init__.py::_compact_index` | transient; replaced onto `decisions.jsonl` in the same call |
-| `.canary` | `scripts/ci/check-state-canary.sh` `plant` | permanent, and written ONLY into a root with no live graph, which in practice means a CI runner. A live operator root is watched read-only and never receives it. One byte of content; its job is to give the walk a file it can prove it saw. |
-| `opencode-install-<hash>.json` | `crates/fno-agent/src/spawn/opencode_install.rs` (the `plugin-install opencode` arm) | permanent; one per `OPENCODE_CONFIG_DIR` (the hash is of the config dir's canonical path), rewritten per install with one entry per written path and its content hash; removed last by `plugin-install opencode --uninstall`, so an interrupted uninstall is resumable |
+| `state/canary` | `scripts/ci/check-state-canary.sh` `plant` | permanent, and written ONLY into a root with no live graph, which in practice means a CI runner. A live operator root is watched read-only and never receives it. One byte of content; its job is to give the walk a file it can prove it saw. |
+| `install/opencode/<hash>.json` | `crates/fno-agent/src/spawn/opencode_install.rs` (the `plugin-install opencode` arm) | permanent; one per `OPENCODE_CONFIG_DIR` (the hash is of the config dir's canonical path). A legacy `opencode-install-<hash>.json` at the root is read until the next install rewrites it here, rewritten per install with one entry per written path and its content hash; removed last by `plugin-install opencode --uninstall`, so an interrupted uninstall is resumable |
 | `recovery/provider-outages.json`, `.lock`, `.provider-outages-*.tmp` | `agents/provider_outage.py` | permanent breaker/evidence journal; lock and atomic temp sidecars live only for one write and stale temps are safe to remove when no writer holds the lock; stores fingerprints, bounded raw refusal text, and explicit route IDs, never credentials or full transcripts |
 | `recovery/provider-canaries/*.json` | `agents/watchdog.py` | bounded health proofs for audit; exact marker, provider/account IDs, pane ID, and timestamp only, never pane dumps or credentials |
 | `recovery/canary-work/` | `agents/watchdog.py` | permanent empty neutral cwd reused by canaries; owns no node claim or project data |
@@ -121,11 +121,10 @@ The migration moves every movable file into a named subfolder (`docs/state-root-
 
 | Entries | Why they cannot move yet |
 |---|---|
-| `config.toml`, `config.toml.lock`, `config.toml.bak*`, `settings.yaml`, `settings.yaml.lock` | The config contract every harness, doc and OSS install names at `~/.fno/config.toml`. The `.bak*` files await the operator's ruling on their deletion. |
+| `config.toml`, `config.toml.lock`, `config.toml.bak*`, `settings.yaml` | The config contract every harness, doc and OSS install names at `~/.fno/config.toml`. The `.bak*` files await the operator's ruling on their deletion. |
 | `my-priorities.md`, `my-priorities.md.lock`, `ruleset-21074865-before-smoke-hold.json` | Operator-owned, edited by hand at that path. |
 | `.env`, `.gitignore` | Operator-owned, edited by hand at that path. |
 | `.DS_Store`, `.metadata_never_index` | macOS Finder and Spotlight; Spotlight reads the opt-out marker only at the folder root. |
-| `.path-migration-done` | The front door's first-run migration sentinel (`crates/fno/src/setup/path_migration.rs`). Parking it re-fires that migration, which rewrites root files. It moves when that migration is deleted. |
 | `events.jsonl` | The retired journal family's anchor and stray-hunt root (`global_events_json`): writers committed to the routed store, so it is read-only, and the doctor's stall fold reads it for the retained rotations beside it. |
 | `posture.json` | The removed `fno posture` command's advisory stamp; the doctor reads it until the file ages out of every machine it landed on. |
 
@@ -242,7 +241,6 @@ One file per session, per day, or per throttle window.
 | `.active-backlog-nudge` | `crates/fno-agent/src/backlog/active_backlog.rs` (the keeper's publish touches it) | single file |
 | `.think-spawn-daily.json` | `crates/fno-agent/src/backlog/think_daily.rs` | daily, overwritten |
 | `.preflight-cancel` | `scripts/ci/preflight.sh` | consumed by the reader (one-shot; stale after one hour) |
-| `.path-migration-done` | `crates/fno/src/setup/path_migration.rs` | one-shot sentinel |
 | `.preflight-receipt-locks/` | `scripts/ci/preflight.sh` | live lock dirs |
 | `db/build-marks/<session>.json` | `crates/fno-agent/src/gate/build_marks.rs` (the daemon arm), read by `crates/fno/src/ui/agents_view/build_marks.rs` | one sidecar per session with a live cargo job at the admission doors (`state`, `position`, `at`, `ttl_ms`); refreshed every 5s while the job runs, deleted by the arm's prune pass when it ends; the 30s TTL ages out a dead daemon's last mark |
 | `db/mail/mail-hold/<session-id>.json` | `crates/fno-mail/src/hold.rs` (`HoldStore`), driven by `crates/fno-agent/src/runtime/mail_hold.rs` via its `state_root()` | one hold record per held session id, always with an `until`; `set_by` reads `user` or `conversation`; removed by the first live read after its end, by the release timer, and by `fno agent mail admin hold --off` |

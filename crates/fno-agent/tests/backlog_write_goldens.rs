@@ -438,7 +438,6 @@ fn materialize(case: &Case) -> Fixture {
             "FNO_AGENT_BIN".into(),
             env!("CARGO_BIN_EXE_fno-agent").to_string(),
         ),
-        ("FNO_SKIP_MIGRATION".into(), "1".into()),
     ];
     // The canonical stamp rides the rank cases (their operator fence needs a
     // resolvable identity). Identity cases (--evidence votes, the armed birth

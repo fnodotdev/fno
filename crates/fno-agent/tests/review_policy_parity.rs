@@ -508,7 +508,6 @@ fn review_policy_golden_parity() {
         std::fs::create_dir_all(&base).unwrap();
         std::fs::create_dir_all(base.join("home")).unwrap();
         std::fs::create_dir_all(base.join("state")).unwrap();
-        write_file(&base.join("state/.path-migration-done"), "migrated\n");
         for (rel, content) in &test_case.files {
             write_file(&base.join(rel), content);
         }

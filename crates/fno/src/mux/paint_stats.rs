@@ -216,13 +216,15 @@ mod tests {
         let me = std::process::id();
         // 1..=10 ms in the window; a dead client, another session and a
         // 900 ms sample older than the window must all stay out.
-        let fresh: Vec<_> = (1..=10).map(|i| (100_000, i * 1000)).collect();
+        // The stale sample sits below the window floor, so it stays out
+        // whether or not a pid next to ours is alive on the host.
+        let fresh: Vec<_> = (1..=10).map(|i| (900_000, i * 1000)).collect();
         put(dir.path(), "main", me, fresh);
-        put(dir.path(), "main", me + 1_000_000, vec![(100_000, 5_000)]);
-        put(dir.path(), "other", me, vec![(100_000, 777_000)]);
+        put(dir.path(), "main", me + 1_000_000, vec![(900_000, 5_000)]);
+        put(dir.path(), "other", me, vec![(900_000, 777_000)]);
         let stale = vec![(1_000, 900_000)];
         put(dir.path(), "main", me + 1, stale);
-        let got = summarize(dir.path(), "main", 160_000, 300).unwrap();
+        let got = summarize(dir.path(), "main", 1_000_000, 300).unwrap();
         assert_eq!(got.p50_ms, 5.0);
         assert_eq!(got.p90_ms, 9.0);
         assert_eq!(got.max_ms, 10.0);

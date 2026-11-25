@@ -450,7 +450,6 @@ fn leaf_help_answers_natively() {
     std::fs::create_dir_all(project.join(".fno")).unwrap();
     std::fs::create_dir_all(home.join(".fno")).unwrap();
     std::fs::create_dir_all(&state).unwrap();
-    std::fs::write(state.join(".path-migration-done"), b"").unwrap();
 
     for (args, usage) in [
         (

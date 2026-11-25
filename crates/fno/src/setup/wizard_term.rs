@@ -48,7 +48,7 @@ Interactive onboarding: asks, probes one harness until one works, then applies t
 const SEARCH_MIN: usize = 12;
 
 fn sidecar() -> PathBuf {
-    model_catalog::state_dir().join("sidecar")
+    crate::state_layout::place(&model_catalog::state_dir(), "sidecar")
 }
 
 fn report_path() -> PathBuf {
@@ -67,7 +67,7 @@ fn lock_path() -> PathBuf {
 /// inventory already owns: a finished or skipped wizard writes it, so the
 /// bare-`fno` gate fires once per machine, never on every launch.
 fn done_marker_in(state_dir: &std::path::Path) -> PathBuf {
-    state_dir.join("sidecar").join("wizard-done")
+    crate::state_layout::place(state_dir, "sidecar").join("wizard-done")
 }
 
 fn done_marker_path() -> PathBuf {
@@ -99,7 +99,7 @@ fn first_run_needed_in(state_dir: &std::path::Path) -> bool {
 /// A machine counts as set up when its global config sets any key, or an
 /// older setup run left its done marker or a joined profile behind.
 fn machine_configured_in(state_dir: &std::path::Path) -> bool {
-    let sidecar = state_dir.join("sidecar");
+    let sidecar = crate::state_layout::place(state_dir, "sidecar");
     if sidecar.join("setup-done").exists() || sidecar.join("setup-profile.toml").exists() {
         return true;
     }
@@ -1370,7 +1370,7 @@ mod done_marker_tests {
     fn the_first_run_gate_reads_one_marker_path() {
         let dir = tempfile::tempdir().unwrap();
         let marker = done_marker_in(dir.path());
-        assert_eq!(marker, dir.path().join("sidecar").join("wizard-done"));
+        assert_eq!(marker, dir.path().join("db/sidecar/wizard-done"));
         // No marker: the gate fires. After a finished wizard writes it,
         // the gate stands down.
         assert!(first_run_needed_in(dir.path()));

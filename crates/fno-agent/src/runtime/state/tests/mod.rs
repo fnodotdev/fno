@@ -723,6 +723,7 @@ fn registry_schema_fields() {
         pid_start_time: Some(1),
         keeper_child_pid: Some(1),
         substrate: Some("value".into()),
+        watch: true,
         log_path: Some("value".into()),
         last_reconciled_at: Some("value".into()),
         inside_leg: Some(InsideLegReport::default()),

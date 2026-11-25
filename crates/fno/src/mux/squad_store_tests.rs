@@ -1950,3 +1950,27 @@ fn stamp_parser_matches_a_known_epoch() {
         Some(1_709_164_800)
     );
 }
+
+#[test]
+fn shot_pin_squad_needs_every_origin_under_a_pin_dir() {
+    let squad = |origins: &[&str]| StoredSquad {
+        project: None,
+        thread_pins: Vec::new(),
+        name: String::new(),
+        key: String::new(),
+        origins: origins.iter().map(|s| (*s).to_string()).collect(),
+        members: Vec::new(),
+        created_at: String::new(),
+        tab_specs: Vec::new(),
+        tab_trees: Vec::new(),
+        active_tab: None,
+    };
+    assert!(is_shot_pin_squad(&squad(&["/var/T/fno-shot-pin-47612"])));
+    assert!(is_shot_pin_squad(&squad(&["/var/T/fno-shot-pin-1/demo"])));
+    assert!(!is_shot_pin_squad(&squad(&[])));
+    assert!(!is_shot_pin_squad(&squad(&["/Users/bb16"])));
+    assert!(!is_shot_pin_squad(&squad(&[
+        "/var/T/fno-shot-pin-1",
+        "/tmp"
+    ])));
+}

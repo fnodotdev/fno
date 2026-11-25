@@ -29,30 +29,23 @@ command -v jq >/dev/null 2>&1 || noop
 # three jq forks per prompt was a real share of a batch the 2026-11-08 audit
 # showed dying at 3 to 5 s harness caps. TSV keeps the fields apart; a jq
 # failure leaves them empty and every path below falls through to its noop.
-EVENT="" SKILL_TRIG="" PROMPT_TRIG="" SID_FIELD=""
-IFS=$'\t' read -r EVENT SKILL_TRIG PROMPT_TRIG SID_FIELD < <(
+EVENT="" NAME="" SID_FIELD=""
+IFS=$'\t' read -r EVENT NAME SID_FIELD < <(
     printf '%s' "$PAYLOAD" | jq -r '
         if (.hook_event_name // "UserPromptSubmit") == "PostToolUse"
         then ["PostToolUse",
-              ((.tool_input.skill // "") | startswith("fno:")),
-              "false",
+              ([(.tool_input.skill // "") | select(startswith("fno:")) | sub("^fno:"; "")] | first // ""),
               (.session_id // "")]
         else ["UserPromptSubmit",
-              "false",
-              ((.prompt // "") | test("(^|\\s)[/$]fno:[a-z]")),
+              ([(.prompt // "") | match("(^|\\s)[/$]fno:[a-z][a-zA-Z0-9:_-]*"; "g").string] | first // "" | sub("^[/$]"; "") | sub("^fno:"; "")),
               (.session_id // "")]
         end | @tsv' 2>/dev/null
 )
 EVENT="${EVENT:-UserPromptSubmit}"
-if [[ "$EVENT" == "PostToolUse" ]]; then
-    TRIGGER="$SKILL_TRIG"
-else
-    EVENT="UserPromptSubmit"
-    TRIGGER="$PROMPT_TRIG"
-fi
+TRIGGER="$NAME"
 
-if [[ "$TRIGGER" == "true" ]]; then
-    printf '%s' "$PAYLOAD" | bash "$HOOK_DIR/session-start-using-fno.sh" "$EVENT" join
+if [[ -n "$TRIGGER" ]]; then
+    printf '%s' "$PAYLOAD" | bash "$HOOK_DIR/session-start-using-fno.sh" "$EVENT" join "skill:$TRIGGER"
     exit 0
 fi
 

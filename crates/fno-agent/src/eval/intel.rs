@@ -973,7 +973,7 @@ pub fn run_intel(args: &[String]) -> i32 {
              pages to check by hand, and manifest.json (counts, scrub drops, leaks).\n\
              It refuses while the pages hold ticked items. --corpus-ingest <dir> reads\n\
              the ticked items and writes eval.jsonl. Nothing leaves the machine.\n\n\
-             --plans-ladder scores the fixed set in ~/.fno/evals/plan-labels/ladder-set.jsonl\n\
+             --plans-ladder scores the fixed set in ~/.fno/db/evals/plan-labels/ladder-set.jsonl\n\
              on fnod, then --teacher-url, then --hosted NAME=COMMAND, and stops at the\n\
              first pass. --plans [--limit N] [--dry-run] labels plan premises with the\n\
              winner and refuses, printing each score, when no rung passed.\n\n\
@@ -1238,7 +1238,7 @@ pub fn run_intel(args: &[String]) -> i32 {
             eprintln!("fno-agent intel: --categories needs --fold <saved fold JSON>");
             return 2;
         };
-        let facets_dir = fno_dir.join("intel").join("facets");
+        let facets_dir = crate::state_layout::place(&fno_dir, "intel").join("facets");
         return crate::intel_insights::run_categories(
             run_path,
             fold_path,

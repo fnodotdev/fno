@@ -116,3 +116,57 @@ fn session_id_field_and_resume_argv_contract() {
         Some(vec!["agy".into(), "--conversation".into(), "x".into()])
     );
 }
+
+/// The law-D2402 gate on the heal persist (node x-4af9), proven through the
+/// watchdog's own adoption entry: a session with no launch record and no law
+/// join trigger still resolves (the caller reaches it) but the registry gains
+/// no row; the same session with a law marker persists exactly as before.
+#[test]
+fn a_heal_of_a_law_refused_session_resolves_without_persisting() {
+    let _root = crate::paths::DeclaredRoot::declare("store-heal-law-gate");
+    let dir = tempfile::TempDir::new().unwrap();
+    let registry_path = dir.path().join("registry.json");
+    let sid = "b2c3d4e5-1111-2222-3333-444455556666";
+    // Refuse arm: no launch record, no marker. The row comes back for
+    // reach; nothing persists.
+    let row = crate::store_heal::adopt_codex_rollout(
+        sid,
+        "/work",
+        &dir.path().join("rollout.jsonl"),
+        &registry_path,
+        "b2c3d4e5",
+        "",
+    )
+    .unwrap();
+    assert_eq!(
+        row.get("name").and_then(serde_json::Value::as_str),
+        Some(crate::identity::canonical_handle(sid).as_str())
+    );
+    let persisted = crate::state::try_load_registry(&registry_path)
+        .ok()
+        .flatten()
+        .map(|r| r.entries.is_empty())
+        .unwrap_or(true);
+    assert!(persisted, "no adopted row may land without a law cause");
+
+    // Admit arm: the same session with a skill trigger persists as before
+    // the gate, stamped origin adopted.
+    crate::join_marker::write_marker(dir.path(), "codex", sid, "skill:review").unwrap();
+    let row = crate::store_heal::adopt_codex_rollout(
+        sid,
+        "/work",
+        &dir.path().join("rollout.jsonl"),
+        &registry_path,
+        "b2c3d4e5",
+        "",
+    )
+    .unwrap();
+    assert_eq!(
+        row.get("name").and_then(serde_json::Value::as_str),
+        Some(crate::identity::canonical_handle(sid).as_str())
+    );
+    let registry = crate::state::load_registry(&registry_path).unwrap();
+    assert_eq!(registry.entries.len(), 1);
+    let origin = registry.entries.first().and_then(|e| e.origin.as_deref());
+    assert_eq!(origin, Some("adopted"));
+}

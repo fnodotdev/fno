@@ -74,7 +74,6 @@ app = [
     "dep:unicode-width",
     "dep:blake3",
     "dep:rusqlite",
-    "dep:strsim",
     "dep:thiserror",
     "dep:tempfile",
     "dep:tokio",
@@ -91,7 +90,7 @@ full = ["app", "web", "transfer", "pdf"]
 # The mail protocol core: the hold store the sideline marks read. A caret
 # range, as in fno-agent: fno-mail versions on its own.
 fno-mail = { path = "../fno-mail", version = "0.1" }
-fno-proto = { path = "../fno-proto", version = "0.2.4", features = ["async", "vt"], optional = true }
+fno-proto = { path = "../fno-proto", version = "0.2.5", features = ["async", "vt", "feed"], optional = true }
 # `fno mux serve --web`: the read-only web bridge's HTTP + WebSocket
 # surface. axum handles the untrusted-input HTTP parsing and WS handshake so
 # the web-facing bridge does not hand-roll that security-sensitive code.
@@ -179,9 +178,6 @@ unicode-width = { version = "0.2", optional = true }
 rusqlite = { version = "0.41.1", features = ["bundled", "backup", "fallible_uint", "functions"], optional = true }
 # The generated rules module compares rule review dates through it.
 chrono = { version = "0.4", default-features = false, features = ["std", "alloc", "clock"] }
-# `search_query.rs` names the nearest key on an unknown-key error (already
-# locked at 0.11.1 as a transitive dep, so no new download).
-strsim = { version = "0.11", optional = true }
 thiserror = { version = "2", optional = true }
 tempfile = { version = "3", optional = true }
 tokio = { optional = true, version = "1", features = [

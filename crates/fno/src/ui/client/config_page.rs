@@ -423,7 +423,7 @@ fn path_default_display(key: &str) -> Option<String> {
     match key {
         "paths.ledger_json" => Some(sketch("db/history/ledger.json")),
         "paths.evals_history" => Some(sketch("db/history/evals-history.jsonl")),
-        "paths.briefs_dir" => Some(sketch("briefs/")),
+        "paths.briefs_dir" => Some(sketch("db/briefs/")),
         "paths.postmortems_dir" => Some(sketch("db/postmortems/")),
         "paths.worktrees_base" => Some(sketch("spaces/worktrees/")),
         "paths.cargo_targets_base" => Some(sketch("cache/cargo-build/")),
@@ -442,7 +442,7 @@ fn path_default_display(key: &str) -> Option<String> {
         }
         "paths.bus_dir" => Some(sketch("db/mail/bus/")),
         "paths.chats" => Some(sketch("db/mail/chats/")),
-        "paths.observer_reports_dir" => Some(sketch("observer-reports/{owner}/")),
+        "paths.observer_reports_dir" => Some(sketch("db/observer-reports/{owner}/")),
         "paths.operator_lane" => Some(sketch("my-priorities.md")),
         "paths.spaces_dir" => Some(sketch("spaces/")),
         _ => None,

@@ -29,6 +29,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `CLAUDE_DIR_OVERRIDE` | rs | Redirects the whole Claude config root. Read by crates/fno-agent/src/runtime/claude_roster.rs `config_dir` and crates/fno-agent/src/runtime/harness_reader.rs. |
 | `CLAUDE_EFFORT` | rs | The effort level an encounter vote records, on claude only. |
 | `CLAUDE_JOB_DIR` | rs | Set by Claude Code in a `claude --bg` job. Its `state.json` names the job, and the SessionStart launch claim reads that name to match the launcher's record. The write gate also falls back to its tmp dir in a refusal when the payload carries no session id; the payload's session wins when present. |
+| `CLAUDE_PID` | rs | The pid of the Claude Code CLI that runs the hooks. On macOS the session report, both register doors and the first-turn bind read it to tell a hand-typed `claude -p` from an interactive session. |
 | `CLAUDE_PLUGIN_ROOT` | rs | The plugin stage root the doctor's hook probes read. |
 | `CLAUDE_SESSION_ID` | rs | unclear: crates/fno-agent/src/runtime/claims.rs:3690 |
 | `CLI` | rs | unclear: crates/fno-agent/src/spawn/loop_dispatch.rs:198 |
@@ -266,7 +267,6 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_SESSION_PID` | rs | The launcher-stamped pid half of the session-proof pair; must be a positive, live pid or the pair is ignored (spawn_context.rs stamp_pid_is_live). |
 | `FNO_SIDECAR_EVERY_MS` | rs | Test seam: milliseconds the fleet sidecar's rewrite throttle and the mux server's refresh timer both run at (default 30000); a zero or unparseable value reads the default. It shortens the cadence for the e2e that proves an unattended machine keeps publishing. |
 | `FNO_SIDECAR_SOCKET` | rs | Overrides the MCP sidecar's socket path (default `$XDG_RUNTIME_DIR/fno/sidecar.sock`, else the state dir's `sidecar.sock`). The client's lazy-start forwards it to the spawned sidecar, so a caller asking for a non-default path never races the default. Set by callers and tests; read at `crates/fno-agent/src/runtime/mcp/sidecar.rs` (`socket_path`). |
-| `FNO_SKIP_MIGRATION` | rs | crates/fno/src/setup/path_migration.rs run_if_needed |
 | `FNO_SNAPSHOT_GATE` | rs | The spawn-gate answer a `--view org-block` snapshot paints, as inline JSON. Unset, the snapshot runs the live probe. |
 | `FNO_SNAPSHOT_LANES` | rs | Path to a saved `fno doctor lanes` reading that a `--view org-block` snapshot paints. Unset, the snapshot runs the live fold. |
 | `FNO_SNAPSHOT_METER` | rs | The capacity state a snapshot paints in the meter row, glance and modal, as inline JSON. Unset, the snapshot reads the machine's capacity file. |
@@ -276,7 +276,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_SPAWN_GATE` | rs | unclear: crates/fno-agent/src/backlog/dispatch_resolve.rs:911 |
 | `FNO_SPAWN_ORIGIN` | rs | Explicit dispatch-origin JSON the spawn door validates onto the request; malformed refuses. |
 | `FNO_SPAWN_OWNER` | rs | Explicit dispatch-owner JSON the spawn door validates onto the request; must be exported together with FNO_SPAWN_ORIGIN. |
-| `FNO_SPAWN_SHOW_ROW` | rs | Set to `1` by the front door's `fno agent spawn --mux`. The headless claude lane then keeps the run's registry row, so the one-shot shows in the mux while it runs. Never passed on to the child. |
+| `FNO_SPAWN_SHOW_ROW` | rs | Set to `1` by the front door's `fno agent spawn --mux`. The headless claude lane then keeps the run's registry row, so the one-shot shows in the mux while it runs. The row carries the watch mark, and the sideline shows no headless row without it. The claude lane takes the variable off the child. The other lanes leave it, and a child that reports its own row reads it as the watch mark. |
 | `FNO_SPAWN_TAKE_OVER` | rs | Refusal marker only: nothing sets it, so a read means a forgery or a stale leak, and the compose door refuses the spawn. The take-over reason rides the compose answer, never the environment. |
 | `FNO_SPAWN_TRIGGER` | rs | unclear: crates/fno-agent/src/spawn/pane_spawn/mod.rs:1440 |
 | `FNO_STATE_DIR` | rs | Pins fno's config state root: `state_dir` and `locks_dir` read it ahead of their config/`$HOME` defaults, and the Rust default graph path and the backlog porcelain reads serve from it ahead of config. `accounts::credentials::seal` sets it around a forwarded HOME so a spawned worker's graph, ledger, and locks stay on the parent's root. |

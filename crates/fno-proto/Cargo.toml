@@ -4,7 +4,7 @@ name = "fno-proto"
 # publishes it only when this version is not on crates.io yet; fno takes it
 # by caret range. Raise it in the PR that raises PROTO_VERSION: the bump guard
 # (scripts/ci/check-proto-version-bump.sh) refuses a wire bump without it.
-version = "0.2.4"
+version = "0.2.5"
 edition = "2021"
 rust-version = "1.92"
 description = "The fno mux wire contract: client and server messages, frame and layout types, framing, and a published JSON Schema."
@@ -33,6 +33,11 @@ rio-vt = { version = "=0.5.29", default-features = false, optional = true }
 # Derives the TypeScript bindings the gen-ts example publishes. Used by the
 # gen-ts example only. serde-json-impl maps serde_json::Value fields to `any`.
 ts-rs = { version = "12.0.1", optional = true, features = ["serde-json-impl"] }
+# The feed module's date reads (the search grammar's date keys, the table's
+# time column). Behind the `feed` feature so the desktop app never links it.
+chrono = { version = "0.4", default-features = false, features = ["std", "alloc", "clock"], optional = true }
+# The grammar names the nearest key on an unknown-key error.
+strsim = { version = "0.11", optional = true }
 
 [features]
 default = []
@@ -40,6 +45,9 @@ async = ["dep:tokio"]
 schema = ["dep:schemars"]
 vt = ["dep:rio-vt"]
 ts = ["dep:ts-rs"]
+# The activity feed's shared search grammar, row and table (`feed`), which
+# the mux client and the fno-agent reader both evaluate.
+feed = ["dep:chrono", "dep:strsim"]
 
 [[example]]
 name = "gen-schema"

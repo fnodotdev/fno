@@ -1403,6 +1403,20 @@ fn classify_squad_members(
     (false, unknown)
 }
 
+/// True for a workspace a screenshot run left behind: it has origins, and every
+/// one sits under a `fno-shot-pin-<pid>` temp dir. The shot deletes that dir
+/// when it returns, so the squad outlives the only thing that justified it.
+pub fn is_shot_pin_squad(squad: &StoredSquad) -> bool {
+    !squad.origins.is_empty()
+        && squad.origins.iter().all(|o| {
+            std::path::Path::new(o).components().any(|c| {
+                c.as_os_str()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with("fno-shot-pin-"))
+            })
+        })
+}
+
 /// The evidence-aware squad predicate. Unlike the legacy live-id wrapper,
 /// absence from an evidence set is not itself death.
 pub fn prune_decision_with_evidence(

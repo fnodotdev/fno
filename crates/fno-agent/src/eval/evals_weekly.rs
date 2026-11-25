@@ -301,7 +301,9 @@ fn render_weekly(report: &Value) -> String {
 }
 
 fn report_path(state: &Path, week: &str) -> PathBuf {
-    state.join("evals/weekly").join(format!("{week}.json"))
+    crate::evals::state_evals_dir(state)
+        .join("weekly")
+        .join(format!("{week}.json"))
 }
 
 /// The weekly leg: the first daily tick of an ISO week writes that week's
@@ -314,7 +316,8 @@ pub(crate) fn leg(
     let path = report_path(state, &week_of(now));
     let mut wrote = false;
     if !path.exists() {
-        std::fs::create_dir_all(state.join("evals/weekly")).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(crate::evals::state_evals_dir(state).join("weekly"))
+            .map_err(|e| e.to_string())?;
         let report = weekly(state, &crate::evals::history_path(), now);
         let bytes = serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?;
         wrote = crate::evals_traces::create_once(&path, &bytes)?;
@@ -407,7 +410,7 @@ mod tests {
         // The weekly report: slice, judges, stale goldens and trend.
         let tmp = tempfile::tempdir().unwrap();
         let state = tmp.path();
-        let traces = state.join("evals/traces");
+        let traces = crate::evals::state_evals_dir(state).join("traces");
         std::fs::create_dir_all(&traces).unwrap();
         for (i, kind) in ["no_progress", "no_progress", "revert"].iter().enumerate() {
             let mut t = trace(Some("opus"), Some(30.0), Some(0));
@@ -427,7 +430,11 @@ mod tests {
                 .to_string()
             })
             .collect();
-        std::fs::write(state.join("evals/labels.jsonl"), labels.join("\n")).unwrap();
+        std::fs::write(
+            crate::evals::state_evals_dir(state).join("labels.jsonl"),
+            labels.join("\n"),
+        )
+        .unwrap();
         let history = state.join("history.jsonl");
         let mut lines = Vec::new();
         for (task, tier, pass) in [

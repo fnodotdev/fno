@@ -1021,6 +1021,10 @@
     {
      "name": "image",
      "default": null
+    },
+    {
+     "name": "host",
+     "default": null
     }
    ]
   },
@@ -3581,6 +3585,7 @@
   "sandbox.on_unavailable",
   "sandbox.provider",
   "sandbox.image",
+  "sandbox.host",
   "obsidian.enabled",
   "obsidian.vault",
   "project.id",

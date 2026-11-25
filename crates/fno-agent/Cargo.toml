@@ -50,7 +50,7 @@ fno-mail = { path = "../fno-mail", version = "0.1" }
 # digest input and the published pack-UI schema regenerates from them, so
 # both spellings must stay one crate. No features: the schema derivation
 # stays behind the published crate's own `schema` feature.
-fno-proto = { path = "../fno-proto", version = "0.2", features = ["vt"] }
+fno-proto = { path = "../fno-proto", version = "0.2.5", features = ["vt", "feed"] }
 thiserror = "2"
 # Cross-process region-text fingerprint for the answer queue: the
 # daemon extractor hashes the blocked prompt's region text and the mux server

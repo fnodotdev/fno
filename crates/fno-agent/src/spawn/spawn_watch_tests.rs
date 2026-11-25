@@ -331,3 +331,26 @@ fn a_long_synthetic_quote_folds_to_what_the_notice_door_accepts() {
     assert!(evidence.contains("word25"), "{evidence}");
     assert!(!evidence.contains("word26"), "{evidence}");
 }
+
+/// A head line proves the launch started a session. With no adopt, no row and
+/// no live process after it, the stage names the missing adopt and never
+/// reads the worker as started.
+#[test]
+fn a_head_with_no_adopt_and_no_live_worker_reads_as_a_missing_adopt() {
+    let watch = Watch {
+        name: Some("w".into()),
+        launch_short_id: Some("2ee23622".into()),
+        ..Default::default()
+    };
+    let (name, evidence) = stage(&watch, None, None);
+    assert_eq!(name, "adopt");
+    assert!(evidence.contains("2ee23622"), "{evidence}");
+    assert!(!evidence.contains("started"), "{evidence}");
+    assert!(!evidence.contains(';'), "{evidence}");
+    let adopted = Watch {
+        child_session: Some("2ee23622-aaaa".into()),
+        ..watch
+    };
+    let (name, _) = stage(&adopted, None, None);
+    assert_eq!(name, "first prompt");
+}

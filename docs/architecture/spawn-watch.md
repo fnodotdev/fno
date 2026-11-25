@@ -10,12 +10,13 @@ When an agent types a spawn or a native launch line, the PreToolUse Bash hook wr
 
 Only a detached launch is watched: a `claude --bg` line, a spawn command, a pane run, or a dispatcher's record. A one-shot such as `codex exec` or `pi -p` is not watched. The caller's own Bash call waits for it and gets its answer there. A spawn with no launch record is not watched either. The mux composer has its own answer: its caller is the human, who sees Launched, Refused or Unknown. A daemon or advance dispatch that no agent typed writes no record either.
 
-## The four stages
+## The five stages
 
 Each pass reads the world and names the furthest stage it can prove.
 
 - **gate**: no worker row, and the gate holds no `worker:<name>` admission. A refused or abandoned call reads the same way.
 - **launch**: the gate admitted the spawn, and no worker row exists yet.
+- **adopt**: the launch printed its `backgrounded` head line, and no SessionStart adopt and no live roster row followed. The head proves `claude --bg` started a session. It does not prove the session still runs. The stage names the missing adopt, so a dead worker reads as one.
 - **harness boot**: a worker row exists, and it has no harness session id yet.
 - **first prompt**: the session started, and its transcript holds no assistant line yet.
 

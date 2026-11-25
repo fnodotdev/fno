@@ -1229,7 +1229,6 @@ dependencies = [
  "serde_yaml_ng",
  "sha2",
  "shlex",
- "strsim",
  "tempfile",
  "thiserror 2.0.18",
  "throbber-widgets-tui",
@@ -1250,11 +1249,13 @@ dependencies = [
 
 [[package]]
 name = "fno-proto"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
+ "chrono",
  "rio-vt",
  "serde",
  "serde_json",
+ "strsim",
  "tokio",
 ]
 

@@ -287,6 +287,8 @@ const SHOT_SEEDS: &[(&str, &str)] = &[
 /// config and bin overrides into the demo. Each world child strips them.
 const WORLD_STRIP_KEYS: &[&str] = &[
     "FNO_CONFIG",
+    "FNO_STATE_DIR",
+    "FNO_HOME",
     "FNO_MUX_DIR",
     "FNO_AGENT_HOME",
     "FNO_CLAIMS_ROOT",
@@ -322,13 +324,77 @@ const WORLD_STRIP_KEYS: &[&str] = &[
 /// One throwaway world for the shot: the temp root and the world server
 /// the app attaches to. Dropping kills the server by its captured pid
 /// and removes the root, so every early return tears the world down.
+/// A pane's keeper outlives the server by design, so the drop ends the
+/// world's keepers first, found through the world's own mux dir.
 struct ShotWorld {
     root: PathBuf,
+    front: PathBuf,
     server: Option<std::process::Child>,
+}
+
+impl ShotWorld {
+    fn new(root: PathBuf, front: &Path) -> Self {
+        Self {
+            root,
+            front: front.to_path_buf(),
+            server: None,
+        }
+    }
+}
+
+/// The world's config. It names the world's one machine: the Machines row
+/// paints the config's display name, never the real host.
+fn seed_world_config(root: &Path) -> bool {
+    match std::fs::write(
+        root.join(".fno/config.toml"),
+        "[fleet]\nname = \"demo-host\"\n",
+    ) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("fno mux app shot: the world config failed: {e}");
+            false
+        }
+    }
+}
+
+/// One row of `mux pane keeper list --json`: the two pids a world's
+/// teardown signals.
+#[derive(serde::Deserialize)]
+struct KeeperRow {
+    keeper_pid: Option<u32>,
+    child_pid: Option<u32>,
+    stale: Option<String>,
+}
+
+/// The pids in a keeper listing, keeper first, then its child. A stale
+/// row's child may be gone, and its number may name another process by
+/// now, so only the keeper is signalled there.
+fn keeper_pids(listing: &[u8]) -> Vec<u32> {
+    let rows: Vec<KeeperRow> = serde_json::from_slice(listing).unwrap_or_default();
+    rows.iter()
+        .flat_map(|r| [r.keeper_pid, r.child_pid.filter(|_| r.stale.is_none())])
+        .flatten()
+        .collect()
 }
 
 impl Drop for ShotWorld {
     fn drop(&mut self) {
+        // The listing reads the world's mux dir (FNO_MUX_DIR is pinned by
+        // world_cmd), so it names only this world's keepers.
+        let mut list = world_cmd(&self.root, &self.front);
+        list.args(["mux", "pane", "keeper", "list", "--json"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
+        if let Ok(out) = list.spawn().and_then(|child| child.wait_with_output()) {
+            for pid in keeper_pids(&out.stdout) {
+                if let Ok(pid) = libc::pid_t::try_from(pid) {
+                    // SAFETY: a plain signal to a pid the world's own keeper
+                    // socket named; no memory is touched.
+                    unsafe { libc::kill(pid, libc::SIGTERM) };
+                }
+            }
+        }
         if let Some(mut child) = self.server.take() {
             // The pid was captured at spawn: kill by pid, never a sweep.
             child.kill().ok();
@@ -577,10 +643,23 @@ fn ask_rows(long: bool) -> String {
     format!("{text}\n{call}\n")
 }
 
+/// The raw row a finished background task leaves in a claude transcript:
+/// a plain user row whose text is a task-notification block, which the
+/// chat folds to its summary line.
+fn notice_row() -> String {
+    let text = "<task-notification>\n<task-id>bhd3bt724</task-id>\n<output-file>/tmp/fno-shot-out</output-file>\n<status>completed</status>\n<summary>Background command \"cargo build\" completed (exit code 0)</summary>\n</task-notification>";
+    let row = serde_json::json!({
+        "parentUuid": null, "isSidechain": false, "type": "user", "uuid": "u3",
+        "message": {"role": "user", "content": text},
+        "sessionId": "00000000-0000-4000-8000-000000000001"
+    });
+    format!("{row}\n")
+}
+
 /// A claude-shaped transcript in the world's projects dir, so the chat
 /// view renders a conversation. The FILE is the contract: rows carry
 /// type + message.content like the real transcripts the server reads.
-fn seed_transcript(root: &Path, ask: Option<&str>) -> bool {
+fn seed_transcript(root: &Path, ask: Option<&str>, notice: bool) -> bool {
     // The dir name is the project slug of the world children's cwd
     // (world_cmd pins them to code/checkout); that is the only name the
     // newest-lookup can find.
@@ -611,6 +690,11 @@ fn seed_transcript(root: &Path, ask: Option<&str>) -> bool {
     let rows = match ask {
         Some(kind) => format!("{rows}{}", ask_rows(kind == "overflow")),
         None => rows.to_string(),
+    };
+    let rows = if notice {
+        format!("{rows}{}", notice_row())
+    } else {
+        rows
     };
     match std::fs::write(dir.join(format!("{session}.jsonl")), rows) {
         Ok(()) => true,
@@ -649,7 +733,7 @@ fn shot(args: &crate::cli_args::AppShotArgs) -> i32 {
     let out_abs = std::path::absolute(out).unwrap_or_else(|_| PathBuf::from(out));
     let root = std::path::Path::new("/tmp").join(format!("fno-shot-world-{}", std::process::id()));
     std::fs::remove_dir_all(&root).ok();
-    let mut world = ShotWorld { root, server: None };
+    let mut world = ShotWorld::new(root, &front);
     for dir in [
         "mux",
         ".fno/agents",
@@ -666,8 +750,7 @@ fn shot(args: &crate::cli_args::AppShotArgs) -> i32 {
     // pin slugs that cwd to find the seed, so every pin below uses the
     // canonical root or the lookup lands one symlink off the seed.
     world.root = std::fs::canonicalize(&world.root).unwrap_or_else(|_| world.root.clone());
-    if let Err(e) = std::fs::write(world.root.join(".fno/config.toml"), "") {
-        eprintln!("fno mux app shot: the world config failed: {e}");
+    if !seed_world_config(&world.root) {
         return 1;
     }
     let mut server_cmd = world_cmd(&world.root, &front);
@@ -691,20 +774,21 @@ fn shot(args: &crate::cli_args::AppShotArgs) -> i32 {
         return 1;
     };
     // The transcript lands first: the adopt seed reads it as evidence.
-    let transcript = seed_transcript(&world.root, ask);
+    let transcript = seed_transcript(&world.root, ask, args.notice);
     let fleet = seed_fleet(&world.root, &front, &first_node);
     let question = seed_question(&world.root);
     if !(transcript && fleet && question) {
         return 1;
     }
+    // The world is this door's own, so the shot may drive it: its attach
+    // opens the world's one workspace, whose shell the overlays type into.
     let mut cmd = world_cmd(&world.root, &bin);
     cmd.arg("--shot")
         .arg("--shot-out")
         .arg(&out_abs)
         .arg("--shot-theme")
         .arg(theme)
-        .arg("--session")
-        .arg("default");
+        .args(["--session", "default", "--shot-own-world"]);
     if args.sheet {
         cmd.arg("--shot-sheet");
     }
@@ -829,11 +913,43 @@ mod tests {
     }
 
     #[test]
-    fn view_spellings_match_the_app_parse() {
-        assert_eq!(AppView::Chat.as_spelling(), "chat");
-        assert_eq!(AppView::Terminal.as_spelling(), "terminal");
-        assert_eq!(AppView::Orchestration.as_spelling(), "orchestration");
-        assert_eq!(AppView::Mods.as_spelling(), "mods");
+    fn notice_seed_ends_the_transcript_on_a_task_notification_row() {
+        let root = std::env::temp_dir().join(format!("fno-notice-seed-{}", std::process::id()));
+        assert!(seed_transcript(&root, None, true));
+        let slug = crate::ui::transcript_tail::claude_project_slug(&root.join("code/checkout"));
+        let file = root
+            .join("transcripts")
+            .join(slug)
+            .join(format!("{DEMO_CHAT_SESSION}.jsonl"));
+        let body = std::fs::read_to_string(&file).unwrap();
+        std::fs::remove_dir_all(&root).ok();
+        let last: serde_json::Value = serde_json::from_str(body.lines().last().unwrap()).unwrap();
+        assert_eq!(last.pointer("/type").and_then(|v| v.as_str()), Some("user"));
+        let text = last
+            .pointer("/message/content")
+            .and_then(|v| v.as_str())
+            .unwrap();
+        assert!(text.starts_with("<task-notification>"), "{text}");
+        assert!(text.contains("<summary>"), "{text}");
+    }
+
+    #[test]
+    fn world_children_never_inherit_a_real_state_root() {
+        let cmd = world_cmd(Path::new("/tmp/fno-world-probe"), Path::new("fno"));
+        let envs: Vec<_> = cmd.get_envs().collect();
+        for key in ["FNO_STATE_DIR", "FNO_HOME"] {
+            assert!(
+                envs.iter().any(|(k, v)| *k == key && v.is_none()),
+                "{key} must be stripped from the world env"
+            );
+        }
+    }
+
+    #[test]
+    fn keeper_listing_names_the_keeper_and_its_child_and_skips_gaps() {
+        let listing = br#"[{"keeper_pid":10,"child_pid":11},{"keeper_pid":12,"child_pid":null},{"keeper_pid":13,"child_pid":14,"stale":"child pid 14 is gone"},{"socket":"x"}]"#;
+        assert_eq!(keeper_pids(listing), vec![10, 11, 12, 13]);
+        assert!(keeper_pids(b"not json").is_empty());
     }
 
     #[test]

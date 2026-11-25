@@ -28,13 +28,21 @@ use goal_arbitration::{
 
 mod cannot_claim;
 mod lead_turn;
+mod sandboxed;
 
 /// Consecutive checker-unavailable fires tolerated for an active session
 /// before a loud give-up allow (the shim's `MAX_UNAVAIL_RETRIES`).
 const MAX_UNAVAIL_RETRIES: u64 = 3;
 
 pub fn run(args: &[String]) -> i32 {
-    let _ = args;
+    // `--sandbox <id>` is the host relay running this decision for a
+    // sandboxed worker; `--sandbox-dirty` is that export's dirty reading.
+    let sandbox = args
+        .iter()
+        .position(|a| a == "--sandbox")
+        .and_then(|i| args.get(i + 1))
+        .cloned();
+    let sandbox_dirty = args.iter().any(|a| a == "--sandbox-dirty");
     let mut payload = String::new();
     if std::io::stdin().read_to_string(&mut payload).is_err() {
         // An unreadable payload is not a verdict for an owner, but the shell
@@ -111,6 +119,20 @@ pub fn run(args: &[String]) -> i32 {
     } else {
         std::fs::canonicalize(&payload_cwd).unwrap_or(PathBuf::from(&payload_cwd))
     };
+
+    // Inside a sandbox there is no host state to decide from: the one host
+    // decision answers through the relay, and a broken relay blocks.
+    if std::env::var_os("FNO_AGENT_SANDBOXED").is_some() && sandbox.is_none() {
+        return sandboxed::sandboxed_stop(&session_id, last_assistant_message.as_deref());
+    }
+    if let Some(id) = &sandbox {
+        if let Err(e) = crate::sandbox::bind_origin(id, &cwd, sandbox_dirty) {
+            return emit_block_for_harness(
+                &session_id,
+                &format!("target stop-hook: the sandbox origin did not bind: {e}"),
+            );
+        }
+    }
 
     // Every Stop fire is a turn end, whatever the ownership verdict: a live
     // conversation clock is shortened to its grace (C3). Silent, and it
@@ -202,12 +224,36 @@ pub fn run(args: &[String]) -> i32 {
     // exit. An unreadable queue reads as no correction (fail-open, the same
     // stance the stand-down gate takes), because a broken reader must not
     // hold every stop in the fleet hostage.
-    if let Some(message) = correction_gate(&cwd, &fire) {
-        return emit_block_for_harness(&session_id, &message);
+    // A sandbox transcript is sandbox content: its user turns are forgeable,
+    // so a sandbox-origin stop records no correction.
+    if crate::sandbox::origin().is_none() {
+        if let Some(message) = correction_gate(&cwd, &fire) {
+            return emit_block_for_harness(&session_id, &message);
+        }
     }
 
     // ── Ownership (the salvaged stop-gate evaluation) ─────────────────────────
-    match evaluate(&cwd, &fire) {
+    // A sandbox's owner is the manifest the host start wrote for the bound
+    // worktree; the binding is host truth, so no session-id scan decides it.
+    let verdict = match crate::sandbox::origin().map(|_| crate::target_orient::manifest_path(&cwd))
+    {
+        Some(Some(state)) => Verdict::Owner {
+            state,
+            driver: "target",
+            owner_cwd: cwd.clone(),
+        },
+        _ => evaluate(&cwd, &fire),
+    };
+    match verdict {
+        // A sandbox stop is never a visitor: the host bound its node before
+        // the clone, so a missing manifest is a broken binding, not consent.
+        Verdict::NoOwner if crate::sandbox::origin().is_some() => {
+            return emit_block_for_harness(
+                &session_id,
+                "target stop-hook: no host manifest names this sandbox's session; \
+                 the stop blocks until the host binding is repaired.",
+            );
+        }
         Verdict::NoOwner => {
             emit_stop_decision(&cwd, &fire, None, "visitor", "none", "allow", "visitor", "");
             return 0;
@@ -333,6 +379,7 @@ fn run_owned(
     // HERE - to its predecessor's manifest - until init, the very thing the
     // silent allow starved, writes its own.
     if !state_is_pending
+        && crate::sandbox::origin().is_none()
         && manifest_names_foreign_session(&manifest, &fire.transcript_path.display().to_string())
     {
         emit_stop_decision(
@@ -866,7 +913,9 @@ fn unavailable_block(cwd: &Path, fire: &Fire, driver: &str, why: &str) -> i32 {
         + 1;
     let _ = std::fs::write(&counter, count.to_string());
     super::emit_tick(cwd, "blocked", "unavailable", driver, &fire.hook_harness_id);
-    if count <= MAX_UNAVAIL_RETRIES {
+    // A sandbox could stop again and again to wear the bound down, so a
+    // sandbox-origin stop never takes the fail-open allow.
+    if count <= MAX_UNAVAIL_RETRIES || crate::sandbox::origin().is_some() {
         emit_stop_decision(
             cwd,
             fire,

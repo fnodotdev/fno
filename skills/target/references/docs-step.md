@@ -27,7 +27,7 @@ Write the user doc for the change this session just built (D2707).
 2. Pick the page type and whether it is a new page or an edit to a live page.
 3. Work in an fno-web worktree (`footnote-sh/fno-web`), never a shared checkout. Create a docs branch docs/<node-or-topic>.
 4. Write the page in fno-sh-docs/ following fno-doc-writing's page types.
-5. Stamp it: `fno do docs bind <page> --nav <nav-group>`. Add --release <tag> when the derived tag is wrong for this window.
+5. Stamp it: `fno do docs link <page> --nav <nav-group>`. Add --release <tag> when the derived tag is wrong for this window.
 6. Rerun the gate: `fno do docs gate --apply`.
 7. Run the reader test as two fresh probes, page text only. Fix and rerun.
 8. Commit and open the paired PR in fno-web with gh. The body names the fno change it documents.
@@ -40,11 +40,13 @@ Limits: a fork exists only on claude. Other harnesses launch a plain subagent in
 
 The reader test never runs inside the fork. A fork carries the whole change context and reads the page like the author. The probes are fresh subagents. They get the page text only, inline or from a neutral path outside both repos. The fork launches the probes. Fix what they report, then rerun. STUCK, guesses, NOT IN PAGE, or a confident wrong answer is a page defect.
 
-## Bind and the gate
+## Link and the gate
 
-`fno do docs bind` decides new-page stamp or live-page twin. A new page gets `since:`. Pass `--nav` to stamp `nav:`. The release tag comes from `--release` first. Without the flag, bind derives the newest `since:` among pages whose tag is not yet live. With no derivation, bind refuses and names `--release`. An edit to a live page becomes `<page>.next.mdx` with `since:` and `replaces:`. The live page is never touched. Both forms rerun `fno do docs gate --apply`. The gate script is the sole writer of the generated `.mintignore` block and the docs.json nav.
+`fno do docs link` decides new-page stamp or live-page twin. A new page gets `since:`. Pass `--nav` to stamp `nav:`. The release tag comes from `--release` first. Without the flag, link derives the newest `since:` among pages whose tag is not yet live. With no derivation, link refuses and names `--release`. An edit to a live page becomes `<page>.next.mdx` with `since:` and `replaces:`. The live page is never touched. Both forms rerun `fno do docs gate --apply`. The gate script is the sole writer of the generated `.mintignore` block and the docs.json nav.
 
-The release-tag window: after a tag exists but before the docs flip lands, the derivation can name the shipped tag. Read the printed `since:` line. When it is wrong for this change, re-run bind with `--release <tag>`.
+The action was named `docs bind` before the 2026-11 rename. The old spelling stays one release as a hidden alias that dispatches to link. The word is a shell builtin. Claude Code refuses a worktree-isolated session's command whose string names it. When a guard still refuses the stamp on an installed binary older than the rename, stamp the front matter by hand. The hand shape: `since:`, `nav:`, `pr:` between `---` lines, or the `<page>.next.mdx` twin with `since:` and `replaces:`. Run `fno do docs gate --apply` yourself. Name the refusal on the node thread. The gate script keeps its sole-writer role over generated blocks either way.
+
+The release-tag window: after a tag exists but before the docs flip lands, the derivation can name the shipped tag. Read the printed `since:` line. When it is wrong for this change, re-run link with `--release <tag>`.
 
 ## The Docs: line
 

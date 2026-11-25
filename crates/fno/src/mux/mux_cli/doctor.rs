@@ -49,6 +49,70 @@ pub(super) fn squad_store_check() -> Check {
     squad_store_verdict(total, orphan)
 }
 
+const SHOT_PIN_REMEDY: &str = "fno mux workspace prune --shot-pins";
+
+/// The squad-store orphan verdict (US3), pure so the ok/warn/Na rendering
+/// is unit-testable without a store. `total` is the persisted squad count;
+/// `orphan` is how many the prune predicate would reap (unnamed, every origin
+/// gone, no live member). Read-only: doctor detects and names the remedy, it
+/// never prunes (Locked Decision 1).
+fn squad_store_verdict(total: usize, orphan: usize) -> Check {
+    if total == 0 {
+        Check {
+            name: "workspace store (squads.json)".into(),
+            verdict: Verdict::Na,
+            detail: "no workspaces persisted".into(),
+            remedy: None,
+        }
+    } else if orphan == 0 {
+        Check {
+            name: "workspace store (squads.json)".into(),
+            verdict: Verdict::Ok,
+            detail: format!("{total} workspace(s), none orphaned"),
+            remedy: None,
+        }
+    } else {
+        Check {
+            name: "workspace store (squads.json)".into(),
+            verdict: Verdict::Warn,
+            detail: format!("{orphan} orphaned workspace(s) (no surviving origin, no live member)"),
+            remedy: Some(PRUNE_REMEDY.into()),
+        }
+    }
+}
+
+/// `fno mux doctor`'s screenshot-residue check: names every workspace whose
+/// origins all sit under a `fno-shot-pin-<pid>` temp dir. Read-only.
+pub(super) fn shot_pin_check() -> Check {
+    shot_pin_verdict(&crate::squad_store::load().squads)
+}
+
+pub(super) fn shot_pin_verdict(squads: &[crate::squad_store::StoredSquad]) -> Check {
+    let origins: Vec<&str> = squads
+        .iter()
+        .filter(|sq| crate::squad_store::is_shot_pin_squad(sq))
+        .flat_map(|sq| sq.origins.iter().map(String::as_str))
+        .collect();
+    if origins.is_empty() {
+        return Check {
+            name: "shot-pin workspaces".into(),
+            verdict: Verdict::Ok,
+            detail: "no fno-shot-pin workspace in the store".into(),
+            remedy: None,
+        };
+    }
+    Check {
+        name: "shot-pin workspaces".into(),
+        verdict: Verdict::Warn,
+        detail: format!(
+            "{} left by screenshot runs: {}",
+            origins.len(),
+            origins.join(", ")
+        ),
+        remedy: Some(SHOT_PIN_REMEDY.into()),
+    }
+}
+
 /// Sessions stranded at the pre-config-chain root `~/.fno/mux` when this
 /// process resolves its socket dir elsewhere through the ambient chain
 /// (`config.state_dir`). A daemon bound before an upgrade - or started from a

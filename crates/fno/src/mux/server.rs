@@ -7842,8 +7842,8 @@ impl Core {
     /// watch-only row whose `attach_id` reconciles to it (attach map) -
     /// else it is a bare pane labelled from its `PaneEntry` (Discretion 5). One
     /// row per entity: a registry agent merged onto a pane never also renders
-    /// watch-only. Truly paneless registry rows (bg/headless/daemon/roster)
-    /// append AFTER the pane rows, matched to a squad by cwd (exact or child) or
+    /// watch-only. Truly paneless registry rows (bg/daemon/roster, a watched
+    /// headless run) append AFTER the pane rows, matched to a squad by cwd (exact or child) or
     /// the `squad: None` catch-all. The fact-badge lattice is unchanged: a dead
     /// pane forces `exited` over any live-TTL badge (fact beats report).
     /// (US4) Compose a row's dim line-2 subline from the off-loop
