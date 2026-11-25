@@ -729,6 +729,13 @@ pub fn mail_token_held(id: &str) -> Option<String> {
     read_store(|conn| mail_number_in(conn?, id, &current_store())).map(|n| format!("fmail-{n}"))
 }
 
+/// The header token for a read path: the held number, else the hash. Never
+/// mints, so a thread read makes no primary call per message. Delivery mints
+/// ([`mail_token`]).
+pub fn mail_token_read(id: &str) -> String {
+    mail_token_held(id).unwrap_or_else(|| id.to_string())
+}
+
 /// The hash id a typed or delivered mail token names. `fmail-87` reads the
 /// store; a hash, a legacy `msg-` id or an unnumbered number passes through
 /// as typed, so a lookup that never held the number fails where it always did.
