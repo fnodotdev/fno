@@ -31,10 +31,23 @@ const MANIFEST_FILE_PREFIX: &str = "opencode-install-";
 /// One manifest per config dir, keyed by a short hash of its canonical path:
 /// two `OPENCODE_CONFIG_DIR` values on one machine must never share install
 /// records, or uninstalling one config dir would orphan the other's files.
+/// The manifest lives in `install/opencode/`; older builds wrote it at the
+/// state root's top, which [`legacy_manifest_path`] still reads.
 pub fn manifest_path(conf: &Path) -> PathBuf {
+    crate::plugin_install::state_root()
+        .join("install")
+        .join("opencode")
+        .join(format!("{}.json", manifest_key(conf)))
+}
+
+fn legacy_manifest_path(conf: &Path) -> PathBuf {
+    crate::plugin_install::state_root()
+        .join(format!("{MANIFEST_FILE_PREFIX}{}.json", manifest_key(conf)))
+}
+
+fn manifest_key(conf: &Path) -> String {
     let key = std::fs::canonicalize(conf).unwrap_or_else(|_| conf.to_path_buf());
-    let hash = blake3::hash(key.display().to_string().as_bytes()).to_hex();
-    crate::plugin_install::state_root().join(format!("{MANIFEST_FILE_PREFIX}{}.json", &hash[..12]))
+    blake3::hash(key.display().to_string().as_bytes()).to_hex()[..12].to_string()
 }
 
 /// OpenCode scans the config dir for commands, agents and skills;
@@ -548,8 +561,9 @@ struct Manifest {
 }
 
 fn read_manifest(conf: &Path) -> Option<Manifest> {
-    let path = manifest_path(conf);
-    let text = std::fs::read_to_string(&path).ok()?;
+    let text = std::fs::read_to_string(manifest_path(conf))
+        .or_else(|_| std::fs::read_to_string(legacy_manifest_path(conf)))
+        .ok()?;
     serde_json::from_str(&text).ok()
 }
 
@@ -559,7 +573,10 @@ fn write_manifest(conf: &Path, manifest: &Manifest) -> Result<(), String> {
         std::fs::create_dir_all(parent).map_err(|e| format!("opencode install: {e}"))?;
     }
     let text = serde_json::to_string_pretty(manifest).unwrap_or_default() + "\n";
-    std::fs::write(&path, text).map_err(|e| format!("opencode install: {e}"))
+    std::fs::write(&path, text).map_err(|e| format!("opencode install: {e}"))?;
+    // The new copy now carries every record the legacy one held.
+    std::fs::remove_file(legacy_manifest_path(conf)).ok();
+    Ok(())
 }
 
 pub fn install(cwd: &Path) -> Result<InstallReceipt, String> {
@@ -707,7 +724,13 @@ pub fn uninstall() -> Result<UninstallReceipt, String> {
         prune_empty_parents(&dest, &conf);
     }
     // The manifest is removed last so an interrupted uninstall is resumable.
-    std::fs::remove_file(manifest_path(&conf)).map_err(|e| format!("opencode uninstall: {e}"))?;
+    std::fs::remove_file(legacy_manifest_path(&conf)).ok();
+    std::fs::remove_file(manifest_path(&conf))
+        .or_else(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => Ok(()),
+            _ => Err(e),
+        })
+        .map_err(|e| format!("opencode uninstall: {e}"))?;
     Ok(UninstallReceipt {
         action: "uninstall",
         status: if kept.is_empty() {

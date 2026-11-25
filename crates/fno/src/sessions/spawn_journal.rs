@@ -219,6 +219,10 @@ pub(crate) enum ReentrySpawnRequest {
     /// Re-enter the held-worker resume behind `Command::FocusPane(pid)` -
     /// restore's interactive arm replays with the verdict staged.
     FocusHeld { pid: u64 },
+    /// Spawn the verdict's argv into the parked no-signal seat `pid`: the
+    /// revive key on an ended portal. The seat swaps in place, so the
+    /// registry never has to flip before the portal can show the session.
+    ReviveSeat { pid: u64 },
 }
 
 /// What a batch re-enters once its pre-resolved plans land. The

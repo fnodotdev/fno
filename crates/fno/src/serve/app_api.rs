@@ -11,6 +11,9 @@ pub mod client {
         pub use crate::client::agent_group::{click_command, RowClick};
     }
     pub mod agent_launcher {
+        pub use crate::client::agent_launcher::projects::{
+            add_project, config_projects, ConfigProject,
+        };
         pub use crate::client::agent_launcher::{
             epic_rows, harness_rows, EpicChoice, HarnessRow, LEAD_SEED,
         };

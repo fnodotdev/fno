@@ -74,14 +74,18 @@ refuses rather than trust a count it cannot re-derive";
 const BLOCKING_SENTENCE_TAIL: &str = "; a blocking finding is cleared by \
 fixing it and letting the next review cover the fix delta";
 
-/// The refusal sentence for the person gate (review.human = always): names
-/// the config, the missing evidence, and the remedy, and states that the
-/// round cap does not discharge it. The cap's waiver covers the round
-/// obligation alone; a person is owed whatever the budget says.
-const HUMAN_APPROVAL_SENTENCE: &str = "review.human = always requires a \
-person's GitHub approval of this head; none found - ask a person to approve \
-the PR on GitHub (the review-round cap does not discharge this gate; the \
-lever is config.review.human)";
+/// The refusal sentence for the person gate (config.review.human = ui or
+/// always): names the config, the missing evidence, and both remedies, the
+/// in-UI command and the GitHub page, and states that the round cap does not
+/// discharge it. The cap's waiver covers the round obligation alone; a
+/// person is owed whatever the budget says. Value-neutral: ui and always
+/// read the same sentence, because the satisfier (a fresh non-author
+/// APPROVED review) is identical for both.
+const HUMAN_APPROVAL_SENTENCE: &str = "the person gate (config.review.human) \
+requires a person's GitHub approval of this head and none is in; a person can \
+approve from the terminal with `fno mux app approve <pr>` or on the PR's \
+GitHub page (the review-round cap does not discharge this gate; the lever is \
+config.review.human)";
 
 const TRUNCATED_KEY: &str = "(truncated remainder)";
 

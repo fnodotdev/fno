@@ -11,17 +11,21 @@
 #                A first segment of `cache` or `logs` names a class: on the
 #                default root (~/.fno) it resolves to the cache home or to
 #                <state home>/logs. Any other root keeps both inside itself.
-# kind           sqlite | anchor | append | overwrite | marker | page | lock | park
+# kind           sqlite | anchor | append | overwrite | marker | page | lock | park | dir | keep
 #                anchor = the virtual graph.json; its existence probe is the
 #                sibling .db. lock = deleted (or parked, for sockets) only
 #                after its data file moved and a non-blocking flock succeeds.
+#                keep = a name that stays at the top level; legacy and new
+#                are the same name, and a `*` makes it a glob.
 # owner          daemon (the fno-agent daemon migrates it) | mux (the mux
 #                server migrates it at its own start; the daemon skips it).
 #
 # Both crates read this file at build time: crates/fno-agent/src/runtime/state_layout.rs
 # and crates/fno/src/setup/state_layout.rs. Edit rows here, never in the Rust copies.
-# The named root exceptions that STAY at the top level are documented in
-# docs/state-root-inventory.md ("Named root exceptions"), not here.
+# The keep rows at the end are the one closed set of names that may sit at
+# the top level. A name no row carries is a new top-level entry: the drift
+# reading names it, the write gate warns on it, and `fno doctor lint
+# state-roots` fails a new code join that spells it.
 #
 # db/ - the graph, event, decision, question and approval stores and their
 # locks and sockets.
@@ -131,7 +135,6 @@ session-names.json.lock	mux/session-names.json.lock	lock	mux
 announce-cursors	state/announce-cursors	dir	daemon
 attention	state/attention	dir	daemon
 attest	state/attest	dir	daemon
-backups	backups	dir	daemon
 bin	install/bin	dir	daemon
 bus	db/mail/bus	dir	daemon
 build-marks	db/build-marks	dir	daemon
@@ -162,6 +165,22 @@ review-invocations	state/review-invocations	dir	daemon
 route-settings	state/route-settings	dir	daemon
 saved-sessions	db/saved-sessions	dir	daemon
 validity-decks	db/validity-decks	dir	daemon
+# The wave 2 folders. screens and route-settings drain: a stored question
+# row or a registry row may name a child's absolute path. evals keeps its
+# claude-config child in place: the sealed eval login is a Keychain item
+# keyed by that folder's path. sidecar waits while wizard-lock names a live pid.
+.interrupted-writes	state/interrupted-writes	dir	daemon
+briefs	db/briefs	dir	daemon
+event-rules	state/event-rules	dir	daemon
+evals	db/evals	dir	daemon
+heal	state/heal	dir	daemon
+intel	db/intel	dir	daemon
+notes	db/notes	dir	daemon
+observer-reports	db/observer-reports	dir	daemon
+recovery	state/recovery	dir	daemon
+rules-seen	state/rules-seen	dir	daemon
+screens	db/screens	dir	daemon
+sidecar	db/sidecar	dir	daemon
 # Parked residue - renamed into backups/state-root-migration/<stamp>/.
 ledger.md	-	park	daemon
 ledger.json.tmp	-	park	daemon
@@ -197,6 +216,51 @@ jobs-tmp	-	park	daemon
 hooks	-	park	daemon
 signals	-	park	daemon
 squads.json.tmp.*	-	park	mux
+# The 2026-11-25 batch: the sentinel and lock of a path migration no code
+# calls, the canary's old spelling (it writes state/canary now), and the
+# .fno tree a hook created when its cwd was the state root (its events.db
+# held 0 rows on the one machine measured).
+.path-migration-done	-	park	daemon
+settings.yaml.lock	-	park	daemon
+.canary	-	park	daemon
+.fno	-	park	daemon
 # Recovery copy rides beside the ledger it recovers (marker: new wins,
 # the legacy root copy parks).
 ledger.json.bak	db/history/ledger.json.bak	marker	daemon
+# keep - the categories (D2070) plus backups, the park base.
+agents	agents	keep	daemon
+backups	backups	keep	daemon
+cache	cache	keep	daemon
+db	db	keep	daemon
+install	install	keep	daemon
+logs	logs	keep	daemon
+mux	mux	keep	daemon
+spaces	spaces	keep	daemon
+state	state	keep	daemon
+# keep - the named root exceptions (docs/state-root-inventory.md): the
+# config contract, operator files, macOS markers,
+# the retired journal anchors and the claims cutover guard for old binaries.
+config.toml	config.toml	keep	daemon
+config.toml.lock	config.toml.lock	keep	daemon
+config.toml.bak*	config.toml.bak*	keep	daemon
+settings.yaml	settings.yaml	keep	daemon
+my-priorities.md	my-priorities.md	keep	daemon
+my-priorities.md.lock	my-priorities.md.lock	keep	daemon
+ruleset-21074865-before-smoke-hold.json	ruleset-21074865-before-smoke-hold.json	keep	daemon
+.env	.env	keep	daemon
+.gitignore	.gitignore	keep	daemon
+.DS_Store	.DS_Store	keep	daemon
+.metadata_never_index	.metadata_never_index	keep	daemon
+events.jsonl	events.jsonl	keep	daemon
+questions.jsonl	questions.jsonl	keep	daemon
+decisions.jsonl	decisions.jsonl	keep	daemon
+posture.json	posture.json	keep	daemon
+claims	claims	keep	daemon
+# keep - folders whose home waits on the user's folder-set answer (D3581),
+# and worktrees, whose live checkouts never move.
+profile	profile	keep	daemon
+projects	projects	keep	daemon
+providers	providers	keep	daemon
+secrets	secrets	keep	daemon
+sessions	sessions	keep	daemon
+worktrees	worktrees	keep	daemon

@@ -19,7 +19,7 @@ Usage: fno do research [OPTIONS] TOPIC
   Retrieve sources for TOPIC, store them, and ship a cited brief.
 
   Searches via the ddgs backbone, self-fetches each result, writes one row per
-  source to ~/.fno/notes/research/<slug>.sources.jsonl, then (unless
+  source to ~/.fno/db/notes/research/<slug>.sources.jsonl, then (unless
   --no-deliver) ships <slug>.md + <slug>.sources.jsonl to
   config.research.output_dir and reports DoneAdvisory.
 

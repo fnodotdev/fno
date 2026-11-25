@@ -9114,7 +9114,6 @@ crates/fno-agent/src/runtime/state_path.rs	clippy::indexing_slicing	return run_d
 crates/fno-agent/src/runtime/state_root_drift.rs	clippy::indexing_slicing	for mid in &parts[1..parts.len() - 1] {
 crates/fno-agent/src/runtime/state_root_drift.rs	clippy::indexing_slicing	let Some(mut rest) = name.strip_prefix(parts[0]) else {
 crates/fno-agent/src/runtime/state_root_drift.rs	clippy::indexing_slicing	let last = parts[parts.len() - 1];
-crates/fno-agent/src/runtime/state_root_drift.rs	clippy::indexing_slicing	let spans: Vec<String> = backtick_spans(cells[1])
 crates/fno-agent/src/runtime/status_fanout.rs	clippy::indexing_slicing	&args[1..]
 crates/fno-agent/src/runtime/status_fanout.rs	clippy::indexing_slicing	.unwrap_or_else(|| BACKOFF[(i as usize).min(BACKOFF.len() - 1)])
 crates/fno-agent/src/runtime/status_fanout.rs	clippy::indexing_slicing	BACKOFF[(i as usize).min(BACKOFF.len() - 1)]

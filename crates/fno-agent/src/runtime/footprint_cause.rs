@@ -46,9 +46,6 @@ const FNO_BINARIES: &[&str] = &["fno", "fno-agent", "fno-agent-daemon", "fno-age
 /// argv[1] tokens the Claude Code background daemon gives its pre-warm pool.
 const CLAUDE_SPARE_POOL_ARGS: &[&str] = &["bg-spare", "bg-pty-host", "--bg-spare", "--bg-pty-host"];
 
-/// Registry statuses that can hold a live process (`spawn_gate.LIVE_STATUSES`).
-const LIVE_STATUSES: &[&str] = &["spawning", "ready", "idle", "busy", "live", "restarting"];
-
 // ---------------------------------------------------------------------------
 // Capacity and threshold
 // ---------------------------------------------------------------------------
@@ -733,7 +730,7 @@ impl Row {
     }
 
     fn is_live(&self) -> bool {
-        LIVE_STATUSES.contains(&self.status.as_str())
+        crate::AgentStatus::LIVE_STATUSES.contains(&self.status.as_str())
     }
 }
 

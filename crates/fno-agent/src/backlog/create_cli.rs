@@ -633,7 +633,8 @@ pub(crate) fn alias_pool_at(graph: &std::path::Path) -> std::collections::BTreeS
 pub(crate) fn mint_node_id(
     existing: &std::collections::BTreeSet<String>,
 ) -> Result<String, String> {
-    let prefix = super::settings::node_id_prefix();
+    let prefix = super::settings::resolved_node_id_prefix()
+        .map_err(|e| format!("node id mint refused: {e}"))?;
     if super::settings::node_id_sequential() {
         return mint_sequential_node_id(existing, &prefix).map_err(|e| e.to_string());
     }
@@ -2164,6 +2165,18 @@ mod tests {
         let r1 = mint_node_id_with_prefix(&Default::default(), &[], "ab", 8).unwrap();
         let r2 = mint_node_id_with_prefix(&Default::default(), &[], "ab", 8).unwrap();
         assert_ne!(r1, r2, "no seed, real entropy");
+    }
+
+    #[test]
+    fn unreadable_config_refuses_the_mint() {
+        let _lock = crate::claims::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("broken.toml");
+        std::fs::write(&cfg, "backlog.id_prefix = [ not toml").unwrap();
+        let _guard = crate::claims::EnvVarGuard::set("FNO_CONFIG", cfg.to_str().unwrap());
+        let err = mint_node_id(&Default::default()).unwrap_err();
+        assert!(err.contains("node id mint refused"), "{err}");
+        assert!(err.contains("broken.toml"), "{err}");
     }
 
     #[test]

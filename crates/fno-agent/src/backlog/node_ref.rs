@@ -115,7 +115,8 @@ pub fn has_node_id_prefix(s: &str) -> bool {
     if is_wellformed_node_id(s) {
         return true;
     }
-    s.starts_with(settings::node_id_prefix().as_str()) || s.starts_with("ab-")
+    let configured = settings::node_id_prefix();
+    s.starts_with(&format!("{configured}-")) || s.starts_with("ab-")
 }
 
 /// The claim-store key a node reference reads under: a bare well-formed id
@@ -186,11 +187,10 @@ pub fn resolve_tiers<'a>(entries: &'a [Value], query: &str) -> Option<&'a Value>
             .bytes()
             .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase());
     if bare_hex {
-        let mut prefixes = vec![settings::node_id_prefix()];
-        prefixes.push("ab-".to_string());
+        let mut prefixes = vec![settings::node_id_prefix(), "ab".to_string()];
         prefixes.dedup();
         for p in &prefixes {
-            let cand = format!("{p}{query}");
+            let cand = format!("{p}-{query}");
             if let Some(hit) = entries
                 .iter()
                 .find(|e| e.get("id").and_then(Value::as_str) == Some(cand.as_str()))
@@ -229,7 +229,7 @@ pub struct ResolutionIndex<'a> {
 
 impl<'a> ResolutionIndex<'a> {
     pub fn new(entries: &'a [Value]) -> Self {
-        let pref = settings::node_id_prefix();
+        let pref_dash = format!("{}-", settings::node_id_prefix());
         let mut index = ResolutionIndex {
             by_id: std::collections::HashMap::new(),
             by_alias: std::collections::HashMap::new(),
@@ -240,7 +240,7 @@ impl<'a> ResolutionIndex<'a> {
         for e in entries {
             if let Some(id) = e.get("id").and_then(Value::as_str) {
                 index.by_id.entry(id).or_insert(e);
-                if let Some(body) = id.strip_prefix(pref.as_str()) {
+                if let Some(body) = id.strip_prefix(pref_dash.as_str()) {
                     if is_bare_hex(body) {
                         index.hex_pref.entry(body).or_insert(e);
                     }

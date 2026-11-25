@@ -353,8 +353,7 @@ pub(crate) fn is_identity_token(v: Option<&str>) -> bool {
 /// registry read until the row was rm'd. This is the full snake_case
 /// AgentStatus vocabulary (mirrors the `status-v1` enum in
 /// `crate::emit_schema_json`); it accepts every valid projected status while
-/// still rejecting genuine garbage. Must stay in lockstep with Python
-/// `registry.py::KNOWN_STATUSES`.
+/// still rejecting genuine garbage.
 const KNOWN_STATUSES: &[&str] = &[
     "spawning",
     "ready",

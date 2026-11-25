@@ -67,6 +67,7 @@ pub fn set_values(
     if scope == "project" {
         refuse_project_grant(&order)?;
     }
+    refuse_without_tty(&order, std::io::IsTerminal::is_terminal(&std::io::stdin()))?;
     let target = target_path(scope)?;
     let touched = order.iter().any(|key| is_merge_gating(key));
     let mut finals: Vec<(String, Value)> = Vec::new();
@@ -131,6 +132,27 @@ fn refuse_project_grant(keys: &[String]) -> Res<()> {
     Err(Refusal::new(
         format!(
             "{key} grants access, so a project file cannot set it. Nothing was written. Set it for this machine: fno config set {key} '<value>'"
+        ),
+        1,
+    ))
+}
+
+/// Keys that widen what a worker may do without asking. A person sets them
+/// from an interactive terminal. An agent has no terminal, and an env var it
+/// strips cannot give it one.
+const OPERATOR_ONLY: [&str; 1] = ["user.auto_approve_routine"];
+
+fn refuse_without_tty(keys: &[String], tty: bool) -> Res<()> {
+    let Some(key) = keys
+        .iter()
+        .filter(|_| !tty)
+        .find(|key| OPERATOR_ONLY.contains(&key.as_str()))
+    else {
+        return Ok(());
+    };
+    Err(Refusal::new(
+        format!(
+            "{key} widens what workers do without asking, so it needs an interactive terminal. Nothing was written. Run `fno config set {key} true` yourself in a terminal."
         ),
         1,
     ))
@@ -496,6 +518,14 @@ fn couple_grant_observer() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_operator_only_key_needs_an_interactive_terminal() {
+        let keys = vec!["user.auto_approve_routine".to_string()];
+        assert!(refuse_without_tty(&keys, false).is_err());
+        assert!(refuse_without_tty(&keys, true).is_ok());
+        assert!(refuse_without_tty(&["user.name".to_string()], false).is_ok());
+    }
 
     /// The GitHub App token path (crates/fno-agent/src/gate/github_app.rs) reads
     /// github.app_id, github.app_installation_id and github.app_key_path from

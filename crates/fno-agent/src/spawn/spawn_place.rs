@@ -16,10 +16,10 @@
 //! `FNO_MAIL_LOCAL_FORWARD`, so the far intercept skips and the target
 //! host's own gate answers.
 
-use crate::agents_top::LIVE_STATUSES;
 use crate::fleet_beacon::{self, Machine, Session};
 use crate::paths::AgentsHome;
 use crate::store_remote;
+use crate::AgentStatus;
 use serde_json::Value;
 
 /// The caller-side placement flags on the thread lane. Portal geometry
@@ -185,7 +185,7 @@ pub fn live_count(sessions: &[Session], machine_id: &str) -> usize {
         .filter(|s| {
             s.status
                 .as_deref()
-                .map_or(true, |st| LIVE_STATUSES.contains(&st))
+                .map_or(true, |st| AgentStatus::LIVE_STATUSES.contains(&st))
         })
         .count()
 }

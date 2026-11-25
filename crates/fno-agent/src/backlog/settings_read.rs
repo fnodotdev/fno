@@ -2,8 +2,8 @@
 //! graph leftovers used to read in-process (node-id knobs, config
 //! candidates, the work map, the cwd -> project detect), answered in one
 //! spawn. One JSON request in, one JSON receipt out; every field is
-//! fail-open, so an advisory caller keeps its legacy default on any read
-//! failure. The decision never splits across the boundary
+//! fail-open, so an advisory caller keeps the documented default on any
+//! read failure. The decision never splits across the boundary
 //! (docs/architecture/rust-python-seam.md).
 
 use serde_json::Value;

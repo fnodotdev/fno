@@ -90,12 +90,12 @@ pub fn slugify(topic: &str) -> String {
 // Paths
 // ---------------------------------------------------------------------------
 
-/// `<state_dir>/notes/research/`, created on first use.
+/// `research/` in the `notes` folder the layout table places
+/// (`<state_dir>/db/notes/research/`), created on first use.
 pub fn research_dir() -> std::io::Result<PathBuf> {
     let state = crate::backlog::settings::state_dir().unwrap_or_else(|| PathBuf::from(".fno"));
-    let d = crate::paths::resolve_loose(&state)
-        .join("notes")
-        .join("research");
+    let d =
+        crate::state_layout::place(&crate::paths::resolve_loose(&state), "notes").join("research");
     std::fs::create_dir_all(&d)?;
     Ok(d)
 }

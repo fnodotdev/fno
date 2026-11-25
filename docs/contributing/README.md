@@ -10,7 +10,7 @@ Not for: using fno. Start at the [docs home](../README.md).
 
 - [CONTRIBUTING.md](../../CONTRIBUTING.md): dev setup, the local checks, and the CI gates.
 - [AGENTS.md](../../AGENTS.md): the working principles every agent session loads.
-- [Style rules](../style-rules.md): the house style. `fno lint style` enforces it.
+- [Style rules](../style-rules.md): the house style. `fno doctor lint style` enforces it.
 - [Code standards](../code-standards.md) and [design guidelines](../design-guidelines.md).
 - [Testing guide](../testing-guide.md): test layout, markers, and each tier.
 

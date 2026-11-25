@@ -203,11 +203,12 @@ pub(crate) fn gate_fields(fields: &Map<String, Value>) -> Result<(), TrackerErro
     Ok(())
 }
 
-/// `~/.fno/sidecar` (or the configured state root's `sidecar` dir).
+/// The `sidecar` folder the layout table places under the state root
+/// (`~/.fno/db/sidecar`), read from the legacy folder until it folds.
 pub(crate) fn root(cwd: &Path) -> std::path::PathBuf {
-    crate::agents_config::state_dir(cwd)
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("sidecar")
+    let state =
+        crate::agents_config::state_dir(cwd).unwrap_or_else(|| std::path::PathBuf::from("."));
+    crate::state_layout::place(&state, "sidecar")
 }
 
 /// Read one per-id sidecar file and validate it the way the deleted
