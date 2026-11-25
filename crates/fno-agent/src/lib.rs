@@ -227,8 +227,8 @@ pub use spawn::{
 };
 use spawn::{bounded_spawn, lifecycle_child, spawn_gate_spend};
 pub(crate) use spawn::{
-    cap_liveness, opencode_pane_grant, resolve_tier, session_origin, spawn_gate_open_prs,
-    spawn_gate_probe, spawn_gate_queue, spawn_gate_slots,
+    cap_liveness, opencode_pane_grant, resolve_tier, session_origin, spawn_floor,
+    spawn_gate_open_prs, spawn_gate_probe, spawn_gate_queue, spawn_gate_slots,
 };
 
 use serde::{Deserialize, Serialize};
