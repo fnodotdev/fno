@@ -258,10 +258,11 @@ impl Drop for PinGuard {
 fn write_pin(dir: &std::path::Path, theme: &str) -> std::io::Result<()> {
     std::fs::remove_dir_all(dir).ok();
     std::fs::create_dir_all(dir.join(".fno"))?;
-    let name = if theme == "light" {
-        THEME_LIGHT
-    } else {
-        THEME_DARK
+    let name = match theme {
+        "light" => THEME_LIGHT,
+        "dark-inverse" => "footnote-inverse",
+        "light-inverse" => "footnote-inverse-paper",
+        _ => THEME_DARK,
     };
     let pin = format!("[mux]\ntheme = \"{name}\"\n");
     std::fs::write(dir.join(".fno/config.toml"), pin)
