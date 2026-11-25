@@ -1380,7 +1380,7 @@ pub(crate) fn config_str_any_format(cwd: &Path, section: &str, key: &str) -> Opt
     resolve_config_key(cwd, &|path| {
         let doc = crate::config_cli::parse_config_file(path)?;
         read_json_section(&doc, section, key).or_else(|| {
-            read_json_section(&crate::config_cli::unwrap_config_dict(doc), section, key)
+            read_json_section(&crate::config_cli::unwrap_config_dict(&doc), section, key)
         })
     })
 }
