@@ -1658,8 +1658,9 @@ fn squad_prune(args: &[OsString]) -> i32 {
     // and reaps their dead members like any survivor's: one wrapped verdict,
     // so the locked pass needs no second shape.
     let decide = |sq: &crate::squad_store::StoredSquad| {
-        // `--shot-pins` removes only what a screenshot run left behind; every
-        // other workspace keeps whatever verdict it would have had.
+        // `--shot-pins` removes only what a screenshot run left behind. Every
+        // other workspace stays, though a prune still reaps its members whose
+        // own identity the evidence proves dead.
         if shot_pins && !crate::squad_store::is_shot_pin_squad(sq) {
             return crate::squad_store::PruneDecision::Keep;
         }
