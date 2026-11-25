@@ -2974,6 +2974,28 @@ fn push_output_format(argv: &mut Vec<String>, output_format: Option<&str>) {
 /// keeps a registry row, so it shows in the mux while it runs.
 pub const SHOW_ROW_ENV: &str = "FNO_SPAWN_SHOW_ROW";
 
+/// The print word on a claude launch argv: `claude -p` or `claude --print`.
+/// A word glued to its neighbours (`the-p-flag`) is not the flag.
+pub(crate) fn print_word_in_argv(argv: &[String]) -> bool {
+    argv.iter().any(|a| matches!(a.as_str(), "-p" | "--print"))
+}
+
+/// A claude print run typed by hand: one nobody spawned through fno. The
+/// entrypoint does not mark this form, so the word is read off the CLI's own
+/// argv, at the pid the CLI hands every hook. A spawn keeps the row it was
+/// given, and a CLI that hands no pid reads as interactive.
+pub(crate) fn typed_print_run(
+    agent_self: Option<&str>,
+    harness: Option<&str>,
+    pid: Option<u32>,
+) -> bool {
+    agent_self.is_none()
+        && harness.map(Harness::parse) == Some(Harness::Claude)
+        && pid
+            .and_then(crate::census::process_argv)
+            .is_some_and(|argv| print_word_in_argv(&argv))
+}
+
 /// Dispatch a `claude -p` truly-headless one-shot (`headless` substrate).
 ///
 /// Unlike [`dispatch_claude_spawn`] (the detached `--bg` thread, which returns a
@@ -3898,6 +3920,32 @@ fn create(
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn a_hand_typed_print_run_reads_as_headless() {
+        let claude = Some("claude");
+        let words = |argv: &[&str]| argv.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+        assert!(print_word_in_argv(&words(&[
+            "claude",
+            "-p",
+            "summarize this thread"
+        ])));
+        assert!(print_word_in_argv(&words(&["claude", "--print", "x"])));
+        assert!(
+            !print_word_in_argv(&words(&[
+                "claude",
+                "--model",
+                "sonnet",
+                "fix",
+                "the-p-flag"
+            ])),
+            "only the whole word is the flag"
+        );
+        // A CLI that hands no pid reads as interactive, and a spawn keeps
+        // the row it was given.
+        assert!(!typed_print_run(None, claude, None));
+        assert!(!typed_print_run(Some("w1"), claude, std::process::id()));
+    }
 
     #[cfg(unix)]
     #[test]

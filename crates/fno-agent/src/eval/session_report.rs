@@ -1509,6 +1509,20 @@ pub async fn run_session_report(rest: &[String], home: &AgentsHome) -> i32 {
     if record.is_none() && print_mode {
         params["no_row"] = Value::Bool(true);
     }
+    // A print run typed by hand keeps a headless row: nobody types into it,
+    // and it prints in the shell that started it, so the sideline shows none
+    // of it.
+    if record.is_none()
+        && crate::claude_ask::typed_print_run(
+            agent_self,
+            harness.as_deref(),
+            std::env::var("CLAUDE_PID")
+                .ok()
+                .and_then(|pid| pid.parse().ok()),
+        )
+    {
+        params["agent_substrate"] = Value::String("headless".into());
+    }
     record_origin(&params);
     if let Some(record) = &record {
         // A claimed record rides the request: the daemon adopts this session

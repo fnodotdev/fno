@@ -364,4 +364,43 @@ mod tests {
             None
         );
     }
+
+    /// A report no launch record names carries its own substrate word, and
+    /// keeps only the one-shot word: a print run typed by hand reports
+    /// headless, and any other word would relabel an interactive session.
+    #[test]
+    fn a_record_less_report_keeps_only_the_headless_word() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = crate::paths::AgentsHome::at(dir.path());
+        crate::state::update_registry(&home.registry_json(), |_| {}).unwrap();
+        crate::join_marker::write_marker(home.root(), "claude", CHILD).unwrap();
+        let minted = |word: Option<&str>| {
+            prepare_mint(
+                &home,
+                "claude",
+                CHILD,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some("/w"),
+                word,
+            )
+            .map(|mint| (mint.native, mint.entry.substrate, mint.entry.origin))
+        };
+
+        let operator = Some("operator".to_string());
+        assert_eq!(
+            minted(Some("headless")),
+            Some((false, Some("headless".to_string()), operator.clone()))
+        );
+        for other in [None, Some("thread")] {
+            assert_eq!(
+                minted(other),
+                Some((false, None, operator.clone())),
+                "{other:?}"
+            );
+        }
+    }
 }
