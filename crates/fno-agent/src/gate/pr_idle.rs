@@ -341,15 +341,17 @@ fn open_prs(pulls: Vec<Value>) -> HashSet<u64> {
 }
 
 /// Whether a PR body names a merge hold: a line that opens with the words
-/// `Merge hold`. An order sentence is not read. It usually names a condition
-/// the alarm cannot see lift, so it would keep the alarm quiet after the hold
-/// ends. A comment is not read either.
+/// `Merge hold`, or the order "do not merge" anywhere. The body stays held
+/// while it carries the words, and the author removes them when the hold
+/// lifts. A comment is not read.
 fn names_merge_hold(body: &str) -> bool {
-    body.lines().any(|line| {
+    let text = body.to_lowercase().replace('\u{2019}', "'");
+    text.lines().any(|line| {
         line.trim_start_matches(['#', '*', '-', '>', ' ', '\t'])
-            .to_ascii_lowercase()
             .starts_with("merge hold")
-    })
+    }) || ["do not merge", "do-not-merge", "don't merge"]
+        .iter()
+        .any(|order| text.contains(order))
 }
 
 pub(crate) fn run_pass(home: &AgentsHome, now: i64) -> Result<(), String> {
@@ -600,9 +602,9 @@ mod tests {
     }
 
     /// A PR whose body names a merge hold leaves the open set the way a draft
-    /// does, loses its clock, and starts a fresh one when the words go. An
-    /// order sentence keeps the PR open: it names a condition the alarm
-    /// cannot see lift.
+    /// does, loses its clock, and starts a fresh one when the words go. The
+    /// order "do not merge" holds a PR the same way. The phrase "merge hold"
+    /// inside a sentence does not.
     fn body_hold_drops_the_clock(home: &AgentsHome, t0: i64) {
         let row = |number: u64, draft: bool, body: Option<&str>| json!({"number": number, "draft": draft, "body": body});
         let listing = |body: &str| {
@@ -624,7 +626,7 @@ mod tests {
             ])
         };
         let held_body = "## Merge hold\n\nThe merge waits for the release tag.";
-        let skipped: HashSet<u64> = [7, 9, 11, 12].into();
+        let skipped: HashSet<u64> = [7, 11, 12].into();
         assert_eq!(listing(held_body), skipped);
         assert_eq!(listing("**MERGE HOLD** until the release tag"), skipped);
         let stale = Seen {
@@ -639,7 +641,7 @@ mod tests {
         assert!(!path.exists(), "a body-held PR loses its clock");
         // The author removed the words: the PR is open again, and its clock
         // starts from zero.
-        let open_again: HashSet<u64> = [7, 8, 9, 11, 12].into();
+        let open_again: HashSet<u64> = [7, 8, 11, 12].into();
         assert_eq!(listing("A plain change too."), open_again);
         assert_eq!(
             sends(home, t0 + RERAISE_AFTER_MS, &open_again, &[ready(8, "def")]),
