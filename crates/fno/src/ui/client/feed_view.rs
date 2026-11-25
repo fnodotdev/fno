@@ -152,8 +152,12 @@ pub(crate) fn reslot(f: &mut FeedOverlay) {
     f.sel = f.sel.min(f.slots.len().saturating_sub(1));
 }
 
+/// The narrowest the summary column gets before node and the other
+/// optional columns drop.
+const SUMMARY_MIN: usize = 12;
+
 /// The widest value, in display columns, of each column that has a cap,
-/// already capped: area and harness 8, kind 16, node and session tail 8,
+/// already capped: area and harness 8, kind 16, node 12, session tail 8,
 /// lead 12. One pass over the rows per re-slot, so a paint reads them free.
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub(crate) struct ValueWidths {
@@ -183,7 +187,7 @@ impl ValueWidths {
             area: w.area.min(8),
             harness: w.harness.min(8),
             kind: w.kind.min(16),
-            node: w.node.min(8),
+            node: w.node.min(12),
             session: w.session.min(8),
             lead: w.lead.min(12),
         }
@@ -237,9 +241,9 @@ pub(crate) fn feed_panel_rows(
     offset: usize,
 ) -> Vec<Vec<Span>> {
     // Columns, in the operator's order: time, area, harness, kind, node,
-    // session (tail 8), lead, summary. The narrowest panel keeps time, kind,
-    // node and summary; a wider one adds lead, harness, area, session back
-    // in that drop order (AC11).
+    // session (tail 8), lead, summary. The narrowest panel keeps time, kind
+    // and at least SUMMARY_MIN of summary; a wider one adds node, then lead,
+    // harness, area and session, in that order (AC11).
     //
     // Header and rows draw through ONE grid: each column's width is
     // the widest value the table shows (display columns), capped, and a
@@ -283,7 +287,9 @@ pub(crate) fn feed_panel_rows(
         out
     };
 
-    let mut used = 3 + ts_w + 1 + kind_w + 1 + node_w + 1;
+    // The summary is the column a reader reads, so it keeps SUMMARY_MIN
+    // before any optional column claims width; node is the first optional.
+    let mut used = 3 + ts_w + 1 + kind_w + 1 + SUMMARY_MIN;
     let fits = |needed: usize, used: &mut usize| {
         if *used + needed <= w {
             *used += needed;
@@ -292,6 +298,7 @@ pub(crate) fn feed_panel_rows(
             false
         }
     };
+    let show_node = fits(node_w + 1, &mut used);
     let show_lead = fits(lead_w + 1, &mut used);
     let show_harness = fits(harness_w + 1, &mut used);
     let show_area = fits(area_w + 1, &mut used);
@@ -322,7 +329,9 @@ pub(crate) fn feed_panel_rows(
         push_col(&mut header, &t_harness, harness_w, true, false);
     }
     push_col(&mut header, &t_kind, kind_w, true, false);
-    push_col(&mut header, &t_node, node_w, true, false);
+    if show_node {
+        push_col(&mut header, &t_node, node_w, true, false);
+    }
     if show_session {
         push_col(&mut header, &t_session, session_w, true, false);
     }
@@ -397,7 +406,9 @@ pub(crate) fn feed_panel_rows(
                     .as_deref()
                     .map(|n| fit_cell(n, node_w))
                     .unwrap_or_else(|| "-".to_string());
-                push_col(&mut row, &node, node_w, item.node.is_some(), false);
+                if show_node {
+                    push_col(&mut row, &node, node_w, item.node.is_some(), false);
+                }
                 if show_session {
                     let sid = item
                         .session_id

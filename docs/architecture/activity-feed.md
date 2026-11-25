@@ -56,7 +56,7 @@ The cursor pages the command. The panel does not page: each fold reads the whole
 
 The filter flags AND together, and the values inside one flag are comma-OR. `--kind` matches by prefix, so an exact kind is its own prefix. An empty flag value is ignored. An unknown area returns an empty answer, not an error. Both epoch bounds reach every event-store leg as real store bounds.
 
-`e` in the mux client toggles the full-height panel on the right edge. Rows render newest first as a table: time, area, harness, kind, node, session tail, lead, summary. A narrow panel drops lead, then harness, then area, then session. Time, kind, node and summary never drop. The border drags to a width that persists.
+`e` in the mux client toggles the full-height panel on the right edge. Rows render newest first as a table: time, area, harness, kind, node, session tail, lead, summary. Time and kind never drop, and the summary keeps at least 12 columns. Past that, the panel adds node, then lead, harness, area and session as width allows. The border drags to a width that persists.
 
 A refresh never moves the reader. The row under the cursor and the top row stay where they were. Rows newer than the newest one held count while you sit away from the top, and the footer shows `↑ N new`. A click on that marker, or `g`, returns you to the top and clears it.
 
@@ -101,7 +101,7 @@ Sort. `o` lists all eight columns, hidden ones too. The active one wears its arr
 
 Filter. `f` lists the columns, with a dot and a count on each one that filters. Enter opens that column's values with their row counts, over the rows the query and the other filters leave. Typing narrows the list, case-blind. Space ticks a value. Enter makes the ticks the column's filter. With nothing ticked and no tick changed, it takes the value under the cursor. After a change, Enter applies the ticks exactly, so unticking every value clears that column. Values inside one column OR. Columns AND, and they AND with the query. A filtered column's title wears a dot and its value count, so color is never the only signal. The time column filters by local day, and the session column by the whole id.
 
-Group. `W` lists `none`, `lead or epic` (the default) and the eight columns. `lead or epic` puts the teams band first, then one group per owner by its newest row, then `other`. A column groups by its value, with `(empty)` last. Picking the active grouping again flips the group order. A header shows a caret and its row count. Enter, Space or a click folds it, and `z` folds them all.
+Group. `W` lists `none`, `lead or epic` (the default) and the eight columns. `lead or epic` puts the teams band first, then one group per owner by its newest row, then `other`. A column groups by its value. Rows with no value group last, under `no <column>`, for example `no harness`. Picking the active grouping again flips the group order. A header shows a caret and its row count. Enter, Space or a click folds it, and `z` folds them all.
 
 ### Search
 

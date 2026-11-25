@@ -58,9 +58,6 @@ fn entry(glyph: &str, label: &str, hint: String) -> PopupRow {
     }
 }
 
-/// How an empty value reads in a list.
-const EMPTY_LABEL: &str = "(empty)";
-
 impl FeedPicker {
     fn bare(kind: PickerKind, popup: Popup, anchor: Anchor) -> Self {
         FeedPicker {
@@ -171,6 +168,7 @@ impl FeedPicker {
             return;
         };
         let needle = self.find.to_lowercase();
+        let empty_label = col.empty_label();
         let hits: Vec<&(String, usize)> = self
             .values
             .iter()
@@ -187,7 +185,7 @@ impl FeedPicker {
             .map(|(v, n)| {
                 let glyph = if self.picked.contains(v) { "●" } else { " " };
                 let label = if v.is_empty() {
-                    EMPTY_LABEL
+                    empty_label.as_str()
                 } else {
                     v.as_str()
                 };

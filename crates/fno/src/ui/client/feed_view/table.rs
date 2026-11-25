@@ -49,6 +49,12 @@ impl Col {
         Col::ALL.into_iter().find(|c| c.name() == s)
     }
 
+    /// How a row with no value in this column reads, as a group header and
+    /// in the filter's value list: `no area`, `no harness`.
+    pub(crate) fn empty_label(self) -> String {
+        format!("no {}", self.name())
+    }
+
     /// The value a filter selects and a group collects: the local calendar
     /// day for time, the full id for session, the first line for summary,
     /// the stored value otherwise. Empty means the row has none.
@@ -341,7 +347,6 @@ fn row_order(a: &(usize, SortKey), b: &(usize, SortKey), desc: bool) -> Ordering
 
 const TEAMS: &str = "teams";
 const OTHER: &str = "other";
-const EMPTY_LABEL: &str = "(empty)";
 
 /// A row's group key and label under one grouping.
 fn group_of(it: &FeedItem, group: Group) -> (String, String) {
@@ -352,7 +357,7 @@ fn group_of(it: &FeedItem, group: Group) -> (String, String) {
         Group::Col(c) => {
             let v = c.value(it);
             if v.is_empty() {
-                EMPTY_LABEL.to_string()
+                c.empty_label()
             } else {
                 v
             }
@@ -362,7 +367,7 @@ fn group_of(it: &FeedItem, group: Group) -> (String, String) {
 }
 
 /// Group order. Lead or epic: the teams band first, `other` last, the rest
-/// by their newest row. A column: by value, with `(empty)` last.
+/// by their newest row. A column: by value, with the empty group last.
 fn sort_groups(groups: &mut [(String, String, Vec<usize>)], items: &[FeedItem], view: &TableView) {
     let desc = view.group_desc;
     let newest = |g: &(String, String, Vec<usize>)| {
@@ -387,8 +392,9 @@ fn sort_groups(groups: &mut [(String, String, Vec<usize>)], items: &[FeedItem], 
                 }
             })
         }),
-        Group::Col(_) => groups.sort_by(|a, b| {
-            let empty = |g: &(String, String, Vec<usize>)| g.1 == EMPTY_LABEL;
+        Group::Col(c) => groups.sort_by(|a, b| {
+            let empty_label = c.empty_label();
+            let empty = |g: &(String, String, Vec<usize>)| g.1 == empty_label;
             empty(a).cmp(&empty(b)).then_with(|| {
                 let o = a.1.cmp(&b.1);
                 if desc {
@@ -403,7 +409,7 @@ fn sort_groups(groups: &mut [(String, String, Vec<usize>)], items: &[FeedItem], 
 
 /// The value list for one column's filter: each value with its row count
 /// under every OTHER filter and `keep`, most rows first. A selected value
-/// stays listed at count 0, and `(empty)` is the empty value.
+/// stays listed at count 0, and the empty string is the empty value.
 pub(crate) fn values(
     items: &[FeedItem],
     view: &TableView,
@@ -430,7 +436,7 @@ mod tests {
     use super::*;
 
     /// A fixture with an empty value in every column but time, so each
-    /// column's empty-last rule and `(empty)` group are exercised.
+    /// column's empty-last rule and empty group are exercised.
     fn rows() -> Vec<FeedItem> {
         let mk = |i: usize, area: &str, h: Option<&str>, kind: &str, node: Option<&str>| FeedItem {
             ts: format!("2026-09-0{}T1{}:00:00Z", 1 + i % 3, i),
@@ -550,8 +556,8 @@ mod tests {
             if distinct.iter().any(String::is_empty) {
                 assert!(
                     matches!(slots.iter().rev().find(|s| matches!(s, Slot::Header { .. })),
-                        Some(Slot::Header { label, .. }) if label == EMPTY_LABEL),
-                    "{col:?}: the (empty) group sorts last"
+                        Some(Slot::Header { label, .. }) if *label == col.empty_label()),
+                    "{col:?}: the empty group sorts last"
                 );
             }
         }

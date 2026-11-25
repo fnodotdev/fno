@@ -1552,6 +1552,32 @@ if [ -n "${FNO_DEMO_FLATPINS:-}" ]; then
   done
 fi
 
+# Feed rows across a day and a half, so the activity feed's time column
+# shows order and its harness, node and area columns carry real values:
+# spawns land in the agents journal, stalls in the main store journal. Both
+# ride the frozen clock, so a reshoot paints the same stamps.
+python3 - "$ROOT" "$FNO_AGENT_HOME" "${IDS[@]}" <<'PY'
+import json, os, sys, datetime
+root, agents_home, ids = sys.argv[1], sys.argv[2], sys.argv[3:]
+now = datetime.datetime.fromtimestamp(int(os.environ["FNO_DEMO_EPOCH"]), datetime.timezone.utc)
+def ts(mins):
+    return (now - datetime.timedelta(minutes=mins)).strftime("%Y-%m-%dT%H:%M:%SZ")
+names = ["archer", "reviewer", "scout", "scribe", "planner", "wren"]
+harnesses = ["claude", "codex", "opencode"]
+os.makedirs(agents_home, exist_ok=True)
+with open(f"{agents_home}/events.jsonl", "a") as f:
+    for i in range(18):
+        f.write(json.dumps({"type": "agent_spawned", "ts": ts(30 + i * 97), "data": {
+            "name": names[i % len(names)], "harness": harnesses[i % 3],
+            "node": ids[i % len(ids)] if ids else None, "substrate": "pane"}}) + "\n")
+with open(f"{root}/.fno/events.jsonl", "a") as f:
+    for i in range(6):
+        f.write(json.dumps({"type": "worker_silent", "ts": ts(55 + i * 241), "data": {
+            "handle": names[(i + 2) % len(names)], "age_s": 600 + i * 120,
+            "harness": harnesses[(i + 1) % 3],
+            "node": ids[(i + 3) % len(ids)] if ids else None}}) + "\n")
+PY
+
 # --sort <column>:<direction> (for example age:descending) sets the
 # sideline's sort column, the way the sort control persists it.
 # --lead-nesting turns on the group-by-lead toggle the same way.
