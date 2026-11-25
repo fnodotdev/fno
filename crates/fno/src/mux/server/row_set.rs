@@ -595,12 +595,12 @@ impl Core {
             // headless run shows in the shell that started it, and its
             // registry row stays: the session id, events and HQ lines are
             // read by name, not through a row. One a person asked to watch
-            // (`fno agent spawn --mux`) keeps its place.
+            // (`fno agent spawn --mux`) keeps its place. The row is still
+            // built, for the sidecar below, and leaves `out` after it.
             let off_sideline =
                 !consumed[i] && a.substrate.as_deref() == Some("headless") && !a.watch;
             if off_sideline {
                 unwatched.push(a.name.clone());
-                continue;
             }
             if consumed[i] {
                 continue;
@@ -1007,9 +1007,8 @@ impl Core {
             });
         }
         // The sidecar above filed every session's counts, so the remote card
-        // of a hidden run keeps them. The sideline is the one surface that
-        // leaves the run out.
-        out.retain(|row| !unwatched.contains(&row.name));
+        // of a hidden run keeps them. The sideline leaves the run out.
+        out.retain(|row| row.pane_id.is_some() || !unwatched.contains(&row.name));
         out
     }
 
