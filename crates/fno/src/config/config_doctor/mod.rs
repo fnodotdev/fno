@@ -106,6 +106,7 @@ pub fn bare(out: &mut String) -> i32 {
     reporters::deprecated_active_backlog_mission(out);
     reporters::band_routing(out);
     reporters::harness_overlays(out);
+    reporters::user_hours(out);
     phone_sink::report(out);
     rc
 }

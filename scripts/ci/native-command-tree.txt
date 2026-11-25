@@ -7,6 +7,7 @@
 mux	group	visible	-	-
 mux app	group	visible	-	-
 mux app answer	leaf	visible	-	!--session,--json,--server
+mux app approve	leaf	visible	-	--repo
 mux app close	leaf	visible	-	!--session,--json,--server
 mux app focus	leaf	visible	-	!--session,--json,--server
 mux app open	leaf	visible	-	!--session,--focus,--json,--mode,--server

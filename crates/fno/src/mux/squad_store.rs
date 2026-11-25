@@ -272,6 +272,11 @@ pub struct StoredSquad {
     /// no-bump rule as `tab_trees`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub thread_pins: Vec<StoredThreadPin>,
+    /// The config project id the operator made this workspace for. Origins
+    /// can collide across workspaces, so the link rests on this id, not on a
+    /// folder. `#[serde(default)]`, same no-bump rule as `tab_trees`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
 }
 
 /// One operator move of a session into a workspace. A paneless row has no
@@ -402,6 +407,7 @@ pub struct SquadSnapshot {
     pub members: Vec<StoredMember>,
     pub tab_trees: Vec<StoredTabTree>,
     pub active_tab: Option<usize>,
+    pub project: Option<String>,
 }
 
 pub struct SnapshotBatch {
@@ -844,6 +850,7 @@ pub fn upsert_with_generations(
             .map(|s| (s.tab_trees.clone(), s.active_tab))
             .unwrap_or_default();
         let thread_pins = existing.map(|s| s.thread_pins.clone()).unwrap_or_default();
+        let project = existing.and_then(|s| s.project.clone());
         squads.retain(|s| !same_squad(s, name, key));
         squads.push(StoredSquad {
             name: name.to_string(),
@@ -855,6 +862,7 @@ pub fn upsert_with_generations(
             tab_trees,
             active_tab,
             thread_pins,
+            project,
         });
     })
 }
@@ -886,6 +894,7 @@ pub fn set_tab_specs_with_generations(
                 tab_trees: Vec::new(),
                 active_tab: None,
                 thread_pins: Vec::new(),
+                project: None,
             });
         }
     })
@@ -922,6 +931,7 @@ pub fn set_tab_trees(
                 tab_trees: tab_trees.to_vec(),
                 active_tab,
                 thread_pins: Vec::new(),
+                project: None,
             });
         }
     })
@@ -974,6 +984,10 @@ fn set_snapshots_inner(
                 .unwrap_or_else(now_iso);
             let tab_specs = existing.map(|s| s.tab_specs.clone()).unwrap_or_default();
             let thread_pins = existing.map(|s| s.thread_pins.clone()).unwrap_or_default();
+            let project = snapshot
+                .project
+                .clone()
+                .or_else(|| existing.and_then(|s| s.project.clone()));
             file.squads.retain(|s| !same_squad(s, &snapshot.name, key));
             file.squads.push(StoredSquad {
                 name: snapshot.name.clone(),
@@ -985,6 +999,7 @@ fn set_snapshots_inner(
                 tab_trees: snapshot.tab_trees.clone(),
                 active_tab: snapshot.active_tab,
                 thread_pins,
+                project,
             });
             let generation = file.generations.entry(generation_key.clone()).or_default();
             *generation = generation.saturating_add(1);
@@ -1966,6 +1981,7 @@ pub fn rename_with_generations(
             .map(|s| (s.tab_trees.clone(), s.active_tab))
             .unwrap_or_default();
         let thread_pins = existing.map(|s| s.thread_pins.clone()).unwrap_or_default();
+        let project = existing.and_then(|s| s.project.clone());
         squads.retain(|s| s.name != old && s.name != new);
         squads.push(StoredSquad {
             name: new.to_string(),
@@ -1977,6 +1993,7 @@ pub fn rename_with_generations(
             tab_trees,
             active_tab,
             thread_pins,
+            project,
         });
     })
 }

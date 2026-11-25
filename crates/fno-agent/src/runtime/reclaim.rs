@@ -870,19 +870,19 @@ fn state_layout_lane(home: &AgentsHome, apply: bool) -> Lane {
 }
 
 /// The state-root drift lane: a READING, never a sweeper. It reports the
-/// top-level entries the inventory doc does not name and removes nothing;
-/// anything with a deleter has it named in the doc's own rows. Gate and
-/// check-in share the reading through [`crate::state_root_drift::drift_report`].
+/// top-level entries no keep row of the layout table carries and removes
+/// nothing; the mover owns every row that owes a move. Gate and check-in
+/// share the reading through [`crate::state_root_drift::drift_report`].
 fn state_root_drift_lane(home: &AgentsHome) -> Lane {
     let mut lane = Lane::new("state_root_drift", Vec::new());
     match crate::state_root_drift::drift_report(&reclaim_state_root(home)) {
         Ok(rep) => {
             lane.note = if rep.entries.is_empty() {
-                "clean: every top-level entry is documented".to_string()
+                "clean: the layout table keeps every top-level entry".to_string()
             } else {
                 let preview: Vec<String> = rep.entries.iter().take(5).cloned().collect();
                 format!(
-                    "{} undocumented top-level entr(y|ies): {}{}",
+                    "{} top-level entr(y|ies) the layout table does not keep: {}{}",
                     rep.entries.len(),
                     preview.join(", "),
                     if rep.entries.len() > 5 { ", ..." } else { "" }

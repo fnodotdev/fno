@@ -96,16 +96,16 @@ pub(crate) use backlog::owner_ladder;
 pub use backlog::{
     active_backlog, additional_prs, announce, backlog_ready, backlog_share, check_supersession,
     day, decide_door, decision_index, decision_log, decision_trace, digest, epic_issue, feed,
-    fleet_law, graph_get, graph_keeper, graph_store, join_marker, keeper_wire, law_filters,
-    law_firings, law_match, law_pr_shape, law_reach, law_recheck, law_renew, law_restore,
-    law_upkeep, law_when, lead_answers, lint_registry, list_render, list_row, live_store_fence,
-    needs, node_bind, node_branch, node_liveness, node_origin, node_reading, node_route, node_seed,
-    outstanding, outstanding_cmds, plan_carry, plan_doc, plan_schema, planning_lane, plans_dirs,
-    plans_path, question_bus, question_clear, question_intake, question_judge, question_ladder,
-    question_probe, question_sweep, repeated_asks, row_truth, row_verdict, rules, rules_check,
-    rules_source, rundown, select_read, store_conn, store_exec, store_export, store_heal,
-    store_remote, think_daily, think_dispatch, think_inspect, wave, wave_ready, worked_nodes,
-    you_threads,
+    fleet_law, graph_get, graph_keeper, graph_store, join_marker, keeper_wire, law_archive,
+    law_filters, law_firings, law_match, law_pr_shape, law_reach, law_recheck, law_renew,
+    law_rescope, law_restore, law_upkeep, law_when, lead_answers, lint_registry, list_render,
+    list_row, live_store_fence, needs, node_bind, node_branch, node_liveness, node_origin,
+    node_reading, node_route, node_seed, outstanding, outstanding_cmds, plan_carry, plan_doc,
+    plan_schema, planning_lane, plans_dirs, plans_path, question_bus, question_clear,
+    question_intake, question_judge, question_ladder, question_probe, question_sweep,
+    repeated_asks, row_truth, row_verdict, rules, rules_check, rules_source, rundown, select_read,
+    store_conn, store_exec, store_export, store_heal, store_remote, think_daily, think_dispatch,
+    think_inspect, wave, wave_ready, worked_nodes, you_threads,
 };
 pub(crate) use eval::lead_eval_grade;
 use eval::refusal_surface_owner;
@@ -227,8 +227,8 @@ pub use spawn::{
 };
 use spawn::{bounded_spawn, lifecycle_child, spawn_gate_spend};
 pub(crate) use spawn::{
-    cap_liveness, opencode_pane_grant, resolve_tier, session_origin, spawn_gate_open_prs,
-    spawn_gate_probe, spawn_gate_queue, spawn_gate_slots,
+    cap_liveness, opencode_pane_grant, resolve_tier, session_origin, spawn_floor,
+    spawn_gate_open_prs, spawn_gate_probe, spawn_gate_queue, spawn_gate_slots,
 };
 
 use serde::{Deserialize, Serialize};
@@ -309,6 +309,32 @@ impl AgentStatus {
             AgentStatus::Ready | AgentStatus::Idle | AgentStatus::Busy | AgentStatus::Live
         )
     }
+
+    /// The variant's serde name, the word every registry row and status
+    /// table spells. One mapping for the whole crate.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AgentStatus::Spawning => "spawning",
+            AgentStatus::Ready => "ready",
+            AgentStatus::Idle => "idle",
+            AgentStatus::Busy => "busy",
+            AgentStatus::Live => "live",
+            AgentStatus::Restarting => "restarting",
+            AgentStatus::Orphaned => "orphaned",
+            AgentStatus::Failed => "failed",
+            AgentStatus::Exited => "exited",
+            AgentStatus::PermanentDead => "permanent_dead",
+        }
+    }
+
+    /// The registry statuses that hold a live process (idle counts: an
+    /// idle-but-unreaped process still holds RAM), the one vocabulary every
+    /// fleet arm reads: census, footprint, peek, worktree ownership, spawn
+    /// gate. The words are the variants' serde names (`Self::as_str`);
+    /// `spawn_gate::status_is_liveish` reads this const, and the spawn-gate
+    /// test pins const, names and predicate together.
+    pub const LIVE_STATUSES: &'static [&'static str] =
+        &["spawning", "ready", "idle", "busy", "live", "restarting"];
 }
 
 /// Sealed event vocabulary every provider parses INTO (LD9). Variant additions

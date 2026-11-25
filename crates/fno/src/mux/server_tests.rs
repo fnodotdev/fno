@@ -425,8 +425,7 @@ fn agent(pane: u64, badge: Option<AgentBadge>, exited: bool) -> RegistryAgent {
 }
 #[test]
 fn new_squad_rejects_a_blank_name_and_creates_nothing() {
-    // Change #2 / AC1-ERR: a whitespace-only name is refused fail-closed -
-    // no squad, no pane. PTY-free: the reject returns before any spawn.
+    // A whitespace-only name is refused fail-closed, before any spawn.
     let mut core = empty_core();
     core.session.add_squad(
         1,
@@ -445,6 +444,7 @@ fn new_squad_rejects_a_blank_name_and_creates_nothing() {
         Command::NewSquad {
             name: "   ".into(),
             origin: None,
+            project: None,
         },
     );
     assert!(matches!(flow, Flow::Continue));

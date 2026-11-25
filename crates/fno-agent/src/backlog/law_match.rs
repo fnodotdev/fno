@@ -61,6 +61,18 @@ enum MatchRequest {
     /// and the exit code (0 acted, 1 the pass could not run, 2 usage).
     #[serde(rename = "upkeep")]
     Upkeep(RecordDoorRequest),
+    /// The scope-amend door: `argv` is the `fno inbox decisions rescope`
+    /// command line. Same ownership as `renew`: stdout carries the amendment
+    /// id, the exit code is 0 amended, 3 refused. The operator's yes is the
+    /// door's proof: never widen or narrow a law's reach without it.
+    #[serde(rename = "rescope")]
+    Rescope(RecordDoorRequest),
+    /// The cold-archive door: `argv` is the `fno inbox decisions archive`
+    /// command line. Dry run by default; `--apply` moves the non-live rows
+    /// into `decisions-archive.jsonl` at the state root. The door owns
+    /// stdout and the exit code (0 answered, 1 store failure, 2 usage).
+    #[serde(rename = "archive")]
+    Archive(RecordDoorRequest),
     #[serde(rename = "scope-split")]
     ScopeSplit(ScopeSplitRequest),
     /// The decisions listing read: `argv` is the `fno backlog decisions`
@@ -1551,8 +1563,10 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
             }
             "--keep" => {
                 let typed = take(&mut i)?;
-                door.keep
-                    .push(crate::numbers::resolve('d', &typed).unwrap_or(typed));
+                for k in typed.split(',').map(str::trim).filter(|k| !k.is_empty()) {
+                    door.keep
+                        .push(crate::numbers::resolve('d', k).unwrap_or_else(|| k.to_string()));
+                }
             }
             "--sweep" => door.sweep.push(take(&mut i)?),
             "--graduation" => door.graduation = Some(take(&mut i)?),
@@ -1906,7 +1920,10 @@ pub(crate) fn project_events_journal() -> std::path::PathBuf {
 
 /// The same canonical-root walk, run from a caller-named directory instead
 /// of the process cwd. The env-free form exists because a process-wide
-/// `FNO_REPO_ROOT` pin would race the daemon's concurrent emitters.
+/// `FNO_REPO_ROOT` pin would race the daemon's concurrent emitters. A cwd
+/// outside any checkout that is a state root (it holds `db/`) answers its
+/// own journal anchor, so a hook run from `~/.fno` never creates
+/// `~/.fno/.fno/`.
 pub(crate) fn project_events_journal_in(cwd: &std::path::Path) -> std::path::PathBuf {
     let main_root = std::process::Command::new("git")
         .args(["worktree", "list", "--porcelain"])
@@ -1919,9 +1936,12 @@ pub(crate) fn project_events_journal_in(cwd: &std::path::Path) -> std::path::Pat
                 .lines()
                 .find_map(|l| l.strip_prefix("worktree ").map(str::to_string))
         })
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| cwd.to_path_buf());
-    main_root.join(".fno").join("events.jsonl")
+        .map(std::path::PathBuf::from);
+    match main_root {
+        Some(root) => root.join(".fno").join("events.jsonl"),
+        None if cwd.join("db").is_dir() => cwd.join("events.jsonl"),
+        None => cwd.join(".fno").join("events.jsonl"),
+    }
 }
 
 /// Open questions the new law may answer: `read_open_questions`' fold over
@@ -1929,9 +1949,8 @@ pub(crate) fn project_events_journal_in(cwd: &std::path::Path) -> std::path::Pat
 /// or malformed store reads as no questions, never an error.
 fn read_open_questions() -> Vec<OpenQuestion> {
     let path = decision_index::default_state_path("questions.jsonl");
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
+    let text =
+        crate::event_store::journal_text(&path, &["operator_question", "operator_question_closed"]);
     let mut asked: Vec<OpenQuestion> = Vec::new();
     let mut closed: std::collections::HashSet<String> = std::collections::HashSet::new();
     for line in text.lines() {
@@ -3452,6 +3471,12 @@ pub fn run_law_match_str(input: &str) -> i32 {
         }
         MatchRequest::Upkeep(r) => {
             return crate::law_upkeep::run_upkeep(&r.argv);
+        }
+        MatchRequest::Rescope(r) => {
+            return crate::decision_log::refresh_after(crate::law_rescope::run_rescope(&r.argv));
+        }
+        MatchRequest::Archive(r) => {
+            return crate::law_archive::run_archive(&r.argv);
         }
         MatchRequest::Ask(r) => serde_json::to_string(&ask_answer(&r)).expect("serializes"),
         MatchRequest::Law(r) => {

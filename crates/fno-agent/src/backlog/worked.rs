@@ -65,21 +65,6 @@ pub(crate) struct FleetRow {
     pub(crate) substrate: Option<String>,
 }
 
-pub(crate) fn status_word(status: crate::AgentStatus) -> &'static str {
-    match status {
-        crate::AgentStatus::Spawning => "spawning",
-        crate::AgentStatus::Ready => "ready",
-        crate::AgentStatus::Idle => "idle",
-        crate::AgentStatus::Busy => "busy",
-        crate::AgentStatus::Live => "live",
-        crate::AgentStatus::Restarting => "restarting",
-        crate::AgentStatus::Orphaned => "orphaned",
-        crate::AgentStatus::Failed => "failed",
-        crate::AgentStatus::Exited => "exited",
-        crate::AgentStatus::PermanentDead => "permanent_dead",
-    }
-}
-
 fn contains(list: &[&str], value: &str) -> bool {
     list.contains(&value)
 }
@@ -150,19 +135,6 @@ fn normalize_node_id(value: &str) -> Option<String> {
 // ---------------------------------------------------------------------------
 // The fleet fold (`fleet_rows`)
 // ---------------------------------------------------------------------------
-
-/// Every live registry status (`spawn_gate.LIVE_STATUSES`).
-pub(crate) fn is_live_status(status: crate::AgentStatus) -> bool {
-    matches!(
-        status,
-        crate::AgentStatus::Spawning
-            | crate::AgentStatus::Ready
-            | crate::AgentStatus::Idle
-            | crate::AgentStatus::Busy
-            | crate::AgentStatus::Live
-            | crate::AgentStatus::Restarting
-    )
-}
 
 pub(crate) fn fleet_rows() -> (Vec<FleetRow>, Vec<String>) {
     let raw = crate::claude_roster::read_all_agents_raw();
@@ -237,7 +209,7 @@ pub(crate) fn fleet_rows_from(
         let vendor = vendor_by_sid.get(*sid).copied();
         let (state, warn) = match vendor {
             Some(r) => row_state(r),
-            None => row_state(&json!({"status": status_word(e.status)})),
+            None => row_state(&json!({"status": e.status.as_str()})),
         };
         if let Some(warn) = warn {
             unmapped.insert(warn);
@@ -359,7 +331,7 @@ pub(crate) fn fleet_rows_from(
         {
             continue;
         }
-        if !is_live_status(entry.status) {
+        if !crate::spawn_gate::status_is_liveish(&entry.status) {
             continue;
         }
         let row_id: String = entry
@@ -389,7 +361,7 @@ pub(crate) fn fleet_rows_from(
             continue;
         }
         let (state, warn) = row_state(&json!({
-            "status": status_word(entry.status),
+            "status": entry.status.as_str(),
         }));
         if let Some(warn) = warn {
             unmapped.insert(warn);

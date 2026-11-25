@@ -478,9 +478,9 @@ enum Role {
     /// `fno do feedback ...`: the redacted upstream-issue draft execs the
     /// sibling binary, the same byte-verbatim handover as DoCi.
     DoFeedback,
-    /// `fno do docs ...`: the docs release-binding family (bind, surface,
-    /// gate) execs the sibling binary's docs dispatcher, the same
-    /// byte-verbatim handover as DoCi.
+    /// `fno do docs ...`: the docs family, tie doc pages to releases
+    /// (link, surface, gate), execs the sibling binary's docs dispatcher,
+    /// the same byte-verbatim handover as DoCi.
     DoDocs,
     /// `fno do show|diff ...`: a file at a revision and the diff between two
     /// revisions exec the sibling binary's rev dispatcher, the DoCi handover.

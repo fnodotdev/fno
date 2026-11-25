@@ -1,21 +1,22 @@
-//! PermissionRequest hook: allow EnterWorktree into a worktree under the
-//! resolved `paths.worktrees_base` or either state-root default base.
+//! PermissionRequest hook: allow a worker's EnterWorktree into its own
+//! claimed worktree.
 //!
 //! Claude Code asks before EnterWorktree moves the session to a path outside
 //! its own managed worktree dir in the repo ("permission-root relocation").
-//! The ask is a safety check the auto-mode classifier may not approve, and an allow rule
-//! is never read for it, so an auto-mode worker that launches from the repo
-//! root stops at the prompt. A PermissionRequest hook is the one answer short
-//! of bypassPermissions. Allowing only the fno base keeps the ask for every
-//! other path.
+//! The ask is a safety check the auto-mode classifier may not approve, and an
+//! allow rule is never read for it, so an auto-mode worker that launches from
+//! the repo root stops at the prompt. A PermissionRequest hook is the one
+//! answer short of bypassPermissions. The claim, not the working directory,
+//! names the worktree: a sibling under the same base keeps its ask.
 //!
-//! Both paths are canonicalized before the prefix test, so a symlink under
-//! the base cannot point the session elsewhere. Anything else prints `{}`,
-//! which leaves the prompt in place: this hook never denies.
+//! Paths are canonicalized before the compare, so a symlink cannot point the
+//! session elsewhere. Anything else prints `{}`, which leaves the prompt in
+//! place: this hook never denies.
 //!
-//! The base holds every repo's worktrees, yet the allow cannot carry a
-//! session into another repo: Claude Code refuses any path that is not a
-//! registered worktree of the session's own repo, after this hook allows.
+//! Routine file work is not answered here. When `user.auto_approve_routine`
+//! is on, the spawn writes plain `permissions.allow` and `ask` rules into its
+//! own settings file (`spawn/auto_approve.rs`), and Claude Code applies its
+//! own deny, ask, allow order.
 
 use serde::Deserialize;
 use serde_json::json;
@@ -30,6 +31,8 @@ struct Payload {
     #[serde(default)]
     cwd: String,
     #[serde(default)]
+    session_id: String,
+    #[serde(default)]
     tool_input: ToolInput,
 }
 
@@ -43,7 +46,8 @@ struct ToolInput {
 pub fn run(_args: &[String]) -> i32 {
     let payload: Payload = serde_json::from_str(super::read_stdin().trim()).unwrap_or_default();
     let cwd = payload_cwd(&payload);
-    let allowed = bases(&cwd).iter().any(|base| allows(&payload, base));
+    let own = own_worktree(&payload.session_id, &cwd);
+    let allowed = own.as_deref().is_some_and(|own| allows(&payload, own));
     if let Some(decision) = row_decision(&payload, allowed) {
         super::emit_guard_row(&cwd, GUARD, "EnterWorktree", decision);
     }
@@ -62,6 +66,99 @@ pub fn run(_args: &[String]) -> i32 {
 }
 
 const GUARD: &str = "worktree-relocation-allow";
+
+/// The worktree this session claims: `<base>/<repo>/<node>` for the node its
+/// registry row carries. No row, no node or no such folder means no claim.
+fn own_worktree(session: &str, cwd: &Path) -> Option<PathBuf> {
+    if session.is_empty() {
+        return None;
+    }
+    let home = crate::paths::AgentsHome::from_env_opt()?;
+    let registry = crate::state::load_registry(&home.registry_json()).ok()?;
+    let node = claimed_node(&registry, session)?;
+    own_worktree_in(&bases(cwd), &crate::paths::canonical_repo_root(cwd)?, &node)
+}
+
+fn claimed_node(registry: &crate::state::Registry, session: &str) -> Option<String> {
+    registry
+        .entries
+        .iter()
+        .find(|e| {
+            e.harness_session_id.as_deref() == Some(session)
+                || e.session_id.as_deref() == Some(session)
+        })
+        .and_then(|e| e.node.clone())
+        .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'))
+}
+
+/// The checkout `<base>/<any folder>/<node>` that belongs to this repo. Its
+/// `.git` file must name a record under the repo's worktree records, and that
+/// record's `gitdir` must point back at the checkout's own `.git` file. A
+/// planted folder can name a record, but it cannot make the record name it.
+fn own_worktree_in(bases: &[PathBuf], repo_root: &Path, node: &str) -> Option<PathBuf> {
+    let records = repo_root.canonicalize().ok()?.join(".git/worktrees");
+    bases
+        .iter()
+        .filter_map(|base| std::fs::read_dir(base).ok())
+        .flatten()
+        .flatten()
+        .find_map(|folder| {
+            let real = folder.path().join(node).canonicalize().ok()?;
+            let pointer = std::fs::read_to_string(real.join(".git")).ok()?;
+            let record = PathBuf::from(pointer.trim().strip_prefix("gitdir:")?.trim());
+            let record = record.canonicalize().ok()?;
+            if record.parent()? != records {
+                return None;
+            }
+            let back = std::fs::read_to_string(record.join("gitdir")).ok()?;
+            let back = PathBuf::from(back.trim()).canonicalize().ok()?;
+            (back == real.join(".git").canonicalize().ok()?).then_some(real)
+        })
+}
+
+/// `<base>/<repo>/<node>` for the base `real` (a canonical cwd) sits under,
+/// with the node's name.
+fn candidate_under(bases: &[PathBuf], real: &Path) -> Option<(PathBuf, String)> {
+    bases.iter().find_map(|base| {
+        let base = base.canonicalize().ok()?;
+        let rest = real.strip_prefix(&base).ok()?;
+        let mut parts = rest.components().take(2);
+        let (repo, node) = (parts.next()?, parts.next()?);
+        let name = node.as_os_str().to_str()?.to_string();
+        Some((base.join(repo).join(node), name))
+    })
+}
+
+/// A spawn that names a node must run in that node's own folder.
+fn names_this_node(named: Option<&str>, folder: &str) -> bool {
+    match named.filter(|n| !n.is_empty()) {
+        Some(n) => n == folder,
+        None => true,
+    }
+}
+
+/// The worktree a spawn at `cwd` runs in, when it is a recorded worktree of
+/// this repo. The registry row does not exist yet when a spawn writes its
+/// settings, so the repo's worktree records stand in for the claim. `named`
+/// is the node the spawn payload names for the child, never the spawner's
+/// own `FNO_NODE`, which a lead passes down to every worker it starts.
+pub(crate) fn verified_worktree(cwd: &Path, named: Option<&str>) -> Option<PathBuf> {
+    verified_in(
+        &bases(cwd),
+        &crate::paths::canonical_repo_root(cwd)?,
+        &cwd.canonicalize().ok()?,
+        named,
+    )
+}
+
+fn verified_in(all: &[PathBuf], repo: &Path, real: &Path, named: Option<&str>) -> Option<PathBuf> {
+    let (candidate, node) = candidate_under(all, real)?;
+    if !names_this_node(named, &node) {
+        return None;
+    }
+    let found = own_worktree_in(all, repo, &node)?;
+    (found == candidate).then_some(found)
+}
 
 /// The `path` of an EnterWorktree call, the only shape that relocates. The
 /// create form (`name`) stays inside the repo and never prompts.
@@ -84,7 +181,7 @@ fn row_decision(payload: &Payload, allowed: bool) -> Option<&'static str> {
 /// plus both state-root defaults. An override moves new checkouts, yet
 /// worktrees made before it, or by a peer repo with another config, still sit
 /// under a default base and must not stop at the prompt.
-fn bases(cwd: &Path) -> Vec<PathBuf> {
+pub(crate) fn bases(cwd: &Path) -> Vec<PathBuf> {
     let state = crate::paths_cli::state_root_for_worktrees(cwd);
     bases_for(crate::paths_cli::worktrees_base(cwd), &state)
 }
@@ -106,17 +203,17 @@ fn payload_cwd(payload: &Payload) -> PathBuf {
 }
 
 /// True when the payload is an EnterWorktree `path` call whose real target
-/// sits strictly under the real base. Separated from `run` so the tests
+/// is the worker's own claimed worktree. Separated from `run` so the tests
 /// exercise the same predicate with no stdin or config in the loop.
-fn allows(payload: &Payload, base: &Path) -> bool {
+fn allows(payload: &Payload, own: &Path) -> bool {
     let Some(raw) = path_call(payload) else {
         return false;
     };
     let target = payload_cwd(payload).join(raw);
-    let (Ok(target), Ok(base)) = (target.canonicalize(), base.canonicalize()) else {
+    let (Ok(target), Ok(own)) = (target.canonicalize(), own.canonicalize()) else {
         return false;
     };
-    target != base && target.starts_with(&base)
+    target == own
 }
 
 #[cfg(test)]
@@ -134,38 +231,41 @@ mod tests {
     }
 
     #[test]
-    fn allows_only_a_real_path_strictly_under_the_base() {
+    fn allows_only_the_workers_own_claimed_worktree() {
         let tmp = tempfile::tempdir().unwrap();
         let base = tmp.path().join("worktrees");
         let wt = base.join("repo").join("node");
+        let sibling = base.join("repo").join("other");
         let outside = tmp.path().join("elsewhere");
-        std::fs::create_dir_all(&wt).unwrap();
-        std::fs::create_dir_all(&outside).unwrap();
+        for dir in [&wt, &sibling, &outside, &tmp.path().join("repo")] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
         let repo = tmp.path().join("repo");
-        std::fs::create_dir_all(&repo).unwrap();
 
-        assert!(allows(&call(&repo, &wt.to_string_lossy()), &base));
+        assert!(allows(&call(&repo, &wt.to_string_lossy()), &wt));
         // Relative paths resolve against the payload cwd.
-        assert!(allows(&call(&base, "repo/node"), &base));
-        // The base itself, an outside dir, a missing dir: the prompt stays.
-        assert!(!allows(&call(&repo, &base.to_string_lossy()), &base));
-        assert!(!allows(&call(&repo, &outside.to_string_lossy()), &base));
+        assert!(allows(&call(&base, "repo/node"), &wt));
+        // A sibling under the same base, the base, an outside dir, a missing
+        // dir: the prompt stays.
+        assert!(!allows(&call(&repo, &sibling.to_string_lossy()), &wt));
+        assert!(!allows(&call(&repo, &base.to_string_lossy()), &wt));
+        assert!(!allows(&call(&repo, &outside.to_string_lossy()), &wt));
         assert!(!allows(
             &call(&repo, &base.join("gone").to_string_lossy()),
-            &base
+            &wt
         ));
-        // A `..` escape canonicalizes out of the base.
-        let escape = format!("{}/repo/../../elsewhere", base.display());
-        assert!(!allows(&call(&repo, &escape), &base));
+        // A `..` escape canonicalizes out of the worktree.
+        let escape = format!("{}/repo/node/../other", base.display());
+        assert!(!allows(&call(&repo, &escape), &wt));
         // Another tool, or the create form with no path, never allows.
         let mut other = call(&repo, &wt.to_string_lossy());
         other.tool_name = "Bash".into();
-        assert!(!allows(&other, &base));
+        assert!(!allows(&other, &wt));
         let create: Payload = serde_json::from_value(
             json!({"tool_name": "EnterWorktree", "tool_input": {"name": "x"}}),
         )
         .unwrap();
-        assert!(!allows(&create, &base));
+        assert!(!allows(&create, &wt));
 
         // Every path answer leaves a row, so a stalled worker tells a
         // declined path (ask) from a hook that never answered (no row).
@@ -177,33 +277,88 @@ mod tests {
         assert_eq!(row_decision(&create, false), None);
     }
 
+    #[cfg(unix)]
     #[test]
-    fn every_base_fno_writes_to_is_allowed_even_under_an_override() {
+    fn a_symlink_under_the_base_pointing_out_is_not_the_claimed_worktree() {
         let tmp = tempfile::tempdir().unwrap();
+        let wt = tmp.path().join("worktrees/repo/node");
+        let outside = tmp.path().join("elsewhere");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let link = tmp.path().join("worktrees/link");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        assert!(!allows(&call(tmp.path(), &link.to_string_lossy()), &wt));
+    }
+
+    /// One checkout under `base/<folder>/<node>` whose record sits in
+    /// `repo/.git/worktrees/<node>`, with the record's back-pointer set by
+    /// `back`.
+    fn checkout(base: &Path, repo: &Path, folder: &str, node: &str, back: bool) -> PathBuf {
+        let record = repo.join(".git/worktrees").join(node);
+        std::fs::create_dir_all(&record).unwrap();
+        let wt = base.join(folder).join(node);
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(wt.join(".git"), format!("gitdir: {}\n", record.display())).unwrap();
+        if back {
+            let git = wt.canonicalize().unwrap().join(".git");
+            std::fs::write(record.join("gitdir"), format!("{}\n", git.display())).unwrap();
+        }
+        wt
+    }
+
+    #[test]
+    fn the_claim_names_the_worktree_by_the_repo_and_its_back_pointer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("checkout");
         let state = tmp.path().join("state");
-        let spaces = crate::paths_cli::default_worktrees_base(&state).join("repo/node");
-        let legacy = crate::paths_cli::legacy_worktrees_base(&state).join("repo/node");
-        std::fs::create_dir_all(&spaces).unwrap();
-        std::fs::create_dir_all(&legacy).unwrap();
+        let base = crate::paths_cli::legacy_worktrees_base(&state);
+        // The folder name differs from the repo's name on purpose.
+        let wt = checkout(&base, &repo, "renamed", "node", true);
+        // A planted folder names a real record, but the record does not name it.
+        let planted = base.join("renamed/planted");
+        std::fs::create_dir_all(&planted).unwrap();
+        std::fs::write(
+            planted.join(".git"),
+            format!("gitdir: {}\n", repo.join(".git/worktrees/node").display()),
+        )
+        .unwrap();
+        // A checkout of a different repo.
+        let foreign = base.join("renamed/foreign");
+        std::fs::create_dir_all(&foreign).unwrap();
+        std::fs::write(
+            foreign.join(".git"),
+            "gitdir: /elsewhere/.git/worktrees/foreign\n",
+        )
+        .unwrap();
+        let unrecorded = checkout(&base, &repo, "renamed", "unrecorded", false);
         let configured = tmp.path().join("custom");
         std::fs::create_dir_all(&configured).unwrap();
         let all = bases_for(configured, &state);
-        for wt in [&spaces, &legacy] {
-            let p = call(tmp.path(), &wt.to_string_lossy());
-            assert!(all.iter().any(|b| allows(&p, b)));
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_symlink_under_the_base_pointing_out_keeps_the_prompt() {
-        let tmp = tempfile::tempdir().unwrap();
-        let base = tmp.path().join("worktrees");
-        let outside = tmp.path().join("elsewhere");
-        std::fs::create_dir_all(&base).unwrap();
-        std::fs::create_dir_all(&outside).unwrap();
-        let link = base.join("link");
-        std::os::unix::fs::symlink(&outside, &link).unwrap();
-        assert!(!allows(&call(tmp.path(), &link.to_string_lossy()), &base));
+        assert_eq!(
+            own_worktree_in(&all, &repo, "node"),
+            Some(wt.canonicalize().unwrap())
+        );
+        // A spawn's cwd names a worktree only through the same record check.
+        let real = wt.canonicalize().unwrap();
+        assert_eq!(
+            candidate_under(&all, &real.join("src")),
+            Some((real.clone(), "node".to_string()))
+        );
+        assert_eq!(candidate_under(&all, tmp.path()), None);
+        assert!(names_this_node(None, "node") && names_this_node(Some(""), "node"));
+        assert!(names_this_node(Some("node"), "node"));
+        assert!(!names_this_node(Some("other"), "node"));
+        // The child's node comes from the spawn payload: a worker spawned into
+        // `node` gets its folder whatever the spawner's own env names.
+        assert_eq!(
+            verified_in(&all, &repo, &real, Some("node")),
+            Some(real.clone())
+        );
+        assert_eq!(verified_in(&all, &repo, &real, None), Some(real.clone()));
+        assert_eq!(verified_in(&all, &repo, &real, Some("other")), None);
+        assert_eq!(own_worktree_in(&all, &repo, "planted"), None);
+        assert_eq!(own_worktree_in(&all, &repo, "foreign"), None);
+        assert_eq!(own_worktree_in(&all, &repo, "unrecorded"), None);
+        assert!(unrecorded.exists());
     }
 }

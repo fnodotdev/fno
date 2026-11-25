@@ -699,7 +699,8 @@ fn clutter_note(abs: &Path, roots: &[Root], state: &Root, session_id: &str) -> O
 /// The state-root half of `clutter_note`, so the mkdir family can take the
 /// state-root scoping without the config-dir branch (the mkdir ruling keeps
 /// mkdir lawful in the Claude config dir). A write whose FIRST segment under
-/// the state root names a missing entry gets a note: a folder created in one
+/// the state root has no keep row in the layout table gets a note, unless it
+/// is a legacy name that exists and the mover still owes: a folder created in one
 /// tool call and written in the next does not slip past it, and a standalone
 /// mkdir does not either.
 fn state_root_note(abs: &Path, state: &Root, session_id: &str) -> Option<String> {
@@ -720,10 +721,13 @@ fn state_root_note(abs: &Path, state: &Root, session_id: &str) -> Option<String>
         return None;
     };
     let first = rest.split('/').next().unwrap_or(rest);
-    if !state.physical.join(first).exists() {
+    // A kept name is lawful; a legacy name the mover still owes stays
+    // writable while it exists. Anything else is a new top-level entry.
+    let owed = crate::state_layout::is_carried(first) && state.physical.join(first).exists();
+    if !crate::state_layout::is_kept(first) && !owed {
         let jd = jobdir_for(&ambient_cfg(), session_id);
         return Some(format!(
-            "{phys} would create a new top-level entry ('{first}') in the fno state root ({}). The top-level set is closed: write under a folder that already exists there, or in this session's job dir: {jd}.",
+            "{phys} would create a new top-level entry ('{first}') in the fno state root ({}). The layout table (docs/state-root-layout.tsv) keeps the top-level set: write under a kept folder, or in this session's job dir: {jd}.",
             state.spelled
         ));
     }

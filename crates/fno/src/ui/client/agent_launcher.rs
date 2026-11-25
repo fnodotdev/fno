@@ -21,6 +21,7 @@ use crate::proto::agent_launch::{AgentLaunchRequest, AgentLaunchUpdate, LaunchSt
 mod bang;
 pub(crate) mod card;
 pub(crate) mod grammar;
+pub(crate) mod projects;
 pub(crate) mod sets;
 pub(crate) mod will_run;
 

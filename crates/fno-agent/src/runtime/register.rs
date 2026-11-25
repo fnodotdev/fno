@@ -231,6 +231,14 @@ session '{session_id}'; use the full session id directly"
             return 1;
         }
     };
+    // The /fno:fno-me act stamps its own law trigger: the D2402 read names
+    // fno-me, and the front door's stamp for this very command is the
+    // non-adopting `command`. Escalation-aware, so a marker a bare command
+    // wrote first upgrades here.
+    if let Err(err) = crate::join_marker::write_marker(home.root(), &harness, &session_id, "fno-me")
+    {
+        eprintln!("fno: fno-me join marker write failed: {err}");
+    }
     if manifest_role.is_none() {
         crate::boot_revival::reseat_registered_row(home, &name);
     }

@@ -647,9 +647,7 @@ const EXIT_USAGE: i32 = 2;
 /// subfolder, the one owned per-item area the inventory already names, so
 /// the root itself grows no new row.
 fn global_marker() -> PathBuf {
-    crate::model_catalog::state_dir()
-        .join("sidecar")
-        .join("setup-done")
+    crate::state_layout::place(&crate::model_catalog::state_dir(), "sidecar").join("setup-done")
 }
 
 /// The project layer's done marker, beside the repo's `.fno/config.toml`.

@@ -12,11 +12,6 @@ mod gh_proxy_tests;
 #[cfg(feature = "app")]
 pub mod must_enable;
 #[cfg(feature = "app")]
-pub mod path_migration;
-#[cfg(all(test, feature = "app"))]
-#[path = "path_migration_tests.rs"]
-mod path_migration_tests;
-#[cfg(feature = "app")]
 pub mod setup_attention_remote;
 #[cfg(feature = "app")]
 pub mod setup_autowire;

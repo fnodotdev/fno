@@ -92,13 +92,21 @@ reg_clear() {
     || fail "could not reset the registry table"
 }
 
-# 1. A session-shaped token the store knows resolves and is ADOPTED. `resume
-#    --print-command` is the assertion surface: it proves resolution AND that the
-#    healed row carries the uuid the dead arm needs (`logs` would hand off to
-#    claude's own job store, which knows nothing about a reaped session).
+# 1. A session-shaped token the store knows resolves. The adoption law gates
+#    the persist: with no launch record and no law join trigger, `resume
+#    --print-command` still proves resolution and the recorded cwd, and the
+#    registry gains no adopted row.
 out=$("$BIN" resume c655c326 --print-command 2>&1) || fail "resume of a stored session: $out"
 grep -q -- "--resume $CLAUDE_UUID" <<<"$out" || fail "dead arm did not build the uuid argv: $out"
 grep -qF "cd $FIXCWD" <<<"$out" || fail "healed row lost its recorded cwd: $out"
+[[ "$(reg_rows)" == "[]" ]] || fail "a heal with no law cause persisted a row"
+
+# 1b. The same heal once a law join trigger exists (the marker a /fno: skill
+#     writes): the adopted row lands with the uuid the dead arm needs.
+mkdir -p "$tmp/home/.fno/agents/sessions/claude/$CLAUDE_UUID"
+printf 'skill:review' > "$tmp/home/.fno/agents/sessions/claude/$CLAUDE_UUID/joined"
+out=$("$BIN" resume c655c326 --print-command 2>&1) || fail "resume after the law marker: $out"
+grep -q -- "--resume $CLAUDE_UUID" <<<"$out" || fail "post-marker resume lost the argv: $out"
 reg_rows | python3 -c '
 import json, os, sys
 rows = json.load(sys.stdin)
@@ -142,10 +150,13 @@ grep -q "has exited" <<<"$err" || fail "attach did not reach the revival pointer
 
 # 8. The heal adopts into the registry the CALLER read. Without that, the row
 #    lands in another file: the command still works, so nothing warns, but the
-#    roster never gains the row and every later call re-heals.
+#    roster never gains the row and every later call re-heals. The law marker
+#    is planted beside the ALT registry, because the gate reads the caller's
+#    home for the join cause the same way it reads the caller's registry.
 reg_clear
 ALT_HOME="$tmp/alt-agents"
-mkdir -p "$ALT_HOME"
+mkdir -p "$ALT_HOME/sessions/claude/$CLAUDE_UUID"
+printf 'skill:review' > "$ALT_HOME/sessions/claude/$CLAUDE_UUID/joined"
 out=$(FNO_AGENT_HOME="$ALT_HOME" "$BIN" resume c655c326 --print-command 2>&1) || \
   fail "heal under FNO_AGENT_HOME failed: $out"
 [[ "$(reg_rows "$ALT_HOME/registry.json")" != "[]" ]] || fail "adopted row did not land in FNO_AGENT_HOME"

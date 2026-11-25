@@ -28,7 +28,7 @@ A side effect sometimes needs a screen with no portal behind it. `fno mux comman
 
 ## The parked screen
 
-When a channel ends, the portal stays and says so. A viewer whose process exits leaves the portal on its no-signal screen: `portal N: no signal - <channel> ended`. The screen is a keeper-hosted tail process that takes no input. No interactive shell is minted, so a death can never multiply tabs. The screen carries `FNO_PORTAL_HELD=<channel>` in its own argv, and every portal door reads that provenance, never command presence.
+When a channel ends, the portal stays and says so. A viewer whose process exits leaves the portal on its no-signal screen: `portal N: no signal - <channel> ended`. The screen is a keeper-hosted tail process that reads no input, and it names what the registry says about the row. On a dead claude row it also offers one key. Press `r` and the canonical revive plan runs for the row. Its argv spawns in the same seat, and the portal shows the session again. A row the plan cannot revive refuses with the reason. That covers no harness, no session id, and a live backend. The seat stays parked. No interactive shell is minted, so a death can never multiply tabs. The screen carries `FNO_PORTAL_HELD=<channel>` in its own argv, and every portal door reads that provenance, never command presence.
 
 The same mint serves a restore-held slot. The seat comes back parked on its channel until a reach or a focus fills it. `[mux.restore] policy = resume` still fills held portals at startup, because that setting is the operator's ask. A parked portal whose row never returns stays a readable screen naming the row.
 

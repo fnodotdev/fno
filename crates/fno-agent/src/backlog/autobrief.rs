@@ -72,7 +72,8 @@ fn text_field(node: &Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// The briefs dir: the config override, else the state root's `briefs/`.
+/// The briefs dir: the config override, else the `briefs` folder the layout
+/// table places under the state root (`db/briefs/`).
 pub(crate) fn briefs_dir() -> Option<PathBuf> {
     let cwd = std::env::current_dir().ok()?;
     if let Some(over) = crate::agents_config::config_lookup(&cwd, &["paths", "briefs_dir"])
@@ -81,7 +82,7 @@ pub(crate) fn briefs_dir() -> Option<PathBuf> {
     {
         return Some(PathBuf::from(over));
     }
-    crate::backlog::settings::state_dir().map(|d| d.join("briefs"))
+    crate::backlog::settings::state_dir().map(|d| crate::state_layout::place(&d, "briefs"))
 }
 
 /// The sidecar brief: `briefs/{id}.md` when `has_brief`.

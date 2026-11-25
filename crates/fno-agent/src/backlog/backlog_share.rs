@@ -1188,6 +1188,16 @@ pub(crate) fn fnv1a(bytes: &[u8]) -> u64 {
     })
 }
 
+/// Whether a take-back target the primary does not hold keeps its local row.
+#[derive(Clone, Copy, PartialEq)]
+enum KeepOnEmpty {
+    No,
+    Yes,
+    /// Keep only while the target at this index, the update's old key,
+    /// reads empty too.
+    IfAbsent(usize),
+}
+
 /// Take the primary's rows back for the nodes the refusal named, re-queue
 /// the batch's other writes for the next flush, keep the refused statements
 /// for retry or inspection, and clear the batch from the outbox, in one
@@ -1226,7 +1236,8 @@ fn repair(
                 .iter()
                 .any(|id| refused_ids.contains(id))
     };
-    let mut targets: Vec<(String, Vec<String>, Vec<String>, Vec<SqlValue>, bool)> = Vec::new();
+    let mut targets: Vec<(String, Vec<String>, Vec<String>, Vec<SqlValue>, KeepOnEmpty)> =
+        Vec::new();
     for change in changes
         .iter()
         .filter(|c| taken_back(c) && c.op != Op::Insert)
@@ -1255,13 +1266,23 @@ fn repair(
         // would amputate the columns it does not name.
         let all_columns: Vec<String> = info.iter().map(|(name, _)| name.clone()).collect();
         // An update whose target the primary lacks keeps its local row; a
-        // delete completed there, so its absence removes the local row.
-        let keep_on_empty = change.op == Op::Update;
-        for row in [&change.old, &change.new] {
+        // delete completed there, so its absence removes the local row. An
+        // update that moved the row's key keeps its new key only while the
+        // primary lacks the old one too: a primary that still holds the old
+        // key has the row there, and a kept new key would be a second copy.
+        let mut old_at: Option<usize> = None;
+        for (new_image, row) in [(false, &change.old), (true, &change.new)] {
             if row.is_empty() {
                 continue;
             }
             let values: Vec<SqlValue> = key.iter().map(|&i| row[i].clone()).collect();
+            let keep_on_empty = match old_at {
+                _ if change.op != Op::Update => KeepOnEmpty::No,
+                Some(j) if new_image && targets.get(j).is_some_and(|t| t.3 != values) => {
+                    KeepOnEmpty::IfAbsent(j)
+                }
+                _ => KeepOnEmpty::Yes,
+            };
             let target = (
                 change.table.clone(),
                 all_columns.clone(),
@@ -1269,8 +1290,15 @@ fn repair(
                 values,
                 keep_on_empty,
             );
-            if !targets.contains(&target) {
-                targets.push(target);
+            let at = match targets.iter().position(|t| *t == target) {
+                Some(at) => at,
+                None => {
+                    targets.push(target);
+                    targets.len() - 1
+                }
+            };
+            if !new_image {
+                old_at = Some(at);
             }
         }
     }
@@ -1290,8 +1318,14 @@ fn repair(
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
     let mut kept_unlanded = 0usize;
+    let absent: Vec<bool> = fetched.iter().map(Vec::is_empty).collect();
     for ((table, columns, names, values, keep_on_empty), rows) in targets.iter().zip(fetched) {
-        if rows.is_empty() && *keep_on_empty {
+        let keep = match *keep_on_empty {
+            KeepOnEmpty::No => false,
+            KeepOnEmpty::Yes => true,
+            KeepOnEmpty::IfAbsent(old) => absent.get(old).copied().unwrap_or(false),
+        };
+        if rows.is_empty() && keep {
             kept_unlanded += 1;
             continue;
         }

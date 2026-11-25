@@ -53,6 +53,7 @@ fn write_lane_settings(
         alias,
         None,
         cwd,
+        payload.pointer("/node").and_then(Value::as_str),
     )
 }
 

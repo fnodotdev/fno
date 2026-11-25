@@ -1,4 +1,5 @@
-//! Move a session bundle to another computer: a pairing code, or a file.
+//! Send or receive a session-transcript bundle between machines: a pairing
+//! code, or a file. Moving a whole live session is `fno agent session move`.
 //!
 //! `transcript send <session-id>` bundles the transcript with its origin
 //! record and offers it over a magic-wormhole pairing code; `--file <path>`
@@ -149,8 +150,24 @@ fn relay_hints() -> Vec<transit::RelayHint> {
 
 fn print_code(code: &Code) {
     println!("Wormhole code: {code}");
-    println!("On the other computer, run: fno agent transcript receive '{code}'");
+    println!("On the other computer, run: fno agent registry transcript receive '{code}'");
     println!("Waiting for the receiver...");
+}
+
+/// The advertised spelling, in one place: every printed line names the
+/// registry form, never the bare alias the deprecation shim still answers.
+fn usage_lines() -> [&'static str; 2] {
+    [
+        "usage: fno agent registry transcript send <session-id> [--file <path>]",
+        "       fno agent registry transcript receive <code|path>",
+    ]
+}
+
+/// A lone help request: every argument is `-h` or `--help`. The same
+/// convention the do-resume door uses, so `send --help --file x` still
+/// parses as arguments rather than flipping to help.
+fn is_help_args(args: &[String]) -> bool {
+    !args.is_empty() && args.iter().all(|a| a == "-h" || a == "--help")
 }
 
 /// Locate one session's transcript and name the store it lives in. One
@@ -195,6 +212,10 @@ fn expand_eq(rest: &[String]) -> Vec<String> {
 }
 
 async fn run_send(rest: &[String]) -> i32 {
+    if is_help_args(rest) {
+        println!("{}", usage_lines()[0]);
+        return 0;
+    }
     let mut it = expand_eq(rest).into_iter();
     let mut sid = String::new();
     let mut file_dest: Option<PathBuf> = None;
@@ -254,7 +275,9 @@ async fn run_send(rest: &[String]) -> i32 {
         return match std::fs::write(&dest, &envelope) {
             Ok(()) => {
                 println!("bundle: {}", dest.display());
-                println!("Move it any way you like, then: fno agent transcript receive <path>");
+                println!(
+                    "Move it any way you like, then: fno agent registry transcript receive <path>"
+                );
                 0
             }
             Err(e) => {
@@ -302,6 +325,10 @@ async fn run_send(rest: &[String]) -> i32 {
 }
 
 async fn run_receive(rest: &[String]) -> i32 {
+    if is_help_args(rest) {
+        println!("{}", usage_lines()[1]);
+        return 0;
+    }
     let arg = expand_eq(rest).join(" ");
     if arg.is_empty() {
         eprintln!("transcript receive: a wormhole code or a bundle path is required");
@@ -476,8 +503,10 @@ fn place_bundle(meta: &BundleMeta, transcript: &[u8], origin: Option<SessionOrig
     0
 }
 
-/// The native `fno agent transcript` entry: a fresh runtime at the binary
-/// edge, since the role dispatch is sync.
+/// The native `fno agent registry transcript` entry: a fresh runtime at the
+/// binary edge, since the role dispatch is sync. The bare `fno agent
+/// transcript` alias forwards here through the deprecation shim, so this
+/// door serves both spellings.
 pub fn run(rest: &[std::ffi::OsString]) -> i32 {
     let rest: Vec<String> = rest
         .iter()
@@ -486,21 +515,29 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
     match tokio::runtime::Runtime::new() {
         Ok(rt) => rt.block_on(run_transcript(&rest)),
         Err(e) => {
-            eprintln!("fno agent transcript: {e}");
+            eprintln!("fno agent registry transcript: {e}");
             1
         }
     }
 }
 
-/// `fno agent transcript send|receive` - move a session bundle over a
-/// pairing code, or through a plain file. No daemon, no registry write.
+/// `fno agent registry transcript send|receive` - send or receive a
+/// session-transcript bundle over a pairing code, or through a plain file.
+/// No daemon, no registry write.
 pub async fn run_transcript(rest: &[String]) -> i32 {
+    if is_help_args(rest) {
+        for line in usage_lines() {
+            println!("{line}");
+        }
+        return 0;
+    }
     match rest.first().map(String::as_str) {
         Some("send") => run_send(&rest[1..]).await,
         Some("receive") => run_receive(&rest[1..]).await,
         _ => {
-            eprintln!("usage: fno agent transcript send <session-id> [--file <path>]");
-            eprintln!("       fno agent transcript receive <code|path>");
+            for line in usage_lines() {
+                eprintln!("{line}");
+            }
             2
         }
     }

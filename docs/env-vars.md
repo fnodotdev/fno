@@ -267,7 +267,6 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_SESSION_PID` | rs | The launcher-stamped pid half of the session-proof pair; must be a positive, live pid or the pair is ignored (spawn_context.rs stamp_pid_is_live). |
 | `FNO_SIDECAR_EVERY_MS` | rs | Test seam: milliseconds the fleet sidecar's rewrite throttle and the mux server's refresh timer both run at (default 30000); a zero or unparseable value reads the default. It shortens the cadence for the e2e that proves an unattended machine keeps publishing. |
 | `FNO_SIDECAR_SOCKET` | rs | Overrides the MCP sidecar's socket path (default `$XDG_RUNTIME_DIR/fno/sidecar.sock`, else the state dir's `sidecar.sock`). The client's lazy-start forwards it to the spawned sidecar, so a caller asking for a non-default path never races the default. Set by callers and tests; read at `crates/fno-agent/src/runtime/mcp/sidecar.rs` (`socket_path`). |
-| `FNO_SKIP_MIGRATION` | rs | crates/fno/src/setup/path_migration.rs run_if_needed |
 | `FNO_SNAPSHOT_GATE` | rs | The spawn-gate answer a `--view org-block` snapshot paints, as inline JSON. Unset, the snapshot runs the live probe. |
 | `FNO_SNAPSHOT_LANES` | rs | Path to a saved `fno doctor lanes` reading that a `--view org-block` snapshot paints. Unset, the snapshot runs the live fold. |
 | `FNO_SNAPSHOT_METER` | rs | The capacity state a snapshot paints in the meter row, glance and modal, as inline JSON. Unset, the snapshot reads the machine's capacity file. |
@@ -281,7 +280,6 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_SPAWN_TAKE_OVER` | rs | Refusal marker only: nothing sets it, so a read means a forgery or a stale leak, and the compose door refuses the spawn. The take-over reason rides the compose answer, never the environment. |
 | `FNO_SPAWN_TRIGGER` | rs | unclear: crates/fno-agent/src/spawn/pane_spawn/mod.rs:1440 |
 | `FNO_STATE_DIR` | rs | Pins fno's config state root: `state_dir` and `locks_dir` read it ahead of their config/`$HOME` defaults, and the Rust default graph path and the backlog porcelain reads serve from it ahead of config. `accounts::credentials::seal` sets it around a forwarded HOME so a spawned worker's graph, ledger, and locks stay on the parent's root. |
-| `FNO_STATE_ROOT_INVENTORY_DOC` | rs | Overrides the inventory doc the state-root drift reading parses (tests and custom installs); empty falls through to `<state-root>/install/plugin-stage/fno/docs/state-root-inventory.md`, then the legacy `<state-root>/plugin-stage` copy during migration (crates/fno-agent/src/runtime/state_root_drift.rs). |
 | `FNO_STORE_EXEC_LOG` | rs | Opt-in request log for sizing a shared store: set to a file path and each request appends one JSON line. Unset, the lane pays nothing. |
 | `FNO_STORE_KEEPER_DRIFT_CHECK_SECS` | rs | unclear: crates/fno-agent/src/backlog/graph_keeper.rs:654 |
 | `FNO_STORE_KEEPER_IDLE_SECS` | rs | unclear: crates/fno-agent/src/backlog/graph_keeper.rs:115 |

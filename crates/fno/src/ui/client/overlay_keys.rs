@@ -638,6 +638,7 @@ pub(super) async fn create_keys(
                                 &ClientMsg::Command(Command::NewSquad {
                                     name: name.to_string(),
                                     origin,
+                                    project: None,
                                 }),
                             )
                             .await

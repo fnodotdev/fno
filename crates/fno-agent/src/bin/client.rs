@@ -283,6 +283,12 @@ fn run_transport_doors(args: &[String]) {
             &args[1..],
         ));
     }
+    // `user-hours`: refusal-or-ok JSON read of `[user.working_hours]`.
+    if args.first().map(String::as_str) == Some("user-hours") {
+        fno_agent::usage_events::exit_cli(fno_agent::agents_config::run_user_hours(
+            args.get(1..).unwrap_or_default(),
+        ));
+    }
     // `terminals`: the delivered-terminal vocabulary JSON read; Python's
     // ledger promotion gate and scoreboard fold read it like the roster.
     if args.first().map(String::as_str) == Some("terminals") {

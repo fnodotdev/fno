@@ -25,7 +25,7 @@ Decision ladder per open lane:
 
 1. Reset under `min_wait_minutes` (default 30): hold, `reason=short-reset`.
 2. Reset unknown: ask. Never auto-move on an unmeasured window.
-3. `mode=auto`, or now inside `sleep_hours`: act on all members.
+3. `mode=auto`, or the user is away (outside `[user.working_hours]`): act on all members.
 4. Otherwise ask. One `operator_question` row names the lane, the reset, and every member. Nothing moves until `fno agent admit provider-cap decide <lane> --answer all|some:<ids>|wait` records an answer. A question that outlives its reset closes `superseded-by-reset`.
 
 Destination: walk the spawn grid via `fallback_chain::resolve`, skipping the capped lane. Usage is refreshed first. Stale or exhausted after refresh is not a destination. With no healthy destination: `wait reason=no-healthy-destination`.
@@ -45,7 +45,7 @@ The ladder, one step per tick (120s), with state in `<home>/provider-cap/return-
 2. Resume ONE canary: the first candidate by name (capped, not held, not spawn-confirmed into a successor).
 3. Hold a survive window of `canary_survive_minutes` (default 15).
 4. When the newest assistant entry postdates the resume and carries no new 429, the canary survived. `cap_unknown` or a missing member reads `unknown`. So does no turn since the resume. `unknown` blocks every further resume for that epoch, with one operator notice.
-5. In `ask` mode outside sleep hours, announce through `fno agent mail admin team --scope all` first. Then hold a 10-minute veto before anything else resumes. `fno agent admit provider-cap decide <lane> --answer wait` holds the rest for as long as the answer stands.
+5. In `ask` mode while the user is at work, announce through `fno agent mail admin team --scope all` first. Then hold a 10-minute veto before anything else resumes. `fno agent admit provider-cap decide <lane> --answer wait` holds the rest for as long as the answer stands.
 6. Otherwise resume the remaining candidates one per tick until the journal reads `return: complete`.
 
 A canary that hits a new 429 reopens the lane. The quota lock gains a fresh future reset, and the leave ladder owns the new strand. The watchdog never wakes on a passed window. Its verdict reads `429 window passed; return owned by provider-cap` ([fleet-watchdog.md](fleet-watchdog.md)).
@@ -57,11 +57,17 @@ A canary that hits a new 429 reopens the lane. The quota lock gains a fresh futu
 enabled = false            # the actor's own arm; independent of recovery.watchdog
 mode = "ask"               # ask | auto
 min_wait_minutes = 30      # a reset closer than this is waited out
-sleep_hours = ""           # "23:00-07:00" (IANA zone below); empty = never asleep
-sleep_timezone = ""        # IANA name; empty = local
 canary_survive_minutes = 15
 quorum = 2
+
+[user]
+timezone = "America/Los_Angeles"   # IANA name; empty = the machine's zone
+
+[user.working_hours]               # HH:MM-HH:MM lists; outside them the user is away
+mon = ["09:00-17:00"]
+sat = []                           # an empty list is away all day; so is a missing day
 ```
+The `[user]` table replaces the old `provider_cap.sleep_hours` and `sleep_timezone` keys. With no `[user.working_hours]` table the user is never away. A bad value refuses at load and names the file and line.
 
 The return ladder's grace lives under `[recovery]`: `provider_outage_reset_grace_seconds` (default and floor 120).
 

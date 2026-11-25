@@ -974,11 +974,10 @@ pub(crate) fn measure_provider_outages(
     report
 }
 
-/// `<state_dir>/recovery/provider-outages.json`.
+/// `provider-outages.json` in the `recovery` folder the layout table places
+/// (`<state_dir>/state/recovery`), read from the legacy folder until it folds.
 pub fn journal_path() -> PathBuf {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    crate::agents_config::state_dir(&cwd)
-        .unwrap_or_else(|| PathBuf::from(".fno"))
-        .join("recovery")
-        .join("provider-outages.json")
+    let state = crate::agents_config::state_dir(&cwd).unwrap_or_else(|| PathBuf::from(".fno"));
+    crate::state_layout::place_in(&state, "recovery", "provider-outages.json")
 }
