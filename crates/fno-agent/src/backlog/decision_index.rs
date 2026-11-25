@@ -902,7 +902,7 @@ pub fn timed_lifecycle(
 }
 
 /// The node id a row's expiry names by exact id, stated or defaulted.
-fn expiry_node_id(row: &Value) -> Option<String> {
+fn expiry_node_id(row: &Value, seq_prefix: Option<&str>) -> Option<String> {
     if let Some(expiry) = row.get("expiry_ref").filter(|r| r.is_object()) {
         return match <Expiry as serde::Deserialize>::deserialize(expiry) {
             Ok(Expiry::Node { node_id }) => Some(node_id),
@@ -913,7 +913,7 @@ fn expiry_node_id(row: &Value) -> Option<String> {
         return None;
     }
     let subject = RowFacts::of(row).subject.unwrap_or("").trim();
-    crate::law_match::matches_node_id_shape(subject).then(|| subject.to_string())
+    crate::law_match::matches_node_id_shape_under(subject, seq_prefix).then(|| subject.to_string())
 }
 
 /// Drop every row whose expiry has fired, for the readers that serve live
@@ -929,8 +929,12 @@ pub fn drop_expired(index: &mut Index, graph: &Path) {
             .and_then(|e| timed_lifecycle(e, now))
             .map_or(true, |(lc, _)| lc != "expired")
     });
-    let ids: std::collections::BTreeSet<String> =
-        index.rows.iter().filter_map(expiry_node_id).collect();
+    let seq_prefix = super::node_ref::sequential_prefix();
+    let ids: std::collections::BTreeSet<String> = index
+        .rows
+        .iter()
+        .filter_map(|row| expiry_node_id(row, seq_prefix.as_deref()))
+        .collect();
     if ids.is_empty() || !graph.exists() {
         return;
     }
@@ -955,9 +959,9 @@ pub fn drop_expired(index: &mut Index, graph: &Path) {
             }
         }
     }
-    index
-        .rows
-        .retain(|row| expiry_node_id(row).map_or(true, |id| !closed.contains(&id)));
+    index.rows.retain(|row| {
+        expiry_node_id(row, seq_prefix.as_deref()).map_or(true, |id| !closed.contains(&id))
+    });
 }
 
 /// The laws of an index, newest first.
