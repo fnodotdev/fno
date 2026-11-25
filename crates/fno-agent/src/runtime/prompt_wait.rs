@@ -382,6 +382,41 @@ impl Waiting {
     }
 }
 
+/// The same action denied this many times for one node stops the follow-up
+/// turns: the worker would only re-ask it.
+const REPEAT_DENIALS: u32 = 2;
+/// A denial older than this no longer counts toward a repeat.
+const REPEAT_WINDOW_MS: i64 = 24 * 3_600_000;
+
+/// Count one more denial of `action` for `node` and return the total inside
+/// the window. Kept per node under the agents home, outside `prompt-wait/`,
+/// whose files the watch deletes when a wait ends.
+fn denial_count(home: &AgentsHome, node: &str, action: &str, now: i64) -> Result<u32, String> {
+    let dir = home.root().join("prompt-denials");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let safe: String = node
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let path = dir.join(format!("{safe}.json"));
+    let mut seen: std::collections::BTreeMap<String, (u32, i64)> = std::fs::read(&path)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    seen.retain(|_, (_, first)| now - *first <= REPEAT_WINDOW_MS);
+    let entry = seen.entry(action.to_string()).or_insert((0, now));
+    entry.0 += 1;
+    let count = entry.0;
+    state::write_json_atomic(&path, &seen).map_err(|e| e.to_string())?;
+    Ok(count)
+}
+
 fn load_once(home: &AgentsHome, registry: &mut Option<Registry>, first_error: &mut Option<String>) {
     if registry.is_some() {
         return;
@@ -475,14 +510,41 @@ fn settle_denials(
                         .and_then(|e| e.node.clone())
                 });
             if let Some(node) = node {
-                let argv = follow_up_argv(w, &node);
-                let (code, _out, err) = runner(&argv, "");
-                if code != 0 {
-                    first_error.get_or_insert(format!(
-                        "follow-up turn to {} failed: {}",
-                        w.name,
-                        err.trim()
-                    ));
+                let action = w.screen_fp.clone().unwrap_or_else(|| w.waiting_for.clone());
+                match denial_count(home, &node, &action, now) {
+                    Ok(count) if count >= REPEAT_DENIALS => {
+                        let store = crate::provider_cap::questions_path(home);
+                        let key = format!("prompt repeated {node} {action}");
+                        let text = format!(
+                            "Node {node}: worker {} hit the same {} {count} times and was denied each time. No more follow-up turns go out. The worker stays idle until a person decides.",
+                            w.name, w.waiting_for
+                        );
+                        if let Err(e) = crate::fleet_task::file_once(
+                            &store,
+                            SENDER,
+                            &key,
+                            &w.cwd,
+                            &text,
+                            None,
+                            Some(&node),
+                        ) {
+                            first_error.get_or_insert(e);
+                        }
+                    }
+                    Ok(_) => {
+                        let argv = follow_up_argv(w, &node);
+                        let (code, _out, err) = runner(&argv, "");
+                        if code != 0 {
+                            first_error.get_or_insert(format!(
+                                "follow-up turn to {} failed: {}",
+                                w.name,
+                                err.trim()
+                            ));
+                        }
+                    }
+                    Err(e) => {
+                        first_error.get_or_insert(e);
+                    }
                 }
             }
             if let Err(e) = w.persist(home) {
@@ -865,5 +927,40 @@ mod tests {
         let line = raw[0].last().unwrap();
         assert!(line.starts_with("/fno:target x-77 "), "{line}");
         assert!(line.contains("route that needs no approval"), "{line}");
+    }
+
+    #[test]
+    fn the_same_action_denied_twice_for_a_node_gets_no_more_follow_ups_and_one_board_task() {
+        let rig = Rig::new();
+        rig.asleep.set(true);
+        rig.pass(1_000_000).unwrap();
+        rig.pass(1_060_000).unwrap();
+        rig.pass(1_120_000).unwrap();
+        assert_eq!(rig.typed.borrow().len(), 3, "every wait is still denied");
+        let raw = rig
+            .sent
+            .borrow()
+            .iter()
+            .filter(|a| a.contains(&"--raw".to_string()))
+            .count();
+        assert_eq!(raw, 1, "only the first denial restarts the worker");
+        let store = crate::provider_cap::questions_path(&rig.home);
+        let repeats = crate::fleet_task::open_tasks(&store)
+            .unwrap()
+            .iter()
+            .filter(|t| t.key.starts_with("prompt repeated x-77"))
+            .count();
+        assert_eq!(repeats, 1, "one board task, however many repeats");
+    }
+
+    #[test]
+    fn denials_older_than_a_day_no_longer_count_as_a_repeat() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = AgentsHome::at(temp.path().join("agents"));
+        assert_eq!(denial_count(&home, "x-1", "fp", 0).unwrap(), 1);
+        assert_eq!(denial_count(&home, "x-1", "fp", 60_000).unwrap(), 2);
+        assert_eq!(denial_count(&home, "x-1", "other", 60_000).unwrap(), 1);
+        let later = REPEAT_WINDOW_MS + 120_000;
+        assert_eq!(denial_count(&home, "x-1", "fp", later).unwrap(), 1);
     }
 }
