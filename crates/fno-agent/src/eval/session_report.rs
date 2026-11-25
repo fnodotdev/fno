@@ -1512,8 +1512,8 @@ fn stamp_row_words(params: &mut Value, claimed: bool) {
             == Some("1"),
         no_row,
     );
-    // A print run typed by hand keeps a headless row: nobody types into it
-    // and it prints in the shell that started it, so the sideline shows none of it.
+    // A print run typed by hand files as headless, so its row stays off the
+    // sideline: nobody types into it, and it prints in the shell that started it.
     let hand_print = !claimed
         && crate::claude_ask::typed_print_run(
             agent_self,
