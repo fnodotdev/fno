@@ -725,12 +725,12 @@ pub fn uninstall() -> Result<UninstallReceipt, String> {
     }
     // The manifest is removed last so an interrupted uninstall is resumable.
     let _ = std::fs::remove_file(legacy_manifest_path(&conf));
-    match std::fs::remove_file(manifest_path(&conf)) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-            return Err(format!("opencode uninstall: {e}"));
-        }
-        _ => {}
-    }
+    std::fs::remove_file(manifest_path(&conf))
+        .or_else(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => Ok(()),
+            _ => Err(e),
+        })
+        .map_err(|e| format!("opencode uninstall: {e}"))?;
     Ok(UninstallReceipt {
         action: "uninstall",
         status: if kept.is_empty() {
