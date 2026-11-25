@@ -254,7 +254,7 @@ fn decision_rows_from(index: &[Value], have: &std::collections::HashSet<String>)
                 format!("{}: {decision}", shown_subject(&subject))
             };
             let (session_id, actor) = split_actor(s_field(r, "decided_by"));
-            Some(FeedRow {
+            let mut row = FeedRow {
                 ts,
                 kind: "decision_recorded".into(),
                 session_id,
@@ -262,9 +262,18 @@ fn decision_rows_from(index: &[Value], have: &std::collections::HashSet<String>)
                 r#ref: Some(id),
                 actor,
                 ..FeedRow::default()
-            })
+            };
+            stamp(&mut row);
+            Some(row)
         })
         .collect()
+}
+
+/// The area and cursor every emitted row carries. These rows join after
+/// `project` stamps its own, so each leg that appends rows stamps them here.
+fn stamp(r: &mut FeedRow) {
+    r.area = area_of(&r.kind).to_string();
+    r.cursor = cursor_of(r);
 }
 
 /// `rows` plus the index decisions the journal missed, ascending by ts. A
@@ -1113,10 +1122,7 @@ pub fn project(
         &lead_names,
         &spawn_names,
     );
-    for r in &mut rows {
-        r.area = area_of(&r.kind).to_string();
-        r.cursor = cursor_of(r);
-    }
+    rows.iter_mut().for_each(stamp);
     Projection {
         rows,
         skipped_lines,
@@ -1888,29 +1894,52 @@ fn mail_escalation_text(
         until_ms: until_epoch.map(|u| u as i64 * 1000),
         ..crate::event_store::EventQuery::of_types(&["mail_escalation"])
     };
+    let dirs: Vec<std::fs::DirEntry> = dirs.flatten().collect();
+    // One store open per space is the leg's whole cost: 899 spaces measured
+    // 16 s of wall on 2 s of CPU under fleet load. The opens wait, so they
+    // overlap on a few threads; rows sort after the join.
+    let workers = 8usize.min(dirs.len().max(1));
+    let chunk = dirs.len().div_ceil(workers).max(1);
+    let query = &query;
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = dirs
+            .chunks(chunk)
+            .map(|part| {
+                scope.spawn(move || {
+                    part.iter()
+                        .map(|d| space_escalations(d, query))
+                        .collect::<String>()
+                })
+            })
+            .collect();
+        handles.into_iter().filter_map(|h| h.join().ok()).collect()
+    })
+}
+
+/// One space's `mail_escalation` rows as JSON lines, each with the space's
+/// repository path as `cwd` when it decodes to a real directory.
+fn space_escalations(dir: &std::fs::DirEntry, query: &crate::event_store::EventQuery) -> String {
+    let journal = dir.path().join("events.jsonl");
+    let Ok(text) = crate::event_store::journal_text_checked(&journal, query) else {
+        return String::new();
+    };
+    let decoded = dir.file_name().to_string_lossy().replace('-', "/");
+    let cwd = std::path::Path::new(&decoded)
+        .is_dir()
+        .then(|| Value::String(decoded.clone()));
     let mut out = String::new();
-    for dir in dirs.flatten() {
-        let journal = dir.path().join("events.jsonl");
-        let Ok(text) = crate::event_store::journal_text_checked(&journal, &query) else {
+    for line in text.lines() {
+        let Ok(mut v) = serde_json::from_str::<Value>(line.trim()) else {
             continue;
         };
-        let decoded = dir.file_name().to_string_lossy().replace('-', "/");
-        let cwd = std::path::Path::new(&decoded)
-            .is_dir()
-            .then(|| Value::String(decoded.clone()));
-        for line in text.lines() {
-            let Ok(mut v) = serde_json::from_str::<Value>(line.trim()) else {
-                continue;
-            };
-            if v.get("type").and_then(Value::as_str) != Some("mail_escalation") {
-                continue;
-            }
-            if let (Some(cwd), Some(row)) = (&cwd, v.as_object_mut()) {
-                row.insert("cwd".into(), cwd.clone());
-            }
-            out.push_str(&v.to_string());
-            out.push('\n');
+        if v.get("type").and_then(Value::as_str) != Some("mail_escalation") {
+            continue;
         }
+        if let (Some(cwd), Some(row)) = (&cwd, v.as_object_mut()) {
+            row.insert("cwd".into(), cwd.clone());
+        }
+        out.push_str(&v.to_string());
+        out.push('\n');
     }
     out
 }
@@ -2416,6 +2445,10 @@ mod tests {
         assert_eq!(extra.len(), 1);
         assert_eq!(extra[0].r#ref.as_deref(), Some("d-2"));
         assert_eq!(extra[0].title, "law: ship it");
+        // AC4: an index-only decision carries its area and a cursor that
+        // round-trips, so it pages and filters like every journal row.
+        assert_eq!(extra[0].area, "mail");
+        assert_eq!(parse_cursor(&extra[0].cursor).unwrap()[4], "d-2");
 
         let questions = [
             r#"{"ts":"2026-09-02T17:00:00Z","type":"operator_question","source":"t","data":{"question_id":"q-1","question":"ask"}}"#,
