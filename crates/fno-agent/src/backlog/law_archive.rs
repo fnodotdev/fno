@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 
 use crate::backlog::decisions::SCOPE_AMEND_EVENT;
 use crate::decision_index::{
-    default_archive_path, default_state_path, derive_rows, drop_expired, read_archive_rows,
+    de, default_archive_path, default_state_path, derive_rows, drop_expired, read_archive_rows,
     read_store_rows, read_store_rows_raw, row_key,
 };
 use crate::graph_get::default_graph_path;

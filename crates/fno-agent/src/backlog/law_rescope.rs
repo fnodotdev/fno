@@ -8,7 +8,7 @@
 use serde_json::{json, Value};
 
 use crate::backlog::decisions::SCOPE_AMEND_EVENT;
-use crate::decision_index;
+use crate::decision_index::{self, de};
 use crate::law_match::{
     all_decision_rows, append_decision, autonomy_ask_gate, chat_may_retire, door_refuse,
     is_decision_id, now_iso, project_events_journal, queue_ruling, resolve_caller, row_id,
@@ -218,6 +218,111 @@ fn rescope_data(
         crate::identity::stamp_person(map);
     }
     Ok(data)
+}
+
+/// The proposal page: every live law, its effective reach, the proposed
+/// reach and a one-line reason. Printed, so the user approves on one pass;
+/// the approved rows go back through the same door one rescope at a time.
+fn run_proposal() -> i32 {
+    let (rows, _damaged) = match all_decision_rows() {
+        Ok(pair) => pair,
+        Err(reason) => {
+            eprintln!(
+                "fno inbox decisions rescope: the decision index could not be read ({reason})"
+            );
+            return 1;
+        }
+    };
+    let rows = scope_filtered_rows(rows);
+    for line in proposal_lines(&rows) {
+        println!(
+            "| {} | {} | {} | {} | {} |",
+            line.id, line.subject, line.current, line.proposed, line.reason
+        );
+    }
+    0
+}
+
+/// One page row.
+pub(crate) struct ProposalLine {
+    id: String,
+    subject: String,
+    current: String,
+    proposed: String,
+    reason: String,
+}
+
+/// The pure proposal: the reach each live law carries and the reach it is
+/// proposed to carry, with the evidence the proposal cites. Explicit rows
+/// propose their own value; unscoped rows propose from their text.
+pub(crate) fn proposal_lines(rows: &[Value]) -> Vec<ProposalLine> {
+    let retired = decision_index::retirement_map(rows);
+    let mut lines = Vec::new();
+    for row in rows.iter().filter(|r| {
+        !crate::law_match::is_retraction_row(r)
+            && decision_index::is_law(r)
+            && !retired.contains_key(&row_id(r).to_lowercase())
+    }) {
+        let id = row_id(row).to_string();
+        let subject = row_subject(row).trim().to_string();
+        let current = decision_index::row_scope(row).to_string();
+        let (proposed, reason) = proposed_reach(row, &current);
+        lines.push(ProposalLine {
+            id,
+            subject,
+            current,
+            proposed,
+            reason,
+        });
+    }
+    lines.sort_by(|a, b| b.current.cmp(&a.current).then_with(|| a.id.cmp(&b.id)));
+    lines
+}
+
+/// The heuristic: explicit stamps keep their value; unscoped rows propose
+/// from text evidence, defaulting to `project:fno`, which is the reach the
+/// reader already applies to a pre-scope row.
+fn proposed_reach(row: &Value, current: &str) -> (String, String) {
+    let explicit = row.get(de::REACH).is_some()
+        || row
+            .get(de::SCOPE)
+            .and_then(Value::as_str)
+            .map(|v| decision_index::is_reach_value(v))
+            .unwrap_or(false);
+    if explicit {
+        return (current.to_string(), "already explicit".to_string());
+    }
+    let subject = row_subject(row).to_lowercase();
+    let text = format!(
+        "{} {}",
+        subject,
+        row.get(de::DECISION)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_lowercase()
+    );
+    if text.contains("fnh") {
+        return ("project:fnh".to_string(), "text names fnh".to_string());
+    }
+    if text.contains("fno-books") || text.split_whitespace().any(|w| w == "books") {
+        return (
+            "project:fno-books".to_string(),
+            "text names fno-books".to_string(),
+        );
+    }
+    if decision_index::is_fleet_subject(&subject) {
+        return (
+            "global".to_string(),
+            "fleet subject reads global today; stamp it".to_string(),
+        );
+    }
+    if let Some(word) = FLEET_WORDS.iter().find(|w| text.contains(*w)) {
+        return ("global".to_string(), format!("text says {word}"));
+    }
+    (
+        "project:fno".to_string(),
+        "pre-scope row recorded in fno; reach made explicit".to_string(),
+    )
 }
 
 #[cfg(test)]

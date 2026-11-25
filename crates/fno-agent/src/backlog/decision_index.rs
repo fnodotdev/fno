@@ -7,7 +7,6 @@
 //! variant measured 67.0s, which breaks every hook budget the read runs
 //! inside.
 
-use self::de;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
