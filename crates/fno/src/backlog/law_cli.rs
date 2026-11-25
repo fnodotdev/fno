@@ -136,60 +136,11 @@ pub fn run(args: &[OsString]) -> i32 {
             }
             law_exec(&buf, Attended::No)
         }
-        "retract" | "restore" | "renew" => {
-            let argv: Vec<String> = rest
-                .iter()
-                .filter_map(|a| a.to_str().map(str::to_owned))
-                .collect();
-            let request = serde_json::json!({
-                "mode": sub,
-                "argv": argv,
-            })
-            .to_string();
-            // Attended: the request rides argv and the worker inherits this
-            // terminal as stdin, so the door's operator proof is the real
-            // tty - the one credential a piped lane can never carry.
-            law_exec(&request, Attended::Yes)
-        }
-        "history" | "recheck" | "upkeep" => {
-            let argv: Vec<String> = rest
-                .iter()
-                .filter_map(|a| a.to_str().map(str::to_owned))
-                .collect();
-            let request = serde_json::json!({
-                "mode": sub,
-                "argv": argv,
-            })
-            .to_string();
-            law_exec(&request, Attended::No)
-        }
-        // Attended: rescoping a law's reach is the user's call, so the
-        // door's proof is the caller's own terminal, the one credential a
-        // piped lane cannot carry.
-        "rescope" => {
-            let argv: Vec<String> = rest
-                .iter()
-                .filter_map(|a| a.to_str().map(str::to_owned))
-                .collect();
-            let request = serde_json::json!({
-                "mode": sub,
-                "argv": argv,
-            })
-            .to_string();
-            law_exec(&request, Attended::Yes)
-        }
-        "archive" => {
-            let argv: Vec<String> = rest
-                .iter()
-                .filter_map(|a| a.to_str().map(str::to_owned))
-                .collect();
-            let request = serde_json::json!({
-                "mode": sub,
-                "argv": argv,
-            })
-            .to_string();
-            law_exec(&request, Attended::No)
-        }
+        // Attended: the request rides argv and the worker inherits this
+        // terminal as stdin, so the door's operator proof is the real
+        // tty - the one credential a piped lane can never carry.
+        "retract" | "restore" | "renew" | "rescope" => law_exec_argv(sub, rest, Attended::Yes),
+        "history" | "recheck" | "upkeep" | "archive" => law_exec_argv(sub, rest, Attended::No),
         _ => {
             eprintln!(
                 "error: expected a subcommand (set | stage | match | retract | restore | renew | history | recheck | upkeep | rescope | archive)"
@@ -197,6 +148,21 @@ pub fn run(args: &[OsString]) -> i32 {
             2
         }
     }
+}
+
+/// One argv-shaped ride: collect the command line, shape the request and
+/// hand it to the worker lane. The doors that take a plain argv share it.
+fn law_exec_argv(mode: &str, rest: &[OsString], attended: Attended) -> i32 {
+    let argv: Vec<String> = rest
+        .iter()
+        .filter_map(|a| a.to_str().map(str::to_owned))
+        .collect();
+    let request = serde_json::json!({
+        "mode": mode,
+        "argv": argv,
+    })
+    .to_string();
+    law_exec(&request, attended)
 }
 
 /// A `merge-freeze:` law writes no freeze record, so the merge owner read it
