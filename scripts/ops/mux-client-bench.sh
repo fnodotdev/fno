@@ -267,7 +267,9 @@ fmt_stats() { # fmt_stats "p50 p90 min max n" -> "123 / 456 (n=20)"
 # `RESULT FAIL <reason>` line; everything else is swallowed so the
 # sample stays clean.
 run_tui_expect() { # run_tui_expect <tcl-file>
-  expect -f "$1" 2>&1 | sed -n 's/^RESULT //p' | tail -1
+  # `|| true`: a tcl error exits expect 1, and under pipefail that would end
+  # the whole bench silently instead of recording a FAIL sample.
+  expect -f "$1" 2>&1 | sed -n 's/^RESULT //p' | tail -1 || true
 }
 
 # ---- metrics ----
@@ -328,7 +330,9 @@ expect {
   timeout { puts "RESULT FAIL timeout_first_paint"; exit 0 }
   eof { puts "RESULT FAIL eof_first_paint"; exit 0 }
 }
-exec $env(BENCH_FNO) mux pane focus $env(BENCH_LONG_ID) --server $env(BENCH_SESSION)
+if {[catch {exec $env(BENCH_FNO) mux pane focus $env(BENCH_LONG_ID) --server $env(BENCH_SESSION)} err]} {
+  puts "RESULT FAIL focus: [string map [list "\n" " "] $err]"; exit 0
+}
 sleep 0.5
 set t0 [clock milliseconds]
 send "\x02"
@@ -465,7 +469,9 @@ expect {
 }
 set timeout $env(BENCH_TIMEOUT)
 set t0 [clock milliseconds]
-exec $env(BENCH_FNO) mux pane focus $env(BENCH_BUSY_ID) --server $env(BENCH_SESSION)
+if {[catch {exec $env(BENCH_FNO) mux pane focus $env(BENCH_BUSY_ID) --server $env(BENCH_SESSION)} err]} {
+  puts "RESULT FAIL focus: [string map [list "\n" " "] $err]"; exit 0
+}
 set got ""
 expect {
   -re {[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]} { set got $expect_out(0,string) }
@@ -508,7 +514,9 @@ expect {
   timeout { puts "RESULT FAIL timeout_first_paint"; exit 0 }
   eof { puts "RESULT FAIL eof_first_paint"; exit 0 }
 }
-exec $env(BENCH_FNO) mux pane focus $env(BENCH_BUSY_ID) --server $env(BENCH_SESSION)
+if {[catch {exec $env(BENCH_FNO) mux pane focus $env(BENCH_BUSY_ID) --server $env(BENCH_SESSION)} err]} {
+  puts "RESULT FAIL focus: [string map [list "\n" " "] $err]"; exit 0
+}
 sleep 0.5
 set marker "kpz[clock clicks]"
 set t0 [clock milliseconds]
