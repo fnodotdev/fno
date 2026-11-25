@@ -236,16 +236,16 @@ mod tests {
         let op = |s: &str| op_for(&s.split(' ').collect::<Vec<_>>());
         assert_eq!(op("backlog get x-9999").unwrap(), json!({"op": "node-get"}));
         assert_eq!(
-            op("do pr create --title t --base main").unwrap()["title"],
-            json!("t")
+            op("do pr create --title t --base main").unwrap(),
+            json!({"op": "pr-create", "title": "t", "body": ""})
         );
         assert_eq!(
             op("agent mail send lead hello there").unwrap(),
             json!({"op": "mail", "kind": "status", "text": "hello there"})
         );
         assert_eq!(
-            op("do plan settle U3 measured it").unwrap()["text"],
-            json!("measured it")
+            op("do plan settle U3 measured it").unwrap(),
+            json!({"op": "plan-settle", "item": "U3", "text": "measured it"})
         );
         for refused in [
             "do pr merge 12",

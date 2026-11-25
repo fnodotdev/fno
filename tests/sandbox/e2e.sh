@@ -412,7 +412,7 @@ export CLAUDE_PLUGIN_ROOT="$REPO_ROOT"
 export FNO_HOME="$WORK/fno-home"
 mkdir -p "$FNO_HOME"
 node="$(cd "$repo" && "$BIN/fno" backlog idea "sandbox loop e2e" --audience internal --why e2e \
-  --done-means e2e --source-kind operator_request 2>&1 | grep -oE '\b[a-z]{1,8}-[0-9a-f]{4,8}\b' | head -1)"
+  --done-means e2e --source-kind organic 2>&1 | grep -oE '\b[a-z]{1,8}-[0-9a-f]{4,8}\b' | head -1)"
 required "the loop node files" test -n "$node"
 loop_out="$WORK/loop.out"
 loop_err="$WORK/loop.err"

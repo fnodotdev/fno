@@ -640,10 +640,8 @@ pub fn receipt_worktree(receipt: &str) -> Option<PathBuf> {
 
 /// The plan a host manifest binds, if any.
 pub fn manifest_plan(worktree: &Path) -> Option<PathBuf> {
-    let slice = crate::paths::worktree_space_dir_opt(worktree)?;
-    let text = std::fs::read_to_string(slice.join("target-state.md"))
-        .or_else(|_| std::fs::read_to_string(worktree.join(".fno/target-state.md")))
-        .ok()?;
+    let manifest = crate::target_orient::manifest_path(worktree)?;
+    let text = std::fs::read_to_string(manifest).ok()?;
     crate::loopcheck::scan_manifest_field(&text, "plan_path")
         .filter(|p| !p.is_empty() && p != "null")
         .map(PathBuf::from)
