@@ -720,6 +720,15 @@ pub fn mail_token(id: &str) -> String {
     }
 }
 
+/// The number token a mail hash id already holds, `fmail-87`: a read that
+/// never mints, for listings with many rows.
+pub fn mail_token_held(id: &str) -> Option<String> {
+    if !fno_mail::address::is_mail_hash(id) {
+        return None;
+    }
+    read_store(|conn| mail_number_in(conn?, id, &current_store())).map(|n| format!("fmail-{n}"))
+}
+
 /// The hash id a typed or delivered mail token names. `fmail-87` reads the
 /// store; a hash, a legacy `msg-` id or an unnumbered number passes through
 /// as typed, so a lookup that never held the number fails where it always did.

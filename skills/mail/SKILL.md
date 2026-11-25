@@ -36,7 +36,7 @@ local command.
 
 ## The delivered turn: one header line, then the whole body
 
-Delivered mail opens with one backticked line, `` `@sender · fmail-<12 hex> · summary` ``, and the full message follows, wholly visible. The summary is the body's first sentence capped at 12 words. The `@` lives inside inline code on purpose: a bare `@` in harness text can open a mention picker or read as an address, so each harness's contract row (`mail_header_at` in `harness_capabilities.toml`) rules which spelling its composer gets, set by the composer check. Old `<fno_mail>` turns in existing transcripts still resolve everywhere.
+Delivered mail opens with one backticked line, `` `@sender · fmail-<N> · summary` ``, and the full message follows, wholly visible. `<N>` is the message's short number. `fno agent mail reply` and `ack` take the number or the old `fmail-<12 hex>` hash. The summary is the body's first sentence capped at 12 words. The `@` lives inside inline code on purpose: a bare `@` in harness text can open a mention picker or read as an address, so each harness's contract row (`mail_header_at` in `harness_capabilities.toml`) rules which spelling its composer gets, set by the composer check. Old `<fno_mail>` turns in existing transcripts still resolve everywhere.
 
 ## The delivery model (so the commands make sense)
 
