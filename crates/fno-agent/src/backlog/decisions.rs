@@ -10,6 +10,10 @@ use std::path::Path;
 
 pub(crate) const DECISION_EVENT: &str = "operator_decision";
 const RETRACTION_EVENT: &str = "decision_retracted";
+/// A law's reach amended in place: one small event, the law keeps its id and
+/// text, and readers apply the newest amendment (node x-85f4). No
+/// superseded twin row ever appears.
+pub const SCOPE_AMEND_EVENT: &str = "decision_scope_amended";
 
 pub fn ddl() -> String {
     format!(
@@ -360,7 +364,10 @@ pub(crate) fn insert_event(connection: &Connection, event: &Value) -> Result<Str
         .get("type")
         .and_then(Value::as_str)
         .ok_or_else(|| "event has no type".to_string())?;
-    if event_type != DECISION_EVENT && event_type != RETRACTION_EVENT {
+    if event_type != DECISION_EVENT
+        && event_type != RETRACTION_EVENT
+        && event_type != SCOPE_AMEND_EVENT
+    {
         return Err(format!("unsupported event type {event_type:?}"));
     }
     let data = event
@@ -378,6 +385,11 @@ pub(crate) fn insert_event(connection: &Connection, event: &Value) -> Result<Str
             .and_then(Value::as_str)
             .filter(|id| !id.is_empty())
             .ok_or_else(|| "decision_retracted has no retraction_id".to_string())?,
+        SCOPE_AMEND_EVENT => data
+            .get("amendment_id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| "decision_scope_amended has no amendment_id".to_string())?,
         _ => unreachable!(),
     };
     // An event with no ts takes the row's own write time. DO NOTHING names
@@ -680,5 +692,51 @@ mod tests {
             .unwrap()
             .expect("the exact fixed id reads its own ruling");
         assert_eq!(decision_id_of(exact), "d-fixed");
+    }
+
+    fn scope_amend(amendment_id: &str, target: &str, reach: &str) -> Value {
+        serde_json::json!({
+            "ts": "2026-11-24T00:00:00Z",
+            "type": SCOPE_AMEND_EVENT,
+            "source": "target",
+            "data": {
+                "amendment_id": amendment_id,
+                "target_decision_id": target,
+                "reach": reach,
+            },
+        })
+    }
+
+    #[test]
+    fn a_scope_amend_records_by_its_amendment_id_or_refuses() {
+        let temp = TempDir::new().unwrap();
+        let connection = crate::backlog::open(&temp.path().join("graph.json")).unwrap();
+        record(&connection, &event("d-aaaa0001")).unwrap();
+        record(
+            &connection,
+            &scope_amend("d-cccc0003", "d-aaaa0001", "global"),
+        )
+        .unwrap();
+        let rows = read_rows(&connection).unwrap().0;
+        assert_eq!(rows.len(), 2, "the amend is its own row, no twin");
+        assert_eq!(
+            rows[1].get("_event_type").and_then(Value::as_str),
+            Some(SCOPE_AMEND_EVENT)
+        );
+        // A replay of the same amendment dedupes on the event id.
+        record(
+            &connection,
+            &scope_amend("d-cccc0003", "d-aaaa0001", "global"),
+        )
+        .unwrap();
+        assert_eq!(read_rows(&connection).unwrap().0.len(), 2);
+        // No amendment id is the damaged shape, refused at write.
+        let bad = serde_json::json!({
+            "ts": "2026-11-24T00:00:01Z",
+            "type": SCOPE_AMEND_EVENT,
+            "data": {"target_decision_id": "d-aaaa0001", "reach": "global"},
+        });
+        let err = insert_event(&connection, &bad).unwrap_err();
+        assert!(err.contains("no amendment_id"), "{err}");
     }
 }

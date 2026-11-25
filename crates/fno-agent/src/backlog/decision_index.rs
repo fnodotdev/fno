@@ -71,6 +71,94 @@ pub fn graph_journal(graph: &Path) -> PathBuf {
     root.join("decisions.jsonl")
 }
 
+/// The cold archive beside the journal (node x-85f4): the same state root
+/// the journal sits in, named `decisions-archive.jsonl`. The default reads
+/// skip it; the citation gate reads it (x-85f4's resolvability rule).
+pub fn graph_archive(graph: &Path) -> PathBuf {
+    graph_journal(graph).with_file_name("decisions-archive.jsonl")
+}
+
+/// The archive file for the machine's default store.
+pub fn default_archive_path() -> PathBuf {
+    default_state_path("decisions-archive.jsonl")
+}
+
+/// The archive's rows, flattened the same way the journal's are. A missing
+/// or unreadable archive is empty: the archive is a projection, and its
+/// absence never breaks a read (the fail-open posture of every reader).
+pub fn read_archive_rows(jsonl: &Path) -> (Vec<Value>, usize) {
+    let Ok(text) = std::fs::read_to_string(jsonl) else {
+        return (Vec::new(), 0);
+    };
+    flatten_envelopes(&text)
+}
+
+/// The archive's row keys: the set every default read skips.
+fn archive_skip_keys(jsonl: &Path) -> std::collections::HashSet<(String, String)> {
+    read_archive_rows(jsonl).0.iter().map(row_key).collect()
+}
+
+/// Apply the store's scope amendments: the newest amendment per target
+/// rewrites that row's `reach` stamp (never the legacy `scope` stamp, which
+/// carries audience values), then the amendment rows drop out, because they
+/// never render as rows. Pure over the given rows.
+pub fn apply_scope_amendments(rows: &mut Vec<Value>) {
+    let mut newest: BTreeMap<String, ((String, String), String)> = BTreeMap::new();
+    for row in rows.iter().filter(|r| {
+        r.get("_event_type").and_then(Value::as_str)
+            == Some(crate::backlog::decisions::SCOPE_AMEND_EVENT)
+    }) {
+        let Some(target) = row.get("target_decision_id").and_then(Value::as_str) else {
+            continue;
+        };
+        if target.is_empty() {
+            continue;
+        }
+        let Some(reach) = row.get("reach").and_then(Value::as_str) else {
+            continue;
+        };
+        if reach.is_empty() {
+            continue;
+        }
+        let rank = (
+            row.get("ts")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            row.get("amendment_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+        );
+        let key = target.to_lowercase();
+        if newest.get(&key).is_none_or(|(seen, _)| *seen < rank) {
+            newest.insert(key, (rank, reach.to_string()));
+        }
+    }
+    if newest.is_empty() {
+        return;
+    }
+    for row in rows.iter_mut() {
+        if row.get("_event_type").and_then(Value::as_str) != Some("operator_decision") {
+            continue;
+        }
+        let id = row
+            .get("decision_id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_lowercase();
+        if let Some((_, reach)) = newest.get(&id) {
+            if let Some(obj) = row.as_object_mut() {
+                obj.insert("reach".to_string(), json!(reach));
+            }
+        }
+    }
+    rows.retain(|row| {
+        row.get("_event_type").and_then(Value::as_str)
+            != Some(crate::backlog::decisions::SCOPE_AMEND_EVENT)
+    });
+}
+
 /// The envelope flatten: JSONL text into flattened rows plus the damaged
 /// count. The index stores event ENVELOPES (`{type, ts, data}`) that the
 /// Python reader flattens (data fields at the top plus `_event_type` and
@@ -93,15 +181,20 @@ fn flatten_envelopes(text: &str) -> (Vec<Value>, usize) {
             damaged += 1;
             continue;
         };
-        if etype != "operator_decision" && etype != "decision_retracted" {
+        if etype != "operator_decision"
+            && etype != "decision_retracted"
+            && etype != crate::backlog::decisions::SCOPE_AMEND_EVENT
+        {
             continue;
         }
         // The Python reader marks an envelope whose required data field is
-        // empty as damaged (discarded), not as a live or retiring row.
-        let required = if etype == "operator_decision" {
-            "decision_id"
-        } else {
-            "target_decision_id"
+        // empty as damaged (discarded), not as a live or retiring row. A
+        // scope amend without its target applies to nothing, so its id is
+        // the damaged shape, like a retraction with no target.
+        let required = match etype {
+            "operator_decision" => "decision_id",
+            crate::backlog::decisions::SCOPE_AMEND_EVENT => "target_decision_id",
+            _ => "target_decision_id",
         };
         if data
             .get(required)
@@ -277,9 +370,34 @@ fn row_key(row: &Value) -> (String, String) {
 /// `admit_proven`, so every law reader sees only proven wide law.
 pub fn read_store_rows(graph: &Path, jsonl: &Path) -> Result<(Vec<Value>, usize), String> {
     let (mut rows, damaged) = read_store_rows_raw(graph, jsonl)?;
+    apply_scope_amendments(&mut rows);
+    let skip = archive_skip_keys(&graph_archive(graph));
+    if !skip.is_empty() {
+        rows.retain(|row| !skip.contains(&row_key(row)));
+    }
     let withheld = crate::identity::trusted_user_key()
         .map_or(0, |user_key| admit_proven(&mut rows, &user_key));
     WITHHELD.with(|count| count.set(withheld));
+    Ok((rows, damaged))
+}
+
+/// The physical store rows (no archive skip, no reach apply) plus the
+/// archive's rows, deduped by row_key: every stored row a citation may name
+/// (x-85f4's resolvability rule). Unproven rows keep the same admit pass the
+/// plain read applies, so a forged id cannot pass the gate by archiving.
+pub fn read_store_rows_everything(
+    graph: &Path,
+    jsonl: &Path,
+) -> Result<(Vec<Value>, usize), String> {
+    let (mut rows, mut damaged) = read_store_rows_raw(graph, jsonl)?;
+    let (archived, arch_damaged) = read_archive_rows(&graph_archive(graph));
+    damaged += arch_damaged;
+    let known: std::collections::HashSet<(String, String)> = rows.iter().map(row_key).collect();
+    for row in archived {
+        if !known.contains(&row_key(&row)) {
+            rows.push(row);
+        }
+    }
     Ok((rows, damaged))
 }
 
