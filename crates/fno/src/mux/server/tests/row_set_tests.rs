@@ -138,7 +138,8 @@ fn a_headless_row_stays_off_the_sideline() {
     old.substrate = Some("headless".into());
     old.exited = true;
     core.agents = vec![once, thread, watched, old];
-    let names: Vec<&str> = core.agent_rows().iter().map(|r| r.name.as_str()).collect();
+    let rows = core.agent_rows();
+    let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
     assert_eq!(names, ["think-thread", "watched-once"]);
 }
 
