@@ -350,13 +350,15 @@ mod tests {
         assert_eq!(row.node_basis, None);
 
         // A print run's mint reads headless, a plain session's none. The arm
-        // drives the mint's parameter: the door's own read is macOS-only.
+        // drives the mint's parameter: the door's own read is macOS-only. The
+        // two ids differ in their first eight chars: the mint names the row
+        // after them, and the registry refuses a repeated row name.
         let registry_path = crate::paths::AgentsHome::from_env().registry_json();
         let minted = |sid: &str, print_run: bool| {
             mint_and_upsert(&registry_path, sid, "/work/proj", "x-aaaa", print_run)
         };
         minted("55554444-3333-4222-8111-000000000001", true).unwrap();
-        minted("55554444-3333-4222-8111-000000000002", false).unwrap();
+        minted("66664444-3333-4222-8111-000000000002", false).unwrap();
         let after = crate::state::load_registry(&registry_path).unwrap();
         let substrate = |sid: &str| {
             after
@@ -366,7 +368,7 @@ mod tests {
                 .and_then(|e| e.substrate.clone())
         };
         let print_run = substrate("55554444-3333-4222-8111-000000000001");
-        let plain_run = substrate("55554444-3333-4222-8111-000000000002");
+        let plain_run = substrate("66664444-3333-4222-8111-000000000002");
         assert_eq!(print_run.as_deref(), Some("headless"));
         assert_eq!(plain_run, None);
         std::env::remove_var("FNO_STATE_DIR");
