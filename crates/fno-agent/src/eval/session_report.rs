@@ -1487,21 +1487,23 @@ pub async fn run_report_dispatch(rest: &[String], home: &AgentsHome) -> i32 {
 fn stamp_row_words(params: &mut Value, claimed: bool) {
     let agent_self = params.get("agent_self").and_then(Value::as_str);
     let harness = params.as_object().and_then(|p| str_field(p, "harness"));
-    let env = |key: &str| std::env::var(key).ok();
-    let no_row = agent_self.is_some() && env(NO_ROW_ENV).as_deref() == agent_self;
+    let no_row = agent_self.is_some() && std::env::var(NO_ROW_ENV).ok().as_deref() == agent_self;
     // A claimed launch record makes this an fno child even without an
     // FNO_AGENT_SELF, so only an unclaimed print-mode run drops its row.
     let print_mode = !claimed
         && print_mode_run(
             agent_self,
             harness.as_deref(),
-            env("CLAUDE_CODE_ENTRYPOINT").as_deref(),
+            std::env::var("CLAUDE_CODE_ENTRYPOINT").ok().as_deref(),
         );
     // A row a person asked to watch keeps its sideline place.
     let watch_row = crate::claude_ask::watch_row_run(
         agent_self,
         harness.as_deref(),
-        env(crate::claude_ask::SHOW_ROW_ENV).as_deref() == Some("1"),
+        std::env::var(crate::claude_ask::SHOW_ROW_ENV)
+            .ok()
+            .as_deref()
+            == Some("1"),
         no_row,
     );
     // A print run typed by hand keeps a headless row: nobody types into it
@@ -1510,7 +1512,9 @@ fn stamp_row_words(params: &mut Value, claimed: bool) {
         && crate::claude_ask::typed_print_run(
             agent_self,
             harness.as_deref(),
-            env("CLAUDE_PID").and_then(|pid| pid.parse().ok()),
+            std::env::var("CLAUDE_PID")
+                .ok()
+                .and_then(|pid| pid.parse().ok()),
         );
     // An object write, never an index: the clippy ratchet refuses a new one.
     if let Some(obj) = params.as_object_mut() {
