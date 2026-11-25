@@ -780,8 +780,8 @@ pub(crate) fn guarded_push(ctx: &PushCtx, head: &str) -> PushOutcome {
             Err((_, msg)) => return PushOutcome::PushFailed(msg),
         },
     };
-    if let Err(err) = push_once(ctx, &target) {
-        return PushOutcome::PushFailed(err);
+    if let Err(outcome) = push_once(ctx, &target) {
+        return outcome;
     }
     stamp_push(ctx);
     PushOutcome::Pushed {
@@ -812,7 +812,7 @@ fn push_branch(ctx: &PushCtx) -> Result<String, PushOutcome> {
 }
 
 /// One push of HEAD, or of the bound source, to `target`.
-fn push_once(ctx: &PushCtx, target: &str) -> Result<(), String> {
+fn push_once(ctx: &PushCtx, target: &str) -> Result<(), PushOutcome> {
     // Push exactly once, to the resolved remote branch, upstream or not.
     // A bare `git push` cannot be used here: push.default=simple refuses
     // when the branch's upstream name differs from its own name (a branch
@@ -848,7 +848,7 @@ fn push_once(ctx: &PushCtx, target: &str) -> Result<(), String> {
     if ok {
         Ok(())
     } else {
-        Err(err)
+        Err(PushOutcome::PushFailed(err))
     }
 }
 
