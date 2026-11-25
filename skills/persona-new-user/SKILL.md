@@ -37,7 +37,7 @@ A change with no file on the surface gets verdict `skip`, with no findings.
 
 ## Record the verdict
 
-Write one JSON file per reviewed head at `~/.fno/evals/personas/new-user/<head-sha>.json`, beside the judge rows in `~/.fno/evals/labels.jsonl`:
+Write one JSON file per reviewed head at `~/.fno/db/evals/personas/new-user/<head-sha>.json`, beside the judge rows in `~/.fno/db/evals/labels.jsonl`:
 
 ```json
 {"persona": "new-user", "change": "<pr url or diff path>", "head": "<sha>",

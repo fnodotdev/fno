@@ -69,7 +69,7 @@ A repo with more than 1,000 open issues is truncated, as is the listing cap.
 
 ## The sidecar
 
-The sidecar lives at `~/.fno/sidecar/<url-encoded-id>.json`.
+The sidecar lives at `~/.fno/db/sidecar/<url-encoded-id>.json`.
 It resolves through `fno.paths`, one file per work item, keyed by the opaque id.
 Placement is beside `graph.json` and `ledger.json`.
 It inherits the existing `config.paths` and `state_dir` override with no new machinery.

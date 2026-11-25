@@ -195,15 +195,36 @@ const LOCK_BEARING_FOLDERS: &[&str] = &[
 
 /// Fold candidates that drain instead of folding. A live reader may retain a
 /// child's absolute path, so the mover never renames it. New writes use the
-/// row's destination; cargo-build residue and plugin-stage swap debris have
-/// safe park rules, while live entries stay until their owner drains them.
-const DRAIN_ONLY_FOLDERS: &[&str] = &["cargo-build", "plugin-stage", "route-settings"];
+/// row's destination; cargo-build residue, plugin-stage swap debris and a
+/// route-settings file no writer has touched past the age limit have safe
+/// park rules, while live entries stay until their owner drains them. A
+/// `screens` shot stays until no question row names it.
+const DRAIN_ONLY_FOLDERS: &[&str] = &["cargo-build", "plugin-stage", "route-settings", "screens"];
 pub(crate) const LEGACY_DRAIN_AGE_SECS: u64 = 3 * 24 * 60 * 60;
 
 /// Fold candidates that hold message or journal lines. A clashing child never
 /// parks here: it merges (`state_layout_merge`), and a destination that does
 /// not exist yet takes the whole folder in one rename.
 const MERGE_FOLDERS: &[&str] = &["bus", "chats", "history"];
+
+/// Children a fold leaves at the legacy path, with the holder a pending
+/// reading names. The sealed eval worker's Claude login is a Keychain item
+/// whose service name hashes the config folder's path, so a moved folder
+/// reads a different item and the login is lost.
+const PINNED_CHILDREN: &[(&str, &str, &str)] = &[(
+    "evals",
+    "claude-config",
+    "the sealed eval login is keyed by evals/claude-config's path",
+)];
+
+/// True while the setup wizard's lock names a live process: the wizard
+/// holds its report and answers paths open for the whole run.
+fn wizard_lock_live(sidecar: &Path) -> bool {
+    std::fs::read_to_string(sidecar.join("wizard-lock"))
+        .ok()
+        .and_then(|text| text.trim().parse::<u32>().ok())
+        .is_some_and(crate::evals_arm::pid_alive)
+}
 
 /// The anchor's file name. Frozen: the lock, its queue, the keeper socket and
 /// the note journal all derive from it, so an older binary and a newer one
@@ -814,7 +835,10 @@ fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
     // row still names must stay put until its prune. Only the emptied shell
     // goes.
     if DRAIN_ONLY_FOLDERS.contains(&row.legacy.as_str()) {
-        if matches!(row.legacy.as_str(), "cargo-build" | "plugin-stage") {
+        if matches!(
+            row.legacy.as_str(),
+            "cargo-build" | "plugin-stage" | "route-settings"
+        ) {
             let remaining = drain_legacy_children(root, &legacy, stamp, apply);
             if !remaining.is_empty() {
                 return Status::Pending(format!(
@@ -861,6 +885,9 @@ fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
     // pass retries.
     if name == "claim-aux" && !lane_dirs_empty(&legacy) {
         return Status::Pending("a waiter holds a ticket".to_string());
+    }
+    if name == "sidecar" && wizard_lock_live(&legacy) {
+        return Status::Pending("wizard-lock names a live setup run".to_string());
     }
     // The probe fds stay open through the fold: a lock another writer takes
     // between the probe and a rename cannot split a child from its holder.
@@ -918,7 +945,12 @@ fn fold_dir_children(root: &Path, row: &Row, stamp: &str, legacy: &Path, new: &P
     for child in children.flatten() {
         let from = child.path();
         let target = new.join(child.file_name());
-        let status = if !occupied(&target) {
+        let pinned = PINNED_CHILDREN
+            .iter()
+            .find(|(folder, kid, _)| row.legacy == *folder && child.file_name() == *kid);
+        let status = if let Some((_, _, holder)) = pinned {
+            Status::Pending((*holder).to_string())
+        } else if !occupied(&target) {
             match crate::state_layout_undo::carry(root, stamp, &from, &target) {
                 Ok(()) => Status::Moved,
                 Err(e) => Status::Refused(format!("refused: {e}")),
@@ -1109,6 +1141,15 @@ fn drain_legacy_children(root: &Path, legacy: &Path, stamp: &str, apply: bool) -
         let park_reason = match folder {
             "cargo-build" => match quiet_untagged_tree(&path, now) {
                 Ok(true) => Some("untagged cargo residue quiet past the age limit"),
+                Ok(false) => None,
+                Err(reason) => {
+                    eprintln!("state-root drain: kept {} ({reason})", path.display());
+                    remaining.push(name);
+                    continue;
+                }
+            },
+            "route-settings" if path.is_file() => match quiet_tree(&path, now) {
+                Ok(true) => Some("route-settings file quiet past the age limit"),
                 Ok(false) => None,
                 Err(reason) => {
                     eprintln!("state-root drain: kept {} ({reason})", path.display());
@@ -1708,7 +1749,8 @@ mod tests {
         }
 
         let rows = parse_table(
-            "cargo-build\tcache/cargo-build\tdir\tdaemon\nplugin-stage\tinstall/plugin-stage\tdir\tdaemon\n",
+            "cargo-build\tcache/cargo-build\tdir\tdaemon\nplugin-stage\tinstall/plugin-stage\tdir\tdaemon\n\
+             route-settings\tstate/route-settings\tdir\tdaemon\nevals\tdb/evals\tdir\tdaemon\n",
         )
         .unwrap();
         let live = tmp_root("drain-live");
@@ -1718,9 +1760,24 @@ mod tests {
         let stage_file = live.join("plugin-stage/fno/hooks/stop.sh");
         std::fs::create_dir_all(stage_file.parent().unwrap()).unwrap();
         std::fs::write(&stage_file, b"live hook\n").unwrap();
+        std::fs::create_dir_all(live.join("route-settings")).unwrap();
+        std::fs::write(live.join("route-settings/fresh.json"), b"{}").unwrap();
+        std::fs::create_dir_all(live.join("evals/claude-config")).unwrap();
+        std::fs::write(live.join("evals/claude-config/.claude.json"), b"{}").unwrap();
+        std::fs::write(live.join("evals/labels.jsonl"), b"{}\n").unwrap();
 
         let receipt = migrate_rows(&live, &rows, true, "live");
-        for name in ["cargo-build", "plugin-stage"] {
+        let evals = receipt
+            .iter()
+            .find(|entry| entry.legacy == "evals")
+            .unwrap();
+        assert!(
+            matches!(evals.status, Status::Pending(ref reason) if reason.contains("sealed eval login")),
+            "the sealed login's folder stays and names its holder: {evals:?}"
+        );
+        assert!(live.join("evals/claude-config/.claude.json").is_file());
+        assert!(live.join("db/evals/labels.jsonl").is_file());
+        for name in ["cargo-build", "plugin-stage", "route-settings"] {
             let row = receipt.iter().find(|entry| entry.legacy == name).unwrap();
             assert!(
                 matches!(row.status, Status::Pending(ref reason) if reason.starts_with("drains:")),
@@ -1744,9 +1801,12 @@ mod tests {
             std::fs::write(marker, b"stale swap residue\n").unwrap();
         }
         age_tree(&residue.join("plugin-stage"), old);
+        std::fs::create_dir_all(residue.join("route-settings")).unwrap();
+        std::fs::write(residue.join("route-settings/old.json"), b"{}").unwrap();
+        age_tree(&residue.join("route-settings"), old);
 
         let receipt = migrate_rows(&residue, &rows, true, "test");
-        for name in ["cargo-build", "plugin-stage"] {
+        for name in ["cargo-build", "plugin-stage", "route-settings"] {
             let row = receipt.iter().find(|entry| entry.legacy == name).unwrap();
             assert!(matches!(row.status, Status::Moved), "{row:?}");
             assert!(
@@ -1758,6 +1818,7 @@ mod tests {
         assert!(parked.join("fc").join("build/output").is_file());
         assert!(parked.join(".fno.new-old/marker").is_file());
         assert!(parked.join(".fno.old-old/marker").is_file());
+        assert!(parked.join("old.json").is_file());
         clean(&residue);
     }
 
@@ -1926,6 +1987,27 @@ mod tests {
         assert!(
             !quiet.entries.iter().any(|e| e.legacy.contains("(journal)")),
             "a root with no family file reports no journal entry"
+        );
+
+        // AC5-ERR: a question journal holding a row its store lacks stays
+        // at the root, and the pass reads pending naming the file.
+        let questions = root.join("questions.jsonl");
+        std::fs::write(
+            &questions,
+            format!("{{\"ts\":\"{ts}\",\"type\":\"operator_question\"}}\n"),
+        )
+        .unwrap();
+        let held = migrate(&root, true);
+        assert!(
+            held.entries
+                .iter()
+                .any(|e| e.legacy.contains("questions.jsonl")
+                    && matches!(e.status, Status::Pending(ref why) if why.contains("lacks"))),
+            "{held:?}"
+        );
+        assert!(
+            questions.is_file(),
+            "the file stays until a read ingests it"
         );
         match prior_home {
             Some(v) => std::env::set_var("FNO_AGENT_HOME", v),

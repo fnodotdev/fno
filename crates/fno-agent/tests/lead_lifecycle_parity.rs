@@ -90,7 +90,6 @@ fn world(events: &str) -> tempfile::TempDir {
     assert!(init.success());
     fs::copy(fixture("registry.json"), p.join("home/registry.json")).unwrap();
     fs::copy(fixture(events), p.join("project/events.jsonl")).unwrap();
-    fs::write(p.join("state/.path-migration-done"), "").unwrap();
     fs::write(
         p.join(".fno/config.toml"),
         "[work.workspaces.t]\nprojects = [{ name = \"fno\", path = \"/nonexistent\" }]\n",

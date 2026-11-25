@@ -30,7 +30,7 @@ The fold names its populations, and the report keeps them apart. Every number sa
 
    The report's header quotes the fold's `scope` object, so the reader sees which harnesses and roots the fold read. Exit 3 means no sessions in the window. Report that and stop.
 
-2. Judge the sampled sessions and write one facet file each: `~/.fno/intel/facets/<session>.json`, mode 0600. Judge only rows with `sampled: true`. They are idle and substantive by construction. Witnessed-turn sessions sample first, so the judged set reaches the conversations the user typed into. Judge only the turns a session row lists in `operator_turns`. Those are the witnessed turns. The fold's `sample.held_out_live` names live sessions with witnessed user turns the idle rule held out. The report carries that list as one line under the Sample heading. The `witness` receipt names the submits, the binds, and the sessions no submit row covers. Key the facet by session id + mtime + size (all three are on the fold's session row). A session whose key matches an existing facet is not re-judged. Skip it, so a resumed session re-enters the report instead of stranding on a stale cache. A matching facet that lacks the current question key gains only that one summary line:
+2. Judge the sampled sessions and write one facet file each: `~/.fno/db/intel/facets/<session>.json`, mode 0600. Judge only rows with `sampled: true`. They are idle and substantive by construction. Witnessed-turn sessions sample first, so the judged set reaches the conversations the user typed into. Judge only the turns a session row lists in `operator_turns`. Those are the witnessed turns. The fold's `sample.held_out_live` names live sessions with witnessed user turns the idle rule held out. The report carries that list as one line under the Sample heading. The `witness` receipt names the submits, the binds, and the sessions no submit row covers. Key the facet by session id + mtime + size (all three are on the fold's session row). A session whose key matches an existing facet is not re-judged. Skip it, so a resumed session re-enters the report instead of stranding on a stale cache. A matching facet that lacks the current question key gains only that one summary line:
 
    ```json
    {
@@ -50,7 +50,7 @@ The fold names its populations, and the report keeps them apart. Every number sa
 
    A cached facet needs both the key and the question to match. A judgment given under one question never judges another question's sample. A facet from another question (or a pre-question facet) reads `stale question` under `categories.unjudged`. Re-judge the session's friction for the current question and update the facet. Keep the other questions' summary lines.
 
-3. Cluster the sampled sessions' summary lines into 3 to 8 categories that answer the question. Each category carries a name, a one-line description, and at most 5 optional subcategories. Every judged session goes into exactly one category. Use `Other` for a session that fit none. Write `~/.fno/intel/runs/<date>-<question key>.json`, mode 0600, in this schema:
+3. Cluster the sampled sessions' summary lines into 3 to 8 categories that answer the question. Each category carries a name, a one-line description, and at most 5 optional subcategories. Every judged session goes into exactly one category. Use `Other` for a session that fit none. Write `~/.fno/db/intel/runs/<date>-<question key>.json`, mode 0600, in this schema:
 
    ```json
    {"schema": 1, "question": "<text>", "question_key": "<8 hex>",

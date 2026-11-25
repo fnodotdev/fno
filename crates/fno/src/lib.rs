@@ -125,9 +125,9 @@ pub use sessions::{
 pub use sessions::{session_move, transcript_transfer};
 #[cfg(feature = "app")]
 pub use setup::{
-    cli_hooks, gh_proxy, must_enable, path_migration, setup_attention_remote, setup_autowire,
-    setup_cmds, setup_daemon_agent, setup_detect, setup_messaging, setup_profile, setup_run,
-    setup_services, state_layout, wizard, wizard_term,
+    cli_hooks, gh_proxy, must_enable, setup_attention_remote, setup_autowire, setup_cmds,
+    setup_daemon_agent, setup_detect, setup_messaging, setup_profile, setup_run, setup_services,
+    state_layout, wizard, wizard_term,
 };
 #[cfg(feature = "app")]
 pub use ui::{
