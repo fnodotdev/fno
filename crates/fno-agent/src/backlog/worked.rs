@@ -1295,9 +1295,6 @@ fn worked_status<'a>(by_id: &BTreeMap<&str, &'a Value>, id: &str) -> &'a str {
 mod tests {
     use super::*;
 
-    // The fleet fold starts from fno's registry: a live claude spine row
-    // lists with an EMPTY vendor view (AC11), and a vendor row with no
-    // spine row is named vendor-only, never dropped silently (AC12).
     #[test]
     fn a_first_turn_mention_never_outranks_the_worktree_or_ledger_binding() {
         let some = |n: &str| Some(n.to_string());
@@ -1328,6 +1325,9 @@ mod tests {
         );
     }
 
+    // The fleet fold starts from fno's registry: a live claude spine row
+    // lists with an EMPTY vendor view (AC11), and a vendor row with no
+    // spine row is named vendor-only, never dropped silently (AC12).
     #[test]
     fn fleet_rows_start_from_the_registry_and_name_vendor_only_rows() {
         let _guard = crate::claims::test_env_lock()
