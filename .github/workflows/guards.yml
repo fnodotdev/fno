@@ -700,6 +700,13 @@ jobs:
         timeout-minutes: 5
         run: bash tests/ci/test_check_value_reads.sh
 
+      # The mux client and the fno-agent feed reader share one search
+      # grammar in fno-proto; a second copy fails here.
+      - name: One search grammar
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/ci/check-one-grammar.sh
+
       # Law d-fe66560a: top-level commands are not allowed at all, hidden ones
       # included. The fno-agent binary's action list may only shrink; the
       # command ratchet reads all of fno-agent as ONE baseline leaf, so nothing

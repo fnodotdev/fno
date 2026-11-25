@@ -143,6 +143,7 @@ pub mod decisions_cache;
 pub mod digest;
 pub mod epic_issue;
 pub mod feed;
+pub(crate) mod feed_serve;
 pub mod fleet_law;
 pub mod graph_get;
 pub mod graph_keeper;

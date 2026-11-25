@@ -254,7 +254,7 @@ fn decision_rows_from(index: &[Value], have: &std::collections::HashSet<String>)
                 format!("{}: {decision}", shown_subject(&subject))
             };
             let (session_id, actor) = split_actor(s_field(r, "decided_by"));
-            Some(FeedRow {
+            let mut row = FeedRow {
                 ts,
                 kind: "decision_recorded".into(),
                 session_id,
@@ -262,9 +262,18 @@ fn decision_rows_from(index: &[Value], have: &std::collections::HashSet<String>)
                 r#ref: Some(id),
                 actor,
                 ..FeedRow::default()
-            })
+            };
+            stamp(&mut row);
+            Some(row)
         })
         .collect()
+}
+
+/// The area and cursor every emitted row carries. These rows join after
+/// `project` stamps its own, so each leg that appends rows stamps them here.
+fn stamp(r: &mut FeedRow) {
+    r.area = area_of(&r.kind).to_string();
+    r.cursor = cursor_of(r);
 }
 
 /// `rows` plus the index decisions the journal missed, ascending by ts. A
@@ -1113,10 +1122,7 @@ pub fn project(
         &lead_names,
         &spawn_names,
     );
-    for r in &mut rows {
-        r.area = area_of(&r.kind).to_string();
-        r.cursor = cursor_of(r);
-    }
+    rows.iter_mut().for_each(stamp);
     Projection {
         rows,
         skipped_lines,
@@ -1653,6 +1659,7 @@ pub(crate) struct Prefilter {
 struct FeedArgs {
     json: bool,
     otlp: bool,
+    serve: bool,
     since_epoch: Option<u64>,
     until_epoch: Option<u64>,
     page: Page,
@@ -1663,6 +1670,7 @@ fn parse_args(rest: &[String]) -> Result<FeedArgs, String> {
     let mut args = FeedArgs {
         json: false,
         otlp: false,
+        serve: false,
         since_epoch: None,
         until_epoch: None,
         page: Page::default(),
@@ -1673,6 +1681,7 @@ fn parse_args(rest: &[String]) -> Result<FeedArgs, String> {
         match a.as_str() {
             "--json" | "-J" => args.json = true,
             "--otlp" => args.otlp = true,
+            "--serve" => args.serve = true,
             "--since-epoch" => {
                 args.since_epoch = Some(
                     it.next()
@@ -1719,6 +1728,9 @@ fn parse_args(rest: &[String]) -> Result<FeedArgs, String> {
     }
     if args.otlp && args.json {
         return Err("--otlp and --json cannot combine".into());
+    }
+    if args.serve && (args.json || args.otlp) {
+        return Err("--serve answers on its own pipe; it takes no --json or --otlp".into());
     }
     let live = |v: Option<String>| v.filter(|s| !s.is_empty());
     args.pre.node = live(args.pre.node);
@@ -1888,29 +1900,52 @@ fn mail_escalation_text(
         until_ms: until_epoch.map(|u| u as i64 * 1000),
         ..crate::event_store::EventQuery::of_types(&["mail_escalation"])
     };
+    let dirs: Vec<std::fs::DirEntry> = dirs.flatten().collect();
+    // One store open per space is the leg's whole cost: 899 spaces measured
+    // 16 s of wall on 2 s of CPU under fleet load. The opens wait, so they
+    // overlap on a few threads; rows sort after the join.
+    let workers = 8usize.min(dirs.len().max(1));
+    let chunk = dirs.len().div_ceil(workers).max(1);
+    let query = &query;
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = dirs
+            .chunks(chunk)
+            .map(|part| {
+                scope.spawn(move || {
+                    part.iter()
+                        .map(|d| space_escalations(d, query))
+                        .collect::<String>()
+                })
+            })
+            .collect();
+        handles.into_iter().filter_map(|h| h.join().ok()).collect()
+    })
+}
+
+/// One space's `mail_escalation` rows as JSON lines, each with the space's
+/// repository path as `cwd` when it decodes to a real directory.
+fn space_escalations(dir: &std::fs::DirEntry, query: &crate::event_store::EventQuery) -> String {
+    let journal = dir.path().join("events.jsonl");
+    let Ok(text) = crate::event_store::journal_text_checked(&journal, query) else {
+        return String::new();
+    };
+    let decoded = dir.file_name().to_string_lossy().replace('-', "/");
+    let cwd = std::path::Path::new(&decoded)
+        .is_dir()
+        .then(|| Value::String(decoded.clone()));
     let mut out = String::new();
-    for dir in dirs.flatten() {
-        let journal = dir.path().join("events.jsonl");
-        let Ok(text) = crate::event_store::journal_text_checked(&journal, &query) else {
+    for line in text.lines() {
+        let Ok(mut v) = serde_json::from_str::<Value>(line.trim()) else {
             continue;
         };
-        let decoded = dir.file_name().to_string_lossy().replace('-', "/");
-        let cwd = std::path::Path::new(&decoded)
-            .is_dir()
-            .then(|| Value::String(decoded.clone()));
-        for line in text.lines() {
-            let Ok(mut v) = serde_json::from_str::<Value>(line.trim()) else {
-                continue;
-            };
-            if v.get("type").and_then(Value::as_str) != Some("mail_escalation") {
-                continue;
-            }
-            if let (Some(cwd), Some(row)) = (&cwd, v.as_object_mut()) {
-                row.insert("cwd".into(), cwd.clone());
-            }
-            out.push_str(&v.to_string());
-            out.push('\n');
+        if v.get("type").and_then(Value::as_str) != Some("mail_escalation") {
+            continue;
         }
+        if let (Some(cwd), Some(row)) = (&cwd, v.as_object_mut()) {
+            row.insert("cwd".into(), cwd.clone());
+        }
+        out.push_str(&v.to_string());
+        out.push('\n');
     }
     out
 }
@@ -2101,15 +2136,9 @@ pub(crate) fn collect_window(
 /// The `fno-agent feed` command. A missing or unreadable store is not fatal: the
 /// rows the other store yielded still emit, with one stderr line naming the
 /// store skipped. Non-JSON output is one line per row, `ts kind node session title`.
-pub async fn run_feed(rest: &[String], home: &AgentsHome) -> i32 {
-    let args = match parse_args(rest) {
-        Ok(a) => a,
-        Err(msg) => {
-            eprintln!("fno-agent: {msg}");
-            return 2;
-        }
-    };
-
+/// Every leg the flags leave in, projected and ordered. The printed read
+/// and the held reader both start here.
+fn project_rows(args: &FeedArgs, home: &AgentsHome) -> Vec<FeedRow> {
     let (questions_raw, questions_note) = if leg_skipped(&args.pre, QUESTION_KINDS) {
         (String::new(), None)
     } else {
@@ -2209,6 +2238,32 @@ pub async fn run_feed(rest: &[String], home: &AgentsHome) -> i32 {
     if skipped_entries > 0 {
         eprintln!("fno-agent feed: skipped {skipped_entries} non-object graph entr(ies)");
     }
+    rows
+}
+
+/// The whole history, as the held reader holds it: every leg, no page and
+/// no prefilter.
+pub(crate) fn serve_rows(home: &AgentsHome) -> Vec<FeedRow> {
+    let Ok(args) = parse_args(&[]) else {
+        return Vec::new();
+    };
+    let rows = project_rows(&args, home);
+    filter_rows(rows, &Page::default(), &args.pre, None, None)
+}
+
+pub async fn run_feed(rest: &[String], home: &AgentsHome) -> i32 {
+    let args = match parse_args(rest) {
+        Ok(a) => a,
+        Err(msg) => {
+            eprintln!("fno-agent: {msg}");
+            return 2;
+        }
+    };
+
+    if args.serve {
+        return super::feed_serve::run(home);
+    }
+    let rows = project_rows(&args, home);
 
     if args.otlp {
         // A preview, never a send: the body is what a beat WOULD post, and
@@ -2416,6 +2471,12 @@ mod tests {
         assert_eq!(extra.len(), 1);
         assert_eq!(extra[0].r#ref.as_deref(), Some("d-2"));
         assert_eq!(extra[0].title, "law: ship it");
+        // AC4: an index-only decision carries its area and a cursor that
+        // round-trips, so it pages and filters like every journal row.
+        let index_only = extra.first().expect("one index-only decision");
+        assert_eq!(index_only.area, "mail");
+        let cursor = parse_cursor(&index_only.cursor).expect("the cursor parses");
+        assert_eq!(cursor.get(4).map(String::as_str), Some("d-2"));
 
         let questions = [
             r#"{"ts":"2026-09-02T17:00:00Z","type":"operator_question","source":"t","data":{"question_id":"q-1","question":"ask"}}"#,
