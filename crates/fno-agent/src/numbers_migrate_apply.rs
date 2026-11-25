@@ -1138,6 +1138,37 @@ fn undo_line(
     .map_err(MigrateError::from)
 }
 
+/// Take one text cell back while it reads what apply wrote. A cell a share
+/// take-back already put back reads its before value, and that is done too.
+fn undo_cell(
+    db: &Path,
+    table: &str,
+    column: &str,
+    rowid: i64,
+    before: &str,
+    after: &str,
+) -> Result<(), MigrateError> {
+    // The shared tables take their writes through the share path.
+    let conn = if shared_table(table) {
+        crate::backlog::open_holding_lock(db)?
+    } else {
+        Connection::open(db)?
+    };
+    let wrote = conn.execute(
+        &format!("UPDATE \"{table}\" SET \"{column}\" = ?1 WHERE rowid = ?2 AND \"{column}\" = ?3"),
+        params![before, rowid, after],
+    )?;
+    let held: Option<String> = conn
+        .query_row(
+            &format!("SELECT \"{column}\" FROM \"{table}\" WHERE rowid = ?1"),
+            params![rowid],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+    changed(wrote.max(usize::from(held.as_deref() == Some(before))))
+}
+
 fn undo_one(entry: &Undo) -> Result<(), MigrateError> {
     let open = |db: &Path| Connection::open(db);
     match entry {
@@ -1148,30 +1179,7 @@ fn undo_one(entry: &Undo) -> Result<(), MigrateError> {
             rowid,
             before,
             after,
-        } => {
-            // The shared tables take their writes through the share path.
-            let conn = if shared_table(table) {
-                crate::backlog::open_holding_lock(db)?
-            } else {
-                open(db)?
-            };
-            let wrote = conn.execute(
-                &format!(
-                    "UPDATE \"{table}\" SET \"{column}\" = ?1 WHERE rowid = ?2 AND \"{column}\" = ?3"
-                ),
-                params![before, rowid, after],
-            )?;
-            // A share take-back already put the primary's value back.
-            let held: Option<String> = conn
-                .query_row(
-                    &format!("SELECT \"{column}\" FROM \"{table}\" WHERE rowid = ?1"),
-                    params![rowid],
-                    |r| r.get::<_, Option<String>>(0),
-                )
-                .optional()?
-                .flatten();
-            changed(wrote.max(usize::from(held.as_deref() == Some(before.as_str()))))
-        }
+        } => undo_cell(db, table, column, *rowid, before, after),
         Undo::Line {
             db,
             table,

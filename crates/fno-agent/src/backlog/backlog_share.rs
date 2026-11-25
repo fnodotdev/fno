@@ -1278,7 +1278,9 @@ fn repair(
             let values: Vec<SqlValue> = key.iter().map(|&i| row[i].clone()).collect();
             let keep_on_empty = match old_at {
                 _ if change.op != Op::Update => KeepOnEmpty::No,
-                Some(j) if new_image && targets[j].3 != values => KeepOnEmpty::IfAbsent(j),
+                Some(j) if new_image && targets.get(j).is_some_and(|t| t.3 != values) => {
+                    KeepOnEmpty::IfAbsent(j)
+                }
                 _ => KeepOnEmpty::Yes,
             };
             let target = (
@@ -1321,7 +1323,7 @@ fn repair(
         let keep = match *keep_on_empty {
             KeepOnEmpty::No => false,
             KeepOnEmpty::Yes => true,
-            KeepOnEmpty::IfAbsent(old) => absent[old],
+            KeepOnEmpty::IfAbsent(old) => absent.get(old).copied().unwrap_or(false),
         };
         if rows.is_empty() && keep {
             kept_unlanded += 1;
