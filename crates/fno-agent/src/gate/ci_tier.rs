@@ -843,7 +843,7 @@ mod tests {
         // A custom gate name from config keeps its runs out of the fold too.
         assert_eq!(
             head_of(&[run(20, "my-gate", "completed", "success")], "my-gate.yml"),
-            head(&[], &[], false, 1, 1)
+            head(&[], &[], false, 0, 0)
         );
     }
 
