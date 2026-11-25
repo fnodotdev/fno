@@ -638,7 +638,57 @@ fn compose_body(inputs: &Inputs, scan: Axes, seam: &mut Seam) {
         return;
     }
     pane_bundle_stage(&mut stage, seam);
+    floor_stage(&stage, seam);
+    if seam.exit.is_some() {
+        return;
+    }
     assemble(&mut stage, seam);
+}
+
+/// `agents.profiles.<command>.min_band`: refuse a spawn whose resolved model
+/// bands below the floor, a typed pin included. No key, no read.
+fn floor_stage(stage: &Stage, seam: &mut Seam) {
+    let Some(floor) = stage.profile.and_then(|p| p.get("min_band")) else {
+        return;
+    };
+    let scan = &stage.scan;
+    let injected = seam
+        .inject
+        .windows(2)
+        .find(|w| w[0] == "--route")
+        .map(|w| w[1].clone());
+    let route = scan
+        .route_value
+        .clone()
+        .filter(|_| scan.explicit_route)
+        .or(injected);
+    let model = seam
+        .harness_model
+        .clone()
+        .or_else(|| crate::spawn_floor::fenced_model(&stage.inputs.argv))
+        .or_else(|| scan.model_value.clone().filter(|_| scan.has_model));
+    let vendor = scan.explicit_vendor.clone();
+    // A resume rides the resumed session's own model, which passed the floor
+    // at its own spawn.
+    if scan.has_resume && route.is_none() && model.is_none() && vendor.is_none() {
+        return;
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let rows = crate::route_gather::declared_rows(&cwd);
+    let (tiers, reach) = crate::route_gather::load_model_tiers();
+    let verdict = crate::spawn_floor::check(&crate::spawn_floor::Ask {
+        command: &stage.profile_command,
+        floor,
+        route: route.as_deref(),
+        model: model.as_deref(),
+        vendor: vendor.as_deref(),
+        rows: &rows,
+        tiers: &tiers,
+        reach: &reach,
+    });
+    if let Err(line) = verdict {
+        seam.refuse(line);
+    }
 }
 
 /// Profile-key resolution: the seed's command names the profile; an unknown

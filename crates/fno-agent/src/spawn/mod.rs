@@ -109,6 +109,7 @@ pub mod spawn_context;
 pub mod spawn_contract;
 pub mod spawn_cwd;
 pub mod spawn_edge;
+pub(crate) mod spawn_floor;
 pub mod spawn_gate;
 pub mod spawn_gate_admission;
 pub mod spawn_gate_command;
