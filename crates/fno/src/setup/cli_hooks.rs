@@ -638,7 +638,7 @@ pub fn install_grok(command: &str, hooks_dir: &Path) -> InstallResult {
             ..InstallResult::at(&path)
         };
     }
-    match write_json(&path, &Value::Object(data)) {
+    match write_json(&path, &data) {
         Ok(_) => InstallResult {
             changed: true,
             ..InstallResult::at(&path)
@@ -1217,7 +1217,8 @@ pub fn run_opts(o: &Opts) -> i32 {
                 .unwrap_or_else(|| home().join(".grok/hooks"));
             let res = install_grok(&script.display().to_string(), &dir);
             any_change |= res.changed;
-            let shown = dir.join("fno-session.json").display();
+            let shown_path = dir.join("fno-session.json");
+            let shown = shown_path.display();
             if let Some(note) = &res.note {
                 eprintln!("grok: error: {note} ({shown})");
                 failed = true;
