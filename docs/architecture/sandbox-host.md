@@ -49,7 +49,7 @@ The host stamps identity from the pipe a frame arrived on. A frame never carries
 
 ## A sandboxed worker in the target loop
 
-A spawn that carries `FNO_NODE` is a target worker. Before the clone, the relay runs the normal host start, `fno do target start <node> --no-merge`, for the sandbox session. That gives a host worktree off the default branch, the node claim held on the host, the manifest and the bound plan. The clone comes from that worktree, and its HEAD stays at the intake base. A spawn with no node binds nothing, and every loop op refuses.
+A spawn with `--node <id>` is a target worker. The spawn guard clears an inherited `FNO_NODE`, so only the flag binds a node. Before the clone, the relay runs the normal host start, `fno do target start <node> --no-merge`, for the sandbox session. That gives a host worktree off the default branch, the node claim held on the host, the manifest and the bound plan. The clone comes from that worktree, and its HEAD stays at the intake base. A spawn with no node binds nothing, and every loop op refuses.
 
 Inside, `fno` sees `FNO_AGENT_SANDBOXED` and opens no store. The loop's commands forward as one `sandbox.op` request each, and every other command refuses by name before anything runs. The guest checks the op again and sends it as one typed frame with a sequence number. The relay drops a repeated number, so a replay never runs a write twice. Each op runs on its own thread, so transcript and proxy frames never wait behind a push or a `gh` call.
 
