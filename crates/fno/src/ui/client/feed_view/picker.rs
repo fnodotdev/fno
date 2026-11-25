@@ -150,12 +150,28 @@ impl FeedPicker {
         keep: impl Fn(&FeedItem) -> bool,
         anchor: Anchor,
     ) -> Self {
+        Self::open_with_values(
+            col,
+            super::table::values(items, view, col, keep),
+            view,
+            anchor,
+        )
+    }
+
+    /// Open the value list from counts already in hand: the held reader's
+    /// answer for the live panel.
+    pub(crate) fn open_with_values(
+        col: Col,
+        values: Vec<(String, usize)>,
+        view: &TableView,
+        anchor: Anchor,
+    ) -> Self {
         let mut p = Self::bare(
             PickerKind::Values(col),
             Popup::new(Vec::new(), anchor),
             anchor,
         );
-        p.values = super::table::values(items, view, col, keep);
+        p.values = values;
         p.picked = view.filters.get(&col).cloned().unwrap_or_default();
         p.rebuild(0);
         p

@@ -166,7 +166,7 @@ pub(crate) fn open(view: &mut View) -> u64 {
         view.bell.unread = false;
     }
     if let Some(feed) = view.feed.take() {
-        view.feed_parked = Some(feed);
+        view.feed_parked = Some(super::feed_view::park(feed));
     }
     view.region_owner = super::region_focus::RegionOwner::Pane;
     generation

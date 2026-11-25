@@ -31,6 +31,7 @@ use crate::feed_overlay::{event_fields, FeedItem};
 
 pub(crate) mod page;
 pub(crate) mod picker;
+pub(crate) mod reader;
 pub(crate) mod search;
 pub(crate) mod table;
 pub(crate) use table::display_kind;
@@ -82,6 +83,70 @@ pub(crate) struct FeedOverlay {
     pub(crate) bar_open: bool,
     /// The debounce instant while the bar has text.
     pub(crate) bar_debounce: Option<Instant>,
+    /// The held reader, while the live panel is open. `None` in a shot or a
+    /// test, which hold their rows in `win` and evaluate in process.
+    pub(crate) reader: Option<reader::Reader>,
+    /// The reader's rows near the window, by storage index. Bounded by
+    /// [`CACHE_SPAN`] slots each side of the top row.
+    pub(crate) cache: std::collections::HashMap<usize, FeedItem>,
+    /// The reader's projection stamp the cached rows came from.
+    pub(crate) stamp: u64,
+    /// Every row the reader holds.
+    pub(crate) total: usize,
+    /// The widest summary the reader holds: the pan ceiling.
+    pub(crate) title_w: usize,
+    /// The id of the newest slots request; an older slots answer drops.
+    pub(crate) slots_req: u64,
+    /// A row fetch is out to the reader.
+    pub(crate) fetch_inflight: bool,
+    /// The top slot and the body rows, as the last run-loop tick saw them.
+    pub(crate) window: (usize, usize),
+    /// A value picker waiting on the reader's value list.
+    pub(crate) pending_values: Option<(table::Col, crate::popup::Anchor)>,
+}
+
+/// The slots each side of the top row whose rows the panel keeps: the
+/// 600-row window of the paged panel, so the client's memory stays flat.
+const CACHE_SPAN: usize = 600;
+
+/// Rows fetched beyond each edge of the window, so a short scroll paints
+/// from the cache.
+const FETCH_MARGIN: usize = 60;
+
+impl FeedOverlay {
+    /// The row at one storage index: the held rows in a shot or a test,
+    /// the reader's cache in the live panel.
+    pub(crate) fn item(&self, i: usize) -> Option<&FeedItem> {
+        self.win.items.get(i).or_else(|| self.cache.get(&i))
+    }
+
+    /// Every row the panel's source holds.
+    pub(crate) fn held(&self) -> usize {
+        if self.win.items.is_empty() {
+            self.total
+        } else {
+            self.win.items.len()
+        }
+    }
+
+    /// The pan ceiling's widest summary.
+    pub(crate) fn widest_title(&self) -> usize {
+        if self.win.items.is_empty() {
+            self.title_w
+        } else {
+            widest_title(&self.win.items)
+        }
+    }
+}
+
+/// A closing panel parks without its reader: the reader exits, and a
+/// reopen starts a fresh one.
+pub(crate) fn park(mut f: FeedOverlay) -> FeedOverlay {
+    f.reader = None;
+    f.inflight = false;
+    f.fetch_inflight = false;
+    f.pending_values = None;
+    f
 }
 
 /// The view a fresh client opens with: the saved one, else the default.
@@ -102,13 +167,25 @@ fn initial_view() -> table::TableView {
 /// content), but a refold is always armed - history may have moved since
 /// the last open, and the fold runs off the UI loop.
 pub(crate) fn open_overlay(prior: Option<FeedOverlay>, gen: u64) -> FeedOverlay {
-    let (win, query_text, parsed, view) = match prior {
-        Some(f) => (f.win, f.query_text, f.parsed, f.view),
+    let (win, query_text, parsed, view, carried) = match prior {
+        Some(f) => {
+            let carried = (f.win.items.is_empty() && f.total > 0).then(|| Carried {
+                slots: f.slots,
+                cache: f.cache,
+                stamp: f.stamp,
+                total: f.total,
+                title_w: f.title_w,
+                matched: f.matched,
+                widths: f.widths,
+            });
+            (f.win, f.query_text, f.parsed, f.view, carried)
+        }
         None => (
             page::FeedWindow::default(),
             String::new(),
             None,
             initial_view(),
+            None,
         ),
     };
     let mut f = FeedOverlay {
@@ -130,15 +207,51 @@ pub(crate) fn open_overlay(prior: Option<FeedOverlay>, gen: u64) -> FeedOverlay 
         keys_open: false,
         bar_open: false,
         bar_debounce: None,
+        reader: None,
+        cache: std::collections::HashMap::new(),
+        stamp: 0,
+        total: 0,
+        title_w: 0,
+        slots_req: 0,
+        fetch_inflight: false,
+        window: (0, 0),
+        pending_values: None,
     };
-    reslot(&mut f);
+    if let Some(prior) = carried {
+        // The reader's last answer paints at once while a fresh reader
+        // starts; its slots and rows ride over whole.
+        f.slots = prior.slots;
+        f.cache = prior.cache;
+        f.stamp = prior.stamp;
+        f.total = prior.total;
+        f.title_w = prior.title_w;
+        f.matched = prior.matched;
+        f.widths = prior.widths;
+    } else {
+        reslot(&mut f);
+    }
     f.sel = first_item_slot(&f.slots);
     f
+}
+
+/// What a reader-fed panel carries over a close and reopen.
+struct Carried {
+    slots: Vec<Slot>,
+    cache: std::collections::HashMap<usize, FeedItem>,
+    stamp: u64,
+    total: usize,
+    title_w: usize,
+    matched: usize,
+    widths: ValueWidths,
 }
 
 /// Rebuild the slot list from the rows, the query and the view. Every
 /// change to any of the three calls this, and nothing else writes `slots`.
 pub(crate) fn reslot(f: &mut FeedOverlay) {
+    if f.reader.is_some() {
+        request_slots(f);
+        return;
+    }
     let started = Instant::now();
     let ctx = crate::feed_overlay::EventCtx::default();
     let query = match &f.parsed {
@@ -163,6 +276,81 @@ pub(crate) fn reslot(f: &mut FeedOverlay) {
             started.elapsed().as_millis()
         ),
     );
+}
+
+/// Ask the reader for the view's slots and the window's rows. The query
+/// travels only when it parsed; a refused one evaluates the view alone, as
+/// the in-process path does.
+fn request_slots(f: &mut FeedOverlay) {
+    let query = match &f.parsed {
+        Some(Ok(_)) => f.query_text.clone(),
+        _ => String::new(),
+    };
+    let (top, rows) = f.window;
+    let req = fno_proto::feed::serve::Request {
+        view: fno_proto::feed::serve::ViewSpec::of(&f.view),
+        query,
+        slots: true,
+        top: top.saturating_sub(FETCH_MARGIN),
+        rows: rows + 2 * FETCH_MARGIN,
+        ..Default::default()
+    };
+    match f.reader.as_mut().and_then(|r| r.send(req)) {
+        Some(id) => {
+            f.slots_req = id;
+            f.inflight = true;
+        }
+        None => f.reader = None,
+    }
+}
+
+/// Ask the reader for the window's rows the cache lacks.
+fn fetch_missing(f: &mut FeedOverlay) {
+    if f.fetch_inflight || f.reader.is_none() {
+        return;
+    }
+    let (top, rows) = f.window;
+    let want: Vec<usize> = f
+        .slots
+        .iter()
+        .skip(top.saturating_sub(FETCH_MARGIN))
+        .take(rows + 2 * FETCH_MARGIN)
+        .filter_map(|s| match s {
+            Slot::Item(i) if !f.cache.contains_key(i) => Some(*i),
+            _ => None,
+        })
+        .collect();
+    if want.is_empty() {
+        return;
+    }
+    let req = fno_proto::feed::serve::Request {
+        view: fno_proto::feed::serve::ViewSpec::of(&f.view),
+        fetch: want,
+        ..Default::default()
+    };
+    match f.reader.as_mut().and_then(|r| r.send(req)) {
+        Some(_) => f.fetch_inflight = true,
+        None => f.reader = None,
+    }
+}
+
+/// Drop cached rows whose slots sit more than [`CACHE_SPAN`] from the top.
+fn evict(f: &mut FeedOverlay) {
+    if f.cache.len() <= 2 * CACHE_SPAN {
+        return;
+    }
+    let top = f.window.0;
+    let keep: std::collections::HashSet<usize> = f
+        .slots
+        .iter()
+        .skip(top.saturating_sub(CACHE_SPAN))
+        .take(2 * CACHE_SPAN)
+        .filter_map(|s| match s {
+            Slot::Item(i) => Some(*i),
+            Slot::Header { .. } => None,
+        })
+        .collect();
+    f.cache.retain(|i, _| keep.contains(i));
 }
 
 /// The narrowest the summary column gets before node and the other
@@ -255,7 +443,7 @@ pub(crate) fn feed_panel_rows(
     let stamps: Vec<Option<&str>> = window
         .iter()
         .map(|s| match s {
-            Slot::Item(i) => o.win.items.get(*i).map(|it| it.ts.as_str()),
+            Slot::Item(i) => o.item(*i).map(|it| it.ts.as_str()),
             Slot::Header { .. } => None,
         })
         .collect();
@@ -338,7 +526,7 @@ pub(crate) fn feed_panel_rows(
 
     let mut rows: Vec<Vec<Span>> = Vec::new();
     rows.push(vec![Span::plain(pad_to(
-        &header_line(focused, &o.view, o.matched, o.win.items.len(), w),
+        &header_line(focused, &o.view, o.matched, o.held(), w),
         w,
     ))]);
     let mut header = vec![Span::plain("   ")];
@@ -393,7 +581,7 @@ pub(crate) fn feed_panel_rows(
                 ]);
             }
             Some(Slot::Item(i)) => {
-                let Some(item) = o.win.items.get(*i) else {
+                let Some(item) = o.item(*i) else {
                     rows.push(vec![Span::plain(pad_to("", w))]);
                     continue;
                 };
@@ -462,7 +650,7 @@ pub(crate) fn feed_panel_rows(
     // beside a still-running fold is a claim the fold has not earned yet,
     // and zero matches over a full history is a filter, never an empty feed.
     if o.slots.is_empty() && o.error.is_none() && !o.inflight && visible > 0 {
-        let notice = if o.win.items.is_empty() {
+        let notice = if o.held() == 0 {
             "   no activity yet".to_string()
         } else {
             "   no rows match".to_string()
@@ -480,7 +668,7 @@ pub(crate) fn feed_panel_rows(
     } else if let Some(Err(refusal)) = &o.parsed {
         // The shared grammar's refusal, verbatim.
         refusal.clone()
-    } else if o.inflight && o.win.items.is_empty() {
+    } else if o.inflight && o.held() == 0 {
         "reading history".to_string()
     } else {
         String::new()
@@ -1031,7 +1219,7 @@ impl View {
                 0,
                 x0 + 1,
                 w - 1,
-                &header_line(focused, &f.view, f.matched, f.win.items.len(), w - 1),
+                &header_line(focused, &f.view, f.matched, f.held(), w - 1),
                 true,
                 &self.theme,
             );
@@ -1128,7 +1316,7 @@ impl View {
             self.feed_offset_clamped(),
         )
         .and_then(|i| {
-            let item = f.win.items.get(i)?;
+            let item = f.item(i)?;
             // A question row answers from the feed: the whole question opens
             // on the same path the questions view uses, never a provenance
             // detour (ruling 2026-09-29).
@@ -1182,7 +1370,7 @@ impl View {
             f.slots
                 .get(f.sel)
                 .and_then(|s| match s {
-                    Slot::Item(i) => f.win.items.get(*i),
+                    Slot::Item(i) => f.item(*i),
                     Slot::Header { .. } => None,
                 })
                 .cloned()
@@ -1235,9 +1423,14 @@ impl View {
 /// so the full read costs the projection nothing more, and a full replace
 /// keeps a renamed lead or session name from going stale.
 pub(crate) fn maybe_kick(view: &mut View, tx: &FoldTx) {
+    let window = (
+        view.feed_offset_clamped(),
+        feed_body_rows(view.term.0 as usize),
+    );
     let Some(f) = view.feed.as_mut() else {
         return;
     };
+    f.window = window;
     // The search bar's 250ms debounce: an expired one re-parses and
     // re-slots the held rows; no read is needed for a new query.
     if f.bar_open {
@@ -1253,17 +1446,41 @@ pub(crate) fn maybe_kick(view: &mut View, tx: &FoldTx) {
     let due = f.want
         || f.last_fold
             .is_none_or(|t| t.elapsed() >= FEED_REFRESH_EVERY);
-    if !due || f.inflight {
+    // A panel holding its own rows (a shot seed, a test) refreshes by one
+    // full read, as before the reader; the live panel holds none.
+    if !f.win.items.is_empty() {
+        if !due || f.inflight {
+            return;
+        }
+        f.want = false;
+        f.inflight = true;
+        let tx = tx.clone();
+        let gen = f.gen;
+        tokio::spawn(async move {
+            let result = crate::feed_overlay::fetch_history()
+                .await
+                .map(crate::feed_overlay::Land::Rows);
+            tx.send((gen, result)).ok();
+        });
         return;
     }
-    f.want = false;
-    f.inflight = true;
-    let tx = tx.clone();
-    let gen = f.gen;
-    tokio::spawn(async move {
-        let result = crate::feed_overlay::fetch_history().await;
-        let _ = tx.send((gen, result));
-    });
+    if f.reader.is_none() && due && !f.inflight {
+        match reader::Reader::spawn(f.gen, tx.clone()) {
+            Ok(r) => f.reader = Some(r),
+            Err(e) => {
+                f.error = Some(e);
+                f.want = false;
+                f.last_fold = Some(Instant::now());
+                return;
+            }
+        }
+    }
+    if due && !f.inflight {
+        f.want = false;
+        request_slots(f);
+    } else {
+        fetch_missing(f);
+    }
 }
 
 /// A row's identity across folds: the projection's cursor, else the
@@ -1289,21 +1506,28 @@ pub(crate) fn apply_fold(view: &mut View, gen: u64, outcome: crate::feed_overlay
     if gen != f.gen {
         return;
     }
-    f.inflight = false;
-    let first = f.last_fold.is_none();
-    f.last_fold = Some(Instant::now());
     let rows = match outcome {
-        Ok(rows) => rows,
+        Ok(crate::feed_overlay::Land::Rows(rows)) => rows,
+        Ok(crate::feed_overlay::Land::Answer(answer)) => {
+            apply_answer(view, top_slot, visible, *answer);
+            return;
+        }
         Err(e) => {
+            f.inflight = false;
+            f.fetch_inflight = false;
+            f.last_fold = Some(Instant::now());
             f.error = Some(e);
             return;
         }
     };
+    f.inflight = false;
+    let first = f.last_fold.is_none();
+    f.last_fold = Some(Instant::now());
     f.error = None;
     // The anchors, recorded BEFORE the rows move: a slot's identity is its
     // row's anchor, or a header's group key.
     let anchor_at = |f: &FeedOverlay, d: usize| match f.slots.get(d) {
-        Some(Slot::Item(i)) => f.win.items.get(*i).map(anchor_of),
+        Some(Slot::Item(i)) => f.item(*i).map(anchor_of),
         Some(Slot::Header { key, .. }) => Some(format!("\u{2}{key}")),
         None => None,
     };
@@ -1330,6 +1554,88 @@ pub(crate) fn apply_fold(view: &mut View, gen: u64, outcome: crate::feed_overlay
     // A refresh never lets the window park past the last slot.
     let max_off = f.slots.len().saturating_sub(visible.max(1));
     view.feed_offset = view.feed_offset.min(max_off);
+}
+
+/// One reader answer: cache its rows, open a waiting value picker, and land
+/// a current slot list the way a fold lands rows, keeping the top row and
+/// the cursor row where they were.
+fn apply_answer(
+    view: &mut View,
+    top_slot: usize,
+    visible: usize,
+    answer: fno_proto::feed::serve::Answer,
+) {
+    let Some(f) = view.feed.as_mut() else {
+        return;
+    };
+    if answer.stamp != f.stamp {
+        f.cache.clear();
+        f.stamp = answer.stamp;
+    }
+    f.cache.extend(answer.items);
+    if let Some(values) = answer.values {
+        if let Some((col, anchor)) = f.pending_values.take() {
+            f.picker = Some(picker::FeedPicker::open_with_values(
+                col, values, &f.view, anchor,
+            ));
+        }
+    }
+    let Some(slots) = answer.slots else {
+        f.fetch_inflight = false;
+        evict(f);
+        return;
+    };
+    if answer.id < f.slots_req {
+        return;
+    }
+    f.inflight = false;
+    let first = f.last_fold.is_none();
+    f.last_fold = Some(Instant::now());
+    f.error = None;
+    let anchor_at = |f: &FeedOverlay, d: usize| match f.slots.get(d) {
+        Some(Slot::Item(i)) => f.item(*i).map(anchor_of),
+        Some(Slot::Header { key, .. }) => Some(format!("\u{2}{key}")),
+        None => None,
+    };
+    let anchor_top = anchor_at(f, top_slot);
+    let anchor_sel = anchor_at(f, f.sel);
+    let detached = top_slot > 0;
+    f.win.new_count = if detached && !first {
+        f.win.new_count + answer.total.saturating_sub(f.total)
+    } else {
+        0
+    };
+    f.total = answer.total;
+    f.slots = slots;
+    f.matched = answer.matched;
+    let w = answer.widths;
+    f.widths = ValueWidths {
+        area: w.area,
+        harness: w.harness,
+        kind: w.kind,
+        node: w.node,
+        session: w.session,
+        lead: w.lead,
+    };
+    f.title_w = w.title;
+    let find = |f: &FeedOverlay, anchor: &str| {
+        (0..f.slots.len()).find(|d| anchor_at(f, *d).as_deref() == Some(anchor))
+    };
+    if first {
+        view.feed_offset = 0;
+        f.sel = first_item_slot(&f.slots);
+    } else {
+        if let Some(d) = anchor_top.as_deref().and_then(|a| find(f, a)) {
+            view.feed_offset = d;
+        }
+        match anchor_sel.as_deref().and_then(|a| find(f, a)) {
+            Some(d) => f.sel = d,
+            None => f.sel = first_item_slot(&f.slots),
+        }
+    }
+    let max_off = f.slots.len().saturating_sub(visible.max(1));
+    view.feed_offset = view.feed_offset.min(max_off);
+    evict(f);
 }
 
 /// A click on the panel's own chrome.
@@ -1430,6 +1736,21 @@ fn open_values_picker(view: &mut View, col: table::Col) {
         Some(Ok(parsed)) => Some(parsed),
         _ => None,
     };
+    if f.win.items.is_empty() && f.reader.is_some() {
+        let req = fno_proto::feed::serve::Request {
+            view: fno_proto::feed::serve::ViewSpec::of(&f.view),
+            query: match &f.parsed {
+                Some(Ok(_)) => f.query_text.clone(),
+                _ => String::new(),
+            },
+            values_for: Some(col.name().to_string()),
+            ..Default::default()
+        };
+        if f.reader.as_mut().and_then(|r| r.send(req)).is_some() {
+            f.pending_values = Some((col, anchor));
+        }
+        return;
+    }
     let p = picker::FeedPicker::open_values(
         col,
         &f.win.items,
@@ -1486,7 +1807,7 @@ pub(crate) async fn toggle(
         // never starts already holding it. The owner field is reset too:
         // `input_owner` normalizes a closed panel to Pane, but the stored
         // choice would silently RE-focus a reopened panel.
-        view.feed_parked = view.feed.take();
+        view.feed_parked = view.feed.take().map(park);
         view.feed_detail = None;
         view.region_owner = super::region_focus::RegionOwner::Pane;
         // A half-read escape sequence must not survive the close: carried
@@ -1671,7 +1992,13 @@ pub(crate) async fn feed_keys(
                 }
                 ModalKey::Byte(0x09) => {
                     let f = view.feed.as_mut().unwrap();
-                    if let Some(next) = search::complete(&f.query_text, &f.win.items) {
+                    let next = if f.win.items.is_empty() {
+                        let pool: Vec<FeedItem> = f.cache.values().cloned().collect();
+                        search::complete(&f.query_text, &pool)
+                    } else {
+                        search::complete(&f.query_text, &f.win.items)
+                    };
+                    if let Some(next) = next {
                         f.query_text = next;
                     }
                     f.bar_debounce = Some(Instant::now());
@@ -1763,7 +2090,7 @@ pub(crate) async fn feed_keys(
                 // One column short of the widest title. AT that width every
                 // row is blank, so the pan would strand the operator in an
                 // empty panel with nothing on screen to pan back by.
-                let ceiling = feed_view::widest_title(&f.win.items).saturating_sub(1);
+                let ceiling = f.widest_title().saturating_sub(1);
                 f.hpan = (f.hpan + 1).min(ceiling);
             }
             // No split cells here: the folded Shift+arrow is inert, the

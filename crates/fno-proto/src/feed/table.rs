@@ -232,7 +232,7 @@ impl TableView {
 /// One display slot: a group header or a row as its STORAGE index into the
 /// items (oldest first). The one list paint, hit test, hover and keys walk,
 /// so a header never opens a detail.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Slot {
     Header {
         key: String,

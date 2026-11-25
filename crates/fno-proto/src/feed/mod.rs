@@ -5,4 +5,5 @@
 
 pub mod grammar;
 pub mod row;
+pub mod serve;
 pub mod table;

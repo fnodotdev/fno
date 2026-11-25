@@ -1659,6 +1659,7 @@ pub(crate) struct Prefilter {
 struct FeedArgs {
     json: bool,
     otlp: bool,
+    serve: bool,
     since_epoch: Option<u64>,
     until_epoch: Option<u64>,
     page: Page,
@@ -1669,6 +1670,7 @@ fn parse_args(rest: &[String]) -> Result<FeedArgs, String> {
     let mut args = FeedArgs {
         json: false,
         otlp: false,
+        serve: false,
         since_epoch: None,
         until_epoch: None,
         page: Page::default(),
@@ -1679,6 +1681,7 @@ fn parse_args(rest: &[String]) -> Result<FeedArgs, String> {
         match a.as_str() {
             "--json" | "-J" => args.json = true,
             "--otlp" => args.otlp = true,
+            "--serve" => args.serve = true,
             "--since-epoch" => {
                 args.since_epoch = Some(
                     it.next()
@@ -1725,6 +1728,9 @@ fn parse_args(rest: &[String]) -> Result<FeedArgs, String> {
     }
     if args.otlp && args.json {
         return Err("--otlp and --json cannot combine".into());
+    }
+    if args.serve && (args.json || args.otlp) {
+        return Err("--serve answers on its own pipe; it takes no --json or --otlp".into());
     }
     let live = |v: Option<String>| v.filter(|s| !s.is_empty());
     args.pre.node = live(args.pre.node);
@@ -2130,15 +2136,9 @@ pub(crate) fn collect_window(
 /// The `fno-agent feed` command. A missing or unreadable store is not fatal: the
 /// rows the other store yielded still emit, with one stderr line naming the
 /// store skipped. Non-JSON output is one line per row, `ts kind node session title`.
-pub async fn run_feed(rest: &[String], home: &AgentsHome) -> i32 {
-    let args = match parse_args(rest) {
-        Ok(a) => a,
-        Err(msg) => {
-            eprintln!("fno-agent: {msg}");
-            return 2;
-        }
-    };
-
+/// Every leg the flags leave in, projected and ordered. The printed read
+/// and the held reader both start here.
+fn project_rows(args: &FeedArgs, home: &AgentsHome) -> Vec<FeedRow> {
     let (questions_raw, questions_note) = if leg_skipped(&args.pre, QUESTION_KINDS) {
         (String::new(), None)
     } else {
@@ -2238,6 +2238,32 @@ pub async fn run_feed(rest: &[String], home: &AgentsHome) -> i32 {
     if skipped_entries > 0 {
         eprintln!("fno-agent feed: skipped {skipped_entries} non-object graph entr(ies)");
     }
+    rows
+}
+
+/// The whole history, as the held reader holds it: every leg, no page and
+/// no prefilter.
+pub(crate) fn serve_rows(home: &AgentsHome) -> Vec<FeedRow> {
+    let Ok(args) = parse_args(&[]) else {
+        return Vec::new();
+    };
+    let rows = project_rows(&args, home);
+    filter_rows(rows, &Page::default(), &args.pre, None, None)
+}
+
+pub async fn run_feed(rest: &[String], home: &AgentsHome) -> i32 {
+    let args = match parse_args(rest) {
+        Ok(a) => a,
+        Err(msg) => {
+            eprintln!("fno-agent: {msg}");
+            return 2;
+        }
+    };
+
+    if args.serve {
+        return super::feed_serve::run(home);
+    }
+    let rows = project_rows(&args, home);
 
     if args.otlp {
         // A preview, never a send: the body is what a beat WOULD post, and

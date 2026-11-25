@@ -3,7 +3,7 @@
 //! the same keys, so neither carries its own copy.
 
 use super::grammar::{Fields, SessionDirectory};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// A repeated feed string, shared. Kind, area, node, session, harness and
 /// the lead fields repeat across a held history of about 50,000 rows, so
@@ -72,6 +72,12 @@ impl PartialEq<&str> for IStr {
     }
 }
 
+impl Serialize for IStr {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.0)
+    }
+}
+
 impl<'de> Deserialize<'de> for IStr {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let s = <std::borrow::Cow<'de, str>>::deserialize(d)?;
@@ -106,7 +112,7 @@ pub fn owned(v: &Option<IStr>) -> Option<String> {
 
 /// One feed row, as emitted by `fno agent fleet feed --json`. `session_id` is what
 /// the deep link resolves through the sideline's own attach path.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct FeedItem {
     pub ts: String,
     pub kind: IStr,

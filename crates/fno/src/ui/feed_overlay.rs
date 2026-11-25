@@ -76,7 +76,15 @@ fn stderr_note(stderr: &[u8], status: &std::process::ExitStatus) -> String {
 
 /// One fold result, as it travels the client's single-flight channel: the
 /// whole history, oldest first.
-pub type FoldResult = Result<Vec<FeedItem>, FeedError>;
+/// What one fold lands: the full rows of a one-shot read (a shot, a test),
+/// or one answer from the live panel's held reader.
+#[derive(Debug, Debug)]
+pub enum Land {
+    Rows(Vec<FeedItem>),
+    Answer(Box<fno_proto::feed::serve::Answer>),
+}
+
+pub type FoldResult = Result<Land, FeedError>;
 
 /// The `--limit` that reads every row: the projection keeps the newest
 /// `limit`, and no history comes near this.
@@ -96,7 +104,7 @@ pub fn history_argv() -> Vec<String> {
 
 /// Read the whole feed history, `Err` carrying the typed reason on any
 /// failure. An empty history is `Ok` with no rows - a real answer.
-pub async fn fetch_history() -> FoldResult {
+pub async fn fetch_history() -> Result<Vec<FeedItem>, FeedError> {
     let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
     command
         .args(history_argv())

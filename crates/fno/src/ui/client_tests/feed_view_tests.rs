@@ -1258,7 +1258,11 @@ async fn a_stale_fold_refolds_and_keeps_the_selection() {
     // refresh, and the same (ts, kind, title) stays selected.
     v.feed.as_mut().unwrap().sel = 2;
     let gen = v.feed.as_ref().unwrap().gen;
-    feed_view::apply_fold(&mut v, gen, Ok(vec![it, other]));
+    feed_view::apply_fold(
+        &mut v,
+        gen,
+        Ok(crate::feed_overlay::Land::Rows(vec![it, other])),
+    );
     let f = v.feed.as_ref().unwrap();
     assert_eq!(f.sel, 2, "the selected row survived the fold");
     assert!(f.last_fold.is_some(), "the fold stamped its time");
@@ -1279,7 +1283,7 @@ async fn a_stale_fold_refolds_and_keeps_the_selection() {
     };
     let mut v = view_with_rows(vec![]);
     v.feed = Some(overlay_in(vec![], Group::None));
-    feed_view::apply_fold(&mut v, 0, Ok(history(40)));
+    feed_view::apply_fold(&mut v, 0, Ok(crate::feed_overlay::Land::Rows(history(40))));
     v.feed_offset = 5;
     let top_before = {
         let f = v.feed.as_ref().unwrap();
@@ -1290,7 +1294,7 @@ async fn a_stale_fold_refolds_and_keeps_the_selection() {
         .unwrap_or_default()
     };
     assert_eq!(top_before, "row 34", "newest first: slot 5 is row 34");
-    feed_view::apply_fold(&mut v, 0, Ok(history(43)));
+    feed_view::apply_fold(&mut v, 0, Ok(crate::feed_overlay::Land::Rows(history(43))));
     let f = v.feed.as_ref().unwrap();
     assert_eq!(f.win.items.len(), 43, "the fold replaced the rows");
     assert_eq!(f.win.new_count, 3, "three rows arrived above the reader");
@@ -1377,4 +1381,58 @@ async fn last_row_paging_edge_hover_and_reopen() {
     assert_eq!(f.win.items.len(), 40, "the parked rows paint at once");
     assert_eq!(f.query_text, "k:node", "the query survives the close");
     assert_eq!(f.gen, 1, "a fold from before the close cannot land");
+}
+
+/// The live panel's reader answers: rows land in the bounded cache, a
+/// slots answer older than the newest slots request drops, and the newest
+/// lands its slots and the reader's row count.
+#[test]
+fn reader_answers_cache_rows_and_drop_stale_slots() {
+    let answer = |id: u64, slots: Vec<feed_view::Slot>| {
+        let mut it = feed_item(Some("x-aaaa"), Some("s-1"));
+        it.title = "PR 1391".into();
+        fno_proto::feed::serve::Answer {
+            id,
+            stamp: 1,
+            total: 1,
+            matched: slots.len(),
+            slots: Some(slots),
+            items: vec![(0, it)],
+            ..Default::default()
+        }
+    };
+    let mut v = view_with_rows(vec![]);
+    v.feed = Some(overlay(vec![]));
+    v.feed.as_mut().unwrap().slots_req = 5;
+    let stale = answer(4, vec![feed_view::Slot::Item(0)]);
+    feed_view::apply_fold(
+        &mut v,
+        0,
+        Ok(crate::feed_overlay::Land::Answer(Box::new(stale))),
+    );
+    let f = v.feed.as_ref().unwrap();
+    assert!(
+        f.slots.is_empty(),
+        "a stale slots answer drops: {:?}",
+        f.slots
+    );
+    assert_eq!(
+        f.item(0).map(|it| it.title.as_str()),
+        Some("PR 1391"),
+        "its rows still cache"
+    );
+    let newest = answer(5, vec![feed_view::Slot::Item(0)]);
+    feed_view::apply_fold(
+        &mut v,
+        0,
+        Ok(crate::feed_overlay::Land::Answer(Box::new(newest))),
+    );
+    let f = v.feed.as_ref().unwrap();
+    assert_eq!(
+        f.slots,
+        vec![feed_view::Slot::Item(0)],
+        "the newest slots land"
+    );
+    assert_eq!(f.held(), 1, "the panel counts the reader's rows");
+    assert!(f.win.items.is_empty(), "the client holds no history");
 }
