@@ -143,3 +143,20 @@ fn claims_pattern_gains_only_the_sequential_arm() {
     assert!(!seq.is_match("u-9"));
     assert!(!seq.is_match("t-07"));
 }
+
+#[test]
+fn door_prefix_answers_the_documented_default() {
+    // Admit arm: a receipt naming x- trims to x.
+    assert_eq!(door_prefix_from(Some(r#"{"prefix": "x-"}"#)), "x");
+    // Refuse arms: a failed, empty or malformed door answers the
+    // documented default, never the legacy ab.
+    assert_eq!(door_prefix_from(None), "x");
+    assert_eq!(door_prefix_from(Some("")), "x");
+    assert_eq!(door_prefix_from(Some("not json")), "x");
+    // The allowlist shape keeps the legacy ab explicitly.
+    let allowlist: std::collections::BTreeSet<String> = [door_prefix_from(None), "ab".to_string()]
+        .into_iter()
+        .collect();
+    assert!(allowlist.contains("x"));
+    assert!(allowlist.contains("ab"));
+}
