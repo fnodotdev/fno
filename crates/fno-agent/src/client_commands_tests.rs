@@ -132,7 +132,7 @@ fn a_heal_of_a_law_refused_session_resolves_without_persisting() {
     let row = crate::store_heal::adopt_codex_rollout(
         sid,
         "/work",
-        dir.path().join("rollout.jsonl"),
+        &dir.path().join("rollout.jsonl"),
         &registry_path,
         "b2c3d4e5",
         "",
@@ -155,7 +155,7 @@ fn a_heal_of_a_law_refused_session_resolves_without_persisting() {
     let row = crate::store_heal::adopt_codex_rollout(
         sid,
         "/work",
-        dir.path().join("rollout.jsonl"),
+        &dir.path().join("rollout.jsonl"),
         &registry_path,
         "b2c3d4e5",
         "",

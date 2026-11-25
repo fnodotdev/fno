@@ -382,7 +382,7 @@ mod tests {
         let sid = "d4e5f6a7-1111-2222-3333-444455556666";
         let mint_call = |sid: &str| {
             prepare_mint(
-                home, "claude", sid, None, None, None, None, None, None, None,
+                &home, "claude", sid, None, None, None, None, None, None, None,
             )
         };
 
