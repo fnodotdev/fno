@@ -127,7 +127,7 @@ max_prs_per_epic = 4
 default_diff_budget = 300
 
 [backlog]
-# Prefix for minted node IDs (<=7 chars; not cv-/fu-/tgt-).
+# Prefix for minted node IDs (<=7 chars; not cv-/fu-/tgt-). Unset defaults to x; legacy ab- ids stay resolvable.
 # id_prefix = <unset>   # optional; no default
 # Hex width of minted node IDs (4-8).
 id_hex_width = 8

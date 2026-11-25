@@ -102,8 +102,9 @@ pub(crate) use install::{release_install, update_prebuilt};
 use mux::pane_send_audit;
 #[cfg(feature = "app")]
 pub use mux::{
-    mux_cli, mux_log, notify_command, pane_argv, pane_cwd, proto, pty, redact, review_invocation,
-    server, server_stats, shell_init, squad, squad_cascade, squad_store, vt, workspace_sidecar,
+    mux_cli, mux_log, notify_command, paint_stats, pane_argv, pane_cwd, proto, pty, redact,
+    review_invocation, server, server_stats, shell_init, squad, squad_cascade, squad_store, vt,
+    workspace_sidecar,
 };
 #[cfg(feature = "web")]
 pub(crate) use serve::web_answer;

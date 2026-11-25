@@ -243,6 +243,7 @@ fn the_named_row_tap_closes_exactly_the_count_the_dry_run_showed() {
     client.cmd(Command::NewSquad {
         name: "named".into(),
         origin: Some(scratch.home_cwd()),
+        project: None,
     });
     client.wait_layout(10, "the named workspace", |l| {
         l.squads.iter().any(|s| s.name == "named")

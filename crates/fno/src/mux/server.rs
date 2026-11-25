@@ -5268,13 +5268,12 @@ impl Core {
         let name = sq.name.clone().unwrap_or_default();
         let mut key = sq.key.clone();
         let origins = sq.origins.clone();
+        let project = sq.project.clone();
         if name.is_empty() && key.is_empty() {
-            // First persist of an unnamed squad: derive its durable identity from
-            // its origins when it has any (stable across restarts, so a repo's
-            // home squad upserts onto one row forever -), else mint a
-            // random key (an originless squad has no stable identity). Recording
-            // it on the live squad makes every later persist in this process
-            // reuse it.
+            // First persist of an unnamed squad: derive its durable identity
+            // from its origins (stable across restarts), else mint a random
+            // key. Recording it on the live squad makes every later persist
+            // in this process reuse it.
             key = if origins.is_empty() {
                 crate::squad_store::mint_key()
             } else {
@@ -5397,6 +5396,7 @@ impl Core {
             members,
             tab_trees,
             active_tab: Some(active_tab),
+            project,
         })
     }
 
@@ -6918,6 +6918,7 @@ impl Core {
                 // Adopt the persisted key so the rebuilt squad keeps its identity.
                 if let Some(s) = self.session.squad_mut(sid) {
                     s.key = restore_key;
+                    s.project = ps.project.clone();
                     // The active tab is part of the captured shape; a
                     // stored index is clamped, never trusted to be in range.
                     if !ps.tab_trees.is_empty() {
@@ -7812,6 +7813,7 @@ impl Core {
                 // back to the origin-basename label (disambiguated).
                 name: s.name.clone().unwrap_or(derived),
                 canonical_cwd: s.canonical_cwd().to_string(),
+                project: s.project.clone(),
                 tabs: s
                     .tabs
                     .iter()
@@ -9583,9 +9585,11 @@ impl Core {
             Command::DispatchPlan { node, account } => {
                 self.dispatch_card(client_id, node, account, true)
             }
-            Command::NewSquad { name, origin } => {
-                self.handle_new_squad(client_id, view, vp, &name, origin)
-            }
+            Command::NewSquad {
+                name,
+                origin,
+                project,
+            } => self.handle_new_squad(client_id, view, vp, &name, origin, project),
             Command::PinThread {
                 squad,
                 harness,
@@ -9595,9 +9599,8 @@ impl Core {
                 self.handle_add_workspace_folder(client_id, squad, &path)
             }
             Command::RenameTab { tab, name } => {
-                // Explicit tab rename. A stale/unknown id (the tab
-                // closed racing the overlay) is refused fail-closed with a
-                // notice, like SelectTab - no mutation.
+                // A stale tab id (closed racing the overlay) is refused with a
+                // notice, like SelectTab; nothing mutates.
                 match self.session.find_tab(tab) {
                     Some((sid, ti)) => {
                         let clean = sanitize_tab_name(&name);
@@ -9607,18 +9610,15 @@ impl Core {
                             .expect("find_tab live squad")
                             .tabs[ti];
                         let tid = t.id;
-                        // Blank-after-sanitize CLEARS the rename back to the
-                        // derived label (Locked 2: "reset to auto" is a
-                        // meaningful rename target).
+                        // A blank name clears the rename back to the derived label.
                         t.name = (!clean.is_empty()).then_some(clean);
                         // (US4) Persist before the push: a client that sees the
                         // name knows it survives a restart. No-op when untracked.
                         self.persist_squad(sid);
-                        // persist_squad preserves tab_specs byte-for-byte,
-                        // so a template tab's stored spec would keep the OLD name
-                        // key across this overlay rename - the same re-persist
-                        // tab_rename does for the wire-API path. Guarded so a
-                        // non-template tab causes no store churn.
+                        // persist_squad keeps tab_specs byte-for-byte, so a
+                        // template tab's stored spec would keep the OLD name key;
+                        // re-persist it, as tab_rename does. Guarded: no churn
+                        // for a non-template tab.
                         if self.template_specs.contains_key(&tid) {
                             self.persist_template_specs(sid);
                         }

@@ -538,6 +538,7 @@ mod tests {
             id,
             name: name.into(),
             canonical_cwd: String::new(),
+            project: None,
             tabs: Vec::new(),
             active_tab: 0,
             panes: 0,

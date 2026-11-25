@@ -537,11 +537,10 @@ pub fn resolve_exact<'a>(query: &str, entries: &'a [Value]) -> Option<&'a Value>
     let bare_hex =
         (4..=8).contains(&q.len()) && q.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
     if bare_hex {
-        let mut prefixes = vec![crate::backlog::settings::node_id_prefix()];
-        prefixes.push("ab-".to_string());
+        let mut prefixes = vec![crate::backlog::settings::node_id_prefix(), "ab".to_string()];
         prefixes.dedup();
         for prefix in &prefixes {
-            let candidate = format!("{prefix}{q}");
+            let candidate = format!("{prefix}-{q}");
             // Last row wins, the dict-by-id the Python tier built.
             if let Some(hit) = entries
                 .iter()
