@@ -95,7 +95,7 @@ pub fn run_rescope(argv: &[String]) -> i32 {
     let rows = scope_filtered_rows(rows);
     let data = match rescope_data(&token, &reach, &rows, &caller) {
         Ok(d) => d,
-        Err(message) => return door_refuse(&message),
+        Err(refusal) => return door_refuse(&refusal.to_string()),
     };
     let amendment_id = match crate::numbers::mint::mint_key() {
         Ok(key) => key,
@@ -106,12 +106,12 @@ pub fn run_rescope(argv: &[String]) -> i32 {
         map.insert("amendment_id".into(), json!(id));
     }
     let target = data
-        .get("target_decision_id")
+        .get(de::TARGET)
         .and_then(Value::as_str)
         .unwrap_or("?")
         .to_string();
     let prior = data
-        .get("prior_reach")
+        .get(de::PRIOR_REACH)
         .and_then(Value::as_str)
         .unwrap_or("?")
         .to_string();
@@ -133,6 +133,20 @@ pub fn run_rescope(argv: &[String]) -> i32 {
     0
 }
 
+/// The ways a rescope refuses (docs/rust-style.md R6): the caller matches
+/// the variant, the door prints the message.
+#[derive(Debug, thiserror::Error)]
+enum RescopeRefusal {
+    #[error("reach must be global or project:<slug>, got {0:?}")]
+    BadReach(String),
+    #[error("no live decision matches {0:?}; nothing to rescope")]
+    NoMatch(String),
+    #[error("{0} live decisions match {1:?} ({2}); rescope one by id")]
+    Ambiguous(usize, String, String),
+    #[error("rescoping {0} needs superuser authority (got {1}; it was recorded as {2}); only the user rescopes it, so ask them with `fno inbox outstanding ask`")]
+    NeedsUser(String, String, String),
+}
+
 /// The amendment's data, pure over the rows so every refusal is testable.
 /// The reach value is validated here, not just parsed: `global` or
 /// `project:<nonempty slug>` and nothing else.
@@ -141,11 +155,9 @@ fn rescope_data(
     reach: &str,
     rows: &[Value],
     caller: &Caller,
-) -> Result<Value, String> {
+) -> Result<Value, RescopeRefusal> {
     if reach != "global" && !(reach.starts_with("project:") && reach.len() > "project:".len()) {
-        return Err(format!(
-            "reach must be global or project:<slug>, got {reach:?}"
-        ));
+        return Err(RescopeRefusal::BadReach(reach.to_string()));
     }
     let retired = decision_index::retirement_map(rows);
     let live: Vec<&Value> = rows
@@ -167,31 +179,26 @@ fn rescope_data(
     };
     let old = match hits.as_slice() {
         [one] => *one,
-        [] => {
-            return Err(format!(
-                "no live decision matches {token:?}; nothing to rescope"
-            ))
-        }
+        [] => return Err(RescopeRefusal::NoMatch(token.to_string())),
         many => {
             let ids: Vec<&str> = many.iter().map(|r| row_id(r)).collect();
-            return Err(format!(
-                "{} live decisions match {token:?} ({}); rescope one by id",
+            return Err(RescopeRefusal::Ambiguous(
                 many.len(),
-                ids.join(", ")
+                token.to_string(),
+                ids.join(", "),
             ));
         }
     };
     if caller.authority != "operator"
         && (caller.authority != "chat_attested" || !chat_may_retire(old))
     {
-        return Err(format!(
-            "rescoping {} needs superuser authority (got {}; it was recorded as {}); \
-             only the user rescopes it, so ask them with `fno inbox outstanding ask`",
-            row_id(old),
-            caller.authority,
-            old.get("authority_source")
+        return Err(RescopeRefusal::NeedsUser(
+            row_id(old).to_string(),
+            caller.authority.to_string(),
+            old.get(de::AUTHORITY)
                 .and_then(Value::as_str)
-                .unwrap_or(""),
+                .unwrap_or("")
+                .to_string(),
         ));
     }
     let mut data = json!({
@@ -211,120 +218,6 @@ fn rescope_data(
         crate::identity::stamp_person(map);
     }
     Ok(data)
-}
-
-/// The proposal page: every live law, its effective reach, the proposed
-/// reach and a one-line reason. Printed; the user approves on one pass; the
-/// approved rows go back through the same door one rescope at a time.
-fn run_proposal() -> i32 {
-    let (rows, _damaged) = match all_decision_rows() {
-        Ok(pair) => pair,
-        Err(reason) => {
-            eprintln!(
-                "fno inbox decisions rescope: the decision index could not be read ({reason})"
-            );
-            return 1;
-        }
-    };
-    let rows = scope_filtered_rows(rows);
-    for line in proposal_lines(&rows) {
-        println!(
-            "| {} | {} | {} | {} | {} |",
-            line.id, line.subject, line.current, line.proposed, line.reason
-        );
-    }
-    0
-}
-
-/// One page row.
-pub(crate) struct ProposalLine {
-    id: String,
-    subject: String,
-    current: String,
-    proposed: String,
-    reason: String,
-}
-
-/// The pure proposal: the reach each live law carries and the reach it is
-/// proposed to carry, with the evidence the proposal cites. Explicit rows
-/// propose their own value; unscoped rows propose from their text.
-pub(crate) fn proposal_lines(rows: &[Value]) -> Vec<ProposalLine> {
-    let retired = decision_index::retirement_map(rows);
-    let mut lines = Vec::new();
-    for row in rows.iter().filter(|r| {
-        !crate::law_match::is_retraction_row(r)
-            && decision_index::is_law(r)
-            && !retired.contains_key(&row_id(r).to_lowercase())
-    }) {
-        let id = row_id(row).to_string();
-        let subject = row_subject(row).trim().to_string();
-        let current = decision_index::row_scope(row).to_string();
-        let (proposed, reason) = proposed_reach(row, &current);
-        lines.push(ProposalLine {
-            id,
-            subject,
-            current,
-            proposed,
-            reason,
-        });
-    }
-    lines.sort_by(|a, b| b.current.cmp(&a.current).then_with(|| a.id.cmp(&b.id)));
-    lines
-}
-
-/// The heuristic: explicit stamps keep their value; unscoped rows propose
-/// from text evidence, defaulting to `project:fno`, which is the reach the
-/// reader already applies to a pre-scope row (decision-record.md).
-fn proposed_reach(row: &Value, current: &str) -> (String, String) {
-    let explicit = row.get("reach").is_some()
-        || row
-            .get("scope")
-            .and_then(Value::as_str)
-            .map(|v| decision_index::is_reach_value(v))
-            .unwrap_or(false);
-    if explicit {
-        return (current.to_string(), "already explicit".to_string());
-    }
-    let subject = row_subject(row).to_lowercase();
-    let text = format!(
-        "{} {}",
-        subject,
-        row.get("decision")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_lowercase()
-    );
-    if text.contains("fnh") {
-        return ("project:fnh".to_string(), "text names fnh".to_string());
-    }
-    if text.contains("fno-books") || text.split_whitespace().any(|w| w == "books") {
-        return (
-            "project:fno-books".to_string(),
-            "text names fno-books".to_string(),
-        );
-    }
-    if decision_index::is_fleet_subject(&subject) {
-        return (
-            "global".to_string(),
-            "fleet subject reads global today; stamp it".to_string(),
-        );
-    }
-    if FLEET_WORDS.iter().any(|w| text.contains(w)) {
-        return (
-            "global".to_string(),
-            format!(
-                "text says {}",
-                FLEET_WORDS
-                    .iter()
-                    .find(|w| text.contains(*w))
-                    .unwrap_or(&"")
-            ),
-        );
-    }
-    (
-        "project:fno".to_string(),
-        "pre-scope row recorded in fno; reach made explicit".to_string(),
-    )
 }
 
 #[cfg(test)]

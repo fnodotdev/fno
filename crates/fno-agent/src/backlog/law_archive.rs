@@ -22,10 +22,10 @@ const ARCHIVE_USAGE: &str = "usage: fno inbox decisions archive [--apply]  (no f
 /// `source` column is not carried, so the line holds ts/type/data only.
 fn envelope_of(row: &Value) -> Value {
     let etype = row
-        .get("_event_type")
+        .get(de::EVENT_TYPE)
         .and_then(Value::as_str)
         .unwrap_or("operator_decision");
-    let ts = row.get("ts").cloned().unwrap_or(Value::Null);
+    let ts = row.get(de::TS).cloned().unwrap_or(Value::Null);
     let mut data = row.as_object().cloned().unwrap_or_default();
     data.remove("_event_type");
     data.remove("ts");
@@ -43,7 +43,10 @@ fn partition(
     let mut to_move: Vec<Value> = Vec::new();
     let mut kept = 0usize;
     for row in raw {
-        let etype = row.get("_event_type").and_then(Value::as_str).unwrap_or("");
+        let etype = row
+            .get(de::EVENT_TYPE)
+            .and_then(Value::as_str)
+            .unwrap_or("");
         let key = row_key(row);
         if existing.contains(&key) {
             kept += 1;
@@ -51,14 +54,14 @@ fn partition(
         }
         let stays = match etype {
             "operator_decision" => {
-                let id = row.get("decision_id").and_then(Value::as_str).unwrap_or("");
+                let id = row
+                    .get(de::DECISION_ID)
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
                 !id.is_empty() && live_ids.contains(&id.to_lowercase())
             }
             SCOPE_AMEND_EVENT => {
-                let t = row
-                    .get("target_decision_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
+                let t = row.get(de::TARGET).and_then(Value::as_str).unwrap_or("");
                 !t.is_empty() && live_ids.contains(&t.to_lowercase())
             }
             _ => false,
@@ -110,8 +113,8 @@ pub fn run_archive(argv: &[String]) -> i32 {
     let live_ids: std::collections::BTreeSet<String> = live_index
         .rows
         .iter()
-        .filter(|r| r.get("_event_type").and_then(Value::as_str) == Some("operator_decision"))
-        .filter_map(|r| r.get("decision_id").and_then(Value::as_str))
+        .filter(|r| r.get(de::EVENT_TYPE).and_then(Value::as_str) == Some("operator_decision"))
+        .filter_map(|r| r.get(de::DECISION_ID).and_then(Value::as_str))
         .filter(|id| !id.is_empty())
         .map(|id| id.to_lowercase())
         .collect();

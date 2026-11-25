@@ -267,7 +267,8 @@ pub fn known_decision_ids() -> Result<HashSet<String>, String> {
     let (rows, _) = crate::decision_index::read_store_rows_everything(
         &crate::graph_get::default_graph_path(),
         &crate::decision_index::default_state_path("decisions.jsonl"),
-    )?;
+    )
+    .map_err(|e| e.to_string())?;
     Ok(rows
         .iter()
         .filter(|row| {

@@ -7,6 +7,7 @@
 //! variant measured 67.0s, which breaks every hook budget the read runs
 //! inside.
 
+use self::de;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -105,27 +106,27 @@ fn archive_skip_keys(jsonl: &Path) -> std::collections::HashSet<(String, String)
 pub fn apply_scope_amendments(rows: &mut Vec<Value>) {
     let mut newest: BTreeMap<String, ((String, String), String)> = BTreeMap::new();
     for row in rows.iter().filter(|r| {
-        r.get("_event_type").and_then(Value::as_str)
+        r.get(de::EVENT_TYPE).and_then(Value::as_str)
             == Some(crate::backlog::decisions::SCOPE_AMEND_EVENT)
     }) {
-        let Some(target) = row.get("target_decision_id").and_then(Value::as_str) else {
+        let Some(target) = row.get(de::TARGET).and_then(Value::as_str) else {
             continue;
         };
         if target.is_empty() {
             continue;
         }
-        let Some(reach) = row.get("reach").and_then(Value::as_str) else {
+        let Some(reach) = row.get(de::REACH).and_then(Value::as_str) else {
             continue;
         };
         if reach.is_empty() {
             continue;
         }
         let rank = (
-            row.get("ts")
+            row.get(de::TS)
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string(),
-            row.get("amendment_id")
+            row.get(de::AMENDMENT_ID)
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string(),
@@ -137,11 +138,11 @@ pub fn apply_scope_amendments(rows: &mut Vec<Value>) {
     }
     if !newest.is_empty() {
         for row in rows.iter_mut() {
-            if row.get("_event_type").and_then(Value::as_str) != Some("operator_decision") {
+            if row.get(de::EVENT_TYPE).and_then(Value::as_str) != Some("operator_decision") {
                 continue;
             }
             let id = row
-                .get("decision_id")
+                .get(de::DECISION_ID)
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_lowercase();
@@ -153,7 +154,7 @@ pub fn apply_scope_amendments(rows: &mut Vec<Value>) {
         }
     }
     rows.retain(|row| {
-        row.get("_event_type").and_then(Value::as_str)
+        row.get(de::EVENT_TYPE).and_then(Value::as_str)
             != Some(crate::backlog::decisions::SCOPE_AMEND_EVENT)
     });
 }
@@ -339,6 +340,39 @@ pub fn derive_live(text: &str) -> Index {
     derive_rows(rows, damaged)
 }
 
+/// The ways a decision-store read fails. One variant today: the store is
+/// unreadable, and the message names both legs. The type is what a caller
+/// matches (docs/rust-style.md R6); the plain read keeps its grandfathered
+/// signature.
+#[derive(Debug, thiserror::Error)]
+#[error("decision store read failed: {0}")]
+pub struct DecisionStoreError(pub String);
+
+impl From<String> for DecisionStoreError {
+    fn from(message: String) -> Self {
+        Self(message)
+    }
+}
+
+/// The decision-envelope field names, one definition each (the
+/// row_facts key-module pattern): new reads go through these, so a field
+/// name has one home and a typo refuses to compile.
+pub mod de {
+    pub const EVENT_TYPE: &str = "_event_type";
+    pub const DECISION_ID: &str = "decision_id";
+    pub const SUBJECT: &str = "subject";
+    pub const SCOPE: &str = "scope";
+    pub const REACH: &str = "reach";
+    pub const PRIOR_REACH: &str = "prior_reach";
+    pub const DECISION: &str = "decision";
+    pub const AUTHORITY: &str = "authority_source";
+    pub const SUPERSEDES: &str = "supersedes";
+    pub const TARGET: &str = "target_decision_id";
+    pub const RETRACTION_ID: &str = "retraction_id";
+    pub const AMENDMENT_ID: &str = "amendment_id";
+    pub const TS: &str = "ts";
+}
+
 /// The row identity the Python merge uses (`decide/__init__.py:814-819`):
 /// event type, then the first non-empty of `decision_id`,
 /// `retraction_id`, `amendment_id`, `target_decision_id`. The amendment id
@@ -346,7 +380,7 @@ pub fn derive_live(text: &str) -> Index {
 /// or the journal-vs-db merge drops the newer one as a copy.
 pub(crate) fn row_key(row: &Value) -> (String, String) {
     let etype = row
-        .get("_event_type")
+        .get(de::EVENT_TYPE)
         .and_then(Value::as_str)
         .unwrap_or("operator_decision")
         .to_string();
@@ -395,7 +429,7 @@ pub fn read_store_rows(graph: &Path, jsonl: &Path) -> Result<(Vec<Value>, usize)
 pub fn read_store_rows_everything(
     graph: &Path,
     jsonl: &Path,
-) -> Result<(Vec<Value>, usize), String> {
+) -> Result<(Vec<Value>, usize), DecisionStoreError> {
     let (mut rows, mut damaged) = read_store_rows_raw(graph, jsonl)?;
     let (archived, arch_damaged) = read_archive_rows(&graph_archive(graph));
     damaged += arch_damaged;
@@ -1214,11 +1248,11 @@ mod tests {
         assert_eq!(rows.len(), 1, "amendment rows never render");
         let row = &rows[0];
         assert_eq!(
-            row.get("decision_id").and_then(Value::as_str),
+            row.get(de::DECISION_ID).and_then(Value::as_str),
             Some("d-aaaa0001")
         );
         assert_eq!(
-            row.get("reach").and_then(Value::as_str),
+            row.get(de::REACH).and_then(Value::as_str),
             Some("global"),
             "the newest amendment wins"
         );
