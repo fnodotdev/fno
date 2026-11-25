@@ -150,10 +150,13 @@ grep -q "has exited" <<<"$err" || fail "attach did not reach the revival pointer
 
 # 8. The heal adopts into the registry the CALLER read. Without that, the row
 #    lands in another file: the command still works, so nothing warns, but the
-#    roster never gains the row and every later call re-heals.
+#    roster never gains the row and every later call re-heals. The law marker
+#    is planted beside the ALT registry, because the gate reads the caller's
+#    home for the join cause the same way it reads the caller's registry.
 reg_clear
 ALT_HOME="$tmp/alt-agents"
-mkdir -p "$ALT_HOME"
+mkdir -p "$ALT_HOME/sessions/claude/$CLAUDE_UUID"
+printf 'skill:review' > "$ALT_HOME/sessions/claude/$CLAUDE_UUID/joined"
 out=$(FNO_AGENT_HOME="$ALT_HOME" "$BIN" resume c655c326 --print-command 2>&1) || \
   fail "heal under FNO_AGENT_HOME failed: $out"
 [[ "$(reg_rows "$ALT_HOME/registry.json")" != "[]" ]] || fail "adopted row did not land in FNO_AGENT_HOME"
