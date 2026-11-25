@@ -232,7 +232,18 @@ pub fn run(args: &[String]) -> i32 {
     }
 
     // ── Ownership (the salvaged stop-gate evaluation) ─────────────────────────
-    match evaluate(&cwd, &fire) {
+    // A sandbox's owner is the manifest the host start wrote for the bound
+    // worktree; the binding is host truth, so no session-id scan decides it.
+    let verdict = match crate::sandbox::origin().map(|_| crate::target_orient::manifest_path(&cwd))
+    {
+        Some(Some(state)) => Verdict::Owner {
+            state,
+            driver: "target",
+            owner_cwd: cwd.clone(),
+        },
+        _ => evaluate(&cwd, &fire),
+    };
+    match verdict {
         // A sandbox stop is never a visitor: the host bound its node before
         // the clone, so a missing manifest is a broken binding, not consent.
         Verdict::NoOwner if crate::sandbox::origin().is_some() => {
@@ -960,7 +971,9 @@ fn unavailable_block(cwd: &Path, fire: &Fire, driver: &str, why: &str) -> i32 {
         + 1;
     let _ = std::fs::write(&counter, count.to_string());
     super::emit_tick(cwd, "blocked", "unavailable", driver, &fire.hook_harness_id);
-    if count <= MAX_UNAVAIL_RETRIES {
+    // A sandbox could stop again and again to wear the bound down, so a
+    // sandbox-origin stop never takes the fail-open allow.
+    if count <= MAX_UNAVAIL_RETRIES || crate::sandbox::origin().is_some() {
         emit_stop_decision(
             cwd,
             fire,
