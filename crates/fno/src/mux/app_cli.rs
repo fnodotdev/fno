@@ -332,6 +332,31 @@ struct ShotWorld {
     server: Option<std::process::Child>,
 }
 
+impl ShotWorld {
+    fn new(root: PathBuf, front: &Path) -> Self {
+        Self {
+            root,
+            front: front.to_path_buf(),
+            server: None,
+        }
+    }
+}
+
+/// The world's config. It names the world's one machine: the Machines row
+/// paints the config's display name, never the real host.
+fn seed_world_config(root: &Path) -> bool {
+    match std::fs::write(
+        root.join(".fno/config.toml"),
+        "[fleet]\nname = \"demo-host\"\n",
+    ) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("fno mux app shot: the world config failed: {e}");
+            false
+        }
+    }
+}
+
 /// One row of `mux pane keeper list --json`: the two pids a world's
 /// teardown signals.
 #[derive(serde::Deserialize)]
@@ -359,8 +384,9 @@ impl Drop for ShotWorld {
         let mut list = world_cmd(&self.root, &self.front);
         list.args(["mux", "pane", "keeper", "list", "--json"])
             .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null());
-        if let Ok(out) = list.output() {
+        if let Ok(out) = list.spawn().and_then(|child| child.wait_with_output()) {
             for pid in keeper_pids(&out.stdout) {
                 if let Ok(pid) = libc::pid_t::try_from(pid) {
                     // SAFETY: a plain signal to a pid the world's own keeper
@@ -707,11 +733,7 @@ fn shot(args: &crate::cli_args::AppShotArgs) -> i32 {
     let out_abs = std::path::absolute(out).unwrap_or_else(|_| PathBuf::from(out));
     let root = std::path::Path::new("/tmp").join(format!("fno-shot-world-{}", std::process::id()));
     std::fs::remove_dir_all(&root).ok();
-    let mut world = ShotWorld {
-        root,
-        front: front.clone(),
-        server: None,
-    };
+    let mut world = ShotWorld::new(root, &front);
     for dir in [
         "mux",
         ".fno/agents",
@@ -728,13 +750,7 @@ fn shot(args: &crate::cli_args::AppShotArgs) -> i32 {
     // pin slugs that cwd to find the seed, so every pin below uses the
     // canonical root or the lookup lands one symlink off the seed.
     world.root = std::fs::canonicalize(&world.root).unwrap_or_else(|_| world.root.clone());
-    // The world names its one machine: the Machines row paints the
-    // config's display name, never the real host.
-    if let Err(e) = std::fs::write(
-        world.root.join(".fno/config.toml"),
-        "[fleet]\nname = \"demo-host\"\n",
-    ) {
-        eprintln!("fno mux app shot: the world config failed: {e}");
+    if !seed_world_config(&world.root) {
         return 1;
     }
     let mut server_cmd = world_cmd(&world.root, &front);
