@@ -43,7 +43,7 @@ READER FAILED drain: drain payload did not parse: EOF while parsing a value at l
 READER FAILED main_ci: gh api branches/main returned no head sha
 control plane: <FOLDED>
 READER FAILED self_hold: current session identity is unavailable
-state_root_drift: 5 top-level entries the layout table does not keep: .fno, home, project, repo, bin
+state_root_drift: 5 top-level entries the layout table does not keep: home, project, repo, .fno, bin
 install: unmeasured (no fno source checkout resolved)
 READER FAILED visual_log_reader: ensure-reader.sh not found (env roots, install pointer, checkout copy)
 boot_revival: none
