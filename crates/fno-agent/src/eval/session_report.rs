@@ -1498,11 +1498,16 @@ pub async fn run_session_report(rest: &[String], home: &AgentsHome) -> i32 {
     if let Some(payload) = read_stdin_payload() {
         params["payload"] = payload;
     }
-    let agent_self = params.get("agent_self").and_then(Value::as_str);
-    let no_row = agent_self.is_some() && std::env::var(NO_ROW_ENV).ok().as_deref() == agent_self;
+    // Owned: the writes below change `params`, and the name is read after them.
+    let agent_self = params
+        .get("agent_self")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let no_row =
+        agent_self.is_some() && std::env::var(NO_ROW_ENV).ok().as_deref() == agent_self.as_deref();
     let harness = params.as_object().and_then(|p| str_field(p, "harness"));
     let print_mode = print_mode_run(
-        agent_self,
+        agent_self.as_deref(),
         harness.as_deref(),
         std::env::var("CLAUDE_CODE_ENTRYPOINT").ok().as_deref(),
     );
@@ -1511,7 +1516,7 @@ pub async fn run_session_report(rest: &[String], home: &AgentsHome) -> i32 {
     }
     // A row a person asked to watch keeps its sideline place.
     let watch_row = crate::claude_ask::watch_row_run(
-        agent_self,
+        agent_self.as_deref(),
         harness.as_deref(),
         std::env::var(crate::claude_ask::SHOW_ROW_ENV)
             .ok()
@@ -1532,7 +1537,7 @@ pub async fn run_session_report(rest: &[String], home: &AgentsHome) -> i32 {
     // and it prints in the shell that started it, so the sideline shows none of it.
     if record.is_none()
         && crate::claude_ask::typed_print_run(
-            agent_self,
+            agent_self.as_deref(),
             harness.as_deref(),
             std::env::var("CLAUDE_PID")
                 .ok()
