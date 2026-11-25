@@ -2974,6 +2974,22 @@ fn push_output_format(argv: &mut Vec<String>, output_format: Option<&str>) {
 /// keeps a registry row, so it shows in the mux while it runs.
 pub const SHOW_ROW_ENV: &str = "FNO_SPAWN_SHOW_ROW";
 
+/// Whether a reporting child's row is one a person asked to watch
+/// (`fno agent spawn --mux`), so it keeps its sideline place. The opt-in
+/// reaches a child by env on every lane but claude, which takes that env off
+/// its child. There the lane's own word decides: it names every child whose
+/// row it drops, so a claude child it did not name keeps a watched row, even
+/// when the lane's own stamp of that row failed.
+pub(crate) fn watch_row_run(
+    agent_self: Option<&str>,
+    harness: Option<&str>,
+    show_row: bool,
+    told_to_drop: bool,
+) -> bool {
+    agent_self.is_some()
+        && (show_row || (harness.map(Harness::parse) == Some(Harness::Claude) && !told_to_drop))
+}
+
 /// The print word on a claude launch argv: `claude -p` or `claude --print`.
 /// A word glued to its neighbours (`the-p-flag`) is not the flag.
 pub(crate) fn print_word_in_argv(argv: &[String]) -> bool {
@@ -3973,6 +3989,29 @@ mod tests {
         // macOS's alone. Elsewhere the same pid reads as interactive.
         assert_eq!(read_print, cfg!(target_os = "macos"));
         assert!(!read_plain);
+    }
+
+    /// A `--mux` row keeps its sideline place on every lane, the claude lane
+    /// included when its own stamp of the row failed: a child it did not
+    /// tell to drop its row reports the watch mark itself.
+    #[test]
+    fn a_kept_claude_child_reports_the_watch_mark() {
+        let claude = Some("claude");
+        let codex = Some("codex");
+        assert!(
+            watch_row_run(Some("w1"), claude, false, false),
+            "the claude lane's own word stands in for the opt-in"
+        );
+        assert!(watch_row_run(Some("w1"), codex, true, false));
+        assert!(
+            !watch_row_run(Some("w1"), codex, false, false),
+            "a row nobody asked to watch leaves the sideline"
+        );
+        assert!(
+            !watch_row_run(Some("w1"), claude, false, true),
+            "a child told to drop its row watches nothing"
+        );
+        assert!(!watch_row_run(None, claude, true, false));
     }
 
     #[cfg(unix)]

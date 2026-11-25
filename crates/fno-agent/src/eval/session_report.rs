@@ -1509,13 +1509,16 @@ pub async fn run_session_report(rest: &[String], home: &AgentsHome) -> i32 {
     if no_row {
         params["no_row"] = Value::Bool(true);
     }
-    // The `--mux` opt-in reaches a spawned child by env, so its row is one a
-    // person asked to watch: it keeps its sideline place.
-    let watch_row = agent_self.is_some()
-        && std::env::var(crate::claude_ask::SHOW_ROW_ENV)
+    // A row a person asked to watch keeps its sideline place.
+    let watch_row = crate::claude_ask::watch_row_run(
+        agent_self,
+        harness.as_deref(),
+        std::env::var(crate::claude_ask::SHOW_ROW_ENV)
             .ok()
             .as_deref()
-            == Some("1");
+            == Some("1"),
+        no_row,
+    );
     if watch_row {
         params["watch_row"] = Value::Bool(true);
     }
