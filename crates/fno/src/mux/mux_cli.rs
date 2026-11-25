@@ -1284,6 +1284,7 @@ fn socket_dir_check() -> Check {
 /// The fix doctor advertises for orphaned store residue. One const for both
 /// emitters, so the advertised spelling cannot drift from the command that exists.
 const PRUNE_REMEDY: &str = "fno mux workspace prune";
+const SHOT_PIN_REMEDY: &str = "fno mux workspace prune --shot-pins";
 
 /// The squad-store orphan verdict (US3), pure so the ok/warn/Na rendering
 /// is unit-testable without a store. `total` is the persisted squad count;
@@ -1354,6 +1355,7 @@ fn gather_checks() -> Vec<Check> {
     ));
     checks.push(clipboard_check(crate::clipboard::available_tool()));
     checks.push(doctor::squad_store_check());
+    checks.push(doctor::shot_pin_check());
     checks.push(doctor::board_scope_check());
     checks.extend(doctor::store_checks());
     checks
@@ -1631,8 +1633,10 @@ fn squad_prune(args: &[OsString]) -> i32 {
     let mut tabs_only = false;
     let mut dead_only = false;
     let mut include_used_shells = false;
+    let mut shot_pins = false;
     for a in args {
         match a.to_str() {
+            Some("--shot-pins") => shot_pins = true,
             Some("--dry-run") => dry_run = true,
             Some("--include-named") => include_named = true,
             Some("--json") | Some("-J") => json = true,
@@ -1657,7 +1661,7 @@ fn squad_prune(args: &[OsString]) -> i32 {
     // the combined `--tabs-only --dead-only` scope runs BOTH halves - the
     // sweep modal's "both" queues exactly that pair, and gating tabs on bare
     // `!dead_only` made it close zero tabs while reporting both.
-    let tab_outcome = if scope.fold_tabs && (!dead_only || tabs_only) {
+    let tab_outcome = if scope.fold_tabs && !shot_pins && (!dead_only || tabs_only) {
         prune_live_tabs_measuring_named(&tabs, include_named, dry_run, include_used_shells)
     } else {
         TabPruneOutcome {
@@ -1683,6 +1687,11 @@ fn squad_prune(args: &[OsString]) -> i32 {
     // and reaps their dead members like any survivor's: one wrapped verdict,
     // so the locked pass needs no second shape.
     let decide = |sq: &crate::squad_store::StoredSquad| {
+        // `--shot-pins` removes only what a screenshot run left behind; every
+        // other workspace keeps whatever verdict it would have had.
+        if shot_pins && !crate::squad_store::is_shot_pin_squad(sq) {
+            return crate::squad_store::PruneDecision::Keep;
+        }
         if dead_only {
             match base_decide(sq) {
                 crate::squad_store::PruneDecision::Prune => crate::squad_store::PruneDecision::Keep,
