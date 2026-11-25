@@ -334,7 +334,7 @@ pub enum AppOp {
     /// config.review.human = ui. Works with the app closed.
     Approve(AppApproveArgs),
     /// `mux app shot --out <path> [--theme dark|light] [--mode <view>]
-    /// [--find bar|chords] [--ask rows|overflow]`: render one offscreen
+    /// [--find bar|chords] [--ask rows|overflow] [--notice]`: render one offscreen
     /// demo frame and write a
     /// png; never opens a window on any display
     Shot(AppShotArgs),
@@ -476,6 +476,10 @@ pub struct AppShotArgs {
     /// options frame, `overflow` makes the first option wrap
     #[arg(long, value_parser = ["rows", "overflow"])]
     pub ask: Option<String>,
+    /// End the seeded chat on a raw task-notification row, which the chat
+    /// folds to one caret line
+    #[arg(long)]
+    pub notice: bool,
     /// Open one overlay through its real code path before the capture:
     /// the row menu (`row-menu-node` gives the agent a node first),
     /// the in-tab rename field, or the scrolled-back pill

@@ -577,10 +577,23 @@ fn ask_rows(long: bool) -> String {
     format!("{text}\n{call}\n")
 }
 
+/// The raw row a finished background task leaves in a claude transcript:
+/// a plain user row whose text is a task-notification block, which the
+/// chat folds to its summary line.
+fn notice_row() -> String {
+    let text = "<task-notification>\n<task-id>bhd3bt724</task-id>\n<output-file>/tmp/fno-shot-out</output-file>\n<status>completed</status>\n<summary>Background command \"cargo build\" completed (exit code 0)</summary>\n</task-notification>";
+    let row = serde_json::json!({
+        "parentUuid": null, "isSidechain": false, "type": "user", "uuid": "u3",
+        "message": {"role": "user", "content": text},
+        "sessionId": "00000000-0000-4000-8000-000000000001"
+    });
+    format!("{row}\n")
+}
+
 /// A claude-shaped transcript in the world's projects dir, so the chat
 /// view renders a conversation. The FILE is the contract: rows carry
 /// type + message.content like the real transcripts the server reads.
-fn seed_transcript(root: &Path, ask: Option<&str>) -> bool {
+fn seed_transcript(root: &Path, ask: Option<&str>, notice: bool) -> bool {
     // The dir name is the project slug of the world children's cwd
     // (world_cmd pins them to code/checkout); that is the only name the
     // newest-lookup can find.
@@ -611,6 +624,11 @@ fn seed_transcript(root: &Path, ask: Option<&str>) -> bool {
     let rows = match ask {
         Some(kind) => format!("{rows}{}", ask_rows(kind == "overflow")),
         None => rows.to_string(),
+    };
+    let rows = if notice {
+        format!("{rows}{}", notice_row())
+    } else {
+        rows
     };
     match std::fs::write(dir.join(format!("{session}.jsonl")), rows) {
         Ok(()) => true,
@@ -691,7 +709,7 @@ fn shot(args: &crate::cli_args::AppShotArgs) -> i32 {
         return 1;
     };
     // The transcript lands first: the adopt seed reads it as evidence.
-    let transcript = seed_transcript(&world.root, ask);
+    let transcript = seed_transcript(&world.root, ask, args.notice);
     let fleet = seed_fleet(&world.root, &front, &first_node);
     let question = seed_question(&world.root);
     if !(transcript && fleet && question) {
@@ -834,6 +852,24 @@ mod tests {
         assert_eq!(AppView::Terminal.as_spelling(), "terminal");
         assert_eq!(AppView::Orchestration.as_spelling(), "orchestration");
         assert_eq!(AppView::Mods.as_spelling(), "mods");
+    }
+
+    #[test]
+    fn notice_seed_ends_the_transcript_on_a_task_notification_row() {
+        let root = std::env::temp_dir().join(format!("fno-notice-seed-{}", std::process::id()));
+        assert!(seed_transcript(&root, None, true));
+        let slug = crate::ui::transcript_tail::claude_project_slug(&root.join("code/checkout"));
+        let file = root
+            .join("transcripts")
+            .join(slug)
+            .join(format!("{DEMO_CHAT_SESSION}.jsonl"));
+        let body = std::fs::read_to_string(&file).unwrap();
+        std::fs::remove_dir_all(&root).ok();
+        let last: serde_json::Value = serde_json::from_str(body.lines().last().unwrap()).unwrap();
+        assert_eq!(last["type"], "user");
+        let text = last["message"]["content"].as_str().unwrap();
+        assert!(text.starts_with("<task-notification>"), "{text}");
+        assert!(text.contains("<summary>"), "{text}");
     }
 
     #[test]
