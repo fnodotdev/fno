@@ -10,6 +10,8 @@ pub mod mux_log;
 #[cfg(feature = "app")]
 pub mod notify_command;
 #[cfg(feature = "app")]
+pub mod paint_stats;
+#[cfg(feature = "app")]
 pub mod pane_argv;
 #[cfg(feature = "app")]
 pub mod pane_cwd;
