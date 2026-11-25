@@ -342,8 +342,8 @@ fn a_head_with_no_adopt_and_no_live_worker_reads_as_a_missing_adopt() {
         launch_short_id: Some("2ee23622".into()),
         ..Default::default()
     };
-    let (stage, evidence) = stage(&watch, None, None);
-    assert_eq!(stage, "adopt");
+    let (name, evidence) = stage(&watch, None, None);
+    assert_eq!(name, "adopt");
     assert!(evidence.contains("2ee23622"), "{evidence}");
     assert!(!evidence.contains("started"), "{evidence}");
     assert!(!evidence.contains(';'), "{evidence}");
@@ -351,6 +351,6 @@ fn a_head_with_no_adopt_and_no_live_worker_reads_as_a_missing_adopt() {
         child_session: Some("2ee23622-aaaa".into()),
         ..watch
     };
-    let (stage, _) = stage(&adopted, None, None);
-    assert_eq!(stage, "first prompt");
+    let (name, _) = stage(&adopted, None, None);
+    assert_eq!(name, "first prompt");
 }
