@@ -2426,6 +2426,13 @@ fn commit_wip_if_dirty(cwd: &Path, reason: &str, session_id: &str) -> Option<Wip
         eprintln!("finalize: worktree is mid-merge/rebase; skipping WIP rescue commit ({reason})");
         return None;
     }
+    // A sandbox's host worktree holds none of its work: the export under
+    // refs/sandbox/<id>/ keeps that, and an add here would commit host state
+    // as if the worker wrote it.
+    if let Some(id) = crate::sandbox::clone_source_of(cwd) {
+        eprintln!("finalize: worktree is sandbox {id}'s clone source; no WIP commit ({reason})");
+        return None;
+    }
     let status = git_capture(cwd, &["status", "--porcelain"])?;
     if status.trim().is_empty() {
         return None; // clean tree, nothing to rescue

@@ -31,6 +31,9 @@ export PATH
 
 EVENT="${1:-SessionStart}"
 JOIN="${2:-}"
+# The join cause the carrier knows (skill:<name> from the prompt/skill hook).
+# Rides to `report --kind join --trigger`, the D2402 adoption read's input.
+TRIGGER="${3:-}"
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-}}"
@@ -95,6 +98,7 @@ BIN="$(fno_agent_bin "$PLUGIN_ROOT")"
 ARGS=(report --kind join --harness "$HARNESS" --session-id "$SESSION_ID" --preamble-due --mark)
 TRANSCRIPT="$(payload_field transcript_path)"
 [[ -n "$TRANSCRIPT" ]] && ARGS+=(--transcript "$TRANSCRIPT")
+[[ -n "$TRIGGER" ]] && ARGS+=(--trigger "$TRIGGER")
 [[ "$(payload_field source)" == "compact" || "$EVENT" == "PostCompact" ]] && ARGS+=(--compacted)
 if [[ "$JOIN" == "join" ]]; then
     DUE="$( unset FNO_HOOK_CONTEXT; with_timeout "${FNO_JOIN_BUDGET_SECS:-3}" "$BIN" "${ARGS[@]}" 2>/dev/null </dev/null || true )"

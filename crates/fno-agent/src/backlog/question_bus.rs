@@ -871,7 +871,8 @@ fn materialize_images(
     if images.is_empty() {
         return 0;
     }
-    let screens = me.root.join("screens");
+    let screens = crate::state_layout::place_dir(&me.root, "screens")
+        .unwrap_or_else(|| me.root.join("screens"));
     if std::fs::create_dir_all(&screens).is_err() {
         return 0;
     }
@@ -917,16 +918,20 @@ WHERE machine_id = ? AND question_id = ? AND seq = ?",
     landed
 }
 
-/// Delete a copy's materialized screenshots: the copy closed, so nothing
-/// here reads its files any more.
+/// Delete a copy's materialized screenshots, in the placed folder and the
+/// legacy one it drains: the copy closed, so nothing here reads its files
+/// any more.
 fn drop_copy_files(me: &Host, copy: &str) {
-    let Ok(entries) = std::fs::read_dir(me.root.join("screens")) else {
-        return;
-    };
     let prefix = format!("{copy}-");
-    for entry in entries.flatten() {
-        if entry.file_name().to_string_lossy().starts_with(&prefix) {
-            let _ = std::fs::remove_file(entry.path());
+    let placed = crate::state_layout::place_dir(&me.root, "screens");
+    for dir in placed.into_iter().chain([me.root.join("screens")]) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().starts_with(&prefix) {
+                let _ = std::fs::remove_file(entry.path());
+            }
         }
     }
 }

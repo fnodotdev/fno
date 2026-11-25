@@ -5268,13 +5268,12 @@ impl Core {
         let name = sq.name.clone().unwrap_or_default();
         let mut key = sq.key.clone();
         let origins = sq.origins.clone();
+        let project = sq.project.clone();
         if name.is_empty() && key.is_empty() {
-            // First persist of an unnamed squad: derive its durable identity from
-            // its origins when it has any (stable across restarts, so a repo's
-            // home squad upserts onto one row forever -), else mint a
-            // random key (an originless squad has no stable identity). Recording
-            // it on the live squad makes every later persist in this process
-            // reuse it.
+            // First persist of an unnamed squad: derive its durable identity
+            // from its origins (stable across restarts), else mint a random
+            // key. Recording it on the live squad makes every later persist
+            // in this process reuse it.
             key = if origins.is_empty() {
                 crate::squad_store::mint_key()
             } else {
@@ -5397,6 +5396,7 @@ impl Core {
             members,
             tab_trees,
             active_tab: Some(active_tab),
+            project,
         })
     }
 
@@ -6918,6 +6918,7 @@ impl Core {
                 // Adopt the persisted key so the rebuilt squad keeps its identity.
                 if let Some(s) = self.session.squad_mut(sid) {
                     s.key = restore_key;
+                    s.project = ps.project.clone();
                     // The active tab is part of the captured shape; a
                     // stored index is clamped, never trusted to be in range.
                     if !ps.tab_trees.is_empty() {
@@ -7812,6 +7813,7 @@ impl Core {
                 // back to the origin-basename label (disambiguated).
                 name: s.name.clone().unwrap_or(derived),
                 canonical_cwd: s.canonical_cwd().to_string(),
+                project: s.project.clone(),
                 tabs: s
                     .tabs
                     .iter()
@@ -7968,8 +7970,8 @@ impl Core {
     /// watch-only row whose `attach_id` reconciles to it (attach map) -
     /// else it is a bare pane labelled from its `PaneEntry` (Discretion 5). One
     /// row per entity: a registry agent merged onto a pane never also renders
-    /// watch-only. Truly paneless registry rows (bg/headless/daemon/roster)
-    /// append AFTER the pane rows, matched to a squad by cwd (exact or child) or
+    /// watch-only. Truly paneless registry rows (bg/daemon/roster, a watched
+    /// headless run) append AFTER the pane rows, matched to a squad by cwd (exact or child) or
     /// the `squad: None` catch-all. The fact-badge lattice is unchanged: a dead
     /// pane forces `exited` over any live-TTL badge (fact beats report).
     /// (US4) Compose a row's dim line-2 subline from the off-loop
@@ -9583,9 +9585,11 @@ impl Core {
             Command::DispatchPlan { node, account } => {
                 self.dispatch_card(client_id, node, account, true)
             }
-            Command::NewSquad { name, origin } => {
-                self.handle_new_squad(client_id, view, vp, &name, origin)
-            }
+            Command::NewSquad {
+                name,
+                origin,
+                project,
+            } => self.handle_new_squad(client_id, view, vp, &name, origin, project),
             Command::PinThread {
                 squad,
                 harness,
@@ -9595,9 +9599,8 @@ impl Core {
                 self.handle_add_workspace_folder(client_id, squad, &path)
             }
             Command::RenameTab { tab, name } => {
-                // Explicit tab rename. A stale/unknown id (the tab
-                // closed racing the overlay) is refused fail-closed with a
-                // notice, like SelectTab - no mutation.
+                // A stale tab id (closed racing the overlay) is refused with a
+                // notice, like SelectTab; nothing mutates.
                 match self.session.find_tab(tab) {
                     Some((sid, ti)) => {
                         let clean = sanitize_tab_name(&name);
@@ -9607,18 +9610,15 @@ impl Core {
                             .expect("find_tab live squad")
                             .tabs[ti];
                         let tid = t.id;
-                        // Blank-after-sanitize CLEARS the rename back to the
-                        // derived label (Locked 2: "reset to auto" is a
-                        // meaningful rename target).
+                        // A blank name clears the rename back to the derived label.
                         t.name = (!clean.is_empty()).then_some(clean);
                         // (US4) Persist before the push: a client that sees the
                         // name knows it survives a restart. No-op when untracked.
                         self.persist_squad(sid);
-                        // persist_squad preserves tab_specs byte-for-byte,
-                        // so a template tab's stored spec would keep the OLD name
-                        // key across this overlay rename - the same re-persist
-                        // tab_rename does for the wire-API path. Guarded so a
-                        // non-template tab causes no store churn.
+                        // persist_squad keeps tab_specs byte-for-byte, so a
+                        // template tab's stored spec would keep the OLD name key;
+                        // re-persist it, as tab_rename does. Guarded: no churn
+                        // for a non-template tab.
                         if self.template_specs.contains_key(&tid) {
                             self.persist_template_specs(sid);
                         }
@@ -10489,12 +10489,9 @@ impl Core {
                 request,
                 verdict,
             } => {
-                // A parked control-door reach finishes with its own
-                // verdict: take it first, let the replay run on the observer
-                // that stayed registered, then answer the held reply. Taken
-                // with a restore, not a drop: a verdict for a DIFFERENT
-                // client (a TUI gesture resolving while a reach is parked)
-                // puts the park back.
+                // A parked control-door reach finishes with its own verdict:
+                // take it first, replay, then answer the held reply. A verdict
+                // for a DIFFERENT client puts the park back.
                 let parked = self.pending_thread_reply.take().and_then(|p| {
                     if p.client == id {
                         Some(p)
@@ -10506,10 +10503,8 @@ impl Core {
                 match verdict {
                     Err(reason) => self.notice(id, reason),
                     Ok(verdict) => {
-                        // Stage exactly one verdict; the receiving arm takes
-                        // it at its argv construction. A vanished client
-                        // (detached mid-resolution) drops the replay - the
-                        // re-dispatch's command read refuses it.
+                        // Stage one verdict for the receiving arm to take. A
+                        // client gone mid-resolution drops the replay.
                         self.reentry_verdict = Some(verdict);
                         match *request {
                             ReentrySpawnRequest::Attach {
@@ -10529,6 +10524,9 @@ impl Core {
                             }
                             ReentrySpawnRequest::FocusHeld { pid } => {
                                 self.command(id, Command::FocusPane(pid));
+                            }
+                            ReentrySpawnRequest::ReviveSeat { pid } => {
+                                self.finish_seat_revive(id, pid)
                             }
                         }
                         self.reentry_verdict = None;

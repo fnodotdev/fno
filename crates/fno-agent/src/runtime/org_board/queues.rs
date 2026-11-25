@@ -1418,7 +1418,12 @@ fn question_rows(outstanding: &Map<String, Value>) -> Vec<Value> {
                             .and_then(crate::numbers::label),
                         "question": r.get("question"),
                         "ts": r.get("ts"),
-                        "session_id": r.get("session_id")
+                        "session_id": r.get("session_id"),
+                        // Absent (null here) once the question is due: the
+                        // notify_watch due lane reads exactly this stamp,
+                        // so a snoozed or pre-deadline question never
+                        // re-fires it.
+                        "quiet": s_str(r, "quiet")
                     })
                 })
                 .collect()

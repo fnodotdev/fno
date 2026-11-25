@@ -1179,6 +1179,12 @@ pub struct RegistryEntry {
     /// refuses the store rather than erasing a stamp on read-modify-write.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub substrate: Option<String>,
+    /// v47: a person asked to watch this one-shot (`fno agent spawn --mux`):
+    /// its headless row keeps its sideline place. Every other headless row
+    /// stays off the sideline. Additive and optional: a writer that does
+    /// not know it keeps it in `extra`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub watch: bool,
     #[serde(default)]
     pub log_path: Option<String>,
     /// Timestamp of the most recent reconcile probe (finding #1 High): the

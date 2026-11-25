@@ -729,20 +729,31 @@ pub fn plans_content_dir_from(root: &Path) -> Option<PathBuf> {
     vault.is_dir().then_some(vault)
 }
 
-/// The configured node-id prefix, rstripped of its dash, from the sibling
-/// settings door; the legacy `ab` fallback matches the deleted
-/// `fno.graph._constants.node_id_prefix` fail-open.
+/// The documented fresh-install prefix. crates/fno cannot link fno-agent,
+/// so this twin of settings::DEFAULT_NODE_ID_PREFIX stays in sync by name;
+/// the CI graphless closure gate (skills/target/scripts/lib/node-id.sh:50)
+/// knows only the `x` and `ab` families.
+const DOOR_DEFAULT_PREFIX: &str = "x";
+
+/// The dash-trimmed prefix a settings-read receipt names, or the documented
+/// default when the door fails or carries nothing. The allowlist already
+/// inserts the legacy `ab` explicitly, so a wrong guess here can only
+/// misclassify a plan filename, never mint an id.
+fn door_prefix_from(door: Option<&str>) -> String {
+    door.and_then(|out| {
+        serde_json::from_str::<serde_json::Value>(out)
+            .ok()?
+            .get("prefix")?
+            .as_str()
+            .map(str::to_string)
+    })
+    .map(|p| p.trim_end_matches('-').to_string())
+    .filter(|p| !p.is_empty())
+    .unwrap_or_else(|| DOOR_DEFAULT_PREFIX.to_string())
+}
+
 fn door_node_prefix() -> String {
-    door_fact(&["state", "path", "settings-read"])
-        .and_then(|out| {
-            serde_json::from_str::<serde_json::Value>(&out)
-                .ok()?
-                .get("prefix")?
-                .as_str()
-                .map(str::to_string)
-        })
-        .map(|p| p.trim_end_matches('-').to_string())
-        .unwrap_or_else(|| "ab".to_string())
+    door_prefix_from(door_fact(&["state", "path", "settings-read"]).as_deref())
 }
 
 /// One stdout fact from the sibling fno-agent binary; None when the sibling

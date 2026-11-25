@@ -62,6 +62,11 @@ impl Core {
                 self.notice(id, composer_guard::HOLD_REFUSAL_TEXT);
                 return;
             }
+            // The revive key on a parked no-signal seat. The parked screen
+            // reads no input, so the key is the server's to take.
+            if bytes == b"r" && self.request_seat_revive(id, focus) {
+                return;
+            }
             let now = Instant::now();
             if let Some(&holder) = self.claims.get(&focus) {
                 if pid_alive(holder) {

@@ -478,9 +478,9 @@ enum Role {
     /// `fno do feedback ...`: the redacted upstream-issue draft execs the
     /// sibling binary, the same byte-verbatim handover as DoCi.
     DoFeedback,
-    /// `fno do docs ...`: the docs release-binding family (bind, surface,
-    /// gate) execs the sibling binary's docs dispatcher, the same
-    /// byte-verbatim handover as DoCi.
+    /// `fno do docs ...`: the docs family, tie doc pages to releases
+    /// (link, surface, gate), execs the sibling binary's docs dispatcher,
+    /// the same byte-verbatim handover as DoCi.
     DoDocs,
     /// `fno do show|diff ...`: a file at a revision and the diff between two
     /// revisions exec the sibling binary's rev dispatcher, the DoCi handover.
@@ -1953,6 +1953,11 @@ fn main() {
     fno::legacy_env::adopt();
     fno::chokepoint_events::install();
     let args: Vec<OsString> = env::args_os().skip(1).collect();
+    // Under the sandbox pin no store exists to open: the loop's commands
+    // forward as typed ops and the rest refuse, before any door runs.
+    if let Some(code) = fno::sandbox_door::run(&args) {
+        std::process::exit(code);
+    }
     fno::cli_usage::start(&args);
     let is_tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let env_session = mux_cli::env_server();

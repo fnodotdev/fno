@@ -162,6 +162,6 @@ The capability table's `hooks.<job>` rows, one cell per declared state (`support
 | agy | supported | impossible (no compaction event; role lands at session start) | supported |
 | footnote | supported | impossible (in-process compaction fires no hook event) | supported (native: the harness writes fno's own records) |
 | gemini | missing | missing | missing |
-| cursor-agent | missing | missing | missing |
-| grok | missing | missing | missing |
-| zcode | missing | missing | missing |
+| cursor-agent | missing | missing | missing (adapter ships as hooks/cursor-session-report.sh, registered by the cli-hooks cursor arm; unproven until a live fire) |
+| grok | missing | missing | missing (adapter ships as hooks/grok-session-report.sh, registered by the cli-hooks grok arm; unproven until a live fire) |
+| zcode | missing | missing | missing (adapter ships via the shared plugin Stop shim hooks/session-state.sh; unproven until a live fire) |

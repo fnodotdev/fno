@@ -129,7 +129,11 @@ pub(crate) const IDLE_HARNESSES: [&str; 6] = ["claude", "codex", "opencode", "pi
 /// expiry arm. Loop-run children exit on allow, and unknown or unsupported
 /// harnesses stay on the blocking path rather than idling without a routed wake.
 pub(crate) fn harness_can_idle(author_harness: Option<&str>, is_loop_run_child: bool) -> bool {
-    author_harness.is_some_and(|h| IDLE_HARNESSES.contains(&h)) && !is_loop_run_child
+    // The daemon cannot re-wake a session inside a sandbox, so a sandbox
+    // stop never parks or idles: it blocks.
+    author_harness.is_some_and(|h| IDLE_HARNESSES.contains(&h))
+        && !is_loop_run_child
+        && crate::sandbox::origin().is_none()
 }
 
 /// US6a: the codex watch registration address. `Some` only for a codex

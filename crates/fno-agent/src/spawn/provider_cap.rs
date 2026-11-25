@@ -1047,49 +1047,10 @@ pub fn questions_path(home: &AgentsHome) -> PathBuf {
 // Leaving (wave 3): short waits hold, sleep hours decide, else ask.
 // ---------------------------------------------------------------------------
 
-/// True when `now_epoch` falls inside `cfg.sleep_hours` ("HH:MM-HH:MM")
-/// resolved in `cfg.sleep_timezone` (IANA; empty = the machine's local zone).
-/// A window that crosses midnight is a window, not an error.
+/// True when the user is away at `now_epoch`: outside their `[user]` working
+/// hours (see [`crate::agents_config::UserHours`]).
 pub fn in_sleep_window(cfg: &ProviderCapConfig, now_epoch: i64) -> bool {
-    use chrono::{Local, TimeZone, Timelike};
-    let (start, end) = match parse_sleep_hours(&cfg.sleep_hours) {
-        Some(v) => v,
-        None => return false,
-    };
-    let local_minutes: i64 = if cfg.sleep_timezone.is_empty() {
-        Local
-            .timestamp_opt(now_epoch, 0)
-            .single()
-            .map(|dt| (dt.hour() as i64) * 60 + dt.minute() as i64)
-            .unwrap_or(0)
-    } else {
-        let tz = match cfg.sleep_timezone.parse::<chrono_tz::Tz>() {
-            Ok(tz) => tz,
-            Err(_) => return false, // an unparseable zone is never "asleep"
-        };
-        tz.timestamp_opt(now_epoch, 0)
-            .single()
-            .map(|dt| (dt.hour() as i64) * 60 + dt.minute() as i64)
-            .unwrap_or(0)
-    };
-    if start <= end {
-        local_minutes >= start && local_minutes < end
-    } else {
-        local_minutes >= start || local_minutes < end
-    }
-}
-
-fn parse_sleep_hours(spec: &str) -> Option<(i64, i64)> {
-    let spec = spec.trim();
-    if spec.is_empty() {
-        return None;
-    }
-    let (a, b) = spec.split_once('-')?;
-    let hm = |s: &str| -> Option<i64> {
-        let (h, m) = s.trim().split_once(':')?;
-        Some(h.trim().parse::<i64>().ok()? * 60 + m.trim().parse::<i64>().ok()?)
-    };
-    Some((hm(a)?, hm(b)?))
+    cfg.user_hours.away(now_epoch)
 }
 
 /// The operator's recorded answer for a lane, from `provider-cap decide`.
@@ -2777,7 +2738,6 @@ mod tests {
         let _ = std::fs::create_dir_all(lanes_dir(&home));
         let lane = lane_fixture(Some(now_epoch_secs() + 3 * 3600), None);
         let cfg = ProviderCapConfig {
-            sleep_hours: String::new(),
             mode: "ask".into(),
             ..Default::default()
         };
@@ -2803,11 +2763,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(home.root());
         let lane = lane_fixture(Some(now_epoch_secs() + 3 * 3600), None);
         let cfg = ProviderCapConfig {
-            // 24:00, not 23:59: the window is end-exclusive, so 23:59 is
-            // awake for one minute a day and this CI test ran inside it
-            // (2026-09-26 23:59 UTC). The test wants "asleep now", always.
-            sleep_hours: "00:00-24:00".into(),
-            sleep_timezone: String::new(),
+            user_hours: crate::agents_config::UserHours::always_away(),
             mode: "ask".into(),
             ..Default::default()
         };

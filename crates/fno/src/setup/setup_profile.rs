@@ -416,9 +416,7 @@ pub(crate) fn host() -> String {
 /// The sidecar folder every join artifact lives in, beside the setup
 /// markers: the state root grows no new top-level row (the freeze gate).
 pub(crate) fn backup_dir() -> PathBuf {
-    crate::model_catalog::state_dir()
-        .join("sidecar")
-        .join("setup-backup")
+    crate::state_layout::place(&crate::model_catalog::state_dir(), "sidecar").join("setup-backup")
 }
 
 /// The in-progress flag a join stamps before its first write, so a run
@@ -429,8 +427,7 @@ pub(crate) fn in_progress_flag() -> PathBuf {
 
 /// Where a joined profile is saved, so the operator can diff or re-export.
 pub(crate) fn profile_path() -> PathBuf {
-    crate::model_catalog::state_dir()
-        .join("sidecar")
+    crate::state_layout::place(&crate::model_catalog::state_dir(), "sidecar")
         .join("setup-profile.toml")
 }
 

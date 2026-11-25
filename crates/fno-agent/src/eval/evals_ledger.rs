@@ -68,7 +68,7 @@ pub(crate) struct Learning {
 }
 
 fn path(state: &Path) -> PathBuf {
-    state.join("evals/learnings.jsonl")
+    crate::evals::state_evals_dir(state).join("learnings.jsonl")
 }
 
 pub(crate) fn read(state: &Path) -> Vec<Learning> {
@@ -112,7 +112,7 @@ pub(crate) fn append(state: &Path, mut row: Learning) -> Result<bool, LedgerErro
     }
     let file = path(state);
     let io = |e: std::io::Error| LedgerError::Io(format!("{}: {e}", file.display()));
-    std::fs::create_dir_all(state.join("evals")).map_err(io)?;
+    std::fs::create_dir_all(crate::evals::state_evals_dir(state)).map_err(io)?;
     let lock = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)

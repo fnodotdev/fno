@@ -259,6 +259,20 @@ write_atomic() {
     mv "$tmp" "$target"
 }
 
+# Sidecar bookkeeping. The retirement pass
+# (scripts/memory/retire-unread-pass.sh) reads .reads.jsonl and counts a
+# line as use only when its ts is not older than the entry's own
+# created_at, so stale ghosts of a prior life of that name never protect
+# a recreated entry. An update event keeps a revisited entry alive. Fail
+# open: bookkeeping never fails the write. Dedup stays a sidecar no-op -
+# identical content re-derived by a pass is not a consumer read.
+record_sidecar() {
+    local fname="$1" kind="$2" sid="$3"
+    printf '{"file":"%s","ts":"%s","kind":"%s","session":"%s"}\n' \
+        "${fname//\"/}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$kind" "${sid//\"/}" \
+        >> "$MEMORY_DIR/.reads.jsonl" 2>/dev/null || true
+}
+
 frontmatter_for_new() {
     cat <<EOF
 ---
@@ -393,6 +407,7 @@ ${ENTRY_BODY}"
     ' "$TARGET")
     write_atomic "$TARGET" "${new_fm}
 ${appended_body}"
+    record_sidecar "$FILENAME" update "$SESSION_ID"
     log "updated: $FILENAME (appended session $SESSION_ID stanza)"
     # MEMORY.md already indexes this file - no append needed.
     # Bump entries_written on the gate artifact (Phase 3 task 3.1).
