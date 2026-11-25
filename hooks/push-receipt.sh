@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# fno hook: PostToolUse(PushNotification) - record what the push call returned
+# fno hook: PostToolUse - record what a PushNotification call returned
 #
 # The ask-push hook only asks the model to push. The PushNotification tool
 # answers with a request, never a receipt, and it suppresses the push when the
