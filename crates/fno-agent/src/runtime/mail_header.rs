@@ -64,7 +64,7 @@ pub struct HeldRelease {
 /// digit-and-whitespace shape matches group into one backticked fold line
 /// (`` `name x26, newest 119m` ``) trailing the whole-rendered unique mail.
 pub fn render_held_release(release: &HeldRelease) -> String {
-    render_held_release_with(
+    render_held_release_at(
         release,
         chrono::Local::now().fixed_offset(),
         crate::numbers::mail_token,
@@ -72,17 +72,9 @@ pub fn render_held_release(release: &HeldRelease) -> String {
 }
 
 /// [`render_held_release`] against a fixed clock, so the fold line's
-/// `newest` age is testable. Ids print as stored.
-pub fn render_held_release_at(
-    release: &HeldRelease,
-    now: chrono::DateTime<chrono::FixedOffset>,
-) -> String {
-    render_held_release_with(release, now, str::to_string)
-}
-
-/// The held-release render with the id token under the caller's control:
+/// `newest` age is testable, with the id token under the caller's control:
 /// delivery passes the minting number token, a test passes identity.
-fn render_held_release_with(
+pub fn render_held_release_at(
     release: &HeldRelease,
     now: chrono::DateTime<chrono::FixedOffset>,
     token: impl Fn(&str) -> String,
@@ -1366,7 +1358,7 @@ mod tests {
                 unique,
             ],
         };
-        let out = render_held_release_at(&release, now);
+        let out = render_held_release_at(&release, now, str::to_string);
         assert!(out.starts_with("4 held messages"), "{out}");
         let fold = "`fno-lead-wake x3, newest 112m`";
         assert!(out.contains(fold), "{out}");
@@ -1411,7 +1403,7 @@ mod tests {
                 },
             ],
         };
-        let twin_out = render_held_release_at(&twin, now);
+        let twin_out = render_held_release_at(&twin, now, str::to_string);
         assert!(!twin_out.contains("x2"), "{twin_out}");
         assert!(is_held_release_turn(&twin_out));
     }
