@@ -464,14 +464,14 @@ EOF
   local t=0 cpu rss
   while [ "$t" -lt "$IDLE_SECS" ]; do
     if [ -n "$tui_pid" ]; then
-      cpu="$(ps -o %cpu= -p "$tui_pid" 2>/dev/null | tr -d ' ')"
-      rss="$(ps -o rss= -p "$tui_pid" 2>/dev/null | tr -d ' ')"
+      cpu="$(ps -o %cpu= -p "$tui_pid" 2>/dev/null | tr -d ' ' || true)"
+      rss="$(ps -o rss= -p "$tui_pid" 2>/dev/null | tr -d ' ' || true)"
       [ -n "$cpu" ] && echo "idle_cpu,tui,$t,$cpu" >> "$SAMPLES"
       [ -n "$rss" ] && echo "idle_rss_kb,tui,$t,$rss" >> "$SAMPLES"
     fi
     if [ -n "$app_pid" ]; then
-      cpu="$(ps -o %cpu= -p "$app_pid" 2>/dev/null | tr -d ' ')"
-      rss="$(ps -o rss= -p "$app_pid" 2>/dev/null | tr -d ' ')"
+      cpu="$(ps -o %cpu= -p "$app_pid" 2>/dev/null | tr -d ' ' || true)"
+      rss="$(ps -o rss= -p "$app_pid" 2>/dev/null | tr -d ' ' || true)"
       [ -n "$cpu" ] && echo "idle_cpu,app,$t,$cpu" >> "$SAMPLES"
       [ -n "$rss" ] && echo "idle_rss_kb,app,$t,$rss" >> "$SAMPLES"
     fi
