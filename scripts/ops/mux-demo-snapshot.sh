@@ -82,6 +82,9 @@ FNO_DEMO_HOLDS=""
 FNO_DEMO_DND=""
 THEME_ARG=""
 FNO_DEMO_SORT=""
+# --feed-view <json> seeds the activity feed's saved table view (sort, group,
+# filters, folded groups), the shape `view_store::FeedViewPref` reads.
+FNO_DEMO_FEED_VIEW=""
 FNO_DEMO_LAYOUT=""
 FNO_DEMO_LEAD_NESTING=""
 # --second-workspace adds `notes` (open), `archive` (folded by hand) and `ledger`
@@ -105,6 +108,8 @@ for a in "$@"; do
     WEB_PORT="$a"
   elif [ "$PREV" = "--sort" ]; then
     FNO_DEMO_SORT="$a"
+  elif [ "$PREV" = "--feed-view" ]; then
+    FNO_DEMO_FEED_VIEW="$a"
   elif [ "$PREV" = "--layout" ]; then
     FNO_DEMO_LAYOUT="$a"
   elif [ "$PREV" = "--install-card" ]; then
@@ -122,7 +127,7 @@ for a in "$@"; do
     # dark and only the selection bar would invert.
     THEME_ARG="$a"
     ARGS+=("$a")
-  elif [ "$a" = "--window-size" ] || [ "$a" = "--group" ] || [ "$a" = "--web-port" ] || [ "$a" = "--sort" ] || [ "$a" = "--layout" ] || [ "$a" = "--install-card" ] || [ "$a" = "--app-theme" ] || [ "$a" = "--app-mode" ] || [ "$a" = "--mod-pane" ]; then
+  elif [ "$a" = "--window-size" ] || [ "$a" = "--group" ] || [ "$a" = "--web-port" ] || [ "$a" = "--sort" ] || [ "$a" = "--feed-view" ] || [ "$a" = "--layout" ] || [ "$a" = "--install-card" ] || [ "$a" = "--app-theme" ] || [ "$a" = "--app-mode" ] || [ "$a" = "--mod-pane" ]; then
     :
   elif [ "$a" = "--second-workspace" ]; then
     export FNO_DEMO_SECOND_WS=1
@@ -1550,16 +1555,18 @@ fi
 # --sort <column>:<direction> (for example age:descending) sets the
 # sideline's sort column, the way the sort control persists it.
 # --lead-nesting turns on the group-by-lead toggle the same way.
-if [ -n "${FNO_DEMO_SORT:-}" ] || [ -n "${FNO_DEMO_LEAD_NESTING:-}" ]; then
-  python3 - "$FNO_AGENT_HOME/mux-view.json" "${FNO_DEMO_SORT:-}" "${FNO_DEMO_LEAD_NESTING:-}" <<'PY'
+if [ -n "${FNO_DEMO_SORT:-}" ] || [ -n "${FNO_DEMO_LEAD_NESTING:-}" ] || [ -n "${FNO_DEMO_FEED_VIEW:-}" ]; then
+  python3 - "$FNO_AGENT_HOME/mux-view.json" "${FNO_DEMO_SORT:-}" "${FNO_DEMO_LEAD_NESTING:-}" "${FNO_DEMO_FEED_VIEW:-}" <<'PY'
 import json, os, sys
-path, spec, nesting = sys.argv[1:4]
+path, spec, nesting, feed_view = sys.argv[1:5]
 data = json.load(open(path)) if os.path.exists(path) else {}
 if spec:
     column, direction = spec.split(":")
     data["sort"] = {"column": column, "direction": direction}
 if nesting:
     data["group_by_lead"] = True
+if feed_view:
+    data["feed_view"] = json.loads(feed_view)
 json.dump(data, open(path, "w"))
 PY
 fi
