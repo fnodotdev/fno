@@ -356,21 +356,27 @@ mod tests {
         assert_eq!(data["prior_reach"], json!("project:demo"));
 
         // A bad reach value refuses before any lookup.
-        let err = rescope_data("d-aaaa0001", "internal", &rows, &op).expect_err("bad reach");
-        assert!(err.contains("reach must be"), "{err}");
-        let err = rescope_data("d-aaaa0001", "project:", &rows, &op).expect_err("empty slug");
-        assert!(err.contains("reach must be"), "{err}");
+        let refusal = rescope_data("d-aaaa0001", "internal", &rows, &op).expect_err("bad reach");
+        assert!(refusal.to_string().contains("reach must be"), "{refusal}");
+        let refusal = rescope_data("d-aaaa0001", "project:", &rows, &op).expect_err("empty slug");
+        assert!(refusal.to_string().contains("reach must be"), "{refusal}");
 
-        let err = rescope_data("nope", "global", &rows, &op).expect_err("none");
-        assert!(err.contains("no live decision matches"), "{err}");
+        let refusal = rescope_data("nope", "global", &rows, &op).expect_err("none");
+        assert!(
+            refusal.to_string().contains("no live decision matches"),
+            "{refusal}"
+        );
 
         // Two live laws under one subject refuse until one is named by id.
         let rows = vec![
             law("d-aaaa0001", None, "quiet-hours", "No pushes at night"),
             law("d-bbbb0002", None, "quiet-hours", "No deploys either"),
         ];
-        let err = rescope_data("quiet-hours", "global", &rows, &op).expect_err("ambiguous");
-        assert!(err.contains("rescope one by id"), "{err}");
+        let refusal = rescope_data("quiet-hours", "global", &rows, &op).expect_err("ambiguous");
+        assert!(
+            refusal.to_string().contains("rescope one by id"),
+            "{refusal}"
+        );
     }
 
     #[test]
@@ -379,9 +385,12 @@ mod tests {
         let agent = Caller::as_authority("agent");
         let rows = vec![law("d-aaaa0001", None, "quiet-hours", "No pushes at night")];
         for caller in [&chat, &agent] {
-            let err = rescope_data("d-aaaa0001", "global", &rows, caller)
+            let refusal = rescope_data("d-aaaa0001", "global", &rows, caller)
                 .expect_err("not the user's yes");
-            assert!(err.contains("needs superuser authority"), "{err}");
+            assert!(
+                refusal.to_string().contains("needs superuser authority"),
+                "{refusal}"
+            );
         }
     }
 
