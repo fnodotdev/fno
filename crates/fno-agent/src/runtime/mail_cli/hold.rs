@@ -449,6 +449,19 @@ fn registrable(harness: &str, session_id: &str) -> Result<(), String> {
 /// A minted row gets `created_at` now.
 pub(crate) fn register_existing_session(harness: &str, session_id: &str) -> Result<(), String> {
     registrable(harness, session_id)?;
+    let print_run = crate::claude_ask::hand_typed_print_run(Some(harness));
+    register_session_row(harness, session_id, print_run)
+        .map_err(|e| format!("registry write failed: {e}"))
+}
+
+/// The mint and the refresh. A print run typed by hand files as headless, the
+/// word the session report gives the same run. The skill hooks adopt a run
+/// after its session report, so this mint is the only one that run gets.
+fn register_session_row(
+    harness: &str,
+    session_id: &str,
+    print_run: bool,
+) -> Result<(), crate::state::StateError> {
     let cwd = std::env::current_dir()
         .map(|p| p.display().to_string())
         .unwrap_or_default();
@@ -479,6 +492,7 @@ pub(crate) fn register_existing_session(harness: &str, session_id: &str) -> Resu
         registry.entries.push(crate::state::RegistryEntry {
             name,
             harness: Some(harness.to_string()),
+            substrate: print_run.then(|| "headless".to_string()),
             cwd,
             status: crate::AgentStatus::Idle,
             created_at: now,
@@ -490,8 +504,6 @@ pub(crate) fn register_existing_session(harness: &str, session_id: &str) -> Resu
             )
         });
     })
-    .map_err(|e| format!("registry write failed: {e}"))?;
-    Ok(())
 }
 
 /// One delivery attempt over the inject path: the current binary re-entered
@@ -579,8 +591,12 @@ mod tests {
     /// carrying a dead pre-restart pid, through the same helper the register
     /// command uses. A synthetic census makes the test process itself the
     /// live harness ancestor, so the ambient walk answers a real, live pid.
+    /// The same door mints a print run typed by hand as headless, the word
+    /// the session report gives it: the skill hooks adopt a run after its
+    /// session report, so this mint is the only one it gets. Any other hand
+    /// session keeps a plain row.
     #[test]
-    fn a_join_refresh_binds_the_live_ambient_pid() {
+    fn the_register_door_binds_the_live_pid_and_stamps_a_print_run() {
         let _env = crate::claims::test_env_lock();
         let tmp = tempfile::tempdir().expect("tempdir");
         let agents = tmp.path().join("agents-home");
@@ -622,17 +638,34 @@ mod tests {
 
         let outcome = register_existing_session("codex", "sid-join");
         assert!(outcome.is_ok(), "{outcome:?}");
+        register_session_row("claude", "sid-print", true).unwrap();
+        register_session_row("claude", "sid-plain", false).unwrap();
 
         let registry = crate::state::load_registry(&AgentsHome::shared_registry_json()).unwrap();
-        let row = registry
-            .entries
-            .iter()
-            .find(|e| e.harness_session_id.as_deref() == Some("sid-join"))
-            .expect("row still present");
-        assert_eq!(row.pid, Some(me));
+        let row = |sid: &str| {
+            registry
+                .entries
+                .iter()
+                .find(|e| e.harness_session_id.as_deref() == Some(sid))
+        };
+        let joined = row("sid-join").expect("row still present");
+        assert_eq!(joined.pid, Some(me));
         assert_eq!(
-            row.pid_start_time,
+            joined.pid_start_time,
             crate::process_probe::process_start_time(me)
+        );
+        assert_eq!(
+            row("sid-print")
+                .expect("the print run keeps its row")
+                .substrate
+                .as_deref(),
+            Some("headless")
+        );
+        assert_eq!(
+            row("sid-plain")
+                .expect("the plain session keeps its row")
+                .substrate,
+            None
         );
 
         crate::spawn_context::set_test_ancestry_table(None);

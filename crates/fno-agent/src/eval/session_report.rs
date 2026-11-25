@@ -1513,15 +1513,11 @@ fn stamp_row_words(params: &mut Value, claimed: bool) {
         no_row,
     );
     // A print run typed by hand files as headless, so its row stays off the
-    // sideline: nobody types into it, and it prints in the shell that started it.
-    let hand_print = !claimed
-        && crate::claude_ask::typed_print_run(
-            agent_self,
-            harness.as_deref(),
-            std::env::var("CLAUDE_PID")
-                .ok()
-                .and_then(|pid| pid.parse().ok()),
-        );
+    // sideline: nobody types into it, and it prints in the shell that started
+    // it. A hand session mints a row here only under the auto-register config
+    // or a law trigger it already carries. One adopted later mints through the
+    // register door, which asks the same question.
+    let hand_print = !claimed && crate::claude_ask::hand_typed_print_run(harness.as_deref());
     // An object write, never an index: the clippy ratchet refuses a new one.
     if let Some(obj) = params.as_object_mut() {
         if no_row || print_mode {

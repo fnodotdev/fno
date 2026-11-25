@@ -3015,6 +3015,19 @@ pub(crate) fn typed_print_run(
             .is_some_and(|argv| print_word_in_argv(&argv))
 }
 
+/// [`typed_print_run`] read from this process's own env: a session with no
+/// fno identity, the named harness, and the pid the CLI hands every hook.
+/// Every door that mints a hand session's row asks this one question.
+pub(crate) fn hand_typed_print_run(harness: Option<&str>) -> bool {
+    typed_print_run(
+        None,
+        harness,
+        std::env::var("CLAUDE_PID")
+            .ok()
+            .and_then(|pid| pid.parse().ok()),
+    )
+}
+
 /// Dispatch a `claude -p` truly-headless one-shot (`headless` substrate).
 ///
 /// Unlike [`dispatch_claude_spawn`] (the detached `--bg` thread, which returns a
