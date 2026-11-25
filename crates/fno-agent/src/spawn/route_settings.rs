@@ -543,8 +543,14 @@ mod tests {
         };
         let bytes = payload_bytes(&Map::new(), None, &rules);
         let doc: Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(doc["permissions"]["allow"], json!(["Read(//w/**)"]));
-        assert_eq!(doc["permissions"]["ask"], json!(["Edit(//w/**/.git)"]));
+        assert_eq!(
+            doc.pointer("/permissions/allow"),
+            Some(&json!(["Read(//w/**)"]))
+        );
+        assert_eq!(
+            doc.pointer("/permissions/ask"),
+            Some(&json!(["Edit(//w/**/.git)"]))
+        );
         let none = Map::new();
         let env = env_for_write(&none, &none, false, true).expect("rules alone owe a file");
         assert!(env.is_empty(), "no scrub floor on a plain lane");
@@ -565,8 +571,11 @@ mod tests {
         };
         let path = write(&ask, root.path()).unwrap().path;
         let doc: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-        assert_eq!(doc["env"], json!({}));
-        assert_eq!(doc["permissions"]["ask"], json!(["Edit(//w/**/.git)"]));
+        assert_eq!(doc.pointer("/env"), Some(&json!({})));
+        assert_eq!(
+            doc.pointer("/permissions/ask"),
+            Some(&json!(["Edit(//w/**/.git)"]))
+        );
         state_restore(saved);
         drop(guard);
     }
