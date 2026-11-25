@@ -336,6 +336,144 @@ fn max_batch(cwd: &Path) -> usize {
         .map_or(DEFAULT_MAX_BATCH, |n| n as usize)
 }
 
+/// `merge_queue.provider`: `auto` (default) picks GitHub's queue on a repo
+/// that can have one and fno's own queue elsewhere, `github` and `fno` force
+/// one, `off` disables queueing entirely. The default works on any repo with
+/// no setting beyond enabling the queue (D1888).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Provider {
+    Auto,
+    Github,
+    Fno,
+    Off,
+}
+
+fn provider(cwd: &Path) -> Provider {
+    match crate::agents_config::config_value_deep(cwd, &["merge_queue", "provider"])
+        .and_then(|v| v.as_str())
+    {
+        Some("github") => Provider::Github,
+        Some("fno") => Provider::Fno,
+        Some("off") => Provider::Off,
+        _ => Provider::Auto,
+    }
+}
+
+/// Which queue runs for this checkout: GitHub's (`gh pr merge --auto` is the
+/// entry) or fno's own. `None` means no queue at all - the queue is disabled
+/// or `off`. The merge probe and the daemon arm both read this, so one fact
+/// feeds both sites.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum QueueKind {
+    Github,
+    Fno,
+}
+
+pub(crate) fn queue_kind(cwd: &Path) -> Option<QueueKind> {
+    if !enabled(cwd) {
+        return None;
+    }
+    match provider(cwd) {
+        Provider::Off => None,
+        Provider::Fno => Some(QueueKind::Fno),
+        Provider::Github => Some(QueueKind::Github),
+        Provider::Auto => Some(auto_kind(cwd)),
+    }
+}
+
+/// The gate workflow file name, `merge_queue.gate_workflow` (default
+/// `merge-queue-gate.yml`). Setup writes that file on repos without
+/// GitHub's queue, so the name is per-repo config, not a const.
+pub(crate) fn gate_workflow(cwd: &Path) -> String {
+    crate::agents_config::config_value_deep(cwd, &["merge_queue", "gate_workflow"])
+        .and_then(|v| v.as_str())
+        .filter(|s| s.ends_with(".yml") || s.ends_with(".yaml"))
+        .unwrap_or(GATE_WORKFLOW)
+        .to_string()
+}
+
+/// The auto pick. GitHub's queue on a repo that can have one: public and
+/// org-owned, or private under an Enterprise Cloud org, with a workflow that
+/// listens on merge_group so required checks actually run on queue batches.
+/// Everything else runs fno's own queue.
+fn auto_kind(cwd: &Path) -> QueueKind {
+    let Some(repo) = repo_facts(cwd) else {
+        return QueueKind::Fno;
+    };
+    let owner = slug_owner(cwd);
+    let enterprise = repo.private && org_plan_is_enterprise(cwd, &owner);
+    auto_pick(
+        repo.owner_org,
+        repo.private,
+        enterprise,
+        workflows_listen_on_merge_group(cwd),
+    )
+}
+
+/// The auto pick, pure so tests measure it without a network. GitHub's queue
+/// on a repo that can have one: public and org-owned, or private under an
+/// Enterprise Cloud org, with a workflow listening on merge_group so the
+/// required checks actually run on queue batches. Everything else, and any
+/// unreadable fact, runs fno's own queue: the safe default queues rather
+/// than skips.
+fn auto_pick(owner_org: bool, private: bool, enterprise: bool, merge_group: bool) -> QueueKind {
+    let capable = if private {
+        owner_org && enterprise
+    } else {
+        owner_org
+    };
+    if capable && merge_group {
+        QueueKind::Github
+    } else {
+        QueueKind::Fno
+    }
+}
+
+/// The owner login from this checkout's origin slug, empty when unreadable.
+fn slug_owner(cwd: &Path) -> String {
+    crate::pr_status::cache::git_slug(cwd)
+        .and_then(|s| s.split('/').next().map(str::to_string))
+        .unwrap_or_default()
+}
+
+/// Repo facts from one `repos/{owner}/{repo}` read. Unreadable facts
+/// degrade to fno's own queue: the safe default queues rather than skips.
+struct RepoFacts {
+    private: bool,
+    owner_org: bool,
+}
+
+fn repo_facts(root: &Path) -> Option<RepoFacts> {
+    let raw = gh(root, "repos/{owner}/{repo}", &[]).ok()?;
+    let v: Value = serde_json::from_str(&raw).ok()?;
+    Some(RepoFacts {
+        private: v
+            .pointer("/private")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+        owner_org: text(&v, "/owner/type") == "Organization",
+    })
+}
+
+/// A private repo queues on GitHub only under an Enterprise Cloud org.
+fn org_plan_is_enterprise(root: &Path, owner: &str) -> bool {
+    let raw = gh(root, &format!("orgs/{owner}"), &[]).ok()?;
+    let v: Value = serde_json::from_str(&raw).ok()?;
+    text(&v, "/plan/name") == "enterprise"
+}
+
+/// Any workflow file in this checkout listens on merge_group.
+fn workflows_listen_on_merge_group(cwd: &Path) -> bool {
+    let dir = cwd.join(".github").join("workflows");
+    let Ok(read) = std::fs::read_dir(&dir) else {
+        return false;
+    };
+    read.filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "yml" || x == "yaml"))
+        .any(|p| std::fs::read_to_string(p).is_ok_and(|s| s.contains("merge_group")))
+}
+
 fn events_path() -> Option<std::path::PathBuf> {
     AgentsHome::from_env_opt().map(|home| crate::daemon::global_events_path(&home))
 }
@@ -431,8 +569,9 @@ fn check_name(job: &str) -> String {
 }
 
 fn gate_of(root: &Path, batch: &Batch) -> Result<Gate, String> {
+    let gate = gate_workflow(root);
     let path = format!(
-        "repos/{{owner}}/{{repo}}/actions/workflows/{GATE_WORKFLOW}/runs?branch={}&per_page=20",
+        "repos/{{owner}}/{{repo}}/actions/workflows/{gate}/runs?branch={}&per_page=20",
         queue_ref(&batch.id)
     );
     let v: Value = serde_json::from_str(&gh(root, &path, &[])?).map_err(|e| e.to_string())?;
@@ -470,7 +609,8 @@ fn gate_of(root: &Path, batch: &Batch) -> Result<Gate, String> {
 }
 
 fn dispatch_gate(root: &Path, batch: &str) -> Result<String, String> {
-    let path = format!("repos/{{owner}}/{{repo}}/actions/workflows/{GATE_WORKFLOW}/dispatches");
+    let gate = gate_workflow(root);
+    let path = format!("repos/{{owner}}/{{repo}}/actions/workflows/{gate}/dispatches");
     let field = format!("ref={}", queue_ref(batch));
     gh(root, &path, &["-X", "POST", "-f", &field])
 }
@@ -737,7 +877,9 @@ pub(crate) fn run_pass(home: &AgentsHome) -> Result<(), String> {
     let mut slugs = HashSet::new();
     for root in crate::daemon::worktree_sweep::registry_repo_roots(home) {
         let root = Path::new(&root);
-        if !enabled(root) {
+        // GitHub's queue runs itself on capable repos; fno's arm runs fno's
+        // own queue and nothing else.
+        if queue_kind(root) != Some(QueueKind::Fno) {
             continue;
         }
         // Two clones of one repo are one queue.
