@@ -205,10 +205,16 @@ fn a_done_fire_shortens_the_conversation_hold_to_the_grace() {
         );
         crate::mail_hold::arm_conversation(SID);
         // The conversation hold's end, or None when no conversation hold is live.
+        #[derive(serde::Deserialize)]
+        struct Status {
+            conversation: bool,
+            clock_until: Option<String>,
+        }
         let until = || {
-            let status = crate::mail_hold::self_status(SID).ok()?;
-            status.get("conversation")?.as_bool()?.then_some(())?;
-            chrono::DateTime::parse_from_rfc3339(status.get("clock_until")?.as_str()?).ok()
+            let status: Status =
+                serde_json::from_value(crate::mail_hold::self_status(SID).ok()?).ok()?;
+            status.conversation.then_some(())?;
+            chrono::DateTime::parse_from_rfc3339(&status.clock_until?).ok()
         };
         let armed = until();
         let payload = json!({"session_id": SID});
