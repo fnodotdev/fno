@@ -338,13 +338,16 @@ struct ShotWorld {
 struct KeeperRow {
     keeper_pid: Option<u32>,
     child_pid: Option<u32>,
+    stale: Option<String>,
 }
 
-/// The pids in a keeper listing, keeper first, then its child.
+/// The pids in a keeper listing, keeper first, then its child. A stale
+/// row's child may be gone, and its number may name another process by
+/// now, so only the keeper is signalled there.
 fn keeper_pids(listing: &[u8]) -> Vec<u32> {
     let rows: Vec<KeeperRow> = serde_json::from_slice(listing).unwrap_or_default();
     rows.iter()
-        .flat_map(|r| [r.keeper_pid, r.child_pid])
+        .flat_map(|r| [r.keeper_pid, r.child_pid.filter(|_| r.stale.is_none())])
         .flatten()
         .collect()
 }
@@ -935,8 +938,8 @@ mod tests {
 
     #[test]
     fn keeper_listing_names_the_keeper_and_its_child_and_skips_gaps() {
-        let listing = br#"[{"keeper_pid":10,"child_pid":11},{"keeper_pid":12,"child_pid":null},{"socket":"x"}]"#;
-        assert_eq!(keeper_pids(listing), vec![10, 11, 12]);
+        let listing = br#"[{"keeper_pid":10,"child_pid":11},{"keeper_pid":12,"child_pid":null},{"keeper_pid":13,"child_pid":14,"stale":"child pid 14 is gone"},{"socket":"x"}]"#;
+        assert_eq!(keeper_pids(listing), vec![10, 11, 12, 13]);
         assert!(keeper_pids(b"not json").is_empty());
     }
 
