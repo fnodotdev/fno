@@ -101,14 +101,19 @@ pub fn history_argv() -> Vec<String> {
     ]
 }
 
+/// The one place the client starts the feed projection: the one-shot read
+/// and the held reader both spawn through it, reaped when dropped.
+pub fn feed_command<S: AsRef<std::ffi::OsStr>>(args: &[S]) -> tokio::process::Command {
+    let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
+    command.args(args).kill_on_drop(true);
+    command
+}
+
 /// Read the whole feed history, `Err` carrying the typed reason on any
 /// failure. An empty history is `Ok` with no rows - a real answer.
 pub async fn fetch_history() -> Result<Vec<FeedItem>, FeedError> {
-    let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
-    command
-        .args(history_argv())
-        .stdin(std::process::Stdio::null())
-        .kill_on_drop(true);
+    let mut command = feed_command(&history_argv());
+    command.stdin(std::process::Stdio::null());
     let fut = crate::process_admission::tokio_output(&mut command);
     let output = tokio::time::timeout(SHELLOUT_TIMEOUT, fut)
         .await

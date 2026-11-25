@@ -18,13 +18,11 @@ impl Reader {
     /// Start the reader. Its answers arrive on `fold` under `gen`; a reader
     /// that exits sends one failure, which an already-closed panel ignores.
     pub(crate) fn spawn(gen: u64, fold: super::FoldTx) -> Result<Reader, FeedError> {
-        let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
+        let mut command = crate::feed_overlay::feed_command(&["agent", "fleet", "feed", "--serve"]);
         command
-            .args(["agent", "fleet", "feed", "--serve"])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .kill_on_drop(true);
+            .stderr(std::process::Stdio::null());
         let mut child = crate::process_admission::tokio_spawn(&mut command)
             .map_err(|e| FeedError::Spawn(e.to_string()))?;
         let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {

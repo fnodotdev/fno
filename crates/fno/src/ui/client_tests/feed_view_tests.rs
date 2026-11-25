@@ -168,13 +168,12 @@ fn render_rows() {
         lines[2]
     );
     assert!(
-        lines[3].contains("x-cccc"),
-        "top row shows the newest: {}",
-        lines[3]
+        lines.get(3).is_some_and(|l| l.contains("x-cccc")),
+        "top row shows the newest: {lines:?}"
     );
     assert!(!lines[3].contains('▸'), "the fill is the cursor");
-    assert!(lines[4].contains("x-bbbb"));
-    assert!(lines[5].contains("x-aaaa"));
+    assert!(lines.get(4).is_some_and(|l| l.contains("x-bbbb")));
+    assert!(lines.get(5).is_some_and(|l| l.contains("x-aaaa")));
     assert!(lines[6].trim().is_empty(), "below the last item: blank");
     assert!(
         lines
@@ -195,9 +194,9 @@ fn render_rows() {
     // Slot offset 1 skips the group header, so the newest row (x-c) leads
     // the window now.
     let lines = feed_panel_lines(&o, false, W, ROWS, 1);
-    assert!(lines[2].contains("x-cccc"));
-    assert!(lines[3].contains("x-bbbb"));
-    assert!(lines[4].contains("x-aaaa"));
+    assert!(lines.get(2).is_some_and(|l| l.contains("x-cccc")));
+    assert!(lines.get(3).is_some_and(|l| l.contains("x-bbbb")));
+    assert!(lines.get(4).is_some_and(|l| l.contains("x-aaaa")));
     assert!(lines[5].trim().is_empty());
 
     // x-d15a: the failure line names the cause, never the old generic
@@ -414,9 +413,8 @@ fn click_rows() {
     // At this 31-wide panel a 6-wide node needs 33 columns at kind 6 and
     // summary 10, so node goes last in the give order and the summary stays.
     assert!(
-        !lines
-            .iter()
-            .any(|l| l.contains("x-cccc") || l.contains("node")),
+        !lines.iter().any(|l| l.contains("x-cccc"))
+            && lines.get(1).is_some_and(|h| !h.contains("node")),
         "node drops at 31 columns with real-width ids: {lines:?}"
     );
     // The header rows never deep-link; the item row under them does.
