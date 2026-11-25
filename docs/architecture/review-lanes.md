@@ -456,7 +456,7 @@ A match is strong evidence of self-attestation. A mismatch is weak evidence of a
 
 ## Reviewer context
 
-Each local `review_attestation` can carry `reviewer_context`. When the harness records a forked code-review context, the value is `fresh`. A positive same-context review tool result records `shared`. If no positive context marker exists, including Codex native review, the value is `unknown`. This field measures execution-context evidence, not who invoked the command. It does not affect coverage or merge policy.
+Each local `review_attestation` can carry `reviewer_context`. When the harness records a forked code-review context, the value is `fresh`. A positive same-context review tool result records `shared`. If no positive context marker exists, including Codex native review, the value is `unknown`. A cross-model peer review records `fresh`: the peer runs in its own session and never shares the builder's context. This field measures execution-context evidence, not who invoked the command. It does not affect the coverage count, and it is not inert at the merge gate either: when `review.posture` demands an independent reviewer, a covered row with no reviewed `fresh`-context attestation at the head refuses until one lands or the round budget is spent (the posture waives at the cap). A typed stamp is a claim the caller makes about the review's context; the hook-derived stamps are the stronger evidence.
 
 The origin is recorded, not gating.
 
