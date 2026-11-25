@@ -526,38 +526,34 @@ impl Pane {
         }
     }
 
-    /// The command blocks that touch the viewport, as inclusive viewport rows.
-    /// A viewport row `r` holds absolute row `viewport_top_abs() + r`. The open
-    /// block runs to the live bottom. Anchors drift under reflow, so rows clamp
-    /// into the viewport and a client picks a block by `seq`, never by row.
+    /// The completed command blocks that touch the viewport, as inclusive
+    /// viewport rows. A viewport row `r` holds absolute row `viewport_top_abs()
+    /// + r`. A running block is left out: a pick selects finished output only.
+    /// The alternate screen (vim) has no blocks, so it gets none. Anchors drift
+    /// under reflow, so rows clamp into the viewport and a client picks a block
+    /// by `seq`, never by row.
     fn block_spans(&self) -> Vec<BlockSpan> {
         let rows = self.rows as i64;
-        if rows == 0 {
+        if rows == 0 || self.term.mode().contains(Mode::ALT_SCREEN) {
             return Vec::new();
         }
         let top = self.viewport_top_abs();
-        let live_bottom = self.term.history_size() as i64 + rows - 1;
-        let spans = self
-            .blocks
+        self.blocks
             .iter()
-            .map(|b| (b.seq, b.start_abs, b.end_abs, b.exit))
-            .chain(
-                self.open
-                    .iter()
-                    .map(|o| (o.seq, o.start_abs, live_bottom, None)),
-            );
-        spans
-            .filter_map(|(seq, start, end, exit)| {
-                let (first, last) = (start.min(end) - top, start.max(end) - top);
+            .filter_map(|b| {
+                let (first, last) = (
+                    b.start_abs.min(b.end_abs) - top,
+                    b.start_abs.max(b.end_abs) - top,
+                );
                 if last < 0 || first >= rows {
                     return None;
                 }
                 Some(BlockSpan {
-                    seq,
+                    seq: b.seq,
                     top: first.clamp(0, rows - 1) as u16,
                     bottom: last.clamp(0, rows - 1) as u16,
-                    exit,
-                    selected: self.selected_block == Some(seq),
+                    exit: b.exit,
+                    selected: self.selected_block == Some(b.seq),
                 })
             })
             .collect()

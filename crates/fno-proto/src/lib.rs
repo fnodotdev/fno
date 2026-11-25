@@ -2692,7 +2692,7 @@ pub struct BlockSpan {
     pub seq: u64,
     pub top: u16,
     pub bottom: u16,
-    /// The command's exit status; `None` while it still runs.
+    /// The command's exit status; `None` when the shell reported none.
     pub exit: Option<i32>,
     /// This block holds the pane's block selection.
     pub selected: bool,
