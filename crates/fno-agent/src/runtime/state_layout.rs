@@ -1749,7 +1749,8 @@ mod tests {
         }
 
         let rows = parse_table(
-            "cargo-build\tcache/cargo-build\tdir\tdaemon\nplugin-stage\tinstall/plugin-stage\tdir\tdaemon\n",
+            "cargo-build\tcache/cargo-build\tdir\tdaemon\nplugin-stage\tinstall/plugin-stage\tdir\tdaemon\n\
+             route-settings\tstate/route-settings\tdir\tdaemon\nevals\tdb/evals\tdir\tdaemon\n",
         )
         .unwrap();
         let live = tmp_root("drain-live");
@@ -1759,9 +1760,24 @@ mod tests {
         let stage_file = live.join("plugin-stage/fno/hooks/stop.sh");
         std::fs::create_dir_all(stage_file.parent().unwrap()).unwrap();
         std::fs::write(&stage_file, b"live hook\n").unwrap();
+        std::fs::create_dir_all(live.join("route-settings")).unwrap();
+        std::fs::write(live.join("route-settings/fresh.json"), b"{}").unwrap();
+        std::fs::create_dir_all(live.join("evals/claude-config")).unwrap();
+        std::fs::write(live.join("evals/claude-config/.claude.json"), b"{}").unwrap();
+        std::fs::write(live.join("evals/labels.jsonl"), b"{}\n").unwrap();
 
         let receipt = migrate_rows(&live, &rows, true, "live");
-        for name in ["cargo-build", "plugin-stage"] {
+        let evals = receipt
+            .iter()
+            .find(|entry| entry.legacy == "evals")
+            .unwrap();
+        assert!(
+            matches!(evals.status, Status::Pending(ref reason) if reason.contains("sealed eval login")),
+            "the sealed login's folder stays and names its holder: {evals:?}"
+        );
+        assert!(live.join("evals/claude-config/.claude.json").is_file());
+        assert!(live.join("db/evals/labels.jsonl").is_file());
+        for name in ["cargo-build", "plugin-stage", "route-settings"] {
             let row = receipt.iter().find(|entry| entry.legacy == name).unwrap();
             assert!(
                 matches!(row.status, Status::Pending(ref reason) if reason.starts_with("drains:")),
@@ -1785,9 +1801,12 @@ mod tests {
             std::fs::write(marker, b"stale swap residue\n").unwrap();
         }
         age_tree(&residue.join("plugin-stage"), old);
+        std::fs::create_dir_all(residue.join("route-settings")).unwrap();
+        std::fs::write(residue.join("route-settings/old.json"), b"{}").unwrap();
+        age_tree(&residue.join("route-settings"), old);
 
         let receipt = migrate_rows(&residue, &rows, true, "test");
-        for name in ["cargo-build", "plugin-stage"] {
+        for name in ["cargo-build", "plugin-stage", "route-settings"] {
             let row = receipt.iter().find(|entry| entry.legacy == name).unwrap();
             assert!(matches!(row.status, Status::Moved), "{row:?}");
             assert!(
@@ -1799,6 +1818,7 @@ mod tests {
         assert!(parked.join("fc").join("build/output").is_file());
         assert!(parked.join(".fno.new-old/marker").is_file());
         assert!(parked.join(".fno.old-old/marker").is_file());
+        assert!(parked.join("old.json").is_file());
         clean(&residue);
     }
 
