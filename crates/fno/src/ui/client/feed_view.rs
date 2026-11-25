@@ -30,20 +30,25 @@ use super::*;
 use crate::feed_overlay::{event_fields, FeedItem};
 
 pub(crate) mod page;
+pub(crate) mod picker;
 pub(crate) mod search;
+pub(crate) mod table;
 
-/// The panel's open state: the items the last fold landed, the hover marker
-/// (a display index, NEWEST FIRST, the order the rows render in), and the
-/// same generation/single-flight discipline the needs fold runs. `want` arms
-/// the run-loop kick; `gen` invalidates a result that lands after a close or
-/// a re-open. `sel` follows the pointer while the panel is UNFOCUSED, and the
-/// arrows while it is focused - the panel consumes keys only then.
+pub(crate) use table::Slot;
+
+/// The panel's open state: the whole history the last fold landed, the one
+/// table view over it and the slots that view yields, the cursor (a slot
+/// index), and the same generation/single-flight discipline the needs fold
+/// runs. `want` arms the run-loop kick; `gen` invalidates a result that
+/// lands after a close or a re-open. `sel` follows the pointer while the
+/// panel is UNFOCUSED, and the keys while it is focused - the panel consumes
+/// keys only then.
 pub(crate) struct FeedOverlay {
     pub(crate) win: page::FeedWindow,
-    /// Hovered row in display order; the cursor fill paints here.
+    /// The cursor, as an index into `slots`; the cursor fill paints here.
     pub(crate) sel: usize,
     /// The typed fold failure, if the last fold failed. `Some` renders its
-    /// reason verbatim; a success fold clears it.
+    /// reason verbatim; a success fold clears it and the last good rows stay.
     pub(crate) error: Option<crate::feed_overlay::FeedError>,
     pub(crate) inflight: bool,
     pub(crate) want: bool,
@@ -54,191 +59,96 @@ pub(crate) struct FeedOverlay {
     /// When the last fold LANDED. Arms the 15s auto-refresh; `None` until the
     /// first fold lands, and the first landing resets to the newest row.
     pub(crate) last_fold: Option<Instant>,
-    /// The row order the panel renders in, persisted per client (`o` toggles).
-    pub(crate) order: FeedOrder,
-    /// The page the window asked for and the fold has not answered.
-    pub(crate) want_page: Option<crate::feed_overlay::PageReq>,
+    /// Sort, column filters, group and collapsed groups.
+    pub(crate) view: table::TableView,
+    /// What `view` yields over `win.items` and the query: the ONE slot list
+    /// paint, hit test, hover and keys walk. Rebuilt by [`reslot`] only.
+    pub(crate) slots: Vec<Slot>,
+    /// Rows that pass the query and every column filter.
+    pub(crate) matched: usize,
+    /// The open sort or group picker.
+    pub(crate) picker: Option<picker::FeedPicker>,
     /// The active query text; empty means unfiltered.
     pub(crate) query_text: String,
     /// The parsed query (or its refusal, for the footer). `None` when the
     /// bar is empty.
     pub(crate) parsed: Option<Result<crate::search_query::Parsed, String>>,
-    /// True when the whole query pushed into projection flags, so landed
-    /// pages need no client-side matching.
-    pub(crate) pushed: bool,
-    /// The projection flags of the active query, when they pushed.
-    pub(crate) filter: Option<crate::feed_overlay::FeedFilter>,
     /// The `?` keys overlay.
     pub(crate) keys_open: bool,
-    /// Where the client-side scan reached (the footer's "scanned to" note).
-    pub(crate) scan_note: Option<String>,
     /// The search bar is open (its text lives in `query_text`).
     pub(crate) bar_open: bool,
-    /// Pages spent on the current client-matched scan gesture, capped so a
-    /// query whose matches are sparse stops after a bounded read.
-    pub(crate) scan_pages: u32,
     /// The debounce instant while the bar has text.
     pub(crate) bar_debounce: Option<Instant>,
 }
 
-/// The panel's row order. `Grouped` is the shipped order (one header per
-/// owner, groups ordered by their newest row); `Recent` is one flat list,
-/// newest first. The operator toggles with `o`; the choice persists through
-/// the view store.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum FeedOrder {
-    #[default]
-    Grouped,
-    Recent,
+/// The view a fresh client opens with: the default, except that the old
+/// two-state `feed_order` preference reads once as its group (`recent` was
+/// the flat list).
+fn initial_view() -> table::TableView {
+    let mut view = table::TableView::default();
+    if crate::view_store::load_feed_order().as_deref() == Some("recent") {
+        view.group = table::Group::None;
+    }
+    view
 }
 
-impl FeedOrder {
-    /// The view-store spelling.
-    fn key(self) -> &'static str {
-        match self {
-            FeedOrder::Grouped => "grouped",
-            FeedOrder::Recent => "recent",
-        }
-    }
-
-    /// The stored spelling back; anything unreadable stays `None` so the
-    /// caller can fall to the shipped order.
-    fn parse(s: &str) -> Option<Self> {
-        match s {
-            "grouped" => Some(FeedOrder::Grouped),
-            "recent" => Some(FeedOrder::Recent),
-            _ => None,
-        }
-    }
-
-    /// One press of `o`. A two-state cycle, so every press changes the order.
-    fn next(self) -> Self {
-        match self {
-            FeedOrder::Grouped => FeedOrder::Recent,
-            FeedOrder::Recent => FeedOrder::Grouped,
-        }
-    }
-}
-
-/// A fresh open: the prior items ride over (instant content), but a refold is
-/// always armed - history may have moved since the last open, and the fold is
-/// cheap and off-loop.
+/// A fresh open: the prior rows, query and view ride over (instant
+/// content), but a refold is always armed - history may have moved since
+/// the last open, and the fold runs off the UI loop.
 pub(crate) fn open_overlay(prior: Option<FeedOverlay>, gen: u64) -> FeedOverlay {
-    let (win, query_text, parsed, pushed, filter) = match prior {
-        Some(f) => (f.win, f.query_text, f.parsed, f.pushed, f.filter),
+    let (win, query_text, parsed, view) = match prior {
+        Some(f) => (f.win, f.query_text, f.parsed, f.view),
         None => (
             page::FeedWindow::default(),
             String::new(),
             None,
-            false,
-            None,
+            initial_view(),
         ),
     };
-    let order = crate::view_store::load_feed_order()
-        .and_then(|o| FeedOrder::parse(&o))
-        .unwrap_or_default();
-    let sel = first_item_slot(&win.items, order);
-    FeedOverlay {
+    let mut f = FeedOverlay {
         win,
-        sel,
+        sel: 0,
         error: None,
         inflight: false,
-        want: false,
+        want: true,
         gen,
         hpan: 0,
         last_fold: None,
-        order,
-        want_page: Some(crate::feed_overlay::PageReq::Head),
+        view,
+        slots: Vec::new(),
+        matched: 0,
+        picker: None,
         query_text,
         parsed,
-        pushed,
-        filter,
         keys_open: false,
-        scan_note: None,
         bar_open: false,
         bar_debounce: None,
-        scan_pages: 0,
-    }
+    };
+    reslot(&mut f);
+    f.sel = first_item_slot(&f.slots);
+    f
 }
 
-/// One display slot: a group header or a row (as its STORAGE index into
-/// `items`, oldest first). The ONE mapping every reader walks, so a header
-/// row never opens a detail and the marker never parks on one.
-pub(crate) enum Slot {
-    Header(String),
-    Item(usize),
+/// Rebuild the slot list from the rows, the query and the view. Every
+/// change to any of the three calls this, and nothing else writes `slots`.
+pub(crate) fn reslot(f: &mut FeedOverlay) {
+    let ctx = crate::feed_overlay::EventCtx::from_rows(&[], &[]);
+    let query = match &f.parsed {
+        Some(Ok(parsed)) => Some(parsed),
+        _ => None,
+    };
+    let (slots, matched) = table::evaluate(&f.win.items, &f.view, |it| {
+        query.is_none_or(|q| q.keeps(&event_fields(it, &ctx)))
+    });
+    f.slots = slots;
+    f.matched = matched;
+    f.sel = f.sel.min(f.slots.len().saturating_sub(1));
 }
 
 /// True when a row renders in the teams band: a team kind, or a removal
 /// that names the team it held.
 fn in_teams_band(kind: &str, team: &Option<String>) -> bool {
     kind == "team_granted" || kind == "team_vacated" || (kind == "session_reaped" && team.is_some())
-}
-
-/// The display order for one panel order. `Grouped` is the shipped shape;
-/// `Recent` is every row, newest first, no headers - one flat list the
-/// operator reads top as now.
-pub(crate) fn display_slots(items: &[FeedItem], order: FeedOrder) -> Vec<Slot> {
-    match order {
-        FeedOrder::Grouped => display_slots_grouped(items),
-        // Storage indexes ascending = oldest first, so the reversed range is
-        // the flat newest-first list.
-        FeedOrder::Recent => (0..items.len()).rev().map(Slot::Item).collect(),
-    }
-}
-
-/// The grouped order: the teams band first (newest first), then one header
-/// per owner, groups ordered by their newest row, then the unowned rows under
-/// `other`. Within a group, newest first; ties keep storage order.
-fn display_slots_grouped(items: &[FeedItem]) -> Vec<Slot> {
-    let mut teams: Vec<usize> = Vec::new();
-    let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
-    let mut other: Vec<usize> = Vec::new();
-    for (i, item) in items.iter().enumerate() {
-        if in_teams_band(&item.kind, &item.team) {
-            teams.push(i);
-            continue;
-        }
-        match &item.owner {
-            Some(owner) => match groups.iter_mut().find(|(o, _)| o == owner) {
-                Some((_, idx)) => idx.push(i),
-                None => groups.push((owner.clone(), vec![i])),
-            },
-            None => other.push(i),
-        }
-    }
-    let mut slots = Vec::new();
-    if !teams.is_empty() {
-        slots.push(Slot::Header("teams".into()));
-        for i in newest_first(items, &teams) {
-            slots.push(Slot::Item(i));
-        }
-    }
-    groups.sort_by(|a, b| {
-        let newest = |g: &(String, Vec<usize>)| g.1.iter().map(|i| ts_key_of(&items[*i].ts)).max();
-        newest(b).cmp(&newest(a))
-    });
-    for (owner, idx) in groups {
-        slots.push(Slot::Header(owner));
-        for i in newest_first(items, &idx) {
-            slots.push(Slot::Item(i));
-        }
-    }
-    if !other.is_empty() {
-        slots.push(Slot::Header("other".into()));
-        for i in newest_first(items, &other) {
-            slots.push(Slot::Item(i));
-        }
-    }
-    slots
-}
-
-/// Storage indexes newest first; ties keep storage order (a stable sort on
-/// already-ascending indexes reverses tie groups together).
-fn newest_first(items: &[FeedItem], idx: &[usize]) -> Vec<usize> {
-    let mut v = idx.to_vec();
-    v.sort_by(|a, b| ts_key_of(&items[*b].ts).cmp(&ts_key_of(&items[*a].ts)));
-    v
 }
 
 /// ts sort key, the projection's own shape.
@@ -293,12 +203,23 @@ pub(crate) fn feed_panel_rows(
     let show_date = w >= 48;
     let ts_w = if show_date { 11 } else { 5 };
     let dw = |s: &str| unicode_width::UnicodeWidthStr::width(s);
-    let col_w = |title: usize, cap: usize, vals: Vec<usize>| {
-        vals.into_iter().fold(title, usize::max).min(cap)
+    // Each title carries its marks: an arrow on the sort column, a dot and
+    // the value count on a filtered one, so color is never the only signal.
+    let [t_time, t_area, t_harness, t_kind, t_node, t_session, t_lead, t_summary] =
+        table::Col::ALL.map(|c| column_title(&o.view, c));
+    // A cell is as wide as its widest value, capped; the title always fits.
+    let col_w = |title: &str, cap: usize, vals: Vec<usize>| {
+        let title = dw(title);
+        vals.into_iter().fold(title, usize::max).min(cap.max(title))
     };
-    let area_w = col_w(4, 8, o.win.items.iter().map(|i| dw(&i.area)).collect());
+    let ts_w = ts_w.max(dw(&t_time));
+    let area_w = col_w(
+        &t_area,
+        8,
+        o.win.items.iter().map(|i| dw(&i.area)).collect(),
+    );
     let harness_w = col_w(
-        7,
+        &t_harness,
         8,
         o.win
             .items
@@ -308,7 +229,7 @@ pub(crate) fn feed_panel_rows(
             .collect(),
     );
     let kind_w = col_w(
-        4,
+        &t_kind,
         16,
         o.win
             .items
@@ -317,7 +238,7 @@ pub(crate) fn feed_panel_rows(
             .collect(),
     );
     let node_w = col_w(
-        4,
+        &t_node,
         8,
         o.win
             .items
@@ -327,7 +248,7 @@ pub(crate) fn feed_panel_rows(
             .collect(),
     );
     let session_w = col_w(
-        7,
+        &t_session,
         8,
         o.win
             .items
@@ -337,7 +258,7 @@ pub(crate) fn feed_panel_rows(
             .collect(),
     );
     let lead_w = col_w(
-        4,
+        &t_lead,
         12,
         o.win
             .items
@@ -393,39 +314,59 @@ pub(crate) fn feed_panel_rows(
 
     let mut rows: Vec<Vec<Span>> = Vec::new();
     rows.push(vec![Span::plain(pad_to(
-        &header_line(focused, o.order, w),
+        &header_line(focused, &o.view, o.matched, o.win.items.len(), w),
         w,
     ))]);
     let mut header = vec![Span::plain("   ")];
-    push_col(&mut header, "time", ts_w, true, false);
+    push_col(&mut header, &t_time, ts_w, true, false);
     if show_area {
-        push_col(&mut header, "area", area_w, true, false);
+        push_col(&mut header, &t_area, area_w, true, false);
     }
     if show_harness {
-        push_col(&mut header, "harness", harness_w, true, false);
+        push_col(&mut header, &t_harness, harness_w, true, false);
     }
-    push_col(&mut header, "kind", kind_w, true, false);
-    push_col(&mut header, "node", node_w, true, false);
+    push_col(&mut header, &t_kind, kind_w, true, false);
+    push_col(&mut header, &t_node, node_w, true, false);
     if show_session {
-        push_col(&mut header, "session", session_w, true, false);
+        push_col(&mut header, &t_session, session_w, true, false);
     }
     if show_lead {
-        push_col(&mut header, "lead", lead_w, true, false);
+        push_col(&mut header, &t_lead, lead_w, true, false);
     }
+    header.push(Span {
+        text: t_summary,
+        bold: true,
+        brand: false,
+    });
+    pad_to_spans(&mut header, w);
     rows.push(header);
     let visible = feed_body_rows(visible_rows);
-    let slots = display_slots(&o.win.items, o.order);
     for d in offset..offset + visible {
-        match slots.get(d) {
-            Some(Slot::Header(label)) => {
-                rows.push(vec![Span {
-                    text: pad_to(&format!(" ▾ {label}"), w),
-                    bold: true,
-                    brand: false,
-                }]);
+        match o.slots.get(d) {
+            Some(Slot::Header {
+                label,
+                count,
+                collapsed,
+                ..
+            }) => {
+                let caret = if *collapsed { '▸' } else { '▾' };
+                let count = count.to_string();
+                let head = format!(" {caret} {label}");
+                let gap = w.saturating_sub(dw(&head) + dw(&count) + 1).max(1);
+                rows.push(vec![
+                    Span {
+                        text: head,
+                        bold: true,
+                        brand: false,
+                    },
+                    Span::plain(format!("{}{count} ", " ".repeat(gap))),
+                ]);
             }
             Some(Slot::Item(i)) => {
-                let item = &o.win.items[*i];
+                let Some(item) = o.win.items.get(*i) else {
+                    rows.push(vec![Span::plain(pad_to("", w))]);
+                    continue;
+                };
                 let selected = focused && d == o.sel;
                 let mut row = Vec::new();
                 row.push(Span {
@@ -480,40 +421,37 @@ pub(crate) fn feed_panel_rows(
                 pad_to_spans(&mut row, w);
                 rows.push(row);
             }
-            // Short list: the rows below the last item paint the panel's
+            // Short list: the rows below the last slot paint the panel's
             // ground across the full width, so no pane cell shows through.
             None => rows.push(vec![Span::plain(pad_to("", w))]),
         }
     }
-    // The empty notice only when the fold has SETTLED empty: "no activity"
-    // beside a still-running fold is a claim the fold has not earned yet.
-    if o.win.items.is_empty() && o.error.is_none() && !o.inflight && visible > 0 {
-        let empty_line = 1 + if visible > 0 { 1 } else { 0 };
-        rows[empty_line] = vec![Span::plain(pad_to(
-            &match &o.query_text {
-                q if !q.is_empty() => format!("   no activity for {q}"),
-                _ => "   no activity yet".to_string(),
-            },
-            w,
-        ))];
+    // The empty notices only when the fold has SETTLED: "no activity"
+    // beside a still-running fold is a claim the fold has not earned yet,
+    // and zero matches over a full history is a filter, never an empty feed.
+    if o.slots.is_empty() && o.error.is_none() && !o.inflight && visible > 0 {
+        let notice = if o.win.items.is_empty() {
+            "   no activity yet".to_string()
+        } else {
+            "   no rows match".to_string()
+        };
+        if let Some(line) = rows.get_mut(2) {
+            *line = vec![Span::plain(pad_to(&notice, w))];
+        }
     }
-    // The footer carries the hints (AC12): the new-row marker, the active
-    // query, then the keys; the status rides the same line.
+    // The footer carries the hints: the new-row marker, the active query,
+    // then the keys; the status rides the same line.
     let mut status = if let Some(e) = &o.error {
         // The typed reason renders verbatim: a timeout names its budget, an
-        // admission refusal its slot count. The cause leads the line.
-        format!("{e}")
+        // admission refusal its slot count. The last good rows stay above.
+        format!("{e} · r retry")
     } else if let Some(Err(refusal)) = &o.parsed {
-        // The shared grammar's refusal, verbatim; no fetch armed.
+        // The shared grammar's refusal, verbatim.
         refusal.clone()
     } else if o.inflight && o.win.items.is_empty() {
-        "folding...".to_string()
-    } else if let Some(note) = &o.scan_note {
-        note.clone()
-    } else if o.win.at_oldest {
-        "end of history".to_string()
+        "reading history".to_string()
     } else {
-        format!("{} loaded", o.win.items.len())
+        String::new()
     };
     if o.bar_open {
         status = format!("/{}▏ {status}", o.query_text);
@@ -526,15 +464,18 @@ pub(crate) fn feed_panel_rows(
         left.push_str(&format!("{} · ", o.query_text));
     }
     let hints = if focused {
-        format!("/ search · ? keys · o {} · esc close", o.order.key())
+        "o sort · W group · z fold · / search · ? keys"
     } else {
-        "E focus · e close".to_string()
+        "E focus · e close"
     };
-    let footer = pad_to(&format!(" {left}{hints} · {status}"), w);
-    rows.push(vec![Span::plain(footer)]);
+    let footer = if status.is_empty() {
+        format!(" {left}{hints}")
+    } else {
+        format!(" {left}{hints} · {status}")
+    };
+    rows.push(vec![Span::plain(pad_to(&footer, w))]);
     rows
 }
-
 /// One styled span of a panel row, in display columns. `brand` names the
 /// theme's accent; both flags ride the span, so the paint pass reads them
 /// without re-deriving which kind needs action.
@@ -585,49 +526,84 @@ pub(crate) fn feed_panel_lines(
 }
 
 /// The click resolver, the exact inverse of the painter's slot list: painted
-/// row 0 is the header, painted row `visible_rows - 1` is the footer, and a
-/// row in between carries its STORAGE item index when that slot is an Item.
-/// A header row resolves to None, so a header never opens a detail.
-pub(crate) fn feed_row_item(
-    items: &[FeedItem],
+/// row 0 is the title, row 1 the column header, painted row
+/// `visible_rows - 1` the footer, and a row in between is the slot at
+/// `offset + painted_row - 2`. Chrome resolves to None.
+pub(crate) fn feed_slot_at(
+    slots: &[Slot],
     painted_row: usize,
     visible_rows: usize,
     offset: usize,
-    order: FeedOrder,
-) -> Option<usize> {
-    // Painted rows 0 and 1 are the header and the column header; the last
-    // painted row is the footer. Chrome never resolves.
+) -> Option<(usize, &Slot)> {
     if painted_row <= 1 || painted_row + 1 >= visible_rows {
         return None;
     }
-    match display_slots(items, order).get(offset + painted_row - 2) {
-        Some(Slot::Item(i)) => Some(*i),
+    let d = offset + painted_row - 2;
+    slots.get(d).map(|s| (d, s))
+}
+
+/// The STORAGE item under a painted row; a group header or chrome is None,
+/// so a header never opens a detail.
+pub(crate) fn feed_row_item(
+    slots: &[Slot],
+    painted_row: usize,
+    visible_rows: usize,
+    offset: usize,
+) -> Option<usize> {
+    match feed_slot_at(slots, painted_row, visible_rows, offset) {
+        Some((_, Slot::Item(i))) => Some(*i),
         _ => None,
     }
 }
 
-/// The panel header for one input state, at the widest spelling that fits.
-/// A clipped header is how the focus key stayed undiscoverable: the panel
-/// drags to any width, and at the 40-column default the full sentence does
-/// not fit.
-///
-/// The last spelling in each list leads with the KEY. The panel drags
-/// narrower than any prose fits, and the caller pads and clips from the end,
-/// so a label-first fallback loses the only place the key is advertised.
-pub(crate) fn header_line(focused: bool, order: FeedOrder, w: usize) -> String {
-    // The header is a TITLE now: the key hints live on the footer line, so
-    // no hint text sits on the header row (AC12).
-    let order_word = order.key();
-    let candidates: [String; 3] = if focused {
+/// A column header's title: the name, an arrow when the rows sort by it, and
+/// a dot with the value count when it filters.
+pub(crate) fn column_title(view: &table::TableView, col: table::Col) -> String {
+    let mut t = col.name().to_string();
+    if view.sort == col {
+        t.push(if view.sort_desc { '↓' } else { '↑' });
+    }
+    let n = view.filters.get(&col).map_or(0, |s| s.len());
+    if n > 0 {
+        t.push_str(&format!("·{n}"));
+    }
+    t
+}
+
+/// The panel title for one state, at the widest spelling that fits: the
+/// matched and total row counts, and while focused the sort and group, so
+/// an active column a narrow panel hides is still named. The last spelling
+/// is the narrowest; the caller pads and clips from the end.
+pub(crate) fn header_line(
+    focused: bool,
+    view: &table::TableView,
+    matched: usize,
+    total: usize,
+    w: usize,
+) -> String {
+    let count = if matched == total {
+        format!("{total}")
+    } else {
+        format!("{matched} of {total}")
+    };
+    let sort = format!(
+        "{}{}",
+        view.sort.name(),
+        if view.sort_desc { '↓' } else { '↑' }
+    );
+    let group = view.group.name();
+    let candidates: [String; 4] = if focused {
         [
-            format!(" FEED FOCUSED · order: {order_word}"),
-            format!(" FOCUSED · {order_word}"),
+            format!(" FEED FOCUSED · {count} · sort {sort} · group {group}"),
+            format!(" FOCUSED · {count} · {sort} · {group}"),
+            format!(" FOCUSED · {count}"),
             " FOCUSED".to_string(),
         ]
     } else {
         [
+            format!(" activity feed · {count}"),
+            format!(" feed · {count}"),
             " activity feed".to_string(),
-            " feed".to_string(),
             " feed".to_string(),
         ]
     };
@@ -815,61 +791,23 @@ impl View {
         changed
     }
 
-    /// Wheel-scroll the item window by one row. The offset re-clamps against
-    /// the CURRENT viewport and item count first, so terminal growth (or a
-    /// shorter fold) can never leave the window parked on blank rows.
+    /// Wheel-scroll the slot window by one row. The offset re-clamps against
+    /// the CURRENT viewport and slot count first, so terminal growth (or a
+    /// shorter fold) can never leave the window parked on blank rows. The
+    /// panel holds the whole history, so no gesture reads a page.
     pub(super) fn scroll_feed(&mut self, down: bool) {
-        let Some(f) = self.feed.as_mut() else {
+        let Some(f) = self.feed.as_ref() else {
             return;
         };
         let visible = feed_body_rows(self.term.0 as usize);
-        let slot_len = display_slots(&f.win.items, f.order).len();
-        let max_off = slot_len.saturating_sub(visible);
-        let next = if max_off == 0 {
-            0
-        } else if down {
+        let max_off = f.slots.len().saturating_sub(visible);
+        self.feed_offset = if down {
             (self.feed_offset + 1).min(max_off)
         } else {
-            self.feed_offset.saturating_sub(1)
+            self.feed_offset.min(max_off).saturating_sub(1)
         };
-        self.feed_offset = next;
-        Self::arm_feed_page(f, down, next == 0, next == max_off, 5);
     }
 
-    /// The page-arm policy, shared by the wheel and the arrow keys. Rows
-    /// paint newest first, so a gesture DOWN at the bottom edge reads older
-    /// history, and one UP at the top edge of a detached head reads forward.
-    /// A client-matched scan may spend at most `scan_cap` pages per gesture;
-    /// leaving the bottom edge gives the next gesture a fresh budget.
-    pub(super) fn arm_feed_page(
-        f: &mut FeedOverlay,
-        down: bool,
-        at_top: bool,
-        at_bottom: bool,
-        scan_cap: u32,
-    ) {
-        if !at_bottom {
-            f.scan_pages = 0;
-        }
-        if down && at_bottom && !f.win.at_oldest && !f.win.scan_cursor.is_empty() {
-            if f.scan_pages >= scan_cap {
-                return;
-            }
-            f.scan_pages += 1;
-            f.want_page = Some(crate::feed_overlay::PageReq::Older(
-                f.win.scan_cursor.clone(),
-            ));
-            f.want = true;
-        } else if !down && at_top && !f.win.head_attached {
-            if let Some(c) = f.win.items.last().map(|i| i.cursor.clone()) {
-                f.want_page = Some(crate::feed_overlay::PageReq::Newer(c));
-                f.want = true;
-            }
-        }
-    }
-
-    /// The scroll offset clamped to what the CURRENT items and viewport can
-    /// show, the single value every read path (paint, click, hover) shares.
     /// True when a click lands on the footer's `↑ N new` marker: the one
     /// footer span that acts, home through the same path the g key takes.
     pub(super) fn feed_new_marker_hit(&self, row: u16, col: u16) -> bool {
@@ -895,33 +833,36 @@ impl View {
         c >= start && c < end
     }
 
-    /// The marker's (and Home's) action: attached, the view jumps to the top
-    /// and the count clears; detached, a Head request is armed and landing
-    /// puts the newest row on top (AC10-EDGE).
+    /// The marker's (and g's) action: the window jumps to the first slot,
+    /// the cursor to the first row, and the new-row count clears.
     pub(super) fn feed_home(&mut self) {
         let Some(f) = self.feed.as_mut() else {
             return;
         };
-        if f.win.home_is_local() {
-            self.feed_offset = 0;
-            f.win.new_count = 0;
-            f.sel = first_item_slot(&f.win.items, f.order);
-        } else {
-            f.want_page = Some(crate::feed_overlay::PageReq::Head);
-            f.want = true;
+        self.feed_offset = 0;
+        f.win.new_count = 0;
+        f.sel = first_item_slot(&f.slots);
+    }
+
+    /// Where a feed picker opens: under the column header at the panel's
+    /// left edge. The popup flips and clamps at the screen edges itself, and
+    /// sizes from the terminal, so a thin panel never makes a thin picker.
+    pub(super) fn feed_picker_anchor(&self) -> crate::popup::Anchor {
+        let w = self.feed_panel_w();
+        crate::popup::Anchor::At {
+            row: 2,
+            col: self.term.1.saturating_sub(w) + 1,
         }
     }
 
+    /// The scroll offset clamped to what the CURRENT slots and viewport can
+    /// show, the single value every read path (paint, click, hover) shares.
     pub(super) fn feed_offset_clamped(&self) -> usize {
         let Some(f) = &self.feed else {
             return 0;
         };
         let visible = feed_body_rows(self.term.0 as usize);
-        let slot_len = display_slots(&f.win.items, f.order).len();
-        if slot_len <= visible {
-            return 0;
-        }
-        self.feed_offset.min(slot_len - visible)
+        self.feed_offset.min(f.slots.len().saturating_sub(visible))
     }
 
     /// The right-edge panel, [`View::draw_sideline`] inverted: divider on the
@@ -1015,7 +956,7 @@ impl View {
                 0,
                 x0 + 1,
                 w - 1,
-                &header_line(focused, f.order, w - 1),
+                &header_line(focused, &f.view, f.matched, f.win.items.len(), w - 1),
                 true,
                 &self.theme,
             );
@@ -1041,6 +982,10 @@ impl View {
         if f.keys_open {
             let popup = search::feed_keys_popup();
             draw_popup_overlay(cells, rows, cols, &popup, self.term, &self.theme);
+        }
+        // The sort or group picker opens under the panel's column header.
+        if let Some(p) = &f.picker {
+            draw_popup_overlay(cells, rows, cols, &p.popup, self.term, &self.theme);
         }
         // The panel's esc chip, at the header row's right edge. A tap on it
         // presses Esc through the shared chip path: a focused panel reads the
@@ -1087,11 +1032,10 @@ impl View {
             return None;
         };
         feed_row_item(
-            &f.win.items,
+            &f.slots,
             row as usize,
             self.term.0 as usize,
             self.feed_offset_clamped(),
-            f.order,
         )
         .and_then(|i| {
             let item = f.win.items.get(i)?;
@@ -1114,18 +1058,16 @@ impl View {
     /// Keep the selected row inside the window after a keyboard move. The
     /// offset is re-clamped against the CURRENT viewport first, exactly as
     /// [`Self::scroll_feed`] does, so a shrunken terminal cannot leave the
-    /// window parked past the last row. `down` is the key's own direction:
-    /// read after the clamp, the selection always sits inside the window.
-    pub(super) fn follow_feed_selection(&mut self, down: bool) {
+    /// window parked past the last row.
+    pub(super) fn follow_feed_selection(&mut self) {
         let visible = feed_body_rows(self.term.0 as usize);
-        let Some(f) = self.feed.as_mut() else {
+        let Some(f) = self.feed.as_ref() else {
             return;
         };
         if visible == 0 {
             return;
         }
-        let slot_len = display_slots(&f.win.items, f.order).len();
-        let max_off = slot_len.saturating_sub(visible);
+        let max_off = f.slots.len().saturating_sub(visible);
         let sel = f.sel;
         let mut off = self.feed_offset.min(max_off);
         if sel < off {
@@ -1134,8 +1076,6 @@ impl View {
             off = sel + 1 - visible;
         }
         self.feed_offset = off.min(max_off);
-        let at_top = sel <= first_item_slot(&f.win.items, f.order);
-        Self::arm_feed_page(f, down, at_top, sel + 1 >= slot_len, 5);
     }
 
     /// Open the provenance view for the selected row, copying the item OUT of
@@ -1149,11 +1089,11 @@ impl View {
             let Some(f) = &self.feed else {
                 return;
             };
-            display_slots(&f.win.items, f.order)
+            f.slots
                 .get(f.sel)
                 .and_then(|s| match s {
                     Slot::Item(i) => f.win.items.get(*i),
-                    Slot::Header(_) => None,
+                    Slot::Header { .. } => None,
                 })
                 .cloned()
         };
@@ -1186,15 +1126,13 @@ impl View {
         if feed_w == 0 || col <= self.term.1 - feed_w {
             return;
         }
-        // The resolver answers in STORAGE indexes; `sel` is a SLOT index.
-        let hit = feed_row_item(
-            &f.win.items,
+        let hit = feed_slot_at(
+            &f.slots,
             row as usize,
             self.term.0 as usize,
             self.feed_offset_clamped(),
-            f.order,
         )
-        .map(|storage| slot_of(&f.win.items, storage, f.order));
+        .map(|(d, _)| d);
         if let (Some(d), Some(f)) = (hit, self.feed.as_mut()) {
             f.sel = d;
         }
@@ -1202,16 +1140,16 @@ impl View {
 }
 
 /// The run-loop fold kick: at most ONE fold in flight, armed by `want` (the
-/// needs fold's generation/single-flight discipline).
+/// needs fold's generation/single-flight discipline). Every fold reads the
+/// whole history: a head page already projects every row before it trims,
+/// so the full read costs the projection nothing more, and a full replace
+/// keeps a renamed lead or session name from going stale.
 pub(crate) fn maybe_kick(view: &mut View, tx: &FoldTx) {
     let Some(f) = view.feed.as_mut() else {
         return;
     };
-    // Time-based re-arm, the backlog board's pattern: a settled fold goes
-    // stale after FEED_REFRESH_EVERY and the next run-loop tick refolds, so
-    // the panel is fresh without the operator touching anything.
-    // The search bar's 250ms debounce: an expired one re-parses and refolds
-    // under the new filter before any other fold arms.
+    // The search bar's 250ms debounce: an expired one re-parses and
+    // re-slots the held rows; no read is needed for a new query.
     if f.bar_open {
         if let Some(at) = f.bar_debounce {
             if at.elapsed() >= std::time::Duration::from_millis(250) {
@@ -1219,9 +1157,9 @@ pub(crate) fn maybe_kick(view: &mut View, tx: &FoldTx) {
                 search::apply_query(f);
             }
         }
-        // Fall through: the refold the debounce armed fires through the same
-        // single-flight path, so the panel updates while the bar stays open.
     }
+    // Time-based re-arm, the backlog board's pattern: a settled fold goes
+    // stale after FEED_REFRESH_EVERY and the next run-loop tick refolds.
     let due = f.want
         || f.last_fold
             .is_none_or(|t| t.elapsed() >= FEED_REFRESH_EVERY);
@@ -1232,22 +1170,26 @@ pub(crate) fn maybe_kick(view: &mut View, tx: &FoldTx) {
     f.inflight = true;
     let tx = tx.clone();
     let gen = f.gen;
-    // A wanted page first, else the 15s refresh tick as an incremental Live
-    // read from the newest row ever seen.
-    let req = f
-        .want_page
-        .take()
-        .unwrap_or_else(|| crate::feed_overlay::PageReq::Live(f.win.head_cursor.clone()));
-    let filter = f.filter.clone();
     tokio::spawn(async move {
-        let result = crate::feed_overlay::fetch_page(req, filter.as_ref()).await;
+        let result = crate::feed_overlay::fetch_history().await;
         let _ = tx.send((gen, result));
     });
 }
 
-/// A fold landed: apply only to the still-open, same-generation panel, and
-/// reopen the scroll window on the newest row so a shorter result can never
-/// leave the window parked past the last item (a blank panel).
+/// A row's identity across folds: the projection's cursor, else the
+/// (ts, kind, title) spelling a row without one still answers to.
+fn anchor_of(it: &FeedItem) -> String {
+    if it.cursor.is_empty() {
+        format!("{}\u{1}{}\u{1}{}", it.ts, it.kind, it.title)
+    } else {
+        it.cursor.clone()
+    }
+}
+
+/// A fold landed: apply only to the still-open, same-generation panel. The
+/// rows replace the held history, and the row under the cursor and the top
+/// row stay where they were, so a refresh never moves the reader. A failed
+/// fold keeps the last good rows and names its cause.
 pub(crate) fn apply_fold(view: &mut View, gen: u64, outcome: crate::feed_overlay::FoldResult) {
     let top_slot = view.feed_offset_clamped();
     let visible = feed_body_rows(view.term.0 as usize);
@@ -1260,102 +1202,70 @@ pub(crate) fn apply_fold(view: &mut View, gen: u64, outcome: crate::feed_overlay
     f.inflight = false;
     let first = f.last_fold.is_none();
     f.last_fold = Some(Instant::now());
-    match outcome {
-        Ok(page) => {
-            // The anchors: the cursors of the top visible row and the
-            // selected row, recorded BEFORE the window moves, so a land
-            // never scrolls the view (AC10).
-            let order = f.order;
-            let slots = display_slots(&f.win.items, order);
-            // The anchor identity: the cursor when the row carries one, else
-            // the (ts, kind, title) spelling a legacy row still answers to.
-            let anchor_of = |it: &FeedItem| {
-                if it.cursor.is_empty() {
-                    format!("{}\u{1}{}\u{1}{}", it.ts, it.kind, it.title)
-                } else {
-                    it.cursor.clone()
-                }
-            };
-            let anchor_top = slots.get(top_slot).and_then(|s| match s {
-                Slot::Item(i) => f.win.items.get(*i).map(&anchor_of),
-                Slot::Header(_) => None,
-            });
-            let anchor_sel = slots.get(f.sel).and_then(|s| match s {
-                Slot::Item(i) => f.win.items.get(*i).map(&anchor_of),
-                Slot::Header(_) => None,
-            });
-            let (req, raw) = (page.req, page.items);
-            let scan_floor = raw.first().map(|i| i.cursor.clone());
-            let raw_len = raw.len();
-            // Under a query the projection flags cannot express, the client
-            // matcher filters each landed page before it enters the window.
-            let rows = match (&f.parsed, f.pushed) {
-                (Some(Ok(parsed)), false) => {
-                    let ctx = crate::feed_overlay::EventCtx::from_rows(&[], &[]);
-                    raw.into_iter()
-                        .filter(|it| {
-                            let fields = event_fields(it, &ctx);
-                            parsed.keeps(&fields)
-                        })
-                        .collect()
-                }
-                _ => raw,
-            };
-            f.win.land_scanned(&req, rows, scan_floor, raw_len);
-            // Re-anchor. The top anchor wins for the offset, the selection
-            // anchor for the marker; a row the land dropped reads its slot
-            // as absent and the clamp below keeps both in range.
-            let slots = display_slots(&f.win.items, order);
-            let slot_of_cursor = |cur: &str| {
-                slots.iter().position(|s| {
-                    matches!(s, Slot::Item(i) if {
-                        f.win.items.get(*i).is_some_and(|it| &anchor_of(it) == cur)
-                    })
-                })
-            };
-            if let (Some(cur), false) = (&anchor_top, first) {
-                if let Some(d) = slot_of_cursor(cur) {
-                    view.feed_offset = d;
-                } else if matches!(req, crate::feed_overlay::PageReq::Head) {
-                    view.feed_offset = 0;
-                }
-            } else if matches!(req, crate::feed_overlay::PageReq::Head) {
-                view.feed_offset = 0;
-            }
-            if let Some(cur) = &anchor_sel {
-                if let Some(d) = slot_of_cursor(cur) {
-                    f.sel = d;
-                }
-            } else {
-                f.sel = first_item_slot(&f.win.items, order);
-            }
-            // A refresh never lets the window park past the last row.
-            let max_off = slots.len().saturating_sub(visible.max(1));
-            if view.feed_offset > max_off {
-                view.feed_offset = max_off;
-            }
-            f.error = None;
+    let rows = match outcome {
+        Ok(rows) => rows,
+        Err(e) => {
+            f.error = Some(e);
+            return;
         }
-        Err(e) => f.error = Some(e),
+    };
+    f.error = None;
+    // The anchors, recorded BEFORE the rows move: a slot's identity is its
+    // row's anchor, or a header's group key.
+    let anchor_at = |f: &FeedOverlay, d: usize| match f.slots.get(d) {
+        Some(Slot::Item(i)) => f.win.items.get(*i).map(anchor_of),
+        Some(Slot::Header { key, .. }) => Some(format!("\u{2}{key}")),
+        None => None,
+    };
+    let anchor_top = anchor_at(f, top_slot);
+    let anchor_sel = anchor_at(f, f.sel);
+    let detached = top_slot > 0;
+    f.win.land(rows, detached);
+    reslot(f);
+    let find = |f: &FeedOverlay, anchor: &str| {
+        (0..f.slots.len()).find(|d| anchor_at(f, *d).as_deref() == Some(anchor))
+    };
+    if first {
+        view.feed_offset = 0;
+        f.sel = first_item_slot(&f.slots);
+    } else {
+        if let Some(d) = anchor_top.as_deref().and_then(|a| find(f, a)) {
+            view.feed_offset = d;
+        }
+        match anchor_sel.as_deref().and_then(|a| find(f, a)) {
+            Some(d) => f.sel = d,
+            None => f.sel = first_item_slot(&f.slots),
+        }
     }
+    // A refresh never lets the window park past the last slot.
+    let max_off = f.slots.len().saturating_sub(visible.max(1));
+    view.feed_offset = view.feed_offset.min(max_off);
 }
 
-/// The first ITEM slot: where a fresh selection parks, so the marker never
-/// sits on a group header.
-pub(crate) fn first_item_slot(items: &[FeedItem], order: FeedOrder) -> usize {
-    display_slots(items, order)
+/// The first ITEM slot: where a fresh cursor parks.
+pub(crate) fn first_item_slot(slots: &[Slot]) -> usize {
+    slots
         .iter()
         .position(|s| matches!(s, Slot::Item(_)))
         .unwrap_or(0)
 }
 
-/// The SLOT index a storage index renders at, for selection-keeping across
-/// folds. A header-hunting fallback lands on the newest row.
-fn slot_of(items: &[FeedItem], storage: usize, order: FeedOrder) -> usize {
-    display_slots(items, order)
-        .iter()
-        .position(|s| matches!(s, Slot::Item(i) if *i == storage))
-        .unwrap_or(0)
+/// Apply one change to the table view, then re-slot and keep the cursor on
+/// the row it was on when that row is still shown.
+pub(crate) fn change_view(view: &mut View, change: impl FnOnce(&mut table::TableView)) {
+    let Some(f) = view.feed.as_mut() else {
+        return;
+    };
+    let keep = match f.slots.get(f.sel) {
+        Some(Slot::Item(i)) => Some(*i),
+        _ => None,
+    };
+    change(&mut f.view);
+    reslot(f);
+    f.sel = keep
+        .and_then(|i| f.slots.iter().position(|s| *s == Slot::Item(i)))
+        .unwrap_or_else(|| first_item_slot(&f.slots));
+    view.follow_feed_selection();
 }
 
 /// The `e` toggle. Opening keeps the contract - prior rows render
@@ -1587,6 +1497,37 @@ pub(crate) async fn feed_keys(
             }
             continue;
         }
+        // An open sort or group picker sits in front of the panel: the
+        // arrows move its cursor, Enter picks (a second pick flips), Esc
+        // closes it and leaves the panel open. Every other key is swallowed.
+        if view.feed.as_ref().is_some_and(|f| f.picker.is_some()) {
+            match tok {
+                ModalKey::Up | ModalKey::Down => {
+                    let term = view.term;
+                    if let Some(p) = view.feed.as_mut().and_then(|f| f.picker.as_mut()) {
+                        let dir = if tok == ModalKey::Up {
+                            crate::popup::NavDir::Up
+                        } else {
+                            crate::popup::NavDir::Down
+                        };
+                        p.popup.nav(dir);
+                        p.popup.follow_sel(term);
+                    }
+                }
+                ModalKey::Enter => {
+                    if let Some(p) = view.feed.as_mut().and_then(|f| f.picker.take()) {
+                        change_view(view, |v| p.pick(v));
+                    }
+                }
+                ModalKey::Esc => {
+                    if let Some(f) = view.feed.as_mut() {
+                        f.picker = None;
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        }
         if matches!(tok, ModalKey::Esc | ModalKey::Byte(b'e')) {
             // Close once; a second close token in the same chunk is
             // swallowed, never a reopen.
@@ -1595,27 +1536,21 @@ pub(crate) async fn feed_keys(
             }
             continue;
         }
+        let picker_at = view.feed_picker_anchor();
         let Some(f) = view.feed.as_mut() else {
             break; // closed mid-chunk: swallow the rest, never forward
         };
-        let len = display_slots(&f.win.items, f.order).len();
+        let len = f.slots.len();
         match tok {
             ModalKey::Esc => {}
+            // Rows and group headers are both cursor stops.
             ModalKey::Up => {
-                // The marker skips headers: the nearest ITEM slot above.
-                let slots = display_slots(&f.win.items, f.order);
-                f.sel = (0..f.sel)
-                    .rev()
-                    .find(|s| matches!(slots.get(*s), Some(Slot::Item(_))))
-                    .unwrap_or(f.sel);
-                view.follow_feed_selection(false);
+                f.sel = f.sel.saturating_sub(1);
+                view.follow_feed_selection();
             }
             ModalKey::Down => {
-                let slots = display_slots(&f.win.items, f.order);
-                f.sel = (f.sel + 1..slots.len())
-                    .find(|s| matches!(slots.get(*s), Some(Slot::Item(_))))
-                    .unwrap_or(f.sel);
-                view.follow_feed_selection(true);
+                f.sel = (f.sel + 1).min(len.saturating_sub(1));
+                view.follow_feed_selection();
             }
             // Panning moves the TITLE only; the stamp, kind and node stay
             // anchored, so a panned row is still the row you selected.
@@ -1633,34 +1568,58 @@ pub(crate) async fn feed_keys(
             ModalKey::PageUp => {
                 let page = feed_body_rows(view.term.0 as usize).max(1);
                 f.sel = f.sel.saturating_sub(page);
-                view.follow_feed_selection(false);
+                view.follow_feed_selection();
             }
             ModalKey::PageDown => {
                 let page = feed_body_rows(view.term.0 as usize).max(1);
                 f.sel = (f.sel + page).min(len.saturating_sub(1));
-                view.follow_feed_selection(true);
+                view.follow_feed_selection();
             }
-            ModalKey::Enter => view.open_feed_detail(),
-            // Jump to the top (or arm a Head when the head is detached),
-            // clearing the new-row marker.
-            ModalKey::Byte(b'g') => {
-                if f.win.home_is_local() {
-                    view.feed_offset = 0;
-                    f.win.new_count = 0;
-                    f.sel = first_item_slot(&f.win.items, f.order);
-                } else {
-                    f.want_page = Some(crate::feed_overlay::PageReq::Head);
-                    f.want = true;
+            // Enter (or Space) on a group header folds it; on a row it opens
+            // the row's provenance or question.
+            ModalKey::Enter | ModalKey::Byte(b' ') => match f.slots.get(f.sel) {
+                Some(Slot::Header { key, .. }) => {
+                    let key = key.clone();
+                    change_view(view, |v| v.toggle_collapse(&key));
+                    if let Some(f) = view.feed.as_mut() {
+                        f.sel = f
+                            .slots
+                            .iter()
+                            .position(|s| matches!(s, Slot::Header { key: k, .. } if *k == key))
+                            .unwrap_or(f.sel);
+                    }
+                    view.follow_feed_selection();
                 }
+                Some(Slot::Item(_)) if tok == ModalKey::Enter => view.open_feed_detail(),
+                _ => {}
+            },
+            // Fold every group, or unfold them all when all are folded.
+            ModalKey::Byte(b'z') => {
+                let keys: Vec<String> = f
+                    .slots
+                    .iter()
+                    .filter_map(|s| match s {
+                        Slot::Header { key, .. } => Some(key.clone()),
+                        Slot::Item(_) => None,
+                    })
+                    .collect();
+                let all = !keys.is_empty() && keys.iter().all(|k| f.view.collapsed.contains(k));
+                change_view(view, |v| {
+                    for k in keys {
+                        if all {
+                            v.collapsed.remove(&k);
+                        } else {
+                            v.collapsed.insert(k);
+                        }
+                    }
+                });
             }
+            // The first slot, clearing the new-row marker.
+            ModalKey::Byte(b'g') => view.feed_home(),
             ModalKey::Byte(b'G') => {
                 let visible = feed_body_rows(view.term.0 as usize).max(1);
-                let slot_len = display_slots(&f.win.items, f.order).len();
-                let max_off = slot_len.saturating_sub(visible);
-                view.feed_offset = max_off;
-                let sel = display_slots(&f.win.items, f.order).len().saturating_sub(1);
-                f.sel = sel;
-                View::arm_feed_page(f, true, false, true, 5);
+                view.feed_offset = len.saturating_sub(visible);
+                f.sel = len.saturating_sub(1);
             }
             ModalKey::Byte(b'?') => {
                 f.keys_open = !f.keys_open;
@@ -1669,11 +1628,22 @@ pub(crate) async fn feed_keys(
                 f.bar_open = true;
                 f.bar_debounce = None;
             }
-            // The order toggle: the panel's ONE local preference, persisted
-            // per client like the dragged width.
+            ModalKey::Byte(b'r') => {
+                f.want = true;
+            }
             ModalKey::Byte(b'o') => {
-                f.order = f.order.next();
-                crate::view_store::save_feed_order(f.order.key());
+                f.picker = Some(picker::FeedPicker::open(
+                    picker::PickerKind::Sort,
+                    &f.view,
+                    picker_at,
+                ));
+            }
+            ModalKey::Byte(b'W') => {
+                f.picker = Some(picker::FeedPicker::open(
+                    picker::PickerKind::Group,
+                    &f.view,
+                    picker_at,
+                ));
             }
             ModalKey::Byte(_) => {}
         }

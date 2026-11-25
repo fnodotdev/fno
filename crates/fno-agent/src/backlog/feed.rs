@@ -1431,15 +1431,12 @@ pub(crate) fn filter_rows(
             .filter(|seg| !seg.is_empty())
             .any(|seg| seg == v)
     };
-    // One flag, comma-OR over case-blind prefix segments: the mux search
-    // grammar's value match, so a query the panel pushes keeps exactly the
-    // rows its own matcher would. An exact value is its own prefix, so an
-    // exact `--kind`, `--area` or `--harness` keeps matching.
+    // One flag, comma-OR over prefix segments. An exact kind is its own
+    // prefix, so today's exact `--kind` keeps matching.
     let prefix_set = |v: &str, set: &str| {
-        let v = v.to_ascii_lowercase();
         set.split(',')
             .filter(|seg| !seg.is_empty())
-            .any(|seg| v.starts_with(&seg.to_ascii_lowercase()))
+            .any(|seg| v.starts_with(seg))
     };
     let mut rows: Vec<FeedRow> = rows
         .into_iter()
@@ -1460,7 +1457,7 @@ pub(crate) fn filter_rows(
             pre.area
                 .as_deref()
                 .filter(|a| !a.is_empty())
-                .is_none_or(|a| prefix_set(&r.area, &a))
+                .is_none_or(|a| in_set(&r.area, &a))
         })
         .filter(|r| {
             pre.session
@@ -1482,7 +1479,11 @@ pub(crate) fn filter_rows(
             pre.harness
                 .as_deref()
                 .filter(|h| !h.is_empty())
-                .is_none_or(|h| r.harness.as_deref().is_some_and(|v| prefix_set(v, &h)))
+                .is_none_or(|h| {
+                    r.harness
+                        .as_deref()
+                        .is_some_and(|v| h.split(',').any(|seg| v.eq_ignore_ascii_case(seg)))
+                })
         })
         .filter(|r| {
             pre.lead
@@ -1613,11 +1614,10 @@ pub(crate) fn leg_skipped(pre: &Prefilter, kinds: &[&str]) -> bool {
     }
     if let Some(a) = pre.area.as_deref() {
         let wanted: Vec<&str> = a.split(',').filter(|s| !s.is_empty()).collect();
-        if !kinds.iter().any(|kd| {
-            wanted
-                .iter()
-                .any(|w| area_of(kd).starts_with(&w.to_ascii_lowercase()))
-        }) {
+        if !kinds
+            .iter()
+            .any(|kd| wanted.iter().any(|w| area_of(kd) == *w))
+        {
             return true;
         }
     }
@@ -2392,24 +2392,6 @@ mod tests {
             None,
         );
         assert_eq!(kinds(&ship_rows), ["node_shipped", "node_ended"]);
-        // AC7: `--area` reads the grammar's case-blind prefix, so `ar:Back`
-        // pushed from the mux keeps exactly what `ar:backlog` keeps.
-        let by_area = |a: &str| {
-            let pre = Prefilter {
-                area: Some(a.into()),
-                ..Default::default()
-            };
-            kinds(&filter_rows(
-                p.rows.clone(),
-                &Page::default(),
-                &pre,
-                None,
-                None,
-            ))
-            .join(",")
-        };
-        assert_eq!(by_area("Back"), by_area("backlog"));
-        assert!(by_area("backlog").contains("node_created"));
         let shipped = ship_rows.iter().find(|r| r.kind == "node_shipped").unwrap();
         assert_eq!(
             shipped.url.as_deref(),

@@ -1,36 +1,11 @@
 //! The feed's search surface: the one shared grammar (`crate::search_query`)
-//! parsed once per gesture; the pushable half travels as projection flags,
-//! the rest is matched client-side over [`event_fields`]. The keys overlay
+//! parsed once per gesture and matched over [`event_fields`] for every row
+//! the panel holds. The panel holds the whole history, so a query reads all
+//! of it and no part of it is pushed into the projection. The keys overlay
 //! and the search bar's completion read the same shared table, so the feed
 //! never carries its own copy of the grammar.
-
-use crate::feed_overlay::FeedFilter;
-
-/// The flat flags one parsed query pushes into the projection, `None` when
-/// any term falls outside the pushable keys. The projection then receives
-/// nothing at all, and the client matches every landed page itself - the one
-/// rule that keeps a half-pushed query from lying about its scope.
-pub(crate) fn prefilter(q: &crate::search_query::Parsed) -> Option<FeedFilter> {
-    let pd = q.pushdown()?;
-    let mut f = FeedFilter::default();
-    for (key, vals) in pd.vals {
-        let joined = vals.join(",");
-        match key {
-            "id" => f.node = Some(joined),
-            "kind" => f.kind = Some(joined),
-            "area" => f.area = Some(joined),
-            "harness" => f.harness = Some(joined),
-            // A key with no projection flag is not pushable; pushdown
-            // already refuses it, so this is the belt under the belt.
-            _ => return None,
-        }
-    }
-    if let Some((lo, hi)) = pd.ts {
-        f.since = lo.map(|v| v.max(0) as u64);
-        f.until = hi.map(|v| v.max(0) as u64);
-    }
-    Some(f)
-}
+//!
+//! [`event_fields`]: crate::feed_overlay::event_fields
 
 /// Parse one query for the feed surface; `Err` carries the shared refusal
 /// (an unknown key, a node-only key) verbatim for the footer.
@@ -65,8 +40,9 @@ pub(crate) fn feed_keys_popup() -> crate::popup::Popup {
     let mut rows: Vec<PopupRow> = vec![
         PopupRow::Header("keys".into()),
         PopupRow::Rule,
-        pick("up/down row - enter details - o order"),
-        pick("g home (newest) - G oldest - arrows pan"),
+        pick("up/down row or group - enter details or fold"),
+        pick("o sort - W group - z fold all - r retry"),
+        pick("g first - G last - arrows pan"),
         pick("/ search - ? keys - esc close"),
         PopupRow::Header("query keys".into()),
         PopupRow::Rule,
@@ -86,8 +62,8 @@ pub(crate) fn feed_keys_popup() -> crate::popup::Popup {
 
 /// One Tab press on the bar text: complete the token before the cursor.
 /// A key prefix completes to the full key names the event surface takes; a
-/// value after a value key completes from the distinct values in the loaded
-/// window. Repeated Tab cycles. `None` leaves the text.
+/// value after a value key completes from the distinct values the panel
+/// holds. Repeated Tab cycles. `None` leaves the text.
 pub(crate) fn complete(text: &str, items: &[crate::feed_overlay::FeedItem]) -> Option<String> {
     let (prefix, token) = match text.rsplit_once(' ') {
         Some((p, t)) => (format!("{p} "), t),
@@ -111,7 +87,9 @@ pub(crate) fn complete(text: &str, items: &[crate::feed_overlay::FeedItem]) -> O
             .position(|c| c.to_string() == token)
             .map(|i| i + 1)
             .unwrap_or(0);
-        return Some(format!("{prefix}{}", cands[next % cands.len()]));
+        return cands
+            .get(next % cands.len())
+            .map(|c| format!("{prefix}{c}"));
     }
     let (key, value) = token.split_once(':')?;
     let field = match key {
@@ -145,81 +123,25 @@ pub(crate) fn complete(text: &str, items: &[crate::feed_overlay::FeedItem]) -> O
         .position(|v| v == value)
         .map(|i| i + 1)
         .unwrap_or(0);
-    Some(format!("{prefix}{key}:{}", vals[next % vals.len()]))
+    vals.get(next % vals.len())
+        .map(|v| format!("{prefix}{key}:{v}"))
 }
 
-/// The bar's text settled: parse the query, recompute the pushable flags,
-/// and re-arm the head page under the new filter. A refusal shows in the
-/// footer verbatim and fetches nothing.
+/// The bar's text settled: parse the query and re-slot the held rows under
+/// it. A refusal shows in the footer verbatim and leaves the rows as they
+/// were.
 pub(crate) fn apply_query(o: &mut super::FeedOverlay) {
-    o.scan_pages = 0;
-    o.scan_note = None;
     if o.query_text.is_empty() {
         o.parsed = None;
-        o.pushed = false;
-        o.filter = None;
-        o.want_page = Some(crate::feed_overlay::PageReq::Head);
-        o.want = true;
-        return;
-    }
-    match parse_query(&o.query_text) {
-        Ok(parsed) => {
-            let pre = prefilter(&parsed);
-            o.pushed = pre.is_some();
-            o.filter = pre;
-            o.parsed = Some(Ok(parsed));
-            o.win = super::page::FeedWindow::default();
-            o.want_page = Some(crate::feed_overlay::PageReq::Head);
-            o.want = true;
-        }
-        Err(e) => {
-            o.parsed = Some(Err(e));
+    } else {
+        match parse_query(&o.query_text) {
+            Ok(parsed) => o.parsed = Some(Ok(parsed)),
+            Err(e) => {
+                o.parsed = Some(Err(e));
+                return;
+            }
         }
     }
-}
-
-#[cfg(test)]
-pub(crate) mod tests {
-    use super::*;
-
-    fn _refusal_case() {
-        // AC8-EDGE: the shared refusal names `s:` as node-only, and the
-        // caller arms no fetch from a refused parse.
-        let err = crate::search_query::parse(
-            "s:ready",
-            crate::search_query::Surface::Event,
-            1_791_854_400,
-        )
-        .expect_err("s: refuses on events");
-        assert!(err.contains("s:"), "the refusal names the key: {err}");
-    }
-
-    fn _prefilter_case() {
-        let pf = |q: &str| prefilter(&parse_query(q).unwrap());
-        // h:codex k:question -> --harness codex --kind question
-        let f = pf("h:codex k:question").expect("one positive group pushes");
-        assert_eq!(f.harness.as_deref(), Some("codex"));
-        assert_eq!(f.kind.as_deref(), Some("question"));
-        // Two groups push nothing.
-        assert!(pf("id:x-1 | k:pane").is_none(), "two groups push none");
-        // A negation pushes nothing.
-        assert!(pf("-k:question").is_none(), "negation pushes none");
-        // Free text pushes nothing.
-        assert!(pf("stall").is_none(), "bare words push none");
-        // A date pushes the epoch bounds.
-        let f = pf("ts:>=2026-10-01").expect("a date pushes");
-        assert!(f.since.is_some());
-        assert_eq!(f.until, None);
-        // A bare node id pushes --node.
-        let f = pf("n-1234").expect("an id-shaped bare word pushes");
-        assert_eq!(f.node.as_deref(), Some("n-1234"));
-        // AC7: only shapes the projection matches as the grammar does push.
-        // `--node` is exact, so an id prefix stays client-side; session,
-        // agent and lead read fields the flags never see.
-        for q in ["id:n-12", "sid:abc", "a:rowan", "l:lara"] {
-            assert!(pf(q).is_none(), "{q} is matched client-side");
-        }
-        let f = pf("ar:ma h:Cod").expect("area and harness prefixes push");
-        assert_eq!(f.area.as_deref(), Some("ma"));
-    }
+    super::reslot(o);
+    o.sel = super::first_item_slot(&o.slots);
 }

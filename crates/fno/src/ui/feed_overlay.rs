@@ -153,120 +153,32 @@ fn stderr_note(stderr: &[u8], status: &std::process::ExitStatus) -> String {
     }
 }
 
-/// One fold result, as it travels the client's single-flight channel.
-pub type FoldResult = Result<FeedPage, FeedError>;
+/// One fold result, as it travels the client's single-flight channel: the
+/// whole history, oldest first.
+pub type FoldResult = Result<Vec<FeedItem>, FeedError>;
 
-/// The page size: the head page and every paged page. The projection's own
-/// default when the client sends no `--limit`, spelled here so the argv
-/// never drifts from the window's arithmetic.
-pub const FEED_PAGE: usize = 200;
+/// The `--limit` that reads every row: the projection keeps the newest
+/// `limit`, and no history comes near this.
+pub const FEED_HISTORY_ROWS: usize = 10_000_000;
 
-/// The flat prefilter flags a one-group positive query pushes: every field
-/// ANDs, and the values inside one field are comma-OR. Only keys the
-/// projection matches exactly as the grammar does push
-/// (`search_query::PUSHABLE_KEYS`); this only spells the argv.
-#[derive(Debug, Default, Clone, PartialEq)]
-pub struct FeedFilter {
-    pub node: Option<String>,
-    pub kind: Option<String>,
-    pub area: Option<String>,
-    pub harness: Option<String>,
-    pub since: Option<u64>,
-    pub until: Option<u64>,
-}
-
-impl FeedFilter {
-    /// The argv spelling: flag then value, in a stable order the tests pin.
-    pub fn to_args(&self) -> Vec<String> {
-        let mut out = Vec::new();
-        let pair = |out: &mut Vec<String>, flag: &str, v: &Option<String>| {
-            if let Some(v) = v {
-                out.push(flag.to_string());
-                out.push(v.clone());
-            }
-        };
-        pair(&mut out, "--node", &self.node);
-        pair(&mut out, "--kind", &self.kind);
-        pair(&mut out, "--area", &self.area);
-        pair(&mut out, "--harness", &self.harness);
-        if let Some(s) = self.since {
-            out.push("--since-epoch".into());
-            out.push(s.to_string());
-        }
-        if let Some(u) = self.until {
-            out.push("--until-epoch".into());
-            out.push(u.to_string());
-        }
-        out
-    }
-}
-
-/// Which page of the keyset to read. `Head` is the newest page; `Older` and
-/// `Newer` page from a cursor; `Live` is the refresh tick's incremental read
-/// of the rows above the newest one already held.
-#[derive(Debug, Clone, PartialEq)]
-pub enum PageReq {
-    Head,
-    /// Rows strictly below the cursor, newest [`FEED_PAGE`] of them.
-    Older(String),
-    /// Rows strictly above the cursor, oldest [`FEED_PAGE`] of them.
-    Newer(String),
-    /// The refresh read: rows above the held cursor, like `Newer`.
-    Live(String),
-}
-
-impl PageReq {
-    /// The tag the fold bookkeeping reads, so a stale page can be told from
-    /// a fresh one without comparing cursors.
-    pub fn is_live(&self) -> bool {
-        matches!(self, PageReq::Live(_))
-    }
-}
-
-/// One landed page: the request it answers and the rows, ascending.
-#[derive(Debug)]
-pub struct FeedPage {
-    pub req: PageReq,
-    pub items: Vec<FeedItem>,
-}
-
-/// The argv one page request spells. An empty cursor (a refresh before any
-/// row landed, or a query that matched nothing) reads the head page: the
-/// projection refuses `--after ''` with exit 2.
-pub fn page_argv(req: &PageReq, filter: Option<&FeedFilter>) -> Vec<String> {
-    let mut argv = vec![
+/// The argv of the panel's one read: the whole history as a JSON array.
+pub fn history_argv() -> Vec<String> {
+    vec![
         "agent".to_string(),
         "fleet".to_string(),
         "feed".to_string(),
         "--json".to_string(),
         "--limit".to_string(),
-        FEED_PAGE.to_string(),
-    ];
-    match req {
-        PageReq::Head => {}
-        PageReq::Older(c) | PageReq::Newer(c) | PageReq::Live(c) if c.is_empty() => {}
-        PageReq::Older(c) | PageReq::Newer(c) | PageReq::Live(c) => {
-            let flag = if matches!(req, PageReq::Older(_)) {
-                "--before"
-            } else {
-                "--after"
-            };
-            argv.push(flag.to_string());
-            argv.push(c.clone());
-        }
-    }
-    if let Some(f) = filter {
-        argv.extend(f.to_args());
-    }
-    argv
+        FEED_HISTORY_ROWS.to_string(),
+    ]
 }
 
-/// Run one page of the feed projection, `Err` carrying the typed reason on
-/// any failure. An empty page is `Ok` with no rows - a real answer.
-pub async fn fetch_page(req: PageReq, filter: Option<&FeedFilter>) -> FoldResult {
+/// Read the whole feed history, `Err` carrying the typed reason on any
+/// failure. An empty history is `Ok` with no rows - a real answer.
+pub async fn fetch_history() -> FoldResult {
     let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
     command
-        .args(page_argv(&req, filter))
+        .args(history_argv())
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true);
     let fut = crate::process_admission::tokio_output(&mut command);
@@ -277,8 +189,7 @@ pub async fn fetch_page(req: PageReq, filter: Option<&FeedFilter>) -> FoldResult
     if !output.status.success() {
         return Err(FeedError::Exit(stderr_note(&output.stderr, &output.status)));
     }
-    let items = parse_feed(&output.stdout, &output.stderr)?;
-    Ok(FeedPage { req, items })
+    parse_feed(&output.stdout, &output.stderr)
 }
 
 fn parse_feed(stdout: &[u8], stderr: &[u8]) -> Result<Vec<FeedItem>, FeedError> {
@@ -470,21 +381,15 @@ mod tests {
         assert!(rendered.contains("skipped 3 malformed question lines"));
     }
 
-    // AC5 and premise 12: the current command spelling, and an empty
-    // cursor never reaches the projection, which exits 2 on `--after ''`.
+    // AC5 and premise 12: the panel's one read spells the current command
+    // and reads every row; no cursor rides it, so `--after ''`, which the
+    // projection refuses with exit 2, can never be sent.
     #[test]
-    fn page_argv_spells_the_current_command_and_never_an_empty_cursor() {
-        let head = page_argv(&PageReq::Head, None);
-        assert!(head.starts_with(&["agent".into(), "fleet".into(), "feed".into()]));
-        for req in [
-            PageReq::Live(String::new()),
-            PageReq::Older(String::new()),
-            PageReq::Newer(String::new()),
-        ] {
-            assert_eq!(page_argv(&req, None), head, "{req:?} reads the head");
-        }
-        let live = page_argv(&PageReq::Live("[\"c\"]".into()), None);
-        assert!(live.ends_with(&["--after".into(), "[\"c\"]".into()]));
+    fn history_argv_reads_every_row_with_no_cursor() {
+        let argv = history_argv();
+        assert!(argv.starts_with(&["agent".into(), "fleet".into(), "feed".into()]));
+        assert!(argv.ends_with(&["--limit".into(), FEED_HISTORY_ROWS.to_string()]));
+        assert!(!argv.iter().any(|a| a == "--after" || a == "--before"));
     }
 
     // regression: the timeout names itself and its duration, so the
