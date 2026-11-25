@@ -206,12 +206,12 @@ mod tests {
             "ts": "2026-09-01T00:00:00Z",
         });
         let env = envelope_of(&row);
-        assert_eq!(env.get("type"), Some(&json!("operator_decision")));
+        assert_eq!(env.get(de::EVENT_TYPE), Some(&json!("operator_decision")));
         let data = env
-            .get("data")
+            .get(de::DATA)
             .and_then(Value::as_object)
             .expect("data object");
-        assert_eq!(data.get("decision_id"), Some(&json!("d-aaaa0001")));
+        assert_eq!(data.get(de::DECISION_ID), Some(&json!("d-aaaa0001")));
         assert!(!data.contains_key("_event_type"));
     }
 

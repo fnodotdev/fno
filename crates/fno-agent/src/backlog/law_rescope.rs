@@ -353,9 +353,9 @@ mod tests {
             "No pushes at night",
         )];
         let data = rescope_data("d-aaaa0001", "global", &rows, &op).expect("rescopes");
-        assert_eq!(data.get("target_decision_id"), Some(&json!("d-aaaa0001")));
-        assert_eq!(data.get("reach"), Some(&json!("global")));
-        assert_eq!(data.get("prior_reach"), Some(&json!("project:demo")));
+        assert_eq!(data.get(de::DECISION_ID), Some(&json!("d-aaaa0001")));
+        assert_eq!(data.get(de::REACH), Some(&json!("global")));
+        assert_eq!(data.get(de::PRIOR_REACH), Some(&json!("project:demo")));
 
         // A bad reach value refuses before any lookup.
         let refusal = rescope_data("d-aaaa0001", "internal", &rows, &op).expect_err("bad reach");

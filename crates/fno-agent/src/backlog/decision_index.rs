@@ -358,6 +358,7 @@ impl From<String> for DecisionStoreError {
 /// name has one home and a typo refuses to compile.
 pub mod de {
     pub const EVENT_TYPE: &str = "_event_type";
+    pub const DATA: &str = "data";
     pub const DECISION_ID: &str = "decision_id";
     pub const SUBJECT: &str = "subject";
     pub const SCOPE: &str = "scope";
