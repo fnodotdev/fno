@@ -551,6 +551,15 @@ pub fn install_gemini(command: &str, settings: &Path) -> InstallResult {
     }
 }
 
+/// One cursor hook definition, typed for the dedupe read (R1: deserialize at
+/// the boundary instead of string-keying the tree). Unknown fields ride
+/// through untouched because only the write side rebuilds the tree.
+#[derive(serde::Deserialize)]
+struct CursorHookEntry {
+    #[serde(default)]
+    command: Option<String>,
+}
+
 /// Merge footnote's sessionStart hook into a cursor hooks.json.
 ///
 /// cursor's schema (cursor.com/docs/hooks): a `hooks` object keyed by
@@ -575,9 +584,11 @@ pub fn install_cursor(command: &str, hooks_json: &Path) -> InstallResult {
             "`hooks.sessionStart` is not an array; left unchanged",
         );
     };
-    let present = session_start.iter().filter_map(Value::as_object).any(|h| {
-        h.get("command")
-            .and_then(Value::as_str)
+    let entries: Vec<CursorHookEntry> =
+        serde_json::from_value(Value::Array(session_start.clone())).unwrap_or_default();
+    let present = entries.iter().any(|e| {
+        e.command
+            .as_deref()
             .is_some_and(|c| c.ends_with(CURSOR_SCRIPT))
     });
     if present {
