@@ -668,17 +668,15 @@ fn shot(args: &crate::cli_args::AppShotArgs) -> i32 {
     if !(transcript && fleet && question) {
         return 1;
     }
+    // The world is this door's own, so the shot may drive it: its attach
+    // opens the world's one workspace, whose shell the overlays type into.
     let mut cmd = world_cmd(&world.root, &bin);
     cmd.arg("--shot")
         .arg("--shot-out")
         .arg(&out_abs)
         .arg("--shot-theme")
         .arg(theme)
-        .arg("--session")
-        .arg("default");
-    // The world is this door's own, so the shot may drive it: its attach
-    // opens the world's one workspace, whose shell the overlays type into.
-    cmd.arg("--shot-own-world");
+        .args(["--session", "default", "--shot-own-world"]);
     if args.sheet {
         cmd.arg("--shot-sheet");
     }
