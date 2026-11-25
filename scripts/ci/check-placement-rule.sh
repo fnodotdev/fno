@@ -61,6 +61,10 @@
 #      crates/fno-agent/src/backlog/plans_path.rs reads Claude Code's own
 #      plansDirectory setting to resolve the user-selected plan location; it
 #      writes no footnote state under .claude/.
+#      crates/fno-agent/src/runtime/hook/worktree_relocation_allow.rs reads
+#      Claude Code's own settings files for their permission ask rules, and
+#      names the .claude folder among the places a routine call never clears.
+#      It writes nothing there.
 #      context_audit.rs (the ported census; was context_audit.py) reads
 #      project-owned .claude/rules/*.md to census the
 #      exact progressive instructions Claude loads; it never writes there.
@@ -343,6 +347,7 @@ add_violation() {
 
 CLAUDE_ALLOWLIST=$(cat <<'EOF'
 crates/fno-agent/src/backlog/decision_reach.rs
+crates/fno-agent/src/runtime/hook/worktree_relocation_allow.rs
 crates/fno/src/config/config_doctor/checks.rs
 crates/fno/src/checks/doctor/report.rs
 crates/fno/src/checks/doctor/report/advisors.rs

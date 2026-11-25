@@ -357,7 +357,8 @@ fn zone_name_ok(name: &str, db: &std::path::Path) -> bool {
             && p.bytes()
                 .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'+'))
     });
-    if !shaped || HELPERS.contains(&parts[0]) || HELPERS.contains(parts.last().unwrap_or(&"")) {
+    let helper = |part: Option<&&str>| part.is_some_and(|p| HELPERS.contains(p));
+    if !shaped || helper(parts.first()) || helper(parts.last()) {
         return false;
     }
     if !db.is_dir() {
