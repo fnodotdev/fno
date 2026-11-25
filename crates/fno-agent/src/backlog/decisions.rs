@@ -484,7 +484,9 @@ fn attach_node(connection: &Connection, node_id: &str, event_id: &str) -> Result
 /// `data` and every other column of `from`, with every join row repointed,
 /// so a shared primary (deletes sent first, foreign keys on) never sees a
 /// join name a missing decision. A `to` row a stopped move already wrote
-/// keeps its data and still takes the joins. False when no `to` row exists.
+/// keeps its data and still takes the joins. A node a share take-back left
+/// joined under both keys keeps the `to` join alone. False when no `to` row
+/// exists.
 pub(crate) fn copy_under_key(
     conn: &Connection,
     from: &str,
@@ -521,8 +523,12 @@ pub(crate) fn copy_under_key(
         return Ok(false);
     }
     conn.execute(
-        "UPDATE node_decisions SET event_id = ?2 WHERE event_id = ?1",
+        "UPDATE OR IGNORE node_decisions SET event_id = ?2 WHERE event_id = ?1",
         params![from, to],
+    )?;
+    conn.execute(
+        "DELETE FROM node_decisions WHERE event_id = ?1",
+        params![from],
     )?;
     Ok(true)
 }
