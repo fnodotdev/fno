@@ -93,6 +93,7 @@ Steer during a running turn and the approval round trip are not yet measured on 
 | zcode exits with the provider-config error before any turn | The bundle carries no provider config at its own paths | The `zcode` launcher exports `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE`; `~/.zcode/cli/config.json` carries `model.main` |
 | A one-shot wrote outside its cwd | Headless yolo is unsandboxed (measured 2026-09-29) | Treat zcode workers as unsandboxed; scope the spawn cwd |
 | A looping dispatch is refused | The plugin Stop hook inside a `-p` turn is not yet measured | `fno config plugin install zcode` links the stage into `plugins.dirs`; the row flips after a live fire proves the hook |
+| A zcode session mints no fno row | zcode fires no SessionStart | The session-report adapter rides the plugin's Stop shim (hooks/session-state.sh carries the zcode guard); install the plugin with `fno config plugin install zcode`; the row flips after a live fire proves the hook |
 
 One-time setup: put a `zcode` launcher on PATH that execs `node /Applications/ZCode.app/Contents/Resources/glm/zcode.cjs "$@"` and exports `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` for the built-in provider config. `~/.zcode/cli/config.json` names `model.main`. Then run `fno config plugin install zcode`.
 
@@ -178,6 +179,7 @@ One scannable table per harness: `symptom | cause | fix`. Every row names the ca
 | `--resume <id>` from the wrong directory finds nothing | The session directory is per-cwd: the identity is the `(cwd, id)` pair (the `session_binding` field, strategy `caller-assigned-cwd-scoped`) | Resume from the same cwd the id was minted in; a fresh process with the id recalls a prior turn across a kill (measured 2026-09-02 on 1.0.13) |
 | A default-flag one-shot wrote outside its cwd | The default sandbox is off | `--always-approve` is the bypass axis, and the effort flag is `--reasoning-effort` |
 | A looping dispatch is refused while grok's real `session_start`/`user_prompt_submit` hook surface exists | grok runs a plugin's hooks only from a trusted location, and even the trusted linked stage is not enough: the 2026-09-26 linked-stage run recorded grok auto-disabling the discovered plugin, with no stop event and no loop-check decision, so plugin hooks are not on the wire (`grok inspect` exposes no trust field, and location trust alone does not survive the auto-disable) | keep the looping dispatch refused until plugin hooks are proven end to end; `fno config plugin install grok` links the stage into `$GROK_HOME/plugins` and `fno-agent plugin-install grok --status` reads `reachable`, and the dispatch gate already carries that status probe for the row flip once the proof lands |
+| A grok session mints no fno row | The user-level hooks lane was unused: the runner injects `GROK_SESSION_ID` into every hook process, and `~/.grok/hooks/*.json` is a claude-compatible config directory independent of the plugin trust story | `fno config setup cli-hooks` writes `~/.grok/hooks/fno-session.json` running hooks/grok-session-report.sh; the capability row stays unproven until a live launch fires it |
 
 ### pi
 
