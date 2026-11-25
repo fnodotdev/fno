@@ -161,7 +161,7 @@ impl Query {
                         crate::search_query::Surface::Node,
                         crate::search_query::now_secs(),
                     )
-                    .map_err(QueryError::Search)?;
+                    .map_err(|e| QueryError::Search(e.to_string()))?;
                     q.sort = parsed.sort;
                     q.q = val.map(str::to_string);
                 }

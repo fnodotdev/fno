@@ -1034,7 +1034,7 @@ fn search_grammar_case_table_holds_and_drives_the_board() {
         };
         match crate::search_query::parse(q, surface, now) {
             Err(msg) => match case.get("error").and_then(|e| e.as_str()) {
-                Some(want) if want == msg => {}
+                Some(want) if want == msg.to_string() => {}
                 other => fails.push(format!(
                     "q {q:?}: parser errored {msg:?}, case wanted {other:?}"
                 )),

@@ -15,6 +15,7 @@ pub(crate) fn parse_query(text: &str) -> Result<crate::search_query::Parsed, Str
         crate::search_query::Surface::Event,
         crate::search_query::now_secs(),
     )
+    .map_err(|e| e.to_string())
 }
 
 /// The `?` overlay: the panel's keys, then every key the shared table marks

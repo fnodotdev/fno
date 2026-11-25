@@ -14,7 +14,7 @@ fn sequential_tail(head: &str, tail: &str) -> bool {
 
 /// Parse one query. Installs the board's sequential-id test first, so a
 /// `<prefix>-<n>` id reads as a node on a sequential board.
-pub fn parse(input: &str, surface: Surface, now: i64) -> Result<Parsed, String> {
+pub fn parse(input: &str, surface: Surface, now: i64) -> Result<Parsed, ParseError> {
     set_sequential_tail(sequential_tail);
     fno_proto::feed::grammar::parse(input, surface, now)
 }

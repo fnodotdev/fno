@@ -220,6 +220,56 @@ pub fn areas_for_node(title: &str, details: &str, project: Option<&str>) -> Vec<
 /// and `details` (long fields, fuzzy per whitespace-split word).
 pub type Fields = BTreeMap<String, Vec<String>>;
 
+/// The fields the matcher itself reads by name. The key table's own keys
+/// read through their [`KeyDef`] names; these are the fixed ones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Field {
+    Created,
+    Ts,
+    Session,
+    Id,
+    Text,
+    Details,
+}
+
+impl Field {
+    /// The key the field map stores this field under.
+    pub fn key(self) -> &'static str {
+        match self {
+            Field::Created => "created",
+            Field::Ts => "ts",
+            Field::Session => "session",
+            Field::Id => "id",
+            Field::Text => "text",
+            Field::Details => "details",
+        }
+    }
+}
+
+/// One fixed field's values in a row's field map.
+pub fn field(f: &Fields, which: Field) -> Option<&Vec<String>> {
+    f.get(which.key())
+}
+
+/// A refused query: the one line every surface shows verbatim (the footer,
+/// the CLI, the web page and the shared cases file).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseError(String);
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ParseError {}
+
+impl From<String> for ParseError {
+    fn from(msg: String) -> Self {
+        ParseError(msg)
+    }
+}
+
 /// `_` and space are the same inside one value, and values are
 /// case-insensitive.
 fn norm(s: &str) -> String {
@@ -347,7 +397,7 @@ impl Pred {
                     .any(|n| op.holds(n, *val) && hi.is_none_or(|hi| n <= hi))
             }),
             Pred::Age { op, days, hi } => {
-                let stamps = f.get("created").or_else(|| f.get("ts"));
+                let stamps = field(f, Field::Created).or_else(|| field(f, Field::Ts));
                 stamps.is_some_and(|vals| {
                     vals.iter().any(|have| {
                         stamp_epoch(have).is_some_and(|ts| {
@@ -359,14 +409,14 @@ impl Pred {
             }
             Pred::Bare { val, quoted } => bare_hit(f, val, *quoted),
             Pred::SessionOrText { val } => {
-                f.get("session").is_some_and(|vals| {
+                field(f, Field::Session).is_some_and(|vals| {
                     vals.iter()
                         .any(|have| have.to_lowercase().starts_with(val.as_str()))
                 }) || bare_hit(f, val, false)
             }
-            Pred::IdExact { val } => f
-                .get("id")
-                .is_some_and(|vals| vals.iter().any(|have| norm(have) == *val)),
+            Pred::IdExact { val } => {
+                field(f, Field::Id).is_some_and(|vals| vals.iter().any(|have| norm(have) == *val))
+            }
         }
     }
 }
@@ -375,7 +425,7 @@ impl Pred {
 /// whitespace-split word of `details`; a quoted needle is a substring over
 /// both.
 fn bare_hit(f: &Fields, val: &str, quoted: bool) -> bool {
-    let text_hit = f.get("text").is_some_and(|vals| {
+    let text_hit = field(f, Field::Text).is_some_and(|vals| {
         vals.iter().any(|have| {
             let have = have.to_lowercase();
             if quoted {
@@ -385,7 +435,7 @@ fn bare_hit(f: &Fields, val: &str, quoted: bool) -> bool {
             }
         })
     });
-    let details_hit = f.get("details").is_some_and(|vals| {
+    let details_hit = field(f, Field::Details).is_some_and(|vals| {
         vals.iter().any(|have| {
             let have = have.to_lowercase();
             if quoted {
@@ -408,7 +458,7 @@ enum Tok {
 /// Whitespace splits terms except inside `"..."`; a lone `|` is its own
 /// token. Quote characters stay in the text; the term parser strips them
 /// where the key's kind reads them.
-fn tokenize(input: &str) -> Result<Vec<Tok>, String> {
+fn tokenize(input: &str) -> Result<Vec<Tok>, ParseError> {
     let mut out: Vec<Tok> = Vec::new();
     let mut in_quote = false;
     let mut cur: Option<(bool, String)> = None;
@@ -435,7 +485,7 @@ fn tokenize(input: &str) -> Result<Vec<Tok>, String> {
         }
     }
     if in_quote {
-        return Err("unterminated quote".to_string());
+        return Err("unterminated quote".to_string().into());
     }
     if let Some((neg, text)) = cur {
         out.push(Tok::Word { neg, text });
@@ -502,7 +552,7 @@ impl Parsed {
 
 /// Parse one query. An empty query parses to a `Parsed` that keeps
 /// everything.
-pub fn parse(input: &str, surface: Surface, now: i64) -> Result<Parsed, String> {
+pub fn parse(input: &str, surface: Surface, now: i64) -> Result<Parsed, ParseError> {
     let toks = tokenize(input)?;
     let mut groups: Vec<Vec<Term>> = Vec::new();
     let mut sort: Option<String> = None;
@@ -511,7 +561,7 @@ pub fn parse(input: &str, surface: Surface, now: i64) -> Result<Parsed, String> 
         match tok {
             Tok::Pipe => {
                 if groups.is_empty() || extend {
-                    return Err("stray '|'".to_string());
+                    return Err("stray '|'".to_string().into());
                 }
                 extend = true;
             }
@@ -528,7 +578,7 @@ pub fn parse(input: &str, surface: Surface, now: i64) -> Result<Parsed, String> 
         }
     }
     if extend {
-        return Err("stray '|'".to_string());
+        return Err("stray '|'".to_string().into());
     }
     Ok(Parsed { groups, sort, now })
 }
@@ -560,7 +610,7 @@ fn term_from(
     surface: Surface,
     now: i64,
     sort_out: &mut Option<String>,
-) -> Result<Option<Term>, String> {
+) -> Result<Option<Term>, ParseError> {
     let (name, value) = split_colon(text);
     let Some(name) = name else {
         return Ok(Some(Term {
@@ -581,7 +631,8 @@ fn term_from(
             "'{name}:' ({}) does not apply to {}",
             def.names[0],
             surface.name()
-        ));
+        )
+        .into());
     }
     if def.kind == Kind::Sort {
         *sort_out = Some(sort_term(value)?);
@@ -636,7 +687,7 @@ fn split_alts(value: &str) -> Vec<&str> {
 }
 
 /// One key's value text into its predicates.
-fn value_alts(def: &KeyDef, value: &str, now: i64) -> Result<Vec<Pred>, String> {
+fn value_alts(def: &KeyDef, value: &str, now: i64) -> Result<Vec<Pred>, ParseError> {
     let key = def.names[0];
     let mut alts = Vec::new();
     for part in split_alts(value) {
@@ -670,7 +721,7 @@ fn value_alts(def: &KeyDef, value: &str, now: i64) -> Result<Vec<Pred>, String> 
         }
     }
     if alts.is_empty() {
-        return Err(format!("'{key}:' needs a value"));
+        return Err(format!("'{key}:' needs a value").into());
     }
     Ok(alts)
 }
@@ -685,12 +736,12 @@ fn quoted_part(part: &str) -> (&str, bool) {
 /// One date alternative: `>=2026-09-20`, `>-7d`, `2026-09-20..2026-09-30`.
 /// A relative value with no operator reads `>=`; an absolute one with no
 /// operator reads that day.
-fn date_pred(key: &'static str, part: &str, now: i64) -> Result<Pred, String> {
+fn date_pred(key: &'static str, part: &str, now: i64) -> Result<Pred, ParseError> {
     let bad = |v: &str| format!("bad date for '{key}:': '{v}'");
     let (op, rest) = Cmp::parse(part);
     if let Some((a, b)) = rest.split_once("..") {
         if op.is_some() {
-            return Err(bad(rest));
+            return Err(bad(rest).into());
         }
         let lo = date_bound(a, now).map_err(|_| bad(a))?;
         let hi = date_bound(b, now).map_err(|_| bad(b))?;
@@ -716,7 +767,7 @@ fn date_pred(key: &'static str, part: &str, now: i64) -> Result<Pred, String> {
 
 /// One bound: `-Nd|-Nh|-Nw` from `now`, or an absolute `YYYY-MM-DD` at
 /// midnight UTC.
-fn date_bound(s: &str, now: i64) -> Result<i64, String> {
+fn date_bound(s: &str, now: i64) -> Result<i64, ParseError> {
     if let Some(rest) = s.strip_prefix('-') {
         let (num, unit) = rest.split_at(rest.len().saturating_sub(1));
         let n: i64 = num
@@ -726,7 +777,7 @@ fn date_bound(s: &str, now: i64) -> Result<i64, String> {
             "d" => 86400,
             "h" => 3600,
             "w" => 604800,
-            _ => return Err(format!("bad relative date '{s}'")),
+            _ => return Err(format!("bad relative date '{s}'").into()),
         };
         return Ok(now - n.max(0) * secs);
     }
@@ -743,12 +794,12 @@ fn is_literal_date(s: &str) -> bool {
 }
 
 /// One numeric alternative: `>3`, `3`, `1..5`.
-fn num_pred(key: &'static str, part: &str) -> Result<Pred, String> {
+fn num_pred(key: &'static str, part: &str) -> Result<Pred, ParseError> {
     let bad = |v: &str| format!("bad number for '{key}:': '{v}'");
     let (op, rest) = Cmp::parse(part);
     if let Some((a, b)) = rest.split_once("..") {
         if op.is_some() {
-            return Err(bad(rest));
+            return Err(bad(rest).into());
         }
         let lo: f64 = a.parse().map_err(|_| bad(a))?;
         let hi: f64 = b.parse().map_err(|_| bad(b))?;
@@ -769,7 +820,7 @@ fn num_pred(key: &'static str, part: &str) -> Result<Pred, String> {
 }
 
 /// One age alternative, in days.
-fn age_pred(part: &str) -> Result<Pred, String> {
+fn age_pred(part: &str) -> Result<Pred, ParseError> {
     match num_pred("age", part)? {
         Pred::Num { op, val, hi, .. } => Ok(Pred::Age { op, days: val, hi }),
         _ => unreachable!("num_pred answers a Num"),
@@ -778,7 +829,7 @@ fn age_pred(part: &str) -> Result<Pred, String> {
 
 /// The `sort:` term: one [`SORT_KEYS`] name with an optional `-desc`,
 /// resolved to the page's sort key.
-fn sort_term(value: &str) -> Result<String, String> {
+fn sort_term(value: &str) -> Result<String, ParseError> {
     let v = unquote(value);
     let (name, desc) = match v.strip_suffix("-desc") {
         Some(base) => (base, true),
