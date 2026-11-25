@@ -276,7 +276,6 @@ impl Launch {
     /// Rebuild the project candidates from the layout: the active workspace's
     /// folder, the config's projects, the app's own cwd, the other workspaces'.
     pub(crate) fn refresh_projects(&mut self, layout: &Layout) {
-        self.config = config_projects();
         let mut projects: Vec<String> = Vec::new();
         if let Some(s) = layout.squads.iter().find(|s| s.id == layout.active_squad) {
             if !s.canonical_cwd.is_empty() {
@@ -323,10 +322,23 @@ impl Launch {
         }
     }
 
+    /// Re-read the config's projects and add any new folder to the
+    /// candidates. The layout path reuses the cached read: it runs on every
+    /// layout push, and the config is a file parse.
+    pub(crate) fn refresh_config(&mut self) {
+        self.config = config_projects();
+        for c in &self.config {
+            if !self.projects.contains(&c.path) {
+                self.projects.push(c.path.clone());
+            }
+        }
+    }
+
     pub(crate) fn open(&mut self, kind: Option<Kind>) {
         if let Some(k) = kind {
             self.kind = k;
         }
+        self.refresh_config();
         self.row = Row::Task;
         self.phase = Phase::Editing;
         self.request_id = 0;

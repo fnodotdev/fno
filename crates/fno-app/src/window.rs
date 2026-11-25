@@ -2469,6 +2469,7 @@ impl Root {
                             origin: Some(project.path.clone()),
                         }));
                     }
+                    root.launch.state.refresh_config();
                     root.launch.state.refresh_projects(&root.layout);
                     root.say(format!("added project {}", project.name), cx);
                 }

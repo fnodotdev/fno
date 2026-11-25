@@ -107,7 +107,7 @@ pub fn add_project(path: &str) -> Result<ConfigProject, String> {
     let name = base_name(&toplevel(path).unwrap_or_else(|| path.to_string()));
     rows.push(serde_json::json!({ "name": name, "path": path }));
     let value = serde_json::to_string(&rows).map_err(|e| e.to_string())?;
-    let bin = std::env::var_os("FNO_BIN").unwrap_or_else(|| "fno".into());
+    let bin = crate::digest_overlay::paired_bin("FNO_BIN", "fno");
     let out = std::process::Command::new(bin)
         .args(["config", "set"])
         .arg(format!("{ADD_KEY}={value}"))
