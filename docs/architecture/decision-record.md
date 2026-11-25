@@ -246,7 +246,7 @@ Every decision reader filters. Global decision reaches every session. A project 
 
 A machine that holds a user certificate also proves what it reads. `decision_index::read_store_rows` is the one store read, so every decision reader inherits the check. There, a wide row (global, machine or user) recorded since 2026-11-03 needs a signature from the machine's own user key to bind. A retraction or supersession of a proven wide row needs the same signature. A project row and an older row bind as before. `fno backlog decisions` prints the withheld count on stderr. `fno backlog decide-reindex` reads the store with no check, so a withheld row is never re-appended.
 
-Readers return the count they withheld, and the report's JSON rows carry `reach` (the amended reach rides the flattened row), so a rescope shows in every listing. The stage block lists a decision's scope on its line. A workspace tier (`workspace:<name>`) is a rung nobody has reached. The field is a free string, so adding it later needs a reader branch and no migration.
+Readers return the count they withheld. The report's JSON rows carry `reach`, the amended value, so a rescope shows in every listing. The stage block lists a decision's scope on its line. A workspace tier (`workspace:<name>`) is a rung nobody has reached. The field is a free string, so adding it later needs a reader branch and no migration.
 
 ## The cold archive and the proposal page
 
