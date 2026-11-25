@@ -35,7 +35,7 @@ fn run_spawn(pin_config: &str, provider: &str, tag: &str) -> (Option<i32>, Strin
             tag,
             "--as",
             "pane",
-            "--provider",
+            "--harness",
             provider,
             "--cwd",
             cwd.to_str().unwrap(),
