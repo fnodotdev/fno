@@ -173,10 +173,19 @@ world_up() {
   ROOT="$(cd "$ROOT" && pwd -P)"
   export FNO_MUX_DIR="$ROOT/mux"
   export FNO_SERVER="$SESSION"
-  # Pin the config inside the temp root: the state root becomes this
-  # directory, so no fno write reaches the real ~/.fno.
-  : > "$ROOT/config.toml"
+  # Pin the config, the state root and the agent registry inside the temp
+  # root. An empty config leaves state_dir at ~/.fno, so selectors would
+  # resolve against the real fleet registry.
+  mkdir -p "$ROOT/state" "$ROOT/agents"
+  printf 'state_dir = "%s"\n' "$ROOT/state" > "$ROOT/config.toml"
   export FNO_CONFIG="$ROOT/config.toml"
+  export FNO_AGENT_HOME="$ROOT/agents"
+  local reg
+  reg="$("$FNO_BIN" config doctor 2>&1 | awk '$1=="OPERATOR" && $2=="registry.json" {print $3; exit}')"
+  case "$reg" in
+    "$ROOT"/*) ;;
+    *) die "registry resolves to '${reg:-none}', outside the bench root $ROOT: refusing to run";;
+  esac
   # The app surface's own HOME; window-state and control files land here.
   mkdir -p "$ROOT/home/Library/Application Support"
   REAL_SIG_BEFORE="$(state_sig "$REAL_STATE")"
