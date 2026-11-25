@@ -748,9 +748,12 @@ echo "== peer stamp (AC1-HP) =="
 # the cross-model peer never shares the builder's context, which is the
 # property reviewer_context measures, so a Reviewed peer row satisfies the
 # independent rung. This pins the row the predicate's independent arm reads.
+# The findings array is empty, so the measured verdict is pass.
+F15_CLEAN="$TMP/findings-clean.json"
+printf '[]' > "$F15_CLEAN"
 rm -f "$TMP/last-emit.txt"
 (cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
-  FNO="$TMP/fno-full" bash "$EMITTER" peer pass fresh --findings-file "$F14") >/dev/null 2>&1
+  FNO="$TMP/fno-full" bash "$EMITTER" peer pass fresh --findings-file "$F15_CLEAN") >/dev/null 2>&1
 [[ -f "$TMP/last-emit.txt" ]] && pass "peer fresh emit writes an event" \
   || fail "peer fresh emit wrote nothing"
 got="$(stored '.reviewer_context')"
