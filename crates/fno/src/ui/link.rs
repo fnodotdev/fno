@@ -343,11 +343,24 @@ pub fn is_handle_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
-/// The message id carried by an exact `fno-message:` pseudo URI.
+/// The message id carried by an exact `fno-message:` pseudo URI: the hash
+/// form `fmail-<12 hex>` or the number form `fmail-<1 to 7 digits>`.
 pub fn message_id_from_uri(s: &str) -> Option<&str> {
     let id = s.strip_prefix(MESSAGE_SCHEME)?;
-    let hex = id.strip_prefix("fmail-")?;
-    (hex.len() == 12 && hex.bytes().all(|b| b.is_ascii_hexdigit())).then_some(id)
+    fno_mail::address::is_mail_id(id).then_some(id)
+}
+
+/// The char length of the mail id token at `start`, just past `fmail-`: 12
+/// hex digits (the hash form) or 1 to 7 decimal digits (the number form).
+/// A longer hex run, or a number mixed with hex letters, names no id.
+fn mail_id_len(chars: &[char], start: usize) -> Option<usize> {
+    let run = chars
+        .get(start..)?
+        .iter()
+        .take_while(|c| c.is_ascii_hexdigit())
+        .count();
+    let digits = chars[start..start + run].iter().all(|c| c.is_ascii_digit());
+    (run == 12 || ((1..=7).contains(&run) && digits)).then_some(run)
 }
 
 pub fn is_message_uri(s: &str) -> bool {
@@ -385,16 +398,15 @@ pub fn is_fno_uri(s: &str) -> bool {
 /// handle's session.
 pub fn find_mail_sender(text: &str) -> Option<(usize, usize, String, String)> {
     let chars: Vec<char> = text.chars().collect();
-    let hex12 = |cs: &[char]| cs.len() == 12 && cs.iter().all(|c| c.is_ascii_hexdigit());
     for i in 0..chars.len() {
         if !chars[i..].starts_with(&['f', 'm', 'a', 'i', 'l', '-']) {
             continue;
         }
         let hex_start = i + "fmail-".len();
-        let id_end = hex_start + 12;
-        if !hex12(chars.get(hex_start..id_end)?) {
+        let Some(id_len) = mail_id_len(&chars, hex_start) else {
             continue;
-        }
+        };
+        let id_end = hex_start + id_len;
         // A hex digit right after the id means a longer token, not this id.
         if chars.get(id_end).is_some_and(|c| c.is_ascii_hexdigit()) {
             continue;
@@ -451,7 +463,6 @@ pub fn find_mail_message(text: &str) -> Option<(usize, usize, String)> {
 /// CHAR index to scan from, so a caller can walk a line's later occurrences.
 pub fn find_fmail_token(text: &str, skip: usize) -> Option<(usize, usize, String)> {
     let chars: Vec<char> = text.chars().collect();
-    let hex12 = |cs: &[char]| cs.len() == 12 && cs.iter().all(|c| c.is_ascii_hexdigit());
     for i in skip..chars.len() {
         if !chars[i..].starts_with(&['f', 'm', 'a', 'i', 'l', '-']) {
             continue;
@@ -461,10 +472,10 @@ pub fn find_fmail_token(text: &str, skip: usize) -> Option<(usize, usize, String
             continue;
         }
         let hex_start = i + "fmail-".len();
-        let id_end = hex_start + 12;
-        if !hex12(chars.get(hex_start..id_end)?) {
+        let Some(id_len) = mail_id_len(&chars, hex_start) else {
             continue;
-        }
+        };
+        let id_end = hex_start + id_len;
         // Any word character right after the id means a longer token, not
         // this id: `fmail-0123456789abg` names no mail this parse may pick.
         if chars
@@ -922,6 +933,23 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_number_id_reads_beside_the_hash_id() {
+        assert_eq!(
+            message_id_from_uri("fno-message:fmail-87"),
+            Some("fmail-87")
+        );
+        assert_eq!(message_id_from_uri("fno-message:fmail-12345678"), None);
+        let header = "`@candor \u{b7} fmail-87 \u{b7} hi`";
+        let (_, _, handle, id) = find_mail_sender(header).unwrap();
+        assert_eq!((handle.as_str(), id.as_str()), ("candor", "fmail-87"));
+        assert_eq!(
+            find_fmail_token("see fmail-87.", 0).map(|t| t.2).as_deref(),
+            Some("fmail-87")
+        );
+        assert_eq!(find_fmail_token("see fmail-8x", 0), None);
+    }
 
     fn urls(text: &str) -> Vec<String> {
         let chars: Vec<char> = text.chars().collect();

@@ -1316,7 +1316,7 @@ fn migrate_envelopes_at(chats_dir: &Path, db: &Path) -> Result<String, String> {
                     crate::mail_header::render_header(
                         crate::mail_header::HeaderForm::Mention,
                         &sender,
-                        &id,
+                        &crate::numbers::mail_token(&id),
                         third.as_deref(),
                     ),
                     inner,
@@ -1451,7 +1451,7 @@ fn render_message(line: &Value) -> String {
         crate::mail_header::render_header(
             crate::mail_header::HeaderForm::Mention,
             l.from.as_deref().unwrap_or("unknown"),
-            l.id.as_deref().unwrap_or(""),
+            &crate::numbers::mail_token(l.id.as_deref().unwrap_or("")),
             third.as_deref(),
         ),
         cleaned,

@@ -164,7 +164,7 @@ pub fn render_held_release_at(
         lines.push(render_header(
             form,
             &item.bare,
-            &message.id,
+            &crate::numbers::mail_token(&message.id),
             third.as_deref(),
         ));
         lines.push(item.body.clone());
@@ -318,7 +318,7 @@ fn header_sender_for<'a>(header: &'a str, id: &str) -> Option<&'a str> {
     let (inner, _) = split_header_span(header.trim())?;
     let (sender, header_id, _) = header_fields(inner)?;
     let bare = sender.strip_prefix('@').unwrap_or(sender);
-    (header_id == id && !bare.is_empty()).then_some(bare)
+    (crate::numbers::mail_hash(header_id) == id && !bare.is_empty()).then_some(bare)
 }
 
 fn header_summary(header: &str) -> Option<String> {
@@ -493,10 +493,8 @@ pub fn is_header_line(line: &str) -> bool {
     if bare.is_empty() || bare.chars().any(|c| c.is_whitespace()) {
         return false;
     }
-    let id_ok = match id.strip_prefix("fmail-") {
-        Some(hex) => hex.len() == 12 && hex.bytes().all(|b| b.is_ascii_hexdigit()),
-        None => id.strip_prefix("msg-").is_some_and(|rest| !rest.is_empty()),
-    };
+    let id_ok = fno_mail::address::is_mail_id(id)
+        || id.strip_prefix("msg-").is_some_and(|rest| !rest.is_empty());
     id_ok && subject.map_or(true, |s| !s.trim().is_empty())
 }
 
@@ -684,7 +682,7 @@ pub fn delivered_msg_id(text: &str) -> Option<String> {
     }
     let (inner, _) = split_header_span(line.trim())?;
     let (_, id, _) = header_fields(inner)?;
-    Some(id.to_string())
+    Some(crate::numbers::mail_hash(id))
 }
 
 /// The header's sender when the store backs it: the first line must parse as
@@ -697,7 +695,7 @@ pub fn verified_sender(text: &str, lookup: impl Fn(&str) -> Option<String>) -> O
     let (inner, _) = split_header_span(line.trim())?;
     let (sender, id, _) = header_fields(inner)?;
     let bare = sender.strip_prefix('@').unwrap_or(sender);
-    let stored = lookup(id)?;
+    let stored = lookup(&crate::numbers::mail_hash(id))?;
     (stored.strip_prefix('@').unwrap_or(&stored) == bare).then(|| bare.to_string())
 }
 
@@ -801,7 +799,7 @@ pub fn delivered_headers(text: &str) -> Vec<DeliveredHeader> {
                 let tail = tail.strip_prefix('⏎').unwrap_or(tail).trim();
                 out.push(DeliveredHeader {
                     sender: sender.trim_start_matches('@').to_string(),
-                    id: id.to_string(),
+                    id: crate::numbers::mail_hash(id),
                     body: tail.to_string(),
                     line_start: at == 0,
                 });
@@ -973,6 +971,19 @@ pub fn relay_parse_line(line: &str) -> Option<(&str, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_number_token_reads_as_a_header_id() {
+        assert!(is_header_line("`@candor \u{b7} fmail-87`"));
+        assert!(is_header_line("`@candor \u{b7} fmail-87 \u{b7} hi`"));
+        assert!(!is_header_line("`@candor \u{b7} fmail-12345678`"));
+        assert!(!is_header_line("`@candor \u{b7} fmail-8x`"));
+        assert_eq!(
+            delivered_msg_id("`@candor \u{b7} fmail-9999999`\nbody").as_deref(),
+            Some("fmail-9999999"),
+            "an unnumbered number passes through as typed"
+        );
+    }
 
     #[test]
     fn summaries_headers_classification_and_ids_hold_the_one_shape() {
