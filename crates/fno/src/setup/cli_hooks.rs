@@ -628,6 +628,16 @@ pub fn install_grok(command: &str, hooks_dir: &Path) -> InstallResult {
             ]
         }
     });
+    if std::fs::read(&path)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .is_some_and(|existing| existing == data)
+    {
+        return InstallResult {
+            already_present: true,
+            ..InstallResult::at(&path)
+        };
+    }
     match write_json(&path, &Value::Object(data)) {
         Ok(_) => InstallResult {
             changed: true,
@@ -1211,6 +1221,8 @@ pub fn run_opts(o: &Opts) -> i32 {
             if let Some(note) = &res.note {
                 eprintln!("grok: error: {note} ({shown})");
                 failed = true;
+            } else if res.already_present {
+                println!("grok: already wired ({shown})");
             } else {
                 println!("grok: wired SessionStart -> {} ({shown})", script.display());
             }

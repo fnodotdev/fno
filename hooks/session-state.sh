@@ -15,11 +15,13 @@ set -u
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # A zcode session loads this plugin verbatim, so its Stop (and PreToolUse,
 # where wired) fires land here carrying claude's label in "$1". zcode fires
-# no SessionStart, so the session report rides this event instead (node
-# x-f1b5); the launcher's provider-config env is the discriminator, and no
-# claude session carries it. The guard costs one env read and calls nothing
-# for every harness that is not zcode.
-if [[ -n "${ZCODE_BUILTIN_PROVIDER_CONFIG_FILE:-}${ZCODE_PERSONAL_PROVIDER_CONFIG_FILE:-}" ]]; then
+# no SessionStart, so the session report rides this event instead; the
+# launcher's provider-config env is the discriminator, and no claude session
+# carries it - a claude marker present means the env arrived some other way,
+# and the session keeps its normal leg. The guard costs one env read and
+# calls nothing for every harness that is not zcode.
+if [[ -n "${ZCODE_BUILTIN_PROVIDER_CONFIG_FILE:-}${ZCODE_PERSONAL_PROVIDER_CONFIG_FILE:-}" \
+    && -z "${CLAUDE_CODE_SESSION_ID:-}" ]]; then
     "$HOOK_DIR/zcode-session-report.sh"
     exit 0
 fi

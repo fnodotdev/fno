@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # fno hook: zcode session adoption - report this session's presence to the
 # registry (mail and liveness stop guessing). zcode fires no SessionStart, so
-# the session report rides its first PreToolUse or Stop instead (node x-f1b5;
-# upstream zai-org/feedback #841), and the mint command updates an existing
+# the session report rides its first PreToolUse or Stop instead (upstream
+# zai-org/feedback #841), and the mint command updates an existing
 # row, so a repeated Stop re-report is harmless. The session id is minted by
 # zcode as sess_<uuid>, read defensively from the payload - never from a
 # claude env name, because a zcode session inherits the claude plugin's env.
