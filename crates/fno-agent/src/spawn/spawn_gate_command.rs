@@ -1761,7 +1761,8 @@ mod tests {
 
     /// The probe answer names the live-status rows the slot count left out,
     /// as one `dropped` object and one note line, on an accepted answer and
-    /// on a refused one. It carries no tally on a registry it cannot read.
+    /// on a refused one. A registry it cannot read answers `unknown`, and
+    /// that answer carries no tally.
     #[test]
     fn probe_names_the_live_rows_the_slot_count_drops() {
         let _g = crate::claims::test_env_lock()
@@ -1827,7 +1828,8 @@ mod tests {
             verdict: String,
             #[serde(default)]
             reason: Option<String>,
-            slots: usize,
+            #[serde(default)]
+            slots: Option<usize>,
             #[serde(default)]
             dropped: Option<Dropped>,
             #[serde(default)]
@@ -1845,7 +1847,7 @@ mod tests {
         let accepted = probe_at(28);
         assert_eq!(accepted.verdict, "accepted");
         // The kept row and the dropped one are the two live-status rows.
-        assert_eq!(accepted.slots, 1);
+        assert_eq!(accepted.slots, Some(1));
         assert_eq!(
             accepted.dropped,
             Some(Dropped {
@@ -1880,10 +1882,17 @@ mod tests {
             "{:?}",
             refused.warnings
         );
-        // An unreadable registry prints no tally.
-        std::fs::write(home.join("registry.json"), "not json at all").unwrap();
+        // A registry the probe cannot read answers `unknown`, with no slots
+        // and no tally. The reads above moved the rows into the registry
+        // store and left a fence directory at `registry.json`, so the
+        // unreadable one gets its own home.
+        let unreadable_home = dir.join("agents-home-unreadable");
+        std::fs::create_dir_all(&unreadable_home).unwrap();
+        std::fs::write(unreadable_home.join("registry.json"), "not json at all").unwrap();
+        std::env::set_var(crate::paths::HOME_ENV, &unreadable_home);
         let unreadable = probe_at(28);
-        assert_eq!((unreadable.slots, unreadable.dropped), (0, None));
+        assert_eq!(unreadable.verdict, "unknown");
+        assert_eq!((unreadable.slots, unreadable.dropped), (None, None));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
