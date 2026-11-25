@@ -29,6 +29,12 @@ struct Seen {
     told: Vec<String>,
     /// A deny key reached the worker; one denial per wait.
     denied: bool,
+    /// When that key was typed. Any sighting after the denial finished is a
+    /// new wait: the worker re-asked, or the key never took.
+    denied_at_ms: i64,
+    /// The prompt whose key-less refusal was already reported, so a prompt
+    /// with no deny option reports once, not every beat.
+    reported: Option<String>,
     /// The denial's board task is filed.
     boarded: bool,
     /// The recipients the denial mail reached.
@@ -344,6 +350,17 @@ impl Waiting {
             .map_err(|e| e.to_string())
     }
 
+    /// A finished denial followed by another sighting is a new wait, even
+    /// when the re-asked prompt shows the same screen. True when it reset.
+    fn reset_after_denial(&mut self, now: i64) -> bool {
+        if !(self.seen.denied && self.seen.deny_done && now > self.seen.denied_at_ms) {
+            return false;
+        }
+        self.seen = Seen::default();
+        self.since_ms = now;
+        true
+    }
+
     /// A deny often ends in a new prompt on the same worker. The screen's
     /// fingerprint tells the two waits apart, so the new one starts clean.
     /// True when the stored state changed.
@@ -380,11 +397,19 @@ fn settle_denials(
         if w.deny_due(now, sleeping) && w.grants.is_empty() {
             match (hooks.deny)(&w.short_id) {
                 DenyOutcome::NotTyped(e) => {
-                    first_error.get_or_insert(e);
+                    let prompt = w.screen_fp.clone().unwrap_or_default();
+                    if w.seen.reported.as_deref() != Some(prompt.as_str()) {
+                        first_error.get_or_insert(e);
+                        w.seen.reported = Some(prompt);
+                        if let Err(e) = w.persist(home) {
+                            first_error.get_or_insert(e);
+                        }
+                    }
                     continue;
                 }
                 DenyOutcome::Typed(note) => {
                     w.seen.denied = true;
+                    w.seen.denied_at_ms = now;
                     if let Some(note) = note {
                         first_error.get_or_insert(note);
                     }
@@ -449,8 +474,14 @@ fn run_pass_denying(
 ) -> Result<(), String> {
     let mut waiting = observe(home, now, snapshot)?;
     for w in waiting.iter_mut() {
-        (hooks.dialog)(w);
-        if w.renew(now) {
+        let mut changed = w.reset_after_denial(now);
+        // Reading a screen costs a process, so only a wait that can act on it
+        // reads: one past the notice mark, or one the user's absence denies.
+        if w.overdue(now) || (hooks.asleep)(w, now) {
+            (hooks.dialog)(w);
+            changed |= w.renew(now);
+        }
+        if changed {
             w.persist(home)?;
         }
     }
@@ -731,5 +762,30 @@ mod tests {
         assert_eq!(rig.typed.borrow().len(), 1, "the clock starts over");
         rig.pass(t1 + DENY_AFTER_MS).unwrap();
         assert_eq!(rig.typed.borrow().len(), 2, "the new prompt is denied too");
+    }
+
+    #[test]
+    fn an_identical_re_asked_prompt_is_denied_again() {
+        let rig = Rig::new();
+        let t0 = 1_000_000;
+        rig.pass(t0).unwrap();
+        rig.pass(t0 + DENY_AFTER_MS).unwrap();
+        rig.pass(t0 + DENY_AFTER_MS + 60_000).unwrap();
+        rig.pass(t0 + 2 * DENY_AFTER_MS + 60_000).unwrap();
+        assert_eq!(
+            rig.typed.borrow().len(),
+            2,
+            "any sighting after a denial restarts the wait"
+        );
+    }
+
+    #[test]
+    fn a_refusal_that_types_nothing_reports_once_per_prompt() {
+        let rig = Rig::new();
+        rig.asleep.set(true);
+        *rig.outcome.borrow_mut() = Some(DenyOutcome::NotTyped("no deny option".into()));
+        assert!(rig.pass(1_000_000).is_err());
+        *rig.outcome.borrow_mut() = Some(DenyOutcome::NotTyped("no deny option".into()));
+        rig.pass(1_000_000 + 60_000).unwrap();
     }
 }

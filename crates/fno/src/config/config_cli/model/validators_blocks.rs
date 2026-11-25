@@ -23,6 +23,7 @@ const MATCH_KEYS: [&str; 14] = [
 ];
 
 pub(super) fn register(reg: &mut Registry) {
+    reg.before("UserBlock", &["working_hours"], check_working_hours);
     reg.model_before("AttentionBlock", ignore_retired_rows);
 
     reg.before("DispatchBlock", &["auto_merge"], coerce_auto_merge);
@@ -279,6 +280,53 @@ fn coerce_write_roots(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
         .map(Value::from)
         .collect();
     Ok(Value::Array(roots))
+}
+
+/// `[user.working_hours]`: weekday keys with `HH:MM-HH:MM` lists, the same
+/// grammar `fno-agent` reads (agents_config.rs `parse_hours_range`). `config
+/// set` refuses a bad range here instead of letting the runtime read it as
+/// never away.
+fn check_working_hours(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
+    const DAYS: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+    let Value::Object(days) = &v else {
+        return Ok(v);
+    };
+    let minute_of = |part: &str| -> Option<u32> {
+        let (h, m) = part.trim().split_once(':')?;
+        let two = |t: &str| t.len() == 2 && t.bytes().all(|b| b.is_ascii_digit());
+        if !two(h) || !two(m) {
+            return None;
+        }
+        let (h, m): (u32, u32) = (h.parse().ok()?, m.parse().ok()?);
+        (m < 60 && (h < 24 || (h == 24 && m == 0))).then_some(h * 60 + m)
+    };
+    let valid = |spec: &str| {
+        spec.split_once('-')
+            .and_then(|(a, b)| Some((minute_of(a)?, minute_of(b)?)))
+            .is_some_and(|(start, end)| start < end)
+    };
+    for (day, list) in days {
+        if !DAYS.contains(&day.as_str()) {
+            return Err(Fail::Value(format!(
+                "working_hours.{day} is not a weekday; use {}",
+                DAYS.join(", ")
+            )));
+        }
+        let Some(items) = list.as_array() else {
+            return Err(Fail::Value(format!(
+                "working_hours.{day} must be a list of \"HH:MM-HH:MM\" strings"
+            )));
+        };
+        for item in items {
+            let spec = item.as_str().unwrap_or("");
+            if !valid(spec) {
+                return Err(Fail::Value(format!(
+                    "working_hours.{day}: {spec:?} is not HH:MM-HH:MM with the start before the end (24:00 ends a day)"
+                )));
+            }
+        }
+    }
+    Ok(v)
 }
 
 fn coerce_term_text(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {

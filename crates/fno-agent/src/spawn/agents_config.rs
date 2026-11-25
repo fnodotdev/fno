@@ -2162,24 +2162,35 @@ pub fn user_hours(cwd: &Path) -> Result<UserHours, String> {
 /// value reads as never away. The refusal is not silent: it prints, and it
 /// lands once on the board, where `fno config doctor` also names it.
 pub fn user_hours_or_default(cwd: &Path) -> UserHours {
-    user_hours(cwd).unwrap_or_else(|refusal| {
-        eprintln!("fno-agent: {refusal}");
-        let home = crate::paths::AgentsHome::from_env();
-        let store = crate::provider_cap::questions_path(&home);
-        let text = format!(
-            "Config refused: {refusal}. Until it is fixed the user reads as never away, so no prompt is denied for being away."
-        );
-        let _ = crate::fleet_task::file_once(
-            &store,
-            "fno/user-hours",
-            &refusal,
-            &cwd.display().to_string(),
-            &text,
-            None,
-            None,
-        );
-        UserHours::default()
-    })
+    const LANE: &str = "fno/user-hours";
+    const KEY: &str = "user-hours refused";
+    let store = crate::paths::AgentsHome::from_env_opt()
+        .map(|home| crate::provider_cap::questions_path(&home));
+    match user_hours(cwd) {
+        Ok(hours) => {
+            if let Some(store) = &store {
+                let _ = crate::fleet_task::close(
+                    store,
+                    LANE,
+                    KEY,
+                    "",
+                    "the config reads clean",
+                    "fno-agent",
+                );
+            }
+            hours
+        }
+        Err(refusal) => {
+            eprintln!("fno-agent: {refusal}");
+            if let Some(store) = &store {
+                let text = format!(
+                    "Config refused: {refusal}. Until it is fixed the user reads as never away, so no prompt is denied for being away."
+                );
+                let _ = crate::fleet_task::file_once(store, LANE, KEY, "", &text, None, None);
+            }
+            UserHours::default()
+        }
+    }
 }
 
 /// `fno-agent user-hours`: one JSON line, `{"ok":true}` or
