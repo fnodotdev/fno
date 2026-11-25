@@ -1035,6 +1035,21 @@ fn detail_field_rows() {
         "not-a-time",
         "unparseable stamps show raw"
     );
+    // A day boundary marks its first row at any width: the top row of an
+    // older day, the first row of each new day, and the first row under a
+    // header. Rows of the same day below stay time-only.
+    let marks = feed_view::day_marks_in(
+        &[
+            Some("2026-09-28T16:48:49Z"),
+            Some("2026-09-28T09:00:00Z"),
+            Some("2026-09-27T23:00:00Z"),
+            None,
+            Some("2026-09-27T22:00:00Z"),
+            Some("not-a-time"),
+        ],
+        &tz,
+    );
+    assert_eq!(marks, [true, false, true, false, true, false]);
 
     let mut a = feed_item(Some("x-a"), None);
     a.ts = "2026-09-28T17:00:00Z".into();

@@ -56,7 +56,7 @@ The cursor pages the command. The panel does not page: each fold reads the whole
 
 The filter flags AND together, and the values inside one flag are comma-OR. `--kind` matches by prefix, so an exact kind is its own prefix. An empty flag value is ignored. An unknown area returns an empty answer, not an error. Both epoch bounds reach every event-store leg as real store bounds.
 
-`e` in the mux client toggles the full-height panel on the right edge. Rows render newest first as a table: time, area, harness, kind, node, session tail, lead, summary. Time and kind never drop, and the summary keeps at least 12 columns. Past that, the panel adds node, then lead, harness, area and session as width allows. The border drags to a width that persists.
+`e` in the mux client toggles the full-height panel on the right edge. Rows render newest first as a table: time, area, harness, kind, node, session tail, lead, summary. Time and kind never drop, and the summary keeps at least 12 columns. A wide panel dates every row older than today. At any width, the first row of each day shows its date, so a day boundary never reads as time running backward. Past that, the panel adds node, then lead, harness, area and session as width allows. The border drags to a width that persists.
 
 A refresh never moves the reader. The row under the cursor and the top row stay where they were. Rows newer than the newest one held count while you sit away from the top, and the footer shows `↑ N new`. A click on that marker, or `g`, returns you to the top and clears it.
 

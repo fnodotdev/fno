@@ -250,7 +250,25 @@ pub(crate) fn feed_panel_rows(
     // longer value ellipsizes inside its cell, so a title can never sit at a
     // different x than its data.
     let show_date = w >= 48;
-    let ts_w = if show_date { 11 } else { 5 };
+    // The first row of each day carries its date at any width, so a day
+    // boundary never reads as time running backward (00:57 above 20:06).
+    let window = o.slots.get(offset..).unwrap_or_default();
+    let window = window
+        .get(..feed_body_rows(visible_rows).min(window.len()))
+        .unwrap_or_default();
+    let stamps: Vec<Option<&str>> = window
+        .iter()
+        .map(|s| match s {
+            Slot::Item(i) => o.win.items.get(*i).map(|it| it.ts.as_str()),
+            Slot::Header { .. } => None,
+        })
+        .collect();
+    let day_marks = day_marks_in(&stamps, &chrono::Local);
+    let ts_w = if show_date || day_marks.iter().any(|m| *m) {
+        11
+    } else {
+        5
+    };
     let dw = |s: &str| unicode_width::UnicodeWidthStr::width(s);
     // Each title carries its marks: an arrow on the sort column, a dot and
     // the value count on a filtered one, so color is never the only signal.
@@ -379,13 +397,13 @@ pub(crate) fn feed_panel_rows(
                     bold: selected,
                     brand: selected,
                 });
-                push_col(
-                    &mut row,
-                    &fit_cell(&short_ts(&item.ts, show_date), ts_w),
-                    ts_w,
-                    selected,
-                    selected,
-                );
+                let day_mark = day_marks.get(d - offset).copied().unwrap_or(false);
+                let ts = if day_mark {
+                    dated_ts(&item.ts)
+                } else {
+                    short_ts(&item.ts, show_date)
+                };
+                push_col(&mut row, &fit_cell(&ts, ts_w), ts_w, selected, selected);
                 if show_area {
                     push_col(
                         &mut row,
@@ -683,6 +701,44 @@ where
 
 fn short_ts(ts: &str, with_date: bool) -> String {
     short_ts_in(ts, &chrono::Local, with_date)
+}
+
+fn dated_ts(ts: &str) -> String {
+    match chrono::DateTime::parse_from_rfc3339(ts) {
+        Ok(t) => t
+            .with_timezone(&chrono::Local)
+            .format("%m-%d %H:%M")
+            .to_string(),
+        Err(_) => ts.to_string(),
+    }
+}
+
+/// Which painted rows open a day, given each row's stamp in paint order
+/// (`None` is a group header). A row opens a day when its local day differs
+/// from the row above it, or it is the first row under the top or a header
+/// and its day is not today. Such a row shows its date at any width.
+pub(crate) fn day_marks_in<Tz: chrono::TimeZone>(stamps: &[Option<&str>], tz: &Tz) -> Vec<bool> {
+    let today = chrono::Utc::now().with_timezone(tz).date_naive();
+    let mut prev = None;
+    stamps
+        .iter()
+        .map(|s| {
+            let Some(s) = s else {
+                prev = None;
+                return false;
+            };
+            let Ok(t) = chrono::DateTime::parse_from_rfc3339(s) else {
+                return false;
+            };
+            let day = tz.from_utc_datetime(&t.naive_utc()).date_naive();
+            let opens = match prev {
+                Some(p) => p != day,
+                None => day != today,
+            };
+            prev = Some(day);
+            opens
+        })
+        .collect()
 }
 
 /// The session id's last eight characters, in order. Measured unique across
