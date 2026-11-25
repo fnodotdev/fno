@@ -2422,15 +2422,15 @@ reason = "no session-state push for gemini (no fno hook registration; the per-ha
 
 [harness.cursor-agent.hooks.session_state]
 state = "missing"
-reason = "no session-state push for cursor-agent (no fno hook registration; the per-harness report adapters land with the session-state push work)"
+reason = "session-state push for cursor-agent ships as hooks/cursor-session-report.sh (registered by the cli-hooks cursor arm), unproven until a live fire (node x-f1b5)"
 
 [harness.grok.hooks.session_state]
 state = "missing"
-reason = "no session-state push for grok (no fno hook registration; the per-harness report adapters land with the session-state push work)"
+reason = "session-state push for grok ships as hooks/grok-session-report.sh (registered by the cli-hooks grok arm into ~/.grok/hooks/), unproven until a live fire (node x-f1b5)"
 
 [harness.zcode.hooks.session_state]
 state = "missing"
-reason = "no session-state push for zcode (no fno hook registration; the per-harness report adapters land with the session-state push work)"
+reason = "session-state push for zcode ships as hooks/zcode-session-report.sh via the shared plugin Stop shim hooks/session-state.sh (node x-f1b5), unproven until a live fire"
 
 [harness.muse.hooks.session_state]
 state = "missing"
@@ -2476,15 +2476,15 @@ reason = "no fno hook registration for gemini (deprecated harness; no plugin hoo
 
 [harness.cursor-agent.hooks.event_rules]
 state = "impossible"
-reason = "no fno hook registration for cursor-agent (no plugin hook file and no capability install lane), so its Stop never reaches the rule engine"
+reason = "no fno hook registration for cursor-agent (its vendor surface is ~/.cursor/hooks.json, registered by the cli-hooks cursor arm; adapters ship, the fire is unproven until a live launch, node x-f1b5)"
 
 [harness.grok.hooks.event_rules]
 state = "impossible"
-reason = "no fno hook registration for grok (no plugin hook file and no capability install lane; the grok install lane would flip this), so its Stop never reaches the rule engine"
+reason = "no fno hook registration for grok (the vendor lane is ~/.grok/hooks/, registered by the cli-hooks grok arm; adapters ship, the fire is unproven until a live launch, node x-f1b5)"
 
 [harness.zcode.hooks.event_rules]
 state = "impossible"
-reason = "no fno hook registration for zcode (no plugin hook file and no capability install lane), so its Stop never reaches the rule engine"
+reason = "no fno hook registration for zcode beyond the shared claude plugin stage it loads verbatim (hooks/session-state.sh carries the zcode guard); the fire is unproven until a live launch (node x-f1b5)"
 
 [harness.muse.hooks.event_rules]
 state = "impossible"
