@@ -143,11 +143,11 @@ fn view_with_rows(rows: Vec<AgentRow>) -> View {
 #[test]
 fn render_rows() {
     let o = {
-        let mut a = feed_item(Some("x-a"), Some("s-1"));
+        let mut a = feed_item(Some("x-aaaa"), Some("s-1"));
         a.ts = "2026-09-02T16:27:06Z".into();
-        let mut b = feed_item(Some("x-b"), Some("s-2"));
+        let mut b = feed_item(Some("x-bbbb"), Some("s-2"));
         b.ts = "2026-09-02T17:27:06Z".into();
-        let mut c = feed_item(Some("x-c"), Some("s-3"));
+        let mut c = feed_item(Some("x-cccc"), Some("s-3"));
         c.ts = "2026-09-02T18:27:06Z".into();
         overlay(vec![a, b, c])
     };
@@ -168,13 +168,13 @@ fn render_rows() {
         lines[2]
     );
     assert!(
-        lines[3].contains("x-c"),
+        lines[3].contains("x-cccc"),
         "top row shows the newest: {}",
         lines[3]
     );
     assert!(!lines[3].contains('▸'), "the fill is the cursor");
-    assert!(lines[4].contains("x-b"));
-    assert!(lines[5].contains("x-a"));
+    assert!(lines[4].contains("x-bbbb"));
+    assert!(lines[5].contains("x-aaaa"));
     assert!(lines[6].trim().is_empty(), "below the last item: blank");
     assert!(
         lines
@@ -184,20 +184,20 @@ fn render_rows() {
     );
 
     let o = {
-        let mut a = feed_item(Some("x-a"), Some("s-1"));
+        let mut a = feed_item(Some("x-aaaa"), Some("s-1"));
         a.ts = "2026-09-02T16:27:06Z".into();
-        let mut b = feed_item(Some("x-b"), Some("s-2"));
+        let mut b = feed_item(Some("x-bbbb"), Some("s-2"));
         b.ts = "2026-09-02T17:27:06Z".into();
-        let mut c = feed_item(Some("x-c"), Some("s-3"));
+        let mut c = feed_item(Some("x-cccc"), Some("s-3"));
         c.ts = "2026-09-02T18:27:06Z".into();
         overlay(vec![a, b, c])
     };
     // Slot offset 1 skips the group header, so the newest row (x-c) leads
     // the window now.
     let lines = feed_panel_lines(&o, false, W, ROWS, 1);
-    assert!(lines[2].contains("x-c"));
-    assert!(lines[3].contains("x-b"));
-    assert!(lines[4].contains("x-a"));
+    assert!(lines[2].contains("x-cccc"));
+    assert!(lines[3].contains("x-bbbb"));
+    assert!(lines[4].contains("x-aaaa"));
     assert!(lines[5].trim().is_empty());
 
     // x-d15a: the failure line names the cause, never the old generic
@@ -386,13 +386,18 @@ fn click_rows() {
     // The full client path: feed open, click in the panel's item rows at the
     // geometry the painter draws, hit = that row's provenance view. The deep
     // link moved to that view's own action; a click inspects, never attaches.
+    // Real-width node ids: the give order at this width is read on the ids
+    // the board actually mints, never on short stand-ins.
     let mut v = view_with_rows(vec![]);
-    let mut a = feed_item(Some("x-a"), Some("s-1"));
+    let mut a = feed_item(Some("x-aaaa"), Some("s-1"));
     a.ts = "2026-09-02T16:27:06Z".into();
-    let mut b = feed_item(Some("x-b"), Some("s-2"));
+    a.title = "PR 1391".into();
+    let mut b = feed_item(Some("x-bbbb"), Some("s-2"));
     b.ts = "2026-09-02T17:27:06Z".into();
-    let mut c = feed_item(Some("x-c"), Some("s-3"));
+    b.title = "PR 1392".into();
+    let mut c = feed_item(Some("x-cccc"), Some("s-3"));
     c.ts = "2026-09-02T18:27:06Z".into();
+    c.title = "PR 1393".into();
     v.feed = Some(overlay(vec![a, b, c]));
     let w = v.feed_panel_w() as u16;
     assert!(w > 0, "the panel must render at the 100-col view");
@@ -403,15 +408,16 @@ fn click_rows() {
     let f = v.feed.as_ref().unwrap();
     let lines = feed_panel_lines(f, false, w as usize - 1, v.term.0 as usize, 0);
     assert!(
-        lines[3].contains("x-c"),
-        "top ITEM row is the newest: {}",
-        lines[3]
+        lines.get(3).is_some_and(|l| l.contains("PR 1393")),
+        "top ITEM row is the newest: {lines:?}"
     );
-    // At this 31-wide panel kind narrows and the summary floor gives to 10,
-    // so node and the summary both show.
+    // At this 31-wide panel a 6-wide node needs 33 columns at kind 6 and
+    // summary 10, so node goes last in the give order and the summary stays.
     assert!(
-        lines.get(3).is_some_and(|l| l.contains("PR 1395")),
-        "the summary shows beside node: {lines:?}"
+        !lines
+            .iter()
+            .any(|l| l.contains("x-cccc") || l.contains("node")),
+        "node drops at 31 columns with real-width ids: {lines:?}"
     );
     // The header rows never deep-link; the item row under them does.
     // The column header's marker gutter is inert; a title sorts by its
