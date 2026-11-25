@@ -5,6 +5,8 @@
 #[cfg(test)]
 use crate::feed_overlay::FeedItem;
 pub(crate) use fno_proto::feed::table::*;
+#[cfg(test)]
+use std::collections::BTreeSet;
 
 /// The view as the store keeps it: every choice by name.
 pub(crate) fn to_pref(view: &TableView) -> crate::view_store::FeedViewPref {
