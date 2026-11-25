@@ -263,8 +263,10 @@ mod tests {
         let ours = ours(&rows, "o/r", "aaa");
         assert_eq!(ours, HashSet::from([1]));
         let done = |id, workflow| run(id, workflow, "completed", "cancelled");
-        let head =
-            crate::ci_tier::head_of(&[done(1, "cli-ci"), done(2, "guards"), done(5, "release")]);
+        let head = crate::ci_tier::head_of(
+            &[done(1, "cli-ci"), done(2, "guards"), done(5, "release")],
+            "merge-queue-gate.yml",
+        );
         // 2 was cancelled by hand, and 5 was already rerun once.
         assert_eq!(reruns(&head, &ours), vec![1]);
     }
