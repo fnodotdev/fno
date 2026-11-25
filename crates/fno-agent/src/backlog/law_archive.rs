@@ -23,11 +23,16 @@ fn row_key(row: &Value) -> (String, String) {
         .and_then(Value::as_str)
         .unwrap_or("operator_decision")
         .to_string();
-    let id = ["decision_id", "retraction_id", "target_decision_id"]
-        .iter()
-        .find_map(|k| row.get(k).and_then(Value::as_str).filter(|s| !s.is_empty()))
-        .unwrap_or("")
-        .to_string();
+    let id = [
+        "decision_id",
+        "retraction_id",
+        "amendment_id",
+        "target_decision_id",
+    ]
+    .iter()
+    .find_map(|k| row.get(k).and_then(Value::as_str).filter(|s| !s.is_empty()))
+    .unwrap_or("")
+    .to_string();
     (etype, id)
 }
 

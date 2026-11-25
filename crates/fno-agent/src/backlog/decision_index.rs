@@ -342,18 +342,25 @@ pub fn derive_live(text: &str) -> Index {
 
 /// The row identity the Python merge uses (`decide/__init__.py:814-819`):
 /// event type, then the first non-empty of `decision_id`,
-/// `retraction_id`, `target_decision_id`.
+/// `retraction_id`, `amendment_id`, `target_decision_id`. The amendment id
+/// sits before the target: two amendments of one law must not share a key,
+/// or the journal-vs-db merge drops the newer one as a copy.
 fn row_key(row: &Value) -> (String, String) {
     let etype = row
         .get("_event_type")
         .and_then(Value::as_str)
         .unwrap_or("operator_decision")
         .to_string();
-    let id = ["decision_id", "retraction_id", "target_decision_id"]
-        .iter()
-        .find_map(|k| row.get(k).and_then(Value::as_str).filter(|s| !s.is_empty()))
-        .unwrap_or("")
-        .to_string();
+    let id = [
+        "decision_id",
+        "retraction_id",
+        "amendment_id",
+        "target_decision_id",
+    ]
+    .iter()
+    .find_map(|k| row.get(k).and_then(Value::as_str).filter(|s| !s.is_empty()))
+    .unwrap_or("")
+    .to_string();
     (etype, id)
 }
 
@@ -1267,6 +1274,24 @@ mod tests {
             all_ids,
             vec!["d-gone0002", "d-keep0001"],
             "the archive joins back"
+        );
+    }
+
+    #[test]
+    fn two_amendments_of_one_law_keep_distinct_row_keys() {
+        let a = amend("d-cccc0003", "d-aaaa0001", "global", "2026-11-24T00:00:00Z");
+        let b = amend(
+            "d-dddd0004",
+            "d-aaaa0001",
+            "project:fnh",
+            "2026-11-25T00:00:00Z",
+        );
+        let (rows_a, _) = flatten_envelopes(&a);
+        let (rows_b, _) = flatten_envelopes(&b);
+        assert_ne!(
+            row_key(&rows_a[0]),
+            row_key(&rows_b[0]),
+            "two amendments of one law must not collide"
         );
     }
 }
