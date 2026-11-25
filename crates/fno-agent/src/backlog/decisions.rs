@@ -3,6 +3,7 @@
 //! `ts` column is `created_at` now (user ruling 2026-09-23). The flattened
 //! rows keep `ts`, the event envelope key every reader parses.
 
+use super::decision_index::de;
 use super::schema_v4::{iso, norm_sql, stamps, touch, updated, NOW};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde_json::Value;
@@ -376,7 +377,7 @@ pub(crate) fn insert_event(connection: &Connection, event: &Value) -> Result<Str
         .ok_or_else(|| "event data is not an object".to_string())?;
     let event_id = match event_type {
         DECISION_EVENT => data
-            .get("decision_id")
+            .get(de::DECISION_ID)
             .and_then(Value::as_str)
             .filter(|id| !id.is_empty())
             .ok_or_else(|| "operator_decision has no decision_id".to_string())?,
@@ -386,7 +387,7 @@ pub(crate) fn insert_event(connection: &Connection, event: &Value) -> Result<Str
             .filter(|id| !id.is_empty())
             .ok_or_else(|| "decision_retracted has no retraction_id".to_string())?,
         SCOPE_AMEND_EVENT => data
-            .get("amendment_id")
+            .get(de::AMENDMENT_ID)
             .and_then(Value::as_str)
             .filter(|id| !id.is_empty())
             .ok_or_else(|| "decision_scope_amended has no amendment_id".to_string())?,
@@ -720,7 +721,7 @@ mod tests {
         let rows = read_rows(&connection).unwrap().0;
         assert_eq!(rows.len(), 2, "the amend is its own row, no twin");
         assert_eq!(
-            rows[1].get("_event_type").and_then(Value::as_str),
+            rows[1].get(de::EVENT_TYPE).and_then(Value::as_str),
             Some(SCOPE_AMEND_EVENT)
         );
         // A replay of the same amendment dedupes on the event id.
