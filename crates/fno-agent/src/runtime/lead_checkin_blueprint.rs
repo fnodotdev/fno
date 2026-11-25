@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::lead_wake::scope_members;
+use crate::state::RegistryEntry;
 
 /// The unplanned rows this team must not dispatch: node id -> the canonical
 /// scope of the live team that owns it, other than this team's own. The
@@ -405,6 +406,7 @@ pub(crate) fn r_blueprint(
     cwd: &Path,
     session_id: Option<String>,
     claims: Result<Vec<String>, String>,
+    spawned: usize,
     slots: Result<usize, String>,
     floor: &str,
     other_owned: &Result<HashMap<String, String>, String>,
@@ -419,7 +421,7 @@ pub(crate) fn r_blueprint(
     let holders = claims?;
     let other_owned = other_owned.as_ref().map_err(Clone::clone)?;
     let holder = format!("blueprint-session:{session_id}");
-    let running = holders.iter().filter(|h| **h == holder).count();
+    let running = holders.iter().filter(|h| **h == holder).count() + spawned;
     let board = board.as_ref()?;
     let rows = crate::lead_checkin::board_queue(board, "unplanned")?
         .get("rows")
@@ -793,14 +795,70 @@ pub(crate) fn running_blueprint_ids(
         .collect()
 }
 
-/// Read the ceiling state live. `None` when the session id or the claims
-/// listing is unreadable: an unmeasured ceiling never converts an
-/// actionable row into a waiting one.
+/// Keys of the live workers `session` spawned whose payload opens with
+/// `/fno:blueprint`. A spawned planner joins the spawn's `spawn-handover:`
+/// claim, so no `blueprint-session:` holder names its lead; the registry row's
+/// owner is the only edge back. The key is the node id the payload names, else
+/// the worker's session id, so a plan-path payload still counts once.
+pub(crate) fn spawned_blueprint_keys(
+    entries: &[RegistryEntry],
+    session: &str,
+    terminal: &std::collections::HashSet<String>,
+) -> Vec<String> {
+    let mut keys: Vec<String> = Vec::new();
+    for e in entries {
+        // A finished planner can sit idle and unreaped: the same capacity
+        // read the slot share uses keeps it from filling a blueprint slot.
+        if e.role_level.is_some()
+            || !crate::spawn_gate::status_is_liveish(&e.status)
+            || !crate::cap_liveness::holds_capacity(e, terminal)
+            || e.current_owner_session() != Some(session)
+        {
+            continue;
+        }
+        let mut tokens = e.spawn_payload.as_deref().unwrap_or("").split_whitespace();
+        let is_blueprint = tokens
+            .next()
+            .and_then(crate::provider::parse_command_token)
+            .is_some_and(|(command, _)| command == "blueprint");
+        if !is_blueprint {
+            continue;
+        }
+        let node = tokens.find(|t| !t.starts_with('-') && !t.contains('/') && t.contains('-'));
+        let key = node
+            .map(str::to_string)
+            .or_else(|| e.harness_session_id.clone())
+            .unwrap_or_else(|| e.name.clone());
+        if !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    keys
+}
+
+/// `spawned_blueprint_keys` over a loaded registry, with the terminal-run
+/// keys the slot share reads. The caller loads the registry, so an unreadable
+/// one is its own named error, never a silent 0.
+pub(crate) fn spawned_in_registry(
+    registry: &crate::state::Registry,
+    home: &crate::paths::AgentsHome,
+    session: &str,
+) -> Vec<String> {
+    let terminal = crate::terminal_run::read_keys(&home.terminal_runs_dir());
+    spawned_blueprint_keys(&registry.entries, session, &terminal)
+}
+
+/// Read the ceiling state live. `None` when the session id, the claims
+/// listing or the registry is unreadable: an unmeasured ceiling never
+/// converts an actionable row into a waiting one.
 pub(crate) fn stop_check_reading(cwd: &Path) -> Option<BlueprintWait> {
     let (session, _) = crate::claims::resolve_identity();
     let session = session?;
     let rows = crate::claims::list(Some("node:"), None, false).ok()?;
-    let running = running_blueprint_ids(&rows, &session);
+    let mut running = running_blueprint_ids(&rows, &session);
+    let home = crate::paths::AgentsHome::from_env();
+    let registry = crate::state::load_registry(&home.registry_json()).ok()?;
+    running.extend(spawned_in_registry(&registry, &home, &session));
     let provider = std::env::var("FNO_ROUTE_PROVIDER").unwrap_or_default();
     let provider_cap = crate::spawn_gate_lanes::provider_subagents_cap(cwd, &provider);
     let ceiling = blueprint_ceiling(provider_cap);
@@ -861,6 +919,7 @@ mod tests {
             board,
             session_id,
             holders,
+            0,
             slots,
             floor,
             Ok(HashMap::new()),
@@ -881,6 +940,7 @@ mod tests {
         board: Value,
         session_id: Option<&str>,
         holders: Vec<String>,
+        spawned: usize,
         slots: Result<usize, String>,
         floor: &str,
         other_owned: Result<HashMap<String, String>, String>,
@@ -911,6 +971,7 @@ mod tests {
             dir,
             session_id.map(str::to_string),
             Ok(holders),
+            spawned,
             slots,
             floor,
             &other_owned,
@@ -951,6 +1012,7 @@ mod tests {
             board,
             Some("sess-1"),
             vec![],
+            0,
             Ok(4),
             "high",
             Ok(HashMap::new()),
@@ -983,9 +1045,84 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A p2 planned node in scope prints its plan-ready line and counts in
+    /// `plans ready`, so the beat names work the board's p2 rows used to hide.
+    fn a_p2_plan_in_scope_prints_plan_ready() {
+        let dir = std::env::temp_dir().join(format!("fno-bp-p2plan-{}", std::process::id()));
+        let board = json!({"queues": [
+            {"name": "unplanned", "status": "ok", "count": 0, "rows": []},
+            {"name": "undispatched", "status": "ok", "count": 1,
+             "rows": [{"id": "x-p2", "priority": "p2", "title": "a p2 plan"}]},
+        ]});
+        let reading =
+            blueprint_reading(&dir, "", board, Some("sess-1"), vec![], Ok(4), "high").unwrap();
+        let lines = render_lines(&reading);
+        assert!(
+            lines.iter().any(|l| l.contains("plans ready 1 /")),
+            "{lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("plan-ready") && l.contains("x-p2")),
+            "{lines:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A blueprint this lead spawned plans on its own worker session, so the
+    /// registry owner edge fills the slot; a plan-path payload counts once by
+    /// worker, another lead's planner and a target worker count for nothing.
+    fn a_spawned_blueprint_fills_a_slot() {
+        let live = |name: &str, payload: &str, owner: &str| RegistryEntry {
+            name: name.to_string(),
+            status: crate::AgentStatus::Live,
+            spawn_payload: Some(payload.to_string()),
+            spawned_by_session: Some(owner.to_string()),
+            harness_session_id: Some(format!("{name}-sid")),
+            ..Default::default()
+        };
+        let entries = vec![
+            live("w1", "/fno:blueprint x-1", "lead"),
+            live("w2", "/fno:blueprint subagent plans/p.md", "lead"),
+            live("w3", "/fno:blueprint x-1", "lead"),
+            live("w4", "/fno:blueprint x-4", "other"),
+            live("w5", "/fno:target x-5", "lead"),
+        ];
+        let terminal = std::collections::HashSet::new();
+        let keys = spawned_blueprint_keys(&entries, "lead", &terminal);
+        assert_eq!(keys, vec!["x-1".to_string(), "w2-sid".to_string()]);
+        let dir = std::env::temp_dir().join(format!("fno-bp-spawned-{}", std::process::id()));
+        let reading = blueprint_reading_owned(
+            &dir,
+            "",
+            unplanned_board(&[], Some(0)),
+            Some("lead"),
+            vec!["blueprint-session:lead".to_string()],
+            keys.len(),
+            Ok(4),
+            "high",
+            Ok(HashMap::new()),
+            Ok(0),
+            vec![],
+            &[],
+            &[],
+            "",
+        )
+        .unwrap();
+        let lines = render_lines(&reading);
+        assert!(
+            lines.iter().any(|l| l.contains("running 3 of")),
+            "{lines:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The seat legs: the L0 integration, the pure walk, and the rendered
     /// line, so the seat surface adds no test declarations to G3.
     fn l0_seat_legs() {
+        a_p2_plan_in_scope_prints_plan_ready();
+        a_spawned_blueprint_fills_a_slot();
         an_l0_beat_seats_a_leadless_epics_children();
         the_seat_walk_keys_on_leadless_epics_and_the_level();
         the_seat_lead_line_names_scope_lane_and_payload();
@@ -1133,6 +1270,7 @@ mod tests {
             ),
             Some("sess-1"),
             vec![],
+            0,
             Ok(4),
             "high",
             Ok(HashMap::from([
@@ -1197,6 +1335,7 @@ mod tests {
                 unplanned_board(&[], Some(0)),
                 Some("sess-1"),
                 vec![],
+                0,
                 Ok(4),
                 "high",
                 Ok(owned.clone()),
@@ -1331,6 +1470,7 @@ mod tests {
             unplanned_board(&[], Some(0)),
             Some("sess-1"),
             vec![],
+            0,
             Ok(4),
             "high",
             Ok(HashMap::new()),
@@ -1377,6 +1517,7 @@ mod tests {
             unplanned_board(&[("x-1", "low")], Some(0)),
             Some("sess-1"),
             vec![],
+            0,
             Ok(4),
             "high",
             Err("a live team's scope does not compile: e-x: unknown".to_string()),

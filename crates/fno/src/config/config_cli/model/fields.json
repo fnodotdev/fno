@@ -1222,6 +1222,10 @@
      "default": null
     },
     {
+     "name": "human",
+     "default": null
+    },
+    {
      "name": "github_apps",
      "default": null
     },
@@ -3639,6 +3643,7 @@
   "review.self_review_required",
   "review.require_corroboration",
   "review.github_approval_satisfies",
+  "review.human",
   "review.max_rounds",
   "review.carry_interdiff_lines",
   "review.invocation_ttl_minutes",

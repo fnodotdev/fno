@@ -2929,6 +2929,23 @@
       "title": "Github Approval Satisfies",
       "type": "boolean"
      },
+     "human": {
+      "anyOf": [
+       {
+        "enum": [
+         "never",
+         "ui",
+         "always"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Human"
+     },
      "max_rounds": {
       "default": 2,
       "minimum": 1,
@@ -5508,6 +5525,17 @@
    "default_source": "",
    "doc": "When true (default), a non-author human GitHub APPROVED review satisfies coverage on its own - the one producer a stranger's GitHub project emits with no footnote machinery. The approver's login must differ from the PR author's (GitHub refuses an author's approval server-side; the gate asserts it, and an unreadable PR author excludes fail-closed). Set false to keep today's recorded-but-never-counted behavior. Limit: GitHub's refusal is per identity, not per human - a second account with its own token can still self-approve.",
    "edit": "toggle"
+  },
+  {
+   "path": "review.human",
+   "label": "Human approval required",
+   "type": "string",
+   "default": null,
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "",
+   "doc": "The person gate (never | ui | always; default ui). never and ui keep today's behavior: nothing requires a person. always requires a person's GitHub approval of the PR head (an APPROVED review by a login that is not the PR author, fresh at the head): fno do pr status reads not ready and the merge refuses until one lands, and the review-round cap does not discharge it (the lever back off is this key). Validated at write: never, ui or always.",
+   "edit": "editor"
   },
   {
    "path": "review.max_rounds",

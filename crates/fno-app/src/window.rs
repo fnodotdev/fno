@@ -3359,10 +3359,40 @@ impl Root {
             keys::MuxAction::Rename => self.rename_open(cx),
             keys::MuxAction::RowMenu => self.row_menu_open(cx),
             keys::MuxAction::NextWaiting => self.focus_next_waiting(cx),
+            keys::MuxAction::Overlay(overlay) => self.open_overlay(overlay, window, cx),
             keys::MuxAction::Bell => {
                 alerts::beep();
                 let name = String::from_utf8_lossy(key).escape_debug().to_string();
                 self.say(format!("prefix {name}: no mux action is bound"), cx);
+            }
+        }
+    }
+
+    /// A fleet overlay chord: close the key sheet and palette, then open the
+    /// app's surface. A second go-to chord leaves the palette open.
+    fn open_overlay(
+        &mut self,
+        overlay: keys::Overlay,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.notice = None;
+        match overlay {
+            keys::Overlay::GoTo => {
+                cx.notify();
+                if self.goto.is_none() {
+                    self.toggle_goto(&GoTo, window, cx);
+                }
+            }
+            keys::Overlay::Inbox | keys::Overlay::Board => {
+                self.goto = None;
+                self.sheet = false;
+                let view = match overlay {
+                    keys::Overlay::Inbox => MainView::Inbox,
+                    _ => MainView::Orchestration,
+                };
+                self.show(view, cx);
+                cx.notify();
             }
         }
     }
@@ -3970,7 +4000,7 @@ impl EntityInputHandler for Root {
         &mut self,
         range: Option<Range<usize>>,
         text: &str,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         // The palette's query owns the keyboard while it shows.
@@ -3999,6 +4029,13 @@ impl EntityInputHandler for Root {
         }
         self.set_preedit(None, cx);
         if self.main != MainView::Terminal || text.is_empty() {
+            return;
+        }
+        // A prefix chord mid-flight owns the next text key: `c`, `%`, `d` and
+        // the tab digits arrive here, not through on_key, so they must reach
+        // the scanner or the prefix claims nothing.
+        if keys::chord_in_flight(&self.scanner) {
+            self.mux_key(text.as_bytes().to_vec(), window, cx);
             return;
         }
         if self.notice.take().is_some() {
