@@ -516,13 +516,16 @@ fn due_token(due: &[(String, u64, String)]) -> String {
     format!("{:x}", h.finalize())
 }
 
-/// The notice body: the count, the three oldest by id with their ages, and
-/// the answer pointer. The durable queue holds the rest.
+/// The notice body: the count, the three oldest by id with how long each
+/// has waited, and the answer pointer. The age is days since the ask, a
+/// number true for every question, never an overdue figure the lane cannot
+/// know for a question filed with its own deadline. The durable queue holds
+/// the rest.
 fn due_body(due: &[(String, u64, String)]) -> String {
     let mut body = format!("{} question(s) overdue", due.len());
     for (id, epoch, question) in due.iter().take(3) {
         let excerpt: String = question.chars().take(60).collect();
-        body.push_str(&format!("; {id} {}d \"{excerpt}\"", epoch + 1));
+        body.push_str(&format!("; {id} asked {}d ago \"{excerpt}\"", epoch + 1));
     }
     let hidden = due.len().saturating_sub(3);
     if hidden > 0 {
@@ -1041,8 +1044,14 @@ mod tests {
         ];
         let body = due_body(&due);
         assert!(body.starts_with("2 question(s) overdue"), "{body}");
-        assert!(body.contains("D3634 3d \"first question\""), "{body}");
-        assert!(body.contains("D3636 2d \"second question\""), "{body}");
+        assert!(
+            body.contains("D3634 asked 3d ago \"first question\""),
+            "{body}"
+        );
+        assert!(
+            body.contains("D3636 asked 2d ago \"second question\""),
+            "{body}"
+        );
         assert!(body.ends_with("Answer: fno inbox outstanding"), "{body}");
         let hidden = due_body(&[
             ("A".to_string(), 1, "q".to_string()),
