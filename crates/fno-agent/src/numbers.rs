@@ -740,9 +740,19 @@ pub fn mail_hash(token: &str) -> String {
     let number = token
         .strip_prefix("fmail-")
         .and_then(|n| n.parse::<i64>().ok());
+    let held = |n: i64| read_store(|conn| mail_hash_in(conn?, n, &current_store()));
     number
-        .and_then(|n| read_store(|conn| mail_hash_in(conn?, n, &current_store())))
+        .and_then(|n| held(n).or_else(|| pull_then(|| held(n))))
         .unwrap_or_else(|| token.to_string())
+}
+
+/// One primary pull, then the read again: a number a peer minted before this
+/// machine's cache caught up still names its id. `None` with no primary set.
+fn pull_then<T>(read: impl FnOnce() -> Option<T>) -> Option<T> {
+    let remote = crate::store_remote::configured().ok().flatten()?;
+    let conn = open_write_at(&db_path()).ok()?;
+    let _ = pull(&remote, &conn);
+    read()
 }
 
 /// Every number this machine holds, for a printer with many rows.
