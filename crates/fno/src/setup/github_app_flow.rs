@@ -106,10 +106,15 @@ pub(crate) fn default_key_path() -> Result<PathBuf, FlowFault> {
 /// personal form; a name targets the org form. Nothing here is secret, so
 /// the temp file carries no cleanup contract.
 pub(crate) fn write_launcher(path: &Path, state: &str, name: &str) -> Result<(), FlowFault> {
+    // The manifest rides a JS single-quoted string inside a <script> block,
+    // whose content is raw text: no HTML entity ever decodes there. Escape
+    // for the string literal instead, and send `<` as an escape so the text
+    // can never spell a closing script tag.
     let manifest = manifest_json(name)
-        .replace('&', "&amp;")
-        .replace('"', "&quot;")
-        .replace('<', "&lt;");
+        .replace('\\', "\\\\")
+        .replace('\'', "\\'")
+        .replace('<', "\\u003c")
+        .replace('\n', "\\n");
     let page = format!(
         "<!doctype html><html><body>\
 <p>fno is creating the fleet's GitHub App (state {state}).</p>\
@@ -316,6 +321,11 @@ mod tests {
         write_launcher(&path, "fno-state-1", "fno-test").unwrap();
         let page = std::fs::read_to_string(&path).unwrap();
         assert!(page.contains("i.name = 'manifest'"));
+        // The manifest must reach the browser as parseable JSON: raw quotes,
+        // no HTML entity residue a <script> block would never decode.
+        assert!(page.contains("i.value = '{\"name\":\"fno-test\""));
+        assert!(!page.contains("&quot;"));
+        assert!(!page.contains("&amp;"));
         assert!(page.contains("settings/apps/new"));
         assert!(page.contains("organizations/' + encodeURIComponent(org)"));
         assert!(page.contains("state fno-state-1"));
