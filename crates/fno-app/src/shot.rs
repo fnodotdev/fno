@@ -103,7 +103,7 @@ pub fn run(opts: ShotOptions) -> i32 {
         });
         let Ok(handle) = open else {
             eprintln!("fno-app --shot: the window did not open");
-            cx.quit();
+            quit_shot(cx, 1);
             return;
         };
         // The fade lands in the same run-loop turn as the open, before
@@ -123,7 +123,7 @@ pub fn run(opts: ShotOptions) -> i32 {
         // SAFETY: NSApp enumeration over this process's own windows only.
         let Some((_, _, occl, w)) = (unsafe { shot_window_id() }) else {
             eprintln!("fno-app --shot: the shot window did not open");
-            cx.quit();
+            quit_shot(cx, 1);
             return;
         };
         // SAFETY: setter on the window this process owns; the floating
@@ -188,18 +188,23 @@ pub fn run(opts: ShotOptions) -> i32 {
             };
             if code != 0 {
                 eprintln!("fno-app --shot: the capture failed");
-                // Exit non-zero so the door reads a real failure; the
-                // quit path would return 0 and hide it. exit skips the
-                // guard's drop, so the pin dir goes first.
-                remove_pin_dir(&pin_dir());
-                cx.update(|app| app.quit()).ok();
-                std::process::exit(1);
             }
-            cx.update(|app| app.quit()).ok();
+            cx.update(|app| quit_shot(app, code)).ok();
         })
         .detach();
     });
     0
+}
+
+/// End the shot with `code`: the pin dir goes first. A quit ends the
+/// process before any drop runs, so the guard never fires on a quit. A
+/// failed shot exits non-zero, or the quit would return 0 and hide it.
+fn quit_shot(cx: &mut App, code: i32) {
+    remove_pin_dir(&pin_dir());
+    cx.quit();
+    if code != 0 {
+        std::process::exit(code);
+    }
 }
 
 /// The shot window: a fixed, undecorated 1280x800 tile at (60, 60).
@@ -252,8 +257,9 @@ fn write_pin(dir: &std::path::Path, theme: &str) -> std::io::Result<()> {
 
 /// Write the pin in a temp dir the process then chdirs into. A pin beats
 /// the system appearance, so the shot paints the asked twin on any host.
-/// The guard removes the dir when the run ends. A failure prints and
-/// reads `None`.
+/// The guard removes the dir when the run returns; a quit ends the process
+/// first, so every quit removes it by hand. A failure prints and reads
+/// `None`.
 fn theme_pin(theme: &str) -> Option<PinGuard> {
     let dir = pin_dir();
     let guard = PinGuard(dir.clone());
@@ -268,8 +274,8 @@ fn theme_pin(theme: &str) -> Option<PinGuard> {
 /// The session the frame attaches to, or `None` when the caller named
 /// none. The no-server frame must not meet a real server, so it attaches
 /// to a session no mux was ever started for. Any other frame needs a
-/// named throwaway world: falling back to `default` attached the shot to
-/// the user's live mux and left a space there.
+/// named session: a fallback to `default` photographed the user's live
+/// mux unasked.
 fn shot_session(opts: &ShotOptions) -> Option<String> {
     let session = opts.session.clone().or_else(|| {
         (opts.first_run == Some(crate::FirstRunShot::NoServer))
@@ -294,7 +300,8 @@ fn prewarm(
     if opts.first_run == Some(crate::FirstRunShot::NoServer) {
         return Ok(None);
     }
-    crate::link::connect_warmed(session, PREWARM).map(Some)
+    let seat = crate::link::Seat::for_shot(opts.own_world);
+    crate::link::connect_warmed(session, PREWARM, seat).map(Some)
 }
 
 // The window-server reads the proof needs. CGWindowListCopyWindowInfo

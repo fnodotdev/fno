@@ -29,4 +29,15 @@ fn observer_attach_never_spawns_a_pane() {
         core.clients.first().is_some_and(|c| c.passive),
         "the (0,0) client is passive"
     );
+    // A driving attach births a squad with a shell that outlives the
+    // client: a shot of a live session left one workspace and row per run.
+    assert_eq!(
+        core.session.squads.len(),
+        0,
+        "observer attach must never birth a squad"
+    );
+    assert!(
+        core.agent_rows().is_empty(),
+        "observer attach must mint no row"
+    );
 }

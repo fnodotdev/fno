@@ -74,6 +74,10 @@ pub struct ShotOptions {
     /// The mux session to attach. Required: the demo world names its own,
     /// and a shot never falls back to the user's default session.
     pub session: Option<String>,
+    /// The caller built the world the session runs in and tears it down
+    /// after, so the shot may drive it. Any other shot attaches as an
+    /// observer and adds no workspace and no row.
+    pub own_world: bool,
     /// A claude session id, or `newest`: what --shot-mode chat renders.
     pub chat: Option<String>,
     /// The terminal font family.
@@ -280,7 +284,6 @@ fn widened_path(path: &str, home: &str) -> String {
 }
 
 /// Run the app (or the headless probe) and return the process exit code.
-/// Run the app (or the headless probe) and return the process exit code.
 pub fn run(opts: Options) -> i32 {
     if let Some(shot) = opts.shot {
         let out = shot.out;
@@ -293,6 +296,7 @@ pub fn run(opts: Options) -> i32 {
             mode,
             find: shot.find,
             session: opts.session,
+            own_world: shot.own_world,
             chat: opts.chat,
             // A shot pins its own face: the shot path reads no config,
             // so the flag (or the default) decides and a run is repeatable.
