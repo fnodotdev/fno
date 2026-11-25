@@ -83,7 +83,7 @@ pub fn run(op: AppOp) -> i32 {
         AppOp::Show(args) => show(args.view, &args.common),
         AppOp::Focus(args) => focus(&args.agent, &args.common),
         AppOp::Answer(args) => answer(args.option, &args.common),
-        AppOp::Approve(args) => approve(&args.pr, args.repo.as_deref()),
+        AppOp::Approve(args) => approve(args.pr, args.repo.as_deref()),
         AppOp::Shot(args) => shot(&args),
         AppOp::State { json } => state(json.json),
         AppOp::Close { common } => close(&common),
@@ -210,40 +210,28 @@ fn answer(option: u32, common: &crate::cli_args::MuxCommon) -> i32 {
 }
 
 /// `mux app approve <pr> [--repo <slug>]`: post the person's GitHub APPROVED
-/// review, the satisfier of config.review.human = ui. The verb shells to the
-/// gh CLI as the locally authenticated person, so GitHub's own rules hold:
-/// an author cannot approve their own PR, and the refusal prints verbatim.
-/// No macOS gate and no live-app check: the action is a GitHub review post,
-/// not an app action, and the person may approve with the app closed.
-fn approve(pr: &u64, repo: Option<&str>) -> i32 {
-    let mut cmd = std::process::Command::new("gh");
-    cmd.arg("pr")
-        .arg("review")
-        .arg(pr.to_string())
-        .arg("--approve");
+/// review, the satisfier of config.review.human = ui. The command shells to
+/// the gh CLI through the crate's bounded spawn seam, so GitHub's own rules
+/// hold: an author cannot approve their own PR, and the refusal prints
+/// verbatim. No macOS gate and no live-app check: the action is a GitHub
+/// review post, not an app action, and the person may approve with the app
+/// closed.
+fn approve(pr: u64, repo: Option<&str>) -> i32 {
+    let pr_text = pr.to_string();
+    let mut argv: Vec<&str> = vec!["gh", "pr", "review", pr_text.as_str(), "--approve"];
     if let Some(slug) = repo {
-        cmd.arg("--repo").arg(slug);
+        argv.push("--repo");
+        argv.push(slug);
     }
-    match cmd.output() {
-        Ok(out) if out.status.success() => {
+    // A review post rides the network; 60s bounds a hung call the way the
+    // setup probes bound an installer.
+    match crate::setup_detect::bounded_for(&argv, std::time::Duration::from_secs(60)) {
+        Ok(_) => {
             println!("approved pr {pr} via gh");
             0
         }
-        Ok(out) => {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            let stderr = stderr.trim();
-            if !stderr.is_empty() {
-                eprintln!("fno mux app approve: gh refused: {stderr}");
-            } else {
-                eprintln!(
-                    "fno mux app approve: gh refused with no message (exit {})",
-                    out.status.code().unwrap_or(-1)
-                );
-            }
-            1
-        }
-        Err(e) => {
-            eprintln!("fno mux app approve: gh is unavailable: {e}");
+        Err(detail) => {
+            eprintln!("fno mux app approve: {detail}");
             1
         }
     }

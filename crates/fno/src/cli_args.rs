@@ -1486,8 +1486,8 @@ mod tests {
             }) => assert!(matches!(op, AppOp::Shot(_))),
             other => panic!("typed app shot expected, got {other:?}"),
         }
-        // The approve verb parses with its positional PR and --repo; it is
-        // the satisfier of config.review.human = ui.
+        // The approve command parses with its positional PR and --repo; it
+        // is the satisfier of config.review.human = ui.
         let r = classify(&os(&[
             "mux",
             "app",

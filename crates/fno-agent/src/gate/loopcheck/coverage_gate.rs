@@ -76,7 +76,7 @@ fixing it and letting the next review cover the fix delta";
 
 /// The refusal sentence for the person gate (config.review.human = ui or
 /// always): names the config, the missing evidence, and both remedies, the
-/// in-UI verb and the GitHub page, and states that the round cap does not
+/// in-UI command and the GitHub page, and states that the round cap does not
 /// discharge it. The cap's waiver covers the round obligation alone; a
 /// person is owed whatever the budget says. Value-neutral: ui and always
 /// read the same sentence, because the satisfier (a fresh non-author
