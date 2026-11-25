@@ -14601,7 +14601,6 @@ crates/fno/src/mux/server.rs	clippy::let_underscore_must_use	let _ = crate::prot
 crates/fno/src/mux/server.rs	clippy::let_underscore_must_use	let _ = crate::squad_store::complete_external(
 crates/fno/src/mux/server.rs	clippy::let_underscore_must_use	let _ = entry.pty.write_input(&bytes);
 crates/fno/src/mux/server.rs	clippy::let_underscore_must_use	let _ = entry.pty.write_input(keystroke);
-crates/fno/src/mux/server.rs	clippy::let_underscore_must_use	let _ = entry.pty.write_input(line.as_bytes());
 crates/fno/src/mux/server.rs	clippy::let_underscore_must_use	let _ = reliable_tx.try_send(ServerMsg::Bye {
 crates/fno/src/mux/server.rs	clippy::let_underscore_must_use	let _ = reply.send(ServerMsg::Info {
 crates/fno/src/mux/server.rs	clippy::let_underscore_must_use	let _ = reply.send(ServerMsg::NoticeSent {

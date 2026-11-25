@@ -65,8 +65,12 @@ impl Core {
                 match cmd {
                     Some(mut line) => {
                         line.push('\r');
-                        if let Some(entry) = self.panes.get(&pane) {
-                            let _ = entry.pty.write_input(line.as_bytes());
+                        let wrote = self
+                            .panes
+                            .get(&pane)
+                            .map(|entry| entry.pty.write_input(line.as_bytes()));
+                        if matches!(wrote, Some(Err(_))) {
+                            self.notice(client_id, "rerun could not write to the pane");
                         }
                     }
                     None => self.notice(client_id, "block has no command to rerun"),
