@@ -2453,10 +2453,8 @@ impl Root {
     /// config off the UI loop, then open a workspace for it unless one already
     /// roots there.
     pub(super) fn add_project_path(&mut self, path: String, cx: &mut Context<Self>) {
-        if launch::typed_project(&self.launch.state.draft).as_deref() == Some(path.as_str()) {
-            self.launch.state.draft.select_all();
-            self.launch.state.draft.replace_selection("");
-        }
+        let typed =
+            launch::typed_project(&self.launch.state.draft).as_deref() == Some(path.as_str());
         let rooted = self.layout.squads.iter().any(|s| s.canonical_cwd == path);
         cx.spawn(async move |this, cx| {
             let added = cx
@@ -2468,6 +2466,11 @@ impl Root {
                 .await;
             this.update(cx, |root, cx| match added {
                 Ok(project) => {
+                    // A refused add leaves the typed path in place to fix.
+                    if typed {
+                        root.launch.state.draft.select_all();
+                        root.launch.state.draft.replace_selection("");
+                    }
                     if !rooted {
                         root.send(ClientMsg::Command(Command::NewSquad {
                             name: project.name.clone(),
