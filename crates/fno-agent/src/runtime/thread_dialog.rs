@@ -385,6 +385,12 @@ mod tests {
     const WRAPPED: &str = " Do you want to proceed?\n   1. Yes\n   2. Yes, and don't ask again for\n      Bash(cargo test:*)\n      Bash(git status:*)\n   3. No";
 
     #[test]
+    fn a_menu_or_an_unreadable_screen_is_never_an_idle_prompt() {
+        assert!(!at_idle_prompt(TWO));
+        assert!(!at_idle_prompt(""));
+    }
+
+    #[test]
     fn a_numbered_picker_takes_a_key() {
         assert_eq!(classify(THREE), Dialog::Picker);
     }

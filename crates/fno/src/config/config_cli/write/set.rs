@@ -67,6 +67,7 @@ pub fn set_values(
     if scope == "project" {
         refuse_project_grant(&order)?;
     }
+    refuse_agent_grant(&order, crate::sessions::process_admission::agent_origin())?;
     let target = target_path(scope)?;
     let touched = order.iter().any(|key| is_merge_gating(key));
     let mut finals: Vec<(String, Value)> = Vec::new();
@@ -131,6 +132,26 @@ fn refuse_project_grant(keys: &[String]) -> Res<()> {
     Err(Refusal::new(
         format!(
             "{key} grants access, so a project file cannot set it. Nothing was written. Set it for this machine: fno config set {key} '<value>'"
+        ),
+        1,
+    ))
+}
+
+/// Keys that widen what a worker may do without asking. A person sets them
+/// from a terminal. A worker session that tried would be granting itself.
+const OPERATOR_ONLY: [&str; 1] = ["user.auto_approve_routine"];
+
+fn refuse_agent_grant(keys: &[String], agent: bool) -> Res<()> {
+    let Some(key) = keys
+        .iter()
+        .filter(|_| agent)
+        .find(|key| OPERATOR_ONLY.contains(&key.as_str()))
+    else {
+        return Ok(());
+    };
+    Err(Refusal::new(
+        format!(
+            "{key} widens what workers do without asking, so an agent session cannot set it. Nothing was written. Run `fno config set {key} true` yourself in a terminal."
         ),
         1,
     ))
@@ -496,6 +517,14 @@ fn couple_grant_observer() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_agent_session_cannot_set_an_operator_only_key() {
+        let keys = vec!["user.auto_approve_routine".to_string()];
+        assert!(refuse_agent_grant(&keys, true).is_err());
+        assert!(refuse_agent_grant(&keys, false).is_ok());
+        assert!(refuse_agent_grant(&["user.name".to_string()], true).is_ok());
+    }
 
     /// The GitHub App token path (crates/fno-agent/src/gate/github_app.rs) reads
     /// github.app_id, github.app_installation_id and github.app_key_path from

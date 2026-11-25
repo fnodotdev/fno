@@ -970,6 +970,24 @@ mod tests {
     }
 
     #[test]
+    fn a_registry_that_cannot_load_keeps_the_follow_up_pending() {
+        let rig = Rig::new();
+        rig.asleep.set(true);
+        let path = rig.home.registry_json();
+        let good = std::fs::read(&path).unwrap();
+        std::fs::write(&path, "not json").unwrap();
+        assert!(rig.pass(1_000_000).is_err());
+        assert_eq!(raw_sends(&rig), 0);
+        std::fs::write(&path, good).unwrap();
+        let _ = rig.pass(1_000_000 + 60_000);
+        assert_eq!(
+            raw_sends(&rig),
+            1,
+            "the pending follow-up goes once the registry reads"
+        );
+    }
+
+    #[test]
     fn an_identical_re_asked_prompt_is_denied_again() {
         let rig = Rig::new();
         let t0 = 1_000_000;

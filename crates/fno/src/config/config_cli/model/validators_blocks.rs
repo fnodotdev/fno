@@ -635,3 +635,27 @@ fn keep_dict_values(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
         _ => Ok(Value::Object(Map::new())),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::zone_name_ok;
+
+    #[test]
+    fn a_zone_name_reads_as_the_runtime_reads_it() {
+        let db = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(db.path().join("America")).unwrap();
+        std::fs::write(db.path().join("America/Los_Angeles"), "").unwrap();
+        std::fs::write(db.path().join("posixrules"), "").unwrap();
+        let ok = |name| zone_name_ok(name, db.path());
+        assert!(ok("") && ok("UTC") && ok("America/Los_Angeles"));
+        for bad in [
+            "utc",
+            " UTC",
+            "america/los_angeles",
+            "posixrules",
+            "Mars/Base",
+        ] {
+            assert!(!ok(bad), "{bad:?}");
+        }
+    }
+}

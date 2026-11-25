@@ -1,9 +1,13 @@
 //! PermissionRequest hook: allow a worker's EnterWorktree into its own
 //! claimed worktree, and its routine file work in its own folders.
 //!
-//! The hook ships behind `user.auto_approve_routine`, read from the global
-//! config only and off by default. Off, it prints `{}` and leaves every
-//! prompt in place.
+//! The file-work rule ships behind `user.auto_approve_routine`, read from the
+//! global config only and off by default. Off, file work keeps its prompt and
+//! the own-worktree entry stays allowed.
+//!
+//! The hook cannot read why a prompt appeared. So it never allows a call that
+//! a settings `ask` rule covers, and it never answers an attended session,
+//! where fno's guards raise their own `ask` for a person to read.
 //!
 //! Claude Code asks before EnterWorktree moves the session to a path outside
 //! its own managed worktree dir in the repo ("permission-root relocation").
@@ -48,13 +52,13 @@ struct ToolInput {
 /// Entry: read one PermissionRequest payload, decide, print, always exit 0.
 pub fn run(_args: &[String]) -> i32 {
     let payload: Payload = serde_json::from_str(super::read_stdin().trim()).unwrap_or_default();
-    if !enabled() {
-        return super::emit_allow();
-    }
     let cwd = payload_cwd(&payload);
+    let rules = ask_rules(&cwd);
     let own = own_worktree(&payload.session_id, &cwd);
-    let allowed = own.as_deref().is_some_and(|own| allows(&payload, own));
-    let file_ok = file_work_allowed(&payload, &cwd, own.as_deref());
+    let allowed = own.as_deref().is_some_and(|own| allows(&payload, own))
+        && !ask_rule_hits(&rules, "EnterWorktree", None, &cwd);
+    let file_ok =
+        enabled() && !attended() && file_work_allowed(&payload, &cwd, own.as_deref(), &rules);
     if file_ok {
         super::emit_guard_row(&cwd, GUARD, &payload.tool_name, "allow");
     }
@@ -76,6 +80,125 @@ pub fn run(_args: &[String]) -> i32 {
 }
 
 const GUARD: &str = "worktree-relocation-allow";
+
+/// True while the harness marks the session as one a person watches.
+fn attended() -> bool {
+    std::env::var("CLAUDE_CODE_SESSION_ATTENDED").is_ok_and(|v| v == "1")
+}
+
+#[derive(Deserialize, Default)]
+struct SettingsFile {
+    #[serde(default)]
+    permissions: SettingsPermissions,
+}
+
+#[derive(Deserialize, Default)]
+struct SettingsPermissions {
+    #[serde(default)]
+    ask: Vec<String>,
+}
+
+/// Every `permissions.ask` rule the harness reads for this session. A settings
+/// file that exists and does not parse reads as one rule that covers all.
+fn ask_rules(cwd: &Path) -> Vec<String> {
+    let mut files: Vec<PathBuf> = vec![
+        PathBuf::from("/Library/Application Support/ClaudeCode/managed-settings.json"),
+        PathBuf::from("/etc/claude-code/managed-settings.json"),
+    ];
+    if let Some(home) = std::env::var_os("HOME") {
+        files.push(PathBuf::from(home).join(".claude/settings.json"));
+    }
+    let mut roots = vec![cwd.to_path_buf()];
+    roots.extend(crate::paths::canonical_repo_root(cwd));
+    for root in roots {
+        files.push(root.join(".claude/settings.json"));
+        files.push(root.join(".claude/settings.local.json"));
+    }
+    let mut rules = Vec::new();
+    for file in files {
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        match serde_json::from_str::<SettingsFile>(&text) {
+            Ok(parsed) => rules.extend(parsed.permissions.ask),
+            Err(_) => rules.push("*".to_string()),
+        }
+    }
+    rules
+}
+
+/// True when an ask rule covers this call. A rule with a path pattern is
+/// matched against the real path; a call with no path, or a rule shape this
+/// cannot read, counts as covered.
+fn ask_rule_hits(rules: &[String], tool: &str, path: Option<&Path>, cwd: &Path) -> bool {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    rules.iter().any(|rule| {
+        let (name, spec) = match rule.split_once('(') {
+            Some((name, rest)) => (name.trim(), Some(rest.trim_end().trim_end_matches(')'))),
+            None => (rule.trim(), None),
+        };
+        let covers = name == "*"
+            || name == tool
+            || (name == "Edit" && matches!(tool, "Write" | "MultiEdit" | "NotebookEdit"));
+        if !covers {
+            return false;
+        }
+        match (spec, path) {
+            (Some(spec), Some(path)) => spec_hits(spec, path, &home, cwd),
+            _ => true,
+        }
+    })
+}
+
+fn spec_hits(spec: &str, path: &Path, home: &Path, cwd: &Path) -> bool {
+    let spec = spec.trim();
+    let mut patterns: Vec<String> = Vec::new();
+    if let Some(rest) = spec.strip_prefix("~/") {
+        patterns.push(home.join(rest).to_string_lossy().into_owned());
+    } else if let Some(rest) = spec.strip_prefix("//") {
+        patterns.push(format!("/{rest}"));
+    } else if let Some(rest) = spec.strip_prefix('/') {
+        patterns.push(format!("/{rest}"));
+        patterns.push(cwd.join(rest).to_string_lossy().into_owned());
+    } else {
+        patterns.push(cwd.join(spec).to_string_lossy().into_owned());
+        patterns.push(format!("**/{spec}"));
+    }
+    let text = path.to_string_lossy();
+    patterns.iter().any(|pat| {
+        glob_hit(pat.as_bytes(), text.as_bytes())
+            || glob_hit(
+                format!("{}/**", pat.trim_end_matches('/')).as_bytes(),
+                text.as_bytes(),
+            )
+    })
+}
+
+fn glob_hit(pat: &[u8], text: &[u8]) -> bool {
+    match pat.split_first() {
+        None => text.is_empty(),
+        Some((b'*', rest)) if rest.first() == Some(&b'*') => {
+            let rest = rest.get(1..).unwrap_or_default();
+            (0..=text.len()).any(|i| glob_hit(rest, text.get(i..).unwrap_or_default()))
+        }
+        Some((b'*', rest)) => {
+            for i in 0..=text.len() {
+                if glob_hit(rest, text.get(i..).unwrap_or_default()) {
+                    return true;
+                }
+                if text.get(i) == Some(&b'/') || i == text.len() {
+                    break;
+                }
+            }
+            false
+        }
+        Some((c, rest)) => {
+            text.first() == Some(c) && glob_hit(rest, text.get(1..).unwrap_or_default())
+        }
+    }
+}
 
 /// The one setting. Only the global config counts, so a project file cannot
 /// turn the hook on for itself.
@@ -148,11 +271,7 @@ fn own_worktree(session: &str, cwd: &Path) -> Option<PathBuf> {
     let home = crate::paths::AgentsHome::from_env_opt()?;
     let registry = crate::state::load_registry(&home.registry_json()).ok()?;
     let node = claimed_node(&registry, session)?;
-    let repo = crate::paths::canonical_repo_root(cwd)?
-        .file_name()?
-        .to_string_lossy()
-        .into_owned();
-    own_worktree_in(&bases(cwd), &repo, &node)
+    own_worktree_in(&bases(cwd), &crate::paths::canonical_repo_root(cwd)?, &node)
 }
 
 fn claimed_node(registry: &crate::state::Registry, session: &str) -> Option<String> {
@@ -167,11 +286,21 @@ fn claimed_node(registry: &crate::state::Registry, session: &str) -> Option<Stri
         .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'))
 }
 
-fn own_worktree_in(bases: &[PathBuf], repo: &str, node: &str) -> Option<PathBuf> {
+/// The checkout `<base>/<any folder>/<node>` whose `.git` file points into
+/// this repo's worktree records. The folder name is never assumed.
+fn own_worktree_in(bases: &[PathBuf], repo_root: &Path, node: &str) -> Option<PathBuf> {
+    let records = repo_root.canonicalize().ok()?.join(".git/worktrees");
     bases
         .iter()
-        .map(|base| base.join(repo).join(node))
-        .find_map(|dir| dir.canonicalize().ok().filter(|real| real.is_dir()))
+        .filter_map(|base| std::fs::read_dir(base).ok())
+        .flatten()
+        .flatten()
+        .find_map(|folder| {
+            let real = folder.path().join(node).canonicalize().ok()?;
+            let pointer = std::fs::read_to_string(real.join(".git")).ok()?;
+            let target = pointer.trim().strip_prefix("gitdir:")?.trim();
+            Path::new(target).starts_with(&records).then_some(real)
+        })
 }
 
 /// The folders a worker's routine file work may touch: its own worktree, its
@@ -296,14 +425,14 @@ fn hard_linked(_path: &Path) -> bool {
 }
 
 /// True for a Read or an edit strictly inside the worker's own folders.
-fn file_work_allowed(payload: &Payload, cwd: &Path, own: Option<&Path>) -> bool {
+fn file_work_allowed(payload: &Payload, cwd: &Path, own: Option<&Path>, rules: &[String]) -> bool {
     let Some(raw) = file_target(payload) else {
         return false;
     };
     let Some(path) = real_path(raw, cwd) else {
         return false;
     };
-    if blocked_name(&path) {
+    if blocked_name(&path) || ask_rule_hits(rules, &payload.tool_name, Some(&path), cwd) {
         return false;
     }
     root_without_links(&path, &work_roots(cwd, own)).is_some()
@@ -427,19 +556,73 @@ mod tests {
     }
 
     #[test]
-    fn the_claim_names_the_worktree_under_any_base_fno_writes_to() {
+    fn the_claim_names_the_worktree_by_the_repo_it_belongs_to() {
         let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("checkout");
+        let records = repo.join(".git/worktrees/node");
+        std::fs::create_dir_all(&records).unwrap();
         let state = tmp.path().join("state");
-        let legacy = crate::paths_cli::legacy_worktrees_base(&state).join("repo/node");
-        std::fs::create_dir_all(&legacy).unwrap();
+        // The folder name differs from the repo's name on purpose.
+        let wt = crate::paths_cli::legacy_worktrees_base(&state).join("renamed/node");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(wt.join(".git"), format!("gitdir: {}\n", records.display())).unwrap();
+        let foreign = crate::paths_cli::legacy_worktrees_base(&state).join("renamed/foreign");
+        std::fs::create_dir_all(&foreign).unwrap();
+        std::fs::write(
+            foreign.join(".git"),
+            "gitdir: /elsewhere/.git/worktrees/foreign\n",
+        )
+        .unwrap();
         let configured = tmp.path().join("custom");
         std::fs::create_dir_all(&configured).unwrap();
         let all = bases_for(configured, &state);
         assert_eq!(
-            own_worktree_in(&all, "repo", "node"),
-            Some(legacy.canonicalize().unwrap())
+            own_worktree_in(&all, &repo, "node"),
+            Some(wt.canonicalize().unwrap())
         );
-        assert_eq!(own_worktree_in(&all, "repo", "other"), None);
+        assert_eq!(own_worktree_in(&all, &repo, "foreign"), None);
+        assert_eq!(own_worktree_in(&all, &repo, "other"), None);
+    }
+
+    #[test]
+    fn a_settings_ask_rule_keeps_the_prompt() {
+        let cwd = Path::new("/w/repo");
+        let rule = |r: &str| vec![r.to_string()];
+        let inside = Path::new("/w/repo/src/lib.rs");
+        assert!(ask_rule_hits(&rule("Edit"), "Write", Some(inside), cwd));
+        assert!(ask_rule_hits(&rule("Read"), "Read", Some(inside), cwd));
+        assert!(ask_rule_hits(
+            &rule("Edit(src/**)"),
+            "Edit",
+            Some(inside),
+            cwd
+        ));
+        assert!(ask_rule_hits(
+            &rule("Edit(//w/repo/src)"),
+            "Edit",
+            Some(inside),
+            cwd
+        ));
+        assert!(ask_rule_hits(
+            &rule("EnterWorktree"),
+            "EnterWorktree",
+            None,
+            cwd
+        ));
+        assert!(ask_rule_hits(&rule("*"), "Read", Some(inside), cwd));
+        assert!(!ask_rule_hits(
+            &rule("Edit(docs/**)"),
+            "Edit",
+            Some(inside),
+            cwd
+        ));
+        assert!(!ask_rule_hits(
+            &rule("Bash(rm *)"),
+            "Edit",
+            Some(inside),
+            cwd
+        ));
+        assert!(!ask_rule_hits(&[], "Edit", Some(inside), cwd));
     }
 
     #[test]
