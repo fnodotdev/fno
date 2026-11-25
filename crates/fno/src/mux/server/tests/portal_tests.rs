@@ -2788,7 +2788,7 @@ fn parked_on_dead_row(harness: Option<&str>) -> (Core, u64, u64, mpsc::Receiver<
     core.agents = vec![bg_row("target-a", "/tmp/seen", Some("deadbee1"))];
     core.command(client_id, portal_reach_cmd("deadbee1", 0));
     let viewer = core.portals.get(&0).expect("portal 0 open").seat;
-    let row = &mut core.agents[0];
+    let row = core.agents.first_mut().expect("one row");
     row.exited = true;
     row.liveness = agents_view::Liveness::Dead;
     row.harness = harness.map(str::to_string);
