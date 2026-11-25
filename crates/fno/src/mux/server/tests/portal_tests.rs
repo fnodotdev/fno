@@ -2853,7 +2853,8 @@ fn portal_revive_key_swaps_the_verdict_argv_into_the_parked_seat() {
         config_dir: None,
         plan_ms: 0,
     };
-    core.finish_seat_revive(client_id, seat, verdict);
+    core.reentry_verdict = Some(verdict);
+    core.finish_seat_revive(client_id, seat);
     let revived = core.portals.get(&0).expect("portal 0 stays").seat;
     assert_ne!(revived, seat, "the seat holds the revived pane");
     assert!(

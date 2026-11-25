@@ -10506,10 +10506,8 @@ impl Core {
                 match verdict {
                     Err(reason) => self.notice(id, reason),
                     Ok(verdict) => {
-                        // Stage exactly one verdict; the receiving arm takes
-                        // it at its argv construction. A vanished client
-                        // (detached mid-resolution) drops the replay - the
-                        // re-dispatch's command read refuses it.
+                        // Stage one verdict for the receiving arm to take. A
+                        // client gone mid-resolution drops the replay.
                         self.reentry_verdict = Some(verdict);
                         match *request {
                             ReentrySpawnRequest::Attach {
@@ -10531,9 +10529,7 @@ impl Core {
                                 self.command(id, Command::FocusPane(pid));
                             }
                             ReentrySpawnRequest::ReviveSeat { pid } => {
-                                if let Some(verdict) = self.reentry_verdict.take() {
-                                    self.finish_seat_revive(id, pid, verdict);
-                                }
+                                self.finish_seat_revive(id, pid)
                             }
                         }
                         self.reentry_verdict = None;
