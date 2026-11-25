@@ -3767,6 +3767,10 @@ unheard_of_field = true
         let done = rows.iter().find(|r| r.name == "eval-done").unwrap();
         assert!(done.exited);
         assert_eq!(done.result.as_deref(), Some("finished"));
+        // The watch mark rides the same read: a key read wrong hides every
+        // run a person asked to watch.
+        let watched = reg(r#"{"name":"w","cwd":"/w","substrate":"headless","watch":true}"#);
+        assert!(derive_rows(&watched, NOW).unwrap()[0].watch);
     }
     #[test]
     fn reader_roster_only_change_republishes() {
