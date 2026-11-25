@@ -133,7 +133,7 @@ impl Widths {
 
 /// One answer, carrying the request's id. `stamp` changes when the reader
 /// re-projects, so the client drops rows it cached under an older stamp.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Answer {
     pub id: u64,
     pub stamp: u64,
