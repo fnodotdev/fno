@@ -51,6 +51,15 @@ check "remote control inactive is classed" "not-sent-remote-control-inactive" "$
 check "an unseen result text is unknown" "unknown" "$(cls q-dd44)"
 check "a push with no question id keeps an empty qid" "1" "$(jq -s '[.[] | select(.qid == "")] | length' "$R")"
 
+# The receipts file stays bounded: past 1000 rows the hook keeps the newest 500.
+home3="$TMP/home3"
+mkdir -p "$home3/ask-push"
+R3="$home3/ask-push/receipts.jsonl"
+for _ in $(seq 1 1000); do echo '{"ts":1,"qid":"q-old","class":"requested"}'; done >"$R3"
+printf '%s' "$(push_payload "Question q-ee55: pick one" "Mobile push requested.")" | FNO_AGENT_HOME="$home3" bash "$HOOK"
+check "receipts file is trimmed past 1000 rows" "500" "$(wc -l <"$R3" | tr -d ' ')"
+check "the newest row survives the trim" "q-ee55" "$(tail -n 1 "$R3" | jq -r .qid)"
+
 # The hook never blocks: bad input exits 0 and writes nothing.
 printf 'not json' | FNO_AGENT_HOME="$TMP/home2" bash "$HOOK"
 check "bad input exits 0" "0" "$?"

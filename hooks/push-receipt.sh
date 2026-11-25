@@ -41,4 +41,10 @@ now="$(date +%s)"
 jq -cn --arg ts "$now" --arg qid "$qid" --arg class "$class" --arg session "$session" --arg result "${result:0:200}" \
     '{ts: ($ts | tonumber), qid: $qid, class: $class, session: $session, result: $result}' \
     >>"$dir/receipts.jsonl" 2>/dev/null || true
+
+# Bound the file: past 1000 rows keep the newest 500.
+if [ "$(wc -l <"$dir/receipts.jsonl" 2>/dev/null || echo 0)" -gt 1000 ]; then
+    tail -n 500 "$dir/receipts.jsonl" >"$dir/receipts.jsonl.tmp" 2>/dev/null \
+        && mv "$dir/receipts.jsonl.tmp" "$dir/receipts.jsonl" 2>/dev/null || true
+fi
 exit 0
