@@ -306,9 +306,9 @@ mod tests {
     #[test]
     fn filter_picker_narrows_ticks_and_applies() {
         let items = vec![
-            item("x-aa01", Some("claude")),
-            item("x-aa01", None),
-            item("x-bb02", Some("codex")),
+            item("x-aaaa", Some("claude")),
+            item("x-aaaa", None),
+            item("x-bbbb", Some("codex")),
         ];
         let mut view = TableView::default();
         let at = Anchor::Center;

@@ -455,11 +455,11 @@ mod tests {
             ..Default::default()
         };
         vec![
-            mk(0, "mail", Some("claude"), "question_asked", Some("x-aa01")),
+            mk(0, "mail", Some("claude"), "question_asked", Some("x-aaaa")),
             mk(1, "agents", Some("codex"), "session_spawned", None),
-            mk(2, "backlog", None, "node_created", Some("x-aa02")),
-            mk(3, "", Some("Claude"), "node_started", Some("x-aa01")),
-            mk(4, "ship", Some("opencode"), "node_shipped", Some("x-aa03")),
+            mk(2, "backlog", None, "node_created", Some("x-bbbb")),
+            mk(3, "", Some("Claude"), "node_started", Some("x-aaaa")),
+            mk(4, "ship", Some("opencode"), "node_shipped", Some("x-cccc")),
             mk(5, "mail", None, "question_closed", None),
         ]
     }
@@ -584,16 +584,16 @@ mod tests {
             .insert(Col::Harness, BTreeSet::from(["claude".to_string()]));
         view.filters.insert(
             Col::Node,
-            BTreeSet::from(["x-aa01".to_string(), "x-zz99".to_string()]),
+            BTreeSet::from(["x-aaaa".to_string(), "x-dddd".to_string()]),
         );
         view.collapsed.clear();
         let (slots, _) = evaluate(&items, &view, |_| true);
         let mut kept = items_of(&slots);
         kept.sort();
-        assert_eq!(kept, [0, 3], "harness claude (case-blind) AND node x-aa01");
+        assert_eq!(kept, [0, 3], "harness claude (case-blind) AND node x-aaaa");
         let vals = values(&items, &view, Col::Node, |_| true);
-        assert_eq!(vals.first(), Some(&("x-aa01".to_string(), 2)));
-        assert!(vals.contains(&("x-zz99".to_string(), 0)), "{vals:?}");
+        assert_eq!(vals.first(), Some(&("x-aaaa".to_string(), 2)));
+        assert!(vals.contains(&("x-dddd".to_string(), 0)), "{vals:?}");
 
         // A second pick flips; a new column starts at its first direction.
         let mut view = TableView::default();
