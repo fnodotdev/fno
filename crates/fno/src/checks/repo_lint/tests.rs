@@ -70,7 +70,7 @@ fn state_roots_rule_c_names_a_planted_join_the_table_does_not_carry() {
     );
     let hits = state_roots::rule_c_violations(&dir);
     assert_eq!(hits.len(), 1, "only the untabled name fires: {hits:?}");
-    let (name, rel, msg) = &hits[0];
+    let (name, rel, msg) = hits.first().expect("one hit");
     assert_eq!(
         (name.as_str(), rel.as_str()),
         ("planted-new", "crates/x/src/a.rs")

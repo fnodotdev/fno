@@ -373,8 +373,8 @@ pub(crate) fn rule_c_violations(root: &Path) -> Vec<(String, String, String)> {
         )];
     };
     let shapes = [
-        regex::Regex::new(ROOT_JOIN).unwrap(),
-        regex::Regex::new(PLACE_CALL).unwrap(),
+        regex::Regex::new(ROOT_JOIN).expect("static regex"),
+        regex::Regex::new(PLACE_CALL).expect("static regex"),
     ];
     let mut violations = Vec::new();
     for (rel, path, suffix) in scan_files(root) {
