@@ -116,6 +116,29 @@ fn own_worktree_in(bases: &[PathBuf], repo_root: &Path, node: &str) -> Option<Pa
         })
 }
 
+/// `<base>/<repo>/<node>` for the base `real` (a canonical cwd) sits under,
+/// with the node's name.
+fn candidate_under(bases: &[PathBuf], real: &Path) -> Option<(PathBuf, String)> {
+    bases.iter().find_map(|base| {
+        let base = base.canonicalize().ok()?;
+        let rest = real.strip_prefix(&base).ok()?;
+        let mut parts = rest.components().take(2);
+        let (repo, node) = (parts.next()?, parts.next()?);
+        let name = node.as_os_str().to_str()?.to_string();
+        Some((base.join(repo).join(node), name))
+    })
+}
+
+/// The worktree a spawn at `cwd` runs in, when it is a recorded worktree of
+/// this repo. The registry row does not exist yet when a spawn writes its
+/// settings, so the repo's worktree records stand in for the claim.
+pub(crate) fn verified_worktree(cwd: &Path) -> Option<PathBuf> {
+    let all = bases(cwd);
+    let (candidate, node) = candidate_under(&all, &cwd.canonicalize().ok()?)?;
+    let found = own_worktree_in(&all, &crate::paths::canonical_repo_root(cwd)?, &node)?;
+    (found == candidate).then_some(found)
+}
+
 /// The `path` of an EnterWorktree call, the only shape that relocates. The
 /// create form (`name`) stays inside the repo and never prompts.
 fn path_call(payload: &Payload) -> Option<&str> {
@@ -294,6 +317,13 @@ mod tests {
             own_worktree_in(&all, &repo, "node"),
             Some(wt.canonicalize().unwrap())
         );
+        // A spawn's cwd names a worktree only through the same record check.
+        let real = wt.canonicalize().unwrap();
+        assert_eq!(
+            candidate_under(&all, &real.join("src")),
+            Some((real.clone(), "node".to_string()))
+        );
+        assert_eq!(candidate_under(&all, tmp.path()), None);
         assert_eq!(own_worktree_in(&all, &repo, "planted"), None);
         assert_eq!(own_worktree_in(&all, &repo, "foreign"), None);
         assert_eq!(own_worktree_in(&all, &repo, "unrecorded"), None);

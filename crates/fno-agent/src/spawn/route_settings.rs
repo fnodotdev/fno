@@ -378,6 +378,19 @@ pub fn write_composed(
     cwd: &Path,
 ) -> Result<Option<String>, String> {
     let rules = crate::spawn::auto_approve::rules_for(cwd);
+    write_with_rules(route_env, account_env, sandbox, alias, session, cwd, rules)
+}
+
+/// `write_composed` with the rules given, so a test needs no global config.
+fn write_with_rules(
+    route_env: &Map<String, Value>,
+    account_env: &Map<String, Value>,
+    sandbox: Option<Value>,
+    alias: Option<&str>,
+    session: Option<&str>,
+    cwd: &Path,
+    rules: crate::spawn::auto_approve::Rules,
+) -> Result<Option<String>, String> {
     let plain = route_env.is_empty() && account_env.is_empty() && sandbox.is_none();
     if plain && rules.is_empty() {
         return Ok(None);
@@ -524,6 +537,31 @@ mod tests {
             let got = foreign_endpoint_tool_denies(&env_of(&[("ANTHROPIC_BASE_URL", base_url)]));
             assert_eq!(got.is_empty(), !denied, "{base_url}");
         }
+    }
+
+    #[test]
+    fn rules_ride_the_settings_file_and_a_plain_lane_keeps_its_own_auth_env() {
+        let rules = crate::spawn::auto_approve::Rules {
+            allow: vec!["Read(//w/**)".into()],
+            ask: vec!["Edit(//w/**/.git)".into()],
+        };
+        let bytes = payload_bytes(&Map::new(), None, &rules);
+        let doc: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(doc["permissions"]["allow"], json!(["Read(//w/**)"]));
+        assert_eq!(doc["permissions"]["ask"], json!(["Edit(//w/**/.git)"]));
+        let root = tempfile::tempdir().unwrap();
+        let (guard, saved) = state_pin(root.path());
+        let none = Map::new();
+        let path = write_with_rules(&none, &none, None, None, None, root.path(), rules)
+            .unwrap()
+            .expect("rules alone write a file");
+        let doc: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(doc["env"], json!({}), "no scrub floor on a plain lane");
+        let empty = crate::spawn::auto_approve::Rules::default();
+        let skipped = write_with_rules(&none, &none, None, None, None, root.path(), empty);
+        assert_eq!(skipped.unwrap(), None, "no overlay and no rules, no file");
+        state_restore(saved);
+        drop(guard);
     }
 
     #[test]

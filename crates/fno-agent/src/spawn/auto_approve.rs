@@ -37,8 +37,11 @@ const SECRET_NAMES: [&str; 8] = [
 /// Folders whose contents keep their prompt for a read and an edit.
 const SECRET_DIRS: [&str; 2] = [".aws/**", ".gnupg/**"];
 /// Names that keep their prompt for an edit only.
-const SETTINGS_NAMES: [&str; 7] = [
+const SETTINGS_NAMES: [&str; 10] = [
     "config.toml",
+    ".cargo/config",
+    ".github/workflows/**",
+    ".git",
     "settings.yaml",
     "settings.json",
     "settings.local.json",
@@ -55,11 +58,21 @@ pub(crate) fn rules_for(cwd: &Path) -> Rules {
     ) {
         return Rules::default();
     }
-    let Some(own) = worktree_root(cwd) else {
+    rules_when(
+        true,
+        crate::hook::worktree_relocation_allow::verified_worktree(cwd),
+        plan_root(cwd),
+    )
+}
+
+/// The gate itself: no rules while the switch is off, and none without a
+/// worktree that is really the worker's own.
+fn rules_when(on: bool, own: Option<PathBuf>, plan: Option<PathBuf>) -> Rules {
+    let Some(own) = own.filter(|_| on) else {
         return Rules::default();
     };
     let mut roots = vec![own];
-    roots.extend(plan_root(cwd));
+    roots.extend(plan);
     rules_from(&roots)
 }
 
@@ -77,6 +90,10 @@ fn rules_from(roots: &[PathBuf]) -> Rules {
         let Ok(real) = root.canonicalize() else {
             continue;
         };
+        // A glob character in the path would change what the rule matches.
+        if real.to_string_lossy().contains(['*', '?', '[', ')', '(']) {
+            continue;
+        }
         let anchor = format!("//{}", real.to_string_lossy().trim_start_matches('/'));
         rules.allow.push(format!("Read({anchor}/**)"));
         rules.allow.push(format!("Edit({anchor}/**)"));
@@ -89,21 +106,6 @@ fn rules_from(roots: &[PathBuf]) -> Rules {
         }
     }
     rules
-}
-
-/// The worker's own worktree: `<base>/<repo>/<node>` for the base `cwd` sits
-/// under. A session outside every base has none, so it earns no rules.
-fn worktree_root(cwd: &Path) -> Option<PathBuf> {
-    let real = cwd.canonicalize().ok()?;
-    crate::hook::worktree_relocation_allow::bases(cwd)
-        .iter()
-        .find_map(|base| {
-            let base = base.canonicalize().ok()?;
-            let rest = real.strip_prefix(&base).ok()?;
-            let mut parts = rest.components().take(2);
-            let (repo, node) = (parts.next()?, parts.next()?);
-            Some(base.join(repo).join(node))
-        })
 }
 
 /// The project's plan folder from the global `plans_dir` alone. The value is
@@ -182,29 +184,49 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_a_true_boolean_turns_the_rules_on() {
+    fn the_rules_gate_on_the_switch_and_a_real_worktree_and_name_the_real_folder() {
         assert!(switch_on(Some(&toml::Value::Boolean(true))));
-        assert!(!switch_on(Some(&toml::Value::Boolean(false))));
-        assert!(!switch_on(None), "unset or unreadable reads as off");
-        assert!(!switch_on(Some(&toml::Value::String("true".into()))));
-        assert!(!switch_on(Some(&toml::Value::Integer(1))));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn the_rules_name_the_real_folder_and_skip_one_that_is_missing() {
+        for off in [
+            Some(toml::Value::Boolean(false)),
+            None,
+            Some(toml::Value::String("true".into())),
+            Some(toml::Value::Integer(1)),
+        ] {
+            assert!(!switch_on(off.as_ref()), "{off:?}");
+        }
         let tmp = tempfile::tempdir().unwrap();
         let real = tmp.path().canonicalize().unwrap().join("wt");
         std::fs::create_dir_all(&real).unwrap();
-        let link = tmp.path().join("link");
-        std::os::unix::fs::symlink(&real, &link).unwrap();
-        let rules = rules_from(&[link, tmp.path().join("gone")]);
+        assert!(rules_when(false, Some(real.clone()), None).is_empty());
+        assert!(
+            rules_when(true, None, None).is_empty(),
+            "no worktree, no rules"
+        );
+        let rules = rules_when(true, Some(real.clone()), Some(tmp.path().join("gone")));
         let anchor = format!("//{}", real.to_string_lossy().trim_start_matches('/'));
-        assert_eq!(rules.allow.len(), 2, "the missing folder adds nothing");
+        assert_eq!(rules.allow.len(), 2, "a missing folder adds nothing");
         assert!(rules.allow.iter().all(|r| r.contains(&anchor)));
-        assert!(rules.ask.contains(&format!("Edit({anchor}/**/.git/**)")));
-        assert!(rules.ask.contains(&format!("Read({anchor}/**/.env*)")));
-        assert!(!rules.is_empty() && Rules::default().is_empty());
+        // In a worktree `.git` is a file, so the file name itself keeps its ask.
+        for want in [
+            format!("Edit({anchor}/**/.git)"),
+            format!("Edit({anchor}/**/.git/**)"),
+            format!("Edit({anchor}/**/.cargo/config)"),
+            format!("Edit({anchor}/**/.github/workflows/**)"),
+            format!("Read({anchor}/**/.env*)"),
+        ] {
+            assert!(rules.ask.contains(&want), "{want}");
+        }
+        // A glob character in the path would change the rule's meaning.
+        let odd = tmp.path().canonicalize().unwrap().join("a[b]*c");
+        std::fs::create_dir_all(&odd).unwrap();
+        assert!(rules_when(true, Some(odd), None).is_empty());
+        #[cfg(unix)]
+        {
+            let link = tmp.path().join("link");
+            std::os::unix::fs::symlink(&real, &link).unwrap();
+            let via = rules_when(true, Some(link), None);
+            assert!(via.allow.iter().all(|r| r.contains(&anchor)), "real path");
+        }
     }
 
     #[test]

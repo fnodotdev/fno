@@ -294,6 +294,30 @@ fn inject_route_model_argv(
     out
 }
 
+/// Happy discards `--settings`. A settings file that carries only permission
+/// rules has no route to lose, so the happy lane drops it and says so.
+fn drop_rules_only_settings(argv: Vec<String>) -> Vec<String> {
+    let Some(at) = argv.iter().position(|tok| tok == "--settings") else {
+        return argv;
+    };
+    let rules_only = argv
+        .get(at + 1)
+        .and_then(|path| std::fs::read(path).ok())
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|doc| {
+            doc.as_object()
+                .map(|obj| obj.keys().all(|k| k == "permissions" || k == "theme"))
+        })
+        .unwrap_or(false);
+    if !rules_only {
+        return argv;
+    }
+    eprintln!("fno: skipping the auto-approve rules for the happy lane, which discards --settings");
+    let mut out = argv;
+    out.drain(at..=at + 1);
+    out
+}
+
 /// The happy wrap (`happy_pane_argv` port): refuse the two flags happy eats,
 /// demand the binary, then carry the argv on `happy` with the route's
 /// non-secret keys as `--claude-env` pairs. The secrets (ANTHROPIC_API_KEY,
@@ -303,6 +327,7 @@ fn happy_wrap(
     argv: Vec<String>,
     route_env: &BTreeMap<String, String>,
 ) -> Result<Vec<String>, PaneRefusal> {
+    let argv = drop_rules_only_settings(argv);
     if argv
         .iter()
         .any(|tok| tok == "--settings" || tok.starts_with("--settings="))
@@ -459,5 +484,33 @@ impl PaneArm for ClaudeArm {
         plan: &ArmPlan,
     ) -> Result<ArmBind, PaneRefusal> {
         bind_claude(ctx, pane, plan)
+    }
+}
+
+#[cfg(test)]
+mod happy_rules_tests {
+    use super::*;
+
+    #[test]
+    fn the_happy_lane_drops_a_rules_only_settings_file_and_keeps_a_route() {
+        let dir = tempfile::tempdir().unwrap();
+        let rules = dir.path().join("rules.json");
+        let route = dir.path().join("route.json");
+        std::fs::write(&rules, r#"{"permissions":{"allow":["Read(//w/**)"]}}"#).unwrap();
+        std::fs::write(&route, r#"{"env":{"A":"b"},"permissions":{"allow":[]}}"#).unwrap();
+        let argv = |path: &std::path::Path| {
+            vec![
+                "claude".to_string(),
+                "--settings".to_string(),
+                path.to_string_lossy().into_owned(),
+                "--print".to_string(),
+            ]
+        };
+        assert_eq!(
+            drop_rules_only_settings(argv(&rules)),
+            ["claude", "--print"]
+        );
+        assert_eq!(drop_rules_only_settings(argv(&route)), argv(&route));
+        assert_eq!(drop_rules_only_settings(vec!["claude".into()]), ["claude"]);
     }
 }
