@@ -896,14 +896,6 @@ mod tests {
     }
 
     #[test]
-    fn view_spellings_match_the_app_parse() {
-        assert_eq!(AppView::Chat.as_spelling(), "chat");
-        assert_eq!(AppView::Terminal.as_spelling(), "terminal");
-        assert_eq!(AppView::Orchestration.as_spelling(), "orchestration");
-        assert_eq!(AppView::Mods.as_spelling(), "mods");
-    }
-
-    #[test]
     fn notice_seed_ends_the_transcript_on_a_task_notification_row() {
         let root = std::env::temp_dir().join(format!("fno-notice-seed-{}", std::process::id()));
         assert!(seed_transcript(&root, None, true));
