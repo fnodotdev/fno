@@ -1175,6 +1175,100 @@ mod tests {
         assert_eq!(index.rows.len(), 2);
         assert_eq!(index.damaged, 2);
     }
+
+    fn amend(id: &str, target: &str, reach: &str, ts: &str) -> String {
+        format!(
+            "{{\"type\":\"decision_scope_amended\",\"ts\":\"{ts}\",\"data\":{{\"amendment_id\":\"{id}\",\
+             \"target_decision_id\":\"{target}\",\"reach\":\"{reach}\"}}}}"
+        )
+    }
+
+    #[test]
+    fn a_scope_amend_applies_newest_wins_and_strips_itself() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = write_index(
+            dir.path(),
+            &[
+                envelope(
+                    "d-aaaa0001",
+                    "2026-09-12T00:00:00Z",
+                    "operator",
+                    "topic-a",
+                    ",\"reach\":\"project:old\"",
+                ),
+                amend("d-cccc0003", "d-pseudo1", "project:new", "2026-11-24T00:00:00Z"),
+                amend("d-dddd0004", "d-aaaa0001", "global", "2026-11-25T00:00:00Z"),
+                "{\"type\":\"decision_scope_amended\",\"ts\":\"2026-11-26T00:00:00Z\",\"data\":{\"amendment_id\":\"d-eeee0005\",\"reach\":\"global\"}}".to_string(),
+            ],
+        );
+        let (mut rows, damaged) = flatten_envelopes(&fs::read_to_string(&path).expect("reads"));
+        assert_eq!(damaged, 1, "an amend with no target is the damaged shape");
+        apply_scope_amendments(&mut rows);
+        assert_eq!(rows.len(), 1, "amendment rows never render");
+        let row = &rows[0];
+        assert_eq!(
+            row.get("decision_id").and_then(Value::as_str),
+            Some("d-aaaa0001")
+        );
+        assert_eq!(
+            row.get("reach").and_then(Value::as_str),
+            Some("global"),
+            "the newest amendment wins"
+        );
+    }
+
+    #[test]
+    fn the_default_read_skips_archive_rows_and_everything_joins_them_back() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let graph = dir.path().join("graph.json");
+        let jsonl = dir.path().join("decisions.jsonl");
+        fs::write(
+            &jsonl,
+            format!(
+                "{}\n{}\n",
+                envelope(
+                    "d-keep0001",
+                    "2026-09-12T00:00:00Z",
+                    "operator",
+                    "topic-keep",
+                    ""
+                ),
+                envelope(
+                    "d-gone0002",
+                    "2026-09-11T00:00:00Z",
+                    "operator",
+                    "topic-gone",
+                    ""
+                ),
+            ),
+        )
+        .expect("writes");
+        let archive = graph_archive(&graph);
+        fs::write(
+            &archive,
+            format!(
+                "{{\"type\":\"operator_decision\",\"ts\":\"2026-09-11T00:00:00Z\",\"data\":{{\"decision_id\":\"d-gone0002\",\"subject\":\"topic-gone\",\"decision\":\"Ruling.\",\"authority_source\":\"operator\"}}}}\n"
+            ),
+        )
+        .expect("writes");
+        let (rows, _) = read_store_rows(&graph, &jsonl).expect("reads");
+        let ids: Vec<&str> = rows
+            .iter()
+            .filter_map(|r| r.get("decision_id").and_then(Value::as_str))
+            .collect();
+        assert_eq!(ids, vec!["d-keep0001"], "the archived row skips");
+        let (all, _) = read_store_rows_everything(&graph, &jsonl).expect("reads");
+        let mut all_ids: Vec<&str> = all
+            .iter()
+            .filter_map(|r| r.get("decision_id").and_then(Value::as_str))
+            .collect();
+        all_ids.sort();
+        assert_eq!(
+            all_ids,
+            vec!["d-gone0002", "d-keep0001"],
+            "the archive joins back"
+        );
+    }
 }
 
 #[cfg(test)]

@@ -61,6 +61,18 @@ enum MatchRequest {
     /// and the exit code (0 acted, 1 the pass could not run, 2 usage).
     #[serde(rename = "upkeep")]
     Upkeep(RecordDoorRequest),
+    /// The scope-amend door: `argv` is the `fno inbox decisions rescope`
+    /// command line. Same ownership as `renew`: stdout carries the amendment
+    /// id, the exit code is 0 amended, 3 refused. The operator's yes is the
+    /// door's proof: never widen or narrow a law's reach without it.
+    #[serde(rename = "rescope")]
+    Rescope(RecordDoorRequest),
+    /// The cold-archive door: `argv` is the `fno inbox decisions archive`
+    /// command line. Dry run by default; `--apply` moves the non-live rows
+    /// into `decisions-archive.jsonl` at the state root. The door owns
+    /// stdout and the exit code (0 answered, 1 store failure, 2 usage).
+    #[serde(rename = "archive")]
+    Archive(RecordDoorRequest),
     #[serde(rename = "scope-split")]
     ScopeSplit(ScopeSplitRequest),
     /// The decisions listing read: `argv` is the `fno backlog decisions`
@@ -3454,6 +3466,12 @@ pub fn run_law_match_str(input: &str) -> i32 {
         }
         MatchRequest::Upkeep(r) => {
             return crate::law_upkeep::run_upkeep(&r.argv);
+        }
+        MatchRequest::Rescope(r) => {
+            return crate::decision_log::refresh_after(crate::law_rescope::run_rescope(&r.argv));
+        }
+        MatchRequest::Archive(r) => {
+            return crate::law_archive::run_archive(&r.argv);
         }
         MatchRequest::Ask(r) => serde_json::to_string(&ask_answer(&r)).expect("serializes"),
         MatchRequest::Law(r) => {
