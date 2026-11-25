@@ -18,9 +18,11 @@ const THEME_LIGHT: &str = "footnote-paper";
 /// The shot window's frame in points.
 const SHOT_SIZE: (f32, f32) = (1280.0, 800.0);
 
-/// How long the shot waits for the board feeds to settle before it
-/// captures.
-const SETTLE_BUDGET: Duration = Duration::from_secs(10);
+/// How long the shot waits for the board feeds to settle. The questions
+/// read alone may take its own 30 s timeout on a busy machine, so the
+/// budget sits above it: a frame is never captured while a section still
+/// reads "reading…".
+const SETTLE_BUDGET: Duration = Duration::from_secs(45);
 
 /// The poll cadence while the feeds settle.
 const SETTLE_POLL: Duration = Duration::from_millis(150);
@@ -154,7 +156,12 @@ pub fn run(opts: ShotOptions) -> i32 {
             // composited at visible occlusion), so the refresh presents
             // for real. The optional tap posts after the settle so the
             // fold it opens presents before the capture.
-            settle_then_tap(cx, &handle, w, tap, ui).await;
+            if !settle_then_tap(cx, &handle, w, tap, ui).await {
+                eprintln!("fno-app --shot: the board feeds never settled; no frame captured");
+                remove_pin_dir(&pin_dir());
+                cx.update(|app| app.quit()).ok();
+                std::process::exit(1);
+            }
             // Hold mode: leave the near-invisible composited window up
             // for a foreign capturer, skip the raise and the capture.
             // A foreign capture during hold reads one-percent precision
@@ -223,14 +230,19 @@ fn shot_window_options() -> WindowOptions {
     }
 }
 
-/// This process's theme-pin dir.
+/// This process's theme-pin dir. The leaf name is fixed: the workspace
+/// row paints the cwd's name, so a pid in it would differ between frames.
+/// The pid lives in the parent, which keeps concurrent shots apart.
 fn pin_dir() -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("fno-shot-pin-{}", std::process::id()))
+    std::env::temp_dir()
+        .join(format!("fno-shot-pin-{}", std::process::id()))
+        .join("demo")
 }
 
-/// Delete the pin dir. Unix removes a directory the process still sits in.
+/// Delete the pin dir and its per-process parent. Unix removes a
+/// directory the process still sits in.
 fn remove_pin_dir(dir: &std::path::Path) {
-    std::fs::remove_dir_all(dir).ok();
+    std::fs::remove_dir_all(dir.parent().unwrap_or(dir)).ok();
 }
 
 /// Deletes the pin dir when the shot run returns.
@@ -389,17 +401,17 @@ unsafe fn ns_string(s: &str) -> *const c_void {
 }
 
 /// Wait for the board feeds to settle, then post the optional tap and
-/// let the frame it opened present before the capture.
+/// let the frame it opened present before the capture. Returns false
+/// when the feeds never settled, so the caller refuses the frame.
 async fn settle_then_tap(
     cx: &mut gpui::AsyncApp,
     handle: &gpui::WindowHandle<crate::window::Root>,
     w: *mut objc::runtime::Object,
     tap: Option<(f64, f64)>,
     ui: Option<crate::UiShot>,
-) {
-    let settled = wait_settled(cx, handle).await;
-    if !settled {
-        eprintln!("fno-app --shot: the board feeds never settled; capturing anyway");
+) -> bool {
+    if !wait_settled(cx, handle).await {
+        return false;
     }
     // The overlay opens through the same Root method a click calls.
     if let Some(ui) = ui {
@@ -431,6 +443,7 @@ async fn settle_then_tap(
             .timer(Duration::from_millis(150))
             .await;
     }
+    true
 }
 
 /// Poll until the board has read every feed and the chat's event count
@@ -767,11 +780,13 @@ mod tests {
 
     #[test]
     fn pin_dir_holds_the_theme_and_the_guard_removes_it() {
-        let dir = std::env::temp_dir().join(format!("fno-shot-pin-test-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("fno-shot-pin-test-{}", std::process::id()));
+        let dir = root.join("demo");
         write_pin(&dir, "light").unwrap();
         let cfg = std::fs::read_to_string(dir.join(".fno/config.toml")).unwrap();
         assert!(cfg.contains(THEME_LIGHT));
         drop(PinGuard(dir.clone()));
-        assert!(!dir.exists());
+        assert!(!root.exists());
+        assert_eq!(pin_dir().file_name().and_then(|n| n.to_str()), Some("demo"));
     }
 }
