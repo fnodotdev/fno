@@ -49,7 +49,8 @@ fn run_spawn(pin_config: &str, provider: &str, tag: &str) -> (Option<i32>, Strin
         .envs(fno_agent::test_run::self_owner_env())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .wait_with_output()
+        .spawn()
+        .and_then(|mut c| c.wait_with_output())
         .unwrap();
     let code = out.status.code();
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
