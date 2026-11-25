@@ -551,7 +551,7 @@ fn ask_rows(long: bool) -> String {
 /// A claude-shaped transcript in the world's projects dir, so the chat
 /// view renders a conversation. The FILE is the contract: rows carry
 /// type + message.content like the real transcripts the server reads.
-fn seed_transcript(root: &Path, ask: Option<&str>) -> bool {
+fn seed_transcript(root: &Path, ask: Option<&str>, chat_harness: Option<&str>) -> bool {
     // The dir name is the project slug of the world children's cwd
     // (world_cmd pins them to code/checkout); that is the only name the
     // newest-lookup can find.
@@ -583,10 +583,44 @@ fn seed_transcript(root: &Path, ask: Option<&str>) -> bool {
         Some(kind) => format!("{rows}{}", ask_rows(kind == "overflow")),
         None => rows.to_string(),
     };
-    match std::fs::write(dir.join(format!("{session}.jsonl")), rows) {
+    if let Err(e) = std::fs::write(dir.join(format!("{session}.jsonl")), rows) {
+        eprintln!("fno mux app shot: the transcript seed failed to write: {e}");
+        return false;
+    }
+    chat_harness.is_none_or(|harness| seed_pi_family(root, harness))
+}
+
+/// A pi or omp session file in the world's own HOME, where the server's
+/// transcript scan looks. omp writes a title slot before the header.
+fn seed_pi_family(root: &Path, harness: &str) -> bool {
+    let dir = root
+        .join(format!(".{harness}/agent/sessions"))
+        .join("--shot--");
+    let lead = if harness == "omp" {
+        "{\"title\":\"shot\"}\n"
+    } else {
+        ""
+    };
+    let rows = format!(
+        "{lead}{}",
+        concat!(
+            r#"{"type":"session","version":3,"id":"00000000-0000-4000-8000-000000000001","timestamp":"2026-11-24T10:00:00.000Z","cwd":"/shot"}"#,
+            "\n",
+            r#"{"type":"message","id":"e1","parentId":null,"timestamp":"2026-11-24T10:00:01.000Z","message":{"role":"user","content":"Which files does the shot door touch?"}}"#,
+            "\n",
+            r#"{"type":"message","id":"e2","parentId":"e1","timestamp":"2026-11-24T10:00:02.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"List the two files first."},{"type":"text","text":"Two files. I will read them."},{"type":"toolCall","id":"c1","name":"bash","arguments":{"command":"ls crates/fno/src/mux"}}]}}"#,
+            "\n",
+            r#"{"type":"message","id":"e3","parentId":"e2","timestamp":"2026-11-24T10:00:03.000Z","message":{"role":"toolResult","toolCallId":"c1","toolName":"bash","content":[{"type":"text","text":"app_cli.rs\nserver.rs"}],"isError":false}}"#,
+            "\n",
+            r#"{"type":"message","id":"e4","parentId":"e3","timestamp":"2026-11-24T10:00:04.000Z","message":{"role":"assistant","content":[{"type":"text","text":"The door lives in app_cli.rs. The server it shoots lives in server.rs."}]}}"#,
+            "\n",
+        )
+    );
+    let file = dir.join("2026-11-24T10-00-00-000Z_00000000-0000-4000-8000-000000000001.jsonl");
+    match std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(file, rows)) {
         Ok(()) => true,
         Err(e) => {
-            eprintln!("fno mux app shot: the transcript seed failed to write: {e}");
+            eprintln!("fno mux app shot: the {harness} transcript seed failed: {e}");
             false
         }
     }
@@ -662,7 +696,7 @@ fn shot(args: &crate::cli_args::AppShotArgs) -> i32 {
         return 1;
     };
     // The transcript lands first: the adopt seed reads it as evidence.
-    let transcript = seed_transcript(&world.root, ask);
+    let transcript = seed_transcript(&world.root, ask, args.chat_harness.as_deref());
     let fleet = seed_fleet(&world.root, &front, &first_node);
     let question = seed_question(&world.root);
     if !(transcript && fleet && question) {
@@ -688,7 +722,12 @@ fn shot(args: &crate::cli_args::AppShotArgs) -> i32 {
             // The seeded session id, not `newest`: newest resolves inside
             // the cwd's project dir, and the shot world's transcript lives
             // in its own demo-project root the pin cwd never matches.
-            cmd.arg("--chat").arg(DEMO_CHAT_SESSION);
+            match args.chat_harness.as_deref() {
+                Some(harness) => cmd
+                    .arg("--chat")
+                    .arg(format!("{harness}:{DEMO_CHAT_SESSION}")),
+                None => cmd.arg("--chat").arg(DEMO_CHAT_SESSION),
+            };
         }
     }
     if let Some(find) = find {
