@@ -203,9 +203,15 @@ fn glob_hit(pat: &[u8], text: &[u8]) -> bool {
 /// The one setting. Only the global config counts, so a project file cannot
 /// turn the hook on for itself.
 fn enabled() -> bool {
-    crate::agents_config::config_lookup_global(&["user", "auto_approve_routine"])
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
+    switch_on(
+        crate::agents_config::config_lookup_global(&["user", "auto_approve_routine"]).as_ref(),
+    )
+}
+
+/// Only a boolean `true` turns the rule on. A missing, unreadable or
+/// mistyped value reads as off.
+fn switch_on(value: Option<&toml::Value>) -> bool {
+    value.and_then(toml::Value::as_bool).unwrap_or(false)
 }
 
 /// The file a routine tool call touches. Reads and edits inside the worker's
@@ -582,6 +588,15 @@ mod tests {
         );
         assert_eq!(own_worktree_in(&all, &repo, "foreign"), None);
         assert_eq!(own_worktree_in(&all, &repo, "other"), None);
+    }
+
+    #[test]
+    fn only_a_true_boolean_turns_the_file_work_rule_on() {
+        assert!(switch_on(Some(&toml::Value::Boolean(true))));
+        assert!(!switch_on(Some(&toml::Value::Boolean(false))));
+        assert!(!switch_on(None), "unset or unreadable reads as off");
+        assert!(!switch_on(Some(&toml::Value::String("true".into()))));
+        assert!(!switch_on(Some(&toml::Value::Integer(1))));
     }
 
     #[test]

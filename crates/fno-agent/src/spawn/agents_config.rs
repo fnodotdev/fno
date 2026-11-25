@@ -2212,13 +2212,17 @@ pub fn user_hours(cwd: &Path) -> Result<UserHours, Refused> {
 /// value reads as never away. The refusal is not silent: it prints, and it
 /// lands once on the board, where `fno config doctor` also names it.
 pub fn user_hours_or_default(cwd: &Path) -> UserHours {
-    const LANE: &str = "fno/user-hours";
-    const KEY: &str = "user-hours refused";
     let store = crate::paths::AgentsHome::from_env_opt()
         .map(|home| crate::provider_cap::questions_path(&home));
+    user_hours_or_default_in(cwd, store.as_deref())
+}
+
+fn user_hours_or_default_in(cwd: &Path, store: Option<&Path>) -> UserHours {
+    const LANE: &str = "fno/user-hours";
+    const KEY: &str = "user-hours refused";
     match user_hours(cwd) {
         Ok(hours) => {
-            if let Some(store) = &store {
+            if let Some(store) = store {
                 crate::fleet_task::close(
                     store,
                     LANE,
@@ -2233,7 +2237,7 @@ pub fn user_hours_or_default(cwd: &Path) -> UserHours {
         }
         Err(refusal) => {
             eprintln!("fno-agent: {refusal}");
-            if let Some(store) = &store {
+            if let Some(store) = store {
                 let text = format!(
                     "Config refused: {refusal}. Until it is fixed the working hours are ignored. A parked prompt is denied after 30 minutes, not at once while the user is away. An explicit away override still holds."
                 );
@@ -2518,12 +2522,21 @@ mod tests {
         std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", global.join("settings.json"));
         std::fs::write(
             global.join("config.toml"),
-            "[[accounts.records]]\nid = \"global-account\"\n",
+            "plans_dir = \"/global/plans\"\n[[accounts.records]]\nid = \"global-account\"\n",
         )
         .unwrap();
         let project = write_project_settings(
             "global-lookup-project",
-            "[[accounts.records]]\nid = \"local-account\"\n",
+            "plans_dir = \"/project/plans\"\n[[accounts.records]]\nid = \"local-account\"\n",
+        );
+        // The file-work hook reads plans_dir through the global-only lookup.
+        assert_eq!(
+            config_lookup(&project, &["plans_dir"]).and_then(|v| v.as_str().map(String::from)),
+            Some("/project/plans".to_string())
+        );
+        assert_eq!(
+            config_lookup_global(&["plans_dir"]).and_then(|v| v.as_str().map(String::from)),
+            Some("/global/plans".to_string())
         );
 
         assert_eq!(
@@ -3498,6 +3511,34 @@ mod user_hours_tests {
         assert_eq!(at("2026-11-25 12:00").unwrap(), TUE_NOON + 86_400);
         assert!(at("yesterday").is_err());
         assert!(at("-5m").is_err(), "a time in the past is refused");
+    }
+
+    #[test]
+    fn a_bad_value_files_one_board_task_and_a_clean_read_closes_it() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_config_env();
+        let store = std::env::temp_dir().join(format!("fno-uh-tasks-{}.jsonl", std::process::id()));
+        std::fs::remove_file(&store).ok();
+        let project = write_project_settings("uh-bad", "[user]\ntimezone = \"Mars/Base\"\n");
+        let open = || {
+            crate::fleet_task::open_tasks(&store)
+                .unwrap()
+                .iter()
+                .filter(|t| t.key == "user-hours refused")
+                .count()
+        };
+        user_hours_or_default_in(&project, Some(&store));
+        user_hours_or_default_in(&project, Some(&store));
+        assert_eq!(open(), 1, "a repeat read files the task once");
+        std::fs::write(
+            project.join(".fno/config.toml"),
+            "[user]\ntimezone = \"UTC\"\n",
+        )
+        .unwrap();
+        user_hours_or_default_in(&project, Some(&store));
+        assert_eq!(open(), 0, "a clean read closes it");
+        std::fs::remove_file(&store).ok();
+        clear_config_env();
     }
 
     #[test]
