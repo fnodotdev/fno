@@ -726,22 +726,9 @@ fn log_records(log: &str) -> impl Iterator<Item = (&str, &str)> {
 /// the command derives it from `@{u}`). Empty `head` skips the read: a branch
 /// with no upstream has nothing in flight anywhere.
 pub(crate) fn guarded_push(ctx: &PushCtx, head: &str) -> PushOutcome {
-    let branch = match (&ctx.source, &ctx.remote_branch) {
-        (Some(_), Some(target)) => target.clone(),
-        (Some(_), None) => {
-            return PushOutcome::PushFailed(
-                "a bound source needs a bound remote branch; nothing pushed".into(),
-            )
-        }
-        _ => run_labeled(
-            "pr-push",
-            &ctx.git_bin,
-            &["rev-parse", "--abbrev-ref", "HEAD"],
-            &ctx.cwd,
-            READ_TIMEOUT,
-        )
-        .map(|(_, out, _)| out.trim().to_string())
-        .unwrap_or_default(),
+    let branch = match push_branch(ctx) {
+        Ok(b) => b,
+        Err(outcome) => return outcome,
     };
     if PROTECTED.contains(&branch.as_str()) {
         return PushOutcome::PushFailed(format!(
@@ -793,6 +780,39 @@ pub(crate) fn guarded_push(ctx: &PushCtx, head: &str) -> PushOutcome {
             Err((_, msg)) => return PushOutcome::PushFailed(msg),
         },
     };
+    if let Err(err) = push_once(ctx, &target) {
+        return PushOutcome::PushFailed(err);
+    }
+    stamp_push(ctx);
+    PushOutcome::Pushed {
+        sha: pushed_sha(ctx),
+        ci,
+        remote_branch: target,
+    }
+}
+
+/// The local branch a push names: the bound remote branch for a bound
+/// source, else HEAD's own name.
+fn push_branch(ctx: &PushCtx) -> Result<String, PushOutcome> {
+    match (&ctx.source, &ctx.remote_branch) {
+        (Some(_), Some(target)) => Ok(target.clone()),
+        (Some(_), None) => Err(PushOutcome::PushFailed(
+            "a bound source needs a bound remote branch; nothing pushed".into(),
+        )),
+        _ => Ok(run_labeled(
+            "pr-push",
+            &ctx.git_bin,
+            &["rev-parse", "--abbrev-ref", "HEAD"],
+            &ctx.cwd,
+            READ_TIMEOUT,
+        )
+        .map(|(_, out, _)| out.trim().to_string())
+        .unwrap_or_default()),
+    }
+}
+
+/// One push of HEAD, or of the bound source, to `target`.
+fn push_once(ctx: &PushCtx, target: &str) -> Result<(), String> {
     // Push exactly once, to the resolved remote branch, upstream or not.
     // A bare `git push` cannot be used here: push.default=simple refuses
     // when the branch's upstream name differs from its own name (a branch
@@ -825,25 +845,26 @@ pub(crate) fn guarded_push(ctx: &PushCtx, head: &str) -> PushOutcome {
     let (ok, _, err) =
         crate::pr_push::run_labeled("pr-push", &ctx.git_bin, &push_args, &ctx.cwd, READ_TIMEOUT)
             .unwrap_or_else(|error| (false, String::new(), error));
-    if !ok {
-        return PushOutcome::PushFailed(err);
+    if ok {
+        Ok(())
+    } else {
+        Err(err)
     }
-    stamp_push(ctx);
-    PushOutcome::Pushed {
-        sha: match &ctx.source {
-            Some(sha) => sha.chars().take(12).collect(),
-            None => run_labeled(
-                "pr-push",
-                &ctx.git_bin,
-                &["rev-parse", "--short", "HEAD"],
-                &ctx.cwd,
-                READ_TIMEOUT,
-            )
-            .map(|(_, out, _)| out.trim().to_string())
-            .unwrap_or_default(),
-        },
-        ci,
-        remote_branch: target,
+}
+
+/// The short sha the push sent.
+fn pushed_sha(ctx: &PushCtx) -> String {
+    match &ctx.source {
+        Some(sha) => sha.chars().take(12).collect(),
+        None => run_labeled(
+            "pr-push",
+            &ctx.git_bin,
+            &["rev-parse", "--short", "HEAD"],
+            &ctx.cwd,
+            READ_TIMEOUT,
+        )
+        .map(|(_, out, _)| out.trim().to_string())
+        .unwrap_or_default(),
     }
 }
 

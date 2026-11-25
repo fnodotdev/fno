@@ -309,22 +309,14 @@ fn lifecycle(a: &Args) -> Res<i32> {
         .exec_piped(&a.id, &["fno-agent", "hook", "sandbox-guest"])
         .spawn()
         .map_err(|e| format!("start the guest: {e}"))?;
-    let bound = Arc::new(super::ops::Bound {
-        id: a.id.clone(),
-        name: a.name.clone(),
-        harness: a.harness.clone(),
-        session: a.session.clone(),
-        from: a.from.clone(),
-        node: a.node.clone(),
-        branch: binding.as_ref().and_then(|t| t.branch.clone()),
-        worktree: a.cwd.clone(),
-        plan: binding.as_ref().and_then(|t| t.plan.clone()),
-        base: intake.base.clone(),
-        store: store_dir.clone(),
-        transcript: transcript_path.clone(),
+    let bound = bound_for(
+        a,
+        binding.as_ref(),
+        &intake,
+        &store_dir,
+        &transcript_path,
         engine,
-        export: Mutex::new(()),
-    });
+    );
     let (tx, flushed) = start_relay(&mut guest, a, transcript, bound)?;
     tx.send(HostFrame::Hello {
         env,
@@ -357,9 +349,50 @@ fn lifecycle(a: &Args) -> Res<i32> {
     guest.kill().ok();
     guest.wait().ok();
 
-    match super::repo::export(&engine, &a.id, &a.id, &intake.base, &a.cwd, &store_dir) {
+    finish(&mut sandbox, a, &intake, &store_dir, &transcript_path);
+    Ok(exit_code(status))
+}
+
+/// The host side every op answers from, fixed at launch.
+fn bound_for(
+    a: &Args,
+    binding: Option<&Target>,
+    intake: &super::repo::Intake,
+    store_dir: &Path,
+    transcript_path: &Path,
+    engine: super::engine::Engine,
+) -> Arc<super::ops::Bound> {
+    Arc::new(super::ops::Bound {
+        id: a.id.clone(),
+        name: a.name.clone(),
+        harness: a.harness.clone(),
+        session: a.session.clone(),
+        from: a.from.clone(),
+        node: a.node.clone(),
+        branch: binding.and_then(|t| t.branch.clone()),
+        worktree: a.cwd.clone(),
+        plan: binding.and_then(|t| t.plan.clone()),
+        base: intake.base.clone(),
+        store: store_dir.to_path_buf(),
+        transcript: transcript_path.to_path_buf(),
+        engine,
+        export: Mutex::new(()),
+    })
+}
+
+/// Export the sandbox's work and remove the container; a failed export
+/// keeps the container with its work.
+fn finish(
+    sandbox: &mut Sandbox,
+    a: &Args,
+    intake: &super::repo::Intake,
+    store_dir: &Path,
+    transcript_path: &Path,
+) {
+    let engine = sandbox.engine;
+    match super::repo::export(&engine, &a.id, &a.id, &intake.base, &a.cwd, store_dir) {
         Ok(out) => {
-            receipt(&a.id, &out, &transcript_path);
+            receipt(&a.id, &out, transcript_path);
             if let Err(e) = sandbox.engine.remove(&a.id) {
                 eprintln!("fno sandbox {}: remove failed, container kept: {e}", a.id);
             }
@@ -373,7 +406,6 @@ fn lifecycle(a: &Args) -> Res<i32> {
             );
         }
     }
-    Ok(exit_code(status))
 }
 
 /// What the host bound for a target spawn before the clone.
