@@ -300,8 +300,6 @@ fn prewarm(
     if opts.first_run == Some(crate::FirstRunShot::NoServer) {
         return Ok(None);
     }
-    // A shot photographs: it attaches as an observer, so the session keeps
-    // its workspaces and its rows. Only a shot that owns its world drives.
     let seat = crate::link::Seat::for_shot(opts.own_world);
     crate::link::connect_warmed(session, PREWARM, seat).map(Some)
 }

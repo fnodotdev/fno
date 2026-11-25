@@ -1181,9 +1181,8 @@ pub struct RegistryEntry {
     pub substrate: Option<String>,
     /// v47: a person asked to watch this one-shot (`fno agent spawn --mux`):
     /// its headless row keeps its sideline place. Every other headless row
-    /// stays off the sideline and shows in the shell that started it.
-    /// Additive and optional: a writer that does not know it keeps it in
-    /// `extra`.
+    /// stays off the sideline. Additive and optional: a writer that does
+    /// not know it keeps it in `extra`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub watch: bool,
     #[serde(default)]

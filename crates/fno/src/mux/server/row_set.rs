@@ -592,11 +592,10 @@ impl Core {
         let mut unwatched = Vec::new();
         for (i, a) in self.agents.iter().enumerate() {
             // Only a session a person can type into gets a sideline row. A
-            // headless run shows in the shell that started it, and its
-            // registry row stays: the session id, events and HQ lines are
-            // read by name, not through a row. One a person asked to watch
-            // (`fno agent spawn --mux`) keeps its place. The row is still
-            // built, for the sidecar below, and leaves `out` after it.
+            // headless run shows in the shell that started it: its registry
+            // row keeps the session id and events, read by name. One a person
+            // asked to watch (`fno agent spawn --mux`) keeps its place. The
+            // row is still built, for the sidecar below, and leaves `out` after it.
             let off_sideline =
                 !consumed[i] && a.substrate.as_deref() == Some("headless") && !a.watch;
             if off_sideline {

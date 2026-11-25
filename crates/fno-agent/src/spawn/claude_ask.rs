@@ -3921,6 +3921,7 @@ mod tests {
     use super::*;
     use std::fs;
 
+    #[cfg(unix)]
     #[test]
     fn a_hand_typed_print_run_reads_as_headless() {
         let claude = Some("claude");
@@ -3944,7 +3945,29 @@ mod tests {
         // A CLI that hands no pid reads as interactive, and a spawn keeps
         // the row it was given.
         assert!(!typed_print_run(None, claude, None));
-        assert!(!typed_print_run(Some("w1"), claude, std::process::id()));
+        assert!(!typed_print_run(
+            Some("w1"),
+            claude,
+            Some(std::process::id())
+        ));
+        // A live pid answers from its own argv. `sh` reads its first
+        // argument after the command string as $0, so the word stays whole.
+        let spawn = |arg: &str| {
+            std::process::Command::new("sh")
+                .args(["-c", "sleep 10; :", arg])
+                .spawn()
+                .unwrap()
+        };
+        let mut print = spawn("-p");
+        let mut plain = spawn("x");
+        let (read_print, read_plain) = (
+            typed_print_run(None, claude, Some(print.id())),
+            typed_print_run(None, claude, Some(plain.id())),
+        );
+        print.kill().unwrap();
+        plain.kill().unwrap();
+        assert!(read_print);
+        assert!(!read_plain);
     }
 
     #[cfg(unix)]
