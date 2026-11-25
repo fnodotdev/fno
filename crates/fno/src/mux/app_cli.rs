@@ -324,13 +324,48 @@ const WORLD_STRIP_KEYS: &[&str] = &[
 /// One throwaway world for the shot: the temp root and the world server
 /// the app attaches to. Dropping kills the server by its captured pid
 /// and removes the root, so every early return tears the world down.
+/// A pane's keeper outlives the server by design, so the drop ends the
+/// world's keepers first, found through the world's own mux dir.
 struct ShotWorld {
     root: PathBuf,
+    front: PathBuf,
     server: Option<std::process::Child>,
+}
+
+/// One row of `mux pane keeper list --json`: the two pids a world's
+/// teardown signals.
+#[derive(serde::Deserialize)]
+struct KeeperRow {
+    keeper_pid: Option<u32>,
+    child_pid: Option<u32>,
+}
+
+/// The pids in a keeper listing, keeper first, then its child.
+fn keeper_pids(listing: &[u8]) -> Vec<u32> {
+    let rows: Vec<KeeperRow> = serde_json::from_slice(listing).unwrap_or_default();
+    rows.iter()
+        .flat_map(|r| [r.keeper_pid, r.child_pid])
+        .flatten()
+        .collect()
 }
 
 impl Drop for ShotWorld {
     fn drop(&mut self) {
+        // The listing reads the world's mux dir (FNO_MUX_DIR is pinned by
+        // world_cmd), so it names only this world's keepers.
+        let mut list = world_cmd(&self.root, &self.front);
+        list.args(["mux", "pane", "keeper", "list", "--json"])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        if let Ok(out) = list.output() {
+            for pid in keeper_pids(&out.stdout) {
+                if let Ok(pid) = libc::pid_t::try_from(pid) {
+                    // SAFETY: a plain signal to a pid the world's own keeper
+                    // socket named; no memory is touched.
+                    unsafe { libc::kill(pid, libc::SIGTERM) };
+                }
+            }
+        }
         if let Some(mut child) = self.server.take() {
             // The pid was captured at spawn: kill by pid, never a sweep.
             child.kill().ok();
@@ -669,7 +704,11 @@ fn shot(args: &crate::cli_args::AppShotArgs) -> i32 {
     let out_abs = std::path::absolute(out).unwrap_or_else(|_| PathBuf::from(out));
     let root = std::path::Path::new("/tmp").join(format!("fno-shot-world-{}", std::process::id()));
     std::fs::remove_dir_all(&root).ok();
-    let mut world = ShotWorld { root, server: None };
+    let mut world = ShotWorld {
+        root,
+        front: front.clone(),
+        server: None,
+    };
     for dir in [
         "mux",
         ".fno/agents",
@@ -686,7 +725,12 @@ fn shot(args: &crate::cli_args::AppShotArgs) -> i32 {
     // pin slugs that cwd to find the seed, so every pin below uses the
     // canonical root or the lookup lands one symlink off the seed.
     world.root = std::fs::canonicalize(&world.root).unwrap_or_else(|_| world.root.clone());
-    if let Err(e) = std::fs::write(world.root.join(".fno/config.toml"), "") {
+    // The world names its one machine: the Machines row paints the
+    // config's display name, never the real host.
+    if let Err(e) = std::fs::write(
+        world.root.join(".fno/config.toml"),
+        "[fleet]\nname = \"demo-host\"\n",
+    ) {
         eprintln!("fno mux app shot: the world config failed: {e}");
         return 1;
     }
@@ -887,6 +931,13 @@ mod tests {
                 "{key} must be stripped from the world env"
             );
         }
+    }
+
+    #[test]
+    fn keeper_listing_names_the_keeper_and_its_child_and_skips_gaps() {
+        let listing = br#"[{"keeper_pid":10,"child_pid":11},{"keeper_pid":12,"child_pid":null},{"socket":"x"}]"#;
+        assert_eq!(keeper_pids(listing), vec![10, 11, 12]);
+        assert!(keeper_pids(b"not json").is_empty());
     }
 
     #[test]

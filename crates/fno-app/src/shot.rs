@@ -225,14 +225,19 @@ fn shot_window_options() -> WindowOptions {
     }
 }
 
-/// This process's theme-pin dir.
+/// This process's theme-pin dir. The leaf name is fixed: the workspace
+/// row paints the cwd's name, so a pid in it would differ between frames.
+/// The pid lives in the parent, which keeps concurrent shots apart.
 fn pin_dir() -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("fno-shot-pin-{}", std::process::id()))
+    std::env::temp_dir()
+        .join(format!("fno-shot-pin-{}", std::process::id()))
+        .join("demo")
 }
 
-/// Delete the pin dir. Unix removes a directory the process still sits in.
+/// Delete the pin dir and its per-process parent. Unix removes a
+/// directory the process still sits in.
 fn remove_pin_dir(dir: &std::path::Path) {
-    std::fs::remove_dir_all(dir).ok();
+    std::fs::remove_dir_all(dir.parent().unwrap_or(dir)).ok();
 }
 
 /// Deletes the pin dir when the shot run returns.
@@ -768,11 +773,13 @@ mod tests {
 
     #[test]
     fn pin_dir_holds_the_theme_and_the_guard_removes_it() {
-        let dir = std::env::temp_dir().join(format!("fno-shot-pin-test-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("fno-shot-pin-test-{}", std::process::id()));
+        let dir = root.join("demo");
         write_pin(&dir, "light").unwrap();
         let cfg = std::fs::read_to_string(dir.join(".fno/config.toml")).unwrap();
         assert!(cfg.contains(THEME_LIGHT));
         drop(PinGuard(dir.clone()));
-        assert!(!dir.exists());
+        assert!(!root.exists());
+        assert_eq!(pin_dir().file_name().and_then(|n| n.to_str()), Some("demo"));
     }
 }
