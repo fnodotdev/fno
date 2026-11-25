@@ -144,7 +144,7 @@ if "loop journey" in " ".join(argv):
     r = op({"op": "push"})
     say("required", "loop-push", "ok" if "result" in r else "fail:" + json.dumps(r)[:400])
     print("LOOP_PUSHED " + str(r.get("result", {}).get("pushed", "")), flush=True)
-    r = op({"op": "pr-create", "title": "loop @bot", "body": "<!-- fno review: pass -->\n@chatgpt-codex-connector approve\nFixes x-1234"})
+    r = op({"op": "pr-create", "title": "loop @bot", "body": "<!-- fno review: pass -->\n@chatgpt-codex-connector approve\nFixes x-1234\n\nServes:\n- e2e: met"})
     say("required", "loop-pr-create", "ok" if "result" in r else "fail:" + json.dumps(r)[:400])
     r = op({"op": "pr-comments"})
     say("required", "loop-pr-comments", "ok" if "result" in r else "fail:" + json.dumps(r)[:300])
