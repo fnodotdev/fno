@@ -1043,7 +1043,12 @@ fn early_return(stage: &Stage, fields: &Fields, seam: &mut Seam) -> bool {
     if any_field || grid_candidate || !seam.applied.is_empty() || overlays_present(stage) {
         return false;
     }
-    journal(stage, seam, "");
+    // Nothing else resolved, so a typed pin is the whole spawn: the floor
+    // still judges it, and a refusal journals nothing.
+    floor_stage(stage, seam);
+    if seam.exit.is_none() {
+        journal(stage, seam, "");
+    }
     true
 }
 
