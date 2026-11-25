@@ -281,7 +281,7 @@ fn silence_rows(roots: &[PathBuf]) -> Vec<FleetRow> {
         .collect();
     let mut out = Vec::new();
     for e in &registry.entries {
-        let live = worked::is_live_status(e.status)
+        let live = crate::spawn_gate::status_is_liveish(&e.status)
             && e.harness.as_deref().map(Harness::parse) != Some(Harness::Codex);
         let spawn = e.origin.as_deref() == Some("spawn") && e.role_level.is_none();
         let node = e.node.clone().filter(|n| !n.is_empty());
@@ -312,7 +312,7 @@ fn silence_rows(roots: &[PathBuf]) -> Vec<FleetRow> {
         out.push(FleetRow {
             row_id,
             name: e.name.clone(),
-            state: worked::status_word(e.status).to_string(),
+            state: e.status.as_str().to_string(),
             node: Some(node),
             cwd: e.cwd.clone(),
             agent: e

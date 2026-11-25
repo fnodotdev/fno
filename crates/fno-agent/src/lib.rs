@@ -309,6 +309,32 @@ impl AgentStatus {
             AgentStatus::Ready | AgentStatus::Idle | AgentStatus::Busy | AgentStatus::Live
         )
     }
+
+    /// The variant's serde name, the word every registry row and status
+    /// table spells. One mapping for the whole crate.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AgentStatus::Spawning => "spawning",
+            AgentStatus::Ready => "ready",
+            AgentStatus::Idle => "idle",
+            AgentStatus::Busy => "busy",
+            AgentStatus::Live => "live",
+            AgentStatus::Restarting => "restarting",
+            AgentStatus::Orphaned => "orphaned",
+            AgentStatus::Failed => "failed",
+            AgentStatus::Exited => "exited",
+            AgentStatus::PermanentDead => "permanent_dead",
+        }
+    }
+
+    /// The registry statuses that hold a live process (idle counts: an
+    /// idle-but-unreaped process still holds RAM), the one vocabulary every
+    /// fleet arm reads: census, footprint, peek, worktree ownership, spawn
+    /// gate. The words are the variants' serde names (`Self::as_str`);
+    /// `spawn_gate::status_is_liveish` reads this const, and the spawn-gate
+    /// test pins const, names and predicate together.
+    pub const LIVE_STATUSES: &'static [&'static str] =
+        &["spawning", "ready", "idle", "busy", "live", "restarting"];
 }
 
 /// Sealed event vocabulary every provider parses INTO (LD9). Variant additions
