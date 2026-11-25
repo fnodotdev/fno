@@ -330,6 +330,9 @@ fn run_pass_with(
         snapshot,
         runner,
         &Hooks {
+            registry: &|home: &AgentsHome| {
+                state::load_registry(&home.registry_json()).map_err(|e| e.to_string())
+            },
             at_idle: &|short: &str| {
                 crate::thread_dialog::read_thread(&crate::claude_roster::daemon_dir(), short)
                     .map(|screen| crate::thread_dialog::at_idle_prompt(&screen))
@@ -346,6 +349,8 @@ fn run_pass_with(
 /// The three seams a pass reaches the machine through, so a test drives the
 /// pass with no screen, no config and no keys.
 struct Hooks<'a> {
+    /// The agent registry, read through the seam so a test can fail the read.
+    registry: &'a dyn Fn(&AgentsHome) -> Result<Registry, String>,
     /// True only while the worker's screen reads as an idle, empty prompt.
     at_idle: &'a dyn Fn(&str) -> bool,
     asleep: &'a dyn Fn(&Waiting, i64) -> bool,
@@ -454,14 +459,19 @@ fn denial_count(home: &AgentsHome, node: &str, action: &str, now: i64) -> Result
     Ok(count)
 }
 
-fn load_once(home: &AgentsHome, registry: &mut Option<Registry>, first_error: &mut Option<String>) {
+fn load_once(
+    home: &AgentsHome,
+    hooks: &Hooks<'_>,
+    registry: &mut Option<Registry>,
+    first_error: &mut Option<String>,
+) {
     if registry.is_some() {
         return;
     }
-    match state::load_registry(&home.registry_json()) {
+    match (hooks.registry)(home) {
         Ok(r) => *registry = Some(r),
         Err(e) => {
-            first_error.get_or_insert(e.to_string());
+            first_error.get_or_insert(e);
         }
     }
 }
@@ -512,7 +522,7 @@ fn follow_up(
     // Claude's rejection result tells the model to stop and wait for
     // the user, so a denied worker idles. One typed command turn
     // sends it back to work, and only onto an idle prompt line.
-    load_once(home, registry, first_error);
+    load_once(home, hooks, registry, first_error);
     let node = registry
         .as_ref()
         .zip(w.session_id.as_deref())
@@ -641,7 +651,7 @@ fn settle_denials(
                 }
             }
         }
-        load_once(home, &mut registry, &mut first_error);
+        load_once(home, hooks, &mut registry, &mut first_error);
         if let (Some(reg), Some(sid)) = (&registry, w.session_id.as_deref()) {
             let to = recipients(home, reg, sid);
             let pending: Vec<String> = to
@@ -691,7 +701,7 @@ fn run_pass_denying(
     if !waiting.iter().any(owes_notice) {
         return denial;
     }
-    let registry = state::load_registry(&home.registry_json()).map_err(|e| e.to_string())?;
+    let registry = (hooks.registry)(home)?;
     let mut first_error = denial.err().map(|e| e.0);
     for w in waiting.iter_mut().filter(|w| owes_notice(w)) {
         let text = notice(w, now);
@@ -861,6 +871,7 @@ mod tests {
         sent: std::cell::RefCell<Vec<Vec<String>>>,
         idle: std::cell::Cell<bool>,
         fail_raw: std::cell::Cell<u8>,
+        registry_down: std::cell::Cell<bool>,
         _temp: tempfile::TempDir,
     }
 
@@ -886,6 +897,7 @@ mod tests {
                 sent: Default::default(),
                 idle: std::cell::Cell::new(true),
                 fail_raw: Default::default(),
+                registry_down: Default::default(),
                 _temp: temp,
             }
         }
@@ -905,6 +917,12 @@ mod tests {
                 (0, "accepted-new-turn".into(), String::new())
             };
             let at_idle = |_: &str| self.idle.get();
+            let registry = |home: &AgentsHome| {
+                if self.registry_down.get() {
+                    return Err("registry read failed".to_string());
+                }
+                state::load_registry(&home.registry_json()).map_err(|e| e.to_string())
+            };
             let asleep = |_: &Waiting, _: i64| self.asleep.get();
             let deny = |short: &str| {
                 self.typed.borrow_mut().push(short.to_string());
@@ -920,6 +938,7 @@ mod tests {
                 &snap,
                 &mut mail,
                 &Hooks {
+                    registry: &registry,
                     at_idle: &at_idle,
                     asleep: &asleep,
                     deny: &deny,
@@ -1013,6 +1032,20 @@ mod tests {
         let line = raw.first().and_then(|a| a.last()).unwrap();
         assert!(line.starts_with("/fno:target x-77 "), "{line}");
         assert!(line.contains("route that needs no approval"), "{line}");
+        drop(sent);
+        // A registry read that fails leaves the follow-up pending, not spent.
+        let down = Rig::new();
+        down.asleep.set(true);
+        down.registry_down.set(true);
+        let _ = down.pass(1_000_000);
+        assert_eq!(raw_sends(&down), 0, "no node is known, so nothing is typed");
+        down.registry_down.set(false);
+        let _ = down.pass(1_000_000 + 60_000);
+        assert_eq!(
+            raw_sends(&down),
+            1,
+            "the pending follow-up goes once the read works"
+        );
     }
 
     #[test]
