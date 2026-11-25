@@ -346,8 +346,8 @@ pub(crate) fn origin_slug(cwd: &Path, git_ceiling: Option<&Path>) -> Result<Stri
             if let Some(ceiling) = git_ceiling {
                 raw.env("GIT_CEILING_DIRECTORIES", ceiling);
             }
-            let out = raw.output().ok().filter(|o| o.status.success())?;
-            parse_origin_slug(String::from_utf8_lossy(&out.stdout).trim())
+            let run = crate::gate_probes::run_probe(raw).filter(|r| r.ok)?;
+            parse_origin_slug(run.stdout.trim())
         })
         .ok_or_else(|| format!("origin is not a github remote: {}", redact_userinfo(&url)))
 }
