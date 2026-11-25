@@ -3500,6 +3500,12 @@ mod user_hours_tests {
         hours.away_until = Some(TUE_NOON + 3600);
         assert!(hours.away(TUE_NOON));
         assert!(!hours.away(TUE_NOON + 3600), "the override ends by itself");
+        {
+            let hours = degraded_hours(Some(TUE_NOON + 3600));
+            assert!(hours.away(TUE_NOON));
+            assert!(!hours.away(TUE_NOON + 3600));
+            assert!(!degraded_hours(None).away(TUE_NOON));
+        }
     }
 
     #[test]
@@ -3511,6 +3517,10 @@ mod user_hours_tests {
         assert_eq!(at("2026-11-25 12:00").unwrap(), TUE_NOON + 86_400);
         assert!(at("yesterday").is_err());
         assert!(at("-5m").is_err(), "a time in the past is refused");
+        {
+            assert!(parse_away_until("9223372036854775807h", "UTC", TUE_NOON).is_err());
+            assert!(parse_away_until("9223372036854775807d", "UTC", TUE_NOON).is_err());
+        }
     }
 
     #[test]
@@ -3542,14 +3552,6 @@ mod user_hours_tests {
     }
 
     #[test]
-    fn a_refused_config_still_honors_an_explicit_away() {
-        let hours = degraded_hours(Some(TUE_NOON + 3600));
-        assert!(hours.away(TUE_NOON));
-        assert!(!hours.away(TUE_NOON + 3600));
-        assert!(!degraded_hours(None).away(TUE_NOON));
-    }
-
-    #[test]
     fn an_expired_away_reads_as_none_and_is_left_alone() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("user-away.json");
@@ -3559,11 +3561,5 @@ mod user_hours_tests {
         assert!(path.exists(), "an expired file is never deleted by a read");
         std::fs::write(&path, "{\"until_epoch\": 9000}\n").unwrap();
         assert_eq!(read_away_until_at(&path, 200), Some(9000));
-    }
-
-    #[test]
-    fn an_away_length_too_large_to_add_is_refused() {
-        assert!(parse_away_until("9223372036854775807h", "UTC", TUE_NOON).is_err());
-        assert!(parse_away_until("9223372036854775807d", "UTC", TUE_NOON).is_err());
     }
 }

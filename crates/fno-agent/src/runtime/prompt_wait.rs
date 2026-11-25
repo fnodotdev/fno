@@ -970,24 +970,6 @@ mod tests {
     }
 
     #[test]
-    fn a_registry_that_cannot_load_keeps_the_follow_up_pending() {
-        let rig = Rig::new();
-        rig.asleep.set(true);
-        let path = rig.home.registry_json();
-        let good = std::fs::read(&path).unwrap();
-        std::fs::write(&path, "not json").unwrap();
-        assert!(rig.pass(1_000_000).is_err());
-        assert_eq!(raw_sends(&rig), 0);
-        std::fs::write(&path, good).unwrap();
-        let _ = rig.pass(1_000_000 + 60_000);
-        assert_eq!(
-            raw_sends(&rig),
-            1,
-            "the pending follow-up goes once the registry reads"
-        );
-    }
-
-    #[test]
     fn an_identical_re_asked_prompt_is_denied_again() {
         let rig = Rig::new();
         let t0 = 1_000_000;
@@ -1027,6 +1009,22 @@ mod tests {
         let line = raw.first().and_then(|a| a.last()).unwrap();
         assert!(line.starts_with("/fno:target x-77 "), "{line}");
         assert!(line.contains("route that needs no approval"), "{line}");
+        {
+            let rig = Rig::new();
+            rig.asleep.set(true);
+            let path = rig.home.registry_json();
+            let good = std::fs::read(&path).unwrap();
+            std::fs::write(&path, "not json").unwrap();
+            assert!(rig.pass(1_000_000).is_err());
+            assert_eq!(raw_sends(&rig), 0);
+            std::fs::write(&path, good).unwrap();
+            let _ = rig.pass(1_000_000 + 60_000);
+            assert_eq!(
+                raw_sends(&rig),
+                1,
+                "the pending follow-up goes once the registry reads"
+            );
+        }
     }
 
     #[test]
@@ -1054,7 +1052,7 @@ mod tests {
     }
 
     #[test]
-    fn denials_older_than_a_day_no_longer_count_as_a_repeat() {
+    fn the_denial_counter_expires_after_a_day_and_reads_a_damaged_file_as_the_limit() {
         let temp = tempfile::tempdir().unwrap();
         let home = AgentsHome::at(temp.path().join("agents"));
         assert_eq!(denial_count(&home, "x-1", "fp", 0).unwrap(), 1);
@@ -1062,6 +1060,14 @@ mod tests {
         assert_eq!(denial_count(&home, "x-1", "other", 60_000).unwrap(), 1);
         let later = REPEAT_WINDOW_MS + 120_000;
         assert_eq!(denial_count(&home, "x-1", "fp", later).unwrap(), 1);
+        {
+            let temp = tempfile::tempdir().unwrap();
+            let home = AgentsHome::at(temp.path().join("agents"));
+            let dir = home.root().join("prompt-denials");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("x-1.json"), "not json").unwrap();
+            assert_eq!(denial_count(&home, "x-1", "fp", 0).unwrap(), REPEAT_DENIALS);
+        }
     }
 
     fn raw_sends(rig: &Rig) -> usize {
@@ -1074,20 +1080,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unclean_denial_follows_up_once_the_screen_is_idle() {
-        let rig = Rig::new();
-        rig.asleep.set(true);
-        rig.idle.set(false);
-        *rig.outcome.borrow_mut() = Some(DenyOutcome::Typed(Some("unconfirmed".into())));
-        assert!(rig.pass(1_000_000).is_err());
-        assert_eq!(raw_sends(&rig), 0, "not idle, so nothing typed");
-        rig.idle.set(true);
-        let _ = rig.pass(1_000_000 + 60_000);
-        assert_eq!(raw_sends(&rig), 1, "idle now, so the one follow-up goes");
-    }
-
-    #[test]
-    fn the_follow_up_waits_for_an_idle_prompt_line() {
+    fn the_follow_up_waits_for_an_idle_prompt_and_retries_a_failed_send() {
         let rig = Rig::new();
         rig.asleep.set(true);
         rig.idle.set(false);
@@ -1101,26 +1094,25 @@ mod tests {
         rig.pass(1_000_000 + 60_000).unwrap();
         assert_eq!(raw_sends(&rig), 1);
         assert_eq!(rig.typed.borrow().len(), 1, "the wait did not restart");
-    }
-
-    #[test]
-    fn a_failed_follow_up_send_is_tried_again() {
-        let rig = Rig::new();
-        rig.asleep.set(true);
-        rig.fail_raw.set(1);
-        assert!(rig.pass(1_000_000).is_err());
-        rig.pass(1_000_000 + 60_000).unwrap();
-        assert_eq!(raw_sends(&rig), 2, "the second send landed");
-        assert_eq!(rig.typed.borrow().len(), 1, "no second denial");
-    }
-
-    #[test]
-    fn an_unreadable_denial_counter_reads_as_at_the_limit() {
-        let temp = tempfile::tempdir().unwrap();
-        let home = AgentsHome::at(temp.path().join("agents"));
-        let dir = home.root().join("prompt-denials");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("x-1.json"), "not json").unwrap();
-        assert_eq!(denial_count(&home, "x-1", "fp", 0).unwrap(), REPEAT_DENIALS);
+        {
+            let rig = Rig::new();
+            rig.asleep.set(true);
+            rig.fail_raw.set(1);
+            assert!(rig.pass(1_000_000).is_err());
+            rig.pass(1_000_000 + 60_000).unwrap();
+            assert_eq!(raw_sends(&rig), 2, "the second send landed");
+            assert_eq!(rig.typed.borrow().len(), 1, "no second denial");
+        }
+        {
+            let rig = Rig::new();
+            rig.asleep.set(true);
+            rig.idle.set(false);
+            *rig.outcome.borrow_mut() = Some(DenyOutcome::Typed(Some("unconfirmed".into())));
+            assert!(rig.pass(1_000_000).is_err());
+            assert_eq!(raw_sends(&rig), 0, "not idle, so nothing typed");
+            rig.idle.set(true);
+            let _ = rig.pass(1_000_000 + 60_000);
+            assert_eq!(raw_sends(&rig), 1, "idle now, so the one follow-up goes");
+        }
     }
 }
