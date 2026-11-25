@@ -33,6 +33,7 @@ pub(crate) mod page;
 pub(crate) mod picker;
 pub(crate) mod search;
 pub(crate) mod table;
+pub(crate) use table::display_kind;
 
 pub(crate) use table::Slot;
 
@@ -88,7 +89,7 @@ pub(crate) struct FeedOverlay {
 /// as its group (`recent` was the flat list).
 fn initial_view() -> table::TableView {
     if let Some(pref) = crate::view_store::load_feed_view() {
-        return table::TableView::from_pref(&pref);
+        return table::from_pref(&pref);
     }
     let mut view = table::TableView::default();
     if crate::view_store::load_feed_order().as_deref() == Some("recent") {
@@ -139,7 +140,7 @@ pub(crate) fn open_overlay(prior: Option<FeedOverlay>, gen: u64) -> FeedOverlay 
 /// change to any of the three calls this, and nothing else writes `slots`.
 pub(crate) fn reslot(f: &mut FeedOverlay) {
     let started = Instant::now();
-    let ctx = crate::feed_overlay::EventCtx::from_rows(&[], &[]);
+    let ctx = crate::feed_overlay::EventCtx::default();
     let query = match &f.parsed {
         Some(Ok(parsed)) => Some(parsed),
         _ => None,
@@ -209,31 +210,6 @@ impl ValueWidths {
             session: w.session.min(8),
             lead: w.lead.min(12),
         }
-    }
-}
-
-/// True when a row renders in the teams band: a team kind, or a removal
-/// that names the team it held.
-fn in_teams_band(kind: &str, team: &Option<crate::feed_overlay::IStr>) -> bool {
-    kind == "team_granted" || kind == "team_vacated" || (kind == "session_reaped" && team.is_some())
-}
-
-/// ts sort key, the projection's own shape.
-fn ts_key_of(ts: &str) -> (u8, i64) {
-    match chrono::DateTime::parse_from_rfc3339(ts) {
-        Ok(t) => (1, t.timestamp_millis()),
-        Err(_) => (0, 0),
-    }
-}
-
-/// The kind as printed. The ship event renamed to `node_shipped` (ruling
-/// 2026-09-29); the projection derives rows at read time, so only a string
-/// embedded in an older surface spells the old name - this is the one reader.
-pub(crate) fn display_kind(kind: &str) -> &str {
-    if kind == "pr_created" {
-        "node_shipped"
-    } else {
-        kind
     }
 }
 
@@ -1449,7 +1425,7 @@ fn open_values_picker(view: &mut View, col: table::Col) {
     let Some(f) = view.feed.as_mut() else {
         return;
     };
-    let ctx = crate::feed_overlay::EventCtx::from_rows(&[], &[]);
+    let ctx = crate::feed_overlay::EventCtx::default();
     let query = match &f.parsed {
         Some(Ok(parsed)) => Some(parsed),
         _ => None,
@@ -1483,7 +1459,7 @@ pub(crate) fn change_view(view: &mut View, change: impl FnOnce(&mut table::Table
         _ => None,
     };
     change(&mut f.view);
-    crate::view_store::save_feed_view(&f.view.to_pref());
+    crate::view_store::save_feed_view(&table::to_pref(&f.view));
     reslot(f);
     f.sel = keep
         .and_then(|i| f.slots.iter().position(|s| *s == Slot::Item(i)))

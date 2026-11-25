@@ -21,13 +21,13 @@ impl FeedWindow {
     /// newer than the previous newest add to `new_count`; at the top they
     /// are simply on screen and the count clears.
     pub fn land(&mut self, rows: Vec<FeedItem>, detached: bool) {
-        let newest = self.items.last().map(|r| super::ts_key_of(&r.ts));
+        let newest = self.items.last().map(|r| super::table::ts_key_of(&r.ts));
         self.new_count = match (detached, newest) {
             (true, Some(newest)) => {
                 self.new_count
                     + rows
                         .iter()
-                        .filter(|r| super::ts_key_of(&r.ts) > newest)
+                        .filter(|r| super::table::ts_key_of(&r.ts) > newest)
                         .count()
             }
             _ => 0,

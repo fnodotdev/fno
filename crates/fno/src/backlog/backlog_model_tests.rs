@@ -477,7 +477,7 @@ fn cards_carry_created_at_for_the_list_rows() {
         harness: Some("claude".into()),
         ..Default::default()
     }];
-    inp2.sessions = crate::search_query::SessionDirectory::from_registry(&roster);
+    inp2.sessions = crate::search_query::session_directory(&roster);
     let by_ref = board_refs(&inp2);
     let order = order_of(&inp2);
     let row_a2 = inp2

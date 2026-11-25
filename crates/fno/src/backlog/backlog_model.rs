@@ -2167,7 +2167,7 @@ pub fn read_search_sources(inp: &mut Inputs, want_questions: bool) {
                     .ok_or_else(|| "the registry rows did not parse".to_string())
             });
         match read {
-            Ok(rows) => inp.sessions = crate::search_query::SessionDirectory::from_registry(&rows),
+            Ok(rows) => inp.sessions = crate::search_query::session_directory(&rows),
             Err(e) => {
                 if !inp.errors.iter().any(|e| e.contains("names unavailable")) {
                     inp.errors.push(format!("names unavailable: {e}"));

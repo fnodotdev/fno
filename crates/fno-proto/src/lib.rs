@@ -36,6 +36,11 @@ pub mod pack;
 #[cfg(feature = "vt")]
 pub mod vt_text;
 
+/// The activity feed's shared search grammar, row and table. Behind the
+/// `feed` feature so a plain wire client never links chrono.
+#[cfg(feature = "feed")]
+pub mod feed;
+
 /// `#[serde(default = ...)]` helper for a field whose omitted default is `true`
 /// rather than serde's `bool` default of `false` (`PaneSplit.no_focus`).
 fn default_true() -> bool {

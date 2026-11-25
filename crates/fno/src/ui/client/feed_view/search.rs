@@ -102,7 +102,7 @@ pub(crate) fn complete(text: &str, items: &[crate::feed_overlay::FeedItem]) -> O
         "l" | "lead" => "lead",
         _ => return None,
     };
-    let ctx = crate::feed_overlay::EventCtx::from_rows(&[], &[]);
+    let ctx = crate::feed_overlay::EventCtx::default();
     let mut vals: Vec<String> = Vec::new();
     for it in items {
         for v in crate::feed_overlay::event_fields(it, &ctx)
