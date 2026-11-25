@@ -2007,10 +2007,11 @@ impl Core {
         true
     }
 
-    /// The revive plan landed, staged in `reentry_verdict`: spawn its argv and swap it into the parked
-    /// seat, the same swap the resume re-attach makes for a viewer whose job
-    /// restarted. The seat must still be parked; a seat the operator closed
-    /// or filled while the plan resolved is left alone.
+    /// The revive plan landed, staged in `reentry_verdict`: spawn its argv
+    /// and swap it into the parked seat, the same swap the resume re-attach
+    /// makes for a viewer whose job restarted. The seat must still be
+    /// parked; a seat the operator closed or filled while the plan resolved
+    /// is left alone.
     pub(super) fn finish_seat_revive(&mut self, client_id: u64, pid: u64) {
         let Some(verdict) = self.reentry_verdict.take() else {
             return;
