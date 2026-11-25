@@ -127,6 +127,7 @@ fn band_of(
         .filter(|(_, name)| {
             model == name.as_str()
                 || model.starts_with(name.as_str())
+                || name.contains(model)
                 || ask
                     .reach
                     .get(name.as_str())
@@ -180,6 +181,8 @@ mod tests {
         assert!(verdict("high", None, Some("claude-opus-5-5")).is_ok());
         assert!(verdict("medium", Some("zai/glm-5.3-flash[1m]"), None).is_ok());
         assert!(verdict("high", None, Some("claude-opus-5-9")).is_ok());
+        assert!(verdict("high", None, Some("opus")).is_ok());
+        assert!(verdict("high", None, Some("haiku")).is_err());
     }
 
     #[test]
