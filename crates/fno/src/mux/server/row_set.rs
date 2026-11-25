@@ -589,7 +589,9 @@ impl Core {
         }
 
         // 2. Watch-only appendix: registry rows no pane claimed.
-        let mut unwatched = Vec::new();
+        // The rows the sideline leaves out, by place in `out`: never by name,
+        // since an exited and a live row can share one.
+        let mut off_sideline_at = Vec::new();
         for (i, a) in self.agents.iter().enumerate() {
             // Only a session a person can type into gets a sideline row. A
             // headless run shows in the shell that started it: its registry
@@ -598,12 +600,10 @@ impl Core {
             // row is still built, for the sidecar below, and leaves `out` after it.
             let off_sideline =
                 !consumed[i] && a.substrate.as_deref() == Some("headless") && !a.watch;
-            if off_sideline {
-                unwatched.push(a.name.clone());
-            }
             if consumed[i] {
                 continue;
             }
+            let at = out.len();
             match &a.mux {
                 Some((sess, pane)) => {
                     // A row hosted in ANOTHER session is that server's to render.
@@ -832,6 +832,9 @@ impl Core {
                     })
                 }
             }
+            if off_sideline {
+                off_sideline_at.push(at);
+            }
         }
         // 3.  Tombstone members DECORATE the row their registry entry
         //    already produced; they no longer mint rows of their own. The old
@@ -1006,8 +1009,11 @@ impl Core {
             });
         }
         // The sidecar above filed every session's counts, so the remote card
-        // of a hidden run keeps them. The sideline leaves the run out.
-        out.retain(|row| row.pane_id.is_some() || !unwatched.contains(&row.name));
+        // of a hidden run keeps them. The sideline leaves the run out. The
+        // removals run last place first, so each one keeps the others true.
+        for at in off_sideline_at.iter().rev() {
+            out.remove(*at);
+        }
         out
     }
 
