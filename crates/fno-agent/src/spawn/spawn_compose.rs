@@ -648,9 +648,10 @@ fn compose_body(inputs: &Inputs, scan: Axes, seam: &mut Seam) {
 /// `agents.profiles.<command>.min_band`: refuse a spawn whose resolved model
 /// bands below the floor, a typed pin included. No key, no read.
 fn floor_stage(stage: &Stage, seam: &mut Seam) {
-    let Some(floor) = stage.profile.and_then(|p| p.get("min_band")) else {
+    if !stage.profile.is_some_and(|p| p.contains_key("min_band")) {
         return;
-    };
+    }
+    let floor = toml::Value::String(cfg_str(stage.profile, "min_band"));
     let scan = &stage.scan;
     let injected = seam
         .inject
@@ -697,7 +698,7 @@ fn floor_stage(stage: &Stage, seam: &mut Seam) {
     let (tiers, reach) = crate::route_gather::load_model_tiers();
     let verdict = crate::spawn_floor::check(&crate::spawn_floor::Ask {
         command: &stage.profile_command,
-        floor,
+        floor: &floor,
         route: route.as_deref(),
         model: model.as_deref(),
         vendor: vendor.as_deref(),
