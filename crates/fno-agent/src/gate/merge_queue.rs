@@ -349,9 +349,9 @@ pub(crate) enum Provider {
 }
 
 fn provider(cwd: &Path) -> Provider {
-    match crate::agents_config::config_value_deep(cwd, &["merge_queue", "provider"])
-        .and_then(|v| v.as_str())
-    {
+    let word = crate::agents_config::config_value_deep(cwd, &["merge_queue", "provider"])
+        .and_then(|v| v.as_str().map(str::to_string));
+    match word.as_deref() {
         Some("github") => Provider::Github,
         Some("fno") => Provider::Fno,
         Some("off") => Provider::Off,
@@ -386,10 +386,9 @@ pub(crate) fn queue_kind(cwd: &Path) -> Option<QueueKind> {
 /// GitHub's queue, so the name is per-repo config, not a const.
 pub(crate) fn gate_workflow(cwd: &Path) -> String {
     crate::agents_config::config_value_deep(cwd, &["merge_queue", "gate_workflow"])
-        .and_then(|v| v.as_str())
+        .and_then(|v| v.as_str().map(str::to_string))
         .filter(|s| s.ends_with(".yml") || s.ends_with(".yaml"))
-        .unwrap_or(GATE_WORKFLOW)
-        .to_string()
+        .unwrap_or_else(|| GATE_WORKFLOW.to_string())
 }
 
 /// The auto pick. GitHub's queue on a repo that can have one: public and
@@ -457,8 +456,12 @@ fn repo_facts(root: &Path) -> Option<RepoFacts> {
 
 /// A private repo queues on GitHub only under an Enterprise Cloud org.
 fn org_plan_is_enterprise(root: &Path, owner: &str) -> bool {
-    let raw = gh(root, &format!("orgs/{owner}"), &[]).ok()?;
-    let v: Value = serde_json::from_str(&raw).ok()?;
+    let Ok(raw) = gh(root, &format!("orgs/{owner}"), &[]) else {
+        return false;
+    };
+    let Ok(v) = serde_json::from_str::<Value>(&raw) else {
+        return false;
+    };
     text(&v, "/plan/name") == "enterprise"
 }
 

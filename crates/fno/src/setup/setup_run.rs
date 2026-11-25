@@ -1023,12 +1023,11 @@ fn step_merge_queue(_exe: &Path, root: &Path, rep: &mut Report) {
         return;
     }
     let gate = value("merge_queue.gate_workflow")
-        .and_then(|v| v.as_str())
-        .unwrap_or("merge-queue-gate.yml")
-        .to_string();
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_else(|| "merge-queue-gate.yml".to_string());
     let provider = value("merge_queue.provider")
-        .and_then(|v| v.as_str())
-        .unwrap_or("auto");
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_else(|| "auto".to_string());
     if provider == "github" {
         // GitHub's queue needs repo-admin ruleset work fno cannot do
         // without the scope: the exact command is the deliverable. Setup
