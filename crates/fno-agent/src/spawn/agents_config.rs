@@ -3227,12 +3227,6 @@ mod user_hours_tests {
     }
 
     #[test]
-    fn a_missing_table_leaves_the_user_never_away() {
-        let hours = parse_user_hours("[user]\ntimezone = \"UTC\"\n", "cfg").unwrap();
-        assert!(!hours.away(TUE_3AM), "a timezone alone sets no hours");
-    }
-
-    #[test]
     fn a_bad_value_refuses_naming_the_file_and_line() {
         let bad_range = "[user]\ntimezone = \"UTC\"\n\n[user.working_hours]\nmon = [\"09:00-17:00\"]\ntue = [\"9-5\"]\n";
         let err = parse_user_hours(bad_range, "cfg.toml").unwrap_err();

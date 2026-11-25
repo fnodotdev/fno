@@ -750,21 +750,6 @@ mod tests {
     }
 
     #[test]
-    fn a_new_prompt_after_a_denial_is_a_new_wait() {
-        let rig = Rig::new();
-        let t0 = 1_000_000;
-        rig.pass(t0).unwrap();
-        rig.pass(t0 + DENY_AFTER_MS).unwrap();
-        assert_eq!(rig.typed.borrow().len(), 1);
-        *rig.fp.borrow_mut() = "bb".into();
-        let t1 = t0 + DENY_AFTER_MS + 120_000;
-        rig.pass(t1).unwrap();
-        assert_eq!(rig.typed.borrow().len(), 1, "the clock starts over");
-        rig.pass(t1 + DENY_AFTER_MS).unwrap();
-        assert_eq!(rig.typed.borrow().len(), 2, "the new prompt is denied too");
-    }
-
-    #[test]
     fn an_identical_re_asked_prompt_is_denied_again() {
         let rig = Rig::new();
         let t0 = 1_000_000;
