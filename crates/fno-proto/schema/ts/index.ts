@@ -14,6 +14,7 @@ export * from "./BacklogCommand";
 export * from "./BlockDir";
 export * from "./BlockMeta";
 export * from "./BlockSel";
+export * from "./BlockSpan";
 export * from "./BuildMark";
 export * from "./BuildStage";
 export * from "./CardState";
