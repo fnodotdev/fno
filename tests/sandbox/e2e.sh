@@ -427,6 +427,17 @@ while read -r _ kind name verdict; do
   esac
 done < <(grep -h '^PROBE ' "$loop_out" "$loop_err")
 grep -h '^LOOP_STOP ' "$loop_out" "$loop_err" || true
+# The host Stop must resolve the manifest the host start wrote: a miss
+# blocks safely, but it also means an honest finish could never be allowed.
+find "$HOME/.fno/spaces" -name target-state.md -path '*/worktrees/*' 2>/dev/null | while read -r f; do
+  echo "HOST_MANIFEST $f"
+  grep -E '^(harness|harness_session_id|claude_session_id|graph_node_id):' "$f"
+done
+if grep -h '^LOOP_STOP ' "$loop_out" "$loop_err" | grep -q 'no manifest names session'; then
+  required "the host Stop resolved the sandbox manifest" false
+else
+  required "the host Stop resolved the sandbox manifest" true
+fi
 required "the loop stub ran its probes" test "$(cat "$loop_out" "$loop_err" | grep -c '^PROBE ')" -ge 20
 # AC8-HP: the host credential did the work; the branch landed on origin.
 branch="$(git -C "$bare" for-each-ref --format='%(refname:short)' refs/heads/ | grep -v '^main$' | head -1)"
