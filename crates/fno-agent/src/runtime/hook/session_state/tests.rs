@@ -204,28 +204,34 @@ fn a_done_fire_shortens_the_conversation_hold_to_the_grace() {
             json!([crate::mail_hold::tests::registry_row("worker", SID)]),
         );
         crate::mail_hold::arm_conversation(SID);
+        // The conversation hold's end, or None when no conversation hold is live.
         let until = || {
-            let status = crate::mail_hold::self_status(SID).unwrap();
-            assert_eq!(status["conversation"], true, "{status}");
-            chrono::DateTime::parse_from_rfc3339(status["clock_until"].as_str().unwrap())
-                .unwrap()
-                .with_timezone(&chrono::Utc)
+            let status = crate::mail_hold::self_status(SID).ok()?;
+            (status["conversation"] == true).then_some(())?;
+            chrono::DateTime::parse_from_rfc3339(status["clock_until"].as_str()?).ok()
         };
         let armed = until();
         let payload = json!({"session_id": SID});
         process("pi", "PreToolUse", &payload);
-        assert_eq!(until(), armed, "a working fire never shortens the hold");
+        let after_working = until();
         process("pi", "Stop", &payload);
+        let after_done = until();
         let grace = chrono::Utc::now() + chrono::Duration::seconds(crate::mail_hold::GRACE_S + 1);
-        assert!(
-            until() <= grace,
-            "the turn end shortens the hold to the grace"
-        );
+        // Restore before asserting, so a failed assert cannot leak the env.
         for (k, v) in saved {
             match v {
                 Some(v) => std::env::set_var(k, v),
                 None => std::env::remove_var(k),
             }
         }
+        assert!(armed.is_some(), "the arm writes a conversation hold");
+        assert_eq!(
+            after_working, armed,
+            "a working fire never shortens the hold"
+        );
+        assert!(
+            after_done.is_some_and(|t| t <= grace),
+            "the turn end shortens the hold to the grace: {after_done:?}"
+        );
     });
 }
