@@ -4,6 +4,7 @@
 //! pin. Characterized by the `policy_*` and `dispatch_pin_*` goldens.
 
 use super::{expanduser, resolve_lenient, sorted_json, state_root};
+use crate::backlog::settings::PrefixError;
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 
@@ -581,8 +582,8 @@ pub(crate) fn events_journal() -> PathBuf {
 /// will not read or parse is an `Err` naming the file, so no caller guesses;
 /// an absent key or a bare fresh install answers the documented default.
 /// The trailing dash normalizes here, once.
-pub fn node_id_prefix(repo_root: &Path) -> Result<String, String> {
-    let merged = merged_config(&resolve_lenient(repo_root))?;
+pub fn node_id_prefix(repo_root: &Path) -> Result<String, PrefixError> {
+    let merged = merged_config(&resolve_lenient(repo_root)).map_err(PrefixError)?;
     let raw = merged
         .get("backlog")
         .and_then(Value::as_object)
@@ -592,10 +593,10 @@ pub fn node_id_prefix(repo_root: &Path) -> Result<String, String> {
         .unwrap_or(crate::backlog::settings::DEFAULT_NODE_ID_PREFIX);
     let trimmed = raw.trim_end_matches('-');
     if !crate::backlog::node_ref::valid_prefix_word(trimmed) {
-        return Err(format!(
+        return Err(PrefixError(format!(
             "backlog.id_prefix = {raw:?} is not a prefix word (a lowercase letter \
              first, lowercase letters and digits, up to 7 chars)"
-        ));
+        )));
     }
     Ok(trimmed.to_string())
 }

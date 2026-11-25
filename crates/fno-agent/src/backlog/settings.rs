@@ -73,19 +73,27 @@ pub(crate) fn candidates_at(cwd: Option<&std::path::Path>) -> Vec<PathBuf> {
     out
 }
 
+/// Why an id-prefix resolution refused: the config file named in the
+/// message exists but will not read or parse, or the configured value is
+/// not a prefix word.
+#[derive(Debug, thiserror::Error, PartialEq)]
+#[error("{0}")]
+pub struct PrefixError(pub String);
+
 /// Parse one config file into a JSON value: TOML by suffix, YAML otherwise.
 /// `Err` names the path when the file exists but will not read or parse;
 /// the loud prefix resolver needs that split and the best-effort readers
 /// cannot carry it.
-fn read_flat_result(path: &std::path::Path) -> Result<Value, String> {
-    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+fn read_flat_result(path: &std::path::Path) -> Result<Value, PrefixError> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| PrefixError(format!("{}: {e}", path.display())))?;
     if path.extension().is_some_and(|e| e == "toml") {
         text.parse::<toml::Value>()
-            .map_err(|e| format!("{}: {e}", path.display()))
+            .map_err(|e| PrefixError(format!("{}: {e}", path.display())))
             .map(|v| serde_json::to_value(v).unwrap_or(Value::Null))
     } else {
         serde_yaml_ng::from_str::<serde_json::Value>(&text)
-            .map_err(|e| format!("{}: {e}", path.display()))
+            .map_err(|e| PrefixError(format!("{}: {e}", path.display())))
     }
 }
 
@@ -117,7 +125,7 @@ pub const DEFAULT_NODE_ID_PREFIX: &str = "x";
 /// no answer at all is the documented default. The configured value is
 /// trimmed of its trailing dash and shape-checked here, once, so the `x`
 /// and `x-` spellings behave identically at every reader.
-pub(crate) fn resolved_node_id_prefix_over(paths: &[PathBuf]) -> Result<String, String> {
+pub(crate) fn resolved_node_id_prefix_over(paths: &[PathBuf]) -> Result<String, PrefixError> {
     for path in paths {
         if !path.exists() {
             continue;
@@ -133,11 +141,11 @@ pub(crate) fn resolved_node_id_prefix_over(paths: &[PathBuf]) -> Result<String, 
         }
         let trimmed = prefix.trim_end_matches('-');
         if !crate::backlog::node_ref::valid_prefix_word(trimmed) {
-            return Err(format!(
+            return Err(PrefixError(format!(
                 "backlog.id_prefix = {prefix:?} in {} is not a prefix word (a lowercase \
                  letter first, lowercase letters and digits, up to 7 chars)",
                 path.display()
-            ));
+            )));
         }
         return Ok(trimmed.to_string());
     }
@@ -145,7 +153,7 @@ pub(crate) fn resolved_node_id_prefix_over(paths: &[PathBuf]) -> Result<String, 
 }
 
 /// The one id-prefix resolution: the loud `Err` the mint must refuse on.
-pub fn resolved_node_id_prefix() -> Result<String, String> {
+pub fn resolved_node_id_prefix() -> Result<String, PrefixError> {
     resolved_node_id_prefix_over(&candidates())
 }
 
@@ -915,7 +923,7 @@ mod tests {
         let cfg = dir.path().join("broken.toml");
         std::fs::write(&cfg, "backlog.id_prefix = [ not toml").unwrap();
         let err = resolved_node_id_prefix_over(&[cfg]).unwrap_err();
-        assert!(err.contains("broken.toml"), "{err}");
+        assert!(err.0.contains("broken.toml"), "{err}");
     }
 
     #[test]
