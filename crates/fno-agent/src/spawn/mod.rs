@@ -10,6 +10,7 @@ pub mod agents_config;
 pub mod agy_ask;
 pub mod agy_launch;
 pub mod ask_project;
+pub mod auto_approve;
 pub(crate) mod bounded_spawn;
 pub(crate) mod cap_liveness;
 pub mod capability_leaves;

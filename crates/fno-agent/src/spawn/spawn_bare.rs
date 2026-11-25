@@ -831,12 +831,19 @@ pub fn pre_gate(
                 .collect()
         })
         .unwrap_or_default();
-    let written =
-        crate::route_settings::write_composed(&env, &Map::new(), Some(sandbox), None, None, cwd)
-            .map_err(|e| {
-                eprintln!("fno agent spawn: {e}");
-                2
-            })?;
+    let written = crate::route_settings::write_composed(
+        &env,
+        &Map::new(),
+        Some(sandbox),
+        None,
+        None,
+        cwd,
+        None,
+    )
+    .map_err(|e| {
+        eprintln!("fno agent spawn: {e}");
+        2
+    })?;
     match (route, written) {
         (Some(route), Some(path)) => {
             route.settings = path;
