@@ -4041,6 +4041,7 @@ impl View {
     /// Pure - all the drawing machinery (row diff, styles, wide-spacer
     /// handling) stays in [`Compositor`].
     fn compose(&self) -> Frame {
+        crate::paint_stats::mark_compose_start();
         self.compose_at(Instant::now())
     }
 
@@ -5941,6 +5942,7 @@ async fn attach_and_run(
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
+    crate::paint_stats::init(&session);
     let mut view = View::new((rows, cols), session, LayoutView::default());
     org_board::boot_sideline(&mut view);
     // Latch the focus-follows-mouse off-switch once; a direct
