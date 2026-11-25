@@ -276,7 +276,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_SPAWN_GATE` | rs | unclear: crates/fno-agent/src/backlog/dispatch_resolve.rs:911 |
 | `FNO_SPAWN_ORIGIN` | rs | Explicit dispatch-origin JSON the spawn door validates onto the request; malformed refuses. |
 | `FNO_SPAWN_OWNER` | rs | Explicit dispatch-owner JSON the spawn door validates onto the request; must be exported together with FNO_SPAWN_ORIGIN. |
-| `FNO_SPAWN_SHOW_ROW` | rs | Set to `1` by the front door's `fno agent spawn --mux`. The headless claude lane then keeps the run's registry row, so the one-shot shows in the mux while it runs. Never passed on to the child. |
+| `FNO_SPAWN_SHOW_ROW` | rs | Set to `1` by the front door's `fno agent spawn --mux`. The headless claude lane then keeps the run's registry row, so the one-shot shows in the mux while it runs. The row carries the watch mark, and the sideline shows no headless row without it. The claude lane takes the variable off the child. The other lanes leave it, and a child that reports its own row reads it as the watch mark. |
 | `FNO_SPAWN_TAKE_OVER` | rs | Refusal marker only: nothing sets it, so a read means a forgery or a stale leak, and the compose door refuses the spawn. The take-over reason rides the compose answer, never the environment. |
 | `FNO_SPAWN_TRIGGER` | rs | unclear: crates/fno-agent/src/spawn/pane_spawn/mod.rs:1440 |
 | `FNO_STATE_DIR` | rs | Pins fno's config state root: `state_dir` and `locks_dir` read it ahead of their config/`$HOME` defaults, and the Rust default graph path and the backlog porcelain reads serve from it ahead of config. `accounts::credentials::seal` sets it around a forwarded HOME so a spawned worker's graph, ledger, and locks stay on the parent's root. |

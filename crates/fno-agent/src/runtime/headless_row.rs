@@ -14,11 +14,14 @@ use crate::AgentStatus;
 /// no row holds the name yet (the child's report has not landed). The child
 /// pid plus its start time give the sweep a positive death proof; the
 /// substrate stamp is what makes every later arm read the row as one-shot.
+/// Every caller stamps under the `fno agent spawn --mux` opt-in, so the row
+/// is one a person asked to watch and keeps its sideline place.
 pub fn stamp_spawn(home: &AgentsHome, name: &str, harness: &str, cwd: &str, pid: u32) {
     let start = crate::process_probe::process_start_time(pid);
     let updated = state::update_registry(&home.registry_json(), |reg| {
         if let Some(entry) = row_named(&mut reg.entries, name) {
             entry.substrate = Some("headless".to_string());
+            entry.watch = true;
             entry.pid = Some(pid);
             entry.pid_start_time = start;
             // A repeat name is a new incarnation: re-open a terminal row so
@@ -35,6 +38,7 @@ pub fn stamp_spawn(home: &AgentsHome, name: &str, harness: &str, cwd: &str, pid:
         entry.name = name.to_string();
         entry.harness = Some(harness.to_string());
         entry.substrate = Some("headless".to_string());
+        entry.watch = true;
         entry.cwd = cwd.to_string();
         entry.status = AgentStatus::Spawning;
         entry.pid = Some(pid);
@@ -112,6 +116,7 @@ mod tests {
         let reg = state::load_registry(&home.registry_json()).unwrap();
         let row = reg.entries.iter().find(|e| e.name == "t-once").unwrap();
         assert_eq!(row.substrate.as_deref(), Some("headless"));
+        assert!(row.watch, "a row a person asked to watch keeps its place");
         assert_eq!(row.pid, Some(42));
         assert_eq!(row.status, AgentStatus::Spawning);
 

@@ -120,7 +120,8 @@ fn paneless_row_with_no_parent_edge_stays_orphaned_but_emitted() {
 
 // Only a session a person can type into gets a sideline row. A headless run
 // keeps its registry row and shows in the shell that started it, so the row
-// set emits none of it. A paneless thread row still has its row.
+// set emits none of it. A paneless thread row still has its row, and so does
+// a one-shot a person asked to watch (`fno agent spawn --mux`).
 #[test]
 fn a_headless_row_stays_off_the_sideline() {
     let mut core = empty_core();
@@ -128,9 +129,12 @@ fn a_headless_row_stays_off_the_sideline() {
     let mut once = bg_row("eval-once", "/w", None);
     once.substrate = Some("headless".into());
     let thread = bg_row("think-thread", "/w", None);
-    core.agents = vec![once, thread];
+    let mut watched = bg_row("watched-once", "/w", None);
+    watched.substrate = Some("headless".into());
+    watched.watch = true;
+    core.agents = vec![once, thread, watched];
     let names: Vec<&str> = core.agent_rows().iter().map(|r| r.name.as_str()).collect();
-    assert_eq!(names, ["think-thread"]);
+    assert_eq!(names, ["think-thread", "watched-once"]);
 }
 
 // An edge naming a session no registry row holds resolves nothing: the row

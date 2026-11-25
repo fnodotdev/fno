@@ -8573,8 +8573,8 @@ async fn selector_keys(
                 // cmd/cwd - NOT a registry entry. Arming the command there would shell
                 // `fno-agent` on a label that could collide with an unrelated
                 // agent's name and stop the wrong one. Pane-hosted rows are managed
-                // via their tab (CloseTab); only the paneless rows - the bg/headless
-                // agents that today linger until GC - are the gap this closes.
+                // via their tab (CloseTab); only the paneless rows - the bg agents and the
+                // watched headless runs that today linger until GC - are the gap this closes.
                 //
                 // An EXTERNAL row (claude-daemon roster or a persisted external
                 // tombstone) routes by stable `attach_id` to the

@@ -589,12 +589,20 @@ impl Core {
         }
 
         // 2. Watch-only appendix: registry rows no pane claimed.
+        let mut unwatched = Vec::new();
         for (i, a) in self.agents.iter().enumerate() {
             // Only a session a person can type into gets a sideline row. A
             // headless run shows in the shell that started it, and its
             // registry row stays: the session id, events and HQ lines are
-            // read by name, not through a row.
-            if consumed[i] || a.substrate.as_deref() == Some("headless") {
+            // read by name, not through a row. One a person asked to watch
+            // (`fno agent spawn --mux`) keeps its place.
+            let off_sideline =
+                !consumed[i] && a.substrate.as_deref() == Some("headless") && !a.watch;
+            if off_sideline {
+                unwatched.push(a.name.clone());
+                continue;
+            }
+            if consumed[i] {
                 continue;
             }
             match &a.mux {
@@ -998,6 +1006,10 @@ impl Core {
                 self.session.squad(sid).and_then(|sq| sq.name.clone())
             });
         }
+        // The sidecar above filed every session's counts, so the remote card
+        // of a hidden run keeps them. The sideline is the one surface that
+        // leaves the run out.
+        out.retain(|row| !unwatched.contains(&row.name));
         out
     }
 

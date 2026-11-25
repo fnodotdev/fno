@@ -106,6 +106,11 @@ fn params_object<'a>(p: &'a Map<String, Value>, key: &str) -> Option<&'a Value> 
     p.get(key).filter(|v| v.is_object())
 }
 
+/// A true flag in the report params. Absent and false read the same.
+fn flag(p: &Map<String, Value>, key: &str) -> bool {
+    p.get(key).and_then(Value::as_bool) == Some(true)
+}
+
 /// Which row a report lands on, and what the match means for the id.
 pub(crate) enum Find {
     /// `entry_holds_session` already answers true: the row records this id.
@@ -296,12 +301,10 @@ pub(crate) fn handle_session_report(
         _ => None,
     };
     let effective_claim = pane_claim.clone().or(pane_side);
-    let wait_row = p
-        .get("wait_row")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
+    let wait_row = flag(p, "wait_row")
         .then_some(WAIT_ROW_CAP)
         .unwrap_or(Duration::ZERO);
+    let watch_row = flag(p, "watch_row");
     if !wait_row.is_zero() {
         wait_for_row(
             &home.registry_json(),
@@ -320,7 +323,7 @@ pub(crate) fn handle_session_report(
     // A headless one-shot touches no row: not a mint, and not a stamp on an
     // older row that shares its name (a verifier name repeats per session),
     // which would read that row live again.
-    if p.get("no_row").and_then(Value::as_bool) == Some(true) {
+    if flag(p, "no_row") {
         return Response::ok(req.id, json!({"stored": false, "dropped": "no_row"}));
     }
 
@@ -463,6 +466,7 @@ pub(crate) fn handle_session_report(
                         ) =>
                 {
                     let mut entry = mint.entry.clone();
+                    entry.watch = watch_row;
                     entry.name = crate::native_adopt::unique_name(&r.entries, &entry.name);
                     // The report that mints the row is its first report.
                     entry.last_report_at = Some(now_stamp.clone());
@@ -1502,6 +1506,16 @@ pub async fn run_session_report(rest: &[String], home: &AgentsHome) -> i32 {
     );
     if no_row {
         params["no_row"] = Value::Bool(true);
+    }
+    // The `--mux` opt-in reaches a spawned child by env, so its row is one a
+    // person asked to watch: it keeps its sideline place.
+    let watch_row = agent_self.is_some()
+        && std::env::var(crate::claude_ask::SHOW_ROW_ENV)
+            .ok()
+            .as_deref()
+            == Some("1");
+    if watch_row {
+        params["watch_row"] = Value::Bool(true);
     }
     let (record, child_name) = claim_launch(&params, home);
     // A claimed launch record makes this an fno child even without an
