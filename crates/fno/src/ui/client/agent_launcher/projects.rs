@@ -43,6 +43,13 @@ pub fn config_projects() -> Vec<ConfigProject> {
     }
 }
 
+/// One config row as written: both keys optional, extra keys ignored.
+#[derive(serde::Deserialize)]
+struct ProjectRow {
+    name: Option<String>,
+    path: Option<String>,
+}
+
 fn projects_from(map: &BTreeMap<String, toml::Value>) -> Vec<ConfigProject> {
     let mut out: Vec<ConfigProject> = Vec::new();
     for (key, value) in map {
@@ -53,22 +60,23 @@ fn projects_from(map: &BTreeMap<String, toml::Value>) -> Vec<ConfigProject> {
             continue;
         };
         for row in rows {
-            let Some(path) = row.get("path").and_then(toml::Value::as_str) else {
+            let Ok(row) = row.clone().try_into::<ProjectRow>() else {
                 continue;
             };
-            if path.is_empty() || out.iter().any(|p| p.path == path) {
+            let Some(path) = row.path.filter(|p| !p.is_empty()) else {
+                continue;
+            };
+            if out.iter().any(|p| p.path == path) {
                 continue;
             }
             let name = row
-                .get("name")
-                .and_then(toml::Value::as_str)
+                .name
                 .filter(|n| !n.is_empty())
-                .map(str::to_string)
-                .unwrap_or_else(|| base_name(path));
+                .unwrap_or_else(|| base_name(&path));
             out.push(ConfigProject {
                 id: project_id(&name),
                 name,
-                path: path.to_string(),
+                path,
             });
         }
     }
@@ -82,17 +90,31 @@ fn base_name(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
+/// Why an add refused, in the words the composer says aloud.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddProjectError(pub String);
+
+impl std::fmt::Display for AddProjectError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for AddProjectError {}
+
 /// Register `path` as a project. A path already listed returns its row and
 /// writes nothing. The name defaults to the basename of the git toplevel
 /// over `path`, else of `path` itself. The write goes through `fno config
 /// set`, the validated writer, with every existing row carried verbatim.
-pub fn add_project(path: &str) -> Result<ConfigProject, String> {
+pub fn add_project(path: &str) -> Result<ConfigProject, AddProjectError> {
     let path = path.trim();
     if !Path::new(path).is_absolute() || !Path::new(path).is_dir() {
-        return Err(format!("{path}: not an absolute folder"));
+        return Err(AddProjectError(format!("{path}: not an absolute folder")));
     }
     let global = crate::config_defaults::global_config_path();
-    let flat = crate::config_defaults::read_flat(&global)?.unwrap_or_default();
+    let flat = crate::config_defaults::read_flat(&global)
+        .map_err(AddProjectError)?
+        .unwrap_or_default();
     if let Some(known) = projects_from(&flat).into_iter().find(|p| p.path == path) {
         return Ok(known);
     }
@@ -102,24 +124,28 @@ pub fn add_project(path: &str) -> Result<ConfigProject, String> {
             .iter()
             .filter_map(|v| serde_json::to_value(v).ok())
             .collect(),
-        Some(_) => return Err(format!("{ADD_KEY} is hand-set to a non-array value")),
+        Some(_) => {
+            return Err(AddProjectError(format!(
+                "{ADD_KEY} is hand-set to a non-array value"
+            )))
+        }
     };
     let name = base_name(&toplevel(path).unwrap_or_else(|| path.to_string()));
     rows.push(serde_json::json!({ "name": name, "path": path }));
-    let value = serde_json::to_string(&rows).map_err(|e| e.to_string())?;
+    let value = serde_json::to_string(&rows).map_err(|e| AddProjectError(e.to_string()))?;
     let bin = crate::digest_overlay::paired_bin("FNO_BIN", "fno");
     let out = std::process::Command::new(bin)
         .args(["config", "set"])
         .arg(format!("{ADD_KEY}={value}"))
         .stdin(std::process::Stdio::null())
         .output()
-        .map_err(|e| format!("fno config set: {e}"))?;
+        .map_err(|e| AddProjectError(format!("fno config set: {e}")))?;
     if !out.status.success() {
         let why = String::from_utf8_lossy(&out.stderr);
-        return Err(format!(
+        return Err(AddProjectError(format!(
             "fno config set refused: {}",
             why.lines().next().unwrap_or("no reason given")
-        ));
+        )));
     }
     Ok(ConfigProject {
         id: project_id(&name),
@@ -177,6 +203,6 @@ mod tests {
     #[test]
     fn add_refuses_a_relative_path() {
         let err = add_project("relative/dir").expect_err("relative path refuses");
-        assert!(err.contains("not an absolute folder"), "{err}");
+        assert!(err.0.contains("not an absolute folder"), "{err}");
     }
 }
