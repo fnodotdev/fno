@@ -5270,12 +5270,10 @@ impl Core {
         let origins = sq.origins.clone();
         let project = sq.project.clone();
         if name.is_empty() && key.is_empty() {
-            // First persist of an unnamed squad: derive its durable identity from
-            // its origins when it has any (stable across restarts, so a repo's
-            // home squad upserts onto one row forever -), else mint a
-            // random key (an originless squad has no stable identity). Recording
-            // it on the live squad makes every later persist in this process
-            // reuse it.
+            // First persist of an unnamed squad: derive its durable identity
+            // from its origins (stable across restarts), else mint a random
+            // key. Recording it on the live squad makes every later persist
+            // in this process reuse it.
             key = if origins.is_empty() {
                 crate::squad_store::mint_key()
             } else {
