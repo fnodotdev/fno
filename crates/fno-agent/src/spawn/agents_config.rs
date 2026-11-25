@@ -1981,6 +1981,8 @@ pub struct UserHours {
     timezone: String,
     /// Minutes-of-day ranges per weekday, Monday first; `None` when unset.
     working: Option<[Vec<(u32, u32)>; 7]>,
+    /// The one-off override: away until this epoch, whatever the hours say.
+    away_until: Option<i64>,
 }
 
 impl UserHours {
@@ -1990,12 +1992,16 @@ impl UserHours {
         Self {
             timezone: String::new(),
             working: Some(Default::default()),
+            away_until: None,
         }
     }
 
     /// True when `now_epoch` falls outside the user's working hours in their
     /// timezone (empty = the machine's local zone).
     pub fn away(&self, now_epoch: i64) -> bool {
+        if self.away_until.is_some_and(|until| now_epoch < until) {
+            return true;
+        }
         let Some(days) = &self.working else {
             return false;
         };
@@ -2155,6 +2161,7 @@ pub fn user_hours(cwd: &Path) -> Result<UserHours, String> {
             merged.working = hours.working;
         }
     }
+    merged.away_until = read_away_until(crate::provider_cap::now_epoch_secs());
     Ok(merged)
 }
 
@@ -2193,16 +2200,182 @@ pub fn user_hours_or_default(cwd: &Path) -> UserHours {
     }
 }
 
-/// `fno-agent user-hours`: one JSON line, `{"ok":true}` or
-/// `{"ok":false,"refusal":"<file>:<line>: ..."}`. `fno config doctor` reads it.
-pub fn run_user_hours(_args: &[String]) -> i32 {
+/// `fno-agent user-hours [away --until <time> | back | status]`. Bare, it
+/// prints one JSON line, `{"ok":true}` or `{"ok":false,"refusal":"<file>:<line>:
+/// ..."}`, which `fno config doctor` reads. `away` sets the one-off override,
+/// `back` ends it, and the override also ends by itself at its time.
+pub fn run_user_hours(args: &[String]) -> i32 {
     let cwd = std::env::current_dir().unwrap_or_default();
-    let answer = match user_hours(&cwd) {
-        Ok(_) => serde_json::json!({"ok": true}),
-        Err(refusal) => serde_json::json!({"ok": false, "refusal": refusal}),
+    let now = crate::provider_cap::now_epoch_secs();
+    match args.first().map(String::as_str) {
+        None => {
+            let answer = match user_hours(&cwd) {
+                Ok(_) => serde_json::json!({"ok": true}),
+                Err(refusal) => serde_json::json!({"ok": false, "refusal": refusal}),
+            };
+            println!("{answer}");
+            0
+        }
+        Some("away") => {
+            let spec = match args.get(1).map(String::as_str) {
+                Some("--until") => args.get(2).map(String::as_str),
+                _ => None,
+            };
+            let Some(spec) = spec else {
+                eprintln!("fno-agent user-hours away: --until <time> is required");
+                return 2;
+            };
+            let zone = user_hours(&cwd).map(|h| h.timezone).unwrap_or_default();
+            match parse_away_until(spec, &zone, now).and_then(|until| {
+                write_away(until, now)?;
+                Ok(until)
+            }) {
+                Ok(until) => {
+                    println!(
+                        "away until epoch {until}; `fno-agent user-hours back` ends it sooner"
+                    );
+                    0
+                }
+                Err(e) => {
+                    eprintln!("fno-agent user-hours away: {e}");
+                    2
+                }
+            }
+        }
+        Some("back") => {
+            if let Some(path) = away_state_path() {
+                let _ = std::fs::remove_file(path);
+            }
+            println!("back: the away override is cleared");
+            0
+        }
+        Some("status") => {
+            match read_away_until(now) {
+                Some(until) => println!("away until epoch {until}"),
+                None => println!("no away override"),
+            }
+            0
+        }
+        Some(other) => {
+            eprintln!("fno-agent user-hours: unknown action {other:?}; use away, back or status");
+            2
+        }
+    }
+}
+
+// --- The one-off away override: `fno-agent user-hours away --until <time>`. ---
+
+/// Where the override lives: one small file in the agents home.
+fn away_state_path() -> Option<PathBuf> {
+    crate::paths::AgentsHome::from_env_opt().map(|home| home.root().join("user-away.json"))
+}
+
+/// The epoch the override runs to, when one is set and still ahead of `now`.
+/// An expired file is deleted on the way, so the override ends by itself.
+fn read_away_until(now: i64) -> Option<i64> {
+    let path = away_state_path()?;
+    let until = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|v| v.get("until_epoch").and_then(serde_json::Value::as_i64));
+    match until {
+        Some(until) if until > now => Some(until),
+        Some(_) => {
+            let _ = std::fs::remove_file(&path);
+            None
+        }
+        None => None,
+    }
+}
+
+fn next_clock<Z: chrono::TimeZone>(zone: &Z, now: i64, at: chrono::NaiveTime) -> Option<i64> {
+    let today = zone.timestamp_opt(now, 0).single()?.date_naive();
+    let first = zone
+        .from_local_datetime(&today.and_time(at))
+        .earliest()?
+        .timestamp();
+    if first > now {
+        return Some(first);
+    }
+    let tomorrow = today.succ_opt()?;
+    Some(
+        zone.from_local_datetime(&tomorrow.and_time(at))
+            .earliest()?
+            .timestamp(),
+    )
+}
+
+/// `--until` as an epoch: a length (`90m`, `8h`, `2d`), a clock time that
+/// means its next occurrence (`09:00`), a local stamp (`2026-11-25 09:00` or
+/// `2026-11-25T09:00`), or an RFC 3339 time with an offset. Clock and stamp
+/// forms read in `timezone` (empty = the machine's zone). The result is
+/// always after `now`.
+pub(crate) fn parse_away_until(spec: &str, timezone: &str, now: i64) -> Result<i64, String> {
+    use chrono::{NaiveDateTime, NaiveTime, TimeZone};
+    let spec = spec.trim();
+    let refuse = || {
+        format!(
+            "{spec:?} is not a time: use a length (90m, 8h, 2d), a clock time (09:00), a stamp (2026-11-25 09:00) or RFC 3339"
+        )
     };
-    println!("{answer}");
-    0
+    let epoch = if let Some(count) = spec
+        .strip_suffix(['m', 'h', 'd'])
+        .and_then(|n| n.parse::<i64>().ok())
+    {
+        let unit = match spec.chars().last() {
+            Some('m') => 60,
+            Some('h') => 3600,
+            _ => 86_400,
+        };
+        now + count * unit
+    } else if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(spec) {
+        dt.timestamp()
+    } else {
+        let zone_tz: Option<chrono_tz::Tz> = if timezone.is_empty() {
+            None
+        } else {
+            Some(
+                timezone
+                    .parse()
+                    .map_err(|_| format!("{timezone:?} is not an IANA zone"))?,
+            )
+        };
+        let found: Option<i64> = if let Ok(at) = NaiveTime::parse_from_str(spec, "%H:%M") {
+            match zone_tz {
+                Some(tz) => next_clock(&tz, now, at),
+                None => next_clock(&chrono::Local, now, at),
+            }
+        } else {
+            let naive = ["%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M"]
+                .iter()
+                .find_map(|f| NaiveDateTime::parse_from_str(spec, f).ok())
+                .ok_or_else(refuse)?;
+            match zone_tz {
+                Some(tz) => tz
+                    .from_local_datetime(&naive)
+                    .earliest()
+                    .map(|d| d.timestamp()),
+                None => chrono::Local
+                    .from_local_datetime(&naive)
+                    .earliest()
+                    .map(|d| d.timestamp()),
+            }
+        };
+        found.ok_or_else(refuse)?
+    };
+    if epoch <= now {
+        return Err(format!("{spec:?} is not in the future"));
+    }
+    Ok(epoch)
+}
+
+fn write_away(until: i64, now: i64) -> Result<(), String> {
+    let path = away_state_path().ok_or("no agents home to hold the away state")?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let body = serde_json::json!({"until_epoch": until, "set_epoch": now});
+    std::fs::write(&path, format!("{body}\n")).map_err(|e| e.to_string())
 }
 
 /// Startup reconciliation is non-destructive by default. Operators may opt in
@@ -3245,5 +3418,26 @@ mod user_hours_tests {
         );
         let backwards = "[user.working_hours]\nmon = [\"17:00-09:00\"]\n";
         assert!(parse_user_hours(backwards, "cfg.toml").is_err());
+    }
+
+    #[test]
+    fn the_away_override_wins_until_its_time() {
+        let toml = "[user.working_hours]\ntue = [\"00:00-24:00\"]\n";
+        let mut hours = parse_user_hours(toml, "cfg").unwrap();
+        assert!(!hours.away(TUE_NOON));
+        hours.away_until = Some(TUE_NOON + 3600);
+        assert!(hours.away(TUE_NOON));
+        assert!(!hours.away(TUE_NOON + 3600), "the override ends by itself");
+    }
+
+    #[test]
+    fn away_until_reads_lengths_clock_times_and_stamps() {
+        let at = |spec| parse_away_until(spec, "UTC", TUE_NOON);
+        assert_eq!(at("90m").unwrap(), TUE_NOON + 5400);
+        assert_eq!(at("13:00").unwrap(), TUE_NOON + 3600);
+        assert_eq!(at("11:00").unwrap(), TUE_NOON + 23 * 3600);
+        assert_eq!(at("2026-11-25 12:00").unwrap(), TUE_NOON + 86_400);
+        assert!(at("yesterday").is_err());
+        assert!(at("-5m").is_err(), "a time in the past is refused");
     }
 }
