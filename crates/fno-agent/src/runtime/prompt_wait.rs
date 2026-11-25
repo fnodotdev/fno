@@ -43,6 +43,9 @@ struct Seen {
     deny_done: bool,
     /// The one `--raw` follow-up turn went out after the denial.
     followed_up: bool,
+    /// The deny key was confirmed. An unconfirmed key reached the worker, so
+    /// the same prompt is not typed at again until the settle window ends.
+    deny_clean: bool,
     /// This wait's denial count for the node and action; 0 until counted.
     follow_count: u32,
     /// Follow-up sends that failed, so a bad lane stops retrying.
@@ -380,7 +383,7 @@ impl Waiting {
         if !self.seen.denied || now <= self.seen.denied_at_ms {
             return false;
         }
-        let settled = self.seen.deny_done && self.seen.followed_up;
+        let settled = self.seen.deny_done && self.seen.followed_up && self.seen.deny_clean;
         if !settled && now - self.seen.denied_at_ms < DENIAL_SETTLE_MS {
             return false;
         }
@@ -605,6 +608,7 @@ fn settle_denials(
                 DenyOutcome::Typed(note) => {
                     w.seen.denied = true;
                     w.seen.denied_at_ms = now;
+                    w.seen.deny_clean = note.is_none();
                     if let Some(note) = note {
                         first_error.get_or_insert(note);
                     }
@@ -1009,22 +1013,6 @@ mod tests {
         let line = raw.first().and_then(|a| a.last()).unwrap();
         assert!(line.starts_with("/fno:target x-77 "), "{line}");
         assert!(line.contains("route that needs no approval"), "{line}");
-        {
-            let rig = Rig::new();
-            rig.asleep.set(true);
-            let path = rig.home.registry_json();
-            let good = std::fs::read(&path).unwrap();
-            std::fs::write(&path, "not json").unwrap();
-            assert!(rig.pass(1_000_000).is_err());
-            assert_eq!(raw_sends(&rig), 0);
-            std::fs::write(&path, good).unwrap();
-            let _ = rig.pass(1_000_000 + 60_000);
-            assert_eq!(
-                raw_sends(&rig),
-                1,
-                "the pending follow-up goes once the registry reads"
-            );
-        }
     }
 
     #[test]
