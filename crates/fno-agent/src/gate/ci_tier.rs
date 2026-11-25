@@ -62,8 +62,12 @@ fn id(run: &Value) -> u64 {
     run.get("id").and_then(Value::as_u64).unwrap_or(0)
 }
 
-fn is_gate(run: &Value) -> bool {
-    word(run, "/name") == "merge-queue-gate" || word(run, "/path").ends_with("merge-queue-gate.yml")
+/// The gate's workflow file name (`merge_queue.gate_workflow`) names its
+/// runs: GitHub derives the run name from the file stem, and the run path
+/// ends with the file name.
+fn is_gate(run: &Value, gate: &str) -> bool {
+    let stem = gate.strip_suffix(".yml").unwrap_or(gate);
+    word(run, "/name") == stem || word(run, "/path").ends_with(gate)
 }
 
 /// A run GitHub fired itself, on no workflow file: default-setup code
@@ -79,10 +83,10 @@ fn is_dynamic(run: &Value) -> bool {
 /// Fold one head's `workflow_runs` to its latest run per workflow. A
 /// merge-queue-gate run is left out: the tier never cancels or reruns one.
 /// So is a dynamic run.
-pub(crate) fn head_of(runs: &[Value]) -> Head {
+pub(crate) fn head_of(runs: &[Value], gate: &str) -> Head {
     let now_ms = crate::ci_cadence::millis_now();
     let mut latest: BTreeMap<&str, &Value> = BTreeMap::new();
-    for run in runs.iter().filter(|r| !is_gate(r) && !is_dynamic(r)) {
+    for run in runs.iter().filter(|r| !is_gate(r, gate) && !is_dynamic(r)) {
         let slot = latest.entry(word(run, "/name")).or_insert(run);
         if id(run) > id(slot) {
             *slot = run;
@@ -218,16 +222,20 @@ fn read_repo(root: &Path) -> Result<Repo, String> {
         }
     }
     prs.sort();
+    let gate = crate::merge_queue::gate_workflow(root);
     let (mut ranked, mut order, mut shas) = (Vec::new(), Vec::new(), Vec::new());
     for (pr, sha, branch) in prs {
         order.push(json!({"pr": pr.3, "branch": branch}));
-        ranked.push((pr, head_of(&runs_of(root, &format!("head_sha={sha}"))?)));
+        ranked.push((
+            pr,
+            head_of(&runs_of(root, &format!("head_sha={sha}"))?, &gate),
+        ));
         shas.push((pr.3, sha));
     }
     let mut gates = HashSet::new();
     for status in ["queued", "in_progress"] {
         let runs = runs_of(root, &format!("status={status}"))?;
-        gates.extend(runs.iter().filter(|r| is_gate(r)).map(id));
+        gates.extend(runs.iter().filter(|r| is_gate(r, &gate)).map(id));
     }
     Ok((ranked, order, gates.len(), shas))
 }
@@ -565,7 +573,8 @@ pub(crate) fn stranded_fact(root: &Path, slug: &str, sha: &str) -> Value {
         .unwrap_or_default();
     let (cancelled, recancelled) = runs_of(root, &format!("head_sha={sha}"))
         .map(|runs| {
-            let head = head_of(&runs);
+            let gate = crate::merge_queue::gate_workflow(root);
+            let head = head_of(&runs, &gate);
             (head.cancelled, head.recancelled)
         })
         .unwrap_or_default();
@@ -827,7 +836,15 @@ mod tests {
             json!({"id": 16, "name": "PR #4470", "path": "dynamic/github-code-scanning/codeql",
                 "event": "dynamic", "status": "in_progress"}),
         ];
-        assert_eq!(head_of(&runs), head(&[11], &[13], false, 1, 3));
+        assert_eq!(
+            head_of(&runs, "merge-queue-gate.yml"),
+            head(&[11], &[13], false, 1, 3)
+        );
+        // A custom gate name from config keeps its runs out of the fold too.
+        assert_eq!(
+            head_of(&[run(20, "my-gate", "completed", "success")], "my-gate.yml"),
+            head(&[], &[], false, 0, 0)
+        );
     }
 
     #[test]

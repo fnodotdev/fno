@@ -408,7 +408,8 @@ fn rerun_repo(root: &Path, slug: &str, path: &Path) -> Result<(), String> {
             continue;
         }
         let runs = crate::ci_tier::runs_of(root, &format!("head_sha={sha}"))?;
-        let list = stranded(&crate::ci_tier::head_of(&runs), &named);
+        let gate = crate::merge_queue::gate_workflow(root);
+        let list = stranded(&crate::ci_tier::head_of(&runs, &gate), &named);
         if list.is_empty() {
             continue;
         }

@@ -2860,7 +2860,14 @@ refusing to assume no review is running"
         head: &str,
     ) -> Option<Result<Option<String>, String>> {
         let _step = step_timer::step("merge_queue");
-        if facts.base_ref != crate::merge_queue::QUEUE_BASE || !crate::merge_queue::enabled(cwd) {
+        if facts.base_ref != crate::merge_queue::QUEUE_BASE {
+            return None;
+        }
+        // GitHub's queue (auto on a capable repo, or provider=github) and
+        // queue-less repos fall through to the arm path below, whose
+        // `gh pr merge --auto` is GitHub's own queue entry. Only fno's own
+        // queue intercepts here.
+        if crate::merge_queue::queue_kind(cwd) != Some(crate::merge_queue::QueueKind::Fno) {
             return None;
         }
         let node = pr_bound_entry(cwd, facts.number);

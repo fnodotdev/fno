@@ -8,6 +8,8 @@ name: sandbox-e2e
 # `forbidden reached: 0` and `required failed: 0`.
 
 on:
+  merge_group:
+    types: [checks_requested]
   pull_request:
     paths:
       - crates/fno-agent/**
