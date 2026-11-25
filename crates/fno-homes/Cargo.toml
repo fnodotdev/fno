@@ -1,7 +1,9 @@
 [package]
 name = "fno-homes"
-# Internal only: both binaries link it as a path dep, so it never versions
-# on its own and never publishes.
+# Versions on its own API, apart from the fno product number: both parents
+# publish, and a parent cannot publish with a dependency crates.io does not
+# carry, so this crate publishes too and consumers take it by caret range.
+# Raise it in the PR that raises the API.
 version = "0.1.0"
 edition = "2021"
 # MSRV: matches the floor the fleet pins (fno-mail, fno-agent). The code is
@@ -9,6 +11,7 @@ edition = "2021"
 rust-version = "1.89"
 description = "The one class-home resolver shared by the fno front door and the fno-agent daemon."
 license = "Apache-2.0"
-publish = false
+repository = "https://github.com/fnodotdev/fno"
+publish = true
 
 [dependencies]

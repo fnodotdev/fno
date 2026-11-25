@@ -533,7 +533,7 @@ mod tests {
     }
 
     /// The class-home read answers a legacy `settings.yaml` pin through the
-    /// format-agnostic reader, the divergence PR 541 carried.
+    /// format-agnostic reader, closing the gap the copied resolver carried.
     #[test]
     fn home_of_reads_a_yaml_pin() {
         let _lock = crate::model_catalog::state_env_lock();
