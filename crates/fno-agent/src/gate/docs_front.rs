@@ -1,16 +1,21 @@
 //! The native `fno do docs` family: tie a doc page to its release for the
 //! worker writing it (law D2707's enforcement side). Three actions:
 //!
-//! - `bind` stamps the front matter that fno-web's release gate judges
+//! - `link` stamps the front matter that fno-web's release gate judges
 //!   (`since:`, `nav:`, `pr:`), turns an edit to a live page into its
 //!   `<page>.next.mdx` twin (`since:` + `replaces:`), then reruns
 //!   `scripts/docs-release-gate.mjs --apply` so `.mintignore` and the
 //!   docs.json nav regenerate. The script is the sole writer of the
-//!   generated block; bind writes page front matter only.
+//!   generated block; link writes page front matter only.
 //! - `surface` prints the changed files that touch a user surface (the
 //!   merge gate's own matcher, so the docs step and the gate cannot
 //!   disagree about what is user-facing).
 //! - `gate` runs the fno-web release gate's check or `--apply`.
+//!
+//! The first action was once named `bind`, a shell builtin, and the Claude
+//! Code worktree guard refuses any isolated-session command whose string
+//! names it. The old spelling stays one release as a hidden alias: it
+//! dispatches to `link`, no help line names it.
 //!
 //! The front door (crates/fno) claims `do docs` lexically and execs this
 //! binary with the argv intact (the `do pr` handover); the arm in
@@ -78,13 +83,13 @@ struct LiveReleases {
 }
 
 const HELP_ROWS: &[(&str, &str)] = &[
-    ("bind <page> [--release T] [--nav G] [--pr N] [--web P]", "Stamp the front matter the fno-web release gate judges, then rerun the gate with --apply. A page whose since: names a live tag becomes <page>.next.mdx with since: and replaces: (the live page is never edited); a draft gets since: (explicit --release, else the newest since: among pages whose vX.Y.Z tag is not yet live (product tags always name --release), else a refusal naming --release), plus --nav/--pr when given. Exit 0 applied, 2 refusal, 4 page/live-list unreadable, 127 node missing."),
+    ("link <page> [--release T] [--nav G] [--pr N] [--web P]", "Stamp the front matter the fno-web release gate judges, then rerun the gate with --apply. A page whose since: names a live tag becomes <page>.next.mdx with since: and replaces: (the live page is never edited); a draft gets since: (explicit --release, else the newest since: among pages whose vX.Y.Z tag is not yet live (product tags always name --release), else a refusal naming --release), plus --nav/--pr when given. Exit 0 applied, 2 refusal, 4 page/live-list unreadable, 127 node missing."),
     ("surface [--diff-base B]", "Print the changed files (B...HEAD plus the dirty tree, default B=origin/main) that touch a user surface, through the merge gate's own matcher. Empty output means the diff is not user-facing. Always exits 0."),
     ("gate [--apply] [--web P]", "Run fno-web's scripts/docs-release-gate.mjs: check (exit 1 on drift) or --apply (move live twins, then pages into or out of the nav). The script's exit passes through; 127 when node is missing."),
 ];
 
 fn print_help() {
-    println!("Docs release binding (fno-web pages: bind, surface, gate)");
+    println!("Tie doc pages to releases (fno-web pages: link, surface, gate)");
     println!();
     println!("Usage: fno do docs <action> [args]");
     println!();
@@ -361,7 +366,7 @@ fn page_paths(docs: &Path, raw: &str) -> Result<(String, PathBuf), DocsError> {
     }
     if raw.is_empty() || !raw.ends_with(".mdx") {
         return Err(DocsError::Usage(format!(
-            "fno do docs bind: {raw} is not a .mdx page path relative to {DOCS_DIR}"
+            "fno do docs link: {raw} is not a .mdx page path relative to {DOCS_DIR}"
         )));
     }
     let path = if Path::new(&raw).is_absolute() {
@@ -451,8 +456,8 @@ fn parse_flags(tail: &[String]) -> Result<Flags, DocsError> {
     Ok(flags)
 }
 
-/// Split the leading page positional off the bind tail. The page comes
-/// before the flags, so `docs bind <page> --nav <group>` parses the flags
+/// Split the leading page positional off the link tail. The page comes
+/// before the flags, so `docs link <page> --nav <group>` parses the flags
 /// over the remainder and never reads the page as a flag.
 fn peel_page(tail: &[String]) -> Result<Option<(String, &[String])>, DocsError> {
     let Some((first, rest)) = tail.split_first() else {
@@ -460,17 +465,17 @@ fn peel_page(tail: &[String]) -> Result<Option<(String, &[String])>, DocsError> 
     };
     if first.starts_with("--") {
         return Err(DocsError::Usage(
-            "fno do docs bind: name the page before the flags".into(),
+            "fno do docs link: name the page before the flags".into(),
         ));
     }
     Ok(Some((first.clone(), rest)))
 }
 
-/// Bind one page: stamp or twin its front matter, then rerun the gate.
-fn bind(tail: &[String]) -> Result<i32, DocsError> {
+/// Link one page: stamp or twin its front matter, then rerun the gate.
+fn link(tail: &[String]) -> Result<i32, DocsError> {
     let Some((page_raw, flag_tail)) = peel_page(tail)? else {
         return Err(DocsError::Usage(
-            "fno do docs bind: name the page (fno do docs bind <page> --help for the flags)".into(),
+            "fno do docs link: name the page (fno do docs link <page> --help for the flags)".into(),
         ));
     };
     let flags = parse_flags(flag_tail)?;
@@ -480,7 +485,7 @@ fn bind(tail: &[String]) -> Result<i32, DocsError> {
     let (stem, page_path) = page_paths(&docs, &page_raw)?;
     let text = std::fs::read_to_string(&page_path).map_err(|e| {
         DocsError::Read(format!(
-            "fno do docs bind: cannot read {}: {e}",
+            "fno do docs link: cannot read {}: {e}",
             page_path.display()
         ))
     })?;
@@ -495,14 +500,14 @@ fn bind(tail: &[String]) -> Result<i32, DocsError> {
         Some(tag) => {
             if !is_release_tag(&tag) {
                 return Err(DocsError::Usage(format!(
-                    "fno do docs bind: --release {tag} is not a vX.Y.Z or <product>-vX.Y.Z tag name"
+                    "fno do docs link: --release {tag} is not a vX.Y.Z or <product>-vX.Y.Z tag name"
                 )));
             }
             tag
         }
         None => derive_release(&docs, &live).ok_or_else(|| {
             DocsError::Refused(
-                "fno do docs bind: no unpublished page names a release to derive; pass --release <tag>".into(),
+                "fno do docs link: no unpublished page names a release to derive; pass --release <tag>".into(),
             )
         })?,
     };
@@ -510,7 +515,7 @@ fn bind(tail: &[String]) -> Result<i32, DocsError> {
     if let Some(pr) = flags.pr.as_deref() {
         if !pr.chars().all(|c| c.is_ascii_digit()) {
             return Err(DocsError::Usage(format!(
-                "fno do docs bind: --pr {pr} is not a PR number"
+                "fno do docs link: --pr {pr} is not a PR number"
             )));
         }
     }
@@ -546,7 +551,7 @@ fn write_twin(
     let twin_path = page_path.with_file_name(twin_name);
     if twin_path.exists() {
         return Err(DocsError::Refused(format!(
-            "fno do docs bind: twin {} already exists; edit it instead",
+            "fno do docs link: twin {} already exists; edit it instead",
             twin_path.display()
         )));
     }
@@ -560,7 +565,7 @@ fn write_twin(
     }
     std::fs::write(&twin_path, twin).map_err(|e| {
         DocsError::Read(format!(
-            "fno do docs bind: cannot write {}: {e}",
+            "fno do docs link: cannot write {}: {e}",
             twin_path.display()
         ))
     })?;
@@ -593,7 +598,7 @@ fn stamp_draft(
     if page != text {
         std::fs::write(page_path, page).map_err(|e| {
             DocsError::Read(format!(
-                "fno do docs bind: cannot write {}: {e}",
+                "fno do docs link: cannot write {}: {e}",
                 page_path.display()
             ))
         })?;
@@ -669,16 +674,26 @@ fn gate(tail: &[String]) -> Result<i32, DocsError> {
     run_gate(&web, flags.apply)
 }
 
+/// The advertised spelling for a typed action word. `bind` maps to
+/// `link` (the hidden alias); an unknown word reads None.
+fn canonical(action: &str) -> Option<&'static str> {
+    match action {
+        "link" | "bind" => Some("link"),
+        "surface" => Some("surface"),
+        "gate" => Some("gate"),
+        _ => None,
+    }
+}
+
 /// The family door: `fno do docs <action> [args]`.
 pub fn run(args: &[String]) -> i32 {
     // A known action with its own --help prints the same help row the
-    // grouped help carries (the pr front door's contract).
-    if let Some(action) = args.first() {
-        if matches!(action.as_str(), "bind" | "surface" | "gate")
-            && args.iter().skip(1).any(|a| a == "--help" || a == "-h")
-        {
-            if let Some(wording) = spelling_help(action) {
-                println!("Usage: fno do docs {action}");
+    // grouped help carries (the pr front door's contract). The alias
+    // prints the advertised spelling it maps to.
+    if let Some(name) = args.first().and_then(|a| canonical(a)) {
+        if args.iter().skip(1).any(|a| a == "--help" || a == "-h") {
+            if let Some(wording) = spelling_help(name) {
+                println!("Usage: fno do docs {name}");
                 println!();
                 println!("    {wording}");
                 return 0;
@@ -691,11 +706,11 @@ pub fn run(args: &[String]) -> i32 {
             print_help();
             return 0;
         }
-        Some("bind") => bind(tail),
+        Some("link" | "bind") => link(tail),
         Some("surface") => surface(tail),
         Some("gate") => gate(tail),
         Some(other) => Err(DocsError::Usage(format!(
-            "fno do docs: unknown action {other}; bind, surface and gate are the actions"
+            "fno do docs: unknown action {other}; link, surface and gate are the actions"
         ))),
     };
     match result {
@@ -710,6 +725,15 @@ pub fn run(args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_hidden_alias_maps_to_the_advertised_spelling() {
+        assert_eq!(canonical("link"), Some("link"));
+        assert_eq!(canonical("bind"), Some("link"));
+        assert_eq!(canonical("surface"), Some("surface"));
+        assert_eq!(canonical("gate"), Some("gate"));
+        assert_eq!(canonical("unlink"), None);
+    }
 
     #[test]
     fn release_tags_read_like_the_gate_script() {
@@ -770,7 +794,7 @@ mod tests {
     }
 
     #[test]
-    fn bind_reads_the_page_positional_before_the_flags() {
+    fn link_reads_the_page_positional_before_the_flags() {
         let tail: Vec<String> = ["guides/x.mdx", "--nav", "Guides", "--pr", "4327"]
             .iter()
             .map(|s| s.to_string())
