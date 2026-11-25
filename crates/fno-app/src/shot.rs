@@ -268,8 +268,8 @@ fn theme_pin(theme: &str) -> Option<PinGuard> {
 /// The session the frame attaches to, or `None` when the caller named
 /// none. The no-server frame must not meet a real server, so it attaches
 /// to a session no mux was ever started for. Any other frame needs a
-/// named throwaway world: falling back to `default` attached the shot to
-/// the user's live mux and left a space there.
+/// named session: a fallback to `default` photographed the user's live
+/// mux unasked.
 fn shot_session(opts: &ShotOptions) -> Option<String> {
     let session = opts.session.clone().or_else(|| {
         (opts.first_run == Some(crate::FirstRunShot::NoServer))
@@ -294,7 +294,10 @@ fn prewarm(
     if opts.first_run == Some(crate::FirstRunShot::NoServer) {
         return Ok(None);
     }
-    crate::link::connect_warmed(session, PREWARM).map(Some)
+    // A shot photographs: it attaches as an observer, so the session keeps
+    // its workspaces and its rows. Only a shot that owns its world drives.
+    let seat = crate::link::Seat::for_shot(opts.own_world);
+    crate::link::connect_warmed(session, PREWARM, seat).map(Some)
 }
 
 // The window-server reads the proof needs. CGWindowListCopyWindowInfo

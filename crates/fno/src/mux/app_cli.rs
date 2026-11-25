@@ -676,6 +676,10 @@ fn shot(args: &crate::cli_args::AppShotArgs) -> i32 {
         .arg(theme)
         .arg("--session")
         .arg("default");
+    // The world is this door's own, so the shot may drive it: its attach
+    // opens the world's one workspace, whose shell the overlays type into.
+    // Any other shot is an observer of the session it photographs.
+    cmd.arg("--shot-own-world");
     if args.sheet {
         cmd.arg("--shot-sheet");
     }
