@@ -287,6 +287,8 @@ const SHOT_SEEDS: &[(&str, &str)] = &[
 /// config and bin overrides into the demo. Each world child strips them.
 const WORLD_STRIP_KEYS: &[&str] = &[
     "FNO_CONFIG",
+    "FNO_STATE_DIR",
+    "FNO_HOME",
     "FNO_MUX_DIR",
     "FNO_AGENT_HOME",
     "FNO_CLAIMS_ROOT",
@@ -873,6 +875,18 @@ mod tests {
             .unwrap();
         assert!(text.starts_with("<task-notification>"), "{text}");
         assert!(text.contains("<summary>"), "{text}");
+    }
+
+    #[test]
+    fn world_children_never_inherit_a_real_state_root() {
+        let cmd = world_cmd(Path::new("/tmp/fno-world-probe"), Path::new("fno"));
+        let envs: Vec<_> = cmd.get_envs().collect();
+        for key in ["FNO_STATE_DIR", "FNO_HOME"] {
+            assert!(
+                envs.iter().any(|(k, v)| *k == key && v.is_none()),
+                "{key} must be stripped from the world env"
+            );
+        }
     }
 
     #[test]
