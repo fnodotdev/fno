@@ -866,7 +866,7 @@ mod tests {
         let body = std::fs::read_to_string(&file).unwrap();
         std::fs::remove_dir_all(&root).ok();
         let last: serde_json::Value = serde_json::from_str(body.lines().last().unwrap()).unwrap();
-        assert_eq!(last.get("type"), Some(&serde_json::json!("user")));
+        assert_eq!(last.pointer("/type").and_then(|v| v.as_str()), Some("user"));
         let text = last
             .pointer("/message/content")
             .and_then(|v| v.as_str())
