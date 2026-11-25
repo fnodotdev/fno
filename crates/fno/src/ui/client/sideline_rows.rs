@@ -123,6 +123,8 @@ pub(super) enum ChromeHit {
     /// BY VALUE: a later fold replaces the row list, so an index would open
     /// the view onto a different event than the one clicked.
     OpenFeedDetail(crate::feed_overlay::FeedItem),
+    /// The feed panel's own chrome: a column title or a group header.
+    Feed(super::feed_view::FeedHit),
     /// Open the questions detail overlay on one block row. Carries the id,
     /// not the index: a fold between click and open must not retarget it.
     OpenQuestionDetail(String),
@@ -163,6 +165,7 @@ impl ChromeHit {
             ChromeHit::CycleDensity => "density",
             ChromeHit::OpenSidelineMenu { .. } => "menu_open",
             ChromeHit::OpenFeedDetail(_) => "feed_row",
+            ChromeHit::Feed(_) => "feed_chrome",
             ChromeHit::OpenQuestionDetail(_) => "question_row",
             ChromeHit::OpenNode(_) => "node_link",
             ChromeHit::OpenPr(_) => "pr_link",

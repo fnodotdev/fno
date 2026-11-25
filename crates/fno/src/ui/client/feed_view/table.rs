@@ -220,6 +220,44 @@ impl TableView {
     pub(crate) fn filter_count(&self) -> usize {
         self.filters.values().filter(|s| !s.is_empty()).count()
     }
+
+    /// The view as the store keeps it: every choice by name.
+    pub(crate) fn to_pref(&self) -> crate::view_store::FeedViewPref {
+        crate::view_store::FeedViewPref {
+            sort: self.sort.name().to_string(),
+            sort_desc: self.sort_desc,
+            group: self.group.name().to_string(),
+            group_desc: self.group_desc,
+            filters: self
+                .filters
+                .iter()
+                .filter(|(_, set)| !set.is_empty())
+                .map(|(c, set)| (c.name().to_string(), set.iter().cloned().collect()))
+                .collect(),
+            collapsed: self.collapsed.iter().cloned().collect(),
+        }
+    }
+
+    /// A saved view. A name this build does not know drops that one choice
+    /// back to its default, never the whole view.
+    pub(crate) fn from_pref(pref: &crate::view_store::FeedViewPref) -> TableView {
+        let mut view = TableView::default();
+        if let Some(col) = Col::parse(&pref.sort) {
+            view.sort = col;
+            view.sort_desc = pref.sort_desc;
+        }
+        if let Some(group) = Group::parse(&pref.group) {
+            view.group = group;
+            view.group_desc = pref.group_desc;
+        }
+        for (name, vals) in &pref.filters {
+            if let Some(col) = Col::parse(name) {
+                view.filters.insert(col, vals.iter().cloned().collect());
+            }
+        }
+        view.collapsed = pref.collapsed.iter().cloned().collect();
+        view
+    }
 }
 
 /// One display slot: a group header or a row as its STORAGE index into the
@@ -561,5 +599,20 @@ mod tests {
         assert!(!view.group_desc);
         view.pick_group(Group::Col(Col::Kind));
         assert!(view.group_desc, "a second group pick flips group order");
+
+        // The saved view round-trips by name; an unknown name drops only
+        // its own choice back to the default.
+        view.filters
+            .insert(Col::Area, BTreeSet::from(["ci".to_string()]));
+        view.collapsed.insert("kind=pr_created".into());
+        let pref = view.to_pref();
+        assert_eq!(TableView::from_pref(&pref), view, "the view round-trips");
+        let mut odd = pref.clone();
+        odd.sort = "colour".into();
+        odd.filters.insert("colour".into(), vec!["red".into()]);
+        let back = TableView::from_pref(&odd);
+        assert_eq!(back.sort, Col::Time, "an unknown sort reads as the default");
+        assert_eq!(back.group, view.group, "the known group survives");
+        assert_eq!(back.filters, view.filters, "an unknown filter column drops");
     }
 }

@@ -1068,6 +1068,7 @@ pub(super) async fn apply_hit(
         // Inspect first: the deep link is the view's own action, not the
         // click path that opened it.
         ChromeHit::OpenFeedDetail(item) => feed_detail::open_into(view, item),
+        ChromeHit::Feed(hit) => feed_view::apply_hit(view, hit),
         // The questions detail overlay: opens on the clicked question.
         ChromeHit::OpenQuestionDetail(id) => view.open_detail_on(&id),
         ChromeHit::OpenNode(id) => node_link::open(view, id).await,

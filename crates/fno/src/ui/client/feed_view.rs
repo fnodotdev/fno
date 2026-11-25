@@ -81,10 +81,13 @@ pub(crate) struct FeedOverlay {
     pub(crate) bar_debounce: Option<Instant>,
 }
 
-/// The view a fresh client opens with: the default, except that the old
-/// two-state `feed_order` preference reads once as its group (`recent` was
-/// the flat list).
+/// The view a fresh client opens with: the saved one, else the default.
+/// With no saved view the old two-state `feed_order` preference reads once
+/// as its group (`recent` was the flat list).
 fn initial_view() -> table::TableView {
+    if let Some(pref) = crate::view_store::load_feed_view() {
+        return table::TableView::from_pref(&pref);
+    }
     let mut view = table::TableView::default();
     if crate::view_store::load_feed_order().as_deref() == Some("recent") {
         view.group = table::Group::None;
@@ -464,7 +467,7 @@ pub(crate) fn feed_panel_rows(
         left.push_str(&format!("{} · ", o.query_text));
     }
     let hints = if focused {
-        "o sort · W group · z fold · / search · ? keys"
+        "o sort · W group · f filter · z fold · / search · ? keys"
     } else {
         "E focus · e close"
     };
@@ -592,9 +595,14 @@ pub(crate) fn header_line(
         if view.sort_desc { '↓' } else { '↑' }
     );
     let group = view.group.name();
+    let filters = match view.filter_count() {
+        0 => String::new(),
+        1 => " · 1 filter".to_string(),
+        n => format!(" · {n} filters"),
+    };
     let candidates: [String; 4] = if focused {
         [
-            format!(" FEED FOCUSED · {count} · sort {sort} · group {group}"),
+            format!(" FEED FOCUSED · {count} · sort {sort} · group {group}{filters}"),
             format!(" FOCUSED · {count} · {sort} · {group}"),
             format!(" FOCUSED · {count}"),
             " FOCUSED".to_string(),
@@ -1031,6 +1039,21 @@ impl View {
         let Some(f) = &self.feed else {
             return None;
         };
+        // The panel's own chrome: a column title sorts by its column, a
+        // group header folds or unfolds its group.
+        let at = usize::from(col - (self.term.1 - feed_w) - 1);
+        if row == 1 {
+            return column_at(f, usize::from(feed_w) - 1, at)
+                .map(|c| ChromeHit::Feed(FeedHit::Sort(c)));
+        }
+        if let Some((_, Slot::Header { key, .. })) = feed_slot_at(
+            &f.slots,
+            row as usize,
+            self.term.0 as usize,
+            self.feed_offset_clamped(),
+        ) {
+            return Some(ChromeHit::Feed(FeedHit::Fold(key.clone())));
+        }
         feed_row_item(
             &f.slots,
             row as usize,
@@ -1242,6 +1265,64 @@ pub(crate) fn apply_fold(view: &mut View, gen: u64, outcome: crate::feed_overlay
     view.feed_offset = view.feed_offset.min(max_off);
 }
 
+/// A click on the panel's own chrome.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum FeedHit {
+    /// A column title: sort by it, or flip it when it already sorts.
+    Sort(table::Col),
+    /// A group header, by its key: fold or unfold the group.
+    Fold(String),
+}
+
+/// Run one chrome click, through the same view change the keys make.
+pub(crate) fn apply_hit(view: &mut View, hit: FeedHit) {
+    match hit {
+        FeedHit::Sort(col) => change_view(view, |v| v.pick_sort(col)),
+        FeedHit::Fold(key) => change_view(view, |v| v.toggle_collapse(&key)),
+    }
+}
+
+/// The column whose title spans display column `at` of the column header
+/// row the painter draws at width `w`; the marker gutter and the gaps are
+/// None.
+fn column_at(f: &FeedOverlay, w: usize, at: usize) -> Option<table::Col> {
+    let rows = feed_panel_rows(f, false, w, 3, 0);
+    let mut x = 0usize;
+    for span in rows.get(1)? {
+        let width = unicode_width::UnicodeWidthStr::width(span.text.as_str());
+        if at < x + width {
+            let title = span.text.trim_end();
+            return table::Col::ALL
+                .into_iter()
+                .find(|c| !title.is_empty() && column_title(&f.view, *c) == title);
+        }
+        x += width;
+    }
+    None
+}
+
+/// The filter's second step: the values of `col` the query and the other
+/// filters leave, with their row counts.
+fn open_values_picker(view: &mut View, col: table::Col) {
+    let anchor = view.feed_picker_anchor();
+    let Some(f) = view.feed.as_mut() else {
+        return;
+    };
+    let ctx = crate::feed_overlay::EventCtx::from_rows(&[], &[]);
+    let query = match &f.parsed {
+        Some(Ok(parsed)) => Some(parsed),
+        _ => None,
+    };
+    let p = picker::FeedPicker::open_values(
+        col,
+        &f.win.items,
+        &f.view,
+        |it| query.is_none_or(|q| q.keeps(&event_fields(it, &ctx))),
+        anchor,
+    );
+    f.picker = Some(p);
+}
+
 /// The first ITEM slot: where a fresh cursor parks.
 pub(crate) fn first_item_slot(slots: &[Slot]) -> usize {
     slots
@@ -1250,8 +1331,8 @@ pub(crate) fn first_item_slot(slots: &[Slot]) -> usize {
         .unwrap_or(0)
 }
 
-/// Apply one change to the table view, then re-slot and keep the cursor on
-/// the row it was on when that row is still shown.
+/// Apply one change to the table view, save it, then re-slot and keep the
+/// cursor on the row it was on when that row is still shown.
 pub(crate) fn change_view(view: &mut View, change: impl FnOnce(&mut table::TableView)) {
     let Some(f) = view.feed.as_mut() else {
         return;
@@ -1261,6 +1342,7 @@ pub(crate) fn change_view(view: &mut View, change: impl FnOnce(&mut table::Table
         _ => None,
     };
     change(&mut f.view);
+    crate::view_store::save_feed_view(&f.view.to_pref());
     reslot(f);
     f.sel = keep
         .and_then(|i| f.slots.iter().position(|s| *s == Slot::Item(i)))
@@ -1497,9 +1579,10 @@ pub(crate) async fn feed_keys(
             }
             continue;
         }
-        // An open sort or group picker sits in front of the panel: the
-        // arrows move its cursor, Enter picks (a second pick flips), Esc
-        // closes it and leaves the panel open. Every other key is swallowed.
+        // An open picker sits in front of the panel: the arrows move its
+        // cursor, Enter picks (a second sort or group pick flips), Esc closes
+        // it and leaves the panel open. A value list also takes typing as
+        // its find text and space as a tick. Every other key is swallowed.
         if view.feed.as_ref().is_some_and(|f| f.picker.is_some()) {
             match tok {
                 ModalKey::Up | ModalKey::Down => {
@@ -1516,7 +1599,16 @@ pub(crate) async fn feed_keys(
                 }
                 ModalKey::Enter => {
                     if let Some(p) = view.feed.as_mut().and_then(|f| f.picker.take()) {
-                        change_view(view, |v| p.pick(v));
+                        if p.kind == picker::PickerKind::FilterCol {
+                            let mut scratch = table::TableView::default();
+                            if let picker::Picked::Values(col) = p.pick(&mut scratch) {
+                                open_values_picker(view, col);
+                            }
+                        } else {
+                            change_view(view, |v| {
+                                p.pick(v);
+                            });
+                        }
                     }
                 }
                 ModalKey::Esc => {
@@ -1524,7 +1616,16 @@ pub(crate) async fn feed_keys(
                         f.picker = None;
                     }
                 }
-                _ => {}
+                tok => {
+                    if let Some(p) = view.feed.as_mut().and_then(|f| f.picker.as_mut()) {
+                        match tok {
+                            ModalKey::Byte(b' ') => p.toggle_selected(),
+                            ModalKey::Byte(0x7f | 0x08) => p.backspace(),
+                            ModalKey::Byte(b) if b > 0x20 && b < 0x7f => p.type_char(b as char),
+                            _ => {}
+                        }
+                    }
+                }
             }
             continue;
         }
@@ -1645,6 +1746,15 @@ pub(crate) async fn feed_keys(
                     picker_at,
                 ));
             }
+            ModalKey::Byte(b'f') => {
+                f.picker = Some(picker::FeedPicker::open(
+                    picker::PickerKind::FilterCol,
+                    &f.view,
+                    picker_at,
+                ));
+            }
+            // Clear every column filter; the query stays.
+            ModalKey::Byte(b'x') => change_view(view, |v| v.filters.clear()),
             ModalKey::Byte(_) => {}
         }
     }

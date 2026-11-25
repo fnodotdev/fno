@@ -408,8 +408,44 @@ fn click_rows() {
         lines[2]
     );
     // The header rows never deep-link; the item row under them does.
-    assert!(v.chrome_hit(1, col).is_none(), "header row is chrome");
-    assert!(v.chrome_hit(2, col).is_none(), "column header is chrome");
+    // The column header's marker gutter is inert; a title sorts by its
+    // column; the group header folds its group. None of them deep-links.
+    assert!(v.chrome_hit(1, col).is_none(), "the marker gutter is inert");
+    let kind_x = lines
+        .get(1)
+        .and_then(|l| l.get(..l.find("kind")?))
+        .map(unicode_width::UnicodeWidthStr::width)
+        .expect("the column header names kind");
+    let title_col = v.term.1 - w + 1 + kind_x as u16;
+    assert!(
+        matches!(
+            v.chrome_hit(1, title_col),
+            Some(ChromeHit::Feed(feed_view::FeedHit::Sort(
+                feed_view::table::Col::Kind
+            )))
+        ),
+        "a title click sorts by its column"
+    );
+    assert!(
+        matches!(
+            v.chrome_hit(2, col),
+            Some(ChromeHit::Feed(feed_view::FeedHit::Fold(key))) if key == "lead or epic=other"
+        ),
+        "the group header folds its group"
+    );
+    feed_view::apply_hit(
+        &mut v,
+        feed_view::FeedHit::Sort(feed_view::table::Col::Kind),
+    );
+    assert_eq!(
+        v.feed.as_ref().map(|f| f.view.sort),
+        Some(feed_view::table::Col::Kind),
+        "the click sorts through the view change the keys make"
+    );
+    feed_view::apply_hit(
+        &mut v,
+        feed_view::FeedHit::Sort(feed_view::table::Col::Time),
+    );
     let hit = v.chrome_hit(3, col).unwrap();
     assert!(
         matches!(&hit, ChromeHit::OpenFeedDetail(item) if item.session_id.as_deref() == Some("s-3")),
