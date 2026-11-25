@@ -56,15 +56,6 @@ pub fn logs_dir(root: &Path) -> PathBuf {
     }
 }
 
-/// The setting that stops the mover on `root`. Only the default root reads
-/// the class settings.
-pub(crate) fn unroutable_setting(root: &Path) -> Option<(&'static str, &'static str)> {
-    if !is_default_root(root) {
-        return None;
-    }
-    crate::paths_cli::unroutable_class_setting(&class_cwd(root))
-}
-
 /// A root-relative table destination as a path. Only a class name reads the
 /// environment or config, so every other name costs one join.
 pub fn home_of(root: &Path, rel: &str) -> PathBuf {
