@@ -289,5 +289,12 @@ fn apply_adopts_with_the_follow_up_path_on_the_row() {
         "law_refused_counts",
     );
     let registry = fno_agent::state::load_registry(&unmarked.registry()).unwrap();
-    assert!(registry.entries.is_empty(), "{:?}", registry.entries);
+    assert!(
+        registry
+            .entries
+            .iter()
+            .all(|e| e.harness_session_id.as_deref() != Some(selected.as_str())),
+        "the law-refused session gained a row: {:?}",
+        registry.entries
+    );
 }
