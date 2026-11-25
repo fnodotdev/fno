@@ -1270,7 +1270,7 @@ fn repair(
         // update that moved the row's key keeps its new key only while the
         // primary lacks the old one too: a primary that still holds the old
         // key has the row there, and a kept new key would be a second copy.
-        let mut old_at = None;
+        let mut old_at: Option<usize> = None;
         for (new_image, row) in [(false, &change.old), (true, &change.new)] {
             if row.is_empty() {
                 continue;
