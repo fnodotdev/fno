@@ -124,7 +124,7 @@ fn write_file(dir: &Path, session: &str, file: &PaintFile) {
     let path = file_path(dir, session, file.pid);
     let tmp = path.with_extension("json.tmp");
     if std::fs::write(&tmp, body).is_ok() && std::fs::rename(&tmp, &path).is_err() {
-        let _ = std::fs::remove_file(&tmp);
+        std::fs::remove_file(&tmp).ok();
     }
 }
 
@@ -151,7 +151,7 @@ fn session_files(dir: &Path, session: &str) -> Vec<(u32, PathBuf)> {
 fn prune_dead(dir: &Path, session: &str) {
     for (pid, path) in session_files(dir, session) {
         if i32::try_from(pid).is_ok_and(crate::proto::pid_confirmed_dead) {
-            let _ = std::fs::remove_file(path);
+            std::fs::remove_file(path).ok();
         }
     }
 }
@@ -159,7 +159,7 @@ fn prune_dead(dir: &Path, session: &str) {
 /// Nearest-rank percentile of an ascending slice.
 fn percentile(sorted: &[u64], pct: usize) -> u64 {
     let rank = (pct * sorted.len()).div_ceil(100).max(1);
-    sorted[rank.min(sorted.len()) - 1]
+    sorted.get(rank - 1).or(sorted.last()).copied().unwrap_or(0)
 }
 
 fn summarize(dir: &Path, session: &str, now_ms: u64, window_secs: u64) -> Option<PaintReading> {
@@ -168,7 +168,7 @@ fn summarize(dir: &Path, session: &str, now_ms: u64, window_secs: u64) -> Option
     let mut clients = 0;
     for (pid, path) in session_files(dir, session) {
         if i32::try_from(pid).is_ok_and(crate::proto::pid_confirmed_dead) {
-            let _ = std::fs::remove_file(&path);
+            std::fs::remove_file(&path).ok();
             continue;
         }
         let Some(file) = std::fs::read(&path)
@@ -192,7 +192,7 @@ fn summarize(dir: &Path, session: &str, now_ms: u64, window_secs: u64) -> Option
         window_secs,
         p50_ms: ms(percentile(&micros, 50)),
         p90_ms: ms(percentile(&micros, 90)),
-        max_ms: ms(micros[micros.len() - 1]),
+        max_ms: ms(micros.last().copied().unwrap_or(0)),
     })
 }
 
