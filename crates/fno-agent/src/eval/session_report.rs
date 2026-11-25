@@ -1480,6 +1480,55 @@ pub async fn run_report_dispatch(rest: &[String], home: &AgentsHome) -> i32 {
     run_session_report(&stripped, home).await
 }
 
+/// Stamp the three row words onto a session report, each decided once here.
+/// `no_row` drops the row at the daemon, `watch_row` keeps a one-shot a person
+/// asked to watch on the sideline, and `agent_substrate` files a hand-typed
+/// print run as headless. `claimed` says a launch record names this session.
+fn stamp_row_words(params: &mut Value, claimed: bool) {
+    let agent_self = params.get("agent_self").and_then(Value::as_str);
+    let harness = params.as_object().and_then(|p| str_field(p, "harness"));
+    let env = |key: &str| std::env::var(key).ok();
+    let no_row = agent_self.is_some() && env(NO_ROW_ENV).as_deref() == agent_self;
+    // A claimed launch record makes this an fno child even without an
+    // FNO_AGENT_SELF, so only an unclaimed print-mode run drops its row.
+    let print_mode = !claimed
+        && print_mode_run(
+            agent_self,
+            harness.as_deref(),
+            env("CLAUDE_CODE_ENTRYPOINT").as_deref(),
+        );
+    // A row a person asked to watch keeps its sideline place.
+    let watch_row = crate::claude_ask::watch_row_run(
+        agent_self,
+        harness.as_deref(),
+        env(crate::claude_ask::SHOW_ROW_ENV).as_deref() == Some("1"),
+        no_row,
+    );
+    // A print run typed by hand keeps a headless row: nobody types into it
+    // and it prints in the shell that started it, so the sideline shows none of it.
+    let hand_print = !claimed
+        && crate::claude_ask::typed_print_run(
+            agent_self,
+            harness.as_deref(),
+            env("CLAUDE_PID").and_then(|pid| pid.parse().ok()),
+        );
+    // An object write, never an index: the clippy ratchet refuses a new one.
+    if let Some(obj) = params.as_object_mut() {
+        if no_row || print_mode {
+            obj.insert("no_row".to_string(), Value::Bool(true));
+        }
+        if watch_row {
+            obj.insert("watch_row".to_string(), Value::Bool(true));
+        }
+        if hand_print {
+            obj.insert(
+                "agent_substrate".to_string(),
+                Value::String("headless".into()),
+            );
+        }
+    }
+}
+
 /// `fno-agent report --kind session --harness <name> [--agent-self <row>]
 /// [--launch-name <record>] [--session-id <id>] [--wait-row]` - the thin
 /// SessionStart transport. The
@@ -1498,54 +1547,9 @@ pub async fn run_session_report(rest: &[String], home: &AgentsHome) -> i32 {
     if let Some(payload) = read_stdin_payload() {
         params["payload"] = payload;
     }
-    // Owned: the writes below change `params`, and the name is read after them.
-    let agent_self = params
-        .get("agent_self")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    let no_row =
-        agent_self.is_some() && std::env::var(NO_ROW_ENV).ok().as_deref() == agent_self.as_deref();
     let harness = params.as_object().and_then(|p| str_field(p, "harness"));
-    let print_mode = print_mode_run(
-        agent_self.as_deref(),
-        harness.as_deref(),
-        std::env::var("CLAUDE_CODE_ENTRYPOINT").ok().as_deref(),
-    );
-    if no_row {
-        params["no_row"] = Value::Bool(true);
-    }
-    // A row a person asked to watch keeps its sideline place.
-    let watch_row = crate::claude_ask::watch_row_run(
-        agent_self.as_deref(),
-        harness.as_deref(),
-        std::env::var(crate::claude_ask::SHOW_ROW_ENV)
-            .ok()
-            .as_deref()
-            == Some("1"),
-        no_row,
-    );
-    if watch_row {
-        params["watch_row"] = Value::Bool(true);
-    }
     let (record, child_name) = claim_launch(&params, home);
-    // A claimed launch record makes this an fno child even without an
-    // FNO_AGENT_SELF, so only an unclaimed print-mode run drops its row.
-    if record.is_none() && print_mode {
-        params["no_row"] = Value::Bool(true);
-    }
-    // A print run typed by hand keeps a headless row: nobody types into it
-    // and it prints in the shell that started it, so the sideline shows none of it.
-    if record.is_none()
-        && crate::claude_ask::typed_print_run(
-            agent_self.as_deref(),
-            harness.as_deref(),
-            std::env::var("CLAUDE_PID")
-                .ok()
-                .and_then(|pid| pid.parse().ok()),
-        )
-    {
-        params["agent_substrate"] = Value::String("headless".into());
-    }
+    stamp_row_words(&mut params, record.is_some());
     record_origin(&params);
     if let Some(record) = &record {
         // A claimed record rides the request: the daemon adopts this session
@@ -1734,6 +1738,15 @@ mod tests {
             "an interactive session keeps its row"
         );
         assert!(!print_mode_run(None, Some("codex"), Some("sdk-cli")));
+        // The words ride the report as params. A kept claude child sends the
+        // watch mark and nothing else. A report with no env identity sends none.
+        let mut kept = json!({"agent_self": "w1", "harness": "claude"});
+        stamp_row_words(&mut kept, false);
+        assert_eq!(kept.as_object().map(|o| o.len()), Some(3));
+        assert_eq!(kept.get("watch_row"), Some(&Value::Bool(true)));
+        let mut bare = json!({"harness": "codex"});
+        stamp_row_words(&mut bare, true);
+        assert_eq!(bare.as_object().map(|o| o.len()), Some(1));
     }
 
     fn temp_home(tag: &str) -> (tempfile::TempDir, AgentsHome) {
