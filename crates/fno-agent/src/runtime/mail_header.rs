@@ -64,14 +64,28 @@ pub struct HeldRelease {
 /// digit-and-whitespace shape matches group into one backticked fold line
 /// (`` `name x26, newest 119m` ``) trailing the whole-rendered unique mail.
 pub fn render_held_release(release: &HeldRelease) -> String {
-    render_held_release_at(release, chrono::Local::now().fixed_offset())
+    render_held_release_with(
+        release,
+        chrono::Local::now().fixed_offset(),
+        crate::numbers::mail_token,
+    )
 }
 
 /// [`render_held_release`] against a fixed clock, so the fold line's
-/// `newest` age is testable.
+/// `newest` age is testable. Ids print as stored.
 pub fn render_held_release_at(
     release: &HeldRelease,
     now: chrono::DateTime<chrono::FixedOffset>,
+) -> String {
+    render_held_release_with(release, now, str::to_string)
+}
+
+/// The held-release render with the id token under the caller's control:
+/// delivery passes the minting number token, a test passes identity.
+fn render_held_release_with(
+    release: &HeldRelease,
+    now: chrono::DateTime<chrono::FixedOffset>,
+    token: impl Fn(&str) -> String,
 ) -> String {
     let mut messages: Vec<&HeldMessage> = release.messages.iter().collect();
     messages.sort_by(|left, right| {
@@ -164,7 +178,7 @@ pub fn render_held_release_at(
         lines.push(render_header(
             form,
             &item.bare,
-            &crate::numbers::mail_token(&message.id),
+            &token(&message.id),
             third.as_deref(),
         ));
         lines.push(item.body.clone());
