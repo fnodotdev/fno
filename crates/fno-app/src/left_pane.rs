@@ -185,28 +185,31 @@ fn pr_status_marks(fact: &PrStatusFact, p: &Palette) -> Vec<(String, u32)> {
     marks
 }
 
-/// The identity cell when a PR fact exists: the tokens, one space, then the
-/// `#N · node` text cut to what the column leaves. Width math mirrors
-/// `ui::cell` (fixed `chars` budget, overflow hidden), so the column
-/// never grows for the tokens.
+/// The identity cell when a PR fact exists: the tokens, one space each,
+/// then the `#N · node` text cut to what the column leaves. Width math
+/// mirrors `ui::cell` (fixed `chars` budget, overflow hidden), so the
+/// column never grows for the tokens.
 fn pr_identity_cell(
     fact: &PrStatusFact,
     identity: Option<&str>,
     chars: usize,
     p: &Palette,
-    adv: Pixels,
+    _adv: Pixels,
 ) -> Div {
     let marks = pr_status_marks(fact, p);
-    let marks_w: usize = marks.iter().map(|(t, _)| t.chars().count()).sum();
+    // One space after each token, so `✗2 r✓ #24` reads as three words
+    // instead of one crammed run; the spaces are part of `marks_w`, so the
+    // text cut stays inside the column and the number survives it.
+    let marks_w: usize = marks.iter().map(|(t, _)| t.chars().count() + 1).sum();
     let mut inner = div().flex().flex_row();
     for (token, color) in marks {
         inner = inner.child(
             ui::role(div(), ui::Role::Fact, p)
                 .text_color(rgb(color))
-                .child(token),
+                .child(format!("{token} ")),
         );
     }
-    let rest_w = chars.saturating_sub(marks_w + usize::from(marks_w > 0));
+    let rest_w = chars.saturating_sub(marks_w);
     inner.child(ui::text(
         ui::cut(identity.unwrap_or_default(), rest_w),
         ui::Role::Fact,
@@ -2380,6 +2383,8 @@ mod tests {
                 },
             ],
             review_state: Some("reviewed".into()),
+            review_rounds: Some(2),
+            title: Some("the mux board fetch stays inside its deadline".into()),
             settled: false,
             pr_state: Some("OPEN".into()),
             draft: false,
@@ -2393,13 +2398,20 @@ mod tests {
         let rows = pr_sheet::model(&sheet_fact());
         let texts: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
         assert!(texts.contains(&"✗ cargo test (fno mux)"));
-        assert!(texts.contains(&"wait for every run at the head | ci-required: FAILED at e51d"));
+        assert!(texts.contains(&"wait for every run at the head"));
+        assert!(texts.contains(&"ci-required: FAILED at e51d"));
+        assert!(texts.contains(&"the mux board fetch stays inside its deadline"));
         assert!(texts.contains(&"checks 51: 32 pass 2 fail 17 pending"));
-        assert!(texts.contains(&"review reviewed"));
+        assert!(texts.contains(&"review: reviewed (2 rounds)"));
         assert!(texts.contains(&"OPEN · MERGEABLE"));
-        // The failing rows wear the error role.
+        // The step rows wear the error role; the error tail is secondary.
         let failing = rows.iter().find(|r| r.text.starts_with("✗ ")).unwrap();
         assert!(failing.error);
+        let tail = rows
+            .iter()
+            .find(|r| r.text == "ci-required: FAILED at e51d")
+            .unwrap();
+        assert!(tail.dim && !tail.error);
     }
 
     #[test]

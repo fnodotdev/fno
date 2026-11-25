@@ -75,6 +75,8 @@ pub(super) fn demo_fact() -> PrStatusFact {
             },
         ],
         review_state: Some("reviewed".into()),
+        review_rounds: Some(2),
+        title: Some("the agent row shows a PR's checks and review".into()),
         settled: false,
         pr_state: Some("OPEN".into()),
         draft: false,
@@ -99,6 +101,8 @@ pub(super) struct Row {
     pub ok: bool,
     pub error: bool,
     pub bold: bool,
+    /// Secondary: the door's raw error tail, dimmed so the step reads first.
+    pub dim: bool,
 }
 
 fn row(label: &str, text: impl Into<String>, bold: bool) -> Row {
@@ -108,6 +112,7 @@ fn row(label: &str, text: impl Into<String>, bold: bool) -> Row {
         ok: false,
         error: false,
         bold,
+        dim: false,
     }
 }
 
@@ -117,6 +122,11 @@ fn row(label: &str, text: impl Into<String>, bold: bool) -> Row {
 /// `render`.
 pub(super) fn model(fact: &PrStatusFact) -> Vec<Row> {
     let mut rows = Vec::new();
+    if let Some(title) = fact.title.as_deref() {
+        if !title.is_empty() {
+            rows.push(row("", title.to_string(), true));
+        }
+    }
     let mut state = String::new();
     if let Some(word) = fact.pr_state.as_deref() {
         if fact.draft {
@@ -146,29 +156,37 @@ pub(super) fn model(fact: &PrStatusFact) -> Vec<Row> {
             ok: false,
             error: true,
             bold: false,
+            dim: false,
         });
-        let mut detail = String::new();
         if !f.step.is_empty() {
-            detail.push_str(&f.step);
-        }
-        if !f.first_error.is_empty() {
-            if !detail.is_empty() {
-                detail.push_str(" | ");
-            }
-            detail.push_str(&f.first_error);
-        }
-        if !detail.is_empty() {
             rows.push(Row {
                 label: String::new(),
-                text: detail,
+                text: f.step.clone(),
                 ok: false,
                 error: true,
                 bold: false,
+                dim: false,
+            });
+        }
+        // The door's raw error tail is secondary: dimmed, so the step
+        // carries the row and the tail answers it.
+        if !f.first_error.is_empty() {
+            rows.push(Row {
+                label: String::new(),
+                text: f.first_error.clone(),
+                ok: false,
+                error: false,
+                bold: false,
+                dim: true,
             });
         }
     }
     if let Some(word) = fact.review_state.as_deref() {
-        rows.push(row("", format!("review {word}"), false));
+        let line = match fact.review_rounds {
+            Some(n) => format!("review: {word} ({n} rounds)"),
+            None => format!("review: {word}"),
+        };
+        rows.push(row("", line, false));
     }
     rows
 }
@@ -201,7 +219,9 @@ pub(super) fn render(sheet: &PrSheet, root: &Root, cx: &mut Context<Root>) -> Di
     let rows = model(&sheet.fact);
     let mut body = div().flex().flex_col();
     for r in rows {
-        let color = if r.error {
+        let color = if r.dim {
+            rgb(p.muted)
+        } else if r.error {
             rgb(p.warn)
         } else if r.ok {
             rgb(p.ok)
@@ -244,7 +264,7 @@ pub(super) fn render(sheet: &PrSheet, root: &Root, cx: &mut Context<Root>) -> Di
             div()
                 .flex_1()
                 .font_weight(FontWeight::SEMIBOLD)
-                .child(format!("pr #{}", sheet.pr)),
+                .child(format!("PR #{}", sheet.pr)),
         )
         .children((!who.is_empty()).then(|| ui::quiet(who, &p)));
     let panel = div()

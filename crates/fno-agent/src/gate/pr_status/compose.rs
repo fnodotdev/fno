@@ -209,6 +209,12 @@ pub(crate) fn compose_payload(inputs: &ComposeInputs) -> (i32, Value, Vec<String
         "pr_state".into(),
         inputs.pr_json.get("state").cloned().unwrap_or(Value::Null),
     );
+    // The PR title rides the same read (the pulls body already carries
+    // it); the sheet names the PR beyond its number.
+    payload.insert(
+        "title".into(),
+        inputs.pr_json.get("title").cloned().unwrap_or(Value::Null),
+    );
     // The pr-nudge park reads this: a green OPEN draft is a person's gate,
     // not a merge order. Absent on stale cached rows, which read as today.
     let park = serde_json::from_value::<super::de::StatusParkTail>(inputs.pr_json.clone())

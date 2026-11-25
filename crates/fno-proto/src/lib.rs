@@ -439,7 +439,7 @@ fn default_true() -> bool {
 /// (serde default); floor stays 58.
 /// v134: `AgentRow.pr_status` (serde default), the serve's bounded pr-status
 /// sweep projection; floor stays 58.
-pub const PROTO_VERSION: u32 = 134;
+pub const PROTO_VERSION: u32 = 135;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -1600,10 +1600,11 @@ pub struct PrFailingCheck {
     pub first_error: String,
 }
 
-/// (v134) One PR's CI and review rollup: the sweep's projection of one
+/// (v135) One PR's CI and review rollup: the sweep's projection of one
 /// `fno do pr status` JSON line (the door's own field names, parsed once
 /// per read). The renderer ages the mark from `measured_at` and never
-/// invents a verdict the door did not print.
+/// invents a verdict the door did not print. v135 adds the PR title and
+/// the review rounds spent, both optional and absent on stale rows.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -1621,6 +1622,13 @@ pub struct PrStatusFact {
     /// The review-coverage word (e.g. "reviewed"); None when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review_state: Option<String>,
+    /// The review rounds spent at read time; None when the door printed
+    /// none (v135).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_rounds: Option<u32>,
+    /// The PR's title from the door's GitHub read; None when absent (v135).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// Whether the verdict was settled at read time.
     #[serde(default)]
     pub settled: bool,

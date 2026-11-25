@@ -3,10 +3,11 @@
 import type { PrFailingCheck } from "./PrFailingCheck";
 
 /**
- * (v134) One PR's CI and review rollup: the sweep's projection of one
+ * (v135) One PR's CI and review rollup: the sweep's projection of one
  * `fno do pr status` JSON line (the door's own field names, parsed once
  * per read). The renderer ages the mark from `measured_at` and never
- * invents a verdict the door did not print.
+ * invents a verdict the door did not print. v135 adds the PR title and
+ * the review rounds spent, both optional and absent on stale rows.
  */
 export type PrStatusFact = { 
 /**
@@ -26,6 +27,15 @@ failing?: Array<PrFailingCheck>,
  * The review-coverage word (e.g. "reviewed"); None when absent.
  */
 review_state?: string | null, 
+/**
+ * The review rounds spent at read time; None when the door printed
+ * none (v135).
+ */
+review_rounds?: number | null, 
+/**
+ * The PR's title from the door's GitHub read; None when absent (v135).
+ */
+title?: string | null, 
 /**
  * Whether the verdict was settled at read time.
  */

@@ -208,6 +208,10 @@ struct DoorLine {
     failures: Option<Vec<DoorFailure>>,
     #[serde(default)]
     review_coverage: Option<DoorReview>,
+    #[serde(default)]
+    rounds_used: Option<u32>,
+    #[serde(default)]
+    title: Option<String>,
 }
 
 #[derive(Clone, Deserialize, Default)]
@@ -285,6 +289,8 @@ fn fact_from(line: &DoorLine, now: u64) -> PrStatusFact {
             .as_ref()
             .and_then(|r| r.review_state.clone())
             .map(cut),
+        review_rounds: line.rounds_used,
+        title: line.title.clone().map(cut),
         settled: line.settled,
         pr_state: line.pr_state.clone().map(cut),
         draft: line.draft,
@@ -310,7 +316,8 @@ mod tests {
                "checks":{"pass":32,"fail":2,"pending":17},
                "failures":[{"check":"Python static correctness","step":"Test declarations are shrink-only","first_error":"test-delta: scope G3 nets +1"},
                            {"check":"ci-required","step":"wait for every run","first_error":"ci-required: FAILED"}],
-               "review_coverage":{"coverage":"covered","review_state":"reviewed","reviewed_count":1}}"#,
+               "review_coverage":{"coverage":"covered","review_state":"reviewed","reviewed_count":1},
+               "rounds_used":2,"title":"the mux board fetch stays inside its deadline"}"#,
         )
         .unwrap()
     }
@@ -325,6 +332,11 @@ mod tests {
         assert_eq!(first.name, "Python static correctness");
         assert_eq!(first.step, "Test declarations are shrink-only");
         assert_eq!(fact.review_state.as_deref(), Some("reviewed"));
+        assert_eq!(fact.review_rounds, Some(2));
+        assert_eq!(
+            fact.title.as_deref(),
+            Some("the mux board fetch stays inside its deadline")
+        );
         assert!(!fact.settled);
         assert_eq!(fact.pr_state.as_deref(), Some("OPEN"));
         assert_eq!(fact.mergeable.as_deref(), Some("MERGEABLE"));
