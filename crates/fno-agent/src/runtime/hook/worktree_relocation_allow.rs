@@ -129,12 +129,24 @@ fn candidate_under(bases: &[PathBuf], real: &Path) -> Option<(PathBuf, String)> 
     })
 }
 
+/// A spawn that names a node must run in that node's own folder.
+fn names_this_node(named: Option<&str>, folder: &str) -> bool {
+    match named.filter(|n| !n.is_empty()) {
+        Some(n) => n == folder,
+        None => true,
+    }
+}
+
 /// The worktree a spawn at `cwd` runs in, when it is a recorded worktree of
 /// this repo. The registry row does not exist yet when a spawn writes its
 /// settings, so the repo's worktree records stand in for the claim.
 pub(crate) fn verified_worktree(cwd: &Path) -> Option<PathBuf> {
     let all = bases(cwd);
     let (candidate, node) = candidate_under(&all, &cwd.canonicalize().ok()?)?;
+    let named = std::env::var("FNO_NODE").ok();
+    if !names_this_node(named.as_deref(), &node) {
+        return None;
+    }
     let found = own_worktree_in(&all, &crate::paths::canonical_repo_root(cwd)?, &node)?;
     (found == candidate).then_some(found)
 }
@@ -324,6 +336,9 @@ mod tests {
             Some((real.clone(), "node".to_string()))
         );
         assert_eq!(candidate_under(&all, tmp.path()), None);
+        assert!(names_this_node(None, "node") && names_this_node(Some(""), "node"));
+        assert!(names_this_node(Some("node"), "node"));
+        assert!(!names_this_node(Some("other"), "node"));
         assert_eq!(own_worktree_in(&all, &repo, "planted"), None);
         assert_eq!(own_worktree_in(&all, &repo, "foreign"), None);
         assert_eq!(own_worktree_in(&all, &repo, "unrecorded"), None);

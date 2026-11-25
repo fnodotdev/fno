@@ -91,12 +91,17 @@ fn rules_from(roots: &[PathBuf]) -> Rules {
             continue;
         };
         // A glob character in the path would change what the rule matches.
-        if real.to_string_lossy().contains(['*', '?', '[', ')', '(']) {
+        if real
+            .to_string_lossy()
+            .contains(['*', '?', '[', ')', '(', '\\'])
+        {
             continue;
         }
         let anchor = format!("//{}", real.to_string_lossy().trim_start_matches('/'));
         rules.allow.push(format!("Read({anchor}/**)"));
         rules.allow.push(format!("Edit({anchor}/**)"));
+        // In a worktree `.git` is a file at the root, so name it directly too.
+        rules.ask.push(format!("Edit({anchor}/.git)"));
         for name in SECRET_NAMES.iter().chain(SECRET_DIRS.iter()) {
             rules.ask.push(format!("Read({anchor}/**/{name})"));
             rules.ask.push(format!("Edit({anchor}/**/{name})"));
@@ -208,6 +213,7 @@ mod tests {
         assert!(rules.allow.iter().all(|r| r.contains(&anchor)));
         // In a worktree `.git` is a file, so the file name itself keeps its ask.
         for want in [
+            format!("Edit({anchor}/.git)"),
             format!("Edit({anchor}/**/.git)"),
             format!("Edit({anchor}/**/.git/**)"),
             format!("Edit({anchor}/**/.cargo/config)"),
@@ -220,6 +226,12 @@ mod tests {
         let odd = tmp.path().canonicalize().unwrap().join("a[b]*c");
         std::fs::create_dir_all(&odd).unwrap();
         assert!(rules_when(true, Some(odd), None).is_empty());
+        let slash = tmp.path().canonicalize().unwrap().join("a\\b");
+        std::fs::create_dir_all(&slash).unwrap();
+        assert!(
+            rules_when(true, Some(slash), None).is_empty(),
+            "a backslash escapes"
+        );
         #[cfg(unix)]
         {
             let link = tmp.path().join("link");

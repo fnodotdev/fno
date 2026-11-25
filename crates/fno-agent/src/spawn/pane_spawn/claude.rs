@@ -305,8 +305,14 @@ fn drop_rules_only_settings(argv: Vec<String>) -> Vec<String> {
         .and_then(|path| std::fs::read(path).ok())
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
         .and_then(|doc| {
-            doc.as_object()
-                .map(|obj| obj.keys().all(|k| k == "permissions" || k == "theme"))
+            // The writer always emits `env`, so an empty one is no route.
+            doc.as_object().map(|obj| {
+                obj.iter().all(|(key, value)| match key.as_str() {
+                    "permissions" | "theme" => true,
+                    "env" => value.as_object().is_some_and(|env| env.is_empty()),
+                    _ => false,
+                })
+            })
         })
         .unwrap_or(false);
     if !rules_only {
@@ -496,8 +502,24 @@ mod happy_rules_tests {
         let dir = tempfile::tempdir().unwrap();
         let rules = dir.path().join("rules.json");
         let route = dir.path().join("route.json");
-        std::fs::write(&rules, r#"{"permissions":{"allow":["Read(//w/**)"]}}"#).unwrap();
-        std::fs::write(&route, r#"{"env":{"A":"b"},"permissions":{"allow":[]}}"#).unwrap();
+        // Both files come from the writer's own bytes, so the fixture holds
+        // the empty `env` object the writer always emits.
+        let allow = crate::spawn::auto_approve::Rules {
+            allow: vec!["Read(//w/**)".into()],
+            ask: Vec::new(),
+        };
+        let mut model = serde_json::Map::new();
+        model.insert("ANTHROPIC_MODEL".into(), "glm-5.2".into());
+        std::fs::write(
+            &rules,
+            crate::route_settings::payload_bytes(&serde_json::Map::new(), None, &allow),
+        )
+        .unwrap();
+        std::fs::write(
+            &route,
+            crate::route_settings::payload_bytes(&model, None, &allow),
+        )
+        .unwrap();
         let argv = |path: &std::path::Path| {
             vec![
                 "claude".to_string(),

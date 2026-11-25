@@ -76,7 +76,7 @@ pub struct WriteReceipt {
 /// The payload bytes: `{"env": ...}` plus the optional sandbox block and the
 /// foreign-endpoint deny, keys inserted in sorted order so the content address
 /// is deterministic (Python wrote `json.dumps(payload, sort_keys=True)`).
-fn payload_bytes(
+pub(crate) fn payload_bytes(
     env: &Map<String, Value>,
     sandbox: Option<&Value>,
     rules: &crate::spawn::auto_approve::Rules,
