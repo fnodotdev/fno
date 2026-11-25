@@ -124,7 +124,7 @@ pub struct Screen {
 
 /// The fixed screen order. The wizard never reorders; a false `when`
 /// records a skip and moves on.
-pub const SCREENS: [Screen; 19] = [
+pub const SCREENS: [Screen; 20] = [
     Screen {
         id: "preflight",
         when: When::Always,
@@ -158,6 +158,11 @@ pub const SCREENS: [Screen; 19] = [
     Screen {
         id: "keys",
         when: When::NeedsKey,
+        stops: [false, true, true],
+    },
+    Screen {
+        id: "github-app",
+        when: When::Always,
         stops: [false, true, true],
     },
     Screen {
@@ -506,6 +511,7 @@ pub fn step(state: &mut State, pr: &mut dyn Prompter, pb: &mut dyn Probes) -> Ne
         "harnesses" => screen_harnesses(state, pr, pb, stops),
         "models" => screen_models(state, pr, pb, stops),
         "keys" => screen_keys(state, pr, stops),
+        "github-app" => screen_github_app(state, pr, stops),
         "budget" => screen_budget(state, pr, stops),
         "review-merge" => screen_review_merge(state, pr, stops),
         "interview" => screen_interview(state, pr, stops),
@@ -917,6 +923,168 @@ fn screen_keys(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outcome
     }
     state.answers.insert("keys", Answer::Picked(stored));
     Outcome::Forward
+}
+
+/// The fleet's own GitHub App through GitHub's manifest flow. The screen
+/// only records the intent: the redirect code is a credential and the pure
+/// flow never reads one, so the terminal host runs the round-trip after
+/// the walk and lands the public App id as the answer the proposal reads.
+/// Default off.
+fn screen_github_app(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outcome {
+    use crate::setup::github_app_flow;
+    if !stops {
+        return Outcome::Forward;
+    }
+    if github_app_flow::configured_app_id().is_some() {
+        pr.note(
+            "github-app",
+            "A fleet GitHub App is already configured (github.app_id). Leaving it as it is.",
+        );
+        return Outcome::Forward;
+    }
+    let wants = match confirm_flow(
+        state,
+        pr,
+        "github-app",
+        "Give the fleet its own GitHub quota? Creates a GitHub App in your account through GitHub's manifest flow; without it fno keeps using your user token.",
+        false,
+    ) {
+        Flow::Answered(true) => true,
+        Flow::Answered(false) => false,
+        Flow::Back => return Outcome::Back,
+        Flow::Cancel => return Outcome::Cancel,
+    };
+    state
+        .answers
+        .insert("github-app", if wants { Answer::Yes } else { Answer::No });
+    if wants {
+        pr.note(
+            "github-app",
+            "Good. After the last screen, setup opens GitHub's App creation page and asks for one paste.",
+        );
+    }
+    Outcome::Forward
+}
+
+/// How the launcher round-trip ended. `Created` carries the public App id
+/// and, when the person pasted one, the installation id to pin; the pem
+/// never leaves the flow module and the paste code never enters state.
+pub(crate) enum RoundTrip {
+    Created {
+        app_id: String,
+        installation_pin: Option<String>,
+    },
+    Back,
+    Cancel,
+    Refused,
+}
+
+/// One launcher round-trip, run by the terminal host after the walk:
+/// write the launcher, open it, collect the paste, exchange the code, and
+/// store the key. Every refusal notes itself and names what was written;
+/// Back and Cancel mean the person stepped away from the paste.
+pub(crate) fn github_app_round_trip(pr: &mut dyn Prompter) -> RoundTrip {
+    use crate::setup::github_app_flow as flow;
+    let nonce = flow::state_nonce();
+    let name = flow::app_name();
+    let launcher = std::env::temp_dir().join("fno-fleet-app.html");
+    if let Err(fault) = flow::write_launcher(&launcher, &nonce, &name) {
+        pr.note(
+            "github-app",
+            &format!("Setup could not write the launcher page, so nothing was written: {fault}"),
+        );
+        return RoundTrip::Refused;
+    }
+    pr.note(
+        "github-app",
+        "GitHub's App creation page opens, prefilled for the fleet. Click Create; GitHub bounces to a page whose address bar carries ?code=... and your launcher's state.",
+    );
+    if !flow::open_in_browser(&launcher) {
+        pr.note(
+            "github-app",
+            &format!(
+                "No browser opened. Open {} in a browser on any machine, then click Create.",
+                launcher.display()
+            ),
+        );
+    }
+    let code = match pr.secret(
+        "github-app",
+        "Paste the code= value from the redirected address bar",
+    ) {
+        Hidden::Value(code) => code,
+        Hidden::Back => return RoundTrip::Back,
+        Hidden::Cancel => return RoundTrip::Cancel,
+        Hidden::Skipped => {
+            pr.note(
+                "github-app",
+                "Skipped. Nothing was written; your user token stays the default.",
+            );
+            return RoundTrip::Refused;
+        }
+    };
+    pr.progress("github-app", "Exchanging the code with GitHub");
+    let conversion = match flow::exchange(code.trim()) {
+        Ok(conversion) => conversion,
+        Err(fault) => {
+            pr.note(
+                "github-app",
+                &format!(
+                    "The exchange failed, so nothing was written: {fault}. The App may exist on GitHub; delete it there or rerun setup later."
+                ),
+            );
+            return RoundTrip::Refused;
+        }
+    };
+    let key_path = match flow::default_key_path() {
+        Ok(path) => path,
+        Err(fault) => {
+            pr.note(
+                "github-app",
+                &format!(
+                    "Setup could not resolve the key path, so nothing was written: {fault}. The App exists on GitHub; download its key from the App settings page or rerun setup."
+                ),
+            );
+            return RoundTrip::Refused;
+        }
+    };
+    if let Err(fault) = flow::write_key(&key_path, &conversion.pem) {
+        pr.note(
+            "github-app",
+            &format!(
+                "Setup could not write the key, so config is untouched: {fault}. The App exists on GitHub; download its key from the App settings page or rerun setup."
+            ),
+        );
+        return RoundTrip::Refused;
+    }
+    pr.note(
+        "github-app",
+        &format!(
+            "The App {} is created and its key is stored. Install it on your repos: https://github.com/apps/{}/installations/new - the installation resolves by owner match; a github.app_installation_id pin is optional.",
+            conversion.slug, conversion.slug
+        ),
+    );
+    // The optional pin: after installing, the completion URL ends in the
+    // installation id. Owner match already works, so a Back, Cancel or
+    // empty answer here keeps the created App and skips only the pin.
+    let installation_pin = match pr.secret(
+        "github-app",
+        "Optional: after installing, paste the installation id the install page ends in (Enter skips)",
+    ) {
+        Hidden::Value(paste) => {
+            let paste = paste.trim().to_string();
+            if paste.is_empty() {
+                None
+            } else {
+                Some(paste)
+            }
+        }
+        _ => None,
+    };
+    RoundTrip::Created {
+        app_id: conversion.app_id,
+        installation_pin,
+    }
 }
 
 fn screen_budget(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outcome {
@@ -1609,6 +1777,26 @@ pub fn pending(state: &State) -> Vec<Proposal> {
             });
         }
         _ => {}
+    }
+    if let Some(Answer::Text(app_id)) = state.answers.get("github-app") {
+        rows.push(Proposal {
+            id: "github-app",
+            key: "github.app_id".into(),
+            value: app_id.clone(),
+            scope: "global",
+            reason: "the fleet App this run created".into(),
+            source: "wizard",
+        });
+    }
+    if let Some(Answer::Text(pin)) = state.answers.get("github-app-pin") {
+        rows.push(Proposal {
+            id: "github-app",
+            key: "github.app_installation_id".into(),
+            value: pin.clone(),
+            scope: "global",
+            reason: "the installation id this run pinned".into(),
+            source: "wizard",
+        });
     }
     // The interview's keyed rows; one nested constructor keeps the
     // struct-literal noise down across the four shapes.

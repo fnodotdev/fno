@@ -198,7 +198,7 @@ fn skipped(state: &State) -> Vec<&'static str> {
 
 #[test]
 fn screen_order_and_skips_follow_the_presets() {
-    // Balanced with every default accepted: sixteen screens run in
+    // Balanced with every default accepted: seventeen screens run in
     // order, three skip, and the proposal set is the balanced one.
     let mut state = State::new(None, fresh_detect(), false);
     let mut pr = Script::auto();
@@ -214,6 +214,7 @@ fn screen_order_and_skips_follow_the_presets() {
             "look",
             "harnesses",
             "models",
+            "github-app",
             "budget",
             "review-merge",
             "interview",
@@ -402,6 +403,7 @@ fn back_navigation_and_the_write_latch() {
         Que::T(Ticks::Ok(vec![0, 2])), // harnesses: claude + codex
         Que::P(Pick::Ok(2)),           // models: claude keeps its model
         Que::P(Pick::Ok(2)),           // models: codex keeps its model
+        Que::C(Conf::No),              // github-app: decline
         Que::C(Conf::Yes),             // budget: apply the band
         Que::C(Conf::Yes),             // review-merge: keep the posture
         Que::C(Conf::Yes),             // review-merge: merge (non-default)
@@ -446,6 +448,7 @@ fn back_navigation_and_the_write_latch() {
         Que::T(Ticks::Ok(vec![0, 2])), // harnesses again
         Que::P(Pick::Ok(2)),           // models: claude
         Que::P(Pick::Ok(2)),           // models: codex
+        Que::C(Conf::No),              // github-app: decline
         Que::C(Conf::Yes),             // budget
         Que::C(Conf::Yes),             // posture
         Que::C(Conf::No),              // merge
@@ -486,6 +489,7 @@ fn back_navigation_and_the_write_latch() {
         Que::T(Ticks::Ok(vec![0, 2])), // harnesses: claude + codex
         Que::P(Pick::Ok(2)),           // models: claude keeps its model
         Que::P(Pick::Ok(2)),           // models: codex keeps its model
+        Que::C(Conf::No),              // github-app: decline
         Que::C(Conf::Yes),             // budget: apply the band
         Que::C(Conf::Yes),             // review-merge: keep the posture
         Que::C(Conf::Yes),             // review-merge: merge
@@ -567,4 +571,22 @@ fn every_row_reads_as_a_line_a_person_can_follow() {
             "a keyless row printed as {line:?}"
         );
     }
+}
+
+#[test]
+fn the_pin_answer_emits_the_installation_row() {
+    let mut state = State::new(Some(Preset::Balanced), fresh_detect(), false);
+    state
+        .answers
+        .insert("github-app", Answer::Text("99".into()));
+    state
+        .answers
+        .insert("github-app-pin", Answer::Text("7".into()));
+    let rows = pending(&state);
+    assert!(rows
+        .iter()
+        .any(|r| r.key == "github.app_id" && r.value == "99"));
+    assert!(rows
+        .iter()
+        .any(|r| r.key == "github.app_installation_id" && r.value == "7"));
 }

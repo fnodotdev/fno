@@ -321,6 +321,13 @@ pub const STEPS: &[Step] = &[
         effect: "run `gh auth login`; without it fno stays local-only (no PR, no review, no merge)",
     },
     Step {
+        id: "github-app",
+        layer: Layer::Global,
+        kind: Kind::Human,
+        question: "Give the fleet its own GitHub quota?",
+        effect: "run `fno do wizard` and pick the quota offer; it creates the fleet's GitHub App through GitHub's manifest flow and stores the ids and key",
+    },
+    Step {
         id: "concurrency-band",
         layer: Layer::Global,
         kind: Kind::Act,
@@ -2587,6 +2594,22 @@ pub(crate) fn apply_wizard_pending(
                     }
                     Err(e) => {
                         let message = format!("review-merge: {e}");
+                        rep.rows
+                            .push(row("needs_human", "config_set_refused", message.clone()));
+                        rep.needs_human.push(message);
+                    }
+                }
+            }
+            "github-app" => {
+                let pairs = [(p.key.as_str(), p.value.as_str())];
+                match config_set(exe, &pairs, false) {
+                    Ok(path) => {
+                        rep.done
+                            .push(format!("github-app: {} = {}", p.key, p.value));
+                        rep.paths.push(path.display().to_string());
+                    }
+                    Err(e) => {
+                        let message = format!("github-app: {e}");
                         rep.rows
                             .push(row("needs_human", "config_set_refused", message.clone()));
                         rep.needs_human.push(message);
