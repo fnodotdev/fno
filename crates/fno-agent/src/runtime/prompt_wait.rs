@@ -331,7 +331,7 @@ fn run_pass_with(
         runner,
         &Hooks {
             registry: &|home: &AgentsHome| {
-                state::load_registry(&home.registry_json()).map_err(|e| e.to_string())
+                state::load_registry(&home.registry_json()).map_err(|e| WaitError(e.to_string()))
             },
             at_idle: &|short: &str| {
                 crate::thread_dialog::read_thread(&crate::claude_roster::daemon_dir(), short)
@@ -350,7 +350,7 @@ fn run_pass_with(
 /// pass with no screen, no config and no keys.
 struct Hooks<'a> {
     /// The agent registry, read through the seam so a test can fail the read.
-    registry: &'a dyn Fn(&AgentsHome) -> Result<Registry, String>,
+    registry: &'a dyn Fn(&AgentsHome) -> Result<Registry, WaitError>,
     /// True only while the worker's screen reads as an idle, empty prompt.
     at_idle: &'a dyn Fn(&str) -> bool,
     asleep: &'a dyn Fn(&Waiting, i64) -> bool,
@@ -471,7 +471,7 @@ fn load_once(
     match (hooks.registry)(home) {
         Ok(r) => *registry = Some(r),
         Err(e) => {
-            first_error.get_or_insert(e);
+            first_error.get_or_insert(e.0);
         }
     }
 }
@@ -919,9 +919,9 @@ mod tests {
             let at_idle = |_: &str| self.idle.get();
             let registry = |home: &AgentsHome| {
                 if self.registry_down.get() {
-                    return Err("registry read failed".to_string());
+                    return Err(WaitError("registry read failed".to_string()));
                 }
-                state::load_registry(&home.registry_json()).map_err(|e| e.to_string())
+                state::load_registry(&home.registry_json()).map_err(|e| WaitError(e.to_string()))
             };
             let asleep = |_: &Waiting, _: i64| self.asleep.get();
             let deny = |short: &str| {
