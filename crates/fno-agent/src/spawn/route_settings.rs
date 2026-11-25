@@ -368,20 +368,9 @@ pub fn publish_for_row(recorded: &str, session_id: &str) -> Option<String> {
 /// names neither overlay nor sandbox: a plain lane launch carries no
 /// settings file, but a write policy alone still owes the scrub floor. A
 /// non-empty `session` names the returned file `session-<id>.json` (the
-/// resume reader replays the recorded path verbatim).
+/// resume reader replays the recorded path verbatim). `node` is the child's
+/// node from the spawn payload, never the spawner's own env.
 pub fn write_composed(
-    route_env: &Map<String, Value>,
-    account_env: &Map<String, Value>,
-    sandbox: Option<Value>,
-    alias: Option<&str>,
-    session: Option<&str>,
-    cwd: &Path,
-) -> Result<Option<String>, String> {
-    write_composed_for(route_env, account_env, sandbox, alias, session, cwd, None)
-}
-
-/// `write_composed` for a spawn whose payload names the child's `node`.
-pub fn write_composed_for(
     route_env: &Map<String, Value>,
     account_env: &Map<String, Value>,
     sandbox: Option<Value>,
@@ -680,6 +669,7 @@ mod tests {
             None,
             Some(SESSION_ID),
             root.path(),
+            None,
         )
         .unwrap()
         .unwrap();
@@ -726,6 +716,7 @@ mod tests {
             None,
             Some(SESSION_ID),
             root.path(),
+            None,
         )
         .unwrap()
         .unwrap();
@@ -736,6 +727,7 @@ mod tests {
             None,
             Some(SESSION_ID),
             root.path(),
+            None,
         )
         .unwrap()
         .unwrap();
