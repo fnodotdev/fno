@@ -37,6 +37,10 @@ struct Payload {
 struct ToolInput {
     #[serde(default)]
     path: String,
+    #[serde(default)]
+    file_path: String,
+    #[serde(default)]
+    notebook_path: String,
 }
 
 /// Entry: read one PermissionRequest payload, decide, print, always exit 0.
@@ -44,10 +48,14 @@ pub fn run(_args: &[String]) -> i32 {
     let payload: Payload = serde_json::from_str(super::read_stdin().trim()).unwrap_or_default();
     let cwd = payload_cwd(&payload);
     let allowed = bases(&cwd).iter().any(|base| allows(&payload, base));
+    let file_ok = file_work_allowed(&payload, &cwd);
+    if file_ok {
+        super::emit_guard_row(&cwd, GUARD, &payload.tool_name, "allow");
+    }
     if let Some(decision) = row_decision(&payload, allowed) {
         super::emit_guard_row(&cwd, GUARD, "EnterWorktree", decision);
     }
-    if allowed {
+    if allowed || file_ok {
         let out = json!({
             "hookSpecificOutput": {
                 "hookEventName": "PermissionRequest",
@@ -62,6 +70,110 @@ pub fn run(_args: &[String]) -> i32 {
 }
 
 const GUARD: &str = "worktree-relocation-allow";
+
+/// The file a routine tool call touches, and whether it writes. Reads of any
+/// non-secret file and edits inside the worker's own folders never need a
+/// person: the user ruled that routine work raises no prompt.
+fn file_target(payload: &Payload) -> Option<(&str, bool)> {
+    let input = &payload.tool_input;
+    let (raw, write) = match payload.tool_name.as_str() {
+        "Write" | "Edit" | "MultiEdit" => (input.file_path.as_str(), true),
+        "NotebookEdit" => (input.notebook_path.as_str(), true),
+        "Read" => (input.file_path.as_str(), false),
+        _ => return None,
+    };
+    (!raw.is_empty()).then_some((raw, write))
+}
+
+/// Names a routine call never clears: git internals (hooks run code), the
+/// harness's own settings, ssh and cloud credentials, env files, keys, and
+/// fno's config. A prompt stays for each.
+fn blocked_name(path: &Path) -> bool {
+    const DIRS: [&str; 5] = [".git", ".claude", ".ssh", ".aws", ".gnupg"];
+    const FILES: [&str; 6] = [
+        "credentials",
+        "config.toml",
+        "settings.yaml",
+        "settings.json",
+        "settings.local.json",
+        "authorized_keys",
+    ];
+    if path
+        .components()
+        .any(|c| DIRS.iter().any(|d| c.as_os_str() == *d))
+    {
+        return true;
+    }
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    name.starts_with(".env")
+        || name.starts_with("id_rsa")
+        || name.starts_with("id_ed25519")
+        || name.ends_with(".pem")
+        || name.ends_with(".key")
+        || FILES.contains(&name.as_str())
+}
+
+/// The real path of a call's target. A file that does not exist yet resolves
+/// through its parent, so a new file in an allowed folder counts.
+fn real_path(raw: &str, cwd: &Path) -> Option<PathBuf> {
+    let joined = cwd.join(raw);
+    if let Ok(real) = joined.canonicalize() {
+        return Some(real);
+    }
+    let name = joined.file_name()?.to_owned();
+    Some(joined.parent()?.canonicalize().ok()?.join(name))
+}
+
+/// The worker's own worktree: `<base>/<repo>/<node>` for the base `cwd` sits
+/// under. A session outside every base has none, so it earns no edit rule.
+fn worktree_root(cwd: &Path) -> Option<PathBuf> {
+    let real = cwd.canonicalize().ok()?;
+    bases(cwd).iter().find_map(|base| {
+        let base = base.canonicalize().ok()?;
+        let rest = real.strip_prefix(&base).ok()?;
+        let mut parts = rest.components().take(2);
+        let (repo, node) = (parts.next()?, parts.next()?);
+        Some(base.join(repo).join(node))
+    })
+}
+
+fn write_roots(cwd: &Path) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = worktree_root(cwd).into_iter().collect();
+    if let Some(job) = std::env::var_os("CLAUDE_JOB_DIR") {
+        roots.push(PathBuf::from(job));
+    }
+    roots.extend(crate::paths_cli::state_dir_absolute(cwd).ok());
+    roots.push(crate::paths_cli::state_root_for_worktrees(cwd));
+    roots.extend(crate::paths_cli::plans_dir_for(cwd));
+    roots
+        .into_iter()
+        .filter_map(|r| r.canonicalize().ok())
+        .collect()
+}
+
+fn under_roots(path: &Path, roots: &[PathBuf]) -> bool {
+    roots
+        .iter()
+        .any(|root| path != root.as_path() && path.starts_with(root))
+}
+
+/// True for a Read of a non-secret file, or an edit strictly inside the
+/// worker's worktree, its job tmp, the fno state folders or the plan vault.
+fn file_work_allowed(payload: &Payload, cwd: &Path) -> bool {
+    let Some((raw, write)) = file_target(payload) else {
+        return false;
+    };
+    let Some(path) = real_path(raw, cwd) else {
+        return false;
+    };
+    if blocked_name(&path) {
+        return false;
+    }
+    !write || under_roots(&path, &write_roots(cwd))
+}
 
 /// The `path` of an EnterWorktree call, the only shape that relocates. The
 /// create form (`name`) stays inside the repo and never prompts.
@@ -205,5 +317,41 @@ mod tests {
         let link = base.join("link");
         std::os::unix::fs::symlink(&outside, &link).unwrap();
         assert!(!allows(&call(tmp.path(), &link.to_string_lossy()), &base));
+    }
+
+    #[test]
+    fn routine_file_work_is_allowed_and_secrets_and_outsiders_keep_the_prompt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let roots = vec![root.join("worktrees/repo/node")];
+        std::fs::create_dir_all(&roots[0]).unwrap();
+        let inside = roots[0].join("src/lib.rs");
+        assert!(under_roots(&inside, &roots), "a file in the worktree");
+        assert!(!under_roots(&roots[0], &roots), "the root itself");
+        assert!(!under_roots(&root.join("elsewhere/x.rs"), &roots));
+        for blocked in [
+            ".git/hooks/pre-commit",
+            ".claude/settings.json",
+            "deploy/.env.production",
+            "keys/server.pem",
+            "home/.ssh/config",
+            ".fno/config.toml",
+        ] {
+            assert!(blocked_name(Path::new(blocked)), "{blocked}");
+        }
+        assert!(!blocked_name(Path::new("src/runtime/prompt_wait.rs")));
+        let write: Payload = serde_json::from_value(
+            json!({"tool_name": "Write", "tool_input": {"file_path": "a.rs"}}),
+        )
+        .unwrap();
+        assert_eq!(file_target(&write), Some(("a.rs", true)));
+        let read: Payload = serde_json::from_value(
+            json!({"tool_name": "Read", "tool_input": {"file_path": "a.rs"}}),
+        )
+        .unwrap();
+        assert_eq!(file_target(&read), Some(("a.rs", false)));
+        let bash: Payload =
+            serde_json::from_value(json!({"tool_name": "Bash", "tool_input": {}})).unwrap();
+        assert_eq!(file_target(&bash), None);
     }
 }
