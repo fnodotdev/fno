@@ -124,7 +124,7 @@ pub struct Screen {
 
 /// The fixed screen order. The wizard never reorders; a false `when`
 /// records a skip and moves on.
-pub const SCREENS: [Screen; 19] = [
+pub const SCREENS: [Screen; 20] = [
     Screen {
         id: "preflight",
         when: When::Always,
@@ -158,6 +158,11 @@ pub const SCREENS: [Screen; 19] = [
     Screen {
         id: "keys",
         when: When::NeedsKey,
+        stops: [false, true, true],
+    },
+    Screen {
+        id: "github-app",
+        when: When::Always,
         stops: [false, true, true],
     },
     Screen {
@@ -506,6 +511,7 @@ pub fn step(state: &mut State, pr: &mut dyn Prompter, pb: &mut dyn Probes) -> Ne
         "harnesses" => screen_harnesses(state, pr, pb, stops),
         "models" => screen_models(state, pr, pb, stops),
         "keys" => screen_keys(state, pr, stops),
+        "github-app" => screen_github_app(state, pr, stops),
         "budget" => screen_budget(state, pr, stops),
         "review-merge" => screen_review_merge(state, pr, stops),
         "interview" => screen_interview(state, pr, stops),
@@ -916,6 +922,128 @@ fn screen_keys(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outcome
         }
     }
     state.answers.insert("keys", Answer::Picked(stored));
+    Outcome::Forward
+}
+
+/// The fleet's own GitHub App through GitHub's manifest flow. The screen
+/// runs the exchange live because the redirect code is a credential and
+/// never enters state; only the public App id rides the proposal, which
+/// apply writes through the locked config writer. Default off.
+fn screen_github_app(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outcome {
+    let flow = crate::setup::github_app_flow;
+    if !stops {
+        return Outcome::Forward;
+    }
+    if flow::configured_app_id().is_some() {
+        pr.note(
+            "github-app",
+            "A fleet GitHub App is already configured (github.app_id). Leaving it as it is.",
+        );
+        return Outcome::Forward;
+    }
+    let wants = match confirm_flow(
+        state,
+        pr,
+        "github-app",
+        "Give the fleet its own GitHub quota? Creates a GitHub App in your account through GitHub's manifest flow; without it fno keeps using your user token.",
+        false,
+    ) {
+        Flow::Answered(true) => true,
+        Flow::Answered(false) => false,
+        Flow::Back => return Outcome::Back,
+        Flow::Cancel => return Outcome::Cancel,
+    };
+    if !wants {
+        state.answers.insert("github-app", Answer::No);
+        return Outcome::Forward;
+    }
+    let nonce = flow::state_nonce();
+    let name = flow::app_name();
+    let launcher = std::env::temp_dir().join("fno-fleet-app.html");
+    if let Err(fault) = flow::write_launcher(&launcher, &nonce, &name) {
+        pr.note(
+            "github-app",
+            &format!("Setup could not write the launcher page, so nothing was written: {fault}"),
+        );
+        state.answers.insert("github-app", Answer::No);
+        return Outcome::Forward;
+    }
+    pr.note(
+        "github-app",
+        "GitHub's App creation page opens, prefilled for the fleet. Click Create; GitHub bounces to a page whose address bar carries ?code=... and your launcher's state.",
+    );
+    if !flow::open_in_browser(&launcher) {
+        pr.note(
+            "github-app",
+            &format!(
+                "No browser opened. Open {} in a browser on any machine, then click Create.",
+                launcher.display()
+            ),
+        );
+    }
+    let code = match pr.secret(
+        "github-app",
+        "Paste the code= value from the redirected address bar",
+    ) {
+        Hidden::Value(code) => code,
+        Hidden::Back => return Outcome::Back,
+        Hidden::Cancel => return Outcome::Cancel,
+        Hidden::Skipped => {
+            pr.note(
+                "github-app",
+                "Skipped. Nothing was written; your user token stays the default.",
+            );
+            state.answers.insert("github-app", Answer::No);
+            return Outcome::Forward;
+        }
+    };
+    pr.progress("github-app", "Exchanging the code with GitHub");
+    let conversion = match flow::exchange(code.trim()) {
+        Ok(conversion) => conversion,
+        Err(fault) => {
+            pr.note(
+                "github-app",
+                &format!(
+                    "The exchange failed, so nothing was written: {fault}. The App may exist on GitHub; delete it there or rerun setup later."
+                ),
+            );
+            state.answers.insert("github-app", Answer::No);
+            return Outcome::Forward;
+        }
+    };
+    let key_path = match flow::default_key_path() {
+        Ok(path) => path,
+        Err(fault) => {
+            pr.note(
+                "github-app",
+                &format!(
+                    "Setup could not resolve the key path, so nothing was written: {fault}. The App exists on GitHub; download its key from the App settings page or rerun setup."
+                ),
+            );
+            state.answers.insert("github-app", Answer::No);
+            return Outcome::Forward;
+        }
+    };
+    if let Err(fault) = flow::write_key(&key_path, &conversion.pem) {
+        pr.note(
+            "github-app",
+            &format!(
+                "Setup could not write the key, so config is untouched: {fault}. The App exists on GitHub; download its key from the App settings page or rerun setup."
+            ),
+        );
+        state.answers.insert("github-app", Answer::No);
+        return Outcome::Forward;
+    }
+    pr.note(
+        "github-app",
+        &format!(
+            "The App {} is created and its key is stored. Install it on your repos: https://github.com/apps/{}/installations/new - the installation resolves by owner match; a github.app_installation_id pin is optional.",
+            conversion.slug, conversion.slug
+        ),
+    );
+    state
+        .answers
+        .insert("github-app", Answer::Text(conversion.app_id));
     Outcome::Forward
 }
 
@@ -1609,6 +1737,16 @@ pub fn pending(state: &State) -> Vec<Proposal> {
             });
         }
         _ => {}
+    }
+    if let Some(Answer::Text(app_id)) = state.answers.get("github-app") {
+        rows.push(Proposal {
+            id: "github-app",
+            key: "github.app_id",
+            value: app_id.clone(),
+            scope: "global",
+            reason: "the fleet App this run created",
+            source: "wizard",
+        });
     }
     // The interview's keyed rows; one nested constructor keeps the
     // struct-literal noise down across the four shapes.
