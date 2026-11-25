@@ -2983,13 +2983,16 @@ pub(crate) fn print_word_in_argv(argv: &[String]) -> bool {
 /// A claude print run typed by hand: one nobody spawned through fno. The
 /// entrypoint does not mark this form, so the word is read off the CLI's own
 /// argv, at the pid the CLI hands every hook. A spawn keeps the row it was
-/// given, and a CLI that hands no pid reads as interactive.
+/// given, and a CLI that hands no pid reads as interactive. macOS only:
+/// elsewhere the argv is `ps` output split on whitespace, so a prompt word
+/// can read as the flag, and a wrong stamp stays on the row.
 pub(crate) fn typed_print_run(
     agent_self: Option<&str>,
     harness: Option<&str>,
     pid: Option<u32>,
 ) -> bool {
-    agent_self.is_none()
+    cfg!(target_os = "macos")
+        && agent_self.is_none()
         && harness.map(Harness::parse) == Some(Harness::Claude)
         && pid
             .and_then(crate::census::process_argv)
@@ -3966,7 +3969,9 @@ mod tests {
         );
         print.kill().unwrap();
         plain.kill().unwrap();
-        assert!(read_print);
+        // The word is read only where the argv is exact, so the stamp is
+        // macOS's alone. Elsewhere the same pid reads as interactive.
+        assert_eq!(read_print, cfg!(target_os = "macos"));
         assert!(!read_plain);
     }
 
