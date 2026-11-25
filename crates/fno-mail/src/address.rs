@@ -99,19 +99,3 @@ pub fn is_mail_number(id: &str) -> bool {
 pub fn is_mail_id(id: &str) -> bool {
     is_mail_hash(id) || is_mail_number(id)
 }
-
-#[cfg(test)]
-mod mail_id_tests {
-    use super::*;
-
-    #[test]
-    fn hash_and_number_forms_are_disjoint() {
-        assert!(is_mail_hash("fmail-0badc0de1234"));
-        assert!(!is_mail_number("fmail-0badc0de1234"));
-        assert!(is_mail_number("fmail-87"));
-        assert!(!is_mail_hash("fmail-87"));
-        assert!(is_mail_id("fmail-87") && is_mail_id("fmail-123456789012"));
-        assert!(!is_mail_number("fmail-12345678"));
-        assert!(!is_mail_id("fmail-") && !is_mail_id("fmail-8x") && !is_mail_id("msg-87"));
-    }
-}

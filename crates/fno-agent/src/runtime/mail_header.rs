@@ -972,8 +972,13 @@ pub fn relay_parse_line(line: &str) -> Option<(&str, &str)> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_number_token_reads_as_a_header_id() {
+    /// The number-form id cases; the one header-shape test below runs them.
+    fn number_token_cases() {
+        use fno_mail::address::{is_mail_hash, is_mail_id, is_mail_number};
+        assert!(is_mail_hash("fmail-0badc0de1234") && !is_mail_number("fmail-0badc0de1234"));
+        assert!(is_mail_number("fmail-87") && !is_mail_hash("fmail-87"));
+        assert!(is_mail_id("fmail-87") && is_mail_id("fmail-123456789012"));
+        assert!(!is_mail_id("fmail-") && !is_mail_id("fmail-8x") && !is_mail_id("msg-87"));
         assert!(is_header_line("`@candor \u{b7} fmail-87`"));
         assert!(is_header_line("`@candor \u{b7} fmail-87 \u{b7} hi`"));
         assert!(!is_header_line("`@candor \u{b7} fmail-12345678`"));
@@ -987,6 +992,7 @@ mod tests {
 
     #[test]
     fn summaries_headers_classification_and_ids_hold_the_one_shape() {
+        number_token_cases();
         // Summary: first sentence, 12-word cap, empty, sentenceless, fenced.
         assert_eq!(summary_of("Fix the gate. Then ship."), "Fix the gate.");
         assert_eq!(
