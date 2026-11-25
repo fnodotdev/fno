@@ -1074,9 +1074,9 @@ mod tests {
         let path = temp_path("due-pass");
         let now = 1_000_000u64;
         let row = || json!({"id": "D3634", "ts": ts_rfc3339(now as i64 - 3 * 86_400), "question": "vanished ask"});
-        let mut sends: u32 = 0;
-        let mut send = |_: &str, _: &str| {
-            sends += 1;
+        let sends = std::cell::Cell::new(0u32);
+        let send = |_: &str, _: &str| {
+            sends.set(sends.get() + 1);
             true
         };
         let mut acted = 0u64;
@@ -1094,7 +1094,7 @@ mod tests {
             &mut notes,
             &mut send,
         );
-        assert_eq!(sends, 1, "first window sends");
+        assert_eq!(sends.get(), 1, "first window sends");
         assert!(notes.contains(&format!("{DUE_KEY}:sent")), "{notes:?}");
 
         // A re-read of the same state stays quiet.
@@ -1107,7 +1107,7 @@ mod tests {
             &mut notes,
             &mut send,
         );
-        assert_eq!(sends, 1, "same state dedupes");
+        assert_eq!(sends.get(), 1, "same state dedupes");
         assert!(notes.contains(&format!("{DUE_KEY}:deduped")), "{notes:?}");
 
         // The next window is new state: it re-fires. This is the ladder.
@@ -1120,7 +1120,7 @@ mod tests {
             &mut notes,
             &mut send,
         );
-        assert_eq!(sends, 2, "next window re-fires");
+        assert_eq!(sends.get(), 2, "next window re-fires");
         assert!(notes.contains(&format!("{DUE_KEY}:sent")), "{notes:?}");
 
         // An answer empties the set: the clear note lands and the key is
@@ -1134,7 +1134,7 @@ mod tests {
             &mut notes,
             &mut send,
         );
-        assert_eq!(sends, 2);
+        assert_eq!(sends.get(), 2);
         assert!(notes.contains(&format!("{DUE_KEY}:clear")), "{notes:?}");
         assert!(load_store(&path).get(DUE_KEY).is_none(), "key forgotten");
         std::fs::remove_file(&path).ok();
