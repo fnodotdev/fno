@@ -86,20 +86,6 @@ impl Op {
         }
     }
 
-    /// Whether the op writes host or GitHub state, so a replayed sequence
-    /// number must never run it twice.
-    pub fn writes(&self) -> bool {
-        !matches!(
-            self,
-            Self::NodeGet
-                | Self::TargetStart
-                | Self::TargetStatus
-                | Self::ClaimStatus
-                | Self::PrStatus
-                | Self::PrComments
-        )
-    }
-
     /// Every text field within its cap. Run before the op leaves the guest
     /// and again on the host.
     pub fn check(&self) -> Res<()> {
