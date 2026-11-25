@@ -66,6 +66,8 @@ pub(crate) struct FeedOverlay {
     pub(crate) slots: Vec<Slot>,
     /// Rows that pass the query and every column filter.
     pub(crate) matched: usize,
+    /// The widest value of each capped column over the held rows.
+    pub(crate) widths: ValueWidths,
     /// The open sort or group picker.
     pub(crate) picker: Option<picker::FeedPicker>,
     /// The active query text; empty means unfiltered.
@@ -120,6 +122,7 @@ pub(crate) fn open_overlay(prior: Option<FeedOverlay>, gen: u64) -> FeedOverlay 
         view,
         slots: Vec::new(),
         matched: 0,
+        widths: ValueWidths::default(),
         picker: None,
         query_text,
         parsed,
@@ -145,7 +148,46 @@ pub(crate) fn reslot(f: &mut FeedOverlay) {
     });
     f.slots = slots;
     f.matched = matched;
+    f.widths = ValueWidths::of(&f.win.items);
     f.sel = f.sel.min(f.slots.len().saturating_sub(1));
+}
+
+/// The widest value, in display columns, of each column that has a cap,
+/// already capped: area and harness 8, kind 16, node and session tail 8,
+/// lead 12. One pass over the rows per re-slot, so a paint reads them free.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub(crate) struct ValueWidths {
+    pub area: usize,
+    pub harness: usize,
+    pub kind: usize,
+    pub node: usize,
+    pub session: usize,
+    pub lead: usize,
+}
+
+impl ValueWidths {
+    fn of(items: &[FeedItem]) -> ValueWidths {
+        let dw = |s: &str| unicode_width::UnicodeWidthStr::width(s);
+        let mut w = ValueWidths::default();
+        for it in items {
+            w.area = w.area.max(dw(&it.area));
+            w.harness = w.harness.max(it.harness.as_deref().map_or(0, dw));
+            w.kind = w.kind.max(dw(display_kind(&it.kind)));
+            w.node = w.node.max(it.node.as_deref().map_or(0, dw));
+            w.session = w
+                .session
+                .max(it.session_id.as_deref().map_or(0, |s| dw(&session_tail(s))));
+            w.lead = w.lead.max(it.lead.as_deref().map_or(0, dw));
+        }
+        ValueWidths {
+            area: w.area.min(8),
+            harness: w.harness.min(8),
+            kind: w.kind.min(16),
+            node: w.node.min(8),
+            session: w.session.min(8),
+            lead: w.lead.min(12),
+        }
+    }
 }
 
 /// True when a row renders in the teams band: a team kind, or a removal
@@ -210,66 +252,17 @@ pub(crate) fn feed_panel_rows(
     // the value count on a filtered one, so color is never the only signal.
     let [t_time, t_area, t_harness, t_kind, t_node, t_session, t_lead, t_summary] =
         table::Col::ALL.map(|c| column_title(&o.view, c));
-    // A cell is as wide as its widest value, capped; the title always fits.
-    let col_w = |title: &str, cap: usize, vals: Vec<usize>| {
-        let title = dw(title);
-        vals.into_iter().fold(title, usize::max).min(cap.max(title))
-    };
+    // A cell is as wide as its widest value, capped (measured once per
+    // re-slot, never per paint); the title always fits.
+    let vw = &o.widths;
+    let col_w = |title: &str, value_w: usize| dw(title).max(value_w);
     let ts_w = ts_w.max(dw(&t_time));
-    let area_w = col_w(
-        &t_area,
-        8,
-        o.win.items.iter().map(|i| dw(&i.area)).collect(),
-    );
-    let harness_w = col_w(
-        &t_harness,
-        8,
-        o.win
-            .items
-            .iter()
-            .filter_map(|i| i.harness.as_deref())
-            .map(dw)
-            .collect(),
-    );
-    let kind_w = col_w(
-        &t_kind,
-        16,
-        o.win
-            .items
-            .iter()
-            .map(|i| dw(display_kind(&i.kind)))
-            .collect(),
-    );
-    let node_w = col_w(
-        &t_node,
-        8,
-        o.win
-            .items
-            .iter()
-            .filter_map(|i| i.node.as_deref())
-            .map(dw)
-            .collect(),
-    );
-    let session_w = col_w(
-        &t_session,
-        8,
-        o.win
-            .items
-            .iter()
-            .filter_map(|i| i.session_id.as_deref().map(session_tail))
-            .map(|s| dw(&s))
-            .collect(),
-    );
-    let lead_w = col_w(
-        &t_lead,
-        12,
-        o.win
-            .items
-            .iter()
-            .filter_map(|i| i.lead.as_deref())
-            .map(dw)
-            .collect(),
-    );
+    let area_w = col_w(&t_area, vw.area);
+    let harness_w = col_w(&t_harness, vw.harness);
+    let kind_w = col_w(&t_kind, vw.kind);
+    let node_w = col_w(&t_node, vw.node);
+    let session_w = col_w(&t_session, vw.session);
+    let lead_w = col_w(&t_lead, vw.lead);
     // The rows show only what fits the cap: a longer value ellipsizes to
     // cap-1 columns plus the ellipsis, so the next column never moves.
     let fit_cell = |s: &str, cap: usize| -> String {
@@ -1301,6 +1294,56 @@ fn column_at(f: &FeedOverlay, w: usize, at: usize) -> Option<table::Col> {
     None
 }
 
+/// Run the open picker's selected choice and close it: a sort, group or
+/// value pick changes the view, and the filter's column step opens the
+/// values of that column. The Enter key and a click share this.
+fn pick_open_picker(view: &mut View) {
+    let Some(p) = view.feed.as_mut().and_then(|f| f.picker.take()) else {
+        return;
+    };
+    if p.kind == picker::PickerKind::FilterCol {
+        let mut scratch = table::TableView::default();
+        if let picker::Picked::Values(col) = p.pick(&mut scratch) {
+            open_values_picker(view, col);
+        }
+    } else {
+        change_view(view, |v| {
+            p.pick(v);
+        });
+    }
+}
+
+/// One mouse report while a picker is open: the picker owns the pointer. A
+/// hover selects, a click on a choice picks it, a click off the popup closes
+/// it, and no press reaches the rows or a pane under it.
+pub(crate) fn picker_mouse(view: &mut View, rep: crate::mouse::MouseReport) {
+    let term = view.term;
+    let Some(p) = view.feed.as_mut().and_then(|f| f.picker.as_mut()) else {
+        return;
+    };
+    let rendered = p.popup.render(term);
+    match rep.kind {
+        MouseKind::Move => {
+            if let Some(t) = rendered.row_target_at(rep.row, rep.col) {
+                p.popup.select(t);
+            }
+        }
+        MouseKind::Press(MouseButton::Left) => match rendered.row_target_at(rep.row, rep.col) {
+            Some(t) => {
+                p.popup.select(t);
+                pick_open_picker(view);
+            }
+            None if !rendered.contains(rep.row, rep.col) => {
+                if let Some(f) = view.feed.as_mut() {
+                    f.picker = None;
+                }
+            }
+            None => {}
+        },
+        _ => {}
+    }
+}
+
 /// The filter's second step: the values of `col` the query and the other
 /// filters leave, with their row counts.
 fn open_values_picker(view: &mut View, col: table::Col) {
@@ -1597,20 +1640,7 @@ pub(crate) async fn feed_keys(
                         p.popup.follow_sel(term);
                     }
                 }
-                ModalKey::Enter => {
-                    if let Some(p) = view.feed.as_mut().and_then(|f| f.picker.take()) {
-                        if p.kind == picker::PickerKind::FilterCol {
-                            let mut scratch = table::TableView::default();
-                            if let picker::Picked::Values(col) = p.pick(&mut scratch) {
-                                open_values_picker(view, col);
-                            }
-                        } else {
-                            change_view(view, |v| {
-                                p.pick(v);
-                            });
-                        }
-                    }
-                }
+                ModalKey::Enter => pick_open_picker(view),
                 ModalKey::Esc => {
                     if let Some(f) = view.feed.as_mut() {
                         f.picker = None;
