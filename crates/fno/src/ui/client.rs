@@ -4038,8 +4038,7 @@ impl View {
     }
 
     /// Compose the full-terminal frame: tab bar, sideline, dividers, panes.
-    /// Pure - all the drawing machinery (row diff, styles, wide-spacer
-    /// handling) stays in [`Compositor`].
+    /// All drawing machinery (row diff, styles) stays in [`Compositor`].
     fn compose(&self) -> Frame {
         crate::paint_stats::mark_compose_start();
         self.compose_at(Instant::now())
@@ -5935,9 +5934,8 @@ async fn attach_and_run(
     let cwd = std::env::current_dir()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
-    // Chrome is client-local: report the CONTENT area. A placeholder View
-    // computes it before any Layout exists. The session name is the socket
-    // stem by construction (`proto::socket_path`).
+    // Chrome is client-local: a placeholder View computes the CONTENT area.
+    // The session name is the socket stem (`proto::socket_path`).
     let session = socket
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
