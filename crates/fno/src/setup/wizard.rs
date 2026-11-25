@@ -930,11 +930,11 @@ fn screen_keys(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outcome
 /// never enters state; only the public App id rides the proposal, which
 /// apply writes through the locked config writer. Default off.
 fn screen_github_app(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outcome {
-    use crate::setup::github_app_flow as flow;
+    use crate::setup::github_app_flow;
     if !stops {
         return Outcome::Forward;
     }
-    if flow::configured_app_id().is_some() {
+    if github_app_flow::configured_app_id().is_some() {
         pr.note(
             "github-app",
             "A fleet GitHub App is already configured (github.app_id). Leaving it as it is.",
@@ -957,6 +957,34 @@ fn screen_github_app(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> O
         state.answers.insert("github-app", Answer::No);
         return Outcome::Forward;
     }
+    let conversion = match github_app_round_trip(pr) {
+        RoundTrip::Created { app_id } => app_id,
+        RoundTrip::Back => return Outcome::Back,
+        RoundTrip::Cancel => return Outcome::Cancel,
+        RoundTrip::Refused => {
+            state.answers.insert("github-app", Answer::No);
+            return Outcome::Forward;
+        }
+    };
+    state.answers.insert("github-app", Answer::Text(conversion));
+    Outcome::Forward
+}
+
+/// How the launcher round-trip ended. `Created` carries only the public
+/// App id; the pem never leaves the flow module and the paste code never
+/// enters state.
+enum RoundTrip {
+    Created { app_id: String },
+    Back,
+    Cancel,
+    Refused,
+}
+
+/// One launcher round-trip: write the launcher, open it, collect the
+/// paste, exchange the code, and store the key. Every refusal notes itself
+/// and names what was written; Back and Cancel bubble untouched.
+fn github_app_round_trip(pr: &mut dyn Prompter) -> RoundTrip {
+    use crate::setup::github_app_flow as flow;
     let nonce = flow::state_nonce();
     let name = flow::app_name();
     let launcher = std::env::temp_dir().join("fno-fleet-app.html");
@@ -965,8 +993,7 @@ fn screen_github_app(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> O
             "github-app",
             &format!("Setup could not write the launcher page, so nothing was written: {fault}"),
         );
-        state.answers.insert("github-app", Answer::No);
-        return Outcome::Forward;
+        return RoundTrip::Refused;
     }
     pr.note(
         "github-app",
@@ -986,15 +1013,14 @@ fn screen_github_app(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> O
         "Paste the code= value from the redirected address bar",
     ) {
         Hidden::Value(code) => code,
-        Hidden::Back => return Outcome::Back,
-        Hidden::Cancel => return Outcome::Cancel,
+        Hidden::Back => return RoundTrip::Back,
+        Hidden::Cancel => return RoundTrip::Cancel,
         Hidden::Skipped => {
             pr.note(
                 "github-app",
                 "Skipped. Nothing was written; your user token stays the default.",
             );
-            state.answers.insert("github-app", Answer::No);
-            return Outcome::Forward;
+            return RoundTrip::Refused;
         }
     };
     pr.progress("github-app", "Exchanging the code with GitHub");
@@ -1007,8 +1033,7 @@ fn screen_github_app(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> O
                     "The exchange failed, so nothing was written: {fault}. The App may exist on GitHub; delete it there or rerun setup later."
                 ),
             );
-            state.answers.insert("github-app", Answer::No);
-            return Outcome::Forward;
+            return RoundTrip::Refused;
         }
     };
     let key_path = match flow::default_key_path() {
@@ -1020,8 +1045,7 @@ fn screen_github_app(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> O
                     "Setup could not resolve the key path, so nothing was written: {fault}. The App exists on GitHub; download its key from the App settings page or rerun setup."
                 ),
             );
-            state.answers.insert("github-app", Answer::No);
-            return Outcome::Forward;
+            return RoundTrip::Refused;
         }
     };
     if let Err(fault) = flow::write_key(&key_path, &conversion.pem) {
@@ -1031,8 +1055,7 @@ fn screen_github_app(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> O
                 "Setup could not write the key, so config is untouched: {fault}. The App exists on GitHub; download its key from the App settings page or rerun setup."
             ),
         );
-        state.answers.insert("github-app", Answer::No);
-        return Outcome::Forward;
+        return RoundTrip::Refused;
     }
     pr.note(
         "github-app",
@@ -1041,10 +1064,9 @@ fn screen_github_app(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> O
             conversion.slug, conversion.slug
         ),
     );
-    state
-        .answers
-        .insert("github-app", Answer::Text(conversion.app_id));
-    Outcome::Forward
+    RoundTrip::Created {
+        app_id: conversion.app_id,
+    }
 }
 
 fn screen_budget(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outcome {

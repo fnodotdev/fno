@@ -242,7 +242,8 @@ pub(crate) fn write_key(path: &Path, pem: &str) -> Result<(), FlowFault> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+                .map_err(|e| FlowFault::Io(e.to_string()))?;
         }
     }
     let tmp = path.with_extension(format!("tmp{}", std::process::id()));
@@ -314,7 +315,7 @@ mod tests {
         let path = dir.join("fno-fleet-app.html");
         write_launcher(&path, "fno-state-1", "fno-test").unwrap();
         let page = std::fs::read_to_string(&path).unwrap();
-        assert!(page.contains("name=\"manifest\""));
+        assert!(page.contains("i.name = 'manifest'"));
         assert!(page.contains("settings/apps/new"));
         assert!(page.contains("organizations/' + encodeURIComponent(org)"));
         assert!(page.contains("state fno-state-1"));
