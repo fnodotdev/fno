@@ -592,15 +592,14 @@ impl Core {
         // The rows the sideline leaves out, by place in `out`: never by name,
         // since an exited and a live row can share one.
         let mut off_sideline_at = Vec::new();
-        for (i, a) in self.agents.iter().enumerate() {
+        for (claimed, a) in consumed.iter().zip(&self.agents) {
             // Only a session a person can type into gets a sideline row. A
             // headless run shows in the shell that started it: its registry
             // row keeps the session id and events, read by name. One a person
             // asked to watch (`fno agent spawn --mux`) keeps its place. The
             // row is still built, for the sidecar below, and leaves `out` after it.
-            let off_sideline =
-                !consumed[i] && a.substrate.as_deref() == Some("headless") && !a.watch;
-            if consumed[i] {
+            let off_sideline = a.substrate.as_deref() == Some("headless") && !a.watch;
+            if *claimed {
                 continue;
             }
             let at = out.len();
