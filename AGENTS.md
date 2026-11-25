@@ -122,7 +122,7 @@ NEVER edit these directly (a `PreToolUse` hook detects it). Use `fno backlog` / 
 |------|---------|---------|-------|
 | `paths.graph_json()` | `~/.fno/db/graph.db` | SQLite; stable `graph.json` path anchor | backlog |
 | `paths.ledger_json()` | `~/.fno/ledger.json` | Execution history + cost | target |
-| `paths.briefs_dir()` | `~/.fno/briefs/{id}.md` | Sidecar discovery briefs | backlog |
+| `paths.briefs_dir()` | `~/.fno/db/briefs/{id}.md` | Sidecar discovery briefs | backlog |
 | `<space>/worktrees/<name>/target-state.md` | repo space | Immutable session manifest | target |
 | `<space>/worktrees/<name>/STATE.md` / `SUMMARY.md` / `00-INDEX.md` | repo space | Wave progress / completion / strategy | /execute, operator, /blueprint |
 | `{plan_path}.artifacts/` | plan-relative | Quick-plan sidecar | target stop hook |
