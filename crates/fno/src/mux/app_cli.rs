@@ -364,6 +364,10 @@ const DEMO_EPOCH: i64 = 1_794_096_000;
 /// The demo chat session: the transcript file the seed writes and the
 /// adopt seed registers, one uuid both sides name.
 const DEMO_CHAT_SESSION: &str = "00000000-0000-4000-8000-000000000001";
+/// The pi and omp demo session. Not the claude uuid: the transcript scan
+/// returns the first file carrying a wanted uuid, so a shared one would
+/// open the claude file.
+const DEMO_PI_SESSION: &str = "00000000-0000-4000-8000-000000000002";
 
 /// Seed the world's graph through the front door's own backlog, one
 /// deterministic mint per card. Any refusal tears the world down, so a
@@ -604,7 +608,7 @@ fn seed_pi_family(root: &Path, harness: &str) -> bool {
     let rows = format!(
         "{lead}{}",
         concat!(
-            r#"{"type":"session","version":3,"id":"00000000-0000-4000-8000-000000000001","timestamp":"2026-11-24T10:00:00.000Z","cwd":"/shot"}"#,
+            r#"{"type":"session","version":3,"id":"00000000-0000-4000-8000-000000000002","timestamp":"2026-11-24T10:00:00.000Z","cwd":"/shot"}"#,
             "\n",
             r#"{"type":"message","id":"e1","parentId":null,"timestamp":"2026-11-24T10:00:01.000Z","message":{"role":"user","content":"Which files does the shot door touch?"}}"#,
             "\n",
@@ -616,7 +620,7 @@ fn seed_pi_family(root: &Path, harness: &str) -> bool {
             "\n",
         )
     );
-    let file = dir.join("2026-11-24T10-00-00-000Z_00000000-0000-4000-8000-000000000001.jsonl");
+    let file = dir.join(format!("2026-11-24T10-00-00-000Z_{DEMO_PI_SESSION}.jsonl"));
     match std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(file, rows)) {
         Ok(()) => true,
         Err(e) => {
@@ -725,7 +729,7 @@ fn shot(args: &crate::cli_args::AppShotArgs) -> i32 {
             match args.chat_harness.as_deref() {
                 Some(harness) => cmd
                     .arg("--chat")
-                    .arg(format!("{harness}:{DEMO_CHAT_SESSION}")),
+                    .arg(format!("{harness}:{DEMO_PI_SESSION}")),
                 None => cmd.arg("--chat").arg(DEMO_CHAT_SESSION),
             };
         }
