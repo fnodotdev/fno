@@ -117,6 +117,8 @@ on_unavailable = "refuse"
 provider = "none"
 # The image a sandboxed worker runs. Unset builds the embedded recipe with the host rev's Linux binaries from bin-cache. Read from global config only: a project value is ignored with a notice.
 # image = <unset>   # optional; no default
+# Runs the sandbox engine on a Linux VM you own, as ssh://[user@]host[:port]. The engine CLI reaches the VM's docker or podman over ssh; the relay and the claim stay on this host, and the VM gets no GitHub token and no route back. The host must be in known_hosts, and an ssh config that forwards the agent or a port refuses. Unset runs the engine locally. Read from global config only.
+# host = <unset>   # optional; no default
 
 [blueprint]
 # Hard ceiling on the PRs one plan or decomposed epic may open; an epic's max_children and --max-prs may only tighten it, and fno-agent wave check warns on a plan that declares more.
