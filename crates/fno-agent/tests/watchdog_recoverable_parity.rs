@@ -252,7 +252,12 @@ fn apply_adopts_with_the_follow_up_path_on_the_row() {
     // The law arm: the same rollout with its join trigger removed holds no
     // law cause, so the batch skips it and the registry gains no row.
     let unmarked = Fixture::new(&["complete_files"]);
-    let selected = unmarked.golden["selected"].as_str().unwrap().to_string();
+    let selected = unmarked
+        .golden
+        .get("selected")
+        .and_then(Value::as_str)
+        .unwrap()
+        .to_string();
     let marker = unmarked
         .sessions()
         .join("codex")
@@ -262,7 +267,7 @@ fn apply_adopts_with_the_follow_up_path_on_the_row() {
     let (_, _, scan) = unmarked.sweep(Some(&selected));
     let results = apply_recoverable_with(&scan, &unmarked.registry(), None);
     assert_eq!(results.len(), 1, "{results:?}");
-    let skipped = &results[0];
+    let skipped = results.first().unwrap();
     assert_eq!(skipped["session_id"], json!(selected));
     assert_eq!(skipped["outcome"], "skipped");
     assert_eq!(skipped["reason"], "law_refused");
