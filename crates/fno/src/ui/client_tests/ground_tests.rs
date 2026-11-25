@@ -18,6 +18,7 @@ fn the_ground_fills_default_background_cells() {
         cursor_visible: false,
         scroll_offset: 0,
         history_lines: 0,
+        blocks: Vec::new(),
     };
     let mut out = Vec::new();
     compositor
@@ -44,6 +45,7 @@ fn no_ground_leaves_default_backgrounds_untouched() {
         cursor_visible: false,
         scroll_offset: 0,
         history_lines: 0,
+        blocks: Vec::new(),
     };
     let mut out = Vec::new();
     compositor

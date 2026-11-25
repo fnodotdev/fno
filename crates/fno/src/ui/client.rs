@@ -4264,6 +4264,7 @@ impl View {
             // frame's own scroll_offset.
             scroll_offset: 0,
             history_lines: 0,
+            blocks: Vec::new(),
         }
     }
 

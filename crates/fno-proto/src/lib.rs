@@ -444,7 +444,9 @@ fn default_true() -> bool {
 /// (serde default); floor stays 58.
 /// v134: `Command::NewSquad.project` and `SquadMeta.project` (serde default),
 /// the explicit project id a workspace was made for; floor stays 58.
-pub const PROTO_VERSION: u32 = 134;
+/// v135: `Frame.blocks` ([`BlockSpan`], serde default) and `ClientMsg::BlockPick`,
+/// the desktop app's clickable command-block gutter; floor stays 58.
+pub const PROTO_VERSION: u32 = 135;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -2672,6 +2674,28 @@ pub struct Frame {
     /// `history_lines`. `default` keeps an older server's frames decoding.
     #[serde(default)]
     pub history_lines: u32,
+    /// (v135) The command blocks that touch this viewport, oldest first, as
+    /// viewport rows. A client paints its gutter from these and picks one by
+    /// `seq` (`ClientMsg::BlockPick`). Empty for a pane with no OSC 133 blocks.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocks: Vec<BlockSpan>,
+}
+
+/// One command block's rows inside a [`Frame`] (v135). `top` and `bottom` are
+/// inclusive viewport rows, clamped into `0..rows`. They come from grid anchors
+/// that drift under reflow, so a client treats them as a paint hint and names
+/// the block by `seq` when it picks one.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct BlockSpan {
+    pub seq: u64,
+    pub top: u16,
+    pub bottom: u16,
+    /// The command's exit status; `None` while it still runs.
+    pub exit: Option<i32>,
+    /// This block holds the pane's block selection.
+    pub selected: bool,
 }
 
 impl Frame {
@@ -2974,6 +2998,7 @@ mod tests {
             cursor_visible: true,
             scroll_offset: 4,
             history_lines: 0,
+            blocks: Vec::new(),
         }
     }
 

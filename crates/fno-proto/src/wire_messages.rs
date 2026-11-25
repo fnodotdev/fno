@@ -103,6 +103,13 @@ pub enum ClientMsg {
         pane: u64,
         dir: BlockDir,
     },
+    /// (v135) Select the block named by `seq` (the whole command + output span)
+    /// and bring it into view, as a click on its gutter. A `seq` the pane no
+    /// longer retains replies with a `Notice`.
+    BlockPick {
+        pane: u64,
+        seq: u64,
+    },
     /// (v8) Re-send the selected (else newest) block's command line to the pane
     /// PTY. Refused unless the pane is known-idle - a rerun injected into a busy
     /// agent corrupts its composer (false-ready is the forbidden direction).

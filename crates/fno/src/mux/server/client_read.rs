@@ -115,6 +115,19 @@ pub(super) async fn client_reader(mut r: OwnedReadHalf, core_tx: mpsc::Sender<Co
                     break;
                 }
             }
+            Ok(ClientMsg::BlockPick { pane, seq }) => {
+                if core_tx
+                    .send(CoreMsg::BlockNav {
+                        id,
+                        pane,
+                        op: BlockNavOp::Pick(seq),
+                    })
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
             Ok(ClientMsg::BlockRerun { pane }) => {
                 if core_tx
                     .send(CoreMsg::BlockNav {

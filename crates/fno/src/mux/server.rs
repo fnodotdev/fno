@@ -368,6 +368,8 @@ fn reap_plain_child(pid: u32) {
 pub(crate) enum BlockNavOp {
     Jump(BlockDir),
     Select(BlockDir),
+    /// (v135) Select one block by seq: a click on its gutter.
+    Pick(u64),
     Rerun,
 }
 
@@ -8270,6 +8272,13 @@ impl Core {
                 match self.panes.get_mut(&pane).map(|e| e.vt.block_select(dir)) {
                     Some(Some(_)) => self.broadcast_pane(pane),
                     Some(None) => self.notice(client_id, "no command blocks"),
+                    None => self.notice(client_id, "pane not found"),
+                }
+            }
+            BlockNavOp::Pick(seq) => {
+                match self.panes.get_mut(&pane).map(|e| e.vt.block_pick(seq)) {
+                    Some(true) => self.broadcast_pane(pane),
+                    Some(false) => self.notice(client_id, "command block is gone"),
                     None => self.notice(client_id, "pane not found"),
                 }
             }
