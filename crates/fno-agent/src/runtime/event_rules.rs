@@ -1210,13 +1210,17 @@ fn picked_laws(journal: &Path, ctx: &Ctx) -> Vec<String> {
 }
 
 /// The engine's own state folder beside the journal: the per-session
-/// cursors and the judge rows.
+/// cursors and the judge rows. Beside a state root (it holds `db/`) the
+/// layout table places the folder, so it never lands at the root's top.
 fn state_dir(journal: &Path) -> PathBuf {
-    journal
+    let parent = journal
         .parent()
         .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("event-rules")
+        .unwrap_or_else(|| PathBuf::from("."));
+    if parent.join("db").is_dir() {
+        return crate::state_layout::place(&parent, "event-rules");
+    }
+    parent.join("event-rules")
 }
 
 /// The judge rows, oldest first: the rotated copy, then the live file. A

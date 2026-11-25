@@ -1908,7 +1908,10 @@ pub(crate) fn project_events_journal() -> std::path::PathBuf {
 
 /// The same canonical-root walk, run from a caller-named directory instead
 /// of the process cwd. The env-free form exists because a process-wide
-/// `FNO_REPO_ROOT` pin would race the daemon's concurrent emitters.
+/// `FNO_REPO_ROOT` pin would race the daemon's concurrent emitters. A cwd
+/// outside any checkout that is a state root (it holds `db/`) answers its
+/// own journal anchor, so a hook run from `~/.fno` never creates
+/// `~/.fno/.fno/`.
 pub(crate) fn project_events_journal_in(cwd: &std::path::Path) -> std::path::PathBuf {
     let main_root = std::process::Command::new("git")
         .args(["worktree", "list", "--porcelain"])
@@ -1921,9 +1924,12 @@ pub(crate) fn project_events_journal_in(cwd: &std::path::Path) -> std::path::Pat
                 .lines()
                 .find_map(|l| l.strip_prefix("worktree ").map(str::to_string))
         })
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| cwd.to_path_buf());
-    main_root.join(".fno").join("events.jsonl")
+        .map(std::path::PathBuf::from);
+    match main_root {
+        Some(root) => root.join(".fno").join("events.jsonl"),
+        None if cwd.join("db").is_dir() => cwd.join("events.jsonl"),
+        None => cwd.join(".fno").join("events.jsonl"),
+    }
 }
 
 /// Open questions the new law may answer: `read_open_questions`' fold over
