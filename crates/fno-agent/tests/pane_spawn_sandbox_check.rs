@@ -50,7 +50,7 @@ fn run_spawn(pin_config: &str, provider: &str, tag: &str) -> (Option<i32>, Strin
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .and_then(|mut c| c.wait_with_output())
+        .and_then(|c| c.wait_with_output())
         .unwrap();
     let code = out.status.code();
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
