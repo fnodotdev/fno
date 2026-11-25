@@ -664,7 +664,7 @@
     "type": "object"
    },
    "BacklogBlock": {
-    "description": "Backlog hygiene settings (nested under 'config.backlog').\n\n``id_prefix`` / ``id_hex_width`` configure the node-ID minting scheme\n(``<prefix><hex>``). Schema defaults are the LEGACY values - an absent\n``id_prefix`` (``None``) falls back to ``ab-`` at the accessor, and the width\ndefaults to 8 - so an existing ``config.backlog`` block with no id keys is\nbyte-identical. The setup wizard OFFERS width 4 for new installs; that is the\nwizard's default, not the schema default (AC3-FR).",
+    "description": "Backlog hygiene settings (nested under 'config.backlog').\n\n``id_prefix`` / ``id_hex_width`` configure the node-ID minting scheme\n(``<prefix><hex>``). The width defaults to 8 at the accessor. An absent\n``id_prefix`` resolves to the documented fresh-install default ``x`` (one\nresolver, never the legacy ``ab-``; old ``ab-`` ids stay resolvable). The\nsetup wizard OFFERS width 4 for new installs; that is the wizard's default,\nnot the schema default (AC3-FR).",
     "properties": {
      "maintain": {
       "$ref": "#/$defs/MaintainBlock"
@@ -4908,7 +4908,7 @@
    "wizard": "always",
    "question": "Backlog node-ID prefix?",
    "default_source": "repo-slug",
-   "doc": "Prefix for minted node IDs (<=7 chars; not cv-/fu-/tgt-).",
+   "doc": "Prefix for minted node IDs (<=7 chars; not cv-/fu-/tgt-). Unset defaults to x; legacy ab- ids stay resolvable.",
    "edit": "editor"
   },
   {
