@@ -303,15 +303,9 @@ The alias will be removed in a future release."
             "--scope" | "--audience" => door.audience = Some(take(&mut i)?),
             "--why" => door.why = Some(take(&mut i)?),
             "--job" => door.job.push(take(&mut i)?),
-            "--keep" => {
-                let v = take(&mut i)?;
-                door.keep.extend(
-                    v.split(',')
-                        .map(str::trim)
-                        .filter(|k| !k.is_empty())
-                        .map(String::from),
-                );
-            }
+            "--keep" => door
+                .keep
+                .extend(crate::law_reach::split_ids(&take(&mut i)?)),
             "--decided-by" => door.decided_by = Some(take(&mut i)?),
             "--authority" => door.authority = Some(take(&mut i)?),
             "--graduation" => door.graduation = Some(take(&mut i)?),

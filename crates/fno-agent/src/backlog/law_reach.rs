@@ -102,6 +102,15 @@ pub(crate) fn decide_near_refusal(
     unnamed_near_refusal(&near, supersedes, keep)
 }
 
+/// A `--keep` value read as ids: one id, or a comma list of them.
+pub(crate) fn split_ids(typed: &str) -> impl Iterator<Item = String> + '_ {
+    typed
+        .split(',')
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+        .map(String::from)
+}
+
 fn same_subject<'a>(near: Vec<&'a Value>, subject: &str) -> Vec<&'a Value> {
     near.into_iter()
         .filter(|r| s(r, "subject").eq_ignore_ascii_case(subject.trim()))
