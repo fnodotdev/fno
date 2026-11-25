@@ -39,13 +39,48 @@ pub fn is_joined(root: &Path, harness: &str, session_id: &str) -> bool {
     marker_path(root, harness, session_id).is_some_and(|p| p.exists())
 }
 
-pub(crate) fn write_marker(root: &Path, harness: &str, session_id: &str) -> Result<(), String> {
+pub(crate) fn write_marker(
+    root: &Path,
+    harness: &str,
+    session_id: &str,
+    trigger: &str,
+) -> Result<(), String> {
     let path = marker_path(root, harness, session_id)
         .ok_or_else(|| format!("not a session id: {session_id:?}"))?;
+    if path.exists() {
+        let existing = std::fs::read_to_string(&path).unwrap_or_default();
+        // Escalation-only: a law trigger may overwrite a non-law word; every
+        // other rewrite is a no-op, so a later bare command never strips a
+        // session's adoption evidence.
+        if !(!trigger_is_law(existing.trim()) && trigger_is_law(trigger)) {
+            return Ok(());
+        }
+    }
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("marker dir: {e}"))?;
     }
-    std::fs::write(&path, b"").map_err(|e| format!("marker write: {e}"))
+    std::fs::write(&path, trigger).map_err(|e| format!("marker write: {e}"))
+}
+
+/// The trigger word a join stamps: `spawn` (birth), `fno-me` (the register
+/// act), `skill:<name>` / `prompt:<name>` (a deliberate fno carrier naming a
+/// skill), or `command` (a bare fno CLI call). Only the law words adopt:
+/// user law D2402 names a /fno: skill other than using-fno, or /fno:fno-me.
+fn trigger_is_law(word: &str) -> bool {
+    match word.split_once(':') {
+        Some(("skill" | "prompt", name)) => !name.is_empty() && name != "using-fno",
+        _ => matches!(word, "spawn" | "fno-me"),
+    }
+}
+
+/// The law-D2402 read: `Some(trigger word)` only when the session's marker
+/// carries a word whose cause adopts - a /fno: skill other than using-fno, a
+/// prompt naming one, /fno:fno-me, or spawn birth. Absent, legacy-empty and
+/// `command` markers answer None: an unknown cause is not a law cause.
+pub fn adoption_trigger(root: &Path, harness: &str, session_id: &str) -> Option<String> {
+    let path = marker_path(root, harness, session_id)?;
+    let word = std::fs::read_to_string(path).ok()?.trim().to_string();
+    trigger_is_law(&word).then_some(word)
 }
 
 fn env_set(key: &str) -> bool {
@@ -61,8 +96,17 @@ pub enum JoinOutcome {
 }
 
 /// The join act: the register `/fno:fno-me` runs, then the marker. Refuses in
-/// hook context. A second join changes nothing.
-pub fn join(root: &Path, harness: &str, session_id: &str) -> Result<JoinOutcome, String> {
+/// hook context. The mail-hold register rides only a law trigger (user law
+/// D2402): a bare-command or using-fno join writes the marker and mints no
+/// row, so a discussion session never holds a worker slot. A law trigger
+/// over a non-law marker escalates it, and that escalation is the moment a
+/// session whose first fno contact was a bare command adopts.
+pub fn join(
+    root: &Path,
+    harness: &str,
+    session_id: &str,
+    trigger: &str,
+) -> Result<JoinOutcome, String> {
     if env_set(HOOK_CONTEXT_ENV) {
         return Err(format!(
             "{HOOK_CONTEXT_ENV} is set: a hook's fno call never joins its session"
@@ -70,16 +114,23 @@ pub fn join(root: &Path, harness: &str, session_id: &str) -> Result<JoinOutcome,
     }
     marker_path(root, harness, session_id)
         .ok_or_else(|| format!("not a session id: {session_id:?}"))?;
-    if is_joined(root, harness, session_id) {
+    let law = trigger_is_law(trigger);
+    let existing_is_law = marker_path(root, harness, session_id)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|s| trigger_is_law(s.trim()))
+        .unwrap_or(false);
+    if is_joined(root, harness, session_id) && (!law || existing_is_law) {
         return Ok(JoinOutcome::AlreadyJoined);
     }
-    if env_set("FNO_AGENT_SELF") {
-        write_marker(root, harness, session_id)?;
-        return Ok(JoinOutcome::SpawnedWorker);
+    if law && !env_set("FNO_AGENT_SELF") {
+        crate::mail_cli::hold::register_existing_session(harness, session_id)?;
     }
-    crate::mail_cli::hold::register_existing_session(harness, session_id)?;
-    write_marker(root, harness, session_id)?;
-    Ok(JoinOutcome::Joined)
+    write_marker(root, harness, session_id, trigger)?;
+    Ok(if env_set("FNO_AGENT_SELF") {
+        JoinOutcome::SpawnedWorker
+    } else {
+        JoinOutcome::Joined
+    })
 }
 
 /// Whether ANY session on this machine has joined fno: one joined marker
@@ -127,11 +178,16 @@ pub fn preamble_due(
 
 // ---------------------------------------------------------------------------
 // `fno-agent report --kind join --harness <h> --session-id <id>
-//      [--check] [--preamble-due [--mark] [--compacted] [--transcript <path>]]`
+//      [--trigger <word>] [--check] [--preamble-due [--mark] [--compacted]
+//      [--transcript <path>]]`
 //
-// Without --check it joins (refused in hook context, exit 3). --preamble-due
-// prints `due` when the preamble is due, nothing otherwise; with --compacted
-// it is due for any joined session. Rides the report
+// Without --check it joins (refused in hook context, exit 3). --trigger names
+// the join cause the carrier knows: `command` (the default, a bare fno call),
+// `spawn`, `fno-me`, `skill:<name>`, `prompt:<name>`. The word is the law
+// read's only input, so an old carrier pairing with a new binary stamps the
+// non-adopting default: degraded posture is never over-adoption.
+// --preamble-due prints `due` when the preamble is due, nothing otherwise;
+// with --compacted it is due for any joined session. Rides the report
 // action so no command is added.
 // ---------------------------------------------------------------------------
 
@@ -139,6 +195,7 @@ pub fn run_join(args: &[String], home: &AgentsHome) -> i32 {
     let mut harness: Option<String> = None;
     let mut session: Option<String> = None;
     let mut transcript: Option<PathBuf> = None;
+    let mut trigger = "command".to_string();
     let (mut check, mut due, mut mark, mut compacted) = (false, false, false, false);
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -150,6 +207,16 @@ pub fn run_join(args: &[String], home: &AgentsHome) -> i32 {
                     Some(v) => transcript = Some(PathBuf::from(v)),
                     None => {
                         eprintln!("report --kind join: --transcript needs a value");
+                        return 2;
+                    }
+                }
+                continue;
+            }
+            "--trigger" => {
+                match it.next() {
+                    Some(v) => trigger = v.clone(),
+                    None => {
+                        eprintln!("report --kind join: --trigger needs a value");
                         return 2;
                     }
                 }
@@ -190,7 +257,7 @@ pub fn run_join(args: &[String], home: &AgentsHome) -> i32 {
     };
     let root = home.root();
     if !check {
-        match join(root, &harness, &session) {
+        match join(root, &harness, &session, &trigger) {
             Ok(JoinOutcome::Joined) => eprintln!(
                 "fno: this {harness} session joined fno; skills/using-fno/SKILL.md names both surfaces"
             ),
@@ -259,7 +326,7 @@ mod tests {
     }
 
     #[test]
-    fn session_join_writes_one_row_and_marker_and_refuses_hook_context() {
+    fn session_join_writes_the_row_on_a_law_trigger_and_refuses_hook_context() {
         let _root = crate::paths::DeclaredRoot::declare("session-join");
         let _env = EnvClear::new(&[HOOK_CONTEXT_ENV, "FNO_AGENT_SELF"]);
         let home = AgentsHome::from_env();
@@ -268,13 +335,17 @@ mod tests {
 
         // AC2: a hook's call writes nothing.
         std::env::set_var(HOOK_CONTEXT_ENV, "1");
-        assert!(join(home.root(), "claude", sid).is_err());
+        assert!(join(home.root(), "claude", sid, "command").is_err());
         assert!(!is_joined(home.root(), "claude", sid));
         assert_eq!(rows_for(sid), 0);
         std::env::remove_var(HOOK_CONTEXT_ENV);
 
-        // AC1: one row and the marker; a second join changes nothing.
-        assert_eq!(join(home.root(), "claude", sid), Ok(JoinOutcome::Joined));
+        // AC1: a law trigger joins with one row and the marker; a second
+        // join of the same word changes nothing.
+        assert_eq!(
+            join(home.root(), "claude", sid, "skill:review"),
+            Ok(JoinOutcome::Joined)
+        );
         assert!(is_joined(home.root(), "claude", sid));
         assert_eq!(rows_for(sid), 1);
         // A join is not a hold: the row carries no bus-only stamp, and it
@@ -288,12 +359,110 @@ mod tests {
         assert_eq!(row.delivery_policy, None);
         assert!(!row.created_at.is_empty());
         assert_eq!(
-            join(home.root(), "claude", sid),
+            join(home.root(), "claude", sid, "skill:review"),
             Ok(JoinOutcome::AlreadyJoined)
         );
         assert_eq!(rows_for(sid), 1);
 
         assert!(marker_path(home.root(), "claude", "../x").is_none());
+    }
+
+    /// The law read over every marker word a carrier can stamp, plus the
+    /// absent case: only a /fno: skill other than using-fno, a prompt naming
+    /// one, /fno:fno-me, or spawn birth adopts (user law D2402). An absent,
+    /// legacy-empty or `command` marker is not a law cause.
+    #[test]
+    fn adoption_trigger_reads_the_trigger_word() {
+        let _root = crate::paths::DeclaredRoot::declare("adoption-trigger");
+        let home = AgentsHome::from_env();
+        let root = home.root();
+        std::fs::create_dir_all(root).unwrap();
+
+        assert_eq!(adoption_trigger(root, "claude", "absent-sid"), None);
+        write_marker(root, "claude", "legacy-sid", "").unwrap();
+        assert_eq!(adoption_trigger(root, "claude", "legacy-sid"), None);
+        write_marker(root, "claude", "cmd-sid", "command").unwrap();
+        assert_eq!(adoption_trigger(root, "claude", "cmd-sid"), None);
+        write_marker(root, "claude", "preamble-sid", "skill:using-fno").unwrap();
+        assert_eq!(adoption_trigger(root, "claude", "preamble-sid"), None);
+
+        write_marker(root, "claude", "skill-sid", "skill:review").unwrap();
+        assert_eq!(
+            adoption_trigger(root, "claude", "skill-sid"),
+            Some("skill:review".to_string())
+        );
+        write_marker(root, "codex", "prompt-sid", "prompt:fix").unwrap();
+        assert_eq!(
+            adoption_trigger(root, "codex", "prompt-sid"),
+            Some("prompt:fix".to_string())
+        );
+        write_marker(root, "claude", "fno-me-sid", "fno-me").unwrap();
+        assert_eq!(
+            adoption_trigger(root, "claude", "fno-me-sid"),
+            Some("fno-me".to_string())
+        );
+        write_marker(root, "claude", "spawn-sid", "spawn").unwrap();
+        assert_eq!(
+            adoption_trigger(root, "claude", "spawn-sid"),
+            Some("spawn".to_string())
+        );
+    }
+
+    /// A bare-command join stamps the non-adopting default and mints no row;
+    /// a later law trigger escalates the marker and that escalation is the
+    /// moment the row lands; a later command can neither downgrade the word
+    /// nor duplicate the row.
+    #[test]
+    fn a_join_registers_only_on_a_law_trigger_and_escalates() {
+        let _root = crate::paths::DeclaredRoot::declare("join-escalation");
+        let _env = EnvClear::new(&[HOOK_CONTEXT_ENV, "FNO_AGENT_SELF"]);
+        let home = AgentsHome::from_env();
+        std::fs::create_dir_all(home.root()).unwrap();
+        let sid = "0f1e2d3c-aaaa-bbbb-cccc-000000000002";
+
+        assert_eq!(
+            join(home.root(), "claude", sid, "command"),
+            Ok(JoinOutcome::Joined)
+        );
+        assert!(is_joined(home.root(), "claude", sid));
+        assert_eq!(rows_for(sid), 0, "a bare command is not a law cause");
+        let word =
+            std::fs::read_to_string(marker_path(home.root(), "claude", sid).unwrap()).unwrap();
+        assert_eq!(word, "command");
+
+        assert_eq!(
+            join(home.root(), "claude", sid, "skill:review"),
+            Ok(JoinOutcome::Joined)
+        );
+        assert_eq!(rows_for(sid), 1, "the escalation is when the row lands");
+        let word =
+            std::fs::read_to_string(marker_path(home.root(), "claude", sid).unwrap()).unwrap();
+        assert_eq!(word, "skill:review");
+
+        assert_eq!(
+            join(home.root(), "claude", sid, "command"),
+            Ok(JoinOutcome::AlreadyJoined)
+        );
+        let word =
+            std::fs::read_to_string(marker_path(home.root(), "claude", sid).unwrap()).unwrap();
+        assert_eq!(word, "skill:review", "a command never downgrades");
+        assert_eq!(rows_for(sid), 1);
+
+        // The law's second named trigger: /fno:fno-me adopts the same way,
+        // from a bare-command marker.
+        let sid2 = "0f1e2d3c-aaaa-bbbb-cccc-000000000003";
+        assert_eq!(
+            join(home.root(), "claude", sid2, "command"),
+            Ok(JoinOutcome::Joined)
+        );
+        assert_eq!(
+            join(home.root(), "claude", sid2, "fno-me"),
+            Ok(JoinOutcome::Joined)
+        );
+        assert_eq!(rows_for(sid2), 1, "fno-me registers");
+        let word =
+            std::fs::read_to_string(marker_path(home.root(), "claude", sid2).unwrap()).unwrap();
+        assert_eq!(word, "fno-me");
     }
 
     #[test]
@@ -326,11 +495,11 @@ mod tests {
         // first call.
         assert!(preamble_due(root, "codex", sid, Some(&t1), false));
         assert!(preamble_due(root, "codex", sid, Some(&t1), false));
-        write_marker(root, "claude", "s-window-closer").unwrap();
+        write_marker(root, "claude", "s-window-closer", "command").unwrap();
         assert!(!preamble_due(root, "codex", sid, Some(&t1), false));
 
         // AC3: joined, taught once, due once more after a newer boundary.
-        write_marker(root, "codex", sid).unwrap();
+        write_marker(root, "codex", sid, "command").unwrap();
         assert!(preamble_due(root, "codex", sid, Some(&t1), true));
         assert!(!preamble_due(root, "codex", sid, Some(&t1), true));
         let t2 = boundary(2_000);
@@ -361,7 +530,7 @@ mod tests {
         assert!(preamble_due(root, "claude", "fresh-1", None, false));
 
         // A joined marker for ANY harness closes the window for everyone.
-        write_marker(root, "codex", "first-join").unwrap();
+        write_marker(root, "codex", "first-join", "command").unwrap();
         assert!(any_joined(root));
         assert!(!preamble_due(root, "claude", "fresh-2", None, false));
     }
