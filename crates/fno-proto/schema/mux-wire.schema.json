@@ -92,7 +92,7 @@
             }
           ],
           "default": null,
-          "description": "(v134) Where a thread opens, snapshotted at Enter: the card's\nworkspace, tab id, anchor pane, split, and the portal or `portal_new`.\nIt wins over the three word fields above, which older clients send."
+          "description": "(v135) Where a thread opens, snapshotted at Enter: the card's\nworkspace, tab id, anchor pane, split, and the portal or `portal_new`.\nIt wins over the three word fields above, which older clients send."
         },
         "permission_mode": {
           "default": null,
@@ -2082,7 +2082,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "(v134) The composer's one-shot `!` run: start, keys, move to a tab.",
+          "description": "(v135) The composer's one-shot `!` run: start, keys, move to a tab.",
           "properties": {
             "ShellRun": {
               "$ref": "#/$defs/ShellRunRequest"
@@ -4029,7 +4029,7 @@
                       "type": "null"
                     }
                   ],
-                  "description": "(v134) The caller, for the pre-birth check and for a worker on\nanother machine. Additive, so the floor does not move."
+                  "description": "(v135) The caller, for the pre-birth check and for a worker on\nanother machine. Additive, so the floor does not move."
                 },
                 "placement": {
                   "$ref": "#/$defs/PanePlacement",
@@ -6512,7 +6512,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "(v134) Where a one-shot `!` run stands, sent only to its client.",
+          "description": "(v135) Where a one-shot `!` run stands, sent only to its client.",
           "properties": {
             "ShellRun": {
               "$ref": "#/$defs/ShellRunUpdate"
@@ -7758,11 +7758,11 @@
       ]
     },
     "ThreadOrigin": {
-      "description": "(v134) Who asks a thread reach. It resolves the workspace of a worker that\nhas no row in this registry: one that is not born yet, or one that runs on\nanother machine.",
+      "description": "(v135) Who asks a thread reach. It resolves the workspace of a worker that\nhas no row in this registry: one that is not born yet, or one that runs on\nanother machine.",
       "properties": {
         "check": {
           "default": false,
-          "description": "Answer whether the reach would land, and change nothing. A caller\nsends this only to a server of v134 or later: an older one drops the\nfield and would act on the request.",
+          "description": "Answer whether the reach would land, and change nothing. A caller\nsends this only to a server of v135 or later: an older one drops the\nfield and would act on the request.",
           "type": "boolean"
         },
         "cwd": {

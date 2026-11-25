@@ -636,7 +636,7 @@ pub(crate) enum CoreMsg {
         id: u64,
         request: crate::proto::AgentLaunchRequest,
     },
-    /// (v134) One client's one-shot `!` run, see [`shell_run`].
+    /// (v135) One client's one-shot `!` run, see [`shell_run`].
     ShellRun(u64, crate::proto::shell_run::ShellRunRequest),
     /// (v116) A passive client tags itself as an observer of one pane.
     Observe(u64, crate::proto::ObserverHello),

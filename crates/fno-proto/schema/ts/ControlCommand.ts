@@ -72,7 +72,7 @@ portal: number | null,
  */
 placement: PanePlacement, 
 /**
- * (v134) The caller, for the pre-birth check and for a worker on
+ * (v135) The caller, for the pre-birth check and for a worker on
  * another machine. Additive, so the floor does not move.
  */
 origin?: ThreadOrigin | null, } } | { "ThreadReseat": { pane: number, 

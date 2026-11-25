@@ -871,7 +871,7 @@ pub enum ControlCommand {
         /// refused outright, exactly as it always was.
         #[serde(default)]
         placement: PanePlacement,
-        /// (v134) The caller, for the pre-birth check and for a worker on
+        /// (v135) The caller, for the pre-birth check and for a worker on
         /// another machine. Additive, so the floor does not move.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         origin: Option<ThreadOrigin>,
@@ -3512,7 +3512,7 @@ mod tests {
         // re-assert the same literal, which caught nothing a single pin does
         // not and turned every bump into a three-file edit; they now assert
         // only their own wire shapes.
-        assert_eq!(PROTO_VERSION, 134);
+        assert_eq!(PROTO_VERSION, 135);
         // v64 added `PanePlacement.portal` and `AgentRow.portal`.
         // Both are additive `#[serde(default)]` fields, so the floor does NOT
         // move with them - a v63 client still attaches. Pinned beside the

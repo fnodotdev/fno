@@ -67,7 +67,7 @@ portal: number | null,
  */
 split: string | null, 
 /**
- * (v134) Where a thread opens, snapshotted at Enter: the card's
+ * (v135) Where a thread opens, snapshotted at Enter: the card's
  * workspace, tab id, anchor pane, split, and the portal or `portal_new`.
  * It wins over the three word fields above, which older clients send.
  */
