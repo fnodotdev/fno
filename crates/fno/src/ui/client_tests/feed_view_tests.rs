@@ -1341,10 +1341,10 @@ async fn last_row_paging_edge_hover_and_reopen() {
     let off = v.feed_offset_clamped();
     let f = v.feed.as_ref().unwrap();
     let lines = feed_panel_lines(f, true, W, rows, off);
+    let last_slot = lines.get(rows - 2).cloned().unwrap_or_default();
     assert!(
-        lines[rows - 2].contains("event 00"),
-        "the oldest row paints on the last slot: {}",
-        lines[rows - 2]
+        last_slot.contains("event 00"),
+        "the oldest row paints on the last slot: {last_slot}"
     );
     assert_eq!(
         2 + f.sel - off,

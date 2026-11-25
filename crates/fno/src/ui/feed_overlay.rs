@@ -475,7 +475,7 @@ mod tests {
     #[test]
     fn page_argv_spells_the_current_command_and_never_an_empty_cursor() {
         let head = page_argv(&PageReq::Head, None);
-        assert_eq!(head[..3], ["agent", "fleet", "feed"]);
+        assert!(head.starts_with(&["agent".into(), "fleet".into(), "feed".into()]));
         for req in [
             PageReq::Live(String::new()),
             PageReq::Older(String::new()),
@@ -484,7 +484,7 @@ mod tests {
             assert_eq!(page_argv(&req, None), head, "{req:?} reads the head");
         }
         let live = page_argv(&PageReq::Live("[\"c\"]".into()), None);
-        assert_eq!(live[live.len() - 2..], ["--after", "[\"c\"]"]);
+        assert!(live.ends_with(&["--after".into(), "[\"c\"]".into()]));
     }
 
     // regression: the timeout names itself and its duration, so the

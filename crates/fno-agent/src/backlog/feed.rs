@@ -2465,8 +2465,10 @@ mod tests {
         assert_eq!(extra[0].title, "law: ship it");
         // AC4: an index-only decision carries its area and a cursor that
         // round-trips, so it pages and filters like every journal row.
-        assert_eq!(extra[0].area, "mail");
-        assert_eq!(parse_cursor(&extra[0].cursor).unwrap()[4], "d-2");
+        let index_only = extra.first().expect("one index-only decision");
+        assert_eq!(index_only.area, "mail");
+        let cursor = parse_cursor(&index_only.cursor).expect("the cursor parses");
+        assert_eq!(cursor.get(4).map(String::as_str), Some("d-2"));
 
         let questions = [
             r#"{"ts":"2026-09-02T17:00:00Z","type":"operator_question","source":"t","data":{"question_id":"q-1","question":"ask"}}"#,
