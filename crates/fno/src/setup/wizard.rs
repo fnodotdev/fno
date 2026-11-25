@@ -926,9 +926,10 @@ fn screen_keys(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outcome
 }
 
 /// The fleet's own GitHub App through GitHub's manifest flow. The screen
-/// runs the exchange live because the redirect code is a credential and
-/// never enters state; only the public App id rides the proposal, which
-/// apply writes through the locked config writer. Default off.
+/// only records the intent: the redirect code is a credential and the pure
+/// flow never reads one, so the terminal host runs the round-trip after
+/// the walk and lands the public App id as the answer the proposal reads.
+/// Default off.
 fn screen_github_app(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outcome {
     use crate::setup::github_app_flow;
     if !stops {
@@ -953,37 +954,33 @@ fn screen_github_app(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> O
         Flow::Back => return Outcome::Back,
         Flow::Cancel => return Outcome::Cancel,
     };
-    if !wants {
-        state.answers.insert("github-app", Answer::No);
-        return Outcome::Forward;
+    state
+        .answers
+        .insert("github-app", if wants { Answer::Yes } else { Answer::No });
+    if wants {
+        pr.note(
+            "github-app",
+            "Good. After the last screen, setup opens GitHub's App creation page and asks for one paste.",
+        );
     }
-    let conversion = match github_app_round_trip(pr) {
-        RoundTrip::Created { app_id } => app_id,
-        RoundTrip::Back => return Outcome::Back,
-        RoundTrip::Cancel => return Outcome::Cancel,
-        RoundTrip::Refused => {
-            state.answers.insert("github-app", Answer::No);
-            return Outcome::Forward;
-        }
-    };
-    state.answers.insert("github-app", Answer::Text(conversion));
     Outcome::Forward
 }
 
 /// How the launcher round-trip ended. `Created` carries only the public
 /// App id; the pem never leaves the flow module and the paste code never
 /// enters state.
-enum RoundTrip {
+pub(crate) enum RoundTrip {
     Created { app_id: String },
     Back,
     Cancel,
     Refused,
 }
 
-/// One launcher round-trip: write the launcher, open it, collect the
-/// paste, exchange the code, and store the key. Every refusal notes itself
-/// and names what was written; Back and Cancel bubble untouched.
-fn github_app_round_trip(pr: &mut dyn Prompter) -> RoundTrip {
+/// One launcher round-trip, run by the terminal host after the walk:
+/// write the launcher, open it, collect the paste, exchange the code, and
+/// store the key. Every refusal notes itself and names what was written;
+/// Back and Cancel mean the person stepped away from the paste.
+pub(crate) fn github_app_round_trip(pr: &mut dyn Prompter) -> RoundTrip {
     use crate::setup::github_app_flow as flow;
     let nonce = flow::state_nonce();
     let name = flow::app_name();

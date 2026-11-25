@@ -1232,6 +1232,20 @@ fn run_inner(tail: &[OsString], quiet_cancel: bool) -> i32 {
     // inside `step_join`; on the wizard's own rows the host backs up the
     // global config first, because the wizard is the only writer here.
     let skip = state.skip_all;
+    // The quota offer's exchange runs here, outside the pure flow: the
+    // redirect code is a credential and the screen walk never reads a secret.
+    if let Some(wizard::Answer::Yes) = state.answers.get("github-app") {
+        match wizard::github_app_round_trip(&mut pr) {
+            wizard::RoundTrip::Created { app_id } => {
+                state
+                    .answers
+                    .insert("github-app", wizard::Answer::Text(app_id));
+            }
+            _ => {
+                state.answers.insert("github-app", wizard::Answer::No);
+            }
+        }
+    }
     let rows = wizard::pending(&state);
     let mut apply_join = serde_json::Value::Null;
     let mut apply_wizard = serde_json::Value::Null;
