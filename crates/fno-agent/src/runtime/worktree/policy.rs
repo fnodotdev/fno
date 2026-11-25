@@ -577,17 +577,58 @@ pub(crate) fn events_journal() -> PathBuf {
     state_root().join("events.jsonl")
 }
 
-/// `config.backlog.id_prefix` or the legacy `ab-` fallback, fail-open.
-pub fn node_id_prefix(repo_root: &Path) -> String {
-    match merged_config(&resolve_lenient(repo_root)) {
-        Ok(merged) => merged
-            .get("backlog")
-            .and_then(Value::as_object)
-            .and_then(|b| b.get("id_prefix"))
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-            .unwrap_or("ab-")
-            .to_string(),
-        Err(_) => "ab-".to_string(),
+/// `config.backlog.id_prefix` with the fail-closed split: a config that
+/// will not read or parse is an `Err` naming the file, so no caller guesses;
+/// an absent key or a bare fresh install answers the documented default.
+/// The trailing dash normalizes here, once.
+pub fn node_id_prefix(repo_root: &Path) -> Result<String, String> {
+    let merged = merged_config(&resolve_lenient(repo_root))?;
+    let raw = merged
+        .get("backlog")
+        .and_then(Value::as_object)
+        .and_then(|b| b.get("id_prefix"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(crate::backlog::settings::DEFAULT_NODE_ID_PREFIX);
+    let trimmed = raw.trim_end_matches('-');
+    if !crate::backlog::node_ref::valid_prefix_word(trimmed) {
+        return Err(format!(
+            "backlog.id_prefix = {raw:?} is not a prefix word (a lowercase letter \
+             first, lowercase letters and digits, up to 7 chars)"
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn policy_reader_refuses_an_unreadable_config() {
+        let _lock = crate::claims::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("broken.toml");
+        std::fs::write(&cfg, "backlog.id_prefix = [ not toml").unwrap();
+        let _guard = crate::claims::EnvVarGuard::set("FNO_CONFIG", cfg.to_str().unwrap());
+        assert!(node_id_prefix(Path::new("/")).is_err());
+    }
+
+    #[test]
+    fn policy_reader_normalizes_and_answers_the_documented_default() {
+        let _lock = crate::claims::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let keyless = dir.path().join("keyless.toml");
+        std::fs::write(&keyless, "other = 1\n").unwrap();
+        let _g1 = crate::claims::EnvVarGuard::set("FNO_CONFIG", keyless.to_str().unwrap());
+        assert_eq!(
+            node_id_prefix(Path::new("/")).as_deref(),
+            Ok(crate::backlog::settings::DEFAULT_NODE_ID_PREFIX)
+        );
+        let dashed = dir.path().join("dashed.toml");
+        std::fs::write(&dashed, "backlog.id_prefix = \"t-\"\n").unwrap();
+        drop(_g1);
+        let _g2 = crate::claims::EnvVarGuard::set("FNO_CONFIG", dashed.to_str().unwrap());
+        assert_eq!(node_id_prefix(Path::new("/")).as_deref(), Ok("t"));
     }
 }
