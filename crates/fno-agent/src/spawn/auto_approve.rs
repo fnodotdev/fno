@@ -51,8 +51,9 @@ const SETTINGS_NAMES: [&str; 10] = [
 ];
 
 /// The rules for the spawn at `cwd`: none while the switch is off, or when
-/// `cwd` is not a worker's own worktree.
-pub(crate) fn rules_for(cwd: &Path) -> Rules {
+/// `cwd` is not a worker's own worktree. `node` is the child's node from the
+/// spawn payload.
+pub(crate) fn rules_for(cwd: &Path, node: Option<&str>) -> Rules {
     if !switch_on(
         crate::agents_config::config_lookup_global(&["user", "auto_approve_routine"]).as_ref(),
     ) {
@@ -60,7 +61,7 @@ pub(crate) fn rules_for(cwd: &Path) -> Rules {
     }
     rules_when(
         true,
-        crate::hook::worktree_relocation_allow::verified_worktree(cwd),
+        crate::hook::worktree_relocation_allow::verified_worktree(cwd, node),
         plan_root(cwd),
     )
 }

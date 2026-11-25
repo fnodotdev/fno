@@ -377,7 +377,20 @@ pub fn write_composed(
     session: Option<&str>,
     cwd: &Path,
 ) -> Result<Option<String>, String> {
-    let rules = crate::spawn::auto_approve::rules_for(cwd);
+    write_composed_for(route_env, account_env, sandbox, alias, session, cwd, None)
+}
+
+/// `write_composed` for a spawn whose payload names the child's `node`.
+pub fn write_composed_for(
+    route_env: &Map<String, Value>,
+    account_env: &Map<String, Value>,
+    sandbox: Option<Value>,
+    alias: Option<&str>,
+    session: Option<&str>,
+    cwd: &Path,
+    node: Option<&str>,
+) -> Result<Option<String>, String> {
+    let rules = crate::spawn::auto_approve::rules_for(cwd, node);
     let Some(env) = env_for_write(route_env, account_env, sandbox.is_some(), !rules.is_empty())
     else {
         return Ok(None);

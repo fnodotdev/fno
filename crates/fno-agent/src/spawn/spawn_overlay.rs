@@ -523,13 +523,14 @@ fn resolve_print(payload: &Value) -> Result<Value, String> {
         .as_ref()
         .and_then(|row| row.get("name"))
         .and_then(Value::as_str);
-    let settings = crate::route_settings::write_composed(
+    let settings = crate::route_settings::write_composed_for(
         &route_env,
         &account_env,
         payload.get("sandbox").filter(|v| v.is_object()).cloned(),
         alias,
         None,
         &cwd,
+        payload.get("node").and_then(Value::as_str),
     )?;
     let template = crate::spawn_compose::resolve_template(
         harness,

@@ -139,15 +139,24 @@ fn names_this_node(named: Option<&str>, folder: &str) -> bool {
 
 /// The worktree a spawn at `cwd` runs in, when it is a recorded worktree of
 /// this repo. The registry row does not exist yet when a spawn writes its
-/// settings, so the repo's worktree records stand in for the claim.
-pub(crate) fn verified_worktree(cwd: &Path) -> Option<PathBuf> {
-    let all = bases(cwd);
-    let (candidate, node) = candidate_under(&all, &cwd.canonicalize().ok()?)?;
-    let named = std::env::var("FNO_NODE").ok();
-    if !names_this_node(named.as_deref(), &node) {
+/// settings, so the repo's worktree records stand in for the claim. `named`
+/// is the node the spawn payload names for the child, never the spawner's
+/// own `FNO_NODE`, which a lead passes down to every worker it starts.
+pub(crate) fn verified_worktree(cwd: &Path, named: Option<&str>) -> Option<PathBuf> {
+    verified_in(
+        &bases(cwd),
+        &crate::paths::canonical_repo_root(cwd)?,
+        &cwd.canonicalize().ok()?,
+        named,
+    )
+}
+
+fn verified_in(all: &[PathBuf], repo: &Path, real: &Path, named: Option<&str>) -> Option<PathBuf> {
+    let (candidate, node) = candidate_under(all, real)?;
+    if !names_this_node(named, &node) {
         return None;
     }
-    let found = own_worktree_in(&all, &crate::paths::canonical_repo_root(cwd)?, &node)?;
+    let found = own_worktree_in(all, repo, &node)?;
     (found == candidate).then_some(found)
 }
 
@@ -339,6 +348,14 @@ mod tests {
         assert!(names_this_node(None, "node") && names_this_node(Some(""), "node"));
         assert!(names_this_node(Some("node"), "node"));
         assert!(!names_this_node(Some("other"), "node"));
+        // The child's node comes from the spawn payload: a worker spawned into
+        // `node` gets its folder whatever the spawner's own env names.
+        assert_eq!(
+            verified_in(&all, &repo, &real, Some("node")),
+            Some(real.clone())
+        );
+        assert_eq!(verified_in(&all, &repo, &real, None), Some(real.clone()));
+        assert_eq!(verified_in(&all, &repo, &real, Some("other")), None);
         assert_eq!(own_worktree_in(&all, &repo, "planted"), None);
         assert_eq!(own_worktree_in(&all, &repo, "foreign"), None);
         assert_eq!(own_worktree_in(&all, &repo, "unrecorded"), None);

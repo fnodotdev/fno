@@ -46,13 +46,14 @@ fn write_lane_settings(
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-    crate::route_settings::write_composed(
+    crate::route_settings::write_composed_for(
         &route_env,
         &account_env,
         payload.get("sandbox").filter(|v| v.is_object()).cloned(),
         alias,
         None,
         cwd,
+        payload.get("node").and_then(Value::as_str),
     )
 }
 
