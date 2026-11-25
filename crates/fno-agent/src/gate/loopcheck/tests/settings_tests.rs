@@ -85,6 +85,18 @@ fn parse_settings_malformed_fails_closed_not_zeroed() {
 }
 
 #[test]
+fn human_owed_gates_explicit_ui_and_always_never_the_absent_key() {
+    // The person gate's resolution contract: explicit ui and always owe a
+    // person's approval; never and the absent key do not. One predicate
+    // serves both read sites (review_inputs and run_done), so this pin
+    // covers pr status and the stop gate together.
+    assert!(!ReviewHuman::owed(None), "absent key owes no person");
+    assert!(!ReviewHuman::owed(Some(ReviewHuman::Never)));
+    assert!(ReviewHuman::owed(Some(ReviewHuman::Ui)));
+    assert!(ReviewHuman::owed(Some(ReviewHuman::Always)));
+}
+
+#[test]
 fn parse_settings_reviewers_malformed_mapping_fails_closed() {
     // A `{...}` mapping value must NOT drop to no-gate (Python raises here);
     // Rust stores an unsatisfiable sentinel so the gate stays active but can
