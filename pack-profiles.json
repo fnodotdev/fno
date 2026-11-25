@@ -53,6 +53,7 @@
     "hooks/pretool-gate.sh",
     "hooks/pretooluse-bash-dispatch.sh",
     "hooks/prompt-outstanding.sh",
+    "hooks/push-receipt.sh",
     "hooks/reconcile-session-start.sh",
     "hooks/refusal-streak-record.sh",
     "hooks/review-hold.sh",
