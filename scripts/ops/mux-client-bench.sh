@@ -172,7 +172,9 @@ world_up() {
   ROOT="$(mktemp -d /tmp/fno-bench.XXXXXX)"
   ROOT="$(cd "$ROOT" && pwd -P)"
   export FNO_MUX_DIR="$ROOT/mux"
-  export FNO_SERVER="$SESSION"
+  # No FNO_SERVER: with it set, `mux attach` refuses ("already inside mux
+  # server") and the refusal text reads as a fast first paint.
+  unset FNO_SERVER FNO_SESSION
   # Pin the config, the state root and the agent registry inside the temp
   # root. An empty config leaves state_dir at ~/.fno, so selectors would
   # resolve against the real fleet registry.
@@ -281,6 +283,7 @@ metric_launch() {
   cat > "$tpl" <<'EOF'
 set timeout $env(BENCH_TIMEOUT)
 set t0 [clock milliseconds]
+set stty_init "rows 40 cols 120"
 spawn -noecho $env(BENCH_FNO) mux attach $env(BENCH_SESSION)
 expect {
   -re "." {}
@@ -324,6 +327,7 @@ metric_scroll() {
   local tpl="$ROOT/tui_scroll.exp"
   cat > "$tpl" <<'EOF'
 set timeout $env(BENCH_TIMEOUT)
+set stty_init "rows 40 cols 120"
 spawn -noecho $env(BENCH_FNO) mux attach $env(BENCH_SESSION)
 expect {
   -re "." {}
@@ -379,6 +383,7 @@ metric_idle() {
   local tpl="$ROOT/tui_idle.exp"
   cat > "$tpl" <<'EOF'
 set timeout $env(BENCH_TIMEOUT)
+set stty_init "rows 40 cols 120"
 spawn -noecho $env(BENCH_FNO) mux attach $env(BENCH_SESSION)
 expect {
   -re "." {}
@@ -450,6 +455,7 @@ metric_switch() {
   local tpl="$ROOT/tui_switch.exp"
   cat > "$tpl" <<'EOF'
 set timeout $env(BENCH_TIMEOUT)
+set stty_init "rows 40 cols 120"
 spawn -noecho $env(BENCH_FNO) mux attach $env(BENCH_SESSION)
 expect {
   -re "." {}
@@ -508,6 +514,7 @@ metric_keypaint() {
   local tpl="$ROOT/tui_keypaint.exp"
   cat > "$tpl" <<'EOF'
 set timeout $env(BENCH_TIMEOUT)
+set stty_init "rows 40 cols 120"
 spawn -noecho $env(BENCH_FNO) mux attach $env(BENCH_SESSION)
 expect {
   -re "." {}
