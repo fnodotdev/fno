@@ -195,15 +195,36 @@ const LOCK_BEARING_FOLDERS: &[&str] = &[
 
 /// Fold candidates that drain instead of folding. A live reader may retain a
 /// child's absolute path, so the mover never renames it. New writes use the
-/// row's destination; cargo-build residue and plugin-stage swap debris have
-/// safe park rules, while live entries stay until their owner drains them.
-const DRAIN_ONLY_FOLDERS: &[&str] = &["cargo-build", "plugin-stage", "route-settings"];
+/// row's destination; cargo-build residue, plugin-stage swap debris and a
+/// route-settings file no writer has touched past the age limit have safe
+/// park rules, while live entries stay until their owner drains them. A
+/// `screens` shot stays until no question row names it.
+const DRAIN_ONLY_FOLDERS: &[&str] = &["cargo-build", "plugin-stage", "route-settings", "screens"];
 pub(crate) const LEGACY_DRAIN_AGE_SECS: u64 = 3 * 24 * 60 * 60;
 
 /// Fold candidates that hold message or journal lines. A clashing child never
 /// parks here: it merges (`state_layout_merge`), and a destination that does
 /// not exist yet takes the whole folder in one rename.
 const MERGE_FOLDERS: &[&str] = &["bus", "chats", "history"];
+
+/// Children a fold leaves at the legacy path, with the holder a pending
+/// reading names. The sealed eval worker's Claude login is a Keychain item
+/// whose service name hashes the config folder's path, so a moved folder
+/// reads a different item and the login is lost.
+const PINNED_CHILDREN: &[(&str, &str, &str)] = &[(
+    "evals",
+    "claude-config",
+    "the sealed eval login is keyed by evals/claude-config's path",
+)];
+
+/// True while the setup wizard's lock names a live process: the wizard
+/// holds its report and answers paths open for the whole run.
+fn wizard_lock_live(sidecar: &Path) -> bool {
+    std::fs::read_to_string(sidecar.join("wizard-lock"))
+        .ok()
+        .and_then(|text| text.trim().parse::<u32>().ok())
+        .is_some_and(crate::evals_arm::pid_alive)
+}
 
 /// The anchor's file name. Frozen: the lock, its queue, the keeper socket and
 /// the note journal all derive from it, so an older binary and a newer one
@@ -814,7 +835,10 @@ fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
     // row still names must stay put until its prune. Only the emptied shell
     // goes.
     if DRAIN_ONLY_FOLDERS.contains(&row.legacy.as_str()) {
-        if matches!(row.legacy.as_str(), "cargo-build" | "plugin-stage") {
+        if matches!(
+            row.legacy.as_str(),
+            "cargo-build" | "plugin-stage" | "route-settings"
+        ) {
             let remaining = drain_legacy_children(root, &legacy, stamp, apply);
             if !remaining.is_empty() {
                 return Status::Pending(format!(
@@ -861,6 +885,9 @@ fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
     // pass retries.
     if name == "claim-aux" && !lane_dirs_empty(&legacy) {
         return Status::Pending("a waiter holds a ticket".to_string());
+    }
+    if name == "sidecar" && wizard_lock_live(&legacy) {
+        return Status::Pending("wizard-lock names a live setup run".to_string());
     }
     // The probe fds stay open through the fold: a lock another writer takes
     // between the probe and a rename cannot split a child from its holder.
@@ -918,7 +945,12 @@ fn fold_dir_children(root: &Path, row: &Row, stamp: &str, legacy: &Path, new: &P
     for child in children.flatten() {
         let from = child.path();
         let target = new.join(child.file_name());
-        let status = if !occupied(&target) {
+        let pinned = PINNED_CHILDREN
+            .iter()
+            .find(|(folder, kid, _)| row.legacy == *folder && child.file_name() == *kid);
+        let status = if let Some((_, _, holder)) = pinned {
+            Status::Pending((*holder).to_string())
+        } else if !occupied(&target) {
             match crate::state_layout_undo::carry(root, stamp, &from, &target) {
                 Ok(()) => Status::Moved,
                 Err(e) => Status::Refused(format!("refused: {e}")),
@@ -1109,6 +1141,15 @@ fn drain_legacy_children(root: &Path, legacy: &Path, stamp: &str, apply: bool) -
         let park_reason = match folder {
             "cargo-build" => match quiet_untagged_tree(&path, now) {
                 Ok(true) => Some("untagged cargo residue quiet past the age limit"),
+                Ok(false) => None,
+                Err(reason) => {
+                    eprintln!("state-root drain: kept {} ({reason})", path.display());
+                    remaining.push(name);
+                    continue;
+                }
+            },
+            "route-settings" if path.is_file() => match quiet_tree(&path, now) {
+                Ok(true) => Some("route-settings file quiet past the age limit"),
                 Ok(false) => None,
                 Err(reason) => {
                     eprintln!("state-root drain: kept {} ({reason})", path.display());

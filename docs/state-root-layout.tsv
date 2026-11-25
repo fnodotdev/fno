@@ -165,6 +165,22 @@ review-invocations	state/review-invocations	dir	daemon
 route-settings	state/route-settings	dir	daemon
 saved-sessions	db/saved-sessions	dir	daemon
 validity-decks	db/validity-decks	dir	daemon
+# The wave 2 folders. screens and route-settings drain: a stored question
+# row or a registry row may name a child's absolute path. evals keeps its
+# claude-config child in place: the sealed eval login is a Keychain item
+# keyed by that folder's path. sidecar waits while wizard-lock names a live pid.
+.interrupted-writes	state/interrupted-writes	dir	daemon
+briefs	db/briefs	dir	daemon
+event-rules	state/event-rules	dir	daemon
+evals	db/evals	dir	daemon
+heal	state/heal	dir	daemon
+intel	db/intel	dir	daemon
+notes	db/notes	dir	daemon
+observer-reports	db/observer-reports	dir	daemon
+recovery	state/recovery	dir	daemon
+rules-seen	state/rules-seen	dir	daemon
+screens	db/screens	dir	daemon
+sidecar	db/sidecar	dir	daemon
 # Parked residue - renamed into backups/state-root-migration/<stamp>/.
 ledger.md	-	park	daemon
 ledger.json.tmp	-	park	daemon
