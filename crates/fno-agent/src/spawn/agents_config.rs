@@ -2285,20 +2285,15 @@ fn read_away_until(now: i64) -> Option<i64> {
     read_away_until_at(&away_state_path()?, now)
 }
 
-/// An expired file is removed only if it still holds the text that read as
-/// expired, so a fresh `away` written meanwhile survives.
+/// An expired file reads as no override and stays on disk: a delete after the
+/// read could remove a fresh `away` written in between. `back` and the next
+/// `away` replace it.
 fn read_away_until_at(path: &Path, now: i64) -> Option<i64> {
     let text = std::fs::read_to_string(path).ok()?;
     let until = serde_json::from_str::<serde_json::Value>(&text)
         .ok()
         .and_then(|v| v.get("until_epoch").and_then(serde_json::Value::as_i64))?;
-    if until > now {
-        return Some(until);
-    }
-    if std::fs::read_to_string(path).is_ok_and(|again| again == text) {
-        let _ = std::fs::remove_file(path);
-    }
-    None
+    (until > now).then_some(until)
 }
 
 fn next_clock<Z: chrono::TimeZone>(zone: &Z, now: i64, at: chrono::NaiveTime) -> Option<i64> {
@@ -3466,16 +3461,15 @@ mod user_hours_tests {
     }
 
     #[test]
-    fn an_expired_away_is_removed_and_a_fresh_one_survives() {
+    fn an_expired_away_reads_as_none_and_is_left_alone() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("user-away.json");
         std::fs::write(&path, "{\"until_epoch\": 100}\n").unwrap();
         assert_eq!(read_away_until_at(&path, 50), Some(100));
         assert_eq!(read_away_until_at(&path, 200), None);
-        assert!(!path.exists(), "expired state is cleared");
+        assert!(path.exists(), "an expired file is never deleted by a read");
         std::fs::write(&path, "{\"until_epoch\": 9000}\n").unwrap();
         assert_eq!(read_away_until_at(&path, 200), Some(9000));
-        assert!(path.exists());
     }
 
     #[test]

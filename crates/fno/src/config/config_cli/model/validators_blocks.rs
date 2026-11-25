@@ -330,28 +330,52 @@ fn check_working_hours(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
     Ok(v)
 }
 
-/// `[user] timezone`: an IANA name or empty. Where the system zone database
-/// exists, an unknown name is refused here instead of at the next load.
+/// `[user] timezone`: an IANA name or empty, read as the runtime reads it:
+/// the exact-case zone name, with no spaces and none of the database's
+/// helper entries. Where the system zone database exists, an unknown name is
+/// refused here instead of at the next load.
 fn check_timezone(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
     let Value::String(name) = &v else {
         return Ok(v);
     };
-    let name = name.trim();
-    if name.is_empty() || name.eq_ignore_ascii_case("utc") {
+    if zone_name_ok(name, std::path::Path::new("/usr/share/zoneinfo")) {
         return Ok(v);
     }
-    let shaped = !name.starts_with('/')
-        && !name.contains("..")
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'_' | b'-' | b'+'));
-    let db = std::path::Path::new("/usr/share/zoneinfo");
-    if !shaped || (db.is_dir() && !db.join(name).is_file()) {
-        return Err(Fail::Value(format!(
-            "timezone {name:?} is not an IANA zone name such as America/Los_Angeles"
-        )));
+    Err(Fail::Value(format!(
+        "timezone {name:?} is not an IANA zone name such as America/Los_Angeles"
+    )))
+}
+
+fn zone_name_ok(name: &str, db: &std::path::Path) -> bool {
+    const HELPERS: [&str; 5] = ["posixrules", "localtime", "posix", "right", "Factory"];
+    if name.is_empty() || name == "UTC" {
+        return true;
     }
-    Ok(v)
+    let parts: Vec<&str> = name.split('/').collect();
+    let shaped = parts.iter().all(|p| {
+        !p.is_empty()
+            && p.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'+'))
+    });
+    if !shaped || HELPERS.contains(&parts[0]) || HELPERS.contains(parts.last().unwrap_or(&"")) {
+        return false;
+    }
+    if !db.is_dir() {
+        return true;
+    }
+    // A case-blind file system answers `is_file` for a wrong-case name, so
+    // each part must match a directory entry byte for byte.
+    let mut dir = db.to_path_buf();
+    for (i, part) in parts.iter().enumerate() {
+        let listed = std::fs::read_dir(&dir)
+            .map(|rows| rows.flatten().any(|e| e.file_name() == *part))
+            .unwrap_or(false);
+        dir.push(part);
+        if !listed || (i + 1 == parts.len() && !dir.is_file()) {
+            return false;
+        }
+    }
+    true
 }
 
 fn coerce_term_text(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {

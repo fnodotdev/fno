@@ -117,6 +117,25 @@ pub(crate) fn read_menu(screen: &str) -> Option<AnswerablePrompt> {
     .then_some(menu)
 }
 
+/// True when the claude manifest reads the screen as an idle, empty prompt
+/// box. A menu, a working turn or an unreadable screen is not idle, so a
+/// typed line never lands on one of them.
+pub(crate) fn at_idle_prompt(screen: &str) -> bool {
+    let Some(Ok(manifest)) = load_manifest("claude", None) else {
+        return false;
+    };
+    let view = ScreenView {
+        visible_text: screen,
+        cursor_row: 0,
+        cursor_col: 0,
+        osc_title: None,
+        osc_progress: None,
+    };
+    manifest
+        .evaluate_answerable(&view)
+        .is_some_and(|(verdict, _)| verdict.state == "idle" && verdict.rule_id == "live_prompt_box")
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Choice {
     Once,

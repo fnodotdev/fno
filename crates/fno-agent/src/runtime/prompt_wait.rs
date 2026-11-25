@@ -43,8 +43,6 @@ struct Seen {
     deny_done: bool,
     /// The one `--raw` follow-up turn went out after the denial.
     followed_up: bool,
-    /// The deny key took cleanly, so the screen is safe to type at after.
-    deny_clean: bool,
     /// This wait's denial count for the node and action; 0 until counted.
     follow_count: u32,
     /// Follow-up sends that failed, so a bad lane stops retrying.
@@ -319,10 +317,10 @@ fn run_pass_with(
         snapshot,
         runner,
         &Hooks {
-            menu_showing: &|short: &str| {
+            at_idle: &|short: &str| {
                 crate::thread_dialog::read_thread(&crate::claude_roster::daemon_dir(), short)
-                    .map(|screen| crate::thread_dialog::read_menu(&screen).is_some())
-                    .unwrap_or(true)
+                    .map(|screen| crate::thread_dialog::at_idle_prompt(&screen))
+                    .unwrap_or(false)
             },
             asleep: &user_asleep,
             deny: &deny_prompt,
@@ -334,9 +332,8 @@ fn run_pass_with(
 /// The three seams a pass reaches the machine through, so a test drives the
 /// pass with no screen, no config and no keys.
 struct Hooks<'a> {
-    /// True while a permission menu is on the worker's screen, or the screen
-    /// cannot be read.
-    menu_showing: &'a dyn Fn(&str) -> bool,
+    /// True only while the worker's screen reads as an idle, empty prompt.
+    at_idle: &'a dyn Fn(&str) -> bool,
     asleep: &'a dyn Fn(&Waiting, i64) -> bool,
     deny: &'a dyn Fn(&str) -> DenyOutcome,
     dialog: &'a dyn Fn(&mut Waiting),
@@ -372,7 +369,7 @@ impl Waiting {
         if !self.seen.denied || now <= self.seen.denied_at_ms {
             return false;
         }
-        let settled = self.seen.deny_done && (self.seen.followed_up || !self.seen.deny_clean);
+        let settled = self.seen.deny_done && self.seen.followed_up;
         if !settled && now - self.seen.denied_at_ms < DENIAL_SETTLE_MS {
             return false;
         }
@@ -511,7 +508,6 @@ fn settle_denials(
                 DenyOutcome::Typed(note) => {
                     w.seen.denied = true;
                     w.seen.denied_at_ms = now;
-                    w.seen.deny_clean = note.is_none();
                     if let Some(note) = note {
                         first_error.get_or_insert(note);
                     }
@@ -521,7 +517,7 @@ fn settle_denials(
                 }
             }
         }
-        if w.seen.denied && w.seen.deny_clean && !w.seen.followed_up {
+        if w.seen.denied && !w.seen.followed_up {
             // Claude's rejection result tells the model to stop and wait for
             // the user, so a denied worker idles. One typed command turn
             // sends it back to work, and only onto an idle prompt line.
@@ -536,7 +532,10 @@ fn settle_denials(
                         .and_then(|e| e.node.clone())
                 });
             match node {
-                None => w.seen.followed_up = true,
+                // A registry that loaded and holds no node leaves nothing to
+                // restart. A registry that failed to load stays pending.
+                None if registry.is_some() => w.seen.followed_up = true,
+                None => {}
                 Some(node) => {
                     let action = w.screen_fp.clone().unwrap_or_else(|| w.waiting_for.clone());
                     if w.seen.follow_count == 0 {
@@ -569,7 +568,7 @@ fn settle_denials(
                                 first_error.get_or_insert(e);
                             }
                         }
-                    } else if count >= 1 && !(hooks.menu_showing)(&w.short_id) {
+                    } else if count >= 1 && (hooks.at_idle)(&w.short_id) {
                         let argv = follow_up_argv(w, &node);
                         let (code, _out, err) = runner(&argv, "");
                         if code == 0 {
@@ -822,7 +821,7 @@ mod tests {
         fp: std::cell::RefCell<String>,
         asleep: std::cell::Cell<bool>,
         sent: std::cell::RefCell<Vec<Vec<String>>>,
-        menu_up: std::cell::Cell<bool>,
+        idle: std::cell::Cell<bool>,
         fail_raw: std::cell::Cell<u8>,
         _temp: tempfile::TempDir,
     }
@@ -847,7 +846,7 @@ mod tests {
                 fp: std::cell::RefCell::new("aa".into()),
                 asleep: Default::default(),
                 sent: Default::default(),
-                menu_up: Default::default(),
+                idle: std::cell::Cell::new(true),
                 fail_raw: Default::default(),
                 _temp: temp,
             }
@@ -867,7 +866,7 @@ mod tests {
                 }
                 (0, "accepted-new-turn".into(), String::new())
             };
-            let menu_showing = |_: &str| self.menu_up.get();
+            let at_idle = |_: &str| self.idle.get();
             let asleep = |_: &Waiting, _: i64| self.asleep.get();
             let deny = |short: &str| {
                 self.typed.borrow_mut().push(short.to_string());
@@ -883,7 +882,7 @@ mod tests {
                 &snap,
                 &mut mail,
                 &Hooks {
-                    menu_showing: &menu_showing,
+                    at_idle: &at_idle,
                     asleep: &asleep,
                     deny: &deny,
                     dialog: &dialog,
@@ -1023,22 +1022,30 @@ mod tests {
     }
 
     #[test]
-    fn no_follow_up_goes_out_when_the_deny_key_did_not_take_cleanly() {
+    fn an_unclean_denial_follows_up_once_the_screen_is_idle() {
         let rig = Rig::new();
         rig.asleep.set(true);
-        *rig.outcome.borrow_mut() = Some(DenyOutcome::Typed(Some("still showing".into())));
+        rig.idle.set(false);
+        *rig.outcome.borrow_mut() = Some(DenyOutcome::Typed(Some("unconfirmed".into())));
         assert!(rig.pass(1_000_000).is_err());
-        assert_eq!(raw_sends(&rig), 0);
+        assert_eq!(raw_sends(&rig), 0, "not idle, so nothing typed");
+        rig.idle.set(true);
+        let _ = rig.pass(1_000_000 + 60_000);
+        assert_eq!(raw_sends(&rig), 1, "idle now, so the one follow-up goes");
     }
 
     #[test]
-    fn the_follow_up_waits_for_a_screen_with_no_menu() {
+    fn the_follow_up_waits_for_an_idle_prompt_line() {
         let rig = Rig::new();
         rig.asleep.set(true);
-        rig.menu_up.set(true);
+        rig.idle.set(false);
         rig.pass(1_000_000).unwrap();
-        assert_eq!(raw_sends(&rig), 0, "a live menu gets no typed line");
-        rig.menu_up.set(false);
+        assert_eq!(
+            raw_sends(&rig),
+            0,
+            "a screen that is not idle gets no typed line"
+        );
+        rig.idle.set(true);
         rig.pass(1_000_000 + 60_000).unwrap();
         assert_eq!(raw_sends(&rig), 1);
         assert_eq!(rig.typed.borrow().len(), 1, "the wait did not restart");
