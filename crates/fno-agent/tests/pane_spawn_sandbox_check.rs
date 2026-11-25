@@ -12,7 +12,7 @@ use std::process::Command;
 /// A fresh scratch root per run: the agents home, the spawn's --cwd and the
 /// pinned config all live under it, so no sibling test or machine state
 /// leaks in. The env travels in the child only; the parent pins nothing.
-fn run_spawn(pin: &str, provider: &str, tag: &str) -> (Option<i32>, String) {
+fn run_spawn(pin_config: &str, provider: &str, tag: &str) -> (Option<i32>, String) {
     let root = std::env::temp_dir().join(format!(
         "fno-pane-sandbox-{}-{}-{}",
         tag,
@@ -27,7 +27,7 @@ fn run_spawn(pin: &str, provider: &str, tag: &str) -> (Option<i32>, String) {
     fs::create_dir_all(&home).unwrap();
     fs::create_dir_all(&cwd).unwrap();
     let pin = root.join("config.toml");
-    fs::write(&pin, pin).unwrap();
+    fs::write(&pin, pin_config).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_fno-agent"))
         .args([
             "spawn",
