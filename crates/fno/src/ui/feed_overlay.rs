@@ -74,16 +74,15 @@ fn stderr_note(stderr: &[u8], status: &std::process::ExitStatus) -> String {
     }
 }
 
-/// One fold result, as it travels the client's single-flight channel: the
-/// whole history, oldest first.
 /// What one fold lands: the full rows of a one-shot read (a shot, a test),
-/// or one answer from the live panel's held reader.
-#[derive(Debug, Debug)]
+/// oldest first, or one answer from the live panel's held reader.
+#[derive(Debug)]
 pub enum Land {
     Rows(Vec<FeedItem>),
     Answer(Box<fno_proto::feed::serve::Answer>),
 }
 
+/// One fold result, as it travels the client's single-flight channel.
 pub type FoldResult = Result<Land, FeedError>;
 
 /// The `--limit` that reads every row: the projection keeps the newest
