@@ -337,7 +337,7 @@ impl Gate {
             false,
         );
         self.expect("no-mirror", code != 0, out);
-        let sidecar = fno_agent::tracker::sidecar::load(&self.state.path().join("sidecar"), &id)
+        let sidecar = fno_agent::tracker::sidecar::load(&self.state.path().join("db/sidecar"), &id)
             .unwrap_or_default();
         self.expect(
             "sidecar-partition",
