@@ -41,6 +41,8 @@ struct Seen {
     told_deny: Vec<String>,
     /// The board task and every denial mail landed.
     deny_done: bool,
+    /// The one `--raw` follow-up turn went out after the denial.
+    followed_up: bool,
     /// Hex fingerprint of the prompt on screen. A new one is a new wait.
     fingerprint: String,
 }
@@ -380,6 +382,44 @@ impl Waiting {
     }
 }
 
+fn load_once(home: &AgentsHome, registry: &mut Option<Registry>, first_error: &mut Option<String>) {
+    if registry.is_some() {
+        return;
+    }
+    match state::load_registry(&home.registry_json()) {
+        Ok(r) => *registry = Some(r),
+        Err(e) => {
+            first_error.get_or_insert(e.to_string());
+        }
+    }
+}
+
+/// The one-line command `--raw` types at the denied worker's idle prompt. It
+/// restarts the worker's own node with the denial named, so it takes a route
+/// that needs no approval or moves to other ready work.
+fn follow_up_argv(w: &Waiting, node: &str) -> Vec<String> {
+    let text = format!(
+        "/fno:target {node} Your {} was denied while the user was away. Take a route that needs no approval, or move to other ready work, and note the item on the board.",
+        w.waiting_for
+    );
+    [
+        "fno",
+        "agents",
+        "mail",
+        "send",
+        "--raw",
+        "--from-name",
+        SENDER,
+        "--origin",
+        "scheduler",
+        &w.short_id,
+        &text,
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+}
+
 /// Deny every wait that is due, then finish what a denial owes: one board
 /// task and one mail per recipient. Each step is recorded as it lands, so a
 /// failed step retries on the next pass and a landed one never repeats.
@@ -419,6 +459,36 @@ fn settle_denials(
                 }
             }
         }
+        if w.seen.denied && !w.seen.followed_up {
+            // Claude's rejection result tells the model to stop and wait for
+            // the user, so a denied worker idles. One typed command turn
+            // sends it back to work.
+            w.seen.followed_up = true;
+            load_once(home, &mut registry, &mut first_error);
+            let node = registry
+                .as_ref()
+                .zip(w.session_id.as_deref())
+                .and_then(|(reg, sid)| {
+                    reg.entries
+                        .iter()
+                        .find(|e| is_session(e, sid))
+                        .and_then(|e| e.node.clone())
+                });
+            if let Some(node) = node {
+                let argv = follow_up_argv(w, &node);
+                let (code, _out, err) = runner(&argv, "");
+                if code != 0 {
+                    first_error.get_or_insert(format!(
+                        "follow-up turn to {} failed: {}",
+                        w.name,
+                        err.trim()
+                    ));
+                }
+            }
+            if let Err(e) = w.persist(home) {
+                first_error.get_or_insert(e);
+            }
+        }
         if !w.seen.denied || w.seen.deny_done {
             continue;
         }
@@ -433,14 +503,7 @@ fn settle_denials(
                 }
             }
         }
-        if registry.is_none() {
-            match state::load_registry(&home.registry_json()) {
-                Ok(r) => registry = Some(r),
-                Err(e) => {
-                    first_error.get_or_insert(e.to_string());
-                }
-            }
-        }
+        load_once(home, &mut registry, &mut first_error);
         if let (Some(reg), Some(sid)) = (&registry, w.session_id.as_deref()) {
             let to = recipients(home, reg, sid);
             let pending: Vec<String> = to
@@ -657,6 +720,7 @@ mod tests {
         outcome: std::cell::RefCell<Option<DenyOutcome>>,
         fp: std::cell::RefCell<String>,
         asleep: std::cell::Cell<bool>,
+        sent: std::cell::RefCell<Vec<Vec<String>>>,
         _temp: tempfile::TempDir,
     }
 
@@ -664,13 +728,22 @@ mod tests {
         fn new() -> Self {
             let temp = tempfile::tempdir().unwrap();
             let home = AgentsHome::at(temp.path().join("agents"));
-            state::update_registry(&home.registry_json(), |_| {}).unwrap();
+            state::update_registry(&home.registry_json(), |r| {
+                let mut row = RegistryEntry::new(Some("sid-x".into()), Lineage::unproven("test"));
+                row.harness_session_id = Some("sid-x".into());
+                row.name = "t-away-worker".into();
+                row.harness = Some("claude".into());
+                row.node = Some("x-77".into());
+                r.entries.push(row);
+            })
+            .unwrap();
             Rig {
                 home,
                 typed: Default::default(),
                 outcome: Default::default(),
                 fp: std::cell::RefCell::new("aa".into()),
                 asleep: Default::default(),
+                sent: Default::default(),
                 _temp: temp,
             }
         }
@@ -681,7 +754,10 @@ mod tests {
                 "sid-x",
                 "t-away-worker",
             )]);
-            let mut mail = |_: &[String], _: &str| (0, "accepted-new-turn".into(), String::new());
+            let mut mail = |argv: &[String], _: &str| {
+                self.sent.borrow_mut().push(argv.to_vec());
+                (0, "accepted-new-turn".into(), String::new())
+            };
             let asleep = |_: &Waiting, _: i64| self.asleep.get();
             let deny = |short: &str| {
                 self.typed.borrow_mut().push(short.to_string());
@@ -772,5 +848,22 @@ mod tests {
         assert!(rig.pass(1_000_000).is_err());
         *rig.outcome.borrow_mut() = Some(DenyOutcome::NotTyped("no deny option".into()));
         rig.pass(1_000_000 + 60_000).unwrap();
+    }
+
+    #[test]
+    fn a_denied_worker_gets_one_raw_follow_up_turn_naming_its_node() {
+        let rig = Rig::new();
+        rig.asleep.set(true);
+        rig.pass(1_000_000).unwrap();
+        rig.pass(1_000_000 + 60_000).unwrap();
+        let sent = rig.sent.borrow();
+        let raw: Vec<&Vec<String>> = sent
+            .iter()
+            .filter(|a| a.contains(&"--raw".into()))
+            .collect();
+        assert_eq!(raw.len(), 1, "one follow-up per denial");
+        let line = raw[0].last().unwrap();
+        assert!(line.starts_with("/fno:target x-77 "), "{line}");
+        assert!(line.contains("route that needs no approval"), "{line}");
     }
 }
