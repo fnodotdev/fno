@@ -24,14 +24,24 @@ fn tick_row(ts: &str, arm: &str, acted: u64) -> serde_json::Value {
            "data": {"arm": arm, "acted": acted}})
 }
 
-fn ms_at(stamp: &str) -> i64 {
-    chrono::DateTime::parse_from_rfc3339(stamp)
-        .unwrap()
-        .timestamp_millis()
+/// Fixture stamps ride a base near now: the prune inside `sync` deletes
+/// telemetry rows older than the 168h horizon, so fixed calendar dates
+/// age out of the store about a week after they are written and the fold
+/// answers empty. The offsets below keep the original shape: the acting
+/// pr_idle beat at +23h sits before the +24h activity edge, and the two
+/// newest beats land just past it.
+fn stamp(base: chrono::DateTime<chrono::Utc>, hours: i64, minutes: i64) -> String {
+    (base + chrono::Duration::hours(hours) + chrono::Duration::minutes(minutes))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+fn ms(base: chrono::DateTime<chrono::Utc>, hours: i64, minutes: i64) -> i64 {
+    (base + chrono::Duration::hours(hours) + chrono::Duration::minutes(minutes)).timestamp_millis()
 }
 
 #[test]
 fn arm_maxima_cache_matches_the_full_fold_and_advances() {
+    let base = chrono::Utc::now() - chrono::Duration::hours(26);
     let dir = tempfile::tempdir().unwrap();
     let live = dir.path().join("events.jsonl");
     append(
@@ -40,14 +50,14 @@ fn arm_maxima_cache_matches_the_full_fold_and_advances() {
             // pr_idle's acting tick sits before the activity edge: an
             // acted=1 beat marks the arm active only inside the window,
             // and a later acted=0 beat never retires it.
-            tick_row("2026-11-17T23:00:00Z", "pr_idle", 1),
-            tick_row("2026-11-18T01:05:00Z", "pr_idle", 0),
-            tick_row("2026-11-18T01:02:00Z", "otlp", 1),
+            tick_row(&stamp(base, 23, 0), "pr_idle", 1),
+            tick_row(&stamp(base, 25, 5), "pr_idle", 0),
+            tick_row(&stamp(base, 25, 2), "otlp", 1),
         ],
     );
     let store = sync(&live).unwrap().store;
-    let since = ms_at("2026-11-17T00:00:00Z");
-    let active_since = ms_at("2026-11-18T00:00:00Z");
+    let since = base.timestamp_millis();
+    let active_since = ms(base, 24, 0);
     let reduce = || {
         reduce_arm_ticks(
             &live,
@@ -64,8 +74,8 @@ fn arm_maxima_cache_matches_the_full_fold_and_advances() {
     assert_eq!(
         cold.max_ts,
         vec![
-            ("otlp".to_string(), ms_at("2026-11-18T01:02:00Z")),
-            ("pr_idle".to_string(), ms_at("2026-11-18T01:05:00Z")),
+            ("otlp".to_string(), ms(base, 25, 2)),
+            ("pr_idle".to_string(), ms(base, 25, 5)),
         ]
     );
     assert_eq!(cold.active_arms, vec!["otlp".to_string()]);
@@ -74,14 +84,14 @@ fn arm_maxima_cache_matches_the_full_fold_and_advances() {
     assert_eq!(cached.max_ts, cold.max_ts);
     assert_eq!(cached.active_arms, cold.active_arms);
     // A row past the watermark merges without a full pass.
-    append(&live, &[tick_row("2026-11-18T01:10:00Z", "otlp", 1)]);
+    append(&live, &[tick_row(&stamp(base, 25, 10), "otlp", 1)]);
     sync(&live).unwrap();
     let incremental = reduce();
     assert_eq!(
         incremental.max_ts,
         vec![
-            ("otlp".to_string(), ms_at("2026-11-18T01:10:00Z")),
-            ("pr_idle".to_string(), ms_at("2026-11-18T01:05:00Z")),
+            ("otlp".to_string(), ms(base, 25, 10)),
+            ("pr_idle".to_string(), ms(base, 25, 5)),
         ]
     );
     // A fresh cold fold over the same rows agrees with the incremental one.
