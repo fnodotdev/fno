@@ -563,16 +563,18 @@ fn due_pass(
     }
     let token = due_token(&due);
     let body = due_body(&due);
+    const TITLE: &str = "operator: overdue questions";
+    const POINTER: &str = "fno inbox outstanding";
     let verdict = verdict_label(notify_signal_via(
         path,
         now,
         min_interval_s,
         KEY,
         &token,
-        "operator: overdue questions",
+        TITLE,
         &body,
-        None,
-        send,
+        Some(POINTER),
+        || send(TITLE, &body),
     ));
     *acted += u64::from(verdict == "sent");
     notes.push(format!("{KEY}:{verdict}"));
