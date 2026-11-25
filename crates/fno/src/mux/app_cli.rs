@@ -630,6 +630,34 @@ fn seed_pi_family(root: &Path, harness: &str) -> bool {
     }
 }
 
+/// The shot world's empty directory tree and config, rooted under /tmp.
+/// The root comes back canonical: macOS hands getcwd the physical path
+/// (/private/tmp), and the chat pin slugs that cwd to find the seed, so
+/// every pin uses the canonical root or the lookup lands one symlink off.
+fn shot_world_dirs() -> Option<ShotWorld> {
+    let root = std::path::Path::new("/tmp").join(format!("fno-shot-world-{}", std::process::id()));
+    std::fs::remove_dir_all(&root).ok();
+    let mut world = ShotWorld { root, server: None };
+    for dir in [
+        "mux",
+        ".fno/agents",
+        "code/checkout",
+        "claimroot/.fno/claims",
+        "transcripts",
+    ] {
+        if let Err(e) = std::fs::create_dir_all(world.root.join(dir)) {
+            eprintln!("fno mux app shot: the world dir failed: {e}");
+            return None;
+        }
+    }
+    world.root = std::fs::canonicalize(&world.root).unwrap_or_else(|_| world.root.clone());
+    if let Err(e) = std::fs::write(world.root.join(".fno/config.toml"), "") {
+        eprintln!("fno mux app shot: the world config failed: {e}");
+        return None;
+    }
+    Some(world)
+}
+
 /// `mux app shot`: one offscreen demo frame as a png, from a world this
 /// door builds, seeds, shoots and tears down. The world never touches
 /// the caller's own state: its own HOME, mux dir, agents home and graph
@@ -656,29 +684,9 @@ fn shot(args: &crate::cli_args::AppShotArgs) -> i32 {
     // Absolutize the out path before the app chdirs into its theme pin:
     // a relative --out would resolve inside the pin dir and die with it.
     let out_abs = std::path::absolute(out).unwrap_or_else(|_| PathBuf::from(out));
-    let root = std::path::Path::new("/tmp").join(format!("fno-shot-world-{}", std::process::id()));
-    std::fs::remove_dir_all(&root).ok();
-    let mut world = ShotWorld { root, server: None };
-    for dir in [
-        "mux",
-        ".fno/agents",
-        "code/checkout",
-        "claimroot/.fno/claims",
-        "transcripts",
-    ] {
-        if let Err(e) = std::fs::create_dir_all(world.root.join(dir)) {
-            eprintln!("fno mux app shot: the world dir failed: {e}");
-            return 1;
-        }
-    }
-    // macOS hands getcwd the physical path (/private/tmp), and the chat
-    // pin slugs that cwd to find the seed, so every pin below uses the
-    // canonical root or the lookup lands one symlink off the seed.
-    world.root = std::fs::canonicalize(&world.root).unwrap_or_else(|_| world.root.clone());
-    if let Err(e) = std::fs::write(world.root.join(".fno/config.toml"), "") {
-        eprintln!("fno mux app shot: the world config failed: {e}");
+    let Some(mut world) = shot_world_dirs() else {
         return 1;
-    }
+    };
     let mut server_cmd = world_cmd(&world.root, &front);
     server_cmd
         .args(["mux", "server", "--server", "default"])
