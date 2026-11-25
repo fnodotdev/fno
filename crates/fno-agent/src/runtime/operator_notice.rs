@@ -1075,7 +1075,7 @@ mod tests {
         let now = 1_000_000u64;
         let row = || json!({"id": "D3634", "ts": ts_rfc3339(now as i64 - 3 * 86_400), "question": "vanished ask"});
         let sends = std::cell::Cell::new(0u32);
-        let send = |_: &str, _: &str| {
+        let mut send = |_: &str, _: &str| {
             sends.set(sends.get() + 1);
             true
         };
