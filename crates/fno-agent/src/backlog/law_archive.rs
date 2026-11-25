@@ -206,7 +206,7 @@ mod tests {
             "ts": "2026-09-01T00:00:00Z",
         });
         let env = envelope_of(&row);
-        assert_eq!(env.get(de::EVENT_TYPE), Some(&json!("operator_decision")));
+        assert_eq!(env.get(de::TYPE), Some(&json!("operator_decision")));
         let data = env
             .get(de::DATA)
             .and_then(Value::as_object)
