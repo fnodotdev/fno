@@ -877,14 +877,23 @@ pub(crate) fn run_pass(home: &AgentsHome) -> Result<(), String> {
     let mut slugs = HashSet::new();
     for root in crate::daemon::worktree_sweep::registry_repo_roots(home) {
         let root = Path::new(&root);
+        let Some(slug) =
+            crate::pr_status::cache::git_slug(root).filter(|s| slugs.insert(s.clone()))
+        else {
+            continue;
+        };
         // GitHub's queue runs itself on capable repos; fno's arm runs fno's
-        // own queue and nothing else.
-        if queue_kind(root) != Some(QueueKind::Fno) {
+        // own queue and nothing else. A provider flip mid-batch must not
+        // strand a built batch, so pending entry rows drain first: the rows
+        // retire on a landing, an ejection, or the PR closing.
+        let now = crate::ci_cadence::millis_now();
+        if queue_kind(root) != Some(QueueKind::Fno)
+            && rows_of(&path, ENTRY_EVENT, &slug, now)
+                .map(|rows| rows.is_empty())
+                .unwrap_or(true)
+        {
             continue;
         }
-        // Two clones of one repo are one queue.
-        let slug = crate::pr_status::cache::git_slug(root).filter(|s| slugs.insert(s.clone()));
-        let Some(slug) = slug else { continue };
         if let Err(e) = pass_repo(root, &slug, &path) {
             eprintln!("merge-queue: {slug}: {e}");
         }
