@@ -7,7 +7,6 @@
 #![cfg(unix)]
 
 use std::fs;
-use std::path::PathBuf;
 use std::process::Command;
 
 /// A fresh scratch root per run: the agents home, the spawn's --cwd and the
