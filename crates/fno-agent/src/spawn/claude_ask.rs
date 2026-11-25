@@ -3017,7 +3017,7 @@ pub(crate) fn typed_print_run(
 
 /// [`typed_print_run`] read from this process's own env: a session with no
 /// fno identity, the named harness, and the pid the CLI hands every hook.
-/// Every door that mints a hand session's row asks this one question.
+/// Every door that mints a row for the session it runs in asks this one question.
 pub(crate) fn hand_typed_print_run(harness: Option<&str>) -> bool {
     typed_print_run(
         None,
