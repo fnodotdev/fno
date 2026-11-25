@@ -11,8 +11,8 @@ use crate::backlog::decisions::SCOPE_AMEND_EVENT;
 use crate::decision_index;
 use crate::law_match::{
     all_decision_rows, append_decision, autonomy_ask_gate, chat_may_retire, door_refuse,
-    is_decision_id, is_retraction_row, now_iso, project_events_journal, queue_ruling,
-    resolve_caller, row_id, row_subject, scope_filtered_rows, Caller,
+    is_decision_id, now_iso, project_events_journal, queue_ruling, resolve_caller, row_id,
+    row_subject, scope_filtered_rows, Caller,
 };
 
 const RESCOPE_USAGE: &str = "usage: fno inbox decisions rescope <subject-or-id> (--global | --project <slug>) [--quote <the user's words>] | fno inbox decisions rescope --proposal";
@@ -41,7 +41,7 @@ pub fn run_rescope(argv: &[String]) -> i32 {
     let mut quote = None;
     let mut it = argv.iter();
     while let Some(arg) = it.next() {
-        match arg.to_str().unwrap_or("") {
+        match arg.as_str() {
             "--global" => reach = Some("global".to_string()),
             "--project" => reach = it.next().map(|v| format!("project:{}", v.trim())),
             "--quote" => quote = it.next().cloned(),
