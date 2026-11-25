@@ -225,7 +225,7 @@ world_up() {
 
 wake_busy() {
   # The newline ends the busy pane's `read _`; the stream starts.
-  "$FNO_BIN" mux pane send "$BUSY_ID" --raw $'\n' --server "$SESSION" >/dev/null \
+  "$FNO_BIN" mux pane send "$BUSY_ID" --text $'\n' --raw --server "$SESSION" >/dev/null \
     || die "could not wake the busy pane (pane send refused)"
 }
 
@@ -312,6 +312,7 @@ metric_launch() {
   cat > "$tpl" <<'EOF'
 set timeout $env(BENCH_TIMEOUT)
 set t0 [clock milliseconds]
+log_user 0
 set stty_init "rows 40 cols 120"
 spawn -noecho $env(BENCH_FNO) mux attach $env(BENCH_SESSION)
 expect {
@@ -356,6 +357,7 @@ metric_scroll() {
   local tpl="$ROOT/tui_scroll.exp"
   cat > "$tpl" <<'EOF'
 set timeout $env(BENCH_TIMEOUT)
+log_user 0
 set stty_init "rows 40 cols 120"
 spawn -noecho $env(BENCH_FNO) mux attach $env(BENCH_SESSION)
 expect {
@@ -363,9 +365,12 @@ expect {
   timeout { puts "RESULT FAIL timeout_first_paint"; exit 0 }
   eof { puts "RESULT FAIL eof_first_paint"; exit 0 }
 }
-if {[catch {exec $env(BENCH_FNO) mux pane focus $env(BENCH_LONG_ID) --server $env(BENCH_SESSION)} err]} {
-  puts "RESULT FAIL focus: [string map [list "\n" " "] $err]"; exit 0
+set ok 0
+for {set k 0} {$k < 25} {incr k} {
+  if {![catch {exec $env(BENCH_FNO) mux pane focus $env(BENCH_LONG_ID) --server $env(BENCH_SESSION)} err]} { set ok 1; break }
+  after 200
 }
+if {!$ok} { puts "RESULT FAIL focus: [string map [list "\n" " "] $err]"; exit 0 }
 sleep 0.5
 set t0 [clock milliseconds]
 send "\x02"
@@ -412,6 +417,7 @@ metric_idle() {
   local tpl="$ROOT/tui_idle.exp"
   cat > "$tpl" <<'EOF'
 set timeout $env(BENCH_TIMEOUT)
+log_user 0
 set stty_init "rows 40 cols 120"
 spawn -noecho $env(BENCH_FNO) mux attach $env(BENCH_SESSION)
 expect {
@@ -492,6 +498,7 @@ metric_switch() {
   local tpl="$ROOT/tui_switch.exp"
   cat > "$tpl" <<'EOF'
 set timeout $env(BENCH_TIMEOUT)
+log_user 0
 set stty_init "rows 40 cols 120"
 spawn -noecho $env(BENCH_FNO) mux attach $env(BENCH_SESSION)
 expect {
@@ -551,6 +558,7 @@ metric_keypaint() {
   local tpl="$ROOT/tui_keypaint.exp"
   cat > "$tpl" <<'EOF'
 set timeout $env(BENCH_TIMEOUT)
+log_user 0
 set stty_init "rows 40 cols 120"
 spawn -noecho $env(BENCH_FNO) mux attach $env(BENCH_SESSION)
 expect {
@@ -558,9 +566,12 @@ expect {
   timeout { puts "RESULT FAIL timeout_first_paint"; exit 0 }
   eof { puts "RESULT FAIL eof_first_paint"; exit 0 }
 }
-if {[catch {exec $env(BENCH_FNO) mux pane focus $env(BENCH_BUSY_ID) --server $env(BENCH_SESSION)} err]} {
-  puts "RESULT FAIL focus: [string map [list "\n" " "] $err]"; exit 0
+set ok 0
+for {set k 0} {$k < 25} {incr k} {
+  if {![catch {exec $env(BENCH_FNO) mux pane focus $env(BENCH_BUSY_ID) --server $env(BENCH_SESSION)} err]} { set ok 1; break }
+  after 200
 }
+if {!$ok} { puts "RESULT FAIL focus: [string map [list "\n" " "] $err]"; exit 0 }
 sleep 0.5
 set marker "kpz[clock clicks]"
 set t0 [clock milliseconds]
