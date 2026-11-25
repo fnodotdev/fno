@@ -260,12 +260,15 @@ pub fn cites_decision_id(text: &str) -> bool {
 
 /// The known decision ids: every `decision_id` on an operator_decision row
 /// of the store, retired rows included (supersession history honestly cites
-/// retired ids), lowercase.
+/// retired ids), lowercase. The cold archive joins the read, so a
+/// row moved to `decisions-archive.jsonl` keeps its id resolvable, so the
+/// predicate stays no-row, not no-LIVE-row.
 pub fn known_decision_ids() -> Result<HashSet<String>, String> {
-    let (rows, _) = crate::decision_index::read_store_rows(
+    let (rows, _) = crate::decision_index::read_store_rows_everything(
         &crate::graph_get::default_graph_path(),
         &crate::decision_index::default_state_path("decisions.jsonl"),
-    )?;
+    )
+    .map_err(|e| e.to_string())?;
     Ok(rows
         .iter()
         .filter(|row| {

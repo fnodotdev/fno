@@ -18,7 +18,7 @@ HOME="${HOME:-$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f6 || echo ~)}"
 
 export STATE_DIR="$HOME/.fno"
 export LEDGER_JSON_PATH="$STATE_DIR/db/history/ledger.json"
-export BRIEFS_DIR="$STATE_DIR/briefs"
+export BRIEFS_DIR="$STATE_DIR/db/briefs"
 export POSTMORTEMS_DIR="$STATE_DIR/db/postmortems"
 export WORKTREES_BASE="$STATE_DIR/spaces/worktrees"
 export MEMORY_DIR="$STATE_DIR/memory"

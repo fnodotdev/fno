@@ -66,6 +66,33 @@ impl Fixture {
                     .unwrap();
             }
         }
+        // The adoption law reads a join trigger per session. Plant one for
+        // every session id the fixture files carry, so each apply case below
+        // reaches adoption exactly as it did when the goldens froze; the
+        // law's refuse arm is proven separately at the end of the apply test.
+        // The marker name never matches the rollout-*.jsonl scan filter.
+        for set in file_sets {
+            for file in golden[*set].as_array().unwrap() {
+                for line in file[1].as_str().unwrap().lines() {
+                    let Ok(item) = serde_json::from_str::<Value>(line) else {
+                        continue;
+                    };
+                    if item.get("type").and_then(Value::as_str) != Some("session_meta") {
+                        continue;
+                    }
+                    let Some(id) = item
+                        .get("payload")
+                        .and_then(|p| p.get("id"))
+                        .and_then(Value::as_str)
+                    else {
+                        continue;
+                    };
+                    let path = root.join("sessions").join("codex").join(id).join("joined");
+                    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                    std::fs::write(&path, "skill:review").unwrap();
+                }
+            }
+        }
         std::fs::write(
             root.join("registry.json"),
             golden["registry"].as_str().unwrap(),
@@ -220,5 +247,54 @@ fn apply_adopts_with_the_follow_up_path_on_the_row() {
         row.log_path.as_deref().is_some_and(|p| p.ends_with(&tail)),
         "{:?}",
         row.log_path
+    );
+
+    // The law arm: the same rollout with its join trigger removed holds no
+    // law cause, so the batch skips it and the registry gains no row.
+    let unmarked = Fixture::new(&["complete_files"]);
+    let selected = unmarked
+        .golden
+        .get("selected")
+        .and_then(Value::as_str)
+        .unwrap()
+        .to_string();
+    let marker = unmarked
+        .sessions()
+        .join("codex")
+        .join(&selected)
+        .join("joined");
+    std::fs::remove_file(&marker).unwrap();
+    let (_, _, scan) = unmarked.sweep(Some(&selected));
+    let results = apply_recoverable_with(&scan, &unmarked.registry(), None);
+    assert_eq!(results.len(), 1, "{results:?}");
+    let skipped = results.first().unwrap();
+    assert_eq!(skipped["session_id"], json!(selected));
+    assert_eq!(skipped["outcome"], "skipped");
+    assert_eq!(skipped["reason"], "law_refused");
+    assert_eq!(skipped["transcript_usable"], json!(true));
+    assert!(
+        skipped["detail"]
+            .as_str()
+            .is_some_and(|d| d.starts_with("law_refused")),
+        "{skipped}"
+    );
+    assert_same(
+        &recovery_result_counts(&results),
+        &json!({
+            "applied": 0,
+            "refused": 0,
+            "deferred": 0,
+            "skipped": 1,
+        }),
+        "law_refused_counts",
+    );
+    let registry = fno_agent::state::load_registry(&unmarked.registry()).unwrap();
+    assert!(
+        registry
+            .entries
+            .iter()
+            .all(|e| e.harness_session_id.as_deref() != Some(selected.as_str())),
+        "the law-refused session gained a row: {:?}",
+        registry.entries
     );
 }

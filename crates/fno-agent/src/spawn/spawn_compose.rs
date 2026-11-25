@@ -638,7 +638,77 @@ fn compose_body(inputs: &Inputs, scan: Axes, seam: &mut Seam) {
         return;
     }
     pane_bundle_stage(&mut stage, seam);
+    floor_stage(&stage, seam);
+    if seam.exit.is_some() {
+        return;
+    }
     assemble(&mut stage, seam);
+}
+
+/// `agents.profiles.<command>.min_band`: refuse a spawn whose resolved model
+/// bands below the floor, a typed pin included. No key, no read.
+fn floor_stage(stage: &Stage, seam: &mut Seam) {
+    if !stage.profile.is_some_and(|p| p.contains_key("min_band")) {
+        return;
+    }
+    let floor = toml::Value::String(cfg_str(stage.profile, "min_band"));
+    let scan = &stage.scan;
+    let injected = seam
+        .inject
+        .iter()
+        .position(|t| t == "--route")
+        .and_then(|at| seam.inject.get(at + 1))
+        .cloned();
+    // Typed axes outrank a pick, and a pick outranks the config scalars the
+    // launch template reads later (lane > profile > defaults).
+    let typed_other_axis = scan.has_model || scan.explicit_vendor_present;
+    let route = scan
+        .route_value
+        .clone()
+        .filter(|_| scan.explicit_route)
+        .or_else(|| (!typed_other_axis).then_some(injected).flatten())
+        .or_else(|| {
+            let configured = stage.fields().route.0.clone();
+            (!typed_other_axis && !configured.is_empty()).then_some(configured)
+        });
+    let configured_model = field_read(
+        stage.lane.as_ref(),
+        stage.lane_index,
+        stage.profile,
+        &stage.profile_command,
+        &stage.defaults,
+        "model",
+    )
+    .0;
+    let model = scan
+        .model_value
+        .clone()
+        .filter(|_| scan.has_model)
+        .or_else(|| seam.harness_model.clone())
+        .or_else(|| crate::spawn_floor::fenced_model(&stage.inputs.argv))
+        .or_else(|| Some(configured_model).filter(|m| !m.is_empty()));
+    let vendor = scan.explicit_vendor.clone();
+    // A resume rides the resumed session's own model, which passed the floor
+    // at its own spawn.
+    if scan.has_resume && route.is_none() && model.is_none() && vendor.is_none() {
+        return;
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let rows = crate::route_gather::declared_rows(&cwd);
+    let (tiers, reach) = crate::route_gather::load_model_tiers();
+    let verdict = crate::spawn_floor::check(&crate::spawn_floor::Ask {
+        command: &stage.profile_command,
+        floor: &floor,
+        route: route.as_deref(),
+        model: model.as_deref(),
+        vendor: vendor.as_deref(),
+        rows: &rows,
+        tiers: &tiers,
+        reach: &reach,
+    });
+    if let Some(line) = verdict {
+        seam.refuse(line);
+    }
 }
 
 /// Profile-key resolution: the seed's command names the profile; an unknown
@@ -973,7 +1043,12 @@ fn early_return(stage: &Stage, fields: &Fields, seam: &mut Seam) -> bool {
     if any_field || grid_candidate || !seam.applied.is_empty() || overlays_present(stage) {
         return false;
     }
-    journal(stage, seam, "");
+    // Nothing else resolved, so a typed pin is the whole spawn: the floor
+    // still judges it, and a refusal journals nothing.
+    floor_stage(stage, seam);
+    if seam.exit.is_none() {
+        journal(stage, seam, "");
+    }
     true
 }
 
@@ -2035,6 +2110,57 @@ mod tests {
         );
         let at = answer.argv.iter().position(|t| t == "--model").unwrap();
         assert_eq!(answer.argv[at + 1], "opus");
+    }
+
+    /// `min_band` binds a typed pin: a route banded below the floor refuses
+    /// with exit 2, and a model at the floor composes as before.
+    #[test]
+    fn a_min_band_floor_refuses_a_typed_pin_below_it() {
+        let (guard, root, saved) = hermetic();
+        std::fs::write(
+            root.join("config.toml"),
+            "[agents.profiles.blueprint]\nmin_band = \"high\"\n\n\
+             [[routing.models]]\nname = \"zai-flash\"\nharness = \"claude\"\n\
+             model = \"glm-5.3-flash[1m]\"\nroute = \"zai/glm-5.3-flash[1m]\"\nband = \"medium\"\n",
+        )
+        .unwrap();
+        let compose_for = |tail: &[&str]| {
+            let argv: Vec<String> = ["spawn", "--name", "w", "--harness", "claude"]
+                .into_iter()
+                .chain(tail.iter().copied())
+                .map(str::to_string)
+                .collect();
+            compose(&Inputs {
+                scan: crate::spawn_admission::scan_projection(&argv[1..]),
+                argv,
+                defaults: toml::Value::Table(toml::map::Map::new()),
+                profiles: "blueprint = { min_band = \"high\" }".parse().unwrap(),
+                dispatch_commands: toml::Value::Table(toml::map::Map::new()),
+                roster: vec!["blueprint".to_string()],
+                node_command: None,
+                env_node: None,
+                ambient_harness: "claude".to_string(),
+                apply_permission_builtin: true,
+                facts: serde_json::json!({"role_resolves": null}),
+                node: None,
+                node_row: None,
+                verbose: false,
+            })
+        };
+        let below = compose_for(&["--route", "zai/glm-5.3-flash[1m]", "/fno:blueprint x-1"]);
+        let at = compose_for(&["/fno:blueprint x-1", "--", "--model", "claude-opus-5-5"]);
+        drop(guard);
+        clear_hermetic(&root, saved);
+        assert_eq!(below.exit, 2, "{:?}", below.stderr);
+        assert!(
+            below
+                .stderr
+                .iter()
+                .any(|l| l.contains("agents.profiles.blueprint.min_band is high")),
+            "{:?}",
+            below.stderr
+        );
+        assert_eq!(at.exit, 0, "{:?}", at.stderr);
     }
 
     /// A take-over reason in the environment is a forgery or a stale

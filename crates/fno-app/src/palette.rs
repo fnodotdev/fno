@@ -300,6 +300,7 @@ mod tests {
             id,
             name: String::new(),
             canonical_cwd: cwd.into(),
+            project: None,
             tabs: Vec::new(),
             active_tab: 0,
             panes: 0,

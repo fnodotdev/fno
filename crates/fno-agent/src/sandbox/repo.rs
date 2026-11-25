@@ -212,7 +212,10 @@ mod tests {
         );
         assert!(!marker.exists(), "no host hook runs on intake");
         assert!(export(
-            &Engine { bin: "docker" },
+            &Engine {
+                bin: "docker",
+                host: None
+            },
             "w",
             "w-1",
             "not-hex",

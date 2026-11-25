@@ -18,7 +18,7 @@ asserts = "invocation"
 ## What happens in a run
 
 1. `fno do target init` looks for the skill in `~/.claude/skills` and `<project>/.claude/skills`. When it finds the skill on no root, init refuses and names each root it searched. A skill that init cannot check (a `plugin:skill` name, an unknown harness) gets one note, and the run goes on.
-2. On the final HEAD, before the promise, the target session runs the `invocation` text. Then it runs `bash skills/review/scripts/emit-attestation.sh house-check`. The steps are in [ship-and-promise.md](ship-and-promise.md).
+2. On the final HEAD, before the promise, the target session runs the `invocation` text. Then it runs `bash skills/review/scripts/emit-attestation.sh house-check`. The context stamp follows the dispatch: `fresh` without builder context, `shared` in this session. Naming the reviewer replaces the default lane for the run. The configured reviewer runs. The inline lane does not. The steps are in [ship-and-promise.md](ship-and-promise.md).
 3. The stop gate refuses `DonePRGreen` until `house-check` attests at the current HEAD. A new commit makes the attestation stale, so the skill runs again on the new HEAD.
 
 ## Two rungs

@@ -456,17 +456,6 @@ jobs:
         working-directory: crates/fno-agent
         run: cargo build --bin fno-agent
 
-      # State-root tidiness: the inventory doc's root rows are shrink-only.
-      # The runtime half is hooks/write-gate.sh, which refuses
-      # a NEW top-level write in either root; this gate is the review half,
-      # failing a PR whose diff adds a root pattern to the doc.
-      - name: State-root inventory rows are shrink-only
-        if: ${{ !cancelled() }}
-        timeout-minutes: 5
-        run: |
-          bash scripts/ci/check-state-root-rows.sh --self-test
-          bash scripts/ci/check-state-root-rows.sh
-
       - name: every spawn-gate refusal emits
         if: ${{ !cancelled() }}
         timeout-minutes: 5
@@ -735,19 +724,6 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 5
         run: bash tests/ci/test_check_client_actions_shrink.sh
-
-      # The write-side half of the same rule: a diff that ADDS a hand-built
-      # root-level write (a bare state_dir() leaf, a fence-less
-      # root_state_file, a Rust place() with no layout row) fails, so a new
-      # writer cannot skip the paths-module doors the doc's rule names.
-      - name: State-root writes are rowed or subfoldered
-        if: ${{ !cancelled() }}
-        timeout-minutes: 5
-        env:
-          PR_BASE_REF: ${{ github.base_ref || 'main' }}
-        run: |
-          bash scripts/ci/check-state-root-writes.sh --self-test
-          bash scripts/ci/check-state-root-writes.sh
 
       # From review-invocation-single-source.yml.
       - name: Review invocation single-source check

@@ -22,7 +22,7 @@ use super::skills::{self, Skill};
 use super::ui::{self, Role};
 use super::window::Root;
 use fno::app_api::client::agent_launcher::{
-    epic_rows, harness_rows, EpicChoice, HarnessRow, LEAD_SEED,
+    config_projects, epic_rows, harness_rows, ConfigProject, EpicChoice, HarnessRow, LEAD_SEED,
 };
 use fno::proto::chat_event::SessionKey;
 use fno::proto::{AgentLaunchRequest, AgentLaunchUpdate, AgentRow, LaunchState};
@@ -210,6 +210,9 @@ pub struct Launch {
     pick: skills::Pick,
     harnesses: Vec<HarnessRow>,
     projects: Vec<String>,
+    /// The config's projects, read at each refresh. A picked folder outside
+    /// this list offers the add-project row.
+    config: Vec<ConfigProject>,
     pub draft: Draft,
     pub field: Rc<FieldState>,
     /// The task box's bounds at the last paint, for the IME candidate window.
@@ -237,6 +240,7 @@ impl Launch {
             pick: skills::Pick::default(),
             harnesses: Vec::new(),
             projects: Vec::new(),
+            config: Vec::new(),
             draft: Draft::default(),
             field: Rc::new(FieldState::default()),
             composer: Rc::new(Cell::new(Bounds::default())),
@@ -269,13 +273,18 @@ impl Launch {
         self.harnesses = rows;
     }
 
-    /// Rebuild the project candidates from the layout, in the TUI's order:
-    /// the active workspace's folder, the app's own cwd, the other workspaces'.
+    /// Rebuild the project candidates from the layout: the active workspace's
+    /// folder, the config's projects, the app's own cwd, the other workspaces'.
     pub(crate) fn refresh_projects(&mut self, layout: &Layout) {
         let mut projects: Vec<String> = Vec::new();
         if let Some(s) = layout.squads.iter().find(|s| s.id == layout.active_squad) {
             if !s.canonical_cwd.is_empty() {
                 projects.push(s.canonical_cwd.clone());
+            }
+        }
+        for c in &self.config {
+            if !projects.contains(&c.path) {
+                projects.push(c.path.clone());
             }
         }
         let own = std::env::current_dir()
@@ -313,10 +322,23 @@ impl Launch {
         }
     }
 
+    /// Re-read the config's projects and add any new folder to the
+    /// candidates. The layout path reuses the cached read: it runs on every
+    /// layout push, and the config is a file parse.
+    pub(crate) fn refresh_config(&mut self) {
+        self.config = config_projects();
+        for c in &self.config {
+            if !self.projects.contains(&c.path) {
+                self.projects.push(c.path.clone());
+            }
+        }
+    }
+
     pub(crate) fn open(&mut self, kind: Option<Kind>) {
         if let Some(k) = kind {
             self.kind = k;
         }
+        self.refresh_config();
         self.row = Row::Task;
         self.phase = Phase::Editing;
         self.request_id = 0;
@@ -475,6 +497,32 @@ impl Launch {
         self.project = cwd;
         self.gone = false;
         self.refresh_skills();
+    }
+
+    /// The picked folder when the config does not list it yet: the add-project
+    /// row offers it. `None` when nothing is picked or the config has it.
+    pub(crate) fn unlisted_project(&self) -> Option<&str> {
+        let p = self.project.as_str();
+        (!p.is_empty() && !self.gone && !self.config.iter().any(|c| c.path == p)).then_some(p)
+    }
+
+    /// The folder the add-project row offers: the typed `+ <path>` first, else
+    /// the picked folder the config does not list.
+    pub(crate) fn add_candidate(&self) -> Option<String> {
+        typed_project(&self.draft).or_else(|| self.unlisted_project().map(str::to_string))
+    }
+
+    /// Tab on a typed `+ <path>` draft extends the path by its folder names.
+    pub(crate) fn complete_typed_path(&mut self) -> bool {
+        let Some(path) = typed_project(&self.draft) else {
+            return false;
+        };
+        let Some(done) = complete_dir(&path) else {
+            return false;
+        };
+        self.draft.select_all();
+        self.draft.replace_selection(&format!("+{done}"));
+        true
     }
 
     /// The picks the start view's header and chips render.
@@ -672,7 +720,7 @@ impl Launch {
                 KeyOut::Taken
             }
             "tab" => {
-                if !self.complete_skill() {
+                if !self.complete_skill() && !self.complete_typed_path() {
                     self.row = self.row.next(k.shift, self.kind);
                 }
                 KeyOut::Taken
@@ -876,6 +924,7 @@ pub(super) fn render(root: &Root, window: &Window, cx: &mut Context<Root>) -> Di
         .child(ui::text(l.kind.why(), Role::Meta, &p))
         .child(harness_row(l, &p, cx))
         .child(project_row(l, &p, cx))
+        .children(l.add_candidate().map(|path| add_project_row(path, &p, cx)))
         .when(l.kind == Kind::Worker, |d| {
             d.child(axis_picker_rows(l, &p, cx))
         })
@@ -966,6 +1015,52 @@ fn short_project_with(path: &str, home: &str) -> String {
     format!("{head}\u{2026}{tail}")
 }
 
+/// The folder a draft names as a new project: a leading `+` (stripped) and
+/// then a path, with `~` read as home. `None` without the lead or the path.
+pub(crate) fn typed_project(draft: &Draft) -> Option<String> {
+    let rest = draft.text().trim().strip_prefix('+')?.trim();
+    (!rest.is_empty()).then(|| expand_home(rest))
+}
+
+fn expand_home(path: &str) -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    match path.strip_prefix('~') {
+        Some(rest) if !home.is_empty() && (rest.is_empty() || rest.starts_with('/')) => {
+            format!("{home}{rest}")
+        }
+        _ => path.to_string(),
+    }
+}
+
+/// Tab completion for a typed folder: the longest prefix the child folders
+/// of the typed directory share. A lone match gains its closing `/`. `None`
+/// when nothing lengthens the tail.
+pub(crate) fn complete_dir(path: &str) -> Option<String> {
+    let cut = path.rfind('/')? + 1;
+    let (dir, tail) = path.split_at(cut);
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| n.starts_with(tail) && (tail.starts_with('.') || !n.starts_with('.')))
+        .collect();
+    names.sort();
+    let first = names.first()?.clone();
+    let common = names.iter().fold(first, |acc, n| {
+        acc.chars()
+            .zip(n.chars())
+            .take_while(|(a, b)| a == b)
+            .map(|(a, _)| a)
+            .collect()
+    });
+    if names.len() == 1 {
+        Some(format!("{dir}{common}/"))
+    } else {
+        (common.len() > tail.len()).then(|| format!("{dir}{common}"))
+    }
+}
+
 fn project_row(l: &Launch, p: &Palette, cx: &mut Context<Root>) -> Stateful<Div> {
     ui::clickable(
         div()
@@ -989,6 +1084,25 @@ fn project_row(l: &Launch, p: &Palette, cx: &mut Context<Root>) -> Stateful<Div>
     )
     .child(ui::clamp(short_project(&l.project), Role::Name, p))
     .when(l.gone, |d| d.child(ui::tag("gone", p.warn, p)))
+}
+
+/// The add-project row, under the project row: it registers the typed or
+/// picked folder in the config and opens a workspace for it.
+fn add_project_row(path: String, p: &Palette, cx: &mut Context<Root>) -> Stateful<Div> {
+    let label = format!("+ add project {}", short_project(&path));
+    ui::clickable(
+        div()
+            .id("launch-add-project")
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(8.0))
+            .py_1(),
+        p,
+    )
+    .on_click(cx.listener(move |root, _, _, cx| root.add_project_path(path.clone(), cx)))
+    .child(div().w(px(56.0)).flex_none())
+    .child(ui::text(label, Role::Label, p))
 }
 
 /// The label the model row shows: the pick, or the door default.
@@ -1311,6 +1425,32 @@ mod tests {
     }
 
     #[test]
+    fn a_typed_plus_path_names_a_project_and_tab_completes_its_folder() {
+        let mut d = Draft::default();
+        d.replace_selection("+ /tmp/x");
+        assert_eq!(typed_project(&d).as_deref(), Some("/tmp/x"));
+        let mut d = Draft::default();
+        d.replace_selection("!ls");
+        assert_eq!(typed_project(&d), None);
+
+        let root = std::env::temp_dir().join(format!("fno-complete-{}", std::process::id()));
+        for dir in ["alpha-one", "alpha-two", "beta"] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        let base = format!("{}/", root.display());
+        assert_eq!(
+            complete_dir(&format!("{base}al")),
+            Some(format!("{base}alpha-"))
+        );
+        assert_eq!(
+            complete_dir(&format!("{base}b")),
+            Some(format!("{base}beta/"))
+        );
+        assert_eq!(complete_dir(&format!("{base}z")), None);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn a_lead_submit_seeds_the_picked_epics_and_a_bare_seed_without_any() {
         let mut l = lead_with_task("");
         l.epics = vec!["fno-a1b2".into(), "fno-c3d4".into()];
@@ -1580,6 +1720,7 @@ mod tests {
             id: 1,
             name: "w".into(),
             canonical_cwd: "/w".into(),
+            project: None,
             tabs: Vec::new(),
             active_tab: 0,
             panes: 0,

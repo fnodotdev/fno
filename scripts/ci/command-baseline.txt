@@ -282,6 +282,7 @@ fno-agent think-dispatch
 fno-agent think-inspect
 fno-agent trace
 fno-agent update-journal
+fno-agent user-hours
 fno-agent verify-evidence
 fno-agent version
 fno-agent visual

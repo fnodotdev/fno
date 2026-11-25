@@ -81,6 +81,20 @@ RATCHET_LINTS='["clippy::correctness", "clippy::invalid_regex", "clippy::indexin
 # outside the crate (macro-expanded registry sources, /rustc shims) are not
 # ours to ratchet; deps are cap-linted anyway. Non-clippy diagnostics are
 # rustc's own and stay with the `warnings` job.
+
+# Render the error-level diagnostics a failed pass already captured, so the
+# failure names its error instead of dying with the JSON stream (an earlier
+# compile red cost a full CI cycle because the branch deleted local_tmp).
+render_errors() {
+    local jsonl="$1"
+    jq -r 'select(.reason == "compiler-message")
+        | select(.message.level == "error")
+        | .message.message as $m
+        | ((.message.spans // [] | map(select(.is_primary == true)) | .[0] // .message.spans[0]) as $s
+           | (if $s then ($s.file_name + ":" + ($s.line_start | tostring) + ": ") else "" end) + $m)' \
+        "$jsonl" 2>/dev/null | sort -u | head -20
+}
+
 extract_keys() {
     local jsonl="$1" crate="$2"
     jq -r --arg crate "$crate" --argjson lints "$RATCHET_LINTS" '
@@ -129,6 +143,8 @@ else
             # readable stderr, never a silent pass.
             echo "clippy-check: cargo clippy failed in $crate; stderr tail:" >&2
             tail -30 "$err_tmp" >&2
+            echo "clippy-check: error diagnostics from the JSON stream:" >&2
+            render_errors "$local_tmp" >&2
             rm -f "$local_tmp" "$err_tmp"
             exit 1
         fi
@@ -141,6 +157,8 @@ else
         elif ! grep -q "no library targets found" "$err_tmp"; then
             echo "clippy-check: cargo clippy (product pass) failed in $crate; stderr tail:" >&2
             tail -30 "$err_tmp" >&2
+            echo "clippy-check: error diagnostics from the JSON stream:" >&2
+            render_errors "$local_tmp" >&2
             rm -f "$local_tmp" "$err_tmp"
             exit 1
         fi

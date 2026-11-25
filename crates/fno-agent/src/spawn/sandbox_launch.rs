@@ -5,8 +5,10 @@
 //! Ruling Q7 orders the harms: shared state, then host, then resource
 //! fights. A sandboxed worker gets no mount at all: no worktree bind, no
 //! daemon socket, no agents home. It reaches the host only through the relay
-//! that owns its exec stream, which stamps identity and forwards five typed
-//! frames. The host client keeps every gate and every claim.
+//! that owns its exec stream, which stamps identity and forwards typed
+//! frames. The host client keeps every gate and every claim. A spawn that
+//! carries `FNO_NODE` is a target worker: the relay binds that node's
+//! worktree, branch, claim and plan on the host before the clone.
 
 use crate::sandbox::{Refusal, Res};
 use std::collections::BTreeMap;
@@ -30,11 +32,17 @@ pub const SANDBOXED_HARNESSES: [&str; 5] = ["claude", "codex", "gemini", "openco
 pub struct SandboxPlan {
     pub provider: String,
     pub image: Option<String>,
+    /// `sandbox.host`: the user's own VM, reached by ssh. Global only.
+    #[serde(default)]
+    pub host: Option<String>,
     pub env: BTreeMap<String, String>,
 }
 
+/// One config layer's `[sandbox]` values: provider, image and host.
+type Layer = (Option<String>, Option<String>, Option<String>);
+
 /// One config layer's `[sandbox]` values, or the reason it refuses.
-fn layer(path: &Path) -> Res<Option<(Option<String>, Option<String>)>> {
+fn layer(path: &Path) -> Res<Option<Layer>> {
     let Ok(body) = std::fs::read_to_string(path) else {
         return Ok(None);
     };
@@ -45,7 +53,7 @@ fn layer(path: &Path) -> Res<Option<(Option<String>, Option<String>)>> {
         )
     })?;
     let Some(sb) = table.get("sandbox") else {
-        return Ok(Some((None, None)));
+        return Ok(Some((None, None, None)));
     };
     let sb = sb
         .as_table()
@@ -74,7 +82,12 @@ fn layer(path: &Path) -> Res<Option<(Option<String>, Option<String>)>> {
             )));
         }
     }
-    Ok(Some((provider, text("image")?)))
+    let host = text("host")?.filter(|h| !h.is_empty());
+    if let Some(h) = &host {
+        crate::sandbox::engine::SshHost::parse(h)
+            .map_err(|e| Refusal(format!("{}: {e}", path.display())))?;
+    }
+    Ok(Some((provider, text("image")?, host)))
 }
 
 /// The resolved policy and the notices it owes the reader.
@@ -82,6 +95,7 @@ fn layer(path: &Path) -> Res<Option<(Option<String>, Option<String>)>> {
 pub struct Policy {
     pub provider: Provider,
     pub image: Option<String>,
+    pub host: Option<String>,
     pub notices: Vec<String>,
 }
 
@@ -94,16 +108,22 @@ pub fn policy(cwd: &Path) -> Res<Policy> {
     let global = crate::agents_config::global_config_path();
     let pinned = std::env::var_os("FNO_CONFIG").is_some_and(|v| !v.is_empty());
     let mut notices = Vec::new();
-    let (mut g_provider, mut g_image) = (None, None);
+    let (mut g_provider, mut g_image, mut g_host) = (None, None, None);
     let mut projects: Vec<(PathBuf, Option<String>, Option<String>)> = Vec::new();
     for path in &candidates {
-        let Some((provider, image)) = layer(path)? else {
+        let Some((provider, image, host)) = layer(path)? else {
             continue;
         };
         // A pinned FNO_CONFIG is the one layer, and reads as global.
         if Some(path) == global.as_ref() || pinned {
-            (g_provider, g_image) = (provider, image);
+            (g_provider, g_image, g_host) = (provider, image, host);
         } else {
+            if host.is_some() {
+                notices.push(format!(
+                    "{} sets sandbox.host; the host is read from global config only, so it is ignored",
+                    path.display()
+                ));
+            }
             projects.push((path.clone(), provider, image));
         }
     }
@@ -137,6 +157,7 @@ pub fn policy(cwd: &Path) -> Res<Policy> {
     Ok(Policy {
         provider,
         image: g_image.filter(|i| !i.is_empty()),
+        host: g_host,
         notices,
     })
 }
@@ -154,6 +175,7 @@ pub fn plan_for(cwd: &Path) -> Res<SandboxPlan> {
     Ok(SandboxPlan {
         provider: p.provider.as_str().to_string(),
         image: p.image,
+        host: p.host,
         env,
     })
 }
@@ -302,16 +324,21 @@ pub fn sandboxed(cmd: Command) -> Command {
     let mut unset = Vec::new();
     let mut name = String::new();
     let mut harness = String::new();
+    let mut node = None;
+    let mut from = None;
     for (k, v) in cmd.get_envs() {
         let k = k.to_string_lossy().into_owned();
         match v {
             // A sandboxed spawn always keeps its row; PWD names the host checkout.
             _ if k == crate::session_report::NO_ROW_ENV || k == "PWD" => {}
             Some(v) => {
-                if k == "FNO_AGENT_SELF" {
-                    name = v.to_string_lossy().into_owned();
-                } else if k == "FNO_AGENT_HARNESS" {
-                    harness = v.to_string_lossy().into_owned();
+                let text = v.to_string_lossy().into_owned();
+                match k.as_str() {
+                    "FNO_AGENT_SELF" => name = text,
+                    "FNO_AGENT_HARNESS" => harness = text,
+                    "FNO_NODE" if !text.is_empty() => node = Some(text),
+                    "FNO_AGENT_FROM" if !text.is_empty() => from = Some(text),
+                    _ => {}
                 }
                 set.push(k);
             }
@@ -324,6 +351,9 @@ pub fn sandboxed(cmd: Command) -> Command {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
     }
+    // The spawn client exports FNO_NODE into its own env, which the lane
+    // inherits without naming it.
+    let node = node.or_else(|| std::env::var("FNO_NODE").ok().filter(|v| !v.is_empty()));
     let (argv, session) = bind_session(&harness, argv);
     let args = crate::sandbox::relay::Args {
         id: crate::sandbox::mint_id(if name.is_empty() { &harness } else { &name }),
@@ -336,6 +366,9 @@ pub fn sandboxed(cmd: Command) -> Command {
         session,
         set,
         unset,
+        node,
+        from,
+        engine_host: plan.host.clone(),
         argv,
     };
     let exe = std::env::current_exe()
@@ -434,8 +467,10 @@ mod tests {
         );
         assert_eq!(
             layers.get(1).cloned().unwrap().unwrap(),
-            Some((Some("docker".into()), Some("img".into())))
+            Some((Some("docker".into()), Some("img".into()), None))
         );
+        let layers = read("[sandbox]\nhost = \"ssh://-oProxyCommand=x\"\n", "");
+        assert!(layers.get(1).cloned().unwrap().is_err());
         let layers = read("", "[sandbox]\nprovider = \"nope\"\n");
         assert!(layers
             .first()

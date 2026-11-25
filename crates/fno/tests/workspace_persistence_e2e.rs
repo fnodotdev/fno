@@ -88,6 +88,7 @@ fn drive_named_three_pane_layout(client: &mut FakeClient, scratch: &Scratch) {
     client.cmd(Command::NewSquad {
         name: "w".into(),
         origin: Some(scratch.home_cwd()),
+        project: None,
     });
     client.wait_layout(10, "workspace w appears", |l| {
         l.squads.iter().any(|s| s.name == "w")
@@ -230,6 +231,7 @@ fn symptom_rename_and_removal_survive_restart() {
     c.cmd(Command::NewSquad {
         name: "w1".into(),
         origin: Some(scratch.home_cwd()),
+        project: None,
     });
     c.wait_layout(10, "workspace w1 appears", |l| {
         l.squads.iter().any(|s| s.name == "w1")
@@ -245,6 +247,7 @@ fn symptom_rename_and_removal_survive_restart() {
     c.cmd(Command::NewSquad {
         name: "gone".into(),
         origin: Some(scratch.home_cwd()),
+        project: None,
     });
     c.wait_layout(10, "workspace gone appears", |l| {
         l.squads.iter().any(|s| s.name == "gone")
@@ -299,6 +302,7 @@ fn symptom_hand_split_survives_restart() {
     c.cmd(Command::NewSquad {
         name: "w".into(),
         origin: Some(scratch.home_cwd()),
+        project: None,
     });
     c.wait_layout(10, "workspace w appears", |l| {
         l.squads.iter().any(|s| s.name == "w")
@@ -897,6 +901,7 @@ fn symptom_named_workspace_takes_the_creator_folder_and_the_command_edits_it() {
     c.cmd(Command::NewSquad {
         name: "w".into(),
         origin: None,
+        project: None,
     });
     c.wait_layout(10, "w takes the creator's folder", |l| {
         l.squads

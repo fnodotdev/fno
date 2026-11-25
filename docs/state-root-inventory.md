@@ -8,9 +8,9 @@ Measured 2026-08-13 against one real install: 527 top-level entries, 395 of them
 
 ## The rule
 
-The root holds a closed set of folders, plus the rows this page already has. Nothing new lands at the top level: state goes under a folder the page already names. A new folder is not the remedy for a new root file. An existing folder is.
+The root holds a closed set of names. The `keep` rows of `docs/state-root-layout.tsv` are that set, and no other list exists. Nothing new lands at the top level: state goes under a kept folder. A new folder is not the remedy for a new root file. An existing folder is. A new top-level name needs a keep row, and that row is the review.
 
-Two gates hold that line. At runtime, the write gate (`hooks/write-gate.sh`, policy in `crates/fno-agent/src/runtime/hook/write_gate.rs`) refuses a new top-level entry, in the state root or the Claude config dir. It also refuses a write under a top-level folder that does not exist. The refusal names the session's job tmp dir. A `sqlite3` open of a missing state-root entry refuses too: the shell creates the file it opens. In CI, `scripts/ci/check-state-root-rows.sh` fails any PR that adds a root pattern to this page against the checked-in baseline. An added folder row refuses like any other. The root rows below are SHRINK-ONLY. A writer that moves into a subfolder or dies takes its row with it. A row never enters.
+Three readers hold that line, and all three read the table. The first is the write gate (`hooks/write-gate.sh`, policy in `crates/fno-agent/src/runtime/hook/write_gate.rs`). At runtime it warns on a write whose first segment has no keep row. The write still lands. A legacy name the mover still owes stays quiet while it exists. The warning names the session's job tmp dir. A `sqlite3` open of such an entry warns too: the shell creates the file it opens. In CI, `fno doctor lint state-roots` rule C reads Rust joins onto a state root. A joined name the table does not carry fails, and the message names the file and the name. Current hits sit in `scripts/ci/state-roots-baseline.txt`, which fails in both directions. The drift reading in the lead check-in and the reclaim receipt names every live top-level entry no keep row carries, the undeclared ones first.
 
 "Belongs at the root" used to mean one durable file per install, named for what it is: `graph.db`, `ledger.json`, `config.toml`. That set closed on 2026-09-27. A family of files keyed by session, band, or timestamp never belonged there, however small each one is. The cost is legibility, not bytes: all 395 context-nudge latches together were 14,625 bytes and made the directory unreadable.
 
@@ -39,11 +39,11 @@ One file per install. These belong at the root.
 | `config.toml`, `.lock` | `paths.config_toml()` | permanent |
 | `settings.yaml`, `.lock` | `fno/config/__init__.py` loader | permanent |
 | `decisions.jsonl` | `crates/fno-agent/src/backlog/decisions_cli.rs` | permanent; stays at the root because the routed store keys this journal family there (the same anchor rule the retired `events.jsonl` keeps) |
-| `questions.jsonl` | `paths.questions_jsonl()`, written by `fno inbox outstanding` | permanent; a question does not expire; stays at the root because the routed store keys this journal family there (the same anchor rule the retired `events.jsonl` keeps) |
+| `questions.jsonl` | `paths.questions_jsonl()`, written by `fno inbox outstanding` | permanent; a question does not expire. The name stays at the root because the routed store keys this journal family there, but the file retires like `events.jsonl`: the migration imports it into `db/questions.db` once and parks it |
 | `decisions.jsonl.corrupt` | `decide/__init__.py::_compact_index` | permanent; the only copy of a row whose source journal is gone |
 | `decisions.jsonl.compact` | `decide/__init__.py::_compact_index` | transient; replaced onto `decisions.jsonl` in the same call |
-| `.canary` | `scripts/ci/check-state-canary.sh` `plant` | permanent, and written ONLY into a root with no live graph, which in practice means a CI runner. A live operator root is watched read-only and never receives it. One byte of content; its job is to give the walk a file it can prove it saw. |
-| `opencode-install-<hash>.json` | `crates/fno-agent/src/spawn/opencode_install.rs` (the `plugin-install opencode` arm) | permanent; one per `OPENCODE_CONFIG_DIR` (the hash is of the config dir's canonical path), rewritten per install with one entry per written path and its content hash; removed last by `plugin-install opencode --uninstall`, so an interrupted uninstall is resumable |
+| `state/canary` | `scripts/ci/check-state-canary.sh` `plant` | permanent, and written ONLY into a root with no live graph, which in practice means a CI runner. A live operator root is watched read-only and never receives it. One byte of content; its job is to give the walk a file it can prove it saw. |
+| `install/opencode/<hash>.json` | `crates/fno-agent/src/spawn/opencode_install.rs` (the `plugin-install opencode` arm) | permanent; one per `OPENCODE_CONFIG_DIR` (the hash is of the config dir's canonical path). A legacy `opencode-install-<hash>.json` at the root is read until the next install rewrites it here, rewritten per install with one entry per written path and its content hash; removed last by `plugin-install opencode --uninstall`, so an interrupted uninstall is resumable |
 | `recovery/provider-outages.json`, `.lock`, `.provider-outages-*.tmp` | `agents/provider_outage.py` | permanent breaker/evidence journal; lock and atomic temp sidecars live only for one write and stale temps are safe to remove when no writer holds the lock; stores fingerprints, bounded raw refusal text, and explicit route IDs, never credentials or full transcripts |
 | `recovery/provider-canaries/*.json` | `agents/watchdog.py` | bounded health proofs for audit; exact marker, provider/account IDs, pane ID, and timestamp only, never pane dumps or credentials |
 | `recovery/canary-work/` | `agents/watchdog.py` | permanent empty neutral cwd reused by canaries; owns no node claim or project data |
@@ -117,21 +117,20 @@ The 2026-09-27 sweep found 71 undocumented top-level entries on one real root. T
 
 ## Named root exceptions
 
-The migration moves every movable file into a named subfolder (`docs/state-root-layout.tsv` is the table, and `fno-agent state migrate` is the mover). These stay at the top level, each because a move is blocked on a port, an operator ruling, or a platform:
+The migration moves every movable file into a named subfolder (`docs/state-root-layout.tsv` is the table, and `fno-agent state migrate` is the mover). These stay at the top level, each because a move is blocked on a port, an operator ruling, or a platform. Each carries a keep row in the table:
 
 | Entries | Why they cannot move yet |
 |---|---|
-| `config.toml`, `config.toml.lock`, `config.toml.bak*`, `settings.yaml`, `settings.yaml.lock` | The config contract every harness, doc and OSS install names at `~/.fno/config.toml`. The `.bak*` files await the operator's ruling on their deletion. |
+| `config.toml`, `config.toml.lock`, `config.toml.bak*`, `settings.yaml` | The config contract every harness, doc and OSS install names at `~/.fno/config.toml`. The `.bak*` files await the operator's ruling on their deletion. |
 | `my-priorities.md`, `my-priorities.md.lock`, `ruleset-21074865-before-smoke-hold.json` | Operator-owned, edited by hand at that path. |
 | `.env`, `.gitignore` | Operator-owned, edited by hand at that path. |
 | `.DS_Store`, `.metadata_never_index` | macOS Finder and Spotlight; Spotlight reads the opt-out marker only at the folder root. |
-| `.path-migration-done` | The front door's first-run migration sentinel (`crates/fno/src/setup/path_migration.rs`). Parking it re-fires that migration, which rewrites root files. It moves when that migration is deleted. |
 | `events.jsonl` | The retired journal family's anchor and stray-hunt root (`global_events_json`): writers committed to the routed store, so it is read-only, and the doctor's stall fold reads it for the retained rotations beside it. |
 | `posture.json` | The removed `fno posture` command's advisory stamp; the doctor reads it until the file ages out of every machine it landed on. |
 
 ## Owned subfolders and remaining root state
 
-Every subfolder and file below was found in the real root unnamed at the 2026-09-08 backfill and given a writer and a lifetime. The top-level folder set is closed: the CI row gate refuses a row naming a folder the baseline does not hold. What reads the real root is the drift reading in the lead check-in and the reclaim receipt, not a test. `cli/tests/test_state_root_inventory.py` builds its root from this page and runs one Python writer. It cannot see a Rust or shell writer.
+Every subfolder and file below was found in the real root unnamed at the 2026-09-08 backfill and given a writer and a lifetime. The top-level set is closed: the keep rows of the layout table hold it. What reads the real root is the drift reading in the lead check-in and the reclaim receipt, not a test.
 
 | Entry | Writer | Lifetime |
 |---|---|---|
@@ -148,7 +147,7 @@ Every subfolder and file below was found in the real root unnamed at the 2026-09
 | `agents/sandbox-exports/<id>/` | `crates/fno-agent/src/sandbox/repo.rs` | one stored dirty patch and untracked archive per sandbox; never applied; removed by hand |
 | `agents/quiet-recovery/` | `crates/fno-agent/src/runtime/codex_watch/quiet.rs` | one episode per native session; resets on new transcript activity; retained as recovery evidence after retirement; deleting a file can repeat its nudge |
 
-One real-root folder predates this page's closed set and carries no row. `profile/` holds user-owned data fno seeds but never deletes. The agent souls live at `profile/agents/<role>/<style>/SOUL.md`, written by `crates/fno-agent/src/runtime/lead_soul.rs` (`ensure_seeded`, fired by the `lead-state --style` ops). The seed copies once on first read and never overwrites. An edited soul is the user's. fno never deletes one. User-added style dirs list beside the seeds. The customer persona records beside it (`profile/customers/`) are the persona reviewer's data, owned by the `audience.rs` reader. This paragraph is the owner-and-lifetime record for both, because the row gate refuses an added folder row.
+One real-root folder predates this page's closed set. It carries a keep row while its home waits on the folder-set answer. `profile/` holds user-owned data fno seeds but never deletes. The agent souls live at `profile/agents/<role>/<style>/SOUL.md`, written by `crates/fno-agent/src/runtime/lead_soul.rs` (`ensure_seeded`, fired by the `lead-state --style` ops). The seed copies once on first read and never overwrites. An edited soul is the user's. fno never deletes one. User-added style dirs list beside the seeds. The customer persona records beside it (`profile/customers/`) are the persona reviewer's data, owned by the `audience.rs` reader. This paragraph is the owner-and-lifetime record for both.
 | `backups/` | the legacy-layout rotation home; on the default layout the graph rotation writes beside the store at `db/backups` (`crates/fno-agent/src/backlog/graph_store.rs`, pruned to `GRAPH_BACKUP_KEEP` and held under `GRAPH_BACKUP_MAX_BYTES` with the newest copy always kept), and `crates/fno/src/setup/path_migration.rs` (`settings.yaml.bak.<ts>`) | graph rotation prunes itself; migration backups are one-shot per install. A backup at most a tenth the size of its predecessor moves that predecessor to `backups/pre-shrink.<name>`, and pins are never pruned. |
 | `briefs/` | `paths.briefs_dir()` | permanent sidecar discovery briefs |
 | `state/sandboxes/` | `crates/fno-agent/src/spawn/project_sandbox.rs` | one named sandbox root per `fno config project sandbox create`: `sandbox.toml`, `fno/` (state root), `agents/`, `claims/`, `home/` (claude and codex homes, keychain and ssh links); lifetime until `rm`, `reset` wipes everything but `home/` and keeps both logins |
@@ -242,7 +241,6 @@ One file per session, per day, or per throttle window.
 | `.active-backlog-nudge` | `crates/fno-agent/src/backlog/active_backlog.rs` (the keeper's publish touches it) | single file |
 | `.think-spawn-daily.json` | `crates/fno-agent/src/backlog/think_daily.rs` | daily, overwritten |
 | `.preflight-cancel` | `scripts/ci/preflight.sh` | consumed by the reader (one-shot; stale after one hour) |
-| `.path-migration-done` | `crates/fno/src/setup/path_migration.rs` | one-shot sentinel |
 | `.preflight-receipt-locks/` | `scripts/ci/preflight.sh` | live lock dirs |
 | `db/build-marks/<session>.json` | `crates/fno-agent/src/gate/build_marks.rs` (the daemon arm), read by `crates/fno/src/ui/agents_view/build_marks.rs` | one sidecar per session with a live cargo job at the admission doors (`state`, `position`, `at`, `ttl_ms`); refreshed every 5s while the job runs, deleted by the arm's prune pass when it ends; the 30s TTL ages out a dead daemon's last mark |
 | `db/mail/mail-hold/<session-id>.json` | `crates/fno-mail/src/hold.rs` (`HoldStore`), driven by `crates/fno-agent/src/runtime/mail_hold.rs` via its `state_root()` | one hold record per held session id, always with an `until`; `set_by` reads `user` or `conversation`; removed by the first live read after its end, by the release timer, and by `fno agent mail admin hold --off` |
@@ -324,7 +322,7 @@ The hot-path budgets these stores serve live in `crates/fno-agent/tests/hook_lat
 
 ## Adding a new root writer
 
-You do not. The root rows are shrink-only (see The rule). The runtime guard refuses a new top-level write, and the CI gate fails a PR that adds a row. The remedy for a new surface is a subfolder:
+You do not. The keep rows close the set (see The rule). The runtime guard warns on a new top-level write, and `fno doctor lint state-roots` fails a PR whose code joins a name the table does not carry. The remedy for a new surface is a subfolder:
 
 1. Put the state under a folder this page already names. Reach for the root only through a row that already exists.
 2. Add the accessor to `cli/src/fno/paths.py` so the location follows `config.state_dir`. When a bash caller needs it, export it from `crates/fno-agent/src/paths_cli.rs` `emit_paths_sh_defaults`, then run `fno config paths emit-shell` to regenerate `scripts/lib/paths.sh`.

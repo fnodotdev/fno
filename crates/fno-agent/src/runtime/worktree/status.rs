@@ -4,7 +4,8 @@
 //! provenance scan consumed via `runtime/worktree.py`. Characterized by the
 //! `status_*` and `list_*` goldens.
 
-use super::{git_out, resolve_lenient, sorted_json, OWNERSHIP_LIVE_STATUSES};
+use super::{git_out, resolve_lenient, sorted_json};
+use crate::AgentStatus;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -192,7 +193,7 @@ fn status_rows_join(repo: &Path, join: &JoinMap) -> Vec<StatusRow> {
 fn classify_target(name: &str, status: &str) -> (String, bool) {
     if name.is_empty() {
         ("none".to_string(), false)
-    } else if OWNERSHIP_LIVE_STATUSES.contains(&status) {
+    } else if AgentStatus::LIVE_STATUSES.contains(&status) {
         (format!("live:{name}"), true)
     } else {
         (
@@ -316,7 +317,7 @@ fn best_rows(agents: &[Value]) -> (JoinMap, bool) {
                 .get("status")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown");
-            let rank = if OWNERSHIP_LIVE_STATUSES.contains(&status) {
+            let rank = if AgentStatus::LIVE_STATUSES.contains(&status) {
                 1
             } else {
                 0

@@ -19,7 +19,7 @@ Every claim the command takes in gate mode is stamped with the PYTHON caller's p
 
 ## Leads take no worker slot
 
-The slot count is the live worker rows plus the live `worker:<name>` reservations. A lead row takes no worker slot. A lead is a row with a role (`role_level`), the same test the lead-share axis counts teams by. On 2026-10-14, seven leads held seven of the 24 slots on one machine, so each new lead shrank the worker pool. The probe answer carries `leads`, and its `cap_clause` ends `; 7 leads take no slot`. The lead check-in capacity line shows that clause.
+The slot count is the live worker rows plus the live `worker:<name>` reservations. A lead row takes no worker slot. A lead is a row with a role (`role_level`), the same test the lead-share axis counts teams by. On 2026-10-14, seven leads held seven of the 24 slots on one machine, so each new lead shrank the worker pool. The probe answer carries `leads`, and its `cap_clause` ends `; 7 leads take no slot`. The lead check-in capacity line shows that clause. The answer also carries `dropped`. It counts the live-status worker rows that the slot count left out, one count per reason. Its `leads` field counts the lead rows that the same read dropped. The registry rows in `slot_rows` plus `dropped.total` are the live-status non-lead rows of that read. An unreadable registry prints no `dropped`. The lanes read faults on it first, so with any provider lane in the table the probe answers `unknown` and prints no `slots` either.
 
 ## Role succession can sit one row over the cap
 

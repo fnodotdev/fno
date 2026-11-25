@@ -1293,8 +1293,8 @@ fn run_ask(args: &[String]) -> i32 {
     while index < args.len() {
         match args[index].as_str() {
             "-h" | "--help" => {
-                println!("usage: fno inbox outstanding ask [QUESTION] [--audience internal|customers|customer:<persona>] [--why s] [--question-file <path>|-|template] [--ask <action>] [--option <choice>]... [--blocks <node>]... [--node <id>] [--subject <subject>] [--challenges <decision-id>] [--image <path>]...");
-                println!("  ask files at one stage: --audience (the record's audience when no --node carries it) and --why are required at the ask itself; there is no later scoping stage.");
+                println!("usage: fno inbox outstanding ask [QUESTION] [--scope internal|customers|customer:<persona>] [--why s] [--question-file <path>|-|template] [--ask <action>] [--option <choice>]... [--blocks <node>]... [--node <id>] [--subject <subject>] [--challenges <decision-id>] [--image <path>]...");
+                println!("  ask files at one stage: --scope (alias --audience; the record's audience when no --node carries it) and --why are required at the ask itself; there is no later scoping stage.");
                 return 0;
             }
             "--question-file" => match args.get(index + 1) {
@@ -1357,13 +1357,13 @@ fn run_ask(args: &[String]) -> i32 {
                     return 2;
                 }
             },
-            "--audience" => match args.get(index + 1) {
+            "--scope" | "--audience" => match args.get(index + 1) {
                 Some(value) => {
                     audience = Some(value.clone());
                     index += 1;
                 }
                 None => {
-                    eprintln!("outstanding: --audience needs a value");
+                    eprintln!("outstanding: --scope needs a value");
                     return 2;
                 }
             },

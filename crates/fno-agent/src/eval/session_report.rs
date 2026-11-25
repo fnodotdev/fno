@@ -106,6 +106,11 @@ fn params_object<'a>(p: &'a Map<String, Value>, key: &str) -> Option<&'a Value> 
     p.get(key).filter(|v| v.is_object())
 }
 
+/// A true flag in the report params. Absent and false read the same.
+fn flag(p: &Map<String, Value>, key: &str) -> bool {
+    p.get(key).and_then(Value::as_bool) == Some(true)
+}
+
 /// Which row a report lands on, and what the match means for the id.
 pub(crate) enum Find {
     /// `entry_holds_session` already answers true: the row records this id.
@@ -296,12 +301,10 @@ pub(crate) fn handle_session_report(
         _ => None,
     };
     let effective_claim = pane_claim.clone().or(pane_side);
-    let wait_row = p
-        .get("wait_row")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
+    let wait_row = flag(p, "wait_row")
         .then_some(WAIT_ROW_CAP)
         .unwrap_or(Duration::ZERO);
+    let watch_row = flag(p, "watch_row");
     if !wait_row.is_zero() {
         wait_for_row(
             &home.registry_json(),
@@ -313,14 +316,20 @@ pub(crate) fn handle_session_report(
     }
 
     // A spawned session is joined at birth, so its preamble carriers fire.
+    // The `spawn` word is the law read's strongest cause: fleet work from
+    // birth (user law D2402).
     if launch_record.is_some() || agent_self.is_some() {
-        let _ = crate::join_marker::write_marker(home.root(), &harness, &session_id);
+        if let Err(err) =
+            crate::join_marker::write_marker(home.root(), &harness, &session_id, "spawn")
+        {
+            eprintln!("fno: spawn birth join marker write failed: {err}");
+        }
     }
 
     // A headless one-shot touches no row: not a mint, and not a stamp on an
     // older row that shares its name (a verifier name repeats per session),
     // which would read that row live again.
-    if p.get("no_row").and_then(Value::as_bool) == Some(true) {
+    if flag(p, "no_row") {
         return Response::ok(req.id, json!({"stored": false, "dropped": "no_row"}));
     }
 
@@ -463,6 +472,7 @@ pub(crate) fn handle_session_report(
                         ) =>
                 {
                     let mut entry = mint.entry.clone();
+                    entry.watch = watch_row;
                     entry.name = crate::native_adopt::unique_name(&r.entries, &entry.name);
                     // The report that mints the row is its first report.
                     entry.last_report_at = Some(now_stamp.clone());
@@ -491,6 +501,8 @@ pub(crate) fn handle_session_report(
             .entries
             .get_mut(matched)
             .expect("find_row returned an existing registry index");
+        // A watched run that joins an older row by name makes that row watched.
+        entry.watch |= watch_row;
         // A child cannot share its parent's conversation. This provenance
         // proves an inherited placeholder; UUID shape alone proves nothing.
         if entry.harness_name() == harness
@@ -1474,6 +1486,55 @@ pub async fn run_report_dispatch(rest: &[String], home: &AgentsHome) -> i32 {
     run_session_report(&stripped, home).await
 }
 
+/// Stamp the three row words onto a session report, each decided once here.
+/// `no_row` drops the row at the daemon, `watch_row` keeps a one-shot a person
+/// asked to watch on the sideline, and `agent_substrate` files a hand-typed
+/// print run as headless. `claimed` says a launch record names this session.
+fn stamp_row_words(params: &mut Value, claimed: bool) {
+    let agent_self = params.get("agent_self").and_then(Value::as_str);
+    let harness = params.as_object().and_then(|p| str_field(p, "harness"));
+    let no_row = agent_self.is_some() && std::env::var(NO_ROW_ENV).ok().as_deref() == agent_self;
+    // A claimed launch record makes this an fno child even without an
+    // FNO_AGENT_SELF, so only an unclaimed print-mode run drops its row.
+    let print_mode = !claimed
+        && print_mode_run(
+            agent_self,
+            harness.as_deref(),
+            std::env::var("CLAUDE_CODE_ENTRYPOINT").ok().as_deref(),
+        );
+    // A row a person asked to watch keeps its sideline place.
+    let watch_row = crate::claude_ask::watch_row_run(
+        agent_self,
+        harness.as_deref(),
+        std::env::var(crate::claude_ask::SHOW_ROW_ENV)
+            .ok()
+            .as_deref()
+            == Some("1"),
+        no_row,
+    );
+    // A print run typed by hand files as headless, so its row stays off the
+    // sideline: nobody types into it, and it prints in the shell that started
+    // it. A hand session mints a row here only under the auto-register config
+    // or a law trigger it already carries. One adopted later mints through the
+    // register door, which asks the same question.
+    let hand_print = !claimed && crate::claude_ask::hand_typed_print_run(harness.as_deref());
+    // An object write, never an index: the clippy ratchet refuses a new one.
+    if let Some(obj) = params.as_object_mut() {
+        if no_row || print_mode {
+            obj.insert("no_row".to_string(), Value::Bool(true));
+        }
+        if watch_row {
+            obj.insert("watch_row".to_string(), Value::Bool(true));
+        }
+        if hand_print {
+            obj.insert(
+                "agent_substrate".to_string(),
+                Value::String("headless".into()),
+            );
+        }
+    }
+}
+
 /// `fno-agent report --kind session --harness <name> [--agent-self <row>]
 /// [--launch-name <record>] [--session-id <id>] [--wait-row]` - the thin
 /// SessionStart transport. The
@@ -1492,23 +1553,9 @@ pub async fn run_session_report(rest: &[String], home: &AgentsHome) -> i32 {
     if let Some(payload) = read_stdin_payload() {
         params["payload"] = payload;
     }
-    let agent_self = params.get("agent_self").and_then(Value::as_str);
-    let no_row = agent_self.is_some() && std::env::var(NO_ROW_ENV).ok().as_deref() == agent_self;
     let harness = params.as_object().and_then(|p| str_field(p, "harness"));
-    let print_mode = print_mode_run(
-        agent_self,
-        harness.as_deref(),
-        std::env::var("CLAUDE_CODE_ENTRYPOINT").ok().as_deref(),
-    );
-    if no_row {
-        params["no_row"] = Value::Bool(true);
-    }
     let (record, child_name) = claim_launch(&params, home);
-    // A claimed launch record makes this an fno child even without an
-    // FNO_AGENT_SELF, so only an unclaimed print-mode run drops its row.
-    if record.is_none() && print_mode {
-        params["no_row"] = Value::Bool(true);
-    }
+    stamp_row_words(&mut params, record.is_some());
     record_origin(&params);
     if let Some(record) = &record {
         // A claimed record rides the request: the daemon adopts this session
@@ -1697,6 +1744,15 @@ mod tests {
             "an interactive session keeps its row"
         );
         assert!(!print_mode_run(None, Some("codex"), Some("sdk-cli")));
+        // The words ride the report as params. A kept claude child sends the
+        // watch mark and nothing else. A report with no env identity sends none.
+        let mut kept = json!({"agent_self": "w1", "harness": "claude"});
+        stamp_row_words(&mut kept, false);
+        assert_eq!(kept.as_object().map(|o| o.len()), Some(3));
+        assert_eq!(kept.get("watch_row"), Some(&Value::Bool(true)));
+        let mut bare = json!({"harness": "codex"});
+        stamp_row_words(&mut bare, true);
+        assert_eq!(bare.as_object().map(|o| o.len()), Some(1));
     }
 
     fn temp_home(tag: &str) -> (tempfile::TempDir, AgentsHome) {

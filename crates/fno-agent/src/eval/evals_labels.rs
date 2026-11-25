@@ -89,7 +89,7 @@ const JUDGES: &[Judge] = &[
 ];
 
 fn labels_path(state: &Path) -> PathBuf {
-    state.join("evals").join("labels.jsonl")
+    crate::evals::state_evals_dir(state).join("labels.jsonl")
 }
 
 fn read_rows(path: &Path) -> Vec<Value> {
@@ -195,7 +195,7 @@ fn mtime_ms(path: &Path) -> Option<i64> {
 }
 
 pub(crate) fn load_traces(state: &Path) -> Vec<Value> {
-    let dir = state.join("evals").join("traces");
+    let dir = crate::evals::state_evals_dir(state).join("traces");
     let mut out = Vec::new();
     for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         let path = entry.path();
@@ -1217,7 +1217,7 @@ mod tests {
             "session_id": {"value": sid, "basis": "event"},
             "created_at": created,
         });
-        let dir = state.join("evals").join("traces");
+        let dir = crate::evals::state_evals_dir(state).join("traces");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(format!("{id}.json")), trace.to_string()).unwrap();
         id

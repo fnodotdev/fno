@@ -112,6 +112,10 @@ A 118-line read-only shim. The ONLY decision it makes is binary resolution order
 
 The shim sources NO `scripts/lib/*.sh` files. Its only writes: the `loop_check_binary_missing` event append (when binary is absent) and `loop-check.stderr.log` append (command stderr).
 
+## A sandboxed worker's Stop
+
+A sandboxed worker has no host state inside, so its `hook stop` forwards the final message as a loop stop op. The host exports the container, then runs this same decision once with `hook stop --sandbox <id>` on the bound worktree. Three inputs change under that sandbox origin. The HEAD and tree reads take `refs/sandbox/<id>/head` and the export's dirty reading. The correction gate is skipped, because the sandbox transcript's user turns are forgeable. The self-review floor is off, because a sandbox has no attest op. `review_required` stays true. A green PR with no outside review ends `DoneUnreviewed`, never `DonePRGreen`, and auto-merge never arms. Done probes run inside the container, and one that needs host state blocks by name. The decision's exit and output return to the worker unchanged ([sandbox host](sandbox-host.md#stop)).
+
 ## The command (`fno-agent loop-check`)
 
 CLI contract:

@@ -51,6 +51,11 @@ struct Args {
     not_duplicates: Vec<i64>,
     check_only: bool,
     cwd: PathBuf,
+    /// The commit every diff reads. `HEAD` from the command line; a host
+    /// caller binds a sandbox's exported head here.
+    head: String,
+    /// A host caller's bound branch, read in place of the checkout's.
+    bound_branch: Option<String>,
 }
 
 fn parse_args(argv: &[String]) -> Result<Args, String> {
@@ -61,6 +66,8 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         not_duplicates: Vec::new(),
         check_only: false,
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        head: "HEAD".to_string(),
+        bound_branch: None,
     };
     let mut i = 0;
     while i < argv.len() {
@@ -285,6 +292,29 @@ pub fn run_pr_create_command(argv: &[String]) -> i32 {
     run(&a, &|path| gh_api("gh", &a.cwd, path, &[]))
 }
 
+/// The create door for a host caller that ships a commit the checkout does
+/// not hold: every gate reads `head` and `branch`, never the checkout's
+/// HEAD, and gh opens the PR for `branch`. A sandbox op is the one caller.
+pub(crate) fn create_bound(
+    title: &str,
+    body_file: &str,
+    branch: &str,
+    head: &str,
+    cwd: &Path,
+) -> i32 {
+    let a = Args {
+        title: title.to_string(),
+        body_file: body_file.to_string(),
+        base: "main".to_string(),
+        not_duplicates: Vec::new(),
+        check_only: false,
+        cwd: cwd.to_path_buf(),
+        head: head.to_string(),
+        bound_branch: Some(branch.to_string()),
+    };
+    run(&a, &|path| gh_api("gh", &a.cwd, path, &[]))
+}
+
 /// One JSON request on stdin (the argv form starts with `{`): the shape
 /// `command_call("pr-create", {...})` sends. The twin scan, then the sibling
 /// gate over the payload's `body`, so the worker ship path meets the same
@@ -385,10 +415,11 @@ fn owners_gate_refusal(a: &Args) -> Option<i32> {
         }
     };
     let base = crate::pr_body_check::base_ref(&a.base);
-    let diff = match crate::test_delta::diff_range("git", &a.cwd, &format!("{base}...HEAD")) {
+    let range = format!("{base}...{}", a.head);
+    let diff = match crate::test_delta::diff_range("git", &a.cwd, &range) {
         Ok(d) => d,
         Err(msg) => {
-            eprintln!("pr-create: could not diff {base}...HEAD for the owners gate: {msg}");
+            eprintln!("pr-create: could not diff {range} for the owners gate: {msg}");
             return Some(2);
         }
     };
@@ -832,7 +863,7 @@ fn blocker_gate(body: &str) {
 /// The contained-unnamed warning: an open contained child of a node this
 /// PR ships that neither the body nor a commit names stays open at merge
 /// now, so the body should claim it before it lands. Read-only.
-fn contained_gate(cwd: &Path, body: &str, base: &str, branch: &str) {
+fn contained_gate(cwd: &Path, body: &str, base: &str, branch: &str, head: &str) {
     match crate::graph_store::read_rows_strict(&crate::backlog::settings::graph_path()) {
         Ok(entries) => {
             // The nodes this PR ships: the branch's own node plus every id
@@ -847,7 +878,7 @@ fn contained_gate(cwd: &Path, body: &str, base: &str, branch: &str) {
                 return;
             }
             let messages =
-                git(cwd, &["log", &format!("{base}..HEAD"), "--format=%B"]).unwrap_or_default();
+                git(cwd, &["log", &format!("{base}..{head}"), "--format=%B"]).unwrap_or_default();
             let rows: Vec<String> = messages.lines().map(String::from).collect();
             let named_ids = crate::backlog::drift_scan::ids_named_in_text(&rows);
             for notice in contained_notices(&entries, &ships, body, &named_ids) {
@@ -1009,7 +1040,8 @@ fn record_docs_pr(cwd: &Path, body_file: &str) {
 }
 
 fn run(a: &Args, gh: Gh) -> i32 {
-    let branch = match git(&a.cwd, &["rev-parse", "--abbrev-ref", "HEAD"]) {
+    let read = || git(&a.cwd, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    let branch = match a.bound_branch.clone().map_or_else(read, Ok) {
         Ok(b) if !b.is_empty() && b != "HEAD" => b,
         _ => {
             eprintln!("pr-create: could not read the head branch (detached HEAD?)");
@@ -1017,7 +1049,15 @@ fn run(a: &Args, gh: Gh) -> i32 {
         }
     };
     let base = crate::pr_body_check::base_ref(&a.base);
-    let my_files = match git(&a.cwd, &["diff", "--name-only", &format!("{base}...HEAD")]) {
+    let my_files = match git(
+        &a.cwd,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--name-only",
+            &format!("{base}...{}", a.head),
+        ],
+    ) {
         Ok(f) if !f.is_empty() => f.lines().map(String::from).collect::<Vec<_>>(),
         Ok(_) => {
             eprintln!("pr-create: no changed files against {base}; nothing to guard");
@@ -1099,7 +1139,7 @@ fn run(a: &Args, gh: Gh) -> i32 {
                 eprintln!("{notice}");
             }
             blocker_gate(&body);
-            contained_gate(&a.cwd, &body, &a.base, &branch);
+            contained_gate(&a.cwd, &body, &a.base, &branch, &a.head);
             if !a.body_file.is_empty() {
                 let touched = crate::docs_gate::surface_files(&my_files, &a.cwd);
                 if !touched.is_empty() && !crate::docs_gate::body_names_doc(&body) {
@@ -1124,7 +1164,7 @@ fn run(a: &Args, gh: Gh) -> i32 {
                     eprintln!("pr-create: warning: could not add `{line}` to the body file: {e}");
                 }
             }
-            let cmd: Vec<String> = vec![
+            let mut cmd: Vec<String> = vec![
                 "gh".to_string(),
                 "pr".to_string(),
                 "create".to_string(),
@@ -1135,6 +1175,9 @@ fn run(a: &Args, gh: Gh) -> i32 {
                 "--base".to_string(),
                 a.base.clone(),
             ];
+            if a.bound_branch.is_some() {
+                cmd.extend(["--head".to_string(), branch.clone()]);
+            }
             match crate::org_board::budget::run_with_timeout(&cmd, &a.cwd, CREATE_TIMEOUT) {
                 Ok(out) => {
                     let printed = String::from_utf8_lossy(&out);
@@ -1312,6 +1355,8 @@ mod tests {
             not_duplicates: vec![],
             check_only: false,
             cwd: dir.path().to_path_buf(),
+            head: "HEAD".into(),
+            bound_branch: None,
         };
         let gh = |path: &str| {
             assert!(path.contains("/pulls?state=open"));
@@ -1349,6 +1394,8 @@ mod tests {
             not_duplicates: vec![],
             check_only: false,
             cwd: PathBuf::from("/"),
+            head: "HEAD".into(),
+            bound_branch: None,
         };
         let gh = |_: &str| Err("HTTP 502".to_string());
         // `/` has no git repo: the branch read fails first (exit 2).
@@ -1433,6 +1480,8 @@ mod tests {
             not_duplicates: vec![],
             check_only: false,
             cwd: dir.path().to_path_buf(),
+            head: "HEAD".into(),
+            bound_branch: None,
         };
         // The scan passes (no open PRs); the owners gate then refuses and
         // the create leg is never reached.

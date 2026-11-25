@@ -8,6 +8,7 @@ A worker can damage shared state. A test worker once wrote over the registry and
 [sandbox]
 provider = "docker"   # none (default), docker, podman, apple, devcontainer
 image = "my/image:1"  # global config only; unset builds the embedded recipe
+host = "ssh://me@vm"  # global config only; unset runs the engine locally
 ```
 
 `none` launches every worker on the host, as before. Any other value sandboxes each `--as headless` spawn of claude, codex, gemini, opencode or agy. `docker` covers OrbStack and Docker Desktop on a Mac and Docker on Linux. `devcontainer` reads `.devcontainer/devcontainer.json` from the default branch as an image source and runs it on docker. `apple` refuses by name: apple/container has no passing journey yet. `fno config set sandbox.provider <value>` writes the key, and an unknown value refuses and names the legal ones.
@@ -46,6 +47,39 @@ The guest listens at `FNO_SUPERVISOR_SOCKET` (`/tmp/fno/supervisor.sock` inside)
 
 The host stamps identity from the pipe a frame arrived on. A frame never carries an argv, env name, host path, session id, node, recipient or credential that the host trusts. `agent.spawn` no longer accepts an `argv` field from any client.
 
+## A sandboxed worker in the target loop
+
+A spawn with `--node <id>` is a target worker. The spawn guard clears an inherited `FNO_NODE`, so only the flag binds a node. Before the clone, the relay runs the normal host start, `fno do target start <node> --no-merge`, for the sandbox session. That gives a host worktree off the default branch, the node claim held on the host, the manifest and the bound plan. The clone comes from that worktree, and its HEAD stays at the intake base. A spawn with no node binds nothing, and every loop op refuses.
+
+Inside, `fno` sees `FNO_AGENT_SANDBOXED` and opens no store. The loop's commands forward as one `sandbox.op` request each, and every other command refuses by name before anything runs. The guest checks the op again and sends it as one typed frame with a sequence number. The relay drops a repeated number, so a replay never runs a write twice. Each op runs on its own thread, so transcript and proxy frames never wait behind a push or a `gh` call.
+
+| Op | The sandbox sends | The host does |
+|---|---|---|
+| node get | nothing | `fno backlog get` for the bound node and its parent |
+| node note | text | a note on the bound node, labelled sandbox origin |
+| target start, target status, claim status | nothing | the binding, the plan as a read-only copy, and the existing reads |
+| plan settle | `U<n>` or `route:<n>`, one line | edits only that open Unknowns line or adds one chosen line, never frontmatter |
+| mail | kind and text | mails the spawner only, labelled |
+| push | nothing | exports the live container, refuses a CI edit, then pushes the sandbox head to the bound branch, fast-forward only, hooks off |
+| PR create, status, comments, reply | title, body, comment id, text | the PR door with the sandbox head and the bound branch; guest text made inert |
+| loop stop | the final message | exports, then runs the one host Stop decision |
+
+There is no merge, attest, spawn, decide or backlog update op. The refusal names the lead.
+
+### Stop
+
+The harness Stop hook inside runs `fno-agent hook stop`, which sends loop stop. The host exports the live container into `refs/sandbox/<id>/head`, then runs `fno-agent hook stop --sandbox <id>` on the bound worktree with the sandbox session and the sandbox transcript. If the export record names another worktree, that flag binds no sandbox origin and the Stop blocks. Under that origin, the HEAD and tree reads take the sandbox head and the export's dirty reading. The correction gate records nothing, because the transcript's user turns are forgeable. The self-review floor is off, because the sandbox has no attest op, and review stays required, so a green PR ends `DoneUnreviewed` and never `DonePRGreen`. Done probes run inside through the engine. A probe that starts with `gh`, `fno`, `fno-agent`, `curl` or `ssh` blocks with its name, because it reads host state. Finalize makes no WIP commit on a sandbox's host worktree. If the relay cannot answer, the Stop blocks and names the relay. It never allows.
+
+### GitHub
+
+The GitHub login never enters the sandbox. The push takes the exported head and refuses a net change to `.github/workflows/` or `.github/actions/` against the merge base with the default branch. PR create reads every gate against the sandbox head and the bound branch. Before anything posts, the host breaks `<!--` markers, `@` mentions, closing words, `Audited owners:` lines and other node ids with a word joiner. The host writes the origin label, its own `Audited owners:` line and `Fixes <node>`. The run is no-merge: a person or an outside reviewer reviews and merges.
+
+## Your own VM
+
+Set `sandbox.host = "ssh://[user@]host[:port]"` in global config to run the engine on a Linux VM you control, with docker or podman. Every engine call carries the host, as `docker -H ssh://...` or `podman --url ssh://...`. The engine CLI moves each argv over its own API, so no remote shell quotes anything. Before first use, the relay checks the host. It refuses a host that `ssh-keygen -F` does not find in known hosts. It also refuses an `ssh -G` config that forwards the agent or a local, remote or dynamic port. The relay, the claim and the GitHub login stay on the fno host, and the VM gets no route back. The proxy still dials from the fno host, so it also closes the VM's own resolved addresses.
+
+A dropped ssh link ends the guest stream and the harness exec. The export then fails or succeeds on its own, and a failed export keeps the container. The next spawn's sweep exports it once the link is back, because the wrapper pid it tests lives on the fno host. A write in flight never replays, because each op carries its own sequence number.
+
 ## Network
 
 The container has no network. The guest serves an HTTP and CONNECT proxy on its own loopback, and the harness gets `HTTPS_PROXY` and `HTTP_PROXY` pointing at it. Claude, codex and opencode send every request through it (measured on CLI versions 2.1.331, 0.172.0 and 1.19.6). The host closes private, loopback, link-local, metadata, CGNAT, IPv6 ULA, multicast and host-owned addresses, with their IPv4-mapped and NAT64 forms. One closed address in an answer refuses the whole answer, so a rebinding name gets nothing. Only ports 80 and 443 open.
@@ -68,4 +102,4 @@ The threat model and its residuals live in [security posture](../security-postur
 
 ## Proof
 
-`.github/workflows/sandbox-e2e.yml` runs `tests/sandbox/e2e.sh` on docker and podman. One headless spawn runs a stub harness that probes every forbidden reach from inside. Each probe has a positive control on the host. The job prints `forbidden reached: 0` and `required failed: 0`, and fails otherwise.
+`.github/workflows/sandbox-e2e.yml` runs `tests/sandbox/e2e.sh` on docker and podman. One headless spawn runs a stub harness that probes every forbidden reach from inside. Each probe has a positive control on the host. A second spawn is bound to a node and runs the loop journey. It starts the target, reads the node, pushes to a local origin and opens a PR through a recording `gh`. Its merge, attest, spawn and workflow push are refused, and a Stop with a forged promise blocks. A third leg runs the same journey on docker over the runner's own sshd and drops the link mid-run. The job prints `forbidden reached: 0` and `required failed: 0`, and fails otherwise.

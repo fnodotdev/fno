@@ -1115,9 +1115,9 @@ fn r_territory(cwd: &Path) -> Result<Value, String> {
     Ok(Value::Array(rows))
 }
 
-/// The state-root drift reading: undocumented top-level entries in the fno
-/// state root. A failed doc or root read is a READER FAILED line, never a
-/// silent zero (the unmeasured-state rule).
+/// The state-root drift reading: top-level entries of the fno state root that
+/// no keep row of the layout table carries. A failed root read is a READER
+/// FAILED line, never a silent zero (the unmeasured-state rule).
 fn r_state_root_drift() -> Result<Value, String> {
     let home = crate::paths::AgentsHome::from_env();
     let state_root = crate::reclaim::reclaim_state_root(&home);
@@ -2621,7 +2621,7 @@ fn render_lines_with(
                 .collect();
             let more = if count > 5 { ", ..." } else { "" };
             lines.push(format!(
-                "state_root_drift: {count} undocumented top-level entries: {}{more}",
+                "state_root_drift: {count} top-level entries the layout table does not keep: {}{more}",
                 entries.join(", ")
             ));
         }

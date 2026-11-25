@@ -64,6 +64,8 @@ pub fn join_if_needed() {
             "report",
             "--kind",
             "join",
+            "--trigger",
+            "command",
             "--harness",
             harness,
             "--session-id",

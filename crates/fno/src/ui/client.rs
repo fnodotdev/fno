@@ -4038,9 +4038,9 @@ impl View {
     }
 
     /// Compose the full-terminal frame: tab bar, sideline, dividers, panes.
-    /// Pure - all the drawing machinery (row diff, styles, wide-spacer
-    /// handling) stays in [`Compositor`].
+    /// All drawing machinery (row diff, styles) stays in [`Compositor`].
     fn compose(&self) -> Frame {
+        crate::paint_stats::mark_compose_start();
         self.compose_at(Instant::now())
     }
 
@@ -5934,13 +5934,13 @@ async fn attach_and_run(
     let cwd = std::env::current_dir()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
-    // Chrome is client-local: report the CONTENT area. A placeholder View
-    // computes it before any Layout exists. The session name is the socket
-    // stem by construction (`proto::socket_path`).
+    // Chrome is client-local: a placeholder View computes the CONTENT area.
+    // The session name is the socket stem (`proto::socket_path`).
     let session = socket
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
+    crate::paint_stats::init(&session);
     let mut view = View::new((rows, cols), session, LayoutView::default());
     org_board::boot_sideline(&mut view);
     // Latch the focus-follows-mouse off-switch once; a direct
@@ -8573,8 +8573,8 @@ async fn selector_keys(
                 // cmd/cwd - NOT a registry entry. Arming the command there would shell
                 // `fno-agent` on a label that could collide with an unrelated
                 // agent's name and stop the wrong one. Pane-hosted rows are managed
-                // via their tab (CloseTab); only the paneless rows - the bg/headless
-                // agents that today linger until GC - are the gap this closes.
+                // via their tab (CloseTab); only the paneless rows - the bg agents and the
+                // watched headless runs that today linger until GC - are the gap this closes.
                 //
                 // An EXTERNAL row (claude-daemon roster or a persisted external
                 // tombstone) routes by stable `attach_id` to the
