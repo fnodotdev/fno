@@ -439,6 +439,9 @@ fn default_true() -> bool {
 /// (serde default); floor stays 58.
 /// v134: `AgentRow.pr_status` (serde default), the serve's bounded pr-status
 /// sweep projection; floor stays 58.
+/// v135: `PrStatusFact` adds `review_rounds` and `title` (serde default), the
+/// review rounds spent and the PR's title, both optional and absent on rows
+/// whose door read printed none; floor stays 58.
 pub const PROTO_VERSION: u32 = 135;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or
@@ -3551,7 +3554,7 @@ mod tests {
         // re-assert the same literal, which caught nothing a single pin does
         // not and turned every bump into a three-file edit; they now assert
         // only their own wire shapes.
-        assert_eq!(PROTO_VERSION, 133);
+        assert_eq!(PROTO_VERSION, 135);
         // v64 added `PanePlacement.portal` and `AgentRow.portal`.
         // Both are additive `#[serde(default)]` fields, so the floor does NOT
         // move with them - a v63 client still attaches. Pinned beside the
