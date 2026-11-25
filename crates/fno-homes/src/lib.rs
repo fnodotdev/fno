@@ -101,16 +101,17 @@ pub fn default_class_home(class: ClassHome) -> PathBuf {
     }
 }
 
-/// One config value as a path: a glob or an unresolved `{template}` is no
-/// answer (`None` falls to the platform default); `$VAR` expands, a `~`
-/// goes `$HOME`-relative, and a relative remainder anchors at `cwd`.
+/// One config value as a path: a glob, an unresolved `{template}`, or a
+/// `$VAR` that no environment answers is no answer (`None` falls to the
+/// platform default); a set `$VAR` expands, a `~` goes `$HOME`-relative,
+/// and a relative remainder anchors at `cwd`.
 fn resolve_config_value(cwd: &Path, raw: &str) -> Option<PathBuf> {
     let trimmed = raw.trim();
     if trimmed.contains(['*', '?', '[']) {
         return None;
     }
     let expanded = expandvars(&trimmed.trim_end_matches('/').to_string());
-    if has_template(&expanded) {
+    if has_template(&expanded) || expanded.contains('$') {
         return None;
     }
     let text = expanduser(&expanded);

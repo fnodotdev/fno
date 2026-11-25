@@ -1574,6 +1574,14 @@ mod tests {
             home.join(".cache").join("fno")
         };
         assert_eq!(cache_home(&fx.root), expected);
+        // A $VAR no environment answers is no answer either: both binaries
+        // fall to the platform default instead of a literal $-named path.
+        let unset = LiveFx::new(
+            "chtmpl-unset",
+            "[paths]\ncache_dir = '$FNO_NO_SUCH_VAR_HOME/cache'\n",
+        );
+        let _unset_env = EnvGuard::new(&[("FNO_CONFIG", unset.config.display().to_string())]);
+        assert_eq!(cache_home(&fx.root), expected);
     }
 
     /// A legacy `settings.yaml` pin answers the class-home keys, the gap
