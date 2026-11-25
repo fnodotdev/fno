@@ -495,6 +495,8 @@ pub(crate) fn handle_session_report(
             .entries
             .get_mut(matched)
             .expect("find_row returned an existing registry index");
+        // A watched run that joins an older row by name makes that row watched.
+        entry.watch |= watch_row;
         // A child cannot share its parent's conversation. This provenance
         // proves an inherited placeholder; UUID shape alone proves nothing.
         if entry.harness_name() == harness

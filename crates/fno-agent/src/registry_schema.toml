@@ -122,9 +122,8 @@
 #
 # v47: additive `watch` - true on a headless row a person asked to watch
 # (`fno agent spawn --mux`), which keeps its sideline place; every other
-# headless row stays off the sideline. Additive and optional: a writer that
-# does not know the key keeps it in the row's catch-all map, so `min_writer`
-# does not move.
+# headless row stays off the sideline. Additive and optional: an older
+# writer keeps the key in the row's catch-all map, so `min_writer` stays.
 #
 # `fields` pins the sorted serde (wire) names of every RegistryEntry field at
 # this version. The equal-version trap this closes: PR 2090 minted v33 for
