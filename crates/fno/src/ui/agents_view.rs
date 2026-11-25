@@ -3769,7 +3769,7 @@ unheard_of_field = true
         assert_eq!(done.result.as_deref(), Some("finished"));
         // The watch mark rides the same read: a key read wrong hides every
         // run a person asked to watch.
-        let watched = reg(r#"{"name":"w","cwd":"/w","substrate":"headless","watch":true}"#);
+        let watched = self::reg(r#"{"name":"w","cwd":"/w","substrate":"headless","watch":true}"#);
         assert!(derive_rows(&watched, NOW).unwrap()[0].watch);
     }
     #[test]
