@@ -4,7 +4,8 @@
 //! acts. Characterized by the `stranded_classify_*`, `resolve_node_*`,
 //! `sweep_*` and `apply_*` goldens.
 
-use super::{git_bounded, git_out, sorted_json, OWNERSHIP_LIVE_STATUSES};
+use super::{git_bounded, git_out, sorted_json};
+use crate::AgentStatus;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -69,7 +70,7 @@ pub fn classify(
         "live".to_string(),
         Value::Bool(
             registry_status
-                .map(|s| OWNERSHIP_LIVE_STATUSES.contains(&s))
+                .map(|s| AgentStatus::LIVE_STATUSES.contains(&s))
                 .unwrap_or(false),
         ),
     );
@@ -134,7 +135,7 @@ fn classify_tiers(
         return row;
     }
     if let Some(status) = registry_status {
-        if OWNERSHIP_LIVE_STATUSES.contains(&status) {
+        if AgentStatus::LIVE_STATUSES.contains(&status) {
             row.klass = LIVE.to_string();
             return row;
         }

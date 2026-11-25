@@ -110,17 +110,9 @@ pub fn check_env(target: &Path, loss: LiveLoss) -> Result<(), String> {
     })
 }
 
-/// Live rows by the `OWNERSHIP_LIVE_STATUSES` vocabulary.
+/// Live rows by the `AgentStatus::LIVE_STATUSES` vocabulary.
 fn is_live(e: &RegistryEntry) -> bool {
-    matches!(
-        e.status,
-        AgentStatus::Spawning
-            | AgentStatus::Ready
-            | AgentStatus::Idle
-            | AgentStatus::Busy
-            | AgentStatus::Live
-            | AgentStatus::Restarting
-    )
+    crate::spawn_gate::status_is_liveish(&e.status)
 }
 
 /// The row's identity: its harness session id, else its name.
