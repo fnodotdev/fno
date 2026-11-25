@@ -1004,7 +1004,7 @@ pub(crate) fn matches_node_id_shape(s: &str) -> bool {
 
 /// `matches_node_id_shape` under an explicit mode: `Some("t")` reads
 /// `t-12`, `None` is hex. The seam the tests drive.
-fn matches_node_id_shape_under(s: &str, seq_prefix: Option<&str>) -> bool {
+pub(crate) fn matches_node_id_shape_under(s: &str, seq_prefix: Option<&str>) -> bool {
     let Some((prefix, suffix)) = s.split_once('-') else {
         return false;
     };
