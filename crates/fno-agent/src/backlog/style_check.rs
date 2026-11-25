@@ -40,6 +40,15 @@ fn banned_fillers() -> &'static BTreeSet<&'static str> {
     SET.get_or_init(|| ["please", "thanks", "basically"].into_iter().collect())
 }
 
+/// Rule 13 wording: prose and machine-printed text say "command". The plural
+/// rides the same set. Quoted and backticked spans mask out first, so naming
+/// the word stays a mention; the tree-wide CI gate is the backstop for
+/// source that the prose lint never reads.
+fn banned_wording() -> &'static BTreeSet<&'static str> {
+    static SET: OnceLock<BTreeSet<&'static str>> = OnceLock::new();
+    SET.get_or_init(|| ["verb", "verbs"].into_iter().collect())
+}
+
 /// Rule 8 filler phrases, matched in the lowered sentence.
 const BANNED_FILLER_PHRASES: [&str; 4] = ["thank you", "of course", "happy to", "feel free"];
 
@@ -486,6 +495,17 @@ fn check_sentence(sentence: &str, index: usize, is_list: bool) -> Vec<Violation>
                 ),
             });
         }
+        if banned_wording().contains(lowered.as_str()) {
+            out.push(Violation {
+                rule: 13,
+                sentence_index: index,
+                sentence: sentence.to_string(),
+                detail: format!(
+                    "sentence {shown} uses \"{}\". Machine-printed text says \"command\". Write \"slash command\" or \"CLI command\" to tell the two apart.",
+                    quote_safe(word)
+                ),
+            });
+        }
     }
     let lowered_sentence = sentence.to_lowercase();
     for phrase in BANNED_FILLER_PHRASES {
@@ -613,6 +633,7 @@ pub(crate) fn rule_names(rule: &u32) -> &'static str {
         10 => "number",
         11 => "dnumber",
         12 => "routes",
+        13 => "wording",
         _ => "?",
     }
 }
@@ -1774,13 +1795,15 @@ pr-body, and markdown prose also refuse a bare decision or question hash that
 holds a number: write D142, or `D142 (d-1a2b3c4d)` when the hash must stay
 copyable. Mail prose also refuses a cannot claim that names no route tried:
 try the other routes first, then name each one tried in the claim, or state
-the tool fact that refused."#;
+the tool fact that refused. Prose and machine-printed text say "command",
+never "verb" or "verbs". Write "slash command" or "CLI command" to tell the
+two apart."#;
 
 /// The usage text `fno doctor lint style --help` prints (the Typer help the
 /// Python leg printed, carried over as the command's own documentation).
 fn print_usage() {
     print!(
-        "Check text against the twelve style rules in docs/style-rules.md.
+        "Check text against the thirteen style rules in docs/style-rules.md.
 
 Usage: fno doctor lint style [OPTIONS]
 
@@ -2077,6 +2100,31 @@ mod tests {
         assert!(check("Staticprogress proves it here.\n", "encounter", None)
             .iter()
             .any(|v| v.rule == 9));
+    }
+
+    #[test]
+    fn wording_rule_fires_bare_and_spares_a_quoted_mention() {
+        let wording = |body: &str| {
+            check(body, "mail", None)
+                .iter()
+                .filter(|v| v.rule == 13)
+                .count()
+        };
+        // A bare use fires, and the plural rides the same set.
+        assert!(wording("run the verb from the menu.\n") > 0); // verb-wording: allow (test input)
+        assert!(wording("the verbs list is retired.\n") > 0); // verb-wording: allow (test input)
+                                                              // A quoted mention is a mention, not a use: the mask blanks the span
+                                                              // before any rule reads it.
+        assert_eq!(
+            wording("the \"verb\" wording names the word, so it passes.\n"), // verb-wording: allow (test input)
+            0
+        );
+        // The rule rides every surface, not just mail.
+        assert!(
+            check("run the verb from the menu.\n", "pr-body", None) // verb-wording: allow (test input)
+                .iter()
+                .any(|v| v.rule == 13)
+        );
     }
 
     #[test]
