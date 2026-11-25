@@ -447,6 +447,22 @@ mod tests {
             std::fs::read_to_string(marker_path(home.root(), "claude", sid).unwrap()).unwrap();
         assert_eq!(word, "skill:review", "a command never downgrades");
         assert_eq!(rows_for(sid), 1);
+
+        // The law's second named trigger: /fno:fno-me adopts the same way,
+        // from a bare-command marker.
+        let sid2 = "0f1e2d3c-aaaa-bbbb-cccc-000000000003";
+        assert_eq!(
+            join(home.root(), "claude", sid2, "command"),
+            Ok(JoinOutcome::Joined)
+        );
+        assert_eq!(
+            join(home.root(), "claude", sid2, "fno-me"),
+            Ok(JoinOutcome::Joined)
+        );
+        assert_eq!(rows_for(sid2), 1, "fno-me registers");
+        let word =
+            std::fs::read_to_string(marker_path(home.root(), "claude", sid2).unwrap()).unwrap();
+        assert_eq!(word, "fno-me");
     }
 
     #[test]

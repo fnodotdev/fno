@@ -502,9 +502,9 @@ deliberately.",
             RM_TOMBSTONE_GRACE_SECS / 3600
         )));
     }
-    // The law-D2402 gate (node x-4af9): a persist needs a launch record or a
-    // law join trigger. Without one the caller still reaches the session
-    // through the synthesized row, and no adopted row lands.
+    // The law-D2402 gate: a persist needs a launch record or a law join
+    // trigger. Without one the caller still reaches the session through the
+    // synthesized row, and no adopted row lands.
     let claimed = crate::launch_record::claimed_edge(
         registry_path.parent().unwrap_or(Path::new(".")),
         &hit.session_id,

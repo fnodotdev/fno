@@ -601,9 +601,9 @@ fn is_adopted_row(entry: &crate::state::RegistryEntry, candidate: &RecoverableRo
 /// resume path. `Err` is the batch-level `adoption_failed` detail.
 fn adopt_one(candidate: &RecoverableRollout, registry_path: &Path) -> Result<Value, String> {
     let session_id = candidate.session_id.as_str();
-    // The law gate (node x-4af9): a rollout whose session holds no launch
-    // record and no law join trigger stays rowless. A skip for the batch,
-    // not a failure: the recovery continues with the rest.
+    // The law gate: a rollout whose session holds no launch record and no
+    // law join trigger stays rowless. A skip for the batch, not a failure:
+    // the recovery continues with the rest.
     let law_ok = crate::launch_record::claimed_edge(
         registry_path.parent().unwrap_or(Path::new(".")),
         session_id,
@@ -773,5 +773,6 @@ pub fn recovery_result_counts(results: &[Value]) -> Value {
         "applied": count("applied"),
         "refused": count("refused"),
         "deferred": count("deferred"),
+        "skipped": count("skipped"),
     })
 }
