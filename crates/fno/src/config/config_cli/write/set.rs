@@ -67,7 +67,7 @@ pub fn set_values(
     if scope == "project" {
         refuse_project_grant(&order)?;
     }
-    refuse_agent_grant(&order, crate::sessions::process_admission::agent_origin())?;
+    refuse_without_tty(&order, std::io::IsTerminal::is_terminal(&std::io::stdin()))?;
     let target = target_path(scope)?;
     let touched = order.iter().any(|key| is_merge_gating(key));
     let mut finals: Vec<(String, Value)> = Vec::new();
@@ -138,20 +138,21 @@ fn refuse_project_grant(keys: &[String]) -> Res<()> {
 }
 
 /// Keys that widen what a worker may do without asking. A person sets them
-/// from a terminal. A worker session that tried would be granting itself.
+/// from an interactive terminal. An agent has no terminal, and an env var it
+/// strips cannot give it one.
 const OPERATOR_ONLY: [&str; 1] = ["user.auto_approve_routine"];
 
-fn refuse_agent_grant(keys: &[String], agent: bool) -> Res<()> {
+fn refuse_without_tty(keys: &[String], tty: bool) -> Res<()> {
     let Some(key) = keys
         .iter()
-        .filter(|_| agent)
+        .filter(|_| !tty)
         .find(|key| OPERATOR_ONLY.contains(&key.as_str()))
     else {
         return Ok(());
     };
     Err(Refusal::new(
         format!(
-            "{key} widens what workers do without asking, so an agent session cannot set it. Nothing was written. Run `fno config set {key} true` yourself in a terminal."
+            "{key} widens what workers do without asking, so it needs an interactive terminal. Nothing was written. Run `fno config set {key} true` yourself in a terminal."
         ),
         1,
     ))
@@ -519,11 +520,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_agent_session_cannot_set_an_operator_only_key() {
+    fn an_operator_only_key_needs_an_interactive_terminal() {
         let keys = vec!["user.auto_approve_routine".to_string()];
-        assert!(refuse_agent_grant(&keys, true).is_err());
-        assert!(refuse_agent_grant(&keys, false).is_ok());
-        assert!(refuse_agent_grant(&["user.name".to_string()], true).is_ok());
+        assert!(refuse_without_tty(&keys, false).is_err());
+        assert!(refuse_without_tty(&keys, true).is_ok());
+        assert!(refuse_without_tty(&["user.name".to_string()], false).is_ok());
     }
 
     /// The GitHub App token path (crates/fno-agent/src/gate/github_app.rs) reads

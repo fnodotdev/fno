@@ -8,6 +8,7 @@
 pub mod accounts;
 pub mod agents_config;
 pub mod agy_ask;
+pub(crate) mod auto_approve;
 pub mod agy_launch;
 pub mod ask_project;
 pub(crate) mod bounded_spawn;

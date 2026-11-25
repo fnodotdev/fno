@@ -45,7 +45,7 @@
     ],
     "PermissionRequest": [
       {
-        "matcher": "EnterWorktree|Write|Edit|MultiEdit|NotebookEdit|Read",
+        "matcher": "EnterWorktree",
         "hooks": [
           {
             "type": "command",

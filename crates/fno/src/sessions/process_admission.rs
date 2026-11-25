@@ -459,7 +459,7 @@ fn describe_brake(until: u64, value: &serde_json::Value) -> String {
 /// worker; a claude thread worker carries none (the supervisor strips it),
 /// so CLAUDECODE=1 with CLAUDE_CODE_SESSION_ATTENDED=0, the harness's own
 /// unattended marker, counts too.
-pub(crate) fn agent_origin() -> bool {
+fn agent_origin() -> bool {
     std::env::var_os("FNO_AGENT_SELF").is_some_and(|name| !name.is_empty())
         || (std::env::var_os("CLAUDECODE").is_some_and(|v| v == "1")
             && std::env::var_os("CLAUDE_CODE_SESSION_ATTENDED").is_some_and(|v| v == "0"))

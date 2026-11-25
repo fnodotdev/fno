@@ -64,6 +64,8 @@ pub struct WriteAsk {
     pub sandbox: Option<Value>,
     pub alias: Option<String>,
     pub session: Option<String>,
+    /// The routine-work permission rules, empty unless the switch is on.
+    pub rules: crate::spawn::auto_approve::Rules,
 }
 
 pub struct WriteReceipt {
@@ -74,7 +76,11 @@ pub struct WriteReceipt {
 /// The payload bytes: `{"env": ...}` plus the optional sandbox block and the
 /// foreign-endpoint deny, keys inserted in sorted order so the content address
 /// is deterministic (Python wrote `json.dumps(payload, sort_keys=True)`).
-fn payload_bytes(env: &Map<String, Value>, sandbox: Option<&Value>) -> Vec<u8> {
+fn payload_bytes(
+    env: &Map<String, Value>,
+    sandbox: Option<&Value>,
+    rules: &crate::spawn::auto_approve::Rules,
+) -> Vec<u8> {
     let mut sorted_env = Map::new();
     let mut keys: Vec<&String> = env.keys().collect();
     keys.sort();
@@ -84,8 +90,18 @@ fn payload_bytes(env: &Map<String, Value>, sandbox: Option<&Value>) -> Vec<u8> {
     let mut root = Map::new();
     root.insert("env".to_string(), Value::Object(sorted_env));
     let deny = foreign_endpoint_tool_denies(env);
+    let mut permissions = Map::new();
     if !deny.is_empty() {
-        root.insert("permissions".to_string(), json!({"deny": deny}));
+        permissions.insert("deny".to_string(), json!(deny));
+    }
+    if !rules.allow.is_empty() {
+        permissions.insert("allow".to_string(), json!(rules.allow));
+    }
+    if !rules.ask.is_empty() {
+        permissions.insert("ask".to_string(), json!(rules.ask));
+    }
+    if !permissions.is_empty() {
+        root.insert("permissions".to_string(), Value::Object(permissions));
     }
     if let Some(sb) = sandbox {
         root.insert("sandbox".to_string(), sb.clone());
@@ -267,7 +283,7 @@ pub fn write(ask: &WriteAsk, cwd: &Path) -> Result<WriteReceipt, String> {
     let base = crate::state_layout::place_dir(&state, "route-settings")
         .ok_or_else(|| "route-settings is not a state-root dir".to_string())?;
     std::fs::create_dir_all(&base).map_err(|e| format!("{}: {e}", base.display()))?;
-    let payload = payload_bytes(&ask.env, ask.sandbox.as_ref());
+    let payload = payload_bytes(&ask.env, ask.sandbox.as_ref(), &ask.rules);
     let digest = digest_of(&payload);
     let digest_path = base.join(format!("{digest}.json"));
     write_atomic_0600(&digest_path, &payload, false)?;
@@ -361,19 +377,27 @@ pub fn write_composed(
     session: Option<&str>,
     cwd: &Path,
 ) -> Result<Option<String>, String> {
-    if route_env.is_empty() && account_env.is_empty() && sandbox.is_none() {
+    let rules = crate::spawn::auto_approve::rules_for(cwd);
+    let plain = route_env.is_empty() && account_env.is_empty() && sandbox.is_none();
+    if plain && rules.is_empty() {
         return Ok(None);
     }
-    let spawn_env: Map<String, Value> = std::env::vars()
-        .map(|(k, v)| (k, Value::String(v)))
-        .collect();
-    let env = compose_env(route_env, account_env, &spawn_env);
+    // Rules alone owe no scrub floor: a plain lane keeps its own auth env.
+    let env = if plain {
+        Map::new()
+    } else {
+        let spawn_env: Map<String, Value> = std::env::vars()
+            .map(|(k, v)| (k, Value::String(v)))
+            .collect();
+        compose_env(route_env, account_env, &spawn_env)
+    };
     let receipt = write(
         &WriteAsk {
             env,
             sandbox,
             alias: alias.map(str::to_string),
             session: session.map(str::to_string),
+            rules,
         },
         cwd,
     )
@@ -433,6 +457,7 @@ pub fn write_settings_kind(payload: &Value) -> Result<Value, String> {
         // The transport contract carries no session id today; a fresh
         // compose that knows one goes through write_composed.
         session: None,
+        rules: Default::default(),
     };
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let receipt = write(&ask, &cwd)?;
@@ -510,6 +535,7 @@ mod tests {
             sandbox: None,
             alias: Some("zai-flash".to_string()),
             session: None,
+            rules: Default::default(),
         };
         let receipt = write(&ask, root.path()).unwrap();
         let alias = receipt.alias_path.unwrap();

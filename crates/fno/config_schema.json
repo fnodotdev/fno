@@ -4795,7 +4795,7 @@
    "wizard": "never",
    "question": "",
    "default_source": "default",
-   "doc": "Auto-approve routine worker file work: while true, a worker's reads and edits in its own worktree, job folder and plan folder raise no prompt. Off by default. A worker's entry to its own worktree never needs this setting. Only you turn it on, with `fno config set user.auto_approve_routine true` in your own terminal. An agent session cannot set it.",
+   "doc": "Auto-approve routine worker file work: while true, a new spawn gets Claude Code permission rules that allow reads and edits in its own worktree and plan folder. Claude Code still applies deny and ask rules first, and secret and settings names keep their prompt. Off by default. A worker's entry to its own worktree never needs this setting. Only you turn it on, with `fno config set user.auto_approve_routine true` in an interactive terminal. A command with no terminal cannot set it.",
    "edit": "toggle"
   },
   {
