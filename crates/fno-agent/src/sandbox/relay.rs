@@ -427,6 +427,14 @@ fn bind_target(a: &Args) -> Res<Option<Target>> {
     c.args(["do", "target", "start", node, "--no-merge"])
         .current_dir(&a.cwd)
         .env_remove("FNO_AGENT_SANDBOXED");
+    // The manifest names the sandbox's session, never an identity the
+    // spawning shell carried: the host Stop resolves its owner by this id.
+    crate::claims::stamp_command_env(
+        &mut c,
+        Some(a.name.as_str()),
+        &a.harness,
+        a.session.as_deref(),
+    );
     if let (Some(sid), "claude") = (&a.session, a.harness.as_str()) {
         c.env("CLAUDE_CODE_SESSION_ID", sid);
     }

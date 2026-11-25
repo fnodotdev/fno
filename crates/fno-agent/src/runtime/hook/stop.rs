@@ -233,6 +233,15 @@ pub fn run(args: &[String]) -> i32 {
 
     // ── Ownership (the salvaged stop-gate evaluation) ─────────────────────────
     match evaluate(&cwd, &fire) {
+        // A sandbox stop is never a visitor: the host bound its node before
+        // the clone, so a missing manifest is a broken binding, not consent.
+        Verdict::NoOwner if crate::sandbox::origin().is_some() => {
+            return emit_block_for_harness(
+                &session_id,
+                "target stop-hook: no host manifest names this sandbox's session; \
+                 the stop blocks until the host binding is repaired.",
+            );
+        }
         Verdict::NoOwner => {
             emit_stop_decision(&cwd, &fire, None, "visitor", "none", "allow", "visitor", "");
             return 0;
