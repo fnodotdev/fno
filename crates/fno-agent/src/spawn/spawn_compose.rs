@@ -654,9 +654,10 @@ fn floor_stage(stage: &Stage, seam: &mut Seam) {
     let scan = &stage.scan;
     let injected = seam
         .inject
-        .windows(2)
-        .find(|w| w[0] == "--route")
-        .map(|w| w[1].clone());
+        .iter()
+        .position(|t| t == "--route")
+        .and_then(|at| seam.inject.get(at + 1))
+        .cloned();
     // Typed axes outrank a pick, and a pick outranks the config scalars the
     // launch template reads later (lane > profile > defaults).
     let typed_other_axis = scan.has_model || scan.explicit_vendor_present;
@@ -704,7 +705,7 @@ fn floor_stage(stage: &Stage, seam: &mut Seam) {
         tiers: &tiers,
         reach: &reach,
     });
-    if let Err(line) = verdict {
+    if let Some(line) = verdict {
         seam.refuse(line);
     }
 }

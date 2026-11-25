@@ -23,7 +23,7 @@ pub(crate) struct Ask<'a> {
 
 /// The `--model` a harness token after the `--` fence names, if any.
 pub(crate) fn fenced_model(argv: &[String]) -> Option<String> {
-    let tail = &argv[argv.iter().position(|t| t == "--")? + 1..];
+    let tail = argv.get(argv.iter().position(|t| t == "--")? + 1..)?;
     tail.iter().enumerate().find_map(|(i, t)| {
         if let Some(v) = t.strip_prefix("--model=") {
             return Some(v.to_string());
@@ -35,12 +35,12 @@ pub(crate) fn fenced_model(argv: &[String]) -> Option<String> {
 }
 
 /// Permit, or the one refusal line.
-pub(crate) fn check(ask: &Ask) -> Result<(), String> {
+pub(crate) fn check(ask: &Ask) -> Option<String> {
     let key = format!("agents.profiles.{}.min_band", ask.command);
     let refuse = |why: String| format!("fno agent spawn: {why}; refusing; no worker launched");
     let floor = ask.floor.as_str().map(str::trim).unwrap_or("");
     if band_rank(floor) < 0 {
-        return Err(refuse(format!(
+        return Some(refuse(format!(
             "{key} must be one of {BANDS}, got {}",
             ask.floor
         )));
@@ -62,19 +62,19 @@ pub(crate) fn check(ask: &Ask) -> Result<(), String> {
             (vendor, band_of(ask, rows, None))
         }
         (None, None, None) => {
-            return Err(refuse(format!(
+            return Some(refuse(format!(
                 "{key} is {floor} but this spawn resolves no model, and a harness \
                  default has no band; name one with --route, a lane or a profile model"
             )))
         }
     };
     match found {
-        Some((band, _)) if band_rank(&band) >= band_rank(floor) => Ok(()),
-        Some((band, who)) => Err(refuse(format!(
+        Some((band, _)) if band_rank(&band) >= band_rank(floor) => None,
+        Some((band, who)) => Some(refuse(format!(
             "{} may not run on {subject} ({who}, band {band}): {key} is {floor}",
             ask.command
         ))),
-        None => Err(refuse(format!(
+        None => Some(refuse(format!(
             "{} may not run on {subject}: it matches no routing.models row or \
              built-in tier, so its band is unknown and {key} is {floor}; declare \
              a routing.models row with a band",
@@ -152,7 +152,7 @@ mod tests {
         })
     }
 
-    fn verdict(floor: &str, route: Option<&str>, model: Option<&str>) -> Result<(), String> {
+    fn verdict(floor: &str, route: Option<&str>, model: Option<&str>) -> Option<String> {
         let floor = toml::Value::String(floor.to_string());
         let (tiers, reach) = crate::route_gather::load_model_tiers();
         check(&Ask {
@@ -169,7 +169,7 @@ mod tests {
 
     #[test]
     fn a_typed_route_below_the_floor_refuses_with_the_named_line() {
-        let line = verdict("high", Some("zai/glm-5.3-flash[1m]"), None).unwrap_err();
+        let line = verdict("high", Some("zai/glm-5.3-flash[1m]"), None).unwrap();
         assert!(line.contains("blueprint may not run on zai/glm-5.3-flash[1m]"));
         assert!(line.contains("zai-flash, band medium"));
         assert!(line.contains("agents.profiles.blueprint.min_band is high"));
@@ -178,18 +178,18 @@ mod tests {
 
     #[test]
     fn a_model_at_or_above_the_floor_permits() {
-        assert!(verdict("high", None, Some("claude-opus-5-5")).is_ok());
-        assert!(verdict("medium", Some("zai/glm-5.3-flash[1m]"), None).is_ok());
-        assert!(verdict("high", None, Some("claude-opus-5-9")).is_ok());
-        assert!(verdict("high", None, Some("opus")).is_ok());
-        assert!(verdict("high", None, Some("haiku")).is_err());
+        assert!(verdict("high", None, Some("claude-opus-5-5")).is_none());
+        assert!(verdict("medium", Some("zai/glm-5.3-flash[1m]"), None).is_none());
+        assert!(verdict("high", None, Some("claude-opus-5-9")).is_none());
+        assert!(verdict("high", None, Some("opus")).is_none());
+        assert!(verdict("high", None, Some("haiku")).is_some());
     }
 
     #[test]
     fn an_unbandable_model_and_a_bad_key_both_refuse() {
-        let unknown = verdict("low", None, Some("mystery-1")).unwrap_err();
+        let unknown = verdict("low", None, Some("mystery-1")).unwrap();
         assert!(unknown.contains("declare a routing.models row with a band"));
-        let bad = verdict("huge", None, Some("claude-opus-5-5")).unwrap_err();
+        let bad = verdict("huge", None, Some("claude-opus-5-5")).unwrap();
         assert!(bad.contains("low|medium|high|max"));
     }
 }
