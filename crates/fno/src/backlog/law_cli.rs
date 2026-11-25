@@ -165,7 +165,7 @@ pub fn run(args: &[OsString]) -> i32 {
         }
         // Attended: rescoping a law's reach is the user's call, so the
         // door's proof is the caller's own terminal, the one credential a
-        // piped lane cannot carry (node x-85f4).
+        // piped lane cannot carry.
         "rescope" => {
             let argv: Vec<String> = rest
                 .iter()

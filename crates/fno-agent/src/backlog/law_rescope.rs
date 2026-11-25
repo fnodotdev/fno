@@ -3,7 +3,7 @@
 //! event; the law keeps its id and text; readers apply the newest amendment
 //! through `row_scope`'s reach preference. No superseded twin row. Like
 //! renew, the operator's own yes is the door's proof: never widen or narrow
-//! without it (node x-85f4).
+//! without it.
 
 use serde_json::{json, Value};
 
@@ -62,10 +62,6 @@ pub fn run_rescope(argv: &[String]) -> i32 {
         );
         return 2;
     };
-    if let "--project" = reach.as_str() {
-        eprintln!("fno inbox decisions rescope: --project wants a slug\n{RESCOPE_USAGE}");
-        return 2;
-    }
     // Dual read: the display number names its hash through the table; a
     // hash lowercases; a subject passes through as typed. A number nothing
     // holds refuses before any read.
@@ -109,6 +105,16 @@ pub fn run_rescope(argv: &[String]) -> i32 {
     if let (Some(map), Some(id)) = (data.as_object_mut(), &amendment_id) {
         map.insert("amendment_id".into(), json!(id));
     }
+    let target = data
+        .get("target_decision_id")
+        .and_then(Value::as_str)
+        .unwrap_or("?")
+        .to_string();
+    let prior = data
+        .get("prior_reach")
+        .and_then(Value::as_str)
+        .unwrap_or("?")
+        .to_string();
     let envelope =
         json!({"ts": now_iso(), "type": SCOPE_AMEND_EVENT, "source": "target", "data": data});
     let Some(amendment_id) = &amendment_id else {
@@ -123,15 +129,7 @@ pub fn run_rescope(argv: &[String]) -> i32 {
         return code;
     }
     println!("{amendment_id}");
-    eprintln!(
-        "fno inbox decisions rescope: {} now reads {reach} (was {})",
-        data.get("target_decision_id")
-            .and_then(Value::as_str)
-            .unwrap_or("?"),
-        data.get("prior_reach")
-            .and_then(Value::as_str)
-            .unwrap_or("?"),
-    );
+    eprintln!("fno inbox decisions rescope: {target} now reads {reach} (was {prior})");
     0
 }
 

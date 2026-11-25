@@ -1,6 +1,6 @@
 //! `fno inbox decisions archive [--apply]`: move every non-live decision row
 //! to the cold archive file, `decisions-archive.jsonl` at the state root
-//! (node x-85f4). The move is a projection, not a delete: rows are copied
+//! The move is a projection, not a delete: rows are copied
 //! row-faithfully (ts, type, data) into the archive, the default reads skip
 //! them through the archive-key filter in `read_store_rows`, and the
 //! citation gate joins the archive back in so every d-id stays resolvable.
@@ -11,30 +11,11 @@ use serde_json::{json, Value};
 use crate::backlog::decisions::SCOPE_AMEND_EVENT;
 use crate::decision_index::{
     default_archive_path, default_state_path, derive_rows, drop_expired, read_archive_rows,
-    read_store_rows, read_store_rows_raw,
+    read_store_rows, read_store_rows_raw, row_key,
 };
 use crate::graph_get::default_graph_path;
 
 const ARCHIVE_USAGE: &str = "usage: fno inbox decisions archive [--apply]  (no flag: the dry run)";
-
-fn row_key(row: &Value) -> (String, String) {
-    let etype = row
-        .get("_event_type")
-        .and_then(Value::as_str)
-        .unwrap_or("operator_decision")
-        .to_string();
-    let id = [
-        "decision_id",
-        "retraction_id",
-        "amendment_id",
-        "target_decision_id",
-    ]
-    .iter()
-    .find_map(|k| row.get(k).and_then(Value::as_str).filter(|s| !s.is_empty()))
-    .unwrap_or("")
-    .to_string();
-    (etype, id)
-}
 
 /// The envelope a flattened row reconstructs to: its own fields under
 /// `data`, the event type back on the envelope, ts on top. The db's

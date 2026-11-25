@@ -11,7 +11,7 @@ use std::path::Path;
 pub(crate) const DECISION_EVENT: &str = "operator_decision";
 const RETRACTION_EVENT: &str = "decision_retracted";
 /// A law's reach amended in place: one small event, the law keeps its id and
-/// text, and readers apply the newest amendment (node x-85f4). No
+/// text, and readers apply the newest amendment. No
 /// superseded twin row ever appears.
 pub const SCOPE_AMEND_EVENT: &str = "decision_scope_amended";
 

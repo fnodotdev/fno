@@ -260,7 +260,7 @@ pub fn cites_decision_id(text: &str) -> bool {
 
 /// The known decision ids: every `decision_id` on an operator_decision row
 /// of the store, retired rows included (supersession history honestly cites
-/// retired ids), lowercase. The cold archive joins the read (x-85f4): a
+/// retired ids), lowercase. The cold archive joins the read, so a
 /// row moved to `decisions-archive.jsonl` keeps its id resolvable, so the
 /// predicate stays no-row, not no-LIVE-row.
 pub fn known_decision_ids() -> Result<HashSet<String>, String> {

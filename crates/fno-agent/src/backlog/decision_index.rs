@@ -71,9 +71,9 @@ pub fn graph_journal(graph: &Path) -> PathBuf {
     root.join("decisions.jsonl")
 }
 
-/// The cold archive beside the journal (node x-85f4): the same state root
+/// The cold archive beside the journal: the same state root
 /// the journal sits in, named `decisions-archive.jsonl`. The default reads
-/// skip it; the citation gate reads it (x-85f4's resolvability rule).
+/// skip it. The citation gate reads it, so every stored id stays resolvable.
 pub fn graph_archive(graph: &Path) -> PathBuf {
     graph_journal(graph).with_file_name("decisions-archive.jsonl")
 }
@@ -135,21 +135,20 @@ pub fn apply_scope_amendments(rows: &mut Vec<Value>) {
             newest.insert(key, (rank, reach.to_string()));
         }
     }
-    if newest.is_empty() {
-        return;
-    }
-    for row in rows.iter_mut() {
-        if row.get("_event_type").and_then(Value::as_str) != Some("operator_decision") {
-            continue;
-        }
-        let id = row
-            .get("decision_id")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_lowercase();
-        if let Some((_, reach)) = newest.get(&id) {
-            if let Some(obj) = row.as_object_mut() {
-                obj.insert("reach".to_string(), json!(reach));
+    if !newest.is_empty() {
+        for row in rows.iter_mut() {
+            if row.get("_event_type").and_then(Value::as_str) != Some("operator_decision") {
+                continue;
+            }
+            let id = row
+                .get("decision_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_lowercase();
+            if let Some((_, reach)) = newest.get(&id) {
+                if let Some(obj) = row.as_object_mut() {
+                    obj.insert("reach".to_string(), json!(reach));
+                }
             }
         }
     }
@@ -345,7 +344,7 @@ pub fn derive_live(text: &str) -> Index {
 /// `retraction_id`, `amendment_id`, `target_decision_id`. The amendment id
 /// sits before the target: two amendments of one law must not share a key,
 /// or the journal-vs-db merge drops the newer one as a copy.
-fn row_key(row: &Value) -> (String, String) {
+pub(crate) fn row_key(row: &Value) -> (String, String) {
     let etype = row
         .get("_event_type")
         .and_then(Value::as_str)
@@ -389,9 +388,10 @@ pub fn read_store_rows(graph: &Path, jsonl: &Path) -> Result<(Vec<Value>, usize)
 }
 
 /// The physical store rows (no archive skip, no reach apply) plus the
-/// archive's rows, deduped by row_key: every stored row a citation may name
-/// (x-85f4's resolvability rule). Unproven rows keep the same admit pass the
-/// plain read applies, so a forged id cannot pass the gate by archiving.
+/// archive's rows, deduped by row_key: every stored row a citation may
+/// name, so a moved id stays resolvable. Unproven rows keep the same admit
+/// pass the plain read applies, so a forged id cannot pass the gate by
+/// archiving.
 pub fn read_store_rows_everything(
     graph: &Path,
     jsonl: &Path,
