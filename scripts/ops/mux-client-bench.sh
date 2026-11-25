@@ -153,7 +153,6 @@ trap teardown EXIT INT TERM
 
 # ---- world ----
 PANE_COUNT_EXPECTED=$((AGENTS + 2))
-SLEEPER_A_ID=""
 BUSY_ID=""
 LONG_ID=""
 
@@ -203,7 +202,7 @@ world_up() {
   # from position: the server may keep panes of its own.
   LONG_ID="$(pane_run_id sh -c 'seq 1 10000; exec sleep 3600')"
   BUSY_ID="$(pane_run_id sh -c 'read _; while :; do date +%s; sleep 0.2; done')"
-  SLEEPER_A_ID="$(pane_run_id sleep 3600)"
+  pane_run_id sleep 3600 >/dev/null
   local _k
   for _k in $(seq 2 "$AGENTS"); do
     pane_run_id sleep 3600 >/dev/null
@@ -291,12 +290,16 @@ run_step() { # run_step <metric_fn>
   local pid wd rc=0
   "$1" &
   pid=$!
-  ( sleep "$STEP_CAP"; kill "$pid" 2>/dev/null ) &
+  # The watchdog ends when the step does, so no sleep outlives the run.
+  ( t=0; while [ "$t" -lt "$STEP_CAP" ] && kill -0 "$pid" 2>/dev/null; do sleep 1; t=$((t + 1)); done
+    kill "$pid" 2>/dev/null ) &
   wd=$!
   wait "$pid" || rc=$?
-  kill "$wd" 2>/dev/null || true
+  wait "$wd" 2>/dev/null || true
   if [ "$rc" -ge 128 ]; then
     record "${1#metric_}" step 0 "FAIL step_cap_${STEP_CAP}s"
+  elif [ "$rc" -ne 0 ]; then
+    record "${1#metric_}" step 0 "FAIL step_exit_$rc"
   fi
 }
 
