@@ -16,6 +16,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 on:
+  merge_group:
+    types: [checks_requested]
   schedule:
     - cron: '41 8 * * *'
   workflow_dispatch:

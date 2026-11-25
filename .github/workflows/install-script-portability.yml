@@ -11,6 +11,8 @@ name: install-script-portability
 # installer under Ubuntu's /bin/sh (dash).
 
 on:
+  merge_group:
+    types: [checks_requested]
   pull_request:
     paths:
       - "scripts/install/fno.sh"

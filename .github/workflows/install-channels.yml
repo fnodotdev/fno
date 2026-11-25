@@ -16,6 +16,8 @@
 name: install-channels
 
 on:
+  merge_group:
+    types: [checks_requested]
   pull_request:
     paths:
       - 'scripts/install/**'

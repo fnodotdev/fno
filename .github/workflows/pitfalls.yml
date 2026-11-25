@@ -5,6 +5,8 @@ name: pitfalls
 # or an entry older than 60 days. The corpus is injected at every SessionStart
 # on every harness, so the cap is a per-session context budget, not style.
 on:
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
     paths: &pitfalls_paths

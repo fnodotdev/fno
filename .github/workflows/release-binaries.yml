@@ -9,6 +9,8 @@ name: release-binaries
 # main-binaries.yml, which feeds the bin-cache `fno update` downloads from.
 
 on:
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
   workflow_call:
     inputs:

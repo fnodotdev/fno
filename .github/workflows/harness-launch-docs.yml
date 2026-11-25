@@ -22,6 +22,8 @@ name: harness-launch-docs
 # On a pull_request only render runs. It prints the diff and opens nothing.
 
 on:
+  merge_group:
+    types: [checks_requested]
   schedule:
     # Mondays 08:00 UTC.
     - cron: "0 8 * * 1"

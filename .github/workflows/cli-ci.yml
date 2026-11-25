@@ -11,6 +11,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 on:
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
     inputs:
       paint_binary:
