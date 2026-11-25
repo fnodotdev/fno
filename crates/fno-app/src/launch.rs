@@ -22,7 +22,7 @@ use super::skills::{self, Skill};
 use super::ui::{self, Role};
 use super::window::Root;
 use fno::app_api::client::agent_launcher::{
-    epic_rows, harness_rows, EpicChoice, HarnessRow, LEAD_SEED,
+    config_projects, epic_rows, harness_rows, ConfigProject, EpicChoice, HarnessRow, LEAD_SEED,
 };
 use fno::proto::chat_event::SessionKey;
 use fno::proto::{AgentLaunchRequest, AgentLaunchUpdate, AgentRow, LaunchState};
@@ -210,6 +210,9 @@ pub struct Launch {
     pick: skills::Pick,
     harnesses: Vec<HarnessRow>,
     projects: Vec<String>,
+    /// The config's projects, read at each refresh. A picked folder outside
+    /// this list offers the add-project row.
+    config: Vec<ConfigProject>,
     pub draft: Draft,
     pub field: Rc<FieldState>,
     /// The task box's bounds at the last paint, for the IME candidate window.
@@ -237,6 +240,7 @@ impl Launch {
             pick: skills::Pick::default(),
             harnesses: Vec::new(),
             projects: Vec::new(),
+            config: Vec::new(),
             draft: Draft::default(),
             field: Rc::new(FieldState::default()),
             composer: Rc::new(Cell::new(Bounds::default())),
@@ -269,13 +273,18 @@ impl Launch {
         self.harnesses = rows;
     }
 
-    /// Rebuild the project candidates from the layout, in the TUI's order:
-    /// the active workspace's folder, the app's own cwd, the other workspaces'.
+    /// Rebuild the project candidates from the layout: the active workspace's
+    /// folder, the config's projects, the app's own cwd, the other workspaces'.
     pub(crate) fn refresh_projects(&mut self, layout: &Layout) {
         let mut projects: Vec<String> = Vec::new();
         if let Some(s) = layout.squads.iter().find(|s| s.id == layout.active_squad) {
             if !s.canonical_cwd.is_empty() {
                 projects.push(s.canonical_cwd.clone());
+            }
+        }
+        for c in &self.config {
+            if !projects.contains(&c.path) {
+                projects.push(c.path.clone());
             }
         }
         let own = std::env::current_dir()
@@ -313,10 +322,23 @@ impl Launch {
         }
     }
 
+    /// Re-read the config's projects and add any new folder to the
+    /// candidates. The layout path reuses the cached read: it runs on every
+    /// layout push, and the config is a file parse.
+    pub(crate) fn refresh_config(&mut self) {
+        self.config = config_projects();
+        for c in &self.config {
+            if !self.projects.contains(&c.path) {
+                self.projects.push(c.path.clone());
+            }
+        }
+    }
+
     pub(crate) fn open(&mut self, kind: Option<Kind>) {
         if let Some(k) = kind {
             self.kind = k;
         }
+        self.refresh_config();
         self.row = Row::Task;
         self.phase = Phase::Editing;
         self.request_id = 0;
@@ -475,6 +497,13 @@ impl Launch {
         self.project = cwd;
         self.gone = false;
         self.refresh_skills();
+    }
+
+    /// The picked folder when the config does not list it yet: the add-project
+    /// row offers it. `None` when nothing is picked or the config has it.
+    pub(crate) fn unlisted_project(&self) -> Option<&str> {
+        let p = self.project.as_str();
+        (!p.is_empty() && !self.gone && !self.config.iter().any(|c| c.path == p)).then_some(p)
     }
 
     /// The picks the start view's header and chips render.
@@ -876,6 +905,9 @@ pub(super) fn render(root: &Root, window: &Window, cx: &mut Context<Root>) -> Di
         .child(ui::text(l.kind.why(), Role::Meta, &p))
         .child(harness_row(l, &p, cx))
         .child(project_row(l, &p, cx))
+        .when(l.unlisted_project().is_some(), |d| {
+            d.child(add_project_row(&p, cx))
+        })
         .when(l.kind == Kind::Worker, |d| {
             d.child(axis_picker_rows(l, &p, cx))
         })
@@ -989,6 +1021,24 @@ fn project_row(l: &Launch, p: &Palette, cx: &mut Context<Root>) -> Stateful<Div>
     )
     .child(ui::clamp(short_project(&l.project), Role::Name, p))
     .when(l.gone, |d| d.child(ui::tag("gone", p.warn, p)))
+}
+
+/// The add-project row, under the project row: it registers the picked
+/// folder in the config and opens a workspace for it.
+fn add_project_row(p: &Palette, cx: &mut Context<Root>) -> Stateful<Div> {
+    ui::clickable(
+        div()
+            .id("launch-add-project")
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(8.0))
+            .py_1(),
+        p,
+    )
+    .on_click(cx.listener(|root, _, _, cx| root.add_picked_project(cx)))
+    .child(div().w(px(56.0)).flex_none())
+    .child(ui::text("+ add project", Role::Label, p))
 }
 
 /// The label the model row shows: the pick, or the door default.
