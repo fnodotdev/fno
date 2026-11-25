@@ -185,3 +185,47 @@ fn the_stop_gate_block_report_sends_working_and_marks_the_record() {
     std::env::remove_var("XDG_RUNTIME_DIR");
     let _ = std::fs::remove_dir_all(&rt);
 }
+
+/// The turn end on a harness with no `hook stop` (pi here; agy, opencode and
+/// omp share the door) shortens a live conversation hold to the grace, the
+/// same point a claude Stop does. A working fire leaves it alone.
+#[test]
+fn a_done_fire_shortens_the_conversation_hold_to_the_grace() {
+    const SID: &str = "dddddddd-1111-2222-3333-444455556666";
+    crate::mail_hold::tests::with_hold_env(|dir| {
+        let saved: Vec<_> = ["XDG_RUNTIME_DIR", "FNO_PANE"]
+            .iter()
+            .map(|k| (*k, std::env::var_os(k)))
+            .collect();
+        std::env::set_var("XDG_RUNTIME_DIR", dir);
+        std::env::remove_var("FNO_PANE");
+        crate::mail_hold::tests::write_registry(
+            dir,
+            json!([crate::mail_hold::tests::registry_row("worker", SID)]),
+        );
+        crate::mail_hold::arm_conversation(SID);
+        let until = || {
+            let status = crate::mail_hold::self_status(SID).unwrap();
+            assert_eq!(status["conversation"], true, "{status}");
+            chrono::DateTime::parse_from_rfc3339(status["clock_until"].as_str().unwrap())
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+        };
+        let armed = until();
+        let payload = json!({"session_id": SID});
+        process("pi", "PreToolUse", &payload);
+        assert_eq!(until(), armed, "a working fire never shortens the hold");
+        process("pi", "Stop", &payload);
+        let grace = chrono::Utc::now() + chrono::Duration::seconds(crate::mail_hold::GRACE_S + 1);
+        assert!(
+            until() <= grace,
+            "the turn end shortens the hold to the grace"
+        );
+        for (k, v) in saved {
+            match v {
+                Some(v) => std::env::set_var(k, v),
+                None => std::env::remove_var(k),
+            }
+        }
+    });
+}

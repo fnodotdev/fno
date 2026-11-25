@@ -619,6 +619,13 @@ pub(crate) fn process(harness: &str, event: &str, payload: &serde_json::Value) {
     let Some(decision) = decide(wiring, &ev) else {
         return;
     };
+    // A done fire is the turn end on every wired harness, including agy,
+    // opencode, pi and omp, which never reach `hook stop`: shorten a live
+    // conversation hold to its grace here too. The shortening never extends,
+    // so claude and codex, which also shorten in `hook stop`, land the same.
+    if decision.state == "done" && !ev.session_id.is_empty() {
+        crate::mail_hold::conversation_turn_end(&ev.session_id);
+    }
     // Marker lane: mux panes only, and independent of the parse (a malformed
     // payload still emits via the presence-gate degrade), so a pane's block
     // scanner segments every turn even when the report cannot fly.
