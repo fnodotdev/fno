@@ -9,6 +9,7 @@ pub(crate) fn meta(id: u64, name: &str, tabs: usize, active_tab: usize) -> Squad
         id,
         name: name.into(),
         canonical_cwd: format!("/code/{name}"),
+        project: None,
         tabs: (1..=tabs)
             .map(|i| TabMeta {
                 id: (i - 1) as u64,

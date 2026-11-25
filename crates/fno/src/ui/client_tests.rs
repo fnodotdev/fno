@@ -11754,6 +11754,7 @@ pub(super) fn named_meta(id: u64, name: &str, tabs: &[&str], active_tab: usize) 
         id,
         name: name.into(),
         canonical_cwd: format!("/code/{name}"),
+        project: None,
         tabs: tabs
             .iter()
             .enumerate()

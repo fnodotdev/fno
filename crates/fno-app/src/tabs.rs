@@ -287,6 +287,7 @@ mod tests {
                 id: 1,
                 name: "checkout".into(),
                 canonical_cwd: "/r".into(),
+                project: None,
                 tabs: Vec::new(),
                 active_tab: 0,
                 panes: 1,

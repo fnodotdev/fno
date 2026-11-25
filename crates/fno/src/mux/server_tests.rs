@@ -445,6 +445,7 @@ fn new_squad_rejects_a_blank_name_and_creates_nothing() {
         Command::NewSquad {
             name: "   ".into(),
             origin: None,
+            project: None,
         },
     );
     assert!(matches!(flow, Flow::Continue));

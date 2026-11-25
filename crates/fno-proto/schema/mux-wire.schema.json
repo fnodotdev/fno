@@ -2759,6 +2759,12 @@
                     "string",
                     "null"
                   ]
+                },
+                "project": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 }
               },
               "required": [
@@ -7233,6 +7239,12 @@
           "format": "uint",
           "minimum": 0,
           "type": "integer"
+        },
+        "project": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "tabs": {
           "items": {
