@@ -808,6 +808,23 @@ fn retire_one(
     if family.is_empty() {
         return out;
     }
+    // A question or decision journal holding bytes its store lacks stays
+    // at the root: the next routed read ingests them, and a later pass parks
+    // the file once nothing in it is new.
+    let store = crate::event_store::store_path(&live);
+    if journal != "events.jsonl"
+        && live.is_file()
+        && crate::event_store::stray_has_uningested_bytes(&live, &store)
+    {
+        out.push((
+            journal.to_string(),
+            Status::Pending(format!(
+                "{journal} holds rows {} lacks; a store read imports them first",
+                store.display()
+            )),
+        ));
+        return out;
+    }
     let names: Vec<String> = family
         .iter()
         .map(|p| {

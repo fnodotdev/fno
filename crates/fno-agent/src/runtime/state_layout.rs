@@ -1988,6 +1988,27 @@ mod tests {
             !quiet.entries.iter().any(|e| e.legacy.contains("(journal)")),
             "a root with no family file reports no journal entry"
         );
+
+        // AC5-ERR: a question journal holding a row its store lacks stays
+        // at the root, and the pass reads pending naming the file.
+        let questions = root.join("questions.jsonl");
+        std::fs::write(
+            &questions,
+            format!("{{\"ts\":\"{ts}\",\"type\":\"operator_question\"}}\n"),
+        )
+        .unwrap();
+        let held = migrate(&root, true);
+        assert!(
+            held.entries
+                .iter()
+                .any(|e| e.legacy.contains("questions.jsonl")
+                    && matches!(e.status, Status::Pending(ref why) if why.contains("lacks"))),
+            "{held:?}"
+        );
+        assert!(
+            questions.is_file(),
+            "the file stays until a read ingests it"
+        );
         match prior_home {
             Some(v) => std::env::set_var("FNO_AGENT_HOME", v),
             None => std::env::remove_var("FNO_AGENT_HOME"),
