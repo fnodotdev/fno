@@ -136,6 +136,23 @@ fn normalize_node_id(value: &str) -> Option<String> {
 // The fleet fold (`fleet_rows`)
 // ---------------------------------------------------------------------------
 
+/// The node a spine row works. A bound node from spawn, target init or adopt
+/// is claimed work and stands. A `first-turn` bind only records that the
+/// session's first prompt named an open node (a brief can cite a dependency
+/// or a sibling), so a worktree or ledger binding for the same session
+/// outranks it; with neither, the mention stands.
+fn resolve_row_node(
+    bound: Option<String>,
+    mention_bound: bool,
+    from_worktree: impl FnOnce() -> Option<String>,
+    from_ledger: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    if bound.is_some() && !mention_bound {
+        return bound;
+    }
+    from_worktree().or_else(from_ledger).or(bound)
+}
+
 pub(crate) fn fleet_rows() -> (Vec<FleetRow>, Vec<String>) {
     let raw = crate::claude_roster::read_all_agents_raw();
     let registry =
@@ -221,16 +238,21 @@ pub(crate) fn fleet_rows_from(
             .map(str::to_string)
             .or_else(|| (!e.cwd.is_empty()).then(|| e.cwd.clone()))
             .unwrap_or_default();
-        let mut node = e.node.clone().filter(|n| !n.is_empty());
-        if node.is_none() && is_linked_worktree(&cwd) {
-            node = node_id_from_worktree(&cwd);
-        }
-        if node.is_none() {
-            if ledger_nodes.is_none() {
-                ledger_nodes = Some(ledger_nodes_map());
-            }
-            node = ledger_nodes.as_ref().and_then(|l| l.get(*sid).cloned());
-        }
+        let node = resolve_row_node(
+            e.node.clone().filter(|n| !n.is_empty()),
+            e.node_basis.as_deref() == Some("first-turn"),
+            || {
+                is_linked_worktree(&cwd)
+                    .then(|| node_id_from_worktree(&cwd))
+                    .flatten()
+            },
+            || {
+                ledger_nodes
+                    .get_or_insert_with(ledger_nodes_map)
+                    .get(*sid)
+                    .cloned()
+            },
+        );
         out.push(FleetRow {
             row_id: (*sid).to_string(),
             name: if e.name.is_empty() {
@@ -1272,6 +1294,36 @@ fn worked_status<'a>(by_id: &BTreeMap<&str, &'a Value>, id: &str) -> &'a str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_first_turn_mention_never_outranks_the_worktree_or_ledger_binding() {
+        let some = |n: &str| Some(n.to_string());
+        assert_eq!(
+            resolve_row_node(some("x-aaaa"), true, || None, || some("x-bbbb")),
+            some("x-bbbb")
+        );
+        assert_eq!(
+            resolve_row_node(some("x-aaaa"), true, || some("x-cccc"), || some("x-bbbb")),
+            some("x-cccc")
+        );
+        assert_eq!(
+            resolve_row_node(some("x-aaaa"), true, || None, || None),
+            some("x-aaaa")
+        );
+        assert_eq!(
+            resolve_row_node(
+                some("x-aaaa"),
+                false,
+                || panic!("worktree read"),
+                || panic!("ledger read")
+            ),
+            some("x-aaaa")
+        );
+        assert_eq!(
+            resolve_row_node(None, false, || None, || some("x-bbbb")),
+            some("x-bbbb")
+        );
+    }
 
     // The fleet fold starts from fno's registry: a live claude spine row
     // lists with an EMPTY vendor view (AC11), and a vendor row with no
