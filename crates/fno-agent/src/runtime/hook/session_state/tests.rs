@@ -207,8 +207,8 @@ fn a_done_fire_shortens_the_conversation_hold_to_the_grace() {
         // The conversation hold's end, or None when no conversation hold is live.
         let until = || {
             let status = crate::mail_hold::self_status(SID).ok()?;
-            (status["conversation"] == true).then_some(())?;
-            chrono::DateTime::parse_from_rfc3339(status["clock_until"].as_str()?).ok()
+            status.get("conversation")?.as_bool()?.then_some(())?;
+            chrono::DateTime::parse_from_rfc3339(status.get("clock_until")?.as_str()?).ok()
         };
         let armed = until();
         let payload = json!({"session_id": SID});
