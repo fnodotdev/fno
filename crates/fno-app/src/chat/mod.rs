@@ -305,14 +305,14 @@ impl Chat {
 }
 
 /// The harness prefix names the key outright (`claude`, `codex`,
-/// `opencode`). A bare id takes the harness of the transcript that carries
+/// `opencode`, `pi`, `omp`). A bare id takes the harness of the transcript that carries
 /// it; opencode sessions live in the store rather than the transcript tree,
 /// so an unfound id stays claude and the server's NotFound names the truth.
 /// `newest` alone stays the newest claude transcript, the shape the probe
 /// and demo flows have always used.
 pub fn resolve_key(which: &str) -> Option<SessionKey> {
     if let Some((harness, rest)) = which.split_once(':') {
-        if matches!(harness, "claude" | "codex" | "opencode") {
+        if matches!(harness, "claude" | "codex" | "opencode" | "pi" | "omp") {
             let session_id = match rest {
                 "newest" => newest_for(harness)?,
                 id => id.to_string(),
@@ -341,13 +341,13 @@ pub fn resolve_key(which: &str) -> Option<SessionKey> {
     })
 }
 
-/// The newest session id a harness has on disk. All three harnesses read
+/// The newest session id a harness has on disk. Every harness reads
 /// through the shared `fno` helpers, so the ambient projects dir, the
-/// isolated accounts and the codex tree follow one scan.
+/// isolated accounts, the codex tree and the pi and omp stores follow one scan.
 fn newest_for(harness: &str) -> Option<String> {
     match harness {
         "claude" => fno::app_api::transcript_tail::newest_transcript("claude"),
-        "codex" => fno::app_api::transcript_tail::newest_transcript("codex"),
+        "codex" | "pi" | "omp" => fno::app_api::transcript_tail::newest_transcript(harness),
         "opencode" => fno::app_api::chat_events::newest_session_id(),
         _ => None,
     }
@@ -405,6 +405,9 @@ mod tests {
         let key = resolve_key("opencode:ses_123").unwrap();
         assert_eq!(key.harness, "opencode");
         assert_eq!(key.session_id, "ses_123");
+        let key = resolve_key("pi:0192f3a0-0000-7000-8000-000000000001").unwrap();
+        assert_eq!(key.harness, "pi");
+        assert_eq!(resolve_key("omp:x").unwrap().harness, "omp");
     }
 
     #[test]

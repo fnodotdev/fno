@@ -281,7 +281,7 @@ mod tests {
         let tail = all.len() as u64 - 2;
         assert_eq!(seqs(tail), vec![tail, tail + 1]);
 
-        let refused = SessionReader::open(&key("pi"), &roots, 0).err().unwrap();
+        let refused = SessionReader::open(&key("agy"), &roots, 0).err().unwrap();
         let frame: Value = serde_json::from_str(&error_frame(&refused)).unwrap();
         assert_eq!(frame["error"]["kind"], "unsupported_harness");
     }

@@ -142,7 +142,7 @@ mod tests {
             assert_eq!(resumed[0].seq, 4);
 
             for (k, needle) in [
-                (key("pi", SID), "\"pi\""),
+                (key("agy", SID), "\"agy\""),
                 (key("claude", "ffffffff-0000-4000-8000-000000000000"), "ffffffff-0000"),
             ] {
                 let mut tail = tail_sync(&sock, k, 0).unwrap();

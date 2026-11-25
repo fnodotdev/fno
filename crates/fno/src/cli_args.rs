@@ -462,6 +462,10 @@ pub struct AppShotArgs {
     /// options frame, `overflow` makes the first option wrap
     #[arg(long, value_parser = ["rows", "overflow"])]
     pub ask: Option<String>,
+    /// Show a seeded pi or oh-my-pi session in the chat instead of the
+    /// claude one
+    #[arg(long, value_parser = ["pi", "omp"])]
+    pub chat_harness: Option<String>,
     /// Open one overlay through its real code path before the capture:
     /// the row menu (`row-menu-node` gives the agent a node first),
     /// the in-tab rename field, or the scrolled-back pill

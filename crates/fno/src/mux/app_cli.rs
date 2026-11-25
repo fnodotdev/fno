@@ -364,6 +364,10 @@ const DEMO_EPOCH: i64 = 1_794_096_000;
 /// The demo chat session: the transcript file the seed writes and the
 /// adopt seed registers, one uuid both sides name.
 const DEMO_CHAT_SESSION: &str = "00000000-0000-4000-8000-000000000001";
+/// The pi and omp demo session. Not the claude uuid: the transcript scan
+/// returns the first file carrying a wanted uuid, so a shared one would
+/// open the claude file.
+const DEMO_PI_SESSION: &str = "00000000-0000-4000-8000-000000000002";
 
 /// Seed the world's graph through the front door's own backlog, one
 /// deterministic mint per card. Any refusal tears the world down, so a
@@ -551,7 +555,7 @@ fn ask_rows(long: bool) -> String {
 /// A claude-shaped transcript in the world's projects dir, so the chat
 /// view renders a conversation. The FILE is the contract: rows carry
 /// type + message.content like the real transcripts the server reads.
-fn seed_transcript(root: &Path, ask: Option<&str>) -> bool {
+fn seed_transcript(root: &Path, ask: Option<&str>, chat_harness: Option<&str>) -> bool {
     // The dir name is the project slug of the world children's cwd
     // (world_cmd pins them to code/checkout); that is the only name the
     // newest-lookup can find.
@@ -583,13 +587,75 @@ fn seed_transcript(root: &Path, ask: Option<&str>) -> bool {
         Some(kind) => format!("{rows}{}", ask_rows(kind == "overflow")),
         None => rows.to_string(),
     };
-    match std::fs::write(dir.join(format!("{session}.jsonl")), rows) {
+    if let Err(e) = std::fs::write(dir.join(format!("{session}.jsonl")), rows) {
+        eprintln!("fno mux app shot: the transcript seed failed to write: {e}");
+        return false;
+    }
+    chat_harness.is_none_or(|harness| seed_pi_family(root, harness))
+}
+
+/// A pi or omp session file in the world's own HOME, where the server's
+/// transcript scan looks. omp writes a title slot before the header.
+fn seed_pi_family(root: &Path, harness: &str) -> bool {
+    let dir = root
+        .join(format!(".{harness}/agent/sessions"))
+        .join("--shot--");
+    let lead = if harness == "omp" {
+        "{\"title\":\"shot\"}\n"
+    } else {
+        ""
+    };
+    let rows = format!(
+        "{lead}{}",
+        concat!(
+            r#"{"type":"session","version":3,"id":"00000000-0000-4000-8000-000000000002","timestamp":"2026-11-24T10:00:00.000Z","cwd":"/shot"}"#,
+            "\n",
+            r#"{"type":"message","id":"e1","parentId":null,"timestamp":"2026-11-24T10:00:01.000Z","message":{"role":"user","content":"Which files does the shot door touch?"}}"#,
+            "\n",
+            r#"{"type":"message","id":"e2","parentId":"e1","timestamp":"2026-11-24T10:00:02.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"List the two files first."},{"type":"text","text":"Two files. I will read them."},{"type":"toolCall","id":"c1","name":"bash","arguments":{"command":"ls crates/fno/src/mux"}}]}}"#,
+            "\n",
+            r#"{"type":"message","id":"e3","parentId":"e2","timestamp":"2026-11-24T10:00:03.000Z","message":{"role":"toolResult","toolCallId":"c1","toolName":"bash","content":[{"type":"text","text":"app_cli.rs\nserver.rs"}],"isError":false}}"#,
+            "\n",
+            r#"{"type":"message","id":"e4","parentId":"e3","timestamp":"2026-11-24T10:00:04.000Z","message":{"role":"assistant","content":[{"type":"text","text":"The door lives in app_cli.rs. The server it shoots lives in server.rs."}]}}"#,
+            "\n",
+        )
+    );
+    let file = dir.join(format!("2026-11-24T10-00-00-000Z_{DEMO_PI_SESSION}.jsonl"));
+    match std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(file, rows)) {
         Ok(()) => true,
         Err(e) => {
-            eprintln!("fno mux app shot: the transcript seed failed to write: {e}");
+            eprintln!("fno mux app shot: the {harness} transcript seed failed: {e}");
             false
         }
     }
+}
+
+/// The shot world's empty directory tree and config, rooted under /tmp.
+/// The root comes back canonical: macOS hands getcwd the physical path
+/// (/private/tmp), and the chat pin slugs that cwd to find the seed, so
+/// every pin uses the canonical root or the lookup lands one symlink off.
+fn shot_world_dirs() -> Option<ShotWorld> {
+    let root = std::path::Path::new("/tmp").join(format!("fno-shot-world-{}", std::process::id()));
+    std::fs::remove_dir_all(&root).ok();
+    let mut world = ShotWorld { root, server: None };
+    for dir in [
+        "mux",
+        ".fno/agents",
+        "code/checkout",
+        "claimroot/.fno/claims",
+        "transcripts",
+    ] {
+        if let Err(e) = std::fs::create_dir_all(world.root.join(dir)) {
+            eprintln!("fno mux app shot: the world dir failed: {e}");
+            return None;
+        }
+    }
+    world.root = std::fs::canonicalize(&world.root).unwrap_or_else(|_| world.root.clone());
+    if let Err(e) = std::fs::write(world.root.join(".fno/config.toml"), "") {
+        eprintln!("fno mux app shot: the world config failed: {e}");
+        return None;
+    }
+    Some(world)
 }
 
 /// `mux app shot`: one offscreen demo frame as a png, from a world this
@@ -618,29 +684,9 @@ fn shot(args: &crate::cli_args::AppShotArgs) -> i32 {
     // Absolutize the out path before the app chdirs into its theme pin:
     // a relative --out would resolve inside the pin dir and die with it.
     let out_abs = std::path::absolute(out).unwrap_or_else(|_| PathBuf::from(out));
-    let root = std::path::Path::new("/tmp").join(format!("fno-shot-world-{}", std::process::id()));
-    std::fs::remove_dir_all(&root).ok();
-    let mut world = ShotWorld { root, server: None };
-    for dir in [
-        "mux",
-        ".fno/agents",
-        "code/checkout",
-        "claimroot/.fno/claims",
-        "transcripts",
-    ] {
-        if let Err(e) = std::fs::create_dir_all(world.root.join(dir)) {
-            eprintln!("fno mux app shot: the world dir failed: {e}");
-            return 1;
-        }
-    }
-    // macOS hands getcwd the physical path (/private/tmp), and the chat
-    // pin slugs that cwd to find the seed, so every pin below uses the
-    // canonical root or the lookup lands one symlink off the seed.
-    world.root = std::fs::canonicalize(&world.root).unwrap_or_else(|_| world.root.clone());
-    if let Err(e) = std::fs::write(world.root.join(".fno/config.toml"), "") {
-        eprintln!("fno mux app shot: the world config failed: {e}");
+    let Some(mut world) = shot_world_dirs() else {
         return 1;
-    }
+    };
     let mut server_cmd = world_cmd(&world.root, &front);
     server_cmd
         .args(["mux", "server", "--server", "default"])
@@ -662,7 +708,7 @@ fn shot(args: &crate::cli_args::AppShotArgs) -> i32 {
         return 1;
     };
     // The transcript lands first: the adopt seed reads it as evidence.
-    let transcript = seed_transcript(&world.root, ask);
+    let transcript = seed_transcript(&world.root, ask, args.chat_harness.as_deref());
     let fleet = seed_fleet(&world.root, &front, &first_node);
     let question = seed_question(&world.root);
     if !(transcript && fleet && question) {
@@ -688,7 +734,12 @@ fn shot(args: &crate::cli_args::AppShotArgs) -> i32 {
             // The seeded session id, not `newest`: newest resolves inside
             // the cwd's project dir, and the shot world's transcript lives
             // in its own demo-project root the pin cwd never matches.
-            cmd.arg("--chat").arg(DEMO_CHAT_SESSION);
+            match args.chat_harness.as_deref() {
+                Some(harness) => cmd
+                    .arg("--chat")
+                    .arg(format!("{harness}:{DEMO_PI_SESSION}")),
+                None => cmd.arg("--chat").arg(DEMO_CHAT_SESSION),
+            };
         }
     }
     if let Some(find) = find {

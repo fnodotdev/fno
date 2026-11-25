@@ -116,6 +116,32 @@ fn codex_sessions_dir() -> PathBuf {
         .join("sessions")
 }
 
+/// pi's sessions root: `$PI_CODING_AGENT_DIR/sessions`, else
+/// `~/.pi/agent/sessions`. Files sit at `<encoded cwd>/<ts>_<uuid>.jsonl`.
+fn pi_sessions_dir() -> PathBuf {
+    pi_family_sessions_dir(".pi")
+}
+
+/// omp's sessions root, same layout under `~/.omp/agent/sessions`. Mirrors
+/// `fno-agent`'s `spawn::omp::sessions_dir` (not importable: no crate edge).
+/// With `PI_CODING_AGENT_DIR` set both roots are one dir, and the file's
+/// name cannot say which harness wrote it.
+fn omp_sessions_dir() -> PathBuf {
+    pi_family_sessions_dir(".omp")
+}
+
+fn pi_family_sessions_dir(home_dir: &str) -> PathBuf {
+    if let Some(dir) = std::env::var_os("PI_CODING_AGENT_DIR").filter(|d| !d.is_empty()) {
+        return PathBuf::from(dir).join("sessions");
+    }
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(home_dir)
+        .join("agent")
+        .join("sessions")
+}
+
 /// The store a transcript path lives in, and its path relative to that
 /// store's root. The pair travels in a transfer bundle, so the receiving
 /// machine rebuilds the same location under its own root.
@@ -270,6 +296,11 @@ pub(crate) fn transcript_roots() -> Vec<PathBuf> {
     }
     let mut roots = claude_roots();
     roots.push(codex_sessions_dir());
+    let (pi, omp) = (pi_sessions_dir(), omp_sessions_dir());
+    roots.push(pi.clone());
+    if omp != pi {
+        roots.push(omp);
+    }
     roots
 }
 
@@ -311,8 +342,16 @@ pub fn newest_transcript(harness: &str) -> Option<String> {
             let uuid = stem.get(stem.len() - UUID_LEN..)?;
             transcript_uuid_shaped(uuid).then(|| uuid.to_string())
         }),
+        // `<ts>_<uuid>`: the trailing UUID_LEN chars carry the id.
+        "pi" => newest_in(&[pi_sessions_dir()], pi_family_id),
+        "omp" => newest_in(&[omp_sessions_dir()], pi_family_id),
         _ => None,
     }
+}
+
+fn pi_family_id(stem: &str) -> Option<String> {
+    let uuid = stem.get(stem.len().checked_sub(UUID_LEN)?..)?;
+    transcript_uuid_shaped(uuid).then(|| uuid.to_string())
 }
 
 /// The newest claude transcript in the project dir `slug` names, across
@@ -352,6 +391,14 @@ pub(crate) fn claude_project_slug(cwd: &Path) -> String {
 pub fn harness_of_session(id: &str) -> Option<&'static str> {
     let found = find_transcripts(&[id]);
     let path = found.get(id)?;
+    // pi and omp files share one name shape, so the root that holds the
+    // file names the harness.
+    if path.starts_with(omp_sessions_dir()) {
+        return Some("omp");
+    }
+    if path.starts_with(pi_sessions_dir()) {
+        return Some("pi");
+    }
     let stem = path.file_stem()?.to_str()?;
     Some(if stem.starts_with("rollout-") {
         "codex"

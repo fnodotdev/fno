@@ -47,7 +47,7 @@ The app never reads that version to judge compatibility. It reads the wire versi
 | `--font-size <pt>` | `app.font_size`, then `13` | The terminal font size; overrides the Settings row. |
 | `--mode <view>` | `mux.launch_screen`, then the saved view, then `chat` | The view the window opens on: `chat`, `terminal`, `orchestration` or `mods`. |
 | `--probe` | off | Attach with no window, print two lines, and exit. |
-| `--chat <pin>` | none | Show one session's chat instead of the focused agent's. The pin is `<harness>:<id|newest>` (`claude`, `codex` or `opencode`), a bare session id (the transcript that carries it names the harness), or `newest` (claude: the newest transcript in the current project, ranked by session start; codex: the newest in its sessions tree). With `--probe`, count its events instead of attaching. |
+| `--chat <pin>` | none | Show one session's chat instead of the focused agent's. The pin is `<harness>:<id|newest>` (`claude`, `codex`, `opencode`, `pi` or `omp`), a bare session id (the transcript that carries it names the harness), or `newest` (claude: the newest transcript in the current project, ranked by session start; codex, pi and omp: the newest in its own sessions tree). With `--probe`, count its events instead of attaching. |
 
 `--probe` attaches as an observer, so it never resizes a pane. It waits up to 5 seconds for the layout and one frame per pane. Then it prints `attached session=<s> panes=<n> frames=<m>`. Next it reads the fleet, the open questions and the backlog the way the window does, and prints `agents=<n> questions=<m> seats=<k>`. After a good attach it exits 0. With no server it prints the socket path it tried and exits 1. A failed fleet or question read prints its reason on stderr.
 
@@ -61,7 +61,7 @@ The title bar has a fixed height that no `--font-size` changes. On the left it n
 
 ## Chat mode
 
-Chat shows the conversation of the agent in the focused pane. The app reads it from the mux server's chat stream, which serves claude, codex and opencode sessions in one event shape. A header line names the agent, its node, its state and its cost. The conversation sits in a centred column. Each turn opens with its author and the time it began. Your turns sit on the right in a bubble.
+Chat shows the conversation of the agent in the focused pane. The app reads it from the mux server's chat stream, which serves claude, codex, opencode, pi and omp sessions in one event shape. A header line names the agent, its node, its state and its cost. The conversation sits in a centred column. Each turn opens with its author and the time it began. Your turns sit on the right in a bubble.
 
 The agent's text renders as markdown: headings, bold, italic, strikethrough, quotes and tables. Inline code uses the terminal font, and so do code blocks. Bullet, numbered and task lists keep their markers. A link shows in the accent colour, and a click opens it. Images in your turns, in tool output and in markdown draw inline. An image too big for the stream shows its size instead.
 
