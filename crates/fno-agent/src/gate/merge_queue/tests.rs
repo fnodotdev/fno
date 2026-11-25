@@ -206,6 +206,25 @@ fn provider_defaults_to_auto_and_reads_literals_from_config() {
     // A configured gate name replaces the default.
     std::fs::write(&cfg, "[merge_queue]\ngate_workflow = \"my-gate.yml\"\n").expect("write config");
     assert_eq!(gate_workflow(Path::new(".")), "my-gate.yml");
+    // queue_kind folds enabled + provider: the queue is opt-in, an
+    // explicit fno or github answers without touching the network, and off
+    // answers None while enabled stays true. FNO_CONFIG is process-global,
+    // so the branches ride inside this one fn under its lock.
+    std::fs::write(&cfg, "[merge_queue]\nenabled = true\nprovider = \"fno\"\n")
+        .expect("write config");
+    assert_eq!(queue_kind(Path::new(".")), Some(QueueKind::Fno));
+    std::fs::write(
+        &cfg,
+        "[merge_queue]\nenabled = true\nprovider = \"github\"\n",
+    )
+    .expect("write config");
+    assert_eq!(queue_kind(Path::new(".")), Some(QueueKind::Github));
+    std::fs::write(&cfg, "[merge_queue]\nenabled = true\nprovider = \"off\"\n")
+        .expect("write config");
+    assert_eq!(queue_kind(Path::new(".")), None);
+    std::fs::write(&cfg, "").expect("write empty config");
+    // The queue is opt-in: no enabled line, no queue at all.
+    assert_eq!(queue_kind(Path::new(".")), None);
     std::env::remove_var("FNO_CONFIG");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -257,33 +276,6 @@ fn main_moving_rebuilds_three_times_then_holds_until_main_stays_still() {
 /// queue answers None before any repo read, an explicit `fno` answers Fno,
 /// and `github` answers Github. The auto branch needs live repo reads, so
 /// this test holds to the branches the config alone decides.
-#[test]
-fn queue_kind_answers_from_config_before_any_repo_read() {
-    let _config = CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = std::env::temp_dir().join(format!("mq-kind-test-{}", std::process::id()));
-    let cfg = dir.join("config.toml");
-    std::fs::create_dir_all(&dir).expect("tempdir");
-    std::env::set_var("FNO_CONFIG", &cfg);
-    std::fs::write(&cfg, "").expect("write empty config");
-    // The queue is opt-in: no enabled line, no queue at all.
-    assert_eq!(queue_kind(Path::new(".")), None);
-    std::fs::write(&cfg, "[merge_queue]\nenabled = true\n").expect("write config");
-    // enabled + auto (default) on this checkout: the pick needs repo reads,
-    // so the test stops before them and the pure pick is measured above.
-    // enabled + explicit literals answer without touching the network.
-    std::fs::write(&cfg, "[merge_queue]\nenabled = true\nprovider = \"fno\"\n")
-        .expect("write config");
-    assert_eq!(queue_kind(Path::new(".")), Some(QueueKind::Fno));
-    std::fs::write(
-        &cfg,
-        "[merge_queue]\nenabled = true\nprovider = \"github\"\n",
-    )
-    .expect("write config");
-    assert_eq!(queue_kind(Path::new(".")), Some(QueueKind::Github));
-    std::fs::write(&cfg, "[merge_queue]\nenabled = true\nprovider = \"off\"\n")
-        .expect("write config");
-    assert_eq!(queue_kind(Path::new(".")), None);
-}
 
 /// The pure auto pick: GitHub's queue only where a repo can have one and a
 /// workflow listens on merge_group; everything else lands on fno's own

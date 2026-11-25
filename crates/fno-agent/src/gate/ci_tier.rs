@@ -840,21 +840,11 @@ mod tests {
             head_of(&runs, "merge-queue-gate.yml"),
             head(&[11], &[13], false, 1, 3)
         );
-    }
-
-    #[test]
-    fn a_custom_gate_workflow_name_is_honored_by_the_head_fold() {
-        let run = |name: &str, path: &str| {
-            json!({"id": 20, "name": name, "path": format!(".github/workflows/{}", path),
-                "status": "completed", "conclusion": "success"})
-        };
-        let runs = vec![
-            run("my-gate", "my-gate.yml"),
-            json!({"id": 21, "name": "a", "status": "completed", "conclusion": "success"}),
-        ];
-        // Under the old literal the custom-named gate run would count as
-        // tier work; the configured name keeps it out of the head fold.
-        assert_eq!(head_of(&runs, "my-gate.yml"), head(&[], &[], false, 1, 1));
+        // A custom gate name from config keeps its runs out of the fold too.
+        assert_eq!(
+            head_of(&[run(20, "my-gate", "completed", "success")], "my-gate.yml"),
+            head(&[], &[], false, 1, 1)
+        );
     }
 
     #[test]
