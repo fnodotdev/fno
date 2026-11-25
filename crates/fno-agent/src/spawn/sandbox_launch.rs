@@ -351,6 +351,9 @@ pub fn sandboxed(cmd: Command) -> Command {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
     }
+    // The spawn client exports FNO_NODE into its own env, which the lane
+    // inherits without naming it.
+    let node = node.or_else(|| std::env::var("FNO_NODE").ok().filter(|v| !v.is_empty()));
     let (argv, session) = bind_session(&harness, argv);
     let args = crate::sandbox::relay::Args {
         id: crate::sandbox::mint_id(if name.is_empty() { &harness } else { &name }),
