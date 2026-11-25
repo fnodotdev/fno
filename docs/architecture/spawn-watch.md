@@ -16,7 +16,7 @@ Each pass reads the world and names the furthest stage it can prove.
 
 - **gate**: no worker row, and the gate holds no `worker:<name>` admission. A refused or abandoned call reads the same way.
 - **launch**: the gate admitted the spawn, and no worker row exists yet.
-- **adopt**: the launch printed its `backgrounded` head line, and no SessionStart adopt and no live roster row followed. The head proves `claude --bg` started a session. It never proves the session still runs, so the stage names the missing adopt and a dead worker reads as one.
+- **adopt**: the launch printed its `backgrounded` head line, and no SessionStart adopt and no live roster row followed. The head proves `claude --bg` started a session. It does not prove the session still runs. The stage names the missing adopt, so a dead worker reads as one.
 - **harness boot**: a worker row exists, and it has no harness session id yet.
 - **first prompt**: the session started, and its transcript holds no assistant line yet.
 
