@@ -269,9 +269,35 @@ fmt_stats() { # fmt_stats "p50 p90 min max n" -> "123 / 456 (n=20)"
 # `RESULT FAIL <reason>` line; everything else is swallowed so the
 # sample stays clean.
 run_tui_expect() { # run_tui_expect <tcl-file>
-  # `|| true`: a tcl error exits expect 1, and under pipefail that would end
-  # the whole bench silently instead of recording a FAIL sample.
-  expect -f "$1" 2>&1 | sed -n 's/^RESULT //p' | tail -1 || true
+  # A tcl error exits expect 1 and a missing RESULT line is a FAIL sample.
+  # The tail of expect's own output rides in the sample, comma-free, so the
+  # cause shows in samples.csv.
+  local raw res
+  raw="$(expect -f "$1" 2>&1 || true)"
+  res="$(printf '%s\n' "$raw" | sed -n 's/^RESULT //p' | tail -1)"
+  if [ -n "$res" ]; then
+    printf '%s\n' "$res"
+  else
+    printf 'FAIL no_result: %s\n' \
+      "$(printf '%s' "$raw" | tr -c '[:alnum:] ._:/=-' ' ' | tr -s ' ' | tail -c 300)"
+  fi
+}
+
+# One metric gets STEP_CAP seconds. A hung step kills itself and records a
+# FAIL row, so the run reaches the report instead of waiting forever. Strays
+# the step left behind fall to the teardown sweep.
+STEP_CAP=600
+run_step() { # run_step <metric_fn>
+  local pid wd rc=0
+  "$1" &
+  pid=$!
+  ( sleep "$STEP_CAP"; kill "$pid" 2>/dev/null ) &
+  wd=$!
+  wait "$pid" || rc=$?
+  kill "$wd" 2>/dev/null || true
+  if [ "$rc" -ge 128 ]; then
+    record "${1#metric_}" step 0 "FAIL step_cap_${STEP_CAP}s"
+  fi
 }
 
 # ---- metrics ----
@@ -405,16 +431,24 @@ EOF
     sleep 0.2; n=$((n + 1))
   done
   if [ -z "$tui_pid" ]; then
-    mark_unmeasured "idle tui: FAIL attach never reported its pid"
+    mark_unmeasured "idle tui: FAIL attach never reported its pid: $(tr -c '[:alnum:] ._:/=-' ' ' < "$ROOT/tui_idle.log" | tr -s ' ' | tail -c 300)"
   fi
 
   local app_pid=""
   if $needs_app; then
-    app_pid="$(app_env "$FNO_BIN" mux app open --server "$SESSION" --mode terminal 2>/dev/null | sed -n 's/^[^0-9]*\([0-9][0-9]*\).*$/\1/p' | head -1)"
+    # In the background and bounded: a blocking `app open` must not hold the step.
+    app_env "$FNO_BIN" mux app open --server "$SESSION" --mode terminal > "$ROOT/app_open.log" 2>&1 &
+    PIDS+=("$!")
+    n=0
+    while [ "$n" -lt 100 ] && [ -z "$app_pid" ]; do
+      app_pid="$(sed -n 's/^[^0-9]*\([0-9][0-9]*\).*$/\1/p' "$ROOT/app_open.log" 2>/dev/null | head -1)"
+      [ -n "$app_pid" ] && break
+      sleep 0.2; n=$((n + 1))
+    done
     if [ -n "$app_pid" ]; then
       PIDS+=("$app_pid")
     else
-      mark_unmeasured "idle app: FAIL mux app open printed no pid (headless display, or the print shape changed?)"
+      mark_unmeasured "idle app: FAIL mux app open printed no pid: $(tr -c '[:alnum:] ._:/=-' ' ' < "$ROOT/app_open.log" | tr -s ' ' | tail -c 300)"
     fi
   fi
 
@@ -615,9 +649,9 @@ command -v perl >/dev/null || die "perl not found"
 
 world_up
 echo "world up: $PANE_COUNT_EXPECTED panes, server $SESSION, root $ROOT"
-case ",$METRICS," in *,launch,*) metric_launch;; esac
-case ",$METRICS," in *,scroll,*) metric_scroll;; esac
-case ",$METRICS," in *,idle,*) metric_idle;; esac
-case ",$METRICS," in *,switch,*) metric_switch;; esac
-case ",$METRICS," in *,keypaint,*) metric_keypaint;; esac
+case ",$METRICS," in *,launch,*) run_step metric_launch;; esac
+case ",$METRICS," in *,scroll,*) run_step metric_scroll;; esac
+case ",$METRICS," in *,idle,*) run_step metric_idle;; esac
+case ",$METRICS," in *,switch,*) run_step metric_switch;; esac
+case ",$METRICS," in *,keypaint,*) run_step metric_keypaint;; esac
 write_report
