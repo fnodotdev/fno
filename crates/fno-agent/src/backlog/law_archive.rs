@@ -80,7 +80,7 @@ pub fn run_archive(argv: &[String]) -> i32 {
         println!("{ARCHIVE_USAGE}");
         return 0;
     }
-    for bad in argv.iter().filter(|a| a.as_str() != "--apply") {
+    if let Some(bad) = argv.iter().find(|a| a.as_str() != "--apply") {
         eprintln!("fno inbox decisions archive: no such option: {bad}\n{ARCHIVE_USAGE}");
         return 2;
     }
