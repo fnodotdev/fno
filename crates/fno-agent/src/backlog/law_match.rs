@@ -1551,8 +1551,10 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
             }
             "--keep" => {
                 let typed = take(&mut i)?;
-                door.keep
-                    .push(crate::numbers::resolve('d', &typed).unwrap_or(typed));
+                for k in typed.split(',').map(str::trim).filter(|k| !k.is_empty()) {
+                    door.keep
+                        .push(crate::numbers::resolve('d', k).unwrap_or_else(|| k.to_string()));
+                }
             }
             "--sweep" => door.sweep.push(take(&mut i)?),
             "--graduation" => door.graduation = Some(take(&mut i)?),
