@@ -60,7 +60,7 @@ The filter flags AND together, and the values inside one flag are comma-OR. `--k
 
 A refresh never moves the reader. The row under the cursor and the top row stay where they were. Rows newer than the newest one held count while you sit away from the top, and the footer shows `↑ N new`. A click on that marker, or `g`, returns you to the top and clears it.
 
-The title row counts the rows: `activity feed · 3`, or `12 of 340` under a query or a filter. Focused, it also names the sort, the group and the filter count, so a filter on a column a narrow panel hides is still named. The bottom row carries the `↑ N new` marker, the active query, the keys, and the typed error with `r retry`.
+The title row counts the rows: `activity feed · 3`, or `12 of 340` under a query or a filter. Focused, it also names the sort, the group and the filter count. The filter count stays down to a narrow panel, so a filter on a hidden column is still named. The bottom row carries the `↑ N new` marker, the active query, the keys, and the typed error with `r retry`.
 
 ### Keys
 
@@ -99,7 +99,7 @@ The panel is a table over every row it holds. One view decides what shows: one s
 
 Sort. `o` lists all eight columns, hidden ones too. The active one wears its arrow. Picking it again flips the direction. A new column starts newest first for time and A to Z for the rest. An empty value sorts last in both directions. Ties fall to newest first. A click on a column title sorts by it the same way.
 
-Filter. `f` lists the columns, with a dot and a count on each one that filters. Enter opens that column's values with their row counts, over the rows the query and the other filters leave. Typing narrows the list, case-blind. Space ticks a value. Enter makes the ticks the column's filter. With nothing ticked, it takes the value under the cursor. An Enter with nothing ticked and nothing under the cursor clears the column. Values inside one column OR. Columns AND, and they AND with the query. A filtered column's title wears a dot and its value count, so color is never the only signal. The time column filters by local day, and the session column by the whole id.
+Filter. `f` lists the columns, with a dot and a count on each one that filters. Enter opens that column's values with their row counts, over the rows the query and the other filters leave. Typing narrows the list, case-blind. Space ticks a value. Enter makes the ticks the column's filter. With nothing ticked and no tick changed, it takes the value under the cursor. After a change, Enter applies the ticks exactly, so unticking every value clears that column. Values inside one column OR. Columns AND, and they AND with the query. A filtered column's title wears a dot and its value count, so color is never the only signal. The time column filters by local day, and the session column by the whole id.
 
 Group. `W` lists `none`, `lead or epic` (the default) and the eight columns. `lead or epic` puts the teams band first, then one group per owner by its newest row, then `other`. A column groups by its value, with `(empty)` last. Picking the active grouping again flips the group order. A header shows a caret and its row count. Enter, Space or a click folds it, and `z` folds them all.
 

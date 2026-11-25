@@ -35,6 +35,9 @@ pub(crate) struct FeedPicker {
     find: String,
     /// The ticked values; Enter makes them the column's filter.
     picked: BTreeSet<String>,
+    /// True once a tick or untick happened: Enter then applies the ticks
+    /// exactly, so unticking every value clears the column.
+    touched: bool,
 }
 
 /// What an Enter on a picker asks for next.
@@ -68,6 +71,7 @@ impl FeedPicker {
             shown: Vec::new(),
             find: String::new(),
             picked: BTreeSet::new(),
+            touched: false,
         }
     }
 
@@ -226,6 +230,7 @@ impl FeedPicker {
         if !self.picked.remove(&v) {
             self.picked.insert(v);
         }
+        self.touched = true;
         let at = self.popup.selected().map_or(0, |(row, _)| row);
         self.rebuild(at);
     }
@@ -246,8 +251,9 @@ impl FeedPicker {
     }
 
     /// Apply the selected choice to `view`. A value list's Enter makes the
-    /// ticked values the column's filter, or the value under the cursor
-    /// when nothing is ticked; an empty pick clears the column.
+    /// ticked values the column's filter. With no tick ever changed and none
+    /// held, it takes the value under the cursor; an empty pick clears the
+    /// column, so unticking every value removes that column's filter.
     pub(crate) fn pick(&self, view: &mut TableView) -> Picked {
         let row = self.popup.selected().map(|(row, _)| row);
         match self.kind {
@@ -268,7 +274,7 @@ impl FeedPicker {
             }
             PickerKind::Values(col) => {
                 let mut set = self.picked.clone();
-                if set.is_empty() {
+                if set.is_empty() && !self.touched {
                     set.extend(self.selected_value().cloned());
                 }
                 if set.is_empty() {
@@ -339,12 +345,13 @@ mod tests {
         );
 
         let mut none = FeedPicker::open_values(Col::Harness, &items, &view, |_| true, at);
-        none.picked.clear();
-        none.type_char('z');
+        none.type_char('x');
+        none.toggle_selected();
+        none.backspace();
         assert_eq!(none.pick(&mut view), Picked::Done);
         assert!(
             !view.filters.contains_key(&Col::Harness),
-            "an empty pick clears the column"
+            "unticking the only value clears the column"
         );
     }
 }

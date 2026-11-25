@@ -593,15 +593,16 @@ pub(crate) fn header_line(
         1 => " · 1 filter".to_string(),
         n => format!(" · {n} filters"),
     };
-    let candidates: [String; 4] = if focused {
-        [
+    let candidates: Vec<String> = if focused {
+        vec![
             format!(" FEED FOCUSED · {count} · sort {sort} · group {group}{filters}"),
-            format!(" FOCUSED · {count} · {sort} · {group}"),
+            format!(" FOCUSED · {count} · {sort} · {group}{filters}"),
+            format!(" FOCUSED · {count}{filters}"),
             format!(" FOCUSED · {count}"),
             " FOCUSED".to_string(),
         ]
     } else {
-        [
+        vec![
             format!(" activity feed · {count}"),
             format!(" feed · {count}"),
             " activity feed".to_string(),
