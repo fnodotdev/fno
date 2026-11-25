@@ -63,6 +63,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_AGENT_RETIRE_INTERVAL_SECS` | rs | Global test/tuning override for the retirement sweep's interval; the result clamps under grace/3 so a row never retires outside its own grace window. |
 | `FNO_AGENT_ROW_PENDING` | rs | unclear: crates/fno-agent/src/runtime/register.rs:83 |
 | `FNO_AGENT_RUNNER_BIN` | rs | Overrides the binary the detached `mail-hold --run-parked` runner execs (mail_hold.rs runner_bin); empty falls through to the process's own executable. A test suite that parks through the real gate pins a stub here so no detached runner escapes the sandbox. |
+| `FNO_AGENT_SANDBOXED` | rs | The sandbox id, set by the host relay on the harness inside a sandbox. A spawn that reads it refuses: a sandboxed worker never spawns a peer (spawn/sandbox_launch.rs `check`). |
 | `FNO_AGENT_SELF` | rs | the registry rows and the mux name the session's self handle |
 | `FNO_AGENT_SELF_SHORT_ID` | rs | The driven agent's short id, stamped by the PTY worker; the write gate matches it against open drive-authority windows so an operator drive scopes to that one session. |
 | `FNO_AGENT_SESSION` | rs | unclear: crates/fno-agent/src/runtime/registry_commands.rs:195 |
@@ -79,7 +80,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_BG` | rs | unclear: crates/fno-agent/src/gate/target_init.rs:591 |
 | `FNO_BIN` | rs | Overrides the Python fno porcelain path at the Rust/Python seam. |
 | `FNO_BOARD_SCOPE` | rs | unclear: crates/fno/src/ui/backlog_view.rs:333 |
-| `FNO_BUILD_WHY` | rs | The declared reason an agent session's cargo build, check or clippy carries (mux shots, a bug repro). The compile door reads it, admits the build, and journals one row under it. Absent or whitespace-only refuses with the compile line. |
+| `FNO_BUILD_WHY` | rs | The declared reason an agent session's cargo build carries (mux shots, an otherwise unshippable bug repro). The compile door reads it, admits only the build, and journals one row under it. check and clippy refuse with or without it; absent or whitespace-only refuses with the compile line. |
 | `FNO_BUS_DIR` | rs | The mail bus dir pin, the top rung of the one ladder: the mail readers (crates/fno-agent/src/runtime/mail_paths.rs) and the dir door (`fno-agent state path dir bus`, crates/fno-agent/src/runtime/state_path.rs) resolve it before `config.paths.bus_dir` and the layout fold. |
 | `FNO_BUS_LOCK_TIMEOUT_SECS` | rs | Overrides the bus-append door's sidecar-lock wait; test escape hatch for the contended-lock refusal. |
 | `FNO_BUS_MAX_BYTES` | rs | Size cap the bus-append door rotates the live log at; malformed degrades to 5 MB. |
@@ -256,7 +257,6 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_ROUTE_PROVIDER` | rs | set by `fno config set --provider` (its help text names the stamp). Read at `crates/fno/src/config/config_cli/leaves.rs` (route resolution) and `crates/fno-agent/src/runtime/lead_checkin.rs` (the blueprint-subagent ceiling). |
 | `FNO_ROUTE_SETTINGS_DIR` | rs | unclear: crates/fno-agent/src/runtime/claude_adopt.rs:112 |
 | `FNO_RUNTIME_STATE_PATH` | rs | Overrides the provider runtime-state file (quota locks, usage); the default is ~/.fno/runtime-state.json. |
-| `FNO_SCCACHE` | rs | Set to `1` to opt a build into sccache; the rustc wrapper compiles with bare rustc unless this or `build.sccache = true` in `.fno/config.toml` (project first, `~/.fno/config.toml` as the fallback) says so. The daemon's server keep-alive reads the same signal from the global config and this env. `SCCACHE_DISABLE=1` still wins over an opt-in. |
 | `FNO_SCCACHE_WATCH` | rs | Pins the sccache-watch state file (last server pid + restart timestamps, written per machine-watch tick); tests use it to keep off the live machine's file. |
 | `FNO_SCHEDULE_FIRE_SEAM` | rs | Test seam for the daemon's scheduled-spawn fire: set, the fire re-entry runs this program with the recorded argv instead of the fno binary, so a probe asserts the exact re-entry shape without launching a worker (crates/fno-agent/src/runtime/schedule_fire.rs `fire_argv`). |
 | `FNO_SERVER` | rs | Names the target mux server; the session-state entry also reads it as the namespace of the turn-pin file (session_state.rs). |
@@ -280,14 +280,13 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_SPAWN_TAKE_OVER` | rs | Refusal marker only: nothing sets it, so a read means a forgery or a stale leak, and the compose door refuses the spawn. The take-over reason rides the compose answer, never the environment. |
 | `FNO_SPAWN_TRIGGER` | rs | unclear: crates/fno-agent/src/spawn/pane_spawn/mod.rs:1440 |
 | `FNO_STATE_DIR` | rs | Pins fno's config state root: `state_dir` and `locks_dir` read it ahead of their config/`$HOME` defaults, and the Rust default graph path and the backlog porcelain reads serve from it ahead of config. `accounts::credentials::seal` sets it around a forwarded HOME so a spawned worker's graph, ledger, and locks stay on the parent's root. |
-| `FNO_STATE_ROOT_INVENTORY_DOC` | rs | Overrides the inventory doc the state-root drift reading parses (tests and custom installs); empty falls through to `<state-root>/install/plugin-stage/fno/docs/state-root-inventory.md`, then the legacy `<state-root>/plugin-stage` copy during migration (crates/fno-agent/src/runtime/state_root_drift.rs). |
 | `FNO_STORE_EXEC_LOG` | rs | Opt-in request log for sizing a shared store: set to a file path and each request appends one JSON line. Unset, the lane pays nothing. |
 | `FNO_STORE_KEEPER_DRIFT_CHECK_SECS` | rs | unclear: crates/fno-agent/src/backlog/graph_keeper.rs:654 |
 | `FNO_STORE_KEEPER_IDLE_SECS` | rs | unclear: crates/fno-agent/src/backlog/graph_keeper.rs:115 |
 | `FNO_STORE_KEEPER_RSS_KB` | rs | Store keeper resident-memory bound in KiB for the watchdog's over-bound reap verdict; overrides the 2 GiB default. |
 | `FNO_STYLE_ENFORCE` | rs | Zero disables the mail style gate and the encounter prose check at their readers (send vet_body, send_raw, team, pane-prepare, encounter_cli.rs:115); any other value enforces. |
 | `FNO_SUBAGENT_LIVE_SECONDS` | rs | Positive seconds a sidechain transcript counts as active on mtime (default 600); the Rust check-in held-subagents reading reads it directly (subagent_hold.rs), and the `fno agent fleet top --subagents` scan (agents_top.rs) reads it through the same `live_threshold`. |
-| `FNO_SUPERVISOR_SOCKET` | rs | Pins the daemon socket a client connects to. A devcontainer spawn sets it inside the sandbox to the mounted socket directory. Set, the client never forks a daemon of its own, and the transcript-push hook posts. Unset, the client uses the agents home socket and the hook posts nothing. |
+| `FNO_SUPERVISOR_SOCKET` | rs | Pins the daemon socket a client connects to. Inside a sandbox the relay sets it to the guest's socket (`/tmp/fno/supervisor.sock`), which forwards only status, report and session report. Set, the client never forks a daemon of its own. Unset, the client uses the agents home socket. |
 | `FNO_SYNC_EVENTS_SCHEMA` | rs | Regenerate-on-build escape for the tracked events-schema copies: unset or any value but `1` keeps the build checking them (drift fails the build); `1` restores writing so a drift can be regenerated and committed. |
 | `FNO_TASK_CONTEXT_FILE` | rs | Absolute path to the executing attempt's bound task-context binding; a declared value gates `fno do target init`, embeds into written handoff receipts, and rides spawn payloads (rendered natively). |
 | `FNO_TEST_BOOT_EPOCH_MS` | rs | Test seam: pins the host boot epoch in ms, so fixtures that fabricate pre-boot transcript history keep it quiet under the awake-idle clamp instead of reading fresh from a young boot. |
@@ -370,8 +369,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `REDUCED_MOTION` | rs | A reduced-motion request (`1`/`true`/`yes`/`on`); the mux launch splash then prints its last frame only, once, instead of animating, and a Working row's status glyph stays a still `●` instead of spinning. |
 | `RUSTC_WRAPPER` | rs | Cargo's own rustc wrapper. `fno update` sets it to the cargo admission wrapper for its compile fallback, since `cargo install` skips the checkout's `.cargo/config.toml`; a value already set is kept. |
 | `SCCACHE_DIR` | rs | Where sccache keeps its compile cache; `fill_sccache_env` pins the fleet cache to `<fno build base>/sccache` when unset and sccache is installed, beside the build-dir shards the same lane sweeps. The footnote rustc wrapper sets the same default for an opted-in build. fno never exports it to a shell rc or harness env, so other Rust projects keep their own cache. |
-| `SCCACHE_DISABLE` | rs | Set to `1` to force bare rustc everywhere; the rustc wrapper reads it ahead of every opt-in, and the daemon's sccache server keep-alive reads it the same way, so a disabled machine runs no server even with `build.sccache = true` or `FNO_SCCACHE=1` set. |
-| `SCCACHE_IDLE_TIMEOUT` | rs | `fill_sccache_env` and the rustc wrapper default this to `0` (never stop on idle): a server that exits on idle mid-build fell compiles back to local rustc under fleet load. A shorter operator-set value survives both defaults. The daemon's `ensure_sccache_server` starts a replacement with `0` when it finds no live server on an opted-in machine. |
+| `SCCACHE_IDLE_TIMEOUT` | rs | `fill_sccache_env` and the rustc wrapper default this to `0` (never stop on idle): a server that exits on idle mid-build fell compiles back to local rustc under fleet load. A shorter operator-set value survives both defaults. No daemon starts a server. The wrapper's client starts the first one, and a server keeps the idle timeout of the process that started it. |
 | `SHELL` | rs | The user's login shell. |
 | `SMOKE_CHANGED_RECEIPT` | rs | Overrides the changed-mode receipt path: crates/fno-agent/src/gate/test_changed.rs |
 | `SMOKE_FAILURE_RECORD` | rs | Overrides the failure-record path: crates/fno-agent/src/gate/test_smoke.rs |

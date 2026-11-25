@@ -64,6 +64,24 @@ fn parse_settings_malformed_fails_closed_not_zeroed() {
         "chatgpt-codex-connector",
         UNPARSEABLE_SETTINGS_SENTINEL
     ));
+    // The person-gate vocabulary rides this declaration (G3 is shrink-only):
+    // only the three words are kept; a typo stays None so the default
+    // (today's behavior) applies, matching posture's lax contract.
+    let s = parse_settings("[review]\nhuman = \"always\"\n");
+    assert_eq!(s.human, Some(ReviewHuman::Always));
+    let s = parse_settings("[review]\nhuman = \"never\"\n");
+    assert_eq!(s.human, Some(ReviewHuman::Never));
+    let s = parse_settings("[review]\nhuman = \"ui\"\n");
+    assert_eq!(s.human, Some(ReviewHuman::Ui));
+    let s = parse_settings("[review]\nhuman = \"alwayz\"\n");
+    assert_eq!(
+        s.human, None,
+        "a typo degrades to the default, never a gate"
+    );
+    let s = parse_settings("[review]\nhuman = \"always extra\"\n");
+    assert_eq!(s.human, None, "a padded word is not in the vocabulary");
+    let s = parse_settings("");
+    assert_eq!(s.human, None, "absent key reads the default");
 }
 
 #[test]

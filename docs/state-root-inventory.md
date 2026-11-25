@@ -8,9 +8,9 @@ Measured 2026-08-13 against one real install: 527 top-level entries, 395 of them
 
 ## The rule
 
-The root holds a closed set of folders, plus the rows this page already has. Nothing new lands at the top level: state goes under a folder the page already names. A new folder is not the remedy for a new root file. An existing folder is.
+The root holds a closed set of names. The `keep` rows of `docs/state-root-layout.tsv` are that set, and no other list exists. Nothing new lands at the top level: state goes under a kept folder. A new folder is not the remedy for a new root file. An existing folder is. A new top-level name needs a keep row, and that row is the review.
 
-Two gates hold that line. At runtime, the write gate (`hooks/write-gate.sh`, policy in `crates/fno-agent/src/runtime/hook/write_gate.rs`) refuses a new top-level entry, in the state root or the Claude config dir. It also refuses a write under a top-level folder that does not exist. The refusal names the session's job tmp dir. A `sqlite3` open of a missing state-root entry refuses too: the shell creates the file it opens. In CI, `scripts/ci/check-state-root-rows.sh` fails any PR that adds a root pattern to this page against the checked-in baseline. An added folder row refuses like any other. The root rows below are SHRINK-ONLY. A writer that moves into a subfolder or dies takes its row with it. A row never enters.
+Three readers hold that line, and all three read the table. The first is the write gate (`hooks/write-gate.sh`, policy in `crates/fno-agent/src/runtime/hook/write_gate.rs`). At runtime it warns on a write whose first segment has no keep row. The write still lands. A legacy name the mover still owes stays quiet while it exists. The warning names the session's job tmp dir. A `sqlite3` open of such an entry warns too: the shell creates the file it opens. In CI, `fno doctor lint state-roots` rule C reads Rust joins onto a state root. A joined name the table does not carry fails, and the message names the file and the name. Current hits sit in `scripts/ci/state-roots-baseline.txt`, which fails in both directions. The drift reading in the lead check-in and the reclaim receipt names every live top-level entry no keep row carries, the undeclared ones first.
 
 "Belongs at the root" used to mean one durable file per install, named for what it is: `graph.db`, `ledger.json`, `config.toml`. That set closed on 2026-09-27. A family of files keyed by session, band, or timestamp never belonged there, however small each one is. The cost is legibility, not bytes: all 395 context-nudge latches together were 14,625 bytes and made the directory unreadable.
 
@@ -117,7 +117,7 @@ The 2026-09-27 sweep found 71 undocumented top-level entries on one real root. T
 
 ## Named root exceptions
 
-The migration moves every movable file into a named subfolder (`docs/state-root-layout.tsv` is the table, and `fno-agent state migrate` is the mover). These stay at the top level, each because a move is blocked on a port, an operator ruling, or a platform:
+The migration moves every movable file into a named subfolder (`docs/state-root-layout.tsv` is the table, and `fno-agent state migrate` is the mover). These stay at the top level, each because a move is blocked on a port, an operator ruling, or a platform. Each carries a keep row in the table:
 
 | Entries | Why they cannot move yet |
 |---|---|
@@ -131,7 +131,7 @@ The migration moves every movable file into a named subfolder (`docs/state-root-
 
 ## Owned subfolders and remaining root state
 
-Every subfolder and file below was found in the real root unnamed at the 2026-09-08 backfill and given a writer and a lifetime. The top-level folder set is closed: the CI row gate refuses a row naming a folder the baseline does not hold. What reads the real root is the drift reading in the lead check-in and the reclaim receipt, not a test. `cli/tests/test_state_root_inventory.py` builds its root from this page and runs one Python writer. It cannot see a Rust or shell writer.
+Every subfolder and file below was found in the real root unnamed at the 2026-09-08 backfill and given a writer and a lifetime. The top-level set is closed: the keep rows of the layout table hold it. What reads the real root is the drift reading in the lead check-in and the reclaim receipt, not a test.
 
 | Entry | Writer | Lifetime |
 |---|---|---|
@@ -144,9 +144,11 @@ Every subfolder and file below was found in the real root unnamed at the 2026-09
 | `state/terminal-app` | `crates/fno-agent/src/runtime/terminal_stamp.rs` (`stamp_from_env`, written at the `fno-agent hook` door; read by `notify_dispatch` for the daemon toast) | permanent, overwritten on every hook fire from a terminal: the raw `TERM_PROGRAM` the operator last used, one line, mode 0600; deleting it costs nothing (the next hook fire rewrites it) and reads as no stamp, so the daemon toast falls back to the dictionary-capable terminals and the plain toast |
 | `state/attest/` | `hooks/attest-model.sh`, `hooks/review-hold.sh` | one attestation sidecar per reviewed session |
 | `<space>/state/merge-architect/*.json` | `crates/fno-agent/src/gate/merge_architect.rs` | permanent immutable judgment or unavailable-attempt evidence per repository, PR and head; shared by worktrees, published once under a bounded native claim |
+| `agents/sandbox-transcripts/` | `crates/fno-agent/src/sandbox/transcript.rs` (host relay `fno-agent hook sandbox-run`) | one 0600 file per sandbox, capped at 64 MiB; kept with the registry row, removed by hand |
+| `agents/sandbox-exports/<id>/` | `crates/fno-agent/src/sandbox/repo.rs` | one stored dirty patch and untracked archive per sandbox; never applied; removed by hand |
 | `agents/quiet-recovery/` | `crates/fno-agent/src/runtime/codex_watch/quiet.rs` | one episode per native session; resets on new transcript activity; retained as recovery evidence after retirement; deleting a file can repeat its nudge |
 
-One real-root folder predates this page's closed set and carries no row. `profile/` holds user-owned data fno seeds but never deletes. The agent souls live at `profile/agents/<role>/<style>/SOUL.md`, written by `crates/fno-agent/src/runtime/lead_soul.rs` (`ensure_seeded`, fired by the `lead-state --style` ops). The seed copies once on first read and never overwrites. An edited soul is the user's. fno never deletes one. User-added style dirs list beside the seeds. The customer persona records beside it (`profile/customers/`) are the persona reviewer's data, owned by the `audience.rs` reader. This paragraph is the owner-and-lifetime record for both, because the row gate refuses an added folder row.
+One real-root folder predates this page's closed set. It carries a keep row while its home waits on the folder-set answer. `profile/` holds user-owned data fno seeds but never deletes. The agent souls live at `profile/agents/<role>/<style>/SOUL.md`, written by `crates/fno-agent/src/runtime/lead_soul.rs` (`ensure_seeded`, fired by the `lead-state --style` ops). The seed copies once on first read and never overwrites. An edited soul is the user's. fno never deletes one. User-added style dirs list beside the seeds. The customer persona records beside it (`profile/customers/`) are the persona reviewer's data, owned by the `audience.rs` reader. This paragraph is the owner-and-lifetime record for both.
 | `backups/` | the legacy-layout rotation home; on the default layout the graph rotation writes beside the store at `db/backups` (`crates/fno-agent/src/backlog/graph_store.rs`, pruned to `GRAPH_BACKUP_KEEP` and held under `GRAPH_BACKUP_MAX_BYTES` with the newest copy always kept), and `crates/fno/src/setup/path_migration.rs` (`settings.yaml.bak.<ts>`) | graph rotation prunes itself; migration backups are one-shot per install. A backup at most a tenth the size of its predecessor moves that predecessor to `backups/pre-shrink.<name>`, and pins are never pruned. |
 | `briefs/` | `paths.briefs_dir()` | permanent sidecar discovery briefs |
 | `state/sandboxes/` | `crates/fno-agent/src/spawn/project_sandbox.rs` | one named sandbox root per `fno config project sandbox create`: `sandbox.toml`, `fno/` (state root), `agents/`, `claims/`, `home/` (claude and codex homes, keychain and ssh links); lifetime until `rm`, `reset` wipes everything but `home/` and keeps both logins |
@@ -173,7 +175,7 @@ One real-root folder predates this page's closed set and carries no row. `profil
 | `evals/` | the evals fold off the store: `evals_drafts.rs` (`evals/golden-drafts/`), `evals_candidates.rs` (`evals/decision/`, `evals/plan-labels/rows.jsonl`) | permanent eval banks; a deleted draft or label row only re-derives from the decisions it named, so treat as data |
 | `evals/traces/` | `crates/fno-agent/src/eval/evals_traces.rs` | permanent local failure evidence and frozen `seed-s2.log`; `.watermark` and `.pass.lock` are runtime coordination; existing trace files retain human labels |
 | `evals/profiles/` | `crates/fno-agent/src/eval/evals_profile.rs` | permanent local profiles, user overrides and identity seed; retain the seed to keep anonymous ids and train or held-out assignments stable |
-| `event-rules/` | `crates/fno-agent/src/runtime/event_rules.rs::cursor_path`: one `<key>.cursor` per session at the Stop boundary | one seen-cursor per session; tiny, never cleaned - a deleted cursor re-fires the rule's effect once |
+| `event-rules/` | `crates/fno-agent/src/runtime/event_rules.rs::cursor_path`: one `<key>.cursor` per session at the Stop boundary. `append_judge_rows` in the same file: `judge.jsonl`, and `judge.jsonl.1` after a rotation | one seen-cursor per session; tiny, never cleaned - a deleted cursor re-fires the rule's effect once. The judge file holds reply tails for the shadow judge, beside the project journal. It rotates past 64 MB and keeps one older copy. Delete both files to drop the pilot's rows |
 | `observer-reports/` | the observer fold, via the `paths` accessor | one report per observation run |
 | `db/operator-capture/` | `fno-agent compaction ack` writes `<session-id>.jsonl`, the ack ledger and receipt; `fno-agent compaction operator-turns` (`crates/fno-agent/src/runtime/operator_turns.rs`) writes `<session-id>.scan.json` | per session, the ack ledger is permanent. The scan cursor cache is safe to delete, the next read rescans from byte 0 |
 | `db/postmortems/` | the retro routine and stuck-terminal postmortem writer, via the `paths` accessor | permanent |
@@ -322,7 +324,7 @@ The hot-path budgets these stores serve live in `crates/fno-agent/tests/hook_lat
 
 ## Adding a new root writer
 
-You do not. The root rows are shrink-only (see The rule). The runtime guard refuses a new top-level write, and the CI gate fails a PR that adds a row. The remedy for a new surface is a subfolder:
+You do not. The keep rows close the set (see The rule). The runtime guard warns on a new top-level write, and `fno doctor lint state-roots` fails a PR whose code joins a name the table does not carry. The remedy for a new surface is a subfolder:
 
 1. Put the state under a folder this page already names. Reach for the root only through a row that already exists.
 2. Add the accessor to `cli/src/fno/paths.py` so the location follows `config.state_dir`. When a bash caller needs it, export it from `crates/fno-agent/src/paths_cli.rs` `emit_paths_sh_defaults`, then run `fno config paths emit-shell` to regenerate `scripts/lib/paths.sh`.

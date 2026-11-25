@@ -185,3 +185,59 @@ fn the_stop_gate_block_report_sends_working_and_marks_the_record() {
     std::env::remove_var("XDG_RUNTIME_DIR");
     let _ = std::fs::remove_dir_all(&rt);
 }
+
+/// The turn end on a harness with no `hook stop` (pi here; agy, opencode and
+/// omp share the door) shortens a live conversation hold to the grace, the
+/// same point a claude Stop does. A working fire leaves it alone.
+#[test]
+fn a_done_fire_shortens_the_conversation_hold_to_the_grace() {
+    const SID: &str = "dddddddd-1111-2222-3333-444455556666";
+    crate::mail_hold::tests::with_hold_env(|dir| {
+        let saved: Vec<_> = ["XDG_RUNTIME_DIR", "FNO_PANE"]
+            .iter()
+            .map(|k| (*k, std::env::var_os(k)))
+            .collect();
+        std::env::set_var("XDG_RUNTIME_DIR", dir);
+        std::env::remove_var("FNO_PANE");
+        crate::mail_hold::tests::write_registry(
+            dir,
+            json!([crate::mail_hold::tests::registry_row("worker", SID)]),
+        );
+        crate::mail_hold::arm_conversation(SID);
+        // The conversation hold's end, or None when no conversation hold is live.
+        #[derive(serde::Deserialize)]
+        struct Status {
+            conversation: bool,
+            clock_until: Option<String>,
+        }
+        let until = || {
+            let status: Status =
+                serde_json::from_value(crate::mail_hold::self_status(SID).ok()?).ok()?;
+            status.conversation.then_some(())?;
+            chrono::DateTime::parse_from_rfc3339(&status.clock_until?).ok()
+        };
+        let armed = until();
+        let payload = json!({"session_id": SID});
+        process("pi", "PreToolUse", &payload);
+        let after_working = until();
+        process("pi", "Stop", &payload);
+        let after_done = until();
+        let grace = chrono::Utc::now() + chrono::Duration::seconds(crate::mail_hold::GRACE_S + 1);
+        // Restore before asserting, so a failed assert cannot leak the env.
+        for (k, v) in saved {
+            match v {
+                Some(v) => std::env::set_var(k, v),
+                None => std::env::remove_var(k),
+            }
+        }
+        assert!(armed.is_some(), "the arm writes a conversation hold");
+        assert_eq!(
+            after_working, armed,
+            "a working fire never shortens the hold"
+        );
+        assert!(
+            after_done.is_some_and(|t| t <= grace),
+            "the turn end shortens the hold to the grace: {after_done:?}"
+        );
+    });
+}

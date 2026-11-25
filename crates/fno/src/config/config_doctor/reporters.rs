@@ -824,6 +824,29 @@ fn def_named<'a>(schema: &'a Value, name: &str) -> &'a Value {
     &schema["$defs"][name]
 }
 
+/// Name a refused `[user]` timezone or `[user.working_hours]` value, with its
+/// file and line. Silent when the hours read clean or the binary is absent.
+pub fn user_hours(out: &mut String) {
+    #[derive(serde::Deserialize)]
+    struct Answer {
+        ok: bool,
+        #[serde(default)]
+        refusal: String,
+    }
+    let Ok(answer) = agents_call(&["user-hours"], None) else {
+        return;
+    };
+    let Ok(Answer { ok: false, refusal }) = serde_json::from_value(answer) else {
+        return;
+    };
+    let refusal = if refusal.is_empty() {
+        "unreadable"
+    } else {
+        &refusal
+    };
+    out.push_str(&format!("user hours refused: {refusal}\n"));
+}
+
 /// Name the (config rung, field) pairs that are inert on spawn. Silent when
 /// every pair maps, or when the roster or the config cannot be read.
 pub fn harness_overlays(out: &mut String) {

@@ -23,6 +23,7 @@ pub(crate) use placement::Placement;
 pub(crate) mod card;
 pub(crate) mod grammar;
 pub(crate) mod placement;
+pub(crate) mod projects;
 mod refusal;
 pub(crate) mod sets;
 pub(crate) mod shell_box;

@@ -142,7 +142,7 @@ pub fn command_help(command: &str) -> Option<&'static str> {
         "spawn-gate" => Some("fno agent gate - The one spawn gate: stdin JSON payload in, admitted or refused out."),
         "spawn-overlay" => Some("fno agent overlay - Harness-keyed spawn-defaults resolver over a stdin payload."),
         "test-run" => Some("fno agent test-run - The native test-suite process-group owner."),
-        "transcript" => Some("fno agent transcript - Move a session bundle to another computer."),
+        "transcript" => Some("fno agent registry transcript - Send or receive a session-transcript bundle between machines."),
         "verify-evidence" => Some("fno agent verify-evidence - Verify child-promise event evidence."),
         "worked-nodes" => Some("fno agent worked-nodes - The worked-overlay join over a stdin rows payload."),
         _ => None,

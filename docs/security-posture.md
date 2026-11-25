@@ -17,7 +17,23 @@ You must run the loop only against plans you have read or trust the author of. S
 - **Plans from the footnote repository's `examples/` folder:** reviewed and safe.
 - **Plans from random contributors, bug reports, gists, or untrusted sources:** read them carefully before running. The loop will execute them with your credentials.
 
-The devcontainer sandbox is shared-state protection, not a security boundary. It keeps a headless worker from writing shared state, and it does not contain a malicious plan. Multi-tenant isolation remains out of scope.
+## What a sandboxed worker cannot do
+
+`[sandbox] provider` runs each headless worker in a container with no mount and no network ([sandbox host](architecture/sandbox-host.md)). The attacker in that model is the sandboxed process: it controls its container and forges every byte it sends. The host user, the daemon, the fno binary and the engine are trusted.
+
+- It cannot see the host login, keychain, home, engine socket or another spawn's route key. Nothing is mounted, and keys cross exec stdin to this sandbox only.
+- It cannot spawn, ask, stop, remove, rename, mail or list other workers. The guest refuses every op but status, report and session report, and the host stamps who sent them.
+- It cannot write the host worktree or `.git`. Its commits land under `refs/sandbox/<id>/head`, fetched with hooks off. No host branch moves, and the host never applies its dirty work.
+- It cannot reach host loopback, the LAN, a tailnet, cloud metadata or a host-owned address. The proxy refuses every private range and every port but 80 and 443.
+- It cannot turn the sandbox off from a project file. A project layer can only raise the sandbox.
+- Its transcript cannot become a user turn, a law witness, operator capture or an account cap. Only display readers read it, labelled as sandbox origin.
+
+What remains:
+
+- A person who checks out a sandbox ref runs untrusted code. Read it first.
+- The sandbox can send its own key and the source out through a public host.
+- Transcript prose can still mislead a person who reads it.
+- Engine and kernel escapes, multi-tenant isolation and resource quotas are out of scope.
 
 ## What the loop WILL do, given a plan
 
@@ -53,6 +69,26 @@ What the guard does not cover: an effect hidden inside a script or a raw `curl` 
 ## Installing a pack from a URL
 
 `fno config plugins install <git-url>` runs third-party content, so it stages before anything runs. The clone points hooks at `/dev/null` and fetches no submodules. The pack must verify on the staged tree, and it can carry only mods and layouts. Roles, skills, agents, adapters, workflows and evaluators install from a local path only. A sha256 over every file binds the consent. An attended terminal says yes, or a principal approves the `local.plugin-install` request for that digest with `fno inbox approvals decide`. A mod that runs its own program starts off, and every launch hashes the pack again and refuses on a change. The gallery lists repos and never installs one. Every row reads "not reviewed by fno". Full contract: [mods-and-layouts](architecture/mods-and-layouts.md).
+
+## The web bridge and the attention door
+
+The assets here are node data, pane frames, transcripts, answer authority, board acts, the secrets that sink rows name, and click activity. fno trusts three things: your OS user, your global config, and an absolute `.toml` pin in the process environment. It does not trust the folder it serves, a tailnet login, a revoked invitee who kept the URL, or a page on another site.
+
+- **A folder grants nothing.** `web.invites` and `attention.sinks` come from [the trusted file](architecture/attention-items.md#the-trusted-file) only.
+- **A fault grants nothing.** An unreadable file, bad TOML or a wrong type admits no invitee and no sink.
+- **A revoke is live.** The next request refuses. An answer or a look reads again before it writes.
+- **An open feed follows a revoke.** It closes in about a second.
+- **A click needs your consent.** Only your own direct local request writes a row.
+
+These limits remain:
+
+- A tool such as direnv can set `FNO_CONFIG` for a folder. Read an `.envrc` before you allow it.
+- A raw TCP or SSH forward looks like this machine. Whoever holds it and the token counts as you.
+- A read that is already in flight can finish after a revoke.
+- An open chat socket outlives the removal of its sink.
+- A cloned folder can hold invite rows that force the bridge closed at start. It cannot open it.
+- `fno config get` and the settings page show merged values, so they can show rows that grant nothing.
+- An invitee's request can start an `fno` subcommand. Its usage row names the command, never the caller.
 
 ## Code scanning dispositions
 

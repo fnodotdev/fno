@@ -82,6 +82,7 @@ pub(crate) fn route_terminal(f: &TerminalRouteFacts<'_>) -> Option<HelpClass> {
     crate::help_router::route_emitted_distress(
         f.cwd,
         f.session_id,
+        f.harness_session_id,
         f.node,
         class,
         &format!("terminal {}", f.reason),
@@ -386,6 +387,7 @@ fn pair_question(
     crate::help_router::route_emitted_distress(
         f.cwd,
         f.session_id,
+        f.harness_session_id,
         f.node,
         HelpClass::Question,
         &format!("terminal pair on node {node}"),

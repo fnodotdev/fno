@@ -215,6 +215,47 @@ pub(crate) fn run_with_timeout_accepting(
     }
 }
 
+/// Run one in-process read and await it until `deadline`. In-process work
+/// cannot be killed, so the deadline bounds the WAIT: a read still running
+/// then is abandoned on its thread, its answer drops, and the source reads
+/// as the budget kill it is. A read that panics hands its panic back to the
+/// caller, so the join keeps reading it as a failure. A joined read let one
+/// slow source hold the whole board past its budget.
+pub(crate) fn run_in_process_until(
+    deadline: Instant,
+    spent_err: &str,
+    read: impl FnOnce() -> SourceRead + Send + 'static,
+) -> SourceRead {
+    let bound = Budget::spawn_bound(deadline);
+    if bound.is_zero() {
+        return SourceRead::over_budget(spent_err.to_string());
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new()
+        .name("board-source".to_string())
+        .spawn(move || {
+            let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(read));
+            // No receiver means the wait gave up at the deadline: the
+            // answer, or the panic, has no reader.
+            drop(tx.send(answer));
+        })
+        .is_ok();
+    if !spawned {
+        return SourceRead::err("reader thread failed to spawn");
+    }
+    match rx.recv_timeout(bound) {
+        Ok(Ok(answer)) => answer,
+        Ok(Err(panic)) => std::panic::resume_unwind(panic),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            SourceRead::over_budget(spent_err.to_string())
+        }
+        // Only a reader that ended without an answer gets here.
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            SourceRead::err("reader ended without an answer")
+        }
+    }
+}
+
 pub(crate) fn run_json(cmd: Vec<String>, cwd: &Path, timeout: Duration) -> SourceRead {
     match run_with_timeout(&cmd, cwd, timeout) {
         Err(e) if e.over_budget() => SourceRead::over_budget(e.message().to_string()),
@@ -283,5 +324,35 @@ mod tests {
         let err = run_with_timeout(&cmd, dir.path(), Duration::from_secs(10)).unwrap_err();
         assert!(!err.over_budget());
         assert!(err.message().contains("exit 3"), "{}", err.message());
+    }
+
+    /// A read still running at its deadline is abandoned, not joined: the
+    /// caller holds a budget kill by the deadline, however long the read
+    /// runs. A read that answers inside the deadline lands unchanged.
+    #[test]
+    fn a_slow_in_process_read_is_abandoned_at_its_deadline() {
+        let spent = "not-read: board budget exhausted after needs";
+        let deadline = Instant::now() + Duration::from_millis(300);
+        let started = Instant::now();
+        let abandoned = run_in_process_until(deadline, spent, || {
+            std::thread::sleep(Duration::from_secs(30));
+            SourceRead::ok(Value::Null)
+        });
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(abandoned.over_budget, "{abandoned:?}");
+        assert_eq!(abandoned.error.as_deref(), Some(spent));
+        let answered = run_in_process_until(Instant::now() + Duration::from_secs(5), spent, || {
+            SourceRead::ok(serde_json::json!({"rows": [1]}))
+        });
+        assert!(answered.is_ok(), "{answered:?}");
+        assert_eq!(answered.payload, Some(serde_json::json!({"rows": [1]})));
+        let spent_read =
+            run_in_process_until(Instant::now(), spent, || SourceRead::ok(Value::Null));
+        assert!(spent_read.over_budget, "{spent_read:?}");
+        assert_eq!(spent_read.error.as_deref(), Some(spent));
     }
 }

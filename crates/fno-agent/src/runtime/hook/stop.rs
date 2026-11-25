@@ -413,7 +413,11 @@ fn run_owned(
     } else {
         arbitrate_continuation(driver, fire, &manifest)
     };
+    // A goal owns plain continuation, never the done read: a goal-owned
+    // target stop still runs loop-check and finalize. A lead has no finalize.
+    let mut continuation_owner = "loop_check";
     match arbitration {
+        GoalArbitration::Delegated if driver == "target" => continuation_owner = "goal",
         GoalArbitration::Delegated => {
             emit_stop_decision(
                 hook_cwd,
@@ -454,7 +458,16 @@ fn run_owned(
             "message": "retrying generic delivery finalization"
         })
         .to_string();
-        return translate(hook_cwd, &out, driver, &state, &owner_cwd, fire, "");
+        return translate(
+            hook_cwd,
+            &out,
+            driver,
+            &state,
+            &owner_cwd,
+            fire,
+            "",
+            continuation_owner,
+        );
     }
 
     // ── Post-terminal: a finished run's later stops are plain conversation ────
@@ -503,6 +516,8 @@ fn run_owned(
         "--cwd".to_string(),
         owner_cwd.display().to_string(),
         "--hook-input-stdin".to_string(),
+        "--continuation-owner".to_string(),
+        continuation_owner.to_string(),
     ];
     let parsed = match crate::loopcheck::parse_args(&args) {
         Ok(p) => p,
@@ -543,12 +558,15 @@ fn run_owned(
         &owner_cwd,
         fire,
         &manifest,
+        continuation_owner,
     )
 }
 
 /// The decision translation: counters, tick row, harness-shaped block, and
 /// terminal cleanup. `manifest` is the state file's content when an upstream
 /// step already read it (empty on the pending-retry entry, which re-reads).
+/// `continuation_owner` is `goal` when a provider goal owns continuation.
+#[allow(clippy::too_many_arguments)]
 fn translate(
     hook_cwd: &Path,
     decision_json: &str,
@@ -557,6 +575,7 @@ fn translate(
     owner_cwd: &Path,
     fire: &Fire,
     manifest: &str,
+    continuation_owner: &str,
 ) -> i32 {
     let v: Value = serde_json::from_str(decision_json.trim()).unwrap_or(Value::Null);
     let decision = v.get("decision").and_then(Value::as_str).unwrap_or("allow");
@@ -601,7 +620,7 @@ fn translate(
         fire,
         Some(state),
         driver,
-        "loop_check",
+        continuation_owner,
         event_decision,
         event_class,
         manifest,
@@ -1992,6 +2011,34 @@ mod tests {
             arbitrate_continuation("target", &bare, "fno_id: node-42\n"),
             GoalArbitration::None
         );
+        // A Claude `/goal` lives in the transcript: an unmet latest row owns
+        // continuation, a met one (achieved or manually cleared) does not.
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("t.jsonl");
+        let row = |met: bool| {
+            format!(
+                "{{\"type\":\"attachment\",\"attachment\":{{\"type\":\"goal_status\",\"met\":{met},\"condition\":\"ship x\"}}}}\n"
+            )
+        };
+        let claude = || {
+            collect_fire(
+                "s",
+                &transcript.display().to_string(),
+                None,
+                String::new(),
+                None,
+            )
+        };
+        std::fs::write(&transcript, row(false)).unwrap();
+        assert_eq!(
+            arbitrate_continuation("target", &claude(), "fno_id: node-42\n"),
+            GoalArbitration::Delegated
+        );
+        std::fs::write(&transcript, row(false) + &row(true)).unwrap();
+        assert_eq!(
+            arbitrate_continuation("target", &claude(), "fno_id: node-42\n"),
+            GoalArbitration::None
+        );
     }
 
     #[test]
@@ -2138,6 +2185,7 @@ mod tests {
             &repo,
             &fire,
             &manifest_body,
+            "goal",
         );
         assert_eq!(
             rc, 0,
@@ -2153,6 +2201,14 @@ mod tests {
                 .is_some_and(|t| t == "session_finalized" || t == "session_finalize_failed")
         });
         assert!(saw, "journal must hold a finalize event; journal: {text}");
+        // A goal-owned terminal finalizes too, and its row names the goal.
+        let owners: Vec<Value> = text
+            .lines()
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+            .filter(|v| v.pointer("/type").and_then(Value::as_str) == Some("stop_decision"))
+            .filter_map(|v| v.pointer("/data/continuation_owner").cloned())
+            .collect();
+        assert_eq!(owners, vec![Value::from("goal")], "journal: {text}");
         match saved_home {
             Some(h) => std::env::set_var("HOME", h),
             None => std::env::remove_var("HOME"),

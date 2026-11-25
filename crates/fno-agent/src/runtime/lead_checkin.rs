@@ -1115,9 +1115,9 @@ fn r_territory(cwd: &Path) -> Result<Value, String> {
     Ok(Value::Array(rows))
 }
 
-/// The state-root drift reading: undocumented top-level entries in the fno
-/// state root. A failed doc or root read is a READER FAILED line, never a
-/// silent zero (the unmeasured-state rule).
+/// The state-root drift reading: top-level entries of the fno state root that
+/// no keep row of the layout table carries. A failed root read is a READER
+/// FAILED line, never a silent zero (the unmeasured-state rule).
 fn r_state_root_drift() -> Result<Value, String> {
     let home = crate::paths::AgentsHome::from_env();
     let state_root = crate::reclaim::reclaim_state_root(&home);
@@ -1421,6 +1421,15 @@ fn collect_readings(
             let claims = crate::claims::list(Some("node:"), None, false)
                 .map(|rows| rows.iter().map(|r| r.holder.clone()).collect());
             let home = crate::paths::AgentsHome::from_env();
+            let spawned = match session_id.as_deref() {
+                Some(session) => {
+                    let registry = crate::state::load_registry(&home.registry_json())
+                        .map_err(|e| format!("fno registry unreadable: {e}"))?;
+                    crate::lead_checkin_blueprint::spawned_in_registry(&registry, &home, session)
+                        .len()
+                }
+                None => 0,
+            };
             let slots = crate::spawn_gate_lanes::share_reading(
                 &home.registry_json(),
                 crate::capacity::effective_for(&cwd).cap,
@@ -1445,6 +1454,7 @@ fn collect_readings(
                 &cwd,
                 session_id,
                 claims,
+                spawned,
                 slots,
                 &floor,
                 &other_owned,
@@ -2611,7 +2621,7 @@ fn render_lines_with(
                 .collect();
             let more = if count > 5 { ", ..." } else { "" };
             lines.push(format!(
-                "state_root_drift: {count} undocumented top-level entries: {}{more}",
+                "state_root_drift: {count} top-level entries the layout table does not keep: {}{more}",
                 entries.join(", ")
             ));
         }
@@ -3141,6 +3151,12 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
     // what pushed the beat past the 60s reader deadline under fleet load.
     // The fold, the scope compile and the idea-children pass all
     // reuse the graph rows this read produces.
+    // The beat takes `undriven_pr`, `unplanned`, `undispatched` and
+    // `blocked_child` from the board and nothing else, so it asks for no
+    // merge verdict, question liveness or needs fold. Under fleet load the
+    // per-PR gates alone held the fetch for the whole board budget, and a
+    // fetch past its deadline fails the board, blueprint and blocked_child
+    // readings together.
     let graph_rx = spawn_preflight("graph read", {
         let graph = ctx.graph.clone();
         move || crate::graph_store::read_rows(&graph).map_err(|e| e.to_string())
@@ -3170,6 +3186,7 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
                 cwd: Some(cwd),
                 budget_ms: BOARD_BUDGET_MS,
                 graph_rows: rows,
+                dispatch_only: true,
                 ..Default::default()
             }))
         }

@@ -964,10 +964,6 @@ pub fn resolve_attester_identity(
     (Some(session_id), witness)
 }
 
-/// The row statuses under which a session still owns its identity. Mirror of
-const OWNERSHIP_LIVE_STATUSES: [&str; 6] =
-    ["spawning", "ready", "idle", "busy", "live", "restarting"];
-
 /// The `(harness, session_id)` of the ONE live codex row holding `cwd`,
 /// read from the registry. Exactly one ownership-live `thread`/`pane` row
 /// with a non-empty harness and session id answers; zero and two-plus
@@ -980,16 +976,7 @@ pub fn live_thread_row_for_cwd(cwd: &str, home: &AgentsHome) -> Option<(String, 
     let wanted = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.into());
     let mut matches: Vec<(String, String)> = Vec::new();
     for row in &registry.entries {
-        let status_word = match row.status {
-            crate::AgentStatus::Spawning => "spawning",
-            crate::AgentStatus::Ready => "ready",
-            crate::AgentStatus::Idle => "idle",
-            crate::AgentStatus::Busy => "busy",
-            crate::AgentStatus::Live => "live",
-            crate::AgentStatus::Restarting => "restarting",
-            _ => "",
-        };
-        if !OWNERSHIP_LIVE_STATUSES.contains(&status_word) {
+        if !crate::spawn_gate::status_is_liveish(&row.status) {
             continue;
         }
         let substrate = row.substrate.as_deref().unwrap_or_default();

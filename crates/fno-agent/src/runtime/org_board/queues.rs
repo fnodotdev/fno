@@ -833,13 +833,17 @@ fn warn_unmeasured_holders(ctx: &BoardCtx<'_>, warnings: &mut Vec<String>) {
 }
 
 fn undispatched_rows(inputs: &BoardInputs, scoping: &mut BoardScope<'_>) -> Vec<Value> {
-    // Undispatched: planned work with no claim, lead priorities only.
+    // Undispatched: planned work with no claim. The unscoped board keeps lead
+    // priorities only; a scoped lead beat reads every priority in its scope.
+    let unscoped = scoping.ids.is_none();
     if inputs.undispatched.is_ok() {
         inputs
             .undispatched
             .rows()
             .into_iter()
-            .filter(|node| LEAD_PRIORITIES.contains(&s_str(node, "priority").unwrap_or("")))
+            .filter(|node| {
+                !unscoped || LEAD_PRIORITIES.contains(&s_str(node, "priority").unwrap_or(""))
+            })
             .filter(|node| {
                 // A held node has a named question, not a missing dispatch
                 //; it renders under held, never here.
@@ -871,6 +875,7 @@ fn undispatched_rows(inputs: &BoardInputs, scoping: &mut BoardScope<'_>) -> Vec<
 
 fn unplanned_rows(ctx: &BoardCtx<'_>, scoping: &mut BoardScope<'_>) -> Vec<Value> {
     let inputs = ctx.inputs;
+    let unscoped = scoping.ids.is_none();
     // Unplanned: cold-dispatchable ideas off the ready list.
     let foreign_owned: HashSet<String> = inputs
         .foreign_owned
@@ -882,7 +887,9 @@ fn unplanned_rows(ctx: &BoardCtx<'_>, scoping: &mut BoardScope<'_>) -> Vec<Value
         .ready
         .rows()
         .into_iter()
-        .filter(|node| LEAD_PRIORITIES.contains(&s_str(node, "priority").unwrap_or("")))
+        .filter(|node| {
+            !unscoped || LEAD_PRIORITIES.contains(&s_str(node, "priority").unwrap_or(""))
+        })
         .filter(|node| {
             node.get("plan_path")
                 .map(|p| p.is_null() || p.as_str().map(|s| s.is_empty()).unwrap_or(false))
@@ -1411,7 +1418,12 @@ fn question_rows(outstanding: &Map<String, Value>) -> Vec<Value> {
                             .and_then(crate::numbers::label),
                         "question": r.get("question"),
                         "ts": r.get("ts"),
-                        "session_id": r.get("session_id")
+                        "session_id": r.get("session_id"),
+                        // Absent (null here) once the question is due: the
+                        // notify_watch due lane reads exactly this stamp,
+                        // so a snoozed or pre-deadline question never
+                        // re-fires it.
+                        "quiet": s_str(r, "quiet")
                     })
                 })
                 .collect()
@@ -2091,6 +2103,53 @@ mod tests {
             .unwrap_or_default()
     }
 
+    fn queue_field(board: &Value, name: &str, field: &str) -> String {
+        board["queues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|q| q["name"] == name)
+            .and_then(|q| q[field].as_str())
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    /// The check-in reads `undriven_pr`, `unplanned`, `undispatched` and
+    /// `blocked_child` from a board that asked for no merge verdict, no
+    /// question liveness and no needs fold. Those four take none of the
+    /// three, so they stay `ok` when the three read not-read.
+    #[test]
+    fn a_dispatch_only_board_keeps_the_check_in_queues_ok() {
+        let cause = "not-read: this board asked for dispatch queues only";
+        let not_read = SourceRead::over_budget(cause.to_string());
+        let mut inputs = pr_board_inputs(json!([]), json!([]));
+        inputs.outstanding = not_read.clone();
+        inputs.needs = not_read.clone();
+        inputs.pr_gates = not_read;
+        let board = build_board(&inputs);
+        for name in ["undriven_pr", "unplanned", "undispatched", "blocked_child"] {
+            assert_eq!(
+                queue_field(&board, name, "status"),
+                "ok",
+                "queue {name}: {}",
+                queue_field(&board, name, "error")
+            );
+        }
+        // The control: each not-read source reaches its own consumer by name.
+        for name in ["operator_question", "unreachable_worker"] {
+            assert_eq!(
+                queue_field(&board, name, "status"),
+                "over_budget",
+                "queue {name}"
+            );
+            assert!(
+                queue_field(&board, name, "error").contains(cause),
+                "queue {name}: {}",
+                queue_field(&board, name, "error")
+            );
+        }
+    }
+
     #[test]
     fn a_cross_territory_mergeable_pr_stays_visible_as_out_of_scope() {
         let inputs = pr_board_inputs(
@@ -2179,6 +2238,23 @@ mod tests {
                 observed_model: Value::Null,
             },
         )
+    }
+
+    #[test]
+    fn a_scoped_board_keeps_a_p2_undispatched_row_the_unscoped_board_drops() {
+        let mut inputs = pr_board_inputs(json!([]), json!([]));
+        inputs.undispatched = SourceRead::ok(json!([
+            {"id": "x-in", "priority": "p2", "title": "a p2 plan in scope"},
+        ]));
+        let scoped = build_board(&inputs);
+        assert_eq!(queue_rows(&scoped, "undispatched").len(), 1, "{scoped}");
+        inputs.scope_ids = None;
+        inputs.role_scope = None;
+        let unscoped = build_board(&inputs);
+        assert!(
+            queue_rows(&unscoped, "undispatched").is_empty(),
+            "{unscoped}"
+        );
     }
 
     #[test]

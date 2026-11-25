@@ -91,6 +91,7 @@ pub(super) fn register(reg: &mut Registry) {
     reg.before("ThinkSpawnBlock", &["substrate"], coerce_legacy_substrate);
 
     reg.before("JoinBlock", &["sandbox"], coerce_sandbox);
+    reg.before("SandboxBlock", &["provider"], check_sandbox_provider);
 
     reg.before("AutoMergeBlock", &["enabled"], coerce_affirmative);
     reg.before("AutoMergeBlock", &["grant"], coerce_grant);
@@ -661,6 +662,22 @@ fn coerce_sandbox(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
     } else {
         Value::Bool(false)
     })
+}
+
+/// The engines a sandboxed worker runs on. An unknown value refuses and
+/// names the legal ones: a silent `none` would run workers on the host while
+/// the operator believes they are boxed.
+const SANDBOX_PROVIDERS: [&str; 5] = ["none", "docker", "podman", "apple", "devcontainer"];
+
+fn check_sandbox_provider(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
+    match &v {
+        Value::String(s) if SANDBOX_PROVIDERS.contains(&s.trim()) => Ok(Value::from(s.trim())),
+        other => Err(Fail::Value(format!(
+            "sandbox.provider must be one of {}; got {}",
+            SANDBOX_PROVIDERS.join(", "),
+            py_repr(other)
+        ))),
+    }
 }
 
 /// A trimmed str inside `allowed`, else `fallback`.

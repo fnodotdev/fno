@@ -489,7 +489,8 @@ fn resolve_print(payload: &Value) -> Result<Value, String> {
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-    if route_env.is_empty() && account_env.is_empty() {
+    let route_model = payload["model"].as_str().unwrap_or("");
+    if route_env.is_empty() && account_env.is_empty() && route_model.is_empty() {
         return Err(
             "--print needs a routed or pinned-account lane (the settings file is \
              the lane); a plain bg line is just claude --bg."
@@ -529,6 +530,7 @@ fn resolve_print(payload: &Value) -> Result<Value, String> {
         alias,
         None,
         &cwd,
+        payload.pointer("/node").and_then(Value::as_str),
     )?;
     let template = crate::spawn_compose::resolve_template(
         harness,

@@ -73,7 +73,7 @@ Drop `--print` to have spawn run the same line. If you hold the node's claim, do
 | Is it alive? | `fno agent session peek <handle>` |
 | Who is actually running | `fno agent fleet top` |
 | The loop-wedge fold | `fno-agent needs --json` (review_wedged / budget_stop; NOT pane completion) |
-| Wake a blocked/stopped teammate | `fno agent session resume <handle>` (then re-send) |
+| Wake a blocked/stopped teammate | `fno agent session resume <handle>` (wakes it; re-send only after `fno agent mail admin withdraw <id>` retracts the queued copy, and stop when withdraw says it was claimed) |
 | Close a teammate pane | `fno mux pane kill` (a mux row's short_id is empty, so `fno agent session stop` refuses it) |
 | End a thread/daemon worker | `fno agent session stop <name>` |
 | Halt the fleet, a scope, or one role | `fno agent audit incident stop --reason "<why>"` arms the fleet breaker: new spawns, dispatch ticks, and `fno doctor test` admissions refuse fleet-wide (a suite started outside that path is not gated) until `fno agent audit incident clear --reason "<why>"`; a default stop holds live loops at their next turn end, `--now` also presses Esc in every running turn (a claude background session or a pane worker) and types a resume turn into each at the clear, `--hold spawns` keeps them running, and `--session <id>` or `--territory <scope>` applies a bounded halt. Matching watchdog wakes and PR nudges refuse until clear or expiry; mail stays open, `fno agent audit incident status` reads the generation. Arming is outward and no standing decision grants an agent the authority, so escalate with evidence and arm on user order. `fno agent hq cancel --scope <scope>` cancels one scope's walk; `fno agent hq done` ends one role |

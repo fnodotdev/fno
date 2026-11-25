@@ -541,58 +541,65 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
         lanes.push("self-send".to_string());
     } else if staged && args.resolved.is_some() {
         let resolved = args.resolved.as_ref().expect("checked");
-        let lane_harness = resolved.agent.clone();
-        let keeper_recipient = crate::harness_capabilities::HarnessContract::packaged()
-            .ok()
-            .and_then(|c| c.thread_lane(&lane_harness).ok())
-            .map(|lane| lane == "keeper")
-            .unwrap_or(false);
-        let keeper_thread_row = keeper_recipient && row_hosts_keeper_thread(&resolved.session_id);
-        if provider.as_deref().map(Harness::parse) == Some(Harness::Claude) {
-            let mut reasons = Vec::new();
-            lane_state = mail_inject_claude(
-                &resolved.session_id,
-                &wrapped,
-                Some(&mut reasons),
-                None,
-                args.steer,
-            );
-            injected = lane_state.reached();
-            if !injected && !reasons.is_empty() {
-                live_reason = Some(reasons.join(";"));
+        match resolve_pane_entry(Some(resolved), Some(&recipient), args.token) {
+            Some(entry) if str_field(&entry, "status") == "live" => {
+                // The send engine's target-shaped ladder: the registry row
+                // picks the lane, so a reply reaches a live session by the
+                // same rungs a send does. The row decides; the sender's
+                // provider names nothing here. A stale pane ref can no
+                // longer type into an unrelated pane: the ladder gates the
+                // pane lane on the row's live mux object itself.
+                match fno_mail::turn::TurnText::parse(&wrapped) {
+                    Ok(turn) => {
+                        let mut reasons: Vec<String> = Vec::new();
+                        let (state, _fallback) = deliver_live_lane(
+                            &entry,
+                            &turn,
+                            &sender,
+                            None,
+                            &mut reasons,
+                            "unknown",
+                            args.steer,
+                        );
+                        lane_state = state;
+                        injected = lane_state.reached();
+                        if !injected && !reasons.is_empty() {
+                            live_reason = Some(reasons.join(";"));
+                        }
+                    }
+                    // A refused parse skips live; the demotion below runs.
+                    Err(_) => live_reason = Some("turn-parse-failed".to_string()),
+                }
             }
-        } else if provider.as_deref().map(Harness::parse) == Some(Harness::Codex) {
-            let mut reasons = Vec::new();
-            lane_state =
-                mail_inject_codex(&resolved.session_id, &wrapped, Some(&mut reasons), None);
-            injected = lane_state.reached();
-            if !injected && !reasons.is_empty() {
-                live_reason = Some(reasons.join(";"));
-            }
-        } else if keeper_thread_row {
-            let mut reasons = Vec::new();
-            lane_state = mail_inject_keeper(
-                &resolved.session_id,
-                &wrapped,
-                &lane_harness,
-                Some(&mut reasons),
-            );
-            injected = lane_state.reached();
-            if !injected && !reasons.is_empty() {
-                live_reason = Some(reasons.join(";"));
-            }
-        }
-        if !injected && !keeper_thread_row {
-            // A send addressed by session id never consults the roster... but a
-            // MUX-hosted session of any provider would demote to durable with a
-            // live pane right there. Gate on live status like the registered
-            // path does: an exited row keeps its mux ref, and pane ids are
-            // reused across a mux restart, so sending on a stale ref types
-            // into an unrelated pane.
-            if let Some(entry) = resolve_pane_entry(Some(resolved), Some(&recipient), args.token) {
-                if str_field(&entry, "status") == "live" {
-                    lane_state = mail_inject_pane(&entry, &wrapped, None);
+            _ => {
+                // No live registry row (the hit resolved off transcripts,
+                // roster, daemon or graph alone): keep the direct session-id
+                // inject for claude and codex only. The keeper lane needs a
+                // row's keeper socket, which a rowless hit by definition
+                // lacks, and a paneless keeper attempt refuses - so any
+                // other harness here has no live rung and demotes, exactly
+                // as this arm did before the shared ladder landed.
+                if provider.as_deref().map(Harness::parse) == Some(Harness::Claude) {
+                    let mut reasons = Vec::new();
+                    lane_state = mail_inject_claude(
+                        &resolved.session_id,
+                        &wrapped,
+                        Some(&mut reasons),
+                        None,
+                        args.steer,
+                    );
                     injected = lane_state.reached();
+                    if !injected && !reasons.is_empty() {
+                        live_reason = Some(reasons.join(";"));
+                    }
+                } else if provider.as_deref().map(Harness::parse) == Some(Harness::Codex) {
+                    let mut reasons = Vec::new();
+                    lane_state =
+                        mail_inject_codex(&resolved.session_id, &wrapped, Some(&mut reasons), None);
+                    injected = lane_state.reached();
+                    if !injected && !reasons.is_empty() {
+                        live_reason = Some(reasons.join(";"));
+                    }
                 }
             }
         }
@@ -781,6 +788,13 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
         }
     }
     if !bus_only && !self_send {
+        // The terminal live-leg reason decides the live-drain receipt: an
+        // unconfirmed inject holds, a refusal fails the send honestly.
+        let failed_reason = if lane_state.reached() {
+            None
+        } else {
+            lane_state.reason().or(live_reason.as_deref())
+        };
         if !report_landing(
             &msg_id,
             &recipient,
@@ -788,6 +802,7 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
             to_harness.as_deref().or(provider.as_deref()),
             to_session.as_deref(),
             Some(owner),
+            failed_reason,
         ) {
             return Err(NOT_LANDED_EXIT);
         }
@@ -1598,6 +1613,7 @@ pub(super) fn run_dispatch_then_name_lane(
                     result.to_harness.as_deref(),
                     result.to_session.as_deref(),
                     result.durable_owner.as_deref(),
+                    result.reason.as_deref(),
                 )
             {
                 return NOT_LANDED_EXIT;

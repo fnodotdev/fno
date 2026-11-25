@@ -16,6 +16,7 @@ use crate::session_truth::{
 };
 use crate::state::{MuxRef, RegistryEntry};
 use crate::wake_read::python_json_default;
+use crate::AgentStatus;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -29,9 +30,6 @@ const EXIT_UNSUPPORTED: i32 = 1;
 const EXIT_NOT_FOUND: i32 = 13;
 
 const STATUS_KINDS: [&str; 4] = ["task_started", "task_done", "blocked", "run_summary"];
-
-/// Registry statuses that claim a running worker.
-const LIVE_STATUSES: [&str; 6] = ["spawning", "ready", "idle", "busy", "live", "restarting"];
 
 const HELP: &str = "\
 Usage: fno agent session peek [OPTIONS] [HANDLE]
@@ -466,12 +464,9 @@ fn peek_one(
         }
         let row = row_exact(rows, handle);
         if let Some(row) = row {
-            let status = serde_json::to_value(row.status)
-                .ok()
-                .and_then(|v| v.as_str().map(str::to_string))
-                .unwrap_or_default();
+            let status = row.status.as_str();
             let sid = row.harness_session_id.as_deref().unwrap_or("");
-            if LIVE_STATUSES.contains(&status.as_str()) && sid.is_empty() {
+            if AgentStatus::LIVE_STATUSES.contains(&status) && sid.is_empty() {
                 eprintln!(
                     "registry row {handle} exists with status={status} but harness_session_id \
                      is missing; worker identity is incomplete"
@@ -505,9 +500,18 @@ fn peek_one(
     };
     if !args.json {
         // `recorded_cwd`: the registry's launch-time snapshot, never a live pwd.
+        // A sandboxed worker's lines are sandbox content, and say so.
+        let origin = match session
+            .row
+            .as_ref()
+            .and_then(|r| r.sandbox_transcript.as_ref())
+        {
+            Some(_) => " origin=sandbox",
+            None => "",
+        };
         emit(
             out,
-            &format!("peer {handle}: agent={agent} short_id={short_id} recorded_cwd={cwd}"),
+            &format!("peer {handle}: agent={agent} short_id={short_id} recorded_cwd={cwd}{origin}"),
         );
     }
 

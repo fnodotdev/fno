@@ -10,6 +10,7 @@ use super::{
     LeaseBook, Parsed, Refusal, Res,
 };
 use crate::config_cli::model::{self, py_repr, py_str};
+use crate::trusted_config::TrustedKey;
 use serde_json::Value;
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsString;
@@ -62,6 +63,11 @@ pub fn set_values(
         };
         resolved.push((key.clone(), owner, field));
     }
+    // Before the target resolves: that step converts a legacy project file.
+    if scope == "project" {
+        refuse_project_grant(&order)?;
+    }
+    refuse_without_tty(&order, std::io::IsTerminal::is_terminal(&std::io::stdin()))?;
     let target = target_path(scope)?;
     let touched = order.iter().any(|key| is_merge_gating(key));
     let mut finals: Vec<(String, Value)> = Vec::new();
@@ -111,6 +117,45 @@ pub fn set_values(
             lease: book.lease(key).cloned(),
         })
         .collect())
+}
+
+/// A project file never grants access, so it takes no write of a trusted key
+/// or of a table that holds one. An unset stays open: it only removes rows.
+fn refuse_project_grant(keys: &[String]) -> Res<()> {
+    let Some(key) = keys
+        .iter()
+        .find_map(|key| TrustedKey::covering(&storage_parts(key)))
+    else {
+        return Ok(());
+    };
+    let key = key.dotted();
+    Err(Refusal::new(
+        format!(
+            "{key} grants access, so a project file cannot set it. Nothing was written. Set it for this machine: fno config set {key} '<value>'"
+        ),
+        1,
+    ))
+}
+
+/// Keys that widen what a worker may do without asking. A person sets them
+/// from an interactive terminal. An agent has no terminal, and an env var it
+/// strips cannot give it one.
+const OPERATOR_ONLY: [&str; 1] = ["user.auto_approve_routine"];
+
+fn refuse_without_tty(keys: &[String], tty: bool) -> Res<()> {
+    let Some(key) = keys
+        .iter()
+        .filter(|_| !tty)
+        .find(|key| OPERATOR_ONLY.contains(&key.as_str()))
+    else {
+        return Ok(());
+    };
+    Err(Refusal::new(
+        format!(
+            "{key} widens what workers do without asking, so it needs an interactive terminal. Nothing was written. Run `fno config set {key} true` yourself in a terminal."
+        ),
+        1,
+    ))
 }
 
 pub fn run(args: &[OsString]) -> i32 {
@@ -297,6 +342,18 @@ fn check_overridden(results: &[SetResult]) -> Option<Value> {
         }
         let effective = effective_at(&settings, &result.key);
         if effective != result.value {
+            let stored = storage_parts(&result.key).join(".");
+            if let Some(key) = TrustedKey::ALL.iter().find(|key| key.dotted() == stored) {
+                // The merged view shows the project rows, and no reader of
+                // this key takes a grant from them.
+                eprintln!(
+                    "warn: {} in {} grants nothing: only the global file does. Remove it there with `fno config unset {} --local`.",
+                    key.dotted(),
+                    decider.display(),
+                    key.dotted()
+                );
+                continue;
+            }
             let flag = if result.scope == "global" {
                 "--local"
             } else {
@@ -462,6 +519,14 @@ fn couple_grant_observer() {
 mod tests {
     use super::*;
 
+    #[test]
+    fn an_operator_only_key_needs_an_interactive_terminal() {
+        let keys = vec!["user.auto_approve_routine".to_string()];
+        assert!(refuse_without_tty(&keys, false).is_err());
+        assert!(refuse_without_tty(&keys, true).is_ok());
+        assert!(refuse_without_tty(&["user.name".to_string()], false).is_ok());
+    }
+
     /// The GitHub App token path (crates/fno-agent/src/gate/github_app.rs) reads
     /// github.app_id, github.app_installation_id and github.app_key_path from
     /// the global config; one `config set -g` batch must accept all three and
@@ -486,7 +551,107 @@ mod tests {
         assert_eq!(results.len(), 3);
         let written = std::fs::read_to_string(&pin).expect("config written");
         assert!(written.contains("app_installation_id = \"42\""));
+        setup_rewrites_the_rows_the_writer_replaces(&pin);
+        a_project_write_of_a_grant_changes_no_file(dir.path());
         std::env::remove_var("FNO_CONFIG");
+    }
+
+    /// The rustc wrapper reads `build.sccache` straight from the TOML.
+    /// `fno config set` takes the same key, and a miss still refuses.
+    #[test]
+    fn set_takes_the_sccache_key_and_a_miss_still_refuses() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pin = dir.path().join("config.toml");
+        // Same pin and env lock as the GitHub App keys above.
+        let _env = crate::digest_overlay::ENVIRONMENT_LOCK.lock();
+        std::env::set_var("FNO_CONFIG", &pin);
+        let results = set_values(
+            &[("build.sccache".to_string(), "true".to_string())],
+            "global",
+            None,
+        )
+        .expect("set takes build.sccache");
+        let [first] = results.as_slice() else {
+            panic!("set returned {} results, expected 1", results.len());
+        };
+        assert_eq!(first.value, Value::Bool(true));
+        let written = std::fs::read_to_string(&pin).expect("config written");
+        assert!(written.contains("sccache = true"), "{written}");
+        let missed = set_values(
+            &[("build.sccache_no_such".to_string(), "true".to_string())],
+            "global",
+            None,
+        );
+        let Err(refusal) = missed else {
+            panic!("a miss must refuse");
+        };
+        assert_eq!(
+            refusal.message,
+            "unknown config key 'build.sccache_no_such'"
+        );
+        assert_eq!(refusal.code, 1);
+        std::env::remove_var("FNO_CONFIG");
+    }
+
+    /// Setup reads what the global write replaces, so a pinned row survives
+    /// an added one and no row of the default global file is copied in.
+    fn setup_rewrites_the_rows_the_writer_replaces(pin: &std::path::Path) {
+        use crate::trusted_config::TrustedFile;
+        std::fs::write(
+            pin,
+            "[[web.invites]]\nemail = \"kept@example.com\"\nrole = \"viewer\"\n",
+        )
+        .expect("pin seeded");
+        let file = TrustedFile::from_env();
+        let target = target_path("global").expect("global target");
+        assert_eq!(file.path(), Some(target.as_path()));
+        let mut rows = crate::setup_messaging::rows_to_rewrite(&file, TrustedKey::WebInvites)
+            .expect("the pinned rows read");
+        assert_eq!(rows.len(), 1, "no default-global row is copied in");
+        rows.push(serde_json::json!({"email": "added@example.com", "role": "owner"}));
+        let value = Value::Array(rows).to_string();
+        set_values(&[("web.invites".to_string(), value)], "global", None).expect("invites set");
+        let written = std::fs::read_to_string(pin).expect("config written");
+        assert!(written.contains("kept@example.com") && written.contains("added@example.com"));
+    }
+
+    /// The refusal comes before the target resolves, which would convert a
+    /// project's legacy yaml into a live config.toml.
+    fn a_project_write_of_a_grant_changes_no_file(dir: &std::path::Path) {
+        let project = dir.join("checkout");
+        let legacy = project.join(".fno/settings.yaml");
+        std::fs::create_dir_all(project.join(".fno")).expect("project dir");
+        std::fs::write(&legacy, "web: {}\n").expect("legacy seeded");
+        let saved = std::env::var_os("FNO_REPO_ROOT");
+        std::env::set_var("FNO_REPO_ROOT", &project);
+        for (key, value, trusted) in [
+            ("web.invites", "[]", "web.invites"),
+            ("config.web.invites", "[]", "web.invites"),
+            ("attention.sinks", "[]", "attention.sinks"),
+            ("web", "{}", "web.invites"),
+            ("attention", "{}", "attention.sinks"),
+        ] {
+            let Err(refusal) = set_values(&[(key.to_string(), value.to_string())], "project", None)
+            else {
+                panic!("a project write of {key} landed");
+            };
+            assert_ne!(refusal.code, 0);
+            assert!(
+                refusal
+                    .message
+                    .contains(&format!("fno config set {trusted}")),
+                "{key}: {}",
+                refusal.message
+            );
+            assert!(
+                legacy.is_file() && !project.join(".fno/config.toml").exists(),
+                "{key}"
+            );
+        }
+        match saved {
+            Some(value) => std::env::set_var("FNO_REPO_ROOT", value),
+            None => std::env::remove_var("FNO_REPO_ROOT"),
+        }
     }
 
     /// Three blocks shipped without model specs in the fields.json models

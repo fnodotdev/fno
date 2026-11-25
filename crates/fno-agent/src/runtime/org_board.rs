@@ -51,6 +51,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub(crate) use crate::territory::compile_scope_ids;
+use budget::run_in_process_until;
 pub(crate) use budget::{now_secs_board, Budget, HAND_RUN_BUDGET_MS};
 pub(crate) use claims::read_claims;
 pub(crate) use classify::{entry_by_id, node_has_pr, read_claimed_nodes};
@@ -481,6 +482,11 @@ pub struct BoardOpts {
     /// beat's graph read). The board reuses them instead of paying a second
     /// full scan; None reads the store as before.
     pub graph_rows: Option<std::sync::Arc<Vec<Value>>>,
+    /// The caller reads no merge verdict, no question liveness and no needs
+    /// fold: the check-in beat, whose readings take `undriven_pr`,
+    /// `unplanned`, `undispatched` and `blocked_child`. Those three sources
+    /// are not read, so the beat never waits on the fleet's slowest scans.
+    pub dispatch_only: bool,
 }
 
 impl Default for BoardOpts {
@@ -492,6 +498,7 @@ impl Default for BoardOpts {
             cwd: None,
             registry: None,
             graph_rows: None,
+            dispatch_only: false,
         }
     }
 }
@@ -903,6 +910,18 @@ struct ConcurrentCtx<'a> {
     spent_err: String,
     driver_name_tokens: &'a HashMap<String, String>,
     budget: &'a Budget,
+    /// The same graph rows as `entries`, held by an `Arc`: a detached read
+    /// cannot borrow the scope, so it takes this clone instead.
+    entries_arc: Option<&'a Arc<Vec<Value>>>,
+    dispatch_only: bool,
+}
+
+/// The read a dispatch-only board gives a source its caller never consumes.
+/// It reads as the board's own choice to stop reading, never as a failure.
+fn not_asked(source: &str) -> SourceRead {
+    SourceRead::over_budget(format!(
+        "not-read: {source}: this board asked for dispatch queues only"
+    ))
 }
 
 /// What the concurrent section joined.
@@ -985,6 +1004,8 @@ fn read_concurrent_phase(
         spent_err,
         driver_name_tokens: &pre.driver_name_tokens,
         budget,
+        entries_arc: pre.entries.as_ref(),
+        dispatch_only: opts.dispatch_only,
     };
     let mut reads = read_threaded_sources(&ctx, sources, &mut pre.holders);
     settle_held(&mut reads, &held_map, ctx.entries, sources);
@@ -1173,17 +1194,24 @@ fn spawn_prs<'scope>(
     let gate_dl = ctx.slices.pr_gate;
     let max_pr_reads = ctx.max_pr_reads;
     let entries_ref = ctx.entries;
+    let dispatch_only = ctx.dispatch_only;
     s.spawn(move || {
         let (prs, pr_nodes, mut w) = read_prs(&cwd, dl, max_pr_reads, entries_ref);
         // The gate read rides the same thread: its input is the
         // listing's own narrowed candidates, so there is nothing to
         // overlap until the listing lands.
-        let candidates: Vec<i64> = prs
-            .rows()
-            .iter()
-            .filter_map(|r| r.get("number").and_then(Value::as_i64))
-            .collect();
-        let (pr_gates, gate_w) = read_pr_gates(&cwd, &candidates, gate_dl);
+        // A dispatch-only board asks for no merge verdict: the thread
+        // returns with the listing, and the queue says so.
+        let (pr_gates, gate_w) = if dispatch_only {
+            (not_asked("merge gate"), Vec::new())
+        } else {
+            let candidates: Vec<i64> = prs
+                .rows()
+                .iter()
+                .filter_map(|r| r.get("number").and_then(Value::as_i64))
+                .collect();
+            read_pr_gates(&cwd, &candidates, gate_dl)
+        };
         w.extend(gate_w);
         let truncated = w.iter().any(|x| x.contains("hit its"));
         (prs, pr_nodes, w, truncated, pr_gates)
@@ -1236,73 +1264,77 @@ fn spawn_ready<'scope>(
     ctx: &ConcurrentCtx<'scope>,
     worked_ids: HashSet<String>,
 ) -> std::thread::ScopedJoinHandle<'scope, SourceRead> {
-    let entries = ctx.entries;
+    let entries = ctx.entries_arc.cloned();
     let cwd = ctx.cwd.to_path_buf();
     let spent_err = ctx.spent_err.clone();
     s.spawn(move || {
-        // In-process now: the admission decision lives in this
-        // binary (backlog_ready::select) and reads the graph the
-        // board already loaded, so the source costs plan-document
-        // disk reads, not an interpreter cold start. The budget
-        // deadline still gates the START: a thread scheduled after
-        // the deadline marks itself spent instead of reading.
-        if Budget::spawn_bound(dl).is_zero() {
-            return SourceRead::over_budget(spent_err);
-        }
-        let Some(entries) = entries else {
-            return SourceRead::err("graph unreadable: no entries for ready selection");
-        };
-        // Strict claims read: an unreadable root is unknown claim
-        // state, surfaced as a source error rather than an empty
-        // set that would re-dispatch held work.
-        let claimed_records = crate::claims::list_strict(Some("node:"), None, false);
-        let Ok(claim_records) = claimed_records else {
-            return SourceRead::err(format!(
-                "claims unreadable: {}",
-                claimed_records.err().unwrap_or_default()
-            ));
-        };
-        let mut claimed = std::collections::BTreeSet::new();
-        for rec in claim_records {
-            if let Some(id) = rec.key.strip_prefix("node:") {
-                claimed.insert(id.to_string());
-            }
-        }
-        claimed.extend(worked_ids);
-        let opts = crate::backlog_ready::ReadyOpts {
-            all: true,
-            repo_root: crate::paths::canonical_repo_root(&cwd).map(|p| p.display().to_string()),
-            staleness_days: crate::backlog_ready::store_staleness_days(),
-            claimed,
-            now_ms: crate::claims::now_ms(),
-            ..Default::default()
-        };
-        match crate::backlog_ready::select(&entries, &opts) {
-            // The dispatch projection carries no tags or details; the board's
-            // user-only rows need both (the skip reason and its runbook), so
-            // they ride back from the full row here.
-            Ok(reply) => SourceRead::ok(Value::Array(
-                reply
-                    .rows
-                    .into_iter()
-                    .map(|mut row| {
-                        let full = entries
-                            .iter()
-                            .find(|e| e.pointer("/id") == row.pointer("/id"))
-                            .and_then(Value::as_object);
-                        for key in ["tags", "details"] {
-                            let carried = full.and_then(|e| e.get(key)).filter(|v| !v.is_null());
-                            if let (Some(v), Some(obj)) = (carried, row.as_object_mut()) {
-                                obj.insert(key.to_string(), v.clone());
-                            }
-                        }
-                        row
-                    })
-                    .collect(),
-            )),
-            Err(_) => SourceRead::err("ready: parent scope did not resolve"),
-        }
+        run_in_process_until(dl, &spent_err, move || {
+            ready_read(
+                entries.as_ref().map(|rows| rows.as_slice()),
+                &cwd,
+                worked_ids,
+            )
+        })
     })
+}
+
+/// The ready selection over the graph rows the board already holds. The
+/// admission decision lives in this binary (backlog_ready::select), so the
+/// source costs plan-document disk reads, not an interpreter cold start.
+fn ready_read(entries: Option<&[Value]>, cwd: &Path, worked_ids: HashSet<String>) -> SourceRead {
+    let Some(entries) = entries else {
+        return SourceRead::err("graph unreadable: no entries for ready selection");
+    };
+    // Strict claims read: an unreadable root is unknown claim
+    // state, surfaced as a source error rather than an empty
+    // set that would re-dispatch held work.
+    let claimed_records = crate::claims::list_strict(Some("node:"), None, false);
+    let Ok(claim_records) = claimed_records else {
+        return SourceRead::err(format!(
+            "claims unreadable: {}",
+            claimed_records.err().unwrap_or_default()
+        ));
+    };
+    let mut claimed = std::collections::BTreeSet::new();
+    for rec in claim_records {
+        if let Some(id) = rec.key.strip_prefix("node:") {
+            claimed.insert(id.to_string());
+        }
+    }
+    claimed.extend(worked_ids);
+    let opts = crate::backlog_ready::ReadyOpts {
+        all: true,
+        repo_root: crate::paths::canonical_repo_root(&cwd).map(|p| p.display().to_string()),
+        staleness_days: crate::backlog_ready::store_staleness_days(),
+        claimed,
+        now_ms: crate::claims::now_ms(),
+        ..Default::default()
+    };
+    match crate::backlog_ready::select(&entries, &opts) {
+        // The dispatch projection carries no tags or details; the board's
+        // user-only rows need both (the skip reason and its runbook), so
+        // they ride back from the full row here.
+        Ok(reply) => SourceRead::ok(Value::Array(
+            reply
+                .rows
+                .into_iter()
+                .map(|mut row| {
+                    let full = entries
+                        .iter()
+                        .find(|e| e.pointer("/id") == row.pointer("/id"))
+                        .and_then(Value::as_object);
+                    for key in ["tags", "details"] {
+                        let carried = full.and_then(|e| e.get(key)).filter(|v| !v.is_null());
+                        if let (Some(v), Some(obj)) = (carried, row.as_object_mut()) {
+                            obj.insert(key.to_string(), v.clone());
+                        }
+                    }
+                    row
+                })
+                .collect(),
+        )),
+        Err(_) => SourceRead::err("ready: parent scope did not resolve"),
+    }
 }
 
 fn spawn_outstanding<'scope>(
@@ -1312,15 +1344,20 @@ fn spawn_outstanding<'scope>(
 ) -> std::thread::ScopedJoinHandle<'scope, SourceRead> {
     let cwd = ctx.cwd.to_path_buf();
     let spent_err = ctx.spent_err.clone();
+    let dispatch_only = ctx.dispatch_only;
     s.spawn(move || {
+        if dispatch_only {
+            return not_asked("outstanding questions");
+        }
+        // The liveness leg keeps its own floor inside the slice the board
+        // hands out; the slice itself bounds the wait.
         let bound = Budget::spawn_bound(dl);
-        if bound.is_zero() {
-            return SourceRead::over_budget(spent_err);
-        }
-        match crate::outstanding::read(&cwd, bound.min(crate::outstanding::LIVENESS_BUDGET)) {
-            Ok(o) => SourceRead::ok(o.as_json()),
-            Err(e) => SourceRead::err(e),
-        }
+        run_in_process_until(dl, &spent_err, move || {
+            match crate::outstanding::read(&cwd, bound.min(crate::outstanding::LIVENESS_BUDGET)) {
+                Ok(o) => SourceRead::ok(o.as_json()),
+                Err(e) => SourceRead::err(e),
+            }
+        })
     })
 }
 
@@ -1399,39 +1436,43 @@ fn spawn_needs<'scope>(
 ) -> std::thread::ScopedJoinHandle<'scope, SourceRead> {
     let cwd = ctx.cwd.to_path_buf();
     let spent_err = ctx.spent_err.clone();
+    let dispatch_only = ctx.dispatch_only;
     s.spawn(move || {
-        // In-process, but the deadline still gates the START: the
-        // refused-worker leg batch-probes the whole registry and
-        // measured ~7s on a busy fleet.
-        if Budget::spawn_bound(dl).is_zero() {
-            return SourceRead::over_budget(spent_err);
+        if dispatch_only {
+            return not_asked("needs");
         }
-        let home = crate::paths::AgentsHome::from_env();
-        let (mut event_paths, default_ledger) = default_needs_sources(&home);
-        // The canonical checkout's journal, exactly as `run_needs`
-        // adds it: a question asked from a worktree writes the
-        // CANONICAL .fno/events.jsonl, never the worktree's. The
-        // project journal anchors on the BOARD's cwd (the caller's
-        // --cwd for an in-process reader), never the process cwd.
-        event_paths[0] = cwd.join(".fno").join("events.jsonl");
-        if let Some(root) = crate::paths::canonical_repo_root(&cwd) {
-            let canonical_events = root.join(".fno").join("events.jsonl");
-            let cwd_events = cwd.join(".fno").join("events.jsonl");
-            if canonical_events != cwd_events && !event_paths.contains(&canonical_events) {
-                event_paths.push(canonical_events);
-            }
-        }
-        let since = now_secs_board().saturating_sub(crate::needs::DEFAULT_WINDOW_SECS);
-        let items = crate::needs::collect_needs_items(
-            &home,
-            &event_paths,
-            &default_ledger,
-            since,
-            crate::needs::DEFAULT_FIRES_FLOOR,
-            &cwd,
-        );
-        SourceRead::ok(serde_json::to_value(&items).unwrap_or(json!([])))
+        run_in_process_until(dl, &spent_err, move || needs_read(&cwd))
     })
+}
+
+/// The needs fold. Its refused-worker leg batch-probes the whole registry
+/// and measured ~7s on a busy fleet, so it rides the slice like a source.
+fn needs_read(cwd: &Path) -> SourceRead {
+    let home = crate::paths::AgentsHome::from_env();
+    let (mut event_paths, default_ledger) = default_needs_sources(&home);
+    // The canonical checkout's journal, exactly as `run_needs`
+    // adds it: a question asked from a worktree writes the
+    // CANONICAL .fno/events.jsonl, never the worktree's. The
+    // project journal anchors on the BOARD's cwd (the caller's
+    // --cwd for an in-process reader), never the process cwd.
+    event_paths[0] = cwd.join(".fno").join("events.jsonl");
+    if let Some(root) = crate::paths::canonical_repo_root(&cwd) {
+        let canonical_events = root.join(".fno").join("events.jsonl");
+        let cwd_events = cwd.join(".fno").join("events.jsonl");
+        if canonical_events != cwd_events && !event_paths.contains(&canonical_events) {
+            event_paths.push(canonical_events);
+        }
+    }
+    let since = now_secs_board().saturating_sub(crate::needs::DEFAULT_WINDOW_SECS);
+    let items = crate::needs::collect_needs_items(
+        &home,
+        &event_paths,
+        &default_ledger,
+        since,
+        crate::needs::DEFAULT_FIRES_FLOOR,
+        &cwd,
+    );
+    SourceRead::ok(serde_json::to_value(&items).unwrap_or(json!([])))
 }
 
 fn spawn_blocked_child<'scope>(
@@ -1439,21 +1480,41 @@ fn spawn_blocked_child<'scope>(
     dl: std::time::Instant,
     ctx: &ConcurrentCtx<'scope>,
 ) -> std::thread::ScopedJoinHandle<'scope, SourceRead> {
-    let claims = ctx.claims;
-    let entries = ctx.entries;
+    let claims = ctx.claims.clone();
+    let entries = ctx.entries_arc.cloned();
     let cwd = ctx.cwd.to_path_buf();
     let spent_err = ctx.spent_err.clone();
+    // The wait and the read each name the spent receipt, and the detached
+    // read cannot borrow the wait's copy.
+    let read_spent_err = spent_err.clone();
     s.spawn(move || {
-        if Budget::spawn_bound(dl).is_zero() {
-            return SourceRead::over_budget(spent_err);
-        }
-        let home = crate::paths::AgentsHome::from_env();
-        let journal = crate::daemon::global_events_path(&home);
-        match read_blocked_rows(&journal) {
-            Err(e) => SourceRead::err(e),
-            Ok(rows) => blocked_child_read(rows, claims, entries, &cwd, dl, &spent_err),
-        }
+        run_in_process_until(dl, &spent_err, move || {
+            blocked_child_source(
+                &claims,
+                entries.as_ref().map(|rows| rows.as_slice()),
+                &cwd,
+                dl,
+                &read_spent_err,
+            )
+        })
     })
+}
+
+/// The blocked-child distress rows: the global distress journal, resolved
+/// against the claims and the graph the board already holds.
+fn blocked_child_source(
+    claims: &SourceRead,
+    entries: Option<&[Value]>,
+    cwd: &Path,
+    dl: std::time::Instant,
+    spent_err: &str,
+) -> SourceRead {
+    let home = crate::paths::AgentsHome::from_env();
+    let journal = crate::daemon::global_events_path(&home);
+    match read_blocked_rows(&journal) {
+        Err(e) => SourceRead::err(e),
+        Ok(rows) => blocked_child_read(rows, claims, entries, cwd, dl, spent_err),
+    }
 }
 
 /// The blocked distress rows past their grace window, minus every one a
@@ -1584,16 +1645,21 @@ fn spawn_stranded<'scope>(
     dl: std::time::Instant,
     ctx: &ConcurrentCtx<'scope>,
 ) -> std::thread::ScopedJoinHandle<'scope, SourceRead> {
-    let entries = ctx.entries;
+    let entries = ctx.entries_arc.cloned();
     let cwd = ctx.cwd.to_path_buf();
     let spent_err = ctx.spent_err.clone();
+    // The wait and the read each name the spent receipt, and the detached
+    // read cannot borrow the wait's copy.
+    let read_spent_err = spent_err.clone();
     s.spawn(move || {
-        if Budget::spawn_bound(dl).is_zero() {
-            return SourceRead::over_budget(spent_err);
-        }
-        let candidates = entries.map(stranded_candidates).unwrap_or_default();
-        let repos = scope::project_repo_paths(&cwd);
-        read_stranded_trees(&repos, &candidates, dl, &spent_err)
+        run_in_process_until(dl, &spent_err, move || {
+            let candidates = entries
+                .as_ref()
+                .map(|rows| stranded_candidates(rows))
+                .unwrap_or_default();
+            let repos = scope::project_repo_paths(&cwd);
+            read_stranded_trees(&repos, &candidates, dl, &read_spent_err)
+        })
     })
 }
 
@@ -1932,8 +1998,7 @@ fn graph_session_nodes(entries: Option<&[Value]>) -> HashMap<String, String> {
 }
 
 /// A registry row counts as a driver candidate only while its status sits in
-/// the LIVE vocabulary (spawning/ready/idle/busy/live/restarting; the same
-/// set spawn_gate.LIVE_STATUSES pins Python-side). A row whose child exited,
+/// the `AgentStatus::LIVE_STATUSES` vocabulary. A row whose child exited,
 /// failed, or died is a CLOSED run: its transcript may still answer for a
 /// while, and feeding it to the roster would let a finished worker suppress
 /// its node's undriven-PR row - the same snapshot-vs-process fold this feed
@@ -2251,6 +2316,33 @@ mod tests {
         }
     }
 
+    /// Points HOME and the agents home at one temp dir for the body's scope
+    /// and holds the lock over it. Fields drop in declaration order: the env
+    /// restores, the temp dir goes, then the lock frees.
+    struct PinnedHome {
+        _restore: EnvRestore,
+        _dir: tempfile::TempDir,
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl PinnedHome {
+        fn pin() -> Self {
+            let guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            // Pins die with the body: a later test must never read a dropped
+            // TempDir through a leaked env value.
+            let restore = EnvRestore::take(&["FNO_AGENT_HOME", "FNO_SPACES_DIR", "HOME"]);
+            let dir = tempfile::tempdir().unwrap();
+            std::env::set_var("HOME", dir.path());
+            std::env::set_var("FNO_AGENT_HOME", dir.path().join(".fno").join("agents"));
+            crate::paths::pin_test_claims_root(dir.path());
+            PinnedHome {
+                _restore: restore,
+                _dir: dir,
+                _guard: guard,
+            }
+        }
+    }
+
     #[test]
     fn the_board_answers_inside_a_tight_budget_with_every_queue_present() {
         // An isolated HOME + cwd: no graph, no claims, no lane - the degraded
@@ -2259,21 +2351,13 @@ mod tests {
         // exit 1.
         // A declared hermetic root: blocked_child's collection resolves
         // ~/.fno/agents via AgentsHome, which panics under test with no
-        // declared root (paths.rs) - this test already pins HOME, so it also
-        // pins FNO_AGENT_HOME under the same tempdir to declare one.
-        let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // Pins die with the body: a later test must never read a dropped
-        // TempDir through a leaked env value.
-        let _restore = EnvRestore::take(&["FNO_AGENT_HOME", "FNO_SPACES_DIR", "HOME"]);
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("HOME", dir.path());
-        std::env::set_var("FNO_AGENT_HOME", dir.path().join(".fno").join("agents"));
-        crate::paths::pin_test_claims_root(dir.path());
+        // declared root (paths.rs). The pin sets HOME and FNO_AGENT_HOME
+        // under one tempdir to declare one.
+        let _pin = PinnedHome::pin();
         let payload = read_board(&BoardOpts {
             budget_ms: 20_000,
             ..Default::default()
         });
-        std::env::remove_var("FNO_AGENT_HOME");
         let queues = payload.get("queues").and_then(Value::as_array).unwrap();
         assert_eq!(queues.len(), 16, "{payload}");
         assert_eq!(payload["exit_code"], 1, "{payload}");
@@ -2309,5 +2393,71 @@ mod tests {
         for (_name, s) in sources {
             assert!(s.get("ok").is_some() && s.get("truncated").is_some(), "{s}");
         }
+    }
+
+    /// A panicking in-process reader reaches the join as a panic, and the
+    /// join reads it as a failure: never as the board's own budget kill.
+    #[test]
+    fn a_panicking_in_process_reader_reads_panicked_never_a_budget_kill() {
+        let read = std::thread::scope(|s| {
+            let handle = s.spawn(|| {
+                run_in_process_until(
+                    std::time::Instant::now() + std::time::Duration::from_secs(5),
+                    "spent",
+                    || panic!("read failed"),
+                )
+            });
+            join_read(Some(handle), &Budget::new(0), "needs: reader panicked")
+        });
+        assert!(!read.over_budget, "{read:?}");
+        assert_eq!(read.error.as_deref(), Some("needs: reader panicked"));
+    }
+
+    /// One source's record under `sources`, and one queue, as `read_board`
+    /// writes them.
+    #[derive(serde::Deserialize)]
+    struct SourceVerdict {
+        error: String,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct QueueVerdict {
+        name: String,
+        error: String,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct BoardVerdict {
+        sources: std::collections::HashMap<String, SourceVerdict>,
+        queues: Vec<QueueVerdict>,
+    }
+
+    /// A dispatch-only board reads no merge verdict, no question liveness
+    /// and no needs fold. Each names why it was not read: the first two
+    /// under `sources`, the needs fold on its own queue.
+    #[test]
+    fn a_dispatch_only_board_names_the_sources_it_did_not_read() {
+        let _pin = PinnedHome::pin();
+        let payload = read_board(&BoardOpts {
+            budget_ms: 20_000,
+            dispatch_only: true,
+            ..Default::default()
+        });
+        let verdict: BoardVerdict = serde_json::from_value(payload).unwrap();
+        let not_read = "this board asked for dispatch queues only";
+        for name in ["pr_gate", "outstanding"] {
+            let error = verdict
+                .sources
+                .get(name)
+                .map(|s| s.error.as_str())
+                .unwrap_or_default();
+            assert!(error.contains(not_read), "sources.{name}: {error}");
+        }
+        let needs = verdict
+            .queues
+            .iter()
+            .find(|q| q.name == "unreachable_worker")
+            .unwrap();
+        assert!(needs.error.contains(not_read), "{}", needs.error);
     }
 }

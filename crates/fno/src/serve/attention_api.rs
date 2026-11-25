@@ -8,6 +8,7 @@
 //! identifies a sink, never a person, and a Tailscale Serve identity header
 //! (loopback bind only) is recorded as evidence, never as authority.
 
+use crate::trusted_config::{Rows, TrustedFile, TrustedKey};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -428,60 +429,42 @@ fn answer_row(
 // Config and IO
 // ---------------------------------------------------------------------------
 
-/// Sink tokens for the answer door: `[[attention.sinks]]` rows in the cwd
-/// config then the global config, a name seen once keeps its first token.
-pub fn load_sink_auth() -> Vec<SinkAuth> {
-    let mut candidates = vec![std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join(".fno/config.toml")];
-    if let Some(home) = std::env::var_os("HOME") {
-        candidates.push(PathBuf::from(home).join(".fno/config.toml"));
-    }
+/// Sink tokens for the answer door: the `[[attention.sinks]]` rows of the
+/// trusted file, read per request. A project row is never a bearer. A name
+/// seen once keeps its first token.
+pub fn load_sink_auth(file: &TrustedFile) -> Vec<SinkAuth> {
+    let Rows::List(rows) = file.rows(TrustedKey::AttentionSinks) else {
+        return Vec::new();
+    };
     let mut out: Vec<SinkAuth> = Vec::new();
-    for path in candidates {
-        let Ok(text) = std::fs::read_to_string(&path) else {
+    for row in &rows {
+        let Some(name) = row.get("name").and_then(|n| n.as_str()) else {
             continue;
         };
-        let Ok(v) = text.parse::<toml::Value>() else {
+        // A chat row's secret is a bot token or a server password, never
+        // a bearer for this door.
+        if row
+            .get("type")
+            .and_then(|t| t.as_str())
+            .is_some_and(|t| matches!(t, "telegram" | "discord" | "bluebubbles"))
+        {
             continue;
-        };
-        let Some(rows) = v
-            .get("attention")
-            .and_then(|a| a.get("sinks"))
-            .and_then(|s| s.as_array())
-        else {
-            continue;
-        };
-        for row in rows {
-            let Some(name) = row.get("name").and_then(|n| n.as_str()) else {
-                continue;
-            };
-            // A chat row's secret is a bot token or a server password, never
-            // a bearer for this door.
-            if row
-                .get("type")
-                .and_then(|t| t.as_str())
-                .is_some_and(|t| matches!(t, "telegram" | "discord" | "bluebubbles"))
-            {
-                continue;
-            }
-            let Some(env_name) = row.get("token_env").and_then(|t| t.as_str()) else {
-                continue;
-            };
-            // The arm reads the same file, so a button it posts always
-            // carries a token this door accepts.
-            let Some(token) = crate::provider_key::resolve_key(env_name, Some("~/.fno/.env"))
-            else {
-                continue;
-            };
-            if token.is_empty() || out.iter().any(|s| s.name == name) {
-                continue;
-            }
-            out.push(SinkAuth {
-                name: name.to_string(),
-                token,
-            });
         }
+        let Some(env_name) = row.get("token_env").and_then(|t| t.as_str()) else {
+            continue;
+        };
+        // The arm reads the same file, so a button it posts always
+        // carries a token this door accepts.
+        let Some(token) = crate::provider_key::resolve_key(env_name, Some("~/.fno/.env")) else {
+            continue;
+        };
+        if token.is_empty() || out.iter().any(|s| s.name == name) {
+            continue;
+        }
+        out.push(SinkAuth {
+            name: name.to_string(),
+            token,
+        });
     }
     out
 }
@@ -605,13 +588,14 @@ impl ApiIo for RealIo {
 // axum layer
 // ---------------------------------------------------------------------------
 
-pub fn router() -> axum::Router {
+pub fn router(file: TrustedFile) -> axum::Router {
     use axum::routing::{get, post};
     axum::Router::new()
         .route("/v1/attention/items", get(list))
         .route("/v1/attention/items/{id}/answer", post(answer))
         .route("/v1/attention/items/{id}", get(get_one))
         .merge(crate::chat_ws::router(crate::chat_events::ChatRoots::host()))
+        .layer(axum::Extension(file))
 }
 
 pub(crate) fn to_response(r: (u16, Value)) -> axum::response::Response {
@@ -645,6 +629,7 @@ async fn get_one(axum::extract::Path(id): axum::extract::Path<String>) -> axum::
 
 async fn answer(
     axum::extract::Path(id): axum::extract::Path<String>,
+    axum::Extension(file): axum::Extension<TrustedFile>,
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> axum::response::Response {
@@ -653,7 +638,7 @@ async fn answer(
         .get("tailscale-user-login")
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
-    let sinks = load_sink_auth();
+    let sinks = load_sink_auth(&file);
     let (status, resp) = tokio::task::spawn_blocking(move || {
         let mut io = RealIo;
         handle_answer(
@@ -672,13 +657,18 @@ async fn answer(
 
 /// Bind 127.0.0.1 and serve; loopback is not configurable (the contract
 /// binds localhost; remote reach is the user's own tunnel).
-pub async fn serve(port: u16) -> Result<(), String> {
+pub async fn serve(port: u16, startup: PathBuf) -> Result<(), String> {
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(|e| format!("cannot bind {addr}: {e}"))?;
     println!("fno attention api: http://{addr}/v1/attention/items (sink token required)");
-    axum::serve(listener, router())
+    let file = TrustedFile::from_env();
+    let project = crate::digest_overlay::project_config_files(&startup);
+    for note in file.notes(TrustedKey::AttentionSinks, &project) {
+        eprintln!("fno attention api: {note}");
+    }
+    axum::serve(listener, router(file))
         .await
         .map_err(|e| e.to_string())
 }
@@ -686,6 +676,77 @@ pub async fn serve(port: u16) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A project sink is no bearer on any `/v1` door, and the global one is.
+    /// `PATH` and `HOME` stand in for secrets a cloned row could name.
+    #[tokio::test]
+    async fn sink_auth_trusted_source_table() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let dir = tempfile::tempdir().unwrap();
+        let global = dir.path().join("config.toml");
+        let project = dir.path().join("checkout.toml");
+        let row = |name: &str, env: &str| {
+            format!(
+                "[[attention.sinks]]\nname = \"{name}\"\ntype = \"webhook\"\nurl = \"https://{name}.example\"\ntoken_env = \"{env}\"\n"
+            )
+        };
+        std::fs::write(&global, row("phone", "PATH")).unwrap();
+        std::fs::write(&project, row("clone", "HOME")).unwrap();
+        let file = TrustedFile::Global(global);
+        let notes = file
+            .notes(TrustedKey::AttentionSinks, &[project])
+            .join("\n");
+        assert!(notes.contains("attention.sinks in"), "{notes}");
+        assert!(
+            !notes.contains("clone.example") && !notes.contains("HOME"),
+            "a notice shows no row: {notes}"
+        );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router(file)).await.unwrap();
+        });
+        let trusted = std::env::var("PATH").unwrap();
+        let forged = std::env::var("HOME").unwrap();
+        for (bearer, admitted) in [(&trusted, true), (&forged, false)] {
+            // An empty body is refused after the bearer check and before any read.
+            let answer = if admitted { "422" } else { "401" };
+            let version = if admitted { "200" } else { "401" };
+            for (method, path, extra, status) in [
+                ("POST", "/v1/attention/items/q-1/answer", "", answer),
+                ("GET", "/v1", "", version),
+                (
+                    "GET",
+                    "/v1/chat/no-such-harness/s-1",
+                    "Upgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n",
+                    "101",
+                ),
+            ] {
+                let connection = if extra.is_empty() { "close" } else { "Upgrade" };
+                let head = format!(
+                    "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {bearer}\r\n{extra}Connection: {connection}\r\nContent-Length: 0\r\n\r\n"
+                );
+                let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+                stream.write_all(head.as_bytes()).await.unwrap();
+                let mut reply = Vec::new();
+                stream.read_to_end(&mut reply).await.unwrap();
+                let text = String::from_utf8_lossy(&reply);
+                assert!(
+                    text.starts_with(&format!("HTTP/1.1 {status}")),
+                    "{path} admitted={admitted}: {text}"
+                );
+                if !extra.is_empty() {
+                    // 1008 is the refusal; an admitted bearer reaches the
+                    // reader, which names the unknown harness.
+                    let policy = reply.windows(2).any(|w| w == 1008u16.to_be_bytes());
+                    assert_eq!(policy, !admitted, "{path}: {text}");
+                    assert_eq!(text.contains("unsupported_harness"), admitted, "{text}");
+                }
+            }
+        }
+        server.abort();
+    }
 
     fn sink(name: &str, token: &str) -> SinkAuth {
         SinkAuth {

@@ -43,6 +43,8 @@ pub mod store_conn;
 mod test_keeper_cleanup;
 #[cfg(all(test, feature = "app"))]
 pub(crate) mod test_owner;
+#[cfg(feature = "app")]
+pub mod trusted_config;
 pub mod version;
 
 #[cfg(feature = "app")]

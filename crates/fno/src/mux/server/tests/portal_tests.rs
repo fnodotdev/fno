@@ -2780,6 +2780,93 @@ fn a_vanishing_portal_says_so_and_names_its_row() {
     );
 }
 
+/// A seat parked after its viewer died on an ended claude row. The row
+/// flips dead after the reach, the way a registry reading lands later.
+fn parked_on_dead_row(harness: Option<&str>) -> (Core, u64, u64, mpsc::Receiver<ServerMsg>) {
+    set_attach_program(&["/bin/cat"]);
+    let (mut core, client_id, _p1, mut rx) = thread_core();
+    core.agents = vec![bg_row("target-a", "/tmp/seen", Some("deadbee1"))];
+    core.command(client_id, portal_reach_cmd("deadbee1", 0));
+    let viewer = core.portals.get(&0).expect("portal 0 open").seat;
+    let row = core.agents.first_mut().expect("one row");
+    row.exited = true;
+    row.liveness = agents_view::Liveness::Dead;
+    row.harness = harness.map(str::to_string);
+    row.harness_session_id = Some("0123-session".to_string());
+    while rx.try_recv().is_ok() {}
+    core.close_viewer_died(viewer, "child exited");
+    let parked = core.portals.get(&0).expect("portal 0 stays").seat;
+    (core, client_id, parked, rx)
+}
+
+#[test]
+fn portal_revive_key_hint_rides_the_parked_line() {
+    let (_core, _client, _seat, mut rx) = parked_on_dead_row(Some("claude"));
+    let line = collect_until_portal_closed(&mut rx, "no signal").expect("the parked line arrived");
+    assert!(
+        line.contains("target-a ended")
+            && line.contains("the registry reads it exited and its process gone")
+            && line.contains("press r to revive"),
+        "the line names the reading and the key: {line:?}"
+    );
+}
+
+#[test]
+fn portal_revive_key_refuses_a_row_it_cannot_revive_and_leaves_live_seats_alone() {
+    let (mut core, client_id, seat, mut rx) = parked_on_dead_row(None);
+    let line = collect_until_portal_closed(&mut rx, "no signal").expect("the parked line arrived");
+    assert!(
+        line.contains("no revive") && !line.contains("press r"),
+        "a row with no harness offers no key: {line:?}"
+    );
+    assert!(
+        core.request_seat_revive(client_id, seat),
+        "the parked seat takes the key"
+    );
+    let refusal = collect_until_portal_closed(&mut rx, "no revive").expect("the refusal arrived");
+    assert!(refusal.contains("harness is missing"), "{refusal:?}");
+    assert_eq!(
+        core.portals.get(&0).map(|p| p.seat),
+        Some(seat),
+        "a refused revive keeps the seat parked"
+    );
+
+    // A seat that is not parked never loses a byte to the key.
+    let (mut core, client_id, _parked, _rx) = parked_on_dead_row(Some("claude"));
+    let other = core
+        .panes
+        .keys()
+        .copied()
+        .find(|p| core.portals.get(&0).map(|x| x.seat) != Some(*p));
+    if let Some(other) = other {
+        assert!(!core.request_seat_revive(client_id, other));
+    }
+}
+
+#[test]
+fn portal_revive_key_swaps_the_verdict_argv_into_the_parked_seat() {
+    let (mut core, client_id, seat, _rx) = parked_on_dead_row(Some("claude"));
+    assert!(!core.portal_seat_is_viewer(seat), "the seat starts parked");
+    let verdict = ReentryVerdict {
+        argv: vec!["/bin/cat".to_string()],
+        env: Vec::new(),
+        config_dir: None,
+        plan_ms: 0,
+    };
+    core.reentry_verdict = Some(verdict);
+    core.finish_seat_revive(client_id, seat);
+    let revived = core.portals.get(&0).expect("portal 0 stays").seat;
+    assert_ne!(revived, seat, "the seat holds the revived pane");
+    assert!(
+        core.portal_seat_is_viewer(revived),
+        "the revived seat is a live viewer"
+    );
+    assert!(
+        !core.panes.contains_key(&seat),
+        "the parked screen is reaped"
+    );
+}
+
 // ---- portal seats are never rows of their own -----------------------------
 
 #[test]

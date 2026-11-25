@@ -85,6 +85,7 @@ pub mod fleet_state;
 pub mod fleet_task;
 pub mod fleet_workspace;
 pub(crate) mod fnod;
+pub(crate) mod fnod_tags;
 pub mod footnote_harness;
 pub mod footnote_transcript;
 pub(crate) mod footprint_cache;

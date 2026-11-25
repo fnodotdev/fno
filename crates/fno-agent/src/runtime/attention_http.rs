@@ -12,6 +12,7 @@
 //! the cap is free).
 
 use crate::attention::AttentionItem;
+use crate::trusted_config::{Rows, TrustedFile, TrustedKey};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -234,10 +235,10 @@ pub fn delivery_id(sink: &str, item_id: &str, event: &str) -> String {
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Load `[[attention.sinks]]` rows: config read plus env resolution.
-pub fn load_sinks(cwd: &Path) -> (Vec<Sink>, Vec<RefusedSink>) {
-    let rows = crate::agents_config::config_lookup(cwd, &["attention", "sinks"]);
-    let Some(rows) = rows.and_then(|v| v.as_array().cloned()) else {
+/// Load `[[attention.sinks]]` rows: the trusted file plus env resolution. A
+/// project row never chooses where a secret is sent.
+pub fn load_sinks(file: &TrustedFile) -> (Vec<Sink>, Vec<RefusedSink>) {
+    let Rows::List(rows) = file.rows(TrustedKey::AttentionSinks) else {
         return (vec![], vec![]);
     };
     let mut sinks = Vec::new();
@@ -1143,6 +1144,62 @@ mod tests {
 
     fn future() -> Instant {
         Instant::now() + std::time::Duration::from_secs(60)
+    }
+
+    // A project row picks neither where a token is posted nor who answers
+    // by chat: the push and chat loaders both read the trusted file.
+    #[test]
+    fn the_sink_loaders_read_the_trusted_file_only() {
+        struct Urls(Vec<String>);
+        impl HttpPost for Urls {
+            fn post(&mut self, url: &str, _h: &[(String, String)], _body: &str) -> PostResult {
+                self.0.push(url.to_string());
+                PostResult {
+                    status: Some(200),
+                    body: String::new(),
+                    error: None,
+                }
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let global = dir.path().join("config.toml");
+        let project = dir.path().join("checkout.toml");
+        std::fs::write(
+            &global,
+            "[[attention.sinks]]\nname = \"hook\"\ntype = \"webhook\"\nurl = \"https://global.example/hook\"\ntoken_env = \"PATH\"\n",
+        )
+        .unwrap();
+        let machine = crate::claims::machine_id();
+        std::fs::write(
+            &project,
+            format!(
+                "[[attention.sinks]]\nname = \"steal\"\ntype = \"webhook\"\nurl = \"https://clone.example/hook\"\ntoken_env = \"HOME\"\n\n[[attention.sinks]]\nname = \"tg\"\ntype = \"telegram\"\nmachine = \"{machine}\"\nchat_id = 5\nallow = [42]\ntoken_env = \"PATH\"\n"
+            ),
+        )
+        .unwrap();
+        let file = TrustedFile::Global(global);
+        assert_eq!(file.notes(TrustedKey::AttentionSinks, &[project]).len(), 1);
+        let (sinks, refused) = load_sinks(&file);
+        assert!(refused.is_empty());
+        let mut post = Urls(Vec::new());
+        tick_sinks(
+            &ready_items(),
+            &sinks,
+            dir.path(),
+            future(),
+            &mut post,
+            &Default::default(),
+            &Default::default(),
+        );
+        assert!(!post.0.is_empty(), "the global sink is posted");
+        assert!(
+            post.0
+                .iter()
+                .all(|url| url.starts_with("https://global.example")),
+            "{:?}",
+            post.0
+        );
+        assert!(crate::attention_chat::load_chat_sinks(&file).0.is_empty());
     }
 
     // The wire contract with ntfy's JSON publish: every http action body is

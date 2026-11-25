@@ -73,9 +73,11 @@ pub mod paths;
 pub mod paths_cli;
 pub mod protocol;
 pub mod remote;
+pub mod sandbox;
 pub mod single_flight;
 pub mod spawn;
 pub mod text_or_file;
+pub mod trusted_config;
 pub mod version;
 
 pub mod eval;
@@ -191,7 +193,7 @@ pub use runtime::{
 };
 pub(crate) use runtime::{
     adopt_carry, adopt_identity, agents_event, attended, cargo_builds, cargo_orphans,
-    claude_restart_watch, fnod, footprint_cache, keeper_revival, lead_checkin_batch,
+    claude_restart_watch, fnod, fnod_tags, footprint_cache, keeper_revival, lead_checkin_batch,
     lead_checkin_beat_budget, lead_checkin_pick, ledger_register, ledger_workers,
     opencode_permission, prompt_wait, reap_evidence, resume_reroute, resume_route, retired_lead,
     served_liveness, session_receipt, shot_save, thread_dialog, thread_permission,
@@ -225,8 +227,8 @@ pub use spawn::{
 };
 use spawn::{bounded_spawn, lifecycle_child, spawn_gate_spend};
 pub(crate) use spawn::{
-    cap_liveness, opencode_pane_grant, resolve_tier, session_origin, spawn_gate_open_prs,
-    spawn_gate_probe, spawn_gate_queue, spawn_gate_slots,
+    cap_liveness, opencode_pane_grant, resolve_tier, session_origin, spawn_floor,
+    spawn_gate_open_prs, spawn_gate_probe, spawn_gate_queue, spawn_gate_slots,
 };
 
 use serde::{Deserialize, Serialize};
@@ -307,6 +309,32 @@ impl AgentStatus {
             AgentStatus::Ready | AgentStatus::Idle | AgentStatus::Busy | AgentStatus::Live
         )
     }
+
+    /// The variant's serde name, the word every registry row and status
+    /// table spells. One mapping for the whole crate.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AgentStatus::Spawning => "spawning",
+            AgentStatus::Ready => "ready",
+            AgentStatus::Idle => "idle",
+            AgentStatus::Busy => "busy",
+            AgentStatus::Live => "live",
+            AgentStatus::Restarting => "restarting",
+            AgentStatus::Orphaned => "orphaned",
+            AgentStatus::Failed => "failed",
+            AgentStatus::Exited => "exited",
+            AgentStatus::PermanentDead => "permanent_dead",
+        }
+    }
+
+    /// The registry statuses that hold a live process (idle counts: an
+    /// idle-but-unreaped process still holds RAM), the one vocabulary every
+    /// fleet arm reads: census, footprint, peek, worktree ownership, spawn
+    /// gate. The words are the variants' serde names (`Self::as_str`);
+    /// `spawn_gate::status_is_liveish` reads this const, and the spawn-gate
+    /// test pins const, names and predicate together.
+    pub const LIVE_STATUSES: &'static [&'static str] =
+        &["spawning", "ready", "idle", "busy", "live", "restarting"];
 }
 
 /// Sealed event vocabulary every provider parses INTO (LD9). Variant additions
@@ -968,10 +996,11 @@ mod tests {
             }
         }
 
-        // The allowed files: production binary repair (install_verify), seven
+        // The allowed files: production binary repair (install_verify), eight
         // production dir modes (paths, fleet_incident, chats, the
         // session-state pin dir, the mcp sidecar's socket-parent tightening,
-        // the daemon's sandbox socket dir, the saved-sessions dir),
+        // the sandbox guest's socket dir, the sandbox transcript dir, the
+        // saved-sessions dir),
         // two dir-mode
         // restores in tests (claims, operator_turns); the bin test target
         // cannot see a cfg(test) lib fn (client_tests); and the plan writer's
@@ -989,7 +1018,8 @@ mod tests {
             ("gate/fleet_incident.rs", 1),
             ("runtime/chats.rs", 1),
             ("runtime/mcp/sidecar.rs", 1),
-            ("runtime/daemon/sandbox_host.rs", 1),
+            ("sandbox/guest.rs", 1),
+            ("sandbox/transcript.rs", 1),
             ("runtime/hook/save_session.rs", 1),
             ("runtime/state_layout_move.rs", 1),
             ("runtime/state_layout.rs", 1),
