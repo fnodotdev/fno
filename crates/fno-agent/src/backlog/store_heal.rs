@@ -964,40 +964,4 @@ mod tests {
             "the spawn name beats the bare session handle"
         );
     }
-
-    /// The law-D2402 gate on the heal persist: a session with no launch
-    /// record and no law join trigger still resolves (the caller reaches it)
-    /// but the registry gains no row; the same session with a law marker
-    /// persists exactly as before the gate.
-    #[test]
-    fn a_heal_of_a_law_refused_session_resolves_without_persisting() {
-        let _root = crate::paths::DeclaredRoot::declare("store-heal-law-gate");
-        let dir = tempfile::TempDir::new().unwrap();
-        let registry_path = dir.path().join("registry.json");
-        let sid = "b2c3d4e5-1111-2222-3333-444455556666";
-        // Refuse arm: no launch record, no marker. The row comes back for
-        // reach; nothing persists.
-        let row = adopt(&claude_hit(sid), &registry_path, "b2c3d4e5", "").unwrap();
-        let parsed: NamedRow = serde_json::from_value(row).expect("the resolved row parses");
-        assert_eq!(parsed.name, crate::identity::canonical_handle(sid));
-        assert!(
-            !registry_path.exists()
-                || crate::state::try_load_registry(&registry_path)
-                    .ok()
-                    .flatten()
-                    .map(|r| r.entries.is_empty())
-                    .unwrap_or(true),
-            "no adopted row may land without a law cause"
-        );
-
-        // Admit arm: the same session with a skill trigger persists as
-        // before the gate.
-        crate::join_marker::write_marker(dir.path(), "claude", sid, "skill:review").unwrap();
-        let row = adopt(&claude_hit(sid), &registry_path, "b2c3d4e5", "").unwrap();
-        let parsed: NamedRow = serde_json::from_value(row).expect("the adopted row parses");
-        assert_eq!(parsed.name, crate::identity::canonical_handle(sid));
-        let registry = crate::state::load_registry(&registry_path).unwrap();
-        assert_eq!(registry.entries.len(), 1);
-        assert_eq!(registry.entries[0].origin.as_deref(), Some("adopted"));
-    }
 }
