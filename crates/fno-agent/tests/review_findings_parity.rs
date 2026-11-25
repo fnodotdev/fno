@@ -122,7 +122,6 @@ fn build_runtime(case: &Value, base: &Path, key: &str, stub: &Path) -> Runtime {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("home/.fno")).unwrap();
     std::fs::write(dir.join("home/.fno/config.toml"), "").unwrap();
-    std::fs::write(dir.join("home/.fno/.path-migration-done"), "").unwrap();
     let repo = dir.join("repo");
     std::fs::create_dir(&repo).unwrap();
     git(&repo, &["init", "-q", "-b", "main"]);

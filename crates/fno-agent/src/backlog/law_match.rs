@@ -1937,9 +1937,8 @@ pub(crate) fn project_events_journal_in(cwd: &std::path::Path) -> std::path::Pat
 /// or malformed store reads as no questions, never an error.
 fn read_open_questions() -> Vec<OpenQuestion> {
     let path = decision_index::default_state_path("questions.jsonl");
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
+    let text =
+        crate::event_store::journal_text(&path, &["operator_question", "operator_question_closed"]);
     let mut asked: Vec<OpenQuestion> = Vec::new();
     let mut closed: std::collections::HashSet<String> = std::collections::HashSet::new();
     for line in text.lines() {

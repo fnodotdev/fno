@@ -198,12 +198,12 @@ cmd_plant() {
     header="WATCHING"
     floor=1
   fi
-  if ! mkdir -p "$home_fno" "$ROOT/.fno"; then
+  if ! mkdir -p "$home_fno/state" "$ROOT/.fno"; then
     report "could not create the watched roots"
     return 2
   fi
   if [[ -z "$live" ]]; then
-    printf 'fno-state-canary\n' >"$home_fno/.canary"
+    printf 'fno-state-canary\n' >"$home_fno/state/canary"
     printf 'fno-state-canary\n' >"$ROOT/.fno/.canary"
   fi
   local snap_rc n
@@ -452,8 +452,8 @@ PY
   fi
   if [[ "$mode" == "live" ]]; then
     # The read-only promise, checked rather than asserted.
-    if [[ -e "$tmp_home/.fno/.canary" ]]; then
-      report "self-test[live] FAILED: plant wrote .canary into a live operator root"
+    if [[ -e "$tmp_home/.fno/state/canary" ]]; then
+      report "self-test[live] FAILED: plant wrote state/canary into a live operator root"
       rm -rf "$tmp_home" "$tmp_root" "$inner_out"
       return 1
     fi
