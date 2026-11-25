@@ -1284,37 +1284,6 @@ fn socket_dir_check() -> Check {
 /// The fix doctor advertises for orphaned store residue. One const for both
 /// emitters, so the advertised spelling cannot drift from the command that exists.
 const PRUNE_REMEDY: &str = "fno mux workspace prune";
-const SHOT_PIN_REMEDY: &str = "fno mux workspace prune --shot-pins";
-
-/// The squad-store orphan verdict (US3), pure so the ok/warn/Na rendering
-/// is unit-testable without a store. `total` is the persisted squad count;
-/// `orphan` is how many the prune predicate would reap (unnamed, every origin
-/// gone, no live member). Read-only: doctor detects and names the remedy, it
-/// never prunes (Locked Decision 1).
-fn squad_store_verdict(total: usize, orphan: usize) -> Check {
-    if total == 0 {
-        Check {
-            name: "workspace store (squads.json)".into(),
-            verdict: Verdict::Na,
-            detail: "no workspaces persisted".into(),
-            remedy: None,
-        }
-    } else if orphan == 0 {
-        Check {
-            name: "workspace store (squads.json)".into(),
-            verdict: Verdict::Ok,
-            detail: format!("{total} workspace(s), none orphaned"),
-            remedy: None,
-        }
-    } else {
-        Check {
-            name: "workspace store (squads.json)".into(),
-            verdict: Verdict::Warn,
-            detail: format!("{orphan} orphaned workspace(s) (no surviving origin, no live member)"),
-            remedy: Some(PRUNE_REMEDY.into()),
-        }
-    }
-}
 
 /// Run every check. The fs/net/env reads live here; the verdict logic each one
 /// calls is pure and unit-tested.

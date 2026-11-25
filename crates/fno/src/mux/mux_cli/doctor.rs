@@ -49,6 +49,38 @@ pub(super) fn squad_store_check() -> Check {
     squad_store_verdict(total, orphan)
 }
 
+const SHOT_PIN_REMEDY: &str = "fno mux workspace prune --shot-pins";
+
+/// The squad-store orphan verdict (US3), pure so the ok/warn/Na rendering
+/// is unit-testable without a store. `total` is the persisted squad count;
+/// `orphan` is how many the prune predicate would reap (unnamed, every origin
+/// gone, no live member). Read-only: doctor detects and names the remedy, it
+/// never prunes (Locked Decision 1).
+fn squad_store_verdict(total: usize, orphan: usize) -> Check {
+    if total == 0 {
+        Check {
+            name: "workspace store (squads.json)".into(),
+            verdict: Verdict::Na,
+            detail: "no workspaces persisted".into(),
+            remedy: None,
+        }
+    } else if orphan == 0 {
+        Check {
+            name: "workspace store (squads.json)".into(),
+            verdict: Verdict::Ok,
+            detail: format!("{total} workspace(s), none orphaned"),
+            remedy: None,
+        }
+    } else {
+        Check {
+            name: "workspace store (squads.json)".into(),
+            verdict: Verdict::Warn,
+            detail: format!("{orphan} orphaned workspace(s) (no surviving origin, no live member)"),
+            remedy: Some(PRUNE_REMEDY.into()),
+        }
+    }
+}
+
 /// `fno mux doctor`'s screenshot-residue check: names every workspace whose
 /// origins all sit under a `fno-shot-pin-<pid>` temp dir. Read-only.
 pub(super) fn shot_pin_check() -> Check {
