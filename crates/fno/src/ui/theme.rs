@@ -68,6 +68,8 @@ pub struct Theme {
     /// The built-in a user theme inherited from, naming its 16-slot OSC
     /// palette table ([`terminal16_slot`]). Empty for the built-ins. A user
     /// theme keeps its parent's palette slots unless the parent has none.
+    /// Empty for the built-ins but the inverse twins, which ride the twin
+    /// they repaint so the slot table and the Claude Code theme match.
     pub inherit_from: &'static str,
     /// App-only: the You chat bubble takes the ink as its fill and the
     /// ground as its text. The mux chrome ignores it.
@@ -430,7 +432,7 @@ pub(crate) fn theme_footnote_paper() -> Theme {
 fn theme_footnote_inverse() -> Theme {
     Theme {
         name: "footnote-inverse",
-        inherit_from: "",
+        inherit_from: "footnote-superscript",
         you_inverse: true,
         inherit: false,
         border: rgb(0xe8, 0xe8, 0xe8), // text (the monochrome ruling)
@@ -452,7 +454,7 @@ fn theme_footnote_inverse() -> Theme {
 fn theme_footnote_inverse_paper() -> Theme {
     Theme {
         name: "footnote-inverse-paper",
-        inherit_from: "",
+        inherit_from: "footnote-paper",
         you_inverse: true,
         inherit: false,
         border: rgb(0x14, 0x14, 0x14), // the dark twin's ground (the mirror pair)
@@ -739,6 +741,25 @@ pub const THEME_NAMES: [&str; 8] = [
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_inverse_twins_ride_their_base_twin_for_palette_and_claude_theme() {
+        for (inv, base) in [
+            ("footnote-inverse", "footnote-superscript"),
+            ("footnote-inverse-paper", "footnote-paper"),
+        ] {
+            let (i, b) = (Theme::from_name(inv).0, Theme::from_name(base).0);
+            assert!(i.you_inverse && !b.you_inverse, "{inv}");
+            assert_eq!(claude_theme(&i), claude_theme(&b), "{inv}");
+            for slot in 0..16 {
+                assert_eq!(
+                    terminal16_slot(slot, &i),
+                    terminal16_slot(slot, &b),
+                    "{inv} {slot}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn from_name_ladder_warns_unknown_and_defaults_silently() {
