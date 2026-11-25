@@ -16,7 +16,7 @@
 #   idle      idle CPU % and RSS of both clients while the world holds 30 agent
 #             stand-in panes (idle shells; they cost the client panes and frame
 #             streams, not real agent processes). ps sampling at 1s cadence.
-#   switch    focused-agent flip to painted change. TUI: `mux view` to the busy
+#   switch    focused-agent flip to painted change. TUI: `mux pane focus` to the busy
 #             pane, detection on its streamed `date +%s` line. fno-app: the
 #             control channel drains on a 400ms poll with no ack row, and
 #             window-state.json is quit-only, so the paint is observable only
@@ -208,8 +208,10 @@ world_up() {
   done
   [ "$got" -ge "$PANE_COUNT_EXPECTED" ] || die "world never reached $PANE_COUNT_EXPECTED panes (got $got)"
 
-  # Baseline the operator view on sleeper A; clients open onto it.
-  "$FNO_BIN" mux view "$SLEEPER_A_ID" --server "$SESSION" >/dev/null 2>&1 || true
+  # Baseline the operator view on sleeper A; clients open onto it. `pane focus`
+  # takes a pane id; `mux view` resolves registry names and would match the
+  # real fleet's agents, not this throwaway server's bare-number pane ids.
+  "$FNO_BIN" mux pane focus "$SLEEPER_A_ID" --server "$SESSION" >/dev/null 2>&1 || true
 }
 
 wake_busy() {
@@ -347,9 +349,9 @@ if {$ms < 0} { set ms 0 }
 puts "RESULT $ms"
 EOF
   local i out
-  "$FNO_BIN" mux view "$LONG_ID" --server "$SESSION" >/dev/null
+  "$FNO_BIN" mux pane focus "$LONG_ID" --server "$SESSION" >/dev/null
   for i in $(seq 1 "$RUNS"); do
-    "$FNO_BIN" mux view "$LONG_ID" --server "$SESSION" >/dev/null 2>&1 || true
+    "$FNO_BIN" mux pane focus "$LONG_ID" --server "$SESSION" >/dev/null 2>&1 || true
     sleep 0.2
     out="$(BENCH_TIMEOUT="$TUI_TIMEOUT" BENCH_FNO="$FNO_BIN" BENCH_SESSION="$SESSION" \
       BENCH_PAGES="$SCROLL_PAGES" BENCH_SETTLE_TICKS="$SCROLL_SETTLE_TICKS" run_tui_expect "$tpl")"
@@ -457,7 +459,7 @@ expect {
 }
 set timeout $env(BENCH_TIMEOUT)
 set t0 [clock milliseconds]
-exec $env(BENCH_FNO) mux view $env(BENCH_BUSY_ID) --server $env(BENCH_SESSION)
+exec $env(BENCH_FNO) mux pane focus $env(BENCH_BUSY_ID) --server $env(BENCH_SESSION)
 set got ""
 expect {
   -re {[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]} { set got $expect_out(0,string) }
@@ -478,7 +480,7 @@ EOF
   # Return the view to sleeper A between runs so every run starts cold.
   local i out
   for i in $(seq 1 "$RUNS"); do
-    "$FNO_BIN" mux view "$SLEEPER_A_ID" --server "$SESSION" >/dev/null 2>&1 || true
+    "$FNO_BIN" mux pane focus "$SLEEPER_A_ID" --server "$SESSION" >/dev/null 2>&1 || true
     sleep 0.3
     out="$(BENCH_TIMEOUT="$TUI_TIMEOUT" BENCH_FNO="$FNO_BIN" BENCH_SESSION="$SESSION" \
       BENCH_BUSY_ID="$BUSY_ID" run_tui_expect "$tpl")"
@@ -516,7 +518,7 @@ catch {exec kill -9 [exp_pid]}
 puts "RESULT [expr {$t1 - $t0}]"
 EOF
   local i out
-  "$FNO_BIN" mux view "$BUSY_ID" --server "$SESSION" >/dev/null 2>&1 || true
+  "$FNO_BIN" mux pane focus "$BUSY_ID" --server "$SESSION" >/dev/null 2>&1 || true
   for i in $(seq 1 "$RUNS"); do
     out="$(BENCH_TIMEOUT="$TUI_TIMEOUT" BENCH_FNO="$FNO_BIN" BENCH_SESSION="$SESSION" run_tui_expect "$tpl")"
     case "$out" in
@@ -581,7 +583,7 @@ write_report() {
     echo "- fno-app: ${app_ver:-unavailable} ($APP_BIN)"
     echo "- world: $AGENTS idle panes + one 10000-line pane + one busy pane; panes $PANE_SIZE; server $SESSION"
     echo "- runs: $RUNS per timed cell; idle sampled 1s cadence for ${IDLE_SECS}s"
-    echo "- methods: launch/tui = first pty output byte; launch/app = cold --shot wall incl. one png encode; scroll = keystroke to a 2s quiet window minus fixed budgets; switch = mux view flip to the busy pane's first streamed epoch line; keypaint = marker keystroke to its painted echo; idle = ps argv-keyed sampling (TUI and server share the name fno)"
+    echo "- methods: launch/tui = first pty output byte; launch/app = cold --shot wall incl. one png encode; scroll = keystroke to a 2s quiet window minus fixed budgets; switch = mux pane focus flip to the busy pane's first streamed epoch line; keypaint = marker keystroke to its painted echo; idle = ps argv-keyed sampling (TUI and server share the name fno)"
     echo "- session was $SESSION; killed at teardown (sweep verdict above in the run log)"
   } > "$REPORT"
   echo "report: $REPORT"
