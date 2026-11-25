@@ -1245,7 +1245,7 @@ mod tests {
         assert_eq!(damaged, 1, "an amend with no target is the damaged shape");
         apply_scope_amendments(&mut rows);
         assert_eq!(rows.len(), 1, "amendment rows never render");
-        let row = &rows[0];
+        let row = rows.first().expect("the one row stays");
         assert_eq!(
             row.get(de::DECISION_ID).and_then(Value::as_str),
             Some("d-aaaa0001")
@@ -1321,9 +1321,12 @@ mod tests {
         );
         let (rows_a, _) = flatten_envelopes(&a);
         let (rows_b, _) = flatten_envelopes(&b);
+        let (Some(first), Some(second)) = (rows_a.first(), rows_b.first()) else {
+            panic!("each amend flattens to one row");
+        };
         assert_ne!(
-            row_key(&rows_a[0]),
-            row_key(&rows_b[0]),
+            row_key(first),
+            row_key(second),
             "two amendments of one law must not collide"
         );
     }

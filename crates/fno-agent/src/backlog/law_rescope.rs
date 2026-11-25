@@ -208,13 +208,13 @@ fn rescope_data(
         "reach": reach,
         "prior_reach": decision_index::row_scope(old),
     });
-    if let Some(a) = &caller.attested_by {
-        data["attested_by"] = json!(a);
-    }
-    if let Some(r) = &caller.relayed_by {
-        data["relayed_by"] = json!(r);
-    }
     if let Some(map) = data.as_object_mut() {
+        if let Some(a) = &caller.attested_by {
+            map.insert("attested_by".into(), json!(a));
+        }
+        if let Some(r) = &caller.relayed_by {
+            map.insert("relayed_by".into(), json!(r));
+        }
         crate::identity::stamp_person(map);
     }
     Ok(data)
@@ -336,7 +336,9 @@ mod tests {
             "strength": "warn", "ts": "2026-09-01T00:00:00Z"
         });
         if let Some(s) = scope {
-            row["scope"] = json!(s);
+            if let Some(map) = row.as_object_mut() {
+                map.insert("scope".into(), json!(s));
+            }
         }
         row
     }
@@ -351,9 +353,9 @@ mod tests {
             "No pushes at night",
         )];
         let data = rescope_data("d-aaaa0001", "global", &rows, &op).expect("rescopes");
-        assert_eq!(data["target_decision_id"], json!("d-aaaa0001"));
-        assert_eq!(data["reach"], json!("global"));
-        assert_eq!(data["prior_reach"], json!("project:demo"));
+        assert_eq!(data.get("target_decision_id"), Some(&json!("d-aaaa0001")));
+        assert_eq!(data.get("reach"), Some(&json!("global")));
+        assert_eq!(data.get("prior_reach"), Some(&json!("project:demo")));
 
         // A bad reach value refuses before any lookup.
         let refusal = rescope_data("d-aaaa0001", "internal", &rows, &op).expect_err("bad reach");

@@ -721,7 +721,9 @@ mod tests {
         let rows = read_rows(&connection).unwrap().0;
         assert_eq!(rows.len(), 2, "the amend is its own row, no twin");
         assert_eq!(
-            rows[1].get(de::EVENT_TYPE).and_then(Value::as_str),
+            rows.get(1)
+                .and_then(|r| r.get(de::EVENT_TYPE))
+                .and_then(Value::as_str),
             Some(SCOPE_AMEND_EVENT)
         );
         // A replay of the same amendment dedupes on the event id.

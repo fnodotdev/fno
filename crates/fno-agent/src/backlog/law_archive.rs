@@ -163,7 +163,9 @@ pub fn run_archive(argv: &[String]) -> i32 {
         }
         moved += 1;
     }
-    let _ = file.flush();
+    if file.flush().is_err() {
+        write_failed = true;
+    }
     if write_failed {
         eprintln!("fno inbox decisions archive: the archive write failed after {moved} row(s)");
         return 1;
@@ -188,7 +190,9 @@ mod tests {
             "ts": "2026-09-01T00:00:00Z",
         });
         if let Some(s) = supersedes {
-            row["supersedes"] = json!(s);
+            if let Some(map) = row.as_object_mut() {
+                map.insert("supersedes".into(), json!(s));
+            }
         }
         row
     }
@@ -202,9 +206,13 @@ mod tests {
             "ts": "2026-09-01T00:00:00Z",
         });
         let env = envelope_of(&row);
-        assert_eq!(env["type"], json!("operator_decision"));
-        assert_eq!(env["data"]["decision_id"], json!("d-aaaa0001"));
-        assert!(!env["data"].as_object().unwrap().contains_key("_event_type"));
+        assert_eq!(env.get("type"), Some(&json!("operator_decision")));
+        let data = env
+            .get("data")
+            .and_then(Value::as_object)
+            .expect("data object");
+        assert_eq!(data.get("decision_id"), Some(&json!("d-aaaa0001")));
+        assert!(!data.contains_key("_event_type"));
     }
 
     #[test]
