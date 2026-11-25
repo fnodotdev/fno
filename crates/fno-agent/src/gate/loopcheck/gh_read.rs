@@ -45,7 +45,16 @@ pub(super) fn attestation_in_scope(
     !attested_branch.is_empty() && !head_branch.is_empty() && attested_branch == head_branch
 }
 
+/// The head a sandbox-origin decision reads: the exported sandbox ref, never
+/// the host worktree's HEAD, which stays at the intake base.
+fn sandbox_head() -> Option<String> {
+    crate::sandbox::origin().map(|o| o.head.clone().unwrap_or_else(|| "unknown".into()))
+}
+
 pub(super) fn git_head_sha(git_bin: &str, cwd: &Path) -> String {
+    if let Some(head) = sandbox_head() {
+        return head;
+    }
     match git_bounded(git_bin, &["rev-parse", "HEAD"], cwd) {
         Some(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
         _ => "unknown".to_string(),
@@ -62,6 +71,9 @@ pub(super) fn git_head_sha(git_bin: &str, cwd: &Path) -> String {
 /// A git that cannot answer reads as DIRTY, so an unreadable tree never
 /// widens what counts as shipped.
 pub(super) fn git_tree_clean(git_bin: &str, cwd: &Path) -> bool {
+    if let Some(o) = crate::sandbox::origin() {
+        return !o.dirty;
+    }
     matches!(
         git_bounded(git_bin, &["status", "--porcelain"], cwd),
         Some(o) if o.status.success() && o.stdout.is_empty()
@@ -83,6 +95,7 @@ pub(super) fn git_tree_clean(git_bin: &str, cwd: &Path) -> bool {
 /// genuinely ahead all answer false, which is the conservative direction: see
 /// [`head_is_shipped`].
 pub(super) fn git_head_on_base(git_bin: &str, cwd: &Path) -> bool {
+    let head = sandbox_head().unwrap_or_else(|| "HEAD".into());
     for base in ["origin/main", "origin/master"] {
         match git_bounded(
             git_bin,
@@ -101,7 +114,7 @@ pub(super) fn git_head_on_base(git_bin: &str, cwd: &Path) -> bool {
         // is not, and >1 on a real error. Only a clean 0 counts, so an errored
         // probe reads as "not shipped" rather than as consent to terminate.
         return matches!(
-            git_bounded(git_bin, &["merge-base", "--is-ancestor", "HEAD", base], cwd),
+            git_bounded(git_bin, &["merge-base", "--is-ancestor", &head, base], cwd),
             Some(o) if o.status.success()
         );
     }

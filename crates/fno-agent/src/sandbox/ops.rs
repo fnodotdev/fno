@@ -613,6 +613,10 @@ fn loop_stop(b: &Bound, message: &str) -> Res<Value> {
         c.arg("--sandbox-dirty");
     }
     b.env(&mut c);
+    // The block prints in the inside harness's shape, not this host's.
+    if b.harness == "claude" {
+        c.env("CLAUDECODE", "1");
+    }
     let got = crate::bounded_cmd::output_with_timeout_stdin(c, STOP_BOUND_S, &payload.to_string())
         .map_err(|e| format!("the host Stop decision did not run: {e}"))?;
     Ok(json!({

@@ -37,6 +37,7 @@ pub mod registry_read;
 #[cfg(feature = "app")]
 pub mod role_migration;
 pub mod rules;
+pub mod sandbox_door;
 #[cfg(feature = "app")]
 pub mod store_conn;
 #[cfg(all(test, feature = "app"))]

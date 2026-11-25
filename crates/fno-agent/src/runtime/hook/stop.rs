@@ -34,7 +34,14 @@ mod lead_turn;
 const MAX_UNAVAIL_RETRIES: u64 = 3;
 
 pub fn run(args: &[String]) -> i32 {
-    let _ = args;
+    // `--sandbox <id>` is the host relay running this decision for a
+    // sandboxed worker; `--sandbox-dirty` is that export's dirty reading.
+    let sandbox = args
+        .iter()
+        .position(|a| a == "--sandbox")
+        .and_then(|i| args.get(i + 1))
+        .cloned();
+    let sandbox_dirty = args.iter().any(|a| a == "--sandbox-dirty");
     let mut payload = String::new();
     if std::io::stdin().read_to_string(&mut payload).is_err() {
         // An unreadable payload is not a verdict for an owner, but the shell
@@ -111,6 +118,20 @@ pub fn run(args: &[String]) -> i32 {
     } else {
         std::fs::canonicalize(&payload_cwd).unwrap_or(PathBuf::from(&payload_cwd))
     };
+
+    // Inside a sandbox there is no host state to decide from: the one host
+    // decision answers through the relay, and a broken relay blocks.
+    if std::env::var_os("FNO_AGENT_SANDBOXED").is_some() && sandbox.is_none() {
+        return sandboxed_stop(&session_id, last_assistant_message.as_deref());
+    }
+    if let Some(id) = &sandbox {
+        if let Err(e) = crate::sandbox::bind_origin(id, &cwd, sandbox_dirty) {
+            return emit_block_for_harness(
+                &session_id,
+                &format!("target stop-hook: the sandbox origin did not bind: {e}"),
+            );
+        }
+    }
 
     // Every Stop fire is a turn end, whatever the ownership verdict: a live
     // conversation clock is shortened to its grace (C3). Silent, and it
@@ -202,8 +223,12 @@ pub fn run(args: &[String]) -> i32 {
     // exit. An unreadable queue reads as no correction (fail-open, the same
     // stance the stand-down gate takes), because a broken reader must not
     // hold every stop in the fleet hostage.
-    if let Some(message) = correction_gate(&cwd, &fire) {
-        return emit_block_for_harness(&session_id, &message);
+    // A sandbox transcript is sandbox content: its user turns are forgeable,
+    // so a sandbox-origin stop records no correction.
+    if crate::sandbox::origin().is_none() {
+        if let Some(message) = correction_gate(&cwd, &fire) {
+            return emit_block_for_harness(&session_id, &message);
+        }
     }
 
     // ── Ownership (the salvaged stop-gate evaluation) ─────────────────────────
@@ -219,6 +244,55 @@ pub fn run(args: &[String]) -> i32 {
             owner_cwd,
         } => run_owned(&cwd, &fire, &payload, state, driver, owner_cwd),
     }
+}
+
+/// The Stop of a sandboxed worker: send loop stop through the pinned socket
+/// and pass the host decision's exit and output through unchanged. Any
+/// failure to reach the host blocks and names itself; it never allows.
+fn sandboxed_stop(session_id: &str, message: Option<&str>) -> i32 {
+    let sock = std::env::var_os("FNO_SUPERVISOR_SOCKET")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(crate::sandbox::CONTAINER_SOCK));
+    let params = serde_json::json!({
+        "op": "loop-stop",
+        "message": message.unwrap_or_default(),
+    });
+    let reply = crate::protocol::blocking_response(
+        &sock,
+        crate::sandbox::ops::OP_METHOD,
+        params,
+        std::time::Duration::from_secs(900),
+    );
+    let answer = match reply.map(|r| r.payload) {
+        Ok(crate::protocol::ResponsePayload::Ok(v)) => v,
+        Ok(crate::protocol::ResponsePayload::Err(e)) => {
+            return emit_block_for_harness(
+                session_id,
+                &format!(
+                    "target stop-hook: the host refused loop stop for this sandbox: {}. \
+                     Fix what it names and stop again.",
+                    e.message
+                ),
+            )
+        }
+        Err(e) => {
+            return emit_block_for_harness(
+                session_id,
+                &format!(
+                    "target stop-hook: the sandbox relay did not answer loop stop ({e}); \
+                     this stop blocks until the host decides."
+                ),
+            )
+        }
+    };
+    let text = |k: &str| answer.get(k).and_then(Value::as_str).unwrap_or_default();
+    eprint!("{}", text("stderr"));
+    print!("{}", text("stdout"));
+    answer
+        .get("exit")
+        .and_then(Value::as_i64)
+        .and_then(|c| i32::try_from(c).ok())
+        .unwrap_or(2)
 }
 
 /// The needs-input stamp decision for one Stop fire, pure so the promise
