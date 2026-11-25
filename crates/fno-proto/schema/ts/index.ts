@@ -53,6 +53,8 @@ export * from "./PanePlacement";
 export * from "./PaneTarget";
 export * from "./PlacementFallback";
 export * from "./PortalSlot";
+export * from "./PrFailingCheck";
+export * from "./PrStatusFact";
 export * from "./Reach";
 export * from "./Rect";
 export * from "./RemoteRow";

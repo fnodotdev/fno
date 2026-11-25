@@ -2340,6 +2340,33 @@ impl Root {
             // The shell prints enough lines to fill its history; the second
             // phase scrolls the pane back through a real frame.
             crate::UiShot::Scrolled => self.pane_input(b"seq 1 120\r".to_vec(), cx),
+            // The sheet rides the row's own PR number, URL and fact, the
+            // same data an alt-click would carry off the demo-stamped row.
+            // The PR-carrying row wins over the top-row token stamp, so
+            // the sheet shows a real number and URL.
+            crate::UiShot::PrSheet => {
+                let with_url = self.layout.agents.iter().find(|a| {
+                    a.pr_status.is_some() && a.bindings.iter().any(|b| b.pr_url.is_some())
+                });
+                let pick =
+                    with_url.or_else(|| self.layout.agents.iter().find(|a| a.pr_status.is_some()));
+                if let Some(a) = pick {
+                    let url = a
+                        .bindings
+                        .iter()
+                        .rev()
+                        .find(|b| b.pr.is_some())
+                        .and_then(|b| b.pr_url.clone());
+                    self.pr_sheet = Some(pr_sheet::PrSheet {
+                        pr: a.pr.unwrap_or(0),
+                        slug: pr_sheet::slug_from_url(url.as_deref()),
+                        url,
+                        fact: a.pr_status.clone().unwrap_or_default(),
+                        agent: a.name.clone(),
+                    });
+                    cx.notify();
+                }
+            }
         }
     }
 

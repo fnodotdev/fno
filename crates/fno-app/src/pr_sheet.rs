@@ -36,13 +36,21 @@ pub(super) fn demo_stamp(agents: &mut [fno_proto::AgentRow]) {
         return;
     }
     let fact = demo_fact();
-    if let Some(row) = agents.iter_mut().find(|r| r.pr.is_some()) {
-        row.pr_status = Some(fact);
-        return;
-    }
-    if let Some(row) = agents.iter_mut().find(|r| r.pane_id.is_some() && !r.exited) {
-        row.pr = Some(23);
-        row.pr_status = Some(fact);
+    // Every agent row takes the tokens, so the board frame shows the look
+    // wherever the world's roster is long: the display order is the
+    // server's, and one picked row can sit below the fold. Rows without a
+    // PR gain the invented #24, and rows without a node gain the seeded
+    // demo node, so the identity column carries the `#24 · node` text the
+    // tokens sit before; a row that already carries either keeps its own.
+    // The sheet reads the picked row's own number and URL.
+    for row in agents.iter_mut() {
+        if row.pr.is_none() {
+            row.pr = Some(24);
+        }
+        if row.node.is_none() {
+            row.node = Some("x-aaaa".into());
+        }
+        row.pr_status = Some(fact.clone());
     }
 }
 
