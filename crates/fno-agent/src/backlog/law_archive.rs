@@ -253,19 +253,26 @@ mod tests {
             4,
             "dead law, retraction, dead-target amend, law_trigger"
         );
-        let ids: Vec<String> = to_move
-            .iter()
-            .map(|e| {
-                e["data"]
-                    .as_object()
-                    .unwrap()
-                    .values()
-                    .find_map(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string()
-                    .to_lowercase()
-            })
-            .collect();
+        // An envelope can carry its id under any of the four id fields, so
+        // the retraction contributes both its retraction_id and its target.
+        let id_keys = [
+            de::DECISION_ID,
+            de::RETRACTION_ID,
+            de::AMENDMENT_ID,
+            de::TARGET,
+        ];
+        let mut ids: Vec<String> = Vec::new();
+        for e in &to_move {
+            let data = match e.get(de::DATA).and_then(Value::as_object) {
+                Some(d) => d,
+                None => continue,
+            };
+            for k in &id_keys {
+                if let Some(v) = data.get(*k).and_then(Value::as_str) {
+                    ids.push(v.to_lowercase());
+                }
+            }
+        }
         assert!(ids.contains(&"d-bbbb0002".to_string()));
         assert!(ids.contains(&"d-eeee0005".to_string()));
         assert!(
