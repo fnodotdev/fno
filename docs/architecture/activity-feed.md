@@ -223,3 +223,27 @@ One risk to know: the OTLP spec does not require a server to accept the JSON enc
 The feed reads the durable stores and the graph for lifecycle. No writer is added.
 
 When you want to surface a new operator-facing event, add it to a store that passes the test above. A typed row in db/events.db or the agents journal qualifies - give the type a required data shape and the projection a derived kind. So does a stamped graph field beside the row that produced it, and so does a durable receipt store. Never emit it into events.jsonl expecting the feed to mine the rotating file.
+
+## Measuring the panel on a real store
+
+The panel holds the whole history in the client. Read its memory and its reslot time on a real store, never on a fixture. Read them on a private copy. Take the copy with `sqlite3 .backup`, and delete it after the read. A binary built in a feature worktree refuses the live store.
+
+The client logs one line per reslot to `$FNO_MUX_DIR/client.log`: `feed reslot rows=<n> slots=<n> ms=<n>`. A row count above 0 tells you the feed landed. Read the client's RSS with `ps -o rss=` before the feed key, at its peak, and 30 seconds after the line lands.
+
+Drive the client in a pty that you own. macOS `script` fails under a harness with `tcgetattr/ioctl: Operation not supported on socket`, so open the pty from code. A runner needs four things, or the read is wrong:
+
+- Unset every harness identity variable before the server starts, as `scripts/ops/mux-demo-snapshot.sh` does, and set `FNO_OWNER_PID` to the runner's pid. With a session id still set, the server sees its sandbox owner gone and shuts down after the first read.
+- Set the pty size before the client starts. Set it on the child side before exec, for example 100x40.
+- Answer the terminal queries. The client waits for a reply to each query in this table. Without the replies the client paints only its splash. Then `client.log` reads `error attach-no-paint` after 5 seconds.
+
+| Query | Sent as | Reply |
+|---|---|---|
+| DA1 | `ESC [ c` | `ESC [ ? 62 ; 22 c` |
+| DSR | `ESC [ 5 n` | `ESC [ 0 n` |
+| cell size | `ESC [ 16 t` | `ESC [ 6 ; 16 ; 8 t` |
+| OSC 11 background | `ESC ] 11 ; ? ST` | `ESC ] 11 ; rgb:1414/1414/1414 ST` |
+
+The client also sends a kitty graphics query. It needs no reply. Spaces in the table are for reading only. Send the bytes with no spaces.
+- Open the feed with Ctrl-b (0x02) then `e`.
+
+Take a read only with no shot rig running on the machine and the 1-minute load under 8. Throw out a read whose window spans a pause of another process. Kill only the pids the runner started, by pid.
