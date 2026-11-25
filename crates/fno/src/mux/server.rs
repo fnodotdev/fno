@@ -10489,12 +10489,9 @@ impl Core {
                 request,
                 verdict,
             } => {
-                // A parked control-door reach finishes with its own
-                // verdict: take it first, let the replay run on the observer
-                // that stayed registered, then answer the held reply. Taken
-                // with a restore, not a drop: a verdict for a DIFFERENT
-                // client (a TUI gesture resolving while a reach is parked)
-                // puts the park back.
+                // A parked control-door reach finishes with its own verdict:
+                // take it first, replay, then answer the held reply. A verdict
+                // for a DIFFERENT client puts the park back.
                 let parked = self.pending_thread_reply.take().and_then(|p| {
                     if p.client == id {
                         Some(p)
